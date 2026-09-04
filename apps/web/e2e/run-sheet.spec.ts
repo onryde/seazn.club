@@ -29,6 +29,38 @@ const UI_EN = JSON.parse(
   readFileSync(fileURLToPath(new URL("../src/dictionaries/en/ui.json", import.meta.url)), "utf8"),
 ) as Record<string, string>;
 
+/**
+ * SHARED-STATE TEARDOWN — `afterEach`, deliberately NOT a `finally`.
+ *
+ * `organizations.timezone` is org-wide, and every parallel spec in the run
+ * shares the one Pro org `auth.setup.ts` provisions. Only the two tests in
+ * the "zone-split cases" describe mutate it (`setZoneSplitSql`); every other
+ * test here touches fixtures/schedule_settings rows scoped to a division it
+ * created itself, which are fine to leave dirty.
+ *
+ * A `try`/`finally` looks like it covers the restore and does not: on a
+ * Playwright TIMEOUT the test body is abandoned and its `finally` NEVER
+ * RUNS — only hooks do. The leak would then survive for the rest of the run
+ * and surface as day-bucketing or time-formatting failures scattered across
+ * unrelated spec files, which is about the most misleading shape a failure
+ * can take here: nobody debugging `competition-desk.spec.ts` goes looking
+ * for a timezone restore in this one. Fix round 4 moved it here, where it
+ * runs on pass, on failure, and on timeout alike.
+ *
+ * Idempotent and safe when nothing was mutated: `null` until a test actually
+ * captures a restore, and cleared BEFORE awaiting so a second `afterEach`
+ * (or a retry) cannot re-run a stale closure. Worker-local by construction —
+ * each Playwright worker is its own process, so each restores only what it
+ * itself captured.
+ */
+let pendingOrgTzRestore: (() => Promise<void>) | null = null;
+
+test.afterEach(async () => {
+  const restore = pendingOrgTzRestore;
+  pendingOrgTzRestore = null;
+  if (restore !== null) await restore();
+});
+
 // Competition Desk W2, Task 4 — the fixtures tab as a run sheet. This is the
 // seam obligation for Tasks 2 and 3: `fixtureRowAction` and `buildRunSheet`
 // are pure builders in a jsdom-less `vitest` runner, blind to DOM wiring —
@@ -318,38 +350,65 @@ test("empty-filter state: switching to a filter with no matching rows shows a me
   await expect(sheet.locator("[data-run-sheet-day]")).toHaveCount(1);
 });
 
-// Fix round 3 (owner ruling): the inline "Set time" editor resolves the
-// typed value in the ORG zone (`orgTz`, #448), never the VENUE zone (`tz`,
-// display-only, amendment 4) and never the browser's implicit zone. This is
-// a VALUE pin, not a reachability check — the whole reason the defect
-// survived every prior write site's own test coverage is that nothing
-// seeded a division where `tz` and `orgTz` actually DISAGREE, so a
-// wrong-zone write and a right-zone write produced the identical instant
-// and nothing could tell them apart. `setZoneSplitSql` seeds exactly that
-// shape.
-test("fix round 3 (owner ruling): the inline Set-time editor writes the ORG zone, not the venue zone", async ({
-  page,
-  request,
-}) => {
-  const { divisionId, fixtureIds } = await seedRunSheetDivision(request);
-  expect(fixtureIds.length, "seed produced no fixtures — setup failed, not the sheet").toBeGreaterThanOrEqual(1);
-  const target = fixtureIds[0]!;
-  const targetInfo = await apiJson<{ fixture_no: number }>(request, `/api/v1/fixtures/${target}`);
-  const fixtureNo = targetInfo.data!.fixture_no;
+// SERIAL, and only these two. Both write `organizations.timezone`, which
+// is org-wide and shared by every parallel spec in the run (auth.setup.ts
+// provisions ONE Pro org). `fullyParallel: true` parallelises tests WITHIN
+// a file, so before this block the two ran in different workers and each
+// could see the other's zone: caught live on 2026-09-04, when the note case
+// read the org as UTC and the page rendered `America/New_York` because the
+// write case had just set it in another worker. Serial mode is the price;
+// read a failure count for this describe as a FLOOR, not a total, because
+// the first red skips the rest of the block (and only this block).
+//
+// They also both SET the zone rather than reading it, to the same
+// `ORG_TZ`. Reading it cannot work: three other spec files
+// (`competition-desk`, `registration-hub`, the organiser walkthrough) write
+// the same column, so a value read at the top of a test can be stale by the
+// time the page renders.
+test.describe("zone-split cases — they share organizations.timezone", () => {
+  test.describe.configure({ mode: "serial" });
 
-  // A division whose venue zone DIFFERS from its org zone. `fixtureNo: -1`
-  // matches no real row — every fixture in this division (the target
-  // included) is left/forced unscheduled by the helper's own "null every
-  // OTHER fixture" clause, which is exactly the state "Set time" needs to
-  // be reachable at all.
-  const restoreOrgTz = await setZoneSplitSql({
-    divisionId,
-    orgTz: "America/New_York",
-    divisionTz: "Asia/Tokyo",
-    fixtureNo: -1,
-    at: "2030-01-01T00:00:00.000Z",
-  });
-  try {
+  /** The one org zone every test in this block writes, so two of them
+   *  overlapping (or one restoring while the other reads) can never make
+   *  them contradict each other on the value itself. */
+  const ORG_TZ = "America/New_York";
+
+  // Fix round 3 (owner ruling): the inline "Set time" editor resolves the
+  // typed value in the ORG zone (`orgTz`, #448), never the VENUE zone (`tz`,
+  // display-only, amendment 4) and never the browser's implicit zone. This is
+  // a VALUE pin, not a reachability check — the whole reason the defect
+  // survived every prior write site's own test coverage is that nothing
+  // seeded a division where `tz` and `orgTz` actually DISAGREE, so a
+  // wrong-zone write and a right-zone write produced the identical instant
+  // and nothing could tell them apart. `setZoneSplitSql` seeds exactly that
+  // shape.
+  test("fix round 3 (owner ruling): the inline Set-time editor writes the ORG zone, not the venue zone", async ({
+    page,
+    request,
+  }) => {
+    const { divisionId, fixtureIds } = await seedRunSheetDivision(request);
+    expect(fixtureIds.length, "seed produced no fixtures — setup failed, not the sheet").toBeGreaterThanOrEqual(1);
+    const target = fixtureIds[0]!;
+    const targetInfo = await apiJson<{ fixture_no: number }>(request, `/api/v1/fixtures/${target}`);
+    const fixtureNo = targetInfo.data!.fixture_no;
+
+    // A division whose venue zone DIFFERS from its org zone. `fixtureNo: -1`
+    // matches no real row — every fixture in this division (the target
+    // included) is left/forced unscheduled by the helper's own "null every
+    // OTHER fixture" clause, which is exactly the state "Set time" needs to
+    // be reachable at all.
+    // Fix round 4: the restore is REGISTERED, not wrapped in a `try`/`finally`.
+    // A Playwright timeout abandons the test body without running its
+    // `finally`, which would leave the SHARED org's timezone mutated for the
+    // rest of the run — see the `afterEach` at the top of this file for the
+    // whole argument. Registered BEFORE the first `await` that can time out.
+    pendingOrgTzRestore = await setZoneSplitSql({
+      divisionId,
+      orgTz: ORG_TZ,
+      divisionTz: "Asia/Tokyo",
+      fixtureNo: -1,
+      at: "2030-01-01T00:00:00.000Z",
+    });
     await page.goto(await divisionPath(request, divisionId, "?tab=fixtures"));
     const targetRow = page.locator(`[data-fixture-no="${fixtureNo}"]`);
     await targetRow.getByRole("button", { name: "Set time", exact: true }).click();
@@ -362,7 +421,7 @@ test("fix round 3 (owner ruling): the inline Set-time editor writes the ORG zone
     // boundary differently for each) ever changes. Sanity-checked that the
     // two zones actually disagree for this instant, or the test would be
     // vacuously satisfied by either implementation.
-    const expectedInstant = isoFromZonedDateTime(typed, "America/New_York");
+    const expectedInstant = isoFromZonedDateTime(typed, ORG_TZ);
     const wrongZoneInstant = isoFromZonedDateTime(typed, "Asia/Tokyo");
     expect(expectedInstant, "orgTz and tz must actually disagree for this instant, or the case proves nothing").not.toBe(
       wrongZoneInstant,
@@ -376,9 +435,8 @@ test("fix round 3 (owner ruling): the inline Set-time editor writes the ORG zone
     await expect
       .poll(
         async () => {
-          lastSeen = (
-            await apiJson<{ scheduled_at: string | null }>(request, `/api/v1/fixtures/${target}`)
-          ).data!.scheduled_at;
+          lastSeen = (await apiJson<{ scheduled_at: string | null }>(request, `/api/v1/fixtures/${target}`)).data!
+            .scheduled_at;
           return lastSeen;
         },
         { timeout: 15_000 },
@@ -394,12 +452,91 @@ test("fix round 3 (owner ruling): the inline Set-time editor writes the ORG zone
       "| would-be-wrong (tz)",
       wrongZoneInstant,
     );
-  } finally {
-    // organizations.timezone is shared across every parallel spec on this
-    // org (setZoneSplitSql's own doc comment) — always restored, success or
-    // failure.
-    await restoreOrgTz();
-  }
+  });
+
+  // Fix round 4 — the zone note, both directions.
+  //
+  // Round 3 added it unconditionally, saying only which zone the input accepts.
+  // Two problems, both about whether an organiser keeps reading it: it fired on
+  // every division, including the majority where `orgTz === tz` and there is
+  // nothing to disambiguate (a note that speaks when it has nothing to say
+  // trains people to stop reading it), and it never said that the ROW
+  // redisplays in a different zone, which is the actual confusion — a typed
+  // 15:00 reappearing as 04:00 with no visible cause reads as data loss.
+  //
+  // This is also where `orgTz` gets its teeth. The editor's initial VALUE is
+  // no longer read from the fixture (see run-sheet-row.tsx: the ladder only
+  // opens this editor for a fixture with no time at all, so that read was dead
+  // code), so the note is the one place `orgTz` is observable in the DOM.
+  // Pinned as an exact sentence built from the dictionary's own string, not a
+  // substring check — a containment assertion cannot tell "enter in NY, shown
+  // in Tokyo" from the swapped, exactly-wrong "enter in Tokyo, shown in NY".
+  //
+  // This case lives in ZONE_SPLIT_CASES (serial) with the fix-round-3 write
+  // test, and it SETS the org zone rather than reading it — see that describe's
+  // own header for why a read-based expectation cannot work here.
+  test("fix round 4: the set-time zone note names both clocks, and only appears when they differ", async ({
+    page,
+    request,
+  }) => {
+    const openEditor = async (divisionId: string, fixtureNo: number) => {
+      await page.goto(await divisionPath(request, divisionId, "?tab=fixtures"));
+      const row = page.locator(`[data-fixture-no="${fixtureNo}"]`);
+      await row.locator('[data-row-action="set_time"]').click();
+      await expect(row.getByTestId("run-sheet-set-time-editor")).toBeVisible();
+      return row;
+    };
+
+    // Phase 1 — the two zones DISAGREE. `fixtureNo: -1` matches no real row,
+    // so the helper's "null every OTHER fixture" clause leaves every fixture
+    // unscheduled, which is the state "Set time" needs to be reachable at all.
+    const differing = await seedRunSheetDivision(request);
+    expect(differing.fixtureIds.length, "seed produced no fixtures — setup failed, not the sheet").toBeGreaterThanOrEqual(
+      1,
+    );
+    const noA = (await apiJson<{ fixture_no: number }>(request, `/api/v1/fixtures/${differing.fixtureIds[0]!}`)).data!
+      .fixture_no;
+    // Registered for `afterEach`, never a `finally` — a Playwright timeout
+    // skips `finally` entirely and would leave the shared org mutated.
+    pendingOrgTzRestore = await setZoneSplitSql({
+      divisionId: differing.divisionId,
+      orgTz: ORG_TZ,
+      divisionTz: "Asia/Tokyo",
+      fixtureNo: -1,
+      at: "2030-01-01T00:00:00.000Z",
+    });
+    const rowA = await openEditor(differing.divisionId, noA);
+    const note = rowA.getByTestId("run-sheet-set-time-zone-note");
+    await expect(note).toBeVisible();
+    const seen = (await note.textContent())?.trim() ?? "";
+    // Built from the SHIPPED English string, so the copy has exactly one
+    // authority and a reworded note moves this expectation with it.
+    const expected = UI_EN["runsheet.setTime.zoneNote"]!.replace("{orgTz}", ORG_TZ).replace("{tz}", "Asia/Tokyo");
+    console.log(`zone note (orgTz=${ORG_TZ}, tz=Asia/Tokyo):`, JSON.stringify(seen));
+    expect(seen).toBe(expected);
+    // The sentence must actually change when the two zones swap places, or a
+    // reversed note would pass this case.
+    expect(expected).not.toBe(
+      UI_EN["runsheet.setTime.zoneNote"]!.replace("{orgTz}", "Asia/Tokyo").replace("{tz}", ORG_TZ),
+    );
+
+    // Phase 2 — the two zones AGREE, on a SECOND division of this test's own,
+    // whose venue zone is set to the SAME `ORG_TZ` the org is already on. No
+    // further org write: the column keeps the one value every test in this
+    // describe puts there, so nothing here can contradict its neighbour.
+    // Every absence below is paired with a positive twin (the editor and its
+    // date input are visible), because `toHaveCount(0)` is equally satisfied
+    // by a page that failed to render the editor at all.
+    const matching = await seedRunSheetDivision(request, { tz: ORG_TZ });
+    const noB = (await apiJson<{ fixture_no: number }>(request, `/api/v1/fixtures/${matching.fixtureIds[0]!}`)).data!
+      .fixture_no;
+    const rowB = await openEditor(matching.divisionId, noB);
+    const editorText = (await rowB.getByTestId("run-sheet-set-time-editor").textContent())?.trim() ?? "";
+    console.log(`editor text when orgTz === tz === ${ORG_TZ}:`, JSON.stringify(editorText.slice(0, 40)), "…");
+    await expect(rowB.getByTestId("run-sheet-set-time-editor")).toBeVisible();
+    await expect(rowB.locator('input[type="date"]')).toBeVisible();
+    await expect(rowB.getByTestId("run-sheet-set-time-zone-note")).toHaveCount(0);
+  });
 });
 
 // Fix round 4, CRITICAL — the "When" field in this editor was ZERO PIXELS
@@ -501,92 +638,6 @@ test("fix round 4: the inline Set-time field is a usable, tappable control at 32
     }));
     console.log(`set-time field round trip at ${width}px:`, JSON.stringify(roundTrip));
     expect(roundTrip).toEqual({ date: "2030-06-15", time: "14:30" });
-  }
-});
-
-// Fix round 4 — the zone note, both directions.
-//
-// Round 3 added it unconditionally, saying only which zone the input accepts.
-// Two problems, both about whether an organiser keeps reading it: it fired on
-// every division, including the majority where `orgTz === tz` and there is
-// nothing to disambiguate (a note that speaks when it has nothing to say
-// trains people to stop reading it), and it never said that the ROW
-// redisplays in a different zone, which is the actual confusion — a typed
-// 15:00 reappearing as 04:00 with no visible cause reads as data loss.
-//
-// This is also where `orgTz` gets its teeth. The editor's initial VALUE is
-// no longer read from the fixture (see run-sheet-row.tsx: the ladder only
-// opens this editor for a fixture with no time at all, so that read was dead
-// code), so the note is the one place `orgTz` is observable in the DOM.
-// Pinned as an exact sentence built from the dictionary's own string, not a
-// substring check — a containment assertion cannot tell "enter in NY, shown
-// in Tokyo" from the swapped, exactly-wrong "enter in Tokyo, shown in NY".
-test("fix round 4: the set-time zone note names both clocks, and only appears when they differ", async ({
-  page,
-  request,
-}) => {
-  const { divisionId, fixtureIds } = await seedRunSheetDivision(request);
-  expect(fixtureIds.length, "seed produced no fixtures — setup failed, not the sheet").toBeGreaterThanOrEqual(1);
-  const target = fixtureIds[0]!;
-  const fixtureNo = (await apiJson<{ fixture_no: number }>(request, `/api/v1/fixtures/${target}`)).data!.fixture_no;
-
-  const openEditor = async () => {
-    await page.goto(await divisionPath(request, divisionId, "?tab=fixtures"));
-    const row = page.locator(`[data-fixture-no="${fixtureNo}"]`);
-    await row.locator('[data-row-action="set_time"]').click();
-    await expect(row.getByTestId("run-sheet-set-time-editor")).toBeVisible();
-    return row;
-  };
-
-  // Phase 1 — the two zones DISAGREE. `fixtureNo: -1` matches no real row,
-  // so the helper's "null every OTHER fixture" clause leaves every fixture
-  // unscheduled, which is what makes "Set time" reachable at all.
-  const restoreOrgTz = await setZoneSplitSql({
-    divisionId,
-    orgTz: "America/New_York",
-    divisionTz: "Asia/Tokyo",
-    fixtureNo: -1,
-    at: "2030-01-01T00:00:00.000Z",
-  });
-  try {
-    let row = await openEditor();
-    const note = row.getByTestId("run-sheet-set-time-zone-note");
-    await expect(note).toBeVisible();
-    const seen = (await note.textContent())?.trim() ?? "";
-    // Built from the SHIPPED English string, so the copy has exactly one
-    // authority and a reworded note moves this expectation with it.
-    const expected = UI_EN["runsheet.setTime.zoneNote"]!
-      .replace("{orgTz}", "America/New_York")
-      .replace("{tz}", "Asia/Tokyo");
-    console.log("zone note (orgTz=America/New_York, tz=Asia/Tokyo):", JSON.stringify(seen));
-    expect(seen).toBe(expected);
-    // The two zones must really disagree, or phase 1 proves nothing.
-    expect(expected).not.toBe(
-      UI_EN["runsheet.setTime.zoneNote"]!.replace("{orgTz}", "Asia/Tokyo").replace("{tz}", "America/New_York"),
-    );
-
-    // Phase 2 — the two zones AGREE. The editor is still there; the note is
-    // not. Asserted with a POSITIVE twin (the editor is visible) beside the
-    // absence, because `toHaveCount(0)` is satisfied by a page that failed
-    // to render the editor at all.
-    await setZoneSplitSql({
-      divisionId,
-      orgTz: "Asia/Tokyo",
-      divisionTz: "Asia/Tokyo",
-      fixtureNo: -1,
-      at: "2030-01-01T00:00:00.000Z",
-    });
-    row = await openEditor();
-    const editorText = (await row.getByTestId("run-sheet-set-time-editor").textContent())?.trim() ?? "";
-    console.log("editor text when orgTz === tz === Asia/Tokyo:", JSON.stringify(editorText));
-    await expect(row.getByTestId("run-sheet-set-time-editor")).toBeVisible();
-    await expect(row.locator('input[type="date"]')).toBeVisible();
-    await expect(row.getByTestId("run-sheet-set-time-zone-note")).toHaveCount(0);
-  } finally {
-    // Restores the ORIGINAL org timezone captured by the FIRST call —
-    // `organizations.timezone` is shared with every parallel spec on this
-    // org (setZoneSplitSql's own doc comment).
-    await restoreOrgTz();
   }
 });
 
