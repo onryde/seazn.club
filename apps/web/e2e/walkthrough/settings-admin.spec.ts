@@ -331,17 +331,30 @@ test.describe("admin platform settings", () => {
         String(target),
       );
 
-      // The CLIENT half of the bounds, driven as a transition in both
-      // directions. Only the second half is the point: T3 proved an EMPTY box
-      // kills the Save, and a `parsed > 0` predicate would satisfy that test
-      // too while making a deliberate 0% — a legal fee, and a 200 in the table
-      // below — unsubmittable. The 101 line above it is what stops
-      // `toBeEnabled()` from being a constant: it proves this button does go
-      // dark on a fill, so its coming back live at 0 is the form's answer and
-      // not just the state it was already in.
+      // The CLIENT half of the bounds, enumerated over the SAME four values as
+      // the route table below, because `valid` and the zod schema are separate
+      // guards and a green route says nothing about the form.
+      //
+      // The order is the substance, not the reading order. Each ENABLED
+      // assertion is preceded by a DISABLED one on the same button, so neither
+      // can pass on the state it was already in — that is what makes them kill
+      // mutants rather than observe a constant:
+      //
+      //   101 dark → 100 live   kills `parsed <= 100` → `parsed < 100`
+      //    -1 dark →   0 live   kills `parsed >=  0` → `parsed >  0`
+      //
+      // Both closed ends need driving here and nowhere else. T3 proved only
+      // that an EMPTY box kills the Save, which a `parsed > 0` predicate
+      // satisfies too while making a deliberate 0% unsubmittable; and the route
+      // accepting 100 says nothing about a form that has already refused to
+      // offer the button.
       await input.fill("101");
       await expect(save, "over the ceiling the form must kill the Save").toBeDisabled();
       await expect(page.getByText("0–100 only"), "and say why").toBeVisible();
+      await input.fill("100");
+      await expect(save, "100% is the ceiling ITSELF — the form must offer a Save").toBeEnabled();
+      await input.fill("-1");
+      await expect(save, "below the floor the form must kill the Save").toBeDisabled();
       await input.fill("0");
       await expect(save, "0% is a legal fee — the form must still offer a Save").toBeEnabled();
       await expect(
@@ -365,11 +378,16 @@ test.describe("admin platform settings", () => {
           platform_fee_percent: c.value,
         });
         expect(res.status, `PUT ${c.value} — ${c.why}`).toBe(c.status);
-        // A 200 is satisfied by ANY stored value, so an accepted row has to
-        // say what it stored. This is what makes 2.7 "accepted end to end"
-        // rather than merely "not refused": the route echoes
-        // `platformFeeDefault()` read back AFTER the write, so a silent round
-        // to 3 (or a step the column quietly enforced) shows up here.
+        // A 200 is satisfied by ANY stored value, so an accepted row has to say
+        // what it stored. This is a genuine read-back, not an echo of the
+        // input: the route returns `await platformFeeDefault()` evaluated AFTER
+        // `setPlatformFeeDefault` dropped the cache entry (route.ts:27,
+        // platform-settings.ts:64), so a silent round to 3 shows up here.
+        //
+        // Its LIMIT, stated so nobody over-reads it: that reader is
+        // `Number(value)` plus a 0–100 clamp (platform-settings.ts:48-49). So
+        // this pins what every CONSUMER of the fee gets, which is the thing
+        // that matters — not the literal jsonb bytes in the column.
         if (c.status === 200) {
           expect(
             res.data?.platform_fee_percent,
@@ -377,6 +395,21 @@ test.describe("admin platform settings", () => {
           ).toBe(c.value);
         }
       }
+
+      // The refused rows pin the STATUS only, and every refused write here is
+      // masked from view: `-1` by the next row's write, and `101` by the
+      // restore in the `finally`. So a route that answered 400 and WROTE
+      // ANYWAY would be unobservable — the refusal rows cannot witness the
+      // regression they exist for. One read closes it, and the two assertions
+      // above it keep that read honest if the table is ever reordered: the
+      // last row must still be a refusal, or a standing value proves nothing.
+      const lastRow = cases[cases.length - 1]!;
+      const lastAccepted = [...cases].reverse().find((c) => c.status === 200)!;
+      expect(lastRow.status, "the table must END on a refusal for the read below to bite").toBe(400);
+      expect(
+        await readFee(page.request),
+        `the refused ${lastRow.value} must not have landed over the accepted ${lastAccepted.value}`,
+      ).toBe(lastAccepted.value);
     } finally {
       // Cleanup UNCONDITIONAL, and ordered so the fee restore can never skip
       // the role clear: the inner `finally` holds only the clear, so a restore
