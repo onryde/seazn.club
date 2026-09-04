@@ -20,13 +20,14 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import stripePlans from "@/config/stripe-plans.json";
+import { formatMinor } from "@/lib/currency";
 
 /**
  * The two rung prices the picker actually renders, READ from the same seed it
  * reads rather than typed here.
  *
- * They used to be the literals `$29` and `$59`, and W2's reprice (M 29 -> 15,
- * L 59 -> 39) broke them in a way worth remembering: the four POSITIVE
+ * They used to be the literals `$29` and `$59`, and W2's reprice (M 29 -> 15
+ * -> 11.99, L 59 -> 39 -> 44.99) broke them TWICE in ways worth remembering: the four POSITIVE
  * assertions failed loudly, but the two NEGATIVE ones — "must not price
  * anything once a pass is held" — went silently VACUOUS. `not.toContain("$29")`
  * passes trivially on a page that has never heard of $29, so the guard against
@@ -37,9 +38,16 @@ import stripePlans from "@/config/stripe-plans.json";
 const rungPrice = (key: "event_pass" | "event_pass_l"): string => {
   const rung = stripePlans.passes.find((r) => r.key === key);
   if (!rung) throw new Error(`stripe-plans.json has no ${key} rung to price`);
-  const { unit_amount: minor } = rung.price;
-  if (minor % 100 !== 0) throw new Error(`${key} is ${minor} minor units — this helper assumes whole dollars`);
-  return `$${minor / 100}`;
+  // Formatted the way the PAGE formats it, not by dividing by 100 here. The
+  // hand-rolled version carried `if (minor % 100 !== 0) throw` — a guard that
+  // was correct for whole-dollar rungs and became a module-scope THROW the
+  // moment charm pricing landed (event_pass is 1199). A throw at module scope
+  // is the worst shape available: the file fails to COLLECT, so vitest reports
+  // `numFailedTests: 0` for it and the whole suite goes silently missing from
+  // the wave's counts rather than going red. `formatMinor` drops the decimals
+  // on whole amounts and keeps them on fractional ones, which is exactly the
+  // rule the page renders by.
+  return formatMinor(rung.price.unit_amount, "usd");
 };
 const M_PRICE = rungPrice("event_pass");
 const L_PRICE = rungPrice("event_pass_l");
