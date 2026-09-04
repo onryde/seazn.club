@@ -3153,7 +3153,7 @@ export const FEE_LADDER_PLAN_KEYS: Record<string, string[]> = {
   Enterprise: ["enterprise"],
 };
 
-/** `| Community | 8% |` rows, from a markdown fee table. */
+/** `| Community | 5% |` rows, from a markdown fee table. */
 export function feeLadderRows(section: string): Array<{ plan: string; percent: number }> {
   const rows: Array<{ plan: string; percent: number }> = [];
   for (const line of section.split("\n")) {
@@ -3161,6 +3161,102 @@ export function feeLadderRows(section: string): Array<{ plan: string; percent: n
     if (match) rows.push({ plan: match[1]!, percent: Number(match[2]) });
   }
   return rows;
+}
+
+/** One fee-ladder table found in an article: its header line, and its rows. */
+export interface FeeLadderTable {
+  header: string;
+  rows: Array<{ plan: string; percent: number }>;
+}
+
+/**
+ * EVERY fee-ladder table in a markdown article, found by SHAPE rather than by
+ * heading — and this function exists because the guard below was scoped to one
+ * FILE for a whole wave.
+ *
+ * `feeLadderFaults` was called with `markdownSection(plans.md, /platform fee/i)`
+ * and nothing else, while `billing/groups.md` and `registration/card-payments.md`
+ * carried their own copies of the same table. Both still read `| Pro Plus | 1% |`
+ * after plans.md had been corrected, because nothing pointed the rule at them —
+ * the scoping decision lived at a call site several hundred lines from the
+ * function that looked authoritative.
+ *
+ * Shape, not filename and not heading: a run of contiguous `|` lines counts as a
+ * fee ladder when EITHER its header mentions a fee (so a table whose plan names
+ * were all renamed at once is still caught) OR at least two of its rows name a
+ * plan the ladder knows (so a table whose heading was reworded still is). Either
+ * alone has a blind spot; the disjunction has neither.
+ *
+ * Deliberately NOT matched: `billing/event-pass.md`'s comparison table, whose
+ * fee row is TRANSPOSED — `| Platform fee on entry fees | 4% | 4% |`, one column
+ * per rung rather than one row per plan. Its header names the two rungs and
+ * their prices, and its first cell is empty, so neither clause fires. That row
+ * is a fee claim and it is guarded, by `passFeeRowFaults` below; it is a
+ * different rule because it is a different table.
+ */
+export function feeLadderTables(markdown: string): FeeLadderTable[] {
+  const tables: FeeLadderTable[] = [];
+  let run: string[] = [];
+  const flush = () => {
+    if (run.length >= 2) {
+      const rows = feeLadderRows(run.join("\n"));
+      const named = rows.filter((r) => FEE_LADDER_PLAN_KEYS[r.plan]).length;
+      if (/\bfees?\b/i.test(run[0]!) || named >= 2) tables.push({ header: run[0]!, rows });
+    }
+    run = [];
+  };
+  for (const line of markdown.split("\n")) {
+    if (line.trim().startsWith("|")) run.push(line.trim());
+    else flush();
+  }
+  flush();
+  return tables;
+}
+
+/**
+ * The transposed fee row — one column per Event Pass rung — against the live
+ * matrix.
+ *
+ * `event-pass.md` sells both rungs side by side, so its fee claim is a ROW of
+ * rates rather than a column of plans, and `feeLadderTables` cannot read it.
+ * The rule it can still enforce without inferring which column is which rung:
+ * EVERY rate in that row must be a rate some pass rung actually charges, and
+ * the rungs must all charge the same one. Both rungs have shared a rate since
+ * V270, and if they ever stop, this reds — which is the right outcome, because
+ * a two-rung table with two different rates needs a guard that knows its
+ * column order, and nobody should discover that silently.
+ */
+export function passFeeRowFaults(
+  label: string,
+  markdown: string,
+  passRates: Record<string, number | null>,
+): string[] {
+  const keys = Object.keys(passRates);
+  if (keys.length === 0) return [`${label}: no pass rates supplied — this scan would pass vacuously`];
+  const rates = new Set(keys.map((k) => passRates[k]));
+  const line = markdown
+    .split("\n")
+    .map((l) => plainProse(l.trim()))
+    .find((l) => /^\|\s*Platform fee/i.test(l));
+  if (!line) return [`${label}: no transposed "Platform fee" row found — the table's shape changed`];
+  const quoted = [...line.matchAll(/(\d+(?:\.\d+)?)\s*%/g)].map((m) => Number(m[1]));
+  const faults: string[] = [];
+  if (quoted.length < 2) {
+    faults.push(`${label}: the fee row quotes ${quoted.length} rate(s), but the table sells two rungs`);
+  }
+  if (rates.size > 1) {
+    faults.push(
+      `${label}: the pass rungs no longer share one rate (${keys.map((k) => `${k}=${passRates[k]}`).join(", ")}) — this row cannot say which column is which, so it needs a column-aware guard`,
+    );
+    return faults;
+  }
+  const [live] = [...rates];
+  for (const percent of quoted) {
+    if (percent !== live) {
+      faults.push(`${label}: the fee row quotes ${percent}%, but every pass rung enforces ${live}%`);
+    }
+  }
+  return faults;
 }
 
 /**
@@ -3173,9 +3269,26 @@ export function feeLadderRows(section: string): Array<{ plan: string; percent: n
 export function feeLadderFaults(
   rows: Array<{ plan: string; percent: number }>,
   live: Record<string, number | null>,
+  /**
+   * Which ladder LABELS this table must carry. Defaults to all of them, which
+   * is right for a table headed "Plan"; a table headed "The group's plan"
+   * legitimately omits Event Pass, because a competition-scoped pass is not a
+   * plan a billing group can be on and a row for it would be a falsehood
+   * rather than a completeness win. The caller declares the subset WITH ITS
+   * REASON, so an omission is a recorded decision instead of a silent gap —
+   * which is the failure this whole function has already had once, at a
+   * different level (it was scoped to a single file while three articles
+   * carried the table).
+   */
+  require: readonly string[] = Object.keys(FEE_LADDER_PLAN_KEYS),
 ): string[] {
   const faults: string[] = [];
   const seen = new Set<string>();
+  for (const label of require) {
+    if (!FEE_LADDER_PLAN_KEYS[label]) {
+      faults.push(`fee ladder: required label "${label}" is not a ladder row at all`);
+    }
+  }
   for (const { plan, percent } of rows) {
     const keys = FEE_LADDER_PLAN_KEYS[plan];
     if (!keys) {
@@ -3189,7 +3302,7 @@ export function feeLadderFaults(
       }
     }
   }
-  for (const plan of Object.keys(FEE_LADDER_PLAN_KEYS)) {
+  for (const plan of require) {
     if (!seen.has(plan)) faults.push(`fee ladder: no row for ${plan}`);
   }
   return faults;

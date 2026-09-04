@@ -27,6 +27,8 @@ import {
   mentionsRateAfterPass,
   feeLadderFaults,
   feeLadderRows,
+  feeLadderTables,
+  passFeeRowFaults,
   DURATION_ALLOWLIST,
   FEE_RATE_ALLOWLIST,
   approvedFormsExercised,
@@ -770,16 +772,81 @@ describe.skipIf(!HAS_DB)("billing help articles quote the numbers the matrix enf
     return row!.int_value;
   };
 
-  it("the fee ladder table is the fee the matrix charges, row for row", async () => {
+  /**
+   * Which ladder labels each published fee table must carry.
+   *
+   * A table absent from this map is required to carry ALL of them — the safe
+   * default — so a NEW article growing a fee ladder is checked in full the day
+   * it lands, and only a deliberate subset needs a line here.
+   */
+  const LADDER_REQUIREMENTS: Record<string, { require: string[]; why: string }> = {
+    "billing/groups": {
+      require: ["Community", "Pro", "Enterprise"],
+      why: "the column is 'The group's plan'. An Event Pass upgrades ONE COMPETITION and is not a plan a billing group can sit on, so a row for it would be a falsehood rather than a completeness win — the article's own next line is 'Community holds 1 and Pro holds 5'.",
+    },
+  };
+
+  it("EVERY published fee ladder is the fee the matrix charges, row for row", async () => {
+    // WIDENED W3 (2026-09-04). This called `feeLadderFaults` on ONE section of
+    // ONE article — `markdownSection(plans.md, /platform fee/i)` — while
+    // `billing/groups.md` and `registration/card-payments.md` carried their own
+    // copies of the same table. Both still read "| Pro Plus | 1% |" a whole
+    // wave after plans.md had been corrected, because nothing pointed the rule
+    // at them. The guard looked authoritative; its SCOPE lived at this call
+    // site, hundreds of lines from the function.
+    //
+    // The sweep is by SHAPE, over every article `allHelpArticles()` returns —
+    // never a filename list, which is the same mistake one level up.
     const live: Record<string, number | null> = {};
     for (const keys of Object.values(FEE_LADDER_PLAN_KEYS)) {
       for (const key of keys) live[key] = await capFor("registration.fee_percent", key);
     }
-    const rows = feeLadderRows(feeLadderSection!);
-    expect(rows.length, "no fee rows parsed — the table's shape changed").toBe(
-      Object.keys(FEE_LADDER_PLAN_KEYS).length,
-    );
-    expect(feeLadderFaults(rows, live)).toEqual([]);
+
+    const found: Array<{ slug: string; rows: number }> = [];
+    const faults: string[] = [];
+    for (const article of allHelpArticles().values()) {
+      // RAW markdown, frontmatter included — `allHelpArticles` has stripped it,
+      // and a fee table could as easily sit in a `description`.
+      for (const table of feeLadderTables(helpArticleBySlug(article.slug))) {
+        found.push({ slug: article.slug, rows: table.rows.length });
+        const spec = LADDER_REQUIREMENTS[article.slug];
+        for (const fault of feeLadderFaults(table.rows, live, spec?.require)) {
+          faults.push(`${article.slug}: ${fault}`);
+        }
+      }
+    }
+    expect(faults).toEqual([]);
+
+    // ── ANTI-VACUITY, because every line above is a loop ────────────────────
+    // A sweep that matched nothing reports exactly what a clean tree reports.
+    // Three articles publish this table today (plans, groups, card-payments);
+    // the floor is stated as a floor so a FOURTH is a pass, not a red.
+    expect(
+      found.length,
+      `fewer than three fee ladders found — the sweep has gone blind (found: ${JSON.stringify(found)})`,
+    ).toBeGreaterThanOrEqual(3);
+    expect(new Set(found.map((f) => f.slug)).size, "one article, scanned repeatedly").toBeGreaterThanOrEqual(3);
+    for (const f of found) {
+      expect(f.rows, `${f.slug}: a fee table with fewer than three rows is a shape change`).toBeGreaterThanOrEqual(3);
+    }
+    // …and every declared subset must name a table that EXISTS, or the
+    // exemption is a licence for an article nobody publishes.
+    for (const slug of Object.keys(LADDER_REQUIREMENTS)) {
+      expect(found.some((f) => f.slug === slug), `${slug} declares a ladder subset but publishes no ladder`).toBe(true);
+    }
+  });
+
+  it("the transposed pass fee row quotes the rate both rungs enforce", async () => {
+    // `event-pass.md` sells the two rungs side by side, so its fee claim is a
+    // ROW of rates rather than a column of plans and the sweep above cannot
+    // read it. It is the fourth published copy of this fact and went unscanned
+    // for the same reason the other two did — a different shape, so nobody
+    // looked.
+    const passRates = {
+      event_pass: await capFor("registration.fee_percent", "event_pass"),
+      event_pass_l: await capFor("registration.fee_percent", "event_pass_l"),
+    };
+    expect(passFeeRowFaults("event-pass.md", eventPass, passRates)).toEqual([]);
   });
 
   it("the Event Pass articles quote each rung's own live caps", async () => {
@@ -1222,6 +1289,107 @@ describe("the help-prose guards survive a rewording, not just a revert", () => {
     expect(feeLadderFaults(feeLadderRows("no table here"), live)).toHaveLength(
       Object.keys(FEE_LADDER_PLAN_KEYS).length,
     );
+  });
+
+  // ── THE WIDENED SWEEP, W3 ─────────────────────────────────────────────────
+
+  it("finds a fee ladder by SHAPE, wherever in an article it sits", () => {
+    // The failure this replaces: the rule was pointed at ONE section of ONE
+    // file, so two other articles carried the same table unscanned.
+    const ladder = [
+      "| Plan | Platform fee |",
+      "| --- | --- |",
+      "| Community | 5% |",
+      "| Pro | 2% |",
+      "| Enterprise | 1% |",
+    ].join("\n");
+    const article = ["# Anything", "", "Some prose.", "", ladder, "", "More prose."].join("\n");
+    expect(feeLadderTables(article)).toHaveLength(1);
+    expect(feeLadderTables(article)[0]!.rows.map((r) => r.plan)).toEqual([
+      "Community",
+      "Pro",
+      "Enterprise",
+    ]);
+    // Two copies in one article are two tables, not one — the drifted copy is
+    // exactly the case that went unscanned for a wave.
+    expect(feeLadderTables(`${article}\n\n${ladder}\n`)).toHaveLength(2);
+
+    // Either clause alone finds it. A table whose HEADING was reworded away
+    // from "fee" is still found by its plan names…
+    const renamedHeader = ladder.replace("| Plan | Platform fee |", "| Tier | What we keep |");
+    expect(feeLadderTables(renamedHeader), "found by its rows").toHaveLength(1);
+    // …and a table whose plan names were ALL renamed at once is still found by
+    // its header, so the rows can be reported as unrecognised rather than
+    // vanishing from the sweep.
+    const renamedRows = ladder.replace(/Community|Pro|Enterprise/g, "Mystery");
+    expect(feeLadderTables(renamedRows), "found by its header").toHaveLength(1);
+
+    // And it does NOT drag in a table that is not a fee ladder.
+    const other = ["| Line | What it is |", "| --- | --- |", "| Tax | on the difference |"].join("\n");
+    expect(feeLadderTables(other)).toEqual([]);
+    // …including event-pass.md's TRANSPOSED shape, which has its own rule.
+    const transposed = [
+      "| | M — $11.99 | L — $44.99 |",
+      "| --- | --- | --- |",
+      "| Platform fee on entry fees | 4% | 4% |",
+    ].join("\n");
+    expect(feeLadderTables(transposed)).toEqual([]);
+  });
+
+  it("lets a table declare the subset it carries, and refuses a bad declaration", () => {
+    const live = { community: 5, event_pass: 4, event_pass_l: 4, pro: 2, enterprise: 1 };
+    const groupsShaped = [
+      "| The group's plan | Platform fee on entries |",
+      "| --- | --- |",
+      "| Community | 5% |",
+      "| Pro | 2% |",
+      "| Enterprise | 1% |",
+    ].join("\n");
+    const rows = feeLadderRows(groupsShaped);
+    // Without the declaration it is INCOMPLETE, which is the default and the
+    // right default — a dropped row reads as "that plan has no platform fee".
+    expect(feeLadderFaults(rows, live)).toEqual(["fee ladder: no row for Event Pass"]);
+    // With it, the omission is a recorded decision.
+    expect(feeLadderFaults(rows, live, ["Community", "Pro", "Enterprise"])).toEqual([]);
+    // The declaration cannot excuse a WRONG RATE — only a missing row.
+    expect(
+      feeLadderFaults(
+        feeLadderRows(groupsShaped.replace("| Pro | 2% |", "| Pro | 8% |")),
+        live,
+        ["Community", "Pro", "Enterprise"],
+      ).join(" "),
+    ).toContain('"Pro" quotes 8%, but pro enforces 2%');
+    // …nor can it name a label that is not a ladder row at all, which is how a
+    // typo would otherwise silently drop a plan from the required set.
+    expect(feeLadderFaults(rows, live, ["Community", "Pro", "Enterprize"]).join(" ")).toContain(
+      'required label "Enterprize" is not a ladder row at all',
+    );
+  });
+
+  it("reads the transposed pass fee row, and refuses to guess when the rungs diverge", () => {
+    const table = [
+      "| | M — $11.99 | L — $44.99 |",
+      "| --- | --- | --- |",
+      "| Platform fee on entry fees | 4% | 4% |",
+    ].join("\n");
+    const rates = { event_pass: 4, event_pass_l: 4 };
+    expect(passFeeRowFaults("x", table, rates)).toEqual([]);
+    // A stale rate in either column.
+    expect(passFeeRowFaults("x", table.replace("| 4% | 4% |", "| 5% | 4% |"), rates).join(" ")).toContain(
+      "quotes 5%, but every pass rung enforces 4%",
+    );
+    // One rate where the table sells two rungs.
+    expect(passFeeRowFaults("x", table.replace("| 4% | 4% |", "| 4% | |"), rates).join(" ")).toContain(
+      "quotes 1 rate(s), but the table sells two rungs",
+    );
+    // Rungs that stop sharing a rate: the rule REFUSES rather than guessing
+    // which column is which, and says what is needed instead.
+    expect(passFeeRowFaults("x", table, { event_pass: 4, event_pass_l: 3 }).join(" ")).toContain(
+      "needs a column-aware guard",
+    );
+    // The vacuity modes: no row, and no rates supplied.
+    expect(passFeeRowFaults("x", "no table here", rates).join(" ")).toContain("the table's shape changed");
+    expect(passFeeRowFaults("x", table, {}).join(" ")).toContain("would pass vacuously");
   });
 });
 
