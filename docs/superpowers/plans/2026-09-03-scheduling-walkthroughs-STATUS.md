@@ -113,3 +113,69 @@ do not touch it from this branch. A merge conflict is CERTAIN in all four
 the last key in each file. Four hunks of that shape are expected; anything
 further is real. `i18n-keys.ts` is generated — take one side wholesale and re-run
 `pnpm run i18n:gen-keys`.
+
+
+## Whole-branch review — findings and rulings (2026-09-04)
+
+Three read-only reviewers over `origin/main...HEAD` (41 commits, 40 files).
+Reports: `wb-review-logic.md`, `wb-review-i18n.md`, `wb-review-tests.md` in the
+plan's SDD workspace. Rulings below are mine as product owner, made rather than
+deferred, and each says what it costs if wrong.
+
+**Tests: approved.** No Critical or Major. Every "derived from X" and
+guard-placement claim in this wave's tests was cross-checked against production
+source and held.
+
+### Critical — `clearPoolEntrants` has no freeze guard
+
+`history.ts:768`, live at `POST /api/v1/pools/[id]/clear-entrants`. It takes the
+advisory lock, reads fixtures, calls `engineRemovePool`, then `execute(...)`,
+with no `divisionLockState`. A frozen division's fixtures can be removed through
+it today. Verified by reading the function, not relayed. **Pre-existing** —
+`git log -L :clearPoolEntrants:` from the worktree shows this branch never
+touched it.
+
+**Ruling: fix it in this wave.** The wave's headline claim is that a frozen
+division refuses edits; that claim is false while this route works, and the
+repair is the same four lines as its three siblings in the same file. Landed as
+Task 10 Step 4, with a red-first test and an unfrozen control in the same test —
+a guard that refuses everything looks identical to a working one otherwise.
+*If wrong:* four lines and a test to revert, and a route that was already
+unguarded stays unguarded.
+
+### Major — a freeze landing mid-`restoreCheckpoint` leaves a partial rewind
+
+`history.ts:667-679` runs its undo loop as N independent transactions with no
+lock spanning them, and the new per-step freeze check re-reads on every
+iteration. A concurrent `setDivisionLocks` stops the rewind partway and returns
+a 422 that reads as "nothing happened" while earlier events are committed.
+Untested — every existing test freezes *before* the restore, never during.
+
+**Ruling: the 422 must carry how many steps were already undone.** A refusal
+that cannot be distinguished from a no-op is the worse half of this defect; the
+partial rewind itself is acceptable, since the alternative is holding a lock
+across N transactions. Owed: a test that freezes mid-loop, and the count in the
+error payload. *If wrong:* the payload gains a field nobody reads.
+
+### Major ×2 — this branch's own English leaks into translated cards
+
+`ai-competition-console.tsx:628-631` fills `board.ai.joint.undoneReason`'s
+`{reason}` with a raw server `err.message` (from
+`competition-schedule-restore.ts:184`), so "the division schedule is locked —
+unlock it to edit" ships in English mid-sentence inside a fully translated card,
+on the first request. `history-panel.tsx:143,253` renders `err.message` raw in a
+generic `catch`, reachable via a stale `scheduleLocked` prop.
+
+**Ruling: fix in this wave, sequenced after Task 10.** The `SCHEDULE_LOCKED`
+code that task adds is exactly the handle a client needs to render a local
+string instead of echoing the server's English — so this is one piece of work
+done in order, not two. *If wrong:* a translated surface keeps an English clause
+slightly longer than it should.
+
+### Not in scope, deliberately
+
+`stages-panel.tsx:744-745`'s unwired second undo control is real and stays for
+another wave — a concurrent wave is rewriting that file, and a unilateral edit
+there makes the merge worse, not better. `schedule-ai.ts`'s 409 refusal shares
+the concept but not the string; changing a status code is a contract change
+nobody asked for.
