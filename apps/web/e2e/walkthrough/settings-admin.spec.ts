@@ -254,7 +254,20 @@ test.describe("admin platform settings", () => {
         save,
         "an empty field must not be a submittable 0%",
       ).toBeDisabled();
-      await expect(page.getByText("0–100 only"), "the form must say why the Save is dead").toBeVisible();
+      // Each dead-Save case pins its OWN message. `0–100 only` here would be
+      // the form giving the wrong reason — the box is not out of range, it is
+      // EMPTY — and asserting it would freeze that wrong copy as expected
+      // behaviour. Both halves are load-bearing: a component that renders both
+      // notes at once, or one note carrying both sentences, passes the
+      // visible-assertion alone and is caught only by the hidden one.
+      await expect(
+        page.getByText("Enter a percentage"),
+        "an empty field must say the field is EMPTY, which is why the Save is dead",
+      ).toBeVisible();
+      await expect(
+        page.getByText("0–100 only"),
+        "emptiness is not a RANGE problem — the range note must not be the reason given",
+      ).toBeHidden();
 
       // And if it were submitted anyway, the stored value must be untouched.
       expect(
@@ -351,6 +364,13 @@ test.describe("admin platform settings", () => {
       await input.fill("101");
       await expect(save, "over the ceiling the form must kill the Save").toBeDisabled();
       await expect(page.getByText("0–100 only"), "and say why").toBeVisible();
+      // The mirror of T3's pair. 101 is PRESENT and out of range, so the
+      // emptiness note would be the wrong reason here — without this the two
+      // messages could collapse back into one and both tests would still pass.
+      await expect(
+        page.getByText("Enter a percentage"),
+        "101 is present, not missing — the emptiness note must not be the reason given",
+      ).toBeHidden();
       await input.fill("100");
       await expect(save, "100% is the ceiling ITSELF — the form must offer a Save").toBeEnabled();
       await input.fill("-1");
@@ -360,6 +380,10 @@ test.describe("admin platform settings", () => {
       await expect(
         page.getByText("0–100 only"),
         "0 is in range, so the form must not claim otherwise",
+      ).toBeHidden();
+      await expect(
+        page.getByText("Enter a percentage"),
+        "a deliberate 0 is not an empty box — the form must not ask for a value",
       ).toBeHidden();
 
       // The ROUTE half, enumerated rather than sampled. Nothing is clicked

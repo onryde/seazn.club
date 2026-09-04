@@ -27,7 +27,14 @@ export function AdminPlatformSettings({
   // place that can tell "the admin meant zero" from "the admin cleared the box".
   // A `type="number"` input also reports "" for unparseable input, so this same
   // clause is what stops a typo'd "abc" from being saved as 0.
-  const valid = trimmed !== "" && Number.isFinite(parsed) && parsed >= 0 && parsed <= 100;
+  // Split from `valid`, not folded into it, because the note beside the button
+  // has to name the ACTUAL reason the Save is dead. An empty box is not an
+  // out-of-range value, and telling an admin `0–100 only` over an empty field
+  // points them at a bound they have not crossed. A `type="number"` input also
+  // reports "" for unparseable input, so a typo'd "abc" lands here too — "the
+  // field has no number in it" is the honest reading of both.
+  const empty = trimmed === "";
+  const valid = !empty && Number.isFinite(parsed) && parsed >= 0 && parsed <= 100;
 
   async function save() {
     setBusy(true);
@@ -87,7 +94,11 @@ export function AdminPlatformSettings({
         </button>
         {saved && <span className="text-xs text-emerald-400">Saved.</span>}
         {error && <span className="text-xs text-red-400">{error}</span>}
-        {!valid && <span className="text-xs text-amber-400">0–100 only</span>}
+        {!valid && (
+          <span className="text-xs text-amber-400">
+            {empty ? "Enter a percentage" : "0–100 only"}
+          </span>
+        )}
         {!canWrite && <span className="text-xs text-slate-400">Superadmin only.</span>}
       </div>
     </div>
