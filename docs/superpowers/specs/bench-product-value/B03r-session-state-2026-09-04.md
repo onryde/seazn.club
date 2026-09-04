@@ -6,7 +6,7 @@ Written for continuity across a compaction. Companion to
 ## Where the work is
 
 - Worktree `/Users/ashokhein/github/seazn.club/.claude/worktrees/bench-b03r`
-- Branch `feat/bench-b03r-registration`, **34 commits**, nothing pushed, no PR opened
+- Branch `feat/bench-b03r-registration`, **37 commits**, pushed, **PR #713**
 - Baseline worktree for A/B triage: `.claude/worktrees/b03r-base` (detached at `3cfac6332`)
 
 ## Environment (all live right now)
@@ -26,7 +26,7 @@ Stripe CLI is logged in; Chromium installed.
 
 | Gate | Result |
 |---|---|
-| `scripts/bench` full suite | **714/714**, 0 outside worktree |
+| `scripts/bench` full suite | **721/721**, 0 outside worktree |
 | `apps/web` register components | 317/317 |
 | `apps/web` full suite (earlier) | 13,707/13,789 — all 8 reds explained, none from this diff |
 | `tsc -p tsconfig.scripts.json` | clean |
@@ -163,13 +163,45 @@ declared 100, and the expectation was wrong, not the product.
 | Counts pasted, lint clean | scripts/bench **714/714**, tsc clean, eslint 0 problems |
 | PR body lists schema escalation + re-pins | owed — the PR itself is the only thing left |
 
-## Still owed
+## Status: PR #713 OPEN, 2026-09-04
 
-1. Final reviewer pass over the branch.
-2. Open the PR (one PR, product + bench — owner ruling 1; record the deviation
-   from the prompt's "PR 0 merged first" acceptance line).
-3. Teardown: `seazn-env down --label b03r` **and** `--label b03rbase`;
-   `git worktree remove .claude/worktrees/b03r-base`.
+https://github.com/onryde/seazn.club/pull/713 — 37 commits, one PR carrying
+both the bench and the product test hooks (owner ruling 1; the deviation from
+the prompt's "PR 0 merged first" line is recorded in the PR body).
+
+Final gates: `scripts/bench` **721/721**, `apps/web` touched components
+571/571, tsc clean, eslint 0 problems. All three live entry modes green.
+
+### What the pre-PR review caught
+
+Two of its four findings were real gaps in MY verification, not the code's:
+
+- **`org.currency` was a fifth inert seam** — stage-0 validated by
+  `registration.currency_required` and transmitted nowhere. I had SEEN the
+  symptom (live charges came back GBP against a pack declaring `usd`), written
+  it down as "worth recording", and not traced it. `organizations.currency`
+  defaults to `'gbp'`. Now written via `PlanSql.setOrgCurrency` and re-proven
+  live: the charges settle in **USD**. The general lesson is sharper than the
+  fix — **a validated-but-unsent field is an inert seam wearing a validation
+  rule as camouflage.** The tell is that the rule enforces AUTHORING rather
+  than EFFECT.
+- **The `pay()` call had no unit coverage at all.** `register.ts`'s
+  `if (entry.pay && outcome.ref) await captain.pay(...)` is the single most
+  important line in the paid funnel and the exact line behind the live
+  `ref: ""` defect. Deleting it outright left **714/714 green**. Only the live
+  run had ever exercised it. Mutate the money path specifically; do not assume
+  it is covered because tests exist nearby.
+
+Verifying the findings also surfaced a mistake of my own: the bulk edit that
+added `paymentMethod: "stripe"` to test fixtures tracked the last `approval:`
+line ACROSS blocks, so a capacity test received a marker meant for the next
+block plus an orphaned comment asserting something untrue about it.
+
+### Still owed
+
+- Tear down the `b03r` label (DB 54867, server 3305, placement 50748).
+  `b03rbase` and the `b03r-base` worktree are already gone.
+- Nothing else. B04 picks up §5.2's organiser-force eligibility half.
 
 ## Traps that cost time here — do not re-learn them
 
