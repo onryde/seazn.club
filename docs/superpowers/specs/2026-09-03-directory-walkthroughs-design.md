@@ -78,9 +78,40 @@ so a spec cannot import them. The spec therefore asserts on **evidence kinds**
 
 Four refusal paths, all with real UI controls:
 
+**Two of the four refusals below were WRONG as first written.** Both were
+corrected by driving the product, and both were then verified independently.
+They are kept here with their corrections because the wrong version is the one
+a reader reconstructs from the schema.
+
+- **The wrong-email refusal is NOT `assertClaimEmail`.** That was this design's
+  claim and it is false. `app/claim/[token]/page.tsx:81` performs its OWN email
+  comparison and simply does not render the accept button for a mismatched
+  visitor — so `claim-accept.tsx:18` is never reached, `claimPerson` never runs,
+  and `assertClaimEmail` cannot execute mismatched on ANY UI path. Mutating
+  `assertClaimEmail` leaves the walkthrough green (proven: its throw string was
+  dead-code-eliminated from the emitted JS); mutating the page branch kills it.
+  The server guard is defence-in-depth, and it is already covered DB-backed at
+  `person-claims.test.ts:167` (403 / `CLAIM_EMAIL_MISMATCH`). **Owner ruling
+  2026-09-04: accept as-is** — the refusal a real person meets is the page
+  branch, and the walkthrough pins that. No API-level spec is owed.
+- **A re-invite cannot be minted from the console while one is pending.** The
+  row's only verb is then "Withdraw invite" (`invite-claim.tsx:108-132`), so
+  `person_claims_open_uq`'s revoke-on-mint has no UI path; reaching it needs a
+  second, stale console. The DB guard is unit-covered at
+  `person-claims.test.ts:138,440`. **Owner ruling 2026-09-04: record only** —
+  a deliberate UI/DB asymmetry, not a gap to close, and withdraw-then-invite is
+  a defensible organiser flow.
+- **Unlink does not kill a LINK.** `settleClaimRow` (`person-claims.ts:233-238`)
+  tests `claimed_at || user_id` before `revoked_at`, and `unlinkPerson:396-399`
+  keeps `claimed_at` — so an already-claimed link keeps reading "Already
+  claimed" after an unlink. Safe, but not what this design assumed.
+
+So the walkthrough proves **three endings and one refusal**, not "four things
+kill it".
+
 | refusal | mechanism | control |
 |---|---|---|
-| wrong email follows the link | `assertClaimEmail` (`:299`) | `/claim/{token}` accept page |
+| wrong email follows the link | the PAGE's own comparison, `claim/[token]/page.tsx:81` — NOT `assertClaimEmail` | `/claim/{token}` accept page |
 | organiser revokes the open invite | `revokeClaimInvite` (`:188`) | `invite-claim.tsx:113` → `DELETE /api/v1/persons/{id}/claim-invites` |
 | organiser unlinks a claimed account | `unlinkPerson` (`:386`) | `invite-claim.tsx:94` → `POST /api/v1/persons/{id}/unlink` |
 | a re-invite kills the previous link | `person_claims_open_uq` (V276) — one OPEN claim per person | invite again; the first copied link is now dead |
