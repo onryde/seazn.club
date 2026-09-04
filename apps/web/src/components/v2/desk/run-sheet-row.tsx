@@ -28,6 +28,7 @@ export function RunSheetRow({
   fixture,
   href,
   tz,
+  orgTz,
   nowMs,
   canEdit,
   entrantNames,
@@ -37,9 +38,18 @@ export function RunSheetRow({
 }: {
   fixture: RunSheetFixture;
   href: string;
-  /** The VENUE zone (`scheduleSettings.tz`) — both the time cell and
-   *  `fixtureRowAction`'s "scheduled today" rule key off it. */
+  /** The VENUE zone (`scheduleSettings.tz`) — the time cell's DISPLAY and
+   *  `fixtureRowAction`'s "scheduled today" rule both key off it. */
   tz: string;
+  /** The ORG zone (`resolveVenueTz(null, org.timezone)`, #448) — the zone
+   *  the inline "Set time" editor reads and writes in (fix round 3, owner
+   *  ruling). Distinct from `tz`: a typed value is governed by `orgTz`,
+   *  never `settings.tz`, matching every other write site in the repo
+   *  (`move-panel.tsx`, `settings-panel.tsx`, the board) — `tz` stays
+   *  display-only. Threaded down from `StagesPanel`'s own `orgTz` prop
+   *  (`page.tsx`'s `resolveVenueTz(null, page.org.timezone)`); never
+   *  re-derived here — one authority per fact. */
+  orgTz: string;
   nowMs: number;
   canEdit: boolean;
   entrantNames: Record<string, string>;
@@ -54,13 +64,17 @@ export function RunSheetRow({
   const msg = useMsg();
   const router = useRouter();
   const [editing, setEditing] = useState(false);
-  // ELEVATED (fix round 1): the VENUE zone (`tz`, amendment 4), never the
-  // browser's — `new Date(iso)`/`new Date(when)` read/write local wall-clock
-  // in whatever zone the BROWSER happens to be in, so a Tokyo browser on a
-  // UTC venue wrote the wrong instant. Inherited verbatim from the retired
-  // `FixtureLine`, but this is now the ONLY inline set-time path on the
-  // sheet, so the bug is no longer merely dormant.
-  const [when, setWhen] = useState(fixture.scheduled_at ? zonedDateTimeInput(fixture.scheduled_at, tz) : "");
+  // Fix round 3 (owner ruling): the ORG zone (`orgTz`, #448), never the
+  // VENUE zone (`tz`) and never the browser's implicit zone —
+  // `zoned-datetime.ts`'s own header already rules that a TYPED time is
+  // governed by `orgTz`, matching every other write site in the repo. This
+  // is a deliberate mismatch with the row's DISPLAY (`tz`, amendment 4): on
+  // a division whose venue zone overrides the org's, an organiser typing
+  // 15:00 sees the row redisplay a different wall-clock time after save —
+  // accepted explicitly by the owner, made legible via the zone note next
+  // to the field rather than "fixed" by changing the display (that trade
+  // was ruled on, not left open).
+  const [when, setWhen] = useState(fixture.scheduled_at ? zonedDateTimeInput(fixture.scheduled_at, orgTz) : "");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -214,42 +228,52 @@ export function RunSheetRow({
         </div>
       </div>
       {editing && (
-        <div className="mt-2 flex flex-wrap items-end gap-2">
-          <DateTimeField
-            kind="datetime-local"
-            label={msg("schedule.field.when")}
-            value={when}
-            onChange={setWhen}
-            options={boardSlotOptions}
-          />
-          <button
-            type="button"
-            disabled={busy || when === ""}
-            onClick={() => {
-              // ELEVATED (fix round 1): `when` is a bare "YYYY-MM-DDTHH:MM"
-              // wall clock with no zone of its own — resolve it in the VENUE
-              // zone (`tz`, amendment 4), never `new Date(when)`'s implicit
-              // browser zone, or a Tokyo browser on a UTC venue writes the
-              // wrong instant.
-              const iso = isoFromZonedDateTime(when, tz);
-              if (iso === null) {
-                setError(msg("schedule.error.failed"));
-                return;
-              }
-              void patchSchedule({ scheduled_at: iso });
-            }}
-            className="btn btn-primary min-h-11 px-3 py-1.5 text-xs"
-          >
-            {busy ? msg("schedule.saving") : msg("schedule.save")}
-          </button>
-          <button
-            type="button"
-            className="btn btn-ghost min-h-11 px-3 py-1.5 text-xs"
-            onClick={() => setEditing(false)}
-          >
-            {msg("schedule.cancel")}
-          </button>
-          {error && <span className="text-xs text-red-600">{error}</span>}
+        <div className="mt-2 flex flex-col gap-1.5">
+          {/* Fix round 3 (owner ruling, "make the mismatch legible"): the
+              typed value is read/written in `orgTz`, not the `tz` the row
+              displays in — on a division whose venue zone differs, the
+              saved time redisplays differently. Named here so that reads
+              as "this field uses a different clock", not as data loss. */}
+          <p className="text-xs text-slate-500" data-testid="run-sheet-set-time-zone-note">
+            {msg("runsheet.setTime.zoneNote", { tz: orgTz })}
+          </p>
+          <div className="flex flex-wrap items-end gap-2">
+            <DateTimeField
+              kind="datetime-local"
+              label={msg("schedule.field.when")}
+              value={when}
+              onChange={setWhen}
+              options={boardSlotOptions}
+            />
+            <button
+              type="button"
+              disabled={busy || when === ""}
+              onClick={() => {
+                // Fix round 3 (owner ruling): `when` is a bare
+                // "YYYY-MM-DDTHH:MM" wall clock with no zone of its own —
+                // resolve it in the ORG zone (`orgTz`, #448), never `tz`
+                // (display-only) and never `new Date(when)`'s implicit
+                // browser zone.
+                const iso = isoFromZonedDateTime(when, orgTz);
+                if (iso === null) {
+                  setError(msg("schedule.error.failed"));
+                  return;
+                }
+                void patchSchedule({ scheduled_at: iso });
+              }}
+              className="btn btn-primary min-h-11 px-3 py-1.5 text-xs"
+            >
+              {busy ? msg("schedule.saving") : msg("schedule.save")}
+            </button>
+            <button
+              type="button"
+              className="btn btn-ghost min-h-11 px-3 py-1.5 text-xs"
+              onClick={() => setEditing(false)}
+            >
+              {msg("schedule.cancel")}
+            </button>
+            {error && <span className="text-xs text-red-600">{error}</span>}
+          </div>
         </div>
       )}
     </li>

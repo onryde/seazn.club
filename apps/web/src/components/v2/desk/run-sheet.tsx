@@ -33,6 +33,7 @@ export function RunSheet({
   blocks,
   stages,
   tz,
+  orgTz,
   nowMs,
   entrantNames,
   courtNames,
@@ -48,6 +49,12 @@ export function RunSheet({
   /** The VENUE zone (`scheduleSettings.tz`), amendment 4 — one zone per
    *  fixture, for both bucketing and printing. */
   tz: string;
+  /** The ORG zone (#448) — passed straight through to `RunSheetRow`'s
+   *  inline "Set time" editor (fix round 3, owner ruling: a typed time is
+   *  governed by `orgTz`, never `tz`). This component never reads it
+   *  itself; it only threads it down, so the row stays the ONE place that
+   *  actually resolves a zone against a typed value. */
+  orgTz: string;
   nowMs: number;
   entrantNames: Record<string, string>;
   courtNames?: Record<string, string>;
@@ -133,6 +140,7 @@ export function RunSheet({
                 msg={msg}
                 hrefFor={hrefFor}
                 tz={tz}
+                orgTz={orgTz}
                 nowMs={nowMs}
                 canEdit={canEdit}
                 entrantNames={entrantNames}
@@ -171,6 +179,7 @@ export function RunSheet({
                     fixture={f}
                     href={hrefFor(f)}
                     tz={tz}
+                    orgTz={orgTz}
                     nowMs={nowMs}
                     canEdit={canEdit}
                     entrantNames={entrantNames}
@@ -203,6 +212,7 @@ export function RunSheet({
                 fixture={f}
                 href={hrefFor(f)}
                 tz={tz}
+                orgTz={orgTz}
                 nowMs={nowMs}
                 canEdit={canEdit}
                 entrantNames={entrantNames}
@@ -238,6 +248,7 @@ export function RunSheet({
                 fixture={f}
                 href={hrefFor(f)}
                 tz={tz}
+                orgTz={orgTz}
                 nowMs={nowMs}
                 canEdit={canEdit}
                 entrantNames={entrantNames}
@@ -364,6 +375,7 @@ function RowWithNow({
   msg: Msg;
   hrefFor: (fixture: RunSheetFixture) => string;
   tz: string;
+  orgTz: string;
   nowMs: number;
   canEdit: boolean;
   entrantNames: Record<string, string>;

@@ -1136,6 +1136,7 @@ export function StagesPanel({ divisionId, divisionSeq, competitionId, orgSlug, c
         blocks={buildRunSheet({ fixtures: fixtures.map(toRunSheetFixture), stages, tz, nowMs })}
         stages={stages}
         tz={tz}
+        orgTz={orgTz}
         nowMs={nowMs}
         entrantNames={entrantNames}
         courtNames={courtNamesById}

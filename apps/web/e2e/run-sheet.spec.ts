@@ -6,7 +6,14 @@ import {
   createStageAndGenerate,
   setFixtureScheduledAtSql,
   setFixtureStatusSql,
+  setZoneSplitSql,
+  setDateTime,
 } from "./helpers";
+// Same authority the row itself uses (`zoned-datetime.ts`, #448) — the
+// expected instant below is DERIVED from the two zones, not typed as a
+// constant, so the case still witnesses the regression if either zone
+// changes (fix round 3).
+import { isoFromZonedDateTime } from "../src/lib/zoned-datetime";
 
 // Competition Desk W2, Task 4 — the fixtures tab as a run sheet. This is the
 // seam obligation for Tasks 2 and 3: `fixtureRowAction` and `buildRunSheet`
@@ -253,4 +260,88 @@ test("empty-filter state: switching to a filter with no matching rows shows a me
   await sheet.getByTestId("run-sheet-empty-show-all").click();
   await expect(empty).toHaveCount(0);
   await expect(sheet.locator("[data-run-sheet-day]")).toHaveCount(1);
+});
+
+// Fix round 3 (owner ruling): the inline "Set time" editor resolves the
+// typed value in the ORG zone (`orgTz`, #448), never the VENUE zone (`tz`,
+// display-only, amendment 4) and never the browser's implicit zone. This is
+// a VALUE pin, not a reachability check — the whole reason the defect
+// survived every prior write site's own test coverage is that nothing
+// seeded a division where `tz` and `orgTz` actually DISAGREE, so a
+// wrong-zone write and a right-zone write produced the identical instant
+// and nothing could tell them apart. `setZoneSplitSql` seeds exactly that
+// shape.
+test("fix round 3 (owner ruling): the inline Set-time editor writes the ORG zone, not the venue zone", async ({
+  page,
+  request,
+}) => {
+  const { divisionId, fixtureIds } = await seedRunSheetDivision(request);
+  expect(fixtureIds.length, "seed produced no fixtures — setup failed, not the sheet").toBeGreaterThanOrEqual(1);
+  const target = fixtureIds[0]!;
+  const targetInfo = await apiJson<{ fixture_no: number }>(request, `/api/v1/fixtures/${target}`);
+  const fixtureNo = targetInfo.data!.fixture_no;
+
+  // A division whose venue zone DIFFERS from its org zone. `fixtureNo: -1`
+  // matches no real row — every fixture in this division (the target
+  // included) is left/forced unscheduled by the helper's own "null every
+  // OTHER fixture" clause, which is exactly the state "Set time" needs to
+  // be reachable at all.
+  const restoreOrgTz = await setZoneSplitSql({
+    divisionId,
+    orgTz: "America/New_York",
+    divisionTz: "Asia/Tokyo",
+    fixtureNo: -1,
+    at: "2030-01-01T00:00:00.000Z",
+  });
+  try {
+    await page.goto(await divisionPath(request, divisionId, "?tab=fixtures"));
+    const targetRow = page.locator(`[data-fixture-no="${fixtureNo}"]`);
+    await targetRow.getByRole("button", { name: "Set time", exact: true }).click();
+    const typed = "2026-10-12T15:00";
+    await setDateTime(page, typed);
+    await targetRow.getByRole("button", { name: "Save", exact: true }).click();
+
+    // DERIVED from both zones, never a typed constant — this stays a real
+    // witness if either zone (or the chosen date, which crosses a DST
+    // boundary differently for each) ever changes. Sanity-checked that the
+    // two zones actually disagree for this instant, or the test would be
+    // vacuously satisfied by either implementation.
+    const expectedInstant = isoFromZonedDateTime(typed, "America/New_York");
+    const wrongZoneInstant = isoFromZonedDateTime(typed, "Asia/Tokyo");
+    expect(expectedInstant, "orgTz and tz must actually disagree for this instant, or the case proves nothing").not.toBe(
+      wrongZoneInstant,
+    );
+
+    // Polled, not a single read — the PATCH is fired from a client click and
+    // can still be in flight the instant this check runs. Prints the actual
+    // read on every poll tick via a side-channel `let`, so a failure still
+    // shows what was seen rather than just a timeout.
+    let lastSeen: string | null | undefined;
+    await expect
+      .poll(
+        async () => {
+          lastSeen = (
+            await apiJson<{ scheduled_at: string | null }>(request, `/api/v1/fixtures/${target}`)
+          ).data!.scheduled_at;
+          return lastSeen;
+        },
+        { timeout: 15_000 },
+      )
+      .toBe(expectedInstant);
+    console.log(
+      "set-time write: typed",
+      typed,
+      "| written",
+      lastSeen,
+      "| expected (orgTz)",
+      expectedInstant,
+      "| would-be-wrong (tz)",
+      wrongZoneInstant,
+    );
+  } finally {
+    // organizations.timezone is shared across every parallel spec on this
+    // org (setZoneSplitSql's own doc comment) — always restored, success or
+    // failure.
+    await restoreOrgTz();
+  }
 });

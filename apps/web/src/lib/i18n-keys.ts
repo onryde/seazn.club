@@ -4460,6 +4460,7 @@ export type DictionaryKey =
   | "runsheet.filter.today"
   | "runsheet.filter.unscheduled"
   | "runsheet.now"
+  | "runsheet.setTime.zoneNote"
   | "runsheet.settled.title"
   | "runsheet.sub.awaitingDraw"
   | "runsheet.sub.noScorer"

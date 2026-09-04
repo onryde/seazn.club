@@ -4958,5 +4958,6 @@
   "runsheet.sub.noScorer": "No scorer yet",
   "runsheet.sub.awaitingDraw": "Awaiting draw",
   "runsheet.emptyFilter.message": "No fixtures match “{filter}” right now.",
-  "runsheet.settled.title": "Played, not scheduled"
+  "runsheet.settled.title": "Played, not scheduled",
+  "runsheet.setTime.zoneNote": "Times entered here are in {tz}."
 }
