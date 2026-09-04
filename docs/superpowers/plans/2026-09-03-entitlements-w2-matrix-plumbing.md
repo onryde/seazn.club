@@ -1163,7 +1163,36 @@ parity only; tripling `credits_10` in all four markets reds dominance only.
 economics claim from a key NAME without opening the record it names. A grep is not a
 read — and a key called `credits_10` is a hypothesis about what it grants.
 
-### 3. An empty platform-fee field saves 0%, on both layers.
+### 3. An empty platform-fee field saves 0% — SUPERSEDED BY MAIN, and the commit message now overstates
+
+**The settings-walkthrough programme found and fixed this independently, and its fix
+reached `main` first.** The 2026-09-04 rebase brought in `f9ab8e5f7` ("an empty fee field
+is not a valid 0%"), `bf3b8cda4` ("says it is EMPTY, not 0–100 only"), `f3b0aea55` (the
+same fail-open in `platformFeePercentSql`, where a jsonb-null row read as 0%) and
+`fdbe826b5` (a support-role staff member handed a live Save that can only collect a 401).
+
+**Main's version is the one that survived the conflict, deliberately.** Ours collapsed
+the state into a single `number | null`, which cannot distinguish "the box is empty" from
+"the number is out of range" — and main's split exists precisely so the note beside a
+dead Save names the actual reason. Main's also carries a `canWrite` prop that ours did
+not have; resolving the conflict the other way would have dropped it and silently
+restored the support-role defect main had just fixed. `git checkout --theirs` during a
+REBASE selects the commit being replayed, not upstream, and did exactly that on the first
+attempt — caught by grepping the resolved file for `canWrite` rather than trusting the
+resolution.
+
+**What we still owed, and kept:** the card's prose said "Pro carries 2%, Event Pass 5%".
+The pass rungs are 4% since V397, so main's copy was stale on arrival. It no longer
+restates any rate — the plan matrix owns those numbers, and a staff card restating them
+is how this went stale in the first place. Our `parseFeePercentInput` helper and its unit
+test were dropped as redundant against main's e2e coverage, which drives the real control.
+
+**Note for the reviewer:** commit `7d904b732` still carries its original subject, "an
+empty platform-fee box saved 0% and called it a decision", while its surviving content is
+only the prose fix. History could not be reworded (no interactive rebase in this
+environment), so it is recorded here instead. Read the diff, not the subject.
+
+### 3b. The original finding, for the record — an empty platform-fee field saves 0%, on both layers.
 
 `admin-platform-settings.tsx:12` — `Number("")` is `0`, and `Number.isFinite(0) &&
 0 >= 0` is `true`, so the client calls an empty box valid. The server agrees:
