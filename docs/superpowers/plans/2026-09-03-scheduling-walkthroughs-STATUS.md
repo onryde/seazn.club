@@ -18,13 +18,12 @@ git-ignored and MACHINE-LOCAL: on any other checkout this file is all there is.
 | 3 | Testids across five panels | reviewed |
 | 7 | CP-SAT rest floor reached the wire as `NaN` | `234d4005a`, `65e0b5b4c` |
 | 8 | Restore-checkpoint refuses a frozen division | `a3ab7db16`, `e6193c1c2` |
-| 9 | Undo/redo refuse it too; joint path says why | `9f6d4117f`, `1f9a01227`, `111fe8070`, `cb6a3ceda` |
+| 9 | Undo/redo refuse it too; joint path says why | `9f6d4117f` … `cb6a3ceda`, `bfae88327` |
+| 4 | Organiser's scheduling day walkthrough | `6b9978ac3` — green ×3, 2 mutants killed |
 
 ## Open
 
-- **Task 4** — `scheduling-organiser-day.spec.ts`. In flight at the boundary;
-  the file may be present and UNTRACKED. Run it before trusting it.
-- **Task 9 fix round** — scoped re-review of `cb6a3ceda` not yet dispatched.
+- **Task 5** — officials handoff walkthrough (see below).
 - **Task 5** — officials handoff walkthrough. Its apply step must stay a
   FAILING test (`test.fail()`, never skip) per spec §S4.
 - **Task 6** — perf gate, cost table, findings doc.
@@ -33,16 +32,21 @@ git-ignored and MACHINE-LOCAL: on any other checkout this file is all there is.
 
 ## Findings that must not be misread
 
-**The board-tab control-set row is RETRACTED.** `schedule-board.tsx:853-861`
+**The board-tab control-set row is RETRACTED — and now SETTLED.** Task 4
+measured it: on a first phone visit at 320 with no saved preference, the board
+opens at **Agenda**, its intended mobile default. No phone composition work is
+owed for the board tab. S14 covers the other tabs only.
+
+Why the original measurement was wrong: `schedule-board.tsx:853-861`
 reads a saved density from `localStorage` before applying its mobile default, so
 a 1280 → 768 → 320 sweep in one browser context carries desktop density into the
-phone pass. The board is NOT demonstrated to be a groomed shrink. Re-measure
-with a fresh context per width. Reasoning and the quoted code are in
+phone pass. The board is NOT demonstrated to be a groomed shrink. That is what a fresh context per width
+showed. Reasoning and the quoted code are in
 `../specs/2026-09-03-scheduling-walkthrough-evidence/README.md`.
 
 The other five tabs' identical-control-set finding STANDS. S13 — the officials
 assign control sitting ~60% off-screen and keyboard-unreachable — STANDS, and
-does not depend on density. S14 phone work is PARKED pending the re-measurement.
+does not depend on density. S14 phone work proceeds for the five tabs that have no persisted view state.
 
 **Five briefed premises in this wave proved false**, every one caught by a
 review rather than by a passing suite. Do not build on a premise here that is
@@ -50,20 +54,30 @@ not accompanied by a `file:line` someone actually opened.
 
 ## Trap this wave found the hard way
 
-Task 4 proves its freeze guard by mutating the SERVED production bundle under
-`.next/standalone`, because the prod server runs a build and editing source
-proves nothing about what is running. An interrupted mutation leaves the running
-server wrong, and `git status` shows nothing — `.next/` is ignored. Before
-trusting any freeze assertion:
+**A shared prod server serves whatever build it was started with.** The server
+on :3313 was found serving a build stamped an hour earlier — from before
+`a74095b13`, so without the Task 3 testids or any of the freeze guards under
+test — while agents tested against it. Rebuilt at Task 4; it is shared, so a
+rebuild is a side effect on other sessions and should be announced.
+
+Grepping a guard's copy out of the served chunks does NOT detect this. That
+check was run and passed, because an earlier guard used the same string. Check
+the stamp instead:
 
 ```sh
-cd apps/web
-grep -rac "the division schedule is locked" \
-  .next/standalone/apps/web/.next/server/chunks/*.js | grep -v ':0$'
+ls -l --time-style=full-iso apps/web/.next/standalone/apps/web/.next/BUILD_ID
+git log -1 --format=%cI <the commit whose behaviour you are testing>
 ```
 
-Nine chunks match on a clean build. Fewer means the bundle is still mutated and
-the suite is lying. Rebuild rather than hand-patch a minified chunk.
+A build older than the commit makes every assertion about it meaningless,
+passing or failing. Ask "is this server serving my tree?" before the first
+e2e run, not after a confusing red.
+
+(An earlier revision of this file warned that Task 4 mutation-tests by patching
+the served bundle, and that an interrupted run would leave a lying server with
+a clean `git status` — `.next/` being ignored. The patching was refused by the
+permission classifier and never happened. The reasoning still applies to anyone
+who does patch a build; it is not something that occurred here.)
 
 ## Cross-session
 
