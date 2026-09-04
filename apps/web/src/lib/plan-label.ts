@@ -25,6 +25,26 @@ const LABELS: Record<PlanKey, string> = {
   enterprise: "Enterprise",
 };
 
+/**
+ * Plan keys the product has SOLD and then retired, newest first, each with the
+ * migration that took it.
+ *
+ * A hand-written list is unavoidable and safe for the same reason
+ * `retired-matrix-keys.test.ts` gives for its own: a retired key is by
+ * definition absent from every runtime source of truth, so there is nothing
+ * left to derive it FROM. What is derived is the part that matters — the
+ * DISPLAY NAME, taken from `planLabel` below, so no guard has to hand-type
+ * "Pro Plus" and none can drift from how the product would render the key.
+ *
+ * Read by `retiredPlanNameFaults` (lib/copy-truth.ts): no shipped user-facing
+ * string may name a plan nobody can buy. Adding a plan here is therefore a
+ * copy obligation, not just bookkeeping.
+ */
+export const RETIRED_PLAN_KEYS: readonly { key: string; retiredBy: string }[] = [
+  { key: "pro_plus", retiredBy: "V392 (entitlements v18) — replaced by enterprise" },
+  { key: "business", retiredBy: "V290 — folded into pro_plus, itself retired by V392" },
+];
+
 /** `enterprise` → "Enterprise". An unknown (historical, or pre-map) key is
  *  title-cased rather than shown raw, so a plan key not in `PlanKey` — e.g.
  *  a retired `pro_plus` row a stale client still has cached — is still

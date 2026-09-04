@@ -3693,3 +3693,213 @@ export function inventoryFaults(label: string, markdown: string, approved: strin
   }
   return faults;
 }
+
+// =============================================================================
+// NO SHIPPED STRING MAY NAME A PLAN NOBODY CAN BUY
+// =============================================================================
+//
+// The guard this file used to have for this was `plusDifferentiatorFaults`, and
+// it was DELETED with the Pro Plus card in W2 — correctly, because it judged
+// whether each differentiator was exclusive to a TIER, and there was no longer
+// a tier. What went with it was the only thing in the repo that read the words
+// "Pro Plus". The copy then went on saying them, in four locales, on /pricing
+// and across seventeen help articles, with a green suite the whole time.
+//
+// So this rule is deliberately NOT the old one narrowed. It asks a question a
+// retired tier cannot dodge by being reworded:
+//
+//   DOES THIS SENTENCE NAME A PLAN THE `plans` TABLE DOES NOT HOLD?
+//
+// TWO LAYERS, because neither can see what the other does.
+//
+//   A. DERIVED. A live plan name followed by a capitalised qualifier is a tier
+//      that does not exist: "Pro" + "Plus". Nothing here is a list of banned
+//      words — the vocabulary is `plans.name`, and the fault is the EXTENSION
+//      of a live name into one that was never seeded. It therefore catches the
+//      next invented tier ("Pro Elite", "Community Premium") as readily as the
+//      last retired one, which a denylist written today cannot.
+//
+//   B. REGISTRY. A retired name that is NOT an extension of a live one —
+//      `business` (V290) is the standing example — is unreachable from (A), so
+//      the retired KEYS are declared (`RETIRED_PLAN_KEYS`, lib/plan-label.ts)
+//      and their DISPLAY NAMES derived through the same `planLabel` the product
+//      renders with. No guard hand-types a retired name.
+//
+// CASE-SENSITIVE, like `PAID_PLAN_NAME` above and for the same reason: plan
+// names are proper nouns, they are untranslated in all four locales, and
+// matching "pro plus" case-insensitively would read ordinary prose as a tier.
+
+/** One shipped string that still names a retired plan, and why it may. */
+export interface RetiredPlanExemption {
+  /** Dictionary key, help path or tip id — matched against `LocalisedValue.key`. */
+  where: string;
+  /** The retired name it carries. ASSERTED to still be there, so an exemption
+   *  whose string has since been fixed reds instead of quietly outliving it. */
+  name: string;
+  /** HOW MANY times, exactly. A licence for the occurrences that exist, not for
+   *  the surface: one more reds, one fewer reds. */
+  hits: number;
+  /** Who owns the fix, and why it is not this change's. */
+  why: string;
+}
+
+/** One retired-plan hit: the surface, and the name it must not carry. */
+export interface RetiredPlanHit {
+  locale: DictionaryLocale;
+  key: string;
+  name: string;
+}
+
+function escapeForPattern(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/** True when `name` is a live plan name plus one capitalised qualifier — the
+ *  shape layer A already reports, so layer B must not report it twice. */
+function extendsALivePlan(name: string, live: readonly string[]): boolean {
+  return live.some(
+    (base) => name.startsWith(base + " ") && /^[A-Z][a-z]+$/.test(name.slice(base.length + 1)),
+  );
+}
+
+/**
+ * Every plan-name-shaped phrase in `values` that `live` does not contain.
+ *
+ * `live` is `plans.name` — the whole vocabulary, not a sample. A caller with a
+ * database asserts it against the table directly; a caller without one derives
+ * it from `ALL_PLAN_KEYS` through `planLabel`, which
+ * `retired-matrix-keys.test.ts` already pins to the table row for row.
+ */
+export function retiredPlanNameHits(
+  values: LocalisedValue[],
+  live: readonly string[],
+  retired: readonly string[],
+): RetiredPlanHit[] {
+  const hits: RetiredPlanHit[] = [];
+  const liveSet = new Set(live);
+  // Longest first, so a two-word plan wins over its own first word and the
+  // qualifier scan cannot read the rest of a real name as an extension.
+  const bases = [...live].sort((a, b) => b.length - a.length).map(escapeForPattern);
+  const extended = new RegExp("\\b(?:" + bases.join("|") + ")(?:\\s+[A-Z][a-z]+)+", "g");
+  const registry = retired
+    .filter((name) => !extendsALivePlan(name, live))
+    .map((name) => ({ name, pattern: new RegExp("\\b" + escapeForPattern(name) + "\\b") }));
+  for (const { locale, key, value } of values) {
+    for (const match of value.matchAll(extended)) {
+      const phrase = match[0]!;
+      if (liveSet.has(phrase)) continue;
+      hits.push({ locale, key, name: phrase });
+    }
+    for (const { name, pattern } of registry) {
+      if (pattern.test(value)) hits.push({ locale, key, name });
+    }
+  }
+  return hits;
+}
+
+/**
+ * The hits that are NOT exempt.
+ *
+ * An exemption is keyed on surface AND name AND COUNT. The count is what makes
+ * it a licence for the occurrences that exist rather than for the surface: a
+ * SECOND "Pro Plus" added to an article that already carries four reds, which a
+ * per-surface exemption would have waved through.
+ */
+export function retiredPlanNameFaults(
+  values: LocalisedValue[],
+  live: readonly string[],
+  retired: readonly string[],
+  exempt: readonly RetiredPlanExemption[],
+): string[] {
+  // ANTI-VACUITY, all three inputs. Every fault below is a MATCH, so an empty
+  // vocabulary, an empty registry or an empty corpus each turn this rule into a
+  // guard that reports clean while reading nothing — which is precisely the
+  // state the repo was in between `plusDifferentiatorFaults` being deleted and
+  // this arriving.
+  if (live.length < 3) {
+    return [
+      "the live plan vocabulary has " +
+        live.length +
+        " names — too few to be plans.name; this rule would examine nothing",
+    ];
+  }
+  if (retired.length === 0) {
+    return ["the retired-plan registry is empty — layer B would examine nothing"];
+  }
+  if (values.length === 0) {
+    return ["no copy was handed to the retired-plan scan — it would pass vacuously"];
+  }
+  const allowed = new Map(exempt.map((e) => [e.where + " " + e.name, e.hits]));
+  const faults: string[] = [];
+  for (const [surface, hits] of countRetiredPlanHits(values, live, retired)) {
+    const licensed = allowed.get(surface) ?? 0;
+    if (hits.length <= licensed) continue;
+    const first = hits[0]!;
+    faults.push(
+      first.locale +
+        " " +
+        first.key +
+        ': names "' +
+        first.name +
+        '" ' +
+        hits.length +
+        " time(s), " +
+        licensed +
+        " exempted — that is no plan in `plans`, so a customer cannot buy it and no shipped string may offer it",
+    );
+  }
+  return faults;
+}
+
+/** Hits grouped by `key + name`, in first-seen order. */
+function countRetiredPlanHits(
+  values: LocalisedValue[],
+  live: readonly string[],
+  retired: readonly string[],
+): Map<string, RetiredPlanHit[]> {
+  const grouped = new Map<string, RetiredPlanHit[]>();
+  for (const hit of retiredPlanNameHits(values, live, retired)) {
+    const surface = hit.key + " " + hit.name;
+    const bucket = grouped.get(surface);
+    if (bucket) bucket.push(hit);
+    else grouped.set(surface, [hit]);
+  }
+  return grouped;
+}
+
+/**
+ * Exemptions that no longer cover what they were written for.
+ *
+ * The half that stops the list rotting. An exemption records "this string still
+ * says it N times, and someone else owns the fix"; once the fix lands, the
+ * entry is a standing licence for the falsehood to come back on that exact
+ * surface. Asserted empty by the caller, so a repaired string forces its
+ * exemption out with it — and an exemption for a surface that never said it is
+ * reported the same way.
+ */
+export function staleRetiredPlanExemptions(
+  values: LocalisedValue[],
+  live: readonly string[],
+  retired: readonly string[],
+  exempt: readonly RetiredPlanExemption[],
+): string[] {
+  const counted = countRetiredPlanHits(values, live, retired);
+  return exempt
+    .map((entry) => {
+      const actual = counted.get(entry.where + " " + entry.name)?.length ?? 0;
+      if (actual === entry.hits) return null;
+      return (
+        entry.where +
+        ': exempted for "' +
+        entry.name +
+        '" ' +
+        entry.hits +
+        " time(s), but that surface names it " +
+        actual +
+        " time(s) — re-count it or delete the exemption (" +
+        entry.why +
+        ")"
+      );
+    })
+    .filter((fault): fault is string => fault !== null);
+}

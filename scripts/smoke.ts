@@ -2454,10 +2454,14 @@ async function passGrantsSuite(): Promise<void> {
   const orgs = (await call(s, "/api/orgs")) as { id: string; slug: string; name: string }[];
   const org = orgs.find((o) => o.id === orgId)!;
 
-  // Unlisted, not public: `dashboard.public.max` is 1 on community, and both
-  // competitions still resolve through the public read model (only `private`
-  // is excluded from public_competitions_v), so the public player card and the
-  // public register panel both stay reachable.
+  // Unlisted, not public: `dashboard.public.max` is 2 on community (V395 —
+  // the comment said 1 until the retired-plan copy sweep re-read the row), and
+  // both competitions still resolve through the public read model (only
+  // `private` is excluded from public_competitions_v), so the public player
+  // card and the public register panel both stay reachable. `unlisted` is
+  // still the right choice here: it takes the cap out of the picture entirely
+  // rather than sitting one under it, which is what the assertions below
+  // assume.
   const mkComp = async (name: string) =>
     v1data<{ id: string; slug: string }>(
       await v1(s, "/api/v1/competitions", "POST", { ends_on: "2030-12-31", name: `${name} ${tag}`, visibility: "unlisted" }),
