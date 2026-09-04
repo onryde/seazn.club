@@ -35,11 +35,35 @@ now stands**, and per RULES.md the wave boundary owes one: full vitest via
 `--reporter=json --outputFile` with `.testResults[].name` confirmed inside this worktree,
 both tsc configs, and a full smoke.
 
+### The five boundary gaps are APPLIED (2026-09-04)
+
+`4bfea8baf` `e09286dbf` INR packs + the parity/dominance guard · `395aef3b2` the degrade
+card names both caps · `714069a1e` the pricing crossover, derived · `5188afd49` a blank
+fee field no longer saves 0% · `d62daae1a` the stale `feePercentFor` comment ·
+`92f603d90` Pass L is 512, not "no entrant limit at all", in four locales ·
+`c2ce241f6` 58 tests that had been collecting as zero · `1f269b3d6` four comments quoting
+a moved price and a deleted currency.
+
+**The crossover figures, recorded here because they otherwise live only in a commit
+message:** `lib/pricing-crossover.ts` solves `passMinor + F·passFee/100 =
+proMonthlyMinor + F·proFee/100` from the seed and `plan_entitlements`, giving **$150 /
+€150 / £100 / ₹5,000** today. It returns null — and the line disappears — when the ladder
+is not the shape the sentence describes, rather than quietly reversing its meaning.
+
+**Quota note, 2026-09-04:** the account hit its Opus weekly limit during this round
+(resets Sep 5, 19:00 Europe/London). An Opus subagent dispatched into that state **dies
+on arrival and can surface as a "completed" agent with a truncated final message**, which
+reads like an ordinary terse completion. One agent here died one second after its commit
+landed; its findings were recovered from the commit message and its uncommitted work from
+the dirty tree. Until the reset, dispatch on Sonnet, and verify a completed agent's
+commits exist rather than trusting the notice.
+
 ### What is left before this wave can be reviewed for merge
 
-1. **The payment rail.** The additive fee (V397) is only half-done: the club is meant to
-   bear Stripe's own cost, which needs `on_behalf_of` on the destination charge — not
-   written yet. Ships with the `admin-platform-settings.tsx:12-13` fix, where
+1. **~~The payment rail~~ — RESOLVED as a launch gate, not W2 work.** See the correction
+   below: `on_behalf_of` cannot do this, and the owner ruled that V397's rates stand while
+   LAUNCH waits on a direct-charge migration in its own wave. Nothing further is owed here
+   by W2. Ships with the `admin-platform-settings.tsx:12-13` fix, where
    `Number("")` is `0`, so clearing the platform-fee field SAVES 0%. That fix owes a
    paired positive assertion (empty rejected AND a real value still accepted), or it
    passes by refusing everything. Also folded in: `server/usecases/registrations.ts:78`
