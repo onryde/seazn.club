@@ -14,6 +14,7 @@
 // LOCATION IS LOAD-BEARING: `src/lib/__tests__/` — CI's Postgres job selects
 // `src/server src/lib` and `src/app`; from elsewhere the whole
 // `describe.skipIf(!HAS_DB)` body would run in no job at all and report green.
+import type { AnyPlanKey } from "@/lib/currency";
 import { afterAll, describe, expect, it } from "vitest";
 import { randomUUID } from "node:crypto";
 import { sql } from "@/lib/db";
@@ -35,7 +36,7 @@ async function seedOrg(): Promise<string> {
 }
 
 /** An org whose own subscription sits on `plan`. */
-async function seedOrgOnPlan(plan: string): Promise<string> {
+async function seedOrgOnPlan(plan: AnyPlanKey): Promise<string> {
   const orgId = await seedOrg();
   if (plan !== "community") await setOrgPlan(orgId, plan);
   await invalidateOrgEntitlements(orgId);

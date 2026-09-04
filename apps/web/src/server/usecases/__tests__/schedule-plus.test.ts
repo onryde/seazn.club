@@ -1,6 +1,7 @@
 // Integration tests for PROMPT-24 (Jul3/04): bulk shift (undoable), wait
 // report, Pro gates, flexible mode. Real Postgres required; skipped without
 // DATABASE_URL.
+import type { AnyPlanKey } from "@/lib/currency";
 import { afterAll, describe, expect, it } from "vitest";
 import { randomUUID } from "node:crypto";
 import { sql } from "@/lib/db";
@@ -27,7 +28,7 @@ const GENERIC_CONFIG = {
   progressScore: false,
 };
 
-async function seedOrg(plan: "community" | "pro" | "pro_plus" = "pro"): Promise<{ auth: AuthCtx }> {
+async function seedOrg(plan: AnyPlanKey = "pro"): Promise<{ auth: AuthCtx }> {
   const suffix = randomUUID().slice(0, 8);
   const [{ id: orgId }] = await sql<{ id: string }[]>`
     insert into organizations (name, slug) values (${"C2 " + suffix}, ${"c2-" + suffix})

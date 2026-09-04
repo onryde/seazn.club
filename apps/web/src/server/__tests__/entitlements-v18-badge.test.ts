@@ -20,6 +20,7 @@
 // asserted alongside it so the two cannot answer differently for this key.
 //
 // Real Postgres required; skipped without DATABASE_URL.
+import type { AnyPlanKey } from "@/lib/currency";
 import { afterAll, describe, expect, it } from "vitest";
 import { randomUUID } from "node:crypto";
 import { sql } from "@/lib/db";
@@ -28,7 +29,7 @@ import { setOrgPlan } from "@/lib/__tests__/_billing-group";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
-async function seedOrg(plan: string): Promise<{ orgId: string }> {
+async function seedOrg(plan: AnyPlanKey): Promise<{ orgId: string }> {
   const suffix = randomUUID().slice(0, 8);
   const [{ id: userId }] = await sql<{ id: string }[]>`
     insert into users (email, display_name, email_verified)

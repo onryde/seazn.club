@@ -17,6 +17,7 @@
 // color overrides the org color".
 //
 // Real Postgres required; skipped without DATABASE_URL.
+import type { AnyPlanKey } from "@/lib/currency";
 import { afterAll, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
@@ -52,7 +53,7 @@ interface Scene {
   compSlug: string;
 }
 
-async function seedScene(plan: string): Promise<Scene> {
+async function seedScene(plan: AnyPlanKey): Promise<Scene> {
   const suffix = randomUUID().slice(0, 8);
   const [{ id: userId }] = await sql<{ id: string }[]>`
     insert into users (email, display_name, email_verified)

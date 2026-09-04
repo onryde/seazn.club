@@ -4,6 +4,7 @@
 // share loops that became paid on Free — and inserted the two Event Pass rows
 // the key had never carried. So the PLAN denies it again on Community, and the
 // pass lifts it for the one competition it paid for. Real Postgres.
+import type { AnyPlanKey } from "@/lib/currency";
 import { afterAll, describe, expect, it } from "vitest";
 import { randomUUID } from "node:crypto";
 import { sql } from "@/lib/db";
@@ -15,7 +16,7 @@ import type { AuthCtx } from "@/server/api-v1/auth";
 import { setOrgPlan } from "@/lib/__tests__/_billing-group";
 const HAS_DB = !!process.env.DATABASE_URL;
 
-async function seed(visibility: string, plan: string) {
+async function seed(visibility: string, plan: AnyPlanKey) {
   const s = randomUUID().slice(0, 8);
   // divisions.sport_key FKs the sports catalog — make sure it exists on a
   // fresh test DB (no sync:sports run).
