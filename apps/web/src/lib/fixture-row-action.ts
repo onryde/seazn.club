@@ -41,6 +41,52 @@ export type RowActionInput = {
   nowMs: number;
 };
 
+/**
+ * The ONE fixture status the server will accept a timetable move for.
+ *
+ * `moveFixture` (server/usecases/schedule.ts) refuses any other outright —
+ * `if (movesTimetable && fixture.status !== MOVABLE_STATUS) throw new
+ * HttpError(422, "fixture is X — decided fixtures are immutable")`. This is a
+ * deliberate hand-copy of that server constant, for the same reason `SETTLED`
+ * above is one: a client component cannot import from `@/server` (it breaks
+ * the build), and this is the client's half of the same fact. The two are
+ * PINNED TOGETHER by `fixture-row-action.test.ts`, which imports the server
+ * module (vitest is node-env) and asserts they are equal — the
+ * `bracket-kinds-sync.test.ts` pattern this repo already uses for its other
+ * three hand-copied lists.
+ *
+ * Getting this wrong is not cosmetic: offering an edit control on a decided
+ * row produces a control that 422s on save, which is the dead-end class this
+ * whole wave exists to remove.
+ */
+export const TIMETABLE_MOVABLE_STATUS = "scheduled";
+
+/**
+ * Is this row's DISPLAYED TIME an affordance — does clicking it open the
+ * inline editor?
+ *
+ * Owner ruling, fix round 5: "correct a time already set" is a regression
+ * that must be restored, and the shape is the TIME CELL ITSELF rather than a
+ * second row-level control — the action column keeps exactly one control
+ * (which is the row's design premise), the organiser clicks the fact they
+ * want to change, and this ladder needs no new branch, so its order-pinned
+ * tests stay valid.
+ *
+ * Three conditions, each load-bearing:
+ *  - `canEdit` — a viewer without write rights gets a plain label.
+ *  - status is `TIMETABLE_MOVABLE_STATUS` — anything else 422s on save.
+ *  - a time actually exists — an unscheduled row shows an em-dash and
+ *    already reaches this same editor through its `set_time` action; making
+ *    the dash a second door would be a poor target for no new capability.
+ */
+export function canEditFixtureTime(input: {
+  status: RowActionInput["status"];
+  scheduledAt: RowActionInput["scheduledAt"];
+  canEdit: boolean;
+}): boolean {
+  return input.canEdit && input.status === TIMETABLE_MOVABLE_STATUS && input.scheduledAt !== null;
+}
+
 export function fixtureRowAction(input: RowActionInput): RowAction {
   const { status, scheduledAt, hasOfficials, canEdit, tz, nowMs } = input;
 

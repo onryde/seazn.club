@@ -175,9 +175,23 @@ describe("DateTimeSplitField", () => {
   // Set-time field is a usable, tappable control at 320 and at 1280"). It is
   // here so the one-token deletion that reintroduces a zero-width date field
   // fails in the fast suite too, next to the reason.
+  // Fix round 5: the first version of this assertion was a regex,
+  // `/class="[^"]*@container[^"]*w-full/`, and it had two holes a reviewer
+  // proved by hand. `@container max-w-full` PASSED it — `max-w-full` contains
+  // the substring `w-full`, and `max-width:100%` does not fix the collapse at
+  // all, so the guard would have waved through the broken build. And
+  // `w-full @container` FAILED it — a correct class list in the other order.
+  // A regex over raw markup was the wrong tool: the question is about CLASS
+  // TOKENS, so read the tokens.
   it("gives the container-query box an EXTRINSIC width — it cannot size itself from content", () => {
     const html = renderToStaticMarkup(<DateTimeSplitField {...baseProps} />);
-    expect(html).toMatch(/class="[^"]*@container[^"]*w-full/);
+    const outerClass = /^<div class="([^"]*)"/.exec(html)?.[1] ?? "";
+    expect(outerClass, "the outer container-query div lost its class attribute").not.toBe("");
+    const tokens = outerClass.split(/\s+/);
+    expect(tokens).toContain("@container");
+    // Exact token membership, so `max-w-full` (which does NOT fix the
+    // collapse) can never satisfy this, and order never matters.
+    expect(tokens).toContain("w-full");
   });
   // A form that routes save errors and e2e locators by field name loses its
   // handle the moment a raw <input> becomes this pair — RS004's registration

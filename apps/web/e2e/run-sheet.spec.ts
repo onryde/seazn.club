@@ -13,7 +13,7 @@ import {
 // expected instant below is DERIVED from the two zones, not typed as a
 // constant, so the case still witnesses the regression if either zone
 // changes (fix round 3).
-import { isoFromZonedDateTime } from "../src/lib/zoned-datetime";
+import { isoFromZonedDateTime, zonedDateTimeInput } from "../src/lib/zoned-datetime";
 // The SAME day-bucketing authority `buildRunSheet` and `fixtureRowAction`
 // both call — the expected day key below is derived from it rather than
 // re-implemented with `toISOString().slice(0, 10)`, which is only the right
@@ -401,13 +401,19 @@ test.describe("zone-split cases — they share organizations.timezone", () => {
     // A Playwright timeout abandons the test body without running its
     // `finally`, which would leave the SHARED org's timezone mutated for the
     // rest of the run — see the `afterEach` at the top of this file for the
-    // whole argument. Registered BEFORE the first `await` that can time out.
-    pendingOrgTzRestore = await setZoneSplitSql({
+    // whole argument. Fix round 5 closes the last window inside the helper
+    // too: `registerRestore` hands the undo over BEFORE the UPDATE, so the
+    // column is never dirty with nothing registered (the awaited return value
+    // only exists once the whole helper resolves).
+    await setZoneSplitSql({
       divisionId,
       orgTz: ORG_TZ,
       divisionTz: "Asia/Tokyo",
       fixtureNo: -1,
       at: "2030-01-01T00:00:00.000Z",
+      registerRestore: (undo) => {
+        pendingOrgTzRestore = undo;
+      },
     });
     await page.goto(await divisionPath(request, divisionId, "?tab=fixtures"));
     const targetRow = page.locator(`[data-fixture-no="${fixtureNo}"]`);
@@ -497,13 +503,17 @@ test.describe("zone-split cases — they share organizations.timezone", () => {
     const noA = (await apiJson<{ fixture_no: number }>(request, `/api/v1/fixtures/${differing.fixtureIds[0]!}`)).data!
       .fixture_no;
     // Registered for `afterEach`, never a `finally` — a Playwright timeout
-    // skips `finally` entirely and would leave the shared org mutated.
-    pendingOrgTzRestore = await setZoneSplitSql({
+    // skips `finally` entirely and would leave the shared org mutated. And
+    // registered from INSIDE the helper, before its first write (round 5).
+    await setZoneSplitSql({
       divisionId: differing.divisionId,
       orgTz: ORG_TZ,
       divisionTz: "Asia/Tokyo",
       fixtureNo: -1,
       at: "2030-01-01T00:00:00.000Z",
+      registerRestore: (undo) => {
+        pendingOrgTzRestore = undo;
+      },
     });
     const rowA = await openEditor(differing.divisionId, noA);
     const note = rowA.getByTestId("run-sheet-set-time-zone-note");
@@ -536,6 +546,85 @@ test.describe("zone-split cases — they share organizations.timezone", () => {
     await expect(rowB.getByTestId("run-sheet-set-time-editor")).toBeVisible();
     await expect(rowB.locator('input[type="date"]')).toBeVisible();
     await expect(rowB.getByTestId("run-sheet-set-time-zone-note")).toHaveCount(0);
+  });
+
+  // FIX ROUND 5 — THE TEST THAT COULD NOT EXIST BEFORE THIS ROUND.
+  //
+  // Round 4 deleted the editor's `orgTz` READ as dead code, correctly: with
+  // no way to reopen the editor on a fixture that already had a time, the
+  // truthy branch of `fixture.scheduled_at ? zonedDateTimeInput(…, orgTz)`
+  // was unreachable and a mutation of it could not go red. The owner has
+  // since ruled that missing path a REGRESSION, so the read is back — and
+  // this is the value pin it now owes.
+  //
+  // A wrong read here is NOT self-cancelling and is close to invisible: the
+  // row DISPLAYS in `tz` (amendment 4) while the field READS in `orgTz`
+  // (#448), so seeding the field from `tz` would make the editor agree with
+  // the row on screen — which looks right — and then round-trip an instant
+  // fourteen hours from the one the organiser was actually looking at. Only
+  // a division where the two zones DISAGREE can tell the two implementations
+  // apart, which is why this lives in the zone-split block.
+  test("fix round 5 (owner ruling): the editor on an already-scheduled fixture opens in the ORG zone", async ({
+    page,
+    request,
+  }) => {
+    const { divisionId, fixtureIds } = await seedRunSheetDivision(request);
+    expect(fixtureIds.length, "seed produced no fixtures — setup failed, not the sheet").toBeGreaterThanOrEqual(1);
+    const target = fixtureIds[0]!;
+    const fixtureNo = (await apiJson<{ fixture_no: number }>(request, `/api/v1/fixtures/${target}`)).data!.fixture_no;
+
+    // 19:00Z on the 12th is 15:00 on the 12th in New York and 04:00 on the
+    // 13th in Tokyo — the two zones disagree on the DATE as well as the
+    // clock, so a wrong read cannot hide in the time half alone.
+    const at = "2026-10-12T19:00:00.000Z";
+    await setZoneSplitSql({
+      divisionId,
+      orgTz: ORG_TZ,
+      divisionTz: "Asia/Tokyo",
+      fixtureNo,
+      at,
+      registerRestore: (undo) => {
+        pendingOrgTzRestore = undo;
+      },
+    });
+
+    // DERIVED through the production helper the component itself calls —
+    // never a typed constant, so this moves with the zones instead of
+    // freezing today's arithmetic.
+    const expectedInput = zonedDateTimeInput(at, ORG_TZ);
+    const wrongZoneInput = zonedDateTimeInput(at, "Asia/Tokyo");
+    expect(expectedInput, "the two zones must disagree for this instant, or the case proves nothing").not.toBe(
+      wrongZoneInput,
+    );
+
+    await page.goto(await divisionPath(request, divisionId, "?tab=fixtures"));
+    const row = page.locator(`[data-fixture-no="${fixtureNo}"]`);
+    // Opened through the affordance an organiser actually uses — the TIME
+    // CELL — not by reaching for the editor directly.
+    await row.getByTestId("run-sheet-edit-time").click();
+    await expect(row.getByTestId("run-sheet-set-time-editor")).toBeVisible();
+
+    const shown = await row.getByTestId("run-sheet-set-time-editor").evaluate((el) => ({
+      date: (el.querySelector('input[type="date"]') as HTMLInputElement | null)?.value ?? null,
+      time: (el.querySelector("select") as HTMLSelectElement | null)?.value ?? null,
+    }));
+    const rowTime = (await row.getByTestId("run-sheet-edit-time").textContent())?.trim() ?? "";
+    console.log(
+      "editor seed: instant",
+      at,
+      "| field shows",
+      JSON.stringify(shown),
+      "| expected (orgTz)",
+      expectedInput,
+      "| would-be-wrong (tz)",
+      wrongZoneInput,
+      "| row displays (tz)",
+      JSON.stringify(rowTime),
+    );
+    expect(`${shown.date}T${shown.time}`).toBe(expectedInput);
+    // And the row really is displaying the OTHER zone, so this case is
+    // witnessing the asymmetry rather than a division where it cannot arise.
+    expect(rowTime).toBe(wrongZoneInput.slice(11));
   });
 });
 
@@ -669,4 +758,177 @@ test("fix round 4: a fixture that already has a time offers no inline editor at 
   await expect(row.locator('[data-row-action="set_time"]')).toHaveCount(0);
   await expect(row.getByTestId("run-sheet-set-time-editor")).toHaveCount(0);
   await expect(row.locator('input[type="date"]')).toHaveCount(0);
+  // Fix round 5: the row now reaches its editor through the TIME CELL
+  // instead — the door round 4 correctly reported as missing. The absence
+  // above is still the right assertion for the ACTION column (one control,
+  // and it is scoring), so this positive twin says where the door moved to.
+  await expect(row.getByTestId("run-sheet-edit-time")).toHaveCount(1);
+});
+
+// FIX ROUND 5 — the restored "correct a time already set" path, driven end
+// to end as an organiser would.
+//
+// Owner ruling: pre-W2 the row carried `schedule.editTime` plus a separate
+// `schedule.unschedule`; the rewrite dropped both and nothing on this tab
+// took them over, so an organiser handling a rain delay or a typo had no way
+// back on the tab they were standing on — the row just said "Score". The
+// affordance is now the TIME CELL itself, and "clear this time" lives inside
+// the editor rather than as a second row-level control.
+//
+// Deliberately ZONE-AGNOSTIC. It asserts the ROUND TRIP ("I set 16:45; when
+// I come back it says 16:45"), not an absolute instant, so it cannot be
+// perturbed by whatever `organizations.timezone` happens to be while the
+// serial zone-split block above is running in another worker. The absolute
+// value in `orgTz` is pinned by that block's own case, where the zone is
+// controlled.
+test("fix round 5: the time cell opens the editor, corrects the time, and can clear it", async ({ page, request }) => {
+  const { divisionId, fixtureIds } = await seedRunSheetDivision(request);
+  expect(fixtureIds.length, "seed produced no fixtures — setup failed, not the sheet").toBeGreaterThanOrEqual(1);
+  const target = fixtureIds[0]!;
+  const fixtureNo = (await apiJson<{ fixture_no: number }>(request, `/api/v1/fixtures/${target}`)).data!.fixture_no;
+  await setFixtureScheduledAtSql(target, "2030-06-15T09:00:00.000Z");
+
+  // A REAL TAP TARGET at both widths, hit-tested at the click point. The
+  // round-4 defect was a control whose centre resolved to the Save button, so
+  // `boundingBox()` alone is not evidence — and `elementFromPoint` is
+  // viewport-relative, so the element is scrolled into view first or an
+  // off-screen control reads as untappable.
+  for (const width of [320, 1280]) {
+    await page.setViewportSize({ width, height: 900 });
+    await page.goto(await divisionPath(request, divisionId, "?tab=fixtures"));
+    const row = page.locator(`[data-fixture-no="${fixtureNo}"]`);
+    const cell = row.getByTestId("run-sheet-edit-time");
+    await expect(cell).toBeVisible();
+    const seen = await cell.evaluate((el) => {
+      el.scrollIntoView({ block: "center" });
+      const r = el.getBoundingClientRect();
+      const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+      return {
+        w: Math.round(r.width),
+        h: Math.round(r.height),
+        // The button or anything inside it counts — `ClientTime` renders a
+        // child, so requiring strict identity would fail on a correct build.
+        hitsSelf: hit !== null && (hit === el || el.contains(hit)),
+        hitTag: hit === null ? "(nothing)" : hit.tagName.toLowerCase(),
+        name: el.getAttribute("aria-label"),
+        text: (el.textContent ?? "").trim(),
+      };
+    });
+    console.log(`time cell at ${width}px:`, JSON.stringify(seen));
+    expect(seen.h, `the time cell is not a 44px tap target at ${width}px`).toBeGreaterThanOrEqual(44);
+    expect(seen.hitsSelf, `a tap at the time cell's centre hits ${seen.hitTag} at ${width}px`).toBe(true);
+    // It must SAY what it does — "09:00" alone is not an accessible name.
+    expect(seen.name, "the time cell has no accessible name").toBeTruthy();
+    const scroll = await page.evaluate(() => [
+      document.documentElement.scrollWidth,
+      document.documentElement.clientWidth,
+    ]);
+    expect(scroll[0], `time cell put the page into horizontal scroll at ${width}px`).toBeLessThanOrEqual(scroll[1]!);
+  }
+
+  // CORRECT THE TIME. Asserted as a round trip through the product's own
+  // read: type it, save it, reopen, and read the field back.
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.goto(await divisionPath(request, divisionId, "?tab=fixtures"));
+  const row = page.locator(`[data-fixture-no="${fixtureNo}"]`);
+  await row.getByTestId("run-sheet-edit-time").click();
+  const editor = row.getByTestId("run-sheet-set-time-editor");
+  await expect(editor).toBeVisible();
+  const corrected = "2030-06-15T16:45";
+  await setDateTime(editor, corrected);
+  await row.getByRole("button", { name: "Save", exact: true }).click();
+
+  // The write landed at all (zone-independent: any instant but the original).
+  let afterSave: string | null | undefined;
+  await expect
+    .poll(
+      async () => {
+        afterSave = (await apiJson<{ scheduled_at: string | null }>(request, `/api/v1/fixtures/${target}`)).data!
+          .scheduled_at;
+        return afterSave;
+      },
+      { timeout: 15_000 },
+    )
+    .not.toBe("2030-06-15T09:00:00.000Z");
+  console.log("corrected time: typed", corrected, "| stored", afterSave);
+  expect(afterSave, "the correction did not store an instant at all").toBeTruthy();
+
+  // Reopen and read it back — the ROUND TRIP, which is what an organiser
+  // actually experiences and what a wrong-zone read would break.
+  await page.goto(await divisionPath(request, divisionId, "?tab=fixtures"));
+  await row.getByTestId("run-sheet-edit-time").click();
+  await expect(editor).toBeVisible();
+  const reread = await editor.evaluate((el) => ({
+    date: (el.querySelector('input[type="date"]') as HTMLInputElement | null)?.value ?? null,
+    time: (el.querySelector("select") as HTMLSelectElement | null)?.value ?? null,
+  }));
+  console.log("reopened editor shows:", JSON.stringify(reread), "expected:", corrected);
+  expect(`${reread.date}T${reread.time}`).toBe(corrected);
+
+  // CLEAR IT — the retired `schedule.unschedule` capability, recovered
+  // inside the editor rather than as a second row-level control.
+  await editor.getByTestId("run-sheet-clear-time").click();
+  await expect
+    .poll(
+      async () =>
+        (await apiJson<{ scheduled_at: string | null }>(request, `/api/v1/fixtures/${target}`)).data!.scheduled_at,
+      { timeout: 15_000 },
+    )
+    .toBeNull();
+  // And the row goes back to being open scheduling work — positive twin for
+  // the absence below, so "the time cell is gone" cannot pass on a blank page.
+  await expect(row.locator('[data-row-action="set_time"]')).toHaveCount(1);
+  await expect(row.getByTestId("run-sheet-edit-time")).toHaveCount(0);
+  const dash = (await row.locator("span").first().textContent())?.trim() ?? "";
+  console.log("row after clearing the time — action:", "set_time", "| time cell:", JSON.stringify(dash));
+});
+
+// FIX ROUND 5, the dead-end guard. `moveFixture` refuses a timetable change
+// for any status but `MOVABLE_STATUS` ("scheduled") with a 422 — "fixture is
+// X — decided fixtures are immutable". So the time cell must NOT be an
+// affordance on an in-play or settled row: an editor whose Save cannot
+// succeed is a dead end, which is the class this whole wave exists to remove.
+//
+// The still-scheduled row in the same division is the POSITIVE CONTROL. Both
+// absences below would pass just as happily on a build where the feature
+// never renders at all; the control is what makes them mean "because of the
+// status".
+test("fix round 5: an in-play or settled row's time is not an affordance, but a scheduled one's is", async ({
+  page,
+  request,
+}) => {
+  const { divisionId, fixtureIds } = await seedRunSheetDivision(request);
+  expect(fixtureIds.length, "seed needs three fixtures for this case").toBeGreaterThanOrEqual(3);
+  const nos: number[] = [];
+  for (const id of [fixtureIds[0]!, fixtureIds[1]!, fixtureIds[2]!]) {
+    await setFixtureScheduledAtSql(id, "2030-06-15T09:00:00.000Z");
+    nos.push((await apiJson<{ fixture_no: number }>(request, `/api/v1/fixtures/${id}`)).data!.fixture_no);
+  }
+  await setFixtureStatusSql(fixtureIds[0]!, "in_play");
+  await setFixtureStatusSql(fixtureIds[1]!, "decided");
+  // fixtureIds[2] stays `scheduled` — the control.
+
+  await page.goto(await divisionPath(request, divisionId, "?tab=fixtures"));
+  await expect(page.getByTestId("run-sheet")).toBeVisible();
+
+  const report: Record<string, unknown> = {};
+  for (const [label, no] of [
+    ["in_play", nos[0]!],
+    ["decided", nos[1]!],
+    ["scheduled", nos[2]!],
+  ] as const) {
+    const row = page.locator(`[data-fixture-no="${no}"]`);
+    await expect(row, `${label} row is missing from the sheet entirely`).toHaveCount(1);
+    report[label] = {
+      action: await row.locator("[data-row-action]").getAttribute("data-row-action"),
+      editTimeCells: await row.getByTestId("run-sheet-edit-time").count(),
+    };
+  }
+  console.log("time-cell affordance by status:", JSON.stringify(report));
+
+  await expect(page.locator(`[data-fixture-no="${nos[0]}"]`).getByTestId("run-sheet-edit-time")).toHaveCount(0);
+  await expect(page.locator(`[data-fixture-no="${nos[1]}"]`).getByTestId("run-sheet-edit-time")).toHaveCount(0);
+  // THE CONTROL: the same page, the same division, a movable row — the
+  // affordance is there.
+  await expect(page.locator(`[data-fixture-no="${nos[2]}"]`).getByTestId("run-sheet-edit-time")).toHaveCount(1);
 });

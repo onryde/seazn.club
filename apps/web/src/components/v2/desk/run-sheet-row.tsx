@@ -18,14 +18,14 @@ import { useMsg } from "@/components/i18n/dict-provider";
 import { DateTimeField } from "../shared/datetime-field";
 import { resolveSlotLabel } from "@/lib/slot-label";
 import { courtDisplayName } from "@/components/v2/board/types";
-import { fixtureRowAction, type RowAction } from "@/lib/fixture-row-action";
+import { canEditFixtureTime, fixtureRowAction, type RowAction } from "@/lib/fixture-row-action";
 import { isBye, type RunSheetFixture } from "@/lib/run-sheet-groups";
 import { outcomeText, VOID_STATUSES } from "@/components/v2/stages-panel";
 import type { PatchFixture } from "@/server/api-v1/schemas";
-// Write-only: the editor never READS an existing instant (see the `when`
-// state below — the ladder only opens it for a fixture with no time at all),
-// so `zonedDateTimeInput` is deliberately not imported here.
-import { isoFromZonedDateTime } from "@/lib/zoned-datetime";
+// Both halves of the round trip resolve in `orgTz` (#448): `zonedDateTimeInput`
+// seeds the field from an existing instant, `isoFromZonedDateTime` turns the
+// typed wall clock back into one. Never `tz` — that is display-only.
+import { zonedDateTimeInput, isoFromZonedDateTime } from "@/lib/zoned-datetime";
 
 export function RunSheetRow({
   fixture,
@@ -67,29 +67,24 @@ export function RunSheetRow({
   const msg = useMsg();
   const router = useRouter();
   const [editing, setEditing] = useState(false);
-  // ALWAYS EMPTY, and that is a fact about the ladder, not a shortcut.
+  // RESTORED in fix round 5, and now genuinely reachable.
   //
-  // This editor is reachable through exactly one door: the `set_time` action
-  // control below. `fixtureRowAction`'s branch 4 returns `set_time` ONLY for
-  // `scheduledAt === null` (fixture-row-action.ts) — a fixture that already
-  // carries a time gets `score` / `assign_scorer` / `result`, whose control
-  // is a plain `<Link>` that never sets `editing`. So `fixture.scheduled_at`
-  // is null on every render that can reach the field, and the round-3
-  // initializer `fixture.scheduled_at ? zonedDateTimeInput(…, orgTz) : ""`
-  // could only ever take its empty branch.
+  // Round 4 deleted this read, correctly: the only door into the editor was
+  // the `set_time` action, which `fixtureRowAction` offers ONLY for
+  // `scheduledAt === null`, so the truthy branch could never run and no
+  // mutation of it could go red. It was dead *because of a gap* — the owner
+  // has since ruled that gap a regression (pre-W2 the row carried
+  // `schedule.editTime`; nothing took it over), and the time cell below is
+  // now an affordance for an already-scheduled row. That revives this read
+  // as live, observable state.
   //
-  // Fix round 4: that dead truthy branch is REMOVED rather than left as a
-  // "harmless" fallback. It was a zone conversion nothing could observe, in
-  // the one file where a wrong zone is not self-cancelling — it read as a
-  // live, tested authority and no mutation of it could go red. `orgTz` is
-  // still this component's write zone (see the Save handler) and still names
-  // itself in the zone note; it simply has no read to do.
-  //
-  // If a later wave re-adds an "edit a time already set" affordance on this
-  // sheet, it must seed this state THEN, in `orgTz`, and ship a value-pin
-  // test on a division where `tz !== orgTz` — a read in `tz` would look
-  // right on screen (the row displays `tz`) while writing an hour that moved.
-  const [when, setWhen] = useState("");
+  // The zone is `orgTz` (#448), never the `tz` the row DISPLAYS in — the
+  // same asymmetry the Save handler documents. It is not self-cancelling: a
+  // `tz` read would look right on screen while round-tripping an instant an
+  // hour (or fourteen) away from the one shown. Pinned by a value test on a
+  // `tz !== orgTz` division, mutation-proven — the test that could not exist
+  // before this round.
+  const [when, setWhen] = useState(fixture.scheduled_at ? zonedDateTimeInput(fixture.scheduled_at, orgTz) : "");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -147,7 +142,10 @@ export function RunSheetRow({
           ? msg("runsheet.sub.noScorer")
           : null;
 
-  async function patchSchedule(json: PatchFixture) {
+  /** Returns whether the write landed, so a caller can reset local state
+   *  only on success — clearing `when` on a FAILED unschedule would leave
+   *  the field empty next to a fixture that still has its time. */
+  async function patchSchedule(json: PatchFixture): Promise<boolean> {
     setBusy(true);
     setError(null);
     try {
@@ -155,8 +153,10 @@ export function RunSheetRow({
       setEditing(false);
       router.refresh();
       onRescheduled?.();
+      return true;
     } catch (err) {
       setError(err instanceof Error ? err.message : msg("schedule.error.failed"));
+      return false;
     } finally {
       setBusy(false);
     }
@@ -187,13 +187,44 @@ export function RunSheetRow({
       <div className="flex min-w-0 flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center sm:gap-3">
         <div className="flex min-w-0 items-center gap-3 sm:contents">
           {/* Time spine cell — mono/tabular so the column lines up; an
-              em-dash for a row with no time at all (the unscheduled group). */}
-          <span className="w-14 shrink-0 font-mono text-sm tabular-nums text-slate-600">
-            {fixture.scheduled_at ? <ClientTime value={fixture.scheduled_at} tz={tz} mode="time" /> : "—"}
-            {fixture.status === "in_play" && (
-              <span aria-hidden className="ml-1.5 inline-block h-1.5 w-1.5 rounded-full bg-amber-500 align-middle" />
-            )}
-          </span>
+              em-dash for a row with no time at all (the unscheduled group).
+              Fix round 5 (owner ruling): when the time is EDITABLE the cell
+              itself is the affordance — clicking the displayed time opens
+              the same inline editor "Set time" opens. The action column keeps
+              exactly one control, which is this row's design premise, and
+              `fixtureRowAction`'s ladder needs no new branch.
+              `canEditFixtureTime` owns the three conditions (see its doc);
+              in particular a non-`scheduled` fixture is NOT offered it,
+              because `moveFixture` 422s that outright and an editor that
+              cannot save is a dead end, not a feature. */}
+          {canEditFixtureTime({ status: fixture.status, scheduledAt: fixture.scheduled_at, canEdit }) ? (
+            // A real <button>, not a click handler on a <span>: it has to be
+            // keyboard-reachable and carry an accessible name of its own
+            // ("14:30" alone says nothing about what clicking does). `min-h-11`
+            // because a 20px line of text is not a tap target — and `-my-1`
+            // so the taller hit area does not push every row's rhythm out.
+            // The dotted underline is not decoration: a bare time with no
+            // affordance signal is reachable and undiscoverable, which is the
+            // failure mode this programme keeps paying for.
+            <button
+              type="button"
+              data-testid="run-sheet-edit-time"
+              aria-label={msg("schedule.editTime")}
+              title={msg("schedule.editTime")}
+              aria-expanded={editing}
+              onClick={() => setEditing((e) => !e)}
+              className="-my-1 flex min-h-11 w-14 shrink-0 items-center font-mono text-sm tabular-nums text-slate-600 underline decoration-slate-300 decoration-dotted underline-offset-4 hover:text-purple-700 hover:decoration-purple-500"
+            >
+              <ClientTime value={fixture.scheduled_at} tz={tz} mode="time" />
+            </button>
+          ) : (
+            <span className="w-14 shrink-0 font-mono text-sm tabular-nums text-slate-600">
+              {fixture.scheduled_at ? <ClientTime value={fixture.scheduled_at} tz={tz} mode="time" /> : "—"}
+              {fixture.status === "in_play" && (
+                <span aria-hidden className="ml-1.5 inline-block h-1.5 w-1.5 rounded-full bg-amber-500 align-middle" />
+              )}
+            </span>
+          )}
           <div className="min-w-0 flex-1">
             <p className="min-w-0 truncate text-xs text-slate-500">
               {courtLabel ? `${courtLabel} · ` : ""}
@@ -303,6 +334,33 @@ export function RunSheetRow({
             >
               {msg("schedule.cancel")}
             </button>
+            {/* Fix round 5 (owner ruling): "clear this time" lives INSIDE the
+                editor rather than as a second row-level control — that
+                recovers the retired `schedule.unschedule` capability without
+                giving the row two competing buttons. Rendered only when
+                there is a time to clear: opened from an unscheduled row's
+                "Set time" it would be a no-op button, which is the "an empty
+                cell is not information" defect wearing a control's clothes.
+                `.btn btn-ghost` rather than the bare text button FixtureLine
+                used — `.btn`'s disabled utilities are not inherited by a bare
+                button, so a disabled bare one still looks live. */}
+            {fixture.scheduled_at !== null && (
+              <button
+                type="button"
+                data-testid="run-sheet-clear-time"
+                disabled={busy}
+                onClick={() => {
+                  void patchSchedule({ scheduled_at: null }).then((ok) => {
+                    // Only on success: a cleared field beside a fixture that
+                    // still holds its time is a lie the next open would tell.
+                    if (ok) setWhen("");
+                  });
+                }}
+                className="btn btn-ghost min-h-11 px-3 py-1.5 text-xs text-slate-500 hover:text-red-600"
+              >
+                {msg("schedule.unschedule")}
+              </button>
+            )}
             {error && <span className="text-xs text-red-600">{error}</span>}
           </div>
         </div>
