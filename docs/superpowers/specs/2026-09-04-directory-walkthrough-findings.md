@@ -27,10 +27,23 @@ never `preview`, and `fail()` did not either. The `UpgradeGate` renders above th
 `{preview && !result}` block, so the refusal stacked on top of a live action
 rather than replacing it.
 
-**Fixed** by clearing `preview` at the start of `upload()` — deliberately there
-and not in `fail()`, because `fail()` also serves the COMMIT path, where a 402
-*should* leave the plan on screen for the organiser to trim. Only the upload path
-was wrong.
+**Fixed** by clearing `preview` in `upload()`'s **`catch`** — on failure only.
+
+The first cut cleared it at the top of `upload()`, which was wrong: `remap()`
+re-enters that same function on every mapping change, so it unmounted the
+mapping card mid-flight on SUCCESSFUL remaps too. Corrected in `4ef658ffb`.
+**Do not move the line back to the top** — a later reader of this paragraph did
+not have that context, which is exactly how a fix gets reverted.
+
+Not in `fail()` either, which the COMMIT path shares: a commit 402 must leave
+the plan on screen to trim. (It does so by never clearing `preview` at all —
+`commit()` handles 402 inline and returns before `fail()` is reached.)
+
+**Still open on this path** (found by a later review, not yet fixed): a FAILED
+remap now strands the organiser. The mapping selects and the "Re-map &
+re-preview" button both live inside `{preview && !result}`, so clearing on
+failure removes the very control needed to retry — and `remap()` has already
+written the bad mapping to `localStorage`, so later uploads re-send it.
 
 **Why no existing test caught it.** The clubs-import walkthrough navigates to
 `/import` between uploads, which unmounts the wizard and takes the stale preview
