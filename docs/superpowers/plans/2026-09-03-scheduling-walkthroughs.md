@@ -632,6 +632,20 @@ const PER_STEP_MS = 6_000;
 const SOLVE_MS = 30_000;
 test.setTimeout(STEPS * PER_STEP_MS + SOLVE_MS);
 
+// SHARED-STATE SAFETY. This spec FREEZES a division on a server every other
+// spec in the leg shares. On Playwright a test TIMEOUT skips try/finally
+// entirely — only afterEach/afterAll run — so a cleanup written as
+// `try { … } finally { unfreeze() }` leaks a frozen division on exactly the
+// failure most likely to happen, and every later spec touching that division
+// then reds with a 422 that has nothing to do with its own change.
+// Put the thaw in afterAll, never in finally, and make it idempotent.
+test.afterAll(async ({ request }) => {
+  if (!divisionId) return;
+  await apiJson(request, `/api/v1/divisions/${divisionId}/locks`, "PATCH", {
+    schedule_locked: false,
+  }).catch(() => {});
+});
+
 async function goTab(page: Page, base: string, tab: string): Promise<void> {
   await page.goto(`${base}?tab=${tab}`);
   await expect(page.getByRole("main")).toBeVisible();
@@ -758,6 +772,19 @@ test("the organiser sets up, schedules, saves, clears, restores, freezes and pub
     const rule = c.hard?.find((h) => h.type === "max_fixtures_per_day");
     return rule ? [rule.count, rule.scope?.kind] : null;
   }).toEqual([2, "division"]);
+
+  // 3d-bis — `Number("") === 0` in JS, so an EMPTY numeric input reads as a
+  // valid zero rather than as missing. `restMin` is coerced with
+  // `Math.max(0, Number(v))`, so clearing it writes 0 — which the engine reads
+  // as "no rest floor", not as "unset". Pin which of those the product means:
+  // assert the stored value after clearing, and if it is 0 rather than absent,
+  // that is a finding to record, not a line to soften.
+  await page.getByTestId("constraint-min-rest").fill("");
+  await page.getByTestId("constraint-min-rest").blur();
+  await expect.poll(() => readConfig(request, divisionId)
+    .then((c) => c.constraints?.restMin)).toBe(0);
+  await page.getByTestId("constraint-min-rest").fill("60");
+  await page.getByTestId("constraint-min-rest").blur();
 
   // 3e — the inverse direction. Clearing the field DELETES the rule; a guard
   // checked in one direction only is half tested.
