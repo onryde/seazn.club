@@ -19,7 +19,7 @@ check expressed as a client `disabled` prop, and `apps/web` vitest is
 | Wave | Scope | State |
 | --- | --- | --- |
 | W1 | `/admin/settings` + 4 legacy redirects; `setOwnerStaffRoleSql` ships with it | **DONE** — 6 tasks, 5 fix rounds, all reviews clean |
-| W2 | `/o/{org}/settings` 7 tabs — drive+persist (sponsors CRUD half) | Not started |
+| W2 | `/o/{org}/settings` 7 tabs — drive+persist (sponsors CRUD half) | Not started — **carries 3 W1 follow-ups, see below** |
 | W3 | `/o/{org}/settings` 7 tabs — gating matrix + first mutation sweep | Not started |
 | W4 | `settings/{connect,credits,add-ons}`, billing's uncovered panels, sponsor monetize half | Not started |
 | W5 | Competition settings — frozen, visibility, discoverable | Not started |
@@ -134,3 +134,33 @@ programme:
 - **A URL-only assertion cannot tell a working destination from a 500.**
 - **A SHA-256 taken after a run settles drift, not ordering** — hash in the
   same invocation as the run.
+
+## W1 follow-ups owed to W2
+
+1. **F5 — the production twin, and the one that touches customers.**
+   `lib/platform-settings.ts:48` does `Number(row?.value)` on a jsonb column.
+   `Number(null)` is a finite `0`, which passes the `>= 0 && <= 100` guard, so
+   a jsonb-null row makes the platform serve a **0% cut** — to the settings
+   page and to every checkout — instead of falling through to `envFallback()`.
+   Unreachable through `setPlatformFeeDefault` today, because its only writer
+   is a bounds-checked `sql.json(pct)`. Pre-existing; W1 fixed the test-helper
+   twin and deliberately left this one, which is the server-side half of this
+   wave's own thesis.
+
+2. **The Critical fix has no permanent guard.** `vitest.config` excludes
+   `e2e/**` (`:162`), so `platformFeePercentSql`'s `typeof` narrowing cannot be
+   unit-tested where it sits, and a healthy DB never holds the row that would
+   trigger it. Deleting the narrowing would go unnoticed.
+
+3. **One change closes both.** Move the decode into
+   `src/lib/platform-settings.ts` as an exported pure predicate, unit-test it
+   there, and have `e2e/helpers.ts` import it. That gives the narrowing a real
+   regression test and fixes the production twin in the same edit.
+
+Also owed, smaller: `borrowedOrgId` should become a `Set<string>`
+(`billing-states.spec.ts` already has the idiom) before any test borrows on two
+orgs; the per-test restore PUT writes a `platform_fee_default_set` audit row,
+which constrains any future audit-trail assertion; two comments state the Redis
+staleness argument as observed when it was only reasoned (the leg runs with no
+Redis, so it is unmeasurable there); and F4 — `/settings` forwards only `tab`
+while its three sibling shims forward every param.
