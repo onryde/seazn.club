@@ -24,6 +24,34 @@ describe("feature-copy V290", () => {
     // next step up for the bool feature-flag itself.
     expect(featurePlan("scheduling.ai")).toBe("pro");
   });
+  /**
+   * `import.bulk`'s refusal must not restate its cap or name a plan.
+   *
+   * In the same spirit as PRICES_THE_RIDER above: a rule about what the
+   * sentence CLAIMS, not a denylist of phrasings. The old copy — "Files over
+   * 20 rows need a Pro plan" — was wrong twice over. The VALUE moved (live
+   * community is 50, V319), and the KIND was wrong too: `import.bulk` is
+   * dual-valued (a bool on Pro, an int cap on community), so a community org
+   * has a real allowance rather than no access. An organiser refused at 51
+   * rows and told the limit was 20 splits into two 26-row files, each of which
+   * would have imported whole.
+   *
+   * Deliberately NOT the repo-wide "no digits" rule that `orgs.max_owned`
+   * would fail — that sentence's job IS to state its caps. This one's job is
+   * to name the remedy and leave the number to `plan_entitlements`.
+   */
+  it("import.bulk's refusal restates neither its cap nor a plan name", () => {
+    const reason = featureReason("import.bulk");
+    expect(reason, "the row cap belongs to plan_entitlements, not to copy").not.toMatch(/\d/);
+    expect(reason, "import.bulk is dual-valued — a community org has a real allowance").not.toMatch(
+      /\bPro(\s|\b)/,
+    );
+    // The positive pair: having said what it must not contain, pin that it
+    // still does its job. A blank string satisfies both negatives above.
+    expect(reason).toMatch(/split/i);
+    expect(reason).toMatch(/upgrade/i);
+  });
+
   it("has reasons for the new keys and none for the dead one", () => {
     expect(featureReason("officials.per_fixture.max")).toMatch(/one official per fixture/i);
     expect(featureReason("schedule.checkpoints.max")).toMatch(/save.point/i);

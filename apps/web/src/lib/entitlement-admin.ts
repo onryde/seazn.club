@@ -60,7 +60,9 @@ const PLANS = ADMIN_PLAN_KEYS;
 function render(cell: AdminEntRow | undefined): string {
   if (!cell) return "—";
   if (cell.bool_value !== null) {
-    // Dual-value keys (import.bulk: true + cap 20) show both.
+    // Dual-value keys (import.bulk carries a bool AND an int cap) show both.
+    // No number here on purpose — the caps live in `plan_entitlements` and
+    // differ per plan; the "20" this comment used to name had already moved.
     if (cell.bool_value && cell.int_value !== null) return `true (${cell.int_value})`;
     return cell.bool_value ? "true" : "false";
   }
