@@ -20,7 +20,12 @@ import { resolveModule } from "@/server/engine-db";
 
 type Tx = postgres.TransactionSql;
 
-const FEATURE = "discipline.enforced";
+// The key is spelled out at every gate below, deliberately, and the module-local
+// constant it replaces is NOT coming back. `discipline.enforced` is
+// Event-Pass-lifted (V392), and lib/__tests__/pass-scoping-guard.test.ts finds
+// an unscoped gate by matching a string LITERAL in the resolver's second
+// argument — an identifier is invisible to it. Six gates in this file therefore
+// resolved org-wide for a whole wave with that guard green.
 
 export type SuspensionStatus = "pending" | "active" | "served" | "waived";
 export type SuspensionSource = "auto_accumulation" | "auto_dismissal" | "manual" | "report";
@@ -83,6 +88,39 @@ const SPORT_DEFAULT_RULES: Record<string, DisciplineRules> = {
     ],
   },
 };
+
+/** The competition an Event-Pass-lifted gate must be resolved against.
+ *
+ *  lib/entitlements.ts consults `competition_passes` only when a competition is
+ *  in scope, so a gate on `discipline.enforced` that omits it makes the pass
+ *  INVISIBLE — the org pays for one competition and is refused on it. Same
+ *  shape as usecases/officials.ts's `competitionForDivision` (T6).
+ *
+ *  Pooled `sql`, and deliberately OUTSIDE any tenant transaction: `resolve`
+ *  queries the pooled proxy, and issuing that from inside a pinned tenant
+ *  transaction asks the pool for a second connection while the first is still
+ *  held — the self-deadlock lib/db.ts guards against.
+ *
+ *  A missing row yields `undefined`, which resolves the gate org-wide (the
+ *  pre-V392 behaviour) and the 404 is raised inside the transaction as before. */
+async function competitionForDivision(divisionId: string): Promise<string | undefined> {
+  const [row] = await sql<{ competition_id: string }[]>`
+    select competition_id from divisions where id = ${divisionId}`;
+  return row?.competition_id;
+}
+
+/** As above, one hop further out: suspensions -> divisions -> competition.
+ *  `decideSuspension` is handed a suspension id and nothing else. Unscoped by
+ *  org on purpose — the pass overlay itself joins on `cp.org_id = orgId`, so a
+ *  foreign competition id grants nothing, and the row's real tenancy check is
+ *  the 404 raised inside `withTenant`. */
+async function competitionForSuspension(suspensionId: string): Promise<string | undefined> {
+  const [row] = await sql<{ competition_id: string }[]>`
+    select d.competition_id from suspensions s
+    join divisions d on d.id = s.division_id
+    where s.id = ${suspensionId}`;
+  return row?.competition_id;
+}
 
 function defaultRules(sportKey: string): DisciplineRules {
   return SPORT_DEFAULT_RULES[sportKey] ?? { accumulation: [], dismissal: [] };
@@ -444,8 +482,10 @@ async function loadSuspension(tx: Tx, divisionId: string, id: string): Promise<S
 }
 
 /** Rules doc + enabled flag + the sport's offerable colours. null when the
- *  division's sport module has no discipline model (tab hidden). Free orgs hit
- *  the requireFeature 402 (PlusReveal) before any rules are returned. */
+ *  division's sport module has no discipline model (tab hidden). An org the
+ *  matrix does not entitle FOR THIS COMPETITION hits the requireFeature 402
+ *  (PlusReveal) before any rules are returned — a Community org holding an
+ *  Event Pass on this competition is entitled and does not. */
 export async function getDisciplineRules(
   auth: AuthCtx,
   divisionId: string,
@@ -457,17 +497,26 @@ export async function getDisciplineRules(
   // applied after it closes; the org still learns nothing it did not before,
   // because the 402 is thrown before anything is returned.
   const loaded = await withTenant(auth.orgId, async (tx) => {
-    const [division] = await tx<{ sport_key: string; module_version: string }[]>`
-      select sport_key, module_version from divisions where id = ${divisionId}`;
+    const [division] = await tx<
+      { sport_key: string; module_version: string; competition_id: string }[]
+    >`
+      select sport_key, module_version, competition_id from divisions where id = ${divisionId}`;
     if (!division) throw new HttpError(404, "division not found");
     const model = resolveModule(division.sport_key, division.module_version).discipline;
     if (!model) return null; // no model → hide the tab (ungated, so free orgs learn nothing extra)
     const [row] = await tx<{ enabled: boolean; rules: DisciplineRules }[]>`
       select enabled, rules from discipline_rules where division_id = ${divisionId}`;
-    return { sportKey: division.sport_key, colors: model.colors, row };
+    return {
+      sportKey: division.sport_key,
+      competitionId: division.competition_id,
+      colors: model.colors,
+      row,
+    };
   });
   if (loaded === null) return null;
-  await requireFeature(auth.orgId, FEATURE);
+  // The competition rides out of the transaction rather than costing a second
+  // read — this is the one gate that already had the divisions row in hand.
+  await requireFeature(auth.orgId, "discipline.enforced", loaded.competitionId);
   return {
     enabled: loaded.row?.enabled ?? false,
     rules: loaded.row?.rules ?? defaultRules(loaded.sportKey),
@@ -480,7 +529,7 @@ export async function putDisciplineRules(
   divisionId: string,
   body: { enabled: boolean; rules: DisciplineRules },
 ): Promise<void> {
-  await requireFeature(auth.orgId, FEATURE);
+  await requireFeature(auth.orgId, "discipline.enforced", await competitionForDivision(divisionId));
   await withTenant(auth.orgId, async (tx) => {
     const [division] = await tx<{ sport_key: string; module_version: string }[]>`
       select sport_key, module_version from divisions where id = ${divisionId}`;
@@ -506,7 +555,9 @@ export async function listSuspensions(
   divisionId: string,
   status?: SuspensionStatus,
 ): Promise<Suspension[]> {
-  await requireFeature(auth.orgId, FEATURE);
+  // Division-scoped, so exactly ONE competition — the filtering question the
+  // org-wide readers in usecases/player-stats.ts had to answer does not arise.
+  await requireFeature(auth.orgId, "discipline.enforced", await competitionForDivision(divisionId));
   return withTenant(auth.orgId, async (tx) => {
     await detectSuspensions(tx, divisionId);
     const rows = await tx<SuspensionRow[]>`
@@ -527,7 +578,7 @@ export async function createManualSuspension(
   divisionId: string,
   input: { personId: string; matchesTotal: number; reason: string },
 ): Promise<Suspension> {
-  await requireFeature(auth.orgId, FEATURE);
+  await requireFeature(auth.orgId, "discipline.enforced", await competitionForDivision(divisionId));
   return withTenant(auth.orgId, async (tx) => {
     // Defense-in-depth: the division must belong to the auth org (the tenant
     // rail scopes it; the route also wraps this in requireResourceAuth).
@@ -556,7 +607,7 @@ export async function decideSuspension(
     | { kind: "waive" }
     | { kind: "adjust"; matchesTotal?: number; reason?: string },
 ): Promise<Suspension> {
-  await requireFeature(auth.orgId, FEATURE);
+  await requireFeature(auth.orgId, "discipline.enforced", await competitionForSuspension(id));
   const result = await withTenant(auth.orgId, async (tx) => {
     const [s] = await tx<
       { division_id: string; person_id: string; entrant_id: string | null; status: SuspensionStatus }[]
@@ -663,8 +714,10 @@ export async function divisionSquad(
 
 /** Active suspensions among a fixture's entrants, keyed for the pad banner
  *  bootstrap (served/total, not remaining). Returns [] when the org isn't
- *  entitled to discipline — the fixture page renders for every tier, so this
- *  never throws a 402 that would break the pad. */
+ *  entitled to discipline ON THIS COMPETITION — the fixture page renders for
+ *  every tier, so this never throws a 402 that would break the pad. A silent
+ *  [] is also how an over-refusing gate hides, which is why pass-scope-w2's
+ *  banner case proves the row it declines to return actually exists. */
 export async function suspensionsForFixture(
   auth: AuthCtx,
   divisionId: string,
@@ -672,7 +725,8 @@ export async function suspensionsForFixture(
 ): Promise<{ personId: string; personName: string; served: number; total: number }[]> {
   const ids = entrantIds.filter((x): x is string => !!x);
   if (ids.length === 0) return [];
-  if (!(await hasFeature(auth.orgId, FEATURE))) return [];
+  const competitionId = await competitionForDivision(divisionId);
+  if (!(await hasFeature(auth.orgId, "discipline.enforced", competitionId))) return [];
   return withTenant(auth.orgId, async (tx) => {
     await detectSuspensions(tx, divisionId);
     const rows = await tx<

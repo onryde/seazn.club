@@ -43,6 +43,14 @@ import { createDeviceLink } from "../device-links";
 import { createCheckpoint } from "../history";
 import { putMyReport, submitMyReport } from "../match-reports";
 import { divisionPlayerStats, personCareerStats, personStats } from "../player-stats";
+import {
+  createManualSuspension,
+  decideSuspension,
+  getDisciplineRules,
+  listSuspensions,
+  putDisciplineRules,
+  suspensionsForFixture,
+} from "../discipline";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 const uniq = () => randomUUID().slice(0, 8);
@@ -343,5 +351,121 @@ describe.skipIf(!HAS_DB)("Event Pass grants resolve against the competition (W2 
       createStages(ctx.auth, plain.divisionId, { seq: 3, kind: "league", name: "Three", config: {} }),
       "stages.per_division.max",
     );
+  });
+  // -------------------------------------------------------------------------
+  // discipline.enforced, the OTHER six gates. The report bridge above is the
+  // only WRITE into the suspensions table, and it was the only site V392's
+  // wave scoped. usecases/discipline.ts read its key from a module-local
+  // `const FEATURE`, which `pass-scoping-guard.test.ts` cannot see (it matches
+  // a string LITERAL in argument 2), so six gates kept asking org-wide and
+  // stayed silently unscoped.
+  //
+  // The customer consequence is worse than a plain refusal: the bridge WROTE
+  // pending suspensions against the passed competition, and the console could
+  // never list, waive or decide them. Money taken, state accumulating, feature
+  // half-delivered.
+  // -------------------------------------------------------------------------
+  const DISCIPLINE_RULES = {
+    accumulation: [{ key: "yellow_5", color: "yellow", count: 5, ban_matches: 1 }],
+    dismissal: [{ key: "red", color: "red", ban_matches: 1 }],
+  };
+
+  it("discipline.enforced: the console reads and decides on the passed competition, and 402s on the sibling", async () => {
+    const ctx = await seedCommunityOrg();
+    const passed = await seedCompetition(ctx, "DC Passed " + uniq(), "football");
+    await buyPass(ctx.orgId, passed.competitionId);
+    const plain = await seedCompetition(ctx, "DC Plain " + uniq(), "football");
+
+    // GET rules — the console's own entry point. Non-null is load-bearing:
+    // `null` is the "this sport tracks no discipline" answer and would be a
+    // green that proves nothing, so pin the sport's offerable colours too.
+    const rules = await getDisciplineRules(ctx.auth, passed.divisionId);
+    expect(rules?.sportColors.map((c) => c.key)).toContain("red");
+    await expectPaywall(getDisciplineRules(ctx.auth, plain.divisionId), "discipline.enforced");
+
+    // PUT rules — the write the organiser makes before anything detects.
+    await putDisciplineRules(ctx.auth, passed.divisionId, {
+      enabled: true,
+      rules: DISCIPLINE_RULES,
+    });
+    expect((await getDisciplineRules(ctx.auth, passed.divisionId))?.enabled).toBe(true);
+    await expectPaywall(
+      putDisciplineRules(ctx.auth, plain.divisionId, { enabled: true, rules: DISCIPLINE_RULES }),
+      "discipline.enforced",
+    );
+
+    // Manual ban + list.
+    const player = await makePerson(ctx, "Suspended Nine");
+    await sql`
+      insert into entrant_members (entrant_id, person_id, org_id)
+      values (${passed.entrantA}, ${player}, ${ctx.orgId})`;
+    const manual = await createManualSuspension(ctx.auth, passed.divisionId, {
+      personId: player,
+      matchesTotal: 1,
+      reason: "violent conduct",
+    });
+    expect(manual.status).toBe("pending");
+    await expectPaywall(
+      createManualSuspension(ctx.auth, plain.divisionId, {
+        personId: player,
+        matchesTotal: 1,
+        reason: "violent conduct",
+      }),
+      "discipline.enforced",
+    );
+
+    expect((await listSuspensions(ctx.auth, passed.divisionId)).map((r) => r.id)).toEqual([manual.id]);
+    await expectPaywall(listSuspensions(ctx.auth, plain.divisionId), "discipline.enforced");
+
+    // Decide — resolved from the SUSPENSION's own division, one hop further
+    // out than every other gate here.
+    const active = await decideSuspension(ctx.auth, manual.id, { kind: "confirm" });
+    expect(active.status).toBe("active");
+    expect(active.entrantId).toBe(passed.entrantA);
+  });
+
+  it("discipline.enforced: the pad's suspension banner is populated by the pass, and its empty answer is the gate", async () => {
+    // suspensionsForFixture returns [] on refusal rather than throwing (the
+    // fixture page renders for every tier). An over-refusing guard therefore
+    // hides behind an empty list, so the pass case must prove ROWS COME BACK
+    // and the denied case must prove the row it declines to return EXISTS.
+    const ctx = await seedCommunityOrg();
+    const passed = await seedCompetition(ctx, "DB Passed " + uniq(), "football");
+    await buyPass(ctx.orgId, passed.competitionId);
+    const plain = await seedCompetition(ctx, "DB Plain " + uniq(), "football");
+
+    const seedActiveBan = async (c: CompCtx, name: string): Promise<string> => {
+      const person = await makePerson(ctx, name);
+      await sql`
+        insert into entrant_members (entrant_id, person_id, org_id)
+        values (${c.entrantA}, ${person}, ${ctx.orgId})`;
+      await sql`
+        insert into suspensions (org_id, division_id, person_id, entrant_id, status, source,
+                                 reason, matches_total, matches_served, decided_at)
+        values (${ctx.orgId}, ${c.divisionId}, ${person}, ${c.entrantA}, 'active', 'manual',
+                'violent conduct', 2, 0, now())`;
+      return person;
+    };
+    const onPassed = await seedActiveBan(passed, "Banner Passed");
+    const onPlain = await seedActiveBan(plain, "Banner Plain");
+
+    expect(
+      await suspensionsForFixture(ctx.auth, passed.divisionId, [passed.entrantA, passed.entrantB]),
+    ).toEqual([{ personId: onPassed, personName: "Banner Passed", served: 0, total: 2 }]);
+
+    // The sibling competition carries an identical row and is answered [].
+    expect(
+      await suspensionsForFixture(ctx.auth, plain.divisionId, [plain.entrantA, plain.entrantB]),
+    ).toEqual([]);
+    const [{ n }] = await sql<{ n: number }[]>`
+      select count(*)::int as n from suspensions
+      where division_id = ${plain.divisionId} and status = 'active'`;
+    expect(n).toBe(1);
+
+    // Same call, same rows, one pass bought: the [] above was the gate.
+    await buyPass(ctx.orgId, plain.competitionId);
+    expect(
+      await suspensionsForFixture(ctx.auth, plain.divisionId, [plain.entrantA, plain.entrantB]),
+    ).toEqual([{ personId: onPlain, personName: "Banner Plain", served: 0, total: 2 }]);
   });
 });
