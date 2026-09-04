@@ -240,18 +240,54 @@ Not "tests pass" — the specific evidence, so a fresh session does not re-run i
 cascade of TS7006) that `main` did not have. They are not defects. `pnpm install`
 — not `npm install`, which fails on `workspace:` protocol — cleared all 22.
 
-### In flight when this was written
+### The full local e2e run — RESULT
 
-A full local e2e run (`parallel`, `walkthrough`, `serial`, 5 mobile widths,
-2 tablet; `gallery` skipped — capture harness, no CI job) against the prod
-build on the `swf` label. 872 tests. **Its result is NOT recorded here** — if
-you are picking this up cold, that run's outcome is unknown and must be redone.
-Env: `seazn-env.sh up --label swf --server --placement`; Playwright needs
-`PLAYWRIGHT_BASE` (NOT `E2E_PROD_TARGET`, which is only a truthy flag) and
-`cd apps/web`.
+Ran `parallel`, `walkthrough`, `serial`, 5 mobile widths, 2 tablet against the
+prod build on the `swf` label (`gallery` skipped — capture harness, no CI job).
+**709 passed, 38 failed, 125 skipped.** Then triaged by RE-RUNNING, not by
+reading the error text:
 
-If that run went red in the `serial` project, treat its count as a FLOOR — that
-project is `mode: "serial"` and the first red aborts everything after it.
+| Cluster | Was | After re-run |
+|---|---|---|
+| Optimiser — `data-status="solver_unavailable"` | 10 red | **12/12 green** |
+| Scoring — `core.start` ledger empty | 5 red | **39/39 green** |
+| `competition-desk` (ECONNRESET), `player-accounts`, `rs011`, mobile-320/360 | 6 red | **green** |
+| Stripe — `event-pass` + `payments-hardening` | 16 red | cannot close here |
+| `rs012` — `CRON_SECRET` | 1 red | cannot close here |
+| `ai-architect`, `partial-amend` ×2, `tennis-mtb` | 4 red | preconditions absent |
+
+**None of the 38 was attributable to W1.5.** Its blast radius is the
+platform-fee decode and the `/settings` shim; `settings-admin.spec.ts` passed
+7/7 INSIDE the failing run, and both money specs fail on preconditions
+(`needs a Stripe TEST key in STRIPE_SECRET_KEY`; a signed webhook answering 400)
+before any fee arithmetic executes.
+
+**Two of those 38 were caused by how the environment was built, and that is the
+reusable lesson:**
+
+1. **The server must be started AFTER the placement service, or restarted once
+   it is up.** `seazn-env up --label X --server` then a later
+   `up --label X --placement` leaves the already-running standalone server with
+   no `PLACEMENT_SERVICE_HOST`, and ten tests fail asserting the real optimiser
+   ran. `seazn-env rebuild --label X` fixes it. Bring it up as
+   `up --label X --all` instead.
+2. **`--workers=4` against one standalone server saturates it.** The symptom is
+   not a timeout message — it is `apiRequestContext.fetch: read ECONNRESET` in
+   one spec and an EMPTY EVENT LEDGER in five others, which reads exactly like a
+   scoring defect. All five passed at `--workers=2`.
+
+**Not verifiable on this machine, and not defects:** `STRIPE_SECRET_KEY` /
+`STRIPE_WEBHOOK_SECRET` (17 tests between Stripe and the webhook signature),
+`CRON_SECRET` (1), `SCHEDULING_AI_BASE_URL` + `ANTHROPIC_API_KEY` (ai-architect).
+`tennis-mtb` and `partial-amend` are wall-clock budgets derived from `HOLD_MS`
+(AGENTS.md failure class 20); `tennis-mtb` was measured at 306.9s against a
+300s budget in W1 and passed in CI.
+
+**A method note worth keeping:** `ps eww -p <pid>` returns NOTHING on this
+machine — zero env vars, for any process. An empty result there is not evidence
+the process lacks a variable. This session briefly reported "confirmed, the
+server has no placement env" on that empty output. The question was settled by
+re-running the spec, which is the only thing that could settle it.
 
 ### W2 — not started, deliberately
 
