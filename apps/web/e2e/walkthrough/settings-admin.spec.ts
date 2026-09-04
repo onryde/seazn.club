@@ -265,4 +265,151 @@ test.describe("admin platform settings", () => {
       await setOwnerStaffRoleSql(org.id, null);
     }
   });
+
+  /**
+   * The drive: what the control OPENS AT, a real save made through the UI, and
+   * the value read back — then the bounds, on BOTH sides of the seam. The
+   * form's own `valid` predicate and the route's zod schema are separate
+   * guards and neither implies the other, so each is enumerated against the
+   * side that owns it.
+   *
+   * `step={0.5}` on the input is enforced by NOTHING: the client tests
+   * `parsed >= 0 && parsed <= 100`, and the route's schema is
+   * `z.number().min(0).max(100)` with no `multipleOf`. So 2.7 is accepted end
+   * to end, and the table pins what the product DOES rather than what the
+   * attribute implies.
+   *
+   * The refusals are 400, not 422. `setPlatformFeeDefault` does throw
+   * `HttpError(422)` out of bounds, but `putSchema.parse` runs first and
+   * `handler()` maps a ZodError to 400 (`lib/http.ts`), so 422 is unreachable
+   * through this route and asserting it would be asserting a dead branch.
+   */
+  test("a superadmin can change the fee, and the bounds hold on both sides", async ({ page }) => {
+    const org = await activeOrg(page);
+
+    // Hoisted so the closing assertions can live OUTSIDE every `finally`.
+    let original: number | undefined;
+    let restored: { status: number; value?: number } | undefined;
+
+    try {
+      // Arm the afterEach backstop BEFORE the grant exists to leak — and this
+      // is the test that hook was built for: it is the only one here that
+      // WRITES the global fee row, and on a TIMEOUT the `finally` below never
+      // starts, so without this line the platform's default cut would stay
+      // wherever this test left it for every run that follows.
+      borrowedOrgId = org.id;
+      await setOwnerStaffRoleSql(org.id, "superadmin");
+      original = await readFee(page.request);
+      // A target that differs from every wrong answer's constant: not the
+      // current value, not 0 (F2's failure mode), not 5 (the env fallback).
+      const target = original === 7.5 ? 8.5 : 7.5;
+
+      await page.goto("/admin/settings");
+      const input = page.getByLabel("Platform fee percent");
+      const save = page.getByRole("button", { name: "Save" });
+
+      // What the control opens at, derived from the route's own answer rather
+      // than a constant typed here — a reachability check would pass on any
+      // value, including a stale one.
+      await expect(input, "the form must open at the stored default").toHaveValue(String(original));
+
+      await input.fill(String(target));
+      await Promise.all([
+        page.waitForResponse(
+          (r) => r.url().includes("/api/admin/settings") && r.request().method() === "PUT",
+        ),
+        save.click(),
+      ]);
+      await expect(page.getByText("Saved."), "the form must confirm the write").toBeVisible();
+
+      // Persisted, and served back on the next load — the page is
+      // `force-dynamic` and `setPlatformFeeDefault` drops the 300s cache entry,
+      // so a reload is a genuine re-read rather than a repaint of local state.
+      expect(await readFee(page.request), "the save must have landed").toBe(target);
+      await page.reload();
+      await expect(input, "the reloaded page must open at the saved value").toHaveValue(
+        String(target),
+      );
+
+      // The CLIENT half of the bounds, driven as a transition in both
+      // directions. Only the second half is the point: T3 proved an EMPTY box
+      // kills the Save, and a `parsed > 0` predicate would satisfy that test
+      // too while making a deliberate 0% — a legal fee, and a 200 in the table
+      // below — unsubmittable. The 101 line above it is what stops
+      // `toBeEnabled()` from being a constant: it proves this button does go
+      // dark on a fill, so its coming back live at 0 is the form's answer and
+      // not just the state it was already in.
+      await input.fill("101");
+      await expect(save, "over the ceiling the form must kill the Save").toBeDisabled();
+      await expect(page.getByText("0–100 only"), "and say why").toBeVisible();
+      await input.fill("0");
+      await expect(save, "0% is a legal fee — the form must still offer a Save").toBeEnabled();
+      await expect(
+        page.getByText("0–100 only"),
+        "0 is in range, so the form must not claim otherwise",
+      ).toBeHidden();
+
+      // The ROUTE half, enumerated rather than sampled. Nothing is clicked
+      // here: the form cannot express -1 or 101 as a submitted value (the
+      // guard just proved that), so the only way to ask the route what it
+      // does with them is to ask it directly.
+      const cases: { value: number; status: number; why: string }[] = [
+        { value: -1, status: 400, why: "below the floor" },
+        { value: 0, status: 200, why: "the floor itself is legal" },
+        { value: 2.7, status: 200, why: "step=0.5 is enforced by nothing" },
+        { value: 100, status: 200, why: "the ceiling itself is legal" },
+        { value: 101, status: 400, why: "above the ceiling" },
+      ];
+      for (const c of cases) {
+        const res = await apiJson<FeeBody>(page.request, "/api/admin/settings", "PUT", {
+          platform_fee_percent: c.value,
+        });
+        expect(res.status, `PUT ${c.value} — ${c.why}`).toBe(c.status);
+        // A 200 is satisfied by ANY stored value, so an accepted row has to
+        // say what it stored. This is what makes 2.7 "accepted end to end"
+        // rather than merely "not refused": the route echoes
+        // `platformFeeDefault()` read back AFTER the write, so a silent round
+        // to 3 (or a step the column quietly enforced) shows up here.
+        if (c.status === 200) {
+          expect(
+            res.data?.platform_fee_percent,
+            `PUT ${c.value} — accepted, so it must have stored ${c.value}`,
+          ).toBe(c.value);
+        }
+      }
+    } finally {
+      // Cleanup UNCONDITIONAL, and ordered so the fee restore can never skip
+      // the role clear: the inner `finally` holds only the clear, so a restore
+      // that throws still drops the borrowed `superadmin` off the shared Pro
+      // user. Nothing here asserts, for the same reason `peekFee` exists — an
+      // expect() in this block would replace the test's real failure with its
+      // own.
+      //
+      // Through the ROUTE, never raw SQL: `platformFeeDefault()` is cache-aside
+      // on a 300s entry that only `setPlatformFeeDefault` invalidates, so an
+      // UPDATE would put the row back and leave the stale value serving every
+      // later reader. The role is still `superadmin` here — this test never
+      // demotes — so the PUT is authorised without re-granting.
+      //
+      // `original === undefined` means `readFee` never returned, which means
+      // nothing above it ever wrote: there is nothing to restore, and PUTting
+      // `undefined` would only add a 400 to the log.
+      try {
+        if (original !== undefined) {
+          await apiJson(page.request, "/api/admin/settings", "PUT", {
+            platform_fee_percent: original,
+          });
+        }
+        restored = await peekFee(page.request);
+      } finally {
+        await setOwnerStaffRoleSql(org.id, null);
+      }
+    }
+
+    // Deliberately OUTSIDE every `finally`. A throw above never reaches here,
+    // so these can only ever report their own failure — never overwrite the
+    // real one with a confusing "the fee moved".
+    expect(restored?.status, "GET /api/admin/settings after the restore").toBe(200);
+    expect(restored?.value, "the fee must be back where this test found it").toBe(original);
+  });
 });
