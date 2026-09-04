@@ -31,7 +31,7 @@ import { createDivision } from "../divisions";
 import { createEntrants } from "../entrants";
 import { createStages, generateStageFixtures } from "../stages";
 import { createVenue, createCourt } from "../venues";
-import { createCheckpoint } from "../history";
+import { createCheckpoint, setDivisionLocks } from "../history";
 import { applyCompetitionSchedule } from "../competition-schedule-apply";
 import { JOINT_APPLY_EVENT } from "../competition-schedule-ai";
 import { restoreCompetitionSchedule } from "../competition-schedule-restore";
@@ -492,6 +492,51 @@ describe.skipIf(!HAS_DB)("restoreCompetitionSchedule (#386)", () => {
     // The good one was really rewound, not merely counted.
     expect(unplaced(await slots(checkpoints[0]!.divisionId))).toBe(true);
     // The FAILED half is on the wire too — `reason` is part of the contract.
+    wireRoundTrip(out);
+  }, 120_000);
+
+  it("inherits the frozen-division refusal as a per-division failure, not an abort", async () => {
+    // The joint restore has no freeze guard of its own: it calls
+    // `restoreCheckpoint` per division inside its own try/catch, so a frozen
+    // division arrives here as a `failed[]` entry carrying that usecase's 422
+    // MESSAGE at HTTP 200 with `ok: false`.
+    //
+    // This records the shape rather than deciding it. The sibling joint APPLY
+    // (`competition-schedule-apply.ts`) answers the same condition with a 422
+    // that aborts everything, and the two differ for a reason that is physical:
+    // an apply is ONE transaction over every division, so a refusal really does
+    // write nothing, while each division here rewinds in its own transaction
+    // and a partial outcome is already committed by the time the next division
+    // is refused. A 422 from this endpoint would claim nothing happened when
+    // something did.
+    //
+    // The `reason` is now load-bearing on screen, not only on the wire: the
+    // board's joint-undo card renders it per division (`ai-joint-apply.ts` ->
+    // `JointReviewStep`), so the sentence has to arrive verbatim.
+    const { auth, competitionId, checkpoints } = await seedAppliedJoint(2);
+    const frozenId = checkpoints[1]!.divisionId;
+    await setDivisionLocks(auth, frozenId, { schedule_locked: true });
+
+    const out = await restoreCompetitionSchedule(auth, competitionId, {
+      checkpoints: checkpoints.map((c) => ({
+        division_id: c.divisionId,
+        checkpoint_id: c.checkpointId,
+      })),
+      confirm: true,
+    });
+
+    expect(out.ok).toBe(false);
+    expect(out.restored).toHaveLength(1);
+    expect(out.restored[0]!.division_id).toBe(checkpoints[0]!.divisionId);
+    expect(out.failed).toHaveLength(1);
+    expect(out.failed[0]!.division_id).toBe(frozenId);
+    expect(out.failed[0]!.reason).toBe("the division schedule is locked — unlock it to edit");
+    // The unfrozen division really was rewound — the freeze is per division and
+    // did not abort its neighbour.
+    expect(unplaced(await slots(checkpoints[0]!.divisionId))).toBe(true);
+    // ...and the frozen one still carries the AI board it was refused from
+    // rewinding, so the console's "still on the AI schedule" copy is true.
+    expect(unplaced(await slots(frozenId))).toBe(false);
     wireRoundTrip(out);
   }, 120_000);
 
