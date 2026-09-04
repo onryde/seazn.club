@@ -154,6 +154,14 @@ export async function runSuite(
       keep: config.keep,
       log: suiteLogger("_tiny"),
       sql,
+      /* The whole point of `--entry`. Parsed into `BenchConfig` by task 6 and
+       * consumed by `runTinySuite`'s `resolveEntryMode` since task 9 — but
+       * unforwarded until now, which made the flag inert end to end: every run
+       * took each division's own declared `entry` no matter what the CLI said,
+       * and `report.entryMode` stayed undefined so "Registration at volume"
+       * could never render. Both halves existed, were typed, and were unit
+       * green. Nothing joined them. */
+      ...(config.entry === undefined ? {} : { cliEntry: config.entry }),
       ...(transport === undefined ? {} : { transport }),
       ...(probeTransport === undefined ? {} : { probeTransport }),
     });
@@ -219,6 +227,12 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     finishedAt: new Date().toISOString(),
     engine: config.engine,
     base: config.base,
+    /* `report.ts:306` gates the "Registration at volume" section on this being
+     * exactly `"registration"`. Without this line it is always undefined, so
+     * that section never renders and the run silently reports nothing about
+     * the volume pass it just performed — the report agreeing with a broken
+     * run rather than contradicting it. */
+    ...(config.entry === undefined ? {} : { entryMode: config.entry }),
     preflight: preflightReport,
     suites,
     gate,
