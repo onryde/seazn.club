@@ -151,9 +151,31 @@ export interface PlanSql {
    */
   claimConnectAccount(orgId: string, accountId: string): Promise<string | null>;
   /** Hands the Connect account back: clears it from `orgId` and, when
-   *  `previousHolderId` is non-null, restores it there. Mirrors smoke.ts's
-   *  `releaseConnectAccount` (smoke.ts:8758) exactly. */
+   *  `previousHolderId` is non-null, restores it there. Follows smoke.ts's
+   *  `releaseConnectAccount` (smoke.ts:8758) with ONE deliberate difference:
+   *  this also clears `stripe_charges_enabled` on `orgId`, which smoke does
+   *  not. `claimConnectAccount` SET that flag, so leaving it true would hand
+   *  back an org that still claims it can take payments with no account
+   *  attached — a state no onboarding path produces. */
   releaseConnectAccount(orgId: string, previousHolderId: string | null, accountId: string): Promise<void>;
+  /**
+   * `update organizations set currency = $2 where id = $1`.
+   *
+   * `PackOrg.currency` was stage-0 validated and transmitted NOWHERE — no
+   * PATCH body, no PUT body, no write — so a pack could declare `usd`, pass
+   * every offline check, and be charged in `gbp`. That is not hypothetical:
+   * `organizations.currency` defaults to `'gbp'`, and the first live paid run
+   * produced two 100 GBP payment intents against a pack declaring `usd`.
+   * Stage-0 rule `registration.currency_required` was therefore enforcing the
+   * authoring of a field with no effect on anything.
+   *
+   * Raw SQL for the same reason `getOrgSlug` reads that way: no v1 endpoint
+   * touches it. There is no `PATCH /api/v1/orgs/{id}` at all — `orgs/[id]/`
+   * holds only subresources (api-keys, connect, courts, posts, sponsors,
+   * venues) — and the org settings page writes it through a server action the
+   * bench has no way to call.
+   */
+  setOrgCurrency(orgId: string, currency: string): Promise<void>;
 }
 
 /**
@@ -484,6 +506,9 @@ export function createRealPlanSql(): RealPlanSqlHandle {
         set stripe_account_id = ${accountId}, stripe_charges_enabled = true
         where id = ${orgId}`;
       return previousHolderId;
+    },
+    async setOrgCurrency(orgId, currency) {
+      await getSql()`update organizations set currency = ${currency} where id = ${orgId}`;
     },
     async releaseConnectAccount(orgId, previousHolderId, accountId) {
       await getSql()`

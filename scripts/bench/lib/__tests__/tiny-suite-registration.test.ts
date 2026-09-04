@@ -474,6 +474,7 @@ describe("runTinySuite — d-registration driven via a fake registrationDrivers"
           order.push(`release:${account}:${prev}`);
         },
       },
+      setOrgCurrency: async () => {},
     });
 
     expect(report.gate, JSON.stringify(report.errors)).toBe("green");
@@ -511,6 +512,7 @@ describe("runTinySuite — d-registration driven via a fake registrationDrivers"
           order.push("release");
         },
       },
+      setOrgCurrency: async () => {},
     });
 
     expect(report.gate).toBe("red");
@@ -542,6 +544,130 @@ describe("runTinySuite — d-registration driven via a fake registrationDrivers"
     expect(report.gate).toBe("green");
     expect(claim).not.toHaveBeenCalled();
     expect(release).not.toHaveBeenCalled();
+  });
+
+  it("MUTATION: an entry declaring pay:true actually has pay() CALLED, with its own registration id", async () => {
+    // The single most important line in the paid funnel — `register.ts`'s
+    // `if (entry.pay && outcome.ref) await captain.pay(...)` — had NO unit
+    // coverage at all: deleting it outright left the whole 714-test suite
+    // green. It was the exact line that made a pay-up-front entry silently
+    // skip payment live, because the ref it guards on was empty.
+    //
+    // The funnel oracle cannot stand in for this: it reads pre-seeded rows
+    // from the fake server, so it reports the same paidCents whether or not
+    // anything ever called pay().
+    const server = makeFakeServer();
+    server.registrationRowsByDivisionId.set(REGISTRATION_DIVISION_ID, [
+      { id: "reg-reg-cap1", status: "confirmed", amount_cents: 100, entry_payment_intent_id: "pi_cap1" },
+      { id: "reg-reg-cap2", status: "paid", amount_cents: 100, entry_payment_intent_id: "pi_cap2" },
+    ]);
+    const driverCalls: RecordedDriverCall[] = [];
+
+    const report = await runTinySuite({
+      base: "http://bench.example",
+      engine: "optimized",
+      keep: false,
+      log: silent,
+      transport: server.transport,
+      packPath: paidPackPath,
+      registrationDrivers: fakeRegistrationDrivers(driverCalls),
+      resolveOrgSlug: async () => SERVER_ORG_SLUG,
+      connectAccount: { claim: async () => null, release: async () => {} },
+      setOrgCurrency: async () => {},
+    });
+
+    expect(report.gate, JSON.stringify(report.errors)).toBe("green");
+    const paid = driverCalls.filter((c) => c.kind === "pay");
+    // Both entries of the paid pack declare pay:true.
+    expect(paid, "pay() was never called for a pack whose entries all declare pay:true").toHaveLength(2);
+    // ...and each got its OWN entry's id, not a shared or empty one. A pay()
+    // called with "" is the live defect this whole branch chased.
+    const paidIds = paid.map((c) => (c.detail as { registrationId: string }).registrationId).sort();
+    expect(paidIds).toEqual(["reg-reg-cap1", "reg-reg-cap2"]);
+  });
+
+  it("MUTATION: an entry declaring pay:false is NOT paid — the gate tracks the pack, not the fee", async () => {
+    // The negative pair. Without it, a runner that called pay() for every
+    // entry of a priced division would satisfy the assertion above.
+    const server = makeFakeServer();
+    server.registrationRowsByDivisionId.set(REGISTRATION_DIVISION_ID, [
+      { id: "reg-reg-cap1", status: "confirmed", amount_cents: 0, entry_payment_intent_id: null },
+      { id: "reg-reg-cap2", status: "pending", amount_cents: 0, entry_payment_intent_id: null },
+    ]);
+    const driverCalls: RecordedDriverCall[] = [];
+
+    const report = await runTinySuite({
+      base: "http://bench.example",
+      engine: "optimized",
+      keep: false,
+      log: silent,
+      transport: server.transport,
+      registrationDrivers: fakeRegistrationDrivers(driverCalls),
+      resolveOrgSlug: async () => SERVER_ORG_SLUG,
+    });
+
+    expect(report.gate).toBe("green");
+    expect(driverCalls.filter((c) => c.kind === "pay")).toHaveLength(0);
+  });
+
+  it("writes the pack's declared org currency — a declaration nothing transmits is not a declaration", async () => {
+    // `org.currency` was stage-0 validated and sent NOWHERE, so a pack could
+    // declare "usd", pass every offline check, and be charged in "gbp"
+    // (`organizations.currency` defaults to 'gbp'). Observed live: two 100 GBP
+    // payment intents against a pack declaring usd.
+    const server = makeFakeServer();
+    server.registrationRowsByDivisionId.set(REGISTRATION_DIVISION_ID, [
+      { id: "reg-reg-cap1", status: "confirmed", amount_cents: 100, entry_payment_intent_id: "pi_cap1" },
+      { id: "reg-reg-cap2", status: "paid", amount_cents: 100, entry_payment_intent_id: "pi_cap2" },
+    ]);
+    const written: { orgId: string; currency: string }[] = [];
+
+    const report = await runTinySuite({
+      base: "http://bench.example",
+      engine: "optimized",
+      keep: false,
+      log: silent,
+      transport: server.transport,
+      packPath: paidPackPath,
+      registrationDrivers: fakeRegistrationDrivers([]),
+      resolveOrgSlug: async () => SERVER_ORG_SLUG,
+      connectAccount: { claim: async () => null, release: async () => {} },
+      setOrgCurrency: async (orgId, currency) => {
+        written.push({ orgId, currency });
+      },
+    });
+
+    expect(report.gate, JSON.stringify(report.errors)).toBe("green");
+    expect(written).toHaveLength(1);
+    // The pack's OWN value, not a constant — the paid fixture declares "usd"
+    // precisely because it differs from the column default.
+    expect(written[0]?.currency).toBe("usd");
+  });
+
+  it("does NOT write a currency when the pack declares none — the column default stands", async () => {
+    // The positive pair. The committed `_tiny` declares no currency (it is
+    // free), and an unconditional write would overwrite a real org's setting
+    // with `undefined` on every free run.
+    const server = makeFakeServer();
+    server.registrationRowsByDivisionId.set(REGISTRATION_DIVISION_ID, [
+      { id: "reg-reg-cap1", status: "confirmed", amount_cents: 0, entry_payment_intent_id: null },
+      { id: "reg-reg-cap2", status: "pending", amount_cents: 0, entry_payment_intent_id: null },
+    ]);
+    const setOrgCurrency = vi.fn(async () => {});
+
+    const report = await runTinySuite({
+      base: "http://bench.example",
+      engine: "optimized",
+      keep: false,
+      log: silent,
+      transport: server.transport,
+      registrationDrivers: fakeRegistrationDrivers([]),
+      resolveOrgSlug: async () => SERVER_ORG_SLUG,
+      setOrgCurrency,
+    });
+
+    expect(report.gate).toBe("green");
+    expect(setOrgCurrency).not.toHaveBeenCalled();
   });
 
   it("MUTATION: a funnel mismatch (an entry the fake never actually submitted as expected) reds the gate — the wiring genuinely propagates register.ts's own findings, not just 'ran without throwing'", async () => {

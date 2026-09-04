@@ -473,6 +473,9 @@ export interface TinySuiteInput {
       accountId: string,
     ) => Promise<void>;
   };
+  /** Overridable for the same reason `connectAccount` is — the unit suite has
+   *  no live Postgres. A live run passes neither and gets `PlanSql`. */
+  setOrgCurrency?: (orgId: string, currency: string) => Promise<void>;
 }
 
 // ---------------------------------------------------------------------------
@@ -1281,6 +1284,35 @@ export async function runTinySuite(
     // same single account and RESTORES it (smoke.ts:8758), so a bench run that
     // kept it would make smoke's paid suites skip themselves and report green
     // while proving nothing.
+    // The pack's declared currency, WRITTEN — not merely validated. Stage 0
+    // requires `org.currency` once any division prices a fee, but nothing
+    // transmitted it, so a pack could declare "usd", satisfy every offline
+    // check, and be charged in "gbp" — `organizations.currency` defaults to
+    // 'gbp', and the first live paid run did exactly that: two 100 GBP
+    // payment intents against a pack that said usd. Written BEFORE the
+    // registration loop because the amount and currency are snapshotted onto
+    // the entry at submit time; a write afterwards would be decoration.
+    const declaredCurrency = pack.org.currency;
+    if (declaredCurrency !== undefined) {
+      const sqlSeam = input.sql;
+      const writeCurrency =
+        input.setOrgCurrency ??
+        (sqlSeam === undefined
+          ? undefined
+          : (id: string, c: string) => sqlSeam.setOrgCurrency(id, c));
+      if (writeCurrency === undefined) {
+        throw new Error(
+          `tiny: pack declares org.currency "${declaredCurrency}" but neither the PlanSql seam nor a setOrgCurrency ` +
+            `override is wired — writing it is the only thing that makes the declaration mean anything`,
+        );
+      }
+      await writeCurrency(orgId, declaredCurrency);
+      log.info(
+        { org: orgId, currency: declaredCurrency },
+        "tiny: wrote the pack's declared org currency",
+      );
+    }
+
     const needsConnect = registrationDivisionsOf(pack).some(
       (d) => pack.registration?.byDivision[d.ref]?.paymentMethod === "stripe",
     );

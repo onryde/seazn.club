@@ -272,17 +272,29 @@ export interface ValidatePackOptions {
 // "the runner must remember to pass it" from a comment into a gate: the
 // obligation is on a caller that does not exist yet, so no runtime test in
 // this suite can witness it.
-type _ExpectedSuiteIsRequired = ValidatePackOptions extends { expectedSuite: string }
+type _ExpectedSuiteIsRequired = ValidatePackOptions extends {
+  expectedSuite: string;
+}
   ? true
   : never;
 export const EXPECTED_SUITE_IS_REQUIRED: _ExpectedSuiteIsRequired = true;
 
-const EMPTY_SPLIT: ProvenanceSplit = { real: 0, reconstructed: 0, synthetic: 0, total: 0 };
+const EMPTY_SPLIT: ProvenanceSplit = {
+  real: 0,
+  reconstructed: 0,
+  synthetic: 0,
+  total: 0,
+};
 
 /** The stage kinds that produce a TABLE rather than a bracket. `americano`
  *  rides the league fold (`engine-db/competition.ts:333`, "Jul3/08 §3"), which
  *  is why it belongs here and not with the bracket kinds. */
-const TABLE_STAGE_KINDS: ReadonlySet<string> = new Set(["league", "group", "swiss", "americano"]);
+const TABLE_STAGE_KINDS: ReadonlySet<string> = new Set([
+  "league",
+  "group",
+  "swiss",
+  "americano",
+]);
 
 // ---------------------------------------------------------------------------
 // Registry boot — mirrors apps/web/src/server/engine-db/registry.ts
@@ -387,7 +399,11 @@ export const OFFLINE_RECORDED_AT = "1970-01-01T00:00:00.000Z";
  * one of the three parity facts moved, and the stream a builder emitted would
  * then fold differently here than it did while it was being built.
  */
-export function packEnvelope(fixtureId: string, ev: PackEvent, i: number): EventEnvelope {
+export function packEnvelope(
+  fixtureId: string,
+  ev: PackEvent,
+  i: number,
+): EventEnvelope {
   return {
     id: String(i),
     fixtureId,
@@ -422,10 +438,16 @@ function toLineupSlot(slot: PackLineupSlot, i: number): LineupSlot {
     personId: sigil(slot.person),
     slot: slot.slot,
     orderNo: slot.orderNo ?? i + 1,
-    ...(slot.positionKey === undefined ? {} : { positionKey: slot.positionKey }),
+    ...(slot.positionKey === undefined
+      ? {}
+      : { positionKey: slot.positionKey }),
     ...(slot.roles.length === 0 ? {} : { roles: slot.roles }),
-    ...(slot.squadNumber === undefined ? {} : { squadNumber: slot.squadNumber }),
-    ...(slot.role === undefined || slot.role === "player" ? {} : { role: slot.role }),
+    ...(slot.squadNumber === undefined
+      ? {}
+      : { squadNumber: slot.squadNumber }),
+    ...(slot.role === undefined || slot.role === "player"
+      ? {}
+      : { role: slot.role }),
     ...(slot.pairOrder === undefined ? {} : { pairOrder: slot.pairOrder }),
   };
 }
@@ -441,7 +463,10 @@ function toLineupSlot(slot: PackLineupSlot, i: number): LineupSlot {
  * the seeded product will not have.
  */
 export function packLineupPair(stream: PackStream): LineupPair {
-  const side = (entrant: string, slots: readonly PackLineupSlot[] | undefined): Lineup => ({
+  const side = (
+    entrant: string,
+    slots: readonly PackLineupSlot[] | undefined,
+  ): Lineup => ({
     entrantId: sigil(entrant),
     slots: (slots ?? []).map(toLineupSlot),
   });
@@ -469,8 +494,16 @@ export function packLineupPair(stream: PackStream): LineupPair {
  */
 export type DivisionCfgResolution =
   | { readonly ok: true; readonly cfg: unknown }
-  | { readonly ok: false; readonly reason: "unknown_variant"; readonly declared: readonly string[] }
-  | { readonly ok: false; readonly reason: "cfg_invalid"; readonly detail: string };
+  | {
+      readonly ok: false;
+      readonly reason: "unknown_variant";
+      readonly declared: readonly string[];
+    }
+  | {
+      readonly ok: false;
+      readonly reason: "cfg_invalid";
+      readonly detail: string;
+    };
 
 export function resolveDivisionCfg(
   sportModule: AnySportModule,
@@ -478,9 +511,16 @@ export function resolveDivisionCfg(
 ): DivisionCfgResolution {
   const variants = sportModule.variants as Record<string, unknown>;
   if (!Object.prototype.hasOwnProperty.call(variants, division.variantKey)) {
-    return { ok: false, reason: "unknown_variant", declared: Object.keys(variants) };
+    return {
+      ok: false,
+      reason: "unknown_variant",
+      declared: Object.keys(variants),
+    };
   }
-  const merged = { ...(variants[division.variantKey] as object), ...division.cfgOverrides };
+  const merged = {
+    ...(variants[division.variantKey] as object),
+    ...division.cfgOverrides,
+  };
   const parsed = sportModule.configSchema.safeParse(merged);
   if (!parsed.success) {
     return {
@@ -500,7 +540,13 @@ export function resolveDivisionCfg(
 
 function deepEqual(a: unknown, b: unknown): boolean {
   if (Object.is(a, b)) return true;
-  if (typeof a !== "object" || typeof b !== "object" || a === null || b === null) return false;
+  if (
+    typeof a !== "object" ||
+    typeof b !== "object" ||
+    a === null ||
+    b === null
+  )
+    return false;
   if (Array.isArray(a) !== Array.isArray(b)) return false;
   if (Array.isArray(a) && Array.isArray(b)) {
     return a.length === b.length && a.every((item, i) => deepEqual(item, b[i]));
@@ -510,7 +556,10 @@ function deepEqual(a: unknown, b: unknown): boolean {
   const ak = Object.keys(ao);
   const bk = Object.keys(bo);
   if (ak.length !== bk.length) return false;
-  return ak.every((k) => Object.prototype.hasOwnProperty.call(bo, k) && deepEqual(ao[k], bo[k]));
+  return ak.every(
+    (k) =>
+      Object.prototype.hasOwnProperty.call(bo, k) && deepEqual(ao[k], bo[k]),
+  );
 }
 
 function show(value: unknown): string {
@@ -528,7 +577,10 @@ function show(value: unknown): string {
  * parsed cleanly and could never resolve. An unresolvable path is an error
  * here, never a skipped claim.
  */
-export function resolveStatePath(root: unknown, path: string): { found: boolean; value: unknown } {
+export function resolveStatePath(
+  root: unknown,
+  path: string,
+): { found: boolean; value: unknown } {
   let cursor: unknown = root;
   for (const segment of path.split(".")) {
     if (Array.isArray(cursor)) {
@@ -539,7 +591,8 @@ export function resolveStatePath(root: unknown, path: string): { found: boolean;
       cursor = cursor[index];
       continue;
     }
-    if (typeof cursor !== "object" || cursor === null) return { found: false, value: undefined };
+    if (typeof cursor !== "object" || cursor === null)
+      return { found: false, value: undefined };
     if (!Object.prototype.hasOwnProperty.call(cursor, segment)) {
       return { found: false, value: undefined };
     }
@@ -601,7 +654,10 @@ type EligibilityPersonLike = Pick<PackPerson, "dob" | "gender">;
  *  (pack-schema.ts) now admits `"x"`, so this mirrors the exemption exactly:
  *  a declared `"x"` never trips `CATEGORY_MISMATCH`, only a missing gender
  *  or a genuinely wrong one does. */
-function categoryViolation(category: string, person: EligibilityPersonLike): boolean {
+function categoryViolation(
+  category: string,
+  person: EligibilityPersonLike,
+): boolean {
   if (category !== "mens" && category !== "womens") return false;
   const needed = category === "mens" ? "m" : "f";
   if (!person.gender) return true;
@@ -615,7 +671,9 @@ function categoryViolation(category: string, person: EligibilityPersonLike): boo
  *  re-evaluated against a DIFFERENT `seasonStartYear` every season, so a
  *  leap-only day would silently roll over into 1 March three years out of
  *  four. */
-const DAYS_IN_MONTH: readonly number[] = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+const DAYS_IN_MONTH: readonly number[] = [
+  31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31,
+];
 
 /** Mirrors `isValidCutoffDay` (registration-rules.ts ~:222-225). */
 function isValidCutoffDayMirror(month: number, day: number): boolean {
@@ -654,7 +712,8 @@ function ageBandViolation(
   let age = cutoff.getUTCFullYear() - dob.getUTCFullYear();
   const beforeBirthday =
     cutoff.getUTCMonth() < dob.getUTCMonth() ||
-    (cutoff.getUTCMonth() === dob.getUTCMonth() && cutoff.getUTCDate() < dob.getUTCDate());
+    (cutoff.getUTCMonth() === dob.getUTCMonth() &&
+      cutoff.getUTCDate() < dob.getUTCDate());
   if (beforeBirthday) age -= 1;
   if (ageMax !== undefined && age > ageMax) return true;
   if (ageMin !== undefined && age < ageMin) return true;
@@ -664,7 +723,10 @@ function ageBandViolation(
 /** Mirrors `rosterCompositionIssues` (registration-rules.ts:397-410):
  *  `mixed` needs at least one `m` AND one `f` among the roster; `x`/null
  *  count toward neither side. An empty roster is NOT vacuously satisfied. */
-function mixedCompositionViolation(category: string, persons: readonly EligibilityPersonLike[]): boolean {
+function mixedCompositionViolation(
+  category: string,
+  persons: readonly EligibilityPersonLike[],
+): boolean {
   if (category !== "mixed") return false;
   let hasM = false;
   let hasF = false;
@@ -709,7 +771,11 @@ function enteringPersons(
   return persons;
 }
 
-function registrationEntryLabel(divisionRef: string, entry: PackRegistrationEntry, i: number): string {
+function registrationEntryLabel(
+  divisionRef: string,
+  entry: PackRegistrationEntry,
+  i: number,
+): string {
   return `registration.byDivision[${divisionRef}].entries[${i}] (${entry.extKey})`;
 }
 
@@ -763,12 +829,17 @@ function checkRejectedEligibilityOffenders(
  *  both tallied from the entries' OWN `expect` tags, so the identity is a
  *  pure consistency check on the block's own declarations (it does not
  *  re-derive who SHOULD be rejected/waitlisted; rules 1 and 3 do that). */
-function checkExpectArithmetic(divisionRef: string, block: PackRegistrationBlock): PackFinding[] {
+function checkExpectArithmetic(
+  divisionRef: string,
+  block: PackRegistrationBlock,
+): PackFinding[] {
   const rejected = block.entries.filter(
-    (e) => e.expect === "rejected_eligibility" || e.expect === "rejected_manual",
+    (e) =>
+      e.expect === "rejected_eligibility" || e.expect === "rejected_manual",
   );
   const waitlisted = block.entries.filter((e) => e.expect === "waitlisted");
-  const expectedEntrants = block.entries.length - rejected.length - waitlisted.length;
+  const expectedEntrants =
+    block.entries.length - rejected.length - waitlisted.length;
   if (block.expect.entrants === expectedEntrants) return [];
   return [
     {
@@ -789,10 +860,17 @@ function checkExpectArithmetic(divisionRef: string, block: PackRegistrationBlock
  *  `expect.waitlisted`. An unset `capacity` means nothing forces a
  *  waitlist, so the expected count is 0 either way admitted count is
  *  ignored in that branch. */
-function checkCapacityWaitlist(divisionRef: string, block: PackRegistrationBlock): PackFinding[] {
-  const admitted = block.entries.filter((e) => e.expect === "entrant" || e.expect === "waitlisted");
+function checkCapacityWaitlist(
+  divisionRef: string,
+  block: PackRegistrationBlock,
+): PackFinding[] {
+  const admitted = block.entries.filter(
+    (e) => e.expect === "entrant" || e.expect === "waitlisted",
+  );
   const expectedWaitlisted =
-    block.capacity === undefined ? 0 : Math.max(0, admitted.length - block.capacity);
+    block.capacity === undefined
+      ? 0
+      : Math.max(0, admitted.length - block.capacity);
   if (block.expect.waitlisted === expectedWaitlisted) return [];
   return [
     {
@@ -809,7 +887,10 @@ function checkCapacityWaitlist(divisionRef: string, block: PackRegistrationBlock
 
 /** Design §4 check 4: `pay: true` requires the division's `feeCents > 0` —
  *  a free division has nothing for an entrant to pay. */
-function checkPayRequiresFee(divisionRef: string, block: PackRegistrationBlock): PackFinding[] {
+function checkPayRequiresFee(
+  divisionRef: string,
+  block: PackRegistrationBlock,
+): PackFinding[] {
   const findings: PackFinding[] = [];
   block.entries.forEach((entry, i) => {
     if (!entry.pay || block.feeCents > 0) return;
@@ -842,7 +923,10 @@ function checkPayRequiresFee(divisionRef: string, block: PackRegistrationBlock):
  *  not catch it — a fee can be perfectly real and still be collected offline.
  *  Caught offline, before any HTTP, because the alternative symptom is an
  *  opaque mint failure deep inside a live run. */
-function checkPayRequiresStripe(divisionRef: string, block: PackRegistrationBlock): PackFinding[] {
+function checkPayRequiresStripe(
+  divisionRef: string,
+  block: PackRegistrationBlock,
+): PackFinding[] {
   const findings: PackFinding[] = [];
   block.entries.forEach((entry, i) => {
     if (!entry.pay || block.paymentMethod === "stripe") return;
@@ -854,6 +938,47 @@ function checkPayRequiresStripe(divisionRef: string, block: PackRegistrationBloc
         `entry "${entry.extKey}" declares pay:true but division "${divisionRef}" declares ` +
         `paymentMethod:"${block.paymentMethod}" — resumeRegistrationCheckout mints a Checkout ` +
         `session only for "stripe" (usecases/registrations.ts:4365), so this entry can never pay`,
+    });
+  });
+  return findings;
+}
+
+/** Stage-0 rule 8 (added B03r, 2026-09-04) — the CONVERSE of rule 7. On a
+ *  `paymentMethod: "stripe"` division, an entry that expects to become an
+ *  entrant must declare `pay: true`.
+ *
+ *  Established live, not assumed: on a stripe division the product collects at
+ *  SUBMIT (the stepper redirects straight to hosted Checkout), so a per-entry
+ *  `pay: false` does NOT stop that entry being charged. The first live paid run
+ *  declared `pay: false` on its second entry and reported `paidCents 200`
+ *  against a declared 100 — the pack was wrong, not the product.
+ *
+ *  Why it has to be caught offline rather than left to the funnel oracle: with
+ *  `pay: false` the runner's own `if (entry.pay && outcome.ref)` gate stays
+ *  false, so `pay()` never runs and neither does its `?reconcile=1` poll. The
+ *  entry's final state then depends on the webhook landing before
+ *  `fetchFinalRows()` reads — a race, which is exactly the kind of flake a
+ *  bench must not have.
+ *
+ *  Scoped to `expect: "entrant"` on purpose. A waitlisted entry is not charged
+ *  (it never clears capacity), and a rejected one never gets a row at all — so
+ *  `pay: false` is correct for both, and a blanket rule would ban them. */
+function checkStripeEntrantMustPay(
+  divisionRef: string,
+  block: PackRegistrationBlock,
+): PackFinding[] {
+  if (block.paymentMethod !== "stripe") return [];
+  const findings: PackFinding[] = [];
+  block.entries.forEach((entry, i) => {
+    if (entry.pay || entry.expect !== "entrant") return;
+    findings.push({
+      code: "registration.stripe_entrant_must_pay",
+      severity: "error",
+      where: registrationEntryLabel(divisionRef, entry, i),
+      message:
+        `entry "${entry.extKey}" expects "entrant" on division "${divisionRef}" (paymentMethod:"stripe") but declares ` +
+        `pay:false — a stripe division collects at SUBMIT, so this entry WILL be charged and the pack's own ` +
+        `expect.paidCents will not match what the product produces`,
     });
   });
   return findings;
@@ -892,7 +1017,8 @@ function checkRegistrationRequiresDobGender(
   personsByRef: ReadonlyMap<string, PackPerson>,
 ): PackFinding[] {
   if (division.entry === "admin") return [];
-  const ageBandDeclared = block.ageMin !== undefined || block.ageMax !== undefined;
+  const ageBandDeclared =
+    block.ageMin !== undefined || block.ageMax !== undefined;
   const needsGender = block.category !== "open";
   // Only an "individual" entrantKind division has `register.ts` claim
   // `registeringSelf: true` for its entries — see this function's own doc
@@ -903,7 +1029,10 @@ function checkRegistrationRequiresDobGender(
   block.entries.forEach((entry, i) => {
     for (const person of enteringPersons(entry, personsByRef)) {
       const isCaptain = person.ref === entry.captain;
-      if (person.dob === undefined && (ageBandDeclared || (selfRegisters && isCaptain))) {
+      if (
+        person.dob === undefined &&
+        (ageBandDeclared || (selfRegisters && isCaptain))
+      ) {
         findings.push({
           code: "registration.missing_dob",
           severity: "error",
@@ -960,7 +1089,11 @@ function checkCurrencyRequiredForFee(
  *  pack-schema.ts for a type alias this file is the only consumer of. */
 type PackRegistrationJoin = PackRegistrationBlock["joins"][number];
 
-function registrationJoinLabel(divisionRef: string, join: PackRegistrationJoin, i: number): string {
+function registrationJoinLabel(
+  divisionRef: string,
+  join: PackRegistrationJoin,
+  i: number,
+): string {
   return `registration.byDivision[${divisionRef}].joins[${i}] (person:${join.person} -> entry:${join.entry})`;
 }
 
@@ -978,7 +1111,8 @@ function isMinorAt(dob: string | undefined, now: Date): boolean {
   let age = now.getUTCFullYear() - born.getUTCFullYear();
   const beforeBirthday =
     now.getUTCMonth() < born.getUTCMonth() ||
-    (now.getUTCMonth() === born.getUTCMonth() && now.getUTCDate() < born.getUTCDate());
+    (now.getUTCMonth() === born.getUTCMonth() &&
+      now.getUTCDate() < born.getUTCDate());
   if (beforeBirthday) age -= 1;
   return age < 18;
 }
@@ -1090,7 +1224,10 @@ function streamLabel(stream: PackStream, index: number): string {
  * division, so a ref that resolves to nothing here is unreachable for a parsed
  * pack — the `find` still returns `undefined` rather than asserting.
  */
-function resolveStage(division: PackDivision, stream: PackStream): PackStage | undefined {
+function resolveStage(
+  division: PackDivision,
+  stream: PackStream,
+): PackStage | undefined {
   if (stream.stageRef !== undefined) {
     return division.stages.find((stage) => stage.ref === stream.stageRef);
   }
@@ -1129,7 +1266,10 @@ function unbindableOverlayKeys(
 // The validator
 // ---------------------------------------------------------------------------
 
-export function validatePack(raw: unknown, opts: ValidatePackOptions): PackValidation {
+export function validatePack(
+  raw: unknown,
+  opts: ValidatePackOptions,
+): PackValidation {
   const findings: PackFinding[] = [];
   const add = (
     severity: PackFindingSeverity,
@@ -1209,14 +1349,25 @@ export function validatePack(raw: unknown, opts: ValidatePackOptions): PackValid
       const block = pack.registration.byDivision[division.ref];
       if (block === undefined) continue;
       findings.push(
-        ...checkRejectedEligibilityOffenders(division.ref, block, personsByRef, seasonStartYear),
+        ...checkRejectedEligibilityOffenders(
+          division.ref,
+          block,
+          personsByRef,
+          seasonStartYear,
+        ),
         ...checkExpectArithmetic(division.ref, block),
         ...checkCapacityWaitlist(division.ref, block),
         ...checkPayRequiresFee(division.ref, block),
         ...checkPayRequiresStripe(division.ref, block),
+        ...checkStripeEntrantMustPay(division.ref, block),
         ...checkRegistrationRequiresDobGender(division, block, personsByRef),
         ...checkCurrencyRequiredForFee(division.ref, block, pack.org.currency),
-        ...checkJoinConsentMatchesMinority(division.ref, block, personsByRef, now),
+        ...checkJoinConsentMatchesMinority(
+          division.ref,
+          block,
+          personsByRef,
+          now,
+        ),
       );
     }
   }
@@ -1235,7 +1386,10 @@ export function validatePack(raw: unknown, opts: ValidatePackOptions): PackValid
     pack.streams.filter((stream) => stream.divisionRef === divisionRef);
   const unboundOf = (divisionRef: string): PackStream[] =>
     streamsOf(divisionRef).filter(
-      (stream) => stageOfStream.get(fixtureKey(stream.divisionRef, stream.fixtureExtKey)) === undefined,
+      (stream) =>
+        stageOfStream.get(
+          fixtureKey(stream.divisionRef, stream.fixtureExtKey),
+        ) === undefined,
     );
 
   for (const division of pack.divisions) {
@@ -1273,7 +1427,10 @@ export function validatePack(raw: unknown, opts: ValidatePackOptions): PackValid
 
     let sportModule: AnySportModule;
     try {
-      sportModule = registryHandle.get(division.sportKey, division.moduleVersion);
+      sportModule = registryHandle.get(
+        division.sportKey,
+        division.moduleVersion,
+      );
     } catch (err) {
       fail(
         "fold.module_not_found",
@@ -1303,7 +1460,9 @@ export function validatePack(raw: unknown, opts: ValidatePackOptions): PackValid
       }
       return;
     }
-    const stage = stageOfStream.get(fixtureKey(stream.divisionRef, stream.fixtureExtKey));
+    const stage = stageOfStream.get(
+      fixtureKey(stream.divisionRef, stream.fixtureExtKey),
+    );
     const cfg = stageScopedFoldCfg(resolved.cfg, stage?.config);
 
     let state: unknown;
@@ -1334,14 +1493,22 @@ export function validatePack(raw: unknown, opts: ValidatePackOptions): PackValid
       // — so this is parity, not a gap opened here; the message says which
       // kind of refusal it was rather than leaving a reader to wonder.
       if (err instanceof EngineError) {
-        const index = Number((err.data as { eventId?: string } | undefined)?.eventId);
+        const index = Number(
+          (err.data as { eventId?: string } | undefined)?.eventId,
+        );
         const at = Number.isFinite(index)
           ? `event #${index} ("${stream.events[index]?.type ?? "?"}")`
           : `an event it did not name (a refusal thrown inside the sport module carries no data.eventId)`;
-        fail("fold.rejected", `the engine refused ${at} with ${err.code}: ${err.message}`);
+        fail(
+          "fold.rejected",
+          `the engine refused ${at} with ${err.code}: ${err.message}`,
+        );
         return;
       }
-      fail("fold.threw", `folding this stream threw a non-engine error: ${String(err)}`);
+      fail(
+        "fold.threw",
+        `folding this stream threw a non-engine error: ${String(err)}`,
+      );
       return;
     }
 
@@ -1374,7 +1541,10 @@ export function validatePack(raw: unknown, opts: ValidatePackOptions): PackValid
   // guarantees every stream has one (its anti-vacuity rule), so a missing
   // entry here is unreachable for a parsed pack.
   const matchByFixture = new Map<string, PackExpectedMatch>(
-    pack.expected.matches.map((m) => [fixtureKey(m.divisionRef, m.fixtureExtKey), m]),
+    pack.expected.matches.map((m) => [
+      fixtureKey(m.divisionRef, m.fixtureExtKey),
+      m,
+    ]),
   );
   pack.streams.forEach((stream, i) => {
     const key = fixtureKey(stream.divisionRef, stream.fixtureExtKey);
@@ -1443,15 +1613,24 @@ export function validatePack(raw: unknown, opts: ValidatePackOptions): PackValid
     // Only the streams that belong to THIS stage. With every stream bound,
     // a multi-stage division gets a table per stage instead of one wrong one.
     const streams = streamsOf(division.ref).filter(
-      (st) => stageOfStream.get(fixtureKey(st.divisionRef, st.fixtureExtKey))?.ref === stage.ref,
+      (st) =>
+        stageOfStream.get(fixtureKey(st.divisionRef, st.fixtureExtKey))?.ref ===
+        stage.ref,
     );
-    const rows = deriveStandings(division, stage, streams, seedByEntrant, folded);
+    const rows = deriveStandings(
+      division,
+      stage,
+      streams,
+      seedByEntrant,
+      folded,
+    );
     if (typeof rows === "string") {
       add("error", "standings.underivable", where, rows);
       return;
     }
     const divergence = firstTableDivergence(rows, table);
-    if (divergence !== null) add("error", divergence.code, where, divergence.message);
+    if (divergence !== null)
+      add("error", divergence.code, where, divergence.message);
   });
 
   // Q3 — a TABLE-kind stage with folded streams and no `expected.tables` row
@@ -1462,14 +1641,18 @@ export function validatePack(raw: unknown, opts: ValidatePackOptions): PackValid
   // owed is an authoring judgement, and the better long-term home is the
   // schema's own anti-vacuity check before the B06 freeze.
   const tabled = new Set(
-    pack.expected.tables.map((table) => fixtureKey(table.divisionRef, table.stageRef)),
+    pack.expected.tables.map((table) =>
+      fixtureKey(table.divisionRef, table.stageRef),
+    ),
   );
   for (const division of pack.divisions) {
     for (const stage of division.stages) {
       if (!TABLE_STAGE_KINDS.has(stage.kind)) continue;
       if (tabled.has(fixtureKey(division.ref, stage.ref))) continue;
       const played = streamsOf(division.ref).filter(
-        (st) => stageOfStream.get(fixtureKey(st.divisionRef, st.fixtureExtKey))?.ref === stage.ref,
+        (st) =>
+          stageOfStream.get(fixtureKey(st.divisionRef, st.fixtureExtKey))
+            ?.ref === stage.ref,
       );
       if (played.length === 0) continue;
       add(
@@ -1505,11 +1688,19 @@ export function validatePack(raw: unknown, opts: ValidatePackOptions): PackValid
       // product clamps to 8 (usecases/stages.ts:756), so past that the implied
       // count is not the count the generator would mint and a warning built
       // from it would be wrong rather than merely unhelpful.
-      if (!(legs === undefined || (typeof legs === "number" && Number.isInteger(legs) && legs >= 1 && legs <= 8))) {
+      if (!(
+        legs === undefined ||
+        (typeof legs === "number" &&
+          Number.isInteger(legs) &&
+          legs >= 1 &&
+          legs <= 8)
+      )) {
         continue;
       }
       const bound = streamsOf(division.ref).filter(
-        (st) => stageOfStream.get(fixtureKey(st.divisionRef, st.fixtureExtKey))?.ref === stage.ref,
+        (st) =>
+          stageOfStream.get(fixtureKey(st.divisionRef, st.fixtureExtKey))
+            ?.ref === stage.ref,
       );
       const implied = roundRobinFixtureCount(entrants, legs ?? 1);
       if (bound.length === 0) {
@@ -1624,7 +1815,9 @@ export function validatePack(raw: unknown, opts: ValidatePackOptions): PackValid
   // -- Stage 4: specials --------------------------------------------------
   pack.expected.specials.forEach((special, i) => {
     const where = `expected.specials[${i}] (${special.kind} ${special.divisionRef}/${special.fixtureExtKey})`;
-    const fold = folded.get(fixtureKey(special.divisionRef, special.fixtureExtKey));
+    const fold = folded.get(
+      fixtureKey(special.divisionRef, special.fixtureExtKey),
+    );
     if (fold === undefined) {
       add(
         "warning",
@@ -1670,7 +1863,10 @@ interface Divergence {
   readonly message: string;
 }
 
-function firstMatchDivergence(fold: FoldedStream, expected: PackExpectedMatch): Divergence | null {
+function firstMatchDivergence(
+  fold: FoldedStream,
+  expected: PackExpectedMatch,
+): Divergence | null {
   const outcome = fold.outcome;
   const want = expected.outcome;
   if (outcome.kind !== want.kind) {
@@ -1720,11 +1916,14 @@ function firstMatchDivergence(fold: FoldedStream, expected: PackExpectedMatch): 
     // contractual (pack-schema.ts's own note on the pack convention), so an
     // index comparison would silently assert the module's array order.
     for (const side of expected.perSide) {
-      const got = fold.summary.perSide.find((s) => s.entrantId === sigil(side.entrant));
+      const got = fold.summary.perSide.find(
+        (s) => s.entrantId === sigil(side.entrant),
+      );
       if (got === undefined) {
         return {
           code: "match.side_missing",
-          message: `perSide names entrant "${side.entrant}" but the module's summary has no line ` +
+          message:
+            `perSide names entrant "${side.entrant}" but the module's summary has no line ` +
             `for it (it has [${fold.summary.perSide.map((s) => s.entrantId).join(", ")}])`,
         };
       }
@@ -1774,7 +1973,8 @@ function deriveStandings(
   let pointsRule: PointsRule | null = null;
   if (pointsRuleRaw !== undefined && pointsRuleRaw !== null) {
     const rule = PointsRule.safeParse(pointsRuleRaw);
-    if (!rule.success) return `stage "${stage.ref}" declares a points rule the engine refuses: ${rule.error.message}`;
+    if (!rule.success)
+      return `stage "${stage.ref}" declares a points rule the engine refuses: ${rule.error.message}`;
     pointsRule = rule.data;
   }
 
@@ -1782,15 +1982,23 @@ function deriveStandings(
   const entrants: string[] = [];
   const seen = new Set<string>();
   for (const stream of streams) {
-    const fold = folded.get(fixtureKey(stream.divisionRef, stream.fixtureExtKey));
-    if (fold === undefined) return `stream "${stream.fixtureExtKey}" has no folded outcome`;
+    const fold = folded.get(
+      fixtureKey(stream.divisionRef, stream.fixtureExtKey),
+    );
+    if (fold === undefined)
+      return `stream "${stream.fixtureExtKey}" has no folded outcome`;
     for (const side of [stream.home, stream.away]) {
       if (!seen.has(side)) {
         seen.add(side);
         entrants.push(sigil(side));
       }
     }
-    const pair = fold.module.standingsDelta(fold.outcome, fold.cfg, ctxBase, fold.state);
+    const pair = fold.module.standingsDelta(
+      fold.outcome,
+      fold.cfg,
+      ctxBase,
+      fold.state,
+    );
     fixtures.push({
       id: fixtureKey(stream.divisionRef, stream.fixtureExtKey),
       // Every folded stream is a played fixture. `decided` and `walkover` are
@@ -1798,7 +2006,9 @@ function deriveStandings(
       // 20) and the fold treats them identically, so the distinction — which
       // is a fixture-row fact a pack does not declare — cannot change a row.
       status: "decided",
-      result: pointsRule ? applyPointsRule(fold.outcome, pair, pointsRule) : pair,
+      result: pointsRule
+        ? applyPointsRule(fold.outcome, pair, pointsRule)
+        : pair,
     });
   }
 
@@ -1835,9 +2045,12 @@ function deriveStandings(
   const tableStage: TableStage = {
     id: stage.ref,
     // americano rides the league fold (competition.ts:333, "Jul3/08 §3").
-    kind: (stage.kind === "americano" ? "league" : stage.kind) as TableStage["kind"],
+    kind: (stage.kind === "americano"
+      ? "league"
+      : stage.kind) as TableStage["kind"],
     entrants,
-    cascade: (division.tiebreakers ?? tiebreakersOf(folded, streams)) as TableStage["cascade"],
+    cascade: (division.tiebreakers ??
+      tiebreakersOf(folded, streams)) as TableStage["cascade"],
     ...(seeds.size > 0 ? { seeds } : {}),
     // `!= null`, matching `toTableStage` exactly (competition.ts:337-338) and
     // NOT a `typeof === "number"` sniff. `PackStage.config` is an opaque JSON
@@ -1845,24 +2058,36 @@ function deriveStandings(
     // here while the product forwards it, and a pack with a typo'd seed would
     // then fold green offline and rank differently on seeding — the exact
     // divergence "mirrored in full" exists to prevent.
-    ...(stageConfig["rngSeed"] != null ? { rngSeed: stageConfig["rngSeed"] as number } : {}),
-    ...(stageConfig["rounds"] != null ? { rounds: stageConfig["rounds"] as number } : {}),
+    ...(stageConfig["rngSeed"] != null
+      ? { rngSeed: stageConfig["rngSeed"] as number }
+      : {}),
+    ...(stageConfig["rounds"] != null
+      ? { rounds: stageConfig["rounds"] as number }
+      : {}),
     ...(stage.kind === "swiss" ? { swiss: true } : {}),
-    ...(Array.isArray(carry) ? { openingDeltas: carry as readonly StandingsDelta[] } : {}),
+    ...(Array.isArray(carry)
+      ? { openingDeltas: carry as readonly StandingsDelta[] }
+      : {}),
     ...(Array.isArray(overrides)
       ? {
-          rankLocks: (overrides as { entrant_id: string; rank: number }[]).map((o) => ({
-            entrantId: o.entrant_id,
-            rank: o.rank,
-          })),
+          rankLocks: (overrides as { entrant_id: string; rank: number }[]).map(
+            (o) => ({
+              entrantId: o.entrant_id,
+              rank: o.rank,
+            }),
+          ),
         }
       : {}),
-    ...(stageConfig["h2h_scope"] === "overall" ? { h2hScope: "overall" as const } : {}),
+    ...(stageConfig["h2h_scope"] === "overall"
+      ? { h2hScope: "overall" as const }
+      : {}),
   };
 
   const completed = completeTableStage(tableStage, fixtures);
   const pool = completed.tables.pools[0];
-  return pool === undefined ? `stage "${stage.ref}" produced no pool table` : pool.rows;
+  return pool === undefined
+    ? `stage "${stage.ref}" produced no pool table`
+    : pool.rows;
 }
 
 /** The cascade a division inherits when it declares none — the SPORT's own
@@ -1874,7 +2099,9 @@ function tiebreakersOf(
   streams: readonly PackStream[],
 ): readonly string[] {
   for (const stream of streams) {
-    const fold = folded.get(fixtureKey(stream.divisionRef, stream.fixtureExtKey));
+    const fold = folded.get(
+      fixtureKey(stream.divisionRef, stream.fixtureExtKey),
+    );
     if (fold !== undefined) return fold.module.defaultTiebreakers;
   }
   return [];
@@ -1924,7 +2151,8 @@ function firstTableDivergence(
     if (want.metrics !== undefined && !deepEqual(got.metrics, want.metrics)) {
       return {
         code: "standings.metrics",
-        message: `rank ${j + 1} "${want.entrant}" metrics: pack expects ${show(want.metrics)}, ` +
+        message:
+          `rank ${j + 1} "${want.entrant}" metrics: pack expects ${show(want.metrics)}, ` +
           `the fold produced ${show(got.metrics)}`,
       };
     }
@@ -1967,9 +2195,11 @@ function claimDivergence(fold: FoldedStream, claim: PackClaim): string | null {
   if (claim.on === "state") {
     const { found, value } = resolveStatePath(fold.state, claim.path);
     if (!found) {
-      return `state path "${claim.path}" does not exist on ${fold.division.sportKey}'s folded state — ` +
+      return (
+        `state path "${claim.path}" does not exist on ${fold.division.sportKey}'s folded state — ` +
         `a claim written from a line number that pointed at a DERIVED struct parses cleanly and can ` +
-        `never resolve, so an unresolvable path is a pack defect, not a skipped assertion`;
+        `never resolve, so an unresolvable path is a pack defect, not a skipped assertion`
+      );
     }
     if (!deepEqual(value, claim.equals)) {
       return `state "${claim.path}": claim expects ${show(claim.equals)}, the fold produced ${show(value)}`;
@@ -1982,16 +2212,25 @@ function claimDivergence(fold: FoldedStream, claim: PackClaim): string | null {
     // what expected.tables asserts, and conflating them would make one claim
     // mean different things in a one-round and a six-round stage.
     const ctx: StageCtx = { kind: fold.stage?.kind ?? "league" };
-    const pair = fold.module.standingsDelta(fold.outcome, fold.cfg, ctx, fold.state);
+    const pair = fold.module.standingsDelta(
+      fold.outcome,
+      fold.cfg,
+      ctx,
+      fold.state,
+    );
     const delta = pair.find((d) => d.entrantId === sigil(claim.entrant));
     if (delta === undefined) {
-      return `standings claim names entrant "${claim.entrant}", which did not play this fixture ` +
-        `(its delta pair is for [${pair.map((d) => d.entrantId).join(", ")}])`;
+      return (
+        `standings claim names entrant "${claim.entrant}", which did not play this fixture ` +
+        `(its delta pair is for [${pair.map((d) => d.entrantId).join(", ")}])`
+      );
     }
     const got = delta[claim.field];
     if (got !== claim.equals) {
-      return `standings ${claim.field} for "${claim.entrant}": claim expects ${claim.equals}, ` +
-        `this fixture's delta gives ${got}`;
+      return (
+        `standings ${claim.field} for "${claim.entrant}": claim expects ${claim.equals}, ` +
+        `this fixture's delta gives ${got}`
+      );
     }
     return null;
   }
@@ -2007,8 +2246,10 @@ function claimDivergence(fold: FoldedStream, claim: PackClaim): string | null {
         ? fold.squads.away
         : undefined;
   if (side === undefined) {
-    return `squads claim names entrant "${claim.entrant}", which is neither side of this fixture ` +
-      `("${fold.squads.home.entrantId}" and "${fold.squads.away.entrantId}")`;
+    return (
+      `squads claim names entrant "${claim.entrant}", which is neither side of this fixture ` +
+      `("${fold.squads.home.entrantId}" and "${fold.squads.away.entrantId}")`
+    );
   }
   if (claim.field === "subsUsed") {
     if (side.subsUsed !== claim.equals) {
@@ -2032,7 +2273,12 @@ function claimDivergence(fold: FoldedStream, claim: PackClaim): string | null {
 // ---------------------------------------------------------------------------
 
 function provenanceStats(pack: Pack): PackProvenanceStats {
-  const zero = (): { real: number; reconstructed: number; synthetic: number; total: number } => ({
+  const zero = (): {
+    real: number;
+    reconstructed: number;
+    synthetic: number;
+    total: number;
+  } => ({
     real: 0,
     reconstructed: 0,
     synthetic: 0,
