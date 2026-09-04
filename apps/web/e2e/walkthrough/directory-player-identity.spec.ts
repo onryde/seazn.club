@@ -24,6 +24,22 @@ import { dismissConsent, freshOrg, stamp, waitForHydration } from "../directory-
  */
 test.use({ storageState: { cookies: [], origins: [] } });
 
+/** Contexts this file opened, closed from `afterEach` and NOT from a `finally`.
+ *
+ *  A Playwright test that exhausts its budget is torn down without unwinding —
+ *  `finally` never runs, and only the hooks do. The cleanup below therefore has
+ *  to be armed as a hook, or a timeout leaks every extra browser context the
+ *  test opened, in a project that runs four workers wide.
+ *
+ *  `splice(0)` so the list is emptied as it is drained: the hook runs after
+ *  BOTH tests in this file, and the first opens no contexts at all. `.catch`
+ *  because a context already closed by a crashed browser must not turn cleanup
+ *  into a second, more confusing failure on top of the real one. */
+const opened: Page[] = [];
+test.afterEach(async () => {
+  for (const p of opened.splice(0)) await p.context().close().catch(() => {});
+});
+
 const roster = (page: Page) => page.getByRole("table", { name: "Players" });
 const queue = (page: Page) => page.getByRole("region", { name: "Possible duplicates" });
 
@@ -216,7 +232,6 @@ test("a claim link is not transferable, and a withdrawn or spent one never comes
   /** A real second human: a context with genuinely EMPTY storage. A bare
    *  browser.newContext() inherits the organiser's session, and every refusal
    *  below then passes against the wrong identity. */
-  const opened: Page[] = [];
   async function signIn(email: string): Promise<Page> {
     const ctx = await browser.newContext({ storageState: { cookies: [], origins: [] } });
     const p = await ctx.newPage();
@@ -230,80 +245,84 @@ test("a claim link is not transferable, and a withdrawn or spent one never comes
     // never see the claim page at all. They navigate themselves below — to the
     // string the console PRINTED, never one this spec assembles.
     await loginUi(p, email, "/");
+    // EVERY blank-storage context owes this, not just the organiser's. This one
+    // clicks — `claimButton(owner).click()` below — and the consent banner is
+    // `fixed bottom-4 … z-40`, so it intercepts pointer events over the last
+    // card on a page. The claim page's button happens to sit clear of it today,
+    // which makes this spec lucky about layout rather than safe: a control added
+    // to that card, or a shorter viewport, turns the click into a retry-until-
+    // timeout whose failure names the BUTTON and never the banner.
+    await dismissConsent(p);
     return p;
   }
 
-  try {
-    const stranger = await signIn(strangerEmail);
-    const owner = await signIn(ownerEmail);
-    const link1 = await invite(ownerEmail);
+  const stranger = await signIn(strangerEmail);
+  const owner = await signIn(ownerEmail);
+  const link1 = await invite(ownerEmail);
 
-    // --- 1. not transferable ------------------------------------------------
-    // The stranger holds the whole link, signed in, and is refused by name.
-    await stranger.goto(link1);
-    await expect(
-      stranger.getByRole("heading", { name: "Wrong account for this invite" }),
-    ).toBeVisible();
-    await expect(claimButton(stranger)).toHaveCount(0);
+  // --- 1. not transferable ------------------------------------------------
+  // The stranger holds the whole link, signed in, and is refused by name.
+  await stranger.goto(link1);
+  await expect(
+    stranger.getByRole("heading", { name: "Wrong account for this invite" }),
+  ).toBeVisible();
+  await expect(claimButton(stranger)).toHaveCount(0);
 
-    // ...and the attempt did not consume the invite: it is still open.
-    await page.reload();
-    // The control about to be clicked, not the page: it exists by now (the row
-    // is invited) and is the thing whose handler must be attached.
-    await waitForHydration(control("Withdraw invite"));
-    await expect(row()).toContainText("Invite pending");
+  // ...and the attempt did not consume the invite: it is still open.
+  await page.reload();
+  // The control about to be clicked, not the page: it exists by now (the row
+  // is invited) and is the thing whose handler must be attached.
+  await waitForHydration(control("Withdraw invite"));
+  await expect(row()).toContainText("Invite pending");
 
-    // --- 2. the organiser withdraws it -------------------------------------
-    await control("Withdraw invite").click();
-    // A negative and its positive twin, and the twin is the load-bearing half:
-    // `not.toContainText` returns `{ matches: isNot }` for a locator resolving
-    // to ZERO elements, so on its own it passes against a row that vanished or
-    // a locator that drifted. The verb returning to "Invite to claim…" pins the
-    // row's real post-state instead of the absence of a string.
-    await expect(row()).not.toContainText("Invite pending");
-    await expect(control("Invite to claim…")).toBeVisible();
-    await owner.goto(link1);
-    await expect(owner.getByRole("heading", { name: "Invite withdrawn" })).toBeVisible();
-    await expect(claimButton(owner)).toHaveCount(0);
+  // --- 2. the organiser withdraws it -------------------------------------
+  await control("Withdraw invite").click();
+  // A negative and its positive twin, and the twin is the load-bearing half:
+  // `not.toContainText` returns `{ matches: isNot }` for a locator resolving
+  // to ZERO elements, so on its own it passes against a row that vanished or
+  // a locator that drifted. The verb returning to "Invite to claim…" pins the
+  // row's real post-state instead of the absence of a string.
+  await expect(row()).not.toContainText("Invite pending");
+  await expect(control("Invite to claim…")).toBeVisible();
+  await owner.goto(link1);
+  await expect(owner.getByRole("heading", { name: "Invite withdrawn" })).toBeVisible();
+  await expect(claimButton(owner)).toHaveCount(0);
 
-    // --- 3. a fresh invite does not revive the withdrawn one ----------------
-    const link2 = await invite(ownerEmail);
-    expect(link2).not.toBe(link1);
-    await owner.goto(link1);
-    await expect(owner.getByRole("heading", { name: "Invite withdrawn" })).toBeVisible();
+  // --- 3. a fresh invite does not revive the withdrawn one ----------------
+  const link2 = await invite(ownerEmail);
+  expect(link2).not.toBe(link1);
+  await owner.goto(link1);
+  await expect(owner.getByRole("heading", { name: "Invite withdrawn" })).toBeVisible();
 
-    // The positive control: the CURRENT link works, in the same browser that
-    // was just refused twice.
-    await owner.goto(link2);
-    await waitForHydration(claimButton(owner));
-    await claimButton(owner).click();
-    await owner.waitForURL(/\/me(\?|$)/, { timeout: 15_000 });
-    await page.reload();
-    await waitForHydration(control("Unlink"));
-    await expect(row()).toContainText("Claimed");
+  // The positive control: the CURRENT link works, in the same browser that
+  // was just refused twice.
+  await owner.goto(link2);
+  await waitForHydration(claimButton(owner));
+  await claimButton(owner).click();
+  await owner.waitForURL(/\/me(\?|$)/, { timeout: 15_000 });
+  await page.reload();
+  await waitForHydration(control("Unlink"));
+  await expect(row()).toContainText("Claimed");
 
-    // --- 4. accepting spends it --------------------------------------------
-    await owner.goto(link2);
-    await expect(owner.getByRole("heading", { name: "Already claimed" })).toBeVisible();
-    await expect(claimButton(owner)).toHaveCount(0);
+  // --- 4. accepting spends it --------------------------------------------
+  await owner.goto(link2);
+  await expect(owner.getByRole("heading", { name: "Already claimed" })).toBeVisible();
+  await expect(claimButton(owner)).toHaveCount(0);
 
-    // ...and the organiser's unlink hands the PROFILE back without handing the
-    // spent link back with it.
-    await control("Unlink").click();
-    const unlinkDialog = page.getByRole("dialog", { name: "Unlink this player account?" });
-    // tone: danger. The confirm is a click, never Enter.
-    await unlinkDialog.getByRole("button", { name: "Unlink" }).click();
-    // Same pair as after the withdraw, and it matters more here: this is the
-    // ONLY assertion of what the unlink did to the console, so the empty-row
-    // vacuity above would let "unlink worked" be reported by a row that is not
-    // there. The invite verb coming back is also the real claim being made —
-    // the profile is invitable again.
-    await expect(row()).not.toContainText("Claimed");
-    await expect(control("Invite to claim…")).toBeVisible();
-    await owner.goto(link2);
-    await expect(owner.getByRole("heading", { name: "Already claimed" })).toBeVisible();
-    await expect(claimButton(owner)).toHaveCount(0);
-  } finally {
-    for (const p of opened) await p.context().close();
-  }
+  // ...and the organiser's unlink hands the PROFILE back without handing the
+  // spent link back with it.
+  await control("Unlink").click();
+  const unlinkDialog = page.getByRole("dialog", { name: "Unlink this player account?" });
+  // tone: danger. The confirm is a click, never Enter.
+  await unlinkDialog.getByRole("button", { name: "Unlink" }).click();
+  // Same pair as after the withdraw, and it matters more here: this is the
+  // ONLY assertion of what the unlink did to the console, so the empty-row
+  // vacuity above would let "unlink worked" be reported by a row that is not
+  // there. The invite verb coming back is also the real claim being made —
+  // the profile is invitable again.
+  await expect(row()).not.toContainText("Claimed");
+  await expect(control("Invite to claim…")).toBeVisible();
+  await owner.goto(link2);
+  await expect(owner.getByRole("heading", { name: "Already claimed" })).toBeVisible();
+  await expect(claimButton(owner)).toHaveCount(0);
 });
