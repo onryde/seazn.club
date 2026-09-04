@@ -537,8 +537,14 @@ describe.skipIf(!HAS_DB)("schedule undo & versioning (Jul3/03)", () => {
     };
 
     // The unfrozen CONTROL runs first for both directions, so a guard that
-    // threw unconditionally — or one placed before the existence check —
-    // cannot pass this test by refusing everything.
+    // threw unconditionally cannot pass this test by refusing everything.
+    //
+    // It says nothing about placement relative to the existence check, and no
+    // test here can: `divisionLockState` (`usecases/schedule.ts:537`) returns
+    // `frozen: row?.schedule_locked ?? false`, so a MISSING division reads as
+    // UNFROZEN, falls through the guard wherever it sits, and 404s later
+    // either way. There is no mutant to kill, so the claim is withdrawn
+    // rather than pinned with a case that would pass vacuously.
     await undoDivision(auth, division.id);
     expect(await courtOf()).toBe(courtA);
     await redoDivision(auth, division.id);
