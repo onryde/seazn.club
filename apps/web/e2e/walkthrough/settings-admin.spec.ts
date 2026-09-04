@@ -1,5 +1,15 @@
 import { test, expect, type APIRequestContext } from "@playwright/test";
 import { activeOrg, apiJson, platformFeePercentSql, setOwnerStaffRoleSql } from "../helpers";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+
+/** Banner copy read from the dictionary the page renders from, not retyped
+ *  here — a test carrying its own copy of a string asserts yesterday's wording
+ *  and goes red on a rewrite that broke nothing (this folder's idiom:
+ *  division-delete.spec.ts:19, board-v3.spec.ts:280). */
+const UI_EN: Record<string, string> = JSON.parse(
+  readFileSync(fileURLToPath(new URL("../../src/dictionaries/en/ui.json", import.meta.url)), "utf8"),
+);
 
 /**
  * W1 of the settings walkthrough programme. Complements nothing — this
@@ -569,6 +579,63 @@ test.describe("legacy settings redirects", () => {
         landing?.status(),
         `${hop.from} reached ${hop.to} but the page returned HTTP ${landing?.status()} — the query arrived at a dead page`,
       ).toBeLessThan(400);
+    }
+  });
+
+  /**
+   * The hop above proves a query SURVIVES. This one proves the surviving value
+   * is USED — and it is a separate test because the two failed separately.
+   *
+   * `/settings` forwarded `tab` alone until this wave (it typed searchParams as
+   * `{ tab?: string }` and rebuilt the URL from that one field, while its three
+   * siblings forwarded everything). The only other param the destination reads
+   * is `email_change`, and `/api/auth/change-email/confirm` redirects ALL FIVE
+   * of its outcomes through exactly this shim — success, invalid, expired,
+   * taken, error (confirm/route.ts:26-57) — so every email-change confirmation
+   * landed on an identical bannerless page. The banner code
+   * (o/[orgSlug]/settings/page.tsx:270,564) was live the whole time; nothing
+   * reachable ever sent it a value.
+   *
+   * TWO OUTCOMES, NOT ONE, and asserted against each other. A single row is
+   * satisfied by a shim that forwards a CONSTANT `email_change`, and equally by
+   * a banner that renders one fixed string regardless of the value — both of
+   * which are the same class of defect as the one being fixed. The pair pins
+   * that the VALUE arrives: each outcome shows its own copy, and the other
+   * outcome's copy is absent from the page.
+   *
+   * They are also chosen to differ in COLOUR class (`taken` is a red banner,
+   * `success` an emerald one, page.tsx:564), so a mutant that hardcoded the
+   * error branch cannot pass by luck.
+   */
+  test("an email-change confirmation keeps its outcome through the shim", async ({ page }) => {
+    const org = await activeOrg(page);
+    const outcomes = ["taken", "success"] as const;
+
+    for (const outcome of outcomes) {
+      const mine = UI_EN[`settings.emailChange.${outcome}`];
+      const other = UI_EN[`settings.emailChange.${outcomes.find((o) => o !== outcome)!}`];
+      // Guards the guard: a renamed dictionary key would otherwise make both
+      // assertions below compare `undefined` against the page and pass.
+      expect(mine, "settings.emailChange copy missing from en/ui.json").toBeTruthy();
+      expect(other).toBeTruthy();
+      expect(mine).not.toBe(other);
+
+      const landing = await page.goto(`/settings?tab=account&email_change=${outcome}`, {
+        waitUntil: "load",
+      });
+      const landed = new URL(page.url());
+      expect(`${landed.pathname}${landed.search}`, `email_change=${outcome} must survive the hop`)
+        .toBe(`/o/${org.slug}/settings?tab=account&email_change=${outcome}`);
+      expect(landing?.status()).toBeLessThan(400);
+
+      await expect(
+        page.getByText(mine, { exact: true }),
+        `the ${outcome} banner must render — the param arrived but the page ignored it`,
+      ).toBeVisible();
+      await expect(
+        page.getByText(other, { exact: true }),
+        `the ${outcome} page is showing the OTHER outcome's banner`,
+      ).toHaveCount(0);
     }
   });
 });

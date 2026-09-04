@@ -19,7 +19,7 @@ check expressed as a client `disabled` prop, and `apps/web` vitest is
 | Wave | Scope | State |
 | --- | --- | --- |
 | W1 | `/admin/settings` + 4 legacy redirects; `setOwnerStaffRoleSql` ships with it | **DONE** — 6 tasks, 5 fix rounds, all reviews clean |
-| W2 | `/o/{org}/settings` 7 tabs — drive+persist (sponsors CRUD half) | Not started — **carries 3 W1 follow-ups, see below** |
+| W2 | `/o/{org}/settings` 7 tabs — drive+persist (sponsors CRUD half) | Not started — W1's follow-ups were **closed in W1.5**, not carried here |
 | W3 | `/o/{org}/settings` 7 tabs — gating matrix + first mutation sweep | Not started |
 | W4 | `settings/{connect,credits,add-ons}`, billing's uncovered panels, sponsor monetize half | Not started |
 | W5 | Competition settings — frozen, visibility, discoverable | Not started |
@@ -63,6 +63,16 @@ the other.
    one more hardcoded English string is consistent with the file and
    inconsistent with the rule. Needs an owner call.
 
+   **RULED 2026-09-04 (owner):** "only for staff, not the enduser so don't
+   spend more time on that in /admin". `/admin` is staff-only and stays
+   English-only; no dictionary work is owed for it, and the two declared i18n
+   exceptions are joined by a third in practice. The evidence agrees with the
+   ruling: none of the five `/admin` files import `t`/`dict`, and
+   `admin-credits-panel.tsx:9` says so in a comment — "English-only (no
+   `t`/`dict` island)". A session in between briefly reported the opposite from
+   a loose `t(` grep that matched inside unrelated identifiers; a grep is not a
+   read, and the correction was the error.
+
 ## Findings
 
 Recorded as they are found, not held to the end. Each is a hypothesis until
@@ -73,11 +83,26 @@ driven — see `_RULES.md` §8.
 | F1 | `/admin/settings` Save rendered enabled for a `support`-role staff user while `PUT` threw `AuthError` → **401**. Page gates on `requireStaff()`, route on `requireSuperadmin()`, and the component's only `disabled` was `busy \|\| !valid`. | **FIXED** — `fdbe826b5`, mutation-killed | W1 |
 | F2 | Clearing the fee input saved **0%**. `Number("") === 0`, so `valid` stayed true, the button stayed live, and zod accepted 0 — the platform's entire cut on entry fees zeroed by clearing a field and one click. | **FIXED** — `f9ab8e5f7`, mutation-killed | W1 |
 | F3 | `step={0.5}` is enforced by nothing — not by `valid`, not by the route's zod schema. Driven and confirmed: `2.7` is accepted end to end and stored **unrounded**. | **PINNED as behaviour**, not a defect | W1 |
-| F4 | `/settings` forwards only `tab`; `/settings/billing`, `/settings/connect` and `/settings/payments` rebuild the full query string. Its searchParams is typed `{tab?: string}` and drops the rest. Customer impact today is nil — nothing links there with a second param — but the first link that adds one loses it silently. | Open — routed to **W2** | W2 |
+| F4 | `/settings` forwards only `tab`; `/settings/billing`, `/settings/connect` and `/settings/payments` rebuild the full query string. Its searchParams is typed `{tab?: string}` and drops the rest. **Customer impact is NOT nil** — see the correction below. | **FIXED** — follow-up wave | W1.5 |
+| F5 | `lib/platform-settings.ts:48` did `Number(row?.value)` on a jsonb column, so a row holding jsonb `null`/`false`/`""`/`[]` read as a finite, in-range `0` and served a **0% platform cut** to the settings page and to every checkout, overriding the fallback an ABSENT row correctly reaches. | **FIXED** — follow-up wave, mutation-killed | W1.5 |
 
 ## False premises found
 
 Recorded so the next session does not re-derive them.
+
+**F4's own severity, written by W1 and wrong.** The finding above originally
+read "Customer impact today is nil — nothing links there with a second param".
+Nothing links there was asserted, not checked. `/api/auth/change-email/confirm`
+redirects **all five** of its outcomes through exactly that shim —
+`/settings?tab=account&email_change=success|invalid|expired|taken|error`
+(`confirm/route.ts:26-57`) — and the org-scoped page renders its banner off
+that param alone (`o/[orgSlug]/settings/page.tsx:270,564`). Every email-change
+confirmation therefore landed on an identical bannerless page: "updated
+successfully", "that address is already in use" and "this link has expired"
+were indistinguishable to the user. The banner code was live the whole time;
+nothing reachable ever sent it a value. A grep for `/settings?` would have
+found the producer in one call, and the wave routed the finding to a later
+wave on the strength of a guess instead.
 
 1. **`AuthError` maps to 401, not 403.** A first draft of W1's gate test
    asserted 403. `lib/http.ts:34` returns 401.
@@ -135,32 +160,52 @@ programme:
 - **A SHA-256 taken after a run settles drift, not ordering** — hash in the
   same invocation as the run.
 
-## W1 follow-ups owed to W2
+## W1 follow-ups — CLOSED in the follow-up wave (2026-09-04)
 
-1. **F5 — the production twin, and the one that touches customers.**
-   `lib/platform-settings.ts:48` does `Number(row?.value)` on a jsonb column.
-   `Number(null)` is a finite `0`, which passes the `>= 0 && <= 100` guard, so
-   a jsonb-null row makes the platform serve a **0% cut** — to the settings
-   page and to every checkout — instead of falling through to `envFallback()`.
-   Unreachable through `setPlatformFeeDefault` today, because its only writer
-   is a bounds-checked `sql.json(pct)`. Pre-existing; W1 fixed the test-helper
-   twin and deliberately left this one, which is the server-side half of this
-   wave's own thesis.
+Branch `feat/settings-w1-followups`. All five items W1 left open are resolved.
 
-2. **The Critical fix has no permanent guard.** `vitest.config` excludes
-   `e2e/**` (`:162`), so `platformFeePercentSql`'s `typeof` narrowing cannot be
-   unit-tested where it sits, and a healthy DB never holds the row that would
-   trigger it. Deleting the narrowing would go unnoticed.
+1. **F5 — FIXED.** `lib/platform-settings.ts` no longer does `Number(row?.value)`
+   on a jsonb column. A row holding jsonb `null`, `false`, `""` or `[]` decodes
+   to a JS value `Number()` maps to a *finite, in-range* `0` — it clears the
+   `>= 0 && <= 100` guard and is served as a 0% platform cut, overriding the
+   `PLATFORM_FEE_PERCENT`/5 fallback that an ABSENT row correctly reaches.
+   Reproduced against real Postgres before the fix: `expected +0 to be 11`.
 
-3. **One change closes both.** Move the decode into
-   `src/lib/platform-settings.ts` as an exported pure predicate, unit-test it
-   there, and have `e2e/helpers.ts` import it. That gives the narrowing a real
-   regression test and fixes the production twin in the same edit.
+2. **The Critical fix now has a permanent guard — FIXED.** `decodeFeePercent`
+   is unit-tested in `src/lib/__tests__/platform-fee.test.ts`: pure, no
+   `skipIf`, so it runs in every suite on every machine. Five mutants — bare
+   `Number()`, dropped `typeof`, `>=0`→`>0`, `<=100`→`<100`, `null`→`0` — all
+   killed. `platform-settings.test.ts` gains the real-Postgres half.
 
-Also owed, smaller: `borrowedOrgId` should become a `Set<string>`
-(`billing-states.spec.ts` already has the idiom) before any test borrows on two
-orgs; the per-test restore PUT writes a `platform_fee_default_set` audit row,
-which constrains any future audit-trail assertion; two comments state the Redis
-staleness argument as observed when it was only reasoned (the leg runs with no
-Redis, so it is unmeasurable there); and F4 — `/settings` forwards only `tab`
-while its three sibling shims forward every param.
+3. **RULING — the decoder lives in a NEW module, not in `platform-settings.ts`.**
+   W1's item 3 said to export the predicate from `lib/platform-settings.ts` and
+   import it from `e2e/helpers.ts`. That is not possible: that file starts with
+   `import "server-only"` and pulls in the db and Redis clients, so importing it
+   would drag the app's server runtime into the Playwright process. It lives in
+   `src/lib/platform-fee.ts` instead — **zero imports of its own** — and both
+   production and the fixture import it from there. Same outcome the item
+   wanted (one authority for the rule, two callers); different address. Cost if
+   wrong: one more small module in `lib/`.
+
+4. **F4 — FIXED, and it was a live customer defect, not the "nil impact" shim
+   nit W1 recorded.** See "False premises found" above. `/settings` now forwards
+   the whole query, exactly as its three siblings do. The e2e test drives TWO
+   outcomes (`taken`, `success`) and asserts each renders its own banner and not
+   the other's, because one row is satisfied by a shim forwarding a constant and
+   by a banner ignoring the value — both the same class of defect as the one
+   fixed. Expected copy is read from `en/ui.json`, not retyped.
+
+5. **i18n of the admin strings — CLOSED, no change.** Owner ruled `/admin` is
+   staff-only and stays English-only (see the ruling above).
+
+Still owed, smaller, and genuinely W2's: `borrowedOrgId` should become a
+`Set<string>` (`billing-states.spec.ts` already has the idiom) before any test
+borrows on two orgs; the per-test restore PUT writes a
+`platform_fee_default_set` audit row, which constrains any future audit-trail
+assertion; and two comments state the Redis staleness argument as observed when
+it was only reasoned (the leg runs with no Redis, so it is unmeasurable there).
+
+The Playwright/`page.route`/mutation traps listed above are being carried into
+`AGENTS.md` by the owner, out of this session — deliberately not edited here,
+because a shared instruction file taking concurrent edits from two sessions is
+how a rule gets half-written.

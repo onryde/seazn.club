@@ -73,4 +73,41 @@ describe.skipIf(!HAS_DB)("platform fee default", () => {
 
     await sql`update platform_settings set value = '5'::jsonb where key = 'platform_fee_percent'`;
   });
+
+  /**
+   * The jsonb shapes that are NOT garbage — they are a finite, in-range, utterly
+   * plausible 0. `Number(null)`, `Number(false)` and `Number("")` are each `0`,
+   * which clears the 0..100 bounds check and is served as a 0% platform cut,
+   * overriding the fallback an ABSENT row correctly reaches. Zero revenue on
+   * every entry fee, and nothing anywhere logs a complaint.
+   *
+   * The env is pinned to 11 rather than left at the seeded 5 ON PURPOSE. With
+   * the fallback at 5 this test would assert 5 against a row that already said
+   * 5, so a decoder that never ran — or an UPDATE that silently did not take —
+   * would pass it. At 11 the three outcomes separate: 11 is the fallback doing
+   * its job, 0 is the defect, and 5 is the row the update was supposed to have
+   * replaced. `decodeFeePercent`'s own unit suite (lib/__tests__/platform-fee)
+   * pins the rule; this pins that PRODUCTION reads a real Postgres jsonb row
+   * through it, which no pure test can see.
+   */
+  it("falls back rather than serving a 0% cut on an empty jsonb row", async () => {
+    const prev = process.env.PLATFORM_FEE_PERCENT;
+    process.env.PLATFORM_FEE_PERCENT = "11";
+    try {
+      for (const empty of ["null", "false", '""', "[]"]) {
+        await sql`update platform_settings set value = ${sql.unsafe(`'${empty}'::jsonb`)}
+          where key = 'platform_fee_percent'`;
+        await cacheDelPattern(__platformFeeCacheKeyForTests());
+        expect(
+          await platformFeeDefault(),
+          `a jsonb ${empty} row must reach the PLATFORM_FEE_PERCENT fallback, not read as 0%`,
+        ).toBe(11);
+      }
+    } finally {
+      if (prev === undefined) delete process.env.PLATFORM_FEE_PERCENT;
+      else process.env.PLATFORM_FEE_PERCENT = prev;
+      await sql`update platform_settings set value = '5'::jsonb where key = 'platform_fee_percent'`;
+      await cacheDelPattern(__platformFeeCacheKeyForTests());
+    }
+  });
 });

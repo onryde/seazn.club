@@ -6,6 +6,7 @@ import "server-only";
 import { sql } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { cacheGet, cacheSet, cacheDelPattern } from "@/lib/cache";
+import { decodeFeePercent } from "@/lib/platform-fee";
 
 const FEE_KEY = "platform_fee_percent";
 const CACHE_KEY_PREFIX = "platform:fee_percent";
@@ -45,8 +46,11 @@ export async function platformFeeDefault(): Promise<number> {
   if (cached) return cached.v;
   const [row] = await sql<{ value: unknown }[]>`
     select value from platform_settings where key = ${FEE_KEY}`;
-  const parsed = Number(row?.value);
-  const v = Number.isFinite(parsed) && parsed >= 0 && parsed <= 100 ? parsed : envFallback();
+  // decodeFeePercent, not Number(): the column is jsonb, so a row holding a
+  // jsonb `null`/`false`/`""` decodes to a FINITE 0 that passes the bounds
+  // check and serves a 0% platform cut, overriding the fallback an absent row
+  // correctly reaches. See lib/platform-fee.ts.
+  const v = decodeFeePercent(row?.value) ?? envFallback();
   await cacheSet(cacheKey(), { v }, TTL_SECONDS);
   return v;
 }
