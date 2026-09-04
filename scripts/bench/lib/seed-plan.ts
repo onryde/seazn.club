@@ -176,7 +176,15 @@ export interface SeedPlanPerson {
   readonly ref: string;
   readonly full_name: string;
   readonly dob?: string;
-  readonly gender?: "m" | "f";
+  /** `"x"` included because the PRODUCT accepts it — `CreatePerson.gender` is
+   *  `z.enum(["m","f","x"]).nullish()` (`api-v1/schemas.ts:502`), as are every
+   *  other person-shaped schema there. This interface was narrower than the
+   *  API it writes to, so a bench pack could never seed a non-binary person
+   *  even though the product has supported one since RS002 — and the product's
+   *  own "x never blocks a category gate" exemption
+   *  (`lib/registration-rules.ts:172-190`) was therefore unreachable from any
+   *  bench run. Widened with `PackPerson.gender` in B03r. */
+  readonly gender?: "m" | "f" | "x";
   /**
    * The pack's own lane, sent EXPLICITLY — including `"player"`, which is
    * also the column default. Same reasoning as `consent` below: relying on a
