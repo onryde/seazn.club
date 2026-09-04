@@ -349,9 +349,10 @@ export function TemplateDetailSheet({
           </button>
         }
       >
-        {/* Same testid and the same four `comp.wizard.publicDegraded.*` keys
-            the blank wizard renders — one message, already translated into all
-            four locales, not a second copy of it for the majority path. */}
+        {/* Same testid and the same three `comp.wizard.publicDegraded.*` keys
+            (title/body/continue) the blank wizard renders — one message,
+            already translated into all four locales, not a second copy of it
+            written for the majority path. */}
         <div className="space-y-4" data-testid="public-quota-degraded">
           <p className="text-sm leading-relaxed text-slate-600">
             {msg("comp.wizard.publicDegraded.body", { name: degraded.name })}

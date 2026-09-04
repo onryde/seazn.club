@@ -3187,8 +3187,17 @@ async function passRungLSuite(): Promise<void> {
   // Until V344 the overlay was skipped entirely under a paid plan, so an L
   // holder who subscribed to Pro silently lost unlimited entrants on the
   // competition they had already paid to unlock. Now the BETTER of the two
-  // applies per axis, and both directions of that are checked below: the plan
-  // wins on divisions, the pass wins on entrants. ===
+  // applies per axis.
+  //
+  // The DIVISIONS half used to be the second direction of that ("the plan wins
+  // on divisions"), and it stopped being one: entitlements v18 (V392, §2 "R2:
+  // bounded; 20 is a federation") bounded Pro at 20, which is exactly what
+  // event_pass_l already carried. Two equal numbers cannot witness which side
+  // won, so this check no longer asserts that the 21st division lands — it
+  // asserts what remains true and observable, that the pass does not LOWER the
+  // Pro competition below its own plan's cap. The ENTRANTS check below (Pro 256
+  // against L's unlimited) is now the only leg on this pair that discriminates,
+  // and it is deliberately left as the load-bearing one. ===
   const pro = newSession();
   const proOrgId = (await signIn(pro, `passlpro_${tag}@example.com`)).org_id;
   await setPlan(proOrgId, "pro", pro);
@@ -3205,19 +3214,33 @@ async function passRungLSuite(): Promise<void> {
     proPass?.pass_key === "event_pass_l",
   );
 
+  // The cap is READ from the org's own resolved entitlements, never typed: it
+  // was written into this file as a bare 21-iteration loop against "L's 20",
+  // and V392 moved Pro onto the same 20 underneath it.
+  const proEnt = (await call(pro, `/api/orgs/${proOrgId}/entitlements`)) as {
+    entitlements: Record<string, { limit?: number | null }>;
+  };
+  const resolvedDivCap = proEnt.entitlements["divisions.per_competition.max"]?.limit;
+  check(
+    "pass L/pro: a passed Pro competition resolves a FINITE divisions.per_competition.max",
+    typeof resolvedDivCap === "number" && resolvedDivCap >= 2,
+  );
+  const proDivCap = typeof resolvedDivCap === "number" ? resolvedDivCap : 0;
   const proDivIds: string[] = [];
-  let proDivisionsOk = true;
-  for (let i = 1; i <= 21; i++) {
+  let oneOver: V1Res | null = null;
+  for (let i = 1; i <= proDivCap + 1; i++) {
     const r = await v1(pro, `/api/v1/competitions/${proComp.id}/divisions`, "POST", {
       name: `Pro Div ${i}`,
       ...genericDiv,
     });
-    if (r.status !== 201) proDivisionsOk = false;
-    else proDivIds.push(v1data<{ id: string }>(r).id);
+    if (i === proDivCap + 1) oneOver = r;
+    else if (r.status === 201) proDivIds.push(v1data<{ id: string }>(r).id);
   }
   check(
-    "pass L/pro: an L pass does not CAP a Pro competition at L's 20 divisions — the 21st still lands, because the PLAN wins on the axis where it is better (#327)",
-    proDivisionsOk,
+    "pass L/pro: an L pass does not LOWER a Pro competition's own division cap — every one of its divisions lands, and only the one past the cap is refused (#327)",
+    proDivIds.length === proDivCap &&
+      oneOver?.status === 402 &&
+      featureKey(oneOver) === "divisions.per_competition.max",
   );
 
   const proDivId = proDivIds[0]!;
@@ -3980,8 +4003,6 @@ async function addonChurnWebhookSuite(): Promise<void> {
  * refusal STATUS rather than a completed purchase, so it never needs Stripe.
  */
 async function passLockEnforcementSuite(): Promise<void> {
-  // V319: community carries 10 concurrent competitions.
-  const COMMUNITY_COMP_CAP = 10;
   const featureKey = (r: V1Res) =>
     (r.json.error as { feature_key?: string } | undefined)?.feature_key;
   // A UTC calendar date `n` days from today, as a string. Written as a string
@@ -3992,6 +4013,21 @@ async function passLockEnforcementSuite(): Promise<void> {
 
   const s = newSession();
   const orgId = (await signIn(s, `passlock_${tag}@example.com`)).org_id;
+  // READ, never typed. This was `const COMMUNITY_COMP_CAP = 10` on a comment
+  // citing V319; entitlements v18 (V392) cut `competitions.max_active` on
+  // community to 3, so the fixture loop below 402'd on the fourth create,
+  // threw on `v1data(...).id` and ABORTED the entire run from here down —
+  // which is a large part of why nobody had a green smoke on this branch. The
+  // cap has now moved twice; the next move must not cost another run.
+  const capEnt = (await call(s, `/api/orgs/${orgId}/entitlements`)) as {
+    entitlements: Record<string, { limit?: number | null }>;
+  };
+  const resolvedCompCap = capEnt.entitlements["competitions.max_active"]?.limit;
+  check(
+    "pass lock/quota: community resolves a FINITE competitions.max_active to fill",
+    typeof resolvedCompCap === "number" && resolvedCompCap >= 2,
+  );
+  const COMMUNITY_COMP_CAP = typeof resolvedCompCap === "number" ? resolvedCompCap : 0;
   const mkComp = async (name: string) =>
     v1data<{ id: string }>(
       await v1(s, "/api/v1/competitions", "POST", { ends_on: "2030-12-31", name: `${name} ${tag}`, visibility: "unlisted" }),
