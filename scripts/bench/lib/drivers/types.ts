@@ -35,6 +35,10 @@ export type EntrantKindValue = "individual" | "team" | "pair";
  *  api-v1/schemas.ts. */
 export type ApprovalMode = "auto" | "manual";
 
+/** Mirrors the product's `RegistrationPaymentMethod`
+ *  (api-v1/schemas.ts:2292) and `PackRegistrationBlock.paymentMethod`. */
+export type RegistrationPaymentMethodValue = "offline" | "stripe";
+
 /** One player row — `PublicRegisterGroupPlayer` (submit) and the identical
  *  shape `PublicJoinRequest.player` (join) both reuse. camelCase here;
  *  `http.ts` maps to the wire's snake_case keys. */
@@ -72,6 +76,12 @@ export interface RegistrationBlockConfig {
   ageMax?: number;
   entrantKind: EntrantKindValue;
   feeCents: number;
+  /** REQUIRED, not optional. `registration_settings.payment_method` is what
+   *  gates hosted Checkout (usecases/registrations.ts:4365), and the product's
+   *  PUT schema defaults an omitted key to "offline" — so an optional field
+   *  here would let a caller silently reintroduce the exact bug this closed:
+   *  a paid division that Stripe can never charge for. */
+  paymentMethod: RegistrationPaymentMethodValue;
   approval: ApprovalMode;
   capacity?: number;
 }

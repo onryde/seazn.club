@@ -636,6 +636,7 @@ export async function runRegistrationDivision(input: DivisionRunnerInput): Promi
     ageMax: block.ageMax,
     entrantKind: block.entrantKind,
     feeCents: block.feeCents,
+    paymentMethod: block.paymentMethod,
     approval: block.approval,
     capacity: block.capacity,
   });

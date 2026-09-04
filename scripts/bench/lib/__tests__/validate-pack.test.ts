@@ -2664,6 +2664,9 @@ describe("registration funnel — rule 3: capacity vs waitlist", () => {
         entrantKind: "individual",
         feeCents: 0,
         approval: "auto",
+        // A `pay: true` entry needs a division Stripe can actually charge for
+        // (stage-0 rule 7): "offline" makes hosted Checkout unmintable.
+        paymentMethod: "stripe" as const,
         capacity: 2,
         entries: [
           { extKey: "e-1", captain: "p1", roster: [], pay: false, expect: "entrant" },
@@ -2690,6 +2693,9 @@ describe("registration funnel — rule 4: pay requires a fee", () => {
         entrantKind: "individual",
         feeCents: 0,
         approval: "auto",
+        // A `pay: true` entry needs a division Stripe can actually charge for
+        // (stage-0 rule 7): "offline" makes hosted Checkout unmintable.
+        paymentMethod: "stripe" as const,
         entries: [{ extKey: "e-free-pay", captain: "p1", roster: [], pay: true, expect: "entrant" }],
         expect: baseExpect({ entrants: 1 }),
       },
@@ -2707,11 +2713,78 @@ describe("registration funnel — rule 4: pay requires a fee", () => {
         entrantKind: "individual",
         feeCents: 1000,
         approval: "auto",
+        // A `pay: true` entry needs a division Stripe can actually charge for
+        // (stage-0 rule 7): "offline" makes hosted Checkout unmintable.
+        paymentMethod: "stripe" as const,
         entries: [{ extKey: "e-paid", captain: "p1", roster: [], pay: true, expect: "entrant" }],
         expect: baseExpect({ entrants: 1, paidCents: 1000 }),
       },
     });
     expect(errors(validatePack(pack, UNIT).findings)).toEqual([]);
+  });
+
+  it("RULE 7: pay:true against an \"offline\" division reds, naming the entry and the reason", () => {
+    // The configuration the bench could ONLY express before this rule
+    // existed: a real fee, a real payer, and a division whose
+    // payment_method the product defaults to "offline" — which
+    // `resumeRegistrationCheckout` refuses to mint a session for.
+    const pack = registrationPack({
+      org: { name: "Unit Org", slug: "unit-org", timezone: "UTC", currency: "usd" },
+      block: {
+        ...OPEN_RESTRICTION,
+        entrantKind: "individual",
+        feeCents: 1000,
+        paymentMethod: "offline" as const,
+        approval: "auto",
+        entries: [{ extKey: "e-offline-payer", captain: "p1", roster: [], pay: true, expect: "entrant" }],
+        expect: baseExpect({ entrants: 1, paidCents: 1000 }),
+      },
+    });
+    const finding = onlyError(validatePack(pack, UNIT).findings);
+    expect(finding.code).toBe("registration.pay_requires_stripe");
+    expect(finding.message).toContain("e-offline-payer");
+    // The message has to say WHICH method it saw, or a reader cannot tell
+    // this rule from rule 4's "nothing to pay".
+    expect(finding.message).toContain('paymentMethod:"offline"');
+  });
+
+  it("RULE 7: pay:false against an \"offline\" division does NOT red — the rule tracks the payer, not the method", () => {
+    // The positive pair. An offline division is a real, shipped product
+    // configuration (`payment_instructions` exists for it); without this
+    // case, a rule that simply refused every "offline" division with a fee
+    // would satisfy the assertion above while banning a legitimate pack.
+    const pack = registrationPack({
+      org: { name: "Unit Org", slug: "unit-org", timezone: "UTC", currency: "usd" },
+      block: {
+        ...OPEN_RESTRICTION,
+        entrantKind: "individual",
+        feeCents: 1000,
+        paymentMethod: "offline" as const,
+        approval: "auto",
+        entries: [{ extKey: "e-offline-nonpayer", captain: "p1", roster: [], pay: false, expect: "entrant" }],
+        expect: baseExpect({ entrants: 1 }),
+      },
+    });
+    expect(errors(validatePack(pack, UNIT).findings)).toEqual([]);
+  });
+
+  it("RULE 7 vs RULE 4: a free division with pay:true and paymentMethod \"stripe\" reds on the FEE, not the method", () => {
+    // The two rules are adjacent and must not cover for each other — mutate
+    // one and exactly one test moves. A zero fee is rule 4's business even
+    // when the method is perfectly chargeable.
+    const pack = registrationPack({
+      block: {
+        ...OPEN_RESTRICTION,
+        entrantKind: "individual",
+        feeCents: 0,
+        paymentMethod: "stripe" as const,
+        approval: "auto",
+        entries: [{ extKey: "e-free-stripe", captain: "p1", roster: [], pay: true, expect: "entrant" }],
+        expect: baseExpect({ entrants: 1 }),
+      },
+    });
+    const finding = onlyError(validatePack(pack, UNIT).findings);
+    expect(finding.code).toBe("registration.pay_requires_fee");
   });
 
   it("pay:false against feeCents:0 does not red — a free entry never has to pay", () => {
@@ -2939,6 +3012,9 @@ describe("registration funnel — org.currency required when a division prices a
         entrantKind: "individual",
         feeCents: 1000,
         approval: "auto",
+        // A `pay: true` entry needs a division Stripe can actually charge for
+        // (stage-0 rule 7): "offline" makes hosted Checkout unmintable.
+        paymentMethod: "stripe" as const,
         entries: [{ extKey: "e-paid", captain: "p1", roster: [], pay: true, expect: "entrant" }],
         expect: baseExpect({ entrants: 1, paidCents: 1000 }),
       },
@@ -2956,6 +3032,9 @@ describe("registration funnel — org.currency required when a division prices a
         entrantKind: "individual",
         feeCents: 1000,
         approval: "auto",
+        // A `pay: true` entry needs a division Stripe can actually charge for
+        // (stage-0 rule 7): "offline" makes hosted Checkout unmintable.
+        paymentMethod: "stripe" as const,
         entries: [{ extKey: "e-paid", captain: "p1", roster: [], pay: true, expect: "entrant" }],
         expect: baseExpect({ entrants: 1, paidCents: 1000 }),
       },
@@ -3003,6 +3082,9 @@ describe("registration funnel — the green fixture: all five rules satisfied at
         entrantKind: "individual",
         feeCents: 1500,
         approval: "manual",
+        // A `pay: true` entry needs a division Stripe can actually charge for
+        // (stage-0 rule 7): "offline" makes hosted Checkout unmintable.
+        paymentMethod: "stripe" as const,
         capacity: 1, // 2 admitted (paid + waitlisted) against capacity 1 -> 1 waitlisted
         entries: [
           { extKey: "e-paid", captain: "p-paid", roster: [], pay: true, expect: "entrant" },

@@ -21,6 +21,7 @@ import type {
   RegistrationEntry,
   RegistrationPlayer,
 } from "./types.ts";
+import { registrationPatchBody, registrationSettingsBody } from "./settings-body.ts";
 
 /** Thrown by `pay()` on this driver — hosted Stripe Checkout is a real
  *  browser page (`checkout.stripe.com`), not a JSON endpoint. The browser
@@ -65,18 +66,8 @@ async function configureRegistration(
   divisionId: string,
   block: RegistrationBlockConfig,
 ): Promise<void> {
-  const patchBody = {
-    category: block.category,
-    age_min: block.ageMin ?? null,
-    age_max: block.ageMax ?? null,
-  };
-  const putBody = {
-    enabled: true,
-    entrant_kind: block.entrantKind,
-    fee_cents: block.feeCents,
-    approval: block.approval,
-    capacity: block.capacity ?? null,
-  };
+  const patchBody = registrationPatchBody(block);
+  const putBody = registrationSettingsBody(block);
   await Promise.all([
     request(base, session, `/api/v1/divisions/${divisionId}`, { method: "PATCH", body: patchBody }),
     request(base, session, `/api/v1/divisions/${divisionId}/registration-settings`, {

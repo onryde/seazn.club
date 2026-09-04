@@ -825,6 +825,40 @@ function checkPayRequiresFee(divisionRef: string, block: PackRegistrationBlock):
   return findings;
 }
 
+/** Stage-0 rule 7 (added B03r, 2026-09-04): `pay: true` additionally requires
+ *  the division's `paymentMethod` to be "stripe".
+ *
+ *  `resumeRegistrationCheckout` refuses to mint a Checkout session for any
+ *  division whose `registration_settings.payment_method` is not "stripe"
+ *  (usecases/registrations.ts:4365), so an entry declaring `pay: true` against
+ *  an "offline" division cannot pay by construction — the run would configure
+ *  a bank-transfer division and then drive a card through it.
+ *
+ *  This rule exists because that combination was not merely possible, it was
+ *  the ONLY thing the bench could express: the pack had no `paymentMethod`
+ *  field, the driver's PUT omitted the key, and the product defaulted it to
+ *  "offline". `payViaCheckout` was written, typed and unit-green while being
+ *  unreachable from every pack in the tree. Rule 4 (`pay_requires_fee`) does
+ *  not catch it — a fee can be perfectly real and still be collected offline.
+ *  Caught offline, before any HTTP, because the alternative symptom is an
+ *  opaque mint failure deep inside a live run. */
+function checkPayRequiresStripe(divisionRef: string, block: PackRegistrationBlock): PackFinding[] {
+  const findings: PackFinding[] = [];
+  block.entries.forEach((entry, i) => {
+    if (!entry.pay || block.paymentMethod === "stripe") return;
+    findings.push({
+      code: "registration.pay_requires_stripe",
+      severity: "error",
+      where: registrationEntryLabel(divisionRef, entry, i),
+      message:
+        `entry "${entry.extKey}" declares pay:true but division "${divisionRef}" declares ` +
+        `paymentMethod:"${block.paymentMethod}" — resumeRegistrationCheckout mints a Checkout ` +
+        `session only for "stripe" (usecases/registrations.ts:4365), so this entry can never pay`,
+    });
+  });
+  return findings;
+}
+
 /** Design §4 check 5: `divisions[].entry: "registration-api"|"registration-
  *  ui"` with an age band OR a non-`open` category requires `dob`/`gender`
  *  on EVERY entering person — an admin-seeded division (`entry:"admin"`,
@@ -1179,6 +1213,7 @@ export function validatePack(raw: unknown, opts: ValidatePackOptions): PackValid
         ...checkExpectArithmetic(division.ref, block),
         ...checkCapacityWaitlist(division.ref, block),
         ...checkPayRequiresFee(division.ref, block),
+        ...checkPayRequiresStripe(division.ref, block),
         ...checkRegistrationRequiresDobGender(division, block, personsByRef),
         ...checkCurrencyRequiredForFee(division.ref, block, pack.org.currency),
         ...checkJoinConsentMatchesMinority(division.ref, block, personsByRef, now),

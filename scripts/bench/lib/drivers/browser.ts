@@ -41,6 +41,7 @@ import type {
   RegistrationEntry,
   RegistrationPlayer,
 } from "./types.ts";
+import { registrationPatchBody, registrationSettingsBody } from "./settings-body.ts";
 
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(`browser.ts assertion failed: ${message}`);
@@ -266,18 +267,8 @@ async function configureRegistrationViaApi(
   block: RegistrationBlockConfig,
 ): Promise<void> {
   const api = session.context.request;
-  const patchBody = {
-    category: block.category,
-    age_min: block.ageMin ?? null,
-    age_max: block.ageMax ?? null,
-  };
-  const putBody = {
-    enabled: true,
-    entrant_kind: block.entrantKind,
-    fee_cents: block.feeCents,
-    approval: block.approval,
-    capacity: block.capacity ?? null,
-  };
+  const patchBody = registrationPatchBody(block);
+  const putBody = registrationSettingsBody(block);
   const [patchRes, putRes] = await Promise.all([
     api.fetch(`${base}/api/v1/divisions/${divisionId}`, { method: "PATCH", data: patchBody }),
     api.fetch(`${base}/api/v1/divisions/${divisionId}/registration-settings`, { method: "PUT", data: putBody }),
@@ -517,7 +508,16 @@ async function enterViaStepper(
 async function payViaCheckout(session: RegistrationBrowserSession, base: string, entryId: string, token: string): Promise<void> {
   const api = session.context.request;
   const mint = await api.fetch(`${base}/api/v1/public/registrations/${entryId}/checkout`, { method: "POST", data: { token } });
-  if (!mint.ok()) throw new Error(`browserCaptain.pay(): checkout mint failed for ${entryId} — HTTP ${mint.status()}`);
+  if (!mint.ok()) {
+    // The BODY, not just the status. `resumeRegistrationCheckout` refuses for
+    // six distinct reasons (wrong status, non-stripe payment method, zero
+    // amount, passed deadline, charges not enabled, no connected account —
+    // usecases/registrations.ts:4350-4387) and every one of them is a 422.
+    // A bare "HTTP 422" names none of them and sends the next reader to read
+    // the usecase and guess; the error code is right there in the response.
+    const detail = await mint.text().catch(() => "<unreadable>");
+    throw new Error(`browserCaptain.pay(): checkout mint failed for ${entryId} — HTTP ${mint.status()}: ${detail.slice(0, 500)}`);
+  }
   const { checkout_url } = (await mint.json()) as { checkout_url: string };
 
   const { page } = session;

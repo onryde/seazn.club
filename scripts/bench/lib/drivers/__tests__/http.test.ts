@@ -186,6 +186,7 @@ describe("httpOrganiser().configureRegistration()", () => {
     ageMax: 18,
     entrantKind: "team",
     feeCents: 500,
+    paymentMethod: "stripe",
     approval: "manual",
     capacity: 16,
   };
@@ -206,13 +207,39 @@ describe("httpOrganiser().configureRegistration()", () => {
     expect(put!.url).toBe("http://x/api/v1/divisions/div-1/registration-settings");
 
     expect(patch!.body).toEqual({ category: "mixed", age_min: 12, age_max: 18 });
-    expect(put!.body).toMatchObject({
+    // `toEqual`, not `toMatchObject`: an OMITTED key is the whole failure mode
+    // here. `PutRegistrationSettings` defaults every field it does not receive
+    // (api-v1/schemas.ts:2334), so a driver that stops sending
+    // `payment_method` does not leave the division alone — it sets it to
+    // "offline" on every configure, and hosted Checkout becomes unmintable.
+    // A `toMatchObject` listing the other five keys stayed green through
+    // exactly that deletion.
+    expect(put!.body).toEqual({
       enabled: true,
       entrant_kind: "team",
       fee_cents: 500,
+      payment_method: "stripe",
       approval: "manual",
       capacity: 16,
     });
+  });
+
+  it("sends the block's OWN payment method, not a constant — an offline division stays offline", async () => {
+    // The differential case. Both this and the test above would pass against a
+    // driver that hardcoded one value; only the pair can witness that the
+    // pack's declaration is what travels.
+    const calls = mockFetch([
+      { status: 200, body: { ok: true, data: {} } },
+      { status: 200, body: { ok: true, data: {} } },
+    ]);
+    await httpOrganiser(BASE, newSession()).configureRegistration("div-2", {
+      ...block,
+      paymentMethod: "offline",
+    });
+
+    const put = calls.find((c) => c.method === "PUT");
+    expect(put).toBeDefined();
+    expect((put!.body as { payment_method: string }).payment_method).toBe("offline");
   });
 });
 

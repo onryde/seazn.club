@@ -1285,6 +1285,28 @@ export const PackRegistrationBlock = z.strictObject({
   ageCutoffDay: z.number().int().min(1).max(31).optional(),
   entrantKind: PackEntrantKind,
   feeCents: z.number().int().nonnegative(),
+  /** How the division COLLECTS its fee — `registration_settings.payment_method`
+   *  (`RegistrationPaymentMethod`, api-v1/schemas.ts:2292). Defaulted to
+   *  "offline" to match the product's own PUT default
+   *  (schemas.ts:2334), so every pack written before this field existed keeps
+   *  meaning exactly what it meant.
+   *
+   *  This is not cosmetic and it is not inferrable. `resumeRegistrationCheckout`
+   *  refuses to mint a Checkout session unless the division's method is
+   *  "stripe" (usecases/registrations.ts:4365), so a pack that declares
+   *  `feeCents > 0` and `pay: true` but leaves this at "offline" configures a
+   *  division that takes money by bank transfer and then asks Stripe to charge
+   *  a card for it. Before this field existed the bench had no way to say
+   *  "stripe" at all — the driver's PUT omitted the key, the product defaulted
+   *  it to "offline", and `payViaCheckout` was therefore unreachable from any
+   *  pack: written, typed, unit-green, and never once executed. Stage-0 rule 7
+   *  (`validate-pack.ts`) is what keeps it from going quiet again.
+   *
+   *  Deliberately NOT derived from `feeCents > 0`: a paid division collecting
+   *  offline is a real, shipped product configuration (`payment_instructions`
+   *  exists for exactly that), so inferring the method would make that case
+   *  unrepresentable. The pack says which one it means. */
+  paymentMethod: z.enum(["offline", "stripe"]).default("offline"),
   approval: z.enum(["auto", "manual"]),
   capacity: z.number().int().positive().optional(),
   entries: z.array(PackRegistrationEntry).default([]),

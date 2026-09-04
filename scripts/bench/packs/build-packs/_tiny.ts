@@ -596,6 +596,9 @@ const REGISTRATION_BLOCK: PackRegistrationBlock = {
   category: "open",
   entrantKind: "individual",
   feeCents: 0,
+  // Free division, so nothing is collected either way — but the field is
+  // required rather than defaulted here so the pack states its own answer.
+  paymentMethod: "offline",
   approval: "manual",
   entries: [
     { extKey: REGISTRATION_ENTRY_1, captain: "p-reg-priya", roster: [], pay: false, expect: "entrant" },
