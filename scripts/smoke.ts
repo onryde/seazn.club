@@ -1533,7 +1533,7 @@ async function p72Suite(): Promise<void> {
   // card division's availability turns on CONNECT, not on plan. Both sides are
   // proved below. registration.paid is no longer a pass differentiator, so the
   // old "an Event Pass reopens a community card division" scenario is obsolete —
-  // the pass's real grants (entrants 64, 5% fee, branded exports, realtime, …)
+  // the pass's real grants (entrants 64, a cheaper fee, branded exports, …)
   // are covered by the pass-scope suites and the entrants/fee checks above. ===
   const comm = newSession();
   const commWho = await signIn(comm, `p72comm_${tag}@example.com`);
@@ -2817,17 +2817,21 @@ async function passGrantsSuite(): Promise<void> {
       featureKey(plainStages[2]!) === "stages.per_division.max",
   );
 
-  // === registration.fee_percent — community 8, pass 5 =====================
+  // === registration.fee_percent — the pass cuts the org's rate ============
   // Stated plainly, because this one is weaker than the rest and the reason
   // matters: the rate has NO competition-scoped read surface. `feePercentFor`
   // is consumed in exactly two places (the registration checkout and the
   // sponsor checkout), and both feed it straight into a Stripe
   // `application_fee_amount` that never comes back out — so there is nothing
   // keyless to observe. What IS assertable is split in two:
-  //   • the matrix itself — the pass row must still say 5 against community's
-  //     8, which fails the moment a migration regresses the grant;
-  //   • the org-wide resolution — a competition-scoped 5% must not become the
-  //     org's rate, which is the leak this suite exists to catch.
+  //   • the matrix itself — the pass row must still sit UNDER community's,
+  //     which fails the moment a migration regresses the grant. Read from the
+  //     table and compared to each other rather than pinned to 5 and 8: V397
+  //     re-cut the whole ladder (community 8 -> 5, both pass rungs 5 -> 4) for
+  //     the additive fee model, and the claim this suite is making is that the
+  //     pass is CHEAPER, never that either rate is a particular number;
+  //   • the org-wide resolution — the competition-scoped pass rate must not
+  //     become the org's rate, which is the leak this suite exists to catch.
   // If a competition-scoped fee ever surfaces (a quote endpoint, or the
   // application fee echoed on the registration read), replace the first half
   // with the behavioural pair the other grants get.
@@ -2842,9 +2846,11 @@ async function passGrantsSuite(): Promise<void> {
     await feeDb.end();
   }
   const feeFor = (planKey: string) => feeMatrix.find((r) => r.plan_key === planKey)?.int_value;
+  const passFee = feeFor("event_pass");
+  const communityFee = feeFor("community");
   check(
-    "pass grants/fee: the pass still cuts the platform rate to 5% (community 8%)",
-    feeFor("event_pass") === 5 && feeFor("community") === 8,
+    `pass grants/fee: the pass still cuts the platform rate (${passFee}% against community's ${communityFee}%)`,
+    typeof passFee === "number" && typeof communityFee === "number" && passFee < communityFee,
   );
 
   // === The org itself is untouched — every grant above is competition-scoped
@@ -2882,11 +2888,15 @@ async function passGrantsSuite(): Promise<void> {
     ent.entitlements["dashboard.player_profiles"]?.enabled === false,
   );
   check(
-    "pass grants/scope: every quota stays at the community figure org-wide (64/4/5 entrants/divisions/AI credits, fee 8%)",
+    `pass grants/scope: every quota stays at the community figure org-wide (64/4/5 entrants/divisions/AI credits, fee ${communityFee}%)`,
     ent.entitlements["entrants.per_division.max"]?.limit === 64 &&
       ent.entitlements["divisions.per_competition.max"]?.limit === 4 &&
       ent.entitlements["ai.credits.monthly"]?.limit === 5 &&
-      ent.entitlements["registration.fee_percent"]?.limit === 8,
+      // The org's own row, read out of the matrix above — never the literal.
+      // This is the LEAK half: the passed competition resolves `passFee`, and
+      // the org must still resolve its own, whatever V397 (or its successor)
+      // set them to.
+      ent.entitlements["registration.fee_percent"]?.limit === communityFee,
   );
   check(
     "pass grants/scope: the two V392 caps stay at the community figure org-wide (2 stages, 2 save points)",
@@ -14852,7 +14862,8 @@ async function schedRegV3Suite(
 
   // Dual payments on community: offline fees were always plan-free, and since
   // V310 (registration.paid on every plan) the CARD method is free too — the
-  // platform monetises it through the higher community fee (8% vs pro's 2%),
+  // platform monetises it through the higher community fee (5% vs pro's 2%
+  // since V397; it was 8% vs 2%),
   // not by gating it. It still requires Connect, so it is refused UNTIL Connect
   // is live, then allowed.
   const fOffline = await v1(free, `/api/v1/divisions/${fDiv.id}/registration-settings`, "PUT", {
