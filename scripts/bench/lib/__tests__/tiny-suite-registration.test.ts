@@ -359,6 +359,42 @@ describe("runTinySuite — d-registration driven via a fake registrationDrivers"
       (c) => c.method === "POST" && /^\/api\/v1\/competitions\/[^/]+\/divisions$/.test(c.path),
     );
     expect(divisionPosts.some((c) => (c.body as { name: string }).name === "Registration UI Proof")).toBe(false);
+
+    // ...and the skip is VISIBLE. The three assertions above are all
+    // negative — they pass just as well when the division is stepped over in
+    // silence, which is what this suite actually did until a live
+    // `--entry admin` run produced a report with no Registration section at
+    // all. `report.registration` being undefined is indistinguishable from a
+    // pack that declares no registration divisions; only a warning naming the
+    // division tells the two apart.
+    const skipWarnings = (report.warnings ?? []).filter((w) => w.includes("d-registration") && /skipped/i.test(w));
+    expect(skipWarnings, "the skipped division is not named in any warning").toHaveLength(1);
+    expect(skipWarnings[0]).toMatch(/proves nothing about registration/);
+  });
+
+  it("no --entry flag: the same run carries NO skip warning — the warning tracks the skip, it is not boilerplate", async () => {
+    // The positive pair. Without it, a warning pushed unconditionally (or on
+    // every registration division regardless of resolution) would satisfy the
+    // assertion above while telling a reader the funnel was skipped on the
+    // very run that drove it.
+    const server = makeFakeServer();
+    server.registrationRowsByDivisionId.set(REGISTRATION_DIVISION_ID, [
+      { id: "reg-reg-cap1", status: "confirmed", amount_cents: 0, entry_payment_intent_id: null },
+      { id: "reg-reg-cap2", status: "pending", amount_cents: 0, entry_payment_intent_id: null },
+    ]);
+    const report = await runTinySuite({
+      base: "http://bench.example",
+      engine: "optimized",
+      keep: false,
+      log: silent,
+      transport: server.transport,
+      registrationDrivers: fakeRegistrationDrivers([]),
+      resolveOrgSlug: async () => SERVER_ORG_SLUG,
+    });
+
+    expect(report.gate).toBe("green");
+    expect(report.registration, "the funnel did not run — this test can no longer witness anything").toHaveLength(1);
+    expect((report.warnings ?? []).filter((w) => /skipped/i.test(w))).toHaveLength(0);
   });
 
   it("MUTATION: a funnel mismatch (an entry the fake never actually submitted as expected) reds the gate — the wiring genuinely propagates register.ts's own findings, not just 'ran without throwing'", async () => {

@@ -1083,10 +1083,15 @@ export async function runTinySuite(input: TinySuiteInput): Promise<SuiteReport> 
 
       const resolvedEntry = resolveEntryMode(division.entry, pack.suite, input.cliEntry);
       if (resolvedEntry === "admin") {
-        log.info(
-          { division: division.ref },
-          "tiny: registration division resolved to admin — skipped entirely (no admin-equivalent seed data in _tiny)",
-        );
+        const skipped = `tiny: registration "${division.ref}": resolved to admin and SKIPPED — _tiny carries no admin-equivalent seed data for it, so this run proves nothing about registration.`;
+        log.info({ division: division.ref }, skipped);
+        // The warning, not just the log line, is what makes the skip legible.
+        // Without it `--entry admin` renders a report with NO Registration
+        // section at all, and a reader cannot tell "the pack declares no
+        // registration divisions" from "one was declared and stepped over" —
+        // an absent symptom reading as a pass, which is exactly what
+        // ORGANISER_FORCE_UNPROVEN_NOTE exists to prevent one seam over.
+        warnings.push(skipped);
         continue;
       }
 

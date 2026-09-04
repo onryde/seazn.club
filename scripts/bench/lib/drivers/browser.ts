@@ -366,16 +366,6 @@ async function clickStepperNext(page: Page): Promise<void> {
   await stepperNextButton(page).click();
 }
 
-interface SubmitEntryResult {
-  readonly registration_id: string;
-  readonly status: string;
-}
-interface SubmitResponseBody {
-  readonly entries: SubmitEntryResult[];
-  readonly group_id?: string;
-  readonly access_token?: string;
-}
-
 /**
  * `_tiny`'s own registration division is `entrantKind: "individual"` on a
  * competition with exactly one open registration division — `steps.ts`'s
@@ -387,12 +377,15 @@ interface SubmitResponseBody {
  * OTHER branch — out of `_tiny`'s own floor, and NOT implemented here (a
  * later suite's own task should widen this).
  *
- * `onAccessToken` captures `access_token` from the real submit response —
- * the ONLY place it is ever exposed (`entry-card.tsx`'s status page renders
- * no such attribute; see `page.waitForResponse` below) — so `pay()`, called
- * later on the SAME `Captain` object, can mint its own checkout session
- * without `PayableEntry` needing a `token` field `drivers/types.ts` does
- * not declare.
+ * `onAccessToken` captures the group's `access_token` from the URL the
+ * registrant LANDS on, not from the submit response — the response body is
+ * unreadable by then (see the long note at the submit step below for why the
+ * browser has already discarded it). `resolvePostSubmitNavigation` puts the
+ * token in the status page's query string, which is the only place a
+ * registrant ever sees it; `entry-card.tsx` renders no attribute carrying it.
+ * `pay()`, called later on the SAME `Captain` object, uses it to mint its own
+ * checkout session, so `PayableEntry` needs no `token` field
+ * `drivers/types.ts` does not declare.
  */
 async function enterViaStepper(
   session: RegistrationBrowserSession,
