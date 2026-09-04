@@ -296,10 +296,27 @@ cost is a latent red"). Its own sibling `scorepad-v3-partial-amend.spec.ts:50`
 already derives its budget from the hold and says so in a comment. The fix is
 to adopt that pattern here, so moving `HOLD_MS` moves this budget with it.
 
-**Deliberately NOT fixed by this session:** the file belongs to another
-programme, the owner scoped this session to W1.5, and a one-line edit to a
-stranger's spec budget is exactly the kind of unasked change that gets
-attributed to the wrong wave later.
+**FIXED — `f2c937143`, on this branch, after the owner asked for it.** The
+paragraph above originally said this was deliberately left alone as another
+programme's file; the owner then said to proceed, so it ships here. A reviewer
+of `feat/settings-w1-followups` will therefore find one commit touching a spec
+that has nothing to do with settings — that is intentional, and this is the
+record of why.
+
+The budget now derives from the constant:
+`Math.max(300_000, 120_000 + TAPS * (HOLD_MS + 1_500))` — 444s at the default
+12s hold. Verified by running it: **310.6s, passed**. That third measurement
+(after 306.9s and 307.4s) is also the strongest evidence the old ceiling was
+wrong, since all three sit above 300s while the machine was idle and
+`--workers=1`.
+
+**The generalisable half, for whoever meets this next:** distinguishing a real
+budget overrun from load costs one run. Run the spec ALONE at `--workers=1`.
+Load shows up as a huge margin — `partial-amend`, same family, same soft-commit
+tax, came in at 16-29s against 180s. A real overrun lands just past the line,
+repeatedly. Reading the error text cannot tell them apart, because a blown
+budget prints whichever `expect.poll` was in flight and reports itself as a
+DATA defect ("Expected: 24 / Received: 23").
 
 **A method note worth keeping:** `ps eww -p <pid>` returns NOTHING on this
 machine — zero env vars, for any process. An empty result there is not evidence
