@@ -111,12 +111,24 @@ describe("seed shape", () => {
   // the base rate") and it only exists as prose in the JSON's $comment_tiers.
   // Encoded here because a fat-fingered 9000 for 900 is a 10× overcharge that no
   // other test in the repo would catch.
-  it("prices every extra organisation at half the base, rounded down", () => {
-    /** Half, rounded DOWN to a whole major unit. */
-    const halfDown = (tier1: number) => Math.floor(tier1 / 200) * 100;
-    /** INR keeps its x99 charm points: half, down to the nearest whole ₹…99. */
-    const halfDownInr = (tier1: number) =>
-      (Math.floor((Math.floor(tier1 / 2 / 100) - 99) / 100) * 100 + 99) * 100;
+  //
+  // REWORDED W3 (2026-09-04) with the rule it checks. It was "half, rounded DOWN
+  // to a whole major unit", and the reprice put every point on a CHARM grid, so
+  // half of $14.99 is charged as $6.99 — not the $7 that rule computes. The
+  // grid is per-currency because "charm" is: INR's idiom is a whole-rupee x99
+  // (₹299, ₹2,499), and paise-level .99 there is a conversion artefact rather
+  // than a price. `config/__tests__/stripe-plans-ladder.test.ts` states the same
+  // rule for the same seed; both are kept because this one guards the SYNC
+  // SCRIPT's view of the file (it parses it from disk, with its own `Seed` type)
+  // and that one guards the app's.
+  it("prices every extra organisation at half the base, floored to the charm grid", () => {
+    /** `tail`, `tail + step`, `tail + 2·step`, … in minor units. */
+    const grid = (currency: string) =>
+      currency === "inr" ? { step: 100_00, tail: 99_00 } : { step: 1_00, tail: 99 };
+    const halfFloor = (tier1: number, currency: string) => {
+      const { step, tail } = grid(currency);
+      return Math.floor((tier1 / 2 - tail) / step) * step + tail;
+    };
 
     for (const plan of seed.plans) {
       for (const [interval, spec] of Object.entries(plan.prices)) {
@@ -127,10 +139,10 @@ describe("seed shape", () => {
         expect(t2.up_to, label).toBe("inf");
         expect({ label, amount: t2.unit_amount }).toEqual({
           label,
-          amount: halfDown(t1.unit_amount),
+          amount: halfFloor(t1.unit_amount, "usd"),
         });
         for (const [currency, tier1] of Object.entries(t1.currency_options ?? {})) {
-          const want = currency === "inr" ? halfDownInr(tier1) : halfDown(tier1);
+          const want = halfFloor(tier1, currency);
           expect({ label, currency, amount: t2.currency_options?.[currency] }).toEqual({
             label,
             currency,
@@ -154,8 +166,13 @@ describe("seed shape", () => {
 describe("priceCreateParams — flat", () => {
   it("sends unit_amount + flat currency_options, and no tier fields", () => {
     const params = priceCreateParams(eventPass, "prod_1", "usd", "event_pass");
-    expect(params.unit_amount).toBe(1500);
-    expect(params.currency_options?.gbp).toEqual({ unit_amount: 1200 });
+    // Read from the seed, not typed: W3 repriced every point, and a typed pair
+    // reds on the next legitimate reprice while pinning nothing about the
+    // TRANSPOSITION this case exists to check.
+    expect(params.unit_amount).toBe(eventPass.unit_amount);
+    expect(params.currency_options?.gbp).toEqual({
+      unit_amount: eventPass.currency_options!.gbp,
+    });
     expect(params.billing_scheme).toBeUndefined();
     expect(params.tiers).toBeUndefined();
     expect(params.recurring).toBeUndefined(); // one-time pass must not regress
@@ -171,9 +188,12 @@ describe("priceCreateParams — tiered", () => {
     expect(params.billing_scheme).toBe("tiered");
     expect(params.tiers_mode).toBe("graduated");
     expect(params.tiers).toEqual([
-      { up_to: 1, unit_amount: 1200 },
-      { up_to: "inf", unit_amount: 600 },
+      { up_to: 1, unit_amount: proTiers[0]!.unit_amount },
+      { up_to: "inf", unit_amount: proTiers[1]!.unit_amount },
     ]);
+    // The two rungs must actually differ, or a ladder that emitted the base
+    // twice would satisfy the shape above.
+    expect(proTiers[0]!.unit_amount).not.toBe(proTiers[1]!.unit_amount);
     // Stripe rejects unit_amount when billing_scheme=tiered.
     expect(params.unit_amount).toBeUndefined();
     expect(params.recurring).toEqual({ interval: "month" });
@@ -182,10 +202,13 @@ describe("priceCreateParams — tiered", () => {
   it("transposes per-tier currency amounts into per-currency ladders", () => {
     expect(params.currency_options?.gbp).toEqual({
       tiers: [
-        { up_to: 1, unit_amount: 900 },
-        { up_to: "inf", unit_amount: 400 },
+        { up_to: 1, unit_amount: proTiers[0]!.currency_options!.gbp },
+        { up_to: "inf", unit_amount: proTiers[1]!.currency_options!.gbp },
       ],
     });
+    // …and gbp is a SET point, not the usd number carried across — which is the
+    // whole reason `currency_options` exists in this seed.
+    expect(proTiers[0]!.currency_options!.gbp).not.toBe(proTiers[0]!.unit_amount);
     // No currency option may carry a flat unit_amount on a tiered price.
     for (const opt of Object.values(params.currency_options ?? {})) {
       expect(opt.unit_amount).toBeUndefined();
@@ -290,7 +313,7 @@ describe("priceHasDrifted — tiered", () => {
 describe("priceHasDrifted — flat", () => {
   it("is false when amounts match and true on a currency amount change", () => {
     const match = livePrice({
-      unit_amount: 1500,
+      unit_amount: eventPass.unit_amount,
       currency_options: Object.fromEntries(
         Object.entries(eventPass.currency_options ?? {}).map(([c, a]) => [
           c,
@@ -299,7 +322,7 @@ describe("priceHasDrifted — flat", () => {
       ),
     });
     expect(priceHasDrifted(match, eventPass)).toBe(false);
-    match.currency_options!.gbp!.unit_amount = 2600;
+    match.currency_options!.gbp!.unit_amount = eventPass.currency_options!.gbp! + 1_00;
     expect(priceHasDrifted(match, eventPass)).toBe(true);
   });
 

@@ -28,6 +28,29 @@ import { PASS_LOCK_REASONS } from "@/lib/entitlements";
 import { PASS_KEYS, SUPPORTED_CURRENCIES, passPrice } from "@/lib/currency";
 import { PASS_CREDIT_GRANT } from "@/lib/pricing-cards";
 import uiEn from "@/dictionaries/en/ui.json";
+import seed from "@/config/stripe-plans.json";
+
+/**
+ * Each rung's price point, READ FROM THE SEED and keyed by rung — never typed
+ * here. A typed pair freezes today's amounts and reds on the next legitimate
+ * reprice (W3 moved every one of them onto charm points), which teaches the
+ * next editor to retype the constants instead of re-checking the claim.
+ *
+ * It is NOT tautological against `passPrice`: the assertions below pin which
+ * OPTION carries which RUNG's amount, so a ladder that handed M the L price
+ * point still fails — the exact defect this file exists for. The seed, rather
+ * than `passPrice`, so the pin does not route through the same reader the
+ * subject does.
+ */
+const SEED_PASS_PRICE = Object.fromEntries(
+  seed.passes.map((pass) => [
+    pass.key,
+    (currency: string): number =>
+      currency === "usd"
+        ? pass.price.unit_amount
+        : (pass.price.currency_options as Record<string, number>)[currency]!,
+  ]),
+) as Record<"event_pass" | "event_pass_l", (currency: string) => number>;
 
 const CAPS = {
   event_pass: { entrants: 128, divisions: 10 },
@@ -39,13 +62,13 @@ describe("passLadderOptions", () => {
     const options = passLadderOptions("usd", CAPS);
     expect(options.map((o) => o.key)).toEqual(["event_pass", "event_pass_l"]);
     expect(options[0]).toMatchObject({
-      amountMinor: 1500,
+      amountMinor: SEED_PASS_PRICE.event_pass("usd"),
       entrants: 128,
       divisions: 10,
       credits: PASS_CREDIT_GRANT.event_pass,
     });
     expect(options[1]).toMatchObject({
-      amountMinor: 3900,
+      amountMinor: SEED_PASS_PRICE.event_pass_l("usd"),
       entrants: null,
       divisions: 20,
       credits: PASS_CREDIT_GRANT.event_pass_l,
@@ -54,8 +77,11 @@ describe("passLadderOptions", () => {
 
   it("prices in the requested currency", () => {
     const options = passLadderOptions("gbp", CAPS);
-    expect(options[0]!.amountMinor).toBe(1200);
-    expect(options[1]!.amountMinor).toBe(2900);
+    expect(options[0]!.amountMinor).toBe(SEED_PASS_PRICE.event_pass("gbp"));
+    expect(options[1]!.amountMinor).toBe(SEED_PASS_PRICE.event_pass_l("gbp"));
+    // The gbp points must actually DIFFER from the usd ones, or this case
+    // passes while `passLadderOptions` ignores its currency argument entirely.
+    expect(SEED_PASS_PRICE.event_pass("gbp")).not.toBe(SEED_PASS_PRICE.event_pass("usd"));
   });
 
   it("never quotes the same amount for both rungs, in any supported currency", () => {
@@ -137,8 +163,18 @@ describe("lowestPassRung", () => {
   });
 
   it("quotes M's real price point today, and names M as the rung it quoted", () => {
-    expect(lowestPassRung("usd")).toEqual({ key: "event_pass", amountMinor: 1500 });
-    expect(lowestPassRung("gbp")).toEqual({ key: "event_pass", amountMinor: 1200 });
+    expect(lowestPassRung("usd")).toEqual({
+      key: "event_pass",
+      amountMinor: SEED_PASS_PRICE.event_pass("usd"),
+    });
+    expect(lowestPassRung("gbp")).toEqual({
+      key: "event_pass",
+      amountMinor: SEED_PASS_PRICE.event_pass("gbp"),
+    });
+    // …and M is genuinely the cheaper rung in both, so "names M" is a claim
+    // about the ORDER rather than a restatement of whichever rung came first.
+    expect(SEED_PASS_PRICE.event_pass("usd")).toBeLessThan(SEED_PASS_PRICE.event_pass_l("usd"));
+    expect(SEED_PASS_PRICE.event_pass("gbp")).toBeLessThan(SEED_PASS_PRICE.event_pass_l("gbp"));
   });
 
   it("never quotes the more expensive rung", () => {

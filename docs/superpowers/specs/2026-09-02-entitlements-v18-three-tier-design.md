@@ -30,12 +30,12 @@ everything bespoke to a conversation:
 | Offer | One-line sell | Value metric |
 |---|---|---|
 | **Free** | Run a club night. | 1 org, small caps, badge on |
-| **Event Pass** (M $15 / L $29, one-time) | One tournament, fully powered. | competition size |
-| **Pro** ($9/mo, $79/yr) | Your whole season. | organisation scale: seats, teams, squads, credits |
+| **Event Pass** (M $11.99 / L $44.99, one-time) | One tournament, fully powered. | competition size |
+| **Pro** ($14.99/mo, $128.99/yr) | Your whole season. | organisation scale: seats, teams, squads, credits |
 | **Contact Us** (dark `enterprise`) | Your federation. | unlimited + bespoke |
 
-Prices are the R2 ladder ruled 2026-09-02 (§3a); they land in W2 with the
-matrix.
+Prices are the R2 ladder ruled 2026-09-02 and repriced in W3 alongside V397's
+additive fee (§3a is the live table; this row is a summary of it).
 
 Pro Plus is retired. No public plan carries an unlimited team, squad, seat or
 credit figure; only the dark `enterprise` plan does, and it is never
@@ -277,35 +277,73 @@ re-derived from the matrix and guarded by `lib/copy-truth.ts`. Target copy
 
 ### 3a. Prices (R12) — every amount is a SET point per currency
 
+**Superseded twice — read the W3 table below, not this paragraph's history.**
+W2 (2026-09-03) withdrew AUD outright, leaving four currencies; W3
+(2026-09-04) repriced every SKU onto CHARM POINTS alongside V397's additive
+fee. What follows is the live table.
+
 Ladder rules that every number below satisfies and that
-`org-addon-catalog-parity.test.ts` / `copy-truth.ts` keep pinned: Pass M <
-Pass L < Pro annual; three L passes ≥ Pro annual; annual ≈ 8–9 months; the
-graduated tier-2 (extra organisation) rate = half the base rounded DOWN to a
-whole major unit (INR down to the nearest x99); pass price redeemable against
-Pro within 30 days.
+`config/__tests__/stripe-plans-ladder.test.ts`,
+`org-addon-catalog-parity.test.ts` and `copy-truth.ts` keep pinned:
 
-| Price | USD | EUR | GBP | AUD | INR |
-|---|---|---|---|---|---|
-| Pro monthly (tier 1) | 9 | 8 | 7 | 12 | 399 |
-| Pro monthly tier 2+ / extra org add-on | 4 | 4 | 3 | 6 | 199 |
-| Pro annual (tier 1) | 79 | 69 | 59 | 99 | 2,999 |
-| Pro annual tier 2+ | 39 | 34 | 29 | 49 | 1,499 |
-| Event Pass M | 15 | 14 | 12 | 19 | 599 |
-| Event Pass L | 29 | 27 | 24 | 39 | 1,199 |
-| Extra seat / month (**hidden**, R13 — catalog price kept for the dormant backend) | 2 | 2 | 2 | 3 | 99 |
-| Size pack +32 (one-time) | 5 | 5 | 4 | 7 | 199 |
-| AI credit packs 40 / 105 / 220 / 460 | unchanged (10 / 25 / 50 / 100 and today's set points) — credits are compute, not packaging |
+1. Pass M < Pass L < Pro annual.
+2. **Pass M < one MONTH of Pro** — added W3. Pass M is a strict SUBSET of Pro
+   (10 divisions vs 20, 128 entrants vs 256, 4 stages vs 6, 5 restore points
+   vs 10, a 4% entry-fee rate vs 2%), so a rung dearer than a month of the
+   plan that dominates it is a product nobody rational buys. Its absence is
+   what let $15 M ship against $12/month Pro: every other bound compared the
+   rungs against the ANNUAL price, where $15 < $99 passes comfortably.
+3. Three L passes ≥ Pro annual; two L passes < it.
+4. Annual ≈ 8–9 months.
+5. The graduated tier-2 (extra organisation) rate = half the base **floored to
+   the charm grid**. **Reworded W3**: it read "rounded DOWN to a whole major
+   unit (INR down to the nearest x99)", which the charm points falsify — half
+   of $14.99 is $7.495 and the rider is $6.99, not $7. Floored, never rounded
+   up, which is what keeps the "no more than half your plan's rate" promise
+   four locales make. It is now asserted as an EQUALITY, so a rider set too
+   low is a fault too.
+6. Every SET point sits on its currency's charm grid: `x.99` in usd/eur/gbp,
+   whole-rupee `x99` in inr (₹599, ₹4,999 — paise-level `.99` is a conversion
+   artefact in that market, not a price). The AI credit packs are the one
+   deliberate exception, below.
+7. Pass price redeemable against Pro within 30 days.
 
-Checks: 3 × L = 87 ≥ 79 (USD); 3 × 27 = 81 ≥ 69 (EUR); 3 × 24 = 72 ≥ 59
-(GBP); 3 × 39 = 117 ≥ 99 (AUD); 3 × 1,199 = 3,597 ≥ 2,999 (INR). Two L passes
-are cheaper than annual in every currency, so a two-tournament organiser is
-never pushed into a subscription.
+| Price | USD | EUR | GBP | INR |
+|---|---|---|---|---|
+| Pro monthly (tier 1) | 14.99 | 12.99 | 10.99 | 599 |
+| Pro monthly tier 2+ / extra org add-on | 6.99 | 5.99 | 4.99 | 299 |
+| Pro annual (tier 1) | 128.99 | 108.99 | 88.99 | 4,999 |
+| Pro annual tier 2+ | 63.99 | 53.99 | 43.99 | 2,499 |
+| Event Pass M | 11.99 | 9.99 | 8.99 | 499 |
+| Event Pass L | 44.99 | 38.99 | 31.99 | 1,699 |
+| Extra seat / month (**hidden**, R13 — catalog price kept for the dormant backend) | 1.99 | 1.99 | 1.99 | 99 |
+| Size pack +32 (one-time) | 4.99 | 4.99 | 3.99 | 199 |
+| AI credit packs 40 / 105 / 220 / 460 | unchanged and deliberately ROUND (10 / 25 / 50 / 100 and today's set points) — credits are compute, not packaging: a pack is a quantity of a metered resource, so $9.99 for 40 credits reads as a discount on arithmetic rather than as a keen price |
 
-Why these points: INR at ₹399 is 29% of today's ₹1,399 — Indian clubs are the
-volume market and were being charged near FX parity. GBP/EUR sit under USD
-because club budgets there are set in whole tens. AUD sits above because AUD
-prices are read against an AUD 15–20 coffee-and-court norm. Revenue per Pro
-org falls 53% against today; the bet is volume plus the badge network.
+Checks, every rule against every currency:
+
+| | USD | EUR | GBP | INR |
+|---|---|---|---|---|
+| annual ÷ monthly (8–9) | 8.61 | 8.39 | 8.10 | 8.35 |
+| tier 2+ ≤ half base (monthly) | 6.99 ≤ 7.495 | 5.99 ≤ 6.495 | 4.99 ≤ 5.495 | 299 ≤ 299.5 |
+| tier 2+ ≤ half base (annual) | 63.99 ≤ 64.495 | 53.99 ≤ 54.495 | 43.99 ≤ 44.495 | 2,499 ≤ 2,499.5 |
+| M < Pro monthly | 11.99 < 14.99 | 9.99 < 12.99 | 8.99 < 10.99 | 499 < 599 |
+| M < L < annual | 11.99 < 44.99 < 128.99 | 9.99 < 38.99 < 108.99 | 8.99 < 31.99 < 88.99 | 499 < 1,699 < 4,999 |
+| 3 × L ≥ annual | 134.97 ≥ 128.99 | 116.97 ≥ 108.99 | 95.97 ≥ 88.99 | 5,097 ≥ 4,999 |
+| 2 × L < annual | 89.98 < 128.99 | 77.98 < 108.99 | 63.98 < 88.99 | 3,398 < 4,999 |
+
+Two L passes stay cheaper than a year in every currency, so a two-tournament
+organiser is never pushed into a subscription; a third pass always costs more
+than subscribing.
+
+Why these points: the additive fee (V397) means our percentage is now margin
+rather than a blended number, so the subscription can carry more of the price
+and the entry-fee rate less — Pro rises from $12 while Free's rate falls from
+8% to 5%. INR at ₹599/month is still the volume-market point and stays a
+whole-rupee charm price. GBP/EUR sit under USD because club budgets there are
+set in whole tens. Pass M comes DOWN to $11.99 to sit under a month of Pro
+(rule 2); Pass L goes UP to $44.99 so that three of them still clear the
+annual price after Pro annual rose.
 - **Contact Us — "Your federation."** A strip, not a card: unlimited seats,
   teams and organisations · write API · 1% fee · pooled AI credits · priority
   support. Listed as *"ask us"* and never as included: custom domain, white

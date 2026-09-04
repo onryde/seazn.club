@@ -47,6 +47,13 @@ vi.mock("next/navigation", () => ({
 }));
 
 import PricingPage from "../page";
+import { formatMinor, passPrice } from "@/lib/currency";
+
+/** Each rung's usd price AS THE PAGE RENDERS IT — derived, never typed. W3
+ *  repriced both rungs onto charm points ("$15" became "$11.99"), and a typed
+ *  string would have turned a legitimate reprice into a page regression. */
+const M_PRICE = formatMinor(passPrice("usd", "event_pass"), "usd");
+const L_PRICE = formatMinor(passPrice("usd", "event_pass_l"), "usd");
 
 /** The two keys V341 makes the rungs differ on, plus a fee row so the card's
  *  surroundings render. Mirrors the live matrix. */
@@ -74,8 +81,10 @@ describe("/pricing renders the Event Pass M/L ladder", () => {
     const { markup, text } = await render();
     expect(markup, "the ladder block itself").toContain("data-pass-ladder");
     // Both prices. M's alone was always on this page; L's is the new claim.
-    expect(text).toContain("$15");
-    expect(text).toContain("$39");
+    // They must also DIFFER, or "each with its own price" is unwitnessable.
+    expect(M_PRICE).not.toBe(L_PRICE);
+    expect(text).toContain(M_PRICE);
+    expect(text).toContain(L_PRICE);
     // Both rungs' caps, read from the matrix rather than written in copy.
     expect(text).toContain("Up to 10 divisions, 128 entrants each");
     expect(text).toContain("Up to 20 divisions, unlimited entrants");
@@ -121,7 +130,7 @@ describe("/pricing renders the Event Pass M/L ladder", () => {
 
   it("suppresses the ladder rather than quoting a figure it does not have", async () => {
     // A DB unreachable at build makes `loadMatrix` fail soft to `{}`; a missing
-    // row read through `?? null` would advertise an UNLIMITED pass for $15.
+    // row read through `?? null` would advertise an UNLIMITED pass for M's price.
     // Absence must suppress, never embellish.
     const { markup, text } = await render(LIVE.filter((r) => r.plan_key !== "event_pass_l"));
     expect(markup, "no rung may be priced from a row that isn't there").not.toContain(
@@ -132,12 +141,12 @@ describe("/pricing renders the Event Pass M/L ladder", () => {
     expect(text).not.toContain("unlimited entrants");
     // …and the card still renders. Suppressing the ladder must not take the
     // Event Pass offer down with it.
-    expect(text).toContain("$15");
-    // Deliberately NOT a page-wide "$39" negative. The FAQ answer interpolates
+    expect(text).toContain(M_PRICE);
+    // Deliberately NOT a page-wide L-price negative. The FAQ answer interpolates
     // {passL} from stripe-plans.json, a STATIC file that is never unavailable —
     // so it keeps naming both rungs' prices even when the matrix read fails.
     // That is correct: the suppression rule guards against quoting a CAP we do
     // not have, not against quoting a price we always do.
-    expect(text).toContain("$39");
+    expect(text).toContain(L_PRICE);
   });
 });

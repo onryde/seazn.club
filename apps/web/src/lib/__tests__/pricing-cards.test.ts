@@ -7,7 +7,13 @@ import {
   PASS_CREDIT_GRANT,
   ticketTiers,
 } from "../pricing-cards";
-import { PASS_KEYS, SUPPORTED_CURRENCIES, lowestCreditPackAmount, passPrice } from "../currency";
+import {
+  PASS_KEYS,
+  SUPPORTED_CURRENCIES,
+  formatMinor,
+  lowestCreditPackAmount,
+  passPrice,
+} from "../currency";
 import stripePlans from "@/config/stripe-plans.json";
 import {
   BOUNDED_SCOPE_GRAMMAR,
@@ -38,12 +44,17 @@ describe("pricing cards", () => {
     expect(community!.bullets.length).toBeGreaterThanOrEqual(3);
   });
   it("prices come from lib/currency (multi-currency stays correct)", () => {
+    // Formatted from the SEED's own points, not from amounts typed here — W3
+    // moved every price onto a charm point and a typed pair would red on the
+    // next legitimate reprice while pinning nothing about the formatting or
+    // the currency routing this case exists for.
     const [, passUsd, proUsd] = ticketTiers("usd");
-    expect(passUsd!.price).toBe("$15");
-    expect(proUsd!.price).toBe("$12");
+    expect(passUsd!.price).toBe(formatMinor(passPrice("usd", "event_pass"), "usd"));
+    expect(proUsd!.price).toBe(formatMinor(stripePlans.plans[0]!.prices.monthly.unit_amount, "usd"));
     expect(proUsd!.period).toBe("/mo");
     const [, passInr] = ticketTiers("inr");
-    expect(passInr!.price).not.toBe("$15");
+    expect(passInr!.price).not.toBe(passUsd!.price);
+    expect(passInr!.price).toContain("₹");
   });
   // v17 #294: the home stub still leads with M's price, because M is what the
   // lowest rung costs — but with two rungs on sale that figure is a FLOOR, not
@@ -140,11 +151,18 @@ describe("pricing cards", () => {
   // array stripe-sync seeds Stripe from, so a quoted price cannot drift from
   // the price object Stripe holds for that rung.
   it("passPrice resolves both Event Pass rungs, keyed by passKey", () => {
-    expect(passPrice("usd", "event_pass")).toBe(1500);
-    expect(passPrice("usd", "event_pass_l")).toBe(3900);
-    expect(passPrice("gbp", "event_pass_l")).toBe(2900);
-    expect(passPrice("eur", "event_pass_l")).toBe(3500);
-    expect(passPrice("inr", "event_pass_l")).toBe(159900);
+    // Both rungs read from the seed rather than typed: the claim is that
+    // `passKey` picks the right ENTRY and `currency` the right point inside it.
+    const bySeedKey = (key: string) => stripePlans.passes.find((p) => p.key === key)!.price;
+    const m = bySeedKey("event_pass");
+    const l = bySeedKey("event_pass_l");
+    expect(passPrice("usd", "event_pass")).toBe(m.unit_amount);
+    expect(passPrice("usd", "event_pass_l")).toBe(l.unit_amount);
+    expect(passPrice("gbp", "event_pass_l")).toBe(l.currency_options.gbp);
+    expect(passPrice("eur", "event_pass_l")).toBe(l.currency_options.eur);
+    expect(passPrice("inr", "event_pass_l")).toBe(l.currency_options.inr);
+    // The rungs must be priced apart, or "keyed by passKey" is unwitnessable.
+    expect(m.unit_amount).not.toBe(l.unit_amount);
   });
 
   // `passKey` is REQUIRED (no default), so a surface that forgets the rung is a

@@ -96,10 +96,19 @@ describe("extra-organisation price", () => {
         for (const currency of SUPPORTED_CURRENCIES) {
           const base = proPrice(interval, currency);
           const extra = extraOrgPrice(plan, interval, currency);
-          // Rounded DOWN to a whole major unit (INR to the nearest x99), so
-          // exact halves are not required — but the customer must never be
-          // charged MORE than half, and never so much less that "half" is a
-          // meaningfully wrong description of what they pay.
+          // Half, FLOORED TO THE CHARM GRID (x.99, and for INR a whole-rupee
+          // x99), so exact halves are not required — but the customer must
+          // never be charged MORE than half, and never so much less that
+          // "half" is a meaningfully wrong description of what they pay.
+          //
+          // REWORDED W3 (2026-09-04) with the rule itself: this read "rounded
+          // DOWN to a whole major unit", which the charm reprice falsifies —
+          // half of $14.99 is charged as $6.99, not $7. The BOUND below did
+          // not have to move, and that is the point of expressing it as a
+          // grid step rather than as a percentage: flooring to the charm grid
+          // loses strictly less than one step, whichever grid a currency is
+          // on. `config/__tests__/stripe-plans-ladder.test.ts` asserts the
+          // floored value exactly; this file guards the COPY that rests on it.
           //
           // THE FLOOR IS THE ROUNDING RULE'S OWN STEP, not a percentage. It was
           // `half * 0.9` (i.e. at least 45% of base), a bound tuned to the

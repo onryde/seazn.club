@@ -365,14 +365,35 @@ describe("requireCard on a trial checkout (v3/07 D13)", () => {
 
 describe("currency price points (v3/07 §4)", () => {
   it("reads SET price points from stripe-plans.json", () => {
-    expect(proPrice("monthly", "usd")).toBe(1200);
-    expect(proPrice("monthly", "eur")).toBe(1000);
-    expect(proPrice("monthly", "gbp")).toBe(900);
-    expect(proPrice("monthly", "inr")).toBe(49900);
-    expect(proPrice("annual", "usd")).toBe(9900);
-    expect(passPrice("usd", "event_pass")).toBe(1500);
-    expect(passPrice("gbp", "event_pass")).toBe(1200);
-    expect(passPrice("inr", "event_pass")).toBe(59900);
+    // Read out of the seed rather than typed here. The claim is that each
+    // reader picks the RIGHT point — the right plan, interval, rung and
+    // currency — never that the file holds a particular number today; W3
+    // repriced every one of them, and a typed table would have made a
+    // legitimate reprice look like a regression in the reader.
+    const pro = seed.plans.find((p) => p.key === "pro")!.prices;
+    const passM = seed.passes.find((p) => p.key === "event_pass")!.price;
+    expect(proPrice("monthly", "usd")).toBe(pro.monthly.unit_amount);
+    expect(proPrice("monthly", "eur")).toBe(pro.monthly.currency_options.eur);
+    expect(proPrice("monthly", "gbp")).toBe(pro.monthly.currency_options.gbp);
+    expect(proPrice("monthly", "inr")).toBe(pro.monthly.currency_options.inr);
+    expect(proPrice("annual", "usd")).toBe(pro.annual.unit_amount);
+    expect(passPrice("usd", "event_pass")).toBe(passM.unit_amount);
+    expect(passPrice("gbp", "event_pass")).toBe(passM.currency_options.gbp);
+    expect(passPrice("inr", "event_pass")).toBe(passM.currency_options.inr);
+    // ANTI-TAUTOLOGY: every point above must be a DISTINCT number, or a reader
+    // that ignored its arguments and returned one amount for everything would
+    // satisfy the whole case. (`amountFor` falls back to `unit_amount` when a
+    // currency has no point, so "returns the usd number under every symbol" is
+    // the live failure mode, not a hypothetical one.)
+    const points = [
+      pro.monthly.unit_amount,
+      pro.monthly.currency_options.eur,
+      pro.monthly.currency_options.gbp,
+      pro.monthly.currency_options.inr,
+      pro.annual.unit_amount,
+      passM.unit_amount,
+    ];
+    expect(new Set(points).size).toBe(points.length);
   });
 
   it("formats whole amounts without decimals", () => {

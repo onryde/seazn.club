@@ -1,6 +1,6 @@
 {
-  "$comment": "Stripe product/price seed for paid plans + one-time Event Pass. Idempotent source of truth: `npm run stripe:sync` ensures each product + price exists in the Stripe account of STRIPE_SECRET_KEY (matched by price lookup_key), keeps multi-currency price points (currency_options) in sync on every run, and writes the resulting price ids into the `plans` table (stripe_price_id_monthly/annual, stripe_price_id_onetime for passes). Re-run after any DB wipe, and against each environment (test/prod) by pointing STRIPE_SECRET_KEY + DATABASE_URL at it. Non-USD amounts are SET price points (v3/07 §4), never FX conversions. Community is free (no Stripe). Entitlements v18 (2026-09-03): FOUR currencies, not five — AUD was withdrawn outright, plans and registration entry fees alike, and `lib/currency.ts`'s SUPPORTED_CURRENCIES is the list this file must agree with (a `currency_options` key with no entry there, or the reverse, renders one currency's symbol over another currency's number).",
-  "$comment_tiers": "Billing groups (spec 2026-07-21 §Pricing): a subscription covers several organisations, so each paid price is a GRADUATED tiered price whose quantity is the number of organisations in the group. Tier 1 is the plan base; tier 2+ is an extra organisation at half the base. `unit_amount`/`currency_options` stay in place and always equal tier 1 — they are what a group of one pays, and what the pricing page and lib/currency.ts advertise. Per-currency tier amounts are SET price points like every other amount here, derived as half the tier-1 point rounded DOWN to a whole major unit (INR down to the nearest x99, matching its existing charm points) — never an FX conversion. That INR rule is why ₹499 halves to ₹199 (40%) rather than ₹249: the parity guard asserts AT-MOST-half, which is what makes the rounding safe.",
+  "$comment": "Stripe product/price seed for paid plans + one-time Event Pass. Idempotent source of truth: `npm run stripe:sync` ensures each product + price exists in the Stripe account of STRIPE_SECRET_KEY (matched by price lookup_key), keeps multi-currency price points (currency_options) in sync on every run, and writes the resulting price ids into the `plans` table (stripe_price_id_monthly/annual, stripe_price_id_onetime for passes). Re-run after any DB wipe, and against each environment (test/prod) by pointing STRIPE_SECRET_KEY + DATABASE_URL at it. Non-USD amounts are SET price points (v3/07 §4), never FX conversions. Community is free (no Stripe). Entitlements v18 (2026-09-03): FOUR currencies, not five — AUD was withdrawn outright, plans and registration entry fees alike, and `lib/currency.ts`'s SUPPORTED_CURRENCIES is the list this file must agree with (a `currency_options` key with no entry there, or the reverse, renders one currency's symbol over another currency's number). W3 (2026-09-04) repriced every SKU onto CHARM POINTS alongside V397's additive fee: x.99 in usd/eur/gbp, whole-rupee x99 in inr (₹599, ₹4,999 — paise-level .99 is not a price shape that market reads). `stripe-plans-ladder.test.ts` asserts the grid, the halving rule and every bound between the rungs; nothing here is an FX conversion of anything else.",
+  "$comment_tiers": "Billing groups (spec 2026-07-21 §Pricing): a subscription covers several organisations, so each paid price is a GRADUATED tiered price whose quantity is the number of organisations in the group. Tier 1 is the plan base; tier 2+ is an extra organisation at half the base. `unit_amount`/`currency_options` stay in place and always equal tier 1 — they are what a group of one pays, and what the pricing page and lib/currency.ts advertise. Per-currency tier amounts are SET price points like every other amount here, derived as half the tier-1 point FLOORED TO THE CHARM GRID — the largest x.99 point at or below it, and for INR the largest whole-rupee x99 point (₹99, ₹199, ₹299 …) — never an FX conversion. REWORDED W3 (2026-09-04): it used to say “rounded DOWN to a whole major unit”, which stopped being true the moment the prices themselves became charm points — half of $14.99 is $7.495 and the rider is $6.99, not $7. A rule the seed does not obey is worse than no rule, because the next editor reprices to match the sentence. FLOOR, never round up: that is what keeps the “no more than half your plan’s rate” promise four locales make, and `stripe-plans-ladder.test.ts` now asserts the floored value EXACTLY, so a rider set too LOW is a fault as well — the shape a fat-fingered reprice actually takes, and the one an at-most-half bound welcomes.",
   "currency": "usd",
   "plans": [
     {
@@ -12,75 +12,75 @@
       "prices": {
         "monthly": {
           "lookup_key": "seazn_pro_monthly",
-          "unit_amount": 1200,
+          "unit_amount": 1499,
           "interval": "month",
-          "currency_options": { "eur": 1000, "gbp": 900, "inr": 49900 },
+          "currency_options": { "eur": 1299, "gbp": 1099, "inr": 59900 },
           "billing_scheme": "tiered",
           "tiers_mode": "graduated",
           "tiers": [
             {
               "up_to": 1,
-              "unit_amount": 1200,
-              "currency_options": { "eur": 1000, "gbp": 900, "inr": 49900 }
+              "unit_amount": 1499,
+              "currency_options": { "eur": 1299, "gbp": 1099, "inr": 59900 }
             },
             {
               "up_to": "inf",
-              "unit_amount": 600,
-              "currency_options": { "eur": 500, "gbp": 400, "inr": 19900 }
+              "unit_amount": 699,
+              "currency_options": { "eur": 599, "gbp": 499, "inr": 29900 }
             }
           ]
         },
         "annual": {
           "lookup_key": "seazn_pro_annual",
-          "unit_amount": 9900,
+          "unit_amount": 12899,
           "interval": "year",
-          "currency_options": { "eur": 8900, "gbp": 7900, "inr": 399900 },
+          "currency_options": { "eur": 10899, "gbp": 8899, "inr": 499900 },
           "billing_scheme": "tiered",
           "tiers_mode": "graduated",
           "tiers": [
             {
               "up_to": 1,
-              "unit_amount": 9900,
-              "currency_options": { "eur": 8900, "gbp": 7900, "inr": 399900 }
+              "unit_amount": 12899,
+              "currency_options": { "eur": 10899, "gbp": 8899, "inr": 499900 }
             },
             {
               "up_to": "inf",
-              "unit_amount": 4900,
-              "currency_options": { "eur": 4400, "gbp": 3900, "inr": 199900 }
+              "unit_amount": 6399,
+              "currency_options": { "eur": 5399, "gbp": 4399, "inr": 249900 }
             }
           ]
         }
       }
     }
   ],
-  "$comment_passes": "Event Pass rungs (v17 #294): TWO one-time price points for the same single-competition upgrade, told apart ONLY by size — M ($15) is 10 divisions / 128 entrants per division, L ($39) is 20 divisions / 512 entrants. Everything else (features) is identical; the one-time AI credit grant is sized with the rung (PASS_CREDIT_GRANT: 25 on M, 35 on L — entitlements v18 W2 T5 sized it by rung, W2 T12 re-cut L from 50). `key` matches the `plans` row of the same name (M's key is literally `event_pass`, not `event_pass_m`), and the caps themselves live in plan_entitlements (V341 derives L's whole matrix from M's), never here — this file only owns the price. The rungs are bounded by the annual plan on both sides (3 × L >= annual keeps a third pass a nudge toward subscribing; 2 × L < annual keeps a two-tournament organiser out of one), which is what stripe-plans-ladder.test.ts pins. stripe-sync loops this array by key and writes each price id into plans.stripe_price_id_onetime, so adding a rung needs no sync-script change; lib/currency.ts passPrice(currency, passKey) is the single reader.",
+  "$comment_passes": "Event Pass rungs (v17 #294): TWO one-time price points for the same single-competition upgrade, told apart ONLY by size — M ($11.99) is 10 divisions / 128 entrants per division, L ($44.99) is 20 divisions / 512 entrants. Everything else (features) is identical; the one-time AI credit grant is sized with the rung (PASS_CREDIT_GRANT: 25 on M, 35 on L — entitlements v18 W2 T5 sized it by rung, W2 T12 re-cut L from 50). `key` matches the `plans` row of the same name (M's key is literally `event_pass`, not `event_pass_m`), and the caps themselves live in plan_entitlements (V341 derives L's whole matrix from M's), never here — this file only owns the price. The rungs are bounded by the annual plan on both sides (3 × L >= annual keeps a third pass a nudge toward subscribing; 2 × L < annual keeps a two-tournament organiser out of one), and M is bounded ABOVE by one MONTH of Pro — added W3 after its absence let a dominated rung ship, M at $15 against Pro at $12/month, while every existing bound compared the rungs against the ANNUAL price and passed. Pass M is a strict subset of Pro on every axis the two share (10 divisions vs 20, 128 entrants vs 256, 4 stages vs 6, 5 restore points vs 10, 4% entry fee vs 2%), so a rung dearer than a month of the plan that dominates it is a product nobody rational buys. All of it is what stripe-plans-ladder.test.ts pins. stripe-sync loops this array by key and writes each price id into plans.stripe_price_id_onetime, so adding a rung needs no sync-script change; lib/currency.ts passPrice(currency, passKey) is the single reader.",
   "passes": [
     {
       "key": "event_pass",
       "product": {
         "name": "Seazn Club Event Pass",
-        "description": "One-time upgrade for a single competition, while it's active: 10 divisions, 128 entrants per division, advanced formats, a 5% entry-fee rate instead of 8%, branded exports, public player profiles, sponsor tiers and paid packages, realtime scoreboard, and a one-time +25 AI credits added to your wallet."
+        "description": "One-time upgrade for a single competition, while it's active: 10 divisions, 128 entrants per division, advanced formats, a 4% entry-fee rate instead of 5%, branded exports, public player profiles, sponsor tiers and paid packages, realtime scoreboard, and a one-time +25 AI credits added to your wallet."
       },
       "price": {
         "lookup_key": "seazn_event_pass",
-        "unit_amount": 1500,
-        "currency_options": { "eur": 1400, "gbp": 1200, "inr": 59900 }
+        "unit_amount": 1199,
+        "currency_options": { "eur": 999, "gbp": 899, "inr": 49900 }
       }
     },
     {
       "key": "event_pass_l",
       "product": {
         "name": "Seazn Club Event Pass L",
-        "description": "One-time upgrade for a single competition, while it's active: 20 divisions, 512 entrants per division, advanced formats, a 5% entry-fee rate instead of 8%, branded exports, public player profiles, sponsor tiers and paid packages, realtime scoreboard, and a one-time +35 AI credits added to your wallet."
+        "description": "One-time upgrade for a single competition, while it's active: 20 divisions, 512 entrants per division, advanced formats, a 4% entry-fee rate instead of 5%, branded exports, public player profiles, sponsor tiers and paid packages, realtime scoreboard, and a one-time +35 AI credits added to your wallet."
       },
       "price": {
         "lookup_key": "seazn_event_pass_l",
-        "unit_amount": 3900,
-        "currency_options": { "eur": 3500, "gbp": 2900, "inr": 159900 }
+        "unit_amount": 4499,
+        "currency_options": { "eur": 3899, "gbp": 3199, "inr": 169900 }
       }
     }
   ],
-  "$comment_packs": "AI credit packs (v17 SPEC-2 §5/§6): one-time top-ups into the org/group's ai_credit_ledger wallet (bucket='pack', never-expire — D2). Not tied to a `plans` row, so the checkout route resolves the live price by `lookup_key` at request time (stripe.prices.list) instead of a stored id — stripe-sync.ts only needs to ensure the price exists, never write it back to a table. `credits` is our own field (never sent to Stripe) — the webhook grants the `credits` snapshot stamped into the session metadata at checkout creation (server-set, so it cannot be tampered with client-side); this catalog is only the logged fallback when the snapshot is absent (a drift the webhook staff-alerts, never a silent wrong/zero grant). The v18 reprice left every pack amount alone; they only lost their AUD point.",
+  "$comment_packs": "AI credit packs (v17 SPEC-2 §5/§6): one-time top-ups into the org/group's ai_credit_ledger wallet (bucket='pack', never-expire — D2). Not tied to a `plans` row, so the checkout route resolves the live price by `lookup_key` at request time (stripe.prices.list) instead of a stored id — stripe-sync.ts only needs to ensure the price exists, never write it back to a table. `credits` is our own field (never sent to Stripe) — the webhook grants the `credits` snapshot stamped into the session metadata at checkout creation (server-set, so it cannot be tampered with client-side); this catalog is only the logged fallback when the snapshot is absent (a drift the webhook staff-alerts, never a silent wrong/zero grant). The v18 reprice left every pack amount alone; they only lost their AUD point. W3 (2026-09-04) moved every OTHER SKU onto charm points and deliberately left these ROUND — $10, $25, $50, $100 — which design/v3/07 §3a marks as intentional in the same words: credits are compute, not packaging. A pack is bought as a quantity of a metered resource ($10 buys 40 credits), so $9.99 reads as a discount on a thing whose price is arithmetic, not as a keen price; the round number is what makes the per-credit rate legible. Recorded here because otherwise it reads as a section somebody forgot — `stripe-plans-ladder.test.ts` names `packs` as the one charm-grid exemption and asserts that the exempt set is exactly this one, so the exception cannot silently grow.",
   "packs": [
     {
       "key": "credits_10",
@@ -147,9 +147,9 @@
       },
       "price": {
         "lookup_key": "seazn_seat_monthly",
-        "unit_amount": 200,
+        "unit_amount": 199,
         "interval": "month",
-        "currency_options": { "eur": 200, "gbp": 200, "inr": 9900 }
+        "currency_options": { "eur": 199, "gbp": 199, "inr": 9900 }
       }
     }
   ],
@@ -165,8 +165,8 @@
       },
       "price": {
         "lookup_key": "seazn_size_pack_32",
-        "unit_amount": 500,
-        "currency_options": { "eur": 500, "gbp": 400, "inr": 19900 }
+        "unit_amount": 499,
+        "currency_options": { "eur": 499, "gbp": 399, "inr": 19900 }
       }
     }
   ],
@@ -183,9 +183,9 @@
       },
       "price": {
         "lookup_key": "seazn_extra_org_pro_monthly",
-        "unit_amount": 600,
+        "unit_amount": 699,
         "interval": "month",
-        "currency_options": { "eur": 500, "gbp": 400, "inr": 19900 }
+        "currency_options": { "eur": 599, "gbp": 499, "inr": 29900 }
       }
     }
   ]
