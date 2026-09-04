@@ -49,7 +49,11 @@ import { boardMetrics } from "./build-objectives.ts";
 import { slotFixtures } from "./calendar.ts";
 import type { Assignment, SchedulableFixture, SlotConfig } from "./calendar.ts";
 import type { SchedulingConstraints } from "./constraints.ts";
-import type { SolveBuildOutcome } from "./placement-client.ts";
+// THE shared rest resolver. Imported so the wire assertions below derive their
+// expectation from it rather than restating its arithmetic — the second
+// implementation is the recurring defect in this subsystem.
+import { restFloor } from "./rest-floor.ts";
+import type { SolveBuildInput, SolveBuildOutcome } from "./placement-client.ts";
 
 /** The six `(name, value)` rows a FULLY PROVED placement reply carries, in the
  *  ladder's order. Values are placeholders — nothing here reads them — but the
@@ -515,5 +519,178 @@ describe("a board split across mismatched court grids now reaches the solver", (
     const sentC1 = sentInput.grid.slots.filter((s) => s.court === "C1").length;
     const sentC2 = sentInput.grid.slots.filter((s) => s.court === "C2").length;
     expect(sentC1).toBeLessThan(sentC2);
+  }, 120_000);
+});
+
+// --- the wire carries the RESOLVED floor, not `perEntrantMinRest` ------------
+//
+// Task 7. The third side of the fork, found by driving the product: Settings
+// "Minimum rest per entrant" 30 + Constraints "Minimum rest" 35 produced
+// "Optimised … SCHEDULED 15/15" and 32 `rest` conflicts in the same breath.
+// The greedy placer resolves rest through `effectiveRestMinutes` and the
+// verifier through `pairRestMinutesWith` — both of which are `restFloor`, a MAX
+// over the four configurable sources (#459, owner ruling 2026-08-04) — while
+// `restByDivisionForWire` in `build.ts` read `config.perEntrantMinRest` RAW.
+// The solver was told 30, produced 30, and the verifier measured against 35.
+//
+// `build.ts`'s own docstring on that block records this exact class of defect
+// shipping once already (`already_optimal` on a rest-violating board) and being
+// closed for `perEntrantMinRest` ALONE; `restMin`, `restByGroup` and
+// `noBackToBack` were never added to the same fold. These cases close it for
+// every source at once by deriving the expectation from `restFloor` itself, so
+// a fifth source moves the tests with the resolver instead of leaving them
+// asserting yesterday's arithmetic.
+describe("the CP-SAT wire payload uses the shared rest resolver", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  /** The reproduction config: the two organiser-facing controls disagree, and
+   *  the WRONG answer (30) is a different number from the RIGHT one (35), so a
+   *  test that accidentally reads `perEntrantMinRest` cannot pass by
+   *  coincidence. `gapMinutes: 0` keeps the chained start arithmetic below to
+   *  `match + rest` with nothing else in it. */
+  const forkedCfg = (over: Partial<SchedulingConstraints> = {}): Cfg => ({
+    startAt: T0,
+    matchMinutes: 30,
+    gapMinutes: 0,
+    courts: ["C1"],
+    perEntrantMinRest: 30,
+    tz: "Europe/London",
+    window: { from: T0, to: T0 + 600 * MIN },
+    constraints: cons({ restMin: 35, ...over }),
+  });
+
+  /** Two cards on ONE entrant, so rest is the only thing separating them. */
+  const chained = (divisionId?: string): SchedulableFixture[] => [
+    { id: "a", home: "E1", away: "E2", roundNo: 1, ...(divisionId !== undefined ? { divisionId } : {}) },
+    { id: "b", home: "E1", away: "E3", roundNo: 1, ...(divisionId !== undefined ? { divisionId } : {}) },
+  ];
+
+  const captureWire = async (): Promise<{ read: () => SolveBuildInput }> => {
+    let captured: SolveBuildInput | undefined;
+    vi.spyOn(await import("./placement-client.ts"), "solveBuild").mockImplementation(async (input) => {
+      captured = input;
+      return okOutcome([{ fixtureId: "a", court: "C1", startAtMs: T0 }]);
+    });
+    return {
+      read: (): SolveBuildInput => {
+        expect(captured).toBeDefined();
+        return captured!;
+      },
+    };
+  };
+
+  /** The `minRestMinutes` the wire actually carries for a fixture — the MAX
+   *  over every `ruleGroup` that names it, which is how a pinned row's own rest
+   *  is resolved on the far side. */
+  const wireRestFor = (input: SolveBuildInput, fixtureId: string): number =>
+    Math.max(
+      0,
+      ...(input.ruleGroups ?? [])
+        .filter((g) => g.fixtureIds.includes(fixtureId))
+        .map((g) => g.minRestMinutes ?? 0),
+    );
+
+  it("sends MAX(perEntrantMinRest, restMin), not perEntrantMinRest", async () => {
+    const config = forkedCfg();
+    const fixtures = chained("D1");
+    // Derived from the resolver, never typed in: a change to `rest-floor.ts`
+    // moves this expectation with it.
+    const expected = restFloor(config, { divisionId: "D1" }).minutes;
+    // THE DIFFERENTIAL. Without this the case is satisfied by the bug's own
+    // constant and witnesses nothing (failure class 19).
+    expect(expected).not.toBe(config.perEntrantMinRest);
+    expect({ expected, raw: config.perEntrantMinRest }).toEqual({ expected: 35, raw: 30 });
+
+    const wire = await captureWire();
+    await buildSchedule({ fixtures, config });
+    expect(wireRestFor(wire.read(), "b")).toBe(expected);
+  }, 120_000);
+
+  it("keeps the Settings floor when it is the stricter of the two", async () => {
+    // The other direction of the MAX. A fix that merely swapped one raw read
+    // for the other would pass the case above and fail here.
+    const config: Cfg = { ...forkedCfg({ restMin: 20 }), perEntrantMinRest: 45 };
+    const expected = restFloor(config, { divisionId: "D1" }).minutes;
+    expect(expected).toBe(45);
+
+    const wire = await captureWire();
+    await buildSchedule({ fixtures: chained("D1"), config });
+    expect(wireRestFor(wire.read(), "b")).toBe(expected);
+  }, 120_000);
+
+  it("carries noBackToBack's derived floor, which no raw field holds at all", async () => {
+    // `matchMinutes + gapMinutes` is not stored anywhere — it is computed by
+    // the resolver — so this source can only reach the wire through it.
+    const config: Cfg = { ...forkedCfg({ restMin: 0, noBackToBack: true }), gapMinutes: 10 };
+    const expected = restFloor(config, { divisionId: "D1" }).minutes;
+    expect(expected).toBe(config.matchMinutes + config.gapMinutes);
+    expect(expected).toBeGreaterThan(config.perEntrantMinRest);
+
+    const wire = await captureWire();
+    await buildSchedule({ fixtures: chained("D1"), config });
+    expect(wireRestFor(wire.read(), "b")).toBe(expected);
+  }, 120_000);
+
+  it("resolves a division-keyed restByGroup per division rather than collapsing the board to one number", async () => {
+    // `restByDivisionForWire` is a per-division map, so a DIVISION-keyed
+    // `restByGroup` entry is expressible exactly. Two divisions with different
+    // answers is what proves it is not folded down to a single board-wide max:
+    // a collapse would give D2 the same 50 as D1.
+    const config = forkedCfg({ restByGroup: { D1: 50 } });
+    const fixtures: SchedulableFixture[] = [
+      { id: "a", home: "E1", away: "E2", roundNo: 1, divisionId: "D1" },
+      { id: "b", home: "E1", away: "E3", roundNo: 1, divisionId: "D1" },
+      { id: "c", home: "E4", away: "E5", roundNo: 1, divisionId: "D2" },
+    ];
+    const d1 = restFloor(config, { divisionId: "D1" }).minutes;
+    const d2 = restFloor(config, { divisionId: "D2" }).minutes;
+    expect({ d1, d2 }).toEqual({ d1: 50, d2: 35 });
+
+    const wire = await captureWire();
+    await buildSchedule({ fixtures, config });
+    const sent = wire.read();
+    expect({ b: wireRestFor(sent, "b"), c: wireRestFor(sent, "c") }).toEqual({ b: d1, c: d2 });
+  }, 120_000);
+
+  // THE ONE THAT ACTUALLY PROVES IT. Three sides have to agree — the lattice,
+  // the greedy placer and the verifier — and unit tests on each side
+  // individually were all green while this defect was live. So the stub solver
+  // below reads NOTHING but the wire payload and chains the second card at
+  // exactly the floor the payload claims; the REAL verifier inside
+  // `buildSchedule` then judges the board it produced. A wire that says 30
+  // where the verifier demands 35 reproduces the organiser's screen in-process:
+  // a board the solver considers finished, carrying `rest` conflicts.
+  it("produces a board with no rest conflict when restMin outranks perEntrantMinRest", async () => {
+    const config = forkedCfg();
+    const fixtures = chained("D1");
+    const owed = restFloor(config, { divisionId: "D1" }).minutes;
+    expect(owed).not.toBe(config.perEntrantMinRest);
+
+    let wireRest: number | undefined;
+    vi.spyOn(await import("./placement-client.ts"), "solveBuild").mockImplementation(async (input) => {
+      // A solver that honours precisely what it was told, and nothing else.
+      // `Math.max(0, ...[])` is 0, so a payload carrying no rest group at all
+      // stacks the two cards back to back — the loudest possible failure.
+      wireRest = wireRestFor(input, "b");
+      return okOutcome([
+        { fixtureId: "a", court: "C1", startAtMs: T0 },
+        { fixtureId: "b", court: "C1", startAtMs: T0 + (config.matchMinutes + wireRest) * MIN },
+      ]);
+    });
+
+    const out = await buildSchedule({ fixtures, config });
+
+    // THE ORGANISER-VISIBLE CLAIM, asserted FIRST so a regression reports the
+    // defect the way the toolbar does rather than an internal precondition.
+    expect(out.conflicts.filter((c) => c.reason === "rest")).toEqual([]);
+    // And the VALUE, not merely the absence of a complaint (failure class 19):
+    // the shipped board separates the two cards by exactly what is owed.
+    const byId = new Map(out.assignments.map((a) => [a.fixtureId, a]));
+    const gapMinutes = (byId.get("b")!.startAt - byId.get("a")!.endAt) / MIN;
+    expect(gapMinutes).toBe(owed);
+    // Non-vacuity: the stub really was reached, and really did read the wire.
+    expect(wireRest).toBe(owed);
   }, 120_000);
 });

@@ -108,6 +108,11 @@ import {
   type VerifyConfig,
 } from "./calendar.ts";
 import type { HardConstraint } from "./constraints.ts";
+// THE shared rest resolver, and a LEAF module by design (it imports nothing),
+// so this costs no cycle. `calendar.ts`'s `effectiveRestMinutes` is a thin
+// wrapper over the same function — asked here directly because this call site
+// wants the number for a GROUP the caller names, not for a fixture it holds.
+import { restFloor } from "./rest-floor.ts";
 import { dayKeyInTz } from "./tz.ts";
 import { repairUniverse } from "./repair-domain.ts";
 // `placement-client.ts` is imported dynamically at the call site inside
@@ -1775,18 +1780,33 @@ async function solveBuild(input: BuildInput): Promise<BuildResult> {
   const hard = effectiveHard(verifyConfig);
 
   /**
-   * `perEntrantMinRest` is a GLOBAL per-entrant rest, and the wire has no
-   * dedicated field for it — a division-scoped rest reaches the wire only as
-   * a `RuleGroup` (see `buildRuleGroups`, `restByDivisionForWire` below).
-   * So it has to be folded into the per-division map, or the solver never hears
-   * about it at all.
+   * An entrant's rest floor is a MAX over FOUR configurable sources
+   * (`rest-floor.ts`, #459) — `perEntrantMinRest` (Settings), `restMin`
+   * (Constraints), a `restByGroup` override, and `noBackToBack` — and the wire
+   * has no dedicated field for any of them: a rest reaches the solver only as a
+   * `RuleGroup` (see `buildRuleGroups`, `restByDivisionForWire` below). So the
+   * RESOLVED floor has to be folded into the per-division map, or the solver
+   * never hears about it at all.
    *
-   * IT DID NOT, AND THAT SHIPPED A WRONG BOARD. Reproduced 2026-08-10 by
-   * `schedule-solver-telemetry.test.ts`'s "forwards the pinned set an infeasible
-   * proof is about": two cards sharing an entrant, pinned 30 minutes apart under
-   * `perEntrantMinRest: 30`. z3 received the rule and proved the board
-   * INFEASIBLE, naming the two contradictory pins. The placement service, never
-   * sent the rule, saw nothing wrong and returned **`already_optimal`**.
+   * NOTHING WAS FOLDED IN AT ALL UNTIL 2026-08-10, AND THAT SHIPPED A WRONG
+   * BOARD. Reproduced by `schedule-solver-telemetry.test.ts`'s "forwards the
+   * pinned set an infeasible proof is about": two cards sharing an entrant,
+   * pinned 30 minutes apart under `perEntrantMinRest: 30`. z3 received the rule
+   * and proved the board INFEASIBLE, naming the two contradictory pins. The
+   * placement service, never sent the rule, saw nothing wrong and returned
+   * **`already_optimal`**.
+   *
+   * THAT FIX COVERED `perEntrantMinRest` AND NOTHING ELSE, so the identical
+   * defect shipped a SECOND time through the three remaining sources. Observed
+   * by hand 2026-09-03 (Task 7): Settings "Minimum rest per entrant" 30 +
+   * Constraints "Minimum rest" 35 auto-scheduled as "Optimised … SCHEDULED
+   * 15/15" and the toolbar grew "⚠ 32 conflicts", every one of kind `rest` —
+   * because the solver was told 30, honestly produced 30, and the verifier
+   * measured against MAX(30, 35). Lowering the Constraints field back to 30
+   * WITHOUT RE-SOLVING cleared all 32, which is the placer/verifier fork
+   * stated as an experiment. So this asks `restFloor` rather than reading any
+   * field: a FIFTH source added there must reach the wire without anyone
+   * remembering that this line exists.
    *
    * `already_optimal` is the damaging status, not a harmless one: an organiser
    * told their schedule is optimal has no reason to look again. And nothing
@@ -1798,6 +1818,19 @@ async function solveBuild(input: BuildInput): Promise<BuildResult> {
    * constraints, and the binding one is the larger. Taking the division's value
    * alone would drop the global floor; taking the global alone would drop a
    * stricter divisional rule.
+   *
+   * PER-DIVISION IS THE FINEST GRAIN THIS MAP HAS, and `restFloor` is asked
+   * with `{ divisionId }` alone for that reason — never with the fixture's
+   * `poolId`. A pool-keyed `restByGroup` entry has nowhere to land here: the
+   * key space is division ids, so folding a pool's stricter floor in would
+   * raise it for every SIBLING POOL of the same division too, which
+   * over-constrains cards that owe nothing and can turn a feasible board
+   * infeasible. Under-stating it is the lesser harm — `rest` is warn-only at
+   * the verifier gate — and collapsing a per-group floor into a number the
+   * organiser never set is the shape of defect this whole block exists to
+   * undo. (`RuleGroup` is a set of FIXTURE IDS and could carry a pool-scoped
+   * group; it is `restByDivision`'s division-keyed record, the parameter
+   * `buildRuleGroups` takes, that cannot express one.)
    *
    * Every division ON THIS BOARD gets an entry, including `""` — the id used for
    * a fixture with no division (see `divisionId: f.divisionId ?? ""` below).
@@ -1811,16 +1844,21 @@ async function solveBuild(input: BuildInput): Promise<BuildResult> {
    * field 10), a field `ruleGroupIndices` cannot name, so a pin could never
    * be attributed it. See `buildRuleGroups`'s own docstring.
    */
-  const restFloor = config.perEntrantMinRest ?? 0;
   const restByDivisionForWire = ((): Record<string, number> | undefined => {
     const declared = verifyConfig.restByDivision;
-    if (restFloor <= 0) return declared;
     const merged: Record<string, number> = { ...(declared ?? {}) };
+    let anyFloor = false;
     for (const f of freeFixtures) {
-      const division = f.divisionId ?? "";
-      merged[division] = Math.max(merged[division] ?? 0, restFloor);
+      // THE shared resolver, not `config.perEntrantMinRest` — see the block
+      // comment above. Per FIXTURE, and asked with that fixture's own division,
+      // because that is exactly what `slotFixtures` (`restForMs`) and
+      // `validateAssignments` (`pairRestMinutesWith`) ask for the same card.
+      const minutes = restFloor(verifyConfig, { divisionId: f.divisionId }).minutes;
+      if (minutes <= 0) continue;
+      anyFloor = true;
+      merged[f.divisionId ?? ""] = Math.max(merged[f.divisionId ?? ""] ?? 0, minutes);
     }
-    return merged;
+    return anyFloor ? merged : declared;
   })();
 
   // C1/B5 (#21). Fed BOTH the resolved `restByDivisionForWire` (so a
