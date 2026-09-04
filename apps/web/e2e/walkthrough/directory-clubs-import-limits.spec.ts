@@ -36,9 +36,14 @@ import {
  * resolves a missing row to 0 and refuses everything, so a deleted row would
  * otherwise surface as a baffling 402 three steps downstream instead of a
  * named failure here. The override then pins a small deterministic cap so the
- * CSVs stay tiny — the live community `clubs.max` is 20-ish and the live
- * `import.bulk` is 50, and deriving the journey from those would mean uploading
- * fifty rows to make a point about the fifty-first.
+ * CSVs stay tiny. The live community numbers at the time of writing are
+ * `clubs.max` 5 and `import.bulk` 50 (queried from `plan_entitlements`, not read
+ * off a migration — `imports.ts`'s own "Community capped at 20 rows/file"
+ * comment is stale by a factor of 2.5). Driving `import.bulk` from its real
+ * value would mean uploading fifty rows to make a point about the fifty-first;
+ * and driving either from the catalog would make this spec's row arithmetic a
+ * hostage to the next re-pricing, which is a change that should move the
+ * CATALOG assertion above and nothing else.
  *
  * `setEntitlementOverrideSql` writes `org_entitlement_overrides` by raw SQL and
  * invalidates NOTHING, while `lib/entitlements.ts` caches every resolution for
@@ -51,9 +56,11 @@ import {
  *
  * ## What the "club count is unchanged" assertion actually pins
  *
- * It pins that the refusal WROTE NOTHING, and it is genuinely load-bearing:
- * moving `executePlan` ahead of the cap check so its writes land and are then
- * refused turns it red while every other assertion here stays green (measured).
+ * It pins that the refusal WROTE NOTHING, and it is genuinely load-bearing.
+ * Measured: hoisting `executePlan` ABOVE the cap check and raising the refusal
+ * after the transaction has committed — the "writes land, then we say no" shape
+ * — leaves the 402 and both `data-feature` assertions green and fails HERE,
+ * `Expected: 2 / Received: 5`. Nothing else in this spec notices.
  *
  * What it does NOT isolate is atomicity. In this code path the `clubs.max`
  * check is a PRE-FLIGHT aggregate — `count(*) + plannedClubs`, evaluated before
