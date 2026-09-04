@@ -117,6 +117,23 @@ function toRegistrationPlayer(person: PackPerson, isCaptain: boolean): Registrat
   };
 }
 
+/** Mirrors `isMinor`/`ageAt` (apps/web/src/lib/registration-rules.ts:56-68)
+ *  IDENTICALLY to `validate-pack.ts`'s own `isMinorAt` — this file cannot
+ *  import `apps/web` from PRODUCTION code either (same constraint,
+ *  `validate-pack.ts:153`'s comment). Whole years between `dob` and `now`,
+ *  decremented if `now` falls before the birthday; a missing dob is never
+ *  passed here (callers guard it), unlike `validate-pack.ts`'s version
+ *  which tolerates one because it also runs over roster members that may
+ *  have none. */
+function isMinorAt(dob: string, now: Date): boolean {
+  const born = new Date(`${dob}T00:00:00Z`);
+  let age = now.getUTCFullYear() - born.getUTCFullYear();
+  const beforeBirthday =
+    now.getUTCMonth() < born.getUTCMonth() || (now.getUTCMonth() === born.getUTCMonth() && now.getUTCDate() < born.getUTCDate());
+  if (beforeBirthday) age -= 1;
+  return age < 18;
+}
+
 /**
  * Resolves one `PackRegistrationEntry` + the division's `PackRegistrationBlock`
  * into a wire-ready `RegistrationEntry` for `Captain.enter()`.
@@ -128,12 +145,29 @@ function toRegistrationPlayer(person: PackPerson, isCaptain: boolean): Registrat
  * free-agent entry needs a PackSchema addition, which is a B16-owned
  * escalation, not this task's to invent. `answers` is likewise never set —
  * no pack field carries division custom-question answers either.
+ *
+ * LIVE-CRASH FIX (B03r-repins-2026-09-03.md dispatch, "fix a live-only
+ * crash in the registration runner"): this function used to set
+ * `registeringSelf: true` unconditionally for every individual entry with
+ * no guardian fields ever set, and `contact.dob` could be null. Against a
+ * real server that is a guaranteed 400 (`PublicRegisterGroupRequest`'s
+ * superRefine 400s ANY self-registering entry lacking `contact.dob`) or a
+ * 422 (registration-submit.ts 422s a self-registering MINOR with no
+ * guardian consent/name) — caught only by a live run, never by a unit
+ * suite that never called this function at all.
+ *
+ * `now` is a required parameter, never `new Date()` called in here directly
+ * — same reason `validatePack` computes it ONCE and threads it down
+ * (`checkJoinConsentMatchesMinority`'s own doc comment): every entry in one
+ * run is judged against the same instant, and a test can pin an exact date
+ * instead of racing the wall clock.
  */
 export function buildRegistrationEntry(
   entry: PackRegistrationEntry,
   block: PackRegistrationBlock,
   personsByRef: ReadonlyMap<string, PackPerson>,
   runTag: string,
+  now: Date,
 ): RegistrationEntry {
   const captain = personsByRef.get(entry.captain);
   if (captain === undefined) {
@@ -158,8 +192,19 @@ export function buildRegistrationEntry(
     // A single-player entry: the captain IS the entrant. `registeringSelf`
     // lets the server default `selfPlayerIndex` to 0 (`RegistrationEntry`'s
     // own doc comment) rather than this file re-deriving that default.
+    //
+    // Guardian fields (LIVE-CRASH FIX, see this function's own doc comment
+    // above): a missing dob is treated as adult, never as its own
+    // violation here — same convention `isMinorAt`'s callers use elsewhere
+    // in this codebase (`joinTeamEntry`'s guardian gate itself does the
+    // same, registration-submit.ts:1215) — because the OFFLINE stage-0
+    // check (`validate-pack.ts`'s widened `checkRegistrationRequiresDobGender`)
+    // is what is supposed to catch a missing dob before this ever runs; a
+    // pack that slipped past stage-0 anyway still gets an honest (if
+    // dob-less) request here rather than this function inventing a value.
+    const minor = captain.dob != null && isMinorAt(captain.dob, now);
     return {
-      contact,
+      contact: minor ? { ...contact, guardianConsent: true, guardianName: `${captain.fullName}'s guardian` } : contact,
       privacyConsent: true,
       entrantKind: "individual",
       players: [toRegistrationPlayer(captain, true)],
@@ -175,6 +220,17 @@ export function buildRegistrationEntry(
     teamName: block.entrantKind === "team" ? `Team ${entry.extKey}` : undefined,
     partnerName: block.entrantKind === "pair" ? roster[0]?.fullName : undefined,
     freeAgent: false,
+    // `registeringSelf` deliberately left UNSET here (LIVE-CRASH FIX
+    // dispatch, "consider whether registeringSelf should be unconditionally
+    // true at all"): `entry.captain` means "the person entering this
+    // team/pair", not "the contact wants to be linked as one of the
+    // roster's own player rows" — `PackRegistrationEntry` has no field
+    // expressing that second, DIFFERENT intent for team/pair kinds. An
+    // individual entry's sole player IS the contact by construction (no
+    // such ambiguity is possible); a team/pair's roster is not. Claiming
+    // registeringSelf:true here without a pack field to back it would (a)
+    // require a dob the pack never promised for this kind and (b) silently
+    // link the contact to a player row the pack never asked for.
     players: allPersons.map((person) => toRegistrationPlayer(person, person.ref === entry.captain)),
   };
 }
@@ -283,12 +339,16 @@ export async function applyOrganiserActions(input: ApplyOrganiserActionsInput): 
 /** One entry's submit-time result, as `Captain.enter()` returned it
  *  (`EntryOutcome`) — captured by the runner immediately after `enter()`,
  *  keyed by the pack's own `extKey`. `registrationId` is `""` for
- *  `rejected_eligibility` (`EntryOutcome.ref`'s own doc comment: an
- *  eligibility rejection happens BEFORE any row is inserted). */
+ *  `rejected_eligibility` AND for `"unexpected_error"` (`EntryOutcome.ref`'s
+ *  own doc comment: an eligibility rejection happens BEFORE any row is
+ *  inserted, and an unexpected 4xx never gets one either). `errorDetail`
+ *  mirrors `EntryOutcome.errorDetail` — present only for
+ *  `"unexpected_error"`. */
 export interface FunnelEntryOutcome {
   readonly extKey: string;
   readonly registrationId: string;
   readonly submitStatus: EntryOutcomeStatus;
+  readonly errorDetail?: { readonly httpStatus: number; readonly body: unknown };
 }
 
 /**
@@ -424,6 +484,23 @@ export function evaluateFunnel(
       continue;
     }
 
+    // LIVE-CRASH FIX (B03r-repins-2026-09-03.md dispatch): an unexpected
+    // 4xx at submit has no final row to classify against (registrationId is
+    // "" — `EntryOutcome.ref`'s own doc comment) and is never one of the
+    // four `expect` values, so it is its OWN finding, reported here rather
+    // than falling into `classifyFunnelOutcome`'s "no final row" throw
+    // (which would crash the WHOLE evaluateFunnel call over one entry).
+    if (outcome.submitStatus === "unexpected_error") {
+      findings.push({
+        code: "funnel.unexpected_error",
+        extKey: entry.extKey,
+        message:
+          `entry "${entry.extKey}" got an unexpected HTTP ${outcome.errorDetail?.httpStatus ?? "?"} at submit — ` +
+          `${JSON.stringify(outcome.errorDetail?.body)}`,
+      });
+      continue;
+    }
+
     const row = outcome.registrationId ? rows.get(outcome.registrationId) : undefined;
     const actual = classifyFunnelOutcome(outcome, row);
 
@@ -547,6 +624,10 @@ function consentFor(person: PackPerson, consent: "granted" | "guardian"): Consen
 
 export async function runRegistrationDivision(input: DivisionRunnerInput): Promise<DivisionRunnerResult> {
   const { block, personsByRef, target, organiser, runTag } = input;
+  // Computed ONCE — same convention `validatePack` uses for its own wall-
+  // clock `now` (checkJoinConsentMatchesMinority's doc comment): every
+  // entry in this run is judged against the same instant.
+  const now = new Date();
 
   // 1. Organiser configures — BEFORE anyone can enter.
   await organiser.configureRegistration(input.divisionId, {
@@ -563,16 +644,25 @@ export async function runRegistrationDivision(input: DivisionRunnerInput): Promi
   //    the pack declares this entry pays up front. `Promise.all` is correct
   //    HERE (unlike the organiser-action loop below): each entry is an
   //    independent cart, and nothing about one captain's submit depends on
-  //    another's.
+  //    another's. `enter()` itself never throws for a 4xx it doesn't
+  //    specifically recognise any more (drivers/http.ts's widened `enter()`)
+  //    — it RETURNS an `"unexpected_error"` outcome instead, which is what
+  //    keeps this `Promise.all` from aborting every OTHER captain's entry
+  //    over one bad request (the B03r live-crash regression).
   const outcomes = new Map<string, FunnelEntryOutcome>();
   const captainByExtKey = new Map<string, Captain>();
   await Promise.all(
     block.entries.map(async (entry) => {
       const captain = input.makeCaptain(entry.extKey);
       captainByExtKey.set(entry.extKey, captain);
-      const registrationEntry = buildRegistrationEntry(entry, block, personsByRef, runTag);
+      const registrationEntry = buildRegistrationEntry(entry, block, personsByRef, runTag, now);
       const outcome = await captain.enter(registrationEntry, target);
-      outcomes.set(entry.extKey, { extKey: entry.extKey, registrationId: outcome.ref, submitStatus: outcome.status });
+      outcomes.set(entry.extKey, {
+        extKey: entry.extKey,
+        registrationId: outcome.ref,
+        submitStatus: outcome.status,
+        errorDetail: outcome.errorDetail,
+      });
       if (entry.pay && outcome.ref) {
         await captain.pay({ registrationId: outcome.ref });
       }

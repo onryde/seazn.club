@@ -4,13 +4,32 @@
 // into a shared `calls[]` array, exactly what "DB-free" means for a file
 // whose whole job is orchestrating those interfaces.
 import { describe, expect, it } from "vitest";
-import type { Captain, Organiser, PayableEntry } from "../drivers/types.ts";
-import type { PackRegistrationBlock, PackRegistrationEntry } from "../pack-schema.ts";
+// The B03r live-crash fix (register.ts's own header comment): the real
+// product schema, imported DIRECTLY — `apps/web/src/server/api-v1/
+// schemas.ts` is deliberately engineered to be importable from a plain
+// `node --experimental-strip-types` script with no bundler/tsconfig `paths`
+// resolution ("NOT server-only ... shared with the OpenAPI generator
+// script", schemas.ts's own header; its one internal import that could have
+// needed the `@/` alias is RELATIVE on purpose, see schemas.ts:11-19).
+// `scripts/openapi-gen.ts` already imports this file's sibling
+// (`openapi.ts`) the identical way — confirmed by actually running this
+// import under both `node --experimental-strip-types` and vitest before
+// relying on it here, not just reading the comment (a comment is a
+// hypothesis, not evidence). Parsing the built body THROUGH this schema is
+// the only assertion that can catch "the API 400s/422s this shape" — a
+// hand-typed expectation of the wire shape would just restate the bug.
+import { PublicRegisterGroupRequest } from "../../../../apps/web/src/server/api-v1/schemas.ts";
+import { toWireSubmitBody } from "../drivers/http.ts";
+import type { Captain, Organiser, PayableEntry, RegistrationDivisionTarget } from "../drivers/types.ts";
+import type { PackPerson, PackRegistrationBlock, PackRegistrationEntry } from "../pack-schema.ts";
 import {
   applyOrganiserActions,
+  buildRegistrationEntry,
+  captainEmail,
   classifyFunnelOutcome,
   evaluateFunnel,
   resolveEntryMode,
+  runRegistrationDivision,
   SUITE_13_KEY,
   type CliEntryFlag,
   type EntryMode,
@@ -435,5 +454,226 @@ describe("applyOrganiserActions", () => {
     });
 
     expect(calls).toEqual(["act:assign_free_agent:reg-fa:reg-team-1"]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// captainEmail
+// ---------------------------------------------------------------------------
+
+describe("captainEmail", () => {
+  it("is deterministic per entry per run", () => {
+    expect(captainEmail("e-1", "run7")).toBe("bench-captain-e-1-run7@example.com");
+    expect(captainEmail("e-1", "run7")).toBe(captainEmail("e-1", "run7"));
+  });
+
+  it("sanitizes characters outside [A-Za-z0-9_.-]", () => {
+    expect(captainEmail("e:1/x y", "run7")).toBe("bench-captain-e-1-x-y-run7@example.com");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// buildRegistrationEntry — the B03r live-crash fix. `PublicRegisterGroupRequest`'s
+// superRefine (schemas.ts) 400s any self-registering entry lacking
+// contact.dob; registration-submit.ts separately 422s a self-registering
+// MINOR lacking guardian consent/name. Every case here parses the built
+// entry's WIRE body (`toWireSubmitBody`, the SAME function `enter()` itself
+// uses — never a body hand-rolled in this file) through the real schema.
+// ---------------------------------------------------------------------------
+
+const RUN_TAG = "runtag1";
+const NOW = new Date("2024-06-15T00:00:00Z");
+const TARGET: RegistrationDivisionTarget = {
+  orgSlug: "acme",
+  competitionSlug: "spring-open",
+  divisionId: "00000000-0000-0000-0000-000000000000",
+};
+
+function person(ref: string, fullName: string, opts: { dob?: string; gender?: "m" | "f" | "x" } = {}): PackPerson {
+  return { ref, fullName, lane: "player", ...opts };
+}
+
+function kindBlock(entrantKind: PackRegistrationBlock["entrantKind"], entries: PackRegistrationEntry[]): PackRegistrationBlock {
+  return {
+    category: "open",
+    entrantKind,
+    feeCents: 0,
+    approval: "auto",
+    entries,
+    joins: [],
+    organiser: [],
+    expect: { entrants: 0, waitlisted: 0, rejected: 0, paidCents: 0 },
+  };
+}
+
+function assertParsesAsPublicRequest(entryBody: unknown): void {
+  const result = PublicRegisterGroupRequest.safeParse(entryBody);
+  expect(result.success, result.success ? "" : JSON.stringify((result as { error: { issues: unknown } }).error.issues)).toBe(true);
+}
+
+describe("buildRegistrationEntry", () => {
+  it("an ADULT captain, individual entry: registeringSelf true, dob carried, NO guardian fields — parses through PublicRegisterGroupRequest", () => {
+    const adult = person("p-adult", "Ada Lovelace", { dob: "1990-01-01" });
+    const personsByRef = new Map([[adult.ref, adult]]);
+    const packEntry: PackRegistrationEntry = { extKey: "e-adult", captain: "p-adult", roster: [], pay: false, expect: "entrant" };
+    const b = kindBlock("individual", [packEntry]);
+
+    const built = buildRegistrationEntry(packEntry, b, personsByRef, RUN_TAG, NOW);
+
+    expect(built.registeringSelf).toBe(true);
+    expect(built.contact.dob).toBe("1990-01-01");
+    expect(built.contact.guardianConsent).toBeUndefined();
+    expect(built.contact.guardianName).toBeUndefined();
+
+    assertParsesAsPublicRequest(toWireSubmitBody(built, TARGET));
+  });
+
+  it("a MINOR captain, individual entry: guardian_consent + guardian_name set — exactly what registration-submit.ts's 422 requires", () => {
+    const minor = person("p-minor", "Alex Minor", { dob: "2015-01-01" }); // 9 at NOW (2024-06-15)
+    const personsByRef = new Map([[minor.ref, minor]]);
+    const packEntry: PackRegistrationEntry = { extKey: "e-minor", captain: "p-minor", roster: [], pay: false, expect: "entrant" };
+    const b = kindBlock("individual", [packEntry]);
+
+    const built = buildRegistrationEntry(packEntry, b, personsByRef, RUN_TAG, NOW);
+
+    expect(built.registeringSelf).toBe(true);
+    expect(built.contact.dob).toBe("2015-01-01");
+    expect(built.contact.guardianConsent).toBe(true);
+    expect(built.contact.guardianName).toBeTruthy();
+
+    const wire = toWireSubmitBody(built, TARGET) as { contact: { guardian_consent?: boolean; guardian_name?: string | null } };
+    assertParsesAsPublicRequest(wire);
+    // The wire keys registration-submit.ts:562-577 actually reads.
+    expect(wire.contact.guardian_consent).toBe(true);
+    expect(wire.contact.guardian_name).toBeTruthy();
+  });
+
+  it("a captain who turns 18 exactly at NOW is adult, not minor — the boundary", () => {
+    const justAdult = person("p-18", "Just Adult", { dob: "2006-06-15" }); // exactly 18 at NOW
+    const personsByRef = new Map([[justAdult.ref, justAdult]]);
+    const packEntry: PackRegistrationEntry = { extKey: "e-18", captain: "p-18", roster: [], pay: false, expect: "entrant" };
+    const b = kindBlock("individual", [packEntry]);
+
+    const built = buildRegistrationEntry(packEntry, b, personsByRef, RUN_TAG, NOW);
+
+    expect(built.contact.guardianConsent).toBeUndefined();
+    expect(built.contact.guardianName).toBeUndefined();
+  });
+
+  it("a captain one day short of 18 at NOW is still a minor", () => {
+    const almost18 = person("p-almost18", "Almost 18", { dob: "2006-06-16" }); // 18 tomorrow, not yet today
+    const personsByRef = new Map([[almost18.ref, almost18]]);
+    const packEntry: PackRegistrationEntry = { extKey: "e-almost18", captain: "p-almost18", roster: [], pay: false, expect: "entrant" };
+    const b = kindBlock("individual", [packEntry]);
+
+    const built = buildRegistrationEntry(packEntry, b, personsByRef, RUN_TAG, NOW);
+
+    expect(built.contact.guardianConsent).toBe(true);
+  });
+
+  it("a TEAM entry: registeringSelf is left UNSET, not unconditionally true — a captain entering a team is not necessarily registering themselves, and the pack model has no field expressing that intent for team/pair kinds", () => {
+    const captain = person("p-cap", "Cap Tain"); // no dob at all
+    const mate = person("p-mate", "Team Mate", { gender: "m" });
+    const personsByRef = new Map([
+      [captain.ref, captain],
+      [mate.ref, mate],
+    ]);
+    const packEntry: PackRegistrationEntry = { extKey: "e-team", captain: "p-cap", roster: ["p-mate"], pay: false, expect: "entrant" };
+    const b = kindBlock("team", [packEntry]);
+
+    const built = buildRegistrationEntry(packEntry, b, personsByRef, RUN_TAG, NOW);
+
+    expect(built.registeringSelf).toBeUndefined();
+    expect(built.entrantKind).toBe("team");
+    expect(built.players).toHaveLength(2);
+    // No dob anywhere, no self-registration claimed, no age band declared —
+    // parses fine even though the captain's own dob is unknown.
+    assertParsesAsPublicRequest(toWireSubmitBody(built, TARGET));
+  });
+
+  it("a PAIR entry: registeringSelf unset too; partnerName comes from roster[0]", () => {
+    const captain = person("p-cap2", "Cap Two");
+    const partner = person("p-partner", "Part Ner");
+    const personsByRef = new Map([
+      [captain.ref, captain],
+      [partner.ref, partner],
+    ]);
+    const packEntry: PackRegistrationEntry = { extKey: "e-pair", captain: "p-cap2", roster: ["p-partner"], pay: false, expect: "entrant" };
+    const b = kindBlock("pair", [packEntry]);
+
+    const built = buildRegistrationEntry(packEntry, b, personsByRef, RUN_TAG, NOW);
+
+    expect(built.registeringSelf).toBeUndefined();
+    expect(built.partnerName).toBe("Part Ner");
+    assertParsesAsPublicRequest(toWireSubmitBody(built, TARGET));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// runRegistrationDivision — the SPECIFIC B03r regression: a 4xx from one
+// captain must produce a funnel finding and must NOT abort the OTHER
+// captains' entries (register.ts's own header comment on the fix).
+// ---------------------------------------------------------------------------
+
+describe("runRegistrationDivision — one captain's unexpected 4xx does not abort the others", () => {
+  it("the bad entry becomes a funnel.unexpected_error finding; the good entry still completes and reaches the entrant hand-off", async () => {
+    const goodEntry: PackRegistrationEntry = { extKey: "good", captain: "p-good", roster: [], pay: false, expect: "entrant" };
+    const badEntry: PackRegistrationEntry = { extKey: "bad", captain: "p-bad", roster: [], pay: false, expect: "entrant" };
+    const b: PackRegistrationBlock = { ...kindBlock("individual", [goodEntry, badEntry]), expect: { entrants: 1, waitlisted: 0, rejected: 0, paidCents: 0 } };
+
+    const goodPerson = person("p-good", "Good Person", { dob: "1990-01-01" });
+    const badPerson = person("p-bad", "Bad Person", { dob: "1990-01-01" });
+    const personsByRef = new Map([
+      [goodPerson.ref, goodPerson],
+      [badPerson.ref, badPerson],
+    ]);
+
+    const organiser: Organiser = {
+      async configureRegistration() {},
+      async act() {},
+    };
+    const captainCalls: string[] = [];
+    // Simulates the ALREADY-FIXED http driver's contract: enter() never
+    // throws for a 4xx it doesn't specifically recognise, it RETURNS an
+    // "unexpected_error" outcome (drivers/http.ts's own widened enter()).
+    // This test's job is the register.ts HALF of the fix: proving the
+    // runner/oracle can consume that outcome without crashing or aborting
+    // its sibling captain.
+    const makeCaptain = (entryExtKey: string): Captain => ({
+      async enter() {
+        captainCalls.push(entryExtKey);
+        if (entryExtKey === "bad") {
+          return { status: "unexpected_error", ref: "", errorDetail: { httpStatus: 400, body: { error: { code: "SOME_OTHER_4XX" } } } };
+        }
+        return { status: "approved", ref: "r-good" };
+      },
+      async pay() {},
+    });
+
+    const result = await runRegistrationDivision({
+      divisionRef: "div-1",
+      divisionId: "d1",
+      target: TARGET,
+      block: b,
+      personsByRef,
+      runTag: RUN_TAG,
+      organiser,
+      makeCaptain,
+      makePlayer: () => {
+        throw new Error("no joins in this fixture");
+      },
+      resolveJoinCode: async () => {
+        throw new Error("no joins in this fixture");
+      },
+      fetchFinalRows: async () => new Map([["r-good", { registrationId: "r-good", status: "confirmed" as const, amountCents: 0, paymentIntentId: null }]]),
+    });
+
+    // BOTH captains' enter() ran — the bad one's 4xx did not abort the Promise.all.
+    expect(captainCalls.sort()).toEqual(["bad", "good"]);
+    expect(result.funnel.findings.some((f) => f.code === "funnel.unexpected_error" && f.extKey === "bad")).toBe(true);
+    expect(result.funnel.ok).toBe(false);
+    // The good entry still made it all the way to the entrant hand-off.
+    expect(result.entrantsByExtKey.get("good")).toBe("r-good");
+    expect(result.entrantsByExtKey.has("bad")).toBe(false);
   });
 });
