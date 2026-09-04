@@ -45,9 +45,10 @@
 // month of the plan that dominates it is a product nobody rational buys. It was
 // invisible because every existing bound compared the rungs against the ANNUAL
 // price, where $15 < $99 passes comfortably.
-import { describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it } from "vitest";
 import seed from "../stripe-plans.json";
 import { SUPPORTED_CURRENCIES } from "@/lib/currency";
+import { sql } from "@/lib/db";
 
 interface Amount {
   unit_amount: number;
@@ -380,5 +381,188 @@ describe("stripe-plans ladder", () => {
       if (2 * l >= annual) faults.push(`${currency}: 2 x ${l} = ${2 * l} >= annual ${annual}`);
     }
     expect(faults).toEqual([]);
+  });
+});
+
+// ── The credit packs against the plan that already includes credits ──────────
+//
+// Added W3 (2026-09-04). Every rule above compares a subscription to a pass —
+// packaging against packaging. Nothing compared a CONSUMABLE to the plan whose
+// allowance it tops up, and that gap is precisely what let the INR credit packs
+// sit at twice the multiple every other market paid, for a whole wave: the
+// plans were re-anchored to per-market set points and the packs were carried
+// forward as "unchanged", which leaves a dollar-priced SKU in a rupee-priced
+// catalogue. Nothing was red, because nothing was looking.
+//
+// THE INVARIANT IS A RATIO, NOT AN AMOUNT. Every amount in this seed is a SET
+// price point per market (v3/07 §4, never an FX conversion), so no two
+// currencies' absolute numbers are comparable at all. What IS one decision,
+// made once and merely expressed four times, is how a pack's per-credit price
+// relates to the per-credit rate of the plan that includes credits. So each
+// market's pack-to-plan multiple is checked against the seed's OWN anchor
+// currency's multiple. A re-anchoring that moves the plans and forgets the
+// packs moves that multiple in exactly one market — which is the shape this
+// rule sees and no absolute bound can.
+//
+// BOTH SIDES ARE READ FROM THEIR SOURCE OF TRUTH: the pack amount and its
+// `credits` grant from the seed, the plan's included allowance from the live
+// `plan_entitlements` matrix. That allowance is not a stable number — V392 cut
+// Pro from 60 to 35 and V394 from 35 to 25 inside a single wave — so a count
+// typed here would already have been stale twice, and would have moved this
+// rule's verdict without anyone repricing anything. It is why this block needs
+// a database when the six rules above do not; it carries the repo's standard
+// HAS_DB guard and skips cleanly without one, the same way every other
+// DB-backed suite here does.
+
+const HAS_DB = !!process.env.DATABASE_URL;
+
+interface Pack {
+  key: string;
+  /** Our own field, never sent to Stripe: the credits this pack grants. */
+  credits: number;
+  price: Amount & { lookup_key: string };
+}
+const packs = (seed as unknown as { packs?: Pack[] }).packs ?? [];
+
+/** The seed's own declared base currency — the one `point()` reads out of
+ *  `unit_amount` — used as the anchor every other market is compared against.
+ *  Read from the file rather than typed here, so re-anchoring the catalogue
+ *  itself moves the reference with it. */
+const ANCHOR_CURRENCY: string = seed.currency;
+
+/**
+ * How far a market's pack-to-plan multiple may sit from the anchor market's.
+ *
+ * A band rather than the equality the charm rule uses, because these are set
+ * price points and not conversions: the packs are priced in whole units of
+ * each currency against a plan priced on the charm grid, so a few points of
+ * drift is the arithmetic and not a decision. Today the widest legitimate gap
+ * is gbp at +9.1% (£8 against a £10.99 plan), then eur at +6.2%. A quarter
+ * leaves that room twice over and still refuses the fault this rule exists
+ * for, which was a clean 2.00x.
+ */
+const PACK_MULTIPLE_TOLERANCE = 0.25;
+
+/** One pack's price per credit in one market, in minor units. */
+const packPerCredit = (pack: Pack, currency: string): number =>
+  point(pack.price, currency) / pack.credits;
+
+/** A pack's per-credit price as a multiple of the per-credit rate a plan's own
+ *  monthly price implies. Both sides in the same market, so the market's set
+ *  points cancel and what is left is the product decision. */
+const packMultiple = (
+  pack: Pack,
+  plan: { price: TieredPrice; included: number },
+  currency: string,
+): number => packPerCredit(pack, currency) / (point(plan.price, currency) / plan.included);
+
+/** `ai.credits.monthly` for a plan key, read from the live matrix. Returns null
+ *  for a plan that carries no row (the Event Pass rungs do not — their grant is
+ *  one-time), which is not a fault, only a plan this rule cannot speak about. */
+async function includedCredits(planKey: string): Promise<number | null> {
+  const [row] = await sql<{ int_value: number | null }[]>`
+    select int_value from plan_entitlements
+     where plan_key = ${planKey} and feature_key = 'ai.credits.monthly'`;
+  return row?.int_value ?? null;
+}
+
+/** Every seed plan the comparison can actually be made against: a graduated
+ *  plan that carries a monthly credit allowance. Derived on both sides, so a
+ *  second such plan is checked the day it lands. */
+async function ratedPlans(): Promise<Array<{ key: string; price: TieredPrice; included: number }>> {
+  const out: Array<{ key: string; price: TieredPrice; included: number }> = [];
+  for (const plan of tieredPlans) {
+    const included = await includedCredits(plan.key);
+    if (typeof included === "number" && included > 0) {
+      out.push({ key: plan.key, price: plan.prices.monthly, included });
+    }
+  }
+  return out;
+}
+
+afterAll(async () => {
+  if (!HAS_DB) return;
+  const g = globalThis as { _sql?: { end(): Promise<void> } };
+  const client = g._sql;
+  g._sql = undefined;
+  await client?.end();
+});
+
+describe.skipIf(!HAS_DB)("stripe-plans ladder — credit packs against the plan that includes credits", () => {
+  it("prices every pack at the same multiple of the plan's included rate in every market", async () => {
+    const rated = await ratedPlans();
+    expect(
+      rated.map((p) => p.key),
+      "no seed plan carries an ai.credits.monthly row — there is nothing to compare a pack against",
+    ).not.toEqual([]);
+    expect(packs.length, "the seed has no credit packs to check").toBeGreaterThan(1);
+
+    const faults: string[] = [];
+    let compared = 0;
+    for (const plan of rated) {
+      for (const pack of packs) {
+        // A pack that grants nothing would make every multiple Infinity and
+        // every comparison below meaningless rather than false.
+        expect(pack.credits, `${pack.key} grants no credits`).toBeGreaterThan(0);
+        const anchor = packMultiple(pack, plan, ANCHOR_CURRENCY);
+        for (const currency of SUPPORTED_CURRENCIES) {
+          if (currency === ANCHOR_CURRENCY) continue;
+          compared += 1;
+          const here = packMultiple(pack, plan, currency);
+          const drift = here / anchor - 1;
+          if (Math.abs(drift) > PACK_MULTIPLE_TOLERANCE) {
+            faults.push(
+              `${pack.key} ${currency}: ${here.toFixed(3)}x ${plan.key}'s included rate, against ${anchor.toFixed(3)}x in ${ANCHOR_CURRENCY} (${(drift * 100).toFixed(1)}% adrift)`,
+            );
+          }
+        }
+      }
+    }
+    expect(faults).toEqual([]);
+    // ANTI-VACUITY. Every fault above comes out of a nested loop, and a loop
+    // over an empty collection reports clean. The count is asserted EXACTLY and
+    // derived from the three collections, so a seed section renamed out from
+    // under `packs`, a plan that lost its matrix row, or a currency list that
+    // silently emptied is a red here rather than a quiet pass.
+    expect(compared, "no pack/market pair was compared").toBe(
+      rated.length * packs.length * (SUPPORTED_CURRENCIES.length - 1),
+    );
+  });
+
+  it("never prices a pack above the included rate itself — a top-up is not a dominated SKU", async () => {
+    // The pack's per-credit price against the plan's whole monthly price
+    // divided by the allowance it includes. That divisor deliberately
+    // OVERSTATES what the included credits cost, because a subscription buys
+    // far more than credits — so this is a floor with a lot of daylight (the
+    // dearest pack today sits at 0.455x) and a breach means the top-up costs
+    // more per credit than simply buying the plan that includes them. Nobody
+    // rational buys that, and it is reachable without breaking the parity rule
+    // above: raising every market's pack together keeps them consistent with
+    // each other while making all four dominated.
+    const rated = await ratedPlans();
+    expect(
+      rated.map((p) => p.key),
+      "no seed plan carries an ai.credits.monthly row — there is nothing to compare a pack against",
+    ).not.toEqual([]);
+
+    const faults: string[] = [];
+    let compared = 0;
+    for (const plan of rated) {
+      for (const pack of packs) {
+        for (const currency of SUPPORTED_CURRENCIES) {
+          compared += 1;
+          const multiple = packMultiple(pack, plan, currency);
+          if (multiple >= 1) {
+            faults.push(
+              `${pack.key} ${currency}: ${multiple.toFixed(3)}x ${plan.key}'s included rate — the top-up costs more per credit than the plan that includes them`,
+            );
+          }
+        }
+      }
+    }
+    expect(faults).toEqual([]);
+    expect(compared, "no pack/market pair was compared").toBe(
+      rated.length * packs.length * SUPPORTED_CURRENCIES.length,
+    );
   });
 });
