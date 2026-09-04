@@ -26,6 +26,34 @@ import {
 // SERIAL_SPECS for exactly that reason.
 test.describe.configure({ mode: "serial" });
 
+// A `finally` is NOT enough to restore the cap, and both tests below used to
+// rely on one. On a test-level TIMEOUT Playwright never unwinds the test frame,
+// so `finally` never starts — widening the timeout does not help, because the
+// abandonment is not a budget problem. `afterEach` IS honoured, and an async
+// hook's awaits complete. Prior art with the same reasoning:
+// `billing-states.spec.ts:14-28`, which revokes a superadmin flag this way.
+//
+// This matters more here than almost anywhere: the value being restored is
+// `dashboard.public.max = 0` on the SHARED account. Leak it and every public
+// competition created by the rest of the run degrades to private — which is
+// precisely the failure that took out ten smoke checks in this wave.
+//
+// The org id is captured BEFORE the override is written, or the hook is a
+// no-op in exactly the runs that need it.
+const cappedOrgIds = new Set<string>();
+
+async function capPublicDashboards(orgId: string, value: number): Promise<void> {
+  cappedOrgIds.add(orgId);
+  await setEntitlementOverrideSql(orgId, "dashboard.public.max", value);
+}
+
+test.afterEach(async () => {
+  for (const id of cappedOrgIds) {
+    await setEntitlementOverrideSql(id, "dashboard.public.max", 50);
+  }
+  cappedOrgIds.clear();
+});
+
 /** The competition the API knows by this name, or fail loudly. */
 async function fetchByName(
   request: Parameters<typeof apiJson>[0],
@@ -73,7 +101,7 @@ test("the wizard opens on Public, and at the cap it creates a PRIVATE competitio
     // Now the cap is met however many public dashboards the org already has:
     // a limit of 0 refuses the very first one, so this does not depend on
     // what any other spec left behind.
-    await setEntitlementOverrideSql(org.id, "dashboard.public.max", 0);
+    await capPublicDashboards(org.id, 0);
     await invalidateOrgEntitlements(page.request, org.id);
 
     await page.goto("/competitions/new");
@@ -129,7 +157,7 @@ test("the TEMPLATE GALLERY at the cap shows the same note — it does not redire
   const org = await activeOrg(page);
   const cappedName = `Capped Template ${TAG}`;
 
-  await setEntitlementOverrideSql(org.id, "dashboard.public.max", 0);
+  await capPublicDashboards(org.id, 0);
   await invalidateOrgEntitlements(page.request, org.id);
 
   try {
