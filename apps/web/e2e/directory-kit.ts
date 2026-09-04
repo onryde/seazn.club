@@ -188,6 +188,88 @@ export async function freshOrg(page: Page, label: string): Promise<{ orgId: stri
 }
 
 /**
+ * Pre-dismiss the app-wide cookie-consent banner. Call once per page, after
+ * `freshOrg` (the page must already be on the app origin for localStorage to
+ * be writable) and before the first `goto`.
+ *
+ * EVERY spec on a blank `storageState` owes this. `cookie-consent.tsx` renders
+ * `fixed bottom-4 left-4 right-20 z-40 … sm:left-6 sm:max-w-sm` — an overlay
+ * that intercepts pointer events over any control in the LAST card on a page.
+ * Measured on /directory?tab=officials, where it covers "Add official":
+ *
+ *     <div class="fixed bottom-4 left-4 right-20 z-40 …"> intercepts pointer events
+ *       - retrying click action
+ *
+ * The click then retries for the whole timeout and the failure names the
+ * BUTTON, not the banner — so it reads as a slow page rather than an occluded
+ * one. A spec that passes without this is not safe, only lucky about where its
+ * controls sit; adding a control to the bottom card breaks it later.
+ *
+ * Both keys are required: the version stamp must match COOKIE_POLICY_VERSION
+ * or the re-prompt logic reopens the banner. "rejected" keeps analytics off,
+ * matching auth.setup.ts, which captures the same pair into the shared
+ * storageState that every OTHER spec inherits.
+ */
+export async function dismissConsent(page: Page): Promise<void> {
+  const { CONSENT_KEY, CONSENT_VERSION_KEY, COOKIE_POLICY_VERSION } = await import(
+    "../src/lib/consent"
+  );
+  await page.evaluate(
+    ([k, vk, v]) => {
+      localStorage.setItem(k, "rejected");
+      localStorage.setItem(vk, v);
+    },
+    [CONSENT_KEY, CONSENT_VERSION_KEY, COOKIE_POLICY_VERSION] as const,
+  );
+}
+
+/**
+ * Block until React has HYDRATED the tree containing `target`.
+ *
+ * A navigation resolves before React attaches its handlers, so the first click
+ * after one can land on server-rendered markup and be silently dropped — the
+ * race `mobile.spec.ts:1738` and `scorepad-v3-cricket.spec.ts:635` both record.
+ * It cannot be recovered afterwards: the click is simply gone.
+ *
+ * The usual defences do not work here. An `expect` on markup the SERVER
+ * rendered (a count of chips, a row's presence) is satisfied before hydration,
+ * so it gates nothing. `toBeEnabled()` is the same — a server-rendered button
+ * is enabled. And the repo's poll-with-re-click idiom is only sound for an
+ * IDEMPOTENT action: re-clicking a `aria-pressed` toggle undoes a click that
+ * did land, so it cannot be used on a chip picker.
+ *
+ * So this waits on a signal the server cannot emit. `react-dom` stamps
+ * `__reactFiber$…` / `__reactProps$…` onto every host node it renders or
+ * hydrates; those keys exist only once the client bundle has run over that
+ * node, and they are absent from the SSR HTML by construction. Pass a locator
+ * INSIDE the client component you are about to drive — hydration is per-root
+ * and per-boundary, so a hydrated header says nothing about a panel further
+ * down the page.
+ *
+ * `.catch(() => false)` keeps a not-yet-attached element a retry rather than a
+ * throw, so the poll's own message is what fails instead of an opaque
+ * "element not found" from inside `evaluate`.
+ */
+export async function waitForHydration(
+  target: Locator,
+  opts: { timeout?: number } = {},
+): Promise<void> {
+  await expect
+    .poll(
+      () =>
+        target
+          .first()
+          .evaluate((el) => Object.keys(el).some((k) => k.startsWith("__react")))
+          .catch(() => false),
+      {
+        timeout: opts.timeout ?? 15_000,
+        message: "React never hydrated the tree under this locator — a click here would be dropped",
+      },
+    )
+    .toBe(true);
+}
+
+/**
  * The org's CURRENT effective limit for `key`.
  *
  * Never hardcode a limit in a spec: the plan catalog is re-valued independently

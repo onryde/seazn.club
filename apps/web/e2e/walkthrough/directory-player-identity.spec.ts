@@ -1,6 +1,6 @@
 import { test, expect, type Page } from "@playwright/test";
 import { failOnNativeDialog, loginUi } from "../helpers";
-import { freshOrg, stamp } from "../directory-kit";
+import { dismissConsent, freshOrg, stamp, waitForHydration } from "../directory-kit";
 
 /**
  * The organiser's identity journey on /directory?tab=players, driven by hand.
@@ -72,7 +72,15 @@ test("the duplicate queue proposes a real pair and suppresses a false one", asyn
   failOnNativeDialog(page);
   const s = stamp();
   await freshOrg(page, "identity");
+  // Blank storageState inherits no consent dismissal, and the banner is a fixed
+  // overlay that intercepts clicks on anything in the last card (directory-kit).
+  await dismissConsent(page);
   await page.goto("/directory?tab=players");
+  // A nav resolves before React attaches handlers, so the first click after one
+  // can be swallowed with no way to recover it. Anchored on the ADD FORM, not
+  // the roster: a fresh org has no players, so the roster table is not in the
+  // DOM at all yet — and the add form is what `addPerson` drives next.
+  await waitForHydration(page.getByRole("button", { name: "Add player" }));
 
   // One human, entered twice: same folded name, same dob. The queue's entry
   // ticket is a shared normalised name; the matching dob raises the rank.
@@ -146,7 +154,9 @@ test("a claim link is not transferable, and a withdrawn or spent one never comes
   failOnNativeDialog(page);
   const s = stamp();
   await freshOrg(page, "claims");
+  await dismissConsent(page);
   await page.goto("/directory?tab=players");
+  await waitForHydration(page.getByRole("button", { name: "Add player" }));
 
   const personName = `Rae Sandoval ${s}`;
   await addPerson(page, { name: personName });
@@ -238,6 +248,9 @@ test("a claim link is not transferable, and a withdrawn or spent one never comes
 
     // ...and the attempt did not consume the invite: it is still open.
     await page.reload();
+    // The control about to be clicked, not the page: it exists by now (the row
+    // is invited) and is the thing whose handler must be attached.
+    await waitForHydration(control("Withdraw invite"));
     await expect(row()).toContainText("Invite pending");
 
     // --- 2. the organiser withdraws it -------------------------------------
@@ -262,9 +275,11 @@ test("a claim link is not transferable, and a withdrawn or spent one never comes
     // The positive control: the CURRENT link works, in the same browser that
     // was just refused twice.
     await owner.goto(link2);
+    await waitForHydration(claimButton(owner));
     await claimButton(owner).click();
     await owner.waitForURL(/\/me(\?|$)/, { timeout: 15_000 });
     await page.reload();
+    await waitForHydration(control("Unlink"));
     await expect(row()).toContainText("Claimed");
 
     // --- 4. accepting spends it --------------------------------------------

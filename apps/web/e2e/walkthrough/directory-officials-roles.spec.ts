@@ -1,6 +1,12 @@
-import { test, expect, type Page } from "@playwright/test";
+import { test, expect } from "@playwright/test";
 import { failOnNativeDialog, setBoolEntitlementOverrideSql } from "../helpers";
-import { freshOrg, invalidateOrgEntitlements, stamp } from "../directory-kit";
+import {
+  dismissConsent,
+  freshOrg,
+  invalidateOrgEntitlements,
+  stamp,
+  waitForHydration,
+} from "../directory-kit";
 import { ALL_OFFICIAL_ROLES } from "../../src/lib/official-roles";
 
 /**
@@ -35,6 +41,19 @@ import { ALL_OFFICIAL_ROLES } from "../../src/lib/official-roles";
  * That is the intent: it is a claim about packaging, and it should not be able
  * to change silently underneath a spec whose subject is the gate.
  *
+ * ## The owner has ruled the ungate WRONG (2026-09-04)
+ *
+ * `officials.roles_multi` is to become a Pro key again. That pricing change is
+ * not in this wave and no matrix row is touched here. When it lands, block A's
+ * assertion must be INVERTED rather than removed — see the long comment there.
+ * Block B and block C are unaffected either way: a staff deny and a lifted deny
+ * are the same two states whatever the plan grants.
+ *
+ * Two findings routed to the owner rather than fixed here, both surfaced while
+ * pinning the above: the enforcement is CLIENT-SIDE ONLY (see block C's save
+ * comment), and the gate's upsell copy offers Pro for a refusal Pro cannot
+ * lift, because an override outranks every plan.
+ *
  * Fresh org, deliberately: the walkthrough project's storageState is a shared
  * Pro org, so block A could not make a statement about the community plan at
  * all. `freshOrg` arrives on community for free (`createOrgForUser` inserts
@@ -45,37 +64,6 @@ import { ALL_OFFICIAL_ROLES } from "../../src/lib/official-roles";
  * array's order — the first-seen union of every preset crew, not alphabetical.
  */
 test.use({ storageState: { cookies: [], origins: [] } });
-
-/**
- * Pre-dismiss the app-wide cookie-consent banner, exactly as auth.setup.ts does
- * for every spec that inherits a storageState. This file runs on an EMPTY one,
- * so it inherits nothing — and the banner is a FIXED overlay pinned bottom-left
- * (`bottom-4 left-4 … sm:max-w-sm`) that sits directly on top of the officials
- * "Add official" button, which lives in the last card on the page. Measured:
- * without this the click retries for the full timeout against
- * `<div class="fixed bottom-4 left-4 …"> intercepts pointer events`, and the
- * failure names the button rather than the thing covering it.
- *
- * "rejected" keeps analytics off. BOTH keys are required — the version stamp
- * must match COOKIE_POLICY_VERSION or the re-prompt logic reopens the banner.
- *
- * Duplicated from f3-day-one-shots.spec.ts (which duplicated auth.setup.ts)
- * rather than added to directory-kit.ts, which this task may not edit. It is a
- * standing obligation of every empty-storageState spec and is a candidate to
- * fold into the kit — see the task report.
- */
-async function dismissConsent(page: Page): Promise<void> {
-  const { CONSENT_KEY, CONSENT_VERSION_KEY, COOKIE_POLICY_VERSION } = await import(
-    "../../src/lib/consent"
-  );
-  await page.evaluate(
-    ([k, vk, v]) => {
-      localStorage.setItem(k, "rejected");
-      localStorage.setItem(vk, v);
-    },
-    [CONSENT_KEY, CONSENT_VERSION_KEY, COOKIE_POLICY_VERSION] as const,
-  );
-}
 
 test("roles_multi is free on community, swaps under a deny, and sticks once allowed", async ({
   page,
@@ -121,9 +109,32 @@ test("roles_multi is free on community, swaps under a deny, and sticks once allo
     scope.getByRole("button", { pressed: true });
 
   // --- A. the community plan does NOT refuse a second role (#253 / V319) ----
-  // The org is on community and carries no override, so this is the plan
-  // speaking. Three chips stack and no gate appears.
+  //
+  // ### THIS BLOCK PINS A STATE THE OWNER HAS RULED INCORRECT. READ BEFORE FIXING.
+  //
+  // It asserts what the product does TODAY: `V319__v17_phase1_reorg.sql:26`
+  // ("Officials ungate (#253)") grants `officials.roles_multi` on community, so
+  // a free org stacks roles and no gate appears.
+  //
+  // The owner ruled on 2026-09-04 that the ungate was WRONG and the key should
+  // be Pro again. That pricing change is NOT in this wave and no matrix row is
+  // touched here, so this block is a description of a state awaiting a fix, not
+  // an endorsement of it.
+  //
+  // Consequently: WHEN THE RE-GATE SHIPS, THIS ASSERTION MUST BE INVERTED, NOT
+  // DELETED. Its going red is the correct and intended signal that the re-gate
+  // landed — community should then swap and raise the gate exactly as block B
+  // does under a deny, and this block becomes a second, plan-driven proof of
+  // the same refusal. Deleting it to "make the suite green" would throw away
+  // the only executable record that the packaging ever moved.
+  //
+  // It is not decoration in the meantime: it is block B's control. Without it,
+  // "the gate appeared" is also true of an org that can never stack anything.
   await page.goto("/directory?tab=officials");
+  // Gate on hydration before the first click. The two counts below are
+  // satisfied by the SSR markup, so they prove the page rendered and nothing
+  // about whether a click will be heard.
+  await waitForHydration(addChips);
   await expect(pressedIn(addChips)).toHaveCount(1);
   await expect(gate).toHaveCount(0);
 
@@ -131,7 +142,8 @@ test("roles_multi is free on community, swaps under a deny, and sticks once allo
   await addChip(roleB).click();
   await expect(
     pressedIn(addChips),
-    "officials.roles_multi is granted on community (V319) — a free org stacks roles",
+    "officials.roles_multi is granted on community (V319) — a free org stacks roles. " +
+      "If this is red, the owner's re-gate to Pro has shipped: INVERT this block, do not delete it.",
   ).toHaveCount(3);
   await expect(gate).toHaveCount(0);
 
@@ -143,6 +155,7 @@ test("roles_multi is free on community, swaps under a deny, and sticks once allo
   // exactly the drift directory-kit's re-export warns about.
   await invalidateOrgEntitlements(page.request, orgId);
   await page.reload();
+  await waitForHydration(addChips);
 
   const name = `Wren Adeyemi ${s}`;
   await page.getByLabel("Name", { exact: true }).fill(name);
@@ -162,7 +175,7 @@ test("roles_multi is free on community, swaps under a deny, and sticks once allo
 
   await page.getByRole("button", { name: "Add official" }).click();
   const row = page.locator("li").filter({ hasText: name });
-  await expect(row).toHaveCount(1, { timeout: 15_000 });
+  await expect(row).toHaveCount(1);
 
   // The swap reached the SERVER, not just the picker's local state. The roster
   // renders `role_keys` straight off the row it read back, so one chip here is
@@ -180,6 +193,9 @@ test("roles_multi is free on community, swaps under a deny, and sticks once allo
   await setBoolEntitlementOverrideSql(orgId, "officials.roles_multi", true);
   await invalidateOrgEntitlements(page.request, orgId);
   await page.reload();
+  // The row, not the add form: hydration is per-boundary, and it is the ROW's
+  // "Edit roles" button that is clicked next.
+  await waitForHydration(row);
 
   // The row's picker is not mounted until its editor is opened: the row renders
   // read-only chip SPANS, and `OfficialRolesEditor` appears only under
@@ -194,15 +210,22 @@ test("roles_multi is free on community, swaps under a deny, and sticks once allo
   await expect(gate).toHaveCount(0);
 
   await row.getByRole("button", { name: "Save roles" }).click();
-  // The editor closes only on a SUCCESSFUL PATCH (`setOpenRow(null)` runs
-  // inside `run`'s try). Waiting on it is what makes a 422 from the server's own
-  // `assertRolesAllowed` a red here, rather than a silent no-op that the reload
-  // below would report as a persistence failure.
-  await expect(row.getByRole("button", { name: "Save roles" })).toHaveCount(0, {
-    timeout: 15_000,
-  });
+  // The editor closes only once the PATCH RESOLVES — `setOpenRow(null)` runs
+  // inside `run`'s try, so a rejected request leaves it open. Waiting on the
+  // close is therefore what makes a failed save a red HERE rather than a silent
+  // no-op that the reload below would report as a persistence failure.
+  //
+  // Note what this does NOT wait for: an entitlement refusal. There is none.
+  // `officials.roles_multi` is enforced CLIENT-SIDE ONLY — neither
+  // POST /api/v1/officials nor PATCH /api/v1/officials/{id} checks it, and the
+  // `assertRolesAllowed` those pickers' comments cite
+  // (officials-shared.tsx:157,179) exists nowhere in server code. The only
+  // server-side reader of the key is the AI planner
+  // (usecases/officials-ai.ts:1196). Routed to the owner as a finding.
+  await expect(row.getByRole("button", { name: "Save roles" })).toHaveCount(0);
 
   await page.reload();
+  await waitForHydration(row);
   await row.getByRole("button", { name: "Edit roles" }).click();
   const persisted = await row
     .getByRole("group", { name: "Roles" })
@@ -226,6 +249,6 @@ test("roles_multi is free on community, swaps under a deny, and sticks once allo
   await expect(
     row.getByText(/Email failed to send/i),
     "the mailer accepted this invite, so no link is shown — this spec needs the send-failure fallback",
-  ).toBeVisible({ timeout: 15_000 });
+  ).toBeVisible();
   await expect(row.getByText(/\/claim\/pc_/)).toBeVisible();
 });
