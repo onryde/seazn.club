@@ -151,11 +151,15 @@ test("a claim link is not transferable, and a withdrawn or spent one never comes
   const personName = `Rae Sandoval ${s}`;
   await addPerson(page, { name: personName });
 
-  // Scoping through `roster` is not tidiness. ResponsiveTable renders every
-  // cell TWICE — a `hidden sm:block` <table> and an `sm:hidden` card <ul>,
-  // both always in the DOM — so a bare page.getByRole("button", { name:
-  // "Unlink" }) is a strict-mode violation rather than a miss. The org holds
-  // exactly this one person, so the row locator is unambiguous.
+  // ResponsiveTable renders every row TWICE — a `hidden sm:block` <table> and
+  // an `sm:hidden` card <ul>, both always in the DOM. That does NOT make an
+  // unscoped role locator ambiguous: Playwright's queryRole skips elements
+  // hidden for ARIA unless `includeHidden`, and the card list is display:none
+  // at this project's desktop viewport. The TEXT engine has no such filter, so
+  // it is chip assertions that resolve twice — the brief's own
+  // page.getByText("Invite pending") is the shape that breaks. Reading
+  // everything through the desktop table's single row (the fresh org holds
+  // exactly this one person) makes both kinds unambiguous for the same reason.
   const row = () => roster(page).getByRole("row", { name: new RegExp(escapeRe(personName)) });
   const control = (name: string) => row().getByRole("button", { name });
   const claimButton = (p: Page) => p.getByRole("button", { name: /This is me — claim/ });
@@ -185,6 +189,9 @@ test("a claim link is not transferable, and a withdrawn or spent one never comes
       dialog.getByTestId("claim-emailed"),
       "the mailer accepted this invite, so no link is shown — this spec needs the send-failure fallback",
     ).toHaveCount(0);
+    // The fallback is CI's path too, not just this machine's: e2e.yml sets no
+    // RESEND_API_KEY, and lib/email.ts's send() returns false when it is unset
+    // (officials-directory.spec.ts already leans on exactly this).
     const link = (await dialog.getByTestId("claim-link").textContent())?.trim();
     if (!link) throw new Error("no claim link rendered");
     await done.click();
@@ -199,9 +206,13 @@ test("a claim link is not transferable, and a withdrawn or spent one never comes
   /** A real second human: a context with genuinely EMPTY storage. A bare
    *  browser.newContext() inherits the organiser's session, and every refusal
    *  below then passes against the wrong identity. */
+  const opened: Page[] = [];
   async function signIn(email: string): Promise<Page> {
     const ctx = await browser.newContext({ storageState: { cookies: [], origins: [] } });
     const p = await ctx.newPage();
+    // Registered BEFORE the login, so a context whose loginUi throws is closed
+    // too rather than leaking into the rest of the run.
+    opened.push(p);
     failOnNativeDialog(p);
     // "/" rather than the claim link: safeNextPath (lib/auth.ts) rejects any
     // `next` that is not a bare path, so handing loginUi the absolute claim_url
@@ -212,9 +223,9 @@ test("a claim link is not transferable, and a withdrawn or spent one never comes
     return p;
   }
 
-  const stranger = await signIn(strangerEmail);
-  const owner = await signIn(ownerEmail);
   try {
+    const stranger = await signIn(strangerEmail);
+    const owner = await signIn(ownerEmail);
     const link1 = await invite(ownerEmail);
 
     // --- 1. not transferable ------------------------------------------------
@@ -231,7 +242,13 @@ test("a claim link is not transferable, and a withdrawn or spent one never comes
 
     // --- 2. the organiser withdraws it -------------------------------------
     await control("Withdraw invite").click();
+    // A negative and its positive twin, and the twin is the load-bearing half:
+    // `not.toContainText` returns `{ matches: isNot }` for a locator resolving
+    // to ZERO elements, so on its own it passes against a row that vanished or
+    // a locator that drifted. The verb returning to "Invite to claim…" pins the
+    // row's real post-state instead of the absence of a string.
     await expect(row()).not.toContainText("Invite pending");
+    await expect(control("Invite to claim…")).toBeVisible();
     await owner.goto(link1);
     await expect(owner.getByRole("heading", { name: "Invite withdrawn" })).toBeVisible();
     await expect(claimButton(owner)).toHaveCount(0);
@@ -261,12 +278,17 @@ test("a claim link is not transferable, and a withdrawn or spent one never comes
     const unlinkDialog = page.getByRole("dialog", { name: "Unlink this player account?" });
     // tone: danger. The confirm is a click, never Enter.
     await unlinkDialog.getByRole("button", { name: "Unlink" }).click();
+    // Same pair as after the withdraw, and it matters more here: this is the
+    // ONLY assertion of what the unlink did to the console, so the empty-row
+    // vacuity above would let "unlink worked" be reported by a row that is not
+    // there. The invite verb coming back is also the real claim being made —
+    // the profile is invitable again.
     await expect(row()).not.toContainText("Claimed");
+    await expect(control("Invite to claim…")).toBeVisible();
     await owner.goto(link2);
     await expect(owner.getByRole("heading", { name: "Already claimed" })).toBeVisible();
     await expect(claimButton(owner)).toHaveCount(0);
   } finally {
-    await stranger.context().close();
-    await owner.context().close();
+    for (const p of opened) await p.context().close();
   }
 });
