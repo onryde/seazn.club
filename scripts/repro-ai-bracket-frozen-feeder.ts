@@ -201,12 +201,15 @@ async function main() {
   console.log("Starting AI fixture server on 4319...");
   const fixture = await startAiFixtureServer();
   try {
-    const plus = newSession();
-    const plusOrg = (await signIn(plus, `smoke-ai-plus-${tag}@example.com`)).org_id;
-    await setPlan(plusOrg, "pro_plus");
-    console.log("Session + org ready:", plusOrg);
+    // `pro`, mirroring v4AiSuite: V392 (entitlements v18) deleted `pro_plus`
+    // from `plans`, and `plan_key` carries a live FK, so the old literal made
+    // this script die on its first write.
+    const paid = newSession();
+    const paidOrg = (await signIn(paid, `smoke-ai-pro-${tag}@example.com`)).org_id;
+    await setPlan(paidOrg, "pro");
+    console.log("Session + org ready:", paidOrg);
 
-    const bracket = await seedBracketAiDivision(plus, "AI Bracket");
+    const bracket = await seedBracketAiDivision(paid, "AI Bracket");
     console.log("Bracket fixtures:", JSON.stringify(bracket.fixtures, null, 2));
 
     const tbdIds = new Set(
@@ -230,7 +233,7 @@ async function main() {
     ];
     console.log("clashingPrior:", JSON.stringify(clashingPrior, null, 2));
 
-    const refinedRes = await v1(plus, `/api/v1/divisions/${bracket.divId}/schedule/ai-plan`, "POST", {
+    const refinedRes = await v1(paid, `/api/v1/divisions/${bracket.divId}/schedule/ai-plan`, "POST", {
       instruction: "keep these kick-off times, they suit the venue",
       mode: "refine",
       prior: { instruction: "the organiser's own timetable", assignments: clashingPrior },
