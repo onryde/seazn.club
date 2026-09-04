@@ -161,3 +161,56 @@ remembered port. Without an exported `DATABASE_URL` vitest refuses to start
 because it detects `.env.local`'s dev DB; that refusal is the guard working.
 A source edit does not reach the running server until a rebuild, so a copy
 assertion run against a stale bundle fails for a reason unrelated to the test.
+
+## W2 session handoff — 2026-09-04
+
+Branch `feat/competition-desk-w2-run-sheet`, worktree
+`.claude/worktrees/desk-w2`, env label `deskw2`. Working tree CLEAN; every commit
+is a new commit — no amends, no rebases, no history rewrites.
+
+**Full ledger, rulings and resume block:**
+`.superpowers/sdd/2026-09-03-competition-desk-w2/progress.md` (git-ignored, in
+this worktree). It ends with a `RESUME STATE` block — trust that and `git log`
+over any recollection. Briefs, supplements, reports and review packages sit
+beside it. `STANDING-POLICY.md` there is the owner's standing policy quoted
+verbatim; every dispatch points at it rather than paraphrasing, because a brief
+that CITES a ruling is not a brief that QUOTES it.
+
+**Status.** Tasks 1-3 complete and reviewed. Task 4 (the run sheet renders) has
+been through five fix rounds — the process cap — with its final re-review
+outstanding. Tasks 5-10 not started; Task 5's supplement is written and waiting.
+
+**What Task 4 cost, recorded because it is this wave's main lesson.** Four review
+rounds, ~6,500 green unit tests, a 949-check smoke suite and a seven-width mobile
+sweep did not notice that the run sheet's "When" field was **0 pixels wide at
+every width**, with the time picker's centre hit-testing to the Save button. A
+reviewer found it by opening the page. Every gate was structurally blind:
+`.fill()` and `.selectOption()` work perfectly on a zero-width control. Two more
+defects were found the same way — a blank match-day screen when the default
+filter matched nothing, and a "vs" separator failing AA contrast.
+
+**Owner rulings taken during W2** (theirs, not recommendations): W2 is
+desktop-only and the W2/W3 split holds · A2, bracket stages keep round sections ·
+day groups merge across non-bracket stages, each bracket stage is its own block,
+one unscheduled group closes the sheet · B1, the auto-schedule CTA lives on the
+stage rail · all stage chrome moves to the rail · the set-time write resolves in
+`orgTz`, obeying #448, accepting that a `tz`-overriding division redisplays a
+typed 15:00 as 17:00 · "correct a time already set" is a REGRESSION and was
+restored.
+
+**Two decisions that are the CONTROLLER'S, not the owner's, both flagged for the
+walkthrough and cheaply reversible:** block order is chronological (day groups
+and bracket blocks interleaved by earliest instant); and settled fixtures with no
+recorded time get their own terminal block rather than joining "Not yet
+scheduled".
+
+**Open items carried forward.** Nine orphaned `schedule.*` dictionary keys —
+delete by EXACT key, never by prefix, because `schedule.unscheduled.*` and
+`schedule.fstatus.*` are live neighbours · `RunSheetRow` renders raw server error
+messages (`err.message`) rather than branching on `err.code`; inherited, not
+introduced, assigned to the copy/e2e sweep · the peer wave
+`feat/scheduling-walkthrough` owes a `SCHEDULE_LOCKED` code and dictionary key to
+point that branch at · the dictionary merge with that wave is a CERTAIN four-hunk
+conflict, one per locale, all the same trailing-comma shape — anything beyond
+those four is a real conflict and must be read. `i18n-keys.ts` is
+regenerate-do-not-merge.
