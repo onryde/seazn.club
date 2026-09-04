@@ -11,7 +11,7 @@
 // differs visibly from the RIGHT one (the pack's own declared value).
 import { describe, expect, it } from "vitest";
 import { buildSeedPlan } from "../seed-plan.ts";
-import { PackSchema, roundRobinFixtureCount, type Pack } from "../pack-schema.ts";
+import { PackPerson, PackSchema, roundRobinFixtureCount, type Pack } from "../pack-schema.ts";
 
 // ---------------------------------------------------------------------------
 // Fixture
@@ -362,6 +362,42 @@ describe("buildSeedPlan — the lane ruling on persons/officials", () => {
     });
     expect(morgan && "dob" in morgan).toBe(false);
     expect(morgan && "gender" in morgan).toBe(false);
+  });
+
+  // `SeedPlanPerson.gender` was `"m" | "f"` while the product's own
+  // `CreatePerson.gender` has been `z.enum(["m","f","x"]).nullish()`
+  // (`apps/web/src/server/api-v1/schemas.ts:502`) since RS002. The bench was
+  // therefore narrower than the API it writes to: no pack could seed a
+  // non-binary person, so the product's "x never blocks a category gate"
+  // exemption (`lib/registration-rules.ts:172-190`) was unreachable from any
+  // bench run. `tsc` only caught it once `PackPerson.gender` widened in B03r,
+  // and nothing else would have.
+  //
+  // The expected set is derived from `PackPerson`'s own enum rather than typed
+  // in, so widening one side without the other reds here instead of silently
+  // dropping a value on the floor. Bench code imports nothing from `apps/web`
+  // (see `validate-pack.ts:153`), so `PackPerson` is the right authority to
+  // read on this side of that boundary.
+  it("carries EVERY gender the pack schema accepts, not a narrower subset", () => {
+    const accepted = PackPerson.shape.gender.unwrap().options;
+    expect(accepted.length, "PackPerson.gender is not the enum this test assumes").toBeGreaterThan(1);
+
+    const base = pack();
+    const seen = new Map<string, unknown>();
+    for (const gender of accepted) {
+      const ref = `p-gender-${gender}`;
+      const plan = buildSeedPlan({
+        ...base,
+        persons: [...base.persons, { ref, fullName: `Gender ${gender}`, lane: "player", gender }],
+      });
+      const person = plan.persons.find((p) => p.ref === ref);
+      expect(person, `no plan person for gender "${gender}"`).toBeTruthy();
+      seen.set(gender, person!.gender);
+    }
+
+    // Assert the VALUES survived, not merely that a person was produced — a
+    // dropped `gender` key would still yield a person and pass a presence test.
+    expect(Object.fromEntries(seen)).toEqual(Object.fromEntries(accepted.map((g) => [g, g])));
   });
 
   it("never creates an official-lane person via POST /persons", () => {

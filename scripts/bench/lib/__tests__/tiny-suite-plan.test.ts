@@ -257,6 +257,12 @@ describe("runTinySuite — B03 T7 plan/entitlement-gate wiring", () => {
       engine: "optimized",
       keep: false,
       log: silent,
+      // B03r tasks 9+10: `_tiny.json` now declares a THIRD division
+      // (`d-registration`) — this file is about the DLS-gate entitlement
+      // probe, not registration, so `cliEntry: "admin"` keeps it there
+      // (also live coverage of the task's own acceptance criterion:
+      // `--entry admin` needs neither Stripe nor a browser).
+      cliEntry: "admin",
       packPath: TINY_PACK_PATH,
       transport,
       sql,
@@ -293,6 +299,12 @@ describe("runTinySuite — B03 T7 plan/entitlement-gate wiring", () => {
       engine: "optimized",
       keep: false,
       log: silent,
+      // B03r tasks 9+10: `_tiny.json` now declares a THIRD division
+      // (`d-registration`) — this file is about the DLS-gate entitlement
+      // probe, not registration, so `cliEntry: "admin"` keeps it there
+      // (also live coverage of the task's own acceptance criterion:
+      // `--entry admin` needs neither Stripe nor a browser).
+      cliEntry: "admin",
       packPath: TINY_PACK_PATH,
       transport,
       sql,
@@ -324,6 +336,12 @@ describe("runTinySuite — B03 T7 plan/entitlement-gate wiring", () => {
       engine: "optimized",
       keep: false,
       log: silent,
+      // B03r tasks 9+10: `_tiny.json` now declares a THIRD division
+      // (`d-registration`) — this file is about the DLS-gate entitlement
+      // probe, not registration, so `cliEntry: "admin"` keeps it there
+      // (also live coverage of the task's own acceptance criterion:
+      // `--entry admin` needs neither Stripe nor a browser).
+      cliEntry: "admin",
       packPath: TINY_PACK_PATH,
       transport,
       sql,
@@ -366,6 +384,12 @@ describe("runTinySuite — B03 T7 plan/entitlement-gate wiring", () => {
       engine: "optimized",
       keep: false,
       log: silent,
+      // B03r tasks 9+10: `_tiny.json` now declares a THIRD division
+      // (`d-registration`) — this file is about the DLS-gate entitlement
+      // probe, not registration, so `cliEntry: "admin"` keeps it there
+      // (also live coverage of the task's own acceptance criterion:
+      // `--entry admin` needs neither Stripe nor a browser).
+      cliEntry: "admin",
       packPath: TINY_PACK_PATH,
       transport,
     });

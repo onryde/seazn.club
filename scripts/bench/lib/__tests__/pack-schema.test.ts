@@ -1252,7 +1252,6 @@ describe("PackSchema — the registration block (declared for B03r, unpopulated 
         category: "open",
         entrantKind: "team",
         feeCents: 0,
-        currency: "GBP",
         approval: "manual",
         entries: [
           { extKey: "entry-1", captain: "p-cap", roster: ["p-ana"], pay: false, expect: "entrant" },
@@ -1272,6 +1271,50 @@ describe("PackSchema — the registration block (declared for B03r, unpopulated 
     expect(p.registration?.byDivision["d-main"]?.entries[0]?.expect).toBe("entrant");
   });
 
+  // Job 1 (B03r): currency moved OFF the division block and onto the org,
+  // because V365__org_currency.sql dropped `registration_settings.currency`
+  // outright — see `PackOrg.currency`'s and `PackRegistrationBlock`'s own
+  // doc comments for the full "why". Two witnesses below: the new home
+  // parses, and the OLD shape (currency back on the division block) is now
+  // a `strictObject` rejection — without this second test the move is
+  // unwitnessed (a currency key silently vanishing would parse just as
+  // cleanly as one silently accepted).
+  it("currency lives on org, lower-case ISO-4217, and defaults to absent", () => {
+    const p = parsed(withRegistration(() => {}));
+    expect(p.org.currency).toBeUndefined();
+    const withCurrency = pack((draft) => {
+      (draft.org as Record<string, unknown>).currency = "usd";
+    });
+    expect(parsed(withCurrency).org.currency).toBe("usd");
+  });
+
+  it("an upper-case or non-3-letter org currency is rejected", () => {
+    expectIssue(
+      pack((draft) => {
+        (draft.org as Record<string, unknown>).currency = "USD";
+      }),
+      ["org", "currency"],
+      /lower-case ISO-4217/i,
+    );
+    expectIssue(
+      pack((draft) => {
+        (draft.org as Record<string, unknown>).currency = "usdollar";
+      }),
+      ["org", "currency"],
+      /lower-case ISO-4217/i,
+    );
+  });
+
+  it("the OLD per-division currency shape is now rejected — the move is witnessed", () => {
+    expectIssue(
+      withRegistration((b) => {
+        b.currency = "gbp";
+      }),
+      ["registration", "byDivision", "d-main"],
+      /Unrecognized key.*currency/i,
+    );
+  });
+
   it("byDivision is keyed by a DECLARED division ref", () => {
     const bad = pack((p) => {
       (p.persons as unknown[]).push({ ref: "p-cap", fullName: "Cap Tain", lane: "player" });
@@ -1281,7 +1324,6 @@ describe("PackSchema — the registration block (declared for B03r, unpopulated 
             category: "open",
             entrantKind: "team",
             feeCents: 0,
-            currency: "GBP",
             approval: "auto",
             expect: { entrants: 0, waitlisted: 0, rejected: 0, paidCents: 0 },
           },
@@ -1335,6 +1377,80 @@ describe("PackSchema — the registration block (declared for B03r, unpopulated 
       }),
       ["registration", "byDivision", "d-main", "organiser", 0, "target"],
       /unknown registration entry/i,
+    );
+  });
+
+  // Gap 1 (B03r-repins-2026-09-03.md, owner ruling 2026-09-04): a
+  // non-1-January eligibility cutoff. `ageCutoffMonth`/`ageCutoffDay`
+  // mirror `divisions.age_cutoff_month`/`age_cutoff_day` (V364/V380).
+  it("ageCutoffMonth/ageCutoffDay parse, independently, and default to absent", () => {
+    const p = parsed(
+      withRegistration((b) => {
+        b.ageCutoffMonth = 9;
+        b.ageCutoffDay = 1;
+      }),
+    );
+    expect(p.registration?.byDivision["d-main"]?.ageCutoffMonth).toBe(9);
+    expect(p.registration?.byDivision["d-main"]?.ageCutoffDay).toBe(1);
+    // Absent by default, same as ageMin/ageMax — an existing pack that never
+    // sets a cutoff parses unchanged.
+    const bare = parsed(withRegistration(() => {}));
+    expect(bare.registration?.byDivision["d-main"]?.ageCutoffMonth).toBeUndefined();
+    expect(bare.registration?.byDivision["d-main"]?.ageCutoffDay).toBeUndefined();
+  });
+
+  it("an out-of-range ageCutoffMonth/ageCutoffDay is rejected", () => {
+    expectIssue(
+      withRegistration((b) => {
+        b.ageCutoffMonth = 13;
+      }),
+      ["registration", "byDivision", "d-main", "ageCutoffMonth"],
+      /.*/,
+    );
+    expectIssue(
+      withRegistration((b) => {
+        b.ageCutoffMonth = 0;
+      }),
+      ["registration", "byDivision", "d-main", "ageCutoffMonth"],
+      /.*/,
+    );
+    expectIssue(
+      withRegistration((b) => {
+        b.ageCutoffDay = 32;
+      }),
+      ["registration", "byDivision", "d-main", "ageCutoffDay"],
+      /.*/,
+    );
+    expectIssue(
+      withRegistration((b) => {
+        b.ageCutoffDay = 0;
+      }),
+      ["registration", "byDivision", "d-main", "ageCutoffDay"],
+      /.*/,
+    );
+  });
+
+  // Gap 2 (B03r-repins-2026-09-03.md, owner ruling 2026-09-04):
+  // `PackPerson.gender` now admits `"x"`, matching the product's "x never
+  // blocks" category exemption (registration-rules.ts ~:177-178).
+  it("a person's gender may be declared 'x'", () => {
+    const p = parsed(
+      pack((draft) => {
+        const persons = draft.persons as Record<string, unknown>[];
+        (persons[0] as Record<string, unknown>).gender = "x";
+      }),
+    );
+    expect(p.persons[0]?.gender).toBe("x");
+  });
+
+  it("a gender value other than m/f/x is still rejected", () => {
+    expectIssue(
+      pack((draft) => {
+        const persons = draft.persons as Record<string, unknown>[];
+        (persons[0] as Record<string, unknown>).gender = "nonbinary";
+      }),
+      ["persons", 0, "gender"],
+      /.*/,
     );
   });
 });
@@ -1996,13 +2112,16 @@ describe("packs/_tiny.json", () => {
     ).toBe(true);
   });
 
-  it("is two divisions, four entrants, four streams, exactly two reconstructed", () => {
+  it("is three divisions, six entrants, four streams, exactly two reconstructed", () => {
     // B03 T5 added `d-badminton` alongside `d-tiny` — the pack's first real
     // exercise of the multi-division generalisation `tinyPlan`'s
-    // `divisions.length !== 1` refusal used to block (deleted in T4).
+    // `divisions.length !== 1` refusal used to block (deleted in T4). B03r
+    // tasks 9+10 added `d-registration` (registration-ui smoke floor) — it
+    // declares TWO more entrants (the "shadow" rows a live run never seeds,
+    // build-packs/_tiny.ts's own comment) but NO streams of its own.
     const p = parsed(raw);
-    expect(p.divisions).toHaveLength(2);
-    expect(p.entrants).toHaveLength(4);
+    expect(p.divisions).toHaveLength(3);
+    expect(p.entrants).toHaveLength(6);
     expect(p.streams).toHaveLength(4);
     expect(p.streams.filter((s) => s.provenance === "reconstructed")).toHaveLength(2);
   });

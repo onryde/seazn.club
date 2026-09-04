@@ -29,6 +29,7 @@ vi.mock("../view-model", async (importOriginal) => {
 });
 
 import { EntryCard, type EntryCardProps } from "../entry-card";
+import type { EntryStatus } from "../view-model";
 
 const RAW_LEAK_SENTINEL = "Raw-Leak-Sentinel-Full-Name";
 
@@ -156,5 +157,76 @@ describe("EntryCard — pool_place_by_at deadline (RS012)", () => {
     );
     expect(html).toContain("Waiting for a team");
     expect(html).not.toContain(expectedDate);
+  });
+});
+
+// Bench hook (B03r) — the bench needs to read WHICH outcome a status page
+// shows without depending on the (per-locale) visible label, so the badge
+// carries both a fixed data-testid AND a data-status value. Critical repo
+// rule (AGENTS.md "Verification traps"): anchor on `="` — React serialises
+// an omitted prop as `"$undefined"`, so a bare `data-testid`/`data-status`
+// substring probe would pass in both the present and absent states.
+//
+// `EXHAUSTIVE_STATUSES` is typed as `Record<EntryStatus, true>` (view-
+// model.ts's own type) rather than a bare string list — if a status is
+// ever renamed or removed there, this object stops compiling instead of
+// silently asserting a stale set.
+describe("EntryCard — reg-status-outcome bench hook", () => {
+  const EXHAUSTIVE_STATUSES: Record<EntryStatus, true> = {
+    pending: true,
+    paid: true,
+    confirmed: true,
+    waitlisted: true,
+    withdrawn: true,
+    expired: true,
+    rejected: true,
+  };
+  void EXHAUSTIVE_STATUSES; // compile-time proof the two cases below are real EntryStatus members
+
+  function withStatus(status: EntryStatus) {
+    const props = baseProps();
+    return renderToStaticMarkup(<EntryCard {...props} entry={{ ...props.entry, status }} />);
+  }
+
+  it('carries data-testid="reg-status-outcome" and data-status="waitlisted" for a waitlisted entry', () => {
+    const html = withStatus("waitlisted");
+    expect(html).toContain('data-testid="reg-status-outcome"');
+    expect(html).toContain('data-status="waitlisted"');
+  });
+
+  it('carries data-testid="reg-status-outcome" and data-status="rejected" for a rejected entry — a DIFFERENT value than waitlisted, proving the attribute tracks the actual status rather than a constant', () => {
+    const html = withStatus("rejected");
+    expect(html).toContain('data-testid="reg-status-outcome"');
+    expect(html).toContain('data-status="rejected"');
+    expect(html).not.toContain('data-status="waitlisted"');
+  });
+
+  // `data-registration-id` sits beside `data-status` because the bench cannot
+  // read the submit RESPONSE: the stepper navigates here on success, and
+  // Playwright's `response.json()` then fails with "No resource with given
+  // identifier found" — the browser has discarded the body of a request whose
+  // page is gone. The landing URL carries only the GROUP's rid/token, and the
+  // public status API is entry-keyed, so this badge is the only place an
+  // entry's own id is observable from the page a registrant actually sees.
+  it('carries data-registration-id on the same badge, matching the entry it renders', () => {
+    const props = baseProps();
+    const html = renderToStaticMarkup(
+      <EntryCard {...props} entry={{ ...props.entry, id: "reg-abc-123", status: "confirmed" }} />,
+    );
+    // Anchored on `="` — React serialises an omitted prop as "$undefined", so
+    // a bare attribute-name probe passes in both the present and absent states.
+    expect(html).toContain('data-registration-id="reg-abc-123"');
+  });
+
+  it("data-registration-id tracks the entry rather than being a constant", () => {
+    const props = baseProps();
+    const other = renderToStaticMarkup(
+      <EntryCard {...props} entry={{ ...props.entry, id: "reg-zzz-999", status: "confirmed" }} />,
+    );
+    // The differential half. A hardcoded id would satisfy the test above
+    // forever, and a driver would then address the wrong entry — or the same
+    // one twice — with nothing failing.
+    expect(other).toContain('data-registration-id="reg-zzz-999"');
+    expect(other).not.toContain('data-registration-id="reg-abc-123"');
   });
 });

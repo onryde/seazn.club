@@ -512,15 +512,27 @@ export function RegisterStepper({
           register-stepper-interaction.test.tsx via the SAME z-index
           source-contract convention as cookie-consent-below-dialogs.test.ts). */}
       <div className="relative z-50 flex items-center justify-between">
-        <button type="button" onClick={goBack} disabled={stepIndex === 0} className={BTN_GHOST}>
+        <button
+          type="button"
+          data-testid="reg-back"
+          onClick={goBack}
+          disabled={stepIndex === 0}
+          className={BTN_GHOST}
+        >
           {t("register.nav.back")}
         </button>
         {currentStep === "review" ? (
-          <button type="button" onClick={handleSubmit} disabled={submitting} className={BTN_PRIMARY}>
+          <button
+            type="button"
+            data-testid="reg-submit"
+            onClick={handleSubmit}
+            disabled={submitting}
+            className={BTN_PRIMARY}
+          >
             {submitLabel}
           </button>
         ) : (
-          <button type="button" onClick={goNext} className={BTN_PRIMARY}>
+          <button type="button" data-testid="reg-next" onClick={goNext} className={BTN_PRIMARY}>
             {t("register.nav.next")}
           </button>
         )}

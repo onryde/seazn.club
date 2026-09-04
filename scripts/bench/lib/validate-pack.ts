@@ -186,7 +186,10 @@ import {
   type PackExpectedMatch,
   type PackExpectedTable,
   type PackLineupSlot,
+  type PackPerson,
   type PackProvenance,
+  type PackRegistrationBlock,
+  type PackRegistrationEntry,
   type PackStage,
   type PackStream,
 } from "./pack-schema.ts";
@@ -269,17 +272,29 @@ export interface ValidatePackOptions {
 // "the runner must remember to pass it" from a comment into a gate: the
 // obligation is on a caller that does not exist yet, so no runtime test in
 // this suite can witness it.
-type _ExpectedSuiteIsRequired = ValidatePackOptions extends { expectedSuite: string }
+type _ExpectedSuiteIsRequired = ValidatePackOptions extends {
+  expectedSuite: string;
+}
   ? true
   : never;
 export const EXPECTED_SUITE_IS_REQUIRED: _ExpectedSuiteIsRequired = true;
 
-const EMPTY_SPLIT: ProvenanceSplit = { real: 0, reconstructed: 0, synthetic: 0, total: 0 };
+const EMPTY_SPLIT: ProvenanceSplit = {
+  real: 0,
+  reconstructed: 0,
+  synthetic: 0,
+  total: 0,
+};
 
 /** The stage kinds that produce a TABLE rather than a bracket. `americano`
  *  rides the league fold (`engine-db/competition.ts:333`, "Jul3/08 §3"), which
  *  is why it belongs here and not with the bracket kinds. */
-const TABLE_STAGE_KINDS: ReadonlySet<string> = new Set(["league", "group", "swiss", "americano"]);
+const TABLE_STAGE_KINDS: ReadonlySet<string> = new Set([
+  "league",
+  "group",
+  "swiss",
+  "americano",
+]);
 
 // ---------------------------------------------------------------------------
 // Registry boot — mirrors apps/web/src/server/engine-db/registry.ts
@@ -384,7 +399,11 @@ export const OFFLINE_RECORDED_AT = "1970-01-01T00:00:00.000Z";
  * one of the three parity facts moved, and the stream a builder emitted would
  * then fold differently here than it did while it was being built.
  */
-export function packEnvelope(fixtureId: string, ev: PackEvent, i: number): EventEnvelope {
+export function packEnvelope(
+  fixtureId: string,
+  ev: PackEvent,
+  i: number,
+): EventEnvelope {
   return {
     id: String(i),
     fixtureId,
@@ -419,10 +438,16 @@ function toLineupSlot(slot: PackLineupSlot, i: number): LineupSlot {
     personId: sigil(slot.person),
     slot: slot.slot,
     orderNo: slot.orderNo ?? i + 1,
-    ...(slot.positionKey === undefined ? {} : { positionKey: slot.positionKey }),
+    ...(slot.positionKey === undefined
+      ? {}
+      : { positionKey: slot.positionKey }),
     ...(slot.roles.length === 0 ? {} : { roles: slot.roles }),
-    ...(slot.squadNumber === undefined ? {} : { squadNumber: slot.squadNumber }),
-    ...(slot.role === undefined || slot.role === "player" ? {} : { role: slot.role }),
+    ...(slot.squadNumber === undefined
+      ? {}
+      : { squadNumber: slot.squadNumber }),
+    ...(slot.role === undefined || slot.role === "player"
+      ? {}
+      : { role: slot.role }),
     ...(slot.pairOrder === undefined ? {} : { pairOrder: slot.pairOrder }),
   };
 }
@@ -438,7 +463,10 @@ function toLineupSlot(slot: PackLineupSlot, i: number): LineupSlot {
  * the seeded product will not have.
  */
 export function packLineupPair(stream: PackStream): LineupPair {
-  const side = (entrant: string, slots: readonly PackLineupSlot[] | undefined): Lineup => ({
+  const side = (
+    entrant: string,
+    slots: readonly PackLineupSlot[] | undefined,
+  ): Lineup => ({
     entrantId: sigil(entrant),
     slots: (slots ?? []).map(toLineupSlot),
   });
@@ -466,8 +494,16 @@ export function packLineupPair(stream: PackStream): LineupPair {
  */
 export type DivisionCfgResolution =
   | { readonly ok: true; readonly cfg: unknown }
-  | { readonly ok: false; readonly reason: "unknown_variant"; readonly declared: readonly string[] }
-  | { readonly ok: false; readonly reason: "cfg_invalid"; readonly detail: string };
+  | {
+      readonly ok: false;
+      readonly reason: "unknown_variant";
+      readonly declared: readonly string[];
+    }
+  | {
+      readonly ok: false;
+      readonly reason: "cfg_invalid";
+      readonly detail: string;
+    };
 
 export function resolveDivisionCfg(
   sportModule: AnySportModule,
@@ -475,9 +511,16 @@ export function resolveDivisionCfg(
 ): DivisionCfgResolution {
   const variants = sportModule.variants as Record<string, unknown>;
   if (!Object.prototype.hasOwnProperty.call(variants, division.variantKey)) {
-    return { ok: false, reason: "unknown_variant", declared: Object.keys(variants) };
+    return {
+      ok: false,
+      reason: "unknown_variant",
+      declared: Object.keys(variants),
+    };
   }
-  const merged = { ...(variants[division.variantKey] as object), ...division.cfgOverrides };
+  const merged = {
+    ...(variants[division.variantKey] as object),
+    ...division.cfgOverrides,
+  };
   const parsed = sportModule.configSchema.safeParse(merged);
   if (!parsed.success) {
     return {
@@ -497,7 +540,13 @@ export function resolveDivisionCfg(
 
 function deepEqual(a: unknown, b: unknown): boolean {
   if (Object.is(a, b)) return true;
-  if (typeof a !== "object" || typeof b !== "object" || a === null || b === null) return false;
+  if (
+    typeof a !== "object" ||
+    typeof b !== "object" ||
+    a === null ||
+    b === null
+  )
+    return false;
   if (Array.isArray(a) !== Array.isArray(b)) return false;
   if (Array.isArray(a) && Array.isArray(b)) {
     return a.length === b.length && a.every((item, i) => deepEqual(item, b[i]));
@@ -507,7 +556,10 @@ function deepEqual(a: unknown, b: unknown): boolean {
   const ak = Object.keys(ao);
   const bk = Object.keys(bo);
   if (ak.length !== bk.length) return false;
-  return ak.every((k) => Object.prototype.hasOwnProperty.call(bo, k) && deepEqual(ao[k], bo[k]));
+  return ak.every(
+    (k) =>
+      Object.prototype.hasOwnProperty.call(bo, k) && deepEqual(ao[k], bo[k]),
+  );
 }
 
 function show(value: unknown): string {
@@ -525,7 +577,10 @@ function show(value: unknown): string {
  * parsed cleanly and could never resolve. An unresolvable path is an error
  * here, never a skipped claim.
  */
-export function resolveStatePath(root: unknown, path: string): { found: boolean; value: unknown } {
+export function resolveStatePath(
+  root: unknown,
+  path: string,
+): { found: boolean; value: unknown } {
   let cursor: unknown = root;
   for (const segment of path.split(".")) {
     if (Array.isArray(cursor)) {
@@ -536,13 +591,601 @@ export function resolveStatePath(root: unknown, path: string): { found: boolean;
       cursor = cursor[index];
       continue;
     }
-    if (typeof cursor !== "object" || cursor === null) return { found: false, value: undefined };
+    if (typeof cursor !== "object" || cursor === null)
+      return { found: false, value: undefined };
     if (!Object.prototype.hasOwnProperty.call(cursor, segment)) {
       return { found: false, value: undefined };
     }
     cursor = (cursor as Record<string, unknown>)[segment];
   }
   return { found: true, value: cursor };
+}
+
+// ---------------------------------------------------------------------------
+// Stage 1.5 — the registration funnel (B03r, design §4)
+// ---------------------------------------------------------------------------
+//
+// Six offline checks over `pack.registration` alone — no engine, no
+// streams, so they run even for a division with no fixtures at all. Each is
+// its OWN function (same discipline as pack-schema.ts's cross-field rules:
+// "a reviewer can read one rule at a time, and a mutation sweep can delete
+// exactly one and watch exactly one test red"), and every finding names the
+// offending entry's `extKey` in its message.
+//
+// Rule 6 was found AFTER the first five landed, by opening the control a
+// testid had been attached to rather than trusting the testid
+// (B03r-repins-2026-09-03.md "A sixth stage-0 rule"): `joins[].consent`
+// claims a consent flow ("granted" or "guardian") that only exists when the
+// joining person's age agrees with it — see that rule's own doc comment
+// below for the full derivation.
+//
+// Two of the five (rule 1's per-person checks) are hand mirrors of
+// `apps/web/src/lib/registration-rules.ts`'s pure predicates
+// (`categoryEligibilityIssues`/`ageBandEligibilityIssues`/
+// `rosterCompositionIssues`) — the SAME "cannot import apps/web" constraint
+// `STAGE_DECIDER_KEYS` above lives under (GLOBAL.md: `@/` aliases do not
+// resolve here and most of that tree is `server-only`). Mirrored rather than
+// skipped: a `rejected_eligibility` entry never checked against the real
+// rule is exactly the "pack lies" failure design §4 exists to catch.
+//
+// Two gaps recorded in earlier passes of this file — CLOSED
+// 2026-09-04 (B03r-repins-2026-09-03.md "Gap 1"/"Gap 2", owner ruling
+// "fold both in now", ahead of the B06 freeze):
+//   Gap 1 — `PackRegistrationBlock.ageCutoffMonth`/`ageCutoffDay`
+//     (pack-schema.ts) now carry a non-1-January cutoff; `ageBandViolation`
+//     below reads them instead of hardcoding 1 January.
+//   Gap 2 — `PackPerson.gender` (pack-schema.ts) now admits `"x"`;
+//     `categoryViolation` below mirrors the product's "x never blocks"
+//     exemption instead of treating `"x"` as a `CATEGORY_MISMATCH`.
+
+type EligibilityPersonLike = Pick<PackPerson, "dob" | "gender">;
+
+/** Mirrors `categoryEligibilityIssues` (registration-rules.ts:188-206):
+ *  `mens`/`womens` requires the matching gender; `open`/`mixed`/null
+ *  constrain nothing here (`mixed` is roster-wide, see
+ *  `mixedCompositionViolation` below). A MISSING gender is also a
+ *  violation — the product's public submit path blocks on it too
+ *  (`registration-eligibility.ts` header, "the exact same two codes as
+ *  BLOCKING"), so a pack cannot claim a rejection is eligibility-driven by
+ *  simply omitting the field.
+ *
+ *  Gap 2, CLOSED: the product's own predicate exempts gender `"x"` ("x
+ *  never blocks", registration-rules.ts ~:177-178) — `PackPerson.gender`
+ *  (pack-schema.ts) now admits `"x"`, so this mirrors the exemption exactly:
+ *  a declared `"x"` never trips `CATEGORY_MISMATCH`, only a missing gender
+ *  or a genuinely wrong one does. */
+function categoryViolation(
+  category: string,
+  person: EligibilityPersonLike,
+): boolean {
+  if (category !== "mens" && category !== "womens") return false;
+  const needed = category === "mens" ? "m" : "f";
+  if (!person.gender) return true;
+  if (person.gender === "x") return false;
+  return person.gender !== needed;
+}
+
+/** Days per month, every year (no leap-year 29) — mirrors
+ *  `isValidCutoffDay`'s own `DAYS_IN_MONTH` table
+ *  (registration-rules.ts ~:213-220): a `(month, day)` cutoff is
+ *  re-evaluated against a DIFFERENT `seasonStartYear` every season, so a
+ *  leap-only day would silently roll over into 1 March three years out of
+ *  four. */
+const DAYS_IN_MONTH: readonly number[] = [
+  31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31,
+];
+
+/** Mirrors `isValidCutoffDay` (registration-rules.ts ~:222-225). */
+function isValidCutoffDayMirror(month: number, day: number): boolean {
+  const max = DAYS_IN_MONTH[month - 1];
+  return max != null && day >= 1 && day <= max;
+}
+
+/** Mirrors `ageBandEligibilityIssues` (registration-rules.ts:252-326),
+ *  including Gap 1's closure: `cutoffMonth`/`cutoffDay` default to 1/1
+ *  exactly like the product (`cutoffMonth ?? 1; cutoffDay ?? 1`,
+ *  registration-rules.ts:271-272) when the block leaves either unset, so an
+ *  existing pack that never sets them keeps meaning what it always meant.
+ *  An impossible combination (schema-level only range-checks 1-12/1-31, see
+ *  `PackRegistrationBlock.ageCutoffMonth`'s own doc comment) is handled the
+ *  same way the product handles a legacy row that predates its own
+ *  write-time validation: never throw, never roll into the wrong month —
+ *  skip enforcing the age band for that entry rather than invent a date
+ *  (registration-rules.ts's own comment on this, "never throw ... strictly
+ *  safer than either alternative"). A missing dob is also a violation, same
+ *  reasoning as `categoryViolation`. */
+function ageBandViolation(
+  ageMin: number | undefined,
+  ageMax: number | undefined,
+  person: EligibilityPersonLike,
+  seasonStartYear: number,
+  cutoffMonth: number | undefined,
+  cutoffDay: number | undefined,
+): boolean {
+  if (ageMin === undefined && ageMax === undefined) return false;
+  if (!person.dob) return true;
+  const month = cutoffMonth ?? 1;
+  const day = cutoffDay ?? 1;
+  if (!isValidCutoffDayMirror(month, day)) return false;
+  const cutoff = new Date(Date.UTC(seasonStartYear, month - 1, day));
+  const dob = new Date(`${person.dob}T00:00:00Z`);
+  let age = cutoff.getUTCFullYear() - dob.getUTCFullYear();
+  const beforeBirthday =
+    cutoff.getUTCMonth() < dob.getUTCMonth() ||
+    (cutoff.getUTCMonth() === dob.getUTCMonth() &&
+      cutoff.getUTCDate() < dob.getUTCDate());
+  if (beforeBirthday) age -= 1;
+  if (ageMax !== undefined && age > ageMax) return true;
+  if (ageMin !== undefined && age < ageMin) return true;
+  return false;
+}
+
+/** Mirrors `rosterCompositionIssues` (registration-rules.ts:397-410):
+ *  `mixed` needs at least one `m` AND one `f` among the roster; `x`/null
+ *  count toward neither side. An empty roster is NOT vacuously satisfied. */
+function mixedCompositionViolation(
+  category: string,
+  persons: readonly EligibilityPersonLike[],
+): boolean {
+  if (category !== "mixed") return false;
+  let hasM = false;
+  let hasF = false;
+  for (const person of persons) {
+    if (person.gender === "m") hasM = true;
+    if (person.gender === "f") hasF = true;
+  }
+  return !(hasM && hasF);
+}
+
+/** Mirrors `seasonStartYearFrom` (registration-rules.ts:351-355).
+ *  `pack.competition.startsOn` is OPTIONAL (pack-schema.ts) — absent, the
+ *  product (and this mirror) falls back to THIS YEAR, which makes a
+ *  registration-carrying pack's age-band checks depend on wall-clock time.
+ *  Recorded as a finding for the task report; every pack that declares an
+ *  age-restricted division should set `startsOn` for that reason. */
+function seasonStartYearOf(pack: Pack): number {
+  return pack.competition.startsOn
+    ? new Date(`${pack.competition.startsOn}T00:00:00Z`).getUTCFullYear()
+    : new Date().getUTCFullYear();
+}
+
+/** The declared entering persons for one entry — captain plus roster,
+ *  deduplicated by ref. `PackSchema` already cross-checks both against
+ *  `pack.persons` (Task 1), so every ref resolves for a parsed pack; a ref
+ *  that somehow does not is silently dropped rather than asserted; there is
+ *  nothing a stage-0 rule about ELIGIBILITY can usefully say about a dangling
+ *  ref that stage 1 would have already refused. */
+function enteringPersons(
+  entry: PackRegistrationEntry,
+  personsByRef: ReadonlyMap<string, PackPerson>,
+): PackPerson[] {
+  const refs = [entry.captain, ...entry.roster];
+  const seen = new Set<string>();
+  const persons: PackPerson[] = [];
+  for (const ref of refs) {
+    if (seen.has(ref)) continue;
+    seen.add(ref);
+    const person = personsByRef.get(ref);
+    if (person !== undefined) persons.push(person);
+  }
+  return persons;
+}
+
+function registrationEntryLabel(
+  divisionRef: string,
+  entry: PackRegistrationEntry,
+  i: number,
+): string {
+  return `registration.byDivision[${divisionRef}].entries[${i}] (${entry.extKey})`;
+}
+
+/** Design §4 check 1: every `rejected_eligibility` entry must actually
+ *  violate its division's restriction, given the entering persons' declared
+ *  `dob`/`gender` — else the pack is claiming a rejection reality would not
+ *  produce ("the pack lies"). */
+function checkRejectedEligibilityOffenders(
+  divisionRef: string,
+  block: PackRegistrationBlock,
+  personsByRef: ReadonlyMap<string, PackPerson>,
+  seasonStartYear: number,
+): PackFinding[] {
+  const findings: PackFinding[] = [];
+  block.entries.forEach((entry, i) => {
+    if (entry.expect !== "rejected_eligibility") return;
+    const persons = enteringPersons(entry, personsByRef);
+    const violates =
+      persons.some(
+        (p) =>
+          categoryViolation(block.category, p) ||
+          ageBandViolation(
+            block.ageMin,
+            block.ageMax,
+            p,
+            seasonStartYear,
+            block.ageCutoffMonth,
+            block.ageCutoffDay,
+          ),
+      ) || mixedCompositionViolation(block.category, persons);
+    if (!violates) {
+      findings.push({
+        code: "registration.rejected_not_violating",
+        severity: "error",
+        where: registrationEntryLabel(divisionRef, entry, i),
+        message:
+          `entry "${entry.extKey}" declares expect:"rejected_eligibility" against division ` +
+          `"${divisionRef}" (category:${block.category}` +
+          `${block.ageMin !== undefined ? ` ageMin:${block.ageMin}` : ""}` +
+          `${block.ageMax !== undefined ? ` ageMax:${block.ageMax}` : ""}) but none of its entering ` +
+          `persons actually violate that restriction — the pack lies`,
+      });
+    }
+  });
+  return findings;
+}
+
+/** Design §4 check 2: `expect.entrants == entries − rejected − waitlisted`,
+ *  where `rejected` counts entries tagged `rejected_eligibility` OR
+ *  `rejected_manual` and `waitlisted` counts entries tagged `waitlisted` —
+ *  both tallied from the entries' OWN `expect` tags, so the identity is a
+ *  pure consistency check on the block's own declarations (it does not
+ *  re-derive who SHOULD be rejected/waitlisted; rules 1 and 3 do that). */
+function checkExpectArithmetic(
+  divisionRef: string,
+  block: PackRegistrationBlock,
+): PackFinding[] {
+  const rejected = block.entries.filter(
+    (e) =>
+      e.expect === "rejected_eligibility" || e.expect === "rejected_manual",
+  );
+  const waitlisted = block.entries.filter((e) => e.expect === "waitlisted");
+  const expectedEntrants =
+    block.entries.length - rejected.length - waitlisted.length;
+  if (block.expect.entrants === expectedEntrants) return [];
+  return [
+    {
+      code: "registration.expect_arithmetic",
+      severity: "error",
+      where: `registration.byDivision[${divisionRef}].expect.entrants`,
+      message:
+        `division "${divisionRef}" declares expect.entrants:${block.expect.entrants} but ` +
+        `entries(${block.entries.length}) − rejected(${rejected.length}) − waitlisted(${waitlisted.length}) ` +
+        `= ${expectedEntrants} — rejected:[${rejected.map((e) => e.extKey).join(", ")}] ` +
+        `waitlisted:[${waitlisted.map((e) => e.extKey).join(", ")}]`,
+    },
+  ];
+}
+
+/** Design §4 check 3: `capacity` vs ADMITTED entries (tagged `entrant` or
+ *  `waitlisted` — i.e. not rejected) produces exactly the declared
+ *  `expect.waitlisted`. An unset `capacity` means nothing forces a
+ *  waitlist, so the expected count is 0 either way admitted count is
+ *  ignored in that branch. */
+function checkCapacityWaitlist(
+  divisionRef: string,
+  block: PackRegistrationBlock,
+): PackFinding[] {
+  const admitted = block.entries.filter(
+    (e) => e.expect === "entrant" || e.expect === "waitlisted",
+  );
+  const expectedWaitlisted =
+    block.capacity === undefined
+      ? 0
+      : Math.max(0, admitted.length - block.capacity);
+  if (block.expect.waitlisted === expectedWaitlisted) return [];
+  return [
+    {
+      code: "registration.waitlist_mismatch",
+      severity: "error",
+      where: `registration.byDivision[${divisionRef}].expect.waitlisted`,
+      message:
+        `division "${divisionRef}" declares expect.waitlisted:${block.expect.waitlisted} but capacity` +
+        `${block.capacity === undefined ? " is unset" : `:${block.capacity}`} against ${admitted.length} ` +
+        `admitted entries [${admitted.map((e) => e.extKey).join(", ")}] produces ${expectedWaitlisted}`,
+    },
+  ];
+}
+
+/** Design §4 check 4: `pay: true` requires the division's `feeCents > 0` —
+ *  a free division has nothing for an entrant to pay. */
+function checkPayRequiresFee(
+  divisionRef: string,
+  block: PackRegistrationBlock,
+): PackFinding[] {
+  const findings: PackFinding[] = [];
+  block.entries.forEach((entry, i) => {
+    if (!entry.pay || block.feeCents > 0) return;
+    findings.push({
+      code: "registration.pay_requires_fee",
+      severity: "error",
+      where: registrationEntryLabel(divisionRef, entry, i),
+      message:
+        `entry "${entry.extKey}" declares pay:true but division "${divisionRef}" feeCents is ` +
+        `${block.feeCents} — nothing to pay`,
+    });
+  });
+  return findings;
+}
+
+/** Stage-0 rule 7 (added B03r, 2026-09-04): `pay: true` additionally requires
+ *  the division's `paymentMethod` to be "stripe".
+ *
+ *  `resumeRegistrationCheckout` refuses to mint a Checkout session for any
+ *  division whose `registration_settings.payment_method` is not "stripe"
+ *  (usecases/registrations.ts:4365), so an entry declaring `pay: true` against
+ *  an "offline" division cannot pay by construction — the run would configure
+ *  a bank-transfer division and then drive a card through it.
+ *
+ *  This rule exists because that combination was not merely possible, it was
+ *  the ONLY thing the bench could express: the pack had no `paymentMethod`
+ *  field, the driver's PUT omitted the key, and the product defaulted it to
+ *  "offline". `payViaCheckout` was written, typed and unit-green while being
+ *  unreachable from every pack in the tree. Rule 4 (`pay_requires_fee`) does
+ *  not catch it — a fee can be perfectly real and still be collected offline.
+ *  Caught offline, before any HTTP, because the alternative symptom is an
+ *  opaque mint failure deep inside a live run. */
+function checkPayRequiresStripe(
+  divisionRef: string,
+  block: PackRegistrationBlock,
+): PackFinding[] {
+  const findings: PackFinding[] = [];
+  block.entries.forEach((entry, i) => {
+    if (!entry.pay || block.paymentMethod === "stripe") return;
+    findings.push({
+      code: "registration.pay_requires_stripe",
+      severity: "error",
+      where: registrationEntryLabel(divisionRef, entry, i),
+      message:
+        `entry "${entry.extKey}" declares pay:true but division "${divisionRef}" declares ` +
+        `paymentMethod:"${block.paymentMethod}" — resumeRegistrationCheckout mints a Checkout ` +
+        `session only for "stripe" (usecases/registrations.ts:4365), so this entry can never pay`,
+    });
+  });
+  return findings;
+}
+
+/** Stage-0 rule 8 (added B03r, 2026-09-04) — the CONVERSE of rule 7. On a
+ *  `paymentMethod: "stripe"` division, an entry that expects to become an
+ *  entrant must declare `pay: true`.
+ *
+ *  Established live, not assumed: on a stripe division the product collects at
+ *  SUBMIT (the stepper redirects straight to hosted Checkout), so a per-entry
+ *  `pay: false` does NOT stop that entry being charged. The first live paid run
+ *  declared `pay: false` on its second entry and reported `paidCents 200`
+ *  against a declared 100 — the pack was wrong, not the product.
+ *
+ *  Why it has to be caught offline rather than left to the funnel oracle: with
+ *  `pay: false` the runner's own `if (entry.pay && outcome.ref)` gate stays
+ *  false, so `pay()` never runs and neither does its `?reconcile=1` poll. The
+ *  entry's final state then depends on the webhook landing before
+ *  `fetchFinalRows()` reads — a race, which is exactly the kind of flake a
+ *  bench must not have.
+ *
+ *  Scoped to `expect: "entrant"` on purpose. A waitlisted entry is not charged
+ *  (it never clears capacity), and a rejected one never gets a row at all — so
+ *  `pay: false` is correct for both, and a blanket rule would ban them. */
+function checkStripeEntrantMustPay(
+  divisionRef: string,
+  block: PackRegistrationBlock,
+): PackFinding[] {
+  if (block.paymentMethod !== "stripe") return [];
+  const findings: PackFinding[] = [];
+  block.entries.forEach((entry, i) => {
+    if (entry.pay || entry.expect !== "entrant") return;
+    findings.push({
+      code: "registration.stripe_entrant_must_pay",
+      severity: "error",
+      where: registrationEntryLabel(divisionRef, entry, i),
+      message:
+        `entry "${entry.extKey}" expects "entrant" on division "${divisionRef}" (paymentMethod:"stripe") but declares ` +
+        `pay:false — a stripe division collects at SUBMIT, so this entry WILL be charged and the pack's own ` +
+        `expect.paidCents will not match what the product produces`,
+    });
+  });
+  return findings;
+}
+
+/** Design §4 check 5: `divisions[].entry: "registration-api"|"registration-
+ *  ui"` with an age band OR a non-`open` category requires `dob`/`gender`
+ *  on EVERY entering person — an admin-seeded division (`entry:"admin"`,
+ *  the default) never needs this, because nothing collects it through a
+ *  public form for that division.
+ *
+ *  Widened (B03r-repins-2026-09-03.md dispatch, "fix a live-only crash in
+ *  the registration runner"): `register.ts`'s `buildRegistrationEntry` sets
+ *  `registeringSelf: true` UNCONDITIONALLY for every entry of an
+ *  "individual" division — the captain IS the entrant for that entrant
+ *  kind, by construction. `PublicRegisterGroupRequest`'s superRefine
+ *  (apps/web/src/server/api-v1/schemas.ts) 400s ANY self-registering entry
+ *  lacking `contact.dob`, INDEPENDENT of whether the division declares an
+ *  age band — so an `open`, no-age-band, individual-kind division used to
+ *  be a LEGAL pack that crashed live (nothing above required a dob for
+ *  it). Scoped to the CAPTAIN only, not every `enteringPersons` row: a
+ *  team/pair entry's roster members never self-register (`register.ts`
+ *  leaves `registeringSelf` unset for those kinds — a captain entering a
+ *  team is not necessarily registering themselves, and the pack model has
+ *  no field saying they are), so requiring their dob here would be a false
+ *  positive this rule has no business raising.
+ *
+ *  Gap 2: this checks PRESENCE only (`person.gender === undefined`), never
+ *  correctness against the category — a declared `"x"` satisfies it exactly
+ *  like `"m"`/`"f"` do, with no special-casing needed here. Whether that `"x"`
+ *  is actually eligible for a `mens`/`womens` division is rule 1's question
+ *  (`categoryViolation` above), not this one's. */
+function checkRegistrationRequiresDobGender(
+  division: PackDivision,
+  block: PackRegistrationBlock,
+  personsByRef: ReadonlyMap<string, PackPerson>,
+): PackFinding[] {
+  if (division.entry === "admin") return [];
+  const ageBandDeclared =
+    block.ageMin !== undefined || block.ageMax !== undefined;
+  const needsGender = block.category !== "open";
+  // Only an "individual" entrantKind division has `register.ts` claim
+  // `registeringSelf: true` for its entries — see this function's own doc
+  // comment above.
+  const selfRegisters = block.entrantKind === "individual";
+  if (!ageBandDeclared && !needsGender && !selfRegisters) return [];
+  const findings: PackFinding[] = [];
+  block.entries.forEach((entry, i) => {
+    for (const person of enteringPersons(entry, personsByRef)) {
+      const isCaptain = person.ref === entry.captain;
+      if (
+        person.dob === undefined &&
+        (ageBandDeclared || (selfRegisters && isCaptain))
+      ) {
+        findings.push({
+          code: "registration.missing_dob",
+          severity: "error",
+          where: registrationEntryLabel(division.ref, entry, i),
+          message: ageBandDeclared
+            ? `entry "${entry.extKey}" enters division "${division.ref}" (entry:"${division.entry}", ` +
+              `age band declared) through person "${person.ref}" with no dob`
+            : `entry "${entry.extKey}" enters division "${division.ref}" (entry:"${division.entry}", ` +
+              `entrantKind:"individual") through captain "${person.ref}" with no dob — an individual entry ` +
+              `always registers the captain as self, and the API 400s any self-registering entry lacking contact.dob`,
+        });
+      }
+      if (needsGender && person.gender === undefined) {
+        findings.push({
+          code: "registration.missing_gender",
+          severity: "error",
+          where: registrationEntryLabel(division.ref, entry, i),
+          message:
+            `entry "${entry.extKey}" enters division "${division.ref}" (entry:"${division.entry}", ` +
+            `category:"${block.category}") through person "${person.ref}" with no gender`,
+        });
+      }
+    }
+  });
+  return findings;
+}
+
+/** The stage-0 consequence of Job 1's currency move (`PackOrg.currency`'s
+ *  own doc comment): a division that prices a fee needs a currency to price
+ *  it in, and `org.currency` has no `.default()` on purpose (the "silent
+ *  'gbp'" gap that comment forbids) — so a pack pricing a fee with no
+ *  org.currency declared is stuck exactly where a real org would be. */
+function checkCurrencyRequiredForFee(
+  divisionRef: string,
+  block: PackRegistrationBlock,
+  orgCurrency: string | undefined,
+): PackFinding[] {
+  if (block.feeCents <= 0 || orgCurrency !== undefined) return [];
+  return [
+    {
+      code: "registration.currency_required",
+      severity: "error",
+      where: "org.currency",
+      message:
+        `division "${divisionRef}" prices a fee (feeCents:${block.feeCents}) but org.currency is unset — ` +
+        `currency moved to the org (V365__org_currency.sql) and is required wherever a fee is priced`,
+    },
+  ];
+}
+
+/** `PackRegistrationBlock` infers `joins` inline (`pack-schema.ts` exports
+ *  no separate `PackRegistrationJoin` TYPE, only the zod schema it is built
+ *  from) — indexed off the block type here rather than editing
+ *  pack-schema.ts for a type alias this file is the only consumer of. */
+type PackRegistrationJoin = PackRegistrationBlock["joins"][number];
+
+function registrationJoinLabel(
+  divisionRef: string,
+  join: PackRegistrationJoin,
+  i: number,
+): string {
+  return `registration.byDivision[${divisionRef}].joins[${i}] (person:${join.person} -> entry:${join.entry})`;
+}
+
+/** Mirrors `isMinor`/`ageAt` (apps/web/src/lib/registration-rules.ts:56-68):
+ *  whole years between `dob` and `now`, decremented if `now` falls before
+ *  the birthday. A MISSING dob is treated as adult, not as its own
+ *  violation (unlike `categoryViolation`/`ageBandViolation` above) — that is
+ *  what the product itself does: `joinTeamEntry`'s guardian gate
+ *  (registration-submit.ts:1214) computes
+ *  `minor = !!input.player.dob && isMinor(input.player.dob, now)`, so an
+ *  absent dob can never trip the server's guardian requirement either. */
+function isMinorAt(dob: string | undefined, now: Date): boolean {
+  if (!dob) return false;
+  const born = new Date(`${dob}T00:00:00Z`);
+  let age = now.getUTCFullYear() - born.getUTCFullYear();
+  const beforeBirthday =
+    now.getUTCMonth() < born.getUTCMonth() ||
+    (now.getUTCMonth() === born.getUTCMonth() &&
+      now.getUTCDate() < born.getUTCDate());
+  if (beforeBirthday) age -= 1;
+  return age < 18;
+}
+
+/**
+ * Design §4 check 6 (B03r-repins-2026-09-03.md "A sixth stage-0 rule"):
+ * `joins[].consent` must agree with whether the joining PERSON is actually a
+ * minor, in BOTH directions.
+ *
+ * Derived from `isMinor`/`ageAt` (registration-rules.ts:56-68) rather than
+ * from `guardianRequired` (components/public-site/register/validation.ts)
+ * directly, because `guardianRequired` takes a `CartState`/`ContactState`
+ * pair a pack join has neither shape of — but it is a thin wrapper over
+ * exactly this predicate: `guardianRequired` -> `effectiveSelfDob` ->
+ * `isMinor(dob, now)`. Mirroring `isMinor` itself reaches the identical
+ * verdict with inputs a pack CAN supply (a person ref's `dob`).
+ *
+ * Uses WALL-CLOCK `now` (computed once in `validatePack` below), NOT the
+ * `seasonStartYear` cutoff `ageBandViolation` above uses for eligibility —
+ * a deliberately DIFFERENT date basis. The product's own
+ * `showGuardian = guardianRequired(cart, contact, new Date())`
+ * (step-consent.tsx:54) evaluates minority at the moment someone actually
+ * registers, not against a season-start cutoff; reusing the eligibility
+ * cutoff here would silently answer a different question than the one the
+ * product asks.
+ *
+ * BOTH directions are the SAME defect mirrored, so both are checked as one
+ * equivalence (`consent === "guardian"` iff minor):
+ *  - "guardian" declared for an ADULT: `showGuardian` is false, so the
+ *    product renders NO guardian control at all for them — the browser
+ *    driver hangs on a selector that never appears, and the join usecase
+ *    derives `consent_status` from `minor` regardless of what a pack
+ *    declares (registration-submit.ts:1231), so the "guardian" flow the
+ *    pack promised can never happen.
+ *  - "granted" declared for a MINOR: `joinTeamEntry`'s own guardian gate
+ *    (registration-submit.ts:1215) unconditionally throws 422 ("A
+ *    guardian's name and consent are required for players under 18") once
+ *    `minor` is true and no `guardian_consent`/`guardian_name` was
+ *    supplied — a pack telling a driver "granted" is fine for a minor is
+ *    certain to fail live, the same "pack lies" class rule 1 exists for.
+ */
+function checkJoinConsentMatchesMinority(
+  divisionRef: string,
+  block: PackRegistrationBlock,
+  personsByRef: ReadonlyMap<string, PackPerson>,
+  now: Date,
+): PackFinding[] {
+  const findings: PackFinding[] = [];
+  block.joins.forEach((join, i) => {
+    const person = personsByRef.get(join.person);
+    // Dangling ref: PackSchema's own checkRegistration already refuses a
+    // pack whose join.person does not resolve, so nothing useful to say here.
+    if (person === undefined) return;
+    const minor = isMinorAt(person.dob, now);
+    const expected: "granted" | "guardian" = minor ? "guardian" : "granted";
+    if (join.consent === expected) return;
+    const dobNote = person.dob ? `dob ${person.dob}` : "no dob on record";
+    findings.push({
+      code: "registration.join_consent_mismatch",
+      severity: "error",
+      where: registrationJoinLabel(divisionRef, join, i),
+      message: minor
+        ? `join for person "${join.person}" (${dobNote}) into entry "${join.entry}" in division ` +
+          `"${divisionRef}" declares consent:"granted", but that person is a MINOR as of ` +
+          `${now.toISOString().slice(0, 10)} — the server's guardian gate (registration-submit.ts) ` +
+          `unconditionally rejects a minor join with no guardian_consent/guardian_name`
+        : `join for person "${join.person}" (${dobNote}) into entry "${join.entry}" in division ` +
+          `"${divisionRef}" declares consent:"guardian", but that person is an ADULT — the product's ` +
+          `guardian control (step-consent.tsx's showGuardian) never renders for them, so the pack is ` +
+          `claiming a flow the product will never show`,
+    });
+  });
+  return findings;
 }
 
 // ---------------------------------------------------------------------------
@@ -581,7 +1224,10 @@ function streamLabel(stream: PackStream, index: number): string {
  * division, so a ref that resolves to nothing here is unreachable for a parsed
  * pack — the `find` still returns `undefined` rather than asserting.
  */
-function resolveStage(division: PackDivision, stream: PackStream): PackStage | undefined {
+function resolveStage(
+  division: PackDivision,
+  stream: PackStream,
+): PackStage | undefined {
   if (stream.stageRef !== undefined) {
     return division.stages.find((stage) => stage.ref === stream.stageRef);
   }
@@ -620,7 +1266,10 @@ function unbindableOverlayKeys(
 // The validator
 // ---------------------------------------------------------------------------
 
-export function validatePack(raw: unknown, opts: ValidatePackOptions): PackValidation {
+export function validatePack(
+  raw: unknown,
+  opts: ValidatePackOptions,
+): PackValidation {
   const findings: PackFinding[] = [];
   const add = (
     severity: PackFindingSeverity,
@@ -684,6 +1333,45 @@ export function validatePack(raw: unknown, opts: ValidatePackOptions): PackValid
   }
   const registryHandle = bootRegistry();
 
+  // -- Stage 1.5: registration funnel (design §4, B03r) --------------------
+  // Pure — runs independently of streams/engine, so it executes even for a
+  // registration division with none yet.
+  if (pack.registration !== undefined) {
+    const personsByRef = new Map(pack.persons.map((p) => [p.ref, p]));
+    const seasonStartYear = seasonStartYearOf(pack);
+    // Computed ONCE so every join in this validatePack call is judged
+    // against the same instant, same reasoning as `seasonStartYear` above —
+    // see checkJoinConsentMatchesMinority's own doc comment for why this is
+    // wall-clock `now` rather than the season-start cutoff `seasonStartYear`
+    // itself is.
+    const now = new Date();
+    for (const division of pack.divisions) {
+      const block = pack.registration.byDivision[division.ref];
+      if (block === undefined) continue;
+      findings.push(
+        ...checkRejectedEligibilityOffenders(
+          division.ref,
+          block,
+          personsByRef,
+          seasonStartYear,
+        ),
+        ...checkExpectArithmetic(division.ref, block),
+        ...checkCapacityWaitlist(division.ref, block),
+        ...checkPayRequiresFee(division.ref, block),
+        ...checkPayRequiresStripe(division.ref, block),
+        ...checkStripeEntrantMustPay(division.ref, block),
+        ...checkRegistrationRequiresDobGender(division, block, personsByRef),
+        ...checkCurrencyRequiredForFee(division.ref, block, pack.org.currency),
+        ...checkJoinConsentMatchesMinority(
+          division.ref,
+          block,
+          personsByRef,
+          now,
+        ),
+      );
+    }
+  }
+
   // WHICH STAGE each stream folds under — resolved ONCE, so the fold, the
   // overlay warning and the standings derivation cannot answer it three ways.
   const stageOfStream = new Map<string, PackStage | undefined>();
@@ -698,7 +1386,10 @@ export function validatePack(raw: unknown, opts: ValidatePackOptions): PackValid
     pack.streams.filter((stream) => stream.divisionRef === divisionRef);
   const unboundOf = (divisionRef: string): PackStream[] =>
     streamsOf(divisionRef).filter(
-      (stream) => stageOfStream.get(fixtureKey(stream.divisionRef, stream.fixtureExtKey)) === undefined,
+      (stream) =>
+        stageOfStream.get(
+          fixtureKey(stream.divisionRef, stream.fixtureExtKey),
+        ) === undefined,
     );
 
   for (const division of pack.divisions) {
@@ -736,7 +1427,10 @@ export function validatePack(raw: unknown, opts: ValidatePackOptions): PackValid
 
     let sportModule: AnySportModule;
     try {
-      sportModule = registryHandle.get(division.sportKey, division.moduleVersion);
+      sportModule = registryHandle.get(
+        division.sportKey,
+        division.moduleVersion,
+      );
     } catch (err) {
       fail(
         "fold.module_not_found",
@@ -766,7 +1460,9 @@ export function validatePack(raw: unknown, opts: ValidatePackOptions): PackValid
       }
       return;
     }
-    const stage = stageOfStream.get(fixtureKey(stream.divisionRef, stream.fixtureExtKey));
+    const stage = stageOfStream.get(
+      fixtureKey(stream.divisionRef, stream.fixtureExtKey),
+    );
     const cfg = stageScopedFoldCfg(resolved.cfg, stage?.config);
 
     let state: unknown;
@@ -797,14 +1493,22 @@ export function validatePack(raw: unknown, opts: ValidatePackOptions): PackValid
       // — so this is parity, not a gap opened here; the message says which
       // kind of refusal it was rather than leaving a reader to wonder.
       if (err instanceof EngineError) {
-        const index = Number((err.data as { eventId?: string } | undefined)?.eventId);
+        const index = Number(
+          (err.data as { eventId?: string } | undefined)?.eventId,
+        );
         const at = Number.isFinite(index)
           ? `event #${index} ("${stream.events[index]?.type ?? "?"}")`
           : `an event it did not name (a refusal thrown inside the sport module carries no data.eventId)`;
-        fail("fold.rejected", `the engine refused ${at} with ${err.code}: ${err.message}`);
+        fail(
+          "fold.rejected",
+          `the engine refused ${at} with ${err.code}: ${err.message}`,
+        );
         return;
       }
-      fail("fold.threw", `folding this stream threw a non-engine error: ${String(err)}`);
+      fail(
+        "fold.threw",
+        `folding this stream threw a non-engine error: ${String(err)}`,
+      );
       return;
     }
 
@@ -837,7 +1541,10 @@ export function validatePack(raw: unknown, opts: ValidatePackOptions): PackValid
   // guarantees every stream has one (its anti-vacuity rule), so a missing
   // entry here is unreachable for a parsed pack.
   const matchByFixture = new Map<string, PackExpectedMatch>(
-    pack.expected.matches.map((m) => [fixtureKey(m.divisionRef, m.fixtureExtKey), m]),
+    pack.expected.matches.map((m) => [
+      fixtureKey(m.divisionRef, m.fixtureExtKey),
+      m,
+    ]),
   );
   pack.streams.forEach((stream, i) => {
     const key = fixtureKey(stream.divisionRef, stream.fixtureExtKey);
@@ -906,15 +1613,24 @@ export function validatePack(raw: unknown, opts: ValidatePackOptions): PackValid
     // Only the streams that belong to THIS stage. With every stream bound,
     // a multi-stage division gets a table per stage instead of one wrong one.
     const streams = streamsOf(division.ref).filter(
-      (st) => stageOfStream.get(fixtureKey(st.divisionRef, st.fixtureExtKey))?.ref === stage.ref,
+      (st) =>
+        stageOfStream.get(fixtureKey(st.divisionRef, st.fixtureExtKey))?.ref ===
+        stage.ref,
     );
-    const rows = deriveStandings(division, stage, streams, seedByEntrant, folded);
+    const rows = deriveStandings(
+      division,
+      stage,
+      streams,
+      seedByEntrant,
+      folded,
+    );
     if (typeof rows === "string") {
       add("error", "standings.underivable", where, rows);
       return;
     }
     const divergence = firstTableDivergence(rows, table);
-    if (divergence !== null) add("error", divergence.code, where, divergence.message);
+    if (divergence !== null)
+      add("error", divergence.code, where, divergence.message);
   });
 
   // Q3 — a TABLE-kind stage with folded streams and no `expected.tables` row
@@ -925,14 +1641,18 @@ export function validatePack(raw: unknown, opts: ValidatePackOptions): PackValid
   // owed is an authoring judgement, and the better long-term home is the
   // schema's own anti-vacuity check before the B06 freeze.
   const tabled = new Set(
-    pack.expected.tables.map((table) => fixtureKey(table.divisionRef, table.stageRef)),
+    pack.expected.tables.map((table) =>
+      fixtureKey(table.divisionRef, table.stageRef),
+    ),
   );
   for (const division of pack.divisions) {
     for (const stage of division.stages) {
       if (!TABLE_STAGE_KINDS.has(stage.kind)) continue;
       if (tabled.has(fixtureKey(division.ref, stage.ref))) continue;
       const played = streamsOf(division.ref).filter(
-        (st) => stageOfStream.get(fixtureKey(st.divisionRef, st.fixtureExtKey))?.ref === stage.ref,
+        (st) =>
+          stageOfStream.get(fixtureKey(st.divisionRef, st.fixtureExtKey))
+            ?.ref === stage.ref,
       );
       if (played.length === 0) continue;
       add(
@@ -968,11 +1688,19 @@ export function validatePack(raw: unknown, opts: ValidatePackOptions): PackValid
       // product clamps to 8 (usecases/stages.ts:756), so past that the implied
       // count is not the count the generator would mint and a warning built
       // from it would be wrong rather than merely unhelpful.
-      if (!(legs === undefined || (typeof legs === "number" && Number.isInteger(legs) && legs >= 1 && legs <= 8))) {
+      if (!(
+        legs === undefined ||
+        (typeof legs === "number" &&
+          Number.isInteger(legs) &&
+          legs >= 1 &&
+          legs <= 8)
+      )) {
         continue;
       }
       const bound = streamsOf(division.ref).filter(
-        (st) => stageOfStream.get(fixtureKey(st.divisionRef, st.fixtureExtKey))?.ref === stage.ref,
+        (st) =>
+          stageOfStream.get(fixtureKey(st.divisionRef, st.fixtureExtKey))
+            ?.ref === stage.ref,
       );
       const implied = roundRobinFixtureCount(entrants, legs ?? 1);
       if (bound.length === 0) {
@@ -1087,7 +1815,9 @@ export function validatePack(raw: unknown, opts: ValidatePackOptions): PackValid
   // -- Stage 4: specials --------------------------------------------------
   pack.expected.specials.forEach((special, i) => {
     const where = `expected.specials[${i}] (${special.kind} ${special.divisionRef}/${special.fixtureExtKey})`;
-    const fold = folded.get(fixtureKey(special.divisionRef, special.fixtureExtKey));
+    const fold = folded.get(
+      fixtureKey(special.divisionRef, special.fixtureExtKey),
+    );
     if (fold === undefined) {
       add(
         "warning",
@@ -1133,7 +1863,10 @@ interface Divergence {
   readonly message: string;
 }
 
-function firstMatchDivergence(fold: FoldedStream, expected: PackExpectedMatch): Divergence | null {
+function firstMatchDivergence(
+  fold: FoldedStream,
+  expected: PackExpectedMatch,
+): Divergence | null {
   const outcome = fold.outcome;
   const want = expected.outcome;
   if (outcome.kind !== want.kind) {
@@ -1183,11 +1916,14 @@ function firstMatchDivergence(fold: FoldedStream, expected: PackExpectedMatch): 
     // contractual (pack-schema.ts's own note on the pack convention), so an
     // index comparison would silently assert the module's array order.
     for (const side of expected.perSide) {
-      const got = fold.summary.perSide.find((s) => s.entrantId === sigil(side.entrant));
+      const got = fold.summary.perSide.find(
+        (s) => s.entrantId === sigil(side.entrant),
+      );
       if (got === undefined) {
         return {
           code: "match.side_missing",
-          message: `perSide names entrant "${side.entrant}" but the module's summary has no line ` +
+          message:
+            `perSide names entrant "${side.entrant}" but the module's summary has no line ` +
             `for it (it has [${fold.summary.perSide.map((s) => s.entrantId).join(", ")}])`,
         };
       }
@@ -1237,7 +1973,8 @@ function deriveStandings(
   let pointsRule: PointsRule | null = null;
   if (pointsRuleRaw !== undefined && pointsRuleRaw !== null) {
     const rule = PointsRule.safeParse(pointsRuleRaw);
-    if (!rule.success) return `stage "${stage.ref}" declares a points rule the engine refuses: ${rule.error.message}`;
+    if (!rule.success)
+      return `stage "${stage.ref}" declares a points rule the engine refuses: ${rule.error.message}`;
     pointsRule = rule.data;
   }
 
@@ -1245,15 +1982,23 @@ function deriveStandings(
   const entrants: string[] = [];
   const seen = new Set<string>();
   for (const stream of streams) {
-    const fold = folded.get(fixtureKey(stream.divisionRef, stream.fixtureExtKey));
-    if (fold === undefined) return `stream "${stream.fixtureExtKey}" has no folded outcome`;
+    const fold = folded.get(
+      fixtureKey(stream.divisionRef, stream.fixtureExtKey),
+    );
+    if (fold === undefined)
+      return `stream "${stream.fixtureExtKey}" has no folded outcome`;
     for (const side of [stream.home, stream.away]) {
       if (!seen.has(side)) {
         seen.add(side);
         entrants.push(sigil(side));
       }
     }
-    const pair = fold.module.standingsDelta(fold.outcome, fold.cfg, ctxBase, fold.state);
+    const pair = fold.module.standingsDelta(
+      fold.outcome,
+      fold.cfg,
+      ctxBase,
+      fold.state,
+    );
     fixtures.push({
       id: fixtureKey(stream.divisionRef, stream.fixtureExtKey),
       // Every folded stream is a played fixture. `decided` and `walkover` are
@@ -1261,7 +2006,9 @@ function deriveStandings(
       // 20) and the fold treats them identically, so the distinction — which
       // is a fixture-row fact a pack does not declare — cannot change a row.
       status: "decided",
-      result: pointsRule ? applyPointsRule(fold.outcome, pair, pointsRule) : pair,
+      result: pointsRule
+        ? applyPointsRule(fold.outcome, pair, pointsRule)
+        : pair,
     });
   }
 
@@ -1298,9 +2045,12 @@ function deriveStandings(
   const tableStage: TableStage = {
     id: stage.ref,
     // americano rides the league fold (competition.ts:333, "Jul3/08 §3").
-    kind: (stage.kind === "americano" ? "league" : stage.kind) as TableStage["kind"],
+    kind: (stage.kind === "americano"
+      ? "league"
+      : stage.kind) as TableStage["kind"],
     entrants,
-    cascade: (division.tiebreakers ?? tiebreakersOf(folded, streams)) as TableStage["cascade"],
+    cascade: (division.tiebreakers ??
+      tiebreakersOf(folded, streams)) as TableStage["cascade"],
     ...(seeds.size > 0 ? { seeds } : {}),
     // `!= null`, matching `toTableStage` exactly (competition.ts:337-338) and
     // NOT a `typeof === "number"` sniff. `PackStage.config` is an opaque JSON
@@ -1308,24 +2058,36 @@ function deriveStandings(
     // here while the product forwards it, and a pack with a typo'd seed would
     // then fold green offline and rank differently on seeding — the exact
     // divergence "mirrored in full" exists to prevent.
-    ...(stageConfig["rngSeed"] != null ? { rngSeed: stageConfig["rngSeed"] as number } : {}),
-    ...(stageConfig["rounds"] != null ? { rounds: stageConfig["rounds"] as number } : {}),
+    ...(stageConfig["rngSeed"] != null
+      ? { rngSeed: stageConfig["rngSeed"] as number }
+      : {}),
+    ...(stageConfig["rounds"] != null
+      ? { rounds: stageConfig["rounds"] as number }
+      : {}),
     ...(stage.kind === "swiss" ? { swiss: true } : {}),
-    ...(Array.isArray(carry) ? { openingDeltas: carry as readonly StandingsDelta[] } : {}),
+    ...(Array.isArray(carry)
+      ? { openingDeltas: carry as readonly StandingsDelta[] }
+      : {}),
     ...(Array.isArray(overrides)
       ? {
-          rankLocks: (overrides as { entrant_id: string; rank: number }[]).map((o) => ({
-            entrantId: o.entrant_id,
-            rank: o.rank,
-          })),
+          rankLocks: (overrides as { entrant_id: string; rank: number }[]).map(
+            (o) => ({
+              entrantId: o.entrant_id,
+              rank: o.rank,
+            }),
+          ),
         }
       : {}),
-    ...(stageConfig["h2h_scope"] === "overall" ? { h2hScope: "overall" as const } : {}),
+    ...(stageConfig["h2h_scope"] === "overall"
+      ? { h2hScope: "overall" as const }
+      : {}),
   };
 
   const completed = completeTableStage(tableStage, fixtures);
   const pool = completed.tables.pools[0];
-  return pool === undefined ? `stage "${stage.ref}" produced no pool table` : pool.rows;
+  return pool === undefined
+    ? `stage "${stage.ref}" produced no pool table`
+    : pool.rows;
 }
 
 /** The cascade a division inherits when it declares none — the SPORT's own
@@ -1337,7 +2099,9 @@ function tiebreakersOf(
   streams: readonly PackStream[],
 ): readonly string[] {
   for (const stream of streams) {
-    const fold = folded.get(fixtureKey(stream.divisionRef, stream.fixtureExtKey));
+    const fold = folded.get(
+      fixtureKey(stream.divisionRef, stream.fixtureExtKey),
+    );
     if (fold !== undefined) return fold.module.defaultTiebreakers;
   }
   return [];
@@ -1387,7 +2151,8 @@ function firstTableDivergence(
     if (want.metrics !== undefined && !deepEqual(got.metrics, want.metrics)) {
       return {
         code: "standings.metrics",
-        message: `rank ${j + 1} "${want.entrant}" metrics: pack expects ${show(want.metrics)}, ` +
+        message:
+          `rank ${j + 1} "${want.entrant}" metrics: pack expects ${show(want.metrics)}, ` +
           `the fold produced ${show(got.metrics)}`,
       };
     }
@@ -1430,9 +2195,11 @@ function claimDivergence(fold: FoldedStream, claim: PackClaim): string | null {
   if (claim.on === "state") {
     const { found, value } = resolveStatePath(fold.state, claim.path);
     if (!found) {
-      return `state path "${claim.path}" does not exist on ${fold.division.sportKey}'s folded state — ` +
+      return (
+        `state path "${claim.path}" does not exist on ${fold.division.sportKey}'s folded state — ` +
         `a claim written from a line number that pointed at a DERIVED struct parses cleanly and can ` +
-        `never resolve, so an unresolvable path is a pack defect, not a skipped assertion`;
+        `never resolve, so an unresolvable path is a pack defect, not a skipped assertion`
+      );
     }
     if (!deepEqual(value, claim.equals)) {
       return `state "${claim.path}": claim expects ${show(claim.equals)}, the fold produced ${show(value)}`;
@@ -1445,16 +2212,25 @@ function claimDivergence(fold: FoldedStream, claim: PackClaim): string | null {
     // what expected.tables asserts, and conflating them would make one claim
     // mean different things in a one-round and a six-round stage.
     const ctx: StageCtx = { kind: fold.stage?.kind ?? "league" };
-    const pair = fold.module.standingsDelta(fold.outcome, fold.cfg, ctx, fold.state);
+    const pair = fold.module.standingsDelta(
+      fold.outcome,
+      fold.cfg,
+      ctx,
+      fold.state,
+    );
     const delta = pair.find((d) => d.entrantId === sigil(claim.entrant));
     if (delta === undefined) {
-      return `standings claim names entrant "${claim.entrant}", which did not play this fixture ` +
-        `(its delta pair is for [${pair.map((d) => d.entrantId).join(", ")}])`;
+      return (
+        `standings claim names entrant "${claim.entrant}", which did not play this fixture ` +
+        `(its delta pair is for [${pair.map((d) => d.entrantId).join(", ")}])`
+      );
     }
     const got = delta[claim.field];
     if (got !== claim.equals) {
-      return `standings ${claim.field} for "${claim.entrant}": claim expects ${claim.equals}, ` +
-        `this fixture's delta gives ${got}`;
+      return (
+        `standings ${claim.field} for "${claim.entrant}": claim expects ${claim.equals}, ` +
+        `this fixture's delta gives ${got}`
+      );
     }
     return null;
   }
@@ -1470,8 +2246,10 @@ function claimDivergence(fold: FoldedStream, claim: PackClaim): string | null {
         ? fold.squads.away
         : undefined;
   if (side === undefined) {
-    return `squads claim names entrant "${claim.entrant}", which is neither side of this fixture ` +
-      `("${fold.squads.home.entrantId}" and "${fold.squads.away.entrantId}")`;
+    return (
+      `squads claim names entrant "${claim.entrant}", which is neither side of this fixture ` +
+      `("${fold.squads.home.entrantId}" and "${fold.squads.away.entrantId}")`
+    );
   }
   if (claim.field === "subsUsed") {
     if (side.subsUsed !== claim.equals) {
@@ -1495,7 +2273,12 @@ function claimDivergence(fold: FoldedStream, claim: PackClaim): string | null {
 // ---------------------------------------------------------------------------
 
 function provenanceStats(pack: Pack): PackProvenanceStats {
-  const zero = (): { real: number; reconstructed: number; synthetic: number; total: number } => ({
+  const zero = (): {
+    real: number;
+    reconstructed: number;
+    synthetic: number;
+    total: number;
+  } => ({
     real: 0,
     reconstructed: 0,
     synthetic: 0,

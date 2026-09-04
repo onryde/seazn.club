@@ -309,6 +309,14 @@ describe("runTinySuite — what the SuiteReport carries", () => {
       engine: "optimized",
       keep: true,
       log: silent,
+      // B03r tasks 9+10: `_tiny.json` now declares a THIRD division
+      // (`d-registration`, `entry: "registration-ui"` by default) — none of
+      // the tests in this file are ABOUT registration, so `cliEntry: "admin"`
+      // forces every division (including the new one) back to the plain
+      // admin-seeded behaviour these tests already pin. This is also live
+      // coverage of the task's own acceptance criterion: `--entry admin`
+      // must need neither Stripe nor a browser.
+      cliEntry: "admin",
       packPath: path.join(REPO_ROOT, "scripts/bench/packs/_absent.json"),
     });
     expect(report.gate).toBe("red");
@@ -324,6 +332,14 @@ describe("runTinySuite — what the SuiteReport carries", () => {
       engine: "greedy",
       keep: false,
       log: silent,
+      // B03r tasks 9+10: `_tiny.json` now declares a THIRD division
+      // (`d-registration`, `entry: "registration-ui"` by default) — none of
+      // the tests in this file are ABOUT registration, so `cliEntry: "admin"`
+      // forces every division (including the new one) back to the plain
+      // admin-seeded behaviour these tests already pin. This is also live
+      // coverage of the task's own acceptance criterion: `--entry admin`
+      // must need neither Stripe nor a browser.
+      cliEntry: "admin",
       packPath: TINY_PACK_PATH,
     });
     // The network is unreachable, so the gate is red for THAT reason…
@@ -487,13 +503,27 @@ interface FakeCompetitionRow {
  * single fixed org for the one test that needs a pre-existing row to be
  * reachable regardless of which email a (possibly wrongly-gated) lookup used.
  */
-function makeFakeServer(opts: { sameOrgForAll?: boolean } = {}): {
+// Exported (B03r tasks 9+10) so `tiny-suite-registration.test.ts` can drive
+// the SAME comprehensive fake for `_tiny`'s admin-seeded divisions (d-tiny/
+// d-badminton) rather than duplicating ~170 lines of route handling —
+// registration-specific routes are covered by a DI-injected
+// `registrationDrivers` fake instead (`TinySuiteInput.registrationDrivers`),
+// so this fixture only ever needs the ONE new route added above
+// (`GET .../divisions/{id}/registrations`) on top of what it already did.
+export function makeFakeServer(opts: { sameOrgForAll?: boolean } = {}): {
   transport: SeedTransport;
   calls: RecordedCall[];
   competitions: FakeCompetitionRow[];
+  /** B03r tasks 9+10 — `GET /api/v1/divisions/{id}/registrations`' rows,
+   *  keyed by this fake's own deterministic `div-<slug>` id. A test
+   *  populates it BEFORE calling `runTinySuite` (the id is predictable from
+   *  the division's declared name, same slug convention the divisions POST
+   *  handler already uses). */
+  registrationRowsByDivisionId: Map<string, unknown[]>;
 } {
   const calls: RecordedCall[] = [];
   const competitions: FakeCompetitionRow[] = [];
+  const registrationRowsByDivisionId = new Map<string, unknown[]>();
   const fixtureOfficials = new Map<string, unknown[]>();
   const claimInvites = new Map<string, unknown>();
   const orgByEmail = new Map<string, string>();
@@ -651,11 +681,21 @@ function makeFakeServer(opts: { sameOrgForAll?: boolean } = {}): {
         const personId = routePath.split("/")[4]!;
         return (claimInvites.get(personId) ?? null) as T;
       }
+      // B03r tasks 9+10 — `runTinySuite`'s registration wiring reads final
+      // rows back through this route (register.ts's `fetchFinalRows`). A
+      // test pre-populates `registrationRowsByDivisionId` keyed by this
+      // fake's own deterministic `div-<slug>` id, predictable from the
+      // division's declared name (same convention the divisions POST
+      // handler above already uses).
+      if (method === "GET" && /^\/api\/v1\/divisions\/[^/]+\/registrations$/.test(routePath)) {
+        const divisionId = routePath.split("/")[4]!;
+        return (registrationRowsByDivisionId.get(divisionId) ?? []) as unknown as T;
+      }
 
       throw new Error(`fake server: unhandled ${method} ${routePath}`);
     },
   };
-  return { transport, calls, competitions };
+  return { transport, calls, competitions, registrationRowsByDivisionId };
 }
 
 function competitionPosts(calls: RecordedCall[]): RecordedCall[] {
@@ -674,6 +714,14 @@ describe("runTinySuite — --keep idempotence (T4)", () => {
       engine: "optimized",
       keep: true,
       log: silent,
+      // B03r tasks 9+10: `_tiny.json` now declares a THIRD division
+      // (`d-registration`, `entry: "registration-ui"` by default) — none of
+      // the tests in this file are ABOUT registration, so `cliEntry: "admin"`
+      // forces every division (including the new one) back to the plain
+      // admin-seeded behaviour these tests already pin. This is also live
+      // coverage of the task's own acceptance criterion: `--entry admin`
+      // must need neither Stripe nor a browser.
+      cliEntry: "admin",
       packPath,
       transport: server.transport,
     });
@@ -685,6 +733,14 @@ describe("runTinySuite — --keep idempotence (T4)", () => {
       engine: "optimized",
       keep: true,
       log: silent,
+      // B03r tasks 9+10: `_tiny.json` now declares a THIRD division
+      // (`d-registration`, `entry: "registration-ui"` by default) — none of
+      // the tests in this file are ABOUT registration, so `cliEntry: "admin"`
+      // forces every division (including the new one) back to the plain
+      // admin-seeded behaviour these tests already pin. This is also live
+      // coverage of the task's own acceptance criterion: `--entry admin`
+      // must need neither Stripe nor a browser.
+      cliEntry: "admin",
       packPath, // the SAME pack content — same hash
       transport: server.transport,
     });
@@ -706,6 +762,14 @@ describe("runTinySuite — --keep idempotence (T4)", () => {
       engine: "optimized",
       keep: true,
       log: silent,
+      // B03r tasks 9+10: `_tiny.json` now declares a THIRD division
+      // (`d-registration`, `entry: "registration-ui"` by default) — none of
+      // the tests in this file are ABOUT registration, so `cliEntry: "admin"`
+      // forces every division (including the new one) back to the plain
+      // admin-seeded behaviour these tests already pin. This is also live
+      // coverage of the task's own acceptance criterion: `--entry admin`
+      // must need neither Stripe nor a browser.
+      cliEntry: "admin",
       packPath: packPathA,
       transport: server.transport,
     });
@@ -727,6 +791,14 @@ describe("runTinySuite — --keep idempotence (T4)", () => {
       engine: "optimized",
       keep: true,
       log: silent,
+      // B03r tasks 9+10: `_tiny.json` now declares a THIRD division
+      // (`d-registration`, `entry: "registration-ui"` by default) — none of
+      // the tests in this file are ABOUT registration, so `cliEntry: "admin"`
+      // forces every division (including the new one) back to the plain
+      // admin-seeded behaviour these tests already pin. This is also live
+      // coverage of the task's own acceptance criterion: `--entry admin`
+      // must need neither Stripe nor a browser.
+      cliEntry: "admin",
       packPath: packPathB,
       transport: server.transport,
     });
@@ -767,6 +839,14 @@ describe("runTinySuite — --keep idempotence (T4)", () => {
       engine: "greedy",
       keep: false,
       log: silent,
+      // B03r tasks 9+10: `_tiny.json` now declares a THIRD division
+      // (`d-registration`, `entry: "registration-ui"` by default) — none of
+      // the tests in this file are ABOUT registration, so `cliEntry: "admin"`
+      // forces every division (including the new one) back to the plain
+      // admin-seeded behaviour these tests already pin. This is also live
+      // coverage of the task's own acceptance criterion: `--entry admin`
+      // must need neither Stripe nor a browser.
+      cliEntry: "admin",
       packPath,
       transport: server.transport,
     });
@@ -808,6 +888,14 @@ describe("runTinySuite — --keep idempotence (T4)", () => {
       engine: "greedy",
       keep: false,
       log: silent,
+      // B03r tasks 9+10: `_tiny.json` now declares a THIRD division
+      // (`d-registration`, `entry: "registration-ui"` by default) — none of
+      // the tests in this file are ABOUT registration, so `cliEntry: "admin"`
+      // forces every division (including the new one) back to the plain
+      // admin-seeded behaviour these tests already pin. This is also live
+      // coverage of the task's own acceptance criterion: `--entry admin`
+      // must need neither Stripe nor a browser.
+      cliEntry: "admin",
       packPath,
       transport: server.transport,
     });
@@ -881,6 +969,14 @@ describe("runTinySuite — --keep idempotence (T4)", () => {
       engine: "greedy",
       keep: false,
       log: silent,
+      // B03r tasks 9+10: `_tiny.json` now declares a THIRD division
+      // (`d-registration`, `entry: "registration-ui"` by default) — none of
+      // the tests in this file are ABOUT registration, so `cliEntry: "admin"`
+      // forces every division (including the new one) back to the plain
+      // admin-seeded behaviour these tests already pin. This is also live
+      // coverage of the task's own acceptance criterion: `--entry admin`
+      // must need neither Stripe nor a browser.
+      cliEntry: "admin",
       packPath,
       transport: server.transport,
     });

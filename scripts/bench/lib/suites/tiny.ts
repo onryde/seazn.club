@@ -111,11 +111,15 @@
 import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import type pino from "pino";
-import { newSession, type Session } from "../http.ts";
+import { newSession, signIn, type Session } from "../http.ts";
 import { formatFinding, loadPackFile } from "../pack-io.ts";
 import { hashPack } from "../pack-hash.ts";
-import type { Pack } from "../pack-schema.ts";
-import { buildSeedPlan, type SeedPlan, type SeedPlanExpectedFixtureCount } from "../seed-plan.ts";
+import type { Pack, PackDivision } from "../pack-schema.ts";
+import {
+  buildSeedPlan,
+  type SeedPlan,
+  type SeedPlanExpectedFixtureCount,
+} from "../seed-plan.ts";
 import {
   defaultTransport,
   runOfficialsAutoAssign,
@@ -125,19 +129,245 @@ import {
 } from "../seed.ts";
 import { runDlsGateProbe, type ProbeTransport } from "../dls-gate.ts";
 import { type PlanSql } from "../plan.ts";
-import { readPlayerStatsBaseline, playerStatsBaselineIssues, type RosterMemberRef } from "../stats.ts";
-import type { OracleResult, SuiteReport } from "../report.ts";
+import {
+  readPlayerStatsBaseline,
+  playerStatsBaselineIssues,
+  type RosterMemberRef,
+} from "../stats.ts";
+import type {
+  OracleResult,
+  RegistrationDivisionReport,
+  SuiteReport,
+} from "../report.ts";
+import type { SelectedDivisionExposure } from "../env.ts";
+import {
+  resolveEntryMode,
+  runRegistrationDivision,
+  type CliEntryFlag,
+  type FunnelRow,
+} from "../register.ts";
+import type { Captain, Organiser, Player } from "../drivers/types.ts";
+import { httpCaptain, httpOrganiser, httpPlayer } from "../drivers/http.ts";
+import {
+  browserCaptain,
+  browserOrganiser,
+  browserPlayer,
+  closeRegistrationBrowserSession,
+  launchRegistrationBrowser,
+  newAnonymousBrowserSession,
+  newOrganiserBrowserSession,
+  type RegistrationBrowserSession,
+} from "../drivers/browser.ts";
 
 /** The committed micro-pack, resolved from THIS module rather than from the
  *  process cwd — the bench is run from the repo root by `npm run
  *  bench:scheduler` and from a worktree root by CI, and a cwd-relative path
  *  would silently read a different file (or none) between the two. */
-export const TINY_PACK_PATH = fileURLToPath(new URL("../../packs/_tiny.json", import.meta.url));
+export const TINY_PACK_PATH = fileURLToPath(
+  new URL("../../packs/_tiny.json", import.meta.url),
+);
 
 /** The `--keep` idempotence marker's key inside `competitions.branding`
  *  (jsonb). Exported so a test can construct a matching/mismatching branding
  *  value without hand-typing the key twice. */
 export const KEEP_BRANDING_KEY = "benchPackHash";
+
+// ---------------------------------------------------------------------------
+// Registration wiring (B03r tasks 9+10, design §3/§9) — the --entry
+// resolution `bench.ts` parses but never wires (this file's own former
+// header comment). One registration-carrying division (`_tiny`'s own
+// `d-registration`) is driven through `register.ts`'s `runRegistrationDivision`
+// with either the http driver (`entry: "registration-api"`) or the browser
+// driver (`entry: "registration-ui"`, the pack's own default — "the browser
+// driver's daily floor", design §9) — never through `seedSuite`'s normal
+// create-then-generate walk (see build-packs/_tiny.ts's own comment on
+// `d-registration` for why: it has no admin-equivalent seed data, and
+// `usecases/stages.ts:1141` refuses to /generate a stage with fewer than two
+// real entrants, which this division's real entrant count never reaches
+// until the funnel itself has run).
+// ---------------------------------------------------------------------------
+
+/** The pack's own declared registration-carrying divisions, in pack order —
+ *  every `pack.divisions[]` entry that has a matching
+ *  `pack.registration.byDivision[ref]` block. Exported so a test (and a
+ *  future multi-suite caller) can reuse the same selector this file's own
+ *  wiring uses, rather than re-deriving `Object.keys(pack.registration.
+ *  byDivision)` a second way. */
+export function registrationDivisionsOf(pack: Pack): readonly PackDivision[] {
+  if (pack.registration === undefined) return [];
+  const byDivision = pack.registration.byDivision;
+  return pack.divisions.filter((d) => byDivision[d.ref] !== undefined);
+}
+
+/**
+ * Reduces a pack's registration-carrying divisions down to `env.ts`'s
+ * `SelectedDivisionExposure` shape, resolving each one's `--entry` mode
+ * first — the exact reduction `lib/env.ts`'s own header comment describes
+ * as "a concurrent agent... reduces its resolved run down to this shape
+ * before calling `runPreflight`". `bench.ts`'s `main()` does not yet call
+ * this (wiring `runPreflight`'s own `selectedDivisions` parameter is a
+ * `bench.ts`-owned sequencing change outside this task's file set: pre-
+ * flight runs BEFORE any pack is loaded there today) — this function is
+ * what a future wiring pass calls, and what THIS task's own tests call
+ * directly to prove the resolution/selection logic itself is correct
+ * (`--entry admin` needs neither Stripe nor Chromium for `_tiny`).
+ */
+export function selectedDivisionExposures(
+  pack: Pack,
+  cliEntry: CliEntryFlag | undefined,
+): SelectedDivisionExposure[] {
+  return registrationDivisionsOf(pack).map((division) => {
+    const block = pack.registration?.byDivision[division.ref];
+    return {
+      entry: resolveEntryMode(division.entry, pack.suite, cliEntry),
+      pay: (block?.entries ?? []).some((e) => e.pay),
+    };
+  });
+}
+
+/** One real driver triple for a registration division, plus how to tear it
+ *  down. `dispose` is always safe to call (a no-op for the http driver,
+ *  which owns no browser resources). */
+export interface RegistrationDriverSet {
+  readonly organiser: Organiser;
+  readonly makeCaptain: (entryExtKey: string) => Captain;
+  readonly makePlayer: (personRef: string) => Player;
+  readonly dispose: () => Promise<void>;
+}
+
+/** Everything a `RegistrationDriverSet` factory needs about ONE division's
+ *  run, resolved by the caller. */
+export interface RegistrationDriverContext {
+  readonly base: string;
+  readonly email: string;
+  readonly orgSlug: string;
+  readonly competitionSlug: string;
+  /** Every entry extKey the block declares — the http driver needs one
+   *  anonymous `Session` per entry; the browser driver needs one
+   *  `BrowserContext`/`Page` per entry, and (design) both need to exist
+   *  BEFORE `runRegistrationDivision` calls `makeCaptain`, which is
+   *  synchronous (`DivisionRunnerInput.makeCaptain`, register.ts) — a
+   *  playwright context cannot be minted lazily inside a sync call. */
+  readonly entryExtKeys: readonly string[];
+  /** Every joining person ref the block declares — same "must pre-exist"
+   *  reasoning as `entryExtKeys`, for `makePlayer`. Empty for `_tiny`'s own
+   *  division (it declares no `joins[]`). */
+  readonly joinPersonRefs: readonly string[];
+}
+
+/**
+ * The REAL default driver-set builder — httpOrganiser/httpCaptain/
+ * httpPlayer for `"registration-api"`, the real playwright browser driver
+ * for `"registration-ui"`. `TinySuiteInput.registrationDrivers` overrides
+ * this ENTIRELY for a test (a fake Organiser/Captain/Player, or a fake
+ * browser-shaped triple) — this function is never called from a test that
+ * supplies that override, so no test here ever launches a real browser or
+ * makes a real HTTP call, matching the DI-with-real-default convention
+ * `transport`/`sql`/`probeTransport` already use in this file.
+ */
+async function buildRealRegistrationDrivers(
+  resolvedEntry: "registration-api" | "registration-ui",
+  ctx: RegistrationDriverContext,
+): Promise<RegistrationDriverSet> {
+  if (resolvedEntry === "registration-api") {
+    const organiserSession = newSession();
+    // The organiser's own actions (configure, approve/reject/promote/assign)
+    // are authenticated admin routes — driven by an admin session signed in
+    // via the SAME magic-link flow `runTinySuite`'s own `s` already used
+    // (kept separate here rather than reusing `s` directly, so this driver
+    // set owns its own session lifecycle independent of the caller's).
+    await signIn(ctx.base, organiserSession, ctx.email);
+    const captainByExtKey = new Map(
+      ctx.entryExtKeys.map((extKey) => [
+        extKey,
+        httpCaptain(ctx.base, newSession()),
+      ]),
+    );
+    const playerByRef = new Map(
+      ctx.joinPersonRefs.map((ref) => [
+        ref,
+        httpPlayer(ctx.base, newSession()),
+      ]),
+    );
+    return {
+      organiser: httpOrganiser(ctx.base, organiserSession),
+      makeCaptain: (extKey) => {
+        const captain = captainByExtKey.get(extKey);
+        if (captain === undefined)
+          throw new Error(
+            `buildRealRegistrationDrivers(): no http captain pre-built for entry "${extKey}"`,
+          );
+        return captain;
+      },
+      makePlayer: (ref) => {
+        const player = playerByRef.get(ref);
+        if (player === undefined)
+          throw new Error(
+            `buildRealRegistrationDrivers(): no http player pre-built for person "${ref}"`,
+          );
+        return player;
+      },
+      dispose: async () => {},
+    };
+  }
+
+  // "registration-ui" — plain playwright, never @playwright/test (this
+  // script runs under node --experimental-strip-types). One BrowserContext
+  // per person (task brief), all pre-created here — NEVER a bare
+  // `browser.newContext()` reused across people, which would silently carry
+  // one person's auth cookies into another's session (repo trap:
+  // reference_bare_newcontext_inherits_auth_state).
+  const browser = await launchRegistrationBrowser();
+  const organiserSession = await newOrganiserBrowserSession(
+    browser,
+    ctx.base,
+    ctx.email,
+  );
+  const captainSessions = new Map<string, RegistrationBrowserSession>();
+  for (const extKey of ctx.entryExtKeys)
+    captainSessions.set(extKey, await newAnonymousBrowserSession(browser));
+  const playerSessions = new Map<string, RegistrationBrowserSession>();
+  for (const ref of ctx.joinPersonRefs)
+    playerSessions.set(ref, await newAnonymousBrowserSession(browser));
+
+  return {
+    organiser: browserOrganiser(
+      organiserSession,
+      ctx.base,
+      ctx.orgSlug,
+      ctx.competitionSlug,
+    ),
+    makeCaptain: (extKey) => {
+      const session = captainSessions.get(extKey);
+      if (session === undefined)
+        throw new Error(
+          `buildRealRegistrationDrivers(): no browser session pre-built for entry "${extKey}"`,
+        );
+      return browserCaptain(
+        session,
+        ctx.base,
+        ctx.orgSlug,
+        ctx.competitionSlug,
+      );
+    },
+    makePlayer: (ref) => {
+      const session = playerSessions.get(ref);
+      if (session === undefined)
+        throw new Error(
+          `buildRealRegistrationDrivers(): no browser session pre-built for person "${ref}"`,
+        );
+      return browserPlayer(session, ctx.base, ctx.orgSlug, ctx.competitionSlug);
+    },
+    dispose: async () => {
+      await Promise.all([
+        closeRegistrationBrowserSession(organiserSession),
+        ...[...captainSessions.values()].map(closeRegistrationBrowserSession),
+        ...[...playerSessions.values()].map(closeRegistrationBrowserSession),
+      ]);
+      await browser.close();
+    },
+  };
+}
 
 export interface TinySuiteInput {
   base: string;
@@ -201,6 +431,51 @@ export interface TinySuiteInput {
    *  above. Defaults to `dls-gate.ts`'s own `defaultProbeTransport`; a live
    *  run never passes it. Meaningless (never read) when `sql` is omitted. */
   probeTransport?: ProbeTransport;
+  /** B03r tasks 9+10: `bench.ts`'s `--entry admin|registration` flag,
+   *  forwarded through `BenchConfig.entry`/`runSuite`. `undefined` (no flag)
+   *  leaves every registration-carrying division on its own pack-declared
+   *  entry mode — `_tiny`'s own `d-registration` defaults to
+   *  `"registration-ui"`, design §9's "browser driver's daily floor". */
+  cliEntry?: CliEntryFlag;
+  /** Overrides `buildRealRegistrationDrivers` entirely for a registration
+   *  division whose resolved entry is NOT `"admin"` — a test's fake
+   *  Organiser/Captain/Player, conforming to `drivers/types.ts` exactly like
+   *  a real driver would. Defaults to the REAL http/browser driver
+   *  construction (same "optional, defaults to the real thing" convention as
+   *  `transport`/`sql`/`probeTransport` above) — a live run never passes it,
+   *  and no test that DOES pass it ever reaches real network or browser
+   *  code. */
+  registrationDrivers?: (
+    resolvedEntry: "registration-api" | "registration-ui",
+    ctx: RegistrationDriverContext,
+  ) => Promise<RegistrationDriverSet>;
+  /** Resolves the SERVER-ASSIGNED org slug that every public URL is addressed
+   *  by. Defaults to `sql.getOrgSlug` — same "optional, defaults to the real
+   *  thing" convention as `transport`/`sql` above.
+   *
+   *  A seam rather than a plain `plan.org.slug` read because those are two
+   *  DIFFERENT slugs and only one of them exists on the server. The pack
+   *  declares `bench-tiny-club`; the backend auto-provisions the org and mints
+   *  `my-organization-N`. The pack's value 404s, and a 404 here still returns
+   *  HTTP 200 chrome with no wizard in it — so the first live run failed 30s
+   *  later as `locator.fill: Timeout waiting for '#reg-who-name'`, blaming a
+   *  selector that was entirely correct. There is no default that reads the
+   *  pack: falling back to it would restore the defect silently. */
+  resolveOrgSlug?: (orgId: string) => Promise<string>;
+  /** Overridable so the unit suite can drive the Connect claim without a live
+   *  Postgres or a real Stripe account — same DI shape as `resolveOrgSlug`
+   *  above. A live run passes neither and gets the `PlanSql` implementation. */
+  connectAccount?: {
+    claim: (orgId: string, accountId: string) => Promise<string | null>;
+    release: (
+      orgId: string,
+      previousHolderId: string | null,
+      accountId: string,
+    ) => Promise<void>;
+  };
+  /** Overridable for the same reason `connectAccount` is — the unit suite has
+   *  no live Postgres. A live run passes neither and gets `PlanSql`. */
+  setOrgCurrency?: (orgId: string, currency: string) => Promise<void>;
 }
 
 // ---------------------------------------------------------------------------
@@ -219,7 +494,11 @@ export type TinyPackStage =
       readonly packHash: string;
       readonly warnings: readonly string[];
     }
-  | { readonly ok: false; readonly errors: readonly string[]; readonly warnings: readonly string[] };
+  | {
+      readonly ok: false;
+      readonly errors: readonly string[];
+      readonly warnings: readonly string[];
+    };
 
 /**
  * Load and gate the pack, BEFORE anything is created over HTTP.
@@ -236,23 +515,33 @@ export type TinyPackStage =
 export async function tinyPackStage(packPath: string): Promise<TinyPackStage> {
   const load = await loadPackFile(packPath);
   const warnings = load.warnings.map(formatFinding);
-  if (!load.ok) return { ok: false, errors: load.errors.map(formatFinding), warnings };
+  if (!load.ok)
+    return { ok: false, errors: load.errors.map(formatFinding), warnings };
   try {
     const plan = buildSeedPlan(load.pack);
     const packHash = hashPack(load.pack);
     return { ok: true, pack: load.pack, plan, packHash, warnings };
   } catch (err) {
-    return { ok: false, errors: [err instanceof Error ? err.message : String(err)], warnings };
+    return {
+      ok: false,
+      errors: [err instanceof Error ? err.message : String(err)],
+      warnings,
+    };
   }
 }
 
 /** One `expectedFixtureCounts` entry, rendered the way a reader can trace it
  *  back to the pack: the count, the division's own entrant arithmetic, and
  *  the legs that produced it — never a bare number. */
-function describeExpectedCount(entry: SeedPlanExpectedFixtureCount, plan: SeedPlan): string {
+function describeExpectedCount(
+  entry: SeedPlanExpectedFixtureCount,
+  plan: SeedPlan,
+): string {
   const division = plan.divisions.find((d) => d.ref === entry.divisionRef);
   const stage = division?.stages.find((s) => s.ref === entry.stageRef);
-  const entrantCount = plan.entrants.filter((e) => e.divisionRef === entry.divisionRef).length;
+  const entrantCount = plan.entrants.filter(
+    (e) => e.divisionRef === entry.divisionRef,
+  ).length;
   // `config` is `PackJsonValue`, so `legs` can be an object or an array as far
   // as the type is concerned, and interpolating one renders "[object Object]"
   // into a message whose whole job is to let a reader trace the count back to
@@ -300,17 +589,26 @@ function describeExpectedCount(entry: SeedPlanExpectedFixtureCount, plan: SeedPl
  * GREEN `_tiny` while the product mints the wrong number of fixtures, which is
  * the one failure the addendum exists to prevent.
  */
-export function fixtureCountIssue(actual: number, plan: SeedPlan): string | null {
+export function fixtureCountIssue(
+  actual: number,
+  plan: SeedPlan,
+): string | null {
   if (plan.expectedFixtureCounts.length === 0) {
     return `pack declares no league-stage fixture-count expectation to check the ${actual} generated fixture(s) against`;
   }
-  const expectedTotal = plan.expectedFixtureCounts.reduce((sum, entry) => sum + entry.count, 0);
+  const expectedTotal = plan.expectedFixtureCounts.reduce(
+    (sum, entry) => sum + entry.count,
+    0,
+  );
   if (actual === expectedTotal) return null;
   if (plan.expectedFixtureCounts.length === 1) {
     return `expected ${describeExpectedCount(plan.expectedFixtureCounts[0], plan)}, got ${actual}`;
   }
   const perDivision = plan.expectedFixtureCounts
-    .map((entry) => `"${entry.divisionRef}": ${describeExpectedCount(entry, plan)}`)
+    .map(
+      (entry) =>
+        `"${entry.divisionRef}": ${describeExpectedCount(entry, plan)}`,
+    )
     .join("; ");
   return `expected ${expectedTotal} fixture(s) total across ${plan.expectedFixtureCounts.length} league stage(s) (${perDivision}), got ${actual}`;
 }
@@ -356,8 +654,16 @@ export interface ExistingSeed {
  * the slug, so there is no later page that could still hold a hash match.
  */
 export type SeedLookup =
-  | { readonly kind: "reuse"; readonly orgId: string; readonly competitionId: string }
-  | { readonly kind: "stale"; readonly competitionId: string; readonly heldHash: unknown }
+  | {
+      readonly kind: "reuse";
+      readonly orgId: string;
+      readonly competitionId: string;
+    }
+  | {
+      readonly kind: "stale";
+      readonly competitionId: string;
+      readonly heldHash: unknown;
+    }
   | { readonly kind: "absent" };
 
 /**
@@ -388,11 +694,16 @@ export async function findExistingSeed(
   let cursor: string | undefined;
   for (;;) {
     const qs = cursor ? `?cursor=${encodeURIComponent(cursor)}` : "";
-    const page = await t.request<CompetitionListPage>(base, s, `/api/v1/competitions${qs}`);
+    const page = await t.request<CompetitionListPage>(
+      base,
+      s,
+      `/api/v1/competitions${qs}`,
+    );
     for (const row of page.items) {
       if (row.slug !== slug) continue;
       const heldHash = row.branding[KEEP_BRANDING_KEY];
-      if (heldHash === packHash) return { kind: "reuse", orgId: row.org_id, competitionId: row.id };
+      if (heldHash === packHash)
+        return { kind: "reuse", orgId: row.org_id, competitionId: row.id };
       return { kind: "stale", competitionId: row.id, heldHash };
     }
     if (!page.nextCursor) return { kind: "absent" };
@@ -404,7 +715,12 @@ interface IdOut {
   id: string;
 }
 interface AutoScheduleOut {
-  assignments: { fixture_id: string; scheduled_at: string; ends_at?: string; court_id: string }[];
+  assignments: {
+    fixture_id: string;
+    scheduled_at: string;
+    ends_at?: string;
+    court_id: string;
+  }[];
   conflicts: { fixture_id: string; code: string; blocking: boolean }[];
   solver?: { engine?: "optimized" | "greedy"; status?: string; mode?: string };
 }
@@ -412,13 +728,16 @@ interface ValidateOut {
   conflicts: { fixture_id: string; code: string; blocking: boolean }[];
 }
 
-export async function runTinySuite(input: TinySuiteInput): Promise<SuiteReport> {
+export async function runTinySuite(
+  input: TinySuiteInput,
+): Promise<SuiteReport> {
   const { base, engine, keep, log } = input;
   const t = input.transport ?? defaultTransport;
   const errors: string[] = [];
   const warnings: string[] = [];
   const oracles: OracleResult[] = [];
   const timings: { seedMs?: number; scheduleMs?: number } = {};
+  const registrationReports: RegistrationDivisionReport[] = [];
   let conflictCount: number | undefined;
   let solver: AutoScheduleOut["solver"];
 
@@ -429,7 +748,10 @@ export async function runTinySuite(input: TinySuiteInput): Promise<SuiteReport> 
   const staged = await tinyPackStage(packPath);
   warnings.push(...staged.warnings);
   if (!staged.ok) {
-    log.error({ packPath, errors: staged.errors }, "tiny: pack refused by stage 0");
+    log.error(
+      { packPath, errors: staged.errors },
+      "tiny: pack refused by stage 0",
+    );
     return {
       suite: "_tiny",
       gate: "red",
@@ -441,7 +763,8 @@ export async function runTinySuite(input: TinySuiteInput): Promise<SuiteReport> 
     };
   }
   const { pack, plan, packHash } = staged;
-  if (warnings.length > 0) log.warn({ packPath, warnings }, "tiny: pack validated with warnings");
+  if (warnings.length > 0)
+    log.warn({ packPath, warnings }, "tiny: pack validated with warnings");
 
   try {
     // The identity used to sign in this run — see this file's header comment
@@ -468,7 +791,11 @@ export async function runTinySuite(input: TinySuiteInput): Promise<SuiteReport> 
         `the last --keep run, and (org_id, slug) is unique so a fresh seed would 409 on the same slug. ` +
         `Re-run with --wipe to reseed this suite from scratch.`;
       log.error(
-        { competitionId: lookup.competitionId, heldHash: lookup.heldHash, packHash },
+        {
+          competitionId: lookup.competitionId,
+          heldHash: lookup.heldHash,
+          packHash,
+        },
         "tiny: --keep refused — pack changed under an existing competition slug",
       );
       return {
@@ -513,7 +840,9 @@ export async function runTinySuite(input: TinySuiteInput): Promise<SuiteReport> 
     const division0 = plan.divisions[0];
     const stage0 = division0?.stages[0];
     if (division0 === undefined || stage0 === undefined) {
-      throw new Error("tiny: the pack's plan has no division/stage to seed and schedule");
+      throw new Error(
+        "tiny: the pack's plan has no division/stage to seed and schedule",
+      );
     }
 
     // B03 T7 — plan/entitlement provisioning + the cricket.dls entitlement-
@@ -539,18 +868,29 @@ export async function runTinySuite(input: TinySuiteInput): Promise<SuiteReport> 
     // needs no entitlement at all, only `competitionVisibility` below.
     let statsPlayerGranted = false;
     if (input.sql !== undefined) {
-      log.info({}, "tiny: running the cricket.dls entitlement-gate probe (B03 T7)");
+      log.info(
+        {},
+        "tiny: running the cricket.dls entitlement-gate probe (B03 T7)",
+      );
       const probe = await runDlsGateProbe({
         base,
         email,
         runTag,
         sql: input.sql,
-        ...(input.probeTransport === undefined ? {} : { transport: input.probeTransport }),
+        ...(input.probeTransport === undefined
+          ? {}
+          : { transport: input.probeTransport }),
       });
       for (const cell of probe.cells) {
-        oracles.push({ name: `entitlement-gate: ${cell.cell}`, passed: cell.ok, detail: cell.detail });
+        oracles.push({
+          name: `entitlement-gate: ${cell.cell}`,
+          passed: cell.ok,
+          detail: cell.detail,
+        });
         if (!cell.ok) {
-          errors.push(`entitlement-gate probe cell "${cell.cell}" failed its own expectation: ${cell.detail}`);
+          errors.push(
+            `entitlement-gate probe cell "${cell.cell}" failed its own expectation: ${cell.detail}`,
+          );
         }
       }
       autoAssign = probe.officialsAutoGranted;
@@ -577,6 +917,34 @@ export async function runTinySuite(input: TinySuiteInput): Promise<SuiteReport> 
       );
     }
 
+    // B03r tasks 9+10: every registration-carrying division (`_tiny`'s own
+    // `d-registration`) is EXCLUDED from the plan handed to `seedSuite` — it
+    // is created and driven separately, below, via `register.ts`'s own
+    // driver flow (see build-packs/_tiny.ts's comment on `d-registration`
+    // for why `seedSuite`'s normal create-then-generate walk cannot touch
+    // it: it has no real entrants until the registration funnel runs, and
+    // `/generate` on fewer than two refuses). `plan` itself is left
+    // UNTOUCHED — `division0`/`stage0` above, `fixtureCountIssue` below and
+    // the officials/stats blocks all keep reading the ORIGINAL plan, which
+    // is correct either way: `d-registration`'s stage is `kind:"knockout"`
+    // (never "league"), so it was never contributing an
+    // `expectedFixtureCounts` entry regardless of this filter.
+    const registrationDivisionRefs = new Set(
+      registrationDivisionsOf(pack).map((d) => d.ref),
+    );
+    const seedPlan: SeedPlan =
+      registrationDivisionRefs.size === 0
+        ? plan
+        : {
+            ...plan,
+            divisions: plan.divisions.filter(
+              (d) => !registrationDivisionRefs.has(d.ref),
+            ),
+            entrants: plan.entrants.filter(
+              (e) => !registrationDivisionRefs.has(e.divisionRef),
+            ),
+          };
+
     // Two independent chains, run concurrently on separate sessions: this
     // suite's OWN venue/court (never part of `SeedPlan` — `_tiny.json`
     // declares no `venues[]`), and the entire org/competition/division/
@@ -587,7 +955,7 @@ export async function runTinySuite(input: TinySuiteInput): Promise<SuiteReport> 
     // caller.
     const seedPromise = seedSuite({
       base,
-      plan,
+      plan: seedPlan,
       streams: pack.streams,
       venues: pack.venues,
       runTag,
@@ -599,19 +967,34 @@ export async function runTinySuite(input: TinySuiteInput): Promise<SuiteReport> 
       // header comment), and there is no reason to change it for a caller
       // that never asked for the stats baseline at all (unit tests
       // included — `input.sql` absent there too).
-      ...(input.sql === undefined ? {} : { competitionVisibility: "unlisted" as const }),
+      ...(input.sql === undefined
+        ? {}
+        : { competitionVisibility: "unlisted" as const }),
     });
     const venuePromise = (async () => {
-      const venue = await t.request<IdOut>(base, s, `/api/v1/orgs/${orgId}/venues`, {
-        method: "POST",
-        body: { name: `Bench Tiny Venue ${runTag}` },
-      });
-      return t.request<IdOut>(base, s, `/api/v1/orgs/${orgId}/venues/${venue.id}/courts`, {
-        method: "POST",
-        body: { name: "Court 1" },
-      });
+      const venue = await t.request<IdOut>(
+        base,
+        s,
+        `/api/v1/orgs/${orgId}/venues`,
+        {
+          method: "POST",
+          body: { name: `Bench Tiny Venue ${runTag}` },
+        },
+      );
+      return t.request<IdOut>(
+        base,
+        s,
+        `/api/v1/orgs/${orgId}/venues/${venue.id}/courts`,
+        {
+          method: "POST",
+          body: { name: "Court 1" },
+        },
+      );
     })();
-    const [seeded, court]: [SeededSuite, IdOut] = await Promise.all([seedPromise, venuePromise]);
+    const [seeded, court]: [SeededSuite, IdOut] = await Promise.all([
+      seedPromise,
+      venuePromise,
+    ]);
 
     if (seeded.orgId !== orgId) {
       throw new Error(
@@ -622,7 +1005,9 @@ export async function runTinySuite(input: TinySuiteInput): Promise<SuiteReport> 
     const divisionId = seeded.divisionIdByRef.get(division0.ref);
     const stageId = seeded.stageIdByRef.get(stage0.ref);
     if (divisionId === undefined || stageId === undefined) {
-      throw new Error(`tiny: seedSuite resolved no id for division "${division0.ref}" / stage "${stage0.ref}"`);
+      throw new Error(
+        `tiny: seedSuite resolved no id for division "${division0.ref}" / stage "${stage0.ref}"`,
+      );
     }
 
     // B03 T6b: every official's claim invite `seedOfficialsAndClaims` just
@@ -643,7 +1028,9 @@ export async function runTinySuite(input: TinySuiteInput): Promise<SuiteReport> 
             : `claim ${claim.id} shows claimed_at=${claim.claimed_at} — seeding must never accept`,
         });
         if (!passed) {
-          errors.push(`official "${ref}"'s claim invite shows claimed_at != null — seeding must never accept`);
+          errors.push(
+            `official "${ref}"'s claim invite shows claimed_at != null — seeding must never accept`,
+          );
         }
       }
     }
@@ -697,21 +1084,26 @@ export async function runTinySuite(input: TinySuiteInput): Promise<SuiteReport> 
       plan.competition.startsOn === undefined
         ? new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString()
         : `${plan.competition.startsOn}T09:00:00.000Z`;
-    await t.request(base, s, `/api/v1/divisions/${divisionId}/schedule-settings`, {
-      method: "PUT",
-      body: {
-        config: {
-          startAt,
-          matchMinutes: 30,
-          gapMinutes: 0,
-          courts: [court.id],
-          perEntrantMinRest: 0,
-          blackouts: [],
-          sessionWindows: [],
+    await t.request(
+      base,
+      s,
+      `/api/v1/divisions/${divisionId}/schedule-settings`,
+      {
+        method: "PUT",
+        body: {
+          config: {
+            startAt,
+            matchMinutes: 30,
+            gapMinutes: 0,
+            courts: [court.id],
+            perEntrantMinRest: 0,
+            blackouts: [],
+            sessionWindows: [],
+          },
+          tz: "UTC",
         },
-        tz: "UTC",
       },
-    });
+    );
 
     // There is no request-level "engine" field on AutoScheduleRequest
     // (schemas.ts:1496-1542) — engine selection is entirely
@@ -724,11 +1116,19 @@ export async function runTinySuite(input: TinySuiteInput): Promise<SuiteReport> 
     // ACTUAL engine the response reports is recorded honestly alongside it
     // rather than either one overwriting the other. Flagged in the PR body
     // as a brief/API-shape finding.
-    log.info({ requestedEngine: engine }, "tiny: --engine is not honoured — AutoScheduleRequest has no per-request engine field");
-    const auto = await t.request<AutoScheduleOut>(base, s, `/api/v1/stages/${stageId}/schedule/auto`, {
-      method: "POST",
-      body: {},
-    });
+    log.info(
+      { requestedEngine: engine },
+      "tiny: --engine is not honoured — AutoScheduleRequest has no per-request engine field",
+    );
+    const auto = await t.request<AutoScheduleOut>(
+      base,
+      s,
+      `/api/v1/stages/${stageId}/schedule/auto`,
+      {
+        method: "POST",
+        body: {},
+      },
+    );
     solver = auto.solver;
 
     await t.request(base, s, `/api/v1/stages/${stageId}/schedule/apply`, {
@@ -753,7 +1153,9 @@ export async function runTinySuite(input: TinySuiteInput): Promise<SuiteReport> 
     // this is the only place a live run can actually reach it. Gated on
     // `autoAssign` (derived above from the DLS-gate probe's own plan
     // choice) — calling `/officials/auto` without the entitlement 402s.
-    const autoOfficials = plan.officials.filter((o) => o.assignments.length === 0);
+    const autoOfficials = plan.officials.filter(
+      (o) => o.assignments.length === 0,
+    );
     if (autoAssign === true && autoOfficials.length > 0) {
       log.info(
         { autoOfficials: autoOfficials.length },
@@ -783,13 +1185,20 @@ export async function runTinySuite(input: TinySuiteInput): Promise<SuiteReport> 
       }
     }
 
-    const validated = await t.request<ValidateOut>(base, s, `/api/v1/divisions/${divisionId}/schedule/validate`, {
-      method: "POST",
-    });
+    const validated = await t.request<ValidateOut>(
+      base,
+      s,
+      `/api/v1/divisions/${divisionId}/schedule/validate`,
+      {
+        method: "POST",
+      },
+    );
     const blocking = validated.conflicts.filter((c) => c.blocking);
     conflictCount = blocking.length;
     if (blocking.length > 0) {
-      errors.push(`${blocking.length} blocking conflict(s) after schedule/apply: ${blocking.map((c) => c.code).join(", ")}`);
+      errors.push(
+        `${blocking.length} blocking conflict(s) after schedule/apply: ${blocking.map((c) => c.code).join(", ")}`,
+      );
     }
     timings.scheduleMs = Math.round(performance.now() - scheduleStart);
 
@@ -815,7 +1224,11 @@ export async function runTinySuite(input: TinySuiteInput): Promise<SuiteReport> 
           const personId = seeded.personIdByRef.get(m.personRef);
           if (personId === undefined) continue;
           seenPersonRefs.add(m.personRef);
-          roster.push({ personRef: m.personRef, personId, full_name: person.full_name });
+          roster.push({
+            personRef: m.personRef,
+            personId,
+            full_name: person.full_name,
+          });
         }
       }
       if (!statsPlayerGranted) {
@@ -823,14 +1236,19 @@ export async function runTinySuite(input: TinySuiteInput): Promise<SuiteReport> 
           "tiny: player-stats baseline skipped — the entitlement-gate probe's own plan does not grant stats.player",
         );
       } else {
-        log.info({ roster: roster.length }, "tiny: reading the player-stats baseline (B03 T6b)");
+        log.info(
+          { roster: roster.length },
+          "tiny: reading the player-stats baseline (B03 T6b)",
+        );
         const baseline = await readPlayerStatsBaseline({
           base,
           email,
           orgId,
           divisionId,
           roster,
-          ...(plan.competition.slug === undefined ? {} : { competitionSlug: plan.competition.slug }),
+          ...(plan.competition.slug === undefined
+            ? {}
+            : { competitionSlug: plan.competition.slug }),
           transport: t,
         });
         const issues = playerStatsBaselineIssues(baseline, roster);
@@ -844,7 +1262,311 @@ export async function runTinySuite(input: TinySuiteInput): Promise<SuiteReport> 
                 `baseline (B03 folds no score events; see lib/stats.ts's header comment)`
               : issues.join("; "),
         });
-        for (const issue of issues) errors.push(`player-stats baseline: ${issue}`);
+        for (const issue of issues)
+          errors.push(`player-stats baseline: ${issue}`);
+      }
+    }
+
+    // B03r tasks 9+10 — registration divisions (design §3/§9), driven
+    // separately from seedSuite's admin walk above (see this file's own
+    // "Registration wiring" header comment for why).
+    //
+    // A pack that declares `paymentMethod: "stripe"` anywhere needs the org to
+    // hold the shared Connect test account BEFORE the first division is
+    // configured: `resumeRegistrationCheckout` reads
+    // `organizations.stripe_account_id` + `stripe_charges_enabled` and refuses
+    // otherwise (usecases/registrations.ts:2325, :4387), and a bench org is
+    // auto-provisioned by this run's own sign-in with neither set. Claimed once
+    // around the whole loop rather than per division — the account belongs to
+    // the ORG, so a per-division claim would be the same write repeated.
+    //
+    // Hand-back is in the `finally` and is not optional: `smoke.ts` claims the
+    // same single account and RESTORES it (smoke.ts:8758), so a bench run that
+    // kept it would make smoke's paid suites skip themselves and report green
+    // while proving nothing.
+    // The pack's declared currency, WRITTEN — not merely validated. Stage 0
+    // requires `org.currency` once any division prices a fee, but nothing
+    // transmitted it, so a pack could declare "usd", satisfy every offline
+    // check, and be charged in "gbp" — `organizations.currency` defaults to
+    // 'gbp', and the first live paid run did exactly that: two 100 GBP
+    // payment intents against a pack that said usd. Written BEFORE the
+    // registration loop because the amount and currency are snapshotted onto
+    // the entry at submit time; a write afterwards would be decoration.
+    const declaredCurrency = pack.org.currency;
+    if (declaredCurrency !== undefined) {
+      const sqlSeam = input.sql;
+      const writeCurrency =
+        input.setOrgCurrency ??
+        (sqlSeam === undefined
+          ? undefined
+          : (id: string, c: string) => sqlSeam.setOrgCurrency(id, c));
+      if (writeCurrency === undefined) {
+        throw new Error(
+          `tiny: pack declares org.currency "${declaredCurrency}" but neither the PlanSql seam nor a setOrgCurrency ` +
+            `override is wired — writing it is the only thing that makes the declaration mean anything`,
+        );
+      }
+      await writeCurrency(orgId, declaredCurrency);
+      log.info(
+        { org: orgId, currency: declaredCurrency },
+        "tiny: wrote the pack's declared org currency",
+      );
+    }
+
+    const needsConnect = registrationDivisionsOf(pack).some(
+      (d) => pack.registration?.byDivision[d.ref]?.paymentMethod === "stripe",
+    );
+    const connectAccountId = process.env.STRIPE_CONNECT_TEST_ACCOUNT;
+    let connectPreviousHolder: string | null = null;
+    let connectClaimed = false;
+    if (needsConnect) {
+      if (connectAccountId === undefined || connectAccountId === "") {
+        throw new Error(
+          'tiny: a registration division declares paymentMethod:"stripe" but STRIPE_CONNECT_TEST_ACCOUNT is not set — ' +
+            "hosted Checkout needs a real connected account (usecases/registrations.ts:2325). Refusing rather than " +
+            "running a paid funnel that would fail at mint time with an opaque error.",
+        );
+      }
+      const connect =
+        input.connectAccount ??
+        (input.sql === undefined
+          ? undefined
+          : {
+              claim: (id: string, account: string) =>
+                input.sql!.claimConnectAccount(id, account),
+              release: (id: string, prev: string | null, account: string) =>
+                input.sql!.releaseConnectAccount(id, prev, account),
+            });
+      if (connect === undefined) {
+        throw new Error(
+          "tiny: a paid registration division needs either the PlanSql seam or an explicit connectAccount override " +
+            "to attach STRIPE_CONNECT_TEST_ACCOUNT to this run's org",
+        );
+      }
+      connectPreviousHolder = await connect.claim(orgId, connectAccountId);
+      connectClaimed = true;
+      log.info(
+        { org: orgId, previousHolder: connectPreviousHolder },
+        "tiny: claimed STRIPE_CONNECT_TEST_ACCOUNT for this run's org (restored on the way out)",
+      );
+    }
+
+    try {
+      for (const division of registrationDivisionsOf(pack)) {
+        const block = pack.registration?.byDivision[division.ref];
+        if (block === undefined) continue; // registrationDivisionsOf already filtered this; narrows the type for TS below.
+
+        const resolvedEntry = resolveEntryMode(
+          division.entry,
+          pack.suite,
+          input.cliEntry,
+        );
+        if (resolvedEntry === "admin") {
+          const skipped = `tiny: registration "${division.ref}": resolved to admin and SKIPPED — _tiny carries no admin-equivalent seed data for it, so this run proves nothing about registration.`;
+          log.info({ division: division.ref }, skipped);
+          // The warning, not just the log line, is what makes the skip legible.
+          // Without it `--entry admin` renders a report with NO Registration
+          // section at all, and a reader cannot tell "the pack declares no
+          // registration divisions" from "one was declared and stepped over" —
+          // an absent symptom reading as a pass, which is exactly what
+          // ORGANISER_FORCE_UNPROVEN_NOTE exists to prevent one seam over.
+          warnings.push(skipped);
+          continue;
+        }
+
+        const funnelStart = performance.now();
+        log.info(
+          { division: division.ref, resolvedEntry },
+          "tiny: creating + configuring a registration division",
+        );
+        // Created DIRECTLY over HTTP, never through seedSuite/seedPlan above —
+        // see build-packs/_tiny.ts's own comment on `d-registration` for why.
+        const createdDivision = await t.request<IdOut>(
+          base,
+          s,
+          `/api/v1/competitions/${seeded.competitionId}/divisions`,
+          {
+            method: "POST",
+            body: {
+              name: division.name,
+              sport_key: division.sportKey,
+              variant_key: division.variantKey,
+              config: division.cfgOverrides,
+              ...(division.tiebreakers === undefined
+                ? {}
+                : { tiebreakers: division.tiebreakers }),
+            },
+          },
+        );
+        const divisionId = createdDivision.id;
+
+        // The SERVER's slug, never the pack's. `plan.org.slug` is what the pack
+        // declares; the backend auto-provisions the org and names it itself, so
+        // the two differ on every real run (`bench-tiny-club` vs
+        // `my-organization-2`). Every public surface the browser driver touches
+        // is addressed by this slug — `/shared/{orgSlug}/...` and `/o/{orgSlug}/...`
+        // — and the pack's value resolves to a 404 whose HTTP 200 chrome renders
+        // without the wizard, so the failure surfaced as a Playwright timeout on
+        // a correct selector rather than as a bad URL. See `PlanSql.getOrgSlug`.
+        const resolveOrgSlug =
+          input.resolveOrgSlug ??
+          (async (id: string) => {
+            if (input.sql === undefined) {
+              throw new Error(
+                `tiny: registration division "${division.ref}" needs either the PlanSql seam or an explicit resolveOrgSlug ` +
+                  `to read the server-assigned org slug — every /shared/ and /o/ URL is addressed by it, and the pack's ` +
+                  `declared slug is not what the backend minted`,
+              );
+            }
+            return input.sql.getOrgSlug(id);
+          });
+        const orgSlug = await resolveOrgSlug(orgId);
+        const competitionSlug = plan.competition.slug;
+        if (competitionSlug === undefined) {
+          throw new Error(
+            `tiny: registration division "${division.ref}" needs the competition's own slug (RegistrationDivisionTarget) — the pack declares none`,
+          );
+        }
+
+        const driverCtx: RegistrationDriverContext = {
+          base,
+          email,
+          orgSlug,
+          competitionSlug,
+          entryExtKeys: block.entries.map((e) => e.extKey),
+          joinPersonRefs: block.joins.map((j) => j.person),
+        };
+        const drivers = await (
+          input.registrationDrivers ?? buildRealRegistrationDrivers
+        )(resolvedEntry, driverCtx);
+        const personsByRef = new Map(pack.persons.map((p) => [p.ref, p]));
+
+        try {
+          const result = await runRegistrationDivision({
+            divisionRef: division.ref,
+            divisionId,
+            target: { orgSlug, competitionSlug, divisionId },
+            block,
+            personsByRef,
+            runTag,
+            organiser: drivers.organiser,
+            makeCaptain: drivers.makeCaptain,
+            makePlayer: drivers.makePlayer,
+            // `_tiny`'s own registration division declares no joins[] — see
+            // `DivisionRunnerInput.resolveJoinCode`'s own doc comment (G2,
+            // B03r-repins-2026-09-03.md) for why this stays a required,
+            // no-default resolver rather than a silent empty-string fallback.
+            resolveJoinCode: () => {
+              throw new Error(
+                `tiny: registration division "${division.ref}" declares no joins[] — resolveJoinCode should never be called`,
+              );
+            },
+            fetchFinalRows: async () => {
+              const rows = await t.request<
+                {
+                  id: string;
+                  status: FunnelRow["status"];
+                  amount_cents: number;
+                  entry_payment_intent_id: string | null;
+                }[]
+              >(base, s, `/api/v1/divisions/${divisionId}/registrations`);
+              return new Map(
+                rows.map((r) => [
+                  r.id,
+                  {
+                    registrationId: r.id,
+                    status: r.status,
+                    amountCents: r.amount_cents,
+                    paymentIntentId: r.entry_payment_intent_id,
+                  },
+                ]),
+              );
+            },
+          });
+
+          for (const freeAgentWarning of result.freeAgentWarnings)
+            warnings.push(
+              `tiny: registration "${division.ref}": ${freeAgentWarning}`,
+            );
+          for (const finding of result.funnel.findings) {
+            errors.push(
+              `registration "${division.ref}": ${finding.code} — ${finding.message}`,
+            );
+          }
+
+          // rejectedEligibility/rejectedManual: derived from the pack's OWN
+          // declared `expect` (report.ts task 8's own doc comment — a plain
+          // `FunnelResult` carries no such split, only findings, and
+          // `DivisionRunnerResult` exposes no per-entry final classification
+          // this file could tally directly without duplicating
+          // `runRegistrationDivision`'s own internal work). Accurate whenever
+          // the run is green (design §9's expected case for `_tiny`); an entry
+          // whose finding fired above is EXCLUDED from either bucket rather
+          // than guessed, since the finding already names its real mismatch.
+          const findingExtKeys = new Set(
+            result.funnel.findings.map((f) => f.extKey),
+          );
+          let rejectedEligibility = 0;
+          let rejectedManual = 0;
+          for (const entry of block.entries) {
+            if (findingExtKeys.has(entry.extKey)) continue;
+            if (entry.expect === "rejected_eligibility")
+              rejectedEligibility += 1;
+            if (entry.expect === "rejected_manual") rejectedManual += 1;
+          }
+
+          registrationReports.push({
+            divisionRef: division.ref,
+            entries: block.entries.length,
+            entrants: result.funnel.entrants,
+            waitlisted: result.funnel.waitlisted,
+            rejectedEligibility,
+            rejectedManual,
+            paidCents: result.funnel.paidCents,
+            organiserForceEligibilityProven:
+              result.funnel.organiserForceEligibilityProven,
+            funnelWallMs: Math.round(performance.now() - funnelStart),
+          });
+          log.info(
+            {
+              division: division.ref,
+              funnelOk: result.funnel.ok,
+              entrants: result.funnel.entrants,
+            },
+            "tiny: registration division funnel complete",
+          );
+        } finally {
+          await drivers.dispose();
+        }
+      }
+    } finally {
+      if (connectClaimed && connectAccountId !== undefined) {
+        const connect =
+          input.connectAccount ??
+          (input.sql === undefined
+            ? undefined
+            : {
+                claim: (id: string, account: string) =>
+                  input.sql!.claimConnectAccount(id, account),
+                release: (id: string, prev: string | null, account: string) =>
+                  input.sql!.releaseConnectAccount(id, prev, account),
+              });
+        // Best-effort: a failure to hand the account back must not replace the
+        // real error that got us here, but it must not be silent either — the
+        // next smoke run's paid suites are what pays for it.
+        try {
+          await connect?.release(
+            orgId,
+            connectPreviousHolder,
+            connectAccountId,
+          );
+        } catch (releaseErr) {
+          warnings.push(
+            `tiny: FAILED to release STRIPE_CONNECT_TEST_ACCOUNT back to ${connectPreviousHolder ?? "nobody"} — ` +
+              `smoke's paid suites will skip until it is restored by hand: ` +
+              `${releaseErr instanceof Error ? releaseErr.message : String(releaseErr)}`,
+          );
+        }
       }
     }
   } catch (err) {
@@ -860,10 +1582,17 @@ export async function runTinySuite(input: TinySuiteInput): Promise<SuiteReport> 
     gate,
     timings,
     keep,
-    solver: { engine: solver?.engine, requestedEngine: engine, status: solver?.status },
+    solver: {
+      engine: solver?.engine,
+      requestedEngine: engine,
+      status: solver?.status,
+    },
     conflictCount,
     errors: errors.length > 0 ? errors : undefined,
     ...(warnings.length > 0 ? { warnings } : {}),
     ...(oracles.length > 0 ? { oracles } : {}),
+    ...(registrationReports.length > 0
+      ? { registration: registrationReports }
+      : {}),
   };
 }

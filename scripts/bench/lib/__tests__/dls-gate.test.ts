@@ -322,6 +322,16 @@ describe("runDlsGateProbe", () => {
     expect(eventCalls).toHaveLength(5);
     const fixtureIds = eventCalls.map((c) => c.path);
     expect(new Set(fixtureIds).size).toBe(4);
+
+    // B03 review F4: every one of these calls is the FIRST event on its
+    // fixture — a refused (402) call never appends, and each "must not be
+    // refused" cell mints its own fresh fixture (see dls-gate.ts header
+    // comment) — so `expected_seq` must be 0 on every single one. Unasserted
+    // before this: a wrong value here would 409 live and nothing here would
+    // have caught it.
+    for (const call of eventCalls) {
+      expect((call.body as { expected_seq: number }).expected_seq).toBe(0);
+    }
   });
 
   it("no single plan grants BOTH capabilities: still provisions the required one (cricket.dls) and REPORTS the gap, never silently drops it", async () => {

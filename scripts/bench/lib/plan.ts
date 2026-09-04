@@ -96,6 +96,86 @@ export interface PlanSql {
    * checkout path can't run without Stripe").
    */
   setDivisionActive(divisionId: string): Promise<void>;
+  /**
+   * `select slug from organizations where id = $1`.
+   *
+   * The org slug is SERVER-ASSIGNED and unknowable ahead of the run. The bench
+   * signs in with a fresh email each run and the backend auto-provisions an org
+   * named from nothing the pack controls — observed live as `my-organization`,
+   * `my-organization-2`, `my-organization-3` across three runs. `_tiny.json`
+   * declares `org.slug: "bench-tiny-club"`, and nothing ever writes it.
+   *
+   * That matters because every PUBLIC surface is addressed by slug:
+   * `/shared/{orgSlug}/{competitionSlug}/register` and the organiser hub at
+   * `/o/{orgSlug}/...`. Using the pack's declared slug sent the browser driver
+   * to a 404 that renders HTTP 200 chrome with no wizard on it, so the run
+   * failed 30s later as `locator.fill: Timeout waiting for '#reg-who-name'` —
+   * a selector that is perfectly correct and an element that was never going
+   * to exist. Verified directly: `bench-tiny-club` -> 404,
+   * `my-organization-2` -> 200.
+   *
+   * Read over SQL because no product API exposes it: there is no
+   * `GET /api/v1/orgs/{id}` route at all, the competitions list carries no
+   * `org_slug`, and `signIn`'s `redirect` is `/onboarding` for a new user
+   * rather than the `/o/{slug}` home an established one gets
+   * (`lib/auth.ts` `postAuthLanding`) — checked live, not assumed. Same
+   * "raw SQL because the real path is infeasible here" precedent as
+   * `setDivisionActive` and `setPlan` above.
+   */
+  getOrgSlug(orgId: string): Promise<string>;
+  /**
+   * Claims the shared Stripe Connect test account for `orgId`, returning
+   * whichever org held it immediately before (or `null` if none did) so the
+   * caller can hand it back.
+   *
+   * Why this has to exist at all: `resumeRegistrationCheckout` refuses to mint
+   * a Checkout session unless the division's org has BOTH a non-null
+   * `organizations.stripe_account_id` (usecases/registrations.ts:2325) and
+   * `stripe_charges_enabled` (`:4387`). A bench org is auto-provisioned by the
+   * run's own first sign-in and has neither, so without this the entire paid
+   * funnel is unreachable no matter what a pack declares.
+   *
+   * Why a CLAIM rather than a plain write: `STRIPE_CONNECT_TEST_ACCOUNT` names
+   * ONE real Stripe test-mode account, and the product enforces one holder —
+   * `scripts/smoke.ts` has claimed and restored it the same way since long
+   * before this file existed (`setConnect` / `releaseConnectAccount`,
+   * smoke.ts:8035 and :8758). A bench run that took it and never gave it back
+   * would leave whichever org smoke expects to hold it with a null
+   * `stripe_account_id`, and smoke's paid suites would then skip — reporting
+   * green while proving nothing. Restoration is the caller's `finally`.
+   *
+   * Raw SQL rather than an API call because no endpoint attaches an existing
+   * Connect account to an org: the product's only path is real Stripe
+   * onboarding (`/onboarding` -> Connect). Same "raw SQL because the real path
+   * is infeasible here" precedent as `setDivisionActive` and `getOrgSlug`.
+   */
+  claimConnectAccount(orgId: string, accountId: string): Promise<string | null>;
+  /** Hands the Connect account back: clears it from `orgId` and, when
+   *  `previousHolderId` is non-null, restores it there. Follows smoke.ts's
+   *  `releaseConnectAccount` (smoke.ts:8758) with ONE deliberate difference:
+   *  this also clears `stripe_charges_enabled` on `orgId`, which smoke does
+   *  not. `claimConnectAccount` SET that flag, so leaving it true would hand
+   *  back an org that still claims it can take payments with no account
+   *  attached — a state no onboarding path produces. */
+  releaseConnectAccount(orgId: string, previousHolderId: string | null, accountId: string): Promise<void>;
+  /**
+   * `update organizations set currency = $2 where id = $1`.
+   *
+   * `PackOrg.currency` was stage-0 validated and transmitted NOWHERE — no
+   * PATCH body, no PUT body, no write — so a pack could declare `usd`, pass
+   * every offline check, and be charged in `gbp`. That is not hypothetical:
+   * `organizations.currency` defaults to `'gbp'`, and the first live paid run
+   * produced two 100 GBP payment intents against a pack declaring `usd`.
+   * Stage-0 rule `registration.currency_required` was therefore enforcing the
+   * authoring of a field with no effect on anything.
+   *
+   * Raw SQL for the same reason `getOrgSlug` reads that way: no v1 endpoint
+   * touches it. There is no `PATCH /api/v1/orgs/{id}` at all — `orgs/[id]/`
+   * holds only subresources (api-keys, connect, courts, posts, sponsors,
+   * venues) — and the org settings page writes it through a server action the
+   * bench has no way to call.
+   */
+  setOrgCurrency(orgId: string, currency: string): Promise<void>;
 }
 
 /**
@@ -394,6 +474,50 @@ export function createRealPlanSql(): RealPlanSqlHandle {
     },
     async setDivisionActive(divisionId) {
       await getSql()`update divisions set status = 'active' where id = ${divisionId}`;
+    },
+    async getOrgSlug(orgId) {
+      const rows = (await getSql()`select slug from organizations where id = ${orgId}`) as { slug: string }[];
+      const slug = rows[0]?.slug;
+      // Loud rather than falling back to the pack's declared slug. A fallback
+      // here would restore exactly the defect this exists to fix, and would do
+      // it silently — the run would go on and fail 30s later inside Playwright,
+      // pointing at a selector instead of at the URL.
+      if (slug === undefined || slug === "") {
+        throw new Error(`plan: organizations.slug is empty for org ${orgId} — cannot address any public /shared/ URL`);
+      }
+      return slug;
+    },
+    async claimConnectAccount(orgId, accountId) {
+      // Read the current holder BEFORE writing, so the restore has something
+      // to aim at. Excludes `orgId` itself: a run that somehow already holds
+      // the account must not record itself as its own predecessor, or the
+      // release below would hand it straight back to an org this run is about
+      // to abandon.
+      const held = (await getSql()`
+        select id from organizations
+        where stripe_account_id = ${accountId} and id <> ${orgId}
+        limit 1`) as { id: string }[];
+      const previousHolderId = held[0]?.id ?? null;
+      if (previousHolderId !== null) {
+        await getSql()`update organizations set stripe_account_id = null where id = ${previousHolderId}`;
+      }
+      await getSql()`
+        update organizations
+        set stripe_account_id = ${accountId}, stripe_charges_enabled = true
+        where id = ${orgId}`;
+      return previousHolderId;
+    },
+    async setOrgCurrency(orgId, currency) {
+      await getSql()`update organizations set currency = ${currency} where id = ${orgId}`;
+    },
+    async releaseConnectAccount(orgId, previousHolderId, accountId) {
+      await getSql()`
+        update organizations
+        set stripe_account_id = null, stripe_charges_enabled = false
+        where id = ${orgId}`;
+      if (previousHolderId !== null) {
+        await getSql()`update organizations set stripe_account_id = ${accountId} where id = ${previousHolderId}`;
+      }
     },
   };
 

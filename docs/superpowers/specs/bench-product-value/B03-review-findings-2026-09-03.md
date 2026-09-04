@@ -106,3 +106,47 @@ entrant/blackout/manual-assignment bodies, asserted field-for-field.
 **Needs fixes.** F1 undoes a stated goal of this wave without disclosure. It is
 fixable, and until it is fixed the honest statement is "auto-assign is not
 reached in a live run", not "unblocked".
+
+---
+
+## Closing note, added 2026-09-03 during B03r
+
+**This file's verdict above is a mid-PR snapshot and was never closed out.**
+Read on its own it says B03 merged with F1 unfixed. It did not.
+
+Timeline, from `git log` rather than from any document:
+
+| Commit | Time | What |
+|---|---|---|
+| `3553d95de` | 21:08 | this findings file, verdict **Needs fixes** |
+| `6d4ffb485` | 21:30 | T6b + **review F1–F3** |
+| `4ea66153e` | 21:44 | review pass 2 — folds `stats.player` into capability selection |
+| `0be211c36` | 21:57 | T9 live run |
+| `3cfac6332` | — | merge of #711 |
+
+Verified in the tree, not inferred from the commit subjects:
+
+- **F1(a) fixed.** `plan.ts:199` `chooseGrantingPlanForCapabilities` derives the
+  plan across `{cricket.dls, officials.auto, stats.player}` together, replacing
+  the single-feature `chooseGrantingPlan` that picked `pro` and silently denied
+  `officials.auto`.
+- **F1(b) fixed.** `seed.ts` `runOfficialsAutoAssign` is a separate export
+  called from `suites/tiny.ts` `runTinySuite` strictly AFTER `schedule/apply` —
+  never from inside `seedSuite`.
+- **F2 fixed.** `seed.ts:66` header now states which function `seedSuite` calls
+  and which it does not; it no longer argues against its own code.
+- **F4 was real and is fixed here** (`aedf99a71`): the DLS probe's
+  `expected_seq: 0` was asserted by no test, so a wrong value would have 409'd
+  live with nothing catching it. Every DLS-probe event call in
+  `dls-gate.test.ts` now asserts it. Mutation-checked: sending `expected_seq: 1`
+  in `dls-gate.ts` reds exactly that assertion (1 of 13).
+
+**Still owed:** F5 (belt-and-suspenders throws with no fake exercising either
+branch — a lead, never mutation-run) and `SeedPlan.officialPersonRefs` (zero
+production consumers).
+
+**The process lesson is the file itself.** A review doc that records a verdict
+and is never updated when the verdict is answered becomes a false report of the
+merged state. It cost a later session a full re-derivation and an incorrect
+statement to the owner. A findings file owes a closing note as much as it owes
+the findings.

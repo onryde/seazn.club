@@ -87,6 +87,27 @@ describe("parseCliArgs", () => {
   it("rejects an unknown flag", () => {
     expect(() => parseCliArgs(["--not-a-real-flag"])).toThrow();
   });
+
+  // B03r task 6: `--entry admin|registration` (design §3) — parsed here,
+  // resolved per-division by `register.ts`'s `resolveEntryMode` (see its
+  // own test file for the mode-resolution table this flag ultimately
+  // drives). This file only proves the CLI's OWN contract: unset by
+  // default, each legal value accepted, anything else rejected.
+  it("--entry is undefined by default (no flag ⇒ each division keeps its own declared entry)", () => {
+    expect(parseCliArgs([]).entry).toBeUndefined();
+  });
+
+  it("accepts each valid --entry value", () => {
+    expect(parseCliArgs(["--entry", "admin"]).entry).toBe("admin");
+    expect(parseCliArgs(["--entry", "registration"]).entry).toBe("registration");
+  });
+
+  it("rejects an invalid --entry value", () => {
+    // Specifically NOT "registration-api"/"registration-ui" — those are
+    // resolveEntryMode's OUTPUT vocabulary (EntryMode), never a legal CLI
+    // input (CliEntryFlag only has "admin"/"registration").
+    expect(() => parseCliArgs(["--entry", "registration-api"])).toThrow(/--entry must be one of/);
+  });
 });
 
 // ---------------------------------------------------------------------------
