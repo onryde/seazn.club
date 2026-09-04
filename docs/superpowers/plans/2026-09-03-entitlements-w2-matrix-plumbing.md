@@ -14,6 +14,48 @@ Decision log: `../specs/2026-09-02-entitlements-v18-prompts/_INDEX.md`.
 W2 makes the three-tier matrix true in the database and in code. No customer-facing
 surface work — that is W3.
 
+## Current state — 2026-09-04, written for a session that has none of this in context
+
+Branch `feat/entitlements-w2-matrix-plumbing` in worktree
+`.claude/worktrees/entw2`. **90 commits ahead of `origin/main`, 20 behind** — a rebase
+is owed and has not been done. Local env label `entw2` (Postgres :54788, placement
+:50832; the server on :3300 serves a STALE bundle — rebuild before driving anything).
+
+**Migrations added by this wave: V392–V397.** V392 the matrix rewrite, V393 drop AUD,
+V394 credits/squad/scorer seat, V395 public-by-default plus the three share loops going
+paid, V396 the dashboard accent key, V397 the additive platform fee. Note V391 is
+**main's** `official_availability_org_write`, not ours — the original V391 collided and
+ours renumbered to V392; do not "correct" a V392 reference back.
+
+**The last full gate is STALE.** It read unit 13859 total / 13792 passed / 0 failed,
+smoke 971 / 0, tsc 0 on both configs — but it ran before `5a8a1305a` (V397), the charm
+reprice, the fee/price copy rewrite and the ladder guard. Those four commits carry only
+their own scoped verification. **Nobody has run a whole-suite gate on this branch as it
+now stands**, and per RULES.md the wave boundary owes one: full vitest via
+`--reporter=json --outputFile` with `.testResults[].name` confirmed inside this worktree,
+both tsc configs, and a full smoke.
+
+### What is left before this wave can be reviewed for merge
+
+1. **The payment rail.** The additive fee (V397) is only half-done: the club is meant to
+   bear Stripe's own cost, which needs `on_behalf_of` on the destination charge — not
+   written yet. Ships with the `admin-platform-settings.tsx:12-13` fix, where
+   `Number("")` is `0`, so clearing the platform-fee field SAVES 0%. That fix owes a
+   paired positive assertion (empty rejected AND a real value still accepted), or it
+   passes by refusing everything.
+2. **T16** — the rate on the Connect card, read from `registration.fee_percent` rather
+   than typed in. Two help articles still quote "1% on Pro Plus", a plan that no longer
+   exists.
+3. **Reviewer pass 4** — whole-wave, pre-merge. Passes 1–3 each found live defects,
+   including one paywall regression that a green test had pinned as correct.
+4. **Driven customer verification** — the wizard's default-public checkbox, the degrade
+   note at the dashboard cap, and the Contact-us CTA, at 1280/768/320 in four locales.
+   Driven in a browser, not grepped: three product facts asserted from reads alone were
+   wrong in this wave.
+5. **A full smoke re-run** at the wave boundary, and the rebase.
+
+Then W4 opens with the Stripe sandbox sync as its FIRST task — see "Owed to W4" below.
+
 ## Owner decisions taken 2026-09-03, before any code
 
 1. **Pro monthly base is USD 12, not 9**, and the whole set-point table re-anchors on

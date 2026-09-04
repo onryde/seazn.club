@@ -36,8 +36,8 @@ dictionaries, help and `copy-truth.ts`, so there are no parallel lanes.
 
 | Wave | Scope | Status |
 |---|---|---|
-| W1 | R9 "scoring goes free" — gate removal, `fidelityTiers` retirement, recording chip, three keys deleted, pinned tests moved | **COMPLETE, UNMERGED** — Tasks 0–7 done and reviewed; branch `feat/entitlements-w1-scoring-free`, 25 commits, no PR opened |
-| W2 | Matrix & plumbing — migration, inert-key deletion, `featurePlan`, labels, add-on sets, credits math, per-rung pass grant, `stripe-plans.json`, copy-truth guards. **R12 prices and R13 hidden add-on land here.** | not started |
+| W1 | R9 "scoring goes free" — gate removal, `fidelityTiers` retirement, recording chip, three keys deleted, pinned tests moved | **MERGED** — PR #704, squashed onto `main` as `ae0751682` (2026-09-03). W2 is cut from that commit. |
+| W2 | Matrix & plumbing — migration, inert-key deletion, `featurePlan`, labels, add-on sets, credits math, per-rung pass grant, `stripe-plans.json`, copy-truth guards. **R12 prices and R13 hidden add-on land here.** | **IN PROGRESS** — branch `feat/entitlements-w2-matrix-plumbing`, 90 commits, migrations V392–V397, no PR. Scope grew well past the brief on owner rulings taken during execution (AUD removed, the whole catalogue re-priced to charm `.99`, the share loops made paid, competitions public by default, the platform fee made additive). **The state block and the remaining-work list live in `../../plans/2026-09-03-entitlements-w2-matrix-plumbing.md` — read it before touching this branch.** Not yet gated as a whole; five items owed. |
 | W3 | Surfaces — pricing page redesign (R14), billing settings, gates, dictionaries ×4, emails, help, e2e replacements | not started |
 | W4 | Proofs & walkthrough — pass and Free proof e2es, full product walkthrough on a prod build, Stripe archive ops step | not started |
 
