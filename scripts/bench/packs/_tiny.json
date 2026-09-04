@@ -79,6 +79,24 @@
           ]
         }
       ]
+    },
+    {
+      "ref": "d-registration",
+      "name": "Registration UI Proof",
+      "sportKey": "generic",
+      "variantKey": "score",
+      "moduleVersion": "1.0.0",
+      "cfgOverrides": {},
+      "stages": [
+        {
+          "ref": "s-registration",
+          "seq": 1,
+          "kind": "knockout",
+          "name": "Registration proof (never created over HTTP this session)",
+          "config": {}
+        }
+      ],
+      "entry": "registration-ui"
     }
   ],
   "persons": [
@@ -115,6 +133,18 @@
       "fullName": "Dahl Erik",
       "lane": "player",
       "shortName": "D. Erik"
+    },
+    {
+      "ref": "p-reg-priya",
+      "fullName": "Priya Kapoor",
+      "lane": "player",
+      "dob": "1990-03-14"
+    },
+    {
+      "ref": "p-reg-sami",
+      "fullName": "Sami Okafor",
+      "lane": "player",
+      "dob": "1988-11-02"
     }
   ],
   "entrants": [
@@ -171,6 +201,30 @@
           "person": "p-dahl",
           "captain": true,
           "squadNumber": 1
+        }
+      ]
+    },
+    {
+      "ref": "e-reg-priya",
+      "divisionRef": "d-registration",
+      "kind": "individual",
+      "displayName": "Priya Kapoor",
+      "roster": [
+        {
+          "person": "p-reg-priya",
+          "captain": true
+        }
+      ]
+    },
+    {
+      "ref": "e-reg-sami",
+      "divisionRef": "d-registration",
+      "kind": "individual",
+      "displayName": "Sami Okafor",
+      "roster": [
+        {
+          "person": "p-reg-sami",
+          "captain": true
         }
       ]
     }
@@ -967,6 +1021,45 @@
       }
     ]
   },
+  "registration": {
+    "byDivision": {
+      "d-registration": {
+        "category": "open",
+        "entrantKind": "individual",
+        "feeCents": 0,
+        "approval": "manual",
+        "entries": [
+          {
+            "extKey": "reg-cap1",
+            "captain": "p-reg-priya",
+            "roster": [],
+            "pay": false,
+            "expect": "entrant"
+          },
+          {
+            "extKey": "reg-cap2",
+            "captain": "p-reg-sami",
+            "roster": [],
+            "pay": false,
+            "expect": "entrant"
+          }
+        ],
+        "joins": [],
+        "organiser": [
+          {
+            "action": "approve",
+            "target": "reg-cap1"
+          }
+        ],
+        "expect": {
+          "entrants": 2,
+          "waitlisted": 0,
+          "rejected": 0,
+          "paidCents": 0
+        }
+      }
+    }
+  },
   "meta": {
     "synthetic": true,
     "sources": [],
@@ -1015,6 +1108,21 @@
         "what": "claimInvites[] carries two entries, one per division's own star (p-ana from d-tiny, p-cho from d-badminton) — minted, never accepted (B03 §5: \"the accept flow is B05's, seeding only mints invites\").",
         "why": "Bench design §9 P2: \"pc_ claim invites for ~3 stars/suite\". Two is enough for _tiny to prove the mapping generalises across divisions without inflating a fixture whose whole point is staying small.",
         "where": "claimInvites[]"
+      },
+      {
+        "what": "d-registration declares two ordinary-shaped entrants[] rows (e-reg-priya, e-reg-sami) that a live run NEVER creates over HTTP — they exist only to satisfy PackSchema's checkEntrantDivisions minimum (every division needs >=2 declared entrants, with no carve-out for a registration-only division).",
+        "why": "This division's REAL entrants only exist once the registration funnel completes (register.ts), which runs long after PackSchema parses. There is no PackSchema field meaning \"this division's entrant minimum is satisfied by its registration block instead\", and adding one is a schema change outside this task's file set (pack-schema.ts is frozen pre-B06 and owned by a completed task). suites/tiny.ts filters divisionRef === \"d-registration\" out of the SeedPlan it hands to seedSuite, so these two rows never reach /entrants.",
+        "where": "entrants[] (e-reg-priya, e-reg-sami), divisions[2]"
+      },
+      {
+        "what": "d-registration's one stage (s-registration) is never created over HTTP this session.",
+        "why": "usecases/stages.ts:1141 refuses to /generate a stage with fewer than two entrants, and this division's real entrant count is only known after the registration funnel runs — after seedSuite's create-then-generate walk would already have tried and failed. suites/tiny.ts excludes this division from seedSuite's plan entirely and creates + configures it directly via register.ts's own driver flow instead. The stage exists only because PackDivision.stages requires at least one; kind:\"knockout\" keeps it out of buildSeedPlan's expectedFixtureCounts (league-only), so it changes nothing about the existing fixture-count arithmetic the other two divisions already prove.",
+        "where": "divisions[2].stages[0]"
+      },
+      {
+        "what": "registration.byDivision[\"d-registration\"] declares exactly one organiser action (approve) though both entries expect:\"entrant\".",
+        "why": "The task brief's own acceptance line is \"2 entries, approval: manual, 1 approve\" — the unapproved entry stays \"pending\", which register.ts's classifyFunnelOutcome counts as an entrant exactly like an approved one (manual approval only produces a different classification via an explicit reject). The single approve action proves the organiser-action leg of the driver runs; it is not needed to make the funnel oracle's arithmetic balance.",
+        "where": "registration.byDivision[\"d-registration\"].organiser"
       }
     ]
   }

@@ -56,9 +56,23 @@ describe("build-packs/_tiny.ts — the determinism gate", () => {
 });
 
 describe("packs/_tiny.json — two divisions, stage 0, no new errors", () => {
-  it("declares TWO divisions (generic d-tiny, badminton d-badminton)", () => {
+  it("declares THREE divisions (generic d-tiny, badminton d-badminton, registration d-registration)", () => {
     const pack = PackSchema.parse(JSON.parse(readFileSync(TINY_JSON_PATH, "utf8")));
-    expect(pack.divisions.map((d) => d.ref)).toEqual(["d-tiny", "d-badminton"]);
+    expect(pack.divisions.map((d) => d.ref)).toEqual(["d-tiny", "d-badminton", "d-registration"]);
+  });
+
+  it("d-registration declares entry:\"registration-ui\" and a registration block with 2 free entries, manual approval, 1 approve", () => {
+    const pack = PackSchema.parse(JSON.parse(readFileSync(TINY_JSON_PATH, "utf8")));
+    const division = pack.divisions.find((d) => d.ref === "d-registration");
+    if (division === undefined) throw new Error("test fixture: d-registration division missing");
+    expect(division.entry).toBe("registration-ui");
+    const block = pack.registration?.byDivision["d-registration"];
+    if (block === undefined) throw new Error("test fixture: d-registration's registration block missing");
+    expect(block.feeCents).toBe(0);
+    expect(block.approval).toBe("manual");
+    expect(block.entries).toHaveLength(2);
+    expect(block.entries.every((e) => e.expect === "entrant")).toBe(true);
+    expect(block.organiser).toEqual([{ action: "approve", target: "reg-cap1" }]);
   });
 
   it("validates GREEN through the real stage-0 validator, with exactly the two permanent not_derived warnings", () => {
@@ -127,22 +141,37 @@ describe("buildSeedPlan — the T4 generalisation, exercised on a REAL two-divis
     const pack = PackSchema.parse(JSON.parse(readFileSync(TINY_JSON_PATH, "utf8")));
     const plan = buildSeedPlan(pack);
 
-    expect(plan.divisions.map((d) => d.ref)).toEqual(["d-tiny", "d-badminton"]);
+    expect(plan.divisions.map((d) => d.ref)).toEqual(["d-tiny", "d-badminton", "d-registration"]);
 
     const badmintonEntrants = plan.entrants.filter((e) => e.divisionRef === "d-badminton");
     expect(badmintonEntrants.map((e) => e.ref).sort()).toEqual(["e-cho", "e-dahl"]);
     const tinyEntrants = plan.entrants.filter((e) => e.divisionRef === "d-tiny");
     expect(tinyEntrants.map((e) => e.ref).sort()).toEqual(["e-alpha", "e-bravo"]);
+    // d-registration's own entrants are the two SHADOW rows (never sent to
+    // /entrants live — see build-packs/_tiny.ts's own header comment on the
+    // registration division), still resolved here because `buildSeedPlan`
+    // has no knowledge of which divisions `suites/tiny.ts` later filters out.
+    const registrationEntrants = plan.entrants.filter((e) => e.divisionRef === "d-registration");
+    expect(registrationEntrants.map((e) => e.ref).sort()).toEqual(["e-reg-priya", "e-reg-sami"]);
 
-    // Every player-lane person, from BOTH divisions, becomes a `persons` row;
-    // Dee Duarte and Eli Ostrander (d-tiny's officials) do not.
-    expect(plan.persons.map((p) => p.ref).sort()).toEqual(["p-ana", "p-bo", "p-cho", "p-dahl"]);
+    // Every player-lane person, from ALL THREE divisions, becomes a `persons`
+    // row; Dee Duarte and Eli Ostrander (d-tiny's officials) do not.
+    expect(plan.persons.map((p) => p.ref).sort()).toEqual([
+      "p-ana",
+      "p-bo",
+      "p-cho",
+      "p-dahl",
+      "p-reg-priya",
+      "p-reg-sami",
+    ]);
     expect(plan.officialPersonRefs).toEqual(["p-dee", "p-eli"]);
 
-    // ONE entry per league stage, per division — the fixture-count
+    // ONE entry per LEAGUE stage, per division — the fixture-count
     // generalisation `expectedFixtureCount` (pack-io.ts:154) exists for.
     // d-tiny: 2 entrants over 3 legs = 3. d-badminton: 2 entrants over 1
-    // leg = 1.
+    // leg = 1. d-registration's stage is kind:"knockout" (never "league"),
+    // so it contributes NO entry here at all — see build-packs/_tiny.ts's
+    // own comment on why that stage kind was chosen.
     expect(plan.expectedFixtureCounts).toEqual([
       { divisionRef: "d-tiny", stageRef: "s-league", count: 3 },
       { divisionRef: "d-badminton", stageRef: "s-badminton-league", count: 1 },

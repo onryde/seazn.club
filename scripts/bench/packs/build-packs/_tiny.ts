@@ -8,13 +8,15 @@
 //
 //   node --experimental-strip-types scripts/bench/packs/build-packs/_tiny.ts
 //
-// TWO divisions. `d-tiny` (the `generic` division) is CARRIED THROUGH AS A
+// THREE divisions. `d-tiny` (the `generic` division) is CARRIED THROUGH AS A
 // LITERAL: it is hand-authored history — see its own `meta.adaptations` below
 // — not something this file re-derives. `d-badminton` is the first division
 // built through the REAL generator, `reconstructSetBasedStream`
 // (`lib/reconstruct.ts:651`), because badminton is set-based and its rally
 // order was never archived (the reconstruction "honesty clause" — see that
-// file's header).
+// file's header). `d-registration` (B03r tasks 9+10) is the registration-ui
+// smoke floor design §9 asks for — see its own block below for why it needs
+// a stage AND two "shadow" entrants it never actually seeds.
 //
 // Runtime constraints (bench GLOBAL.md, unchanged): no TS `enum`, no
 // `namespace`, no emit-dependent syntax — this runs under
@@ -33,6 +35,7 @@ import {
 import { resolveDivisionCfg } from "../../lib/validate-pack.ts";
 import {
   PackSchema,
+  type PackRegistrationBlock,
   type PackStage,
 } from "../../lib/pack-schema.ts";
 
@@ -473,6 +476,176 @@ const BADMINTON_TABLE: NonNullable<PackInput["expected"]["tables"]>[number] = {
 };
 
 // ---------------------------------------------------------------------------
+// d-registration — the registration-ui smoke floor (B03r tasks 9+10, design
+// §9: "browser drivers have no meaningful unit test ... this is their
+// floor").
+//
+// One FREE, `entry: "registration-ui"` division: 2 entries, `approval:
+// "manual"`, 1 approve, no Stripe (task brief verbatim). `category: "open"`
+// and `entrantKind: "individual"` are the simplest legal shapes that still
+// exercise the funnel end to end without dragging in Stripe/category/roster
+// machinery this floor was never asked to prove — that is B16's suite-13 job
+// (design §5).
+//
+// TWO REAL constraints from files this task does NOT own collide here, and
+// both are worth recording rather than rediscovering:
+//
+//   1. `checkEntrantDivisions` (pack-schema.ts) requires EVERY division —
+//      registration-only or not — to declare at least two `entrants[]` rows.
+//      There is no carve-out for `entry !== "admin"`. So this division
+//      declares two ordinary-looking "shadow" entrants (`e-reg-*`) purely to
+//      satisfy that minimum; `suites/tiny.ts` NEVER hands them to `seedSuite`
+//      — the division's REAL entrants come from the registration funnel
+//      (`register.ts`'s `runRegistrationDivision`), driven separately. A live
+//      run therefore creates the division and its TWO registration entries,
+//      but never POSTs these two shadow rows to `/entrants` at all.
+//   2. `usecases/stages.ts:1141` refuses to `/generate` a stage with fewer
+//      than two entrants — and this division's REAL entrant count is only
+//      known once the funnel completes, long after `seedSuite`'s
+//      create-then-generate walk would have already tried and failed. So
+//      `suites/tiny.ts` excludes this division from the `SeedPlan` it hands
+//      to `seedSuite` entirely (no `/divisions` POST, no `/stages` POST, no
+//      `/generate` there) and creates + configures it itself, directly, via
+//      `register.ts`'s own driver flow. `stages: PackDivision.stages.min(1)`
+//      still requires ONE declared stage, kept here purely to satisfy that
+//      shape rule — `s-registration`'s `kind: "knockout"` is deliberate:
+//      `buildSeedPlan`'s `expectedFixtureCounts` only derives a count for a
+//      `"league"` stage (`s.kind !== "league" => continue`,
+//      `seed-plan.ts:476`), so a non-league kind here means this division
+//      contributes NOTHING to that machinery — no fixture count to satisfy,
+//      no round-robin arithmetic to keep honest, nothing for
+//      `build-packs/__tests__/_tiny.test.ts`'s existing
+//      `plan.expectedFixtureCounts` assertion to gain a third entry for. The
+//      stage is NEVER created over HTTP in this session; nothing here claims
+//      otherwise.
+const REGISTRATION_DIVISION_REF = "d-registration";
+const REGISTRATION_STAGE_REF = "s-registration";
+const REGISTRATION_ENTRY_1 = "reg-cap1";
+const REGISTRATION_ENTRY_2 = "reg-cap2";
+
+const REGISTRATION_PERSONS: NonNullable<PackInput["persons"]> = [
+  // Adult `dob` on BOTH: `checkRegistrationRequiresDobGender`
+  // (validate-pack.ts) requires a dob for the captain of any
+  // `entry:"registration-*"` INDIVIDUAL-kind entry (self-registers,
+  // independent of any age band) — `register.ts`'s `buildRegistrationEntry`
+  // sets `registeringSelf: true` unconditionally for that kind, and the
+  // real API 400s any self-registering entry lacking `contact.dob`.
+  { ref: "p-reg-priya", fullName: "Priya Kapoor", lane: "player", dob: "1990-03-14" },
+  { ref: "p-reg-sami", fullName: "Sami Okafor", lane: "player", dob: "1988-11-02" },
+];
+
+/** The two "shadow" entrants — see this block's header comment, constraint
+ *  1. Never sent to `POST /divisions/{id}/entrants` by a live run;
+ *  `suites/tiny.ts` filters `divisionRef === REGISTRATION_DIVISION_REF`
+ *  entrants out of the `SeedPlan` it hands to `seedSuite`. Exist only so
+ *  `PackSchema`'s own `checkEntrantDivisions` (>=2 entrants per division,
+ *  no exception for a registration division) accepts the pack. */
+const REGISTRATION_SHADOW_ENTRANTS: PackInput["entrants"] = [
+  {
+    ref: "e-reg-priya",
+    divisionRef: REGISTRATION_DIVISION_REF,
+    kind: "individual",
+    displayName: "Priya Kapoor",
+    roster: [{ person: "p-reg-priya", captain: true }],
+  },
+  {
+    ref: "e-reg-sami",
+    divisionRef: REGISTRATION_DIVISION_REF,
+    kind: "individual",
+    displayName: "Sami Okafor",
+    roster: [{ person: "p-reg-sami", captain: true }],
+  },
+];
+
+const REGISTRATION_DIVISION: PackInput["divisions"][number] = {
+  ref: REGISTRATION_DIVISION_REF,
+  name: "Registration UI Proof",
+  // Never folded (this division declares no streams) — `generic`/`score`
+  // mirrors d-tiny's own choice rather than inventing a third pairing that
+  // would mean nothing either way.
+  sportKey: "generic",
+  variantKey: "score",
+  moduleVersion: "1.0.0",
+  cfgOverrides: {},
+  stages: [
+    {
+      ref: REGISTRATION_STAGE_REF,
+      seq: 1,
+      kind: "knockout",
+      name: "Registration proof (never created over HTTP this session)",
+      config: {},
+    },
+  ],
+  entry: "registration-ui",
+};
+
+/** Design §4 / `PackRegistrationBlock`. Free (`feeCents: 0`, so `org.currency`
+ *  stays unset — `checkCurrencyRequiredForFee` only fires for a priced
+ *  division), `approval: "manual"`, 2 entries, exactly ONE `approve`
+ *  organiser action (task brief verbatim: "2 entries ... 1 approve"). The
+ *  entry NOT approved simply stays at its post-submit "pending" status,
+ *  which `register.ts`'s `classifyFunnelOutcome` counts as `"entrant"`
+ *  exactly like an approved one (`"pending" | "paid" | "confirmed"` all map
+ *  to `"entrant"` — manual approval only ever produces a DIFFERENT
+ *  classification via an explicit "reject") — so both entries declare
+ *  `expect: "entrant"`, and the single `approve` action's job is to prove
+ *  the organiser-action leg of the browser (or http) driver actually runs,
+ *  not to change either entry's funnel bucket.
+ */
+const REGISTRATION_BLOCK: PackRegistrationBlock = {
+  category: "open",
+  entrantKind: "individual",
+  feeCents: 0,
+  approval: "manual",
+  entries: [
+    { extKey: REGISTRATION_ENTRY_1, captain: "p-reg-priya", roster: [], pay: false, expect: "entrant" },
+    { extKey: REGISTRATION_ENTRY_2, captain: "p-reg-sami", roster: [], pay: false, expect: "entrant" },
+  ],
+  joins: [],
+  organiser: [{ action: "approve", target: REGISTRATION_ENTRY_1 }],
+  expect: { entrants: 2, waitlisted: 0, rejected: 0, paidCents: 0 },
+};
+
+const REGISTRATION_ADAPTATIONS: NonNullable<PackInput["meta"]["adaptations"]> = [
+  {
+    what:
+      "d-registration declares two ordinary-shaped entrants[] rows (e-reg-priya, e-reg-sami) that a live run " +
+      "NEVER creates over HTTP — they exist only to satisfy PackSchema's checkEntrantDivisions minimum (every " +
+      "division needs >=2 declared entrants, with no carve-out for a registration-only division).",
+    why:
+      "This division's REAL entrants only exist once the registration funnel completes (register.ts), which " +
+      "runs long after PackSchema parses. There is no PackSchema field meaning \"this division's entrant " +
+      "minimum is satisfied by its registration block instead\", and adding one is a schema change outside " +
+      "this task's file set (pack-schema.ts is frozen pre-B06 and owned by a completed task). suites/tiny.ts " +
+      "filters divisionRef === \"d-registration\" out of the SeedPlan it hands to seedSuite, so these two rows " +
+      "never reach /entrants.",
+    where: "entrants[] (e-reg-priya, e-reg-sami), divisions[2]",
+  },
+  {
+    what: "d-registration's one stage (s-registration) is never created over HTTP this session.",
+    why:
+      "usecases/stages.ts:1141 refuses to /generate a stage with fewer than two entrants, and this division's " +
+      "real entrant count is only known after the registration funnel runs — after seedSuite's create-then-" +
+      "generate walk would already have tried and failed. suites/tiny.ts excludes this division from " +
+      "seedSuite's plan entirely and creates + configures it directly via register.ts's own driver flow " +
+      "instead. The stage exists only because PackDivision.stages requires at least one; kind:\"knockout\" " +
+      "keeps it out of buildSeedPlan's expectedFixtureCounts (league-only), so it changes nothing about the " +
+      "existing fixture-count arithmetic the other two divisions already prove.",
+    where: "divisions[2].stages[0]",
+  },
+  {
+    what: "registration.byDivision[\"d-registration\"] declares exactly one organiser action (approve) though both entries expect:\"entrant\".",
+    why:
+      "The task brief's own acceptance line is \"2 entries, approval: manual, 1 approve\" — the unapproved " +
+      "entry stays \"pending\", which register.ts's classifyFunnelOutcome counts as an entrant exactly like " +
+      "an approved one (manual approval only produces a different classification via an explicit reject). The " +
+      "single approve action proves the organiser-action leg of the driver runs; it is not needed to make the " +
+      "funnel oracle's arithmetic balance.",
+    where: "registration.byDivision[\"d-registration\"].organiser",
+  },
+];
+
+// ---------------------------------------------------------------------------
 // Assembly
 // ---------------------------------------------------------------------------
 
@@ -493,9 +666,9 @@ export function buildTinyPack(): PackInput {
       description:
         "The bench's own proof fixture: the smallest pack that still exercises every part of PackSchema.",
     },
-    divisions: [TINY_DIVISION, BADMINTON_DIVISION],
-    persons: [...TINY_PERSONS, ...BADMINTON_PERSONS],
-    entrants: [...TINY_ENTRANTS, ...BADMINTON_ENTRANTS],
+    divisions: [TINY_DIVISION, BADMINTON_DIVISION, REGISTRATION_DIVISION],
+    persons: [...TINY_PERSONS, ...BADMINTON_PERSONS, ...REGISTRATION_PERSONS],
+    entrants: [...TINY_ENTRANTS, ...BADMINTON_ENTRANTS, ...REGISTRATION_SHADOW_ENTRANTS],
     streams: [...TINY_STREAMS, BADMINTON_STREAM],
     officials: TINY_OFFICIALS,
     claimInvites: TINY_CLAIM_INVITES,
@@ -507,10 +680,11 @@ export function buildTinyPack(): PackInput {
       suspensions: [],
       specials: TINY_SPECIALS,
     },
+    registration: { byDivision: { [REGISTRATION_DIVISION_REF]: REGISTRATION_BLOCK } },
     meta: {
       synthetic: true,
       sources: [],
-      adaptations: TINY_ADAPTATIONS,
+      adaptations: [...(TINY_ADAPTATIONS ?? []), ...REGISTRATION_ADAPTATIONS],
     },
   };
 }

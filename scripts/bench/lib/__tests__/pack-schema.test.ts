@@ -2112,13 +2112,16 @@ describe("packs/_tiny.json", () => {
     ).toBe(true);
   });
 
-  it("is two divisions, four entrants, four streams, exactly two reconstructed", () => {
+  it("is three divisions, six entrants, four streams, exactly two reconstructed", () => {
     // B03 T5 added `d-badminton` alongside `d-tiny` — the pack's first real
     // exercise of the multi-division generalisation `tinyPlan`'s
-    // `divisions.length !== 1` refusal used to block (deleted in T4).
+    // `divisions.length !== 1` refusal used to block (deleted in T4). B03r
+    // tasks 9+10 added `d-registration` (registration-ui smoke floor) — it
+    // declares TWO more entrants (the "shadow" rows a live run never seeds,
+    // build-packs/_tiny.ts's own comment) but NO streams of its own.
     const p = parsed(raw);
-    expect(p.divisions).toHaveLength(2);
-    expect(p.entrants).toHaveLength(4);
+    expect(p.divisions).toHaveLength(3);
+    expect(p.entrants).toHaveLength(6);
     expect(p.streams).toHaveLength(4);
     expect(p.streams.filter((s) => s.provenance === "reconstructed")).toHaveLength(2);
   });

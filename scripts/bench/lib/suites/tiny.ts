@@ -111,10 +111,10 @@
 import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import type pino from "pino";
-import { newSession, type Session } from "../http.ts";
+import { newSession, signIn, type Session } from "../http.ts";
 import { formatFinding, loadPackFile } from "../pack-io.ts";
 import { hashPack } from "../pack-hash.ts";
-import type { Pack } from "../pack-schema.ts";
+import type { Pack, PackDivision } from "../pack-schema.ts";
 import { buildSeedPlan, type SeedPlan, type SeedPlanExpectedFixtureCount } from "../seed-plan.ts";
 import {
   defaultTransport,
@@ -126,7 +126,26 @@ import {
 import { runDlsGateProbe, type ProbeTransport } from "../dls-gate.ts";
 import { type PlanSql } from "../plan.ts";
 import { readPlayerStatsBaseline, playerStatsBaselineIssues, type RosterMemberRef } from "../stats.ts";
-import type { OracleResult, SuiteReport } from "../report.ts";
+import type { OracleResult, RegistrationDivisionReport, SuiteReport } from "../report.ts";
+import type { SelectedDivisionExposure } from "../env.ts";
+import {
+  resolveEntryMode,
+  runRegistrationDivision,
+  type CliEntryFlag,
+  type FunnelRow,
+} from "../register.ts";
+import type { Captain, Organiser, Player } from "../drivers/types.ts";
+import { httpCaptain, httpOrganiser, httpPlayer } from "../drivers/http.ts";
+import {
+  browserCaptain,
+  browserOrganiser,
+  browserPlayer,
+  closeRegistrationBrowserSession,
+  launchRegistrationBrowser,
+  newAnonymousBrowserSession,
+  newOrganiserBrowserSession,
+  type RegistrationBrowserSession,
+} from "../drivers/browser.ts";
 
 /** The committed micro-pack, resolved from THIS module rather than from the
  *  process cwd — the bench is run from the repo root by `npm run
@@ -138,6 +157,162 @@ export const TINY_PACK_PATH = fileURLToPath(new URL("../../packs/_tiny.json", im
  *  (jsonb). Exported so a test can construct a matching/mismatching branding
  *  value without hand-typing the key twice. */
 export const KEEP_BRANDING_KEY = "benchPackHash";
+
+// ---------------------------------------------------------------------------
+// Registration wiring (B03r tasks 9+10, design §3/§9) — the --entry
+// resolution `bench.ts` parses but never wires (this file's own former
+// header comment). One registration-carrying division (`_tiny`'s own
+// `d-registration`) is driven through `register.ts`'s `runRegistrationDivision`
+// with either the http driver (`entry: "registration-api"`) or the browser
+// driver (`entry: "registration-ui"`, the pack's own default — "the browser
+// driver's daily floor", design §9) — never through `seedSuite`'s normal
+// create-then-generate walk (see build-packs/_tiny.ts's own comment on
+// `d-registration` for why: it has no admin-equivalent seed data, and
+// `usecases/stages.ts:1141` refuses to /generate a stage with fewer than two
+// real entrants, which this division's real entrant count never reaches
+// until the funnel itself has run).
+// ---------------------------------------------------------------------------
+
+/** The pack's own declared registration-carrying divisions, in pack order —
+ *  every `pack.divisions[]` entry that has a matching
+ *  `pack.registration.byDivision[ref]` block. Exported so a test (and a
+ *  future multi-suite caller) can reuse the same selector this file's own
+ *  wiring uses, rather than re-deriving `Object.keys(pack.registration.
+ *  byDivision)` a second way. */
+export function registrationDivisionsOf(pack: Pack): readonly PackDivision[] {
+  if (pack.registration === undefined) return [];
+  const byDivision = pack.registration.byDivision;
+  return pack.divisions.filter((d) => byDivision[d.ref] !== undefined);
+}
+
+/**
+ * Reduces a pack's registration-carrying divisions down to `env.ts`'s
+ * `SelectedDivisionExposure` shape, resolving each one's `--entry` mode
+ * first — the exact reduction `lib/env.ts`'s own header comment describes
+ * as "a concurrent agent... reduces its resolved run down to this shape
+ * before calling `runPreflight`". `bench.ts`'s `main()` does not yet call
+ * this (wiring `runPreflight`'s own `selectedDivisions` parameter is a
+ * `bench.ts`-owned sequencing change outside this task's file set: pre-
+ * flight runs BEFORE any pack is loaded there today) — this function is
+ * what a future wiring pass calls, and what THIS task's own tests call
+ * directly to prove the resolution/selection logic itself is correct
+ * (`--entry admin` needs neither Stripe nor Chromium for `_tiny`).
+ */
+export function selectedDivisionExposures(pack: Pack, cliEntry: CliEntryFlag | undefined): SelectedDivisionExposure[] {
+  return registrationDivisionsOf(pack).map((division) => {
+    const block = pack.registration?.byDivision[division.ref];
+    return {
+      entry: resolveEntryMode(division.entry, pack.suite, cliEntry),
+      pay: (block?.entries ?? []).some((e) => e.pay),
+    };
+  });
+}
+
+/** One real driver triple for a registration division, plus how to tear it
+ *  down. `dispose` is always safe to call (a no-op for the http driver,
+ *  which owns no browser resources). */
+export interface RegistrationDriverSet {
+  readonly organiser: Organiser;
+  readonly makeCaptain: (entryExtKey: string) => Captain;
+  readonly makePlayer: (personRef: string) => Player;
+  readonly dispose: () => Promise<void>;
+}
+
+/** Everything a `RegistrationDriverSet` factory needs about ONE division's
+ *  run, resolved by the caller. */
+export interface RegistrationDriverContext {
+  readonly base: string;
+  readonly email: string;
+  readonly orgSlug: string;
+  readonly competitionSlug: string;
+  /** Every entry extKey the block declares — the http driver needs one
+   *  anonymous `Session` per entry; the browser driver needs one
+   *  `BrowserContext`/`Page` per entry, and (design) both need to exist
+   *  BEFORE `runRegistrationDivision` calls `makeCaptain`, which is
+   *  synchronous (`DivisionRunnerInput.makeCaptain`, register.ts) — a
+   *  playwright context cannot be minted lazily inside a sync call. */
+  readonly entryExtKeys: readonly string[];
+  /** Every joining person ref the block declares — same "must pre-exist"
+   *  reasoning as `entryExtKeys`, for `makePlayer`. Empty for `_tiny`'s own
+   *  division (it declares no `joins[]`). */
+  readonly joinPersonRefs: readonly string[];
+}
+
+/**
+ * The REAL default driver-set builder — httpOrganiser/httpCaptain/
+ * httpPlayer for `"registration-api"`, the real playwright browser driver
+ * for `"registration-ui"`. `TinySuiteInput.registrationDrivers` overrides
+ * this ENTIRELY for a test (a fake Organiser/Captain/Player, or a fake
+ * browser-shaped triple) — this function is never called from a test that
+ * supplies that override, so no test here ever launches a real browser or
+ * makes a real HTTP call, matching the DI-with-real-default convention
+ * `transport`/`sql`/`probeTransport` already use in this file.
+ */
+async function buildRealRegistrationDrivers(
+  resolvedEntry: "registration-api" | "registration-ui",
+  ctx: RegistrationDriverContext,
+): Promise<RegistrationDriverSet> {
+  if (resolvedEntry === "registration-api") {
+    const organiserSession = newSession();
+    // The organiser's own actions (configure, approve/reject/promote/assign)
+    // are authenticated admin routes — driven by an admin session signed in
+    // via the SAME magic-link flow `runTinySuite`'s own `s` already used
+    // (kept separate here rather than reusing `s` directly, so this driver
+    // set owns its own session lifecycle independent of the caller's).
+    await signIn(ctx.base, organiserSession, ctx.email);
+    const captainByExtKey = new Map(ctx.entryExtKeys.map((extKey) => [extKey, httpCaptain(ctx.base, newSession())]));
+    const playerByRef = new Map(ctx.joinPersonRefs.map((ref) => [ref, httpPlayer(ctx.base, newSession())]));
+    return {
+      organiser: httpOrganiser(ctx.base, organiserSession),
+      makeCaptain: (extKey) => {
+        const captain = captainByExtKey.get(extKey);
+        if (captain === undefined) throw new Error(`buildRealRegistrationDrivers(): no http captain pre-built for entry "${extKey}"`);
+        return captain;
+      },
+      makePlayer: (ref) => {
+        const player = playerByRef.get(ref);
+        if (player === undefined) throw new Error(`buildRealRegistrationDrivers(): no http player pre-built for person "${ref}"`);
+        return player;
+      },
+      dispose: async () => {},
+    };
+  }
+
+  // "registration-ui" — plain playwright, never @playwright/test (this
+  // script runs under node --experimental-strip-types). One BrowserContext
+  // per person (task brief), all pre-created here — NEVER a bare
+  // `browser.newContext()` reused across people, which would silently carry
+  // one person's auth cookies into another's session (repo trap:
+  // reference_bare_newcontext_inherits_auth_state).
+  const browser = await launchRegistrationBrowser();
+  const organiserSession = await newOrganiserBrowserSession(browser, ctx.base, ctx.email);
+  const captainSessions = new Map<string, RegistrationBrowserSession>();
+  for (const extKey of ctx.entryExtKeys) captainSessions.set(extKey, await newAnonymousBrowserSession(browser));
+  const playerSessions = new Map<string, RegistrationBrowserSession>();
+  for (const ref of ctx.joinPersonRefs) playerSessions.set(ref, await newAnonymousBrowserSession(browser));
+
+  return {
+    organiser: browserOrganiser(organiserSession, ctx.base, ctx.orgSlug, ctx.competitionSlug),
+    makeCaptain: (extKey) => {
+      const session = captainSessions.get(extKey);
+      if (session === undefined) throw new Error(`buildRealRegistrationDrivers(): no browser session pre-built for entry "${extKey}"`);
+      return browserCaptain(session, ctx.base, ctx.orgSlug, ctx.competitionSlug);
+    },
+    makePlayer: (ref) => {
+      const session = playerSessions.get(ref);
+      if (session === undefined) throw new Error(`buildRealRegistrationDrivers(): no browser session pre-built for person "${ref}"`);
+      return browserPlayer(session, ctx.base, ctx.orgSlug, ctx.competitionSlug);
+    },
+    dispose: async () => {
+      await Promise.all([
+        closeRegistrationBrowserSession(organiserSession),
+        ...[...captainSessions.values()].map(closeRegistrationBrowserSession),
+        ...[...playerSessions.values()].map(closeRegistrationBrowserSession),
+      ]);
+      await browser.close();
+    },
+  };
+}
 
 export interface TinySuiteInput {
   base: string;
@@ -201,6 +376,21 @@ export interface TinySuiteInput {
    *  above. Defaults to `dls-gate.ts`'s own `defaultProbeTransport`; a live
    *  run never passes it. Meaningless (never read) when `sql` is omitted. */
   probeTransport?: ProbeTransport;
+  /** B03r tasks 9+10: `bench.ts`'s `--entry admin|registration` flag,
+   *  forwarded through `BenchConfig.entry`/`runSuite`. `undefined` (no flag)
+   *  leaves every registration-carrying division on its own pack-declared
+   *  entry mode — `_tiny`'s own `d-registration` defaults to
+   *  `"registration-ui"`, design §9's "browser driver's daily floor". */
+  cliEntry?: CliEntryFlag;
+  /** Overrides `buildRealRegistrationDrivers` entirely for a registration
+   *  division whose resolved entry is NOT `"admin"` — a test's fake
+   *  Organiser/Captain/Player, conforming to `drivers/types.ts` exactly like
+   *  a real driver would. Defaults to the REAL http/browser driver
+   *  construction (same "optional, defaults to the real thing" convention as
+   *  `transport`/`sql`/`probeTransport` above) — a live run never passes it,
+   *  and no test that DOES pass it ever reaches real network or browser
+   *  code. */
+  registrationDrivers?: (resolvedEntry: "registration-api" | "registration-ui", ctx: RegistrationDriverContext) => Promise<RegistrationDriverSet>;
 }
 
 // ---------------------------------------------------------------------------
@@ -419,6 +609,7 @@ export async function runTinySuite(input: TinySuiteInput): Promise<SuiteReport> 
   const warnings: string[] = [];
   const oracles: OracleResult[] = [];
   const timings: { seedMs?: number; scheduleMs?: number } = {};
+  const registrationReports: RegistrationDivisionReport[] = [];
   let conflictCount: number | undefined;
   let solver: AutoScheduleOut["solver"];
 
@@ -577,6 +768,28 @@ export async function runTinySuite(input: TinySuiteInput): Promise<SuiteReport> 
       );
     }
 
+    // B03r tasks 9+10: every registration-carrying division (`_tiny`'s own
+    // `d-registration`) is EXCLUDED from the plan handed to `seedSuite` — it
+    // is created and driven separately, below, via `register.ts`'s own
+    // driver flow (see build-packs/_tiny.ts's comment on `d-registration`
+    // for why `seedSuite`'s normal create-then-generate walk cannot touch
+    // it: it has no real entrants until the registration funnel runs, and
+    // `/generate` on fewer than two refuses). `plan` itself is left
+    // UNTOUCHED — `division0`/`stage0` above, `fixtureCountIssue` below and
+    // the officials/stats blocks all keep reading the ORIGINAL plan, which
+    // is correct either way: `d-registration`'s stage is `kind:"knockout"`
+    // (never "league"), so it was never contributing an
+    // `expectedFixtureCounts` entry regardless of this filter.
+    const registrationDivisionRefs = new Set(registrationDivisionsOf(pack).map((d) => d.ref));
+    const seedPlan: SeedPlan =
+      registrationDivisionRefs.size === 0
+        ? plan
+        : {
+            ...plan,
+            divisions: plan.divisions.filter((d) => !registrationDivisionRefs.has(d.ref)),
+            entrants: plan.entrants.filter((e) => !registrationDivisionRefs.has(e.divisionRef)),
+          };
+
     // Two independent chains, run concurrently on separate sessions: this
     // suite's OWN venue/court (never part of `SeedPlan` — `_tiny.json`
     // declares no `venues[]`), and the entire org/competition/division/
@@ -587,7 +800,7 @@ export async function runTinySuite(input: TinySuiteInput): Promise<SuiteReport> 
     // caller.
     const seedPromise = seedSuite({
       base,
-      plan,
+      plan: seedPlan,
       streams: pack.streams,
       venues: pack.venues,
       runTag,
@@ -847,6 +1060,133 @@ export async function runTinySuite(input: TinySuiteInput): Promise<SuiteReport> 
         for (const issue of issues) errors.push(`player-stats baseline: ${issue}`);
       }
     }
+
+    // B03r tasks 9+10 — registration divisions (design §3/§9), driven
+    // separately from seedSuite's admin walk above (see this file's own
+    // "Registration wiring" header comment for why).
+    for (const division of registrationDivisionsOf(pack)) {
+      const block = pack.registration?.byDivision[division.ref];
+      if (block === undefined) continue; // registrationDivisionsOf already filtered this; narrows the type for TS below.
+
+      const resolvedEntry = resolveEntryMode(division.entry, pack.suite, input.cliEntry);
+      if (resolvedEntry === "admin") {
+        log.info(
+          { division: division.ref },
+          "tiny: registration division resolved to admin — skipped entirely (no admin-equivalent seed data in _tiny)",
+        );
+        continue;
+      }
+
+      const funnelStart = performance.now();
+      log.info({ division: division.ref, resolvedEntry }, "tiny: creating + configuring a registration division");
+      // Created DIRECTLY over HTTP, never through seedSuite/seedPlan above —
+      // see build-packs/_tiny.ts's own comment on `d-registration` for why.
+      const createdDivision = await t.request<IdOut>(base, s, `/api/v1/competitions/${seeded.competitionId}/divisions`, {
+        method: "POST",
+        body: {
+          name: division.name,
+          sport_key: division.sportKey,
+          variant_key: division.variantKey,
+          config: division.cfgOverrides,
+          ...(division.tiebreakers === undefined ? {} : { tiebreakers: division.tiebreakers }),
+        },
+      });
+      const divisionId = createdDivision.id;
+
+      const orgSlug = plan.org.slug;
+      const competitionSlug = plan.competition.slug;
+      if (competitionSlug === undefined) {
+        throw new Error(
+          `tiny: registration division "${division.ref}" needs the competition's own slug (RegistrationDivisionTarget) — the pack declares none`,
+        );
+      }
+
+      const driverCtx: RegistrationDriverContext = {
+        base,
+        email,
+        orgSlug,
+        competitionSlug,
+        entryExtKeys: block.entries.map((e) => e.extKey),
+        joinPersonRefs: block.joins.map((j) => j.person),
+      };
+      const drivers = await (input.registrationDrivers ?? buildRealRegistrationDrivers)(resolvedEntry, driverCtx);
+      const personsByRef = new Map(pack.persons.map((p) => [p.ref, p]));
+
+      try {
+        const result = await runRegistrationDivision({
+          divisionRef: division.ref,
+          divisionId,
+          target: { orgSlug, competitionSlug, divisionId },
+          block,
+          personsByRef,
+          runTag,
+          organiser: drivers.organiser,
+          makeCaptain: drivers.makeCaptain,
+          makePlayer: drivers.makePlayer,
+          // `_tiny`'s own registration division declares no joins[] — see
+          // `DivisionRunnerInput.resolveJoinCode`'s own doc comment (G2,
+          // B03r-repins-2026-09-03.md) for why this stays a required,
+          // no-default resolver rather than a silent empty-string fallback.
+          resolveJoinCode: () => {
+            throw new Error(
+              `tiny: registration division "${division.ref}" declares no joins[] — resolveJoinCode should never be called`,
+            );
+          },
+          fetchFinalRows: async () => {
+            const rows = await t.request<
+              { id: string; status: FunnelRow["status"]; amount_cents: number; entry_payment_intent_id: string | null }[]
+            >(base, s, `/api/v1/divisions/${divisionId}/registrations`);
+            return new Map(
+              rows.map((r) => [
+                r.id,
+                { registrationId: r.id, status: r.status, amountCents: r.amount_cents, paymentIntentId: r.entry_payment_intent_id },
+              ]),
+            );
+          },
+        });
+
+        for (const freeAgentWarning of result.freeAgentWarnings) warnings.push(`tiny: registration "${division.ref}": ${freeAgentWarning}`);
+        for (const finding of result.funnel.findings) {
+          errors.push(`registration "${division.ref}": ${finding.code} — ${finding.message}`);
+        }
+
+        // rejectedEligibility/rejectedManual: derived from the pack's OWN
+        // declared `expect` (report.ts task 8's own doc comment — a plain
+        // `FunnelResult` carries no such split, only findings, and
+        // `DivisionRunnerResult` exposes no per-entry final classification
+        // this file could tally directly without duplicating
+        // `runRegistrationDivision`'s own internal work). Accurate whenever
+        // the run is green (design §9's expected case for `_tiny`); an entry
+        // whose finding fired above is EXCLUDED from either bucket rather
+        // than guessed, since the finding already names its real mismatch.
+        const findingExtKeys = new Set(result.funnel.findings.map((f) => f.extKey));
+        let rejectedEligibility = 0;
+        let rejectedManual = 0;
+        for (const entry of block.entries) {
+          if (findingExtKeys.has(entry.extKey)) continue;
+          if (entry.expect === "rejected_eligibility") rejectedEligibility += 1;
+          if (entry.expect === "rejected_manual") rejectedManual += 1;
+        }
+
+        registrationReports.push({
+          divisionRef: division.ref,
+          entries: block.entries.length,
+          entrants: result.funnel.entrants,
+          waitlisted: result.funnel.waitlisted,
+          rejectedEligibility,
+          rejectedManual,
+          paidCents: result.funnel.paidCents,
+          organiserForceEligibilityProven: result.funnel.organiserForceEligibilityProven,
+          funnelWallMs: Math.round(performance.now() - funnelStart),
+        });
+        log.info(
+          { division: division.ref, funnelOk: result.funnel.ok, entrants: result.funnel.entrants },
+          "tiny: registration division funnel complete",
+        );
+      } finally {
+        await drivers.dispose();
+      }
+    }
   } catch (err) {
     errors.push(err instanceof Error ? err.message : String(err));
   }
@@ -865,5 +1205,6 @@ export async function runTinySuite(input: TinySuiteInput): Promise<SuiteReport> 
     errors: errors.length > 0 ? errors : undefined,
     ...(warnings.length > 0 ? { warnings } : {}),
     ...(oracles.length > 0 ? { oracles } : {}),
+    ...(registrationReports.length > 0 ? { registration: registrationReports } : {}),
   };
 }

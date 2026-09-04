@@ -285,6 +285,10 @@ describe("validatePack — _tiny.json, the shared fixture", () => {
     expect(result.provenance.byDivision).toEqual({
       "d-tiny": { real: 2, reconstructed: 1, synthetic: 0, total: 3 },
       "d-badminton": { real: 0, reconstructed: 1, synthetic: 0, total: 1 },
+      // d-registration (B03r tasks 9+10) declares no streams at all — its
+      // split is present and zeroed, same as "gives every declared division
+      // a split" below proves for d-tiny/d-badminton with streams emptied.
+      "d-registration": { real: 0, reconstructed: 0, synthetic: 0, total: 0 },
     });
   });
 
@@ -306,6 +310,7 @@ describe("validatePack — _tiny.json, the shared fixture", () => {
     expect(result.provenance.byDivision).toEqual({
       "d-tiny": { real: 0, reconstructed: 0, synthetic: 0, total: 0 },
       "d-badminton": { real: 0, reconstructed: 0, synthetic: 0, total: 0 },
+      "d-registration": { real: 0, reconstructed: 0, synthetic: 0, total: 0 },
     });
   });
 });
