@@ -1,5 +1,11 @@
 # W2 — matrix & plumbing (entitlements v18)
 
+**This file supersedes `2026-09-03-entitlements-w2-matrix-and-plumbing.md`** (note the
+"and"), which the W1 session wrote before W2 began and which was deleted in this wave. It
+was a Tasks 0-9 skeleton that still named V391 for the matrix migration — now **V392**,
+after main's own V391 collided with it — and carried none of the owner rulings made during
+execution. Two plans for one wave is how the wrong one gets read; there is now one.
+
 Branch `feat/entitlements-w2-matrix-plumbing`, cut from `main` @ `ae0751682`.
 Brief: `../specs/2026-09-02-entitlements-v18-prompts/W2-matrix-and-plumbing.md`.
 Design of record: `../specs/2026-09-02-entitlements-v18-three-tier-design.md`.
