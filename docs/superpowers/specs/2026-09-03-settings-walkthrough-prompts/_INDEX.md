@@ -209,3 +209,53 @@ The Playwright/`page.route`/mutation traps listed above are being carried into
 `AGENTS.md` by the owner, out of this session — deliberately not edited here,
 because a shared instruction file taking concurrent edits from two sessions is
 how a rule gets half-written.
+
+## Session status — 2026-09-04 (handoff)
+
+**W1.5 is complete, verified, and DELIBERATELY UNMERGED.** Owner chose "keep the
+branch as-is" when offered push+PR / merge / keep. Do not push or merge it
+without asking them again — that choice is theirs and does not carry forward.
+
+- Branch: `feat/settings-w1-followups`, worktree
+  `.claude/worktrees/settings-followups`, based on `d41b92ab0` (PR #712 merge).
+- Commits: `fb0100bc3` (F5 + the permanent guard + F4), `106f78f25` (README row).
+  Working tree clean.
+
+### What was actually proven, and how
+
+Not "tests pass" — the specific evidence, so a fresh session does not re-run it:
+
+| Gate | Result |
+|---|---|
+| Full `apps/web` vitest | 13,708 passed / 13,786, every suite path under this worktree |
+| The 4 reds in it | `schedule-build-honours-locks.test.ts` — **environmental**, 12/12 once the CP-SAT placement service was up. Re-proven this session, not taken from memory. |
+| `settings-admin.spec.ts` vs a prod build | 7/7 |
+| F4 mutant (pre-fix shim, rebuilt and re-run) | **Killed** — the new test red, the PRE-EXISTING redirect test still green. That pair is the finding: W1's own suite could not see F4. |
+| `decodeFeePercent` mutants | 5/5 killed (bare `Number()`, dropped `typeof`, `>=0`→`>0`, `<=100`→`<100`, `null`→`0`) |
+| F5 vs real Postgres | Reproduced against the pre-fix decode: `expected +0 to be 11` |
+| tsc, eslint | clean, exit 0 |
+
+**A worktree trap worth the next session's time:** this worktree had no root
+`node_modules` and produced 22 tsc errors (`Cannot find module 'pino'`, then a
+cascade of TS7006) that `main` did not have. They are not defects. `pnpm install`
+— not `npm install`, which fails on `workspace:` protocol — cleared all 22.
+
+### In flight when this was written
+
+A full local e2e run (`parallel`, `walkthrough`, `serial`, 5 mobile widths,
+2 tablet; `gallery` skipped — capture harness, no CI job) against the prod
+build on the `swf` label. 872 tests. **Its result is NOT recorded here** — if
+you are picking this up cold, that run's outcome is unknown and must be redone.
+Env: `seazn-env.sh up --label swf --server --placement`; Playwright needs
+`PLAYWRIGHT_BASE` (NOT `E2E_PROD_TARGET`, which is only a truthy flag) and
+`cd apps/web`.
+
+If that run went red in the `serial` project, treat its count as a FLOOR — that
+project is `mode: "serial"` and the first red aborts everything after it.
+
+### W2 — not started, deliberately
+
+Owner said "hold W2". Nothing is written, planned, or scaffolded for it. Its
+scope is unchanged in the design doc: `/o/{org}/settings` 7 tabs, drive+persist,
+sponsors CRUD half only, 2 specs.
+
