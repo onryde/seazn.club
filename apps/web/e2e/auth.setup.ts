@@ -94,6 +94,17 @@ setup("authenticate as a fresh Pro org", async ({ page }) => {
   ).json()) as { data?: { id: string }[] };
   const setupOrgId = orgs.data?.[0]?.id;
   if (setupOrgId) await setEntitlementOverrideSql(setupOrgId, "orgs.max_owned", 50);
+  // Same argument, second axis. V395 retired Pro's "unlimited public
+  // dashboards" for a finite `dashboard.public.max` of 10, and competitions are
+  // PUBLIC BY DEFAULT now — so competitions accumulate against that cap across
+  // the whole run exactly as owned orgs do. Past it a create is not refused
+  // (T15/F): it comes back PRIVATE, which drops the competition out of
+  // `public_fixtures_v` and, since T20, stops the template gallery navigating
+  // at all — so an unrelated new spec would turn into a mystery failure in
+  // whichever spec happened to run last. `public-dashboards.spec.ts` drives the
+  // cap deliberately and restores it to this same value; nothing else in e2e
+  // asserts it.
+  if (setupOrgId) await setEntitlementOverrideSql(setupOrgId, "dashboard.public.max", 50);
   await capture(page, PRO_STATE);
 });
 
