@@ -2283,6 +2283,104 @@ describe.skipIf(!HAS_DB)("the four-locale dictionaries match plan_entitlements",
   // with the live ordering (community 5 / pro 25 / enterprise 500) and with the
   // leader passed explicitly.
 
+  // ── W2: the four caps in the Event Pass FAQ answer ────────────────────────
+  //
+  // `pricing.faq.eventPass.a` describes BOTH rungs in one sentence and quotes
+  // four numbers. None of them was bound to anything, and it showed: V392 gave
+  // the L rung a real 512-entrant cap where `int_value` had been null, and the
+  // answer went on promising "no entrant limit at all" — in all four locales,
+  // for a whole wave.
+  //
+  // It survived two guards that look like they cover it. `APPROVED_DICTIONARY_COPY`
+  // pins the WORDING, which is a different question from whether the wording is
+  // true. `capClaimFaults` is the rule for exactly this claim family and even
+  // carries the V392 case in its own comment — but it is only ever called with
+  // the rung DESCRIPTIONS (plan-copy-truth.test.ts), and nothing pointed it at
+  // this key. A guard's scope is its call site, not its name.
+  //
+  // Two halves, deliberately, because either alone is satisfied by the bug: the
+  // live numbers must be PRESENT with their nouns, and no locale may describe a
+  // capped rung as uncapped. The vocabulary is per locale and built through
+  // `claim()` — `\b` and `\w` are ASCII-only, so a French pattern written with
+  // plain literals reports clean on "sans aucune limite".
+  const RUNG_CAP_COPY: Record<
+    DictionaryLocale,
+    { entrants: string; divisions: string; uncapped: RegExp }
+  > = {
+    en: {
+      entrants: "entrants",
+      divisions: "divisions",
+      uncapped: claim(String.raw`\b(unlimited|no\s+\w*\s*limit)\b`),
+    },
+    es: {
+      entrants: "participantes",
+      divisions: "divisiones",
+      uncapped: claim(String.raw`\b(ilimitad\w*|sin\s+(ning\w+\s+)?l\w+mite)\b`),
+    },
+    fr: {
+      entrants: "participants",
+      divisions: "divisions",
+      uncapped: claim(String.raw`\b(illimit\w*|sans\s+(aucune\s+)?limite)\b`),
+    },
+    nl: {
+      entrants: "deelnemers",
+      divisions: "divisies",
+      uncapped: claim(String.raw`\b(onbeperkt\w*|geen\s+\w*limiet)\b`),
+    },
+  };
+
+  /** Both rungs' live caps, from the table the resolver enforces. */
+  const rungCaps = async (): Promise<
+    Record<string, { entrants: number | null; divisions: number | null }>
+  > => {
+    const rows = await sql<{ plan_key: string; feature_key: string; int_value: number | null }[]>`
+      select plan_key, feature_key, int_value from plan_entitlements
+      where plan_key = any(${["event_pass", "event_pass_l"]})
+        and feature_key = any(${["entrants.per_division.max", "divisions.per_competition.max"]})`;
+    const out: Record<string, { entrants: number | null; divisions: number | null }> = {};
+    for (const row of rows) {
+      const cell = (out[row.plan_key] ??= { entrants: null, divisions: null });
+      if (row.feature_key === "entrants.per_division.max") cell.entrants = row.int_value;
+      else cell.divisions = row.int_value;
+    }
+    return out;
+  };
+
+  it("the Event Pass answer quotes each rung's live entrant and division caps", async () => {
+    const caps = await rungCaps();
+    // The premise, read from the seed rather than asserted from memory: BOTH
+    // rungs are finite on both axes. If a rung is ever uncapped again the
+    // sentence has to say so in words, and this test must be rewritten rather
+    // than relaxed — an unlimited cap quoted as a number is the same defect
+    // pointing the other way.
+    for (const plan of ["event_pass", "event_pass_l"]) {
+      expect(typeof caps[plan]?.entrants, `${plan} entrant cap`).toBe("number");
+      expect(typeof caps[plan]?.divisions, `${plan} division cap`).toBe("number");
+    }
+    expect(caps.event_pass!.entrants).not.toBe(caps.event_pass_l!.entrants);
+
+    for (const locale of DICTIONARY_LOCALES) {
+      const answer = load(locale, "marketing")["pricing.faq.eventPass.a"];
+      expect(answer, `${locale} has no pricing.faq.eventPass.a`).toBeDefined();
+      const words = RUNG_CAP_COPY[locale];
+      for (const plan of ["event_pass", "event_pass_l"]) {
+        for (const [n, noun] of [
+          [caps[plan]!.entrants, words.entrants],
+          [caps[plan]!.divisions, words.divisions],
+        ] as const) {
+          expect(
+            answer!,
+            `${locale} drops ${plan}'s live cap of ${n} ${noun}`,
+          ).toMatch(claim(String.raw`\b` + n + String.raw`\s+` + noun + String.raw`\b`));
+        }
+      }
+      expect(
+        answer!,
+        `${locale} describes a capped rung as uncapped (${copyTruth.describeClaim(words.uncapped)})`,
+      ).not.toMatch(words.uncapped);
+    }
+  });
+
   // ── #382 review, finding 1: the Pro card on the UPGRADE page ──────────────
   //
   // `upgrade.proCard.body` is rendered to a community org with NO pass — the
