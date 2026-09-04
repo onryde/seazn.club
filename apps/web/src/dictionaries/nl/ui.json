@@ -3833,6 +3833,8 @@
   "comp.wizard.endsOn.required": "Een einddatum is verplicht.",
   "comp.wizard.publicDegraded.title": "Aangemaakt als privé",
   "comp.wizard.publicDegraded.body": "De openbare dashboards van je abonnement zijn allemaal in gebruik, dus {name} is als privé aangemaakt. Archiveer een afgeronde competitie of stap over op een groter abonnement, en maak deze daarna openbaar via de instellingen.",
+  "comp.wizard.publicDegraded.capsOwn": "Je abonnement host er {limit} tegelijk.",
+  "comp.wizard.publicDegraded.caps": "Je abonnement host er {limit} tegelijk; {plan} host er {upgrade}.",
   "comp.wizard.publicDegraded.continue": "Naar de competitie",
   "comp.validation.endsBeforeStarts": "De einddatum kan niet vóór de startdatum liggen.",
   "board.gate.warnTitlePublish": "Dit schema toch publiceren?",

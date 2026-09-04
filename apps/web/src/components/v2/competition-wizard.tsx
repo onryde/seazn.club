@@ -6,13 +6,33 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { apiV1, ApiV1Error } from "@/lib/client-v1";
 import { UpgradeGate } from "@/components/upgrade-gate";
+import {
+  publicDashboardGain,
+  PUBLIC_DASHBOARD_FEATURE,
+  type PublicDashboardUpgrade,
+} from "@/lib/public-dashboard-upgrade";
 import { VisibilityPicker } from "@/components/ui/visibility-picker";
 import { DateTimeField } from "@/components/v2/shared/datetime-field";
 import { routes } from "@/lib/routes";
 import { useMsg } from "@/components/i18n/dict-provider";
 
 
-export function CompetitionWizard({ orgSlug }: { orgSlug: string }) {
+export function CompetitionWizard({
+  orgSlug,
+  publicDashboardUpgrade,
+}: {
+  orgSlug: string;
+  /**
+   * What the next plan up hosts for `dashboard.public.max`, read out of
+   * `plan_entitlements` by the Server Component page.
+   *
+   * REQUIRED, not optional, and passed down rather than derived here: this is a
+   * "use client" island with no database in reach, and an optional prop is how
+   * the figure quietly stops arriving — the whole class of defect this thread
+   * exists to close. `tsc` names every caller instead.
+   */
+  publicDashboardUpgrade: PublicDashboardUpgrade | null;
+}) {
   const msg = useMsg();
   const router = useRouter();
   const [name, setName] = useState("");
@@ -31,7 +51,12 @@ export function CompetitionWizard({ orgSlug }: { orgSlug: string }) {
   // private one because its public dashboards are all in use. NOT an error —
   // the competition exists — so it replaces the redirect with a note and a way
   // onward, rather than an error banner over a form that already succeeded.
-  const [degraded, setDegraded] = useState<{ name: string; slug: string } | null>(null);
+  // `limit` is the cap the create was refused BY — the server resolved it
+  // against this org's own plan and says so on the 201, so the card can name
+  // the number instead of gesturing at it.
+  const [degraded, setDegraded] = useState<
+    { name: string; slug: string; limit: number | null } | null
+  >(null);
   const [busy, setBusy] = useState(false);
 
   async function submit(e: React.FormEvent) {
@@ -79,7 +104,11 @@ export function CompetitionWizard({ orgSlug }: { orgSlug: string }) {
       // is what a caller ignoring the note reads), but making this component
       // check both would be two guards covering for each other, each untested.
       if (created.public_quota_degraded) {
-        setDegraded({ name: name.trim(), slug: created.slug });
+        setDegraded({
+          name: name.trim(),
+          slug: created.slug,
+          limit: created.public_quota_degraded.limit,
+        });
         return;
       }
       router.push(routes.competition(orgSlug, created.slug));
@@ -101,6 +130,11 @@ export function CompetitionWizard({ orgSlug }: { orgSlug: string }) {
   // because leaving an armed "Create competition" button under a competition
   // that already exists is how the same night gets created twice.
   if (degraded) {
+    // BOTH numbers, or as many of them as are true: the cap they hit and what
+    // the next plan up hosts. See lib/public-dashboard-upgrade.ts for when the
+    // second one is suppressed — a Pro org at Pro's own cap must not read
+    // "Pro hosts 10" as an offer.
+    const gain = publicDashboardGain(degraded.limit, publicDashboardUpgrade);
     return (
       <div className="card space-y-4 p-6" data-testid="public-quota-degraded">
         <h2 className="text-lg font-semibold text-slate-800">
@@ -109,7 +143,18 @@ export function CompetitionWizard({ orgSlug }: { orgSlug: string }) {
         <p className="text-sm leading-relaxed text-slate-600">
           {msg("comp.wizard.publicDegraded.body", { name: degraded.name })}
         </p>
-        <UpgradeGate feature="dashboard.public.max" />
+        {degraded.limit !== null && (
+          <p className="text-sm font-medium text-slate-700" data-testid="public-quota-caps">
+            {gain !== null && publicDashboardUpgrade
+              ? msg("comp.wizard.publicDegraded.caps", {
+                  limit: degraded.limit,
+                  plan: publicDashboardUpgrade.plan,
+                  upgrade: gain,
+                })
+              : msg("comp.wizard.publicDegraded.capsOwn", { limit: degraded.limit })}
+          </p>
+        )}
+        <UpgradeGate feature={PUBLIC_DASHBOARD_FEATURE} />
         <div className="flex justify-end">
           <button
             type="button"

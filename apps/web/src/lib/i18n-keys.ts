@@ -1213,6 +1213,8 @@ export type DictionaryKey =
   | "comp.wizard.name.label"
   | "comp.wizard.name.placeholder"
   | "comp.wizard.publicDegraded.body"
+  | "comp.wizard.publicDegraded.caps"
+  | "comp.wizard.publicDegraded.capsOwn"
   | "comp.wizard.publicDegraded.continue"
   | "comp.wizard.publicDegraded.title"
   | "comp.wizard.startsOn"

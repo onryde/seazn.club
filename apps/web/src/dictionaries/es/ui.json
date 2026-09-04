@@ -3833,6 +3833,8 @@
   "comp.wizard.endsOn.required": "Se requiere una fecha de fin.",
   "comp.wizard.publicDegraded.title": "Creada como privada",
   "comp.wizard.publicDegraded.body": "Los paneles públicos de tu plan están todos en uso, así que {name} se creó como privada. Archiva una competición finalizada, o mejora tu plan, y luego hazla pública desde sus ajustes.",
+  "comp.wizard.publicDegraded.capsOwn": "Tu plan aloja {limit} a la vez.",
+  "comp.wizard.publicDegraded.caps": "Tu plan aloja {limit} a la vez; {plan} aloja {upgrade}.",
   "comp.wizard.publicDegraded.continue": "Ir a la competición",
   "comp.validation.endsBeforeStarts": "La fecha de fin no puede ser anterior a la fecha de inicio.",
   "board.gate.warnTitlePublish": "¿Publicar este calendario de todos modos?",

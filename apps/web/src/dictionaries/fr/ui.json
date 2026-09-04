@@ -3833,6 +3833,8 @@
   "comp.wizard.endsOn.required": "Une date de fin est obligatoire.",
   "comp.wizard.publicDegraded.title": "Créée en privé",
   "comp.wizard.publicDegraded.body": "Les tableaux de bord publics de votre formule sont tous utilisés : {name} a donc été créée en privé. Archivez une compétition terminée, ou changez de formule, puis rendez-la publique depuis ses paramètres.",
+  "comp.wizard.publicDegraded.capsOwn": "Votre formule en héberge {limit} à la fois.",
+  "comp.wizard.publicDegraded.caps": "Votre formule en héberge {limit} à la fois ; {plan} en héberge {upgrade}.",
   "comp.wizard.publicDegraded.continue": "Aller à la compétition",
   "comp.validation.endsBeforeStarts": "La date de fin ne peut pas précéder la date de début.",
   "board.gate.warnTitlePublish": "Publier quand même ce calendrier ?",

@@ -3833,6 +3833,8 @@
   "comp.wizard.endsOn.required": "An end date is required.",
   "comp.wizard.publicDegraded.title": "Created as private",
   "comp.wizard.publicDegraded.body": "Your plan's public dashboards are all in use, so {name} was created as private. Archive a finished competition, or upgrade, then make this one public from its settings.",
+  "comp.wizard.publicDegraded.capsOwn": "Your plan hosts {limit} at a time.",
+  "comp.wizard.publicDegraded.caps": "Your plan hosts {limit} at a time; {plan} hosts {upgrade}.",
   "comp.wizard.publicDegraded.continue": "Continue to the competition",
   "comp.validation.endsBeforeStarts": "The end date cannot be before the start date.",
   "board.gate.warnTitlePublish": "Publish this schedule anyway?",
