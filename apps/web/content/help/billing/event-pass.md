@@ -12,7 +12,7 @@ It comes in two sizes, **M** and **L**. They differ in exactly one respect — h
 
 | | M — $11.99 | L — $44.99 |
 |---|---|---|
-| Entrants per division | 128 | Unlimited |
+| Entrants per division | 128 | 512 |
 | Divisions in the competition | Up to 10 | Up to 20 |
 | AI credits | +25, one-time | +35, one-time |
 | Platform fee on entry fees | 4% | 4% |

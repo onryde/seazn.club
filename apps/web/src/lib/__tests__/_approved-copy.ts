@@ -93,7 +93,7 @@ export const APPROVED_EVENT_PASS_INVENTORY: string[] = [
   "c265587d5f9e7989",
   "4776a83e3ec825a2",
   "57618eb0b22ecf4c",
-  "c568f8fe6e21cf2a",
+  "5d9e354126a4c3ed",
   "ca5e9f43ca10e67f",
   "0bd529e8836c444c",
   "20a234eadd484ec6",

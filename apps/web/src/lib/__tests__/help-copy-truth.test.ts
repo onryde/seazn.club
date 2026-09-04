@@ -873,8 +873,35 @@ describe.skipIf(!HAS_DB)("billing help articles quote the numbers the matrix enf
       expect(text, `${label}: L's division cap`).toContain(`${l.divisions} divisions`);
       expect(text, `${label}: L's entrant cap`).toContain(`${l.entrants} entrants`);
       expect(text, `${label}: L is capped, not unlimited`).not.toMatch(/\bunlimited\s+entrants\b/i);
+      // ...and the same claim again, for the shape the regex above CANNOT see.
+      // A prose sentence puts the two words together; a TABLE puts the noun in
+      // the row label and the value in a cell, so "Entrants per division | 128 |
+      // Unlimited" never matches `unlimited\s+entrants` and sailed through this
+      // very assertion. That is not hypothetical: it shipped fourteen lines
+      // above a bullet this wave had already corrected to 512, in the flagship
+      // M-vs-L comparison table, in a row-set three of whose other rows were
+      // edited at the same time. Row-label semantics, not word adjacency.
+      expect(uncappedEntrantCells(text), `${label}: an entrants ROW still says unlimited`).toEqual(
+        [],
+      );
     }
   });
+
+  // Markdown table rows whose LABEL cell names entrants, but whose value cells
+  // claim no limit. Returns the offending "label: value" pairs so the failure
+  // names the row rather than just asserting a boolean.
+  const uncappedEntrantCells = (text: string): string[] => {
+    const faults: string[] = [];
+    for (const line of text.split("\n")) {
+      if (!line.trimStart().startsWith("|")) continue;
+      const [, label, ...values] = line.split("|").map((c) => c.trim());
+      if (!label || !/entrant/i.test(label)) continue;
+      for (const value of values) {
+        if (/^(unlimited|unbounded|no limit|∞)$/i.test(value)) faults.push(`${label}: ${value}`);
+      }
+    }
+    return faults;
+  };
 
   // A cross-plan claim is a claim about the OTHER plan's matrix row too. Both
   // parenthetical comparisons in `event-pass.md` are read in order, so a drifted
