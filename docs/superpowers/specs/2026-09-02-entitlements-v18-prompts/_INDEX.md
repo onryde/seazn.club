@@ -154,11 +154,19 @@ Raised as a product-owner read of the wave rather than as a task list, each veri
 against the tree or the `entw2` database. Full write-up with the arithmetic:
 `../../plans/2026-09-03-entitlements-w2-matrix-plumbing.md`, "Product-owner gaps".
 
-1. **`on_behalf_of` ships WITH V397, or V397 reverts.** The rate cut was sized for the
-   rail and shipped without it: on a $1,000 competition the platform's contribution is
-   $20.70 today against $50.70 before and $50.00 intended, so a 37.5% headline cut is a
-   59% cut to contribution. Merging the cut alone also ships a priced promise to clubs
-   ("we absorb the card fee") the code does not keep. **This blocks the W2 merge.**
+1. **SUPERSEDED THE SAME DAY — `on_behalf_of` cannot do this.** The recommendation as
+   first written ("the rail ships with V397 or V397 reverts") rested on the wave's own
+   false premise, asserted in three places in the tree including V397's header. Verified
+   against `docs.stripe.com/connect/charges`: destination charges debit Stripe's fees
+   from the PLATFORM's balance, and `on_behalf_of` sets the business of record —
+   settlement country, that country's fee schedule, statement descriptor, payout timing —
+   not who pays. **Only direct charges carry the lever**, and they are a charge-type plus
+   Connect-account migration (refunds and disputes move to the connected account; Stripe
+   does not recommend direct charges for the legacy Express accounts `stripe-connect.ts`
+   creates). **Owner ruling: keep V397's rates and gate LAUNCH on that migration** — no
+   club takes real registrations until it lands. It owes its own wave. The underlying
+   diagnosis was right and predates V397: any rate below Stripe's 2.9% is negative and
+   worsens with volume, which was already true of Pro at 2%.
 2. **INR credit packs are re-anchored** — 10/25/50/100 to ₹399/₹999/₹1,999/₹3,999,
    which is 1.67× the included rate, exactly USD's ratio. They were carried as
    "unchanged" while the plans moved to PPP set points, leaving ₹799 buying 10 credits

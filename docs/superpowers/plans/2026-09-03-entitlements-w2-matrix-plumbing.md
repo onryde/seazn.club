@@ -1077,8 +1077,28 @@ more negative as the club grows. V397 did not create the hole; it deepened it fo
 community and the passes while leaving the two negative rungs untouched.
 
 **Nothing is lost today** — greenfield, no live registrations — so this is a decision
-about what we launch with, not a leak to staunch. The decision is the owner's and is
-recorded above this line once taken.
+about what we launch with, not a leak to staunch.
+
+**OWNER RULING 2026-09-04: keep V397's rates, and gate LAUNCH on the charge-type
+migration.** The rates stay 5 / 4 / 2 / 1 because they are the correct rates for the
+model we intend, and the cut costs nothing until clubs transact. Direct charges is what
+the design already commits to and how the market quotes ("2.5% on top of Stripe"), and
+it moves dispute liability off the platform — today our balance is debited for every
+chargeback, and on legacy Express we carry fraud liability outright.
+
+**The gate, stated so a later session cannot merge past it:** no club takes real
+registrations until direct charges land. That is a programme, not a task — direct
+charges need v2 accounts and `stripe-connect.ts:133` creates Express — and it owes its
+own wave with its own design. Until it ships, every rate in the matrix is a promise
+about a charge shape we do not yet run.
+
+Rejected, with reasons, so they are not re-proposed: reverting V397 (restores community
+margin but leaves Pro and Enterprise structurally negative, and undoes a four-locale
+copy sweep); repricing above Stripe's cost (Pro to ~3.5%, contradicting the positioning
+V397's own header cites, and V316 locks a competition's rate at first paid entry so it
+would reach only unsold competitions); and running registrations as a subscription-funded
+loss leader (works at $1,000/month, and at $5,000/month the same Pro org is $30 under
+water every month, because the loss is a rate).
 
 ### 2. INR credit packs were half as generous as every other market — CORRECTED
 
