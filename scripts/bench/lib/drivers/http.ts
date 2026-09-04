@@ -180,14 +180,16 @@ interface SubmitResponseShape {
   entries: Array<{ registration_id: string; status: string }>;
 }
 
-async function enter(
-  base: string,
-  session: Session,
-  entry: RegistrationEntry,
-  division: RegistrationDivisionTarget,
-): Promise<EntryOutcome> {
-  const path = `/api/v1/public/orgs/${division.orgSlug}/competitions/${division.competitionSlug}/register`;
-  const body = {
+/**
+ * Builds the exact wire body `enter()` POSTs to public submit — extracted
+ * into its own export so a test can parse it THROUGH the real
+ * `PublicRegisterGroupRequest` schema (`register.test.ts`) without
+ * re-deriving this mapping: a hand-typed expectation of the wire shape
+ * would just restate whatever bug the mapping itself has. `enter()` below
+ * is the only OTHER caller — nothing here changes what goes over the wire.
+ */
+export function toWireSubmitBody(entry: RegistrationEntry, division: RegistrationDivisionTarget): unknown {
+  return {
     contact: {
       name: entry.contact.name,
       email: entry.contact.email,
@@ -213,6 +215,16 @@ async function enter(
     ],
     website: entry.website ?? "",
   };
+}
+
+async function enter(
+  base: string,
+  session: Session,
+  entry: RegistrationEntry,
+  division: RegistrationDivisionTarget,
+): Promise<EntryOutcome> {
+  const path = `/api/v1/public/orgs/${division.orgSlug}/competitions/${division.competitionSlug}/register`;
+  const body = toWireSubmitBody(entry, division);
   try {
     const data = await request<SubmitResponseShape>(base, session, path, { method: "POST", body });
     const result = data.entries[0];
@@ -223,6 +235,20 @@ async function enter(
       if (code !== undefined && ELIGIBILITY_ERROR_CODES.has(code)) {
         return { status: "rejected_eligibility", ref: "" };
       }
+    }
+    // B03r live-crash fix (`B03r-repins-2026-09-03.md`, register.ts's own
+    // header comment): a 4xx this driver has no SPECIFIC mapping for used to
+    // rethrow past `runRegistrationDivision`'s `Promise.all`, aborting every
+    // OTHER captain's entry in the same division over ONE bad request.
+    // Widening — the eligibility mapping above stays exact-match-only and
+    // runs FIRST, unchanged — to design §5.3's rule: "unexpected 4xx/5xx ->
+    // red, response body attached". A 4xx becomes a funnel-visible outcome
+    // (the funnel oracle reports it as a finding); a 5xx (or anything that
+    // is not a `BenchHttpError` at all — a network failure, say) is still a
+    // hard error, because there is no wire response to attach and nothing a
+    // report row could usefully say about it.
+    if (err instanceof BenchHttpError && err.status >= 400 && err.status < 500) {
+      return { status: "unexpected_error", ref: "", errorDetail: { httpStatus: err.status, body: err.body } };
     }
     throw err;
   }

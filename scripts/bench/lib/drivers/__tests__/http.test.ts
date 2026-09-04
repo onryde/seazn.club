@@ -133,13 +133,37 @@ describe("httpCaptain().enter()", () => {
       expect(outcome).toEqual({ status: "rejected_eligibility", ref: "" });
     });
 
-    it("rethrows a 422 whose code is unrelated to eligibility", async () => {
-      mockFetch([{ status: 422, body: { ok: false, error: { code: "DIVISION_CLOSED", message: "closed" } } }]);
-      await expect(httpCaptain(BASE, newSession()).enter(soloEntry, division)).rejects.toBeInstanceOf(BenchHttpError);
+    // B03r live-crash fix: a 4xx `enter()` doesn't have a specific mapping
+    // for is now a funnel-visible "unexpected_error" OUTCOME, never a thrown
+    // exception — a throw here would escape `runRegistrationDivision`'s
+    // `Promise.all` and abort every OTHER captain's entry in the division.
+    // These two used to assert a throw; that was the bug's OWN behaviour,
+    // not a property worth keeping.
+    it("maps a 422 whose code is unrelated to eligibility to an 'unexpected_error' outcome, not a throw — funnel-visible, not fatal", async () => {
+      const body = { ok: false, error: { code: "DIVISION_CLOSED", message: "closed" } };
+      mockFetch([{ status: 422, body }]);
+      const outcome = await httpCaptain(BASE, newSession()).enter(soloEntry, division);
+      expect(outcome.status).toBe("unexpected_error");
+      expect(outcome.ref).toBe("");
+      expect(outcome.errorDetail).toEqual({ httpStatus: 422, body });
     });
 
-    it("rethrows a 422 whose code merely CONTAINS the substring ELIGIBILITY (proves an exact match, not a substring one)", async () => {
+    it("a 422 whose code merely CONTAINS the substring ELIGIBILITY maps to 'unexpected_error', never 'rejected_eligibility' (exact match, not a substring one)", async () => {
       mockFetch([{ status: 422, body: { ok: false, error: { code: "SOME_ELIGIBILITY_ADJACENT_RULE", message: "x" } } }]);
+      const outcome = await httpCaptain(BASE, newSession()).enter(soloEntry, division);
+      expect(outcome.status).toBe("unexpected_error");
+    });
+
+    it("maps a 400 (no error.code at all) to 'unexpected_error' too — the widening is 'any 4xx', not '422 only'", async () => {
+      const body = { ok: false, error: { message: "Bad request" } };
+      mockFetch([{ status: 400, body }]);
+      const outcome = await httpCaptain(BASE, newSession()).enter(soloEntry, division);
+      expect(outcome.status).toBe("unexpected_error");
+      expect(outcome.errorDetail).toEqual({ httpStatus: 400, body });
+    });
+
+    it("STILL rethrows a 5xx — a hard error, never a funnel outcome", async () => {
+      mockFetch([{ status: 500, body: { ok: false, error: { message: "boom" } } }]);
       await expect(httpCaptain(BASE, newSession()).enter(soloEntry, division)).rejects.toBeInstanceOf(BenchHttpError);
     });
   });

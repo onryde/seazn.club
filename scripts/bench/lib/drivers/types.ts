@@ -137,17 +137,32 @@ export interface RegistrationEntry {
   website?: string;
 }
 
-export type EntryOutcomeStatus = "pending" | "approved" | "waitlisted" | "rejected_eligibility";
+/** `"unexpected_error"` added for the B03r live-crash fix
+ *  (`B03r-repins-2026-09-03.md` register.ts defect): `enter()` used to
+ *  rethrow ANY 4xx it didn't recognise as an eligibility rejection, past
+ *  `runRegistrationDivision`'s `Promise.all` — aborting every OTHER
+ *  captain's entry in the same division. A 4xx the driver doesn't have a
+ *  specific mapping for is now itself a funnel-visible outcome (design
+ *  §5.3: "unexpected 4xx/5xx ... red, response body attached") rather than
+ *  a thrown exception; a 5xx still throws (still a hard error — see
+ *  `enter()`'s own doc comment for the exact split). */
+export type EntryOutcomeStatus = "pending" | "approved" | "waitlisted" | "rejected_eligibility" | "unexpected_error";
 
 /** `ref` is the registration id (`PublicRegisterGroupEntryResult.
  *  registration_id`) once one exists. An eligibility rejection happens
  *  BEFORE any row is inserted (registration-submit.ts throws pre-insert), so
- *  there is nothing to reference — `ref` is `""` for `rejected_eligibility`,
+ *  there is nothing to reference — `ref` is `""` for `rejected_eligibility`
+ *  AND for `"unexpected_error"` (same reason: nothing to reference),
  *  documented here rather than left to be discovered as a surprise empty
  *  string downstream. */
 export interface EntryOutcome {
   status: EntryOutcomeStatus;
   ref: string;
+  /** Present only when `status` is `"unexpected_error"` — the raw HTTP
+   *  status and response body of the unexpected 4xx, carried through so the
+   *  funnel oracle / report can show exactly what the API rejected (design
+   *  §5.3). */
+  errorDetail?: { httpStatus: number; body: unknown };
 }
 
 /** What `Captain.pay()` needs to identify an entry. The HTTP driver never
