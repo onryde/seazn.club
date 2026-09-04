@@ -391,6 +391,19 @@ export interface TinySuiteInput {
    *  and no test that DOES pass it ever reaches real network or browser
    *  code. */
   registrationDrivers?: (resolvedEntry: "registration-api" | "registration-ui", ctx: RegistrationDriverContext) => Promise<RegistrationDriverSet>;
+  /** Resolves the SERVER-ASSIGNED org slug that every public URL is addressed
+   *  by. Defaults to `sql.getOrgSlug` — same "optional, defaults to the real
+   *  thing" convention as `transport`/`sql` above.
+   *
+   *  A seam rather than a plain `plan.org.slug` read because those are two
+   *  DIFFERENT slugs and only one of them exists on the server. The pack
+   *  declares `bench-tiny-club`; the backend auto-provisions the org and mints
+   *  `my-organization-N`. The pack's value 404s, and a 404 here still returns
+   *  HTTP 200 chrome with no wizard in it — so the first live run failed 30s
+   *  later as `locator.fill: Timeout waiting for '#reg-who-name'`, blaming a
+   *  selector that was entirely correct. There is no default that reads the
+   *  pack: falling back to it would restore the defect silently. */
+  resolveOrgSlug?: (orgId: string) => Promise<string>;
 }
 
 // ---------------------------------------------------------------------------
@@ -1093,7 +1106,27 @@ export async function runTinySuite(input: TinySuiteInput): Promise<SuiteReport> 
       });
       const divisionId = createdDivision.id;
 
-      const orgSlug = plan.org.slug;
+      // The SERVER's slug, never the pack's. `plan.org.slug` is what the pack
+      // declares; the backend auto-provisions the org and names it itself, so
+      // the two differ on every real run (`bench-tiny-club` vs
+      // `my-organization-2`). Every public surface the browser driver touches
+      // is addressed by this slug — `/shared/{orgSlug}/...` and `/o/{orgSlug}/...`
+      // — and the pack's value resolves to a 404 whose HTTP 200 chrome renders
+      // without the wizard, so the failure surfaced as a Playwright timeout on
+      // a correct selector rather than as a bad URL. See `PlanSql.getOrgSlug`.
+      const resolveOrgSlug =
+        input.resolveOrgSlug ??
+        (async (id: string) => {
+          if (input.sql === undefined) {
+            throw new Error(
+              `tiny: registration division "${division.ref}" needs either the PlanSql seam or an explicit resolveOrgSlug ` +
+                `to read the server-assigned org slug — every /shared/ and /o/ URL is addressed by it, and the pack's ` +
+                `declared slug is not what the backend minted`,
+            );
+          }
+          return input.sql.getOrgSlug(id);
+        });
+      const orgSlug = await resolveOrgSlug(orgId);
       const competitionSlug = plan.competition.slug;
       if (competitionSlug === undefined) {
         throw new Error(

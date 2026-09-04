@@ -96,6 +96,33 @@ export interface PlanSql {
    * checkout path can't run without Stripe").
    */
   setDivisionActive(divisionId: string): Promise<void>;
+  /**
+   * `select slug from organizations where id = $1`.
+   *
+   * The org slug is SERVER-ASSIGNED and unknowable ahead of the run. The bench
+   * signs in with a fresh email each run and the backend auto-provisions an org
+   * named from nothing the pack controls — observed live as `my-organization`,
+   * `my-organization-2`, `my-organization-3` across three runs. `_tiny.json`
+   * declares `org.slug: "bench-tiny-club"`, and nothing ever writes it.
+   *
+   * That matters because every PUBLIC surface is addressed by slug:
+   * `/shared/{orgSlug}/{competitionSlug}/register` and the organiser hub at
+   * `/o/{orgSlug}/...`. Using the pack's declared slug sent the browser driver
+   * to a 404 that renders HTTP 200 chrome with no wizard on it, so the run
+   * failed 30s later as `locator.fill: Timeout waiting for '#reg-who-name'` —
+   * a selector that is perfectly correct and an element that was never going
+   * to exist. Verified directly: `bench-tiny-club` -> 404,
+   * `my-organization-2` -> 200.
+   *
+   * Read over SQL because no product API exposes it: there is no
+   * `GET /api/v1/orgs/{id}` route at all, the competitions list carries no
+   * `org_slug`, and `signIn`'s `redirect` is `/onboarding` for a new user
+   * rather than the `/o/{slug}` home an established one gets
+   * (`lib/auth.ts` `postAuthLanding`) — checked live, not assumed. Same
+   * "raw SQL because the real path is infeasible here" precedent as
+   * `setDivisionActive` and `setPlan` above.
+   */
+  getOrgSlug(orgId: string): Promise<string>;
 }
 
 /**
@@ -394,6 +421,18 @@ export function createRealPlanSql(): RealPlanSqlHandle {
     },
     async setDivisionActive(divisionId) {
       await getSql()`update divisions set status = 'active' where id = ${divisionId}`;
+    },
+    async getOrgSlug(orgId) {
+      const rows = (await getSql()`select slug from organizations where id = ${orgId}`) as { slug: string }[];
+      const slug = rows[0]?.slug;
+      // Loud rather than falling back to the pack's declared slug. A fallback
+      // here would restore exactly the defect this exists to fix, and would do
+      // it silently — the run would go on and fail 30s later inside Playwright,
+      // pointing at a selector instead of at the URL.
+      if (slug === undefined || slug === "") {
+        throw new Error(`plan: organizations.slug is empty for org ${orgId} — cannot address any public /shared/ URL`);
+      }
+      return slug;
     },
   };
 

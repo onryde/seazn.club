@@ -206,6 +206,19 @@ function fakeRegistrationDrivers(calls: RecordedDriverCall[]): (
   };
 }
 
+/** What the BACKEND mints, deliberately different from the pack's declared
+ *  `org.slug` ("bench-tiny-club"). The two must differ in this fixture or the
+ *  suite cannot witness the defect these tests exist for: `tiny.ts` used to
+ *  address every public URL with the PACK's slug, which 404s. A fixture where
+ *  the two agree passes either way. Observed live as `my-organization-2`. */
+const SERVER_ORG_SLUG = "my-organization-2";
+
+/** Read from the committed pack rather than retyped. A literal here would go
+ *  stale the moment `_tiny.json`'s org slug changed, and a stale literal in a
+ *  `not.toBe` assertion passes for the wrong reason — it would compare against
+ *  a slug nothing uses and never fail again. */
+const TINY_PACK_DECLARED_ORG_SLUG = tinyPack().org.slug;
+
 describe("runTinySuite — d-registration driven via a fake registrationDrivers", () => {
   it("submits both entries, records exactly the pack's one approve action, and reports a green funnel", async () => {
     const server = makeFakeServer();
@@ -228,6 +241,7 @@ describe("runTinySuite — d-registration driven via a fake registrationDrivers"
       log: silent,
       transport: server.transport,
       registrationDrivers: fakeRegistrationDrivers(driverCalls),
+      resolveOrgSlug: async () => SERVER_ORG_SLUG,
     });
 
     expect(report.gate).toBe("green");
@@ -281,6 +295,48 @@ describe("runTinySuite — d-registration driven via a fake registrationDrivers"
     expect(driverCalls.some((c) => c.kind === "join")).toBe(false);
   });
 
+  // The regression for the first live run's failure. `tiny.ts` addressed every
+  // public URL with `plan.org.slug` — the PACK's declared slug — while the org
+  // is auto-provisioned and named by the backend. `/shared/bench-tiny-club/...`
+  // 404s, and a 404 here still serves HTTP 200 chrome with no wizard on it, so
+  // the run died 30s later inside Playwright as
+  //   locator.fill: Timeout 30000ms exceeded — waiting for '#reg-who-name'
+  // blaming a selector that was correct all along. No unit test could see it:
+  // every fake agreed with whatever slug it was handed. This one does not — it
+  // asserts the driver is handed the SERVER's slug and, separately, that the
+  // pack's own value never reaches a driver at all.
+  it("hands the driver the SERVER-assigned org slug, never the pack's declared one", async () => {
+    const server = makeFakeServer();
+    server.registrationRowsByDivisionId.set(REGISTRATION_DIVISION_ID, [
+      { id: "reg-reg-cap1", status: "confirmed", amount_cents: 0, entry_payment_intent_id: null },
+      { id: "reg-reg-cap2", status: "pending", amount_cents: 0, entry_payment_intent_id: null },
+    ]);
+
+    const seenOrgSlugs: string[] = [];
+    const report = await runTinySuite({
+      base: "http://bench.example",
+      engine: "optimized",
+      keep: false,
+      log: silent,
+      transport: server.transport,
+      resolveOrgSlug: async () => SERVER_ORG_SLUG,
+      registrationDrivers: async (resolvedEntry, ctx) => {
+        seenOrgSlugs.push(ctx.orgSlug);
+        return fakeRegistrationDrivers([])(resolvedEntry, ctx);
+      },
+    });
+
+    expect(report.gate).toBe("green");
+    expect(seenOrgSlugs, "the driver factory was never called").not.toHaveLength(0);
+    // Positive AND negative. The positive alone would pass if the resolver
+    // were ignored and both slugs happened to coincide; the negative alone
+    // would pass on any wrong-but-different value.
+    for (const slug of seenOrgSlugs) {
+      expect(slug).toBe(SERVER_ORG_SLUG);
+      expect(slug).not.toBe(TINY_PACK_DECLARED_ORG_SLUG);
+    }
+  });
+
   it("--entry admin: the registration division is skipped ENTIRELY — the driver factory is never even called, and no division is created for it", async () => {
     const server = makeFakeServer();
     const driverFactory = vi.fn(fakeRegistrationDrivers([]));
@@ -293,6 +349,7 @@ describe("runTinySuite — d-registration driven via a fake registrationDrivers"
       transport: server.transport,
       cliEntry: "admin",
       registrationDrivers: driverFactory,
+      resolveOrgSlug: async () => SERVER_ORG_SLUG,
     });
 
     expect(report.gate).toBe("green");
@@ -327,6 +384,7 @@ describe("runTinySuite — d-registration driven via a fake registrationDrivers"
       log: silent,
       transport: server.transport,
       registrationDrivers: fakeRegistrationDrivers([]),
+      resolveOrgSlug: async () => SERVER_ORG_SLUG,
     });
 
     expect(report.gate).toBe("red");
