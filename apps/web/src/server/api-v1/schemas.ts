@@ -159,6 +159,54 @@ export const Competition = z.object({
   frozen: z.boolean().optional(),
 });
 
+/**
+ * The create-time public-dashboard degrade, stated in the RESPONSE (T20,
+ * reviewer pass 3, 2026-09-03).
+ *
+ * V395 made competitions public by default and, at `dashboard.public.max`,
+ * made a create DEGRADE to private rather than 402 (T15/F, owner ruling
+ * 2026-09-03). The degrade was invisible: a 201 came back carrying something
+ * other than what was asked for, and the only way to notice was to diff the
+ * returned row against the request — which exactly one client did. A 201 that
+ * silently substitutes a different resource is wrong for every consumer, so
+ * the substitution is now NAMED, with the cap that caused it.
+ *
+ * Two properties this shape is chosen for:
+ *
+ *   * A caller that IGNORES it is still not misled — both create responses
+ *     also carry the visibility that was actually applied, so the resource
+ *     representation is truthful on its own. This note is the explicit
+ *     signal, never the only one.
+ *   * The cap travels WITH the note (`limit` + `reason`, built by
+ *     `publicDashboardsReason`) rather than being restated in copy, for the
+ *     same reason the 402 does it: the flat sentence in feature-copy.ts said
+ *     "one public dashboard at a time" through caps of 1, 3 and 2.
+ *
+ * ABSENT when nothing was degraded — never `false`/null-filled, so
+ * `if (res.public_quota_degraded)` is the whole client-side test and a
+ * consumer is never trained to ignore a field that is usually there.
+ */
+export const PublicQuotaDegraded = z.object({
+  feature_key: z.literal("dashboard.public.max"),
+  requested_visibility: z.literal("public"),
+  applied_visibility: z.literal("private"),
+  /** The resolved cap, null when unlimited. */
+  limit: z.number().int().nullable(),
+  /** Same sentence the 402 carries — `publicDashboardsReason(limit)`. */
+  reason: z.string(),
+});
+export type PublicQuotaDegraded = z.infer<typeof PublicQuotaDegraded>;
+
+/** POST /competitions' 201 body: the competition, plus the degrade note when
+ *  the public-dashboard cap turned a requested public create private. Only
+ *  the CREATE response can carry it — a later GET/list of the same row has no
+ *  request to have degraded — which is why this is a separate schema rather
+ *  than an optional field on `Competition`. */
+export const CreatedCompetition = Competition.extend({
+  public_quota_degraded: PublicQuotaDegraded.optional(),
+});
+export type CreatedCompetition = z.infer<typeof CreatedCompetition>;
+
 // ---------------------------------------------------------------------------
 // Divisions
 // ---------------------------------------------------------------------------
@@ -961,6 +1009,18 @@ export const FromTemplateResult = z.object({
   /** So the wizard can navigate straight to the created competition page —
    *  same pattern the blank-form wizard already uses off its own POST. */
   slug: Slug,
+  /** The visibility that was ACTUALLY applied (T20). `createCompetition`
+   *  returns the whole row, so its caller could always diff requested against
+   *  created; this result carried no visibility at all, which is why the
+   *  template gallery — the DEFAULT create path, the one `/competitions/new`
+   *  opens on — redirected unconditionally into a silently private
+   *  competition whose public link 404s. */
+  visibility: Visibility,
+  /** Present ONLY when the public-dashboard cap turned this create private —
+   *  the same note POST /competitions carries, deliberately the same field
+   *  name and the same shape so one concept has one name on both create
+   *  paths. */
+  public_quota_degraded: PublicQuotaDegraded.optional(),
   divisions: z.array(TemplateDivisionResultS),
   templateKey: z.string(),
   templateVersion: z.number().int(),

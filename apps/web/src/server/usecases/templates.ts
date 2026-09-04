@@ -44,7 +44,7 @@ import type { CreateFromTemplate, FromTemplateResult } from "@/server/api-v1/sch
 import { slugify, withUniqueSlug, SLUG_CONSTRAINT } from "./slugs";
 import {
   assertActiveQuota,
-  withinPublicQuota,
+  resolveCreateVisibility,
   fireCompetitionCreated,
   fireCompetitionMadePublic,
   shouldFireMadePublic,
@@ -184,8 +184,14 @@ export async function instantiateTemplate(
   // create is never blocked by the public-dashboard cap. Resolved here,
   // BEFORE the transaction, for the same pooled-read reason as the quota
   // checks above it.
-  const quotaMet = input.visibility === "public" && !(await withinPublicQuota(auth)).ok;
-  const visibility = quotaMet ? "private" : (input.visibility ?? "public");
+  //
+  // Through the SHARED helper, not a second copy (T20): the copy that used to
+  // live here keyed the guard on `=== "public"` and the value on
+  // `?? "public"`, so an omitted visibility skipped the quota check and still
+  // created a public competition. `degraded` is carried into the result below
+  // — `FromTemplateResult` had no visibility at all, which is what left the
+  // template gallery redirecting into a silently private competition.
+  const { visibility, degraded } = await resolveCreateVisibility(auth, input.visibility);
 
   const dict = await getDictionary("en", "ui");
 
@@ -404,6 +410,8 @@ export async function instantiateTemplate(
   return {
     competitionId,
     slug,
+    visibility,
+    ...(degraded ? { public_quota_degraded: degraded } : {}),
     divisions,
     templateKey: template.key,
     templateVersion: template.version,

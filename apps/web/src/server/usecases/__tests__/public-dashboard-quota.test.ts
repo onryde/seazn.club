@@ -25,6 +25,7 @@ import { afterAll, describe, expect, it } from "vitest";
 import { randomUUID } from "node:crypto";
 import { sql } from "@/lib/db";
 import { getLimit, invalidateOrgEntitlements } from "@/lib/entitlements";
+import { publicDashboardsReason } from "@/lib/feature-copy";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { createCompetition, patchCompetition } from "../competitions";
 
@@ -142,6 +143,41 @@ describe.skipIf(!HAS_DB)("assertPublicQuota counts LIVE public dashboards", () =
     const degraded = await make(auth, "One over the cap");
     expect(degraded.id).toBeTruthy();
     expect(degraded.visibility).toBe("private");
+  });
+
+  it("the degrade is SIGNALLED in the response, never merely implied by the row", async () => {
+    // T20 finding 1 (reviewer pass 3, 2026-09-03). A 201 that quietly returns
+    // something other than what was asked for is wrong for EVERY consumer, not
+    // just the one client that happens to diff the row it gets back. So the
+    // response NAMES what happened and why, and — like the 402 the PATCH path
+    // still raises — the cap travels WITH the note rather than being restated
+    // in copy that goes stale the next time the number moves.
+    //
+    // `reason` is asserted through `publicDashboardsReason`, the same function
+    // that builds the 402's, so a change to the sentence moves this test with
+    // it instead of leaving it pinning yesterday's wording.
+    const auth = await seedOrg("community");
+    const cap = await publicCap(auth);
+    for (let i = 1; i <= cap; i += 1) await make(auth, `Live ${i}`);
+    const degraded = await make(auth, "Signalled over the cap");
+    expect(degraded.visibility).toBe("private");
+    expect(degraded.public_quota_degraded).toEqual({
+      feature_key: "dashboard.public.max",
+      requested_visibility: "public",
+      applied_visibility: "private",
+      limit: cap,
+      reason: publicDashboardsReason(cap),
+    });
+  });
+
+  it("a create INSIDE the cap carries NO degrade note", async () => {
+    // The other direction, so the assertion above cannot be satisfied by a
+    // note that is simply always attached — which would train every consumer
+    // to ignore it.
+    const auth = await seedOrg("community");
+    const inside = await make(auth, "Room to spare");
+    expect(inside.visibility).toBe("public");
+    expect(inside.public_quota_degraded).toBeUndefined();
   });
 
   it("the degrade drops the showcase opt-in with the visibility", async () => {

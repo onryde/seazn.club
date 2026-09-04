@@ -57,7 +57,7 @@ const pageOf = (item: ZodType) =>
 export const ROUTES: RouteSpec[] = [
   // Competitions
   { path: "/competitions", method: "get", summary: "List competitions", tag: "competitions", response: pageOf(S.Competition), query: PAGE_QUERY },
-  { path: "/competitions", method: "post", summary: "Create a competition", tag: "competitions", request: S.CreateCompetition, response: S.Competition, status: 201, errors: [409] },
+  { path: "/competitions", method: "post", summary: "Create a competition. Public by default; at `dashboard.public.max` the create is NOT refused — it is created private and the 201 carries `public_quota_degraded` naming the cap", tag: "competitions", request: S.CreateCompetition, response: S.CreatedCompetition, status: 201, errors: [409] },
   { path: "/competitions/from-template", method: "post", summary: "Instantiate a curated format template (D1a) — competition + divisions + stages in one transaction", tag: "competitions", request: S.CreateFromTemplate, response: S.FromTemplateResult, status: 201, errors: [402, 404, 409, 422] },
   { path: "/competitions/{id}", method: "get", summary: "Get a competition", tag: "competitions", response: S.Competition },
   { path: "/competitions/{id}", method: "patch", summary: "Update a competition", tag: "competitions", request: S.PatchCompetition, response: S.Competition, errors: [409] },

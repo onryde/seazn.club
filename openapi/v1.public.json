@@ -480,7 +480,7 @@
         ]
       },
       "post": {
-        "summary": "Create a competition",
+        "summary": "Create a competition. Public by default; at `dashboard.public.max` the create is NOT refused — it is created private and the 201 carries `public_quota_degraded` naming the cap",
         "tags": [
           "competitions"
         ],
@@ -721,6 +721,46 @@
                         },
                         "frozen": {
                           "type": "boolean"
+                        },
+                        "public_quota_degraded": {
+                          "type": "object",
+                          "properties": {
+                            "feature_key": {
+                              "type": "string",
+                              "const": "dashboard.public.max"
+                            },
+                            "requested_visibility": {
+                              "type": "string",
+                              "const": "public"
+                            },
+                            "applied_visibility": {
+                              "type": "string",
+                              "const": "private"
+                            },
+                            "limit": {
+                              "anyOf": [
+                                {
+                                  "type": "integer",
+                                  "minimum": -9007199254740991,
+                                  "maximum": 9007199254740991
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "reason": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "feature_key",
+                            "requested_visibility",
+                            "applied_visibility",
+                            "limit",
+                            "reason"
+                          ],
+                          "additionalProperties": false
                         }
                       },
                       "required": [
@@ -1065,6 +1105,54 @@
                           "maxLength": 80,
                           "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
                         },
+                        "visibility": {
+                          "type": "string",
+                          "enum": [
+                            "private",
+                            "unlisted",
+                            "public"
+                          ]
+                        },
+                        "public_quota_degraded": {
+                          "type": "object",
+                          "properties": {
+                            "feature_key": {
+                              "type": "string",
+                              "const": "dashboard.public.max"
+                            },
+                            "requested_visibility": {
+                              "type": "string",
+                              "const": "public"
+                            },
+                            "applied_visibility": {
+                              "type": "string",
+                              "const": "private"
+                            },
+                            "limit": {
+                              "anyOf": [
+                                {
+                                  "type": "integer",
+                                  "minimum": -9007199254740991,
+                                  "maximum": 9007199254740991
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "reason": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "feature_key",
+                            "requested_visibility",
+                            "applied_visibility",
+                            "limit",
+                            "reason"
+                          ],
+                          "additionalProperties": false
+                        },
                         "divisions": {
                           "type": "array",
                           "items": {
@@ -1118,6 +1206,7 @@
                       "required": [
                         "competitionId",
                         "slug",
+                        "visibility",
                         "divisions",
                         "templateKey",
                         "templateVersion"
@@ -1135,6 +1224,14 @@
                   "data": {
                     "competitionId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
                     "slug": "example",
+                    "visibility": "private",
+                    "public_quota_degraded": {
+                      "feature_key": "dashboard.public.max",
+                      "requested_visibility": "public",
+                      "applied_visibility": "private",
+                      "limit": -9007199254740991,
+                      "reason": "example"
+                    },
                     "divisions": [
                       {
                         "id": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",

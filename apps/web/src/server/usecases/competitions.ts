@@ -12,7 +12,12 @@ import { EVENTS, type AnalyticsEvent } from "@/lib/analytics-events";
 import { log } from "@/server/logger";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { page, type ListQuery, type Page } from "@/server/api-v1/http";
-import { CompetitionStatus, type CreateCompetition, type PatchCompetition } from "@/server/api-v1/schemas";
+import {
+  CompetitionStatus,
+  type CreateCompetition,
+  type PatchCompetition,
+  type PublicQuotaDegraded,
+} from "@/server/api-v1/schemas";
 import { fireDiscoveryRevalidate, invalidateDiscoveryCache } from "@/server/public-site/revalidate";
 import { ONBOARDING_EARN, REFERRAL_WELCOME_EARN, tryEarnGrant } from "@/lib/credits";
 import { invalidateSlugCache } from "@/server/slug-resolve";
@@ -39,6 +44,11 @@ export interface CompetitionRow {
   discovery: unknown;
   /** doc 10 §2.4 — over-quota after a downgrade: read-only, never deleted. */
   frozen?: boolean;
+  /** T20 — set by `createCompetition` ONLY, and only when the
+   *  public-dashboard cap turned a requested public create private. Not a
+   *  column: it describes what happened to THIS request, so a later read of
+   *  the same row never carries it. */
+  public_quota_degraded?: PublicQuotaDegraded;
 }
 
 const COLS = [
@@ -171,6 +181,60 @@ export async function assertPublicQuota(auth: AuthCtx, excludeId?: string): Prom
   }
 }
 
+/**
+ * The create-time visibility decision, resolved ONCE for both create paths
+ * (T20, reviewer pass 3, 2026-09-03).
+ *
+ * `createCompetition` and `instantiateTemplate` each carried their own copy of
+ *
+ *     const quotaMet = input.visibility === "public" && !(await withinPublicQuota(auth)).ok;
+ *     const visibility = quotaMet ? "private" : (input.visibility ?? "public");
+ *
+ * and the template copy had a real hole in it: the GUARD keyed on
+ * `=== "public"` while the VALUE keyed on `?? "public"`, so an omitted
+ * visibility skipped the quota check entirely and still created a PUBLIC
+ * competition, over the cap, with neither a note nor a refusal. Two spellings
+ * of one rule is how that happens, so there is now one — the default is
+ * applied FIRST and the guard reads the resolved answer, which makes the two
+ * incapable of disagreeing again.
+ *
+ * Returns the note as well as the value, because the note is the API contract:
+ * see `PublicQuotaDegraded` (api-v1/schemas.ts) for why a silent substitution
+ * in a 201 is wrong for every consumer and not only for the client that
+ * happens to diff the row.
+ *
+ * NEVER blocks. The PATCH path still 402s through `assertPublicQuota` above —
+ * switching an existing competition to public is a deliberate act with a wrong
+ * answer available, so it gets an error; a create is not.
+ */
+export async function resolveCreateVisibility(
+  auth: AuthCtx,
+  requested: "private" | "unlisted" | "public" | undefined,
+): Promise<{
+  visibility: "private" | "unlisted" | "public";
+  degraded: PublicQuotaDegraded | null;
+}> {
+  // PUBLIC BY DEFAULT (V395/T15). Applied here, before the guard reads it, so
+  // "what an omitted visibility means" is answered in exactly one place for
+  // both create paths and for every direct usecase caller.
+  const wanted = requested ?? "public";
+  if (wanted !== "public") return { visibility: wanted, degraded: null };
+  const { ok, limit } = await withinPublicQuota(auth);
+  if (ok) return { visibility: "public", degraded: null };
+  return {
+    visibility: "private",
+    degraded: {
+      feature_key: "dashboard.public.max",
+      requested_visibility: "public",
+      applied_visibility: "private",
+      limit,
+      // The SAME sentence `assertPublicQuota`'s 402 carries, from the same
+      // builder — the cap travels with the answer instead of being restated.
+      reason: publicDashboardsReason(limit),
+    },
+  };
+}
+
 /** Activation event (feature 1) — first competition is the "aha" moment.
  *  Exported so createFromTemplate (usecases/templates.ts, D1a) can fire the
  *  SAME event, with the SAME shape, after ITS OWN transaction commits — a
@@ -221,12 +285,16 @@ export async function createCompetition(
   // `assertPublicQuota` throw the THIRD create on the plan whose one-line sell
   // is "run a club night" would have 402'd by default, with no wrong choice
   // made by the organiser. It degrades instead: the competition is created
-  // PRIVATE, and the caller learns that from the row it gets back (the
-  // requested visibility went in, a different one came out) rather than from
-  // an error. The PATCH path still 402s — switching an existing competition to
-  // public is a deliberate act with a wrong answer available, so it gets one.
-  const quotaMet = input.visibility === "public" && !(await withinPublicQuota(auth)).ok;
-  const visibility = quotaMet ? "private" : input.visibility;
+  // PRIVATE, the row that comes back carries the visibility that was actually
+  // applied, and (T20) `public_quota_degraded` names the substitution and the
+  // cap that caused it, so a consumer does not have to diff the response
+  // against its own request to notice. The PATCH path still 402s — switching
+  // an existing competition to public is a deliberate act with a wrong answer
+  // available, so it gets one.
+  // Resolved through the shared helper both create paths use — see
+  // `resolveCreateVisibility` for why the default and the guard must be one
+  // answer, and `PublicQuotaDegraded` for why `degraded` reaches the caller.
+  const { visibility, degraded } = await resolveCreateVisibility(auth, input.visibility);
   // Showcase at create time follows the exact PATCH rules (doc 15 §1):
   // gate key server-side, and never let a non-public competition opt in. Both
   // checks read the CALLER'S OWN input, not the degraded value: a caller that
@@ -240,7 +308,7 @@ export async function createCompetition(
       throw new HttpError(422, "Only public competitions can be showcased on seazn.club");
     }
   }
-  const discoverable = !quotaMet && input.discoverable === true;
+  const discoverable = !degraded && input.discoverable === true;
   const row = await withTenant(auth.orgId, async (tx) => {
     // The insert is shared by both slug paths so the generated one can be
     // RETRIED against the unique index — `q` is the savepoint the retry rolls
@@ -302,7 +370,10 @@ export async function createCompetition(
   if (shouldFireMadePublic(undefined, visibility)) {
     await fireCompetitionMadePublic(auth, row.id);
   }
-  return row;
+  // The degrade note rides ALONGSIDE the row rather than replacing anything in
+  // it: a consumer that never looks at it still reads the truthful
+  // `visibility` off the resource itself (T20).
+  return degraded ? { ...row, public_quota_degraded: degraded } : row;
 }
 
 // Two phases on purpose, and the boundary is load-bearing (see
