@@ -1379,6 +1379,80 @@ describe("PackSchema — the registration block (declared for B03r, unpopulated 
       /unknown registration entry/i,
     );
   });
+
+  // Gap 1 (B03r-repins-2026-09-03.md, owner ruling 2026-09-04): a
+  // non-1-January eligibility cutoff. `ageCutoffMonth`/`ageCutoffDay`
+  // mirror `divisions.age_cutoff_month`/`age_cutoff_day` (V364/V380).
+  it("ageCutoffMonth/ageCutoffDay parse, independently, and default to absent", () => {
+    const p = parsed(
+      withRegistration((b) => {
+        b.ageCutoffMonth = 9;
+        b.ageCutoffDay = 1;
+      }),
+    );
+    expect(p.registration?.byDivision["d-main"]?.ageCutoffMonth).toBe(9);
+    expect(p.registration?.byDivision["d-main"]?.ageCutoffDay).toBe(1);
+    // Absent by default, same as ageMin/ageMax — an existing pack that never
+    // sets a cutoff parses unchanged.
+    const bare = parsed(withRegistration(() => {}));
+    expect(bare.registration?.byDivision["d-main"]?.ageCutoffMonth).toBeUndefined();
+    expect(bare.registration?.byDivision["d-main"]?.ageCutoffDay).toBeUndefined();
+  });
+
+  it("an out-of-range ageCutoffMonth/ageCutoffDay is rejected", () => {
+    expectIssue(
+      withRegistration((b) => {
+        b.ageCutoffMonth = 13;
+      }),
+      ["registration", "byDivision", "d-main", "ageCutoffMonth"],
+      /.*/,
+    );
+    expectIssue(
+      withRegistration((b) => {
+        b.ageCutoffMonth = 0;
+      }),
+      ["registration", "byDivision", "d-main", "ageCutoffMonth"],
+      /.*/,
+    );
+    expectIssue(
+      withRegistration((b) => {
+        b.ageCutoffDay = 32;
+      }),
+      ["registration", "byDivision", "d-main", "ageCutoffDay"],
+      /.*/,
+    );
+    expectIssue(
+      withRegistration((b) => {
+        b.ageCutoffDay = 0;
+      }),
+      ["registration", "byDivision", "d-main", "ageCutoffDay"],
+      /.*/,
+    );
+  });
+
+  // Gap 2 (B03r-repins-2026-09-03.md, owner ruling 2026-09-04):
+  // `PackPerson.gender` now admits `"x"`, matching the product's "x never
+  // blocks" category exemption (registration-rules.ts ~:177-178).
+  it("a person's gender may be declared 'x'", () => {
+    const p = parsed(
+      pack((draft) => {
+        const persons = draft.persons as Record<string, unknown>[];
+        (persons[0] as Record<string, unknown>).gender = "x";
+      }),
+    );
+    expect(p.persons[0]?.gender).toBe("x");
+  });
+
+  it("a gender value other than m/f/x is still rejected", () => {
+    expectIssue(
+      pack((draft) => {
+        const persons = draft.persons as Record<string, unknown>[];
+        (persons[0] as Record<string, unknown>).gender = "nonbinary";
+      }),
+      ["persons", 0, "gender"],
+      /.*/,
+    );
+  });
 });
 
 describe("PackSchema — pre-freeze reservations (venues, officials, claim invites)", () => {

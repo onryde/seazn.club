@@ -526,8 +526,22 @@ export const PackPerson = z.strictObject({
   // owns (design §4's five checks), not a shape rule, so both stay optional
   // here. Declared now because PackSchema freezes at the end of B06 and an
   // additive change after that is an owner escalation.
+  //
+  // Gap 2 (B03r-repins-2026-09-03.md, owner ruling 2026-09-04, closed ahead
+  // of the B06 freeze): `"x"` added to the union. The product's
+  // `categoryEligibilityIssues` (apps/web/src/lib/registration-rules.ts
+  // ~:177-178) reads "`x` never blocks: a person whose gender is `x` is
+  // eligible for every category (owner ruling, RS002)" — a null gender is
+  // still `MISSING_GENDER`, but a declared `"x"` is never a
+  // `CATEGORY_MISMATCH`. `mixedCompositionTally` (same file, ~:357) treats
+  // `x`/null identically: neither counts toward either side of a `mixed`
+  // roster's m/f tally. Without this member a pack could not express a
+  // non-binary person at all, and therefore could not represent the one
+  // case those predicates treat specially — see `validate-pack.ts`'s
+  // `categoryViolation`/`mixedCompositionViolation`, the stage-0 mirrors
+  // that now honour it.
   dob: z.iso.date().optional(),
-  gender: z.enum(["m", "f"]).optional(),
+  gender: z.enum(["m", "f", "x"]).optional(),
 });
 export type PackPerson = z.infer<typeof PackPerson>;
 
@@ -1251,6 +1265,24 @@ export const PackRegistrationBlock = z.strictObject({
   category: z.enum(["open", "mens", "womens", "mixed"]),
   ageMin: z.number().int().min(0).max(120).optional(),
   ageMax: z.number().int().min(0).max(120).optional(),
+  /** Gap 1 (B03r-repins-2026-09-03.md, owner ruling 2026-09-04, closed
+   *  ahead of the B06 freeze): the product evaluates an age band at
+   *  `age_cutoff_month`/`age_cutoff_day` of the season-start year, NOT
+   *  always 1 January — `divisions.age_cutoff_month`/`age_cutoff_day`
+   *  (V364/V380), `ageBandEligibilityIssues`
+   *  (apps/web/src/lib/registration-rules.ts:252-326). Both independently
+   *  optional and independently defaultable to 1, exactly like the product
+   *  (`cutoffMonth ?? 1; cutoffDay ?? 1`, registration-rules.ts:271-272) —
+   *  a pack that never sets either keeps meaning what it always meant.
+   *  Range-checked only (1-12 / 1-31): the DB CHECK constraint itself does
+   *  not cross-check day-per-month either (B03r-repins-2026-09-03.md FP7),
+   *  so this matches the product's own laxness at the schema layer — the
+   *  stage-0 mirror (`validate-pack.ts`'s `ageBandViolation`) is where an
+   *  impossible combination is handled, the same split the product uses
+   *  (`isValidCutoffDay` is a read-side backstop, not a parse-time
+   *  rejection). */
+  ageCutoffMonth: z.number().int().min(1).max(12).optional(),
+  ageCutoffDay: z.number().int().min(1).max(31).optional(),
   entrantKind: PackEntrantKind,
   feeCents: z.number().int().nonnegative(),
   approval: z.enum(["auto", "manual"]),

@@ -2245,7 +2245,7 @@ interface RegPerson {
   readonly fullName: string;
   readonly lane: string;
   readonly dob?: string;
-  readonly gender?: "m" | "f";
+  readonly gender?: "m" | "f" | "x";
 }
 
 function registrationPack(opts: {
@@ -2354,6 +2354,180 @@ describe("registration funnel — rule 1: rejected_eligibility must actually vio
     const finding = onlyError(validatePack(pack, UNIT).findings);
     expect(finding.code).toBe("registration.rejected_not_violating");
     expect(finding.message).toContain("e-lies");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Gap 1 (B03r-repins-2026-09-03.md, owner ruling 2026-09-04): a
+// non-1-January eligibility cutoff. Same person, same ageMax:17 band, both
+// blocks declare the SAME entry `rejected_eligibility` — only the cutoff
+// differs. Person born 2006-08-01 is age 17 at a 1 January 2024 cutoff
+// (not yet had their 2024 birthday relative to Jan 1) and age 18 at a
+// 1 September 2024 cutoff (birthday already passed) — so the same person
+// is ELIGIBLE under the default cutoff and INELIGIBLE under an explicit
+// September one.
+// ---------------------------------------------------------------------------
+
+describe("registration funnel — rule 1 + Gap 1: a non-1-January cutoff changes the verdict", () => {
+  const CUTOFF_DOB = "2006-08-01"; // age 17 @ 1 Jan 2024, age 18 @ 1 Sep 2024
+
+  it("under the DEFAULT (absent) cutoff the person is eligible — declaring them rejected is the pack lying", () => {
+    const pack = registrationPack({
+      persons: [{ ref: "p-cutoff", fullName: "Cutoff Case", lane: "player", dob: CUTOFF_DOB, gender: "f" }],
+      block: {
+        category: "open",
+        ageMax: 17,
+        entrantKind: "individual",
+        feeCents: 0,
+        approval: "auto",
+        entries: [
+          { extKey: "e-default-cutoff", captain: "p-cutoff", roster: [], pay: false, expect: "rejected_eligibility" },
+        ],
+        expect: baseExpect({ rejected: 1 }),
+      },
+    });
+    const finding = onlyError(validatePack(pack, UNIT).findings);
+    expect(finding.code).toBe("registration.rejected_not_violating");
+    expect(finding.message).toContain("e-default-cutoff");
+  });
+
+  it("under an EXPLICIT 1 September cutoff the SAME person is ineligible — the same rejection is now honest", () => {
+    const pack = registrationPack({
+      persons: [{ ref: "p-cutoff", fullName: "Cutoff Case", lane: "player", dob: CUTOFF_DOB, gender: "f" }],
+      block: {
+        category: "open",
+        ageMax: 17,
+        ageCutoffMonth: 9,
+        ageCutoffDay: 1,
+        entrantKind: "individual",
+        feeCents: 0,
+        approval: "auto",
+        entries: [
+          { extKey: "e-sept-cutoff", captain: "p-cutoff", roster: [], pay: false, expect: "rejected_eligibility" },
+        ],
+        expect: baseExpect({ rejected: 1 }),
+      },
+    });
+    expect(errors(validatePack(pack, UNIT).findings)).toEqual([]);
+  });
+
+  it("cutoff defaulting: an absent cutoff produces the IDENTICAL verdict as an explicit 1 January cutoff", () => {
+    const buildPack = (block: Record<string, unknown>) =>
+      registrationPack({
+        persons: [{ ref: "p-cutoff", fullName: "Cutoff Case", lane: "player", dob: CUTOFF_DOB, gender: "f" }],
+        block: {
+          category: "open",
+          ageMax: 17,
+          entrantKind: "individual",
+          feeCents: 0,
+          approval: "auto",
+          entries: [
+            { extKey: "e-jan-default", captain: "p-cutoff", roster: [], pay: false, expect: "rejected_eligibility" },
+          ],
+          expect: baseExpect({ rejected: 1 }),
+          ...block,
+        },
+      });
+    const withDefault = errors(validatePack(buildPack({}), UNIT).findings).map((f) => f.code);
+    const withExplicitJan1 = errors(
+      validatePack(buildPack({ ageCutoffMonth: 1, ageCutoffDay: 1 }), UNIT).findings,
+    ).map((f) => f.code);
+    expect(withDefault).toEqual(["registration.rejected_not_violating"]);
+    expect(withDefault).toEqual(withExplicitJan1);
+  });
+
+  // The schema only range-checks 1-12/1-31 (matching the DB CHECK
+  // constraint's own laxness — pack-schema.ts's doc comment on
+  // `ageCutoffMonth`), so `(2, 30)` — Feb 30 does not exist — parses. The
+  // product's `ageBandEligibilityIssues` treats an impossible legacy
+  // combination as "no age rule to evaluate" rather than rolling into the
+  // next month (registration-rules.ts's own comment, "never throw ...
+  // strictly safer than either alternative") — this proves the mirror does
+  // the same, not a silent rollover. dob 2005-01-01 is chosen so the two
+  // interpretations disagree: skipped entirely, nothing ever violates
+  // (rule 1 must red the "rejected" declaration); rolled into March, the
+  // person is 19 and DOES violate ageMax:17 (rule 1 must NOT red).
+  it("an impossible cutoff (Feb 30) is never enforced — not silently rolled into March", () => {
+    const pack = registrationPack({
+      persons: [{ ref: "p-badcutoff", fullName: "Bad Cutoff", lane: "player", dob: "2005-01-01", gender: "f" }],
+      block: {
+        category: "open",
+        ageMax: 17,
+        ageCutoffMonth: 2,
+        ageCutoffDay: 30,
+        entrantKind: "individual",
+        feeCents: 0,
+        approval: "auto",
+        entries: [
+          { extKey: "e-bad-cutoff", captain: "p-badcutoff", roster: [], pay: false, expect: "rejected_eligibility" },
+        ],
+        expect: baseExpect({ rejected: 1 }),
+      },
+    });
+    const finding = onlyError(validatePack(pack, UNIT).findings);
+    expect(finding.code).toBe("registration.rejected_not_violating");
+    expect(finding.message).toContain("e-bad-cutoff");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Gap 2 (B03r-repins-2026-09-03.md, owner ruling 2026-09-04): gender "x".
+// The product's `categoryEligibilityIssues` never blocks a person whose
+// gender is "x" against a mens/womens gate (owner ruling, RS002) — a MISSING
+// gender still blocks. The differential between "x" (never violates) and
+// missing (always violates) is the pair that witnesses a mutant collapsing
+// the two back together.
+// ---------------------------------------------------------------------------
+
+describe("registration funnel — rule 1 + Gap 2: gender 'x' never violates a category gate", () => {
+  it("an 'x' person declared rejected_eligibility against a womens division is a pack lie", () => {
+    const pack = registrationPack({
+      persons: [{ ref: "p-x", fullName: "Nonbinary Person", lane: "player", gender: "x" }],
+      block: {
+        category: "womens",
+        entrantKind: "individual",
+        feeCents: 0,
+        approval: "auto",
+        entries: [{ extKey: "e-x-lies", captain: "p-x", roster: [], pay: false, expect: "rejected_eligibility" }],
+        expect: baseExpect({ rejected: 1 }),
+      },
+    });
+    const finding = onlyError(validatePack(pack, UNIT).findings);
+    expect(finding.code).toBe("registration.rejected_not_violating");
+    expect(finding.message).toContain("e-x-lies");
+  });
+
+  it("the SAME division with a person who has NO gender at all correctly reds as a genuine violation", () => {
+    const pack = registrationPack({
+      persons: [{ ref: "p-none", fullName: "No Gender Recorded", lane: "player" }],
+      block: {
+        category: "womens",
+        entrantKind: "individual",
+        feeCents: 0,
+        approval: "auto",
+        entries: [{ extKey: "e-missing-ok", captain: "p-none", roster: [], pay: false, expect: "rejected_eligibility" }],
+        expect: baseExpect({ rejected: 1 }),
+      },
+    });
+    expect(errors(validatePack(pack, UNIT).findings)).toEqual([]);
+  });
+});
+
+describe("registration funnel — rule 5 + Gap 2: an entering person with gender 'x' satisfies the presence check", () => {
+  it("entry:registration-api, category:mixed, gender:'x' does not red missing_gender", () => {
+    const pack = registrationPack({
+      division: { entry: "registration-api" },
+      persons: [{ ref: "p-x-entrant", fullName: "X Entrant", lane: "player", gender: "x" }],
+      block: {
+        category: "mixed",
+        entrantKind: "team",
+        feeCents: 0,
+        approval: "auto",
+        entries: [{ extKey: "e-x-entrant", captain: "p-x-entrant", roster: [], pay: false, expect: "entrant" }],
+        expect: baseExpect({ entrants: 1 }),
+      },
+    });
+    expect(errors(validatePack(pack, UNIT).findings)).toEqual([]);
   });
 });
 

@@ -575,14 +575,15 @@ export function resolveStatePath(root: unknown, path: string): { found: boolean;
 // skipped: a `rejected_eligibility` entry never checked against the real
 // rule is exactly the "pack lies" failure design §4 exists to catch.
 //
-// KNOWN GAP, recorded for the task report rather than approximated
-// silently: neither `PackDivision` nor `PackRegistrationBlock` carries
-// `age_cutoff_month`/`age_cutoff_day` (V364/V380) — no B03r reservation
-// declared one. The product's own `ageBandEligibilityIssues` defaults an
-// absent cutoff to 1 January of the season-start year
-// (registration-rules.ts:271-272), so this mirror does too — a pack simply
-// CANNOT express a division whose real eligibility cutoff is anything other
-// than 1 January.
+// Two gaps recorded in earlier passes of this file — CLOSED
+// 2026-09-04 (B03r-repins-2026-09-03.md "Gap 1"/"Gap 2", owner ruling
+// "fold both in now", ahead of the B06 freeze):
+//   Gap 1 — `PackRegistrationBlock.ageCutoffMonth`/`ageCutoffDay`
+//     (pack-schema.ts) now carry a non-1-January cutoff; `ageBandViolation`
+//     below reads them instead of hardcoding 1 January.
+//   Gap 2 — `PackPerson.gender` (pack-schema.ts) now admits `"x"`;
+//     `categoryViolation` below mirrors the product's "x never blocks"
+//     exemption instead of treating `"x"` as a `CATEGORY_MISMATCH`.
 
 type EligibilityPersonLike = Pick<PackPerson, "dob" | "gender">;
 
@@ -595,31 +596,60 @@ type EligibilityPersonLike = Pick<PackPerson, "dob" | "gender">;
  *  BLOCKING"), so a pack cannot claim a rejection is eligibility-driven by
  *  simply omitting the field.
  *
- *  The product's own predicate also exempts gender `"x"` ("x never blocks",
- *  registration-rules.ts:177-178) — `PackPerson.gender` (pack-schema.ts) is
- *  `z.enum(["m","f"]).optional()` with no `"x"` member, so that exemption is
- *  a further KNOWN GAP: a pack cannot express a non-binary person at all,
- *  and therefore cannot represent the one case that predicate treats
- *  specially. Recorded for the task report. */
+ *  Gap 2, CLOSED: the product's own predicate exempts gender `"x"` ("x
+ *  never blocks", registration-rules.ts ~:177-178) — `PackPerson.gender`
+ *  (pack-schema.ts) now admits `"x"`, so this mirrors the exemption exactly:
+ *  a declared `"x"` never trips `CATEGORY_MISMATCH`, only a missing gender
+ *  or a genuinely wrong one does. */
 function categoryViolation(category: string, person: EligibilityPersonLike): boolean {
   if (category !== "mens" && category !== "womens") return false;
   const needed = category === "mens" ? "m" : "f";
   if (!person.gender) return true;
+  if (person.gender === "x") return false;
   return person.gender !== needed;
 }
 
-/** Mirrors `ageBandEligibilityIssues` (registration-rules.ts:252-326) at a
- *  1-January-of-`seasonStartYear` cutoff — see the KNOWN GAP note above. A
- *  missing dob is also a violation, same reasoning as `categoryViolation`. */
+/** Days per month, every year (no leap-year 29) — mirrors
+ *  `isValidCutoffDay`'s own `DAYS_IN_MONTH` table
+ *  (registration-rules.ts ~:213-220): a `(month, day)` cutoff is
+ *  re-evaluated against a DIFFERENT `seasonStartYear` every season, so a
+ *  leap-only day would silently roll over into 1 March three years out of
+ *  four. */
+const DAYS_IN_MONTH: readonly number[] = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+
+/** Mirrors `isValidCutoffDay` (registration-rules.ts ~:222-225). */
+function isValidCutoffDayMirror(month: number, day: number): boolean {
+  const max = DAYS_IN_MONTH[month - 1];
+  return max != null && day >= 1 && day <= max;
+}
+
+/** Mirrors `ageBandEligibilityIssues` (registration-rules.ts:252-326),
+ *  including Gap 1's closure: `cutoffMonth`/`cutoffDay` default to 1/1
+ *  exactly like the product (`cutoffMonth ?? 1; cutoffDay ?? 1`,
+ *  registration-rules.ts:271-272) when the block leaves either unset, so an
+ *  existing pack that never sets them keeps meaning what it always meant.
+ *  An impossible combination (schema-level only range-checks 1-12/1-31, see
+ *  `PackRegistrationBlock.ageCutoffMonth`'s own doc comment) is handled the
+ *  same way the product handles a legacy row that predates its own
+ *  write-time validation: never throw, never roll into the wrong month —
+ *  skip enforcing the age band for that entry rather than invent a date
+ *  (registration-rules.ts's own comment on this, "never throw ... strictly
+ *  safer than either alternative"). A missing dob is also a violation, same
+ *  reasoning as `categoryViolation`. */
 function ageBandViolation(
   ageMin: number | undefined,
   ageMax: number | undefined,
   person: EligibilityPersonLike,
   seasonStartYear: number,
+  cutoffMonth: number | undefined,
+  cutoffDay: number | undefined,
 ): boolean {
   if (ageMin === undefined && ageMax === undefined) return false;
   if (!person.dob) return true;
-  const cutoff = new Date(Date.UTC(seasonStartYear, 0, 1));
+  const month = cutoffMonth ?? 1;
+  const day = cutoffDay ?? 1;
+  if (!isValidCutoffDayMirror(month, day)) return false;
+  const cutoff = new Date(Date.UTC(seasonStartYear, month - 1, day));
   const dob = new Date(`${person.dob}T00:00:00Z`);
   let age = cutoff.getUTCFullYear() - dob.getUTCFullYear();
   const beforeBirthday =
@@ -701,7 +731,14 @@ function checkRejectedEligibilityOffenders(
       persons.some(
         (p) =>
           categoryViolation(block.category, p) ||
-          ageBandViolation(block.ageMin, block.ageMax, p, seasonStartYear),
+          ageBandViolation(
+            block.ageMin,
+            block.ageMax,
+            p,
+            seasonStartYear,
+            block.ageCutoffMonth,
+            block.ageCutoffDay,
+          ),
       ) || mixedCompositionViolation(block.category, persons);
     if (!violates) {
       findings.push({
@@ -792,7 +829,13 @@ function checkPayRequiresFee(divisionRef: string, block: PackRegistrationBlock):
  *  ui"` with an age band OR a non-`open` category requires `dob`/`gender`
  *  on EVERY entering person — an admin-seeded division (`entry:"admin"`,
  *  the default) never needs this, because nothing collects it through a
- *  public form for that division. */
+ *  public form for that division.
+ *
+ *  Gap 2: this checks PRESENCE only (`person.gender === undefined`), never
+ *  correctness against the category — a declared `"x"` satisfies it exactly
+ *  like `"m"`/`"f"` do, with no special-casing needed here. Whether that `"x"`
+ *  is actually eligible for a `mens`/`womens` division is rule 1's question
+ *  (`categoryViolation` above), not this one's. */
 function checkRegistrationRequiresDobGender(
   division: PackDivision,
   block: PackRegistrationBlock,
