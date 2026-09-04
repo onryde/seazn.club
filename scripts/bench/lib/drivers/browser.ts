@@ -423,8 +423,26 @@ async function enterViaStepper(
   }
   await clickStepperNext(page);
 
-  // Step "details" — nothing required for a self-registering individual
-  // entry (the contact IS the sole player, already captured above).
+  // Step "details" — the roster. NOT a no-op, which is what the first three
+  // live runs assumed: `validateDetails` requires every player row's name, so
+  // an unfilled row leaves `goNext` refusing to advance. The wizard then sits
+  // on "details" while the driver waits out 30s for a consent control that
+  // only renders once the step actually changes — the failure reads as a
+  // missing selector and is really a blocked transition.
+  //
+  // Row 0 is the captain themself for a self-registering individual entry;
+  // `entry.roster` carries any further players.
+  const rosterNames = (entry.players ?? []).map((p) => p.fullName);
+  // A self-registering individual entry may declare no `players` at all — the
+  // contact IS the sole player, and the stepper still renders one row for
+  // them. Fall back to the contact's own name rather than skipping the step,
+  // which is precisely the assumption that stalled the first three runs.
+  const names = rosterNames.length > 0 ? rosterNames : [entry.contact.name];
+  for (const [i, fullName] of names.entries()) {
+    const field = page.locator(`[data-testid="reg-roster-name"][data-player-row="${i}"]`);
+    await field.waitFor({ state: "visible" });
+    await field.fill(fullName);
+  }
   await clickStepperNext(page);
 
   // Step "consent".

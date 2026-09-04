@@ -192,6 +192,7 @@ const DIV_WOMENS: DivisionLike = {
  *  freely self-linkable with no eligibility noise from either one. */
 const DIV_OPEN_2: DivisionLike = { ...DIV_OPEN, division_id: "div-open-2", name: "Open Doubles" };
 
+
 function mount(divisions: DivisionLike[]) {
   const info: RegisterInfo = {
     competition: { name: "Test Cup", starts_on: "2026-09-01" },
@@ -1937,5 +1938,39 @@ describe("step 5 — submit", () => {
     });
     const after = m.island.tree().filter((e) => propsOf(e)["data-testid"] === "reg-who-playing");
     expect(propsOf(after[0]!).checked, "the hooked checkbox does not drive imPlaying").toBe(!before);
+  });
+
+  // The details step is NOT a no-op, which is what the bench's browser driver
+  // assumed for three live runs: `validateDetails` requires every player row's
+  // name, so an unfilled row leaves `goNext` refusing to advance. The wizard
+  // then sits on "details" while the driver waits 30s for a consent control
+  // that only renders once the step changes — the failure reads as a missing
+  // selector and is really a blocked transition.
+  //
+  // Every field in that row was addressable only by an aria-label built from
+  // TRANSLATED strings, so a driver had no non-text way in. `data-player-row`
+  // matters as much as the testid: the row REPEATS per player, so a bare
+  // `[data-testid="reg-roster-name"]` matches N elements and trips
+  // Playwright's strict mode the moment a pack has more than one player.
+  it('carries data-testid="reg-roster-name" with a per-row data-player-row index', async () => {
+    const m = mount([DIV_OPEN]);
+    (propsOf(m.stepWho()).onChange as (p: object) => void)({ name: "Alex Test", email: "alex@example.com" });
+    m.clickByText("Next"); // -> DETAILS (individual + one open division collapses ENTRIES, steps.ts:31)
+
+    const names = m.island.tree().filter((e) => propsOf(e)["data-testid"] === "reg-roster-name");
+    expect(names, "no reg-roster-name field on the details step").not.toHaveLength(0);
+
+    // This mount renders ONE row, so it can only prove the hook is present and
+    // wired. The per-row INDEX property is proven in roster-table-hooks.test.tsx
+    // against a two-player roster — asserted here it would be vacuous, and was:
+    // stamping data-player-row={0} on every row left this file green.
+    expect(propsOf(names[0]!)["data-player-row"]).toBe(0);
+
+    // And the hooked field actually drives that player's name.
+    (propsOf(names[0]!).onChange as (e: { target: { value: string } }) => void)({
+      target: { value: "Alex Test" },
+    });
+    const after = m.island.tree().filter((e) => propsOf(e)["data-testid"] === "reg-roster-name");
+    expect(propsOf(after[0]!).value).toBe("Alex Test");
   });
 });

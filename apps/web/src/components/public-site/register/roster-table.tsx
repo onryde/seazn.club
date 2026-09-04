@@ -97,6 +97,12 @@ export function RosterTable({
                     maxLength={120}
                     className={`${FIELD} min-w-0`}
                     placeholder={t("register.who.name.placeholder")}
+                    /* Bench hook. Every field in this row was addressable only
+                     * by an aria-label built from TRANSLATED strings, which is
+                     * the text selector AGENTS.md forbids — and the row repeats
+                     * per player, so a driver needs the index too. */
+                    data-testid="reg-roster-name"
+                    data-player-row={i}
                     aria-label={`${label} — ${t("register.who.name.label")}`}
                     value={p.full_name}
                     onChange={(e) => onUpdatePlayer(i, { full_name: e.target.value })}
@@ -108,6 +114,8 @@ export function RosterTable({
                       maxLength={3}
                       className={`${FIELD} min-w-0`}
                       placeholder={t("register.details.player.squadNumber.placeholder")}
+                      data-testid="reg-roster-squad"
+                      data-player-row={i}
                       aria-label={`${label} — ${t("register.details.player.squadNumber.placeholder")}`}
                       value={p.squad_number}
                       onChange={(e) => onUpdatePlayer(i, { squad_number: e.target.value.replace(/\D/g, "").slice(0, 3) })}
@@ -117,6 +125,8 @@ export function RosterTable({
                     <input
                       type="date"
                       className={`${FIELD} min-w-0`}
+                      data-testid="reg-roster-dob"
+                      data-player-row={i}
                       aria-label={`${label} — ${t("register.who.dob.label")}`}
                       value={p.dob ?? ""}
                       onChange={(e) => onUpdatePlayer(i, { dob: e.target.value || null })}
@@ -125,6 +135,8 @@ export function RosterTable({
                   {requiresGender && (
                     <select
                       className={`${FIELD} min-w-0`}
+                      data-testid="reg-roster-gender"
+                      data-player-row={i}
                       aria-label={`${label} — ${t("register.who.gender.label")}`}
                       value={p.gender ?? ""}
                       onChange={(e) => onUpdatePlayer(i, { gender: (e.target.value || null) as Gender | null })}
