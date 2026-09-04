@@ -1,4 +1,5 @@
 import { test, expect } from "@playwright/test";
+import AxeBuilder from "@axe-core/playwright";
 import {
   TAG,
   apiJson,
@@ -859,6 +860,30 @@ test("fix round 5: the time cell opens the editor, corrects the time, and can cl
   await row.getByTestId("run-sheet-edit-time").click();
   const editor = row.getByTestId("run-sheet-set-time-editor");
   await expect(editor).toBeVisible();
+
+  // AXE, scoped to the sheet, with the editor OPEN. `mobile.spec.ts`'s own
+  // axe sweep covers `?tab=standings` and never this tab, so the run sheet
+  // had zero accessibility coverage — and round 5 turns a passive time label
+  // into an interactive control, which is exactly the kind of change that
+  // rule set exists to catch. Scoped with `.include` rather than scanning the
+  // whole page: this asserts something about MY surface, and a page-wide
+  // scan here would either inherit unrelated violations or need exclusions
+  // that quietly hide real ones. Non-vacuous by construction — the sheet is
+  // on screen with rows and an open editor at this point, which the
+  // assertions above have already proven.
+  const axe = await new AxeBuilder({ page }).include('[data-testid="run-sheet"]').withTags(["wcag2a", "wcag2aa"]).analyze();
+  const blocking = axe.violations.filter((v) => v.impact === "serious" || v.impact === "critical");
+  console.log(
+    "axe on the run sheet (editor open):",
+    axe.violations.length,
+    "violations,",
+    blocking.length,
+    "serious/critical",
+  );
+  expect(
+    blocking.map((v) => `${v.id} — ${v.nodes[0]?.html}`),
+    "axe serious/critical on the run sheet with the time editor open",
+  ).toEqual([]);
   const corrected = "2030-06-15T16:45";
   await setDateTime(editor, corrected);
   await row.getByRole("button", { name: "Save", exact: true }).click();
@@ -933,7 +958,14 @@ test("fix round 5: an in-play or settled row's time is not an affordance, but a 
   // fixtureIds[2] stays `scheduled` — the control.
 
   await page.goto(await divisionPath(request, divisionId, "?tab=fixtures"));
-  await expect(page.getByTestId("run-sheet")).toBeVisible();
+  const sheet = page.getByTestId("run-sheet");
+  await expect(sheet).toBeVisible();
+  // EXPLICITLY "All". The default filter is "today" once the division reads
+  // as a match day, and an `in_play` fixture is exactly what can tip it
+  // there — with rows dated 2030 that would empty the sheet and turn every
+  // assertion below into a statement about the empty state instead. Clicking
+  // it is a no-op when "all" is already active.
+  await sheet.locator('[data-filter="all"]').click();
 
   const report: Record<string, unknown> = {};
   for (const [label, no] of [

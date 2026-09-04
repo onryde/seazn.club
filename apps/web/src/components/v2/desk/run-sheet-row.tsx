@@ -240,7 +240,18 @@ export function RunSheetRow({
               className={`block min-w-0 truncate text-sm font-medium hover:text-purple-700 ${voided ? "text-slate-500 line-through" : "text-slate-800"}`}
             >
               {home}
-              <span className="mx-1.5 text-slate-400">{msg("schedule.vs")}</span>
+              {/* slate-500, not slate-400. `#94a3b8` on white measures ~2.9:1
+                  — below the 4.5:1 AA floor for body text — and axe reports it
+                  at SERIOUS impact. Found by the scoped axe scan fix round 5
+                  added to `run-sheet.spec.ts` (mobile.spec.ts's own sweep
+                  covers `?tab=standings` and has never covered this tab), on
+                  its first run. Pre-existing: this span is unchanged from the
+                  original Task 4 commit, and `FixtureLine` carried the
+                  identical one before it. slate-500 (`#64748b`, ~4.8:1) is the
+                  lightest step that clears AA and keeps `vs` quieter than the
+                  entrant names it separates — the same remedy `move-panel.tsx`
+                  already applied to its own contrast finding. */}
+              <span className="mx-1.5 text-slate-500">{msg("schedule.vs")}</span>
               {away}
             </Link>
             {((decided && !voided) || subLine) && (
