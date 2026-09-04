@@ -647,6 +647,26 @@ async function main() {
     await call(viewer, "/api/users/me", "PATCH", { timezone: null });
   }
 
+  // --- HEADROOM: org2's public dashboards --------------------------------
+  // V395 retired Pro's "unlimited public dashboards" and made the cap a finite
+  // `dashboard.public.max` = 10, and (T15/F) a create past it is no longer
+  // refused — it silently comes back PRIVATE. org2 is the shared Pro org that
+  // ~30 suites below run against, and between them they create far more than
+  // ten public competitions; a real Pro club would not. Once the cap was met,
+  // every later "public" competition landed private, `public_fixtures_v`
+  // (`visibility = any('{public,unlisted}')`) stopped returning it, and NINE
+  // checks failed at the far end of the run — the news feed, the post page,
+  // the story PNG, the v3 public page and CTA, the QR poster, the embed and
+  // the sponsor strip.
+  //
+  // The cap is not the thing under test in any of those, so the harness org
+  // gets the headroom its scenario needs rather than the assertions being
+  // rewritten to accept a degraded page. The degrade ITSELF is asserted on its
+  // own fresh community org, at its own plan's cap, by
+  // `publicQuotaDegradeSuite` below — the product behaviour is pinned, this
+  // override just stops it firing where it is incidental.
+  await insertEntitlementOverride(admin, org2.id, "dashboard.public.max", 100);
+
   // --- Platform API /api/v1 (PROMPT-11) — the full engine v2 lifecycle ---
   await v1Suite(admin, org2.id, renamed.slug);
 
@@ -960,6 +980,10 @@ async function main() {
   // distinguish its tier at the resolution + HTTP-status level. Own fresh orgs;
   // keyless-safe. The HTTP-level plan-truth net for the two e2e tasks that follow.
   await smokePlanMatrix();
+
+  // --- T20: a create at `dashboard.public.max` is NEVER refused, and never
+  // silent either. Own fresh community org; keyless-safe.
+  await publicQuotaDegradeSuite();
 
   // --- Task 23: every grant an Event Pass actually delivers, asserted as a
   // passed-vs-sibling PAIR inside one fresh community org — allowed here,
@@ -1637,6 +1661,130 @@ async function p72Suite(): Promise<void> {
  *  pass overlays comp-scoped Pro features INSIDE the passed comp only; the dead
  *  Event-Pass members.max row is gone → org-wide keys resolve community for a
  *  passed org. */
+/**
+ * T20 — `dashboard.public.max` DEGRADES a create; it never refuses one, and it
+ * is never silent about it.
+ *
+ * V395 made competitions public by default and (T15/F, owner ruling
+ * 2026-09-03) made a create at the cap come back PRIVATE rather than 402 —
+ * Free is 3 active competitions against 2 public dashboards, so under the old
+ * refusal the third create on the plan whose one-line sell is "run a club
+ * night" would have failed by default, with no wrong choice made by the
+ * organiser. What was missing was the other half: the 201 said nothing, so a
+ * caller had to diff the row it got against the row it asked for to notice,
+ * and `public_fixtures_v` (`visibility = any('{public,unlisted}')`) then 404s
+ * the link the organiser shares.
+ *
+ * Both create paths are asserted, because the TEMPLATE path is the one
+ * `/competitions/new` opens on — it carried no visibility at all until T20 and
+ * redirected straight into the silently private competition.
+ *
+ * Own fresh community org, so this cannot be satisfied by ambient state; the
+ * cap is READ from the org's own entitlements rather than typed, because it
+ * has been 1, 3 and 2 across three migrations and a literal here would have
+ * been wrong in between. `competitions.max_active` (3 on community) is lifted
+ * for this org only — it would fire first and mask the axis under test, the
+ * same isolation `public-dashboard-quota.test.ts` documents. Keyless-safe.
+ */
+async function publicQuotaDegradeSuite(): Promise<void> {
+  const owner = newSession();
+  const who = await signIn(owner, `pubquota_${tag}@example.com`);
+  const orgId = who.org_id;
+  await insertEntitlementOverride(owner, orgId, "competitions.max_active", 50);
+
+  const ent = (await call(owner, `/api/orgs/${orgId}/entitlements`)) as {
+    entitlements: Record<string, { limit?: number | null }>;
+  };
+  const cap = ent.entitlements["dashboard.public.max"]?.limit;
+  check(
+    "public quota: community resolves a FINITE public-dashboard cap to fill",
+    typeof cap === "number" && cap >= 1,
+  );
+  const capN = typeof cap === "number" ? cap : 0;
+
+  // Fill to the cap. Aggregated into one check so the check COUNT does not
+  // move when the cap does.
+  let fillClean = capN >= 1;
+  for (let i = 1; i <= capN; i += 1) {
+    const res = await v1(owner, "/api/v1/competitions", "POST", {
+      ends_on: "2030-12-31",
+      name: `Quota Fill ${i} ${tag}`,
+      visibility: "public",
+    });
+    const row = v1data<{ visibility: string; public_quota_degraded?: unknown }>(res);
+    fillClean &&=
+      res.status === 201 && row.visibility === "public" && row.public_quota_degraded === undefined;
+  }
+  check(
+    `public quota: all ${capN} creates up to the cap are public and carry NO note`,
+    fillClean,
+  );
+
+  const over = await v1(owner, "/api/v1/competitions", "POST", {
+    ends_on: "2030-12-31",
+    name: `Quota Over ${tag}`,
+    visibility: "public",
+  });
+  const overRow = v1data<{
+    id: string;
+    visibility: string;
+    public_quota_degraded?: {
+      feature_key?: string;
+      requested_visibility?: string;
+      applied_visibility?: string;
+      limit?: number | null;
+      reason?: string;
+    };
+  }>(over);
+  check("public quota: the create AT the cap is 201, never 402", over.status === 201);
+  check("public quota: and it comes back PRIVATE, not public", overRow.visibility === "private");
+  const note = overRow.public_quota_degraded;
+  check(
+    "public quota: the 201 SAYS SO — feature key, both visibilities, and the LIVE cap in the reason",
+    !!note &&
+      note.feature_key === "dashboard.public.max" &&
+      note.requested_visibility === "public" &&
+      note.applied_visibility === "private" &&
+      note.limit === capN &&
+      typeof note.reason === "string" &&
+      note.reason.includes(String(capN)),
+  );
+
+  // The DEFAULT create path. `visibility` is deliberately omitted, which is
+  // both what the gallery sends and the case whose guard used to key on
+  // `=== "public"` while its value keyed on `?? "public"` — skipping the quota
+  // check entirely and creating a PUBLIC competition over the cap.
+  const tmpl = await v1(owner, "/api/v1/competitions/from-template", "POST", {
+    template_key: "slam128",
+    name: `Quota Template ${tag}`,
+    ends_on: "2030-12-31",
+  });
+  const tmplRow = v1data<{
+    visibility: string;
+    public_quota_degraded?: { feature_key?: string; applied_visibility?: string };
+  }>(tmpl);
+  check(
+    "public quota: the TEMPLATE path degrades identically and carries the SAME note",
+    tmpl.status === 201 &&
+      tmplRow.visibility === "private" &&
+      tmplRow.public_quota_degraded?.feature_key === "dashboard.public.max" &&
+      tmplRow.public_quota_degraded?.applied_visibility === "private",
+  );
+
+  // The other direction, so "never refuses" cannot be satisfied by deleting
+  // the cap: flipping an EXISTING competition to public is a deliberate act
+  // with a wrong answer available, and still 402s.
+  const patched = await v1(owner, `/api/v1/competitions/${overRow.id}`, "PATCH", {
+    visibility: "public",
+  });
+  check(
+    "public quota: the PATCH path still 402s — only a CREATE degrades",
+    patched.status === 402 &&
+      (patched.json.error as { feature_key?: string } | undefined)?.feature_key ===
+        "dashboard.public.max",
+  );
+}
+
 async function smokePlanMatrix(): Promise<void> {
   const genericDiv = {
     sport_key: "generic",
@@ -17616,6 +17764,10 @@ async function cleanup(tag: string): Promise<void> {
     `smoke-pro-${tag}@example.com`,
     `smoke-enterprise-${tag}@example.com`,
     `smoke-pass-${tag}@example.com`,
+    // T20 publicQuotaDegradeSuite — its own community org (the cap-many public
+    // competitions, the degraded one and the templated one all cascade with
+    // it, as does its competitions.max_active override).
+    `pubquota_${tag}@example.com`,
     // Task 23 — passGrantsSuite's own org (its two competitions, pass row,
     // sponsors, packages, person and AI ledger rows all cascade with it).
     `passgrant_${tag}@example.com`,
