@@ -2754,12 +2754,17 @@ describe("registration funnel — rule 5: registration-api/ui needs dob/gender",
   it("a non-open category with entry:registration-api and a captain with no gender reds", () => {
     const pack = registrationPack({
       division: { entry: "registration-api" },
+      // Rule 5's WIDENED half (self-registration alone requires dob, tested
+      // separately below) also fires for an individual entry with no dob —
+      // this captain carries a dob specifically so the ONLY thing red here
+      // is the gender rule this test exists to prove.
+      persons: [{ ref: "p-nogender", fullName: "No Gender", lane: "player", dob: "2000-01-01" }],
       block: {
         category: "womens",
         entrantKind: "individual",
         feeCents: 0,
         approval: "auto",
-        entries: [{ extKey: "e-nogender", captain: "p1", roster: [], pay: false, expect: "entrant" }],
+        entries: [{ extKey: "e-nogender", captain: "p-nogender", roster: [], pay: false, expect: "entrant" }],
         expect: baseExpect({ entrants: 1 }),
       },
     });
@@ -2814,6 +2819,99 @@ describe("registration funnel — rule 5: registration-api/ui needs dob/gender",
         feeCents: 0,
         approval: "auto",
         entries: [{ extKey: "e-complete", captain: "p-complete", roster: [], pay: false, expect: "entrant" }],
+        expect: baseExpect({ entrants: 1 }),
+      },
+    });
+    expect(errors(validatePack(pack, UNIT).findings)).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Rule 5, widened — the B03r live-crash fix
+// (B03r-repins-2026-09-03.md dispatch, "fix a live-only crash in the
+// registration runner"). `register.ts`'s `buildRegistrationEntry` sets
+// `registeringSelf: true` UNCONDITIONALLY for every entry of an
+// "individual" division (the captain IS the entrant) — and
+// `PublicRegisterGroupRequest`'s superRefine (apps/web/src/server/api-v1/
+// schemas.ts) 400s ANY self-registering entry lacking `contact.dob`,
+// independent of whether the division declares an age band. Before this
+// fix, an `open`, no-age-band, individual-kind division was a LEGAL pack
+// that crashed live — the original rule 5 only fired for an age band or a
+// non-open category, neither of which "open + individual" ever declares.
+// ---------------------------------------------------------------------------
+
+describe("registration funnel — rule 5 widened: self-registration alone requires dob", () => {
+  it("an OPEN, no-age-band, INDIVIDUAL division with entry:registration-api and a captain with no dob reds — self-registration alone requires dob", () => {
+    const pack = registrationPack({
+      division: { entry: "registration-api" },
+      block: {
+        ...OPEN_RESTRICTION,
+        entrantKind: "individual",
+        feeCents: 0,
+        approval: "auto",
+        entries: [{ extKey: "e-selfreg-nodob", captain: "p1", roster: [], pay: false, expect: "entrant" }],
+        expect: baseExpect({ entrants: 1 }),
+      },
+    });
+    const finding = onlyError(validatePack(pack, UNIT).findings);
+    expect(finding.code).toBe("registration.missing_dob");
+    expect(finding.message).toContain("e-selfreg-nodob");
+  });
+
+  it("the SAME open/no-age-band/individual/registration-api pack does not red once the captain has a dob", () => {
+    const pack = registrationPack({
+      division: { entry: "registration-api" },
+      persons: [{ ref: "p-hasdob", fullName: "Has Dob", lane: "player", dob: "2000-01-01" }],
+      block: {
+        ...OPEN_RESTRICTION,
+        entrantKind: "individual",
+        feeCents: 0,
+        approval: "auto",
+        entries: [{ extKey: "e-selfreg-dob", captain: "p-hasdob", roster: [], pay: false, expect: "entrant" }],
+        expect: baseExpect({ entrants: 1 }),
+      },
+    });
+    expect(errors(validatePack(pack, UNIT).findings)).toEqual([]);
+  });
+
+  it("a TEAM (not individual) division under the same open/no-age-band/registration-api conditions does NOT red — only an individual entry self-registers (register.ts never sets registeringSelf for team/pair)", () => {
+    const pack = registrationPack({
+      division: { entry: "registration-api" },
+      block: {
+        ...OPEN_RESTRICTION,
+        entrantKind: "team",
+        feeCents: 0,
+        approval: "auto",
+        entries: [{ extKey: "e-team-nodob", captain: "p1", roster: ["p2"], pay: false, expect: "entrant" }],
+        expect: baseExpect({ entrants: 1 }),
+      },
+    });
+    expect(errors(validatePack(pack, UNIT).findings)).toEqual([]);
+  });
+
+  it("a PAIR division under the same conditions does NOT red either", () => {
+    const pack = registrationPack({
+      division: { entry: "registration-api" },
+      block: {
+        ...OPEN_RESTRICTION,
+        entrantKind: "pair",
+        feeCents: 0,
+        approval: "auto",
+        entries: [{ extKey: "e-pair-nodob", captain: "p1", roster: ["p2"], pay: false, expect: "entrant" }],
+        expect: baseExpect({ entrants: 1 }),
+      },
+    });
+    expect(errors(validatePack(pack, UNIT).findings)).toEqual([]);
+  });
+
+  it("entry:admin (the default) still never requires dob, even for an individual division — admin-seeded, nothing collects it through a public form", () => {
+    const pack = registrationPack({
+      block: {
+        ...OPEN_RESTRICTION,
+        entrantKind: "individual",
+        feeCents: 0,
+        approval: "auto",
+        entries: [{ extKey: "e-admin-nodob", captain: "p1", roster: [], pay: false, expect: "entrant" }],
         expect: baseExpect({ entrants: 1 }),
       },
     });

@@ -831,6 +831,22 @@ function checkPayRequiresFee(divisionRef: string, block: PackRegistrationBlock):
  *  the default) never needs this, because nothing collects it through a
  *  public form for that division.
  *
+ *  Widened (B03r-repins-2026-09-03.md dispatch, "fix a live-only crash in
+ *  the registration runner"): `register.ts`'s `buildRegistrationEntry` sets
+ *  `registeringSelf: true` UNCONDITIONALLY for every entry of an
+ *  "individual" division — the captain IS the entrant for that entrant
+ *  kind, by construction. `PublicRegisterGroupRequest`'s superRefine
+ *  (apps/web/src/server/api-v1/schemas.ts) 400s ANY self-registering entry
+ *  lacking `contact.dob`, INDEPENDENT of whether the division declares an
+ *  age band — so an `open`, no-age-band, individual-kind division used to
+ *  be a LEGAL pack that crashed live (nothing above required a dob for
+ *  it). Scoped to the CAPTAIN only, not every `enteringPersons` row: a
+ *  team/pair entry's roster members never self-register (`register.ts`
+ *  leaves `registeringSelf` unset for those kinds — a captain entering a
+ *  team is not necessarily registering themselves, and the pack model has
+ *  no field saying they are), so requiring their dob here would be a false
+ *  positive this rule has no business raising.
+ *
  *  Gap 2: this checks PRESENCE only (`person.gender === undefined`), never
  *  correctness against the category — a declared `"x"` satisfies it exactly
  *  like `"m"`/`"f"` do, with no special-casing needed here. Whether that `"x"`
@@ -842,20 +858,28 @@ function checkRegistrationRequiresDobGender(
   personsByRef: ReadonlyMap<string, PackPerson>,
 ): PackFinding[] {
   if (division.entry === "admin") return [];
-  const needsDob = block.ageMin !== undefined || block.ageMax !== undefined;
+  const ageBandDeclared = block.ageMin !== undefined || block.ageMax !== undefined;
   const needsGender = block.category !== "open";
-  if (!needsDob && !needsGender) return [];
+  // Only an "individual" entrantKind division has `register.ts` claim
+  // `registeringSelf: true` for its entries — see this function's own doc
+  // comment above.
+  const selfRegisters = block.entrantKind === "individual";
+  if (!ageBandDeclared && !needsGender && !selfRegisters) return [];
   const findings: PackFinding[] = [];
   block.entries.forEach((entry, i) => {
     for (const person of enteringPersons(entry, personsByRef)) {
-      if (needsDob && person.dob === undefined) {
+      const isCaptain = person.ref === entry.captain;
+      if (person.dob === undefined && (ageBandDeclared || (selfRegisters && isCaptain))) {
         findings.push({
           code: "registration.missing_dob",
           severity: "error",
           where: registrationEntryLabel(division.ref, entry, i),
-          message:
-            `entry "${entry.extKey}" enters division "${division.ref}" (entry:"${division.entry}", ` +
-            `age band declared) through person "${person.ref}" with no dob`,
+          message: ageBandDeclared
+            ? `entry "${entry.extKey}" enters division "${division.ref}" (entry:"${division.entry}", ` +
+              `age band declared) through person "${person.ref}" with no dob`
+            : `entry "${entry.extKey}" enters division "${division.ref}" (entry:"${division.entry}", ` +
+              `entrantKind:"individual") through captain "${person.ref}" with no dob — an individual entry ` +
+              `always registers the captain as self, and the API 400s any self-registering entry lacking contact.dob`,
         });
       }
       if (needsGender && person.gender === undefined) {
