@@ -42,7 +42,9 @@ both tsc configs, and a full smoke.
    written yet. Ships with the `admin-platform-settings.tsx:12-13` fix, where
    `Number("")` is `0`, so clearing the platform-fee field SAVES 0%. That fix owes a
    paired positive assertion (empty rejected AND a real value still accepted), or it
-   passes by refusing everything.
+   passes by refusing everything. Also folded in: `server/usecases/registrations.ts:78`
+   still comments `feePercentFor` as "(pro 2, event-pass 5)" — the pass rungs are 4
+   since V397. It was left deliberately (outside T22's touch list), not missed.
 2. **T16** — the rate on the Connect card, read from `registration.fee_percent` rather
    than typed in. Two help articles still quote "1% on Pro Plus", a plan that no longer
    exists.
@@ -55,6 +57,27 @@ both tsc configs, and a full smoke.
 5. **A full smoke re-run** at the wave boundary, and the rebase.
 
 Then W4 opens with the Stripe sandbox sync as its FIRST task — see "Owed to W4" below.
+
+### T22 closed 2026-09-04 — five commits, `5a8a1305a` … `7281dc594`
+
+V397 plus the charm reprice, every fee/price string rewritten once against the final
+numbers, the fee-ladder guard widened past `plans.md`, and smoke's fee assertions
+re-derived from the matrix instead of pinning 8 and 5. Verification as reported and
+spot-checked against the tree: tsc EXIT=0 on both configs, eslint EXIT=0 on the six
+touched files, `db:apply` "now at version v397" with psql agreeing, and scoped vitest
+**452 / 452 / 0** across 19 files with every `.testResults[].name` inside this worktree.
+Three mutants, each killed by the rule it was aimed at — including the `groups.md` fee
+row, which the OLD call site never read at all.
+
+**A fourth fee-table surface was found**, against a brief that named three:
+`content/help/billing/event-pass.md:18` transposes the table (one column per pass rung),
+so `feeLadderTables` cannot parse it. It got its own rule, `passFeeRowFaults`
+(`lib/copy-truth.ts:3229`), which REFUSES rather than guesses if the two rungs ever stop
+sharing a rate. Fifth instance this wave of "the brief is a hypothesis".
+
+Not covered by T22 and still owed to the boundary run: `scripts/smoke.ts` has no suite
+filter, so its fee assertions have been type-checked and read but never EXECUTED. The
+full smoke is the arbiter.
 
 ## Owner decisions taken 2026-09-03, before any code
 
@@ -117,39 +140,50 @@ Then W4 opens with the Stripe sandbox sync as its FIRST task — see "Owed to W4
 7. Greenfield reconfirmed by the owner: no prod data. R7 stands — `pro_plus` deletes
    unconditionally, no grandfathering.
 
-### The price table as it will be written (major units; the seed stores minor)
+### The price table AS SHIPPED (T22, 2026-09-04) — read this, not the draft below
 
-| | USD | EUR | GBP | INR |
+Charm `.99` throughout, on the owner's ruling. **The draft table this section used to
+carry is superseded and has been deleted rather than left below it**, because a stale
+price table inside the wave's own plan is exactly the trap this programme keeps paying
+for. Numbers below were read back out of `apps/web/src/config/stripe-plans.json`, not
+copied from the task report.
+
+Minor units, as the seed stores them. USD rides `unit_amount`; `currency_options`
+carries only `eur/gbp/inr`. **AUD is GONE** (T10) — four currencies, not five; do not
+reinstate it from an earlier draft.
+
+| lookup_key | usd | eur | gbp | inr |
 |---|---|---|---|---|
-| Pro monthly tier 1 | 12 | 10 | 9 | 499 |
-| Pro monthly tier 2+ / extra org add-on | 6 | 5 | 4 | 199 |
-| Pro annual tier 1 | 99 | 89 | 79 | 3,999 |
-| Pro annual tier 2+ | 49 | 44 | 39 | 1,999 |
-| Event Pass M | 15 | 14 | 12 | 599 |
-| Event Pass L | 39 | 35 | 29 | 1,599 |
-| Extra seat / month (hidden, R13) | 2 | 2 | 2 | 99 |
-| Size pack +32 | 5 | 5 | 4 | 199 |
-| AI credit packs | unchanged | | | |
+| `seazn_pro_monthly` tier 1 | 1499 | 1299 | 1099 | 59900 |
+| `seazn_pro_monthly` tier 2+ | 699 | 599 | 499 | 29900 |
+| `seazn_pro_annual` tier 1 | 12899 | 10899 | 8899 | 499900 |
+| `seazn_pro_annual` tier 2+ | 6399 | 5399 | 4399 | 249900 |
+| `seazn_event_pass` (M) | 1199 | 999 | 899 | 49900 |
+| `seazn_event_pass_l` | 4499 | 3899 | 3199 | 169900 |
+| `seazn_extra_org_pro_monthly` | 699 | 599 | 499 | 29900 |
+| `seazn_seat_monthly` (hidden, R13) | 199 | 199 | 199 | 9900 |
+| `seazn_size_pack_32` | 499 | 499 | 399 | 19900 |
+| `seazn_credits_10` | 1000 | 900 | 800 | 79900 |
+| `seazn_credits_25` | 2500 | 2300 | 2000 | 199900 |
+| `seazn_credits_50` | 5000 | 4600 | 4000 | 399900 |
+| `seazn_credits_100` | 10000 | 9200 | 7900 | 799900 |
 
-**AUD is GONE** (ruling below, T10) — four currencies, not five. Its amounts are
-struck from every row above; do not reinstate them from an earlier draft.
+The extra-org rate is not a separate SKU on annual — it is the `up_to: inf` rung of each
+plan's graduated ladder, which is why tier 2+ and `extra_org_pro_monthly` are the same
+number on monthly and there is no `extra_org_pro_annual` lookup_key to grep for.
 
-In minor units, as the seed stores them (USD rides `unit_amount`; `currency_options`
-carries only `eur/gbp/inr`):
+**Six rules, verified in all four currencies** (usd / eur / gbp / inr):
+- annual ÷ monthly ∈ 8–9: 8.61 / 8.39 / 8.10 / 8.35
+- tier 2+ ≤ half base, monthly 699≤749.5, 599≤649.5, 499≤549.5, 29900≤29950;
+  annual 6399≤6449.5, 5399≤5449.5, 4399≤4449.5, 249900≤249950
+- M < L < annual: 1199<4499<12899 · 999<3899<10899 · 899<3199<8899 · 49900<169900<499900
+- 3 × L ≥ annual: 13497≥12899 · 11697≥10899 · 9597≥8899 · 509700≥499900
+- 2 × L < annual: 8998<12899 · 7798<10899 · 6398<8899 · 339800<499900
+- **NEW — M < Pro monthly**: 1199<1499 · 999<1299 · 899<1099 · 49900<59900. Added
+  because charm pricing brought the entry pass within a rounding error of a month of
+  Pro; a mutant that lifted Pass M above Pro monthly was caught by this rule ALONE
+  while the other eight stayed green, so it is the one that detects a dominated rung.
 
-| | usd | eur | gbp | inr |
-|---|---|---|---|---|
-| pro monthly tier 1 / tier 2+ | 1200 / 600 | 1000 / 500 | 900 / 400 | 49900 / 19900 |
-| pro annual tier 1 / tier 2+ | 9900 / 4900 | 8900 / 4400 | 7900 / 3900 | 399900 / 199900 |
-| event_pass / event_pass_l | 1500 / 3900 | 1400 / 3500 | 1200 / 2900 | 59900 / 159900 |
-| extra_org_pro | 600 | 500 | 400 | 19900 |
-| extra_seat | 200 | 200 | 200 | 9900 |
-| size_pack_32 | 500 | 500 | 400 | 19900 |
-
-Rules, verified in all four currencies: annual ÷ monthly ∈ 8–9 (8.25 / 8.90 / 8.78 /
-8.01); tier 2+ ≤ half the base (6≤6, 5≤5, 4≤4.5, 199≤249.5 monthly; 49≤49.5,
-44≤44.5, 39≤39.5, 1999≤1999.5 annual); M < L < annual; 3 × L ≥ annual (117≥99,
-105≥89, 87≥79, 4797≥3999); 2 × L < annual (78<99, 70<89, 58<79, 3198<3999).
 
 Consequences to carry into W3: the design's "revenue per Pro org falls 53%" is now
 ~37%, and the approved mockups print the old $9/$15 pair. Both are W3's to amend.
