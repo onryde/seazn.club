@@ -1,5 +1,5 @@
 import { test, expect, type Page } from "@playwright/test";
-import { failOnNativeDialog } from "../helpers";
+import { failOnNativeDialog, loginUi } from "../helpers";
 import { freshOrg, stamp } from "../directory-kit";
 
 /**
@@ -9,6 +9,11 @@ import { freshOrg, stamp } from "../directory-kit";
  * is proposed, and that a same-name pair with DIFFERING dobs is suppressed. The
  * suppression case is the one no existing spec makes, and it is what a
  * "suggest everything" mutant dies on.
+ *
+ * Test B follows ONE claim link through every ending it has, and asserts each
+ * ending from the INVITEE's browser rather than from the organiser's console:
+ * a link that is dead in the database while it still renders a claim button is
+ * exactly the defect a console-side assertion cannot see.
  *
  * Fresh org, deliberately. The walkthrough project's storageState is the shared
  * PRO org, and the Players tab renders only the OLDEST 200 persons
@@ -111,4 +116,157 @@ test("the duplicate queue proposes a real pair and suppresses a false one", asyn
   // And the queue holds exactly the one pair — assertable only because the org
   // is this spec's own.
   await expect(queue(page).locator("[data-candidate]")).toHaveCount(1);
+});
+
+/**
+ * One claim link, followed to every ending the console can give it:
+ *
+ *   1. the WRONG address opens it     -> refused, and the invite SURVIVES
+ *   2. the organiser withdraws it     -> "Invite withdrawn"
+ *   3. the organiser invites again    -> the withdrawn link STAYS withdrawn
+ *   4. the invited address accepts it -> spent; "Already claimed" ever after,
+ *                                        and an unlink does not hand it back
+ *
+ * Step 3's positive control — the CURRENT link still works, from the same
+ * browser that was just refused twice — is what stops the four refusals above
+ * from passing on a claim page that simply never offers the button.
+ *
+ * Two endings the brief asked for are NOT here, because the console cannot
+ * reach them: minting a second invite while one is still OPEN (the row's verb
+ * is "Withdraw invite" from the moment router.refresh() lands, so
+ * reviveClaimInvite's revoke-on-mint needs a stale second console), and the
+ * unlink KILLING a live link (unlink can only follow a claim, and
+ * settleClaimRow tests claimed_at before revoked_at, so the dead-end stays
+ * "Already claimed" either way). See the task report.
+ */
+test("a claim link is not transferable, and a withdrawn or spent one never comes back", async ({
+  page,
+  browser,
+}) => {
+  failOnNativeDialog(page);
+  const s = stamp();
+  await freshOrg(page, "claims");
+  await page.goto("/directory?tab=players");
+
+  const personName = `Rae Sandoval ${s}`;
+  await addPerson(page, { name: personName });
+
+  // Scoping through `roster` is not tidiness. ResponsiveTable renders every
+  // cell TWICE — a `hidden sm:block` <table> and an `sm:hidden` card <ul>,
+  // both always in the DOM — so a bare page.getByRole("button", { name:
+  // "Unlink" }) is a strict-mode violation rather than a miss. The org holds
+  // exactly this one person, so the row locator is unambiguous.
+  const row = () => roster(page).getByRole("row", { name: new RegExp(escapeRe(personName)) });
+  const control = (name: string) => row().getByRole("button", { name });
+  const claimButton = (p: Page) => p.getByRole("button", { name: /This is me — claim/ });
+
+  const ownerEmail = `claimant-a-${s}@example.com`;
+  const strangerEmail = `claimant-b-${s}@example.com`;
+
+  /** Send an invite through the organiser's own dialog; return the one-time
+   *  link it prints. */
+  async function invite(email: string): Promise<string> {
+    await control("Invite to claim…").click();
+    const dialog = page.getByRole("dialog", {
+      name: `Invite ${personName} to claim their profile`,
+    });
+    await dialog.getByLabel("Their email").fill(email);
+    await dialog.getByRole("button", { name: "Send invite" }).click();
+
+    // "Done" renders on BOTH outcomes of the POST, so waiting on it is what
+    // makes the next line a real check instead of one against a dialog that
+    // has not answered yet — `toHaveCount(0)` is satisfied by an empty page.
+    const done = dialog.getByRole("button", { name: "Done" });
+    await expect(done).toBeVisible({ timeout: 15_000 });
+    // The link is the send-FAILURE fallback (invite-claim.tsx): with a mailer
+    // configured the dialog shows `claim-emailed` and no link at all, and this
+    // spec has to say that out loud rather than die on a null further down.
+    await expect(
+      dialog.getByTestId("claim-emailed"),
+      "the mailer accepted this invite, so no link is shown — this spec needs the send-failure fallback",
+    ).toHaveCount(0);
+    const link = (await dialog.getByTestId("claim-link").textContent())?.trim();
+    if (!link) throw new Error("no claim link rendered");
+    await done.click();
+
+    // The row's verb flips from "Invite to claim…" to "Withdraw invite" only
+    // once router.refresh() lands, which is AFTER the dialog closes. Settling
+    // on the badge here is what keeps a later step off a stale button.
+    await expect(row()).toContainText("Invite pending");
+    return link;
+  }
+
+  /** A real second human: a context with genuinely EMPTY storage. A bare
+   *  browser.newContext() inherits the organiser's session, and every refusal
+   *  below then passes against the wrong identity. */
+  async function signIn(email: string): Promise<Page> {
+    const ctx = await browser.newContext({ storageState: { cookies: [], origins: [] } });
+    const p = await ctx.newPage();
+    failOnNativeDialog(p);
+    // "/" rather than the claim link: safeNextPath (lib/auth.ts) rejects any
+    // `next` that is not a bare path, so handing loginUi the absolute claim_url
+    // drops the claimant into postAuthLanding's auto-provision branch and they
+    // never see the claim page at all. They navigate themselves below — to the
+    // string the console PRINTED, never one this spec assembles.
+    await loginUi(p, email, "/");
+    return p;
+  }
+
+  const stranger = await signIn(strangerEmail);
+  const owner = await signIn(ownerEmail);
+  try {
+    const link1 = await invite(ownerEmail);
+
+    // --- 1. not transferable ------------------------------------------------
+    // The stranger holds the whole link, signed in, and is refused by name.
+    await stranger.goto(link1);
+    await expect(
+      stranger.getByRole("heading", { name: "Wrong account for this invite" }),
+    ).toBeVisible();
+    await expect(claimButton(stranger)).toHaveCount(0);
+
+    // ...and the attempt did not consume the invite: it is still open.
+    await page.reload();
+    await expect(row()).toContainText("Invite pending");
+
+    // --- 2. the organiser withdraws it -------------------------------------
+    await control("Withdraw invite").click();
+    await expect(row()).not.toContainText("Invite pending");
+    await owner.goto(link1);
+    await expect(owner.getByRole("heading", { name: "Invite withdrawn" })).toBeVisible();
+    await expect(claimButton(owner)).toHaveCount(0);
+
+    // --- 3. a fresh invite does not revive the withdrawn one ----------------
+    const link2 = await invite(ownerEmail);
+    expect(link2).not.toBe(link1);
+    await owner.goto(link1);
+    await expect(owner.getByRole("heading", { name: "Invite withdrawn" })).toBeVisible();
+
+    // The positive control: the CURRENT link works, in the same browser that
+    // was just refused twice.
+    await owner.goto(link2);
+    await claimButton(owner).click();
+    await owner.waitForURL(/\/me(\?|$)/, { timeout: 15_000 });
+    await page.reload();
+    await expect(row()).toContainText("Claimed");
+
+    // --- 4. accepting spends it --------------------------------------------
+    await owner.goto(link2);
+    await expect(owner.getByRole("heading", { name: "Already claimed" })).toBeVisible();
+    await expect(claimButton(owner)).toHaveCount(0);
+
+    // ...and the organiser's unlink hands the PROFILE back without handing the
+    // spent link back with it.
+    await control("Unlink").click();
+    const unlinkDialog = page.getByRole("dialog", { name: "Unlink this player account?" });
+    // tone: danger. The confirm is a click, never Enter.
+    await unlinkDialog.getByRole("button", { name: "Unlink" }).click();
+    await expect(row()).not.toContainText("Claimed");
+    await owner.goto(link2);
+    await expect(owner.getByRole("heading", { name: "Already claimed" })).toBeVisible();
+    await expect(claimButton(owner)).toHaveCount(0);
+  } finally {
+    await stranger.context().close();
+    await owner.context().close();
+  }
 });
