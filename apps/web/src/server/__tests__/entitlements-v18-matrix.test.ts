@@ -270,6 +270,36 @@ describe.skipIf(!HAS_DB)("V392 entitlements v18 matrix — pinned against design
     expect(survivors, `these §2 "delete key" rows still have plan_entitlements rows: ${JSON.stringify(survivors)}`).toEqual([]);
   });
 
+  it("every feature_key in plan_entitlements is NAMED by §2 — the pin runs BOTH ways", async () => {
+    // T20 (reviewer pass 3, 2026-09-03). Every case above iterates rows PARSED
+    // OUT OF the design doc and asks the database to match. Nothing went the
+    // other direction, so a row in `plan_entitlements` that §2 never mentions
+    // passed unnoticed — while V395's header (`:3-5`), V396's header (`:3-4`)
+    // and this wave's plan all rest on the sentence "a row in the database
+    // that §2 does not name is drift by construction". That guarantee did not
+    // exist. There is no live defect (`import.events` and `dashboard.theme`
+    // were both added to §2 in the same commits that seeded them, which is
+    // exactly the discipline those headers describe); the exposure is the NEXT
+    // migration that forgets, whose author has been told three times that it
+    // cannot happen. A false guarantee is worse than none: it manufactures
+    // confidence where a reader would otherwise check.
+    //
+    // The known-deleted set is subtracted too, because §2 names a deleted key
+    // with an all-em-dash row and asserts its ABSENCE (the case above) — a key
+    // parsed as deleted is still a key §2 names.
+    const named = new Set(PARSED.map((r) => r.key));
+    const rows = await sql<{ feature_key: string }[]>`
+      select distinct feature_key from plan_entitlements`;
+    // Anti-vacuity: an empty right-hand side satisfies any subset assertion,
+    // and a broken query or an unmigrated database would present as one.
+    expect(rows.length).toBeGreaterThanOrEqual(40);
+    const unnamed = rows.map((r) => r.feature_key).filter((k) => !named.has(k)).sort();
+    expect(
+      unnamed,
+      `these feature keys have plan_entitlements rows but appear nowhere in §2 of ${DESIGN_DOC_RELATIVE} — either add the row to the matrix or drop it from the migration:\n${unnamed.join("\n")}`,
+    ).toEqual([]);
+  });
+
   it("pro_plus is gone from plan_entitlements and from plans", async () => {
     const [entitlementRows, planRows] = await Promise.all([
       sql<{ n: number }[]>`select count(*)::int as n from plan_entitlements where plan_key = 'pro_plus'`,

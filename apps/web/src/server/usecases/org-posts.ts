@@ -16,7 +16,6 @@ import { hhmmInTz } from "@seazn/engine/scheduling/tz";
 import { sql, withTenant } from "@/lib/db";
 import { HttpError, PaymentRequiredError } from "@/lib/errors";
 import { firePostRevalidate } from "@/server/public-site/revalidate";
-import { hasFeature } from "@/lib/entitlements";
 import { captureServer } from "@/lib/posthog-server";
 import { EVENTS } from "@/lib/analytics-events";
 import { toLocale, type Locale } from "@/lib/i18n-constants";
@@ -1114,32 +1113,51 @@ const DECIDED_STATUSES = ["decided", "finalized", "forfeited"] as const;
  * yes for all of them); a Free org with one pass gets exactly that one; a
  * plain Free org gets an empty set, which is the 402.
  *
- * MUST run on the pooled proxy, OUTSIDE `withTenant` — `hasFeature` is a
- * pooled read and issuing one inside a tenant transaction is the pool
- * self-deadlock (lib/db.ts). Both callers resolve it before they open theirs.
- *
  * Returns BOTH numbers, because "no competitions I may publish about" and "no
  * competitions" are different answers and collapsing them broke a stated
  * acceptance criterion the first time this was written: an org with no
  * activity at all still gets a draft from the button, and it SAYS so instead
  * of being blank (`org-posts-digest.test.ts`). A refusal means the org OWNS
- * competitions and holds the key for none of them; with `total === 0` there is
- * nothing to refuse and the digest that comes out is provably empty. That does
- * let a Free org with zero competitions press the button for a contentless
- * draft — a deliberate, recorded edge, and the cheapest one available: the
- * only other way to answer it is the org-wide question, which for a
- * pass-lifted key is exactly what `pass-scoping-guard.test.ts` forbids here.
+ * competitions and holds the key for none of them.
+ *
+ * `permitted` is the THIRD answer, and it exists because the previous shape
+ * left a hole at `total === 0` that the two callers spelled differently (T20,
+ * reviewer pass 3, 2026-09-03): the button guard read
+ * `total > 0 && allowed.length === 0`, so a Free org owning nothing at all
+ * skipped the refusal and minted a `weekly_digest` — while a comment beside
+ * the sweep's own check claimed the two could not answer differently. Both now
+ * read this ONE field, which is what makes that claim true instead of
+ * aspirational.
+ *
+ * With `total === 0` the answer is the org's PLAN row, and that is not a
+ * pass-scoping leak: an Event Pass is FK'd to a competition
+ * (`competition_passes.competition_id`), so an org with no competitions can
+ * hold no pass and a competition-less read has nothing to hide. A Pro org with
+ * nothing on yet still gets its honest, empty draft; a Free one gets the 402.
+ *
+ * ONE query for the per-competition arm, not one per competition: this runs
+ * inside the weekly cron over every candidate org, and the loop it replaces
+ * cost an entitlement round trip per competition. `org_has_feature` is the SQL
+ * half of the same resolver — `entitlements-sql-parity.test.ts` is the
+ * standing tie between the two and pins the null-competition form used below —
+ * so the answer is the one `hasFeature` gives, asked once.
+ *
+ * MUST run on the pooled proxy, OUTSIDE `withTenant`: a pooled read issued
+ * inside a tenant transaction is the pool self-deadlock (lib/db.ts). Both
+ * callers resolve it before they open theirs.
  */
 export async function newsAutoCompetitionScope(
   orgId: string,
-): Promise<{ total: number; allowed: string[] }> {
-  const rows = await superuser<{ id: string }[]>`
-    select id from competitions where org_id = ${orgId}`;
-  const allowed: string[] = [];
-  for (const { id } of rows) {
-    if (await hasFeature(orgId, "news.auto", id)) allowed.push(id);
-  }
-  return { total: rows.length, allowed };
+): Promise<{ total: number; allowed: string[]; permitted: boolean }> {
+  const rows = await superuser<{ id: string; allowed: boolean }[]>`
+    select c.id, org_has_feature(${orgId}::uuid, 'news.auto', c.id) as allowed
+      from competitions c
+     where c.org_id = ${orgId}`;
+  const allowed = rows.filter((r) => r.allowed).map((r) => r.id);
+  if (rows.length > 0) return { total: rows.length, allowed, permitted: allowed.length > 0 };
+  const [orgWide] = await superuser<{ ok: boolean | null }[]>`
+    select org_has_feature(${orgId}::uuid, 'news.auto', null::uuid) as ok`;
+  return { total: 0, allowed, permitted: orgWide?.ok === true };
 }
 
 /** Divisions with >=1 fixture the fold last touched inside the window
@@ -1584,10 +1602,13 @@ export async function generateWeeklyDigest(auth: AuthCtx, orgId: string): Promis
   void orgId; // RLS scopes to auth.orgId; the route proved auth against this org.
   // V395: `news.auto` is pass-lifted, so the entitlement question is per
   // competition and the answer is a SET, not a boolean — see
-  // `newsAutoCompetitionScope`. Empty set = nothing this org may auto-publish
-  // for = the same 402 `requireFeature` used to raise, with the same key.
+  // `newsAutoCompetitionScope`. Nothing this org may auto-publish for = the
+  // same 402 `requireFeature` used to raise, with the same key. `permitted`,
+  // not `allowed.length`, so an org owning NO competitions is answered by its
+  // plan instead of skipping the refusal entirely — which is what let a Free
+  // org mint a digest for free (T20).
   const scope = await newsAutoCompetitionScope(auth.orgId);
-  if (scope.total > 0 && scope.allowed.length === 0) throw new PaymentRequiredError("news.auto");
+  if (!scope.permitted) throw new PaymentRequiredError("news.auto");
   const post = await withTenant(auth.orgId, (tx) =>
     digestForOrg(tx, auth.orgId, Date.now(), scope.allowed),
   );
@@ -1597,11 +1618,12 @@ export async function generateWeeklyDigest(auth: AuthCtx, orgId: string): Promis
 }
 
 /** The stg cron sweep (`/api/cron/news-digest`, no AuthCtx — a system
- *  trigger, not a user session). Every org table row is checked for the
- *  entitlement directly (`hasFeature`, the same resolver the button path's
- *  `requireFeature` uses) rather than pre-filtering by plan in SQL — the
- *  resolver already accounts for Event Passes, billing-group overrides and
- *  trials, and re-deriving that logic here is exactly how it would drift. */
+ *  trigger, not a user session). Every candidate org is checked through the
+ *  resolver itself (`newsAutoCompetitionScope`, the same call and the same
+ *  field the button path's refusal reads) rather than pre-filtering by plan in
+ *  SQL — the resolver already accounts for Event Passes, billing-group
+ *  overrides and trials, and re-deriving that logic here is exactly how it
+ *  would drift. */
 export async function sweepWeeklyDigests(
   nowMs: number = Date.now(),
 ): Promise<{ orgsTotal: number; orgsChecked: number; digestsCreated: number }> {
@@ -1649,10 +1671,12 @@ export async function sweepWeeklyDigests(
     // sweep asks the same question the button path asks, through the same
     // resolver, so the two cannot answer differently.
     // The sweep's candidates all HAVE fixtures, so `total` is never 0 here in
-    // practice; the check is written the same way as the button path's so the
-    // two cannot answer differently, and `skipIfEmpty` covers the rest.
+    // practice. This reads the same FIELD the button path reads, not merely
+    // the same shape of expression — the two used to spell the condition
+    // differently and did answer differently at `total === 0` (T20).
+    // `skipIfEmpty` covers the rest.
     const scope = await newsAutoCompetitionScope(orgId);
-    if (scope.allowed.length === 0) continue;
+    if (!scope.permitted) continue;
     try {
       const post = await withTenant(orgId, (tx) =>
         digestForOrg(tx, orgId, nowMs, scope.allowed, { skipIfEmpty: true }),

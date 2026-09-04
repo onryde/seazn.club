@@ -226,6 +226,26 @@ describe.skipIf(!HAS_DB)("weekly digest (P3 / D7)", () => {
     });
   });
 
+  it("402s a community org that owns NO competitions at all — total === 0 was a hole", async () => {
+    // T20 finding 1 (reviewer pass 3, 2026-09-03). The button guard read
+    // `scope.total > 0 && scope.allowed.length === 0`, so an org with nothing
+    // at all skipped the refusal and minted a `weekly_digest` on Free. A
+    // comment five lines above the sweep's own check claimed the two "cannot
+    // answer differently"; they did, in exactly this case.
+    //
+    // The paired over-refusal guard is "an org with no activity at all still
+    // gets a draft from the button" below: that org is PRO with zero
+    // competitions, so a fix that simply refuses on an empty `allowed` set
+    // would show a paywall to someone who has already paid. With no
+    // competitions there can be no pass either (a pass is FK'd to a
+    // competition row), so the plan answer is the whole answer here.
+    const ctx = await seedOrg("community");
+    await expect(generateWeeklyDigest(ctx.auth, ctx.orgId)).rejects.toMatchObject({
+      status: 402,
+      featureKey: "news.auto",
+    });
+  });
+
   it("a community org holding an Event Pass gets a digest, scoped to that competition", async () => {
     // The digest is an ORG-level artefact and a pass buys ONE competition, so
     // the entitlement question is a SET, not a boolean. Both halves are pinned:
