@@ -19,11 +19,37 @@ git-ignored and MACHINE-LOCAL: on any other checkout this file is all there is.
 | 7 | CP-SAT rest floor reached the wire as `NaN` | `234d4005a`, `65e0b5b4c` |
 | 8 | Restore-checkpoint refuses a frozen division | `a3ab7db16`, `e6193c1c2` |
 | 9 | Undo/redo refuse it too; joint path says why | `9f6d4117f` … `cb6a3ceda`, `bfae88327` |
-| 4 | Organiser's scheduling day walkthrough | `6b9978ac3` — green ×3, 2 mutants killed |
+| 4 | Organiser's scheduling day walkthrough | `6b9978ac3` + fix round `5b3c6949c` — green ×3, 2 mutants killed |
 
 ## Open
 
-- **Task 5** — officials handoff walkthrough (see below).
+- **Task 4 re-review** — of fix round `5b3c6949c`. Dispatched; if no
+  `task-4-rereview.md` exists, it did not survive.
+- **Task 5** — officials handoff walkthrough (see below). Its brief carries two
+  controller amendments: finding S4's apply button must be encoded as
+  `test.fail()` (never `test.skip()`), and the durable rows it writes
+  (`officials`, `official_availability`, `fixture_officials`) need an
+  idempotent `afterAll` cleanup.
+- **Product change owed, recorded nowhere else.** `autoSolverWallMs`
+  (`apps/web/src/server/usecases/schedule.ts:1992`) is MIRRORED into the
+  walkthrough rather than imported, because a Playwright spec cannot import a
+  server module. It wants exporting from a leaf, the way `HOLD_MS` and
+  `NOT_RECORDING_GRACE_MINUTES` already are. Fold into Task 10, the
+  constant-extraction task. This survives only here: the report that would have
+  carried it was never written.
+
+## Rate limit, 2026-09-04
+
+The Task 4 fix-round implementer was killed mid-round by a WEEKLY opus limit
+(HTTP 429, `claude-opus-5`, resets **Sep 5 19:00 Europe/London**). It had
+committed `5b3c6949c` first, so nothing was lost, but its report never got
+written. Until that resets, dispatch reviewers and implementers on a mid-tier
+model; an opus dispatch 429s on arrival.
+
+The verification the agent never reached was run by hand instead: three clean
+runs (suites 2, expected 3, unexpected 0, flaky 0), walkthrough test 31.08s
+against a derived 81s budget and a 90s ceiling, tsc and eslint both exit 0 from
+the worktree's own `apps/web`.
 - **Task 5** — officials handoff walkthrough. Its apply step must stay a
   FAILING test (`test.fail()`, never skip) per spec §S4.
 - **Task 6** — perf gate, cost table, findings doc.
