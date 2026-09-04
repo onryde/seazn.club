@@ -148,6 +148,36 @@ These are in addition to R1–R14 in the design doc.
   one-time $15 above the $9/mo recurring **by the owner's choice**, with the
   counter-argument put first and overruled. Do not "fix" it.
 
+### Owner ruling 2026-09-04 — the five W2-boundary product gaps, all approved
+
+Raised as a product-owner read of the wave rather than as a task list, each verified
+against the tree or the `entw2` database. Full write-up with the arithmetic:
+`../../plans/2026-09-03-entitlements-w2-matrix-plumbing.md`, "Product-owner gaps".
+
+1. **`on_behalf_of` ships WITH V397, or V397 reverts.** The rate cut was sized for the
+   rail and shipped without it: on a $1,000 competition the platform's contribution is
+   $20.70 today against $50.70 before and $50.00 intended, so a 37.5% headline cut is a
+   59% cut to contribution. Merging the cut alone also ships a priced promise to clubs
+   ("we absorb the card fee") the code does not keep. **This blocks the W2 merge.**
+2. **INR credit packs are re-anchored** — 10/25/50/100 to ₹399/₹999/₹1,999/₹3,999,
+   which is 1.67× the included rate, exactly USD's ratio. They were carried as
+   "unchanged" while the plans moved to PPP set points, leaving ₹799 buying 10 credits
+   where ₹599 bought a month of Pro including 25. A dominated SKU throws no error; it
+   just never sells. **Ships with a new ladder rule comparing a consumable against the
+   plan that includes the same thing** — the six existing rules only compare plans to
+   passes, which is why this could happen silently.
+3. **A blank platform-fee field stops meaning 0%.** `Number("")` is `0` and both layers
+   accepted it. `min(0)` stays — a deliberate promo is legitimate — but empty is no
+   longer zero, and the fix ships with a paired positive assertion so it cannot pass by
+   refusing everything.
+4. **The pass/Pro crossover gets named on the pricing page**, derived from the live
+   catalogue rather than typed: the pass wins below roughly $150 of entry fees and Pro
+   above it. Unstated, the page reads "the pass is cheaper" and pushes volume at the
+   one-time SKU when the recurring one is what retains.
+5. **The degrade card names its numbers.** The client dropped `limit` from the 201, so
+   the best-timed upgrade moment in the product could not say the org is at 2 and Pro
+   is 10.
+
 ## Findings that changed the work
 
 - **`fidelityTiers` was the RECORDABLE set; `padSpec.fidelity` is the
@@ -238,6 +268,18 @@ items to W1, so nothing below is owed by anyone else.
 ## Named items owed to a later wave
 
 Each needs a task and an owner. Nothing here is fixed by W1.
+
+0. **W3 entry gate — baseline the distribution the growth reversal gives up.**
+   W2 put player profiles, embeds and auto posts back behind the paywall on an
+   explicit owner ruling, reversing the PLG position recorded higher in this file.
+   That is not re-litigated — but it trades off-platform distribution for revenue,
+   and **nothing in the tree measures the distribution side**, so the trade cannot be
+   read later, only argued about. The badge network was the stated reason those keys
+   were free; removing them removes the badge from the surfaces that carried it.
+   Take the baseline BEFORE W3 ships the surfaces — embed loads, public-profile
+   views, auto-posted items, and how many orgs use each — or the counterfactual is
+   gone for good. Cheap now, impossible in a month. Raised as a product-owner
+   finding at the W2 boundary, 2026-09-04, and approved with the five fixes below.
 
 1. **The setbased kernel registers event schemas and fidelity bands for types
    no shipped preset accepts** — a badminton expedite system, a table-tennis
