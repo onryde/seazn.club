@@ -19,6 +19,7 @@ import { runTinySuite } from "./lib/suites/tiny.ts";
 import { createRealPlanSql, type PlanSql } from "./lib/plan.ts";
 import type { SeedTransport } from "./lib/seed.ts";
 import type { ProbeTransport } from "./lib/dls-gate.ts";
+import type { CliEntryFlag } from "./lib/register.ts";
 
 const execFileAsync = promisify(execFile);
 
@@ -27,6 +28,15 @@ type Engine = (typeof ENGINES)[number];
 
 const KNOWN_SUITES = ["_tiny"] as const;
 
+// B03r task 6: `--entry admin|registration` (design §3) — the CLI's own
+// narrower vocabulary; `register.ts`'s `resolveEntryMode` is what turns
+// "registration" into the concrete `registration-api`/`registration-ui`
+// per suite (suite 13 is the one exception). Only PARSED here — nothing in
+// `runSuite` below wires it into a live suite yet: `_tiny` doesn't accept
+// an `entry` override until a later task gives it a registration division
+// (B03r ladder item 7), and `suites/` is out of this task's scope.
+const ENTRY_FLAGS = ["admin", "registration"] as const;
+
 export interface BenchConfig {
   suites: string[];
   engine: Engine;
@@ -34,6 +44,7 @@ export interface BenchConfig {
   reportDir: string;
   base: string;
   runId?: string;
+  entry?: CliEntryFlag;
 }
 
 /**
@@ -58,6 +69,7 @@ export function parseCliArgs(argv: string[]): BenchConfig {
       "report-dir": { type: "string", default: "bench-report" },
       base: { type: "string" },
       "run-id": { type: "string" },
+      entry: { type: "string" },
     },
     allowPositionals: false,
     strict: true,
@@ -94,12 +106,17 @@ export function parseCliArgs(argv: string[]): BenchConfig {
     throw new Error("--base is required (or set SMOKE_BASE) — point it at the bench's own throwaway server, never :3000.");
   }
 
+  if (values.entry !== undefined && !(ENTRY_FLAGS as readonly string[]).includes(values.entry)) {
+    throw new Error(`--entry must be one of ${ENTRY_FLAGS.join("|")}, got "${values.entry}"`);
+  }
+
   return {
     suites,
     engine: engine as Engine,
     keep: !values.wipe,
     reportDir: values["report-dir"],
     base,
+    ...(values.entry === undefined ? {} : { entry: values.entry as CliEntryFlag }),
     runId: values["run-id"],
   };
 }
