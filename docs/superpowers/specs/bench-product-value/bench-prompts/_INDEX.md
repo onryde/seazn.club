@@ -32,8 +32,8 @@ B03/B04/B05 are sequential (shared `scripts/bench/lib/`). B17 needs B15
 | B01 | `B01-runner-core.md` | CLI, pre-flight, HTTP client, report writer | B00 | **MERGED #658 2026-08-26** |
 | B02 | `B02-pack-lib.md` | PackSchema, stage-0 validator, reconstruction | B01 | **MERGED #701 `1cdcaf4c6`** |
 | B03 | `B03-seeding-layer.md` | org/comp/divisions/persons/officials/plans/claims | B02 | **MERGED #711 `3cfac6332` 2026-09-03** |
-| B03r | `B03r-registration-layer.md` | registration entry path: `--entry` flag, http+browser drivers, PackSchema `registration` block, Stripe test-mode payer, funnel oracle | B03 + **RS007–RS011, RS010 merged** | **PR #713 open 2026-09-04** — paid path proven live (2 × 100 USD destination charges, webhook accepted); bench 721/721 |
-| B04 | `B04-scheduling-layer.md` | config apply, auto/validate, checker, certificate, metrics | B03 | TODO |
+| B03r | `B03r-registration-layer.md` | registration entry path: `--entry` flag, http+browser drivers, PackSchema `registration` block, Stripe test-mode payer, funnel oracle | B03 + **RS007–RS011, RS010 merged** | **MERGED #713 `310eb22ac` 2026-09-04** — paid path proven live (2 × 100 USD destination charges, webhook accepted); bench 721/721 |
+| B04 | `B04-scheduling-layer.md` | config apply, auto/validate, checker, certificate, metrics | B03 | **UNGATED 2026-09-04** — B03 (#711) and B03r (#713) both merged; verified by SHA on main, not from these rows. Kickoff: `../B04-kickoff-2026-09-05.md` |
 | B05 | `B05-simulation-layer.md` | event loop, advancement, oracles, people-layer steps | B04 | TODO |
 | B06 | `B06-pack-darts-pilot.md` | suite 11 (PDC) — pilot proves the playbook | B05 | TODO |
 | B07 | `B07-pack-carrom.md` | suite 10 (ICF) — thin-data resilience | B06 | TODO |
