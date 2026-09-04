@@ -4960,6 +4960,7 @@
   "history.aria": "Schedule history",
   "history.undo": "Undo",
   "history.redo": "Redo",
+  "history.step.frozen": "The schedule is frozen. Unfreeze it above to undo or redo an edit.",
   "history.notUndoable": "(not undoable)",
   "history.savePoints.placeholder": "e.g. before rain reshuffle",
   "history.savePoints.labelAria": "Save point label",

@@ -183,10 +183,32 @@ export function HistoryPanel({
                 with no way to see why. Interpolated into ONE template literal
                 rather than sitting beside the expression so the button renders
                 a single text node, exactly as it did before. */}
-            <button type="button" className="btn btn-ghost" disabled={busy} onClick={() => void step("undo")}>
+            {/* The freeze binds the REWIND primitives too. `restoreCheckpoint`
+                is a loop of `undoDivision`, so the freeze that disabled Restore
+                a few hundred pixels below left the thing it is built out of
+                live right here. `scheduleLocked` is the prop, NOT anything
+                derived from `canEdit`: the mount site passes
+                `canEdit && !billingFrozen`, the ORG's billing freeze, and
+                gating on that would make this silently unreachable on a frozen
+                division. Both are `.btn`, which already carries
+                `disabled:cursor-not-allowed disabled:opacity-50`, so unlike the
+                bare-text Restore these read as disabled without extra tokens. */}
+            <button
+              type="button"
+              data-testid="history-undo"
+              className="btn btn-ghost"
+              disabled={busy || scheduleLocked}
+              onClick={() => void step("undo")}
+            >
               {`↩ ${msg("history.undo")}`}
             </button>
-            <button type="button" className="btn btn-ghost" disabled={busy} onClick={() => void step("redo")}>
+            <button
+              type="button"
+              data-testid="history-redo"
+              className="btn btn-ghost"
+              disabled={busy || scheduleLocked}
+              onClick={() => void step("redo")}
+            >
               {`↪ ${msg("history.redo")}`}
             </button>
             <label className="ml-auto flex items-center gap-2 text-sm text-slate-600">
@@ -208,6 +230,24 @@ export function HistoryPanel({
           </>
         )}
       </div>
+
+      {/* ONE note for both controls: they are refused for the same single
+          reason, and repeating the sentence beside each would be noise. It sits
+          BELOW the row rather than inside it — the row is a `flex-wrap`, so a
+          paragraph in it would be laid out as a third control — which also
+          makes each locale's own "above" (arriba / ci-dessus / hierboven) true
+          of the freeze checkbox at the end of that row. The sibling sentences
+          `history.danger.body` and `history.checkpoint.frozen` already point
+          the same way in the same word; three sentences in one console must not
+          disagree about which direction the checkbox is in.
+
+          `history.danger.frozen` is NOT reusable here even though the shape
+          matches: it ends "to clear slots", which names a different control. */}
+      {canEdit && scheduleLocked && (
+        <p className="text-xs text-slate-500" data-testid="history-step-reason">
+          {msg("history.step.frozen")}
+        </p>
+      )}
 
       {paywallFeature && <UpgradeGate feature={paywallFeature} />}
       {error && <p className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-600">{error}</p>}

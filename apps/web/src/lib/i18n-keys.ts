@@ -2221,6 +2221,7 @@ export type DictionaryKey =
   | "history.savePoints.labelAria"
   | "history.savePoints.placeholder"
   | "history.savePoints.title"
+  | "history.step.frozen"
   | "history.title"
   | "history.undo"
   | "home.audiences.clubs.body"

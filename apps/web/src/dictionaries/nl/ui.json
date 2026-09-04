@@ -4960,6 +4960,7 @@
   "history.aria": "Schemageschiedenis",
   "history.undo": "Ongedaan maken",
   "history.redo": "Opnieuw uitvoeren",
+  "history.step.frozen": "Het schema is vergrendeld. Ontgrendel het hierboven om een bewerking ongedaan te maken of opnieuw uit te voeren.",
   "history.notUndoable": "(niet ongedaan te maken)",
   "history.savePoints.placeholder": "bijv. voor de herschikking door regen",
   "history.savePoints.labelAria": "Label van het opslagpunt",

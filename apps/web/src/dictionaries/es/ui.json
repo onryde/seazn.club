@@ -4960,6 +4960,7 @@
   "history.aria": "Historial del calendario",
   "history.undo": "Deshacer",
   "history.redo": "Rehacer",
+  "history.step.frozen": "El calendario está congelado. Descongélalo arriba para deshacer o rehacer una edición.",
   "history.notUndoable": "(no se puede deshacer)",
   "history.savePoints.placeholder": "p. ej. antes de reorganizar por lluvia",
   "history.savePoints.labelAria": "Etiqueta del punto de guardado",
