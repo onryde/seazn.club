@@ -133,6 +133,15 @@ export function ImportWizard() {
     setError(null);
     setPaywallFeature(null);
     setResult(null);
+    // The PREVIOUS file's plan, too. Without this a refused upload — a row cap
+    // hit, a parse failure — leaves the last good preview mounted underneath
+    // the paywall or the error, with its "Commit import" button still enabled,
+    // and pressing it imports a file the organiser was just told was rejected.
+    //
+    // Deliberately here and NOT in `fail()`: `fail()` also serves the COMMIT
+    // path, where a 402 should leave the plan on screen for the organiser to
+    // trim. Only the upload path must clear it.
+    setPreview(null);
     setBusy(true);
     try {
       const form = new FormData();
