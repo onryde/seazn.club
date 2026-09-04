@@ -1320,8 +1320,9 @@ describe.skipIf(!HAS_DB)("the four-locale dictionaries say what the resolver enf
    * `pricing.addons.credits` said "$10" in all four locales (es "desde 10 $",
    * fr "à partir de 10 $", nl "vanaf $10") and rendered statically, while every
    * other price on the page is interpolated behind the CurrencySwitcher. The
-   * seed's cheapest pack is eur 900 / gbp 800 / aud 1500 / inr 79900, so it was
-   * false in four of five currencies.
+   * seed's cheapest pack was eur 900 / gbp 800 / aud 1500 / inr 79900 when that
+   * was written (AUD is gone and INR is 39900 since W2), so it was false in four
+   * of the five currencies of the day.
    *
    * Scanned as a CLASS rather than as that one key: any pricing value carrying a
    * currency symbol or an ISO code is the same defect (#191), whoever writes it

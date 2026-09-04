@@ -70,9 +70,11 @@ describe("pricing cards", () => {
   /**
    * FIX ROUND 2 — the add-on line quoted a HARDCODED "$10" in all four locales
    * while every other price on /pricing goes through `formatMinor(…, currency)`
-   * behind the CurrencySwitcher. The seed's cheapest pack is eur 900 / gbp 800 /
-   * aud 1500 / inr 79900, so the literal was false in FOUR of five currencies —
-   * exactly the defect #191 was filed for on the pass copy.
+   * behind the CurrencySwitcher. The seed's cheapest pack was eur 900 / gbp 800 /
+   * aud 1500 / inr 79900 when that was written — AUD has since been dropped and
+   * the INR packs re-anchored to 39900 — so the literal was false in FOUR of the
+   * five currencies of the day, exactly the defect #191 was filed for on the
+   * pass copy.
    *
    * Pinned to the SEED, not to a number: the floor is the smallest amount in the
    * switched currency, so adding a cheaper pack moves the advertised "from".

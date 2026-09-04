@@ -443,9 +443,12 @@ export default async function PricingPage({
                   <span aria-hidden>⚡</span>
                   {/* fix round 2: this line hardcoded "$10" in all four
                       locales while every other price on the page honours the
-                      CurrencySwitcher. The seed's cheapest pack is eur 900 /
-                      gbp 800 / inr 79900, so the literal was false in three
-                      of four currencies — #191's defect, again. */}
+                      CurrencySwitcher. The seed's cheapest pack was eur 900 /
+                      gbp 800 / inr 79900 then and is eur 900 / gbp 800 /
+                      inr 39900 now, so the literal was false in three of
+                      four currencies — #191's defect, again. The point of
+                      deriving it is that this comment can go stale and the
+                      rendered price cannot. */}
                   {t(d, "pricing.addons.credits", {
                     price: formatMinor(lowestCreditPackAmount(currency), currency),
                   })}

@@ -249,9 +249,12 @@ export function creditPackOptions(currency: Currency): CreditPackOption[] {
  * v17 gap wave 7, fix round 2: `pricing.addons.credits` hardcoded "$10" in all
  * four locales and rendered statically, on a page where every other price goes
  * through `formatMinor(…, currency)` behind the `CurrencySwitcher`. The seed's
- * cheapest pack is eur 900 / gbp 800 / inr 79900, so the literal was
- * false in three of the four supported currencies — the same defect #191 was
- * filed for, which is why the FAQ answers interpolate their prices.
+ * cheapest pack was eur 900 / gbp 800 / inr 79900 when that was written (it is
+ * inr 39900 since W2 re-anchored the INR packs), so the literal was false in
+ * three of the four supported currencies — the same defect #191 was filed for,
+ * which is why the FAQ answers interpolate their prices. The numbers in this
+ * comment are illustration and will drift again; the DERIVATION below is what
+ * keeps the page honest.
  *
  * DERIVED, not named: the smallest AMOUNT in the switched currency, so adding a
  * cheaper pack (or discounting one) moves the advertised floor with it rather
