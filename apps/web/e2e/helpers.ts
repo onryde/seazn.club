@@ -1178,7 +1178,9 @@ export async function setOwnerStaffRoleSql(
  * superadmin-only, and the one caller that needs this value needs it BEFORE any
  * privilege has been borrowed — a `beforeEach` capturing the row so a hook can
  * put it back after a test that timed out mid-write. Returns `null` when the
- * row is absent or unparseable, so a caller can decline to "restore" a value
+ * row is absent or its `value` is not a jsonb NUMBER (a jsonb `null`, string or
+ * boolean all decode to something `Number()` reads as a finite 0 — see below),
+ * so a caller can decline to "restore" a value
  * that never existed (with no row, `platformFeeDefault()` falls through to the
  * PLATFORM_FEE_PERCENT env and then to 5 — writing one would not be a restore,
  * it would be a new setting).
@@ -1194,8 +1196,17 @@ export async function platformFeePercentSql(): Promise<number | null> {
   return withDb(async (sql) => {
     const [row] = await sql<{ value: unknown }[]>`
       select value from platform_settings where key = 'platform_fee_percent'`;
-    const parsed = Number(row?.value);
-    return Number.isFinite(parsed) ? parsed : null;
+    const value = row?.value;
+    // Narrowed to a real number BEFORE it is measured, and that is the whole
+    // point. `value` is jsonb, so postgres.js decodes it to whatever JSON says
+    // — `null` for a jsonb `null` row, a string or boolean for a hand-written
+    // one — and `Number(null)`, `Number("")` and `Number(false)` are each a
+    // FINITE `0`. A bare `Number(value)` therefore reads a valueless row as a
+    // perfectly good 0%, the afterEach hook PUTs that 0 back as a "restore",
+    // and the platform's entire cut on entry fees is zeroed through the route
+    // with the cache invalidated: this wave's own headline defect, reproduced
+    // inside the fixture built to prevent it.
+    return typeof value === "number" && Number.isFinite(value) ? value : null;
   });
 }
 
