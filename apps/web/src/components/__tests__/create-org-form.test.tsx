@@ -199,7 +199,7 @@ describe("create-org-form billing decisions", () => {
     const eligibleGroups = groups.filter((g) => eligibility(g, msg).eligible);
     expect(eligibleGroups.length).toBe(0);
     expect(msg("orgNew.bill.noneEligible")).toBe(
-      "No eligible bills — each needs an open slot on Pro or Pro Plus.",
+      "No eligible bills — each needs an open slot on Pro.",
     );
   });
 });
@@ -418,7 +418,7 @@ describe("CreateOrgForm island (v17 gap #293 — the wiring, end to end)", () =>
     const toggle = buttonNamed(island.tree(), "Add to an existing bill");
     expect(propsOf(toggle!).disabled).toBe(true);
     expect(island.text()).toContain(
-      "No eligible bills — each needs an open slot on Pro or Pro Plus.",
+      "No eligible bills — each needs an open slot on Pro.",
     );
 
     const links = linksIn(island.tree());
