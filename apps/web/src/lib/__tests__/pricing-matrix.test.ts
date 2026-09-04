@@ -109,11 +109,14 @@ const DATA: MatrixData = {
     event_pass_l: cell(null, true),
     pro: cell(null, true),
   },
+  // V397 re-cut this ladder for the additive-fee model: community 8 -> 5, both
+  // pass rungs 5 -> 4. Pro and enterprise were already pure margin and did not
+  // move.
   "registration.fee_percent": {
-    community: cell(8),
-    event_pass: cell(5),
+    community: cell(5),
+    event_pass: cell(4),
     // Flat across rungs by decision (#294): L buys size, not a cheaper cut.
-    event_pass_l: cell(5),
+    event_pass_l: cell(4),
     pro: cell(2),
   },
   // V392: the pass now lifts player stats too. Community stays denied.
@@ -317,13 +320,15 @@ describe("buildPricingSections — the /pricing pivot", () => {
   });
 
   it("folds registration.paid + fee_percent into one entry-fee cell, keyed pricing.matrix.fees", () => {
-    // V310: every column charges; the ladder is what differs (8/5/2/1).
+    // V310 as re-cut by V397: every column charges; the ladder is what differs,
+    // now 5/4/2/1 rather than 8/5/2/1.
     // #294: the fee is FLAT across rungs — L buys size, not a cheaper cut.
-    // A 5% cell on the L column is the assertion that keeps the ladder honest.
+    // Equal cells on the two pass columns are the assertion that keeps that
+    // honest, so they move together or not at all.
     expect(cells("pricing.matrix.fees")).toMatchObject({
-      community: "✓ 8%",
-      event_pass: "✓ 5%",
-      event_pass_l: "✓ 5%",
+      community: "✓ 5%",
+      event_pass: "✓ 4%",
+      event_pass_l: "✓ 4%",
       pro: "✓ 2%",
     });
     // The 1% rung did not disappear with pro_plus — it moved to `enterprise`,
@@ -414,15 +419,26 @@ describe.skipIf(!HAS_DB)("V310 packaging: logos + paid entry for everyone", () =
     }
   });
 
-  // The community row must EXIST and be > 0. feePercentFor
+  // The community row must EXIST and be > 0. `feePercentFor`
   // (server/usecases/registrations.ts) falls back to platformFeeDefault() when
-  // getLimit returns null OR <= 0, and that default is 5 — the same cut the
-  // pass charges. Without a real row the pass would discount nothing.
-  it("ladders registration.fee_percent 8/5/2/1 with an EXPLICIT community row", async () => {
+  // getLimit returns null OR <= 0. Without a real row the pass would discount
+  // nothing.
+  //
+  // WHY EXISTENCE IS ASSERTED DIRECTLY AND NOT VIA THE FALLBACK'S VALUE. This
+  // test used to prove the row was there by showing the resolved rate differed
+  // from `platformFeeDefault()` — sound while community was 8 and the default
+  // was 5. V397 cut community to 5, which is EXACTLY the platform default, so
+  // that proof collapsed: delete the community row today and `feePercentFor`
+  // still answers 5, from the fallback, and the value-inequality check cannot
+  // tell the two apart. Value inequality was only ever a PROXY for existence;
+  // `toBeDefined()` on the row itself is the thing we actually mean, and it
+  // keeps working whatever the two numbers do next.
+  it("ladders registration.fee_percent 5/4/2/1 with an EXPLICIT community row", async () => {
     const get = await load("registration.fee_percent");
-    expect(get("community"), "community needs a real row, not the 5% env fallback").toBeDefined();
-    expect(get("community")?.int_value).toBe(8);
-    expect(get("event_pass")?.int_value).toBe(5);
+    expect(get("community"), "community needs a real row, not the env fallback").toBeDefined();
+    expect(get("community")?.int_value).toBe(5);
+    expect(get("event_pass")?.int_value).toBe(4);
+    expect(get("event_pass_l")?.int_value).toBe(4);
     expect(get("pro")?.int_value).toBe(2);
     // V392 moved the 1% floor from pro_plus onto enterprise. The LADDER is the
     // assertion, not the plan name: each step must be strictly cheaper than

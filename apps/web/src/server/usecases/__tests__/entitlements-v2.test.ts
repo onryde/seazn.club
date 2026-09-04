@@ -565,21 +565,34 @@ describe.skipIf(!HAS_DB)("event pass (v3/07 §3)", () => {
     expect(await getLimit(auth.orgId, "entrants.per_division.max", comp.id)).toBe(128);
   });
 
-  // V310 fee ladder (D20): community 8 → pass 5 → pro 2 → pro plus 1. The
-  // community leg is the one that matters. It used to have no row and fell back
-  // to platformFeeDefault() (5), which is EXACTLY the pass rate — so the pass
-  // discounted nothing. The assertion below is deliberately written against the
-  // literal 8 AND against platformFeeDefault(), because a regression that drops
-  // the community row reintroduces the fallback silently.
-  it("fee percent ladder: community 8%, pass comps 5%, pro orgs 2%", async () => {
+  // Fee ladder, re-cut by V397 for the additive-fee model: community 5 → pass 4
+  // → pro 2 → enterprise 1. The community leg is still the one that matters. It
+  // once had no row at all and fell back to platformFeeDefault(), which was
+  // EXACTLY the pass rate — so the pass discounted nothing.
+  //
+  // THE OLD PROOF OF THAT NO LONGER WORKS, and swapping the literals alone
+  // would have hidden it. This test used to add `not.toBe(await
+  // platformFeeDefault())`, reasoning that a resolved rate differing from the
+  // fallback proves a real row was read. Sound while community was 8 and the
+  // default 5. V397 cut community to 5 and the default is ALSO 5, so delete the
+  // community row today and `feePercentFor` still answers 5 — from the
+  // fallback — and the inequality check cannot tell the cases apart. Value
+  // inequality was a proxy; the row's presence is the actual claim, so it is
+  // now queried directly and survives whatever the two numbers do next.
+  it("fee percent ladder: community 5%, pass comps 4%, pro orgs 2%", async () => {
     const { auth } = await seedOrg("community");
     const comp = await makeCompetition(auth, "Fee");
-    expect(await feePercentFor(auth.orgId, comp.id)).toBe(8);
-    expect(await feePercentFor(auth.orgId, comp.id)).not.toBe(await platformFeeDefault());
-    // Org-level too — the community rate is not competition-scoped.
-    expect(await feePercentFor(auth.orgId)).toBe(8);
-    await grantPass(auth.orgId, comp.id);
+    const [row] = await sql<{ int_value: number | null }[]>`
+      select int_value from plan_entitlements
+      where plan_key = 'community' and feature_key = 'registration.fee_percent'`;
+    expect(row, "community needs a real fee row, not the platform fallback").toBeDefined();
+    expect(row!.int_value).toBe(5);
     expect(await feePercentFor(auth.orgId, comp.id)).toBe(5);
+    // Org-level too — the community rate is not competition-scoped.
+    expect(await feePercentFor(auth.orgId)).toBe(5);
+    await grantPass(auth.orgId, comp.id);
+    // The pass is the LOWER_IS_BETTER key: it must cut the rate, not raise it.
+    expect(await feePercentFor(auth.orgId, comp.id)).toBe(4);
     await setPlan(auth.orgId, "pro");
     expect(await feePercentFor(auth.orgId, comp.id)).toBe(2);
   });
