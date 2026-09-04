@@ -419,7 +419,17 @@ export function HistoryPanel({
                                 <button
                                   type="button"
                                   data-testid="checkpoint-restore"
-                                  className={`text-[10.5px] hover:underline ${cp.superseded ? "text-slate-600" : "text-purple-600"}`}
+                                  // `enabled:hover:underline`, not
+                                  // `hover:underline`: `:hover` still matches a
+                                  // DISABLED button, so the bare variant keeps
+                                  // painting the link affordance on a control
+                                  // that does nothing. The other two are the
+                                  // pair `.btn` carries (globals.css) — this is
+                                  // a bare text button and inherits none of it,
+                                  // so a frozen Restore would otherwise render
+                                  // pixel-identical to a live one and lie about
+                                  // itself while the note beside it says why.
+                                  className={`text-[10.5px] enabled:hover:underline disabled:cursor-not-allowed disabled:opacity-50 ${cp.superseded ? "text-slate-600" : "text-purple-600"}`}
                                   disabled={busy || scheduleLocked}
                                   onClick={async () => {
                                     const ok = await confirmDialog({

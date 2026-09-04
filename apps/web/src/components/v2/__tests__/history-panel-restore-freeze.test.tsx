@@ -136,6 +136,30 @@ describe("HistoryPanel — a frozen schedule refuses the restore too", () => {
     expect(reasons).toHaveLength(0);
   });
 
+  it("makes the disabled Restore LOOK disabled, not merely act disabled", async () => {
+    // The clear button is a `.btn`, and `.btn` carries
+    // `disabled:cursor-not-allowed disabled:opacity-50` (globals.css). This one
+    // is a bare text button, so it inherits none of that: with a custom
+    // `color` set, a disabled <button> renders identically to a live one and
+    // still underlines on hover, which is a control that lies about itself.
+    // The reason note explains a state the control has to be showing.
+    //
+    // Class tokens, not computed style — this environment has no browser. The
+    // three below are the same stock utilities `.btn` uses, so "present" and
+    // "in effect" coincide as closely as they can without one.
+    const { restores } = await render(true);
+    for (const b of restores) {
+      const className = String(propsOf(b).className ?? "");
+      expect(className, "no disabled cursor").toContain("disabled:cursor-not-allowed");
+      expect(className, "a disabled control at full strength").toContain("disabled:opacity-50");
+      // `:hover` still matches a disabled button, so a bare `hover:underline`
+      // keeps painting the link affordance on a control that does nothing.
+      expect(className, "the hover underline is not gated on enabled").not.toMatch(
+        /(^|\s)hover:underline/,
+      );
+    }
+  });
+
   it("keeps the control visible rather than removing it — a vanished button reads as a missing feature", async () => {
     // Both states render both rows AND both buttons; only `disabled` differs.
     // A future change that hides them instead fails here.
