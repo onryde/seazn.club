@@ -246,13 +246,20 @@ test("three courts, restricted hours on the middle one, and the count the schedu
   // whole spec. This line is the only one that does not.
   expect(
     body.data?.hours,
-    "the saved calendar is not the single Wednesday range this test typed in — check the `.nth(WEEKDAY)` above",
+    "the payload the panel sent is not the single Wednesday range this test typed in — check the `.nth(WEEKDAY)` above",
   ).toEqual([{ weekday: WEEKDAY, open_min: minutesOf(OPEN_AT), close_min: minutesOf(CLOSE_AT) }]);
 
-  // And the exception reached the server as a CLOSED day, not merely as a row.
+  // And the panel sent the exception as a CLOSED day, not merely as a row.
+  //
+  // Both of these read the REQUEST, not the database: `putCourtCalendar`
+  // returns `input.hours`/`input.exceptions` (venues.ts:844-845), the
+  // zod-parsed body. That is still the assertion worth making here — the
+  // payload is the panel's own state, which is what `.nth(WEEKDAY)` and the
+  // exception editor are being judged on — but persistence is proven by the
+  // reload in block D, NOT by these two lines. Do not reword them back.
   expect(
     body.data?.exceptions,
-    "the dated exception did not survive the write",
+    "the panel did not send the dated exception as a closed day",
   ).toEqual([{ date: EXCEPTION_DATE, closed: true, open_min: null, close_min: null }]);
 
   // THE assertion. Pinned to 1, not `> 0`: this org owns exactly one fixture,
@@ -300,6 +307,15 @@ test("three courts, restricted hours on the middle one, and the count the schedu
     reopened.getByRole("textbox", { name: "Exception date", exact: true }),
     "the dated exception did not come back from the server",
   ).toHaveValue(EXCEPTION_DATE);
+  // The FLAG as well as the date. A stored `closed: false` is caught today only
+  // as a side effect — it renders a second "Open" combobox sharing
+  // `venues.calendar.openLabel` (venues-panel.tsx:851), which trips strict mode
+  // on the hours assertion above and reds while naming the wrong control.
+  // Asserting it directly makes that failure say what it means.
+  await expect(
+    reopened.getByRole("checkbox", { name: "Closed all day", exact: true }),
+    "the exception came back from the server, but no longer as a closure",
+  ).toBeChecked();
 
   // --- E. the conflict is raised, and it is ADVISORY -----------------------
   const validated = await apiJson<{
