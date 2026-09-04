@@ -1,4 +1,4 @@
-import { test, expect } from "@playwright/test";
+import { test, expect, type Locator } from "@playwright/test";
 import { apiJson, failOnNativeDialog, seedRosteredFixture } from "../helpers";
 import {
   dismissConsent,
@@ -178,6 +178,27 @@ test("three courts, restricted hours on the middle one, and the count the schedu
   });
   expect(placed.status, "could not place the fixture on the court under test").toBe(200);
 
+  /** The weekly-hours ranges of one court row, told apart from the exception
+   *  rows below them by the one control only they carry.
+   *
+   *  Both editors label their time fields with `venues.calendar.openLabel`, so
+   *  a court-row-wide "Open" is unambiguous only while every exception is a
+   *  CLOSURE — venues-panel.tsx renders an exception's own open/close pair
+   *  under `{!e.closed && ...}`. Measured, with `listVenues` mapping every
+   *  stored exception to `closed: false`: the unscoped locator died on the
+   *  hours assertion in block D with "strict mode violation ... resolved to 2
+   *  elements", naming a combobox — never the closure flag that had actually
+   *  changed, whose assertion at the end of block D was UNREACHABLE. Scoped,
+   *  the same mutation reds on that checkbox and says what it means.
+   *
+   *  Defined against the range row's own Remove button rather than against
+   *  "not an exception row": the weekly editor is what this scope is for, and
+   *  a negative would silently widen the day a third kind of row appears. */
+  const weeklyRanges = (row: Locator): Locator =>
+    row
+      .getByRole("listitem")
+      .filter({ has: page.getByRole("button", { name: "Remove range", exact: true }) });
+
   // --- C. restrict that court, in the panel --------------------------------
   const courtRow = await waitForCourtRow(page, venueName, restricted);
   await courtRow.getByRole("button", { name: "Hours", exact: true }).click();
@@ -193,9 +214,10 @@ test("three courts, restricted hours on the middle one, and the count the schedu
   //
   // Counted before being driven rather than reached for with `.last()`: exactly
   // one range exists at this point, so a count of one is a statement that the
-  // click above added a row to Wednesday and to nowhere else.
-  const openField = courtRow.getByRole("combobox", { name: "Open", exact: true });
-  const closeField = courtRow.getByRole("combobox", { name: "Close", exact: true });
+  // click above added a row to Wednesday and to nowhere else. It is also what
+  // fails first, and fast, if `weeklyRanges` ever stops matching.
+  const openField = weeklyRanges(courtRow).getByRole("combobox", { name: "Open", exact: true });
+  const closeField = weeklyRanges(courtRow).getByRole("combobox", { name: "Close", exact: true });
   await expect(openField).toHaveCount(1);
   await expect(closeField).toHaveCount(1);
   await openField.selectOption(OPEN_AT);
@@ -287,8 +309,12 @@ test("three courts, restricted hours on the middle one, and the count the schedu
   const reopened = await waitForCourtRow(page, venueName, restricted);
   await waitForHydration(reopened.getByRole("button", { name: "Hours", exact: true }));
   await reopened.getByRole("button", { name: "Hours", exact: true }).click();
-  await expect(reopened.getByRole("combobox", { name: "Open", exact: true })).toHaveValue(OPEN_AT);
-  await expect(reopened.getByRole("combobox", { name: "Close", exact: true })).toHaveValue(CLOSE_AT);
+  await expect(weeklyRanges(reopened).getByRole("combobox", { name: "Open", exact: true })).toHaveValue(
+    OPEN_AT,
+  );
+  await expect(weeklyRanges(reopened).getByRole("combobox", { name: "Close", exact: true })).toHaveValue(
+    CLOSE_AT,
+  );
 
   // ONE weekday range closes the whole REST of the week, and the panel says so:
   // `baseFor` (engine court-windows.ts) reads an EMPTY calendar as the full
@@ -307,11 +333,13 @@ test("three courts, restricted hours on the middle one, and the count the schedu
     reopened.getByRole("textbox", { name: "Exception date", exact: true }),
     "the dated exception did not come back from the server",
   ).toHaveValue(EXCEPTION_DATE);
-  // The FLAG as well as the date. A stored `closed: false` is caught today only
-  // as a side effect — it renders a second "Open" combobox sharing
-  // `venues.calendar.openLabel` (venues-panel.tsx:851), which trips strict mode
-  // on the hours assertion above and reds while naming the wrong control.
-  // Asserting it directly makes that failure say what it means.
+  // The FLAG as well as the date, and this line is now REACHABLE. Until the
+  // hours assertions above were scoped to `weeklyRanges`, a stored
+  // `closed: false` was caught only as a side effect: the exception's own
+  // open/close pair shares `venues.calendar.openLabel`, so the court-row-wide
+  // locator tripped strict mode two assertions earlier and this one never ran.
+  // Verified both ways against `listVenues` returning `closed: false` — before,
+  // "resolved to 2 elements" on the combobox; after, the message below.
   await expect(
     reopened.getByRole("checkbox", { name: "Closed all day", exact: true }),
     "the exception came back from the server, but no longer as a closure",
