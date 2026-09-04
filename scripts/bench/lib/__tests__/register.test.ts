@@ -423,6 +423,26 @@ describe("applyOrganiserActions", () => {
     ).rejects.toThrow(/unresolved entry "ghost"/);
   });
 
+  it("throws when an action targets an entry whose submit produced NO row — before spending a locator budget on it", async () => {
+    // `registrationId: ""` is a real, documented outcome (an eligibility
+    // rejection, or any unexpected 4xx — `FunnelEntryOutcome`). Passing it on
+    // is not a no-op: the browser organiser builds
+    // `[data-registration-id=""]` from it and burns the full 30s Playwright
+    // budget, then reports a locator timeout that says nothing about why the
+    // entry has no id. Seen live, and misread as a UI problem.
+    const { organiser, calls } = makeOrderingFakes();
+    await expect(
+      applyOrganiserActions({
+        organiser,
+        actions: [{ action: "approve", target: "a" }],
+        contextByExtKey: new Map<string, OrganiserActionContext>([["a", { registrationId: "" }]]),
+        feeCents: 0,
+      }),
+    ).rejects.toThrow(/targets entry "a", which has NO registration id/);
+    // And it refuses BEFORE acting — the point is to not reach the hub at all.
+    expect(calls).toEqual([]);
+  });
+
   it("assign_free_agent is skipped (never gated, never throws) when no target resolver is wired", async () => {
     const { organiser, calls } = makeOrderingFakes();
     const warnings: string[] = [];

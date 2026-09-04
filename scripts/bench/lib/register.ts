@@ -296,6 +296,20 @@ export async function applyOrganiserActions(input: ApplyOrganiserActionsInput): 
     if (ctx === undefined) {
       throw new Error(`applyOrganiserActions(): action "${action.action}" targets unresolved entry "${action.target}"`);
     }
+    // An entry whose submit produced no row (an eligibility rejection, or any
+    // unexpected 4xx) carries `registrationId: ""` — see `FunnelEntryOutcome`.
+    // Passing that on is not a no-op: the browser organiser builds a selector
+    // from it and spends the full 30s locator budget waiting for
+    // `[data-registration-id=""]`, then reports a Playwright timeout that says
+    // nothing about WHY the entry has no id. Refuse here instead, and name the
+    // entry — the pack asked the organiser to act on something that was never
+    // created, which is a pack/product disagreement, not a UI problem.
+    if (ctx.registrationId === "") {
+      throw new Error(
+        `applyOrganiserActions(): action "${action.action}" targets entry "${action.target}", which has NO registration id — ` +
+          `its submit produced no row (rejected at submit, or an unexpected 4xx). Nothing can be ${action.action}d.`,
+      );
+    }
     const kind: OrganiserActionKind = action.action;
 
     if (kind === "assign_free_agent") {

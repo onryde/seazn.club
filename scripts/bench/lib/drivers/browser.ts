@@ -164,7 +164,21 @@ export function divisionBuilderCategorySelector(category: string): string {
  *  "confirmed" are ever assigned at submit time). Duplicated rather than
  *  imported because `drivers/http.ts` exports no such symbol; kept in sync
  *  by the SAME `http.test.ts`-style fixture assertions this file's own
- *  tests carry. */
+ *  tests carry.
+ *
+ *  "paid" is the BROWSER driver's own addition, and it is not a submit-time
+ *  status in the sense the name implies. The http driver reads the submit
+ *  RESPONSE, where a row can only be waitlisted/pending/confirmed. The browser
+ *  driver reads the STATUS PAGE, and a pay-up-front entry only reaches that
+ *  page after hosted Checkout has settled — by which point the row says
+ *  "paid". The vocabulary was enumerated from the free path, so the first
+ *  successful live payment ended in this function throwing on its own success.
+ *
+ *  It maps to "pending", not "approved": paid means the money moved, not that
+ *  the organiser admitted the entry. Under `approval: "manual"` a paid entry
+ *  still waits for a human, and `classifyFunnelOutcome` already counts
+ *  pending/paid/confirmed alike as entrants — so the funnel arithmetic is
+ *  unchanged and the approval semantics stay honest. */
 export function mapSubmitStatus(status: string): EntryOutcomeStatus {
   switch (status) {
     case "waitlisted":
@@ -172,6 +186,8 @@ export function mapSubmitStatus(status: string): EntryOutcomeStatus {
     case "confirmed":
       return "approved";
     case "pending":
+      return "pending";
+    case "paid":
       return "pending";
     default:
       throw new Error(`mapSubmitStatus(): unrecognised submit-time registration status "${status}"`);
@@ -384,6 +400,11 @@ async function enterViaStepper(
   division: RegistrationDivisionTarget,
   entry: RegistrationEntry,
   onAccessToken: (token: string) => void,
+  /** Called when this entry paid during submit (a pay-up-front division), so
+   *  the captain's own `pay()` verifies rather than minting a SECOND session
+   *  against a registration that is already settled — which the product
+   *  refuses with a 422 on `reg.status === "pending"`. */
+  onPaidDuringEnter: () => void,
 ): Promise<EntryOutcome> {
   const { page } = session;
   await page.goto(`${base}/shared/${division.orgSlug}/${division.competitionSlug}/register`);
@@ -474,17 +495,27 @@ async function enterViaStepper(
   // there is also the stronger assertion: it proves the UI agrees, rather than
   // trusting a payload the customer never sees.
   //
-  // A paid-up-front entry redirects to Stripe instead and never lands here;
-  // `pay()` mints its own checkout session rather than trusting whichever page
-  // this navigation happened to reach.
+  // A paid-up-front entry redirects to Stripe FIRST and only reaches the status
+  // page after paying, which is the whole reason the branch below exists.
   await page.waitForURL(
     (url) => url.pathname.includes("/register/status") || url.hostname.includes("checkout.stripe.com"),
   );
 
   if (page.url().includes("checkout.stripe.com")) {
-    // Paid-up-front: no status page to read. The entry exists, but its id is
-    // only observable once `pay()` completes and the status page renders.
-    return { status: "pending", ref: "" };
+    // Paid up front: the registrant is standing on hosted Checkout right now,
+    // so pay from here and follow the return redirect to the status page. The
+    // id and token are then read exactly as they are on the free path.
+    //
+    // This branch used to `return { status: "pending", ref: "" }` and leave the
+    // payment to `pay()`. That was unreachable-by-construction: `register.ts`
+    // only calls `pay()` when `entry.pay && outcome.ref`, and the ref it just
+    // returned is empty — so a pay-up-front entry was never paid, and the
+    // organiser step then waited 30s on `[data-registration-id=""]`. Found by
+    // running it; no unit test could see it, because the redirect only happens
+    // against a division a real Stripe account can charge for.
+    await completeHostedCheckout(page);
+    onPaidDuringEnter();
+    await page.waitForURL((url) => url.pathname.includes("/register/status"), { timeout: 60_000 });
   }
 
   const landed = new URL(page.url());
@@ -505,6 +536,52 @@ async function enterViaStepper(
   return { status: mapSubmitStatus(domStatus), ref: registrationId };
 }
 
+/**
+ * Pays the hosted Checkout page the browser is currently on, with the test
+ * card the brief names verbatim. Reached from BOTH directions:
+ *
+ *  - `pay()` after minting a session (a promotion off the waitlist, or any
+ *    entry whose submit did not itself redirect), and
+ *  - `enter()` when the submit redirected straight here, which is what a
+ *    pay-up-front division actually does to a registrant.
+ *
+ * Extracted because the second caller did not exist until a live run found
+ * that it had to: on a paid division the stepper never lands on the status
+ * page at all, so an `enter()` that returned early there produced an empty
+ * registration id, and `register.ts`'s `if (entry.pay && outcome.ref)` then
+ * SKIPPED the payment for exactly the entries that needed it — silently, with
+ * the failure surfacing one step later as an organiser action waiting on
+ * `[data-registration-id=""]`.
+ */
+async function completeHostedCheckout(page: Page): Promise<void> {
+  await page.waitForURL((url) => url.hostname.includes("checkout.stripe.com"));
+
+  // The card fields are always there. Stripe's own hosted Checkout ids
+  // (`stripe:test-cards`); the card number is the brief's verbatim test card.
+  await page.locator("#cardNumber").fill("4242 4242 4242 4242");
+  await page.locator("#cardExpiry").fill("12/34");
+  await page.locator("#cardCvc").fill("123");
+
+  // The BILLING fields are not. Which of them Checkout renders depends on the
+  // connected account's country and the session's own address-collection
+  // settings — this run's fixture account shows a cardholder name and no
+  // postal code, and an unconditional `#billingPostalCode` fill spent the full
+  // 30s locator budget waiting for a field Stripe was never going to draw.
+  // Filling what is present, rather than asserting a field set we do not
+  // control, is the only version of this that survives a fixture change.
+  for (const [selector, value] of [
+    ["#billingName", "Bench Tester"],
+    ["#billingPostalCode", "94107"],
+  ] as const) {
+    const field = page.locator(selector);
+    if ((await field.count()) > 0 && (await field.first().isVisible())) {
+      await field.first().fill(value);
+    }
+  }
+
+  await page.locator(".SubmitButton, button[type=submit]").click();
+}
+
 async function payViaCheckout(session: RegistrationBrowserSession, base: string, entryId: string, token: string): Promise<void> {
   const api = session.context.request;
   const mint = await api.fetch(`${base}/api/v1/public/registrations/${entryId}/checkout`, { method: "POST", data: { token } });
@@ -522,41 +599,75 @@ async function payViaCheckout(session: RegistrationBrowserSession, base: string,
 
   const { page } = session;
   await page.goto(checkout_url);
-  await page.waitForURL((url) => url.hostname.includes("checkout.stripe.com"));
-  // Stripe's own hosted Checkout field ids (`stripe:test-cards` — the test
-  // card the task brief names verbatim).
-  await page.locator("#cardNumber").fill("4242 4242 4242 4242");
-  await page.locator("#cardExpiry").fill("12/34");
-  await page.locator("#cardCvc").fill("123");
-  await page.locator("#billingName").fill("Bench Tester");
-  await page.locator("#billingPostalCode").fill("94107");
-  await page.locator(".SubmitButton, button[type=submit]").click();
+  await completeHostedCheckout(page);
 
+  await pollPaid(session, base, entryId, token);
+}
+
+/** Polls the public status endpoint until the entry reads paid/confirmed.
+ *  `reconcile=1` makes the read fetch the Checkout session from Stripe and
+ *  settle the row synchronously, so this does not depend on the webhook
+ *  having been delivered first (`reconcileRegistration`, registrations.ts:3242
+ *  — documented as never throwing, precisely so a slow webhook cannot wedge
+ *  a read). */
+async function pollPaid(session: RegistrationBrowserSession, base: string, entryId: string, token: string): Promise<void> {
+  const api = session.context.request;
   await pollUntilPaid(async () => {
     const res = await api.fetch(
       `${base}/api/v1/public/registrations/${entryId}?token=${encodeURIComponent(token)}&reconcile=1`,
       { method: "GET" },
     );
     if (!res.ok()) throw new Error(`browserCaptain.pay(): status poll failed for ${entryId} — HTTP ${res.status()}`);
-    const data = (await res.json()) as { status: string };
-    return { status: data.status };
+    // The v1 ENVELOPE, not the view. Every `/api/v1` route wraps its payload
+    // as `{ ok, data, requestId }` (`server/api-v1/http.ts`'s `v1()`), so
+    // reading `.status` off the top level yields `undefined` — which
+    // `pollUntilPaid` then reports as a state that never settles, blaming the
+    // registration for the reader's own mistake. `PublicStatusView.status`
+    // lives one level down (usecases/registrations.ts:3375).
+    const body = (await res.json()) as { data?: { status?: string } };
+    const status = body.data?.status;
+    if (status === undefined) {
+      throw new Error(
+        `browserCaptain.pay(): status poll for ${entryId} returned no data.status — the response envelope is not what this driver expects`,
+      );
+    }
+    return { status };
   });
 }
 
 export function browserCaptain(session: RegistrationBrowserSession, base: string, _orgSlug: string, _competitionSlug: string): Captain {
   let accessToken: string | undefined;
+  // Whether this captain's own submit already went through hosted Checkout.
+  // A pay-up-front division redirects on submit, so by the time `register.ts`
+  // calls `pay()` the money has moved and the row is settled — minting a
+  // second session there is not merely wasteful, it is a 422
+  // (`resumeRegistrationCheckout` requires `reg.status === "pending"`,
+  // registrations.ts:4350). `pay()` still has real work in that case: proving
+  // the entry actually reached paid/confirmed rather than assuming it.
+  let paidDuringEnter = false;
   return {
     enter: (entry, division) =>
-      enterViaStepper(session, base, division, entry, (token) => {
-        accessToken = token;
-      }),
+      enterViaStepper(
+        session,
+        base,
+        division,
+        entry,
+        (token) => {
+          accessToken = token;
+        },
+        () => {
+          paidDuringEnter = true;
+        },
+      ),
     pay: (entry: PayableEntry) => {
       if (accessToken === undefined) {
         throw new Error(
           `browserCaptain.pay(): no access_token captured — this captain's own enter() must run (and succeed) first (registration ${entry.registrationId})`,
         );
       }
-      return payViaCheckout(session, base, entry.registrationId, accessToken);
+      return paidDuringEnter
+        ? pollPaid(session, base, entry.registrationId, accessToken)
+        : payViaCheckout(session, base, entry.registrationId, accessToken);
     },
   };
 }

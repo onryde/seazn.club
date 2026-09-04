@@ -70,9 +70,21 @@ describe("mapSubmitStatus — the exact submit-time vocabulary (registration-sub
   it("pending -> pending", () => {
     expect(mapSubmitStatus("pending")).toBe("pending");
   });
-  it("throws on any OTHER value rather than guessing — 'paid'/'rejected'/'withdrawn'/'expired' never happen at submit time", () => {
-    expect(() => mapSubmitStatus("paid")).toThrow(/unrecognised submit-time registration status "paid"/);
-    expect(() => mapSubmitStatus("rejected")).toThrow();
+  it("paid -> pending: a pay-up-front entry reaches the status page ALREADY paid, and paid is not approved", () => {
+    // This test asserted the opposite until a live paid run proved it wrong.
+    // The vocabulary was enumerated from the free path, where the status page
+    // can only say waitlisted/pending/confirmed. On a `payment_method: "stripe"`
+    // division the stepper redirects to hosted Checkout and only returns here
+    // once the row has settled — so the FIRST successful live payment ended in
+    // this function throwing on its own success.
+    //
+    // "pending", not "approved": the money moved, the organiser has not acted.
+    // Under `approval: "manual"` a paid entry still waits for a human.
+    expect(mapSubmitStatus("paid")).toBe("pending");
+  });
+  it("throws on any OTHER value rather than guessing — 'rejected'/'withdrawn'/'expired' are not submit-time statuses", () => {
+    expect(() => mapSubmitStatus("rejected")).toThrow(/unrecognised submit-time registration status "rejected"/);
+    expect(() => mapSubmitStatus("withdrawn")).toThrow();
     expect(() => mapSubmitStatus("")).toThrow();
   });
 });

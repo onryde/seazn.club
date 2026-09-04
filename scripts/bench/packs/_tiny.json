@@ -1027,6 +1027,7 @@
         "category": "open",
         "entrantKind": "individual",
         "feeCents": 0,
+        "paymentMethod": "offline",
         "approval": "manual",
         "entries": [
           {

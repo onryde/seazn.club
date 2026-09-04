@@ -23,8 +23,10 @@
 //     from `tiny-suite.test.ts` for exactly this reuse) covers the REST of
 //     `_tiny`'s admin-seeded surface (d-tiny/d-badminton) the SAME way it
 //     already does for every other test in that file.
-import { readFileSync } from "node:fs";
-import { describe, expect, it, vi } from "vitest";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import pino from "pino";
 import { loadPackValue } from "../pack-io.ts";
 import type { Pack } from "../pack-schema.ts";
@@ -60,6 +62,41 @@ function tinyPack(): Pack {
 // either the division's `name` or the slug algorithm reds this file loudly
 // rather than silently drifting.
 const REGISTRATION_DIVISION_ID = "div-registration-ui-proof";
+
+// A PAID variant of the committed pack, written to a temp file rather than
+// committed: `_tiny.json` is the free daily floor by design (design §9), and a
+// fee on it would put every routine run through Stripe. The live paid proof
+// used exactly this shape (`fee_cents:100`, both entries paying,
+// `paymentMethod:"stripe"`), which is why it is worth pinning here.
+const FIXTURE_ACCOUNT = "acct_bench_unit_fixture";
+// The BASENAME must stay `_tiny.json`: the loader cross-checks the pack's
+// declared `suite` against its own filename, so a temp directory is the way to
+// vary the contents without renaming the pack.
+const paidPackDir = mkdtempSync(join(tmpdir(), "bench-tiny-paid-"));
+const paidPackPath = join(paidPackDir, "_tiny.json");
+{
+  const paid = JSON.parse(TINY_TEXT) as {
+    org: Record<string, unknown>;
+    registration: { byDivision: Record<string, Record<string, unknown>> };
+  };
+  paid.org.currency = "usd"; // stage-0 requires a currency once a fee is priced
+  const block = paid.registration.byDivision["d-registration"]!;
+  block.feeCents = 100;
+  block.paymentMethod = "stripe";
+  for (const entry of block.entries as { pay: boolean }[]) entry.pay = true;
+  (block.expect as { paidCents: number }).paidCents = 200;
+  writeFileSync(paidPackPath, JSON.stringify(paid));
+}
+
+// `runTinySuite` reads STRIPE_CONNECT_TEST_ACCOUNT from the environment — it
+// refuses a paid pack without one rather than failing later at mint time.
+beforeAll(() => {
+  process.env.STRIPE_CONNECT_TEST_ACCOUNT = FIXTURE_ACCOUNT;
+});
+afterAll(() => {
+  delete process.env.STRIPE_CONNECT_TEST_ACCOUNT;
+  rmSync(paidPackDir, { force: true, recursive: true });
+});
 
 // ---------------------------------------------------------------------------
 // selectedDivisionExposures — pure reduction, no I/O
@@ -395,6 +432,116 @@ describe("runTinySuite — d-registration driven via a fake registrationDrivers"
     expect(report.gate).toBe("green");
     expect(report.registration, "the funnel did not run — this test can no longer witness anything").toHaveLength(1);
     expect((report.warnings ?? []).filter((w) => /skipped/i.test(w))).toHaveLength(0);
+  });
+
+  it("claims the Connect fixture account before configuring, and hands it back afterwards", async () => {
+    // A bench org is auto-provisioned by this run's own sign-in with no
+    // Connect account and `stripe_charges_enabled` false, so
+    // `resumeRegistrationCheckout` refuses to mint a session
+    // (registrations.ts:2325, :4387) and the whole paid funnel is unreachable.
+    // ORDER is the assertion that matters: a claim after the division is
+    // configured is a claim that arrives too late to matter.
+    const server = makeFakeServer();
+    // Both entries settled, each carrying a payment intent — the funnel oracle
+    // sums paidCents only over rows that are paid|confirmed AND have one
+    // (FP6), so a row without an intent would read as unpaid.
+    server.registrationRowsByDivisionId.set(REGISTRATION_DIVISION_ID, [
+      { id: "reg-reg-cap1", status: "confirmed", amount_cents: 100, entry_payment_intent_id: "pi_cap1" },
+      { id: "reg-reg-cap2", status: "paid", amount_cents: 100, entry_payment_intent_id: "pi_cap2" },
+    ]);
+    const order: string[] = [];
+    const driverCalls: RecordedDriverCall[] = [];
+    const previous = "org-that-held-it-before";
+
+    const report = await runTinySuite({
+      base: "http://bench.example",
+      engine: "optimized",
+      keep: false,
+      log: silent,
+      transport: server.transport,
+      packPath: paidPackPath,
+      registrationDrivers: (resolvedEntry, ctx) => {
+        order.push("configure");
+        return fakeRegistrationDrivers(driverCalls)(resolvedEntry, ctx);
+      },
+      resolveOrgSlug: async () => SERVER_ORG_SLUG,
+      connectAccount: {
+        claim: async (_orgId, account) => {
+          order.push(`claim:${account}`);
+          return previous;
+        },
+        release: async (_orgId, prev, account) => {
+          order.push(`release:${account}:${prev}`);
+        },
+      },
+    });
+
+    expect(report.gate, JSON.stringify(report.errors)).toBe("green");
+    expect(order[0]).toBe(`claim:${FIXTURE_ACCOUNT}`);
+    expect(order.at(-1)).toBe(`release:${FIXTURE_ACCOUNT}:${previous}`);
+    // The previous holder travels from claim to release UNCHANGED — a release
+    // that passed null would silently strand the account on nobody, and
+    // smoke.ts's paid suites would then skip themselves and report green.
+    expect(order).toContain(`release:${FIXTURE_ACCOUNT}:${previous}`);
+  });
+
+  it("hands the account back even when the funnel THROWS — the release is in a finally, not on the happy path", async () => {
+    // The failure case is the one that matters: a run that dies mid-funnel is
+    // exactly when the account is most likely to be left stranded.
+    const server = makeFakeServer();
+    const order: string[] = [];
+
+    const report = await runTinySuite({
+      base: "http://bench.example",
+      engine: "optimized",
+      keep: false,
+      log: silent,
+      transport: server.transport,
+      packPath: paidPackPath,
+      registrationDrivers: () => {
+        throw new Error("driver exploded on purpose");
+      },
+      resolveOrgSlug: async () => SERVER_ORG_SLUG,
+      connectAccount: {
+        claim: async () => {
+          order.push("claim");
+          return null;
+        },
+        release: async () => {
+          order.push("release");
+        },
+      },
+    });
+
+    expect(report.gate).toBe("red");
+    expect(order, "the account was claimed and never released").toEqual(["claim", "release"]);
+  });
+
+  it("never claims for a free division — the account is a shared singleton, not a default", async () => {
+    // The positive pair. An unconditional claim would satisfy both assertions
+    // above while stealing the fixture account from smoke on every free run.
+    const server = makeFakeServer();
+    server.registrationRowsByDivisionId.set(REGISTRATION_DIVISION_ID, [
+      { id: "reg-reg-cap1", status: "confirmed", amount_cents: 0, entry_payment_intent_id: null },
+      { id: "reg-reg-cap2", status: "pending", amount_cents: 0, entry_payment_intent_id: null },
+    ]);
+    const claim = vi.fn(async () => null);
+    const release = vi.fn(async () => {});
+
+    const report = await runTinySuite({
+      base: "http://bench.example",
+      engine: "optimized",
+      keep: false,
+      log: silent,
+      transport: server.transport,
+      registrationDrivers: fakeRegistrationDrivers([]),
+      resolveOrgSlug: async () => SERVER_ORG_SLUG,
+      connectAccount: { claim, release },
+    });
+
+    expect(report.gate).toBe("green");
+    expect(claim).not.toHaveBeenCalled();
+    expect(release).not.toHaveBeenCalled();
   });
 
   it("MUTATION: a funnel mismatch (an entry the fake never actually submitted as expected) reds the gate — the wiring genuinely propagates register.ts's own findings, not just 'ran without throwing'", async () => {
