@@ -1,7 +1,10 @@
 # W1 — step one: the overlay page, the projection, the stream link, the panel
 
-Read `_RULES.md` → `_INDEX.md` (both pinned-symbol tables) → spec §"Architecture"
-1–9, §"Tests", §"Waves, PRs, gates": `../2026-09-05-stream-overlay-design.md`.
+Read `_RULES.md` → `_INDEX.md` (both pinned-symbol tables) → `_THEMES.md`
+(binding design values: §1 type, §2 sport tokens, §3 bar, §4 bug, §6 motion,
+§7 phone floors, §8 panel tokens; the overlay and panel tasks cite these
+sections instead of restating numbers) → spec §"Architecture" 1–9, §"Tests",
+§"Waves, PRs, gates": `../2026-09-05-stream-overlay-design.md`.
 Plan: `../../plans/2026-09-05-stream-overlay-w1.md` (being written by a Fable
 agent 2026-09-05; absent when this file was written). When the plan exists, its
 task ORDER wins and this file's RULINGS win; a conflict between them is a finding
@@ -377,7 +380,9 @@ Spec §"False-premise watch list" 1–8, with what is already known:
    run `select distinct sport_key from divisions` on the dev DB and diff.
 
 Found while writing these prompts (also in `_INDEX.md`): `WALKTHROUGH_SPECS`
-does not exist (R9); `broadcastRevalidate` is the peer primitive, the helper is
+does not exist on this branch (R9) but does on `main` since PR #723, so the
+capture spec is registered there after the rebase, same commit;
+`broadcastRevalidate` is the peer primitive, the helper is
 `fireDivisionRevalidate` at `revalidate.ts:14`; `renderIsland` exists, so the
 hook's branches ARE unit-testable; the schedule toggle is gated on `status ===
 "scheduled"` — copying that gate would hide the panel exactly when the club is

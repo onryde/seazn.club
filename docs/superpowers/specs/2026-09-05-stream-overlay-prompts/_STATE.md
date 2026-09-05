@@ -89,6 +89,20 @@ under the worktree (0 outside):
 
 Nothing in this baseline touches files W1 changes.
 
+Caveat on the runner: the failure stack shows `@vitest/runner` loaded from
+`/Users/ashokhein/github/seazn.club/node_modules/…` (the MAIN checkout) even
+though `apps/web/node_modules/.bin/vitest` and `@seazn/engine` resolve inside
+the worktree. Cause: this worktree sits INSIDE the main checkout's directory,
+so Node's parent-directory walk reaches main's `node_modules` for any package
+the worktree's pnpm layout does not hoist to its root. Same lockfile, same
+version, code under test is the worktree's — but any package missing from
+the worktree resolves silently from main. Before trusting a run that depends
+on a changed dependency, check `readlink -f` for that package.
+
+Prompt-dir files `_RULES.md`, `W1-step-one.md`, `W2-moments.md` and this
+file were committed as `a7bcd50a3` at 18:35 BST; the reshaped `_INDEX.md`
+follows in its own commit once the writer finishes.
+
 ## Next actions, in order
 
 1. Commit whatever prompt-dir files are on disk (`_RULES.md`, `W1-step-one.md`,

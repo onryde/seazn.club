@@ -1,6 +1,8 @@
 # W2 — moments (SIX · OUT · GOAL · MATCH POINT) and the cricket batter/bowler line
 
 Read `_RULES.md` → `_INDEX.md` → `W1-step-one.md` (the slot this wave fills) →
+`_THEMES.md` §5 (the moment slab: tones, sizes, Barlow 800), §6 (slab row of
+the motion table), §3 (the cricket detail band cells marked W2) →
 spec §"Step two — moments", §9 "Motion", decision 4:
 `../2026-09-05-stream-overlay-design.md`. Plan:
 `../../plans/2026-09-05-stream-overlay-w2-moments.md` (being written by a Fable

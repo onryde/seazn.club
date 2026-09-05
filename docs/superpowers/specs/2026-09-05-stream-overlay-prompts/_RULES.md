@@ -5,7 +5,9 @@ Read this before touching anything under `apps/web/src/app/overlay/**`,
 `apps/web/src/lib/stream-url.ts`, `apps/web/src/components/public-site/use-live-fixture.ts`,
 `apps/web/src/components/v2/fixture-stream-panel.tsx`, the `FixtureLine` row in
 `apps/web/src/components/v2/stages-panel.tsx`, or `public_fixtures_v`. These are
-rulings that are **not derivable from the code**. Design of record:
+rulings that are **not derivable from the code**. Design themes with every
+binding pixel, colour, type and motion value: `_THEMES.md` beside this file
+(native 1920×1080; cite its sections, never restate values). Design of record:
 `../2026-09-05-stream-overlay-design.md` (owner-approved 2026-09-05; its
 "Decisions locked" 1–7 and §9 "Motion" are binding; this file restates them for a
 subagent that cannot afford the whole spec). Programme index: `_INDEX.md` beside
@@ -81,7 +83,11 @@ and finding is stated as value to one of these two.
   programme.
 - **R9 — Walkthrough specs are picked up by PATH, not by a list.** The brief for
   these prompts said "name new specs in `WALKTHROUGH_SPECS`"; **no such symbol
-  exists on this branch or on `feat/spectator-surface`** (grepped 2026-09-05).
+  exists on this branch or on `feat/spectator-surface`** (grepped 2026-09-05)
+  because it landed on `main` in PR #723 (`01ea4a455`), AFTER this branch's
+  base `997ad225b`. A peer session reports `e2e-ci-wiring.test.ts` goes red in
+  two CI jobs for any walkthrough spec not named there. So after the rebase
+  the list WILL exist and the spec MUST be registered in the same commit.
   The `walkthrough` project matches `const WALKTHROUGH =
   /[\\/]e2e[\\/]walkthrough[\\/]/` (`apps/web/playwright.config.ts:119`, project
   at `:164`); CI runs it as `group: walkthrough … --workers=3`
