@@ -223,6 +223,21 @@ export interface EncodedConstraints {
    *  state rather than from the bench's intention — design §3.2 step 3. */
   pins: readonly { fixtureId: string; start: number; courtId: string }[];
   isRoundRobin: boolean;
+  /** Did the PACK declare officials for this division?
+   *
+   *  Carried here because `checkBoard`'s only oracle is this record, and
+   *  design §4.3's officials rule is otherwise vacuous: `Fixture.officials` is
+   *  `z.array(z.unknown())` on the wire, so a division that fetched none at all
+   *  arrives as an empty array and every "no official is double-booked" check
+   *  passes forever. Nothing else on `Board` or `EncodedConstraints` can tell
+   *  "this division has no officials" from "this division's officials did not
+   *  come back", and those are the two answers the rule exists to separate.
+   *
+   *  REQUIRED, not optional, and that is the point: an optional flag defaulting
+   *  to `false` would let a caller ship the rule inert without writing a line,
+   *  which is the failure class the rule was written against. `encodeConstraints`
+   *  takes it from its caller, who holds the pack. */
+  declaresOfficials: boolean;
   /** EVERY declared constraint this bench build does not model — not only
    *  `HardConstraint` members (ruling R9). Carried so the checker can report
    *  them as UNCHECKED rather than imply it checked them;
@@ -898,6 +913,12 @@ export function encodeConstraints(input: {
   courtIdByRef: ReadonlyMap<string, string>;
   isRoundRobin: boolean;
   pins: readonly { fixtureId: string; start: number; courtId: string }[];
+  /** Whether the pack declared any official for this division — resolved by
+   *  the caller, who holds the pack, and forwarded verbatim. Required for the
+   *  reason the field's own note gives: an optional one ships design §4.3's
+   *  rule inert. Coerced with `=== true` rather than read raw, because this
+   *  function is reached from JavaScript call sites tsc does not see. */
+  declaresOfficials: boolean;
 }): EncodedConstraints {
   const cfg = input.scheduleConfig ?? {};
 
@@ -957,6 +978,7 @@ export function encodeConstraints(input: {
     hard,
     pins: input.pins,
     isRoundRobin: input.isRoundRobin,
+    declaresOfficials: input.declaresOfficials === true,
     unmodelled,
   };
 }
