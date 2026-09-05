@@ -453,6 +453,122 @@ describe("encodeConstraints", () => {
     expect(out.pins).toEqual(pins);
   });
 
+  // ---- unmodelled[] covers every DECLARED knob, not just hard[] -----------
+  // Ruling R9. `unmodelled[]` used to mean "`HardConstraint` members this build
+  // cannot model", so a pack setting `constraints.restMin: 60` had it dropped
+  // with nothing reporting it — the same false-clean design §1.4 exists to
+  // prevent, one level up. The list is keyed on PRESENCE, not on value: judging
+  // which declared value is inert is exactly the judgement the encoder is
+  // saying it did not make.
+
+  it("reports a constraints knob it does not model rather than dropping it", () => {
+    const out = encodeConstraints({
+      divisionRef: "d-tiny",
+      scheduleConfig: { constraints: { restMin: 60 } },
+      courtIdByRef: courts,
+      isRoundRobin: true,
+      pins: [],
+    });
+    expect(out.hard).toEqual([]);
+    expect(out.unmodelled).toEqual([
+      { type: "constraints.restMin", reason: expect.stringContaining("not modelled") },
+    ]);
+  });
+
+  // perEntrantMinRest and constraints.restMin are DIFFERENT knobs
+  // (`schemas.ts:1303` vs `:1332`) and neither covers for the other. A reader
+  // that treated the encoded one as discharging the declared one would report
+  // clean on a rest rule it never checked.
+  it("does not let perEntrantMinRest stand in for constraints.restMin", () => {
+    const out = encodeConstraints({
+      divisionRef: "d-tiny",
+      // Different numbers, so a conflated read lands a visibly wrong value.
+      scheduleConfig: { perEntrantMinRest: 90, constraints: { restMin: 60 } },
+      courtIdByRef: courts,
+      isRoundRobin: true,
+      pins: [],
+    });
+    expect(out.perEntrantMinRest).toBe(90);
+    expect(out.unmodelled.map((u) => u.type)).toEqual(["constraints.restMin"]);
+  });
+
+  // Design §3.3's rule list has no gap rule, and court occupancy is judged on
+  // `[start, start + matchMinutes)`. `gapMinutes` is a spacing PREFERENCE, so
+  // it is encoded for the report and declared unchecked — T2 does not guess.
+  it("declares gapMinutes and roundMinutes unmodelled while still carrying gapMinutes' value", () => {
+    const out = encodeConstraints({
+      divisionRef: "d-tiny",
+      scheduleConfig: { gapMinutes: 10, roundMinutes: 75 },
+      courtIdByRef: courts,
+      isRoundRobin: true,
+      pins: [],
+    });
+    expect(out.gapMinutes).toBe(10);
+    expect(out.unmodelled.map((u) => u.type)).toEqual(["gapMinutes", "roundMinutes"]);
+    expect(out.unmodelled[0]?.reason).toMatch(/occupancy/i);
+  });
+
+  it("names crossPersonClash as unmodelled AND inert, since the product reads it nowhere", () => {
+    const out = encodeConstraints({
+      divisionRef: "d-tiny",
+      scheduleConfig: { constraints: { crossPersonClash: "hard" } },
+      courtIdByRef: courts,
+      isRoundRobin: true,
+      pins: [],
+    });
+    expect(out.unmodelled.map((u) => u.type)).toEqual(["constraints.crossPersonClash"]);
+    // `constraints.ts:138-145`: "@deprecated Accepted and stored, read by
+    // nothing." Reporting it as merely unchecked would imply the product acts
+    // on it, which would send a reader hunting a defect that cannot exist.
+    expect(out.unmodelled[0]?.reason).toMatch(/inert/i);
+  });
+
+  // Enumerate the table, never one sample: a loop that reported the first key
+  // and stopped, or one missing a member, passes any single-knob test.
+  it("enumerates EVERY declared knob this build does not model, in schema order", () => {
+    const out = encodeConstraints({
+      divisionRef: "d-tiny",
+      scheduleConfig: {
+        gapMinutes: 5,
+        roundMinutes: 75,
+        // Modelled, so none of these may appear below.
+        matchMinutes: 45,
+        perEntrantMinRest: 30,
+        courts: ["@c-one"],
+        constraints: {
+          restMin: 60,
+          restByGroup: { u12: 45 },
+          noBackToBack: true,
+          startWindows: [{ target: { kind: "division", id: "d-1" }, notBefore: "2027-06-01T08:00:00Z" }],
+          fieldFairness: "rotate",
+          parallelism: "block",
+          crossPersonClash: "warn",
+          // `hard` is modelled rule-by-rule and must NOT appear as a knob.
+          hard: [{ type: "not_before", time: "09:30", scope: { kind: "competition" } }],
+        },
+      },
+      courtIdByRef: courts,
+      isRoundRobin: true,
+      pins: [],
+    });
+    expect(out.hard).toEqual([
+      { type: "not_before", minutesIntoDay: 570, scope: { kind: "competition" } },
+    ]);
+    expect(out.unmodelled.map((u) => u.type)).toEqual([
+      "gapMinutes",
+      "roundMinutes",
+      "constraints.restMin",
+      "constraints.restByGroup",
+      "constraints.noBackToBack",
+      "constraints.startWindows",
+      "constraints.fieldFairness",
+      "constraints.parallelism",
+      "constraints.crossPersonClash",
+    ]);
+    // Every reason carries the marker `CheckerReport.unchecked` forwards.
+    expect(out.unmodelled.every((u) => u.reason.startsWith("not modelled"))).toBe(true);
+  });
+
   // ---- the refusals T4 is told to build on --------------------------------
   // Report §5 hands T4 the decision of whether these throws become a
   // `scheduleErrors[]` entry or abort the run. That decision was being taken

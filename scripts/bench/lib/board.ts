@@ -189,7 +189,19 @@ export type EncodedHardRule =
  *  checker's oracle, and the certificate's. */
 export interface EncodedConstraints {
   divisionRef: string;
+  /** The occupancy unit. A court is busy for `[start, start + matchMinutes)`
+   *  and every overlap rule measures against that half-open interval. */
   matchMinutes: number;
+  /** GAP IS NOT PART OF COURT OCCUPANCY. Court double-booking is judged on
+   *  `[start, start + matchMinutes)` — never `+ gapMinutes` — because the gap
+   *  is a SPACING PREFERENCE, not an occupancy claim, and design §3.3's rule
+   *  list carries no gap rule. The two readings differ on every back-to-back
+   *  pair, so leaving the choice to the checker would have T2 guess a rule the
+   *  design never states.
+   *
+   *  Carried here so the report can print what the pack declared, and listed in
+   *  `unmodelled[]` so "checker clean" cannot be read as "the gap was
+   *  honoured". */
   gapMinutes: number;
   /** epoch ms. */
   startAt?: number;
@@ -211,13 +223,29 @@ export interface EncodedConstraints {
    *  state rather than from the bench's intention — design §3.2 step 3. */
   pins: readonly { fixtureId: string; start: number; courtId: string }[];
   isRoundRobin: boolean;
-  /** `HardConstraint` members this bench build cannot model, carried so the
-   *  checker can report them as UNCHECKED rather than imply it checked them.
-   *  `CheckerReport.unchecked` is this list, forwarded — one authority, and
-   *  the checker never composes a second one.
+  /** EVERY declared constraint this bench build does not model — not only
+   *  `HardConstraint` members (ruling R9). Carried so the checker can report
+   *  them as UNCHECKED rather than imply it checked them;
+   *  `CheckerReport.unchecked` is this list, forwarded — one authority, and the
+   *  checker never composes a second one.
    *
-   *  One entry per RULE, not per type: two `fixture_on_date` rules are two
-   *  unchecked rules, and collapsing them would under-report. */
+   *  Two populations, and the widening is the point of the second:
+   *
+   *   - One entry per `constraints.hard[]` RULE the encoder could not model,
+   *     keyed by its `HardConstraint` type. Per RULE, never per type: two
+   *     `fixture_on_date` rules are two unchecked rules, and collapsing them
+   *     would under-report.
+   *   - One entry per DECLARED KNOB with no rule behind it, keyed by its config
+   *     path (`gapMinutes`, `roundMinutes`, `constraints.restMin`, …). Before
+   *     R9 those were dropped in silence, so a pack setting
+   *     `constraints.restMin: 60` got a clean report on a rest floor nothing
+   *     checked — the same false-clean design §1.4 exists to prevent, one level
+   *     up from `hard[]`.
+   *
+   *  Keyed on PRESENCE, not on value. The encoder does not decide which
+   *  declared value is inert, because deciding that is exactly the judgement it
+   *  is reporting it did not make. An absent or null knob is not declared and
+   *  produces no entry. */
   unmodelled: readonly { type: string; reason: string }[];
 }
 
@@ -607,6 +635,75 @@ function show(value: unknown): string {
   return Object.prototype.toString.call(value);
 }
 
+/** Every knob `ScheduleConfig` declares that this build models with no rule,
+ *  in the schema's own declaration order so the report reads like the config.
+ *
+ *  A TABLE rather than nine `if`s: adding a knob to `ScheduleConfig` and
+ *  forgetting it here is the failure this list exists to prevent, and a table
+ *  is the shape a reader can diff against `schemas.ts:1283-1359` in one pass.
+ *  Only `hard` is absent from it, because `encodeHardRule` reports that one
+ *  rule by rule. */
+const UNMODELLED_TOP_LEVEL: readonly { key: string; why: string }[] = [
+  {
+    key: "gapMinutes",
+    why: "gapMinutes is a spacing preference and not an occupancy claim — court occupancy is judged on [start, start + matchMinutes) and design §3.3's rule list has no gap rule, so the value is carried for the report and never checked",
+  },
+  {
+    key: "roundMinutes",
+    why: "roundMinutes sets where round r starts (startAt + (r-1)·roundMinutes, schemas.ts:1327) and the checker's round-order rules do not read it",
+  },
+];
+
+const UNMODELLED_CONSTRAINTS: readonly { key: string; why: string }[] = [
+  {
+    key: "restMin",
+    why: "constraints.restMin is a division-wide rest floor and is NOT the top-level perEntrantMinRest (schemas.ts:1332 vs :1303) — the two are separate knobs and neither covers for the other",
+  },
+  {
+    key: "restByGroup",
+    why: "constraints.restByGroup keys a rest floor by group (schemas.ts:1333) and the checker resolves no group membership",
+  },
+  {
+    key: "noBackToBack",
+    why: "constraints.noBackToBack (schemas.ts:1334) has no rule in design §3.3's list",
+  },
+  {
+    key: "startWindows",
+    why: "constraints.startWindows[] is the SCOPED twin of the not_before/not_after hard rules — per-target ISO instants (schemas.ts:1335-1344), not wall clocks — so modelling those rules does not cover these windows",
+  },
+  {
+    key: "fieldFairness",
+    why: "constraints.fieldFairness (schemas.ts:1345) is a court-allocation preference the checker does not score",
+  },
+  {
+    key: "parallelism",
+    why: "constraints.parallelism (schemas.ts:1346) is a placement preference the checker does not score",
+  },
+  {
+    key: "crossPersonClash",
+    why: 'constraints.crossPersonClash is unmodelled here AND inert product-side — "@deprecated Accepted and stored, read by nothing" (constraints.ts:138-145): the write gate lists person_overlap unconditionally and the placer avoids one regardless, so neither side consults the setting',
+  },
+];
+
+/** Reports every declared-but-unmodelled knob, keyed on PRESENCE. Runs AFTER
+ *  the `hard[]` scan so per-rule entries keep their own order ahead of the
+ *  knobs. */
+function reportUnmodelledKnobs(
+  cfg: Record<string, unknown>,
+  constraints: Record<string, unknown> | undefined,
+  unmodelled: { type: string; reason: string }[],
+): void {
+  for (const { key, why } of UNMODELLED_TOP_LEVEL) {
+    if (!isAbsent(cfg[key])) unmodelled.push({ type: key, reason: `${NOT_MODELLED} — ${why}` });
+  }
+  if (constraints === undefined) return;
+  for (const { key, why } of UNMODELLED_CONSTRAINTS) {
+    if (!isAbsent(constraints[key])) {
+      unmodelled.push({ type: `constraints.${key}`, reason: `${NOT_MODELLED} — ${why}` });
+    }
+  }
+}
+
 /** The scope gate every modellable member passes through, checked BEFORE its
  *  own operand so the two guards are killable one at a time: a rule with a good
  *  operand and a bad scope witnesses this one, a rule with a good scope and a
@@ -721,7 +818,21 @@ function encodeHardRule(
  *  Pure, and deliberately NOT `async`: the caller resolves `courtIdByRef`,
  *  `pins` and `isRoundRobin` from the seeded org before calling, so this
  *  function needs no network and can be driven from a unit test with three
- *  literals. */
+ *  literals.
+ *
+ *  THROWS, AND THE CALLER OWNS THE VERDICT. The refusals above (an
+ *  unresolvable `@`-ref, an ISO field that is not an offset-bearing instant, a
+ *  present-but-unreadable numeric knob or court) are pack-authoring bugs, and a
+ *  thrown encode never reaches `judgeDivision` — so on its own it has no path
+ *  to a verdict at all, only to a stack trace. Callers MUST catch and route the
+ *  message into `ScheduleOutcome.scheduleErrors`, the same list `judgeDivision`
+ *  already reds on (its fifth trigger), so a pack-authoring bug is reported as
+ *  that division's red rather than killing the run.
+ *
+ *  There is deliberately NO non-throwing mode. A second, tolerant entry point
+ *  would give the wave two encoders whose answers differ exactly where it
+ *  matters, and the tolerant one would be the one that silently produced a
+ *  wrong oracle. */
 export function encodeConstraints(input: {
   divisionRef: string;
   scheduleConfig: Record<string, unknown> | undefined;
@@ -769,6 +880,7 @@ export function encodeConstraints(input: {
     const rules = arrayField(constraints, "hard", "scheduleConfig.constraints.hard");
     rules.forEach((raw, i) => encodeHardRule(raw, i, hard, unmodelled));
   }
+  reportUnmodelledKnobs(cfg, constraints, unmodelled);
 
   const startAt = isAbsent(cfg.startAt) ? undefined : epochMs(cfg.startAt, "scheduleConfig.startAt");
   const endAt = isAbsent(cfg.endAt) ? undefined : epochMs(cfg.endAt, "scheduleConfig.endAt");
