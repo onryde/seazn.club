@@ -45,15 +45,40 @@ const en: Record<string, string> = JSON.parse(
  * product change this wants — recorded in task-4-fix-1.md rather than made here.
  */
 const SOLVER_WALL_SECONDS_DEFAULT = 10;
-function solverWallMs(): number {
+
+/**
+ * TOTAL BY CONSTRUCTION — it never throws, because it is called at MODULE
+ * SCOPE and `test.setTimeout` below needs its value at declaration time.
+ *
+ * A throw here would be the worst available failure mode: Playwright collects
+ * ZERO tests from a file whose module body throws, and the JSON reporter then
+ * emits `suites: 0, expected: 0, unexpected: 0` — which any gate reading
+ * `unexpected === 0` scores as a PASS. Measured, not reasoned:
+ * `PLACEMENT_WALL_SECONDS=oops` on this file produced exactly that shape.
+ * So a malformed value falls back to the documented default and is reported
+ * as a `fault` string instead, which the test's first act asserts is absent
+ * (beside the budget assertion, which already states this same rule six
+ * lines below). Wrong-but-legible budget, RED test — never zero tests.
+ *
+ * `raw.trim() === ""` runs before `Number(raw)` on purpose: `Number("")` and
+ * `Number("   ")` are both `0`, so a blank variable would otherwise be read
+ * as a zero-second wall rather than as "unset".
+ */
+function solverWall(): { ms: number; fault: string | null } {
   const raw = process.env.PLACEMENT_WALL_SECONDS;
-  if (raw === undefined || raw.trim() === "") return SOLVER_WALL_SECONDS_DEFAULT * 1_000;
+  if (raw === undefined || raw.trim() === "") {
+    return { ms: SOLVER_WALL_SECONDS_DEFAULT * 1_000, fault: null };
+  }
   const seconds = Number(raw);
   if (!Number.isFinite(seconds) || seconds <= 0) {
-    throw new Error(`PLACEMENT_WALL_SECONDS must be a finite number > 0, got ${JSON.stringify(raw)}`);
+    return {
+      ms: SOLVER_WALL_SECONDS_DEFAULT * 1_000,
+      fault: `PLACEMENT_WALL_SECONDS must be a finite number > 0, got ${JSON.stringify(raw)}`,
+    };
   }
-  return Math.round(seconds * 1_000);
+  return { ms: Math.round(seconds * 1_000), fault: null };
 }
+const SOLVER_WALL = solverWall();
 
 // Budget: fourteen tapped steps, no deliberate waits, one solve. DERIVED, so
 // that adding a step or moving the solver's wall moves the budget with it
@@ -62,7 +87,7 @@ const STEPS = 14;
 const PER_STEP_MS = 4_000;
 /** Two solver walls plus slack: one for the solve itself, one because the strip
  *  only paints after the round trip has been persisted and re-rendered. */
-const SOLVE_MS = 2 * solverWallMs() + 5_000;
+const SOLVE_MS = 2 * SOLVER_WALL.ms + 5_000;
 const TEST_BUDGET_MS = STEPS * PER_STEP_MS + SOLVE_MS;
 /** The OWNER'S constraint on this leg, and the reason the journey is four
  *  entrants and one solve. Asserted as the test's first act (not thrown at
@@ -292,6 +317,14 @@ test("the organiser sets up, schedules, saves, clears, restores, freezes and pub
   // allowance is asserted against that ceiling rather than merely being
   // written down beside it: add a step, or raise PLACEMENT_WALL_SECONDS, and
   // this reds with the arithmetic instead of drifting quietly over.
+  //
+  // The wall the budget is DERIVED FROM is validated here, in the same first
+  // act and for the same reason: `solverWall()` cannot throw at module scope
+  // without reducing this whole file to zero collected tests, so it reports a
+  // malformed `PLACEMENT_WALL_SECONDS` as a fault string and the assertion
+  // lives where a failure is a RED TEST. Asserted BEFORE the arithmetic below,
+  // because a fallback wall makes that arithmetic answer about the wrong wall.
+  expect(SOLVER_WALL.fault, String(SOLVER_WALL.fault)).toBeNull();
   expect(
     TEST_BUDGET_MS,
     `derived budget ${TEST_BUDGET_MS}ms = ${STEPS} steps x ${PER_STEP_MS}ms + ${SOLVE_MS}ms solve, ` +
