@@ -17,21 +17,30 @@
 //
 //   1. no `historicalAssignment` for this division  -> SKIPPED_NO_HISTORY
 //   2. history breaches our own encoding            -> PACK_AUTHORING_BUG
-//   3. `placed < total`                             -> UNPLACED
-//   4. history clean AND solver `infeasible`        -> PRODUCT_DEFECT
+//   3. history clean AND solver `infeasible`        -> PRODUCT_DEFECT
+//   4. `placed < total`                             -> UNPLACED
 //   5. otherwise                                    -> FEASIBLE
 //
-// Branches 2 and 4 are the pair the protocol exists for; branch 3 sits
-// between them because an unplaced fixture is a fact about the board that was
-// produced, and it is true (and worth reporting as itself) whatever the
-// solver's status field says. A run that reported PRODUCT_DEFECT on an
-// infeasible solve that also stranded fixtures would be attributing a
-// board-shaped fact to a status-shaped one.
+// Branches 2 and 3 are the pair the protocol exists for. Branch 4 sits BELOW
+// branch 3 — design §3.4's table order, and ruling R27 — because once the
+// solver has declared `infeasible`, `placed < total` is a CONSEQUENCE of that
+// infeasibility. Reporting UNPLACED there names the SYMPTOM while
+// PRODUCT_DEFECT names the CAUSE, and naming the cause is the entire purpose
+// of this certificate.
 //
-//   Note for a reader diffing this against design §3.4's table: that table
-//   LISTS `PRODUCT_DEFECT` above `UNPLACED`. The evaluation order here is the
-//   one both the parent spec's §6.3 gate list and this task's brief state in
-//   prose, and the two order tests in `certificate.test.ts` are what pin it.
+// Read the other way, that ordering is what leaves branch 4 the job parent
+// spec §6.3 actually describes for it: "UNKNOWN/timeout leaving fixtures
+// unplaced" — a board the product failed to fill WITHOUT declaring the
+// problem infeasible. Ranking branch 4 above branch 3 would swallow that
+// distinction in precisely the case where the certificate has the most to
+// say.
+//
+//   An earlier build of this file evaluated the unplaced gate third,
+//   following the task brief's Step 3 prose. The plan was wrong and the
+//   design right; ruling R27 corrected the plan. Exactly ONE test can tell
+//   the two orders apart — `infeasible` AND `placed < total` must land on
+//   PRODUCT_DEFECT — so that test is load-bearing rather than illustrative,
+//   and it is the one thing standing between two shippable behaviours.
 //
 // -------------------------------------------------------------------------
 // Why `checkBoard` verbatim, and never a second implementation
@@ -189,8 +198,27 @@ export function certify(input: {
   }
 
   // -------------------------------------------------------------------
-  // Branch 3 — parent spec §6.3's unplaced-fixture gate
+  // Branch 3 — history is clean, so an infeasible solve is the product's
   // -------------------------------------------------------------------
+  //
+  // ABOVE the unplaced gate, deliberately: an `infeasible` solve that also
+  // stranded fixtures is ONE event, and this is the branch that names its
+  // cause. See the ordering note in this module's header.
+  if (input.solverStatus === INFEASIBLE) {
+    return verdict(
+      "PRODUCT_DEFECT",
+      `the real timetable satisfies the very encoding we handed the solver, so a status of "${INFEASIBLE}" is the product's defect and not the pack's`,
+      NO_VIOLATIONS,
+    );
+  }
+
+  // -------------------------------------------------------------------
+  // Branch 4 — parent spec §6.3's unplaced-fixture gate
+  // -------------------------------------------------------------------
+  //
+  // Reached only when the solver did NOT declare the problem infeasible, so
+  // this is §6.3's "UNKNOWN/timeout leaving fixtures unplaced" — the product
+  // failed to fill the board without saying it could not.
   //
   // `<` and never `!==`: a board carrying MORE placed rows than the proposal
   // counted is not an unplaced-fixture defect, and reporting one would send a
@@ -199,17 +227,6 @@ export function certify(input: {
     return verdict(
       "UNPLACED",
       `the real timetable satisfies our encoding, but the product placed ${input.placed} of ${input.total} fixtures (solver status ${input.solverStatus ?? "absent"})`,
-      NO_VIOLATIONS,
-    );
-  }
-
-  // -------------------------------------------------------------------
-  // Branch 4 — history is clean, so an infeasible solve is the product's
-  // -------------------------------------------------------------------
-  if (input.solverStatus === INFEASIBLE) {
-    return verdict(
-      "PRODUCT_DEFECT",
-      `the real timetable satisfies the very encoding we handed the solver, so a status of "${INFEASIBLE}" is the product's defect and not the pack's`,
       NO_VIOLATIONS,
     );
   }

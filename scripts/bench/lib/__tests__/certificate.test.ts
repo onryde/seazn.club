@@ -1,10 +1,16 @@
 // certificate.test.ts — the §6.3 protocol, and above all its ORDER.
 //
 // The suite's contract with itself: every case below states the mutation that
-// reds it, and the two ORDER cases exist because nothing else can see the
-// difference. A `certify` that read `solverStatus` first, or one that read
-// the unplaced counts last, passes every single-branch case here and fails
-// only the pair that holds two inputs fixed and flips the third.
+// reds it, and the three ORDER cases exist because nothing else can see the
+// difference. A `certify` that read `solverStatus` before running history
+// through the checker, or one that read the unplaced counts before the solver
+// status, passes every single-branch case in this file and fails only the
+// pair that holds two inputs fixed and flips the third.
+//
+// That third pair is the one ruling R27 turns on, so read it before changing
+// it: with the solver at `infeasible`, `placed < total` is a consequence of
+// the infeasibility, and the certificate must name the cause (PRODUCT_DEFECT)
+// rather than the symptom (UNPLACED).
 //
 // The history boards are `cleanBoard()` from `_board-fixtures.ts`, perturbed
 // by exactly one thing — the SAME hand-built board `checker.test.ts` uses,
@@ -230,18 +236,24 @@ describe("certify — the branch ORDER is the protocol", () => {
     expect(good.branch).toBe("PRODUCT_DEFECT");
   });
 
-  // The unplaced gate before the solver verdict, for the same reason and with
-  // the same shape: identical inputs except the counts. Swapping branches 3
-  // and 4 leaves every single-branch case below green and reds only this one.
-  it("reads the unplaced counts BEFORE the solver verdict", () => {
-    const short = certify(input({ solverStatus: "infeasible", placed: 2, total: 3 }));
-    const full = certify(input({ solverStatus: "infeasible", placed: 3, total: 3 }));
-    expect(short.branch).toBe("UNPLACED");
-    expect(full.branch).toBe("PRODUCT_DEFECT");
+  // THE case that separates two shippable behaviours, and the only one in the
+  // suite that can (ruling R27). When the solver has declared `infeasible`,
+  // `placed < total` is a CONSEQUENCE of it: UNPLACED would name the symptom
+  // where PRODUCT_DEFECT names the cause. Swapping branches 3 and 4 leaves
+  // every single-branch case in this file green and reds only this one, so
+  // it is what pins which of the two orders actually shipped.
+  //
+  // The pair also proves the gate is not simply dead: with the SAME counts and
+  // a non-infeasible status it does fire, and lands on UNPLACED.
+  it("reads the solver verdict BEFORE the unplaced counts", () => {
+    const declared = certify(input({ solverStatus: "infeasible", placed: 2, total: 3 }));
+    const silent = certify(input({ solverStatus: "not_searched", placed: 2, total: 3 }));
+    expect(declared.branch).toBe("PRODUCT_DEFECT");
+    expect(silent.branch).toBe("UNPLACED");
   });
 
-  // …and history before the unplaced gate, so a pack whose own timetable
-  // breaches the encoding is never reported as the product failing to place.
+  // …and history before both of them, so a pack whose own timetable breaches
+  // the encoding is never reported as the product failing to place.
   it("reads history BEFORE the unplaced counts", () => {
     const v = certify(
       input({ historyBoard: doubleBookedHistory(), solverStatus: "ok", placed: 2, total: 3 }),
@@ -250,26 +262,7 @@ describe("certify — the branch ORDER is the protocol", () => {
   });
 });
 
-describe("certify — branch 3, UNPLACED", () => {
-  it("UNPLACED when placed < total, even with a clean history and status ok", () => {
-    const v = certify(input({ solverStatus: "ok", placed: 2, total: 3 }));
-    expect(v.branch).toBe("UNPLACED");
-    expect(v.red).toBe(true);
-    expect(v.reason).toMatch(/2 of 3/);
-    expect(v.violations).toEqual([]);
-  });
-
-  // `<`, not `!==`: a board that placed MORE rows than the proposal counted is
-  // not an unplaced-fixture defect, and reporting one would send a reader
-  // hunting for a fixture that is on the board.
-  it("does not red when placed exceeds total", () => {
-    const v = certify(input({ solverStatus: "ok", placed: 4, total: 3 }));
-    expect(v.branch).toBe("FEASIBLE");
-    expect(v.red).toBe(false);
-  });
-});
-
-describe("certify — branch 4, PRODUCT_DEFECT", () => {
+describe("certify — branch 3, PRODUCT_DEFECT", () => {
   it("PRODUCT_DEFECT reds", () => {
     const v = certify(input({ solverStatus: "infeasible" }));
     expect(v.branch).toBe("PRODUCT_DEFECT");
@@ -292,6 +285,25 @@ describe("certify — branch 4, PRODUCT_DEFECT", () => {
     const absent = certify(input({ solverStatus: undefined }));
     expect(absent.branch).toBe("FEASIBLE");
     expect(absent.red).toBe(false);
+  });
+});
+
+describe("certify — branch 4, UNPLACED", () => {
+  it("UNPLACED when placed < total and the solver never declared infeasible", () => {
+    const v = certify(input({ solverStatus: "ok", placed: 2, total: 3 }));
+    expect(v.branch).toBe("UNPLACED");
+    expect(v.red).toBe(true);
+    expect(v.reason).toMatch(/2 of 3/);
+    expect(v.violations).toEqual([]);
+  });
+
+  // `<`, not `!==`: a board that placed MORE rows than the proposal counted is
+  // not an unplaced-fixture defect, and reporting one would send a reader
+  // hunting for a fixture that is on the board.
+  it("does not red when placed exceeds total", () => {
+    const v = certify(input({ solverStatus: "ok", placed: 4, total: 3 }));
+    expect(v.branch).toBe("FEASIBLE");
+    expect(v.red).toBe(false);
   });
 });
 
@@ -326,8 +338,8 @@ describe("certify — redness is a property of the branch", () => {
   const cases: readonly { branch: CertificateBranch; call: () => CertifyInput }[] = [
     { branch: "SKIPPED_NO_HISTORY", call: () => input({ historical: [], historyBoard: undefined }) },
     { branch: "PACK_AUTHORING_BUG", call: () => input({ historyBoard: doubleBookedHistory() }) },
-    { branch: "UNPLACED", call: () => input({ placed: 1, total: 3 }) },
     { branch: "PRODUCT_DEFECT", call: () => input({ solverStatus: "infeasible" }) },
+    { branch: "UNPLACED", call: () => input({ placed: 1, total: 3 }) },
     { branch: "FEASIBLE", call: () => input() },
   ];
 
