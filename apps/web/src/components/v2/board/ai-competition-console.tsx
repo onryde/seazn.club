@@ -64,6 +64,7 @@ import {
 import { blockingConflictKey, type AiConsoleFixture } from "./ai-diff";
 // A leaf with ZERO imports, so a client component may hold it: the CODE is the
 // contract between the refusal and this card, and the sentence is not.
+import { JOINT_UNDO_SUPERSEDED_CODE } from "@/lib/joint-undo";
 import { SCHEDULE_LOCKED_CODE } from "@/lib/schedule-lock";
 import { AiReviewPanel } from "./ai-review-panel";
 import { buildReviewRows } from "./ai-review";
@@ -618,8 +619,15 @@ export function JointReviewStep({
       // replacing it with a generic "something went wrong" would trade an
       // untranslated known refusal for an unreportable unknown failure.
       const named = (id: string): string => nameOf.get(id) ?? id;
-      const localReason = (f: JointUndoFailure): string =>
-        f.code === SCHEDULE_LOCKED_CODE ? msg("board.ai.joint.reasonLocked") : f.reason;
+      // One branch per refusal this card can RECOGNISE, keyed on the code.
+      // `JOINT_UNDO_SUPERSEDED` is the second: the usecase's own English
+      // sentence for a rewind a newer apply overtook, which landed in
+      // `{reason}` exactly as the freeze sentence used to.
+      const localReason = (f: JointUndoFailure): string => {
+        if (f.code === SCHEDULE_LOCKED_CODE) return msg("board.ai.joint.reasonLocked");
+        if (f.code === JOINT_UNDO_SUPERSEDED_CODE) return msg("board.ai.joint.reasonSuperseded");
+        return f.reason;
+      };
       // Grouped on the CODE where there is one, so two divisions frozen for the
       // same reason stay ONE line even if the server worded their two messages
       // differently — the sentence they are given is identical either way.

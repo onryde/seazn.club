@@ -207,6 +207,34 @@ describe("HistoryPanel — a refused write says so in the reader's language", ()
     expect(await refuse(new Error("network down"))).toBe("network down");
   });
 
+  // The refusal in the branch IMMEDIATELY ABOVE the freeze one, missed by the
+  // pass that added it: `SEQ_CONFLICT` already branched on the code and then
+  // painted a hardcoded English literal, so a Spanish organiser who lost a race
+  // to a second tab read the same English line in the same translated panel.
+  //
+  // What this case can and cannot see: the harness has NO provider tree, so
+  // `useMsg` falls back to the English catalog and a hardcoded literal renders
+  // identically to a dictionary read. It pins that the branch FIRES and that
+  // the server's own message does not reach the banner. That the sentence
+  // comes from the dictionary at all is pinned by the source scan in
+  // schedule-lock-refusal-copy.test.ts, which is the only guard that can tell
+  // the two apart — and it is red on this file until the literal is gone.
+  it("says the concurrent-edit refusal in the reader's language too", async () => {
+    const LOCAL = EN["history.error.seqConflict"]!;
+    expect(typeof LOCAL, "history.error.seqConflict is missing from en/ui.json").toBe("string");
+
+    const shown = await refuse(new ApiV1Error("stale seq 7 != 9", 409, "SEQ_CONFLICT"));
+    // NOT a proof that the sentence came from the dictionary: with no provider
+    // tree, `msg(...)` and the old hardcoded literal produce the SAME string
+    // here. This asserts the branch fires and says the right words. The source
+    // scan named above is what proves where the words came from.
+    expect(shown, "the SEQ_CONFLICT branch does not reach the banner").toBe(LOCAL);
+    expect(
+      shown,
+      "the server's diagnostic reached the organiser instead of the recognised sentence",
+    ).not.toContain("stale seq");
+  });
+
   it("shows no banner at all when the write succeeds", async () => {
     // The negative half: a banner that renders unconditionally would satisfy
     // every assertion above without the branch existing.

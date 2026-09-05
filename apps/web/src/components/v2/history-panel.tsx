@@ -140,7 +140,12 @@ export function HistoryPanel({
       if (err instanceof ApiV1Error && err.code === "PAYMENT_REQUIRED") {
         setPaywallFeature(String(err.extra.feature_key ?? ""));
       } else if (err instanceof ApiV1Error && err.code === "SEQ_CONFLICT") {
-        setError("Someone else edited this division — reloaded the latest state.");
+        // Same rule as the freeze branch below, and the same defect before it:
+        // this sentence was an English literal in a fully translated panel, on
+        // a path an organiser reaches whenever a second tab or a second person
+        // writes first. Branching on the CODE is already right here — only the
+        // sentence was hardcoded.
+        setError(msg("history.error.seqConflict"));
         await load();
       } else if (err instanceof ApiV1Error && err.code === SCHEDULE_LOCKED_CODE) {
         // A refusal this panel recognises is said in the reader's language. The

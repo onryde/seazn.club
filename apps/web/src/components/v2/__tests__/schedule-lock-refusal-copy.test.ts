@@ -10,12 +10,28 @@
 //   - `history-panel.tsx`'s generic `catch` rendered `err.message`.
 //
 // The fix is a LOCAL dictionary string chosen off the CODE. This file guards
-// the copy half of that: the three keys exist in all four locales, they are
-// really translated rather than the English value copied across, they carry no
-// placeholders to lose in translation, and neither component holds the English
-// as a literal. Without the last guard the components would render correctly
-// under `useMsg`'s English fallback whether the sentence came from the
-// dictionary or from a hardcoded string.
+// the copy half of that: each key exists in all four locales, is really
+// translated rather than the English value copied across, carries no
+// placeholders to lose in translation, and is not held as a literal by the
+// component that speaks it. Without the last guard the components would render
+// correctly under `useMsg`'s English fallback whether the sentence came from
+// the dictionary or from a hardcoded string — and that guard is the ONLY thing
+// that can see the difference, because the hook harness those components are
+// driven through has no provider tree at all.
+//
+// WIDENED (2026-09-05): the schedule lock was the first refusal to get this
+// treatment, not the only one that needed it. Two more English sentences were
+// left behind by that pass and are now covered here, because they are the same
+// defect in the same two components rather than a new one:
+//
+//   - `board.ai.joint.reasonSuperseded` — the usecase's own English sentence
+//     for a rewind a newer joint apply overtook, landing in the SAME
+//     `{reason}` placeholder the freeze sentence used to;
+//   - `history.error.seqConflict` — "Someone else edited this division …",
+//     a hardcoded literal in the branch immediately above the freeze branch.
+//
+// The filename still says schedule-lock; the describe titles below say what is
+// actually asserted. Sweep this file by what it ASSERTS, not by its name.
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -32,14 +48,21 @@ const DICTS: Record<string, Record<string, string>> = {
 };
 const EN = DICTS.en!;
 
-/** The three sentences this fix introduced, and the component each is spoken
- *  by — so "the English is not a literal" is checked against the file that
- *  would hold it, not against the tree at large. */
+/** Every refusal sentence these two components say in the reader's own
+ *  language, and the component each is spoken by — so "the English is not a
+ *  literal" is checked against the file that would hold it, not against the
+ *  tree at large. */
 const KEYS: { key: string; source: string }[] = [
   { key: "board.ai.joint.reasonLocked", source: "src/components/v2/board/ai-competition-console.tsx" },
+  { key: "board.ai.joint.reasonSuperseded", source: "src/components/v2/board/ai-competition-console.tsx" },
   { key: "history.error.frozen", source: "src/components/v2/history-panel.tsx" },
+  { key: "history.error.seqConflict", source: "src/components/v2/history-panel.tsx" },
   { key: "history.checkpoint.frozenDelete", source: "src/components/v2/history-panel.tsx" },
 ];
+
+/** The two JOINT-card sentences. Grouped because the card is
+ *  competition-scoped and neither may point at a control it has not got. */
+const JOINT_KEYS = ["board.ai.joint.reasonLocked", "board.ai.joint.reasonSuperseded"];
 
 /** Comments stripped: this file's own prose quotes the sentences it guards, and
  *  a component's comment may legitimately do the same. Only rendered code
@@ -50,7 +73,7 @@ function code(relative: string): string {
     .replace(/\/\/.*$/gm, "");
 }
 
-describe("the schedule-lock refusal's local copy", () => {
+describe("the refusal sentences these two components say locally", () => {
   // First, because every assertion below is DERIVED from these values: a
   // missing key makes the expectation `undefined`, and `not.toContain(undefined)`
   // passes on any input, so the source scans would go vacuously green.
@@ -103,6 +126,19 @@ describe("the schedule-lock refusal's local copy", () => {
         SCHEDULE_LOCKED_MESSAGE,
       );
     }
+
+    // The superseded refusal's sentence is NOT exported: it is server-side
+    // prose, and `@/lib/joint-undo` deliberately shares only the code, so that
+    // English never sits one import away from a browser surface. Its most
+    // distinctive clause stands in — a console that recognised this refusal by
+    // its prose would break the moment the prose was reworded, which is the
+    // whole reason the code exists.
+    for (const source of new Set(KEYS.map((k) => k.source))) {
+      expect(
+        code(source),
+        `${source} matches the superseded refusal's English prose instead of its code`,
+      ).not.toContain("newer joint apply");
+    }
   });
 
   it("points at the freeze control the same way its neighbours in the same panel do", () => {
@@ -135,11 +171,12 @@ describe("the schedule-lock refusal's local copy", () => {
     // this card. The panel's own "unfreeze it above" would be a false direction
     // here, so this key must NOT reuse it.
     const DEIXIS = ["above", "arriba", "ci-dessus", "hierboven"];
-    for (const locale of Object.keys(DICTS)) {
-      const value = DICTS[locale]!["board.ai.joint.reasonLocked"]!.toLowerCase();
-      for (const word of DEIXIS) {
-        expect(value, `${locale}/board.ai.joint.reasonLocked points at a control it has not got`)
-          .not.toContain(word);
+    for (const key of JOINT_KEYS) {
+      for (const locale of Object.keys(DICTS)) {
+        const value = DICTS[locale]![key]!.toLowerCase();
+        for (const word of DEIXIS) {
+          expect(value, `${locale}/${key} points at a control it has not got`).not.toContain(word);
+        }
       }
     }
   });

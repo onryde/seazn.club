@@ -35,6 +35,7 @@ import { createCheckpoint, setDivisionLocks } from "../history";
 import { applyCompetitionSchedule } from "../competition-schedule-apply";
 import { JOINT_APPLY_EVENT } from "../competition-schedule-ai";
 import { restoreCompetitionSchedule } from "../competition-schedule-restore";
+import { JOINT_UNDO_SUPERSEDED_CODE } from "@/lib/joint-undo";
 import { SCHEDULE_LOCKED_CODE, SCHEDULE_LOCKED_MESSAGE } from "@/lib/schedule-lock";
 import { seedOrg } from "./_seed";
 
@@ -681,6 +682,15 @@ describe.skipIf(!HAS_DB)("restoreCompetitionSchedule (#386)", () => {
     // The reason NAMES what happened, so the organiser is not sent looking for a
     // failure in a division nothing touched.
     expect(out.failed[0]!.reason).toMatch(/newer joint apply/i);
+    // …and it carries the MACHINE-READABLE half beside the sentence. The
+    // sentence is English prose that lands in a translated card's `{reason}`
+    // placeholder; the code is the only thing a client can branch on to say it
+    // in the reader's own language. This refusal never passes through an
+    // `HttpError`, so nothing else on this path can supply it.
+    expect(
+      out.failed[0]!.code,
+      "the superseded refusal reaches the client as English prose and nothing else",
+    ).toBe(JOINT_UNDO_SUPERSEDED_CODE);
     // …and the report is TRUE of the board, asserted BOTH ways: the rewound
     // division really is off the AI schedule and must not be re-listed as
     // outstanding; the untouched one still carries it.
@@ -720,6 +730,12 @@ describe.skipIf(!HAS_DB)("restoreCompetitionSchedule (#386)", () => {
     expect(out.restored).toEqual([]);
     expect(out.failed.map((f) => f.division_id).sort()).toEqual(divisions.map((d) => d.id).sort());
     expect(out.failed.every((f) => /newer joint apply/i.test(f.reason))).toBe(true);
+    // EVERY division, not just the first: the code is pushed inside the loop,
+    // so a guard on one entry cannot see it going missing from the rest.
+    expect(
+      out.failed.map((f) => f.code),
+      "a superseded division reached the client with no code",
+    ).toEqual(out.failed.map(() => JOINT_UNDO_SUPERSEDED_CODE));
     // …and it really did stop before writing: both boards still carry the AI
     // schedule, so the report names exactly what is left.
     for (const d of divisions) expect(unplaced(await slots(d.id))).toBe(false);

@@ -85,6 +85,7 @@ vi.mock("@/components/i18n/dict-provider", async (importOriginal) => {
 // the file, so these already see the mocked modules.
 import { renderToStaticMarkup } from "react-dom/server";
 import { ApiV1Error } from "@/lib/client-v1";
+import { JOINT_UNDO_SUPERSEDED_CODE } from "@/lib/joint-undo";
 import { SCHEDULE_LOCKED_CODE, SCHEDULE_LOCKED_MESSAGE } from "@/lib/schedule-lock";
 import type { AiParsePreviewResponse } from "@/server/api-v1/schemas";
 import { AiCompetitionConsole, JointReviewStep, type JointDivision } from "../ai-competition-console";
@@ -688,6 +689,66 @@ describe("the review step is wired to the console's own state", () => {
     const html = renderToStaticMarkup(typed(ctx.island.tree(), JointReviewStep));
     expect(html, "an unrecognised reason was swallowed").toContain("checkpoint not found");
     expect(html).toContain("Under 14s");
+  });
+
+  // The SECOND English sentence in this card, left behind by the pass above.
+  // `SUPERSEDED_REASON` (competition-schedule-restore.ts) is the usecase's own
+  // prose for a division the rewind never attempted because a newer joint apply
+  // overtook it, and it lands in the SAME `{reason}` placeholder — so the card
+  // that had just been cleaned of one English clause could still print another,
+  // on a path that needs no unusual state beyond two organisers working at
+  // once. It now travels with `JOINT_UNDO_SUPERSEDED_CODE`.
+  //
+  // The negative assertion quotes a clause with NO apostrophe on purpose: React
+  // escapes `'` to `&#x27;` in text nodes, so `not.toContain(<the whole
+  // sentence>)` would pass on a card that renders the leak perfectly.
+  it("says a superseded rewind in the reader's own copy too, never the usecase's English", async () => {
+    const LOCAL = enText["board.ai.joint.reasonSuperseded"]!;
+    expect(typeof LOCAL, "board.ai.joint.reasonSuperseded is missing from en/ui.json").toBe(
+      "string",
+    );
+    const SERVER_CLAUSE = "a newer joint apply landed on this competition";
+    // The WIRE value, pinned once. The console and the usecase share the
+    // constant, so a rename moves both together and no assertion here would
+    // notice — but a browser running yesterday's bundle against today's server
+    // would, and this is the line that says so.
+    expect(JOINT_UNDO_SUPERSEDED_CODE, "the wire code changed under deployed clients").toBe(
+      "JOINT_UNDO_SUPERSEDED",
+    );
+
+    const ctx = await applied(() => ({
+      restored: [],
+      // The envelope the usecase really answers with for a superseded rewind:
+      // its own sentence AND the code, on every division it did not attempt.
+      failed: [
+        {
+          division_id: "d1",
+          reason: `${SERVER_CLAUSE} while the undo was running`,
+          code: JOINT_UNDO_SUPERSEDED_CODE,
+        },
+        {
+          division_id: "d2",
+          reason: `${SERVER_CLAUSE} while the undo was running`,
+          code: JOINT_UNDO_SUPERSEDED_CODE,
+        },
+      ],
+      ok: false,
+    }));
+
+    ctx.undo();
+    await flush();
+    const html = renderToStaticMarkup(typed(ctx.island.tree(), JointReviewStep));
+    expect(html, "the superseded refusal is not said in the reader's language").toContain(
+      esc(LOCAL),
+    );
+    expect(
+      html,
+      "the usecase's English sentence leaked into a translated card",
+    ).not.toContain(SERVER_CLAUSE);
+    // Both divisions read as ONE reason. Weak on its own — they share a reason
+    // string too — but it is what pins the grouping key once the sentences the
+    // server sends diverge, and it costs one line.
+    expect(html.split(esc(LOCAL)).length - 1, "one refusal, listed twice").toBe(1);
   });
 
   // Two divisions refused for DIFFERENT reasons must read as two reasons. One

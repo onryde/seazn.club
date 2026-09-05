@@ -1,5 +1,6 @@
 import { withTenant } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
+import { JOINT_UNDO_SUPERSEDED_CODE } from "@/lib/joint-undo";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { JOINT_APPLY_EVENT } from "./competition-schedule-ai";
 import { restoreCheckpoint } from "./history";
@@ -7,7 +8,13 @@ import { restoreCheckpoint } from "./history";
 /** Reported for every division the rewind did NOT attempt because a NEWER joint
  *  apply landed on the competition part-way through (the anchor check below).
  *  Phrased as what the organiser needs to know: nothing changed here, and the
- *  anchors they are holding no longer describe the board. */
+ *  anchors they are holding no longer describe the board.
+ *
+ *  ENGLISH PROSE, and it rides in `failed[].reason` — which the AI console
+ *  interpolates into a translated card. It therefore travels with
+ *  `JOINT_UNDO_SUPERSEDED_CODE` so a client can say it in the reader's own
+ *  language; this sentence is what a client that does not recognise the code
+ *  falls back to. Same treatment the freeze refusal already gets. */
 const SUPERSEDED_REASON =
   "a newer joint apply landed on this competition while the undo was running — " +
   "nothing was changed here, and this undo's save points no longer match the board";
@@ -181,7 +188,15 @@ export async function restoreCompetitionSchedule(
       if (current?.id !== anchor.id) superseded = true;
     }
     if (superseded) {
-      failed.push({ division_id: c.division_id, reason: SUPERSEDED_REASON });
+      // The code, not just the sentence: this is the ONE refusal on this
+      // envelope that never passes through an `HttpError`, so the spread in
+      // the catch below cannot supply it. Without it the console has only
+      // English prose to render, and only English prose to group on.
+      failed.push({
+        division_id: c.division_id,
+        reason: SUPERSEDED_REASON,
+        code: JOINT_UNDO_SUPERSEDED_CODE,
+      });
       continue;
     }
     try {
