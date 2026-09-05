@@ -814,6 +814,78 @@ describe("encodeConstraints", () => {
     expect(out.perEntrantMinRest).toBe(product.perEntrantMinRest);
   });
 
+  // The second drift guard (fix round 2, F2), same class as the one above.
+  // R9's knob table in `board.ts` is a hand-copy of `ScheduleConfig`'s key set,
+  // and the enumeration test is a SECOND hand-copy of the same list — so a knob
+  // added to the product schema would land in neither `hard[]` nor
+  // `unmodelled[]`, both copies would stay mutually consistent, and nothing
+  // would notice. This asserts against the schema's OWN keys instead.
+  //
+  // The unmodelled half is read from a real `encodeConstraints` call rather
+  // than from a table, so this pins BEHAVIOUR; only the modelled half is
+  // written down, and it is what a new key gets tested against. Moving a knob
+  // from unmodelled to modelled later leaves the union unchanged, which is
+  // correct — the guard's claim is coverage, not a particular split.
+  it("accounts for EVERY key ScheduleConfig declares — modelled or reported, never neither", () => {
+    const constraintsShape = (
+      ScheduleConfig.shape.constraints as unknown as { unwrap: () => { shape: Record<string, unknown> } }
+    ).unwrap().shape;
+
+    const declared = new Set<string>();
+    for (const key of Object.keys(ScheduleConfig.shape)) {
+      // `constraints` is a CONTAINER, not a knob: its members are enumerated
+      // below, and the container itself has nothing to model or report.
+      if (key !== "constraints") declared.add(key);
+    }
+    for (const key of Object.keys(constraintsShape)) declared.add(`constraints.${key}`);
+    // Sanity: a broken shape access must not pass by comparing two empty sets.
+    expect(declared.size).toBeGreaterThan(10);
+
+    // The eight this build actually reads into the oracle.
+    const modelled = [
+      "startAt",
+      "endAt",
+      "matchMinutes",
+      "courts",
+      "perEntrantMinRest",
+      "blackouts",
+      "sessionWindows",
+      "constraints.hard",
+    ];
+
+    const out = encodeConstraints({
+      divisionRef: "d-tiny",
+      // Every knob present, so `unmodelled[]` reports its full set.
+      scheduleConfig: {
+        startAt: "2027-06-01T08:00:00Z",
+        endAt: "2027-06-03T20:00:00Z",
+        matchMinutes: 45,
+        gapMinutes: 5,
+        courts: ["@c-one"],
+        perEntrantMinRest: 30,
+        blackouts: [],
+        sessionWindows: [],
+        roundMinutes: 75,
+        constraints: {
+          restMin: 60,
+          restByGroup: { u12: 45 },
+          noBackToBack: true,
+          startWindows: [],
+          fieldFairness: "rotate",
+          parallelism: "block",
+          crossPersonClash: "warn",
+          hard: [{ type: "not_before", time: "09:30", scope: { kind: "competition" } }],
+        },
+      },
+      courtIdByRef: courts,
+      isRoundRobin: true,
+      pins: [],
+    });
+
+    const accounted = [...new Set([...modelled, ...out.unmodelled.map((u) => u.type)])].sort();
+    expect(accounted).toEqual([...declared].sort());
+  });
+
   it("carries gapMinutes and perEntrantMinRest when the pack declares them", () => {
     const out = encodeConstraints({
       divisionRef: "d-tiny",
