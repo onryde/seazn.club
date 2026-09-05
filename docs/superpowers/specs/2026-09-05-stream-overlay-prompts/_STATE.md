@@ -25,7 +25,7 @@ commit and record everything"):
 | Deliverable | Path | State at last update |
 |---|---|---|
 | Wave 1 plan | `docs/superpowers/plans/2026-09-05-stream-overlay-w1.md` | not yet on disk |
-| Wave 2 plan (moments) | `docs/superpowers/plans/2026-09-05-stream-overlay-w2-moments.md` | not yet on disk |
+| Wave 2 plan (moments) | `docs/superpowers/plans/2026-09-05-stream-overlay-w2-moments.md` | landed 18:44 BST, 1083 lines, 6 tasks, committed; carries a "NOT executable yet" status note: Task 1 test bodies are comment-sketched pending the RE-PIN table (task zero rewrites them); blocked on spectator W1 merge |
 | Prompt dir: `_RULES.md`, `W1-step-one.md`, `W2-moments.md` | same dir as this file | on disk, uncommitted at 18:33; committed if a later row below says so |
 | Prompt dir: reshaped `_INDEX.md` | same dir | not yet rewritten (18:16 version is the committed one) |
 
