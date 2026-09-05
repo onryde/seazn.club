@@ -1117,7 +1117,7 @@
   "billing.cta.goPro": "Passer à Pro",
   "billing.perMoBilledYearly": "/mois facturé annuellement",
   "billing.orMonthly": "ou {price} par mois",
-  "billing.annualSaves": "L'abonnement annuel fait économiser 30 %.",
+  "billing.annualSaves": "Payer à l'année, c'est plus de deux mois offerts.",
   "billing.planChange.toPro": "Passer à Pro",
   "billing.planChange.confirm": "Confirmer le changement",
   "billing.planChange.keep": "Conserver le forfait actuel",

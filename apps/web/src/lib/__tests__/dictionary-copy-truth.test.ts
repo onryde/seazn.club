@@ -39,6 +39,11 @@ import { TIPS } from "@/config/tips";
 import * as copyTruth from "@/lib/copy-truth";
 import { APPROVED_DICTIONARY_COPY } from "./_approved-dictionary-copy";
 import {
+  ANNUAL_SAVING_CLAIM,
+  annualClaimFaults,
+  annualPricePoints,
+  annualSavingFaults,
+  SEED_CURRENCIES,
   approvedDictionaryFaults,
   sourceControlCharacterFaults,
   unexportedPatternFaults,
@@ -690,6 +695,15 @@ const KNOWN_POSITIVES: string[] = [
   "Chaque niveau de détail est disponible sur tous les forfaits.",
   "Bal-voor-bal scoren vereist een Pro-abonnement.",
   "Elk detailniveau is beschikbaar op elk abonnement.",
+  // ── The annual saving, stated as a floor (entitlements v18 / W2) ──
+  //    One line per locale, each carrying all three parts of
+  //    `ANNUAL_SAVING_CLAIM` — numeral, unit and giveaway — so twelve patterns
+  //    are proven live by four fixtures, and a mangled escape in any of them
+  //    reds here instead of quietly matching nothing.
+  "Paying yearly is more than two months free.",
+  "Pagar por a\u00f1o son m\u00e1s de dos meses gratis.",
+  "Payer \u00e0 l'ann\u00e9e, c'est plus de deux mois offerts.",
+  "Per jaar betalen is meer dan twee maanden gratis.",
   // ── Per-plan CAPACITY claims (entitlements v18 / W2) ──
   //    Six one-word fixtures, because these patterns read TABLE CELLS rather
   //    than sentences: `PLAN_CAP_AXES[*].column` and the two cell patterns are
@@ -3641,5 +3655,137 @@ describe("no dictionary string sells scoring detail (W1: it is free on every pla
     expect(
       scoringFreeClaimFaults(sentences(twoClaims).map((part) => ["split", part] as const)),
     ).toHaveLength(1);
+  });
+});
+
+// =============================================================================
+// THE ANNUAL SAVING - a claim no single number could have made true
+// =============================================================================
+//
+// `pricing.faq.annual.a` and `billing.annualSaves` both said "annual billing
+// saves 30%", in all four locales, on two live surfaces: the /pricing FAQ and
+// the emerald hint under the Go Pro buttons in Settings -> Billing. Eight
+// shipped strings, one claim, and after the charm reprice it is wrong in every
+// market -- 28.29% usd, 30.08% eur, 32.52% gbp, 30.45% inr on the base tier,
+// and 23.71-30.35% on the extra-organisation rider.
+//
+// The defect is not the NUMBER, it is the SHAPE. The seed prices each market
+// independently, so no single percentage can be right, and re-cutting 30% to
+// 28% would put the next reprice straight back here. The copy now states a
+// floor derived from the ladder -- "a year up front costs less than ten
+// monthly payments in every currency we bill in, so annual is more than two
+// months free" -- and this suite holds the copy and the seed together in both
+// directions.
+describe("the annual saving the copy promises is one the seed delivers", () => {
+  const ANNUAL_CLAIM = { monthsFree: 2, staleBeyond: 5 };
+  const ANNUAL_KEYS = [
+    ["marketing", "pricing.faq.annual.a"],
+    // NOT in the brief, and found by grepping the dictionaries for a percentage
+    // beside an annual word rather than by trusting the one key that was named.
+    // It renders live in `settings/billing/page.tsx`, under two buttons that
+    // already print the real monthly and annual-per-month prices -- so it was
+    // contradicting arithmetic on its own screen.
+    ["ui", "billing.annualSaves"],
+  ] as const;
+  const ANNUAL_VALUES: LocalisedValue[] = ANNUAL_KEYS.flatMap(([file, key]) =>
+    across(file, key),
+  );
+
+  it("costs at most ten monthly payments, every currency and BOTH tiers", () => {
+    const points = annualPricePoints(stripePlans.plans as unknown as PricedPlan[]);
+    expect(annualSavingFaults(points, ANNUAL_CLAIM)).toEqual([]);
+  });
+
+  // ANTI-VACUITY: the check above is a loop over a derived list, and an empty
+  // one passes. Four currencies on two graduated tiers is eight points, and the
+  // rider tier must actually be among them -- it is the rung that saves least,
+  // so a sweep that lost it would call a claim safe on the strength of the
+  // generous half alone.
+  it("actually compared every price point, the rider rung included", () => {
+    const points = annualPricePoints(stripePlans.plans as unknown as PricedPlan[]);
+    expect(points.length, "the point sweep collapsed").toBeGreaterThanOrEqual(
+      SEED_CURRENCIES.length * 2,
+    );
+    expect(new Set(points.map((p) => p.tier))).toEqual(new Set(["base", "rider"]));
+    expect(new Set(points.map((p) => p.currency))).toEqual(new Set(SEED_CURRENCIES));
+  });
+
+  // ...and the bound is a real bound, not one the numbers satisfy whatever they
+  // are. A claim of five months free must FAIL on today's ladder, or the check
+  // above is decoration: the live spread is 2.8-3.9 months, so 2 passes and 5
+  // must not.
+  it("would reject a floor the ladder does not reach", () => {
+    const points = annualPricePoints(stripePlans.plans as unknown as PricedPlan[]);
+    const overclaimed = annualSavingFaults(points, { monthsFree: 5, staleBeyond: 9 });
+    expect(overclaimed.length, "a five-month claim passed on a ladder that gives under four").toBeGreaterThan(0);
+    expect(overclaimed.join(" ")).toContain("but the copy promises more than 5");
+  });
+
+  // The loose side, proven the same way: a floor of half a month is TRUE at
+  // every point and still a claim that has stopped describing the product.
+  it("would reject a floor that has gone stale in the customer's favour", () => {
+    const points = annualPricePoints(stripePlans.plans as unknown as PricedPlan[]);
+    const stale = annualSavingFaults(points, { monthsFree: 0.5, staleBeyond: 1 });
+    expect(stale.join(" ")).toContain("has stopped describing the product");
+  });
+
+  it("says it in all four locales, numeral and unit and giveaway", () => {
+    expect(ANNUAL_VALUES).toHaveLength(ANNUAL_KEYS.length * DICTIONARY_LOCALES.length);
+    // The vocabulary itself must cover every locale, or a locale with no entry
+    // is checked by nothing and the sweep reports clean on untranslated copy.
+    expect(
+      Object.keys(ANNUAL_SAVING_CLAIM).sort(),
+      "the claim vocabulary does not cover every locale",
+    ).toEqual([...DICTIONARY_LOCALES].sort());
+    expect(annualClaimFaults(ANNUAL_VALUES)).toEqual([]);
+  });
+
+  // THE INVERSE, because a presence rule alone is satisfied by copy that also
+  // carries the falsehood. A percentage is exactly what these eight strings
+  // used to be, and a percentage cannot be right here for any value: the eight
+  // price points do not share one.
+  it("quotes no percentage on either surface, in any locale", () => {
+    const withPercent = ANNUAL_VALUES.filter((v) => /\d\s*%/.test(v.value));
+    expect(
+      withPercent.map((v) => `${v.locale}/${v.key}: ${v.value}`),
+      "a single percentage cannot be true across four independently priced markets",
+    ).toEqual([]);
+  });
+
+  // Each PART of the claim is separately killable, or a three-way vocabulary is
+  // really a one-way one wearing a costume: without these, dropping the unit
+  // and the giveaway from `ANNUAL_SAVING_CLAIM` leaves this suite green,
+  // because the percentage probes below fail on the numeral alone.
+  it("names WHICH half of the sentence went missing", () => {
+    const missing: Array<[string, LocalisedValue]> = [
+      ["giveaway", { locale: "en", key: "probe", value: "Annual billing costs two months less." }],
+      ["numeral", { locale: "en", key: "probe", value: "Annual billing gives you months free." }],
+      ["unit", { locale: "en", key: "probe", value: "Annual billing gets you two free." }],
+    ];
+    for (const [part, value] of missing) {
+      expect(annualClaimFaults([value]).join(" "), `${value.value} must fail on ${part}`).toContain(
+        `states no ${part}`,
+      );
+    }
+    // ...and the true sentence passes all three, so the probes above are
+    // measuring the vocabulary rather than an always-fault.
+    expect(
+      annualClaimFaults([
+        { locale: "en", key: "probe", value: "Paying yearly is more than two months free." },
+      ]),
+    ).toEqual([]);
+  });
+
+  // ...and it must not come back as a word, either. The negative above is
+  // lexical; this one is the reason it exists.
+  it("catches the percentage returning, spelled out or reworded", () => {
+    const reworded: LocalisedValue[] = [
+      { locale: "en", key: "probe", value: "Yes — annual billing saves 30%, and it's the default." },
+      { locale: "en", key: "probe", value: "Save 28 % by paying for the year." },
+    ];
+    for (const v of reworded) {
+      expect(annualClaimFaults([v]).length, `${v.value} must fail the claim`).toBeGreaterThan(0);
+      expect(/\d\s*%/.test(v.value), `${v.value} must trip the percentage ban`).toBe(true);
+    }
   });
 });

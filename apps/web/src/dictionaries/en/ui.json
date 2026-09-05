@@ -1117,7 +1117,7 @@
   "billing.cta.goPro": "Go Pro",
   "billing.perMoBilledYearly": "/mo billed yearly",
   "billing.orMonthly": "or {price} monthly",
-  "billing.annualSaves": "Annual saves 30%.",
+  "billing.annualSaves": "Paying yearly is more than two months free.",
   "billing.planChange.toPro": "Switch to Pro",
   "billing.planChange.confirm": "Confirm change",
   "billing.planChange.keep": "Keep current plan",

@@ -1066,6 +1066,169 @@ export function riderRateFaults(plans: PricedPlan[]): string[] {
   return faults;
 }
 
+
+// -- The annual saving, against the seed's own ladder -------------------------
+//
+// `pricing.faq.annual.a` and `billing.annualSaves` both said "annual billing
+// saves 30%", in all four locales, on two live surfaces. After the charm
+// reprice no currency saves 30%, and no SINGLE percentage can be right,
+// because the seed prices each market independently:
+//
+//   base tier   usd 28.29%   eur 30.08%   gbp 32.52%   inr 30.45%
+//   rider tier  usd 23.71%   eur 24.89%   gbp 26.54%   inr 30.35%
+//
+// A global percentage is therefore not a stale number to re-cut; it is the
+// wrong SHAPE of claim, and re-cutting it would put the next reprice straight
+// back here. The copy states a FLOOR instead -- "a year up front costs less
+// than ten monthly payments in every currency we bill in, so annual is more
+// than two months free" -- which is true at all eight price points with room,
+// survives a per-market reprice, and errs towards the customer.
+//
+// The rider tier is in scope because a subscription can hold several
+// organisations on one bill (`pricing.faq.groups.a`), so a reader on the
+// /pricing FAQ may be buying either rung, and the claim has to hold for what
+// they actually pay.
+
+/** One place the annual claim can be checked: a currency on a graduated tier. */
+export interface AnnualPricePoint {
+  lookupKey: string;
+  /** "base" (the first organisation) or "rider" (each one after it). */
+  tier: string;
+  currency: string;
+  monthly: number;
+  annual: number;
+  /** How many MONTHLY payments a year up front costs. */
+  monthsPaid: number;
+}
+
+/**
+ * Every monthly/annual pair in the seed, per currency AND per graduated tier.
+ *
+ * Anchored on the tiers rather than the headline amounts, because a claim made
+ * about "annual billing" is made to everyone who can buy annually, and the
+ * rider rung saves visibly less than the base one -- which is the whole reason
+ * a single percentage cannot be true.
+ */
+export function annualPricePoints(plans: PricedPlan[]): AnnualPricePoint[] {
+  const points: AnnualPricePoint[] = [];
+  for (const plan of plans) {
+    const monthlyPrice = plan.prices.monthly;
+    const annualPrice = plan.prices.annual;
+    if (!monthlyPrice || !annualPrice) continue;
+    for (const [tier, upTo] of [
+      ["base", 1],
+      ["rider", "inf"],
+    ] as const) {
+      const m = monthlyPrice.tiers?.find((t) => t.up_to === upTo);
+      const a = annualPrice.tiers?.find((t) => t.up_to === upTo);
+      if (!m || !a) continue;
+      for (const currency of SEED_CURRENCIES) {
+        const monthly = amountIn(m, currency);
+        const annual = amountIn(a, currency);
+        if (monthly === undefined || annual === undefined || monthly <= 0) continue;
+        points.push({
+          lookupKey: annualPrice.lookup_key,
+          tier,
+          currency,
+          monthly,
+          annual,
+          monthsPaid: annual / monthly,
+        });
+      }
+    }
+  }
+  return points;
+}
+
+/**
+ * The published floor against every price point, in BOTH directions.
+ *
+ * `monthsFree` is the claim the copy makes, and it is a floor: a year must cost
+ * at most `12 - monthsFree` monthly payments EVERYWHERE, or the claim
+ * overpromises in some market -- the failure mode "saves 30%" already had.
+ *
+ * `staleBeyond` is the loose side, and it is loose on purpose. A floor cannot
+ * become false by a price moving in the customer's favour, so nothing would
+ * ever red if a reprice doubled the discount and left the copy underselling it
+ * by a year. The bound sits far enough out (five months, against a live spread
+ * of 2.8-3.9) that an ordinary re-cut does not trip it, and close enough that a
+ * claim which has stopped describing the product does.
+ */
+export function annualSavingFaults(
+  points: readonly AnnualPricePoint[],
+  claim: { monthsFree: number; staleBeyond: number },
+): string[] {
+  if (points.length === 0) {
+    return ["annual saving: no monthly/annual price points at all — this check would pass vacuously"];
+  }
+  if (claim.staleBeyond <= claim.monthsFree) {
+    return [
+      `annual saving: staleBeyond (${claim.staleBeyond}) must exceed monthsFree (${claim.monthsFree}), or the two bounds cross and every point faults`,
+    ];
+  }
+  const faults: string[] = [];
+  for (const p of points) {
+    const where = `${p.lookupKey} ${p.currency} (${p.tier}): ${p.annual} a year against ${p.monthly} a month`;
+    const free = 12 - p.monthsPaid;
+    if (free < claim.monthsFree) {
+      faults.push(
+        `${where} — ${free.toFixed(2)} months free, but the copy promises more than ${claim.monthsFree}`,
+      );
+    } else if (free > claim.staleBeyond) {
+      faults.push(
+        `${where} — ${free.toFixed(2)} months free, far beyond the ${claim.monthsFree} the copy claims: the floor has stopped describing the product and should be re-cut`,
+      );
+    }
+  }
+  return faults;
+}
+
+/**
+ * How each locale states the annual claim.
+ *
+ * Three parts per language, all required, because a presence rule on one word
+ * is satisfied by copy that says the opposite: this module's own header records
+ * a "must mention add-ons" gate passing on "the add-ons you've bought STOP
+ * COUNTING". The numeral, the unit and the giveaway together cannot be
+ * satisfied by an accident.
+ *
+ * The numerals are WORDS, not digits, and that is load-bearing: the paired
+ * negative in `dictionary-copy-truth.test.ts` bans a bare percentage from these
+ * values, and a digit vocabulary here would make the two rules argue.
+ */
+export const ANNUAL_SAVING_CLAIM: Record<
+  string,
+  { numeral: RegExp; unit: RegExp; giveaway: RegExp }
+> = {
+  en: { numeral: /\btwo\b/i, unit: /\bmonths?\b/i, giveaway: /\bfree\b/i },
+  es: { numeral: /\bdos\b/i, unit: /\bmeses\b/i, giveaway: /\bgratis\b/i },
+  fr: { numeral: /\bdeux\b/i, unit: /\bmois\b/i, giveaway: /\bofferts?\b/i },
+  nl: { numeral: /\btwee\b/i, unit: /\bmaanden\b/i, giveaway: /\bgratis\b/i },
+};
+
+/** A locale value that fails to state the annual claim, part by part, so the
+ *  fault names WHICH half of the sentence went missing. */
+export function annualClaimFaults(values: readonly LocalisedValue[]): string[] {
+  const faults: string[] = [];
+  for (const { locale, key, value } of values) {
+    const claim = ANNUAL_SAVING_CLAIM[locale];
+    if (!claim) {
+      faults.push(`${locale}/${key}: no annual claim vocabulary for this locale`);
+      continue;
+    }
+    if (!value) {
+      faults.push(`${locale}/${key}: missing`);
+      continue;
+    }
+    for (const [part, pattern] of Object.entries(claim)) {
+      if (!pattern.test(value)) {
+        faults.push(`${locale}/${key}: states no ${part} — "${value}"`);
+      }
+    }
+  }
+  return faults;
+}
+
 /** A standalone extra-organisation add-on price, as `org_addons` holds it. */
 export interface OrgAddon {
   key: string;
