@@ -734,16 +734,171 @@ export type PackStream = z.infer<typeof PackStream>;
 // them a shape, are listed in this task's report instead.
 // ---------------------------------------------------------------------------
 
+/** One weekly opening range on one court, from `CourtHourRangeInput`
+ *  (`apps/web/src/server/usecases/venues.ts:132-141`) — the schema the
+ *  `PUT /orgs/{id}/courts/{courtId}/calendar` route actually validates with,
+ *  not `schemas.ts`'s OpenAPI mirror of it.
+ *
+ *  camelCase where the wire is snake_case, and that is the ONLY difference:
+ *  `PackSchema` carries no snake_case key anywhere, and the camelCase spelling
+ *  is not invented here either — it is the engine's own `CourtHoursRow`
+ *  (`packages/engine/src/scheduling/court-windows.ts:59`), which is exactly
+ *  what `BoardCourt.hours` carries and what `checker.ts` recomputes
+ *  containment from. `seed.ts` renames once, at the wire, and nowhere else.
+ *
+ *  `weekday` is 0 = Sunday (V367's convention, restated by `CourtHoursRow`).
+ *  `1440` is admitted as a CLOSE bound so a range can run to midnight; the
+ *  product admits it on both bounds and the `openMin < closeMin` refine is
+ *  what stops an open-at-midnight range being expressible either way. */
+export const PackCourtHours = z
+  .strictObject({
+    weekday: z.number().int().min(0).max(6),
+    openMin: z.number().int().min(0).max(1440),
+    closeMin: z.number().int().min(0).max(1440),
+  })
+  .refine((r) => r.openMin < r.closeMin, {
+    message: "openMin must be before closeMin",
+    path: ["closeMin"],
+  });
+export type PackCourtHours = z.infer<typeof PackCourtHours>;
+
+/** One dated exception on one court, from `CourtExceptionInput`
+ *  (`usecases/venues.ts:143-164`).
+ *
+ *  `closed` and the range are MUTUALLY EXCLUSIVE — the `court_exceptions`
+ *  CHECK constraint makes them so, and `checker.ts`'s `courtRangesOn` reads
+ *  the pair as three distinct answers (closed -> no usable range; a range ->
+ *  it REPLACES that weekday's rows; neither -> the row says nothing and the
+ *  weekly calendar still governs). A row that carried both would be a fourth
+ *  answer nothing can store.
+ *
+ *  The range is `.optional()` and NOT `.nullish()`: a JSON pack cannot express
+ *  `undefined`, so admitting `null` would give one fact two spellings, and
+ *  `BoardCourt`'s `CourtExceptionRow` has an OPTIONAL range whose absence
+ *  `schedule.ts` is careful never to launder into a 0 (midnight). `seed.ts`
+ *  writes the null the wire wants. */
+export const PackCourtException = z
+  .strictObject({
+    date: z.iso.date(),
+    closed: z.boolean(),
+    openMin: z.number().int().min(0).max(1440).optional(),
+    closeMin: z.number().int().min(0).max(1440).optional(),
+  })
+  .refine(
+    (e) =>
+      e.closed
+        ? e.openMin === undefined && e.closeMin === undefined
+        : e.openMin !== undefined && e.closeMin !== undefined && e.openMin < e.closeMin,
+    {
+      message:
+        "a closed exception must omit openMin/closeMin; an open exception needs both, open before close",
+    },
+  );
+export type PackCourtException = z.infer<typeof PackCourtException>;
+
 /** One court. Fields from `CreateCourt` (`apps/web/src/server/api-v1/
  *  schemas.ts`): `name`, `sort`, `tags` — the last bounded by
- *  `RequiredCourtTags`, `z.array(z.string().min(1).max(40)).max(50)`. */
-export const PackCourt = z.strictObject({
-  ref: PackRef,
-  name: z.string().min(1).max(200),
-  sort: z.number().int().optional(),
-  tags: z.array(z.string().min(1).max(40)).max(50).default([]),
-});
+ *  `RequiredCourtTags`, `z.array(z.string().min(1).max(40)).max(50)`.
+ *
+ *  `hours`/`exceptions` are NOT part of `CreateCourt`: the product has no
+ *  create-with-calendar path at all, so they are a second write
+ *  (`PUT /orgs/{id}/courts/{courtId}/calendar`, a FULL replace) and their
+ *  bounds are that route's — `.max(200)` and `.max(500)`
+ *  (`PutCourtCalendarInput`, `usecases/venues.ts:166-169`).
+ *
+ *  BOTH DEFAULT TO `[]`, and the default is the product's own semantics rather
+ *  than a convenience: ZERO `court_hours` rows is a property of the COURT and
+ *  means open all day, every day (`court-windows.ts`'s note 1, reproduced in
+ *  `checker.ts`'s header). A synthesised 00:00-24:00 row would be a DIFFERENT
+ *  fact — a court that HAS hours, and is therefore closed on any weekday it
+ *  does not name. `seed.ts` reads the empty pair as "declare nothing" and
+ *  never calls the calendar route, because a PUT of two empty arrays deletes
+ *  every row and inserts none, which leaves exactly the state a court already
+ *  has when it was never written. */
+export const PackCourt = z
+  .strictObject({
+    ref: PackRef,
+    name: z.string().min(1).max(200),
+    sort: z.number().int().optional(),
+    tags: z.array(z.string().min(1).max(40)).max(50).default([]),
+    hours: z.array(PackCourtHours).max(200).default([]),
+    exceptions: z.array(PackCourtException).max(500).default([]),
+  })
+  .superRefine((c, ctx) => {
+    assertCourtHoursDoNotOverlap(c.hours, ctx);
+    assertCourtExceptionDatesAreUnique(c.exceptions, ctx);
+  });
 export type PackCourt = z.infer<typeof PackCourt>;
+
+/** The pack-time twin of `assertNoHoursOverlap` (`usecases/venues.ts:200`),
+ *  which is a 422 `COURT_HOURS_OVERLAP` on the calendar route. Refusing it
+ *  here rather than there is the whole point: stage 0 declares the pack clean
+ *  long before seeding, so without this the run aborts mid-seed on an opaque
+ *  HTTP error that names no pack ref.
+ *
+ *  Same algorithm as the product's, deliberately: group by weekday, sort by
+ *  `openMin`, compare each range to its predecessor. `next.openMin <
+ *  prev.closeMin` catches EQUAL starts too (the table's pk is
+ *  `(court_id, weekday, open_min)`), and back-to-back ranges — one's
+ *  `closeMin` equal to the next's `openMin` — are NOT an overlap, which is
+ *  the case the `<` rather than `<=` exists for.
+ *
+ *  The issue is reported at the row's ORIGINAL index, not its sorted one: a
+ *  path a reader can find in the file they wrote. */
+function assertCourtHoursDoNotOverlap(
+  hours: readonly PackCourtHours[],
+  ctx: z.RefinementCtx,
+): void {
+  const byWeekday = new Map<number, { row: PackCourtHours; idx: number }[]>();
+  hours.forEach((row, idx) => {
+    const list = byWeekday.get(row.weekday) ?? [];
+    list.push({ row, idx });
+    byWeekday.set(row.weekday, list);
+  });
+  for (const [weekday, entries] of byWeekday) {
+    const sorted = [...entries].sort(
+      (a, b) => a.row.openMin - b.row.openMin || a.idx - b.idx,
+    );
+    for (let i = 1; i < sorted.length; i++) {
+      const cur = sorted[i]!;
+      const prev = sorted[i - 1]!;
+      if (cur.row.openMin < prev.row.closeMin) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["hours", cur.idx],
+          message: `hours[${cur.idx}] (${cur.row.openMin}-${cur.row.closeMin}) overlaps hours[${prev.idx}] (${prev.row.openMin}-${prev.row.closeMin}) on weekday ${weekday} — the calendar route refuses this with a 422 COURT_HOURS_OVERLAP`,
+        });
+      }
+    }
+  }
+}
+
+/** The pack-time twin of `assertNoDuplicateExceptionDates`
+ *  (`usecases/venues.ts:222`). Two reasons this is not merely tidiness: the
+ *  `court_exceptions` primary key admits exactly one row per (court, date),
+ *  so the second is a seed-time 422; and `checker.ts`'s `courtRangesOn` reads
+ *  `exceptions.find((e) => e.date === ymd)`, so a second row for a date it
+ *  already matched would be silently unreachable — a pack could declare a
+ *  closure the checker never sees. Reported on the LATER row, matching
+ *  first-seen-wins. */
+function assertCourtExceptionDatesAreUnique(
+  exceptions: readonly PackCourtException[],
+  ctx: z.RefinementCtx,
+): void {
+  const firstAt = new Map<string, number>();
+  exceptions.forEach((e, idx) => {
+    const first = firstAt.get(e.date);
+    if (first === undefined) {
+      firstAt.set(e.date, idx);
+      return;
+    }
+    ctx.addIssue({
+      code: "custom",
+      path: ["exceptions", idx],
+      message: `duplicate exception date ${e.date} — exceptions[${first}] already declares it, and a court admits exactly one exception row per date`,
+    });
+  });
+}
 
 /** One venue and its courts. Fields from `CreateVenue` (`name`, `address`,
  *  `sort`). Consumers: B03 seeds them (bench design §10's pre-flight seeds a
