@@ -1065,3 +1065,72 @@ describe("deriveCricketScorecard — enriched band-2 lines", () => {
 - **Spec coverage**: shared model → Tasks 1–4 + 17; band-2 enrichment (ruling 12) → 17–18; view model + transport → 5–9; composition A, tabs, live in place → 10–14; i18n → 8 + 14; consent → 5, 6, 11; fidelity by presence → 4, 6, 10, 12; every other sport (ruling 10) → 7, 13, 15; R10 → 9, 10, 15; four test types → unit (1–14), e2e (15), smoke (15), regression (14, 15); screens and control-set diff → 15–16; `_INDEX.md` → 16. Gap: none found; the OG card is deliberately untouched (spec).
 - **Placeholders**: the only algorithm described in prose is the ledger builder in Task 1 Step 2 (an explicit numbered algorithm with the exact derivations) — acceptable; every other step names the code.
 - **Type consistency**: `MatchCentreDocT` / `CricketViewT` / `TimelineLineT` / `SetsViewT` / `InfoViewT` / `PersonT` / `SideT` / `MsgT` (Task 5) are the names used by Tasks 6–14; `deriveCricketScorecard(input: { events, cfg, lineups })` (Task 1) is what Task 6 calls; `useLiveFixture(fixtureId, initial, realtime)` (Task 10) is what Task 14 wires; `match_centre` is the API field, `matchCentre` the server-render field (Task 9).
+
+
+### Task 19: Console — a decided fixture keeps the pad's post-phase panel (owner ruling 17)
+
+**Added 2026-09-06 by owner decision ("Decision 1 - fix").** Task 18 proved that a band-2
+organiser cannot post `cricket.player.line` through the product: the fixture console and the
+device pad unmount the pad the instant a fixture is `decided` (`outcome !== null`), and the
+module's Scorecard panel is declared for phase `"post"` — which only resolves once the match
+is done. The fix is a mount condition, nothing else: no restyle, no new controls.
+
+**Files (pinned by the Task 18 review, 2026-09-05):**
+- Modify: `apps/web/src/components/v2/fixture-console.tsx:484,801` and
+  `apps/web/src/components/v2/scorepad/device-score-pad.tsx:207,318` — the `decided` unmount
+  branches. Read `pad-host.tsx`'s phase handling and `skins/cricket.tsx:1163-1167`
+  (`resolvePhase`: `done`/`final` → `"post"`) and the panel declaration
+  `packages/engine/src/sports/cricket/cricket.ts:3090-3096` before editing.
+- Modify: `apps/web/e2e/scorepad-v3-cricket-lines.spec.ts` — remove the `test.fixme`
+  (Task 18) so the line-entry walkthrough RUNS; keep every assertion; update the header
+  comment. It lives under `apps/web/e2e/` (the `parallel` project), not `walkthrough/`, so
+  `WALKTHROUGH_SPECS` is untouched — state that in the report.
+- Modify: `docs/superpowers/specs/2026-08-15-scoringpad-v3-prompts/_INDEX.md` — one line:
+  the console now keeps the pad mounted in the post phase for modules that declare
+  post-phase actions (spectator programme, owner ruling 17).
+- Test: `apps/web/src/components/v2/__tests__/fixture-console-post-phase.test.tsx` (new;
+  builder-level per the pad's "builders as data" rule — if the mount decision is a plain
+  predicate, extract it as `shouldMountPad(fixture, spec)` and test THAT) and the same for
+  the device pad if its predicate differs.
+
+**Interfaces:**
+- Produces: `shouldMountPad(args: { decided: boolean; padSpec: PadSpec }): boolean` (or the
+  name the code suggests) — true while the fixture is live, and true after `decided` iff
+  the module's spec declares at least one panel/action for phase `"post"`; false otherwise
+  (unchanged behaviour for every sport without post-phase actions).
+
+- [ ] **Step 1: Failing tests**
+
+```ts
+describe("shouldMountPad", () => {
+  it("mounts while the fixture is live regardless of the spec", () => {
+    expect(shouldMountPad({ decided: false, padSpec: specWithoutPost })).toBe(true);
+  });
+  it("unmounts a decided fixture whose module declares no post-phase actions (unchanged)", () => {
+    expect(shouldMountPad({ decided: true, padSpec: specWithoutPost })).toBe(false);
+  });
+  it("keeps a decided fixture mounted when the module declares a post-phase panel", () => {
+    // spec derived from padSpec(cricketCfg) — assert it really declares phase "post" first
+    expect(specWithPost.panels.some((p) => p.phase === "post")).toBe(true);
+    expect(shouldMountPad({ decided: true, padSpec: specWithPost })).toBe(true);
+  });
+});
+```
+
+- [ ] **Step 2: Run — failures.** **Step 3: Implement** the predicate; use it at all four
+  mount sites; a decided fixture with post-phase actions renders the pad in its post phase
+  BELOW the existing result summary (the summary stays first; nothing else moves).
+  **Step 4: Run — green.** Mutants: (a) `return !decided` (old behaviour) → the third test
+  reds; (b) drop the `phase === "post"` check → the second test reds. Then the e2e: fresh
+  `t19` env (`--server`), run the WHOLE `scorepad-v3-cricket-lines.spec.ts` — it must now
+  pass through the pad: open More → player line → innings 1 → chips → submit; `expect.poll`
+  the ledger for the `cricket.player.line` event deep-equal to the tapped values, and the
+  legacy 7-field pair; then screens of the More sheet at 320 and 768 (no horizontal scroll;
+  every chip ≥ 44 px by `elementFromPoint`) saved under `apps/web/e2e/__screens__/spectator-w1/`
+  and listed in the report. Also run `scorepad-v3-football.spec.ts` in full (its comment at
+  :1236-1239 documents the old gap — a football fixture has no post-phase panel, so its
+  behaviour must be UNCHANGED; if any assertion there depended on the unmount, report it,
+  do not weaken it). `down --label t19` after.
+  **Step 5: Commit** — "console(pad): a decided fixture keeps the pad's post-phase panel when the module declares one; the player-line walkthrough runs for real".
+
+---

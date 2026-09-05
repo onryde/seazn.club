@@ -197,3 +197,9 @@ resolver in W2 consumed by W3 and W5. `colors.primary` is a key nothing writes.
 runs after W4 from `plans/2026-09-05-spectator-w5-public-team-page.md` (option A, `tm-*`
 testids); its ten prompt questions carry the product-owner recommendations unless the
 owner rules otherwise at re-pin.
+
+**Owner ruling 17 (2026-09-06 00:5x): "Decision 1 - fix"** — the organiser console's mount
+condition is fixed in this wave (plan Task 19): a decided fixture keeps the pad's post-phase
+panel when the sport module declares post-phase actions, so band-2 player lines can be entered
+after the result; the Task 18 walkthrough runs for real. Bands 1 and 2 stay offered. This is
+the programme's second deliberate console/pad touch (the first was ruling 12's Task 18).
