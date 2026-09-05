@@ -105,10 +105,16 @@ overlay tasks cite `_THEMES.md` sections instead of restating values.
 - Worktree deps installed (`pnpm install --frozen-lockfile`, engine resolves
   inside the worktree); `.env.local` symlinked in root and `apps/web`
   (relative targets).
-- Postgres under seazn-env label `ovl`: `DATABASE_URL=postgresql://postgres@127.0.0.1:54405/seazn_ovl
-  DATABASE_SSL=disable`, schema V391 + sport catalog. `seazn-env status`
-  shows it; `seazn-env down --label ovl` removes it. No prod server yet
-  (`up --label ovl --server` when e2e starts).
+- **The `ovl` database is TORN DOWN** (2026-09-06, `seazn-env down --label
+  ovl`, port 54405 confirmed free). It was removed on purpose once the
+  baseline below was recorded and implementation was deferred; this repo does
+  not keep standing environments. Recreate it in about thirteen seconds when
+  W1 starts: `~/.claude/skills/seazn-local-env/scripts/seazn-env.sh up --label
+  ovl` from this worktree, then `eval "$(… env --label ovl)"`. It comes back
+  as `DATABASE_URL=postgresql://postgres@127.0.0.1:54405/seazn_ovl
+  DATABASE_SSL=disable` (the port is derived from the label, so it is stable),
+  schema V391 plus the sport catalog. Add `--server` for e2e and smoke, and
+  `--placement` before trusting `schedule-build-honours-locks.test.ts`.
 - Baseline `apps/web` vitest against that DB: see "Baseline" below.
 - Shell guard in a worktree session: `/usr/bin/git` in separate plain calls,
   no heredocs, no `eval`/sourcing, Write tool for files, no absolute paths
