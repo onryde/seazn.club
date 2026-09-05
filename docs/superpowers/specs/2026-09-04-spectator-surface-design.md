@@ -234,6 +234,19 @@ for photos. We copy the *level of detail*, not the site.
   proof is end to end: the walkthrough posts an event through the API while the
   anonymous page is open and asserts the DOM changes within one poll interval with no
   navigation; a test that reloads to see the change has not tested this rule.
+- **R11 — Visual sign-off, per screen, cosmetics included** (owner, 2026-09-05: "make sure
+  that visually verify all pages including cosmetic, button, text alignment, etc."). A wave
+  is not done when its suites are green: every page, every tab and every state it touches
+  is screenshotted at 320, 768 and 1280 on a prod build with real data and READ by a person
+  — alignment and baselines, spacing rhythm, button and pill sizes and their consistency
+  across screens, text wrapping and truncation (a 43-character name is the test), colour
+  and contrast in both themes where the page has them, icon alignment, tap targets ≥ 44 px
+  measured with `elementFromPoint`, overlaps and clipped text, empty and error states. The
+  result is a per-screen verdict table appended to this document ("W<n> sign-off — per-
+  screen verdicts"), each row naming what was seen, not what must be true. A cosmetic
+  defect is a defect (the competition-desk ruling): it is fixed before the PR, never parked
+  as polish. The controller does this read itself and may add an Opus visual reviewer; a
+  suite, a linter or a no-horizontal-scroll gate never stands in for it.
 
 ## The shared model (W1; W2 and W3 key off it)
 

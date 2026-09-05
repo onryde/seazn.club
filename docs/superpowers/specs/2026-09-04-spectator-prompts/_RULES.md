@@ -81,6 +81,13 @@ acquisition channel, so the share loop is a feature, not chrome.
   event through the API while the anonymous page is OPEN and assert the DOM
   changes within one poll interval with no navigation. A test that reloads to
   see the change has not tested this rule.
+- **R11 — Visual sign-off, per screen, cosmetics included** (owner, 2026-09-05).
+  Green suites do not finish a wave. Every page, tab and state is screenshotted
+  at 320/768/1280 on a prod build with real data and READ: alignment, spacing,
+  button/pill size and consistency, wrapping and truncation (43-char name),
+  contrast, icon alignment, tap targets ≥ 44 px by `elementFromPoint`, overlaps,
+  clipped text, empty/error states. Per-screen verdict table in the spec, each
+  row saying what was SEEN. A cosmetic defect is a defect — fixed before the PR.
 
 ## Repo traps that bite this surface specifically
 

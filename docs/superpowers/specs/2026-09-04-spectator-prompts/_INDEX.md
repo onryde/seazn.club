@@ -57,6 +57,10 @@ peer session as the other.
     (2026-09-05.) The band line on the Info tab, and the band-2 player-line
     enrichment (engine schema + fold + the pad's line-entry form) are pulled
     into W1 as plan Tasks 17–18 — the programme's one deliberate scorepad touch.
+13. **"Make sure that visually verify all pages including cosmetic, button, text
+    alignment, etc."** (2026-09-05.) Standing rule R11: per-screen visual
+    sign-off at 320/768/1280 with a written verdict table in the spec; cosmetic
+    defects are defects, fixed before the PR.
 11. **"Make sure that all live pages are live update without reload."**
     (2026-09-05.) Standing rule R10 in the spec and `_RULES.md`: every public
     surface showing a match in play updates in place over the existing
