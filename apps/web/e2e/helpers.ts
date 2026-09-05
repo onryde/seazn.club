@@ -996,6 +996,47 @@ export async function invalidateOrgEntitlements(
  *  the wrong rung's numbers. That landmine has now been closed five times in
  *  this wave (passPrice, recordPassPurchase, fetchPassCheckoutClientSecret,
  *  smoke's grantPass, and here); a required parameter is what stops a sixth. */
+/**
+ * One `plan_entitlements` cell, live — the number the resolver enforces and the
+ * number `/pricing` renders, read from the same row.
+ *
+ * THREE outcomes, and the third is why this returns `number | null | undefined`
+ * rather than a number: a row with a null `int_value` is UNLIMITED, and NO ROW
+ * is a denial. Collapsing them lets a table cell reading "∞" satisfy a plan
+ * that has no such grant at all.
+ *
+ * It exists because the pricing-matrix assertions in `pricing-v3.spec.ts` were
+ * hardcoded figures, and every repricing left them asserting yesterday's
+ * numbers against a page that had moved — the same failure this repo's own
+ * `price-kit.ts` header describes for prices. The matrix is the source of truth
+ * for the caps exactly as `stripe-plans.json` is for the amounts.
+ */
+export async function planCapSql(
+  featureKey: string,
+  planKey: string,
+): Promise<number | null | undefined> {
+  return withDb(async (sql) => {
+    const rows = await sql<{ int_value: number | null }[]>`
+      select int_value from plan_entitlements
+       where feature_key = ${featureKey} and plan_key = ${planKey}`;
+    return rows[0]?.int_value;
+  });
+}
+
+/** The same cell as a BOOLEAN grant. `undefined` when the plan has no row —
+ *  which the resolver reads as denied, and the table renders as a dash. */
+export async function planFlagSql(
+  featureKey: string,
+  planKey: string,
+): Promise<boolean | null | undefined> {
+  return withDb(async (sql) => {
+    const rows = await sql<{ bool_value: boolean | null }[]>`
+      select bool_value from plan_entitlements
+       where feature_key = ${featureKey} and plan_key = ${planKey}`;
+    return rows[0]?.bool_value;
+  });
+}
+
 export async function grantCompetitionPassSql(
   orgId: string,
   competitionId: string,

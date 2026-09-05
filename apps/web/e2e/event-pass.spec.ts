@@ -23,7 +23,7 @@ import type { PassLockReason } from "../src/lib/entitlements";
 // zero tests instead of failing loudly. Every money figure below — rendered or
 // charged — comes from the seed through this, because these numbers have now
 // moved three times and a literal has rotted every time.
-import { passLabel, passMinor } from "./price-kit";
+import { HIDDEN_PASS_RUNGS, SELLABLE_PASS_RUNGS, passLabel, passMinor } from "./price-kit";
 
 // Event Pass, end to end, through a REAL Stripe test-mode purchase (task 22).
 //
@@ -1059,17 +1059,30 @@ async function expectPricedForTheRung(
 }
 
 test.describe("the rung the buyer picks is the rung Stripe is asked for", () => {
-  test("L and M each reach the wire, and Stripe quotes each at its own price", async ({ page }) => {
+  // Owner decision 2026-09-05 took the L rung off sale, and this test is where
+  // that lands hardest: it used to pick L in the ladder and press buy. It could
+  // not simply lose that leg. What it proved was the SEAM — that the rung the
+  // picker highlights is the rung the browser posts and the rung Stripe prices —
+  // and a one-rung ladder cannot witness a seam at all, because every possible
+  // answer is the right one.
+  //
+  // So it is split along the line the decision draws. Through the UI: the ladder
+  // offers exactly the rungs on sale, and the one it opens on is the one that
+  // reaches Stripe at its own price. Through the API: the withdrawn rung is
+  // still a real, priced, purchasable product — the R13 dormancy requirement,
+  // kept because the Stripe price and the backend stay live and an org that
+  // already holds an L pass must go on working. Nothing but a direct POST can
+  // reach it, which is exactly the claim.
+  test("the ladder offers only what is on sale, and that rung reaches Stripe at its own price", async ({
+    page,
+  }) => {
     test.setTimeout(180_000);
     const rig = await seedRig("wire");
     await signIn(page, rig.ownerEmail);
 
-    // Probe the EXPENSIVE rung. An unsynced L is the ordinary state of any
-    // environment where `stripe:sync` has not run for it, and probing M instead
-    // would turn that into a failure at the Stripe iframe rather than a skip.
-    const probeL = await passCheckoutProbeStatus(page.request, rig.orgId, rig.compId, "event_pass_l");
-    test.skip(probeL >= 500, "Stripe not usable / event_pass_l unsynced — skipping");
-    expect(probeL, "L must not 503 — `npm run stripe:sync` writes its one-time price id").toBe(200);
+    const probe = await passCheckoutProbeStatus(page.request, rig.orgId, rig.compId);
+    test.skip(probe >= 500, "Stripe not usable / event_pass unsynced — skipping");
+    expect(probe, "the entry rung must not 503 — `npm run stripe:sync` writes its price id").toBe(200);
 
     // Every pass-checkout POST this page makes, exactly as the browser sent it,
     // and the client_secret that came back (`<session id>_secret_…`) so the
@@ -1087,59 +1100,85 @@ test.describe("the rung the buyer picks is the rung Stripe is asked for", () => 
       if (body?.data?.client_secret) secrets.push(body.data.client_secret);
     });
 
-    /** Pick `rung` in the ladder, press buy, and return STRIPE's view of the
-     *  session that opened — asserting the wire body on the way through. */
-    async function openThroughTheUi(rung: PassKey): Promise<Stripe.Checkout.Session> {
-      const seen = posted.length;
-      // Both watermarks, not just the request one. The response handler runs an
-      // `await res.json()`, so the secret lands strictly later than its POST —
-      // and on the SECOND call through here a `secrets.length > 0` poll is
-      // already satisfied by the FIRST leg's secret, so a slow body would let
-      // this read the previous rung's session id. Everything downstream then
-      // asserts against the wrong session and reds for the wrong reason.
-      const seenSecrets = secrets.length;
-      await page.goto(upgradeUrl(rig));
-      // M is options[0] and therefore pre-selected. Asserted, not assumed: "L
-      // reached the wire" proves nothing if L was what the page opened on.
-      await expect(page.locator('[data-pass-rung="event_pass"][data-pass-rung-active]')).toBeVisible();
-      if (rung !== "event_pass") await page.locator(`[data-pass-rung="${rung}"]`).click();
-      await expect(page.locator(`[data-pass-rung="${rung}"][data-pass-rung-active]`)).toBeVisible();
+    await page.goto(upgradeUrl(rig));
 
-      await page.locator("[data-pass-buy]").click();
-      // The sheet mounting at all is the proof the route did not 503 for L.
-      await expect(page.locator('iframe[src*="stripe.com"]').first()).toBeVisible({ timeout: 45_000 });
-      await expect.poll(() => posted.length, { timeout: 15_000 }).toBeGreaterThan(seen);
-      await expect.poll(() => secrets.length, { timeout: 15_000 }).toBeGreaterThan(seenSecrets);
+    // THE CONTROL SET, read out of the live DOM. Membership and order, against
+    // the authority — not "L is absent", which a ladder that rendered nothing
+    // would also satisfy.
+    const offered = await page
+      .locator("[data-pass-rung]")
+      .evaluateAll((els) => els.map((el) => el.getAttribute("data-pass-rung")!));
+    expect(offered).toEqual([...SELLABLE_PASS_RUNGS]);
+    for (const hidden of HIDDEN_PASS_RUNGS) expect(offered).not.toContain(hidden);
+    expect(HIDDEN_PASS_RUNGS.length).toBeGreaterThan(0);
 
-      const body = JSON.parse(posted[posted.length - 1]!) as { pass_key?: string; competition_id?: string };
-      expect(body.competition_id).toBe(rig.compId);
-      expect(body.pass_key, "the browser asked Stripe for a rung the buyer did not pick").toBe(rung);
+    // The rung the ladder OPENS ON — asserted, not assumed. event-pass.spec.ts
+    // presses [data-pass-buy] without touching the picker in half a dozen other
+    // tests, so whatever is pre-selected here is what those buy.
+    const opensOn = SELLABLE_PASS_RUNGS[0]!;
+    await expect(page.locator(`[data-pass-rung="${opensOn}"][data-pass-rung-active]`)).toBeVisible();
 
-      // `line_items` is not returned by default, and it is what says WHICH
-      // Stripe price the route actually put in the session.
-      const session = await stripe.checkout.sessions.retrieve(
-        secrets[secrets.length - 1]!.split("_secret_")[0]!,
-        { expand: ["line_items"] },
-      );
-      await stripe.checkout.sessions.expire(session.id).catch(() => undefined);
-      return session;
-    }
+    await page.locator("[data-pass-buy]").click();
+    await expect(page.locator('iframe[src*="stripe.com"]').first()).toBeVisible({ timeout: 45_000 });
+    await expect.poll(() => posted.length, { timeout: 15_000 }).toBeGreaterThan(0);
+    await expect.poll(() => secrets.length, { timeout: 15_000 }).toBeGreaterThan(0);
 
-    const l = await openThroughTheUi("event_pass_l");
-    expect(l.metadata?.pass_key).toBe("event_pass_l");
-    await expectPricedForTheRung(l, "event_pass_l");
+    const body = JSON.parse(posted[posted.length - 1]!) as { pass_key?: string; competition_id?: string };
+    expect(body.competition_id).toBe(rig.compId);
+    expect(body.pass_key, "the browser asked Stripe for a rung the buyer did not pick").toBe(opensOn);
 
-    const m = await openThroughTheUi("event_pass");
-    expect(m.metadata?.pass_key).toBe("event_pass");
-    await expectPricedForTheRung(m, "event_pass");
+    // `line_items` is not returned by default, and it is what says WHICH Stripe
+    // price the route actually put in the session.
+    const session = await stripe.checkout.sessions.retrieve(
+      secrets[secrets.length - 1]!.split("_secret_")[0]!,
+      { expand: ["line_items"] },
+    );
+    await stripe.checkout.sessions.expire(session.id).catch(() => undefined);
+    expect(session.metadata?.pass_key).toBe(opensOn);
+    await expectPricedForTheRung(session, opensOn);
+  });
 
-    // Currency-agnostic backstop: whatever the buyer's currency, L costs more.
-    expect(l.currency).toBe(m.currency);
-    expect(l.amount_total!).toBeGreaterThan(m.amount_total!);
-    // Two rungs, two sessions. A rung-blind idempotency key would hand the
-    // second press the FIRST session, and the two amounts would then agree by
-    // accident rather than because each rung resolved its own price.
-    expect(l.id).not.toBe(m.id);
+  test("a rung that is off sale still prices correctly at the API — dormant, not deleted", async ({
+    page,
+  }) => {
+    // THE DORMANCY REQUIREMENT, driven end to end. The rung keeps its plans
+    // row, its stripe-plans.json entry and its Stripe price (R13: backend and
+    // price kept, no purchase UI anywhere), so an org that already holds one
+    // goes on working and the rung can be put back on sale without a repricing.
+    // Nothing in the product offers it — the test above is what proves that —
+    // so this is the only way left to exercise the path, which is precisely why
+    // it is the one most likely to rot.
+    test.setTimeout(180_000);
+    const hidden = HIDDEN_PASS_RUNGS[0];
+    test.skip(hidden === undefined, "no rung is off sale — nothing to keep dormant");
+    const rig = await seedRig("dorm");
+    await signIn(page, rig.ownerEmail);
+
+    const probe = await passCheckoutProbeStatus(page.request, rig.orgId, rig.compId, hidden!);
+    test.skip(probe >= 500, `Stripe not usable / ${hidden} unsynced — skipping`);
+    expect(
+      probe,
+      `${hidden} is off sale but must stay PURCHASABLE at the API — a 4xx here means the rung was retired, not hidden`,
+    ).toBe(200);
+
+    // …and Stripe must quote it at its OWN price, not the entry rung's. That is
+    // the half a status code cannot see, and the mis-sale the rung's own price
+    // point exists to prevent.
+    const res = await apiJson(page.request, "/api/billing/pass-checkout", "POST", {
+      competition_id: rig.compId,
+      pass_key: hidden,
+    });
+    const secret = (res.data as { client_secret?: string } | undefined)?.client_secret;
+    expect(secret, "no client_secret came back for the dormant rung").toBeTruthy();
+    const session = await stripe.checkout.sessions.retrieve(secret!.split("_secret_")[0]!, {
+      expand: ["line_items"],
+    });
+    await stripe.checkout.sessions.expire(session.id).catch(() => undefined);
+    expect(session.metadata?.pass_key).toBe(hidden);
+    await expectPricedForTheRung(session, hidden!);
+    // The two rungs must genuinely differ in price, or "its own price" is
+    // satisfied by the entry rung's amount.
+    expect(session.amount_total).not.toBe(passMinor(SELLABLE_PASS_RUNGS[0]!, "usd"));
   });
 });
 

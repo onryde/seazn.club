@@ -3059,9 +3059,10 @@ async function passRungLSuite(): Promise<void> {
       lRow?.pass_key === "event_pass_l" && lRow?.stripe_payment_intent === lIntent,
     );
     const afterL = await walletBalance(orgId);
+    const lGrant = afterL - startBalance;
     check(
-      "pass L/paid: the one-time +25 AI credit grant fires on an L purchase",
-      afterL - startBalance === 25,
+      "pass L/paid: a one-time AI credit grant fires on an L purchase",
+      lGrant > 0,
     );
 
     const mIntent = `pi_smoke_${tag}_m`;
@@ -3076,9 +3077,21 @@ async function passRungLSuite(): Promise<void> {
       "pass L/paid: the same writer files an M purchase as event_pass — the rung is read from the session, not hardcoded",
       mAck === 200 && mRow?.pass_key === "event_pass" && mRow?.stripe_payment_intent === mIntent,
     );
+    // PER RUNG since entitlements v18 W2 T5, and this check asserted the
+    // opposite: it pinned a FLAT 25 on both rungs, with a literal, and W2 T12
+    // then set L to 35. It had been red on the L leg ever since — a stale
+    // assertion in the one path a customer can no longer reach, now that the L
+    // rung is off sale (owner decision 2026-09-05), which is exactly why it
+    // went unnoticed.
+    //
+    // The rungs are compared to EACH OTHER rather than to numbers. Smoke cannot
+    // import `PASS_CREDIT_GRANT` (see the PASS_RUNGS comment above — no `@/`
+    // alias, no JSON import), and a literal here is what rotted; the ordering
+    // is the product rule and it moves with the constant.
+    const mGrant = (await walletBalance(orgId)) - afterL;
     check(
-      "pass L/paid: M grants the same 25 — PASS_CREDIT_GRANT is flat across rungs, never parametrised by one",
-      (await walletBalance(orgId)) - afterL === 25,
+      `pass L/paid: each rung grants its OWN credit top-up — L ${lGrant}, M ${mGrant}, both positive and NOT equal`,
+      mGrant > 0 && lGrant > mGrant,
     );
   } else {
     await grantPass(orgId, lComp.id, "event_pass_l");

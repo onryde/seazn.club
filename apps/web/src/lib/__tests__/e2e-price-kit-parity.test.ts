@@ -1,14 +1,24 @@
 import { describe, it, expect } from "vitest";
 import {
   ALL_PLAN_KEYS,
+  HIDDEN_PASS_KEYS,
   PASS_KEYS,
+  SELLABLE_PASS_KEYS,
   SUPPORTED_CURRENCIES,
   formatMinor,
   passPrice,
   proPrice,
   type Currency,
 } from "@/lib/currency";
-import { money, passMinor, proMinor, passLabel, proAnnualPerMonthLabel } from "../../../e2e/price-kit";
+import {
+  HIDDEN_PASS_RUNGS,
+  SELLABLE_PASS_RUNGS,
+  money,
+  passMinor,
+  proMinor,
+  passLabel,
+  proAnnualPerMonthLabel,
+} from "../../../e2e/price-kit";
 
 /**
  * The e2e suite cannot import `@/lib/currency` at RUNTIME.
@@ -91,5 +101,28 @@ describe("e2e/price-kit mirrors lib/currency", () => {
     expect(PASS_KEYS.length).toBeGreaterThanOrEqual(2);
     expect(ALL_PLAN_KEYS).toContain("pro");
     for (const key of PASS_KEYS) expect(passMinor(key, "usd")).toBeGreaterThan(0);
+  });
+
+  // WHICH RUNGS ARE ON SALE, restated in the kit for the same reason every
+  // price is: a VALUE import of `SELLABLE_PASS_KEYS` from a spec drags the
+  // app's bare `stripe-plans.json` import into Playwright's ESM loader, the
+  // loader refuses the JSON, and the importing spec collects ZERO TESTS. That
+  // is a whole file silently leaving the run, which is worse than a stale
+  // literal — so the lists are mirrored, and mirrored means guarded here.
+  //
+  // ORDER matters as well as membership: the e2e ladder assertion compares the
+  // rendered control set to `SELLABLE_PASS_RUNGS` element for element, and a
+  // reordered mirror would make that comparison fail against a correct page.
+  it("mirrors the sellable and hidden rung lists exactly, in order", () => {
+    expect([...SELLABLE_PASS_RUNGS]).toEqual([...SELLABLE_PASS_KEYS]);
+    expect([...HIDDEN_PASS_RUNGS]).toEqual([...HIDDEN_PASS_KEYS]);
+    // …and together they are still the whole ladder, so a rung added to
+    // `PASS_KEYS` cannot land in neither list and vanish from the e2e suite's
+    // view of the shop.
+    expect([...SELLABLE_PASS_RUNGS, ...HIDDEN_PASS_RUNGS].sort()).toEqual([...PASS_KEYS].sort());
+    // Anti-vacuity: something really is on sale, and something really is
+    // hidden, or both assertions above are about empty arrays.
+    expect(SELLABLE_PASS_RUNGS.length).toBeGreaterThan(0);
+    expect(HIDDEN_PASS_RUNGS.length).toBeGreaterThan(0);
   });
 });

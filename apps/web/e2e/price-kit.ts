@@ -66,6 +66,24 @@ export function money(
   }).format(amount);
 }
 
+/**
+ * WHICH RUNGS ARE ON SALE, and which are dormant — restated for the same reason
+ * every price in this file is, and guarded the same way.
+ *
+ * `SELLABLE_PASS_KEYS` in `src/lib/currency.ts` is the one authority. A VALUE
+ * import of it from a spec drags `stripe-plans.json` in through the app's own
+ * bare JSON import, Node's ESM loader refuses it, and the importing spec
+ * collects ZERO TESTS — the exact failure this file's header describes, and the
+ * one that cost a run before these two lines were moved here.
+ *
+ * `satisfies readonly PassKey[]` makes a rung that is not a rung a compile
+ * error; `e2e-price-kit-parity.test.ts` compares both lists to the production
+ * ones, member for member and in order, so a rung going on or off sale reds
+ * there rather than leaving the e2e suite asserting last month's shop.
+ */
+export const SELLABLE_PASS_RUNGS = ["event_pass"] as const satisfies readonly PassKey[];
+export const HIDDEN_PASS_RUNGS = ["event_pass_l"] as const satisfies readonly PassKey[];
+
 /** What an Event Pass rung costs, in MINOR units — the figure Stripe charges,
  *  so this is what `pi.amount`, `invoice.total`, `customer.balance` and
  *  `refund.amount` are asserted against. */
