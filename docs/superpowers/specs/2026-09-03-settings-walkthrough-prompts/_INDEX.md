@@ -396,6 +396,38 @@ for a "red Community leg" in `auth.setup.ts`; that leg was not red, it was
 this artifact, and the advice was retracted. A post-rebuild checklist is three
 items: manifest probe, `lsof` the old port, and re-run setup if the port moved.
 
+### A `mobile.spec.ts` sweep run beside a walkthrough leg reds on OTHER tests
+
+Cost four sweeps on 2026-09-05. Three consecutive runs failed on three
+DIFFERENT tests, none related to the change under test — `RS009` (assign
+sheet), then portfolio panels P1/P2/P4, then `RS012` (pool summary banner) —
+and every one cleared on re-run with nothing changed. Cause: shared-state
+churn from a concurrent walkthrough run, confirmed by another task's artifacts
+sitting in the same `test-results/` directory mid-sweep. `/o/{slug}/c/new` was
+also checked directly and renders `template-gallery` fine (200, count 1), so
+the portfolio red was never a live defect.
+
+**Anyone sweeping the width matrix while a walkthrough leg runs will get a red
+that looks like a product defect and is not.** Re-run before reporting one.
+Failure class 8, three times in one afternoon.
+
+### The phone fix, measured before and after
+
+Name box, 320→430: **6→182, 46→222, 61→168, 76→183, 116→223**. It WRAPS rather
+than compresses — row height 44→94, `sameLine` false at all five phone widths.
+
+**Not monotonic, and worth knowing before anyone tunes it:** 375 lands LOWER
+(168) than 320 (182), because at 375 the badge still fits on line 1 and takes
+57+12 from the name, while at 320 it wraps away. Both clear the 140 floor, but
+the floor is not a soft margin at 375 — a change that looks safe at 320 can
+breach it at 375 first.
+
+**≥768 proven byte-identical, measured not asserted:** 768 → 478/246/44, 834 →
+544/312/44, 1280 → 734/502/44, every figure the same before and after. Control
+set 33 controls, identical membership, order and repeats at all eight widths.
+A composition, not a groomed shrink. Full sweep: **289 passed, 5 skipped, 0
+failed** across all seven projects, every run a total with zero "did not run".
+
 ### W2 findings from driving the tabs
 
 **F8 — `e2e/api-keys.spec.ts:30` may not be testing the key at all.**
