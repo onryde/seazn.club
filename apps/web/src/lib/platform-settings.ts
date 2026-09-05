@@ -45,8 +45,10 @@ export function __platformFeeCacheKeyForTests(): string {
 }
 
 /** @internal — exported for tests. `envFallback` is the branch EVERY rejected
- *  jsonb row lands on, so it needs a guard that runs without a database;
- *  platform-settings.test.ts is `skipIf(!HAS_DB)` and CI has no DATABASE_URL. */
+ *  jsonb row lands on, so it needs a guard that runs with no database and on
+ *  every trigger: `platform-settings.test.ts` is `skipIf(!HAS_DB)`, and while
+ *  ci.yml's `smoke-db` job does provide a DATABASE_URL, ci.yml runs on
+ *  `pull_request:` only — a push straight to `main` gets none of it. */
 export function __envFallbackForTests(): number {
   return envFallback();
 }

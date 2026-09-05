@@ -391,10 +391,42 @@ export async function ensureActiveOrg(userId: string): Promise<string> {
   return created.id;
 }
 
-/** Validate a post-auth redirect target is a safe, internal path. */
+/**
+ * Validate a post-auth redirect target is a safe, internal path.
+ *
+ * PREFIX CHECKS ARE NOT ENOUGH, and the old `startsWith("/") && !startsWith("//")`
+ * pair was an open redirect. A backslash is not a slash to `String.startsWith`
+ * but IS one to the URL parser, which normalises `\` to `/` in the authority
+ * position: `new URL("/\\evil.com", "https://seazn.club").href` is
+ * `https://evil.com/`. So `/\evil.com` and `/\/evil.com` both passed and both
+ * resolved off-site. That mattered because the value reaches
+ * `new URL(landing.redirect, baseUrl(req))` in the Google callback
+ * (api/auth/google/callback/route.ts) and a bare `redirect()` on the login
+ * page — the second of which sends a signed-in victim off-site in one click,
+ * and the first delivers a signed-out victim to the attacker's page having
+ * just completed a genuine sign-in.
+ *
+ * The rule is therefore expressed as the property actually wanted — "this
+ * resolves to the SAME origin" — rather than as prefix arithmetic that has to
+ * anticipate every character the URL parser treats as a separator. The literal
+ * checks are kept in front as a cheap reject, not as the guarantee.
+ */
 export function safeNextPath(next: unknown): string | null {
   if (typeof next !== "string") return null;
   if (!next.startsWith("/") || next.startsWith("//")) return null;
+  // Backslashes and control characters (CR/LF included, which have no business
+  // in a redirect target) never appear in a legitimate internal path.
+  // eslint-disable-next-line no-control-regex
+  if (/[\\\u0000-\u001f\u007f]/.test(next)) return null;
+  // The authority: resolve against a sentinel origin and require it to survive.
+  // Anything that escapes — scheme, host, or an authority smuggled through a
+  // separator this function does not know about — changes the origin and is
+  // rejected without needing to be enumerated.
+  try {
+    if (new URL(next, "https://x.invalid").origin !== "https://x.invalid") return null;
+  } catch {
+    return null;
+  }
   return next;
 }
 

@@ -1,11 +1,18 @@
-// Guards the SEAM, not the decoder — and does it WITHOUT a database, because
-// that is exactly the gap. `platform-settings.test.ts` is `skipIf(!HAS_DB)`
-// and CI's unit job has never had DATABASE_URL, so reverting
-// `decodeFeePercent(row?.value)` back to `Number(row?.value)` — the original
-// F5 defect — leaves the whole pipeline green. `platform-fee.test.ts` cannot
-// see it either: it only exercises the pure function and never imports this
-// module. So the db and cache are mocked here and the real
-// `platformFeeDefault()` is driven through them.
+// Guards the SEAM, not the decoder, and without a database.
+//
+// THE GAP IS NARROWER THAN THIS FILE FIRST CLAIMED, and the correction matters
+// because the false version would have justified far more than it should.
+// `smoke-db` (ci.yml) DOES set DATABASE_URL and DOES run `src/lib`, so
+// `platform-settings.test.ts` is not skipped there and its jsonb case already
+// kills a revert of `decodeFeePercent(row?.value)` to `Number(row?.value)`.
+// The real gap is the TRIGGER: `ci.yml` is `on: pull_request:` only, so a
+// commit pushed straight to `main` gets no run of it at all — and the unit job
+// that does run everywhere has no DATABASE_URL, so the DB suite self-skips
+// there. `platform-fee.test.ts` cannot cover the seam either; it exercises the
+// pure function and never imports this module.
+//
+// So: mocked db and cache, driving the real `platformFeeDefault()`, in a test
+// that needs no database and therefore runs in every job on every trigger.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const row = vi.hoisted(() => ({ value: undefined as unknown }));

@@ -86,45 +86,61 @@ driven — see `_RULES.md` §8.
 | F4 | `/settings` forwards only `tab`; `/settings/billing`, `/settings/connect` and `/settings/payments` rebuild the full query string. Its searchParams is typed `{tab?: string}` and drops the rest. **Customer impact is NOT nil** — see the correction below. | **FIXED** — follow-up wave | W1.5 |
 | F5 | `lib/platform-settings.ts:48` did `Number(row?.value)` on a jsonb column, so a row holding jsonb `null`/`false`/`""`/`[]` read as a finite, in-range `0` and served a **0% platform cut** to the settings page and to every checkout, overriding the fallback an ABSENT row correctly reaches. | **FIXED** — follow-up wave, mutation-killed | W1.5 |
 
-## F7 — the email-change fix is PARTIAL, and the common case is still broken
+## F7 — FIXED on this branch, with two branches still residual
 
-**Open. Not fixed on this branch.** Found by the max-effort review of W1.5,
-verified against the tree.
+`bf16ea599`. **This section previously said "Open. Not fixed on this branch",
+which was true when written and false by the time a reviewer read it** — the
+index is what a fresh session reads first, so a stale "open" here costs more
+than no entry at all.
 
-`/settings/page.tsx` now forwards the whole query — but `requirePageAuth()` runs
-FIRST (`page.tsx:21`), and it exits before the forwarding code on three
-branches: `if (!user) redirect("/login")`, `orgs.length === 0 -> /orgs/new`, and
-`role === "scorer" -> /my-matches` (`page-auth.ts:37,39,42`). Each is a bare
-`redirect()` that takes no return param, and `login/page.tsx` accepts none.
+**What was wrong.** `/settings` forwarded the whole query, but
+`requirePageAuth()` runs first and its unauthenticated branch is a bare
+`redirect("/login")` carrying no destination (`page-auth.ts:37`). That is the
+DEFAULT path for the one param the shim exists to carry:
+`/api/auth/change-email/confirm` needs no session — it acts on the token alone —
+and the link is mailed to the user's NEW address, so it is normally opened with
+no cookie. The address change committed and the outcome was still discarded.
 
-That is not an edge case here, it is the DEFAULT path.
-`/api/auth/change-email/confirm` requires **no session** — it acts on the token
-alone (`confirm/route.ts:9-11`, no auth call anywhere in the handler) — and the
-link is mailed to the user's NEW address. So it is routinely opened in whatever
-browser the mail client hands it to, with no `seazn` cookie. The address change
-COMMITS, then the redirect lands on `/login` and `email_change` is discarded one
-hop later than it used to be. `success`, `taken` and `expired` remain
-indistinguishable for exactly the users most likely to hit them.
+**What fixed it.** No new auth machinery. `AuthForm` already forwards a `next`
+to the magic-link/signup/google routes, `safeNextPath` already validates it, and
+`postAuthLanding` already honours it — `LoginPage` simply never read `?next=`
+from its own URL. The shim checks auth itself so it can build the destination
+from the query it is holding.
 
-**So W1.5's F4 fix is necessary and insufficient.** It is right for a signed-in,
-non-scorer user with an org — and that is the user the new e2e test drives,
-because the walkthrough leg runs as the shared Pro org member. The test is
-structurally blind to the case that matters most.
+**And it opened a hole, which is the part worth remembering.** Making
+`/login?next=` a reachable GET turned a latent `safeNextPath` weakness into a
+live open redirect. `startsWith("/") && !startsWith("//")` treats a backslash as
+an ordinary character; the URL parser normalises it to a slash in the authority
+position, so `/\evil.com` passed and
+`new URL("/\evil.com", "https://seazn.club").href` is `https://evil.com/` —
+verified in node, not reasoned. Two live paths: a signed-in victim is thrown
+off-site by the login page's own `redirect()`, and a signed-out victim completes
+a real sign-in and is delivered to the attacker's page authenticated.
+`safeNextPath` now validates the property actually wanted — resolves to the same
+origin — instead of prefix arithmetic, and has the repo's first tests for it
+(`safe-next-path.test.ts`), which fail 2/5 against the old implementation.
 
-**Why it was not fixed here:** closing it means a return-param contract through
-`/login` (or moving the banner to a surface that does not require auth), which
-is an auth-flow change with a blast radius well outside a settings walkthrough,
-and this session had no environment up to drive it. Recorded rather than
-half-done.
+**A hardening change with no test is how this got here**: `safeNextPath` existed
+with zero coverage anywhere in `src/` or `e2e/`.
 
-**The cheap first step for whoever takes it:** the review names one, and it is
-worth taking regardless — `GET /api/auth/change-email/confirm?token=<garbage>`
-deterministically produces the `invalid` outcome with no seeding at all, so a
-test can drive PRODUCER -> shim -> banner in one hop instead of hand-typing the
-URL the producer is supposed to emit. The current test types that URL itself,
-so renaming the param or dropping `tab=account` (which gates the banner,
-`o/[orgSlug]/settings/page.tsx:559`) leaves it green while every real
-confirmation breaks again.
+### Residual, NOT fixed — for whoever picks this up
+
+`requirePageAuth` drops the query on two further branches: `orgs.length === 0`
+-> `/orgs/new` (`page-auth.ts:39`) and `role === "scorer"` -> `/my-matches`
+(`:42`). The F7 flow makes the first MORE reachable, not less: `postAuthLanding`
+returns a safe `next` **without provisioning an org** (`auth.ts:413-419`), so a
+first-time signup arriving through `/login?next=/settings?...` lands org-less
+and is bounced to `/orgs/new` with the outcome gone.
+
+Not fixed here because `/orgs/new` has no `next` handling at all (checked), so
+closing it means giving that page a destination contract too — a second
+auth-flow change, unverified, at the end of a wave. Neither user has an
+org-scoped settings page to land on, so the banner has no home for them today;
+that is an explanation of the current shape, not a defence of it.
+
+The e2e also still hand-types the URL the producer should emit. Driving
+`GET /api/auth/change-email/confirm?token=<garbage>` yields the `invalid`
+outcome with no seeding and would prove producer -> shim -> banner in one hop.
 
 ## False premises found
 
