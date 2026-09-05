@@ -29,6 +29,19 @@ resolves inside the worktree), `.env.local` symlinks (relative targets) in
 root and `apps/web`, no database or server yet. Stand one up with
 `seazn-env up --label ovl` from the worktree when execution starts.
 
+## Base commit health (peer report, 2026-09-05, not reproduced here)
+
+This branch is based on `997ad225b`. A peer session reports main's e2e
+walkthrough leg RED in CI at that commit (run 33968571673): a route handler
+builds a redirect with `new URL("/path", req.url)`, which in CI emits the
+server's bind address `0.0.0.0` (no `HOSTNAME` set there), the browser sees an
+origin mismatch, the session cookie is withheld, and the test lands on
+`/login`. Locally green because `seazn-env` pins `HOSTNAME=127.0.0.1`. Two
+consequences for this programme: a walkthrough red on this branch that ends
+on `/login` is that defect until proven otherwise, and no code in this
+programme builds a redirect from `req.url`; the overlay page returns HTML or
+`notFound()`, and `PUT /stream` returns JSON.
+
 ## Pinned symbols — server and data (scout, 2026-09-05, this worktree)
 
 | path:line | symbol | fact |
