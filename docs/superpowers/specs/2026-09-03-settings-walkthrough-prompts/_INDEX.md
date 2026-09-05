@@ -396,6 +396,31 @@ for a "red Community leg" in `auth.setup.ts`; that leg was not red, it was
 this artifact, and the advice was retracted. A post-rebuild checklist is three
 items: manifest probe, `lsof` the old port, and re-run setup if the port moved.
 
+### W2 findings from driving the tabs
+
+**F8 — `e2e/api-keys.spec.ts:30` may not be testing the key at all.**
+`playwright.request.newContext()` **inherits `use.storageState`**, the same
+trap as a bare `browser.newContext()`. That spec's "the minted key works" 200
+is therefore possibly the signed-in Pro SESSION answering, not the key. Found
+by Task 3 while writing its own anonymous request and hitting the same
+inheritance. Not fixed here — it is another spec's file and outside W2's
+scope — but it means the existing api-keys coverage is unproven in the one
+direction that matters. **Assign at the W2 boundary or W3.**
+
+Two of the plan's own premises were also false, corrected in comments where
+they are used rather than worked around silently:
+
+- **`GET /api/users/me` returns only `{ id, org }`** — no `display_name`,
+  `timezone` or `locale`.
+- **`src/app/api/orgs/[id]/route.ts` exports PATCH only.** The plan's
+  `apiJson(request, "/api/orgs/{id}")` persistence read is a **405**, not a
+  read. Both Task 2 and Task 3 must read the column instead.
+
+**A pinned API key 403ing on `GET /api/v1/competitions` is BY DESIGN** —
+`src/server/api-v1/key-scopes.ts:47`, "a pinned key is 403 on rules without
+one". Task 3 turned that into the assertion proving the pin took effect
+rather than filing it as a defect.
+
 ### Machine note
 
 The box was carrying seven seazn-env labels at load 269 and OOM-killed a
