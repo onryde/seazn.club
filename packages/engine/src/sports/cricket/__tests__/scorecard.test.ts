@@ -11,19 +11,26 @@
 //     `batters: [striker, nonStriker]` → `[nonStriker, striker]` in
 //     `InningsAccumulator.onBall` (scorecard.ts). RED: "a new partnership
 //     opens with the pair the reducer put at the crease after the wicket" at
-//     scorecard.test.ts:320 — `expected [ 'h1', 'h4' ] to deeply equal
+//     scorecard.test.ts:327 — `expected [ 'h1', 'h4' ] to deeply equal
 //     [ 'h4', 'h1' ]` (the pair after innings 1's run-out). Restored (`cp`
 //     backup, `cmp` identical), re-ran GREEN.
 // (d) Dropped the maiden credit — `if (overBowler !== null &&
 //     this.overRunsByIndex[index] === 0)` → `if (false && …)`, so a maiden
 //     over is never credited. RED: Task 2's "a wide and a no-ball count
-//     against the bowler…" at scorecard.test.ts:205 — `expected +0 to be 1`
+//     against the bowler…" at scorecard.test.ts:212 — `expected +0 to be 1`
 //     (h7's six dots). Restored (`cp` backup, `cmp` identical), re-ran GREEN.
 // (e) Computed the required rate over one ball too many — `(needRuns * bpo) /
 //     ballsLeft` → `/ (ballsLeft + 1)` in `live()`. RED: "chase maths:
-//     target, need, balls left, RRR…" at scorecard.test.ts:346 — `expected 20
+//     target, need, balls left, RRR…" at scorecard.test.ts:353 — `expected 20
 //     to be close to 24`. Restored (`cp` backup, `cmp` identical), re-ran
 //     GREEN.
+// (f) Not required by the brief — it kills the brief's OWN chase gate.
+//     Reverted `isChase` in `live()` from `index === inningsPerSide * 2 - 1`
+//     (the reducer's `isChaseIndex`) to the brief's `state.innings.length >=
+//     2`. RED: "no target, need or RRR in a third innings…" at
+//     scorecard.test.ts:393 — `expected 2 to be null`, i.e. a Test's third
+//     innings shown the FOURTH innings' target. Restored (`cp` backup, `cmp`
+//     identical), re-ran GREEN.
 //
 // Mutants killed (Task 2)
 // -----------------------
@@ -354,5 +361,40 @@ describe("deriveCricketScorecard — fall of wickets, partnerships, overs, live"
   it("live is null once the match is decided", () => {
     const { events, cfg, lineups } = scriptLedger(TWO_INNINGS);
     expect(deriveCricketScorecard({ events, cfg, lineups }).live).toBeNull();
+  });
+});
+
+describe("deriveCricketScorecard — the chase is the LAST innings, not the second", () => {
+  // Two innings a side. `chaseTarget` answers for the innings that chases,
+  // and in this format that is the FOURTH — so a third innings in progress
+  // has no target of its own, and printing `chaseTarget`'s answer there would
+  // be a wrong number rather than a missing one. The fold mirrors the
+  // reducer's own `isChaseIndex` (`inningsPerSide * 2 - 1`), which the
+  // brief's "two innings have been played" gate matches only when a side
+  // bats once.
+  const TEST_MATCH: Script = {
+    cfg: { inningsPerSide: 2, ballsPerInnings: 12, playersPerSide: 8, minOversForResult: 2 },
+    home: HOME,
+    away: AWAY,
+    tossWonBy: "home",
+    elected: "bat",
+    innings: [
+      { batting: "home", bowlers: ["a7", "a8"], deliveries: [{ bat: 1 }] },
+      { batting: "away", bowlers: ["h7", "h8"], deliveries: [{ bat: 1 }] },
+      { batting: "home", bowlers: ["a7", "a8"], deliveries: [{ bat: 1 }], leaveOpen: true },
+    ],
+  };
+
+  it("no target, need or RRR in a third innings; the reducer still has one for the fourth", () => {
+    const s = scriptLedger(TEST_MATCH);
+    const card = deriveCricketScorecard({ events: s.events, cfg: s.cfg, lineups: s.lineups });
+    expect(card.innings).toHaveLength(3);
+    expect(card.live).not.toBeNull();
+    expect(card.live!.target).toBeNull();
+    expect(card.live!.needRuns).toBeNull();
+    expect(card.live!.rrr).toBeNull();
+    // …and it is genuinely a number being withheld, not an absent one: the
+    // reducer answers for the fourth innings on this very state.
+    expect(chaseTarget(s.state)).toEqual(expect.any(Number));
   });
 });

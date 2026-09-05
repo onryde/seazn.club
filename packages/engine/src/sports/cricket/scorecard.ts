@@ -546,11 +546,18 @@ class InningsAccumulator {
     const falls = this.fowByIndex[index] ?? [];
     const lastFall = falls[falls.length - 1];
 
-    // A super over's target is its OWN first innings' score, not the match
-    // chase `chaseTarget` answers — and nothing in this fold models super
-    // overs yet (see `cards()`), so the honest answer there is "no target"
-    // rather than the main match's, which would be a wrong number on screen.
-    const target = !inSuperOver && state.innings.length >= 2 ? chaseTarget(state) : null;
+    // `chaseTarget` answers for the innings that CHASES — the last one the
+    // format allows (`isChaseIndex`, cricket.ts: `inningsPerSide * 2 - 1`,
+    // mirrored here because it is private). The brief's "two innings have
+    // been played" gate is the same thing in a one-innings-a-side match and
+    // only there: in a Test's THIRD innings it would put the fourth innings'
+    // target on screen, which is a wrong number, not a missing one.
+    //
+    // A super over is out for the same reason from the other direction: its
+    // target is its own first innings' score, not the match chase, and
+    // nothing in this fold models super overs yet (see `cards()`).
+    const isChase = !inSuperOver && index === state.cfg.inningsPerSide * 2 - 1;
+    const target = isChase ? chaseTarget(state) : null;
     const needRuns = target === null ? null : target - innings.runs;
     const ballsLeft = innings.ballsLimit === null ? null : innings.ballsLimit - innings.legalBalls;
 
