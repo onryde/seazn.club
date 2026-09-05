@@ -393,6 +393,71 @@ describe("encodeConstraints", () => {
     expect(out.unmodelled[0]?.reason).toMatch(/scope/i);
   });
 
+  it("carries a DIVISION-scoped rule's own divisionId, and refuses one without it", () => {
+    // `readScope`'s `division` arm had NO test: a `return undefined` mutant on
+    // it survived the whole suite, and the only `kind: "division"` anywhere in
+    // this file was inside `constraints.startWindows[].target`, an unrelated
+    // shape. Both directions here, so the arm and its own operand guard are
+    // killable one at a time.
+    const carried = encodeConstraints({
+      divisionRef: "d-tiny",
+      scheduleConfig: {
+        constraints: {
+          hard: [
+            { type: "max_fixtures_per_day", count: 4, scope: { kind: "division", divisionId: "d-77" } },
+          ],
+        },
+      },
+      courtIdByRef: courts,
+      isRoundRobin: true,
+      pins: [],
+      declaresOfficials: false,
+    });
+    expect(carried.hard).toEqual([
+      { type: "max_fixtures_per_day", count: 4, scope: { kind: "division", divisionId: "d-77" } },
+    ]);
+    expect(carried.unmodelled).toEqual([]);
+
+    const missing = encodeConstraints({
+      divisionRef: "d-tiny",
+      scheduleConfig: {
+        constraints: {
+          hard: [{ type: "max_fixtures_per_day", count: 4, scope: { kind: "division" } }],
+        },
+      },
+      courtIdByRef: courts,
+      isRoundRobin: true,
+      pins: [],
+      declaresOfficials: false,
+    });
+    expect(missing.hard).toEqual([]);
+    expect(missing.unmodelled[0]?.reason).toMatch(/scope/i);
+  });
+
+  it("REPORTS a scope whose kind is not a ConstraintScope member at all", () => {
+    // `readScope`'s DEFAULT arm, which also had no test. A garbage kind that
+    // resolved to anything truthy would be applied as though it were a real
+    // scope, and the bench would red fixtures no rule covers — a false product
+    // defect, the worst output this harness can produce.
+    const out = encodeConstraints({
+      divisionRef: "d-tiny",
+      scheduleConfig: {
+        constraints: {
+          hard: [{ type: "max_fixtures_per_day", count: 4, scope: { kind: "referee" } }],
+        },
+      },
+      courtIdByRef: courts,
+      isRoundRobin: true,
+      pins: [],
+      declaresOfficials: false,
+    });
+    expect(out.hard).toEqual([]);
+    expect(out.unmodelled).toEqual([
+      { type: "max_fixtures_per_day", reason: expect.stringContaining("not modelled") },
+    ]);
+    expect(out.unmodelled[0]?.reason).toMatch(/scope/i);
+  });
+
   // A PERSON scope is unmeasurable for EVERY rule type, not just for
   // `min_rest_minutes`. Enumerated across both person scopes AND all three
   // modelled rule types, because the defect this covers was exactly a ruling

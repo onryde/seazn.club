@@ -14,6 +14,7 @@ import type { Board, CheckerFinding } from "../board.ts";
 import {
   at,
   cleanBoard,
+  DIVISION_ID,
   cleanConstraints,
   COURT_1,
   COURT_2,
@@ -577,6 +578,73 @@ describe("checkBoard", () => {
     expect(r.findings.flatMap((f) => [...f.fixtureIds])).toEqual(["fx-0", "fx-1"]);
   });
 
+
+
+  // -----------------------------------------------------------------------
+  // The two `tallyKeys` arms nothing exercised
+  //
+  // A `return []` mutant on either survived the whole suite and produced the
+  // same false-clean the `person` arm did — the same trap, two arms over.
+  // -----------------------------------------------------------------------
+
+  it("tallies a division-scoped cap on THAT division only", () => {
+    // fx-1 is moved to a SECOND division on purpose. Every fixture on the
+    // clean board shares one division, so a scoped-to-division assertion made
+    // against it passes whether or not the arm filters — vacuous in exactly
+    // the way the arm was.
+    const b = withFixture(cleanBoard(), 1, { divisionId: "div-two" });
+    const r = checkBoard(b, {
+      ...cleanConstraints(),
+      hard: [
+        {
+          type: "max_fixtures_per_day",
+          count: 1,
+          scope: { kind: "division", divisionId: DIVISION_ID },
+        },
+      ],
+    });
+    expect(kinds(r.findings)).toEqual(["day_cap_exceeded"]);
+    // fx-1 is absent and the count is 2, not 3: an arm that keyed every
+    // fixture regardless of division gives both away at once.
+    expect(r.findings[0].fixtureIds).toEqual(["fx-0", "fx-2"]);
+    expect(r.findings[0].measured).toBe(2);
+
+    // The other direction: the division holding a single fixture is under cap.
+    const other = checkBoard(b, {
+      ...cleanConstraints(),
+      hard: [
+        {
+          type: "max_fixtures_per_day",
+          count: 1,
+          scope: { kind: "division", divisionId: "div-two" },
+        },
+      ],
+    });
+    expect(other.findings).toEqual([]);
+  });
+
+  it("tallies a pool-scoped cap per pool, and requires the DIVISION to match too", () => {
+    // fx-0 and fx-2 are pool-a; fx-1 is pool-b. The fixtures already carried
+    // these and no test had ever read `poolId`.
+    const cap = (divisionId: string, pool: string) => ({
+      ...cleanConstraints(),
+      hard: [
+        { type: "max_fixtures_per_day" as const, count: 1, scope: { kind: "pool" as const, divisionId, pool } },
+      ],
+    });
+
+    const a = checkBoard(cleanBoard(), cap(DIVISION_ID, "pool-a"));
+    expect(kinds(a.findings)).toEqual(["day_cap_exceeded"]);
+    expect(a.findings[0].fixtureIds).toEqual(["fx-0", "fx-2"]);
+
+    // pool-b holds one fixture, so it is under the same cap.
+    expect(checkBoard(cleanBoard(), cap(DIVISION_ID, "pool-b")).findings).toEqual([]);
+
+    // The pool arm is a TWO-part predicate: same pool name, wrong division,
+    // matches nothing. Without this an arm that dropped the division half
+    // passes the two cases above.
+    expect(checkBoard(cleanBoard(), cap("div-two", "pool-a")).findings).toEqual([]);
+  });
 
   // -----------------------------------------------------------------------
   // Person scopes — the branch nothing exercised, and the reason `board.ts`

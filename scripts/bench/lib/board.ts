@@ -793,29 +793,13 @@ function reportUnmodelledKnobs(
   }
 }
 
-/** The scope gate every modellable member passes through, checked BEFORE its
- *  own operand so the two guards are killable one at a time: a rule with a good
- *  operand and a bad scope witnesses this one, a rule with a good scope and a
- *  bad operand witnesses the other. Two guards covering for each other are each
- *  untested — and this claim is only true while BOTH tests exist and each cites
- *  its OWN message, so `board.test.ts` asserts `/scope/i` on one and `/count/i`
- *  on the other. It stopped being true once already, when the operand test was
- *  deleted as collateral and nothing killed either guard. */
-function scopeOr(
-  type: string,
-  rule: Record<string, unknown>,
-  unmodelled: { type: string; reason: string }[],
-): ConstraintScope | undefined {
-  const scope = readScope(rule.scope);
-  if (scope !== undefined) return scope;
-  unmodelled.push({
-    type,
-    reason: `${NOT_MODELLED} — ${type} carries no readable ConstraintScope (constraints.ts:30), and there is no safe default: applying it universally would red fixtures the rule never covers`,
-  });
-  return undefined;
-}
-
 /** A PERSON scope cannot be measured by this bench, whatever rule wears it.
+ *
+ *  Called from `scopeOr`, i.e. from the ONE place a scope is read, so it
+ *  applies to every scope-bearing rule type there is and to every one added
+ *  later. It was first written as a per-arm call, which is the same defect it
+ *  exists to fix one level up: correct for the three arms that remembered to
+ *  call it, and silently absent for the fourth.
  *
  *  The generalisation of ruling R23, which was made for `min_rest_minutes` and
  *  then not carried to its siblings — so a `max_fixtures_per_day`,
@@ -848,6 +832,35 @@ function personScopeUnmeasurable(
     reason: `${NOT_MODELLED} — ${type} is scoped ${scope.kind}, and no person scope can be measured from a Board: the product's Fixture carries no person ids, so personIds is always empty and the rule matches nothing rather than passing; the entrant tally is a DIFFERENT constraint and is not substituted`,
   });
   return true;
+}
+
+/** The scope gate every modellable member passes through, checked BEFORE its
+ *  own operand so the two guards are killable one at a time: a rule with a good
+ *  operand and a bad scope witnesses this one, a rule with a good scope and a
+ *  bad operand witnesses the other. Two guards covering for each other are each
+ *  untested — and this claim is only true while BOTH tests exist and each cites
+ *  its OWN message, so `board.test.ts` asserts `/scope/i` on one and `/count/i`
+ *  on the other. It stopped being true once already, when the operand test was
+ *  deleted as collateral and nothing killed either guard. */
+function scopeOr(
+  type: string,
+  rule: Record<string, unknown>,
+  unmodelled: { type: string; reason: string }[],
+): ConstraintScope | undefined {
+  const scope = readScope(rule.scope);
+  if (scope === undefined) {
+    unmodelled.push({
+      type,
+      reason: `${NOT_MODELLED} — ${type} carries no readable ConstraintScope (constraints.ts:30), and there is no safe default: applying it universally would red fixtures the rule never covers`,
+    });
+    return undefined;
+  }
+  // Refused HERE rather than in each rule-type arm, so a rule type added later
+  // inherits it by construction instead of by somebody remembering. That is
+  // the whole point: this refusal is a property of the SCOPE, and every
+  // scope-bearing member already funnels through this one function.
+  if (personScopeUnmeasurable(type, scope, unmodelled)) return undefined;
+  return scope;
 }
 
 /** Maps ONE `constraints.hard[]` entry onto `hard` or onto `unmodelled`.
@@ -907,7 +920,6 @@ function encodeHardRule(
     case "max_fixtures_per_day": {
       const scope = scopeOr(type, rule, unmodelled);
       if (scope === undefined) return;
-      if (personScopeUnmeasurable(type, scope, unmodelled)) return;
       const count = positiveInt(rule.count);
       if (count === undefined) {
         unmodelled.push({
@@ -923,7 +935,6 @@ function encodeHardRule(
     case "not_after": {
       const scope = scopeOr(type, rule, unmodelled);
       if (scope === undefined) return;
-      if (personScopeUnmeasurable(type, scope, unmodelled)) return;
       const mins = minutesIntoDay(rule.time);
       if (mins === undefined) {
         unmodelled.push({
