@@ -410,23 +410,45 @@ export async function eligibilityOverrideAuditRows(
  *  `fixtures` rows are scoped to the ONE division the caller just created —
  *  fine to leave mutated. `organizations.timezone` is not: on the shared Pro
  *  org every parallel spec runs against (auth.setup.ts:78-81) it is a
- *  cross-spec contamination risk. Returns a restore function — call it in a
- *  `finally` — that puts the org's timezone back to whatever it was before
- *  this call, rather than assuming any particular default. */
+ *  cross-spec contamination risk. Returns a restore function that puts the
+ *  org's timezone back to whatever it was before this call, rather than
+ *  assuming any particular default.
+ *
+ *  **Register that restore from a HOOK, never a `try`/`finally`.** A
+ *  Playwright TIMEOUT abandons the test body without running its `finally` —
+ *  only hooks run (measured: an `afterEach` fires, the body's `finally` does
+ *  not) — so a timed-out test would leave the shared org mutated for the rest
+ *  of the run, surfacing as timezone-shaped failures in unrelated spec files.
+ *
+ *  **And `registerRestore` closes the last window inside this helper.** The
+ *  returned closure only exists once this function RESOLVES, so a timeout
+ *  landing between the UPDATE below and that return used to leak with nothing
+ *  registered anywhere. `registerRestore` is called with the undo AFTER the
+ *  previous value is read and BEFORE anything is written, so from the first
+ *  moment the column can be dirty, the caller already holds its undo. The
+ *  return value is unchanged, so callers that do not pass it are unaffected
+ *  (they keep the narrower guarantee). */
 export async function setZoneSplitSql(opts: {
   divisionId: string;
   orgTz: string;
   divisionTz: string;
   fixtureNo: number;
   at: string;
+  /** Called with the restore closure BEFORE the first write — see above. */
+  registerRestore?: (restore: () => Promise<void>) => void;
 }): Promise<() => Promise<void>> {
-  const orgId = await withDb(async (sql) => {
+  const restore = await withDb(async (sql) => {
     const [row] = await sql<{ org_id: string; timezone: string | null }[]>`
       select c.org_id, o.timezone from competitions c
         join divisions d on d.competition_id = c.id
         join organizations o on o.id = c.org_id
        where d.id = ${opts.divisionId}`;
     if (!row) throw new Error(`setZoneSplitSql: no org for division ${opts.divisionId}`);
+    // Built and handed over BEFORE the UPDATE that makes it necessary.
+    const undo = async () => {
+      await withDb((sql2) => sql2`update organizations set timezone = ${row.timezone} where id = ${row.org_id}`);
+    };
+    opts.registerRestore?.(undo);
     await sql`update organizations set timezone = ${opts.orgTz} where id = ${row.org_id}`;
     await sql`insert into schedule_settings (division_id, tz, config)
               values (${opts.divisionId}, ${opts.divisionTz}, '{}'::jsonb)
@@ -435,13 +457,9 @@ export async function setZoneSplitSql(opts: {
                where division_id = ${opts.divisionId} and fixture_no = ${opts.fixtureNo}`;
     await sql`update fixtures set scheduled_at = null
                where division_id = ${opts.divisionId} and fixture_no <> ${opts.fixtureNo}`;
-    return { orgId: row.org_id, previousTimezone: row.timezone };
+    return undo;
   });
-  return async () => {
-    await withDb((sql) =>
-      sql`update organizations set timezone = ${orgId.previousTimezone} where id = ${orgId.orgId}`,
-    );
-  };
+  return restore;
 }
 
 export async function setOrgPlanBySql(

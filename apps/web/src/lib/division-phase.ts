@@ -280,6 +280,27 @@ const SEVERITY_ORDER: Severity[] = ["red", "amber", "slate"];
  */
 export const NOT_RECORDING_GRACE_MINUTES = 15;
 
+/**
+ * How long a match is assumed to last when its division has no
+ * `schedule_settings.config.matchMinutes` of its own — a CLIENT-SAFE
+ * hand-copy of `ScheduleConfig.matchMinutes`'s `.default(30)`
+ * (`@/server/api-v1/schemas`), which is what `defaultMatchMinutes()`
+ * (competition-desk.ts) resolves on the server.
+ *
+ * Hand-copied for the same reason `fixture-row-action.ts`'s
+ * `TIMETABLE_MOVABLE_STATUS` is: a client component that imports
+ * `@/server/**` drags gRPC and Node built-ins into the browser bundle and
+ * `next build` fails, while `tsc` and vitest both pass. And PINNED for the
+ * same reason too — `division-phase.test.ts` imports the schema (vitest is
+ * node-env) and asserts the two are equal, so the copy cannot drift. This
+ * exact number has drifted here before (`run-sheet-groups.ts`'s own header:
+ * "a hand-written twin is how DEFAULT_MATCH_MINUTES drifted").
+ *
+ * It is a FALLBACK, never a first answer: every surface that can resolve the
+ * division's real setting passes that instead.
+ */
+export const DEFAULT_MATCH_MINUTES = 30;
+
 /** YYYY-MM-DD of an instant in a zone. en-CA gives ISO order natively. */
 export function localDateKey(iso: string, tz: string): string {
   const ms = Date.parse(iso);
@@ -322,6 +343,61 @@ const PLAYED_STATUSES = new Set(["decided", "finalized"]);
  */
 export function hasPlayedFixture(fixtures: readonly { status: string }[]): boolean {
   return fixtures.some((f) => PLAYED_STATUSES.has(f.status));
+}
+
+/**
+ * "This fixture is real, and nobody has said when it is played."
+ *
+ * The `unscheduled` attention's own predicate, lifted out of
+ * `resolveAttention` (where it was written inline) so a second surface asking
+ * the same question imports it instead of restating it. It was already stated
+ * three times — here, `stages-panel.tsx`'s pinned per-stage section, and the
+ * run sheet's "Unscheduled" filter — and the run sheet's copy was the one
+ * that drifted: it asked `fixtureRowAction(...).kind === "set_time"`, which
+ * is gated on `canEdit`, so a viewer (or an owner on a FROZEN competition)
+ * read "Unscheduled 0" directly above a list of unscheduled fixtures
+ * (max-effort review, finding 1). Membership of a DISPLAY filter is a fact
+ * about the fixture, never about the reader's write rights.
+ *
+ * Deliberately says nothing about byes: a bye has no time and never will,
+ * and every caller already applies its own `isBye` rule (the run sheet keeps
+ * byes visible under every filter; the panel's section excludes them). One
+ * fact per predicate.
+ */
+export function isUnscheduledFixture(f: { status: string; scheduledAt: string | null }): boolean {
+  return f.status === "scheduled" && f.scheduledAt === null;
+}
+
+/**
+ * "This fixture should have finished by now and no result has arrived."
+ *
+ * The `result_missing` attention's own predicate, lifted out of
+ * `resolveAttention` for the same reason as `isUnscheduledFixture` above.
+ * The run sheet's "Needs result" chip asked `fixtureRowAction(...).kind ===
+ * "open_pad"` — i.e. `status === "in_play"` — which is not merely a different
+ * answer but a DISJOINT one: `open_pad` requires `in_play`, this requires
+ * `scheduled`, so no fixture could ever be in both. On the Saturday evening
+ * the filter exists for (organisers score after the fact, so nothing is ever
+ * left `in_play`) the chip read zero (max-effort review, finding 2).
+ *
+ * `matchMinutes` is the division's own `schedule_settings.config.matchMinutes`
+ * (falling back to `defaultMatchMinutes()`, competition-desk.ts) — the grace
+ * that stops a match reading as overdue while it is still being played.
+ *
+ * The `divisionStatus !== "setup"` gate `resolveAttention` applies around its
+ * call is deliberately NOT part of this predicate: it decides whether the
+ * LEDGER raises a row, not whether the fact is true, and the same composition
+ * rule holds for `no_scorer`/`not_recording` beside it.
+ */
+export function isResultMissing(
+  f: { status: string; scheduledAt: string | null; matchMinutes: number },
+  nowMs: number,
+): boolean {
+  return (
+    f.status === "scheduled" &&
+    f.scheduledAt !== null &&
+    Date.parse(f.scheduledAt) + f.matchMinutes * 60_000 < nowMs
+  );
 }
 
 /** Every stage that is not complete, in play order. K1 (fix round G,
@@ -593,7 +669,7 @@ export function resolveAttention(input: PhaseInput): Attention[] {
     // one.
     out.push({ kind: "needs_fixtures", stageName: blocked.name });
   }
-  const unscheduled = input.fixtures.filter((f) => f.status === "scheduled" && f.scheduledAt === null).length;
+  const unscheduled = input.fixtures.filter(isUnscheduledFixture).length;
   if (unscheduled > 0) out.push({ kind: "unscheduled", count: unscheduled });
   // F3+F4 fix (final review, Important): both aggregated per division below,
   // the same way `unscheduled` already is above — collected here, pushed once.
@@ -698,11 +774,10 @@ export function resolveAttention(input: PhaseInput): Attention[] {
         elapsed >= NOT_RECORDING_GRACE_MINUTES
       ) {
         notRecording.push({ id: f.id, since: elapsed });
-      } else if (
-        f.status === "scheduled" &&
-        f.scheduledAt !== null &&
-        Date.parse(f.scheduledAt) + f.matchMinutes * 60_000 < nowMs
-      ) {
+      } else if (isResultMissing(f, nowMs)) {
+        // Behaviour unchanged: the predicate is the same three terms, now
+        // EXPORTED so the run sheet's "Needs result" chip can ask this
+        // module the question instead of inventing its own answer.
         resultMissing.push(f.id);
       }
     }

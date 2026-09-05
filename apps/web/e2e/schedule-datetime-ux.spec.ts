@@ -630,11 +630,17 @@ test("board settings offers quarter-hour times through a select, and leaves the 
 // settings tab (case e, above) is deliberately NOT fed the same list — it
 // defines the grid rather than living on it.
 //
-// SELECTORS ARE STRUCTURAL/ROLE, NEVER COPY (#465). "Edit time" is the one
+// SELECTORS ARE STRUCTURAL/ROLE, NEVER COPY (#465). "Set time" is the one
 // non-structural hook below, but it is a static, non-interpolated label this
-// surface already carries — the same way a sibling spec keys off it
-// (division-schedule.spec.ts:93) — not the fragile interpolated-copy pattern
-// #465 bans.
+// surface already carries.
+//
+// Competition Desk W2 (Task 4): the fixtures tab's run sheet gives every row
+// exactly ONE action (`fixtureRowAction`'s ladder, Task 2) — an already-
+// scheduled, already-timed fixture's action is "Assign scorer" or "Score",
+// never an inline reschedule control ("Edit time" is retired for that case).
+// Only an UNSCHEDULED row still opens the inline `DateTimeField` this test
+// exists to probe, via "Set time" — so this no longer pre-places fixture 0
+// first; it drives the SAME control an unscheduled row now offers instead.
 // ---------------------------------------------------------------------------
 test("a 40/0 board offers 09:40 through the fixture When control, not quarter hours (case f)", async ({
   page,
@@ -656,18 +662,8 @@ test("a 40/0 board offers 09:40 through the fixture When control, not quarter ho
   });
   expect(settings.status).toBe(200);
 
-  // Pre-place fixture 0 so its row already reads "Edit time" — a fixture
-  // with no scheduled_at instead reads "Schedule", which opens the identical
-  // form but is a less specific, more collision-prone accessible name to key
-  // a locator off.
-  const placed = await apiJson(request, `/api/v1/fixtures/${fixtureIds[0]!}`, "PATCH", {
-    scheduled_at: new Date(Date.UTC(2026, 9, 19, 9, 0)).toISOString(),
-    court_id: courts[0]!.id,
-  });
-  expect(placed.status).toBe(200);
-
   await page.goto(await divisionPath(request, divisionId, "?tab=fixtures"));
-  await page.getByRole("button", { name: "Edit time", exact: true }).first().click();
+  await page.getByRole("button", { name: "Set time", exact: true }).first().click();
 
   // The fixture "When" field is `kind="datetime-local"`, so its time half
   // carries the distinct `aria-label="Time"` `DateTimeSplitField` gives it

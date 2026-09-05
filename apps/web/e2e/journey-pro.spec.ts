@@ -85,6 +85,23 @@ test.describe.serial("pro lifecycle", () => {
     fixtureIds = out.fixtureIds;
     // 6 entrants, single round robin → 15 fixtures.
     expect(fixtureIds.length).toBe(15);
+
+    // Competition Desk W2 (Task 4): the fixtures tab's run sheet gives an
+    // UNSCHEDULED row exactly one action — "Set time" — never "Score"
+    // (`fixtureRowAction`'s ladder, Task 2, already reviewed and approved).
+    // This journey used to jump straight from "Start tournament" to a
+    // "Score" link on a never-timed fixture; that entry point is retired by
+    // design, so this now times every fixture first, the same way a real
+    // organiser would have to. A future date (well past "today" in this
+    // environment) keeps the action "Score" rather than "Assign scorer"
+    // (rule 5 of the ladder: scheduled TODAY with no officials assigned).
+    const base = Date.UTC(2026, 9, 12, 9, 0, 0); // 2026-10-12 09:00Z
+    for (let i = 0; i < fixtureIds.length; i++) {
+      const patched = await apiJson(request, `/api/v1/fixtures/${fixtureIds[i]!}`, "PATCH", {
+        scheduled_at: new Date(base + i * 30 * 60_000).toISOString(),
+      });
+      expect(patched.status, `scheduling fixture ${i} failed: ${JSON.stringify(patched.error)}`).toBeLessThan(300);
+    }
   });
 
   test("start the tournament from the division console", async ({ page, request }) => {
