@@ -1,6 +1,6 @@
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 const REPO_ROOT = join(import.meta.dirname, "../../../..");
 
@@ -288,6 +288,56 @@ describe("toolchain: no V8 heap ceiling for typecheck", () => {
     expect(active).toEqual([]);
   });
 });
+
+describe("toolchain: Turbopack build cache is opt-in and env-gated", () => {
+  /**
+   * Next 16's `experimental.turbopackFileSystemCacheForBuild` is off by
+   * default and "experimental for production builds", so every `next build`
+   * compiled from zero — a one-file change cost the same 48s compile as a
+   * clean tree, and 5.5min under load. Local seazn-env builds now opt in via
+   * NEXT_BUILD_FS_CACHE=1; CI, Docker and the deploy workflows leave it unset
+   * and stay cold. Both halves are asserted because either alone is inert:
+   * turbo runs in strict env mode and strips any variable not listed in
+   * `build.env` before next.config.js ever sees it.
+   */
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.resetModules();
+  });
+
+  async function buildCacheFlag(): Promise<unknown> {
+    vi.resetModules();
+    const mod = (await import("../../next.config.js")) as {
+      nextConfig: { experimental?: { turbopackFileSystemCacheForBuild?: unknown } };
+    };
+    return mod.nextConfig.experimental?.turbopackFileSystemCacheForBuild;
+  }
+
+  it("next.config.js leaves the cache OFF when NEXT_BUILD_FS_CACHE is unset", async () => {
+    vi.stubEnv("NEXT_BUILD_FS_CACHE", "");
+    expect(await buildCacheFlag()).toBe(false);
+  });
+
+  it("next.config.js turns the cache ON only for NEXT_BUILD_FS_CACHE=1", async () => {
+    vi.stubEnv("NEXT_BUILD_FS_CACHE", "1");
+    expect(await buildCacheFlag()).toBe(true);
+    vi.stubEnv("NEXT_BUILD_FS_CACHE", "true");
+    expect(await buildCacheFlag()).toBe(false);
+  });
+
+  it("turbo.json hashes NEXT_BUILD_FS_CACHE into the build task, beside SKIP_TYPECHECK", () => {
+    // turbo.json carries `//` comment lines; the only `//` inside a string is
+    // the $schema URL, which a line-anchored strip never touches.
+    const jsonc = readFileSync(join(REPO_ROOT, "turbo.json"), "utf8")
+      .split("\n")
+      .filter((line) => !/^\s*\/\//.test(line))
+      .join("\n");
+    const turbo = JSON.parse(jsonc) as { tasks: { build: { env?: string[] } } };
+    expect(turbo.tasks.build.env).toContain("NEXT_BUILD_FS_CACHE");
+    expect(turbo.tasks.build.env).toContain("SKIP_TYPECHECK");
+  });
+});
+
 
 function rootManifest(): {
   dependencies?: Record<string, string>;
