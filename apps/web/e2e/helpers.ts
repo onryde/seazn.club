@@ -1102,6 +1102,39 @@ export async function splitOrgIntoOwnGroupSql(orgId: string): Promise<string> {
 }
 
 /**
+ * Return an org-creation SLOT to `ownerUserId`, and take the org out of the
+ * lists the UI reads.
+ *
+ * A soft delete is NOT enough. `assertMayOwnAnotherOrg` (src/lib/auth.ts)
+ * counts `org_members` rows with `role = 'owner'` for the user and applies no
+ * `deleted_at` filter at all, so an org that is soft-deleted still spends one
+ * of the five slots a Pro user gets (`orgs.max_owned`, src/lib/billing-group.ts).
+ * Dropping the owner membership row is what actually frees it.
+ *
+ * Both statements, because either alone leaves a visible wrong state: without
+ * the membership drop the slot leaks and the sixth seed in a leg 402s; without
+ * the soft delete the org keeps appearing in public listings with no owner.
+ *
+ * `ownerUserId` is optional and the `role = 'owner'` fallback is the path
+ * `releaseSettingsOrg` actually takes — `withDb` is module-private here, so a
+ * caller outside this file cannot look the owner up first. Pass it when you
+ * already know it (an org with two owner rows would otherwise lose both).
+ *
+ * Idempotent: a second call matches zero rows in both statements.
+ */
+export async function releaseSeededOrgSql(orgId: string, ownerUserId?: string): Promise<void> {
+  await withDb(async (sql) => {
+    if (ownerUserId) {
+      await sql`delete from org_members where org_id = ${orgId} and user_id = ${ownerUserId}`;
+    } else {
+      await sql`delete from org_members where org_id = ${orgId} and role = 'owner'`;
+    }
+    await sql`update organizations set deleted_at = now()
+               where id = ${orgId} and deleted_at is null`;
+  });
+}
+
+/**
  * Force `quantity_paid` — the seats Stripe has already been billed for.
  *
  * Deliberately settable independently of the org count, because the two
