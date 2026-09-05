@@ -66,14 +66,36 @@ on conflict (plan_key, feature_key) do update set int_value = excluded.int_value
 do $$
 declare
   wrong text;
+  n int;
 begin
+  -- THE EMPTY CASE FIRST, because this guard could not see it. `string_agg`
+  -- over zero rows returns NULL, and the check below is `wrong is not null` —
+  -- so a migration that deleted every fee row, or a typo in `feature_key`,
+  -- passed as clean. Count first and state the number this migration
+  -- guarantees, so "there is nothing here" fails instead of succeeding.
+  select count(*) into n
+    from plan_entitlements where feature_key = 'registration.fee_percent';
+  if n <> 5 then
+    raise exception 'V397: expected 5 registration.fee_percent rows, found %', n;
+  end if;
+
+  -- ...and NULL asked separately, because `(plan_key, int_value) not in (...)`
+  -- can never catch it: a row comparison against NULL evaluates to NULL, not
+  -- TRUE, so the row is simply not selected and the guard reports clean.
+  --
+  -- That matters for THIS key more than most. NULL means UNLIMITED in this
+  -- schema, and an unlimited rate resolves through `getLimit` into
+  -- `feePercentFor`'s `pct == null || pct <= 0` branch, which falls back to
+  -- `platformFeeDefault()` — 5%. So a null `pro` rate does not charge nothing;
+  -- it silently charges a Pro org 5% where it was sold 2%.
   select string_agg(plan_key || '=' || coalesce(int_value::text, 'null'), ', ' order by plan_key)
     into wrong
     from plan_entitlements
    where feature_key = 'registration.fee_percent'
-     and (plan_key, int_value) not in (
-       ('community', 5), ('pro', 2), ('event_pass', 4), ('event_pass_l', 4), ('enterprise', 1)
-     );
+     and (int_value is null
+          or (plan_key, int_value) not in (
+            ('community', 5), ('pro', 2), ('event_pass', 4), ('event_pass_l', 4), ('enterprise', 1)
+          ));
   if wrong is not null then
     raise exception 'V397: registration.fee_percent carries rates this migration does not set: %', wrong;
   end if;
