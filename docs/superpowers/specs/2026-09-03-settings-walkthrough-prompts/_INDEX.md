@@ -49,6 +49,19 @@ the other.
    W4 — see the recommendation below.
 5. **Subagent dispatches use Opus 5** (2026-09-03). Note this overrides
    `AGENTS.md`'s "never override `model:` on a dispatch".
+6. **The ≤60s budget HOLDS; W3-W8 restructure to fit it** (2026-09-05). Put to
+   the owner with the measurement — W2 spends ~30s of a 60s programme ceiling
+   and W3-W8 cover more surface — and the owner ruled for the recommendation:
+   restructure the later waves rather than raise the ceiling. Concretely that
+   means the gating matrix and every case that does not need a rendered page
+   move to `APIRequestContext` with no browser, per `_RULES.md` §5.4, and a
+   browser round trip has to earn its place. The ceiling is what has kept
+   these specs from becoming the slow leg; it is not negotiable in W3.
+7. **Finding E and F8 are fixed now, not deferred** (2026-09-05). Owner ruled
+   on the recommendation to close both rather than carry them: the hardcoded
+   English in `org-switcher.tsx` is on a customer-facing row, and an
+   api-keys test that may be exercising the session instead of the key is
+   coverage that reads as protection and is not.
 
 ## Recommendations I made (NOT owner rulings)
 
