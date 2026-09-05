@@ -36,6 +36,13 @@
 //
 //   entrants: f0 = e-a,e-b · f1 = e-c,e-d · f2 = e-a,e-c
 //   persons:  f0 = p-a,p-b · f1 = p-c,p-d · f2 = p-a,p-c
+//
+//   `personIds` is POPULATED HERE AND ONLY HERE. A real board never has
+//   them: the product's `Fixture` carries no persons at all, so anything
+//   `schedule.ts` builds has `personIds: []`. They are seeded on this
+//   hand-built board so `tallyKeys`' person branches can be exercised at
+//   all — and a test below drives the SAME rule against an emptied board
+//   to show the hole that makes `board.ts` refuse to encode person scopes.
 //   officials: f0 = o-1 · f1 = o-2 · f2 = o-1   (o-1 twice, never overlapping)
 //
 // Deliberate slack, so that a single-fixture perturbation reds ONE rule:

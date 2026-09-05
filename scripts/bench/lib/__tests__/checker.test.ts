@@ -164,6 +164,28 @@ describe("checkBoard", () => {
     ]);
   });
 
+  it("requires a fixture to be WHOLLY inside a session window, not merely to start in one", () => {
+    // fx-2 runs 11:00-11:30. Against a window closing at 11:15 it STARTS
+    // inside and finishes outside, so a start-only containment test passes
+    // this board and this case fails it. Court hours (06:00-14:00) admit the
+    // fixture either way, so the window guard is the only producer.
+    const narrowed = {
+      ...cleanConstraints(),
+      sessionWindows: [{ from: at(MON, "09:00"), to: at(MON, "11:15") }],
+    };
+    const r = checkBoard(cleanBoard(), narrowed);
+    expect(kinds(r.findings)).toEqual(["outside_session_windows"]);
+    expect(r.findings[0].fixtureIds).toEqual(["fx-2"]);
+
+    // ...and the boundary: a window closing exactly at the fixture's end
+    // contains it, so `<=` is right and `<` would red a legal board.
+    const exact = {
+      ...cleanConstraints(),
+      sessionWindows: [{ from: at(MON, "09:00"), to: at(MON, "11:30") }],
+    };
+    expect(checkBoard(cleanBoard(), exact).findings).toEqual([]);
+  });
+
   it("treats an empty sessionWindows list as unrestricted", () => {
     const unrestricted = { ...cleanConstraints(), sessionWindows: [] };
     expect(checkBoard(movedTo(cleanBoard(), 0, MON, "07:00"), unrestricted).findings).toEqual(
@@ -553,6 +575,70 @@ describe("checkBoard", () => {
     const r = checkBoard(cleanBoard(), notBefore(570, { kind: "every_entrant" }));
     expect(kinds(r.findings)).toEqual(["not_before_breached", "not_before_breached"]);
     expect(r.findings.flatMap((f) => [...f.fixtureIds])).toEqual(["fx-0", "fx-1"]);
+  });
+
+
+  // -----------------------------------------------------------------------
+  // Person scopes — the branch nothing exercised, and the reason `board.ts`
+  // now refuses to encode one
+  // -----------------------------------------------------------------------
+
+  /** Every fixture stripped of its persons — what `schedule.ts` actually
+   *  produces, because the product's `Fixture` carries no persons at all. */
+  function withoutPersons(board: Board): Board {
+    return { ...board, fixtures: board.fixtures.map((f) => ({ ...f, personIds: [] })) };
+  }
+
+  it("tallies a person-scoped day cap per PERSON when persons are present", () => {
+    // p-a plays fx-0 and fx-2. This is the only thing that proves `tallyKeys`'
+    // person branch resolves at all — no test used a person scope before.
+    const r = checkBoard(cleanBoard(), {
+      ...cleanConstraints(),
+      hard: [
+        {
+          type: "max_fixtures_per_day",
+          count: 1,
+          scope: { kind: "person", personKey: "p-a" },
+        },
+      ],
+    });
+    expect(kinds(r.findings)).toEqual(["day_cap_exceeded"]);
+    expect(r.findings[0].fixtureIds).toEqual(["fx-0", "fx-2"]);
+    expect(r.findings[0].measured).toBe(2);
+  });
+
+  it("matches NOTHING for a person scope on a board with no persons — the false-clean", () => {
+    // The same rule and the same timetable, with `personIds` as a real board
+    // has them. The rule does not fail: it silently covers no fixture and the
+    // report comes back clean. That is why `board.ts` reports a person-scoped
+    // rule as unmodelled rather than encoding it, and this case is what makes
+    // the hole visible instead of theoretical.
+    const r = checkBoard(withoutPersons(cleanBoard()), {
+      ...cleanConstraints(),
+      hard: [
+        {
+          type: "max_fixtures_per_day",
+          count: 1,
+          scope: { kind: "person", personKey: "p-a" },
+        },
+      ],
+    });
+    expect(r.findings).toEqual([]);
+    expect(r.clean).toBe(true);
+  });
+
+  it("applies an every_person wall-clock bound per person, and to nobody without persons", () => {
+    const rule = {
+      ...cleanConstraints(),
+      hard: [
+        { type: "not_before" as const, minutesIntoDay: 570, scope: { kind: "every_person" as const } },
+      ],
+    };
+    const present = checkBoard(cleanBoard(), rule);
+    expect(kinds(present.findings)).toEqual(["not_before_breached", "not_before_breached"]);
+    expect(present.findings.flatMap((f) => [...f.fixtureIds])).toEqual(["fx-0", "fx-1"]);
+
+    expect(checkBoard(withoutPersons(cleanBoard()), rule).findings).toEqual([]);
   });
 
   // -----------------------------------------------------------------------

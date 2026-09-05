@@ -797,7 +797,10 @@ function reportUnmodelledKnobs(
  *  own operand so the two guards are killable one at a time: a rule with a good
  *  operand and a bad scope witnesses this one, a rule with a good scope and a
  *  bad operand witnesses the other. Two guards covering for each other are each
- *  untested. */
+ *  untested — and this claim is only true while BOTH tests exist and each cites
+ *  its OWN message, so `board.test.ts` asserts `/scope/i` on one and `/count/i`
+ *  on the other. It stopped being true once already, when the operand test was
+ *  deleted as collateral and nothing killed either guard. */
 function scopeOr(
   type: string,
   rule: Record<string, unknown>,
@@ -810,6 +813,41 @@ function scopeOr(
     reason: `${NOT_MODELLED} — ${type} carries no readable ConstraintScope (constraints.ts:30), and there is no safe default: applying it universally would red fixtures the rule never covers`,
   });
   return undefined;
+}
+
+/** A PERSON scope cannot be measured by this bench, whatever rule wears it.
+ *
+ *  The generalisation of ruling R23, which was made for `min_rest_minutes` and
+ *  then not carried to its siblings — so a `max_fixtures_per_day`,
+ *  `not_before` or `not_after` scoped `person`/`every_person` encoded fine,
+ *  matched zero fixtures, emitted nothing, appeared in no `unmodelled[]`, and
+ *  reported CLEAN. That is design §1.4's false-clean reached by a different
+ *  road, and it is worse than the `min_rest_minutes` case it was cloned from,
+ *  because here the rule LOOKS modelled all the way through.
+ *
+ *  The cause is structural, not a gap more code would close: the product's
+ *  `Fixture` carries `home_entrant_id` / `away_entrant_id` and NO persons at
+ *  all (`apps/web/src/server/api-v1/schemas.ts`, the `Fixture` object), so
+ *  `BoardFixture.personIds` is always `[]` and `tallyKeys` yields no key for a
+ *  person scope on any real board.
+ *
+ *  ENTRANT is NOT a substitute and is never swapped in: a doubles pair is one
+ *  entrant and two people, and a player entered in singles and mixed is two
+ *  entrants and one person, so only the person reading stops that human
+ *  playing four times in a day (`constraints.ts:30`'s own note). Answering a
+ *  person-scoped rule with entrant tallies would report on a constraint nobody
+ *  declared. */
+function personScopeUnmeasurable(
+  type: string,
+  scope: ConstraintScope,
+  unmodelled: { type: string; reason: string }[],
+): boolean {
+  if (scope.kind !== "person" && scope.kind !== "every_person") return false;
+  unmodelled.push({
+    type,
+    reason: `${NOT_MODELLED} — ${type} is scoped ${scope.kind}, and no person scope can be measured from a Board: the product's Fixture carries no person ids, so personIds is always empty and the rule matches nothing rather than passing; the entrant tally is a DIFFERENT constraint and is not substituted`,
+  });
+  return true;
 }
 
 /** Maps ONE `constraints.hard[]` entry onto `hard` or onto `unmodelled`.
@@ -869,6 +907,7 @@ function encodeHardRule(
     case "max_fixtures_per_day": {
       const scope = scopeOr(type, rule, unmodelled);
       if (scope === undefined) return;
+      if (personScopeUnmeasurable(type, scope, unmodelled)) return;
       const count = positiveInt(rule.count);
       if (count === undefined) {
         unmodelled.push({
@@ -884,6 +923,7 @@ function encodeHardRule(
     case "not_after": {
       const scope = scopeOr(type, rule, unmodelled);
       if (scope === undefined) return;
+      if (personScopeUnmeasurable(type, scope, unmodelled)) return;
       const mins = minutesIntoDay(rule.time);
       if (mins === undefined) {
         unmodelled.push({
