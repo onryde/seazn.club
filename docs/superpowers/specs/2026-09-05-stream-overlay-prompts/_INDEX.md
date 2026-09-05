@@ -32,15 +32,21 @@ root and `apps/web`, no database or server yet. Stand one up with
 ## Base commit health (peer report, 2026-09-05, not reproduced here)
 
 This branch is based on `997ad225b`. A peer session reports main's e2e
-walkthrough leg RED in CI at that commit (run 33968571673): a route handler
-builds a redirect with `new URL("/path", req.url)`, which in CI emits the
-server's bind address `0.0.0.0` (no `HOSTNAME` set there), the browser sees an
-origin mismatch, the session cookie is withheld, and the test lands on
-`/login`. Locally green because `seazn-env` pins `HOSTNAME=127.0.0.1`. Two
-consequences for this programme: a walkthrough red on this branch that ends
-on `/login` is that defect until proven otherwise, and no code in this
-programme builds a redirect from `req.url`; the overlay page returns HTML or
-`notFound()`, and `PUT /stream` returns JSON.
+walkthrough leg RED in CI at that commit (run 33968571673), the failing flow
+landing on `/login`. The peer's first explanation (a redirect built with
+`new URL("/path", req.url)` emitting the CI bind address `0.0.0.0`) was later
+withdrawn as unresolved; a competing hypothesis exists in another file. So:
+the red is real, its cause is open. Two consequences for this programme: a
+walkthrough red on this branch that ends on `/login` is that upstream red
+until proven otherwise (check the CI run before blaming the branch), and, as
+plain hygiene, no code in this programme builds a redirect from `req.url`;
+the overlay page returns HTML or `notFound()`, and `PUT /stream` returns JSON.
+
+Planning note (owner, 2026-09-05): "use fable agent to write all wave
+implementation plans". Wave plans: `docs/superpowers/plans/2026-09-05-stream-overlay-w1.md`
+(step one) and `docs/superpowers/plans/2026-09-05-stream-overlay-w2-moments.md`
+(moments, executes only after spectator W1 merges and its RE-PIN list is
+re-verified).
 
 ## Pinned symbols — server and data (scout, 2026-09-05, this worktree)
 
