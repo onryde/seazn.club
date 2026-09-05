@@ -27,7 +27,18 @@
 // Epoch literals below were derived OUTSIDE this process (`date -u -r`), not
 // from `Date.parse` — deriving the expectation from the implementation's own
 // call is the tautology this repo has already paid for.
+//
+// One import here reaches OUT of `scripts/bench` and into the product:
+// `ScheduleConfig`, so the three defaults `board.ts` restates are pinned to the
+// declaration they were copied from rather than to a second copy of the same
+// number (see the drift guard at the end of the `encodeConstraints` block).
+// `board.ts` itself must NOT gain that dependency — it is the runtime, and it
+// stays import-free apart from two `import type`s. Two consequences worth
+// knowing: this suite now fails to COLLECT if `schemas.ts` ever throws at
+// module scope, and a collection failure contributes ZERO failures to the JSON
+// reporter — so judge this file on `numTotalTests`, never on `numFailedTests`.
 import { describe, expect, it } from "vitest";
+import { ScheduleConfig } from "../../../../apps/web/src/server/api-v1/schemas.ts";
 import {
   encodeConstraints,
   judgeDivision,
@@ -395,6 +406,32 @@ describe("encodeConstraints", () => {
     expect(out.unmodelled).toEqual([]);
     expect(out.isRoundRobin).toBe(false);
     expect(out.pins).toEqual(pins);
+  });
+
+  // ---- the drift guard ---------------------------------------------------
+  // `board.ts` restates `ScheduleConfig`'s three defaults because it reads an
+  // OPAQUE record and therefore never runs that zod schema. The briefed test
+  // above asserts `30`, which is a SECOND hand-copy of the same literal: move
+  // the product's default to 40 and both copies stay mutually consistent, the
+  // suite stays green, and the checker measures every overlap rule against a
+  // duration the product never used.
+  //
+  // So this asserts the encoder's defaults against the SCHEMA'S OWN PARSE, not
+  // against a table typed into this file. `ScheduleConfig.parse({})` is the
+  // product's answer to "what does a division that configured nothing get", and
+  // it is the only authority here — if it moves, this reds.
+  it("keeps its three defaults equal to ScheduleConfig's own, so a product default change reds HERE", () => {
+    const product = ScheduleConfig.parse({});
+    const out = encodeConstraints({
+      divisionRef: "d-tiny",
+      scheduleConfig: {},
+      courtIdByRef: courts,
+      isRoundRobin: true,
+      pins: [],
+    });
+    expect(out.matchMinutes).toBe(product.matchMinutes);
+    expect(out.gapMinutes).toBe(product.gapMinutes);
+    expect(out.perEntrantMinRest).toBe(product.perEntrantMinRest);
   });
 
   it("carries gapMinutes and perEntrantMinRest when the pack declares them", () => {
