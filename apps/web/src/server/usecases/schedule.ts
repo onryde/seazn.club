@@ -3640,7 +3640,14 @@ export async function startDivision(
       from stages s where s.division_id = ${divisionId}
       order by s.seq limit 1`;
     if (!firstStage) throw new HttpError(422, "division has no stages to start");
-    return { ...division, firstStage };
+    // Read here, ACTED ON below — see the two guards further down. The freeze
+    // does not bind the start TRANSITION (that is deliberate: the design's own
+    // customer story is freeze-then-publish, and `schedule-board.tsx` gates its
+    // publish/start block on status while the freeze toggle fifteen lines above
+    // reads `single.schedule_locked` — same component, same variable in scope,
+    // different condition). It binds the two SCHEDULE WRITES this function can
+    // make on the way through.
+    return { ...division, firstStage, scheduleFrozen: (await divisionLockState(tx, divisionId)).frozen };
   });
   if (pre.status === "active") {
     return { division_id: divisionId, status: "active", started: false, generated: 0 };
@@ -3650,6 +3657,15 @@ export async function startDivision(
   // its own division lock).
   let generated = 0;
   if (pre.firstStage.n === 0) {
+    // A start that GENERATES a stage's fixtures is creating the timetable, not
+    // merely opening scoring on one — the widest schedule write in this
+    // function. Refused on a frozen board, and refused HERE rather than at the
+    // top of the function, so a start that generates nothing is untouched: the
+    // freeze binds edits, and starting an already-built frozen board is the
+    // intended path (see the pre-flight read above).
+    if (pre.scheduleFrozen) {
+      throw new HttpError(422, SCHEDULE_LOCKED_MESSAGE, SCHEDULE_LOCKED_CODE);
+    }
     const outcome = await generateStageFixtures(auth, pre.firstStage.id);
     generated = outcome.created;
   }
@@ -3672,6 +3688,16 @@ export async function startDivision(
         select distinct round_no from fixtures
         where stage_id = ${pre.firstStage.id} and scheduled_at is null
         order by round_no`;
+      // The sweep below writes `scheduled_at` across the first stage, which is
+      // a schedule edit whatever door it came through — so a frozen board
+      // refuses it. Gated on `rounds.length`, not on reaching this branch: a
+      // frozen division whose fixtures are already slotted has NOTHING for
+      // this loop to write, and refusing it would break freeze-then-start for
+      // no gain. Re-read inside THIS transaction rather than trusting the
+      // pre-flight value, because this is where the write happens.
+      if (rounds.length > 0 && (await divisionLockState(tx, divisionId)).frozen) {
+        throw new HttpError(422, SCHEDULE_LOCKED_MESSAGE, SCHEDULE_LOCKED_CODE);
+      }
       for (const [i, r] of rounds.entries()) {
         await tx`
           update fixtures set scheduled_at = ${iso(startAt + i * step)}, schedule_source = 'auto'
