@@ -71,7 +71,18 @@ Learned the hard way this wave; a later session that reorders them pays twice.
    findings, better than we had.
 3. **Then the boundary gate**, judged from `--reporter=json` with
    `.testResults[].name` confirmed inside this worktree.
-4. **Only then drive the product.** A prod build wants ~2.8GB; run it beside live
+4. **Only then drive the product.** Two things changed machine-local on
+   2026-09-05 that alter how the build behaves, so read them before trusting one.
+   **A successful local build no longer means types are clean** — `seazn-env`
+   now builds with `SKIP_TYPECHECK=1`, because the ~3GB `node` worker under
+   `next build` was Next's own JS TypeScript checker (Next cannot use the TS 7 Go
+   binary), and CI already skipped it. Run `npx turbo run typecheck` or
+   `seazn-env gate` separately; a green build is no longer evidence.
+   And **never `rm -rf apps/web/.next` by hand** — `seazn-env rebuild` now
+   preserves `.next/cache`, which is what makes a one-file change 24s instead of
+   a 3.7-minute cold compile; deleting it throws ~800MB of cache away. The
+   Turbopack build-cache flag itself is inert until PR #716 is in the branch.
+   Even so: A prod build wants ~2.8GB; run it beside live
    agents and the build dies with **exit 137 AFTER printing "Compiled
    successfully"**, which reads like a code failure and is not one. Take the
    environment down to just Postgres first.
