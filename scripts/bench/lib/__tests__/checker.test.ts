@@ -254,6 +254,55 @@ describe("checkBoard", () => {
     expect(r.findings.flatMap((f) => [...f.fixtureIds])).toEqual(["fx-0", "fx-2"]);
   });
 
+  // --- a court the board never declared (finding R02) ---------------------
+  //
+  // Both directions in one case, and the SAME instant on both sides, so the
+  // pair witnesses the lookup and not the clock. A checker that kept the old
+  // silent skip passes the first half and fails the second — which is the
+  // whole point: the second half is a board that reported CLEAN while an
+  // entire rule had been skipped for that fixture.
+  it("FLAGS a fixture on a court the board never declared, instead of skipping its hours", () => {
+    // 14:00 is outside court-1's 06:00-14:00, so on a DECLARED court this
+    // instant reds. That is the control: it proves the instant is judgeable
+    // and that the second half's silence would have been the lookup's doing.
+    const known = checkBoard(movedTo(cleanBoard(), 2, MON, "14:00"), cleanConstraints());
+    expect(kinds(known.findings)).toEqual(["outside_court_hours"]);
+
+    // The same fixture at the same instant, moved onto a court id that is in
+    // no `board.courts` entry. Court-hours containment is a rule the
+    // product's own `/validate` does not block on, so the bench is its only
+    // gate — and this used to walk out of the rule with no finding, no
+    // `unchecked` line, and `clean: true`.
+    const unknown = checkBoard(
+      movedTo(cleanBoard(), 2, MON, "14:00", "court-not-in-this-venue"),
+      cleanConstraints(),
+    );
+    expect(kinds(unknown.findings)).toEqual(["court_not_declared"]);
+    expect(unknown.findings[0].fixtureIds).toEqual(["fx-2"]);
+    expect(unknown.clean).toBe(false);
+    // Names the id it could not resolve. Without this the finding could cite
+    // any court at all and a reader could not tell which row to open.
+    expect(unknown.findings[0].detail).toContain("court-not-in-this-venue");
+  });
+
+  it("does NOT flag a placed fixture that carries no court at all", () => {
+    // The other half of the old guard, and deliberately still a skip. An
+    // absent `court_id` is a state the product genuinely returns — `board.ts`
+    // sets `courtId` only when `fixture.court_id` is a string — so a fixture
+    // given a time and no court is a product answer this rule has no calendar
+    // to judge, not a board referencing something that does not exist.
+    // Flagging it here would file a false product defect from the court-hours
+    // rule, and the two cases are separated so neither can cover for the
+    // other.
+    const b = cleanBoard();
+    const f = [...b.fixtures];
+    const { courtId: _dropped, ...courtless } = f[2];
+    f[2] = { ...courtless, start: at(MON, "14:00"), end: at(MON, "14:00") + 30 * 60_000 };
+    const r = checkBoard({ ...b, fixtures: f }, cleanConstraints());
+    expect(kinds(r.findings)).toEqual([]);
+    expect(r.clean).toBe(true);
+  });
+
   // -----------------------------------------------------------------------
   // Rule 3 — rest minima
   // -----------------------------------------------------------------------

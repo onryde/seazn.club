@@ -390,7 +390,39 @@ function windowContainment(
     }
 
     // --- the court's own calendar ----------------------------------------
-    const court = p.fixture.courtId === undefined ? undefined : courtById.get(p.fixture.courtId);
+    //
+    // The two ways a fixture can arrive here with no calendar are DIFFERENT
+    // facts and are answered differently, which is why they are separate
+    // branches rather than one `court !== undefined` gate. They used to be
+    // one, and it silently skipped the entire rule for both.
+    //
+    //   * NO `courtId` at all -> skip, deliberately. `board.ts` sets the
+    //     field only when the product's `fixture.court_id` is a string, so a
+    //     fixture given a time and no court is an answer the product
+    //     genuinely returns. There is no calendar to judge it against and
+    //     inventing a breach here would file a FALSE product defect — the
+    //     worst output a harness like this can produce.
+    //   * A `courtId` naming no `BoardCourt` -> a FINDING. Both sides of this
+    //     reference came from the product, as two separate fetches that must
+    //     agree, so a fixture pointing outside the venue set is an
+    //     inconsistency in the answer itself. Skipping it was design §1.4's
+    //     forbidden outcome reached with no malformed input at all: the
+    //     fixture was measured against no calendar and the division still
+    //     came back clean. It matters more here than anywhere else in this
+    //     function because court-hours containment is a rule the product's
+    //     own `/validate` does not block on, so the bench is its only gate.
+    const courtId = p.fixture.courtId;
+    if (courtId !== undefined && courtById.get(courtId) === undefined) {
+      out.push(
+        finding(
+          "court_not_declared",
+          constraints,
+          [id],
+          `${id} at ${localLabel(p)} is placed on court ${courtId}, which is in none of the ${board.courts.length} court(s) this board declares — its hours could not be checked at all`,
+        ),
+      );
+    }
+    const court = courtId === undefined ? undefined : courtById.get(courtId);
     if (court !== undefined) {
       const ranges = courtRangesOn(court, p.ymd, p.weekday);
       if (ranges !== "open_all_day") {

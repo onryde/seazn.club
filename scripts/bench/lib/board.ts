@@ -299,7 +299,17 @@ export type CheckerFindingKind =
   // bench report should not have to open the detail to learn which bound a
   // fixture broke.
   | "not_before_breached"
-  | "not_after_breached";
+  | "not_after_breached"
+  // Bench NATIVE, and it has no product counterpart by construction: the
+  // product owns both sides of this reference, so it can never emit a
+  // conflict saying one of its own fixtures names a court it does not have.
+  // The bench can, because it fetched the fixtures and the courts as two
+  // separate answers and they must agree. Reported as a FINDING rather than
+  // an `unchecked` line: `CheckerReport.unchecked` is
+  // `EncodedConstraints.unmodelled` FORWARDED and never a second list, so it
+  // is a per-CONSTRAINT fact resolved at encode time and has nowhere to put a
+  // per-FIXTURE one discovered at check time.
+  | "court_not_declared";
 
 /** One breach. `measured`/`required` are optional because not every kind has
  *  a scalar to compare — a double-booking has two fixtures and no number,
