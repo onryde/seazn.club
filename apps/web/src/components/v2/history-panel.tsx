@@ -11,6 +11,9 @@ import { UpgradeGate } from "@/components/upgrade-gate";
 import { useConfirm } from "@/components/ui/confirm-provider";
 import { Tip } from "@/components/ui/tip";
 import { useMsg } from "@/components/i18n/dict-provider";
+// Zero imports of its own, so a client component may hold it. The CODE is the
+// contract between a schedule-lock refusal and this panel; the SENTENCE is not.
+import { SCHEDULE_LOCKED_CODE } from "@/lib/schedule-lock";
 import type { MessageKey } from "@/lib/messages";
 
 interface HistoryRow {
@@ -139,7 +142,25 @@ export function HistoryPanel({
       } else if (err instanceof ApiV1Error && err.code === "SEQ_CONFLICT") {
         setError("Someone else edited this division — reloaded the latest state.");
         await load();
+      } else if (err instanceof ApiV1Error && err.code === SCHEDULE_LOCKED_CODE) {
+        // A refusal this panel recognises is said in the reader's language. The
+        // server's sentence is English prose (`SCHEDULE_LOCKED_MESSAGE`), and
+        // painting it here put an English line in the middle of a translated
+        // console. Reachable without any race: `scheduleLocked` is a prop
+        // resolved when the page rendered, so a second tab or a second
+        // organiser freezing the division leaves every control on this page
+        // live and the 422 as the only thing that says no.
+        //
+        // Branch on the CODE, never on the message: matching an English
+        // sentence to decide how to render it breaks the moment the sentence is
+        // reworded, which is exactly what `@/lib/schedule-lock` makes cheap.
+        setError(msg("history.error.frozen"));
       } else {
+        // Deliberately NOT blanket-suppressed. Every refusal this client can
+        // recognise now has its own sentence; what is left is the unanticipated
+        // failure, and that is the one an organiser most needs to be able to
+        // quote. A generic "something went wrong" would trade an untranslated
+        // known refusal for an unreportable unknown one.
         setError(err instanceof Error ? err.message : "Failed");
       }
     } finally {
@@ -250,7 +271,14 @@ export function HistoryPanel({
       )}
 
       {paywallFeature && <UpgradeGate feature={paywallFeature} />}
-      {error && <p className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-600">{error}</p>}
+      {error && (
+        <p
+          data-testid="history-error"
+          className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-600"
+        >
+          {error}
+        </p>
+      )}
 
       <div className="grid gap-4 lg:grid-cols-2">
         <div className="card p-4">
@@ -395,9 +423,20 @@ export function HistoryPanel({
               the mount site passes `canEdit && !billingFrozen`, and
               `billingFrozen` is the ORG's billing freeze, a different thing
               with a confusingly similar name. */}
+          {/* Names BOTH refused actions when both are on the list, and only
+              Restore when they are not: Delete is offered on MANUAL save points
+              alone, so on a list of AI anchors "unfreeze it to restore or
+              delete" would promise a control that unfreezing does not produce.
+              One note either way — every control on the rail is refused for the
+              same single reason, and repeating the sentence down it would be
+              noise. */}
           {canEdit && scheduleLocked && checkpoints.length > 0 && (
             <p className="text-xs text-slate-500" data-testid="checkpoint-restore-reason">
-              {msg("history.checkpoint.frozen")}
+              {msg(
+                checkpoints.some((c) => (c.kind ?? "manual") === "manual")
+                  ? "history.checkpoint.frozenDelete"
+                  : "history.checkpoint.frozen",
+              )}
             </p>
           )}
           {checkpoints.length === 0 ? (
@@ -504,8 +543,28 @@ export function HistoryPanel({
                               {canEdit && (cp.kind ?? "manual") === "manual" && (
                                 <button
                                   type="button"
-                                  className="text-[11px] text-slate-400 hover:text-rose-600"
-                                  disabled={busy}
+                                  data-testid="checkpoint-delete"
+                                  // `enabled:hover:text-rose-600`, and the two
+                                  // disabled tokens spelled out: `:hover` still
+                                  // matches a DISABLED button, and this is a
+                                  // bare text button that inherits none of
+                                  // `.btn`'s `disabled:*` pair (globals.css).
+                                  // Without them a frozen Delete renders
+                                  // pixel-identical to a live one and still
+                                  // reddens under the cursor — a control lying
+                                  // about itself while the note above says why.
+                                  // Exactly the reasoning the Restore beside it
+                                  // already carries.
+                                  className="text-[11px] text-slate-400 enabled:hover:text-rose-600 disabled:cursor-not-allowed disabled:opacity-50"
+                                  // Matched to the Restore ON THIS ROW. Delete
+                                  // is the IRREVERSIBLE half of the pair — it
+                                  // destroys the rewind the freeze exists to
+                                  // protect, where Restore merely uses it — and
+                                  // `deleteCheckpoint` now answers a frozen
+                                  // division with a live 422, so leaving it
+                                  // `disabled={busy}` offered a button that
+                                  // could only fail.
+                                  disabled={busy || scheduleLocked}
                                   aria-label={msg("history.checkpoint.delete")}
                                   title={msg("history.checkpoint.delete")}
                                   onClick={async () => {

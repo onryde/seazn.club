@@ -212,6 +212,16 @@ export interface JointUndoFailure {
    *  below, where the call itself failed and a per-division reason would be a
    *  guess — the console renders no "why" line for an empty reason. */
   reason: string;
+  /** The refusal's machine-readable code, where it had one — `SCHEDULE_LOCKED`
+   *  for a frozen division, absent for a bare `HttpError` or a thrown `Error`.
+   *
+   *  Carried for exactly one purpose: the console renders a LOCAL dictionary
+   *  sentence for a refusal it recognises, because `reason` is English prose
+   *  and painting it into `board.ai.joint.undoneReason`'s `{reason}` put an
+   *  English clause mid-sentence inside a fully translated card. Branch on
+   *  THIS, never on `reason` — matching the sentence breaks the moment the
+   *  sentence is reworded. */
+  code?: string;
 }
 
 export interface JointUndoOutcome {
@@ -248,7 +258,7 @@ export async function undoJointApply(
   try {
     const out = await api<{
       restored: { division_id: string; watermark: number; steps: number }[];
-      failed: { division_id: string; reason: string }[];
+      failed: { division_id: string; reason: string; code?: string }[];
       ok: boolean;
     }>(`/api/v1/competitions/${competitionId}/schedule/restore`, {
       method: "POST",
@@ -264,8 +274,14 @@ export async function undoJointApply(
       ok: out.ok,
       // `reason` carried through, not discarded: it is per DIVISION on the
       // wire (the usecase catches around each `restoreCheckpoint`), so the
-      // console can say why each one is still on the AI board.
-      failed: out.failed.map((f) => ({ divisionId: f.division_id, reason: f.reason })),
+      // console can say why each one is still on the AI board. `code` rides
+      // beside it — the reason is what an unrecognised refusal shows, the code
+      // is what a recognised one is SAID with, in the reader's own language.
+      failed: out.failed.map((f) => ({
+        divisionId: f.division_id,
+        reason: f.reason,
+        ...(f.code ? { code: f.code } : {}),
+      })),
     };
   } catch (err) {
     // Keyed on the STATUS, not the code: the usecase throws a bare

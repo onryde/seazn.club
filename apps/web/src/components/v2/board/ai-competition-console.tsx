@@ -62,6 +62,9 @@ import {
   type JointUndoRefusal,
 } from "./ai-joint-apply";
 import { blockingConflictKey, type AiConsoleFixture } from "./ai-diff";
+// A leaf with ZERO imports, so a client component may hold it: the CODE is the
+// contract between the refusal and this card, and the sentence is not.
+import { SCHEDULE_LOCKED_CODE } from "@/lib/schedule-lock";
 import { AiReviewPanel } from "./ai-review-panel";
 import { buildReviewRows } from "./ai-review";
 import { formatConflictDetail } from "./conflict-detail-format";
@@ -600,13 +603,35 @@ export function JointReviewStep({
       // in `undoJointApply` reports every division with no reason at all,
       // because the call failed as a whole and a per-division reason there
       // would be a guess.
+      //
+      // A refusal this client RECOGNISES is said in the reader's own language.
+      // The server's `reason` is English prose — `SCHEDULE_LOCKED_MESSAGE` and
+      // its siblings — so painting it into `{reason}` put a raw English clause
+      // mid-sentence inside a fully translated card, on the FIRST request. The
+      // branch is on the CODE, never on the sentence: matching English text to
+      // decide how to render it is the same defect wearing a different hat, and
+      // it breaks the moment the sentence is reworded (which is precisely what
+      // `@/lib/schedule-lock` exists to make a one-line edit).
+      //
+      // Everything else keeps the server's own message. A refusal nobody
+      // anticipated is the one an organiser most needs to be able to quote, and
+      // replacing it with a generic "something went wrong" would trade an
+      // untranslated known refusal for an unreportable unknown failure.
       const named = (id: string): string => nameOf.get(id) ?? id;
-      const grouped: { reason: string; divisions: string[] }[] = [];
+      const localReason = (f: JointUndoFailure): string =>
+        f.code === SCHEDULE_LOCKED_CODE ? msg("board.ai.joint.reasonLocked") : f.reason;
+      // Grouped on the CODE where there is one, so two divisions frozen for the
+      // same reason stay ONE line even if the server worded their two messages
+      // differently — the sentence they are given is identical either way.
+      const groupKey = (f: JointUndoFailure): string => f.code || f.reason;
+      const grouped: { key: string; reason: string; divisions: string[] }[] = [];
       for (const f of undoFailed) {
-        if (!f.reason) continue;
-        const row = grouped.find((g) => g.reason === f.reason);
+        const reason = localReason(f);
+        if (!reason) continue;
+        const key = groupKey(f);
+        const row = grouped.find((g) => g.key === key);
         if (row) row.divisions.push(named(f.divisionId));
-        else grouped.push({ reason: f.reason, divisions: [named(f.divisionId)] });
+        else grouped.push({ key, reason, divisions: [named(f.divisionId)] });
       }
       return (
         <div className="space-y-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2.5">
@@ -624,7 +649,7 @@ export function JointReviewStep({
               <p className="font-semibold">{msg("board.ai.joint.undoneWhy")}</p>
               <ul className="mt-0.5 list-disc pl-4">
                 {grouped.map((g) => (
-                  <li key={g.reason}>
+                  <li key={g.key}>
                     {msg("board.ai.joint.undoneReason", {
                       divisions: g.divisions.join(", "),
                       reason: g.reason,

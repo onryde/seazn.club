@@ -69767,6 +69767,9 @@
                               },
                               "reason": {
                                 "type": "string"
+                              },
+                              "code": {
+                                "type": "string"
                               }
                             },
                             "required": [
@@ -69806,7 +69809,8 @@
                     "failed": [
                       {
                         "division_id": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
-                        "reason": "example"
+                        "reason": "example",
+                        "code": "example"
                       }
                     ],
                     "ok": true

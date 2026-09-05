@@ -14,7 +14,23 @@ const SUPERSEDED_REASON =
 
 export interface CompetitionRestoreOut {
   restored: { division_id: string; watermark: number; steps: number }[];
-  failed: { division_id: string; reason: string }[];
+  /** `reason` is the refusal's own sentence; `code` is `HttpError.code` where
+   *  the refusal carried one — the same machine-readable code the /api/v1
+   *  envelope would have carried had this refusal escaped as the response's
+   *  status, rather than being caught per division and reported here.
+   *
+   *  The code is what lets a client SAY the refusal in the reader's language.
+   *  Without it the console had only the sentence, and interpolating
+   *  `SCHEDULE_LOCKED_MESSAGE` — English prose — into a dictionary placeholder
+   *  put a raw English clause mid-sentence inside a fully translated card, on
+   *  the ordinary first request. Matching the sentence instead would be the
+   *  same defect wearing a different hat: it breaks the moment the sentence is
+   *  reworded, which is exactly what `@/lib/schedule-lock` exists to make cheap.
+   *
+   *  Optional because not every refusal has one: a bare `HttpError(404,
+   *  "checkpoint not found")` carries no code, and neither does a thrown
+   *  `Error`. A client that does not recognise the code shows the sentence. */
+  failed: { division_id: string; reason: string; code?: string }[];
   ok: boolean;
 }
 
@@ -182,6 +198,10 @@ export async function restoreCompetitionSchedule(
       failed.push({
         division_id: c.division_id,
         reason: err instanceof Error ? err.message : "restore failed",
+        // Spread, not `code: …` with an undefined value: the wire shape stays
+        // exactly as it was for every refusal that has no code, so a caller
+        // reading `failed` sees a new key only where there is one to read.
+        ...(err instanceof HttpError && err.code ? { code: err.code } : {}),
       });
     }
   }

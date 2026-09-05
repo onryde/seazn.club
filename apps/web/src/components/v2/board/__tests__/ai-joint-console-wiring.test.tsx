@@ -85,6 +85,7 @@ vi.mock("@/components/i18n/dict-provider", async (importOriginal) => {
 // the file, so these already see the mocked modules.
 import { renderToStaticMarkup } from "react-dom/server";
 import { ApiV1Error } from "@/lib/client-v1";
+import { SCHEDULE_LOCKED_CODE, SCHEDULE_LOCKED_MESSAGE } from "@/lib/schedule-lock";
 import type { AiParsePreviewResponse } from "@/server/api-v1/schemas";
 import { AiCompetitionConsole, JointReviewStep, type JointDivision } from "../ai-competition-console";
 import { AiInstructionPreview } from "../ai-instruction-preview";
@@ -98,6 +99,20 @@ import en from "@/dictionaries/en/ui.json";
  *  those is the property the test exists for. Same shape
  *  `ai-competition-console.test.tsx` uses. */
 const enText = en as unknown as Record<string, string>;
+
+/** React escapes `'` -> `&#x27;` (and `&`, `<`, `>`, `"`) in text nodes, so a
+ *  dictionary sentence containing an apostrophe is NEVER a substring of the
+ *  markup that renders it perfectly. Every POSITIVE assertion against rendered
+ *  copy goes through this; the negatives below quote server sentences that
+ *  contain none of these characters. */
+function esc(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#x27;");
+}
 
 /**
  * Four divisions, of which exactly TWO can join a run. The gap is the point:
@@ -619,16 +634,32 @@ describe("the review step is wired to the console's own state", () => {
   // organiser can act on ("unlock it to edit"), and the joint path threw it
   // away: `out.failed.map(f => f.division_id)` kept the ids and dropped
   // `reason`, so the console named which divisions failed and never said why.
-  // Copy that exists and that nothing renders is an inert seam, so this drives
-  // the REAL producer (the console's own `undoJointApply`, over the envelope
-  // the usecase actually returns) into the REAL consumer (`JointReviewStep`
-  // rendered with the props the console handed it) rather than asserting on a
-  // fixture at both ends.
-  it("carries each division's own reason from the server envelope into the rendered copy", async () => {
-    const LOCKED = "the division schedule is locked — unlock it to edit";
+  // Carrying the sentence fixed the silence and introduced a second defect:
+  // `SCHEDULE_LOCKED_MESSAGE` is ENGLISH PROSE, and interpolating it into
+  // `board.ai.joint.undoneReason` put a raw English clause mid-sentence inside
+  // a fully translated card, on the FIRST request — the ordinary path, not a
+  // race. A refusal this client can recognise is said in the reader's own copy.
+  //
+  // Both halves are driven through the REAL producer (the console's own
+  // `undoJointApply`, over the envelope the usecase actually returns) into the
+  // REAL consumer (`JointReviewStep` rendered with the props the console handed
+  // it), rather than asserting on a fixture at both ends.
+  it("says a recognised freeze refusal in the reader's own copy, never the server's English", async () => {
+    const LOCAL = enText["board.ai.joint.reasonLocked"]!;
+    // The expected value must EXIST before its presence or the server
+    // sentence's absence means anything: a missing key is `undefined`, and
+    // `not.toContain(undefined)` passes on any input at all.
+    expect(typeof LOCAL, "board.ai.joint.reasonLocked is missing from en/ui.json").toBe("string");
+
     const ctx = await applied(() => ({
       restored: [{ division_id: "d1", watermark: 3, steps: 1 }],
-      failed: [{ division_id: "d2", reason: LOCKED }],
+      // The envelope the usecase really answers with: the prose AND the
+      // machine-readable code. The console branches on the CODE — matching the
+      // sentence would break the moment the sentence is reworded, which is the
+      // same defect wearing a different hat.
+      failed: [
+        { division_id: "d2", reason: SCHEDULE_LOCKED_MESSAGE, code: SCHEDULE_LOCKED_CODE },
+      ],
       ok: false,
     }));
 
@@ -636,19 +667,39 @@ describe("the review step is wired to the console's own state", () => {
     await flush();
     const html = renderToStaticMarkup(typed(ctx.island.tree(), JointReviewStep));
     expect(html, "the division is still named").toContain("Under 14s");
-    expect(html, "the server's reason never reaches the organiser").toContain(LOCKED);
+    expect(html, "the refusal is not said in the reader's language").toContain(esc(LOCAL));
+    expect(html, "the server's English sentence leaked into a translated card").not.toContain(
+      SCHEDULE_LOCKED_MESSAGE,
+    );
+  });
+
+  // The other half of the same rule: a refusal the client does NOT recognise
+  // still surfaces the server's own message. Suppressing it would trade an
+  // untranslated known refusal for an unreportable unknown failure, and leave
+  // the organiser with a card that says a division failed and nothing else.
+  it("still shows an unrecognised refusal's own message, rather than swallowing it", async () => {
+    const ctx = await applied(() => ({
+      restored: [],
+      failed: [{ division_id: "d2", reason: "checkpoint not found" }],
+      ok: false,
+    }));
+    ctx.undo();
+    await flush();
+    const html = renderToStaticMarkup(typed(ctx.island.tree(), JointReviewStep));
+    expect(html, "an unrecognised reason was swallowed").toContain("checkpoint not found");
+    expect(html).toContain("Under 14s");
   });
 
   // Two divisions refused for DIFFERENT reasons must read as two reasons. One
   // banner carrying the first would tell the organiser to unfreeze a division
   // that is not frozen, and hide the one that is.
   it("keeps distinct reasons distinct, and collapses identical ones", async () => {
-    const LOCKED = "the division schedule is locked — unlock it to edit";
+    const LOCAL = enText["board.ai.joint.reasonLocked"]!;
     const GONE = "checkpoint not found";
     const distinct = await applied(() => ({
       restored: [],
       failed: [
-        { division_id: "d1", reason: LOCKED },
+        { division_id: "d1", reason: SCHEDULE_LOCKED_MESSAGE, code: SCHEDULE_LOCKED_CODE },
         { division_id: "d2", reason: GONE },
       ],
       ok: false,
@@ -656,21 +707,24 @@ describe("the review step is wired to the console's own state", () => {
     distinct.undo();
     await flush();
     const two = renderToStaticMarkup(typed(distinct.island.tree(), JointReviewStep));
-    expect(two).toContain(LOCKED);
+    expect(two).toContain(esc(LOCAL));
     expect(two).toContain(GONE);
 
+    // Grouped on the CODE, not on the prose: two frozen divisions are one
+    // finding, and the local sentence they share is identical whatever the
+    // server's two messages happened to say.
     const shared = await applied(() => ({
       restored: [],
       failed: [
-        { division_id: "d1", reason: LOCKED },
-        { division_id: "d2", reason: LOCKED },
+        { division_id: "d1", reason: SCHEDULE_LOCKED_MESSAGE, code: SCHEDULE_LOCKED_CODE },
+        { division_id: "d2", reason: SCHEDULE_LOCKED_MESSAGE, code: SCHEDULE_LOCKED_CODE },
       ],
       ok: false,
     }));
     shared.undo();
     await flush();
     const one = renderToStaticMarkup(typed(shared.island.tree(), JointReviewStep));
-    expect(one.split(LOCKED).length - 1, "one shared reason, said twice").toBe(1);
+    expect(one.split(esc(LOCAL)).length - 1, "one shared reason, said twice").toBe(1);
     // ...and both divisions are named on the line that carries it.
     expect(one).toContain("Under 12s");
     expect(one).toContain("Under 14s");

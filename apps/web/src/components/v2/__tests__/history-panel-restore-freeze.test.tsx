@@ -126,7 +126,14 @@ describe("HistoryPanel — a frozen schedule refuses the restore too", () => {
     expect(restores).toHaveLength(2);
     for (const b of restores) expect(propsOf(b).disabled).toBe(true);
     expect(reasons, "the frozen restore states no reason").toHaveLength(1);
-    expect(propsOf(reasons[0]!).children).toBe(EN[KEY]);
+    // ONE note for the whole rail, and which sentence it is depends on what is
+    // ON the rail: `CHECKPOINTS` above carries a MANUAL save point, and a
+    // frozen division now refuses Delete as well as Restore (`deleteCheckpoint`
+    // answers a live 422), so the note names both. `KEY` is still the sentence
+    // for a list of AI anchors alone — Delete is not offered on those, so
+    // naming it there would promise a control unfreezing cannot produce — and
+    // `history-panel-locked-refusal.test.tsx` pins that half.
+    expect(propsOf(reasons[0]!).children).toBe(EN["history.checkpoint.frozenDelete"]);
   });
 
   it("leaves Restore live, with no reason note, when the schedule is not frozen", async () => {
