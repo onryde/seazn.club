@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { parseFEN } from "../../engine";
 import { LANDS } from "../lands";
 import { LESSONS } from "../lessons";
-import { TACTICS, TACTICS2, TACTICS3, TACTICS4 } from "../puzzles";
+import { TACTICS, TACTICS2, TACTICS3, TACTICS4, TACTICS5 } from "../puzzles";
 import { OPENING_IDS } from "../openings";
 
 const GAME_IDS = [
@@ -85,7 +85,8 @@ describe("curriculum shape", () => {
   it("tactic-trainer lessons point at existing packs", () => {
     for (const l of LESSONS.filter((x) => x.game === "tacticTrainer")) {
       const pack = l.gameOpts?.pack ?? "";
-      const exists = pack in TACTICS || pack in TACTICS2 || pack in TACTICS3 || pack in TACTICS4;
+      const exists =
+        pack in TACTICS || pack in TACTICS2 || pack in TACTICS3 || pack in TACTICS4 || pack in TACTICS5;
       expect(exists, `lesson ${l.n} pack "${pack}"`).toBe(true);
     }
   });

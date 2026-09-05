@@ -79,7 +79,7 @@ export function MateInOne({ range }: { range?: [number, number] }) {
   function solved(i: number) {
     markSolved(i);
     const n = solvedCount();
-    progress.setGameStars(gameId, STAR_RULES.packStars(n));
+    progress.setGameStars(gameId, STAR_RULES.packStars(n, PACK.length));
     setStatus("<strong>Checkmate!</strong> 🎉 The king has nowhere to run.");
     voice.say("Checkmate! The king has nowhere to run!");
     celebrate();
@@ -156,6 +156,19 @@ export function MateInOne({ range }: { range?: [number, number] }) {
       score={`🧩 ${solvedCount()} / ${PACK.length} solved`}
       status={status}
       chips={chips}
+      subtitle={<span className="min-w-0 truncate font-bold">{PACK[cur].name}</span>}
+      picker={{
+        label: "Puzzles",
+        children: (
+          <PuzzleDots
+            count={PACK.length}
+            current={cur}
+            isSolved={isSolved}
+            onPick={load}
+            variant="grid"
+          />
+        ),
+      }}
       extra={
         <PuzzleDots
           count={PACK.length}

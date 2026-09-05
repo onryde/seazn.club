@@ -78,11 +78,14 @@ export function LessonCard({
         </div>
       ) : null}
 
+      {/* `.btn` is 36px tall; on phones this card is the first thing under
+          the thumb (design of record: "Quest hub on a phone" — Today first),
+          so both actions take the 44px minimum. */}
       <div className="mt-4 flex flex-wrap gap-2">
         {wk.game ? (
           <button
             type="button"
-            className="btn btn-primary"
+            className="btn btn-primary max-md:min-h-11"
             onClick={() => onPlay(wk.game as GameId, wk.gameOpts ?? {})}
           >
             {GAME_LABEL[wk.game]}
@@ -90,7 +93,7 @@ export function LessonCard({
         ) : null}
         <button
           type="button"
-          className={isDone ? "btn btn-ghost" : "btn btn-primary"}
+          className={`max-md:min-h-11 ${isDone ? "btn btn-ghost" : "btn btn-primary"}`}
           onClick={(e) => {
             const was = isDone;
             progress.setWeekDone(wk.n, !was);
