@@ -9,7 +9,18 @@ import { cacheGet, cacheSet, cacheDelPattern } from "@/lib/cache";
 import { decodeFeePercent } from "@/lib/platform-fee";
 
 const FEE_KEY = "platform_fee_percent";
-const CACHE_KEY_PREFIX = "platform:fee_percent";
+// v2 — BUMPED with the jsonb decode fix. The Redis read at the top of
+// platformFeeDefault() precedes the decode, and the only invalidator is an
+// admin PUT: a warm `{v:0}` written by the old `Number(row?.value)` would
+// otherwise keep serving a 0% cut for the full 300s TTL AFTER the fix
+// deployed. That window is not merely cosmetic — the first paid entry in it
+// runs `update competitions set fee_percent = <0> where fee_percent is null`
+// (registrations.ts:2918, first-wins and the only writer), and
+// effectiveFeePercentFor treats a locked 0 as "not locked" (`> 0`, :103), so
+// the row is non-null forever and that competition can never lock a rate
+// again. Bumping the key makes the fix take effect on deploy instead of 300s
+// later.
+const CACHE_KEY_PREFIX = "platform:fee_percent:v2";
 const TTL_SECONDS = 300;
 
 /**
@@ -33,9 +44,23 @@ export function __platformFeeCacheKeyForTests(): string {
   return cacheKey();
 }
 
+/** @internal — exported for tests. `envFallback` is the branch EVERY rejected
+ *  jsonb row lands on, so it needs a guard that runs without a database;
+ *  platform-settings.test.ts is `skipIf(!HAS_DB)` and CI has no DATABASE_URL. */
+export function __envFallbackForTests(): number {
+  return envFallback();
+}
+
 function envFallback(): number {
-  const raw = Number(process.env.PLATFORM_FEE_PERCENT ?? "5");
-  return Number.isFinite(raw) && raw >= 0 && raw <= 100 ? raw : 5;
+  // `?? "5"` does NOT cover an empty value, and this is the same 0-shaped trap
+  // decodeFeePercent exists for: `Number("")` is a finite, in-range `0`, so
+  // `PLATFORM_FEE_PERCENT=` (set but blank — an unset GH secret, a bare Docker
+  // `-e PLATFORM_FEE_PERCENT`, an uncommented-and-emptied .env line) served a
+  // 0% platform cut. This path carries MORE traffic since the jsonb decode
+  // landed: every row decodeFeePercent rejects is routed here.
+  const raw = process.env.PLATFORM_FEE_PERCENT?.trim();
+  if (!raw) return 5;
+  return decodeFeePercent(Number(raw)) ?? 5;
 }
 
 /** Platform's default cut of entry fees, in percent. Resolution: admin-set

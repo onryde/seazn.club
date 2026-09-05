@@ -419,7 +419,11 @@ test.describe("admin platform settings", () => {
         // platform-settings.ts:64), so a silent round to 3 shows up here.
         //
         // Its LIMIT, stated so nobody over-reads it: that reader is
-        // `Number(value)` plus a 0–100 clamp (platform-settings.ts:48-49). So
+        // `decodeFeePercent(row?.value) ?? envFallback()` (platform-settings.ts,
+        // `platformFeeDefault`). It WAS `Number(value)` plus a 0–100 clamp at
+        // :48-49 until the follow-up wave replaced those two lines, so the
+        // read-back is now type-gated as well as bounded — a pin at the old
+        // line numbers now lands on the comment explaining the change. So
         // this pins what every CONSUMER of the fee gets, which is the thing
         // that matters — not the literal jsonb bytes in the column.
         if (c.status === 200) {

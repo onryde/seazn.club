@@ -1184,12 +1184,22 @@ export async function setOwnerStaffRoleSql(
  * superadmin-only, and the one caller that needs this value needs it BEFORE any
  * privilege has been borrowed — a `beforeEach` capturing the row so a hook can
  * put it back after a test that timed out mid-write. Returns `null` when the
- * row is absent or its `value` is not a jsonb NUMBER (a jsonb `null`, string or
- * boolean all decode to something `Number()` reads as a finite 0 — see below),
- * so a caller can decline to "restore" a value
- * that never existed (with no row, `platformFeeDefault()` falls through to the
- * PLATFORM_FEE_PERCENT env and then to 5 — writing one would not be a restore,
- * it would be a new setting).
+ * row is absent, when its `value` is not a jsonb NUMBER (a jsonb `null`, string
+ * or boolean all decode to something `Number()` reads as a finite 0 — see
+ * below), AND — since it adopted the shared decoder — when the number is
+ * outside 0..100. That last case is a narrowing worth stating: this helper used
+ * to accept any finite number, so a row holding 150 was captured and restored
+ * (loudly, via the route's own 422). It now reads as `null`, the caller's
+ * `if (fee !== null)` guard is false, and NOTHING is restored — including the
+ * `console.warn` in that branch, which is unreachable in exactly the case it
+ * would be most wanted. Acceptable because the only writer is bounds-checked,
+ * so an out-of-band row means someone wrote raw SQL; recorded because a silent
+ * skip is a bad failure mode to discover later.
+ *
+ * A caller can therefore decline to "restore" a value that never existed (with
+ * no row, `platformFeeDefault()` falls through to the PLATFORM_FEE_PERCENT env
+ * and then to 5 — writing one would not be a restore, it would be a new
+ * setting).
  *
  * READS ONLY. There is deliberately no SQL writer beside it: `value` is cached
  * in Redis for 300s (`lib/platform-settings.ts`, cache-aside), and

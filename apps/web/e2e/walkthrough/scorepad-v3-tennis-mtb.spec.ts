@@ -28,6 +28,7 @@ import {
 } from "../helpers";
 import { HUMAN_FASTEST_REPEAT_MS } from "../../src/components/v2/scorepad/use-pad-pipeline";
 import { HOLD_MS } from "../../src/components/v2/scorepad/queue";
+import { PER_TAP_SLACK_MS, BUDGET_FLOOR_MS } from "../gallery-budget";
 
 test.describe.configure({ mode: "parallel" });
 
@@ -128,7 +129,14 @@ async function tapPoint(page: Page, fx: RosteredFixture, side: "home" | "away"):
   await pace(page, side);
   await tennisHalf(page, side).click();
   await expect
-    .poll(async () => (await ledger(page.request, fx.fixtureId)).length, { timeout: 20_000 })
+    // Derived for the same reason the budget is: the row cannot appear until
+    // the hold drains and there is no flush here, so a flat 20s reds EVERY tap
+    // — before BUDGET_MS is ever consulted — the moment HOLD_MS exceeds it
+    // (resolveHoldMs deliberately does not cap, queue.ts:158). Folder idiom:
+    // honest-recording.spec.ts:193, cricket.spec.ts:350.
+    .poll(async () => (await ledger(page.request, fx.fixtureId)).length, {
+      timeout: HOLD_MS + 20_000,
+    })
     .toBe(before + 1);
 }
 
@@ -138,27 +146,39 @@ async function tapPoint(page: Page, fx: RosteredFixture, side: "home" | "away"):
  *
  * The v3 pad soft-commits: every tap waits out a full `HOLD_MS` before the
  * ledger can be polled, so this file's cost is dominated by taps x HOLD_MS.
- * At the default 12s hold the ~24 taps below come to ~288s on their own —
- * which left the old 300s ceiling roughly twelve seconds of headroom for
- * seeding, the page load, the config write and every `expect.poll` in between.
- * It did not fit: measured 306.9s in one session and 307.4s in another, alone,
- * at `--workers=1`, on an idle machine. Two measurements over the line is a
- * budget that was always too small, not flake, and not load.
+ * Measured three times alone at `--workers=1` on an idle machine: 306.9s,
+ * 307.4s, 310.6s. Three runs above a 300s ceiling is a budget that never fit,
+ * not flake and not load — its sibling `scorepad-v3-partial-amend.spec.ts`
+ * runs the same soft-commit tax in 16-29s against 180s, which is what load
+ * looks like by contrast.
  *
- * It also fails DISHONESTLY. On a `test.setTimeout` overrun Playwright prints
+ * It also failed DISHONESTLY. On a `test.setTimeout` overrun Playwright prints
  * whichever `expect.poll` was in flight, so this file reported
  * "Expected: 24 / Received: 23" — a missing rally — above the timeout line
- * (AGENTS.md failure class 20). The data defect is the decoy; the wall clock
- * is the event.
+ * (AGENTS.md failure class 20). The data defect is the decoy.
  *
- * Expressed against the constant so that doubling `HOLD_MS` — it is
- * env-tunable via `NEXT_PUBLIC_SCOREPAD_HOLD_MS`, and CI may run it short —
- * moves this budget with it instead of silently re-creating the same overrun.
- * Same shape as `scorepad-v3-partial-amend.spec.ts`, which already does this.
+ * `PER_TAP_SLACK_MS` and `BUDGET_FLOOR_MS` are IMPORTED from `gallery-budget`,
+ * which exists so hold-derived budgets are reachable from the node-environment
+ * vitest suite. Retyping `1_500` here — as a first cut of this change did —
+ * is the same duplication this branch's own thesis argues against.
+ *
+ * THE FLOOR MUST SIT BELOW THE CI BAND or the derivation is decorative:
+ * `e2e.yml` pins `NEXT_PUBLIC_SCOREPAD_HOLD_MS: "3000"` at job level, and a
+ * 300_000 floor (the first cut again) makes BUDGET_MS byte-identical to the
+ * flat literal it replaced for every hold up to 6s — so raising CI's hold to
+ * chase flake would not move the budget at all. At 180_000 the derived term
+ * governs across the whole band: 3s hold -> 232.5s, 12s -> 457.5s.
  */
-const TAPS = 24; // 4 + 4 to level the sets, 10 through five-all, up to 5 to
-                 // decide, plus Start match and the closing Void last entry.
-const BUDGET_MS = Math.max(300_000, 120_000 + TAPS * (HOLD_MS + 1_500));
+const TAPS = 25; // 23 point taps (the count the test itself asserts at :271 —
+                 // 4 + 4 to level the sets, 10 through five-all, 5 to decide)
+                 // plus Start match and the closing Void last entry.
+                 // NOT `gallery-budget`'s HOLD_BOUND_TAPS: that 44 is the
+                 // capture harness's empirical worst sport, screenshotting at
+                 // three widths per tap. Borrowing it would size this test on
+                 // a different workload. Its note that 24 is "a known-too-low
+                 // floor" is why this is enumerated against the assertion
+                 // rather than eyeballed.
+const BUDGET_MS = Math.max(BUDGET_FLOOR_MS, 120_000 + TAPS * (HOLD_MS + PER_TAP_SLACK_MS));
 
 /** A no-ad game is four points; with `gamesTo: 1` that is also a whole set. */
 async function winGame(page: Page, fx: RosteredFixture, side: "home" | "away"): Promise<void> {
