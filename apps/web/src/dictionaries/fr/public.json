@@ -135,6 +135,7 @@
   "matchCentre.info.addToCalendar": "Ajouter au calendrier",
   "matchCentre.info.division": "Division",
   "matchCentre.info.competition": "Compétition",
+  "matchCentre.bowlingFor": "{side} — lancer",
   "term.yellow": "jaune",
   "term.red": "rouge",
   "term.second_yellow": "second jaune",

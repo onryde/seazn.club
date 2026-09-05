@@ -38,7 +38,7 @@ export interface InfoTabProps {
 }
 
 const LINK_CLASS =
-  "rounded-lg border border-line px-3 py-2 text-[13px] font-medium hover:bg-surface";
+  "rounded-lg border border-zinc-200/80 px-3 py-2 text-[13px] font-medium hover:bg-surface";
 
 export function InfoTab({ doc, dict }: InfoTabProps): ReactNode {
   const { rows, calendarHref, divisionHref, competitionHref } = doc.info;

@@ -70,12 +70,12 @@ function OverGroup({ over, dict }: { over: OverT; dict: PublicDict }): ReactNode
   return (
     <section
       data-testid={`mc-over-${over.number}`}
-      className="rounded-xl border border-line bg-surface"
+      className="rounded-xl border border-zinc-200/80 bg-surface"
     >
-      <h3 className="border-b border-line px-3 py-2 text-[13px] font-semibold tabular-nums">
+      <h3 className="border-b border-zinc-200/80 px-3 py-2 text-[13px] font-semibold tabular-nums">
         {header}
       </h3>
-      <ol className="divide-y divide-line/50">
+      <ol className="divide-y divide-zinc-200/60">
         {over.lines.map((line, i) => {
           const ball = i + 1;
           const glyph = over.glyphs[i] ?? null;
@@ -121,7 +121,7 @@ export function CommentaryTab({ doc, dict }: CommentaryTabProps): ReactNode {
           type="button"
           data-testid="mc-load-earlier"
           onClick={() => setVisible((n) => n + OVER_WINDOW)}
-          className="rounded-xl border border-line px-3 py-2 text-[13px] font-medium hover:bg-surface"
+          className="rounded-xl border border-zinc-200/80 px-3 py-2 text-[13px] font-medium hover:bg-surface"
         >
           {t(dict, "matchCentre.loadEarlier")}
         </button>

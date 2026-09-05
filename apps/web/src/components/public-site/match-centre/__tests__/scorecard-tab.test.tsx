@@ -36,8 +36,19 @@
 //      impact, and nothing else in the suite would notice its absence.
 //      → RED: "both tables are reachable overflow regions, not clipped boxes".
 //
-// All three compile and collect (`numTotalTests` stayed 12 in every run), so
-// none is the collection-break shape that reads as a survivor.
+// Fix round 1 added two more, for the two guards that round introduced:
+//
+//  (d) NO BRACE FALLBACK — `dismissalText` returns `t(...)` unchanged, so an
+//      unfillable template reaches the reader as "c {fielder} b J. Bumrah".
+//      → RED: "an unfillable dismissal template falls back to plain 'out'".
+//
+//  (e) BOWLING NAMED FOR THE BATTING SIDE — `fieldingSide={entry.side}`, the
+//      defect the review found.
+//      → RED: "the bowling region is named for the FIELDING side".
+//
+// All five compile and collect (`numTotalTests` stayed 12 before fix round 1
+// and 20 after), so none is the collection-break shape that reads as a
+// survivor.
 import { beforeAll, describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import { CricketWicket } from "@seazn/engine/sports/cricket";
@@ -88,7 +99,7 @@ const richInnings: CricketInningsViewT = {
       runs: 62,
       balls: 41,
       fours: 7,
-      sixes: 2,
+      sixes: null,
       strikeRate: "151.22",
       // Both params, so the assertion can prove BOTH are interpolated.
       dismissal: {
@@ -98,10 +109,14 @@ const richInnings: CricketInningsViewT = {
       notOut: false,
     },
     {
+      // DISAGREES with the row above, per column: no fours recorded, sixes
+      // recorded. `anyNonNull` is a per-COLUMN rule over the innings' rows, and
+      // a fixture whose rows all agree cannot tell it apart from a per-ROW or a
+      // per-INNINGS rule.
       person: person("p-suryakumar", "S. Yadav"),
       runs: 38,
       balls: 22,
-      fours: 3,
+      fours: null,
       sixes: 3,
       strikeRate: "172.73",
       dismissal: { key: "matchCentre.dismissal.not_out" },
@@ -119,6 +134,17 @@ const richInnings: CricketInningsViewT = {
       economy: "7.00",
       wides: 2,
       noBalls: 1,
+    },
+    {
+      // Same split on the bowling side: no maidens, but wides recorded.
+      person: person("p-archer", "J. Archer"),
+      overs: "3.0",
+      maidens: null,
+      runs: 34,
+      wickets: 1,
+      economy: "11.33",
+      wides: 2,
+      noBalls: null,
     },
   ],
   fallOfWickets: [
@@ -379,6 +405,106 @@ describe("ScorecardTab", () => {
     // Band 2 also has no strike rate or economy.
     expect(coarse).not.toContain(`title="${en["matchCentre.col.strikeRate"]}"`);
     expect(rich).toContain(`title="${en["matchCentre.col.strikeRate"]}"`);
+  });
+
+  it("a column shows when ANY row has a value, even if its siblings do not", () => {
+    // The rich innings deliberately disagrees with itself: row 1 has fours and
+    // no sixes, row 2 has sixes and no fours; one bowler has maidens, the other
+    // does not. All four columns must still render — which is what makes this
+    // a test of a per-COLUMN rule rather than a per-row or per-innings one.
+    const html = render(RICH_ONLY);
+    for (const key of [
+      "matchCentre.col.fours",
+      "matchCentre.col.sixes",
+      "matchCentre.col.maidens",
+      "matchCentre.col.wides",
+    ] as const) {
+      expect(html, key).toContain(`title="${en[key]}"`);
+    }
+    // …and the negative half, from the innings where NO row has them: the rule
+    // is "any row", not "always". (The band-2/band-3 test below is the fuller
+    // pair; this is the one that proves the two halves come from the same rule.)
+    const coarse = render(COARSE_ONLY);
+    for (const key of ["matchCentre.col.fours", "matchCentre.col.maidens"] as const) {
+      expect(coarse, key).not.toContain(`title="${en[key]}"`);
+    }
+  });
+
+  it("an unfillable dismissal template falls back to plain 'out', never a raw {param}", () => {
+    // `fielder` is OPTIONAL on the engine's own wicket payload, and
+    // `interpolate` leaves an unmatched `{fielder}` verbatim — so a caught
+    // dismissal recorded without one would print "c {fielder} b J. Bumrah" to a
+    // spectator.
+    const partial: CricketInningsViewT = {
+      ...richInnings,
+      batting: [
+        {
+          ...richInnings.batting[0]!,
+          dismissal: {
+            key: "matchCentre.dismissal.caught",
+            params: { bowler: "J. Bumrah" }, // no fielder
+          },
+        },
+      ],
+    };
+    const html = renderToStaticMarkup(
+      <ScorecardTab doc={doc({ innings: [partial] })} dict={dict} data={data} />,
+    );
+    expect(html).not.toContain("{");
+    expect(html).toContain(en["matchCentre.dismissal.out_unknown"]);
+    // Positive pair: a COMPLETE template still renders its own sentence.
+    expect(render(RICH_ONLY)).toContain("c S. Patel b J. Bumrah");
+  });
+
+  it("the bowling region is named for the FIELDING side, not the batting one", () => {
+    const html = render(RICH_ONLY);
+    // Innings 1 is Mumbai batting, so Rajasthan are bowling.
+    expect(html).toContain(`aria-label="${AWAY.name} — bowling"`);
+    expect(html).not.toContain(`aria-label="${HOME.name} — bowling"`);
+    // Both tables still carry a name, and they are DIFFERENT names.
+    const labels = [...html.matchAll(/aria-label="([^"]+)"/g)].map((m) => m[1]);
+    expect(labels.length).toBeGreaterThanOrEqual(2);
+    expect(new Set(labels).size).toBe(labels.length);
+  });
+
+  it("the summary keeps a disclosure affordance after `display:flex` removes the marker", () => {
+    const html = render(DECIDED);
+    expect(html).toContain("list-none");
+    expect(html).toContain("group-open:rotate-90");
+    expect(html).toContain("<svg");
+    // The chevron is decorative — <details> already announces expanded state.
+    expect(html).toMatch(/<svg[^>]*aria-hidden/);
+  });
+
+  it("column headers carry the localised word for a screen reader, not only a hover title", () => {
+    const html = render(RICH_ONLY);
+    expect(html).toContain('class="sr-only"');
+    // The abbreviation is hidden from the a11y tree so it is not read twice.
+    expect(html).toMatch(/<span aria-hidden[^>]*>R<\/span>/);
+    // Each table names itself for a screen reader.
+    expect(html).toContain(`<caption class="sr-only">`);
+  });
+
+  it("the name column is bounded so `truncate` can actually fire", () => {
+    // `min-w-0` does nothing on a <td> and an auto-layout table grows to the
+    // longest name, so truncation needed `table-fixed` + an explicit width +
+    // `max-w-0`. Asserted on the classes because NO static assertion can
+    // measure paint — Task 15's screenshots are what close this.
+    const html = render(RICH_ONLY);
+    expect(html).toContain("table-fixed");
+    expect(html).toContain("w-[44%]");
+    expect(html).toContain("w-[40%]");
+    expect(html).toContain("max-w-0");
+  });
+
+  it("uses real colour tokens — `border-line` is not one", () => {
+    // `--color-line` does not exist in globals.css, so Tailwind v4 paints
+    // `currentColor` for `border-line` and drops `border-line/50` entirely:
+    // the hairlines were invisible or the wrong colour, and nothing in a
+    // markup test would have said so.
+    const html = render(DECIDED);
+    expect(html).not.toContain("border-line");
+    expect(html).toContain("border-zinc-200");
   });
 
   it("fall of wickets joins entries with ' · ' and is omitted when empty", () => {

@@ -37,8 +37,10 @@
 //    axe reds `scrollable-region-focusable` at SERIOUS impact. `tabIndex`
 //    cannot be varied by media query, so it is unconditional. Scrolling is the
 //    LAST resort though: `text-[13px] px-1 tabular-nums` on the numeric cells
-//    and `min-w-0 truncate` on the name cell are what should keep six columns
-//    inside 320 without it.
+//    and a `table-fixed` name column (`max-w-0 truncate`) are what should keep
+//    six columns inside 320 without it. PAINT IS NOT PROVABLE STATICALLY: no
+//    assertion on markup can measure a rendered width, so the 320 claim rests
+//    on Task 15's screenshots, not on this file's tests.
 //
 // CONTRACT NOTES for the task that builds `doc.cricket` (recorded here because
 // nothing in this file can enforce them):
@@ -52,7 +54,12 @@
 import type { ReactNode } from "react";
 import type { Dict as PublicDict } from "@/lib/i18n-constants";
 import { t } from "@/lib/i18n-runtime";
-import type { CricketViewT, MatchCentreDocT, PersonT } from "@/server/public-site/match-centre-schema";
+import type {
+  CricketViewT,
+  MatchCentreDocT,
+  PersonT,
+  SideT,
+} from "@/server/public-site/match-centre-schema";
 import type { LiveFixtureData } from "../live-score-data";
 
 // Derived from `CricketViewT` rather than imported: the schema exports the view
@@ -87,14 +94,43 @@ function Num({ value }: { value: number | string | null }): ReactNode {
 
 function Th({ label, abbr }: { label: string; abbr: string }): ReactNode {
   // The header shows NOTATION (R, B, 4s, SR) because that is what a scorecard
-  // prints and what fits; the localised word rides in `title` so it is
-  // available to anyone who needs it. `scope` keeps the table readable to a
-  // screen reader without a visible caption.
+  // prints and what fits six columns into 320px. `title` alone was not enough:
+  // it is a hover affordance, and a phone has no hover — so the localised word
+  // ALSO ships as `sr-only` text, with the abbreviation hidden from the
+  // accessibility tree so a screen reader reads "Strike rate" once rather than
+  // "SR Strike rate".
   return (
     <th scope="col" className={HEAD_CELL} title={label}>
-      {abbr}
+      <span className="sr-only">{label}</span>
+      <span aria-hidden>{abbr}</span>
     </th>
   );
+}
+
+/** The name column's width, and the `max-w-0` that makes truncation work.
+ *
+ *  `min-w-0` does nothing on a `<td>`, and an auto-layout table simply grows to
+ *  fit the longest name — so `truncate` could never fire and a 43-character
+ *  entrant pushed the numeric columns off a 320px screen. `table-fixed` plus an
+ *  explicit width is what bounds the cell; `max-w-0` on the inner block is the
+ *  standard trick that makes a percentage-width table cell actually clip. */
+const NAME_CELL = "max-w-0 truncate";
+
+/**
+ * A dismissal, resolved — or the neutral "out" when the document could not
+ * fill its own template.
+ *
+ * `interpolate` leaves an unmatched `{fielder}` VERBATIM in the string, and
+ * `fielder` is optional on the engine's own wicket payload (`CricketWicket`),
+ * so a caught dismissal recorded without one renders "c {fielder} b J. Bumrah"
+ * to a spectator. There is no way to fix that in the template — a template that
+ * omitted the fielder would be a different sentence — so a resolved string that
+ * still contains a brace is treated as unusable and falls back to the one
+ * dismissal key that names nobody.
+ */
+function dismissalText(dict: PublicDict, dismissal: CricketBattingRowT["dismissal"]): string {
+  const text = t(dict, dismissal.key, dismissal.params);
+  return text.includes("{") ? t(dict, "matchCentre.dismissal.out_unknown") : text;
 }
 
 function ScrollRegion({ label, children }: { label: string; children: ReactNode }): ReactNode {
@@ -119,10 +155,15 @@ function BattingTable({
   const showSr = anyNonNull(rows, (r) => r.strikeRate);
   return (
     <ScrollRegion label={label}>
-      <table className="w-full text-[13px] leading-tight">
+      <table className="w-full table-fixed text-[13px] leading-tight">
+        <caption className="sr-only">{label}</caption>
         <thead>
-          <tr className="border-b border-line">
-            <th scope="col" className="px-1 text-left font-medium text-ink-muted" title={t(dict, "matchCentre.col.batter")}>
+          <tr className="border-b border-zinc-200/80">
+            <th
+              scope="col"
+              className="w-[44%] px-1 text-left font-medium text-ink-muted"
+              title={t(dict, "matchCentre.col.batter")}
+            >
               {t(dict, "matchCentre.col.batter")}
             </th>
             <Th label={t(dict, "matchCentre.col.runs")} abbr="R" />
@@ -137,14 +178,14 @@ function BattingTable({
             <tr
               key={row.person.personId}
               data-testid={`mc-bat-${row.person.personId}`}
-              className="border-b border-line/50 align-top"
+              className="border-b border-zinc-200/60 align-top"
             >
-              <td className="min-w-0 px-1 py-1">
-                <span className="block truncate">{row.person.name}</span>
+              <td className="px-1 py-1">
+                <span className={`block ${NAME_CELL}`}>{row.person.name}</span>
                 {/* The dismissal is a Msg, resolved here in the viewer's own
                     locale — the document never carries pre-rendered copy. */}
-                <span className="dis block truncate text-[11px] text-ink-muted">
-                  {t(dict, row.dismissal.key, row.dismissal.params)}
+                <span className={`dis block text-[11px] text-ink-muted ${NAME_CELL}`}>
+                  {dismissalText(dict, row.dismissal)}
                 </span>
               </td>
               <td className={`${NUM_CELL} font-semibold`}>{row.runs}</td>
@@ -175,10 +216,15 @@ function BowlingTable({
   const showNoBalls = anyNonNull(rows, (r) => r.noBalls);
   return (
     <ScrollRegion label={label}>
-      <table className="w-full text-[13px] leading-tight">
+      <table className="w-full table-fixed text-[13px] leading-tight">
+        <caption className="sr-only">{label}</caption>
         <thead>
-          <tr className="border-b border-line">
-            <th scope="col" className="px-1 text-left font-medium text-ink-muted" title={t(dict, "matchCentre.col.bowler")}>
+          <tr className="border-b border-zinc-200/80">
+            <th
+              scope="col"
+              className="w-[40%] px-1 text-left font-medium text-ink-muted"
+              title={t(dict, "matchCentre.col.bowler")}
+            >
               {t(dict, "matchCentre.col.bowler")}
             </th>
             <Th label={t(dict, "matchCentre.col.overs")} abbr="O" />
@@ -195,10 +241,10 @@ function BowlingTable({
             <tr
               key={row.person.personId}
               data-testid={`mc-bowl-${row.person.personId}`}
-              className="border-b border-line/50"
+              className="border-b border-zinc-200/60"
             >
-              <td className="min-w-0 px-1 py-1">
-                <span className="block truncate">{row.person.name}</span>
+              <td className="px-1 py-1">
+                <span className={`block ${NAME_CELL}`}>{row.person.name}</span>
               </td>
               <Num value={row.overs} />
               {showMaidens ? <Num value={row.maidens} /> : null}
@@ -219,10 +265,13 @@ const names = (people: readonly PersonT[]): string => people.map((p) => p.name).
 
 function Innings({
   innings,
+  fieldingSide,
   open,
   dict,
 }: {
   innings: CricketInningsViewT;
+  /** The side BOWLING in this innings — the other one. See the call site. */
+  fieldingSide: SideT;
   open: boolean;
   dict: PublicDict;
 }): ReactNode {
@@ -234,9 +283,22 @@ function Innings({
     <details
       data-testid={`mc-innings-${n}`}
       open={open}
-      className="rounded-xl border border-line bg-surface"
+      className="group rounded-xl border border-zinc-200/80 bg-surface"
     >
-      <summary className="flex cursor-pointer items-baseline justify-between gap-2 px-3 py-2.5">
+      {/* `display: flex` on a <summary> REMOVES the UA disclosure marker
+          (`summary { display: list-item }`), so a closed innings showed no
+          affordance at all — nothing said it could be opened. `list-none` makes
+          that explicit rather than accidental, and the chevron below is the
+          replacement: `aria-hidden`, because <details> already announces its
+          own expanded state, and rotated from the <details> group. */}
+      <summary className="flex list-none cursor-pointer items-baseline justify-between gap-2 px-3 py-2.5">
+        <svg
+          aria-hidden
+          viewBox="0 0 12 12"
+          className="mt-1 h-3 w-3 shrink-0 text-ink-muted transition-transform group-open:rotate-90"
+        >
+          <path d="M4 2l4 4-4 4" fill="none" stroke="currentColor" strokeWidth="1.75" />
+        </svg>
         <span className="min-w-0">
           <span className="block truncate font-semibold">{innings.side.name}</span>
           <span className="block text-[11px] text-ink-muted">
@@ -267,7 +329,7 @@ function Innings({
           )}
           <p
             data-testid={`mc-total-${n}`}
-            className="flex justify-between gap-2 border-t border-line px-1 pt-1 text-[13px] font-semibold"
+            className="flex justify-between gap-2 border-t border-zinc-200/80 px-1 pt-1 text-[13px] font-semibold"
           >
             <span>{t(dict, "matchCentre.total")}</span>
             <span className="tabular-nums">
@@ -291,7 +353,10 @@ function Innings({
         <BowlingTable
           rows={innings.bowling}
           dict={dict}
-          label={`${innings.side.name} — ${t(dict, "matchCentre.col.bowler")}`}
+          // The BOWLERS ARE THE FIELDING SIDE'S. Naming this region after
+          // `innings.side` labelled the away team's attack with the batting
+          // team's name — the one thing a screen-reader user relies on it for.
+          label={t(dict, "matchCentre.bowlingFor", { side: fieldingSide.name })}
         />
       </div>
     </details>
@@ -309,6 +374,15 @@ export function ScorecardTab({ doc, dict }: ScorecardTabProps): ReactNode {
         <Innings
           key={entry.number}
           innings={entry}
+          // The side that is NOT batting is the one bowling. Matched on
+          // `entrantId` rather than by index, because `innings[].side` is a
+          // copy of a header side and nothing guarantees the header's order
+          // matches the batting order — the side batting second is `sides[0]`
+          // whenever the away team won the toss and chose to field.
+          fieldingSide={
+            doc.header.sides.find((s) => s.entrantId !== entry.side.entrantId) ??
+            doc.header.sides[1]
+          }
           // See note 2: the last innings, live or finished.
           open={index === innings.length - 1}
           dict={dict}

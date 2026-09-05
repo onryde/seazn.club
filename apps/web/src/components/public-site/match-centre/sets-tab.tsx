@@ -56,7 +56,7 @@ export function SetsTab({ doc, dict }: SetsTabProps): ReactNode {
             {caption}
           </caption>
           <thead>
-            <tr className="border-b border-line">
+            <tr className="border-b border-zinc-200/80">
               <th scope="col" className="px-1 text-left font-medium text-ink-muted">
                 {/* The side column needs no heading: the row header names it. */}
               </th>
@@ -85,7 +85,7 @@ export function SetsTab({ doc, dict }: SetsTabProps): ReactNode {
               <tr
                 key={side.entrantId}
                 data-testid={`mc-sets-row-${rowIndex}`}
-                className="border-b border-line/50 last:border-0"
+                className="border-b border-zinc-200/60 last:border-0"
               >
                 <th scope="row" className="min-w-0 px-1 py-1.5 text-left font-normal">
                   <span className="flex items-center gap-2">

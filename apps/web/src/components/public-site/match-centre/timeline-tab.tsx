@@ -94,7 +94,7 @@ export function TimelineTab({ doc, dict }: TimelineTabProps): ReactNode {
             key={`${line.seq}-${line.text.key}`}
             data-testid={`mc-timeline-line-${line.seq}`}
             data-emphasis={line.emphasis}
-            className="flex items-start gap-2 border-b border-line/40 px-1 py-1.5 text-[13px] last:border-0"
+            className="flex items-start gap-2 border-b border-zinc-200/50 px-1 py-1.5 text-[13px] last:border-0"
           >
             {line.marker === null ? null : (
               <span
