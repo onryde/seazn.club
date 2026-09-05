@@ -463,10 +463,52 @@
                 "minimum": 0,
                 "type": "integer"
               },
+              "dismissal": {
+                "additionalProperties": false,
+                "properties": {
+                  "bowler": {
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "fielder": {
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "kind": {
+                    "enum": [
+                      "bowled",
+                      "caught",
+                      "hitballtwice",
+                      "hitwicket",
+                      "lbw",
+                      "obstructed",
+                      "retired",
+                      "runout",
+                      "stumped",
+                      "timedout"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "type": "object"
+              },
+              "fours": {
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "type": "integer"
+              },
               "out": {
                 "type": "boolean"
               },
               "runs": {
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "sixes": {
                 "maximum": 9007199254740991,
                 "minimum": 0,
                 "type": "integer"
@@ -486,12 +528,27 @@
                 "minimum": 0,
                 "type": "integer"
               },
+              "maidens": {
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "noBalls": {
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "type": "integer"
+              },
               "runs": {
                 "maximum": 9007199254740991,
                 "minimum": 0,
                 "type": "integer"
               },
               "wickets": {
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "wides": {
                 "maximum": 9007199254740991,
                 "minimum": 0,
                 "type": "integer"
@@ -831,10 +888,28 @@
       "playerLines[].batting.balls": [
         "number"
       ],
+      "playerLines[].batting.dismissal": [
+        "object"
+      ],
+      "playerLines[].batting.dismissal.bowler": [
+        "string"
+      ],
+      "playerLines[].batting.dismissal.fielder": [
+        "string"
+      ],
+      "playerLines[].batting.dismissal.kind": [
+        "string"
+      ],
+      "playerLines[].batting.fours": [
+        "number"
+      ],
       "playerLines[].batting.out": [
         "boolean"
       ],
       "playerLines[].batting.runs": [
+        "number"
+      ],
+      "playerLines[].batting.sixes": [
         "number"
       ],
       "playerLines[].bowling": [
@@ -843,10 +918,19 @@
       "playerLines[].bowling.legalBalls": [
         "number"
       ],
+      "playerLines[].bowling.maidens": [
+        "number"
+      ],
+      "playerLines[].bowling.noBalls": [
+        "number"
+      ],
       "playerLines[].bowling.runs": [
         "number"
       ],
       "playerLines[].bowling.wickets": [
+        "number"
+      ],
+      "playerLines[].bowling.wides": [
         "number"
       ],
       "playerLines[].innings": [

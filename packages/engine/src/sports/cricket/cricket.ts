@@ -2258,25 +2258,72 @@ function generatePlayerLine(
   const wantBowling = bowlers.length > 0 && (batters.length === 0 || rng() < 0.5);
   if (wantBowling) {
     const person = bowlers[Math.floor(rng() * bowlers.length)] as string;
+    const legalBalls = fine.bowlerBalls[person] ?? 0;
+    // S17/owner ruling 12 — SOMETIMES, not always (same discipline as the
+    // `incoming` batter above): `maidens`/`wides`/`noBalls` are never
+    // cross-checked against `FineInnings` (`applyPlayerLine` only bounds
+    // `maidens` against THIS line's own `legalBalls`), so any in-bound value
+    // is a legal line and this generator is free to pick one — the point is
+    // reaching the fold path at all, walked by `golden.test.ts`'s
+    // `EXTEND_GOLDEN` coverage search, not modelling a real over.
+    const maxMaidens = Math.floor(legalBalls / state.cfg.ballsPerOver);
+    const maidens = rng() < 0.5 && maxMaidens > 0 ? Math.floor(rng() * (maxMaidens + 1)) : undefined;
+    const wides = rng() < 0.5 ? Math.floor(rng() * 5) : undefined;
+    const noBalls = rng() < 0.5 ? Math.floor(rng() * 3) : undefined;
     return {
       innings: number,
       person,
       bowling: {
-        legalBalls: fine.bowlerBalls[person] ?? 0,
+        legalBalls,
         runs: fine.bowlerRuns[person] ?? 0,
         wickets: fine.bowlerWickets[person] ?? 0,
+        ...(maidens !== undefined ? { maidens } : {}),
+        ...(wides !== undefined ? { wides } : {}),
+        ...(noBalls !== undefined ? { noBalls } : {}),
       },
     };
   }
   if (batters.length === 0) return null;
   const person = batters[Math.floor(rng() * batters.length)] as string;
+  const runs = fine.batterRuns[person] ?? 0;
+  const isOut = fine.dismissed.includes(person);
+  // S17/owner ruling 12 — same "sometimes" discipline, and same "no
+  // cross-check to respect" freedom as the bowling half above: `fours`/
+  // `sixes` only have to satisfy THIS line's own `fours*4 + sixes*6 <= runs`
+  // (never `FineInnings`'s real boundary count), and `dismissal` only has to
+  // satisfy `out === true`, never the wicket the fine ball actually recorded.
+  const maxFours = Math.floor(runs / 4);
+  const fours = rng() < 0.5 && maxFours > 0 ? Math.floor(rng() * (maxFours + 1)) : undefined;
+  const maxSixes = Math.floor((runs - (fours ?? 0) * 4) / 6);
+  const sixes = rng() < 0.5 && maxSixes > 0 ? Math.floor(rng() * (maxSixes + 1)) : undefined;
+  const wantDismissal = isOut && rng() < 0.5;
+  const dismissalBowlingOrder = state.orders[opponent(innings.battingSide)];
+  // `DISMISSAL_KINDS` is `readonly string[]` (its declared type, for reuse in
+  // `PadFieldEnum.values`) — narrow the pick back to the real union so the
+  // return type below still matches `z.infer<typeof CricketPlayerLine>`.
+  const dismissalKind = pickFrom(DISMISSAL_KINDS, rng) as z.infer<typeof CricketWicket>["kind"];
   return {
     innings: number,
     person,
     batting: {
-      runs: fine.batterRuns[person] ?? 0,
+      runs,
       balls: fine.batterBalls[person] ?? 0,
-      ...(fine.dismissed.includes(person) ? { out: true } : {}),
+      ...(isOut ? { out: true } : {}),
+      ...(fours !== undefined ? { fours } : {}),
+      ...(sixes !== undefined ? { sixes } : {}),
+      ...(wantDismissal
+        ? {
+            dismissal: {
+              kind: dismissalKind,
+              ...(dismissalBowlingOrder.length > 0 && rng() < 0.7
+                ? { bowler: pickFrom(dismissalBowlingOrder, rng) }
+                : {}),
+              ...(dismissalBowlingOrder.length > 0 && rng() < 0.5
+                ? { fielder: pickFrom(dismissalBowlingOrder, rng) }
+                : {}),
+            },
+          }
+        : {}),
     },
   };
 }
