@@ -836,6 +836,113 @@ filter** (`auth.ts:224-226`) — a soft-deleted org still occupies a slot, so
 only `releaseSeededOrgSql`, which deletes the membership row, actually returns
 one.
 
+### W3 verified facts — the matrix's inputs, read end to end
+
+Confirmed by reading each handler through, not by grep. The plan is written
+from this table; re-pin before trusting any line number.
+
+**Tab keys** (`_components/settings-nav.tsx:24-26`): `organization`, `news`,
+`sponsors`, `team`, `api`, `preferences`, `account`. An unrecognised or absent
+`?tab=` falls through to `organization` (`page.tsx:119`) — no redirect, no 404,
+the bad value stays in the URL.
+
+**Three UI-ONLY gates — a control the UI hides that the API still honours.**
+These are the wave's headline candidates.
+
+1. **Brand colour has NO write-side check.** `PATCH /api/orgs/{id}`
+   (`route.ts:87-190`) is `requireOrgRole(EDITOR_ROLES)` → schema → 
+   `mergeBrandColor` (`:137`) → update. No `hasFeature`/`requireFeature` in the
+   file; the schema validates shape only; no DB trigger. A **Community editor's
+   PATCH persists the colour and gets 200.** The read is masked in three places
+   (`public-site/data.ts:362-363` returns `'{}'::jsonb` and sets
+   `branded=false`; same mask in `V230` and `V306`).
+   **But the mask has an EXCEPTION, and it is reachable:** `page.tsx:386` hands
+   raw `active.branding` to `OrgAbout`, which feeds
+   `publicThemeStyleChain(branding)` into `previewStyle`
+   (`org-about.tsx:57`) — unmasked, on the Organisation tab, which a Community
+   org can open. So "stored but rendered nowhere" is FALSE as stated. Drive it
+   before writing the assertion.
+2. **`GET /api/v1/orgs/{id}/api-keys` has no `api.access` guard.**
+   `api-keys/route.ts:8-15` → `listApiKeys` → `requireSession` only
+   (`usecases/api-keys.ts:31-35`). `requireFeature("api.access")` appears only
+   in `createApiKey` (`:42`). A Community owner/admin **GETs 200 with the key
+   list** while the UI shows an upsell panel (`page.tsx:456`).
+3. **`DELETE /api/tour` has no org check at all.** `api/tour/route.ts:12-16` is
+   `getCurrentUser()` → `resetTour(user.id)`. A viewer, whose UI hides the
+   button (`page.tsx:391`), **succeeds with 200.**
+
+**The API scope radios are ungated in the UI and fail only on submit.**
+`api-keys.tsx:195-225` renders three radios with no `disabled`, no `PlanBadge`,
+and `ApiKeysPanel` is passed no plan prop at all (`page.tsx:457`). Gated values
+are `score` and `manage` (`read` is free), guard at `usecases/api-keys.ts:47`.
+**Order decides the expectation:** `requireFeature("api.access")` runs FIRST
+(`:42`), so a Community editor picking `score` gets 402 with
+`feature_key: "api.access"` and never reaches the `api.write` guard. Only a
+**Pro** editor sees `feature_key: "api.write"`. A matrix row asserting
+`api.write` against a Community org would be asserting the wrong key.
+
+**Status codes branch by route family, and the matrix must branch with them.**
+`/api/orgs/**` → `requireOrgRole` → `AuthError` → **401** for *both* "not a
+member" and "insufficient permissions" (`lib/http.ts:34-38`).
+`/api/v1/**` → `requireOrgAuth` → **401** only if not a member, **403** if the
+role is insufficient (`api-v1/auth.ts:216-218`).
+
+What a `viewer` actually receives:
+
+| route + method | viewer |
+|---|---|
+| `PATCH /api/orgs/{id}` | 401 |
+| `POST /api/orgs/{id}/logo-upload-url`, `/content-upload` | 401 |
+| `GET`,`POST /api/orgs/{id}/invites`, `…/{token}/revoke` | 401 |
+| `POST /api/orgs/{id}/members/{userId}/role` | 401 (owner-only — an **admin** also gets 401) |
+| `DELETE /api/orgs/{id}/members/{userId}` | 401 (owner-only; admin 401) |
+| `POST /api/orgs/{id}/transfer-owner` | 401 (owner-only; admin 401) |
+| `GET /api/orgs/{id}/members` | **200** — gate is `ORG_ROLES`, viewer included |
+| `DELETE /api/orgs/{id}/members/me` | **200** — no role gate; 404 only for a non-member |
+| `DELETE /api/tour` | **200** — no org check |
+| `GET /api/v1/orgs/{id}/sponsors`, `/sponsor-packages` | **200** — `read`, viewer ∈ `READ_ROLES` |
+| `POST`/`PATCH`/`DELETE` on those | 403 |
+| `POST /api/v1/orgs/{id}/posts/digest` | 403 |
+| `GET`,`POST /api/v1/orgs/{id}/api-keys` | 403 (both declared `write`) |
+| `PATCH`,`DELETE /api/v1/posts/{id}` | 403 |
+
+**`scorer` is not in `READ_ROLES`**, so it gets 403 on the `read` rows — but
+`requireOrgPage` redirects scorers to `/my-matches` (`page-auth.ts:155`), so
+that identity **cannot reach `/settings` in a browser** and only appears if the
+matrix drives the API directly.
+
+**Feature keys — two in the design doc are not keys.** REAL, per
+`lib/entitlement-domains.ts`: `dashboard.branding` (:51), `sponsors.tiers` /
+`sponsors.monetize` (:15), `api.access` (:56), `news.auto` (:53). Also live on
+this page and missing from the design's list: `branding` (org logo, free since
+V310) and `api.write` (the scope radios). **NOT keys:** `discoveryBranding` and
+`themeBranding` are React prop names on the *competition* settings page; the
+keys behind them are `discovery.branding` and `dashboard.branding`.
+`scheduling.constraints` is a real key but is **not referenced on this page**.
+
+**Identity: there is NO non-owner-member helper, and `loginUi` is not free.**
+The only working pattern in the suite is `members-roles.spec.ts:17-35` — the
+owner mints `POST /api/orgs/{id}/invites`, then a **second context on
+`community.json`** calls `POST /api/invites/{token}/accept`; role is then moved
+with `POST …/members/{userId}/role`. No `impersonate`, `loginAs`,
+`addMemberSql` or `setMemberRoleSql` exists. `loginUi` mints a brand-new user
+by magic link and spends the 5-per-5-min rate limit.
+
+**Ownership cases 11-14: three of the four are IRREVERSIBLE, so they need a
+throwaway org, not the shared one.**
+
+| case | route | guard | reversible? |
+|---|---|---|---|
+| 11 last owner leaves | `DELETE /api/orgs/{id}/members/me` | 409 "You are the sole owner…" (`me/route.ts:22-31`); **an owner never sees the control** (`page.tsx:666`) | **NO** — only invite-accept re-adds a member |
+| 12 delete account | `DELETE /api/users/me` `{confirm:"DELETE"}` | 409 when sole owner AND others exist (`users/me/route.ts:85-103`) | **NO — terminal** (anonymise + `destroySession`) |
+| 13 transfer ownership | `POST /api/orgs/{id}/transfer-owner` | not rendered at one member (`page.tsx:660-663`); 404 non-member, 400 self | yes, but the ACTOR flips — caller becomes `admin` |
+| 14 demote only owner | `POST …/members/{userId}/role` | 409 "must keep at least one owner"; **NO SELF GUARD in the route** — self-demotion is API-reachable, the UI merely hides it (`org-team.tsx:191`) | yes |
+
+**Gap by design, worth a finding:** `DELETE /api/users/me` does NOT block a
+sole owner whose org has **no other members** — `:157-158` deletes the
+membership unconditionally, leaving the organisation row with zero members and
+no owner.
+
 ## False premises found
 
 Recorded so the next session does not re-derive them.
