@@ -219,6 +219,50 @@ describe("certify — the wiring guards", () => {
     // …and names how many of how many, so the reader is not left counting.
     expect(run).toThrow(/2 of 3/);
   });
+
+  // I4 (finding R03). The ONLY hole in this module that produced a wrong
+  // POSITIVE verdict rather than a missing one — the certificate actively
+  // asserting the product is fine on counts it could not read.
+  //
+  // `input.placed < input.total` is `false` when EITHER side is `NaN`, so a
+  // non-finite pair sailed past branch 4 and landed on FEASIBLE: "the product
+  // placed all NaN fixtures". Reachability is not theoretical — R28 leaves
+  // `ScheduleOutcome.metrics` optional, so a caller deriving these from a
+  // solver that never answered is one `Number()` away from a NaN, and this
+  // repo has already been bitten by `Number()` serving a finite 0 where a
+  // fallback was intended.
+  //
+  // Enumerated rather than sampled: `NaN` reaches FEASIBLE through the
+  // comparison being false, `Infinity` as `total` through a different route
+  // (`3 < Infinity` is TRUE, so it reaches UNPLACED and reports a shortfall
+  // against an unbounded total), and a negative `total` through the same
+  // false comparison as NaN. One sample cannot witness all three.
+  it("REFUSES non-finite or nonsensical counts rather than certifying FEASIBLE", () => {
+    for (const patch of [
+      { placed: Number.NaN, total: 3 },
+      { placed: 3, total: Number.NaN },
+      { placed: Number.NaN, total: Number.NaN },
+      { placed: Number.POSITIVE_INFINITY, total: 3 },
+      { placed: 3, total: Number.POSITIVE_INFINITY },
+      { placed: 1.5, total: 3 },
+      { placed: 3, total: -1 },
+    ]) {
+      const run = () => certify(input(patch));
+      expect(run).toThrow(/placed.*total|counts/i);
+      // A WIRING fault, named as one. The five branches are a closed protocol
+      // about the pack and the product, and an unreadable count is a fact
+      // about neither — the same reasoning the two guards above already use.
+      expect(run).toThrow(/wiring/i);
+    }
+  });
+
+  // The positive pair. Without it the guard could refuse EVERYTHING and the
+  // case above would still pass — and a zero-fixture division is exactly the
+  // legal input a careless `> 0` guard would reject.
+  it("accepts finite counts, including a legitimate zero", () => {
+    expect(certify(input({ placed: 0, total: 0 })).branch).toBe("FEASIBLE");
+    expect(certify(input({ placed: 0, total: 3 })).branch).toBe("UNPLACED");
+  });
 });
 
 describe("certify — branch 2, PACK_AUTHORING_BUG", () => {

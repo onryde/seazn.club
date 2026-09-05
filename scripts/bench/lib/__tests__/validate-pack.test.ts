@@ -4443,3 +4443,123 @@ describe("registration funnel — rule 6: join consent must match minority", () 
     expect(errors(validatePack(pack, UNIT).findings)).toEqual([]);
   });
 });
+
+// ===========================================================================
+// Stage 1.6 — a scheduled division must pin its own zone (finding R06)
+// ===========================================================================
+//
+// Built by hand rather than off the committed `_tiny.json`, deliberately.
+// `_tiny`'s scheduling scope change (a venue with two courts, and a
+// `scheduleConfig` on both competition divisions) lands on the wave branch,
+// not this one, so the pack on disk here declares neither — asserting against
+// it would pin whichever half of the wave happened to be merged rather than
+// the rule.
+
+/** `_tiny` plus the venue and configs its scheduling scope change gives it:
+ *  one venue, two courts, and a `scheduleConfig` on each division that is not
+ *  a registration-funnel one. This is the shape the rule must ACCEPT, and
+ *  every case below perturbs exactly one thing about it. */
+function scheduledPack(): Record<string, unknown> {
+  const pack = tiny() as unknown as Record<string, unknown>;
+  pack.venues = [
+    {
+      ref: "v-test",
+      name: "Test Hall",
+      courts: [
+        { ref: "c-test-1", name: "Court 1" },
+        { ref: "c-test-2", name: "Court 2" },
+      ],
+    },
+  ];
+  const config = {
+    courts: ["@c-test-1", "@c-test-2"],
+    matchMinutes: 30,
+    gapMinutes: 0,
+  };
+  for (const d of pack.divisions as Record<string, unknown>[]) {
+    // The registration division is seeded through the funnel and is not
+    // scheduled, so it gets none — exactly as the real pack leaves it.
+    if (d.ref !== "d-registration") d.scheduleConfig = { ...config };
+  }
+  return pack;
+}
+
+const schedulingErrors = (result: PackValidation): readonly PackFinding[] =>
+  errors(result.findings).filter(
+    (f) => f.code === "pack.division_missing_schedule_config",
+  );
+
+describe("validatePack — stage 1.6, a scheduled division must declare a scheduleConfig", () => {
+  // The positive pair, FIRST. Without it every case below is satisfied by a
+  // rule that refuses everything, and the whole block would prove nothing.
+  it("accepts a pack whose every scheduled division declares one", () => {
+    expectClean(validatePack(scheduledPack(), TINY), TINY_NOT_DERIVED);
+  });
+
+  it("REFUSES a scheduled division that declares none, naming the division ref", () => {
+    const pack = scheduledPack();
+    // ONE perturbation: `d-badminton` loses the config its sibling keeps, so
+    // the finding cannot be satisfied by a rule that fires per-pack rather
+    // than per-division.
+    const divisions = pack.divisions as Record<string, unknown>[];
+    const badminton = divisions.find((d) => d.ref === "d-badminton");
+    delete badminton?.scheduleConfig;
+
+    const result = validatePack(pack, TINY);
+    const finding = onlyError(result.findings);
+    expect(finding.code).toBe("pack.division_missing_schedule_config");
+    // Names WHICH division, so a pack author is not left diffing three of
+    // them — the whole ask of the finding.
+    expect(finding.where).toContain("d-badminton");
+    expect(finding.message).toContain("d-badminton");
+    expect(finding.message).not.toContain("d-tiny");
+    // …and says WHY, in terms of the thing that actually breaks: the zone is
+    // never pinned because no PUT happens, so wall-clock rules judge it in a
+    // zone nobody verified.
+    expect(finding.message).toMatch(/tz|timezone/i);
+    expect(finding.message).toMatch(/PUT|schedule-settings/i);
+    // An `error`, not a warning: `ok` false is what stops the run before
+    // anything is seeded, which is the entire point of catching it at stage 0.
+    expect(result.ok).toBe(false);
+  });
+
+  it("refuses EVERY offending division, not merely the first", () => {
+    // A rule that `return`ed on the first miss would report one and let the
+    // second through, and the author would fix one and re-run into the other.
+    const pack = scheduledPack();
+    for (const d of pack.divisions as Record<string, unknown>[]) {
+      delete d.scheduleConfig;
+    }
+    expect(schedulingErrors(validatePack(pack, TINY)).map((f) => f.where)).toEqual([
+      expect.stringContaining("d-tiny"),
+      expect.stringContaining("d-badminton"),
+    ]);
+  });
+
+  it("does NOT refuse a REGISTRATION-funnel division that declares none", () => {
+    // `d-registration` is seeded through the funnel rather than the schedule
+    // path and carries no config in the real pack either. Its own case, so
+    // this exemption can be killed on its own — an over-broad rule that
+    // refused it would red the committed pack on the wave branch, which is a
+    // FALSE red on a correct pack and the one outcome stage 0 must not have.
+    const pack = scheduledPack();
+    expect(
+      (pack.divisions as Record<string, unknown>[]).find(
+        (d) => d.ref === "d-registration",
+      )?.scheduleConfig,
+    ).toBeUndefined();
+    expect(schedulingErrors(validatePack(pack, TINY))).toEqual([]);
+  });
+
+  it("does not fire at all for a pack that declares no courts", () => {
+    // `scheduleConfig.courts` is an array of @-sigil refs resolved against the
+    // pack's OWN venues, so a pack declaring no court cannot express a
+    // meaningful config and has nowhere to place a fixture — the scheduling
+    // layer does not run for it. This is what keeps the rule off packs from
+    // the layers before this one, and it is asserted rather than assumed: the
+    // committed `_tiny` on this branch declares no venues at all.
+    const pack = tiny() as unknown as Record<string, unknown>;
+    expect(pack.venues ?? []).toEqual([]);
+    expect(schedulingErrors(validatePack(pack, TINY))).toEqual([]);
+  });
+});

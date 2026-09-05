@@ -482,8 +482,59 @@ function toBoardCourt(venueId: string, court: NonNullable<WireVenue["courts"]>[n
  *
  *  Extra keys in the RESPONSE are not reported: `ScheduleConfig` applies
  *  `.default()`s, and a product filling in a knob the pack left out is the
- *  documented behaviour rather than a disagreement. */
-function crossCheckSettings(sent: Record<string, unknown>, persisted: unknown, sink: Sink): void {
+ *  documented behaviour rather than a disagreement.
+ *
+ *  RULING R04 — the TZ is checked too, and it is checked FIRST, because a
+ *  wrong zone is the one divergence that makes this bench file false product
+ *  defects rather than miss real ones. `ScheduleSettings.tz` (`schemas.ts:1450`)
+ *  is the RESOLVED zone, not an echo: `putScheduleSettings` stores whatever it
+ *  was sent and answers with `resolveVenueTz(stored, orgTz)` (`lib/tz.ts:44`),
+ *  which returns the sent string only when it is a valid IANA name and
+ *  otherwise falls through to the org zone and then to `UTC` — all behind a
+ *  200. Meanwhile the `Board` this driver builds carries the PACK's `tz`, and
+ *  every wall-clock rule downstream reads its local clocks in it. Two zones,
+ *  one board, and the rules disagree with a scheduler that was never wrong.
+ *
+ *  Compared as an exact string, deliberately. The tempting normalisations both
+ *  break it: comparing UTC OFFSETS at one instant calls `Europe/London` and
+ *  `Europe/Lisbon` equal every winter, which suppresses exactly the divergence
+ *  this is for; and canonicalising through `Intl` is only half a rename table
+ *  in this runtime (`Etc/UTC` folds to `UTC`, `Asia/Calcutta` does not), so it
+ *  would launder some aliases and not others. The product stores the string
+ *  verbatim, so an equal string is the only thing that proves the pin took.
+ *
+ *  NOTE the reach of this check, which is narrower than it looks: the PUT only
+ *  happens for a division that DECLARES a `scheduleConfig`, because
+ *  `PutScheduleSettings.config` is required and there is no tz-only write. A
+ *  division whose pack declares no config is judged in an unverified zone and
+ *  this driver cannot say so — see the report for this round. */
+function crossCheckSettings(
+  sent: Record<string, unknown>,
+  sentTz: string,
+  settings: PutSettingsOut | undefined,
+  sink: Sink,
+): void {
+  // BEFORE the config check and outside its early return: a response with an
+  // unreadable config still carries a readable tz, and losing the zone signal
+  // to an unrelated failure is how a check becomes conditional on the thing it
+  // was meant to be independent of.
+  const keptTz = settings?.tz;
+  if (typeof keptTz !== "string") {
+    sink.error(
+      `schedule-settings returned no readable tz (${show(keptTz)}), so whether the product accepted the ` +
+        `pack's "${sentTz}" is unknown; every wall-clock rule below reads its local times in that zone ` +
+        "and would report the difference as a product defect",
+    );
+  } else if (keptTz !== sentTz) {
+    sink.error(
+      `schedule-settings RESOLVED the timezone to "${keptTz}" — the pack pinned "${sentTz}". ` +
+        "ScheduleSettings.tz is the resolved zone (stored division tz -> org timezone -> UTC), so an " +
+        "invalid or unstored pin falls back behind a 200. The board below is judged in the pack's zone " +
+        "while the scheduler used this one, which makes every court-hours and start-window red a false one",
+    );
+  }
+
+  const persisted = settings?.config;
   if (!isRecord(persisted)) {
     sink.error(
       `schedule-settings returned no readable config (${show(persisted)}), so what the product kept ` +
@@ -511,7 +562,24 @@ function crossCheckSettings(sent: Record<string, unknown>, persisted: unknown, s
 
 /** Structural equality, with two instants that name the same moment treated as
  *  equal. Records compare only the keys the PACK declared — see
- *  `crossCheckSettings` on why an added default is not a divergence. */
+ *  `crossCheckSettings` on why an added default is not a divergence.
+ *
+ *  ARRAY ORDER IS SIGNIFICANT, and that is a decision rather than an accident
+ *  of writing the comparison positionally. A reordered court list is not the
+ *  same fact as an unchanged one: `ScheduleConfig.courts` is `z.array(CourtId)`
+ *  and `putScheduleSettings` stores the parsed config as jsonb VERBATIM
+ *  (`usecases/schedule.ts` — `tx.json(input.config)`), so zod preserves the
+ *  order and jsonb preserves it again. A well-behaved product therefore CANNOT
+ *  produce a reorder, which means treating one as a divergence costs no false
+ *  reds at all, while treating it as equality would silently accept a product
+ *  that had started reshaping the array. Sorting before comparing would buy
+ *  nothing and hide that.
+ *
+ *  The LENGTH test is likewise load-bearing in one direction only, and it is
+ *  the direction `every` cannot cover: a KEPT array LONGER than the sent one
+ *  passes every index the pack declared. That is the product holding courts,
+ *  blackouts or session windows the pack never asked for — capacity the
+ *  scheduler had and the checker will not know about. */
 function sameConfigValue(sent: unknown, kept: unknown): boolean {
   if (typeof sent === "string" && typeof kept === "string") {
     const a = instant(sent);
@@ -740,8 +808,10 @@ async function runDivision(
         { method: "PUT", body: { config: sent, tz: division.tz } },
       );
       // THE RESPONSE IS EVIDENCE, NOT AN ACKNOWLEDGEMENT — see
-      // `crossCheckSettings`.
-      crossCheckSettings(sent, settings?.config, sink);
+      // `crossCheckSettings`. The whole response goes in, not just `.config`:
+      // R04's tz check needs the sibling field, and handing the checker one
+      // half of the evidence is what left the zone unread for a whole round.
+      crossCheckSettings(sent, division.tz, settings, sink);
     }
 
     // --- Step 3: lock, then SNAPSHOT what the product reports as locked ----

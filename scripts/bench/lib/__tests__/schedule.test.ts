@@ -26,6 +26,10 @@ import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+// The PRODUCT schema, imported so the fake's key set below is checked against
+// its source of truth instead of against a second hand-copy of the same list
+// (R05). Same import `board.test.ts` already uses for its own drift guards.
+import { ScheduleConfig } from "../../../../apps/web/src/server/api-v1/schemas.ts";
 import { checkBoard } from "../checker.ts";
 import type { RequestOptions, Session } from "../http.ts";
 import type { SeedTransport } from "../seed.ts";
@@ -130,21 +134,33 @@ function venue(over: Record<string, unknown> = {}): Record<string, unknown> {
     sort: 0,
     archived_at: null,
     created_at: "2099-01-01T00:00:00.000Z",
-    courts: [
-      {
-        id: "court-1",
-        venue_id: "venue-1",
-        name: "Court 1",
-        sort: 0,
-        tags: [],
-        archived_at: null,
-        created_at: "2099-01-01T00:00:00.000Z",
-        hours: [{ weekday: 4, open_min: 480, close_min: 1320 }],
-        exceptions: [{ date: "2099-01-02", closed: true, open_min: null, close_min: null }],
-      },
-    ],
+    courts: [court()],
     ...over,
   };
+}
+
+/** One nested court row. Weekday 4 is the weekday of 2099-01-01 (checked, not
+ *  assumed), so the default calendar declares 08:00-22:00 on the very day every
+ *  fixture below is placed — which is what lets a test narrow or widen that day
+ *  with an exception and see the difference. */
+function court(over: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    id: "court-1",
+    venue_id: "venue-1",
+    name: "Court 1",
+    sort: 0,
+    tags: [],
+    archived_at: null,
+    created_at: "2099-01-01T00:00:00.000Z",
+    hours: [{ weekday: 4, open_min: 480, close_min: 1320 }],
+    exceptions: [{ date: "2099-01-02", closed: true, open_min: null, close_min: null }],
+    ...over,
+  };
+}
+
+/** A venues payload whose only court carries exactly these exception rows. */
+function venuesWithExceptions(exceptions: Record<string, unknown>[]): Record<string, unknown>[] {
+  return [venue({ courts: [court({ exceptions })] })];
 }
 
 // ---------------------------------------------------------------------------
@@ -176,6 +192,14 @@ interface Script {
   stripConfigKeys?: string[];
   /** Values the product persisted DIFFERENTLY from what was sent. */
   configOverrides?: Record<string, unknown>;
+  /** What the PUT reports as the RESOLVED zone (`ScheduleSettings.tz`,
+   *  `schemas.ts:1450` — "stored division tz -> org timezone -> 'UTC'"). Unset
+   *  means the fake echoes the tz it was sent, which is what a product build
+   *  that accepted the pin does. `null` models a response carrying no readable
+   *  tz at all. Set it to a DIFFERENT zone to model the case that matters: the
+   *  product refused or fell back, and every wall-clock rule downstream is
+   *  being judged in a zone the scheduler never used. */
+  settingsTz?: string | null;
 }
 
 /** `ScheduleConfig`'s own top-level keys (`schemas.ts:1283-1426`). The fake
@@ -263,10 +287,17 @@ function fakeTransport(script: Script = {}): { transport: SeedTransport; calls: 
           if (script.stripConfigKeys?.includes(k)) continue;
           kept[k] = v;
         }
+        // `ScheduleSettings.tz` is the RESOLVED zone, not an echo: the usecase
+        // stores `input.tz` and answers with
+        // `resolveVenueTz(stored, orgTz)` (`lib/tz.ts:44`), which silently
+        // falls back to the org zone and then to UTC when the sent string is
+        // not a valid IANA name. So a 200 here does NOT mean the pin took.
+        const echoedTz = typeof body.tz === "string" ? body.tz : "UTC";
+        const resolvedTz = script.settingsTz === undefined ? echoedTz : script.settingsTz;
         return {
           division_id: settings[1],
           config: { ...kept, ...(script.configOverrides ?? {}) },
-          tz: typeof body.tz === "string" ? body.tz : "UTC",
+          ...(resolvedTz === null ? {} : { tz: resolvedTz }),
           updated_at: "2099-01-01T00:00:00.000Z",
         } as unknown as T;
       }
@@ -709,6 +740,103 @@ describe("runScheduleLayer — the board", () => {
     // A closed exception carries no range: null on the wire becomes ABSENT,
     // never 0, which `usableWindows` would read as midnight.
     expect(court.exceptions).toEqual([{ date: "2099-01-02", closed: true }]);
+  });
+
+  // --- SEVERE 1: the RANGED exception arm ----------------------------------
+  //
+  // `toBeBoardCourt`'s two conditional spreads
+  // (`typeof e.open_min === "number" ? { openMin } : {}`, and the same for
+  // close) are the SOLE producer of `BoardCourt.exceptions[].openMin`, which
+  // `courtRangesOn` (`checker.ts:326`) reads as "this ranged row REPLACES the
+  // weekly rows for that date". Every exception in every fixture was
+  // `closed: true` with nulls, so only the FALSY side of both spreads was ever
+  // taken: delete either one and the whole ranged form degrades to the
+  // "says nothing about the ranges" fall-through, a day whose hours were
+  // NARROWED is silently judged against the wider weekly window, and the
+  // checker calls the board clean.
+  //
+  // That is a false clean on court-hours containment, and containment is a rule
+  // the product's own `/validate` does not gate on at all — this bench is its
+  // only gate.
+  //
+  // The three below are deliberately a differential set, because the mapping
+  // assertion alone cannot see the consequence and either containment case
+  // alone is satisfied by a constant: a `courtRangesOn` that always returned
+  // the exception passes the narrowing case and fails the widening one, and a
+  // fall-through that ignores the exception entirely does the reverse. Only
+  // both directions witness "REPLACES, never intersects".
+
+  it("maps a RANGED exception's open/close pair, the arm no closed-day fixture reaches", async () => {
+    const { transport } = fakeTransport({
+      divisions: { "div-a": {} },
+      // 10:00-15:00 on the day every fixture here is placed — a NARROWING of
+      // the weekly 08:00-22:00, which is the shape the product emits when an
+      // organiser shortens one day rather than closing it.
+      venues: venuesWithExceptions([
+        { date: "2099-01-01", closed: false, open_min: 600, close_min: 900 },
+      ]),
+    });
+
+    const r = await runScheduleLayer(layer({ transport }));
+
+    // `toEqual`, not `toMatchObject`: an arm that stopped emitting `openMin`
+    // has to red HERE, and a partial match would accept the degraded row.
+    expect(r.boards[0].courts[0].exceptions).toEqual([
+      { date: "2099-01-01", closed: false, openMin: 600, closeMin: 900 },
+    ]);
+  });
+
+  it("drives checkBoard's outside_court_hours red from a day the exception NARROWED", async () => {
+    const { transport } = fakeTransport({
+      divisions: {
+        "div-a": {
+          // 09:00-09:45 — inside the weekly 480-1320, OUTSIDE the 600-900 the
+          // exception declares for this one date. Which window the checker
+          // used is the entire question, and this fixture answers it.
+          fixturesAfter: PLACED(),
+        },
+      },
+      venues: venuesWithExceptions([
+        { date: "2099-01-01", closed: false, open_min: 600, close_min: 900 },
+      ]),
+    });
+
+    const r = await runScheduleLayer(layer({ transport }));
+    const report = checkBoard(r.boards[0], r.constraints[0]);
+
+    expect(report.findings.map((f) => f.kind)).toContain("outside_court_hours");
+    // The narrowed range, not the weekly one, is what the reader is shown —
+    // so the message itself witnesses which window was applied.
+    expect(report.findings.find((f) => f.kind === "outside_court_hours")!.detail).toContain("600-900");
+    expect(report.clean).toBe(false);
+  });
+
+  it("stays quiet on a day the exception WIDENED, proving it replaces the weekly rows", async () => {
+    const { transport } = fakeTransport({
+      divisions: {
+        "div-a": {
+          // 23:00-23:45 — OUTSIDE the weekly 480-1320, inside the 1320-1440
+          // this date's exception declares. A checker that intersected the two
+          // windows, or fell through to the weekly one, reds this.
+          fixturesAfter: [
+            fx({
+              id: "f1",
+              scheduled_at: "2099-01-01T23:00:00.000Z",
+              court_id: "court-1",
+              court_name: "Court 1",
+            }),
+          ],
+        },
+      },
+      venues: venuesWithExceptions([
+        { date: "2099-01-01", closed: false, open_min: 1320, close_min: 1440 },
+      ]),
+    });
+
+    const r = await runScheduleLayer(layer({ transport }));
+    const report = checkBoard(r.boards[0], r.constraints[0]);
+
+    expect(report.findings.map((f) => f.kind)).not.toContain("outside_court_hours");
   });
 
   it("carries the division's tz onto the board so the checker reads wall clocks in it", async () => {
@@ -1457,6 +1585,80 @@ describe("runScheduleLayer — the schedule-settings round trip", () => {
     expect(r.outcomes[0].errors.join(" ")).toMatch(/CHANGED "matchMinutes".*45.*30/);
   });
 
+  // --- SEVERE 2: the array and record arms of `sameConfigValue` -------------
+  //
+  // Until this round `configOverrides` only ever moved a SCALAR
+  // (`matchMinutes: 30`), so `sameConfigValue`'s array and record arms were
+  // only ever reached in the EQUAL direction. Both could be replaced with
+  // `return true` and the suite stayed green — which silently disabled
+  // `crossCheckSettings` for `courts`, `blackouts` and `sessionWindows`,
+  // exactly the fields a non-`.strict()` `ScheduleConfig` is most likely to
+  // drop or reshape, and exactly the defect this cross-check was added for.
+  //
+  // Each case below is chosen so that ONE arm is load-bearing for it: the
+  // `courts` cases are arrays of strings, so they never touch the record arm,
+  // and the `constraints` case is a bare record, so it never touches the array
+  // arm.
+
+  it("reports an array the product persisted with a DIFFERENT element", async () => {
+    const { transport } = fakeTransport({
+      divisions: { "div-a": { fixturesAfter: PLACED() } },
+      // The pack resolved `@c1`/`@c2` to court-1/court-2; the product kept a
+      // court that is not the one the checker will judge occupancy on.
+      configOverrides: { courts: ["court-1", "court-3"] },
+    });
+
+    const r = await runScheduleLayer(layer({ transport }));
+
+    expect(r.outcomes[0].errors.join(" ")).toMatch(/CHANGED "courts"/);
+  });
+
+  it("reports an array that differs only by ORDER — a reordered court list is not the same fact", async () => {
+    const { transport } = fakeTransport({
+      divisions: { "div-a": { fixturesAfter: PLACED() } },
+      configOverrides: { courts: ["court-2", "court-1"] },
+    });
+
+    const r = await runScheduleLayer(layer({ transport }));
+
+    // Order is significant BY DECISION, and it is free: `putScheduleSettings`
+    // stores the parsed config as jsonb verbatim, so a well-behaved product
+    // cannot produce a reorder and this can never be a false red. A comparison
+    // that sorted first would accept a product that had begun reshaping the
+    // array and report nothing.
+    expect(r.outcomes[0].errors.join(" ")).toMatch(/CHANGED "courts"/);
+  });
+
+  it("reports an array the product came back LONGER than the pack declared", async () => {
+    const { transport } = fakeTransport({
+      divisions: { "div-a": { fixturesAfter: PLACED() } },
+      configOverrides: { courts: ["court-1", "court-2", "court-3"] },
+    });
+
+    const r = await runScheduleLayer(layer({ transport }));
+
+    // The one direction the element-wise walk cannot see on its own: every
+    // index the pack declared matches, and the product is still holding a
+    // court the checker knows nothing about. Only the length test catches it.
+    expect(r.outcomes[0].errors.join(" ")).toMatch(/CHANGED "courts"/);
+  });
+
+  it("reports a record the product persisted with one key changed", async () => {
+    const withConstraints = { ...CONFIG, constraints: { noBackToBack: true, restMin: 30 } };
+    const { transport } = fakeTransport({
+      divisions: { "div-a": { fixturesAfter: PLACED() } },
+      // Same keys, same shape, one value moved — the shape a nested knob takes
+      // when a build has quietly changed its own default.
+      configOverrides: { constraints: { noBackToBack: true, restMin: 45 } },
+    });
+
+    const r = await runScheduleLayer(
+      layer({ transport, divisions: [divA({ scheduleConfig: withConstraints })] }),
+    );
+
+    expect(r.outcomes[0].errors.join(" ")).toMatch(/CHANGED "constraints"/);
+  });
+
   it("does NOT report a re-serialised instant as a divergence", async () => {
     const { transport } = fakeTransport({
       divisions: { "div-a": { fixturesAfter: PLACED() } },
@@ -1495,6 +1697,72 @@ describe("runScheduleLayer — the schedule-settings round trip", () => {
     const r = await runScheduleLayer(layer({ transport }));
 
     expect(r.outcomes[0].errors.join(" ")).toMatch(/no readable config/);
+  });
+
+  // --- R04: the resolved tz is EVIDENCE too --------------------------------
+  //
+  // The PUT body carries `tz` alongside `config`, and until this round nothing
+  // read the answer back. `ScheduleSettings.tz` is the RESOLVED zone
+  // (`schemas.ts:1450`), produced by `resolveVenueTz(stored, orgTz)` — which
+  // returns the sent string only if it is a valid IANA name and otherwise falls
+  // through to the org zone and then to UTC, all behind a 200.
+  //
+  // The cost of not reading it is asymmetric, which is why this is not a minor
+  // gap. The board this driver builds carries `division.tz` (the PACK's zone)
+  // and every wall-clock rule downstream — the checker's court-hours
+  // containment, `not_before`/`not_after`, believability's day bucketing — is
+  // judged in it. If the product scheduled in a different zone, those rules do
+  // not MISS a defect, they INVENT one: the bench files false product defects.
+  // An instrument that cries wolf gets switched off, and the real findings go
+  // with it.
+
+  it("reports a tz the product resolved differently from the one the pack pinned", async () => {
+    const { transport } = fakeTransport({
+      divisions: { "div-a": { fixturesAfter: PLACED() } },
+      // The pin did not take: stored value invalid/absent, so `resolveVenueTz`
+      // fell through to the org zone. A 200, and the wrong clock.
+      settingsTz: "UTC",
+    });
+
+    const r = await runScheduleLayer(layer({ transport, divisions: [divA({ tz: "Europe/London" })] }));
+
+    // Both zones named, order-independently: the report has to say which one
+    // the scheduler used AND which one the board is being judged in, or the
+    // reader cannot tell which half to go and fix.
+    const said = r.outcomes[0].errors.join(" ");
+    expect(said).toMatch(/RESOLVED the timezone/);
+    expect(said).toContain("Europe/London");
+    expect(said).toContain("UTC");
+  });
+
+  it("compares against the tz that was SENT, not a constant — a zone the product honours is quiet", async () => {
+    // The pair for the test above, and it is what makes that one falsifiable:
+    // an implementation that reds whenever the resolved zone is not "UTC", or
+    // whenever it is not the string "Europe/London", passes one of these two
+    // and fails the other. Only comparing the response against the value this
+    // division actually sent passes both.
+    const { transport } = fakeTransport({
+      divisions: { "div-a": { fixturesAfter: PLACED() } },
+    });
+
+    const r = await runScheduleLayer(layer({ transport, divisions: [divA({ tz: "Europe/London" })] }));
+
+    expect(r.outcomes[0].errors).toEqual([]);
+  });
+
+  it("reports a PUT that answered with no tz at all rather than assuming the sent one took", async () => {
+    const { transport } = fakeTransport({
+      divisions: { "div-a": { fixturesAfter: PLACED() } },
+      settingsTz: null,
+    });
+
+    const r = await runScheduleLayer(layer({ transport, divisions: [divA({ tz: "Europe/London" })] }));
+
+    // `ScheduleSettings.tz` is a REQUIRED `z.string()`, so an absent one is a
+    // product build this driver does not understand. Silence here would mean
+    // assuming the pin took, which is the one inference this check exists to
+    // refuse.
+    expect(r.outcomes[0].errors.join(" ")).toMatch(/no readable tz/);
   });
 });
 
@@ -1580,5 +1848,37 @@ describe("declaresOfficials is carried from the PACK onto EncodedConstraints", (
 
     expect(r.constraints[0].declaresOfficials).toBe(true);
     expect(report.findings.map((f) => f.kind)).not.toContain("officials_unreadable");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// R05 — the fake's key set is a HAND-COPY, and hand-copies drift
+// ---------------------------------------------------------------------------
+
+describe("SCHEDULE_CONFIG_KEYS — drift guard", () => {
+  // `SCHEDULE_CONFIG_KEYS` above is a hand-copy of `ScheduleConfig`'s own
+  // top-level key set, and the whole `stripConfigKeys` model rests on it: the
+  // fake PUT strips anything NOT in that set, because a plain `z.object` strips
+  // an unknown key rather than refusing it.
+  //
+  // So a knob ADDED to the product schema is the failure this guard exists for,
+  // and it is silent without it. The fake would strip the new key on every PUT,
+  // `crossCheckSettings` would report it DROPPED on every division that
+  // declared it, and the wrong half of the system would look broken — a bench
+  // that reds on a product which is behaving correctly. A knob REMOVED is the
+  // milder direction: the fake keeps echoing a key the product no longer has,
+  // and the round-trip check goes quiet where it should red.
+  //
+  // Third instance of this class in this wave, and the pattern is the one
+  // `board.test.ts` already uses: assert against the schema's OWN shape, never
+  // against a second copy of the same list.
+  it("stays equal to ScheduleConfig's own top-level shape, so a product schema change reds HERE", () => {
+    const declared = Object.keys(ScheduleConfig.shape);
+
+    // Sanity: a broken shape access must not pass by comparing two empty sets
+    // — the vacuous mode this guard would otherwise have.
+    expect(declared.length).toBeGreaterThan(5);
+
+    expect([...SCHEDULE_CONFIG_KEYS].sort()).toEqual([...declared].sort());
   });
 });

@@ -191,6 +191,39 @@ export function certify(input: {
       `certificate: the rendered historyBoard is for division ${board.divisionRef} but the encoding is for ${ref} — certifying one division's timetable against another's constraints is a bench wiring fault, not a pack or product one`,
     );
   }
+  // The THIRD wiring guard, and the only one that was closing a wrong
+  // POSITIVE verdict rather than a missing one.
+  //
+  // Branch 4 asks `placed < total`, and that comparison is `false` when
+  // EITHER side is `NaN` — so a non-finite pair fell straight through to
+  // branch 5 and certified FEASIBLE: the strongest claim this harness makes,
+  // asserted about counts it could not read. `Infinity` is the same hole from
+  // the other side (`3 < Infinity` is true, so it reports a shortfall against
+  // an unbounded total), and a negative `total` is the NaN case again.
+  //
+  // Reachability is live rather than theoretical: `ScheduleOutcome.metrics`
+  // is optional, so a caller deriving these from a solver that never answered
+  // is one coercion away from a NaN — and `Number(null)` is a finite 0 while
+  // `Number(undefined)` is `NaN`, so the two obvious spellings fail
+  // differently.
+  //
+  // THROWS rather than returning a verdict, for the same reason as the two
+  // guards above: the five branches are a closed protocol about the PACK and
+  // the PRODUCT, and a count the bench could not read is a fact about
+  // neither. `Number.isInteger` and not `Number.isFinite`, because a
+  // fractional count of fixtures is as unreadable as a NaN one; `>= 0`
+  // because a negative total reaches FEASIBLE through the very same false
+  // comparison. A zero-fixture division is LEGAL and passes.
+  for (const [name, value] of [
+    ["placed", input.placed],
+    ["total", input.total],
+  ] as const) {
+    if (!Number.isInteger(value) || value < 0) {
+      throw new Error(
+        `certificate: ${ref} was handed ${name}=${String(value)} — placed/total must both be non-negative integers, and a non-finite one silently satisfies the unplaced gate and certifies FEASIBLE. A bench wiring fault, not a pack or product one`,
+      );
+    }
+  }
 
   // `checkBoard`'s OWN placed predicate, restated rather than approximated.
   //
