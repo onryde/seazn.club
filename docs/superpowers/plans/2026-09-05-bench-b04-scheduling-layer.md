@@ -69,7 +69,7 @@ Every task's requirements implicitly include all of these.
 W=/Users/ashokhein/github/seazn.club/.claude/worktrees/bench-b04
 S=/private/tmp/claude-501/-Users-ashokhein-github-seazn-club/70216b38-6a7f-4c13-a0f7-69a8009b3d3a/scratchpad
 
-cd $W && npx vitest run --reporter=json --outputFile=$S/b4.json scripts/bench
+cd $W && ./packages/engine/node_modules/.bin/vitest run --reporter=json --outputFile=$S/b4.json scripts/bench
 cd $W && jq '{total:.numTotalTests,passed:.numPassedTests,failed:.numFailedTests}' $S/b4.json
 cd $W && rtk proxy npm run lint          # judge on the "✖ N problems" line only
 cd $W && npm run bench:scheduler -- --suite _tiny --wipe --engine both
@@ -79,18 +79,27 @@ cd $W && npm run bench:scheduler -- --suite _tiny --wipe --engine both
 failed)" is the wrapper losing the result, not a clean run. `rtk` also
 fabricates a clean Prettier verdict. Use `rtk proxy` and read the real line.
 
-### Live environment (already up, label `b04`)
+### Live environment — TORN DOWN, bring it up only for T7
 
-| Resource | Value |
-|---|---|
-| Postgres | port **54723**, schema at v391, `sync:sports` done |
-| Placement (CP-SAT) | port **50536**, native, pid 78855 |
-| App server | `seazn-env status --label b04` for the port |
+There is deliberately NO standing env. Owner policy 2026-09-04: no idle
+environments; bring one up only when a task actually needs it. T1-T6 need
+none — the bench's DI seams mean its unit suite never touches live Postgres.
 
-`eval "$(~/.claude/skills/seazn-local-env/scripts/seazn-env.sh env --label b04)"`
-exports `DATABASE_URL` / `SMOKE_BASE` / `PLACEMENT_SERVICE_*`. After editing
-code, `seazn-env rebuild --label b04` — a second `up --server` re-serves the
-PREVIOUS build and passes every health check.
+T7's live legs need one:
+
+```bash
+S=~/.claude/skills/seazn-local-env/scripts/seazn-env.sh
+$S up --label b04 --all          # ~13s DB; placement venv is per-repo and survives
+eval "$($S env --label b04)"     # DATABASE_URL / SMOKE_BASE / PLACEMENT_SERVICE_*
+$S down --label b04              # the moment T7's legs are done
+```
+
+**The server build OOMs under machine load.** It died once at exit 137
+(SIGKILL) after `✓ Compiled successfully`, killed during `Running TypeScript`,
+28m56s wasted — seven resident env labels, load avg ~396, 2.5GB of 4GB swap
+used; `apps/web` typecheck alone wants ~2.8GB. Check `uptime` and `vm_stat`
+before starting the build, and note the harness reported that failed command
+as "exit code 0" — only its own `EXIT=$?` said otherwise.
 
 ---
 
@@ -121,9 +130,12 @@ PREVIOUS build and passes every health check.
 | `scripts/bench/lib/report.ts` | New render sections: scheduling, checker, certificate, believability, engine delta. Hook is the `sections` array in `renderMarkdown` (`:363-369`). |
 | `scripts/bench/packs/build-packs/_tiny.ts` + `packs/_tiny.json` | Add `venues[]` (one venue, two courts) and a `scheduleConfig` on BOTH divisions. |
 
-**Task order.** T1 → (T2 ∥ T4) → (T3 ∥ T5) → T6 → T7. The parallel pairs
-touch provably disjoint files; run them in separate worktrees or sequentially
-if there is any doubt — ownership lists do not hold.
+**Task order.** T1 → T2 → T3 → T4 → T5 → T6 → T7, **strictly sequential**
+(Ruling R5). The original `T2 ∥ T4` / `T3 ∥ T5` pairing is overridden: both
+halves of each pair write into `scripts/bench/lib/__tests__/`, the SDD skill
+forbids parallel implementers outright, and AGENTS.md requires sequential
+execution on any file-set overlap. Commit commands name explicit files, never
+a directory.
 
 ---
 
@@ -272,7 +284,7 @@ describe("encodeConstraints", () => {
 
 - [ ] **Step 2: Run to verify it fails**
 
-Run: `cd $W && npx vitest run --reporter=json --outputFile=$S/t1.json scripts/bench/lib/__tests__/board.test.ts`
+Run: `cd $W && ./packages/engine/node_modules/.bin/vitest run --reporter=json --outputFile=$S/t1.json scripts/bench/lib/__tests__/board.test.ts`
 Expected: FAIL — `Failed to load .../board.ts`.
 
 - [ ] **Step 3: Implement `board.ts`**
@@ -403,7 +415,7 @@ describe("checkBoard", () => {
 
 - [ ] **Step 2: Run to verify it fails**
 
-Run: `cd $W && npx vitest run --reporter=json --outputFile=$S/t2.json scripts/bench/lib/__tests__/checker.test.ts`
+Run: `cd $W && ./packages/engine/node_modules/.bin/vitest run --reporter=json --outputFile=$S/t2.json scripts/bench/lib/__tests__/checker.test.ts`
 Expected: FAIL — module not found.
 
 - [ ] **Step 3: Implement `checker.ts`**
@@ -678,7 +690,7 @@ it("goes green with the checker bypassed — proving the checker is what reds it
 });
 ```
 
-- [ ] **Step 2: Full unit gate.** `npx vitest run --reporter=json
+- [ ] **Step 2: Full unit gate.** `./packages/engine/node_modules/.bin/vitest run --reporter=json
   --outputFile=$S/b4.json scripts/bench`, then the `jq` line. Paste raw counts.
 - [ ] **Step 3: Lint.** `rtk proxy npm run lint`; judge on `✖ N problems`.
 - [ ] **Step 4: Live leg A — placement UP.**
