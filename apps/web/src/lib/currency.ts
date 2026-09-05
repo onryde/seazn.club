@@ -136,11 +136,87 @@ export function extraOrgPrice(
 export const PASS_KEYS = ["event_pass", "event_pass_l"] as const;
 export type PassKey = (typeof PASS_KEYS)[number];
 
-/** Is this a rung we know how to sell? The one place that decides — used by the
+/** Is this a rung we RECOGNISE? The one place that decides — used by the
  *  checkout route's request validation and by the webhook / reconcile paths that
- *  read a rung back out of Stripe session metadata (v17 #294). */
+ *  read a rung back out of Stripe session metadata (v17 #294).
+ *
+ *  Recognition, not sale: a rung taken off sale is still a rung a held pass can
+ *  name, so this stays over `PASS_KEYS`. "May we sell it TODAY" is
+ *  `isSellablePassKey` below, and the two questions are deliberately separate. */
 export function isPassKey(value: unknown): value is PassKey {
   return typeof value === "string" && (PASS_KEYS as readonly string[]).includes(value);
+}
+
+/**
+ * WHICH RUNGS ARE ON SALE — the one authority every buy surface reads.
+ *
+ * Owner decision 2026-09-05: the L rung comes OFF SALE. Against a one-month
+ * competition Pro is cheaper than L in money at every volume ($44.99 one-time
+ * against $14.99/mo), and L's platform fee is the same 4% as M — so L's only
+ * real edge is capacity, 512 entrants per division against Pro's 256. It
+ * therefore reads as a savings product while being a capacity product, and a
+ * buyer comparing on price is misled. Rather than write copy explaining that,
+ * the rung is taken off sale.
+ *
+ * HIDDEN, NOT DELETED — the R13 precedent (design §1 R13, the extra-seat
+ * add-on: "keep code and price dormant"). `PASS_KEYS` above stays COMPLETE, and
+ * with it the `plans` row, the `plan_entitlements` matrix, the
+ * `stripe-plans.json` seed entry, the Stripe price, `PASS_CREDIT_GRANT` and
+ * every resolution path. An org that already holds an L pass goes on getting
+ * exactly what it bought, and the rung can be put back on sale by adding one
+ * key here.
+ *
+ * ONE list, not a `key !== "event_pass_l"` in each of six selling surfaces.
+ * This mirrors `PUBLICLY_READABLE_VISIBILITIES`
+ * (server/usecases/entitlement-freeze.ts), introduced last week for the same
+ * reason and after the same class of defect: two implementations that happen to
+ * agree today are what this repo keeps paying for, and the day one of them is
+ * updated alone is the day a buyer is offered a rung the checkout will refuse —
+ * or, worse, is quietly sold the one the owner withdrew.
+ *
+ * THE DECISION is this one tuple; both lists below are derived from it, so a
+ * rung cannot be on sale in one place and hidden in another. `satisfies
+ * readonly PassKey[]` makes a rung that is not a rung a compile error here
+ * rather than a silent no-op filter.
+ */
+const HIDDEN_PASS_KEY_LIST = ["event_pass_l"] as const satisfies readonly PassKey[];
+export type HiddenPassKey = (typeof HIDDEN_PASS_KEY_LIST)[number];
+
+/** A rung that is no longer offered. It still resolves; nothing sells it. */
+export type SellablePassKey = Exclude<PassKey, HiddenPassKey>;
+
+/**
+ * The rungs on sale, in ladder order.
+ *
+ * Written as a FILTER of `PASS_KEYS` rather than as its own literal, so the
+ * ladder's ORDER (smallest-first — `passLadderOptions` renders in it and the
+ * picker pre-selects the first element) can never diverge between the two
+ * lists.
+ */
+export const SELLABLE_PASS_KEYS: readonly SellablePassKey[] = PASS_KEYS.filter(
+  (key): key is SellablePassKey =>
+    !(HIDDEN_PASS_KEY_LIST as readonly string[]).includes(key),
+);
+
+/**
+ * The complement: rungs that still resolve but are no longer offered.
+ *
+ * Derived from the same tuple, never re-typed. An empty `HIDDEN_PASS_KEYS`
+ * beside a hidden rung would read as "nothing is hidden" to every guard that
+ * consults it.
+ */
+export const HIDDEN_PASS_KEYS: readonly HiddenPassKey[] = HIDDEN_PASS_KEY_LIST;
+
+/**
+ * May we sell this rung today?
+ *
+ * The predicate every SELLING surface asks — the `/pricing` ladder and its
+ * comparison columns, the competition upgrade page's ladder and columns, and
+ * the per-org `sellablePassRungs` gate that decides whether a buy chip renders
+ * at all. Resolution never asks it: `isPassKey` is the question there.
+ */
+export function isSellablePassKey(value: unknown): value is SellablePassKey {
+  return typeof value === "string" && (SELLABLE_PASS_KEYS as readonly string[]).includes(value);
 }
 
 /** Union of every `plans.key` value: the subscription plans plus the pass
