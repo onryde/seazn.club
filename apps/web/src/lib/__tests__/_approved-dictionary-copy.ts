@@ -1100,4 +1100,48 @@ export const APPROVED_DICTIONARY_COPY: ApprovedValue[] = [
       nl: "Automatisch opgestelde wedstrijdverslagen",
     },
   },
+  {
+    file: "marketing",
+    key: "pricing.pro.per",
+    why: "the '/month' suffix beside the Pro card's headline figure, and the word that decides whether the number above it is read as a monthly or a yearly price. Source of truth: config/stripe-plans.json plans[pro].prices.monthly.interval = 'month'; with the annual toggle ON the page divides the ANNUAL amount by twelve (pricing/page.tsx) so the suffix stays true in both toggle states. It was the literal '/month' in every locale until 2026-09-05, on a page whose every other price honours the currency switcher.",
+    text: {
+      en: "/month",
+      es: "/mes",
+      fr: "/mois",
+      nl: "/maand",
+    },
+  },
+  {
+    file: "marketing",
+    key: "pricing.pro.annualBilled",
+    why: "the yearly TOTAL under the per-month figure, shown while the annual toggle is on. {total} is interpolated by pricing/page.tsx from proPrice('annual', currency) — never typed into a locale file, because the seed prices each market independently (usd 12899 / eur 10899 / gbp 8899 / inr 499900) and a figure frozen into copy goes stale four times and is corrected once. The words are the claim that this amount is charged ONCE A YEAR rather than monthly.",
+    text: {
+      en: "{total} billed yearly",
+      es: "{total} facturado al año",
+      fr: "{total} facturé à l'année",
+      nl: "{total} per jaar gefactureerd",
+    },
+  },
+  {
+    file: "marketing",
+    key: "pricing.pro.annualSaving",
+    why: "WHAT PAYING YEARLY IS WORTH, in the emerald badge on the Pro card. It said 'save 30%' — hardcoded English, and false in every market: derived from config/stripe-plans.json the base tier saves 28.29% usd / 30.08% eur / 32.52% gbp / 30.45% inr, and the extra-organisation rider 23.71% / 24.89% / 26.54% / 30.35%. No single percentage can be right, so the claim is a FLOOR read off the ladder — a year costs 8.10 to 9.16 monthly payments at the eight live price points, so 'more than two months free' is true everywhere with room. DELIBERATELY THE SAME WORDING as pricing.faq.annual.a and billing.annualSaves: one fact, one sentence, and dictionary-copy-truth's annual suite judges all three against annualPricePoints() together.",
+    text: {
+      en: "more than two months free",
+      es: "más de dos meses gratis",
+      fr: "plus de deux mois offerts",
+      nl: "meer dan twee maanden gratis",
+    },
+  },
+  {
+    file: "marketing",
+    key: "pricing.pro.monthlyNote",
+    why: "shown in place of the yearly line when the toggle is OFF, and it makes two claims: that this price is billed monthly, and that the interval can be changed later. Source of truth for the second, RE-CHECKED against the tree rather than assumed: POST /api/billing/interval -> applyIntervalChange in lib/billing-manage.ts swaps the subscription's price with proration, with GET /api/billing/interval/preview quoting the charge first, and components/billing-manage.tsx renders the control (billing.intervalChange.toYearly / .toMonthly). So 'any time' is the product's behaviour, not a marketing flourish.",
+    text: {
+      en: "Billed monthly · switch to yearly any time",
+      es: "Facturación mensual · cambia a anual cuando quieras",
+      fr: "Facturation mensuelle · passez à l'annuel à tout moment",
+      nl: "Maandelijkse facturering · stap altijd over op jaarlijks",
+    },
+  },
 ];

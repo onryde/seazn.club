@@ -459,6 +459,12 @@
   "pricing.pro.f7": "Suivi des suspensions et de la discipline",
   "pricing.pro.f8": "Attribution automatique des officiels et notations",
   "pricing.pro.f9": "Articles de résultats rédigés automatiquement",
+  "pricing.pro.per": "/mois",
+  "pricing.pro.annualBilled": "{total} facturé à l'année",
+  "pricing.pro.annualSaving": "plus de deux mois offerts",
+  "pricing.pro.monthlyNote": "Facturation mensuelle · passez à l'annuel à tout moment",
+  "pricing.pro.annualToggle": "Facturation annuelle",
+  "pricing.currency.label": "Devise",
   "home.stub.once": " en une fois",
   "home.stub.perMonth": "/mois",
   "home.finale.compare": "Comparer les offres en détail →"

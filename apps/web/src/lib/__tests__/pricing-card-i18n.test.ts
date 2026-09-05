@@ -32,7 +32,7 @@
 // `mutation-proved` below: the contrast between the two is committed, not a
 // manual check that happened once.
 import { describe, expect, it } from "vitest";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import type * as TS from "typescript";
 import {
@@ -74,18 +74,82 @@ const ALL_BULLET_KEYS = [...BULLET_KEYS.community, ...BULLET_KEYS.pass, ...BULLE
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
- * The modules that OWN the card bullets: the shared source both surfaces read
- * from, and the home-page stub component that renders them.
+ * ── WHY THIS LIST IS DISCOVERED AND NOT TYPED OUT ──────────────────────
  *
- * `/[lang]/pricing/page.tsx` is deliberately NOT here. It is a 600-line page
- * whose own chrome already goes through `t(d, …)`, and widening the scan to it
- * would pull in the wider marketing tree rather than the thing this guard is
- * about. The rendered check in pricing-page.test.tsx is the net for that side.
+ * It used to be two hand-written paths — the module that owns the card bullets,
+ * and the home-page stub that renders them — and that scope is precisely what
+ * let the next instance of the same defect walk straight past it.
+ * `components/pro-price-card.tsx` sits on the SAME page, a few hundred pixels
+ * from the bullets this scan was written for, and shipped "/month", "Annual
+ * billing", "Billed monthly · switch to yearly any time" and
+ * "$128.99 billed yearly — save 30%" as English literals in every locale. It was
+ * even NAMED as a live finding in the commit that added this file, and naming it
+ * is not covering it.
+ *
+ * A scan whose scope is a list of names only ever covers the components somebody
+ * remembered. The one added tomorrow is the one nobody will.
+ *
+ * So the scope is READ OFF THE PAGE: every `@/components/…` module the pricing
+ * page imports is scanned, whatever it is called and whenever it arrived. A
+ * component mounted on /pricing is in scope the moment its import line lands,
+ * with nobody's memory in the loop.
+ *
+ * `/[lang]/pricing/page.tsx` ITSELF is still deliberately NOT scanned, for the
+ * reason it never was: it is a 600-line server page whose own chrome already
+ * goes through `t(d, …)`, and it carries analytics ids, plan keys and matrix
+ * identifiers this prose heuristic would have to be tuned down to tolerate —
+ * tuned down is how a scan stops seeing real copy. The rendered check in
+ * pricing-page.test.tsx is the net for that side.
  */
-const PROSE_SCANNED = [
-  "src/lib/pricing-cards.ts",
-  "src/components/marketing/ticket-stubs.tsx",
-] as const;
+const PRICING_PAGE = "src/app/[lang]/(marketing)/pricing/page.tsx";
+
+/**
+ * Every `@/components/…` module a page MOUNTS, in source order.
+ *
+ * Type-only imports are skipped — an erased import renders nothing, so it can
+ * carry no copy. A pure (file, text) pair like `proseLiterals` above, so the
+ * discovery itself is provable against a fixture rather than only against the
+ * one page that exists today.
+ */
+function componentSpecifiers(file: string, text: string): string[] {
+  const src = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+  const out: string[] = [];
+  for (const stmt of src.statements) {
+    if (!ts.isImportDeclaration(stmt)) continue;
+    if (stmt.importClause?.isTypeOnly) continue;
+    if (!ts.isStringLiteral(stmt.moduleSpecifier)) continue;
+    const spec = stmt.moduleSpecifier.text;
+    if (spec.startsWith("@/components/")) out.push(spec);
+  }
+  return [...new Set(out)].sort();
+}
+
+/** `@/…` is `apps/web/src/…` (tsconfig paths). `null` when nothing is there —
+ *  which is a FAULT below, never a silent skip: a renamed component would
+ *  otherwise drop out of the scan and take its copy with it. */
+function resolveComponent(specifier: string): string | null {
+  const base = `src/${specifier.slice("@/".length)}`;
+  for (const ext of [".tsx", ".ts"]) {
+    if (existsSync(`${base}${ext}`)) return `${base}${ext}`;
+  }
+  return null;
+}
+
+const PRICING_PAGE_SPECIFIERS = componentSpecifiers(
+  PRICING_PAGE,
+  readFileSync(PRICING_PAGE, "utf8"),
+);
+
+/** The bullet-owning module, the home stub that renders it, and every component
+ *  the pricing page mounts. */
+const PROSE_SCANNED: readonly string[] = [
+  ...new Set([
+    "src/lib/pricing-cards.ts",
+    // Not reachable from the pricing page's imports — the HOME page mounts it.
+    "src/components/marketing/ticket-stubs.tsx",
+    ...PRICING_PAGE_SPECIFIERS.map(resolveComponent).filter((f): f is string => f !== null),
+  ]),
+].sort();
 
 /**
  * Prose literals that are allowed to stay hardcoded, each with its reason.
@@ -157,6 +221,11 @@ function proseLiterals(file: string, text: string): ProseHit[] {
     ) {
       return true;
     }
+    // A DIRECTIVE PROLOGUE — `"use client"`, `"use server"`. A bare string as a
+    // whole statement is never rendered, and every client component in this
+    // tree opens with one; excluded by POSITION, like the rest of this list,
+    // rather than by allowlisting the two spellings.
+    if (ts.isExpressionStatement(parent) && parent.expression === node) return true;
     // Any JSX attribute value: `className="…"`, and `className={`…`}` too.
     for (let p: TS.Node | undefined = parent; p; p = p.parent) {
       if (ts.isJsxAttribute(p)) return true;
@@ -220,6 +289,67 @@ function hardcodedProseFaults(files: readonly string[]): string[] {
   return faults;
 }
 
+/**
+ * ── THE ONE-WORD GAP, CLOSED STRUCTURALLY ────────────────────────────────────
+ *
+ * `isProse` needs TWO word-shaped tokens, which is the price of not drowning in
+ * Tailwind class lists — and it is why the widened scan above, run against the
+ * unfixed `pro-price-card.tsx`, reported four faults and not six. The two it
+ * could not see were the worst strings on the card:
+ *
+ *     <span …>/month</span>                        one token
+ *     <span …>save 30%</span>                      one token, and FALSE in all
+ *                                                  four markets (usd 28.29%,
+ *                                                  eur 30.08%, gbp 32.52%,
+ *                                                  inr 30.45% on the base tier)
+ *
+ * `pricing-cards.ts` closes the same gap with a strict whitelist — every literal
+ * must be a dictionary key or a row identifier — but that only works on a pure
+ * data module. A COMPONENT is full of legitimate non-copy literals (font
+ * weights, cookie attributes, ISO currency codes), so the strict rule has to be
+ * narrower than "no literals".
+ *
+ * It is narrower by POSITION, the way everything else here is: a JSX TEXT NODE
+ * is, definitionally, characters painted onto the screen. If it contains a
+ * letter or a digit in any script, it is copy, and copy belongs in a dictionary.
+ * A separator, a bullet glyph, a "✓", an arrow — none of those carry a letter,
+ * so none of them need exempting, and the rule costs a component nothing until
+ * it actually hardcodes something a reader reads.
+ *
+ * Language-agnostic like its neighbour, and for the same reason: `\p{L}` is as
+ * happy with "Facturación mensual" as with "Billed monthly".
+ */
+function paintedText(file: string, text: string): ProseHit[] {
+  const src = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+  const hits: ProseHit[] = [];
+  const visit = (node: TS.Node): void => {
+    if (ts.isJsxText(node)) {
+      const trimmed = node.text.trim();
+      if (trimmed && /[\p{L}\p{N}]/u.test(trimmed)) {
+        hits.push({
+          file,
+          line: src.getLineAndCharacterOfPosition(node.getStart(src)).line + 1,
+          text: trimmed,
+        });
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(src);
+  return hits;
+}
+
+function paintedTextFaults(files: readonly string[]): string[] {
+  const faults: string[] = [];
+  for (const file of files.filter((f) => f.endsWith(".tsx"))) {
+    for (const hit of paintedText(file, readFileSync(file, "utf8"))) {
+      if (hit.text in PROSE_EXEMPT) continue;
+      faults.push(`${hit.file}:${hit.line} hardcoded on-screen text: ${JSON.stringify(hit.text)}`);
+    }
+  }
+  return faults;
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 
 describe("the plan-card bullets are dictionary copy, not literals (SOURCE SCAN)", () => {
@@ -227,11 +357,23 @@ describe("the plan-card bullets are dictionary copy, not literals (SOURCE SCAN)"
     expect(hardcodedProseFaults(PROSE_SCANNED)).toEqual([]);
   });
 
+  /**
+   * The one-word half of the same rule. Separate `it` from the prose scan on
+   * purpose: the two catch different things, and a single assertion would let
+   * either of them rot behind the other going red.
+   */
+  it("no component on the pricing page paints a literal onto the screen", () => {
+    expect(paintedTextFaults(PROSE_SCANNED)).toEqual([]);
+  });
+
   it("every prose exemption still matches something in the scanned files", () => {
     const seen = new Set(
-      PROSE_SCANNED.flatMap((f) => proseLiterals(f, readFileSync(f, "utf8"))).map((h) =>
-        h.text.trim(),
-      ),
+      [
+        ...PROSE_SCANNED.flatMap((f) => proseLiterals(f, readFileSync(f, "utf8"))),
+        ...PROSE_SCANNED.filter((f) => f.endsWith(".tsx")).flatMap((f) =>
+          paintedText(f, readFileSync(f, "utf8")),
+        ),
+      ].map((h) => h.text.trim()),
     );
     const stale = Object.keys(PROSE_EXEMPT).filter((t) => !seen.has(t));
     expect(stale, "exemptions covering nothing — delete them").toEqual([]);
@@ -279,6 +421,129 @@ describe("the plan-card bullets are dictionary copy, not literals (SOURCE SCAN)"
       `);\n`;
     const hits = proseLiterals("fixture.tsx", fixture).filter((h) => isProse(h.text));
     expect(hits.map((h) => h.text)).toEqual(["Compare plans in detail"]);
+  });
+
+  /**
+   * The same contrast, on CARD CHROME rather than a bullet — the shape that
+   * actually shipped. A price suffix and a saving badge are JSX TEXT NODES
+   * beside a class list, not entries in an exported array, so this proves the
+   * widened scope is watching the thing that broke rather than a second copy of
+   * the case already covered above.
+   *
+   * The French row is the one that matters. A rendered assertion on /fr/pricing
+   * is fully green on it — measured, twice now — because a dictionary lookup and
+   * a hardcoded translation emit the same bytes.
+   */
+  it("fires on hardcoded card chrome, whatever language it is written in", () => {
+    const fixture = (literal: string) =>
+      `export const C = () => (\n  <p className="mb-3 text-sm text-slate-500">${literal}</p>\n);\n`;
+    for (const literal of [
+      "$128.99 billed yearly — save 30%",
+      "Billed monthly · switch to yearly any time",
+      "128,99 € facturé à l'année — plus de deux mois offerts",
+      "Facturación mensual · cambia a anual cuando quieras",
+      "Maandelijkse facturering · stap altijd over op jaarlijks",
+    ]) {
+      const hits = proseLiterals("fixture.tsx", fixture(literal)).filter((h) => isProse(h.text));
+      expect(hits.map((h) => h.text), literal).toEqual([literal]);
+    }
+  });
+
+  /**
+   * ── AND THE TWO STRINGS THE PROSE HEURISTIC CANNOT SEE ───────────────────
+   *
+   * "/month" and "save 30%" are ONE word-shaped token each, so `isProse`
+   * returns false for both and the scan above reports them as clean. They are
+   * also the price suffix and the discount badge — the most claim-bearing copy
+   * on the card, and "save 30%" was outright false in all four markets.
+   *
+   * Measured, against the component as it shipped: the widened prose scan found
+   * four of the six hardcoded strings. These are the other two.
+   */
+  it("catches one-word chrome the prose heuristic is structurally blind to", () => {
+    const fixture = (literal: string) =>
+      `export const C = () => (\n  <span className="text-lg font-normal">${literal}</span>\n);\n`;
+    for (const literal of ["/month", "save 30%", "/mois", "/maand", "Pro"]) {
+      expect(isProse(literal), `${literal} should NOT be prose — that is the gap`).toBe(false);
+      expect(
+        paintedText("fixture.tsx", fixture(literal)).map((h) => h.text),
+        literal,
+      ).toEqual([literal]);
+    }
+  });
+
+  /**
+   * …and it must NOT fire on the punctuation and glyphs a localised card
+   * legitimately paints between two dictionary strings, or the rule is
+   * unaffordable and the next person turns it off.
+   */
+  it("ignores separators and glyphs, which carry no letter to translate", () => {
+    const fixture =
+      `export const C = () => (\n` +
+      `  <p className="mb-3">\n` +
+      `    <span aria-hidden>⚡</span>\n` +
+      `    {billed} — <span className="font-semibold">{saving}</span>\n` +
+      `    <span className="mt-0.5">✓</span> {bullet}\n` +
+      `  </p>\n` +
+      `);\n`;
+    expect(paintedText("fixture.tsx", fixture)).toEqual([]);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// THE SCOPE ITSELF (a scan is only as good as the list of files it opens)
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("the scan's scope is discovered from the page, not remembered", () => {
+  /**
+   * The defect this widening exists for: a component on the pricing page that
+   * the hand-written list did not name. Pinned BY NAME here — not because the
+   * list is hand-written again, but because an anti-vacuity check that only
+   * counts entries passes on a discovery that collapsed to the two seeds.
+   */
+  it("reaches the components the pricing page actually mounts", () => {
+    expect(PROSE_SCANNED).toContain("src/components/pro-price-card.tsx");
+    expect(PROSE_SCANNED).toContain("src/components/currency-switcher.tsx");
+    expect(PROSE_SCANNED).toContain("src/lib/pricing-cards.ts");
+    expect(PROSE_SCANNED).toContain("src/components/marketing/ticket-stubs.tsx");
+    expect(PROSE_SCANNED.length, "the discovery collapsed to its seeds").toBeGreaterThan(4);
+  });
+
+  /**
+   * A specifier that resolves to nothing is a FAULT, not a skip. Rename a
+   * component and the naive version of this discovery quietly scans one file
+   * fewer, which is the same failure as the hand-written list wearing a
+   * different hat.
+   */
+  it("resolves every component import it found, or says which it could not", () => {
+    const unresolved = PRICING_PAGE_SPECIFIERS.filter((s) => resolveComponent(s) === null);
+    expect(unresolved, "a component import resolving to no file — the scan silently shrank").toEqual(
+      [],
+    );
+    expect(PRICING_PAGE_SPECIFIERS.length, "no component imports found at all").toBeGreaterThan(2);
+    for (const file of PROSE_SCANNED) expect(existsSync(file), file).toBe(true);
+  });
+
+  /**
+   * ── THE POINT OF THE WIDENING ────────────────────────────────────────────
+   *
+   * A component added to the page tomorrow is in scope tomorrow. Proved against
+   * a FIXTURE, so it is a property of the discovery rather than of today's page:
+   * an unknown component is picked up, `@/lib` is not, and a type-only import
+   * (erased at build, renders nothing, can carry no copy) is not.
+   */
+  it("picks up a component the day its import line lands", () => {
+    const fixture = [
+      `import type { Metadata } from "next";`,
+      `import { MarketingShell } from "@/components/marketing/marketing-shell";`,
+      `import { SomethingNobodyHasWrittenYet } from "@/components/brand-new-card";`,
+      `import { formatMinor } from "@/lib/currency";`,
+      `import type { Currency } from "@/components/erased-type-only";`,
+    ].join("\n");
+    expect(componentSpecifiers("fixture.tsx", fixture)).toEqual([
+      "@/components/brand-new-card",
+      "@/components/marketing/marketing-shell",
+    ]);
   });
 });
 

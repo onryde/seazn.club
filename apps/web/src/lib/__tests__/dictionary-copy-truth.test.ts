@@ -1034,8 +1034,14 @@ describe.skipIf(!HAS_DB)("the four-locale dictionaries say what the resolver enf
     // hardcoded English arrays and into the four dictionaries. They are the
     // cards' claims about what each plan grants, and until this wave they were
     // not dictionary copy at all — /es/pricing rendered them in English.
+    // 340 -> 356: the Pro card's own price chrome (`pricing.pro.per`,
+    // `annualBilled`, `annualSaving`, `monthlyNote`), hardcoded English inside
+    // `components/pro-price-card.tsx` until 2026-09-05 and therefore invisible
+    // to every rule here — a key-shaped guard cannot classify a string that has
+    // no key. `annualSaving` is the one that mattered: it read "save 30%" while
+    // the FAQ two screens below already carried the corrected floor.
     // A count, not a floor, so a DELETED pin reds too.
-    expect(APPROVED_DICTIONARY_COPY.length * DICTIONARY_LOCALES.length).toBe(340);
+    expect(APPROVED_DICTIONARY_COPY.length * DICTIONARY_LOCALES.length).toBe(356);
     // Every entry must say what it claims and what decides it — a pin with no
     // `why` is a snapshot, and a snapshot teaches the next editor to re-record
     // rather than to re-check.
@@ -1092,6 +1098,22 @@ describe.skipIf(!HAS_DB)("the four-locale dictionaries say what the resolver enf
       match: /^pricing\.(community|pass|pro)\.f\d+$/,
       pinned: true,
       why: "the Community / Event Pass / Pro card bullets. Each names the plan_entitlements rows its card claims; the caps and fee rates inside them are interpolated live by cardBullets in lib/pricing-cards.ts, and the English rendering is judged against the matrix by CARD_SURFACES in lib/__tests__/pricing-cards.test.ts. Pinned here for the WORDS, in four locales side by side",
+    },
+    {
+      // W2 (entitlements v18), 2026-09-05: the Pro card's PRICE CHROME. It was
+      // hardcoded English in `components/pro-price-card.tsx` on every locale
+      // until this task, so it had no keys and this rule could not see it —
+      // the same blind spot the card bullets sat in one commit earlier, and
+      // the reason "every pricing key is a decision" is only ever as wide as
+      // the set of strings that HAVE keys.
+      match: /^pricing\.pro\.(per|annualBilled|annualSaving|monthlyNote)$/,
+      pinned: true,
+      why: "the Pro card's price chrome: the /month suffix, the yearly total line, the annual saving and the monthly-billing note. Each one quotes or qualifies money, the figures inside them are interpolated live from stripe-plans.json, and the saving is the claim that stood on this card as a flat 'save 30%' — false in all four markets and contradicting the FAQ on the same page. Held against the seed's own ladder by the annual-saving suite below",
+    },
+    {
+      match: /^pricing\.pro\.annualToggle$/,
+      pinned: false,
+      why: "the label on the Pro card's annual/monthly switch. It names the control; what either option costs is stated by pricing.pro.per, annualBilled and annualSaving, all three pinned",
     },
     {
       match: /^pricing\.faq\./,
@@ -3750,6 +3772,14 @@ describe("the annual saving the copy promises is one the seed delivers", () => {
     // already print the real monthly and annual-per-month prices -- so it was
     // contradicting arithmetic on its own screen.
     ["ui", "billing.annualSaves"],
+    // THE THIRD SURFACE, 2026-09-05. The Pro pricing card said "save 30%" in
+    // hardcoded English, on every locale, while the FAQ two screens below it
+    // already carried the corrected claim -- the product contradicting itself
+    // on one page. It is in THIS list rather than in a rule of its own because
+    // one fact deserves one wording: the floor, the vocabulary and the
+    // percentage ban now judge all three surfaces together, so a re-cut moves
+    // them together or reds.
+    ["marketing", "pricing.pro.annualSaving"],
   ] as const;
   const ANNUAL_VALUES: LocalisedValue[] = ANNUAL_KEYS.flatMap(([file, key]) =>
     across(file, key),

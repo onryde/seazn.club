@@ -459,6 +459,12 @@
   "pricing.pro.f7": "Seguimiento de suspensiones y disciplina",
   "pricing.pro.f8": "Asignación automática de árbitros y valoraciones",
   "pricing.pro.f9": "Publicaciones de resultados redactadas automáticamente",
+  "pricing.pro.per": "/mes",
+  "pricing.pro.annualBilled": "{total} facturado al año",
+  "pricing.pro.annualSaving": "más de dos meses gratis",
+  "pricing.pro.monthlyNote": "Facturación mensual · cambia a anual cuando quieras",
+  "pricing.pro.annualToggle": "Facturación anual",
+  "pricing.currency.label": "Moneda",
   "home.stub.once": " pago único",
   "home.stub.perMonth": "/mes",
   "home.finale.compare": "Compara los planes en detalle →"

@@ -15,6 +15,18 @@ const LABELS: Record<Currency, string> = {
 export function CurrencySwitcher({
   current,
   /**
+   * The select's accessible name, localized by the calling page.
+   *
+   * It was the literal "Currency" until 2026-09-05 — visible at >= sm beside the
+   * switcher on /fr/pricing and /es/pricing, English on both, and invisible to
+   * every test in the repo. A REQUIRED prop rather than one defaulting to that
+   * literal: the two callers read it from different namespaces
+   * (`pricing.currency.label` on the marketing page, `settings.prefs.currency`
+   * in Settings), and a default would have been the English fallback that let
+   * this sit unnoticed.
+   */
+  label,
+  /**
    * `false` where the surface already prints its own "Currency" heading
    * (Settings → Preferences). The word still ships to assistive tech — it is
    * the select's only accessible name — it just stops appearing twice on
@@ -23,12 +35,13 @@ export function CurrencySwitcher({
   showLabel = true,
 }: {
   current: Currency;
+  label: string;
   showLabel?: boolean;
 }) {
   const router = useRouter();
   return (
     <label className="inline-flex items-center gap-2 text-sm text-slate-500">
-      <span className={showLabel ? "sr-only sm:not-sr-only" : "sr-only"}>Currency</span>
+      <span className={showLabel ? "sr-only sm:not-sr-only" : "sr-only"}>{label}</span>
       <select
         value={current}
         data-currency-switcher

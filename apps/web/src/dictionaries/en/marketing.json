@@ -459,6 +459,12 @@
   "pricing.pro.f7": "Suspensions & discipline tracking",
   "pricing.pro.f8": "Auto officials assignment & ratings",
   "pricing.pro.f9": "Auto-drafted result posts",
+  "pricing.pro.per": "/month",
+  "pricing.pro.annualBilled": "{total} billed yearly",
+  "pricing.pro.annualSaving": "more than two months free",
+  "pricing.pro.monthlyNote": "Billed monthly · switch to yearly any time",
+  "pricing.pro.annualToggle": "Annual billing",
+  "pricing.currency.label": "Currency",
   "home.stub.once": " once",
   "home.stub.perMonth": "/mo",
   "home.finale.compare": "Compare plans in detail →"

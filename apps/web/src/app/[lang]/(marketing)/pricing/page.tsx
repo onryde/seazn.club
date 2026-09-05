@@ -286,7 +286,7 @@ export default async function PricingPage({
             </h1>
             <p className="text-lg text-slate-600">{t(d, "pricing.subhead")}</p>
             <div className="mt-6 flex justify-center">
-              <CurrencySwitcher current={currency} />
+              <CurrencySwitcher current={currency} label={t(d, "pricing.currency.label")} />
             </div>
           </section>
 
@@ -454,10 +454,25 @@ export default async function PricingPage({
               <ProPriceCard
                 monthly={proMonthly}
                 annualPerMonth={formatMinor(Math.round(proPrice("annual", currency) / 12), currency)}
-                annualTotal={formatMinor(proPrice("annual", currency), currency)}
                 features={cardBullets(d, PRO_CARD_BULLETS, matrix)}
                 creditsLine={proCreditsLine ?? undefined}
-                ctaLabel={t(d, "pricing.plus.cta")}
+                // Every string the card paints, resolved HERE. The component
+                // carries no copy and no English fallback — see
+                // components/pro-price-card.tsx and the source scan in
+                // lib/__tests__/pricing-card-i18n.test.ts.
+                labels={{
+                  tier: t(d, "pricing.pro.name"),
+                  perMonth: t(d, "pricing.pro.per"),
+                  // The yearly TOTAL, in the visitor's currency, interpolated
+                  // rather than typed into four locale files.
+                  annualBilled: t(d, "pricing.pro.annualBilled", {
+                    total: formatMinor(proPrice("annual", currency), currency),
+                  }),
+                  annualSaving: t(d, "pricing.pro.annualSaving"),
+                  monthlyNote: t(d, "pricing.pro.monthlyNote"),
+                  annualToggle: t(d, "pricing.pro.annualToggle"),
+                  cta: t(d, "pricing.plus.cta"),
+                }}
               />
             </div>
 

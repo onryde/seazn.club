@@ -517,7 +517,13 @@ export default async function SettingsPage({
 
                   <div className="mt-5 border-t border-slate-100 pt-5">
                     <SubSection icon={Coins} label={t(dict, "settings.prefs.currency")} />
-                    {displayCurrency && <CurrencySwitcher current={displayCurrency} showLabel={false} />}
+                    {displayCurrency && (
+                      <CurrencySwitcher
+                        current={displayCurrency}
+                        label={t(dict, "settings.prefs.currency")}
+                        showLabel={false}
+                      />
+                    )}
                     <p className="mt-2 text-xs text-slate-500">
                       {t(dict, "settings.prefs.currencyHelp")}
                     </p>

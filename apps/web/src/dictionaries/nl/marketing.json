@@ -459,6 +459,12 @@
   "pricing.pro.f7": "Schorsingen & disciplineregistratie",
   "pricing.pro.f8": "Automatische toewijzing van officials & beoordelingen",
   "pricing.pro.f9": "Automatisch opgestelde wedstrijdverslagen",
+  "pricing.pro.per": "/maand",
+  "pricing.pro.annualBilled": "{total} per jaar gefactureerd",
+  "pricing.pro.annualSaving": "meer dan twee maanden gratis",
+  "pricing.pro.monthlyNote": "Maandelijkse facturering · stap altijd over op jaarlijks",
+  "pricing.pro.annualToggle": "Jaarlijkse facturering",
+  "pricing.currency.label": "Valuta",
   "home.stub.once": " eenmalig",
   "home.stub.perMonth": "/mnd",
   "home.finale.compare": "Vergelijk de abonnementen in detail →"
