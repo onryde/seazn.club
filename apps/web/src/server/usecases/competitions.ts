@@ -23,10 +23,10 @@ import { ONBOARDING_EARN, REFERRAL_WELCOME_EARN, tryEarnGrant } from "@/lib/cred
 import { invalidateSlugCache } from "@/server/slug-resolve";
 import {
   assertCompetitionNotFrozen,
+  countActiveCompetitions,
+  countPublicDashboards,
   countsTowardPublicQuota,
   frozenCompetitionIds,
-  liveUnpassedCompetition,
-  PUBLICLY_READABLE_VISIBILITIES,
 } from "./entitlement-freeze";
 
 export interface CompetitionRow {
@@ -123,12 +123,7 @@ export async function listCompetitions(
 // this is the SAME pre-transaction check createCompetition itself runs below
 // — reused, not restated, so the two can never disagree about the boundary.
 export async function assertActiveQuota(auth: AuthCtx): Promise<void> {
-  const count = await withTenant(auth.orgId, async (tx) => {
-    const [{ n }] = await tx<{ n: number }[]>`
-      select count(*)::int as n from competitions c
-      where ${liveUnpassedCompetition(tx)}`;
-    return n;
-  });
+  const count = await countActiveCompetitions(auth.orgId);
   const { ok } = await withinLimit(auth.orgId, "competitions.max_active", count + 1);
   if (!ok) throw new PaymentRequiredError("competitions.max_active");
 }
@@ -165,14 +160,7 @@ export async function withinPublicQuota(
   auth: AuthCtx,
   excludeId?: string,
 ): Promise<{ ok: boolean; limit: number | null }> {
-  const count = await withTenant(auth.orgId, async (tx) => {
-    const [{ n }] = await tx<{ n: number }[]>`
-      select count(*)::int as n from competitions c
-      where c.visibility in ${tx([...PUBLICLY_READABLE_VISIBILITIES])}
-        ${excludeId ? tx`and c.id <> ${excludeId}` : tx``}
-        and ${liveUnpassedCompetition(tx)}`;
-    return n;
-  });
+  const count = await countPublicDashboards(auth.orgId, excludeId);
   return withinLimit(auth.orgId, "dashboard.public.max", count + 1);
 }
 

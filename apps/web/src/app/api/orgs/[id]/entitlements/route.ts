@@ -1,6 +1,9 @@
 import { sql } from "@/lib/db";
 import { requireOrgRole } from "@/lib/auth";
-import { PUBLICLY_READABLE_VISIBILITIES } from "@/server/usecases/entitlement-freeze";
+import {
+  countActiveCompetitions,
+  countPublicDashboards,
+} from "@/server/usecases/entitlement-freeze";
 import { getLimit, hasFeature } from "@/lib/entitlements";
 import { handler } from "@/lib/http";
 import { ORG_ROLES } from "@/lib/types";
@@ -49,20 +52,18 @@ export async function GET(
       order by feature_key`;
 
     // v2 usage (PROMPT-13): what the UI compares against the v2 quota keys.
-    // Statuses counted mirror competitions.max_active enforcement, and the
-    // visibilities mirror dashboard.public.max's — `unlisted` consumes a slot
-    // because it serves the same dashboard to anyone with the link (owner
-    // ruling 2026-09-05). A meter that read 0/2 while the create path degraded
-    // is a support ticket, not a rounding difference.
-    const [v2] = await sql<
-      { competitions_active_count: number; dashboards_public_count: number }[]
-    >`
-      select
-        count(*) filter (where status in ('draft','published','live'))::int
-          as competitions_active_count,
-        count(*) filter (where visibility in ${sql([...PUBLICLY_READABLE_VISIBILITIES])})::int
-          as dashboards_public_count
-      from competitions where org_id = ${orgId}`;
+    //
+    // NOT this route's own SQL. Both numbers come from the functions
+    // enforcement itself counts with (`server/usecases/entitlement-freeze.ts`),
+    // because a meter and a cap are two faces of ONE fact and this route had
+    // the other implementation of it. Its copy carried neither the status
+    // filter nor the Event-Pass exclusion, so it metered HISTORY and it
+    // metered competitions a pass had bought out: a Free org with 2 live
+    // public competitions and 3 archived seasons read 5/2 in red while the
+    // create path was still publishing for it. See `quotaCount` for the pair
+    // of divergences and why an agreeing second copy is still the defect.
+    const competitionsActiveCount = await countActiveCompetitions(orgId);
+    const dashboardsPublicCount = await countPublicDashboards(orgId);
 
     // Org-level questions, so no competition id: an Event Pass lifts a single
     // competition, not the org, and the 2-arg call is what asks that question.
@@ -96,8 +97,8 @@ export async function GET(
       trial_end: sub?.trial_end ?? null,
       current_period_end: sub?.current_period_end ?? null,
       usage: {
-        competitions_active_count: v2?.competitions_active_count ?? 0,
-        dashboards_public_count: v2?.dashboards_public_count ?? 0,
+        competitions_active_count: competitionsActiveCount,
+        dashboards_public_count: dashboardsPublicCount,
       },
       entitlements,
     };

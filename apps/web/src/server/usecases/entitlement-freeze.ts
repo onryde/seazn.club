@@ -91,6 +91,65 @@ export function liveUnpassedCompetition(t: Tx) {
            and pass_applies(c.status, c.ends_on, (now() at time zone 'utc')::date))`;
 }
 
+/**
+ * THE COUNT every `dashboard.public.max` and `competitions.max_active` question
+ * is answered from — the enforcement path and both usage meters alike.
+ *
+ * It exists because "how many is the org holding" had two implementations that
+ * happened to agree about nothing. Enforcement asked
+ * `liveUnpassedCompetition`; the two meters
+ * (`app/api/orgs/[id]/entitlements/route.ts`,
+ * `app/o/[orgSlug]/settings/billing/page.tsx`) asked their own SQL, and the
+ * answers diverged in both directions a customer can see:
+ *
+ *  - a Free org (cap 2) with 2 live public competitions and 3 archived public
+ *    seasons — enforcement counted 2 and published a third dashboard, while
+ *    the billing page rendered 5/2 in red;
+ *  - a Free org with a competition an Event Pass had bought out — enforcement
+ *    counted 0 and left the whole cap open, while the meter read the org full.
+ *
+ * Two implementations that happen to agree today are the defect, not the
+ * symptom, so there is one and the meters call it. `publiclyReadable` is the
+ * only axis they differ on; `excludeId` is the PATCH path's "don't count the
+ * row being changed", which is what keeps a public -> unlisted lateral move
+ * possible.
+ *
+ * NOT the same shape as `frozenCompetitionIds` below: that one already holds a
+ * transaction when it needs the number, so it calls `quotaCount` directly
+ * rather than opening a second one (see its header for why nesting is fatal).
+ */
+async function quotaCount(
+  t: Tx,
+  scope: { publiclyReadable: boolean; excludeId?: string },
+): Promise<number> {
+  const [row] = await t<{ n: number }[]>`
+    select count(*)::int as n from competitions c
+    where ${liveUnpassedCompetition(t)}
+      ${
+        scope.publiclyReadable
+          ? t`and c.visibility in ${t([...PUBLICLY_READABLE_VISIBILITIES])}`
+          : t``
+      }
+      ${scope.excludeId ? t`and c.id <> ${scope.excludeId}` : t``}`;
+  return row?.n ?? 0;
+}
+
+/** How many competitions count against `competitions.max_active` right now. */
+export async function countActiveCompetitions(orgId: string): Promise<number> {
+  return withTenant(orgId, (t) => quotaCount(t, { publiclyReadable: false }));
+}
+
+/**
+ * How many publicly-readable dashboards count against `dashboard.public.max`
+ * right now. `excludeId` omits one competition — the row a PATCH is changing.
+ */
+export async function countPublicDashboards(
+  orgId: string,
+  excludeId?: string,
+): Promise<number> {
+  return withTenant(orgId, (t) => quotaCount(t, { publiclyReadable: true, excludeId }));
+}
+
 export interface FreezeCandidate {
   id: string;
   lastActiveAt: string | Date;
@@ -154,9 +213,10 @@ export async function frozenCompetitionIds(orgId: string): Promise<Set<string>> 
   const limit = await getLimit(orgId, "competitions.max_active");
   if (limit === null) return new Set();
   const run = async (t: Tx): Promise<Set<string>> => {
-    const [{ n }] = await t<{ n: number }[]>`
-      select count(*)::int as n from competitions c
-      where ${liveUnpassedCompetition(t)}`;
+    // The shared count, inside the transaction this already holds — see
+    // `quotaCount`. Opening its own would be the nesting this header warns
+    // about two paragraphs up.
+    const n = await quotaCount(t, { publiclyReadable: false });
     if (n <= limit) return new Set();
     return selectFrozen(await loadCandidates(t), limit);
   };

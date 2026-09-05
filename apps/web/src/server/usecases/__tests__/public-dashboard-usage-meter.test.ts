@@ -58,15 +58,17 @@ async function seedOrg(): Promise<AuthCtx> {
 const make = (auth: AuthCtx, name: string, visibility: "public" | "unlisted" | "private") =>
   createCompetition(auth, { ends_on: "2030-12-31", name, visibility, branding: {} });
 
-async function usage(orgId: string): Promise<{ dashboards_public_count: number }> {
+interface Usage {
+  dashboards_public_count: number;
+  competitions_active_count: number;
+}
+
+async function usage(orgId: string): Promise<Usage> {
   await invalidateOrgEntitlements(orgId);
   const res = await entitlementsGET(new Request("http://t/x"), {
     params: Promise.resolve({ id: orgId }),
   });
-  const body = (await res.json()) as {
-    ok: boolean;
-    data: { usage: { dashboards_public_count: number } };
-  };
+  const body = (await res.json()) as { ok: boolean; data: { usage: Usage } };
   expect(body.ok).toBe(true);
   return body.data.usage;
 }
@@ -94,6 +96,57 @@ describe.skipIf(!HAS_DB)("the public-dashboard meter agrees with the cap it repo
     // …and enforcement agrees, on the same org, in the same test.
     const next = await make(auth, "One over the cap", "public");
     expect(next.visibility).toBe("private");
+  });
+
+  it("stops counting a dashboard once the season is archived, on BOTH sides", async () => {
+    // The first of the two divergences. Enforcement filters on the LIVE
+    // statuses (`liveUnpassedCompetition`), so a club three seasons in counts
+    // ZERO and is allowed to publish. The meter had no status clause at all,
+    // so it metered HISTORY: the same org read `cap`/`cap` in red while the
+    // create path was still happily publishing for it. Nothing in the product
+    // told the organiser which of the two screens to believe.
+    const auth = await seedOrg();
+    const cap = await getLimit(auth.orgId, "dashboard.public.max");
+    expect(cap, "a finite cap is the premise of this test").not.toBeNull();
+
+    for (let i = 1; i <= cap!; i += 1) await make(auth, `Season ${i}`, "public");
+    // The premise: while they are live they DO hold their slots.
+    expect((await usage(auth.orgId)).dashboards_public_count).toBe(cap);
+
+    await sql`update competitions set status = 'archived' where org_id = ${auth.orgId}`;
+
+    // The number is derived from the matrix, not typed: an archived season
+    // holds no slot, so every one of the org's `cap` slots is free again.
+    expect((await usage(auth.orgId)).dashboards_public_count).toBe(0);
+    // …and that is enforcement's own answer, on the same org, in the same
+    // test — the whole cap is available, every create publishes.
+    for (let i = 1; i <= cap!; i += 1) {
+      const next = await make(auth, `This season ${i}`, "public");
+      expect(next.visibility, `create ${i} of ${cap} after archiving`).toBe("public");
+    }
+  });
+
+  it("stops counting a dashboard an Event Pass bought out, on BOTH sides", async () => {
+    // The second divergence. A pass buys its competition out of the quota for
+    // as long as the pass APPLIES (v3/07 §3, `pass_applies`) — enforcement
+    // stops counting it; the meter counted it anyway and read the org full.
+    const auth = await seedOrg();
+    const cap = await getLimit(auth.orgId, "dashboard.public.max");
+    expect(cap).not.toBeNull();
+
+    const passed = await make(auth, "Passed event", "public");
+    expect((await usage(auth.orgId)).dashboards_public_count).toBe(1);
+
+    await sql`insert into competition_passes (competition_id, org_id, pass_key)
+              values (${passed.id}, ${auth.orgId}, 'event_pass')`;
+
+    expect((await usage(auth.orgId)).dashboards_public_count).toBe(0);
+    // So the org still holds its WHOLE cap, and enforcement proves it by
+    // publishing all of it.
+    for (let i = 1; i <= cap!; i += 1) {
+      const next = await make(auth, `Still room ${i}`, "public");
+      expect(next.visibility, `create ${i} of ${cap} beside a passed event`).toBe("public");
+    }
   });
 
   it("does not count a private competition", async () => {

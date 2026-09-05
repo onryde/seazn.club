@@ -22,7 +22,10 @@ import {
 } from "@/server/usecases/billing-manage";
 import { InvoiceList } from "@/components/billing-invoice-list";
 import { getCreditsTab } from "@/server/usecases/credits-tab";
-import { PUBLICLY_READABLE_VISIBILITIES } from "@/server/usecases/entitlement-freeze";
+import {
+  countActiveCompetitions,
+  countPublicDashboards,
+} from "@/server/usecases/entitlement-freeze";
 import { type Subscription } from "@/lib/types";
 import { getLimit, isPaidPlan, isPlanLapsed, orgPlanKey } from "@/lib/entitlements";
 import { TrackOnMount } from "@/components/analytics-track-mount";
@@ -167,32 +170,22 @@ export default async function BillingPage({
   // v2 usage vs plan quotas (doc 10 §1) — v1 seasons/tournaments died at the
   // PROMPT-15 cutover; overrides are honoured via getLimit.
   //
-  // The active-competition count MUST exclude Event-Passed competitions, exactly
-  // as the write-side quota does (server/usecases/competitions.ts assertActiveQuota,
-  // v3/07 §3: a pass buys its competition out of the quota). Without the same
-  // `not exists` clause this meter read 6/5 — over quota, in red — for an org
-  // that enforcement was still happily letting create another competition.
-  //
-  // The public-dashboard count carries the same obligation on its own axis:
-  // `unlisted` consumes a `dashboard.public.max` slot because it serves the
-  // same dashboard to anyone holding the link (owner ruling 2026-09-05, see
-  // PUBLICLY_READABLE_VISIBILITIES). Counting only `public` here would show an
-  // organiser 0/2 in the moment the create path refused to publish for them.
-  const [counts] = await sql<
-    { competitions_active: number; dashboards_public: number; members: number }[]
-  >`
-    select
-      (select count(*)::int from competitions c
-        where c.org_id = ${orgId} and c.status in ('draft','published','live')
-          and not exists (
-            select 1 from competition_passes cp where cp.competition_id = c.id))
-        as competitions_active,
-      (select count(*)::int from competitions
-        where org_id = ${orgId}
-          and visibility in ${sql([...PUBLICLY_READABLE_VISIBILITIES])})
-        as dashboards_public,
-      (select count(*)::int from org_members m
-        where m.org_id = ${orgId} and m.role != 'scorer') as members`;
+  // Both competition counts come from the functions ENFORCEMENT counts with
+  // (server/usecases/entitlement-freeze.ts), not from this page's own SQL. A
+  // meter and a cap are two faces of one fact, and this page held the other
+  // implementation of it — which is how it once read 6/5 in red for an org the
+  // write path was still letting create another competition. That symptom was
+  // patched by copying the pass clause in; the copy then drifted again on its
+  // own terms (it asked whether a pass ROW EXISTS, which V343 retired because a
+  // lapsed pass kept its exemption for ever) while the public-dashboard count
+  // beside it never grew a status or pass clause at all and went on metering
+  // archived seasons. Agreeing copies are the defect, so there are none: see
+  // `quotaCount`.
+  const competitionsActive = await countActiveCompetitions(orgId);
+  const dashboardsPublic = await countPublicDashboards(orgId);
+  const [counts] = await sql<{ members: number }[]>`
+    select (select count(*)::int from org_members m
+      where m.org_id = ${orgId} and m.role != 'scorer') as members`;
   const [competitionsLimit, dashboardsLimit, membersLimit] = await Promise.all([
     getLimit(orgId, "competitions.max_active"),
     getLimit(orgId, "dashboard.public.max"),
@@ -554,12 +547,12 @@ export default async function BillingPage({
           <div className="space-y-3">
             <UsageRow
               label={t(dict, "billing.usage.competitions")}
-              current={counts?.competitions_active ?? 0}
+              current={competitionsActive}
               limit={competitionsLimit}
             />
             <UsageRow
               label={t(dict, "billing.usage.dashboards")}
-              current={counts?.dashboards_public ?? 0}
+              current={dashboardsPublic}
               limit={dashboardsLimit}
             />
             <UsageRow
