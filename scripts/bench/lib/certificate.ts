@@ -55,15 +55,23 @@
 // imported as a value and called with the same `EncodedConstraints` the
 // product's own board was judged against.
 //
-// Two consequences follow, and both are guards below rather than assumptions:
+// Three consequences follow, and all three are guards below rather than
+// assumptions:
 //
-//   * `checkBoard` SKIPS unplaced fixtures (checker.ts, convention 2). A
-//     history board whose fixtures carry no `start` therefore comes back
-//     `clean` having measured nothing, and the certificate would report
-//     FEASIBLE on no evidence — the false-clean class design §1.4 exists to
-//     prevent. Every historical row carries a REQUIRED `startsAt`
-//     (`pack-schema.ts:844`), so such a board is a rendering fault, and it
-//     throws.
+//   * `checkBoard` SKIPS unplaced fixtures (checker.ts, convention 2), and a
+//     skipped fixture is measured by no rule at all. So a history board that
+//     is absent, partly rendered, or carrying a NaN `start` comes back `clean`
+//     having examined less than the whole timetable — or none of it — and the
+//     certificate would report FEASIBLE on that. Every historical row carries
+//     a REQUIRED `startsAt` (`pack-schema.ts:844`), so every one of those is a
+//     rendering fault rather than a fact about the pack, and each throws.
+//     The coverage guard below is a per-ROW comparison, not "is anything
+//     placed": one of three rendered satisfies the latter, and that is the
+//     false clean that needs no malformed data to happen.
+//   * The board must be the one this encoding describes. `checkBoard`
+//     attributes every finding to `constraints.divisionRef` whatever board
+//     produced it, so a mispaired board arrives as a confident, fully-formed,
+//     wrong report that nothing downstream can notice.
 //   * `CheckerReport.clean` is the checker's OWN verdict and the single
 //     authority on it (board.ts). This module reads that field and never
 //     re-derives it from `findings.length`, exactly as `judgeDivision` does.
@@ -172,9 +180,48 @@ export function certify(input: {
       `certificate: ${ref} declares ${declared.length} historicalAssignment row(s) but no historyBoard was rendered — a bench wiring fault, not a pack or product one`,
     );
   }
-  if (!board.fixtures.some((f) => typeof f.start === "number")) {
+  // The board and the encoding must describe the SAME division. The rows above
+  // are filtered on `constraints.divisionRef`, so checking one side and taking
+  // the other on trust would read as a considered decision rather than an
+  // omission — and nothing downstream can catch it: `checkBoard` attributes
+  // every finding to `constraints.divisionRef` whatever board produced it, so
+  // a mispairing arrives as a confident, fully-formed, wrong report.
+  if (board.divisionRef !== ref) {
     throw new Error(
-      `certificate: ${ref} declares ${declared.length} historicalAssignment row(s) but the rendered historyBoard carries no placed fixture — checkBoard skips unplaced fixtures, so certifying it would report a clean history having measured nothing`,
+      `certificate: the rendered historyBoard is for division ${board.divisionRef} but the encoding is for ${ref} — certifying one division's timetable against another's constraints is a bench wiring fault, not a pack or product one`,
+    );
+  }
+
+  // `checkBoard`'s OWN placed predicate, restated rather than approximated.
+  //
+  // The `Number.isFinite` half is NOT redundant with the `typeof`, and the
+  // difference is the whole reason this is spelled out: `checker.ts:182` skips
+  // a NaN `start` as well as an absent one, because a NaN compares false
+  // against every bound and would make every containment rule pass vacuously
+  // for that fixture. A guard here that accepted a NaN as "rendered" would
+  // hand the checker a fixture it then silently drops, and the certificate
+  // would report a clean history it never examined. Any drift between these
+  // two predicates reopens exactly that hole, so they are kept identical on
+  // purpose — the difference would look deliberate to the next reader.
+  const placedKeys = new Set<string>();
+  for (const f of board.fixtures) {
+    if (typeof f.start !== "number" || !Number.isFinite(f.start)) continue;
+    if (f.extKey !== undefined) placedKeys.add(f.extKey);
+  }
+
+  // EVERY declared row must have a placed fixture, not merely one of them.
+  // A partial render needs no malformed data to produce a false clean: a board
+  // carrying one of three declared rows satisfies "is anything placed?", and
+  // the checker then reports clean having measured a third of the timetable.
+  // `extKey` (`BoardFixture`) and `fixtureExtKey` (`PackHistoricalAssignment`)
+  // are both already present, so this is a coverage comparison and not new
+  // plumbing.
+  const unrendered = declared
+    .filter((row) => !placedKeys.has(row.fixtureExtKey))
+    .map((row) => row.fixtureExtKey);
+  if (unrendered.length > 0) {
+    throw new Error(
+      `certificate: ${ref} declares ${declared.length} historicalAssignment row(s) but ${unrendered.length} of ${declared.length} have no placed fixture on the rendered historyBoard (${unrendered.join(", ")}) — checkBoard skips unplaced fixtures, so certifying this board would report a clean history having measured only part of it`,
     );
   }
 

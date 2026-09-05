@@ -168,6 +168,57 @@ describe("certify — the wiring guards", () => {
     };
     expect(() => certify(input({ historyBoard: unplaced }))).toThrow(/no placed fixture/i);
   });
+
+  // I1. `checkBoard` skips a fixture whose `start` is a NaN as well as one
+  // whose `start` is absent (`checker.ts:182` — `typeof` AND `Number.isFinite`,
+  // because a NaN compares false against every bound and would make every
+  // containment rule pass vacuously). A weaker predicate here lets that
+  // fixture count as rendered, the checker then skips it, and the certificate
+  // reports a clean history it never examined.
+  //
+  // Reds on its own under an I1-only regression: with `Number.isFinite`
+  // dropped, `fx-0` counts as placed, coverage is satisfied, and this
+  // certifies FEASIBLE instead of throwing.
+  it("counts a NaN start as UNPLACED, exactly as checkBoard does", () => {
+    const b = cleanBoard();
+    const naN: Board = {
+      ...b,
+      fixtures: b.fixtures.map((f, i) =>
+        i === 0 ? { ...f, start: Number.NaN, end: Number.NaN } : f,
+      ),
+    };
+    // `r1-a` is `fx-0`'s extKey — the row the checker would silently skip.
+    expect(() => certify(input({ historyBoard: naN }))).toThrow(/r1-a/);
+  });
+
+  // I2. The rows are filtered on `constraints.divisionRef`; taking the BOARD's
+  // on trust in the same function would read as a decision rather than an
+  // omission. Neither `checkBoard` nor this module can otherwise notice the
+  // mispairing — every finding is attributed to `constraints.divisionRef`
+  // regardless of which board produced it.
+  it("refuses a history board rendered for ANOTHER division", () => {
+    const foreign: Board = { ...cleanBoard(), divisionRef: "d-somewhere-else" };
+    const run = () => certify(input({ historyBoard: foreign }));
+    expect(run).toThrow(/d-somewhere-else/);
+    expect(run).toThrow(new RegExp(DIVISION_REF));
+  });
+
+  // I3. The sharpest of the three, because it needs no malformed data — just
+  // an incomplete render. A board carrying ONE of three declared rows passes
+  // any "is there at least one placed fixture" test, and the checker then
+  // reports clean having measured a third of the timetable.
+  //
+  // Reds on its own under an I3-only regression (coverage weakened back to
+  // `some`): `fx-0` is placed, so nothing throws and this certifies FEASIBLE.
+  it("throws when the render is PARTIAL — one of three declared rows placed", () => {
+    const b = cleanBoard();
+    const partial: Board = { ...b, fixtures: [b.fixtures[0]] };
+    const run = () => certify(input({ historyBoard: partial }));
+    expect(run).toThrow(/r1-b/);
+    expect(run).toThrow(/r2-a/);
+    // …and names how many of how many, so the reader is not left counting.
+    expect(run).toThrow(/2 of 3/);
+  });
 });
 
 describe("certify — branch 2, PACK_AUTHORING_BUG", () => {
