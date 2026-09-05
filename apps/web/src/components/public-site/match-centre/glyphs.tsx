@@ -3,6 +3,24 @@
 // on `CricketInningsView.overs[].glyphs` / `CricketView.live.thisOver`):
 // "1","4","W","wd","nb+2","·" — this component never re-derives what
 // happened on a ball, only how it LOOKS.
+//
+// Task 8 (spectator dictionary coverage) — `GLYPH_KINDS` is the semantic
+// CATEGORY set `classesFor` below distinguishes, not the literal glyph
+// strings (those are unbounded: "nb+2", "wd+1", any run count). It is the
+// dictionary coverage test's dynamic family for `matchCentre.ball.<kind>` —
+// exported here (rather than hand-copied into the test) so the two can never
+// drift apart. Order mirrors `classesFor`'s own branches.
+export const GLYPH_KINDS = [
+  "four",
+  "six",
+  "wicket",
+  "dot",
+  "wide",
+  "noball",
+  "legbye",
+  "bye",
+  "run",
+] as const;
 const BASE =
   "inline-flex h-[26px] w-[26px] shrink-0 items-center justify-center rounded-full text-[11px] font-bold tabular-nums";
 
