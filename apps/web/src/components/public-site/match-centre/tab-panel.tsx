@@ -1,12 +1,14 @@
-// Spectator surface W1, Task 13 — the shell every tab panel's ROOT is.
+// Spectator surface W1, Task 13 — the shell every tab panel's root uses.
 //
-// It exists so the three attributes that make a panel a panel cannot drift
-// apart across four files: `role="tabpanel"` announces it, `id` is what the
-// rail's `aria-controls` points AT, and `aria-labelledby` points BACK at the
-// rail's tab. A panel carrying only a `data-testid` is not a tab panel at all,
-// and the relationship is unverifiable from either side alone — so both sides
-// have to name it, and here that naming is derived from one `id` argument
-// rather than typed out four times.
+// IT DELIBERATELY CARRIES NO `role="tabpanel"`, NO `id` AND NO
+// `aria-labelledby`. `MatchCentre` wraps whichever panel is active in ONE
+// element that owns all three (plus `data-testid="mc-tab-panel-<id>"`), so a
+// panel that also declared them would nest two tabpanels inside each other —
+// two elements claiming the same role, and an `id` that appears twice in the
+// document the moment anything renders a second panel.
+//
+// What is left here is worth keeping anyway: one place that names each panel's
+// own testid from its tab id, so the five roots cannot drift apart.
 import type { ReactNode } from "react";
 import type { MatchCentreTabIdT } from "@/server/public-site/match-centre-schema";
 
@@ -17,16 +19,10 @@ export function TabPanel({
 }: {
   id: MatchCentreTabIdT;
   className?: string;
-  children: ReactNode;
+  children?: ReactNode;
 }): ReactNode {
   return (
-    <div
-      role="tabpanel"
-      id={`mc-tab-panel-${id}`}
-      aria-labelledby={`mc-tab-${id}`}
-      data-testid={`mc-tab-panel-${id}`}
-      className={className}
-    >
+    <div data-testid={`mc-${id}`} className={className}>
       {children}
     </div>
   );

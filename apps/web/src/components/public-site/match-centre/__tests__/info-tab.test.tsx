@@ -64,7 +64,7 @@ beforeAll(() => {
 describe("InfoTab", () => {
   it("EMPTY: zero rows renders the panel container and the links, no row grid", () => {
     const html = render(NO_ROWS);
-    expect(html).toContain('data-testid="mc-tab-panel-info"');
+    expect(html).toContain('data-testid="mc-info"');
     expect(html).not.toContain('data-testid="mc-info-0"');
     // The links are NOT rows and must survive an empty row list.
     expect(html).toContain('data-testid="mc-info-division"');
@@ -72,11 +72,17 @@ describe("InfoTab", () => {
     expect(render(FULL)).toContain('data-testid="mc-info-0"'); // positive pair
   });
 
-  it("the root IS the tab panel — role, id and the label the rail points at", () => {
+  it("the root does NOT claim the tabpanel role — MatchCentre's wrapper owns it", () => {
+    // `MatchCentre` wraps whichever panel is active in ONE element carrying
+    // `role="tabpanel"`, `id="mc-tab-panel-info"` and `aria-labelledby`. A
+    // panel that also declared them would nest two tabpanels and put the same
+    // id in the document twice — so this asserts their ABSENCE, and the panel
+    // keeps only its own testid.
     const html = render(FULL);
-    expect(html).toContain('role="tabpanel"');
-    expect(html).toContain('id="mc-tab-panel-info"');
-    expect(html).toContain('aria-labelledby="mc-tab-info"');
+    expect(html).toContain('data-testid="mc-info"');
+    expect(html).not.toContain('role="tabpanel"');
+    expect(html).not.toContain('id="mc-tab-panel-info"');
+    expect(html).not.toContain('aria-labelledby=');
   });
 
   it("rows render in the order GIVEN, with label AND value resolved", () => {

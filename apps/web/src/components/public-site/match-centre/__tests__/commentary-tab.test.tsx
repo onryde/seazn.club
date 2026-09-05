@@ -48,7 +48,7 @@ describe("CommentaryTab", () => {
   it("EMPTY: no overs renders the panel container, no over group and no button", () => {
     for (const d of [NO_OVERS, NO_CRICKET]) {
       const html = render(d);
-      expect(html).toContain('data-testid="mc-tab-panel-commentary"');
+      expect(html).toContain('data-testid="mc-commentary"');
       expect(html).not.toContain('data-testid="mc-over-');
       expect(html).not.toContain('data-testid="mc-load-earlier"');
     }
@@ -58,11 +58,17 @@ describe("CommentaryTab", () => {
     expect(populated).toContain('data-testid="mc-load-earlier"');
   });
 
-  it("the root IS the tab panel — role, id and the label the rail points at", () => {
+  it("the root does NOT claim the tabpanel role — MatchCentre's wrapper owns it", () => {
+    // `MatchCentre` wraps whichever panel is active in ONE element carrying
+    // `role="tabpanel"`, `id="mc-tab-panel-commentary"` and `aria-labelledby`. A
+    // panel that also declared them would nest two tabpanels and put the same
+    // id in the document twice — so this asserts their ABSENCE, and the panel
+    // keeps only its own testid.
     const html = render(SEVEN);
-    expect(html).toContain('role="tabpanel"');
-    expect(html).toContain('id="mc-tab-panel-commentary"');
-    expect(html).toContain('aria-labelledby="mc-tab-commentary"');
+    expect(html).toContain('data-testid="mc-commentary"');
+    expect(html).not.toContain('role="tabpanel"');
+    expect(html).not.toContain('id="mc-tab-panel-commentary"');
+    expect(html).not.toContain('aria-labelledby=');
   });
 
   it("over groups render NEWEST first", () => {

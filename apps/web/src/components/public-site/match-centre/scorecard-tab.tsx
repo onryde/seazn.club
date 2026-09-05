@@ -301,13 +301,10 @@ function Innings({
 export function ScorecardTab({ doc, dict }: ScorecardTabProps): ReactNode {
   const innings = doc.cricket?.innings ?? [];
   return (
-    <div
-      role="tabpanel"
-      id="mc-tab-panel-scorecard"
-      aria-labelledby="mc-tab-scorecard"
-      data-testid="mc-tab-panel-scorecard"
-      className="grid gap-2"
-    >
+    // The tabpanel role, id and label live on `MatchCentre`'s wrapper around
+    // whichever panel is active — declaring them here too would nest two
+    // tabpanels and duplicate an id. See `tab-panel.tsx`.
+    <div data-testid="mc-scorecard" className="grid gap-2">
       {innings.map((entry, index) => (
         <Innings
           key={entry.number}

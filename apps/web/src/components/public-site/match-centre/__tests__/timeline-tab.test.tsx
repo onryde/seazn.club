@@ -123,17 +123,23 @@ describe("TimelineTab", () => {
   it("EMPTY: a null or empty timeline renders the panel container and no rows", () => {
     for (const d of [EMPTY_LIST, NULL_LIST]) {
       const html = render(d);
-      expect(html).toContain('data-testid="mc-tab-panel-timeline"');
+      expect(html).toContain('data-testid="mc-timeline"');
       expect(html).not.toContain('data-testid="mc-timeline-line-');
     }
     expect(render(FULL)).toContain('data-testid="mc-timeline-line-'); // positive pair
   });
 
-  it("the root IS the tab panel — role, id and the label the rail points at", () => {
+  it("the root does NOT claim the tabpanel role — MatchCentre's wrapper owns it", () => {
+    // `MatchCentre` wraps whichever panel is active in ONE element carrying
+    // `role="tabpanel"`, `id="mc-tab-panel-timeline"` and `aria-labelledby`. A
+    // panel that also declared them would nest two tabpanels and put the same
+    // id in the document twice — so this asserts their ABSENCE, and the panel
+    // keeps only its own testid.
     const html = render(FULL);
-    expect(html).toContain('role="tabpanel"');
-    expect(html).toContain('id="mc-tab-panel-timeline"');
-    expect(html).toContain('aria-labelledby="mc-tab-timeline"');
+    expect(html).toContain('data-testid="mc-timeline"');
+    expect(html).not.toContain('role="tabpanel"');
+    expect(html).not.toContain('id="mc-tab-panel-timeline"');
+    expect(html).not.toContain('aria-labelledby=');
   });
 
   it("renders one row per line, in the DELIVERED order — never re-sorted", () => {

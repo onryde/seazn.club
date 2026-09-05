@@ -89,17 +89,23 @@ beforeAll(() => {
 describe("SetsTab", () => {
   it("EMPTY: doc.sets === null renders the panel container and no table", () => {
     const html = render(null);
-    expect(html).toContain('data-testid="mc-tab-panel-sets"');
+    expect(html).toContain('data-testid="mc-sets"');
     expect(html).not.toContain("<table");
     expect(html).not.toContain('data-testid="mc-sets-col-');
     expect(render(TENNIS)).toContain("<table"); // positive pair
   });
 
-  it("the root IS the tab panel — role, id and the label the rail points at", () => {
+  it("the root does NOT claim the tabpanel role — MatchCentre's wrapper owns it", () => {
+    // `MatchCentre` wraps whichever panel is active in ONE element carrying
+    // `role="tabpanel"`, `id="mc-tab-panel-sets"` and `aria-labelledby`. A
+    // panel that also declared them would nest two tabpanels and put the same
+    // id in the document twice — so this asserts their ABSENCE, and the panel
+    // keeps only its own testid.
     const html = render(TENNIS);
-    expect(html).toContain('role="tabpanel"');
-    expect(html).toContain('id="mc-tab-panel-sets"');
-    expect(html).toContain('aria-labelledby="mc-tab-sets"');
+    expect(html).toContain('data-testid="mc-sets"');
+    expect(html).not.toContain('role="tabpanel"');
+    expect(html).not.toContain('id="mc-tab-panel-sets"');
+    expect(html).not.toContain('aria-labelledby=');
   });
 
   it("one column per entry, one row per side, values from rows[sideIndex][i]", () => {

@@ -252,7 +252,7 @@ beforeAll(() => {
 describe("ScorecardTab", () => {
   it("EMPTY: no innings renders the panel container and nothing else", () => {
     const html = render(EMPTY);
-    expect(html).toContain('data-testid="mc-tab-panel-scorecard"');
+    expect(html).toContain('data-testid="mc-scorecard"');
     expect(html).not.toContain('data-testid="mc-innings-');
     expect(html).not.toContain('data-testid="mc-bat-');
     expect(html).not.toContain("<table");
@@ -262,22 +262,24 @@ describe("ScorecardTab", () => {
     expect(populated).toContain("<table");
   });
 
-  it("the root IS the tab panel — role, id and the label the rail points at", () => {
-    // The tab rail carries `id="mc-tab-scorecard"` + `aria-controls`; a panel
-    // that only has a testid is not announced as a tab panel at all, and the
-    // relationship is unverifiable from either side alone.
+  it("the root does NOT claim the tabpanel role — MatchCentre's wrapper owns it", () => {
+    // `MatchCentre` wraps whichever panel is active in ONE element carrying
+    // `role="tabpanel"`, `id="mc-tab-panel-scorecard"` and `aria-labelledby`. A
+    // panel that also declared them would nest two tabpanels and put the same
+    // id in the document twice — so this asserts their ABSENCE, and the panel
+    // keeps only its own testid.
     const html = render(DECIDED);
-    expect(html).toContain('role="tabpanel"');
-    expect(html).toContain('id="mc-tab-panel-scorecard"');
-    expect(html).toContain('aria-labelledby="mc-tab-scorecard"');
-    expect(html).toContain('data-testid="mc-tab-panel-scorecard"');
+    expect(html).toContain('data-testid="mc-scorecard"');
+    expect(html).not.toContain('role="tabpanel"');
+    expect(html).not.toContain('id="mc-tab-panel-scorecard"');
+    expect(html).not.toContain('aria-labelledby=');
   });
 
   it("a null cricket view renders the panel container, not a crash", () => {
     const html = renderToStaticMarkup(
       <ScorecardTab doc={{ ...EMPTY, cricket: null }} dict={dict} data={data} />,
     );
-    expect(html).toContain('data-testid="mc-tab-panel-scorecard"');
+    expect(html).toContain('data-testid="mc-scorecard"');
     expect(html).not.toContain('data-testid="mc-innings-');
   });
 
