@@ -287,7 +287,11 @@ describe("encodeConstraints", () => {
           hard: [
             // Two DIFFERENT scopes, so a reader that copied the first rule's
             // scope onto every rule differs visibly from the right answer.
-            { type: "not_before", time: "09:30", scope: { kind: "every_person" } },
+            // `every_entrant` where this was `every_person`: a person scope is
+            // no longer modelled for ANY rule type, so the old value would now
+            // land in `unmodelled[]` and take this test's real subject — the
+            // HH:mm conversion below — down with it.
+            { type: "not_before", time: "09:30", scope: { kind: "every_entrant" } },
             { type: "not_after", time: "21:15", scope: { kind: "pool", divisionId: "d-1", pool: "A" } },
           ],
         },
@@ -300,7 +304,7 @@ describe("encodeConstraints", () => {
     // the exact bug this asserts against, and both differ from their wrong
     // answer.
     expect(out.hard).toEqual([
-      { type: "not_before", minutesIntoDay: 570, scope: { kind: "every_person" } },
+      { type: "not_before", minutesIntoDay: 570, scope: { kind: "every_entrant" } },
       {
         type: "not_after",
         minutesIntoDay: 1275,
@@ -310,20 +314,21 @@ describe("encodeConstraints", () => {
     expect(out.unmodelled).toEqual([]);
   });
 
-  it("renames min_rest_minutes' rest_scope to restScope and carries its declared value", () => {
+  it("carries a UNIVERSAL scope verbatim — every_entrant is not collapsed to competition", () => {
     const out = encodeConstraints({
       divisionRef: "d-tiny",
       scheduleConfig: {
         constraints: {
           hard: [
-            // The MIDDLE member, so a hardcoded first-member default differs
-            // from the right answer.
-            {
-              type: "min_rest_minutes",
-              minutes: 45,
-              rest_scope: "feeder_to_dependent",
-              scope: { kind: "person", personKey: "p-3" },
-            },
+            // `constraints.ts:36-50`: `every_entrant` means "each entrant,
+            // counted separately", NOT "the whole run". `scopeCoversFixture`
+            // answers `true` for both and cannot tell them apart, so the
+            // distinction survives only if the encoding keeps the kind.
+            // Carried on `max_fixtures_per_day` because that is a rule this
+            // build still models; `min_rest_minutes` used to serve here and no
+            // longer reaches `hard[]` at all (ruling R23). The SCOPE is the
+            // subject of this test, not the rule it rides on.
+            { type: "max_fixtures_per_day", count: 20, scope: { kind: "every_entrant" } },
           ],
         },
       },
@@ -332,15 +337,7 @@ describe("encodeConstraints", () => {
       pins: [],
     });
     expect(out.hard).toEqual([
-      {
-        type: "min_rest_minutes",
-        minutes: 45,
-        restScope: "feeder_to_dependent",
-        // `rest_scope` and `scope` are DIFFERENT fields and neither stands in
-        // for the other: the first says which rest a rule measures, the second
-        // says whose fixtures it covers.
-        scope: { kind: "person", personKey: "p-3" },
-      },
+      { type: "max_fixtures_per_day", count: 20, scope: { kind: "every_entrant" } },
     ]);
   });
 
@@ -366,6 +363,9 @@ describe("encodeConstraints", () => {
     expect(out.unmodelled).toEqual([
       { type: "max_fixtures_per_day", reason: expect.stringContaining("not modelled") },
     ]);
+    // Names the OPERAND, not the scope. Without this the scope guard's own
+    // message would satisfy this test and the two would cover for each other.
+    expect(out.unmodelled[0]?.reason).toMatch(/count/i);
   });
 
   it("REPORTS a hard rule whose ConstraintScope is unreadable rather than applying it universally", () => {
@@ -393,27 +393,187 @@ describe("encodeConstraints", () => {
     expect(out.unmodelled[0]?.reason).toMatch(/scope/i);
   });
 
-  it("carries a UNIVERSAL scope verbatim — every_entrant is not collapsed to competition", () => {
-    const out = encodeConstraints({
+  it("carries a DIVISION-scoped rule's own divisionId, and refuses one without it", () => {
+    // `readScope`'s `division` arm had NO test: a `return undefined` mutant on
+    // it survived the whole suite, and the only `kind: "division"` anywhere in
+    // this file was inside `constraints.startWindows[].target`, an unrelated
+    // shape. Both directions here, so the arm and its own operand guard are
+    // killable one at a time.
+    const carried = encodeConstraints({
       divisionRef: "d-tiny",
       scheduleConfig: {
         constraints: {
           hard: [
-            // `constraints.ts:36-50`: `every_entrant` means "each entrant,
-            // counted separately", NOT "the whole run". `scopeCoversFixture`
-            // answers `true` for both and cannot tell them apart, so the
-            // distinction survives only if the encoding keeps the kind.
-            { type: "min_rest_minutes", minutes: 20, rest_scope: "both", scope: { kind: "every_entrant" } },
+            { type: "max_fixtures_per_day", count: 4, scope: { kind: "division", divisionId: "d-77" } },
           ],
         },
       },
       courtIdByRef: courts,
       isRoundRobin: true,
       pins: [],
+      declaresOfficials: false,
+    });
+    expect(carried.hard).toEqual([
+      { type: "max_fixtures_per_day", count: 4, scope: { kind: "division", divisionId: "d-77" } },
+    ]);
+    expect(carried.unmodelled).toEqual([]);
+
+    const missing = encodeConstraints({
+      divisionRef: "d-tiny",
+      scheduleConfig: {
+        constraints: {
+          hard: [{ type: "max_fixtures_per_day", count: 4, scope: { kind: "division" } }],
+        },
+      },
+      courtIdByRef: courts,
+      isRoundRobin: true,
+      pins: [],
+      declaresOfficials: false,
+    });
+    expect(missing.hard).toEqual([]);
+    expect(missing.unmodelled[0]?.reason).toMatch(/scope/i);
+  });
+
+  it("REPORTS a scope whose kind is not a ConstraintScope member at all", () => {
+    // `readScope`'s DEFAULT arm, which also had no test. A garbage kind that
+    // resolved to anything truthy would be applied as though it were a real
+    // scope, and the bench would red fixtures no rule covers — a false product
+    // defect, the worst output this harness can produce.
+    const out = encodeConstraints({
+      divisionRef: "d-tiny",
+      scheduleConfig: {
+        constraints: {
+          hard: [{ type: "max_fixtures_per_day", count: 4, scope: { kind: "referee" } }],
+        },
+      },
+      courtIdByRef: courts,
+      isRoundRobin: true,
+      pins: [],
+      declaresOfficials: false,
+    });
+    expect(out.hard).toEqual([]);
+    expect(out.unmodelled).toEqual([
+      { type: "max_fixtures_per_day", reason: expect.stringContaining("not modelled") },
+    ]);
+    expect(out.unmodelled[0]?.reason).toMatch(/scope/i);
+  });
+
+  // A PERSON scope is unmeasurable for EVERY rule type, not just for
+  // `min_rest_minutes`. Enumerated across both person scopes AND all three
+  // modelled rule types, because the defect this covers was exactly a ruling
+  // made for one rule and not carried to its siblings.
+  for (const scope of [{ kind: "person", personKey: "p-3" }, { kind: "every_person" }] as const) {
+    it(`reports EVERY hard rule scoped ${scope.kind} as unmodelled, whatever its type`, () => {
+      const out = encodeConstraints({
+        divisionRef: "d-tiny",
+        scheduleConfig: {
+          constraints: {
+            hard: [
+              { type: "max_fixtures_per_day", count: 2, scope },
+              { type: "not_before", time: "09:00", scope },
+              { type: "not_after", time: "18:00", scope },
+            ],
+          },
+        },
+        courtIdByRef: courts,
+        isRoundRobin: true,
+        pins: [],
+        declaresOfficials: false,
+      });
+      // Not one of them is modelled: a person-scoped rule matches zero
+      // fixtures on any real board, so encoding it reports CLEAN on a rule
+      // nothing checked.
+      expect(out.hard).toEqual([]);
+      expect(out.unmodelled.map((u) => u.type)).toEqual([
+        "max_fixtures_per_day",
+        "not_before",
+        "not_after",
+      ]);
+      for (const entry of out.unmodelled) expect(entry.reason).toContain(scope.kind);
+    });
+  }
+
+  it("still models those same three rules under a NON-person scope", () => {
+    // The negative pair. Without it, an encoder that reported every hard rule
+    // as unmodelled would pass both cases above and the bench would check
+    // nothing at all while claiming to be honest about it.
+    const scope = { kind: "every_entrant" } as const;
+    const out = encodeConstraints({
+      divisionRef: "d-tiny",
+      scheduleConfig: {
+        constraints: {
+          hard: [
+            { type: "max_fixtures_per_day", count: 2, scope },
+            { type: "not_before", time: "09:00", scope },
+            { type: "not_after", time: "18:00", scope },
+          ],
+        },
+      },
+      courtIdByRef: courts,
+      isRoundRobin: true,
+      pins: [],
+      declaresOfficials: false,
     });
     expect(out.hard).toEqual([
-      { type: "min_rest_minutes", minutes: 20, restScope: "both", scope: { kind: "every_entrant" } },
+      { type: "max_fixtures_per_day", count: 2, scope },
+      { type: "not_before", minutesIntoDay: 540, scope },
+      { type: "not_after", minutesIntoDay: 1080, scope },
     ]);
+    expect(out.unmodelled).toEqual([]);
+  });
+
+  // `min_rest_minutes` is REPORTED, never modelled — in every rest_scope.
+  // Enumerated rather than sampled: a reader that special-cased one value and
+  // fell through on the others would pass a single-case test, and the three
+  // reach the reporting line by different routes.
+  for (const restScope of ["per_person", "feeder_to_dependent", "both"] as const) {
+    it(`reports a min_rest_minutes rule with rest_scope "${restScope}" as unmodelled`, () => {
+      // `personIds` is ALWAYS empty (the product's `Fixture` carries no
+      // persons at all) and no feeds edges reach a Board, so no reading of
+      // this rule is measurable. Modelling any of them would hand the checker
+      // a rule it silently measures as something else — a clean report on a
+      // constraint nobody verified.
+      const out = encodeConstraints({
+        divisionRef: "d-tiny",
+        scheduleConfig: {
+          constraints: {
+            hard: [
+              {
+                type: "min_rest_minutes",
+                minutes: 45,
+                rest_scope: restScope,
+                scope: { kind: "competition" },
+              },
+            ],
+          },
+        },
+        courtIdByRef: courts,
+        isRoundRobin: true,
+        pins: [],
+        declaresOfficials: false,
+      });
+      expect(out.hard).toEqual([]);
+      expect(out.unmodelled).toEqual([
+        { type: "min_rest_minutes", reason: expect.stringContaining("not modelled") },
+      ]);
+      expect(out.unmodelled[0]?.reason).toContain(restScope);
+    });
+  }
+
+  it("leaves the SEPARATE perEntrantMinRest knob modelled — it is keyed on entrants, which exist", () => {
+    // The negative pair for the three cases above. Without it, an encoder that
+    // reported every rest concept as unmodelled would pass all three, and the
+    // one rest rule the bench really can measure would go missing unnoticed.
+    const out = encodeConstraints({
+      divisionRef: "d-tiny",
+      scheduleConfig: { perEntrantMinRest: 75 },
+      courtIdByRef: courts,
+      isRoundRobin: true,
+      pins: [],
+      declaresOfficials: false,
+    });
+    expect(out.perEntrantMinRest).toBe(75);
+    expect(out.unmodelled).toEqual([]);
   });
 
   it("refuses a present-but-unreadable matchMinutes instead of falling back to the default", () => {

@@ -47,11 +47,21 @@
 //
 // 2. WHAT THE ENCODER CANNOT MODEL, IT REPORTS. `HardConstraint` is a
 //    SIX-member union (`constraints.ts:86`) and `EncodedHardRule` models
-//    four. A checker that quietly skipped the other two and then said "clean"
-//    would be stating something it never checked — design §1.4. So the
-//    unmodelled ones travel in `unmodelled[]`, `CheckerReport.unchecked` is
-//    that list forwarded (one authority, never a second composition), and the
-//    report renders it beside the verdict.
+//    THREE — `max_fixtures_per_day`, `not_before`, `not_after`. A checker that
+//    quietly skipped the other three and then said "clean" would be stating
+//    something it never checked — design §1.4. So the unmodelled ones travel
+//    in `unmodelled[]`, `CheckerReport.unchecked` is that list forwarded (one
+//    authority, never a second composition), and the report renders it beside
+//    the verdict.
+//
+//    The three that are reported rather than modelled, and why — none of them
+//    is a gap that more code here would close, and each was verified against
+//    the product rather than assumed:
+//      - `fixture_on_weekday` / `fixture_on_date` target fixtures through a
+//        `FixtureSelector` and a calendar the checker does not resolve.
+//      - `min_rest_minutes` is unmeasurable in ALL THREE of its `rest_scope`
+//        readings, because the product's `Fixture` carries no person ids and no
+//        feeds edges (ruling R23). Its case below says so in full.
 //
 // -------------------------------------------------------------------------
 // Refuse vs report — where the line is, and why it is not arbitrary
@@ -147,14 +157,17 @@ export interface Board {
 // The oracle — what the PACK declared, normalised
 // ---------------------------------------------------------------------------
 
-/** The four `HardConstraint` members this bench build can model.
+/** The three `HardConstraint` members this bench build can model.
  *
  *  A discriminated union rather than an open record, so a checker rule that
- *  forgets a member fails to compile instead of silently never firing.
- *
- *  `restScope` is camelCase where the engine's own field is `rest_scope`
- *  (`constraints.ts:88`): every other field in this file is camelCase, and
- *  the rename happens exactly once, here, where the wire shape is read.
+ *  forgets a member fails to compile instead of silently never firing — and,
+ *  read the other way, so a member the bench CANNOT measure has no place here.
+ *  That is why `min_rest_minutes` is absent (ruling R23): every one of its
+ *  three `rest_scope` readings is structurally unmeasurable from a `Board`,
+ *  so it is reported in `unmodelled[]` and never encoded. Leaving it in this
+ *  union would have obliged `checker.ts` to carry a branch nothing can reach —
+ *  a dead guard with tests implying it fires, which is the class this wave has
+ *  already paid for once.
  *
  *  `scope` IS NOT OPTIONAL, and it is the engine's own `ConstraintScope`
  *  (`import type`, `constraints.ts:30`) rather than a bench restatement, so the
@@ -175,12 +188,6 @@ export interface Board {
  *  that `true` as sufficient writes the same bug the engine's own comment was
  *  written to prevent. */
 export type EncodedHardRule =
-  | {
-      type: "min_rest_minutes";
-      minutes: number;
-      restScope: "per_person" | "feeder_to_dependent" | "both";
-      scope: ConstraintScope;
-    }
   | { type: "max_fixtures_per_day"; count: number; scope: ConstraintScope }
   | { type: "not_before"; minutesIntoDay: number; scope: ConstraintScope }
   | { type: "not_after"; minutesIntoDay: number; scope: ConstraintScope };
@@ -223,6 +230,21 @@ export interface EncodedConstraints {
    *  state rather than from the bench's intention — design §3.2 step 3. */
   pins: readonly { fixtureId: string; start: number; courtId: string }[];
   isRoundRobin: boolean;
+  /** Did the PACK declare officials for this division?
+   *
+   *  Carried here because `checkBoard`'s only oracle is this record, and
+   *  design §4.3's officials rule is otherwise vacuous: `Fixture.officials` is
+   *  `z.array(z.unknown())` on the wire, so a division that fetched none at all
+   *  arrives as an empty array and every "no official is double-booked" check
+   *  passes forever. Nothing else on `Board` or `EncodedConstraints` can tell
+   *  "this division has no officials" from "this division's officials did not
+   *  come back", and those are the two answers the rule exists to separate.
+   *
+   *  REQUIRED, not optional, and that is the point: an optional flag defaulting
+   *  to `false` would let a caller ship the rule inert without writing a line,
+   *  which is the failure class the rule was written against. `encodeConstraints`
+   *  takes it from its caller, who holds the pack. */
+  declaresOfficials: boolean;
   /** EVERY declared constraint this bench build does not model — not only
    *  `HardConstraint` members (ruling R9). Carried so the checker can report
    *  them as UNCHECKED rather than imply it checked them;
@@ -269,7 +291,15 @@ export type CheckerFindingKind =
   | "round_order_day"
   | "round_order_same_day"
   | "officials_unreadable"
-  | "duration_disagreement";
+  | "duration_disagreement"
+  // The two wall-clock bounds. TWO members where the product has one:
+  // `calendar.ts:1531` emits a single `instruction_time` conflict and
+  // discriminates with a `ruleType` FIELD, so these are deliberately bench
+  // NATIVE names rather than members of the shared vocabulary — a reader of a
+  // bench report should not have to open the detail to learn which bound a
+  // fixture broke.
+  | "not_before_breached"
+  | "not_after_breached";
 
 /** One breach. `measured`/`required` are optional because not every kind has
  *  a scalar to compare — a double-booking has two fixtures and no number,
@@ -763,23 +793,74 @@ function reportUnmodelledKnobs(
   }
 }
 
+/** A PERSON scope cannot be measured by this bench, whatever rule wears it.
+ *
+ *  Called from `scopeOr`, i.e. from the ONE place a scope is read, so it
+ *  applies to every scope-bearing rule type there is and to every one added
+ *  later. It was first written as a per-arm call, which is the same defect it
+ *  exists to fix one level up: correct for the three arms that remembered to
+ *  call it, and silently absent for the fourth.
+ *
+ *  The generalisation of ruling R23, which was made for `min_rest_minutes` and
+ *  then not carried to its siblings — so a `max_fixtures_per_day`,
+ *  `not_before` or `not_after` scoped `person`/`every_person` encoded fine,
+ *  matched zero fixtures, emitted nothing, appeared in no `unmodelled[]`, and
+ *  reported CLEAN. That is design §1.4's false-clean reached by a different
+ *  road, and it is worse than the `min_rest_minutes` case it was cloned from,
+ *  because here the rule LOOKS modelled all the way through.
+ *
+ *  The cause is structural, not a gap more code would close: the product's
+ *  `Fixture` carries `home_entrant_id` / `away_entrant_id` and NO persons at
+ *  all (`apps/web/src/server/api-v1/schemas.ts`, the `Fixture` object), so
+ *  `BoardFixture.personIds` is always `[]` and `tallyKeys` yields no key for a
+ *  person scope on any real board.
+ *
+ *  ENTRANT is NOT a substitute and is never swapped in: a doubles pair is one
+ *  entrant and two people, and a player entered in singles and mixed is two
+ *  entrants and one person, so only the person reading stops that human
+ *  playing four times in a day (`constraints.ts:30`'s own note). Answering a
+ *  person-scoped rule with entrant tallies would report on a constraint nobody
+ *  declared. */
+function personScopeUnmeasurable(
+  type: string,
+  scope: ConstraintScope,
+  unmodelled: { type: string; reason: string }[],
+): boolean {
+  if (scope.kind !== "person" && scope.kind !== "every_person") return false;
+  unmodelled.push({
+    type,
+    reason: `${NOT_MODELLED} — ${type} is scoped ${scope.kind}, and no person scope can be measured from a Board: the product's Fixture carries no person ids, so personIds is always empty and the rule matches nothing rather than passing; the entrant tally is a DIFFERENT constraint and is not substituted`,
+  });
+  return true;
+}
+
 /** The scope gate every modellable member passes through, checked BEFORE its
  *  own operand so the two guards are killable one at a time: a rule with a good
  *  operand and a bad scope witnesses this one, a rule with a good scope and a
  *  bad operand witnesses the other. Two guards covering for each other are each
- *  untested. */
+ *  untested — and this claim is only true while BOTH tests exist and each cites
+ *  its OWN message, so `board.test.ts` asserts `/scope/i` on one and `/count/i`
+ *  on the other. It stopped being true once already, when the operand test was
+ *  deleted as collateral and nothing killed either guard. */
 function scopeOr(
   type: string,
   rule: Record<string, unknown>,
   unmodelled: { type: string; reason: string }[],
 ): ConstraintScope | undefined {
   const scope = readScope(rule.scope);
-  if (scope !== undefined) return scope;
-  unmodelled.push({
-    type,
-    reason: `${NOT_MODELLED} — ${type} carries no readable ConstraintScope (constraints.ts:30), and there is no safe default: applying it universally would red fixtures the rule never covers`,
-  });
-  return undefined;
+  if (scope === undefined) {
+    unmodelled.push({
+      type,
+      reason: `${NOT_MODELLED} — ${type} carries no readable ConstraintScope (constraints.ts:30), and there is no safe default: applying it universally would red fixtures the rule never covers`,
+    });
+    return undefined;
+  }
+  // Refused HERE rather than in each rule-type arm, so a rule type added later
+  // inherits it by construction instead of by somebody remembering. That is
+  // the whole point: this refusal is a property of the SCOPE, and every
+  // scope-bearing member already funnels through this one function.
+  if (personScopeUnmeasurable(type, scope, unmodelled)) return undefined;
+  return scope;
 }
 
 /** Maps ONE `constraints.hard[]` entry onto `hard` or onto `unmodelled`.
@@ -805,18 +886,35 @@ function encodeHardRule(
 
   switch (type) {
     case "min_rest_minutes": {
-      const scope = scopeOr(type, rule, unmodelled);
-      if (scope === undefined) return;
-      const minutes = positiveInt(rule.minutes);
+      // NEVER modelled — every reading of `rest_scope` is unmeasurable from a
+      // `Board`, so this rule is REPORTED in full rather than half-checked.
+      //
+      //   * `per_person` (and the per-person half of `both`) needs person ids,
+      //     and the product's `Fixture` carries NONE — no `person_ids`, no
+      //     lineup, only `home_entrant_id` / `away_entrant_id`
+      //     (`apps/web/src/server/api-v1/schemas.ts`, the `Fixture` object). So
+      //     `BoardFixture.personIds` is always `[]` and a person series can
+      //     never have two members to measure between.
+      //   * `feeder_to_dependent` (and the feeder half of `both`) needs the
+      //     bracket's `feeds` edges — no `winner_to`/`loser_to` reaches a
+      //     `Board` either.
+      //
+      // Substituting the ENTRANT series for the person one would measure a
+      // different constraint than the one declared: in doubles a pair is one
+      // entrant and two people, and a player entered in singles and mixed is
+      // two entrants and one person, so only the person reading stops that
+      // human playing four times in a day (`constraints.ts:30`'s own note).
+      // The top-level `perEntrantMinRest` knob is a SEPARATE rule, keyed on
+      // `entrantIds`, which ARE present — it still works and neither stands in
+      // for the other.
       const restScope = rule.rest_scope;
-      if (minutes === undefined || !isRestScope(restScope)) {
-        unmodelled.push({
-          type,
-          reason: `${NOT_MODELLED} — min_rest_minutes needs a positive integer "minutes" and a "rest_scope" of ${REST_SCOPES.join("/")}`,
-        });
-        return;
-      }
-      hard.push({ type: "min_rest_minutes", minutes, restScope, scope });
+      const why = isRestScope(restScope)
+        ? `rest_scope "${restScope}"`
+        : "an unreadable rest_scope";
+      unmodelled.push({
+        type,
+        reason: `${NOT_MODELLED} — min_rest_minutes with ${why} cannot be measured from a Board: the product's Fixture carries no person ids (so personIds is always empty) and no feeds edges, and the entrant series is a DIFFERENT constraint that is not substituted; the separate top-level perEntrantMinRest knob is unaffected`,
+      });
       return;
     }
     case "max_fixtures_per_day": {
@@ -898,6 +996,12 @@ export function encodeConstraints(input: {
   courtIdByRef: ReadonlyMap<string, string>;
   isRoundRobin: boolean;
   pins: readonly { fixtureId: string; start: number; courtId: string }[];
+  /** Whether the pack declared any official for this division — resolved by
+   *  the caller, who holds the pack, and forwarded verbatim. Required for the
+   *  reason the field's own note gives: an optional one ships design §4.3's
+   *  rule inert. Coerced with `=== true` rather than read raw, because this
+   *  function is reached from JavaScript call sites tsc does not see. */
+  declaresOfficials: boolean;
 }): EncodedConstraints {
   const cfg = input.scheduleConfig ?? {};
 
@@ -957,6 +1061,7 @@ export function encodeConstraints(input: {
     hard,
     pins: input.pins,
     isRoundRobin: input.isRoundRobin,
+    declaresOfficials: input.declaresOfficials === true,
     unmodelled,
   };
 }
