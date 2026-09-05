@@ -251,10 +251,19 @@ position either way — it is simply inconsistent.
 
 ---
 
-## S4 — The officials auto-draft produces a proposal that cannot be applied
+## S4 — A blocked officials auto-draft gives the organiser no reason
 
-**High. This is the "inert seam" class: a control that renders, names a real
-number, and never fires.**
+**Medium** (downgraded 2026-09-05 from High, on measured evidence — see
+**RESOLVED** at the end of this section). Originally filed as
+*"The officials auto-draft produces a proposal that cannot be applied"*.
+
+> The original High text is kept below, unedited, because the reasoning in it —
+> including the strongest-argument-against that turned out to be correct — is
+> what made the finding resolvable. Read it as the record of what was seen, not
+> as the current claim.
+
+**Original filing — SUPERSEDED. High. This is the "inert seam" class: a control
+that renders, names a real number, and never fires.**
 
 On the Officials tab, with one linked official on the roster:
 
@@ -300,6 +309,51 @@ reason I did not eliminate — a per-role requirement, a minimum roster size,
 a stage-status precondition. If so, the finding shrinks to "the disabled state
 has no explanation", which is still real but much cheaper. Either way the
 product owes the organiser a sentence.
+
+### RESOLVED 2026-09-05 — DOWNGRADED to Medium. The text above is SUPERSEDED, kept for the record.
+
+**The strongest-argument-against was right, and it was the author's own.** The
+cause they could not eliminate has now been measured: it is a *block conflict*,
+and the missing precondition is the official's **`max_per_day` cap**.
+
+**Mechanism.** `officials-panel.tsx:316` —
+`disabled={busy || proposal.conflicts.some((c) => c.severity === "block")}`.
+With one official capped at 1/day and two fixtures on the SAME day, the day cap
+(`packages/engine/src/officials/assign.ts:228-231`) leaves the second slot
+unfilled, and the engine emits `kind: "role_unfilled"`, `severity: "block"`
+(`:270-271`). That is the disjunct holding Apply down.
+
+**Evidence, by mutation.** Deleting the `max_per_day: 1` PATCH from the
+walkthrough's setup makes Apply come back ENABLED — the assertion reds with
+`Expected: disabled, Received: enabled`. And driving the whole seam without the
+cap — propose → apply → read `fixture_officials` back — SUCCEEDS: one referee
+is seated on BOTH same-day fixtures, verified by official id, not by row count.
+Removing the click makes that read-back red with `Received array: []`, so the
+read-back is proving the write and not pre-existing state.
+
+**So this is not an inert seam.** The auto-draft's producer and consumer are
+connected and the apply writes real rows. What the customer actually loses is
+narrower, and it is exactly the shrunken finding predicted above:
+
+> **S4 (Medium) — a blocked auto-draft gives the organiser no reason.** When a
+> proposal carries a block conflict, Apply is correctly disabled but carries no
+> `title`, no `aria-label`, no `aria-disabled`, and there is no message
+> anywhere on the page. The conflict list does render the raw engine `kind`
+> (`role_unfilled`) with the fixture id truncated to 8 characters, which is a
+> developer string, not a sentence for an organiser. The product owes them one.
+
+**Test consequence.** The `test.fail()` pin AMENDMENT A added for the High
+reading has been REMOVED — not merely deleted, replaced. It could never have
+fired correctly: it expected Apply to enable while its own `beforeAll` capped
+the official at 1/day and so guaranteed the block, making it permanently red
+even against a perfect product. In its place
+`scheduling-officials-handoff.spec.ts` now carries a real, passing
+propose → apply → read-back test on an UNCAPPED official — which is what this
+finding's own Recommendation asked for ("proven by its real producer and
+consumer rather than by a fixture at both ends"). The main walkthrough keeps
+its `toBeDisabled()` assertion, which under a cap is the correct behaviour, now
+with Propose's enabled state and the `role_unfilled` row beside it so it
+discriminates the block conflict from `busy`.
 
 ---
 

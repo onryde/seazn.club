@@ -27,12 +27,19 @@ import {
 // screen — is read back after it.
 //
 // task-5-brief.md carried two controller amendments that override the steps
-// below them (both applied here): AMENDMENT A rewrites Step 4's apply
-// assertion (the brief's `toBeEnabled()` contradicts finding S4 — see the
-// comment at that call site) and adds a `test.fail()` pin for the correct
-// behaviour; AMENDMENT B moves durable-row cleanup into `afterAll` (a
-// Playwright TIMEOUT skips `finally` entirely, so a finally-based cleanup
-// leaks on exactly the failure most likely to happen).
+// below them: AMENDMENT A rewrote Step 4's apply assertion (the brief's
+// `toBeEnabled()` is wrong against a CAPPED official — see the comment at that
+// call site) and added a `test.fail()` pin for the behaviour it believed
+// correct; AMENDMENT B moves durable-row cleanup into `afterAll` (a Playwright
+// TIMEOUT skips `finally` entirely, so a finally-based cleanup leaks on
+// exactly the failure most likely to happen).
+//
+// AMENDMENT A's PIN IS GONE (2026-09-05, owner ruling on measured evidence).
+// Finding S4 was filed as an inert seam; a mutation showed the disable is the
+// block-conflict branch working, and the pin — which expected Apply to enable
+// while its own setup guaranteed the block — could never have fired correctly.
+// It is replaced by a real, passing end-to-end test on an UNCAPPED official at
+// the bottom of this file. AMENDMENT B stands unchanged.
 //
 // Two more of the brief's own routes were wrong and are fixed here rather
 // than reproduced — see the comments at their call sites: `GET
@@ -670,17 +677,30 @@ test.describe("the officials handoff, both people driven", () => {
     await page.getByTestId("officials-propose").click();
     const apply = page.getByTestId("officials-apply");
     await expect(apply).toBeVisible({ timeout: 20_000 });
-    // S4 (High, docs/superpowers/specs/2026-09-03-scheduling-walkthrough-findings.md:254):
-    // propose builds a real draft — the max_per_day cap above guarantees a
-    // `role_unfilled` (severity "block") conflict — and the apply control is
-    // DOM-disabled while any block conflict exists, so the draft can never be
-    // applied. Asserted AS-IS so the walkthrough can continue past it; the
-    // DESIRED behaviour is pinned by the separate `test.fail()` test below,
-    // which is what will red the moment S4 is fixed. The brief's own Step 4
-    // asserted `toBeEnabled()` here — that is wrong and would fail; weakening
-    // it to `toBeDisabled()` alone (with no companion pin) would instead
-    // freeze this High defect as expected behaviour, which is the exact
-    // failure this programme has already shipped twice.
+    // THIS ASSERTS THE BLOCK-CONFLICT BRANCH WORKING — it is not a defect
+    // frozen as expected behaviour, and it used to read as one.
+    //
+    // The `max_per_day: 1` cap above and two fixtures on the SAME day
+    // guarantee that the engine cannot fill the second slot, so it emits
+    // `role_unfilled` at severity "block"
+    // (packages/engine/src/officials/assign.ts:228-231, :270-271), and
+    // `disabled={busy || conflicts.some(block)}` (officials-panel.tsx:316)
+    // correctly refuses the apply. A draft that cannot be honoured SHOULD NOT
+    // be applyable; asserting that is asserting the product working.
+    //
+    // Finding S4 originally read this as an inert seam ("a control that
+    // renders, names a real number, and never fires") and was filed High. A
+    // mutation settled it: delete the cap and Apply comes back ENABLED, and
+    // the whole seam then drives end to end — which the uncapped test at the
+    // bottom of this file now does for real, propose → apply → read the
+    // `fixture_officials` rows back. S4 is DOWNGRADED to Medium and restated
+    // as "a blocked auto-draft gives the organiser no reason": the disabled
+    // button carries no title, no aria-disabled and no message, and the only
+    // thing on screen is the raw engine `kind`. That residual is a copy/a11y
+    // gap, not a dead seam, and nothing here pins it as correct.
+    //
+    // The brief's own Step 4 asserted `toBeEnabled()`, which is wrong under a
+    // cap and would fail.
     //
     // `toBeDisabled()` ALONE CANNOT SAY WHY. The predicate is
     // `busy || proposal.conflicts.some((c) => c.severity === "block")`
@@ -773,17 +793,48 @@ test.describe("the officials handoff, both people driven", () => {
 });
 
 // ============================================================================
-// AMENDMENT A, part 2 — the pin. Independent, isolated fixture/official/
-// division so it makes sense (and reproduces the same S4 shape) on its own,
-// with no dependence on the main walkthrough's leftover state.
+// The officials auto-draft, driven END TO END on its own isolated org,
+// division, fixtures and official — no dependence on the main walkthrough's
+// leftover state.
+//
+// THIS REPLACES A `test.fail()` PIN, and the reason is worth keeping.
+// AMENDMENT A added that pin for finding S4, filed High as an inert seam: "a
+// control that renders, names a real number, and never fires". Its author
+// eliminated the freeze, division status, permissions and entitlements, and
+// wrote as their own strongest-argument-against that the button might be
+// "correctly disabled for a reason I did not eliminate — a per-role
+// requirement, a minimum roster size, a stage-status precondition. If so, the
+// finding shrinks."
+//
+// A mutation supplied exactly that missing cause: DELETE the `max_per_day: 1`
+// PATCH and Apply comes back ENABLED (measured 2026-09-05 — the main
+// walkthrough's `toBeDisabled()` reds with "Received: enabled"). So the
+// disable is the block-conflict branch working as designed
+// (officials-panel.tsx:316), not a dead seam. Owner ruling on that evidence:
+// S4 is DOWNGRADED to Medium, and the residual is that a blocked draft gives
+// the organiser no reason — no title, no aria-disabled, no message.
+//
+// The pin had to go, and not by deletion alone: it expected Apply to ENABLE
+// while its own `beforeAll` capped the official at 1/day and so guaranteed the
+// block. It could never have fired correctly — permanently red even against a
+// perfect product, which proves less than no test at all. What stands here
+// instead is S4's OWN recommendation: propose -> apply -> read the resulting
+// `fixture_officials` rows back, so the seam is proven by its real producer
+// and consumer rather than by a fixture at both ends.
+//
+// The ONE difference from the pin is the missing cap. Everything else — org,
+// plan, division, two same-day fixtures, one referee — is unchanged, which is
+// what makes this test and the main walkthrough's `toBeDisabled()` a matched
+// pair: same shape, capped and uncapped, blocked and applied.
 // ============================================================================
 
-test.describe("S4: an applied draft should seat the proposed officials", () => {
+test.describe("the officials auto-draft applies, and the assignments persist", () => {
   const s4OfficialName = `S4 Ref ${TAG}`;
   let orgId = "";
   let base = "";
   let officialId = "";
   let fixtureA = "";
+  let fixtureB = "";
   let officialWritten = false;
 
   test.beforeAll(async ({ request }) => {
@@ -813,7 +864,7 @@ test.describe("S4: an applied draft should seat the proposed officials", () => {
     const { fixtureIds } = await createStageAndGenerate(request, divisionId);
     expect(fixtureIds).toHaveLength(3);
     fixtureA = fixtureIds[0]!;
-    const fixtureB = fixtureIds[1]!;
+    fixtureB = fixtureIds[1]!;
 
     const { courts } = await seedVenueWithCourts(request, ["Court 1"], { orgId });
     const courtId = courts[0]!.id;
@@ -837,10 +888,13 @@ test.describe("S4: an applied draft should seat the proposed officials", () => {
     // not after it resolves — see the main describe's afterAll comment for
     // the full reasoning. `officialId` is not known until the call returns.
     officialWritten = true;
+    // NO `max_per_day`. That is the whole difference from the main
+    // walkthrough's capped official, and it is what this test exists to
+    // isolate: uncapped, one referee can take both same-day fixtures, the
+    // draft carries no `role_unfilled` block, and Apply is live.
     const off = await apiJson<{ id: string }>(request, "/api/v1/officials", "POST", {
       display_name: s4OfficialName,
       role_keys: ["referee"],
-      max_per_day: 1,
     });
     if (!off.data) throw new Error(`official → ${off.status} ${JSON.stringify(off.error)}`);
     officialId = off.data.id;
@@ -885,33 +939,19 @@ test.describe("S4: an applied draft should seat the proposed officials", () => {
     }
   });
 
-  test("S4: an applied draft seats the proposed officials", async ({ page, request }) => {
-    // AMENDMENT A requirement: pins the CORRECT behaviour and is expected to
-    // fail today. `test.fail()`, never `test.skip()` — a skip is silent
-    // forever; this reds as "passed unexpectedly" the moment S4 is fixed,
-    // which forces someone to come back and delete this line. Do not weaken
-    // the assertions below to make it "pass" — it is supposed to fail now.
+  test("an uncapped official is proposed, applied and seated on both fixtures", async ({
+    page,
+    request,
+  }) => {
+    // A REAL, PASSING test — no `test.fail()`. See the block comment above the
+    // describe for why the pin that stood here could never have fired
+    // correctly and what replaced it.
     //
-    // THE SETUP RUNS ABOVE THE MODIFIER, DELIBERATELY. `test.fail()` flips
-    // this test's expected status at the moment it EXECUTES (Playwright
-    // 1.61's `TestInfo._modifier`: `type === "fail"` assigns
-    // `expectedStatus = "failed"` there and then), so everything before it is
-    // still held to a normal pass and everything after it is expected to
-    // fail. Written the other way — the modifier as the body's first
-    // statement, which is how this started — the two `/api/orgs/active` round
-    // trips, the navigation, the propose click and the 20s wait were ALL
-    // expected-to-fail as well: six distinct setup failures would have
-    // reported GREEN, and the pin could not tell "S4 is still broken" from
-    // "the test never got as far as S4". Nothing below the modifier may move
-    // above it, and nothing above it may move below.
-    //
-    // THE BUDGET, first, and ABOVE the modifier for exactly that reason.
-    // `test.setTimeout(TEST_BUDGET_MS)` is module-scoped, so this pin runs
-    // under the SAME derived clock as the main walkthrough and is equally
-    // exposed to it drifting over the 90s ceiling — but it carried no
-    // assertion of its own, so raising STEPS or PER_STEP_MS would have gone
-    // unremarked here. Below `test.fail()` the check would be worse than
-    // absent: an over-budget spec would report as the expected failure.
+    // THE BUDGET, first. `test.setTimeout(TEST_BUDGET_MS)` is module-scoped,
+    // so this test runs under the SAME derived clock as the main walkthrough
+    // and is equally exposed to it drifting over the 90s ceiling, but it
+    // carried no assertion of its own — raising STEPS or PER_STEP_MS would
+    // have gone unremarked here.
     expect(
       TEST_BUDGET_MS,
       `derived budget ${TEST_BUDGET_MS}ms = ${STEPS} steps x ${PER_STEP_MS}ms + ${CLAIM_FLOW_MS}ms claim flow, ` +
@@ -932,22 +972,45 @@ test.describe("S4: an applied draft should seat the proposed officials", () => {
       await goTab(page, base, "officials");
       await page.getByTestId("officials-propose").click();
       // VISIBLE only. That a draft came back and rendered a control is setup;
-      // whether that control can be PRESSED is the whole of finding S4, and
-      // it is asserted below the modifier where a failure is expected.
+      // whether it can be PRESSED, and what pressing it WRITES, is the claim
+      // this test makes, and both are asserted outside this step.
       await expect(apply).toBeVisible({ timeout: 20_000 });
     });
 
-    test.fail();
-
-    // THE PIN, and nothing else. Finding S4: "Apply 6 assignments" renders
-    // with the DOM property `disabled === true`, carrying no title, no
-    // `aria-disabled` and no explanation anywhere on the page — so this is
-    // the assertion that fails today, and the one a fix makes green.
+    // THE SEAM, driven. Apply is live because nothing blocks it — asserted
+    // BEFORE the click, so a future regression that re-disables the button
+    // reds here with "not enabled" rather than at a silent read-back.
     await expect(apply).toBeEnabled();
+    // The complement of the main walkthrough's assertion, and the reason this
+    // pair is a matched set: with no cap there is no block conflict, so the
+    // engine's `role_unfilled` row is ABSENT. Without this, "Apply was
+    // enabled" could be true for some other reason entirely.
+    await expect(page.getByText(/role_unfilled/)).toHaveCount(0);
     await apply.click();
 
+    // THE READ-BACK, from the system's own record rather than the screen that
+    // just claimed it. `fixtureOfficials` reads `GET /api/v1/fixtures/{id}`'s
+    // `officials` cache, which `refreshOfficialsCache` rebuilds from the
+    // `fixture_officials` rows the apply wrote.
+    //
+    // Pinned by IDENTITY, not by count. `length > 0` is satisfied by any row
+    // from any source (AGENTS.md §19 — reachability is satisfied by any
+    // value), so it would stay green against an apply that seated the wrong
+    // official, or against a leftover assignment this test never made.
     await expect
-      .poll(async () => (await fixtureOfficials(request, fixtureA)).length)
-      .toBeGreaterThan(0);
+      .poll(async () => (await fixtureOfficials(request, fixtureA)).map((o) => o.official_id))
+      .toContain(officialId);
+    // BOTH same-day fixtures, which is the whole point: this is the exact pair
+    // the `max_per_day: 1` cap could not cover, so seating both is the direct
+    // evidence that the cap — not the seam — was what stopped the capped run.
+    await expect
+      .poll(async () => (await fixtureOfficials(request, fixtureB)).map((o) => o.official_id))
+      .toContain(officialId);
+
+    // And the draft is spent: `setProposal(null)` runs on a successful apply
+    // (officials-panel.tsx:331), so the control that fired goes away. This is
+    // the on-screen half of "it fired", and it fails against an apply whose
+    // POST rejected while the button stayed put.
+    await expect(apply).toHaveCount(0);
   });
 });
