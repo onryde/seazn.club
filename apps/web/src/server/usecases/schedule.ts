@@ -241,6 +241,24 @@ export async function putScheduleSettings(
     // AUTO relocates those correctly today and refusing them would be a
     // regression, not a fix.
     //
+    // THAT PREMISE DOES NOT HOLD ON A FROZEN DIVISION, and this arm does not
+    // yet account for it. Once `divisions.schedule_locked` is set, every path
+    // that could relocate a `scheduled` fixture refuses: `applySchedule` and
+    // `moveFixture` (below), and `shiftDivisionSchedule`
+    // (`schedule-plus.ts`). So removing a court from a frozen division strands
+    // its fixtures on a court the settings no longer list, with no in-product
+    // way to move them until someone unfreezes.
+    //
+    // Deliberately left as-is rather than guarded, and the reasons are
+    // recorded so the next reader can weigh them rather than re-derive them:
+    // this is a SETTINGS write, and the freeze as ruled binds board writes;
+    // the damage is bounded, because `boardCourtColumns`
+    // (`schedule-board.tsx`) back-fills a column for a court the settings
+    // dropped, so the cards do not vanish; and unfreezing restores every
+    // relocation path. If that trade is ever revisited, the fix is a
+    // `divisionLockState` guard on the courts-removal arm only — not on the
+    // whole save, which would refuse edits that touch no court at all.
+    //
     // Placed BEFORE the upsert on purpose. Everything below this point writes,
     // so a rejection here leaves the stored config completely unchanged — the
     // atomicity half of the acceptance criteria, pinned by tests that re-read
