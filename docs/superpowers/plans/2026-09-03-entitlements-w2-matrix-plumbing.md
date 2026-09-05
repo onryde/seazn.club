@@ -31,11 +31,16 @@ CI starts working.**
 written.
 
 **And when you do rebase, expect an INHERITED e2e red.** Main's walkthrough leg is
-currently red from a redirect built with `new URL("/path", req.url)`, which emits the
-server's internal bind address in CI (no `HOSTNAME` set there) so the session cookie is
-withheld and the browser lands on `/login`. It passes locally only because `seazn-env`
-pins `HOSTNAME=127.0.0.1`. The commit is `997ad225b` and **it is not in this branch
-yet** — my own dispatch (run 33966576108, verified against `refs/pull/719/head`) was
+currently red, landing on `/login`. **The CAUSE is disputed as of 2026-09-05 — two
+hypotheses fit the same symptom, and neither is confirmed.** One: a redirect built with
+`new URL("/path", req.url)` emits the server's internal bind address in CI (no
+`HOSTNAME` set there), so the session cookie is withheld across the origin mismatch —
+invisible locally because `seazn-env` pins `HOSTNAME=127.0.0.1`. Two: an auth-state bug
+in `settings/page.tsx`, a different file and a different mechanism. **Do not assume
+either.** Note the second is a file THIS BRANCH also modifies (i18n strings only), so
+if you are diagnosing post-rebase, that overlap is worth knowing before you conclude
+the red is purely inherited. What IS established: the commit is `997ad225b` and **it is
+not in this branch yet** — my own dispatch (run 33966576108, verified against `refs/pull/719/head`) was
 green on the walkthrough leg without it. Rebasing pulls it in. So a walkthrough red on
 the next run is almost certainly that, not the rebase: check it BEFORE bisecting 148
 commits of your own.
