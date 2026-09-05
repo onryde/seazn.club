@@ -55,7 +55,23 @@ test("a seeded settings org is Pro, reachable, and returns its slot", async ({ p
     seededForCleanup = null;
   }
 
-  // Finding B: the slot came back — the owned count is what it was.
+  // Finding B: the slot came back.
+  //
+  // Asserted against THIS org's id, never against a count. The first version
+  // of this compared `after.length` to `before.length` and was green alone and
+  // red in company: `/api/orgs` is the SHARED Pro user's whole membership
+  // list, and settings-org-tabs.spec.ts and settings-people-tabs.spec.ts each
+  // seed an org of their own — so the total moves under this test through no
+  // fault of the code it is testing. That is exactly what `_RULES.md` §1
+  // forbids ("every count counts the whole run; scope counts to the per-spec
+  // TAG, never to a global total"), and it made a shared-state artifact look
+  // like a released-slot failure.
+  //
+  // Both directions, because a negative assertion needs its positive pair: a
+  // `releaseSeededOrgSql` that deleted every membership row would satisfy the
+  // first expectation on its own.
   const after = await apiJson<{ id: string }[]>(page.request, "/api/orgs");
-  expect(after.data?.length ?? 0).toBe(before.data?.length ?? 0);
+  const ids = (after.data ?? []).map((o) => o.id);
+  expect(ids).not.toContain(seeded.orgId);
+  expect(ids.length).toBeGreaterThan(0);
 });
