@@ -48,7 +48,19 @@
             "e-bravo"
           ]
         }
-      ]
+      ],
+      "scheduleConfig": {
+        "startAt": "2099-01-01T09:00:00.000Z",
+        "matchMinutes": 30,
+        "gapMinutes": 0,
+        "courts": [
+          "@c-tiny-1",
+          "@c-tiny-2"
+        ],
+        "perEntrantMinRest": 0,
+        "blackouts": [],
+        "sessionWindows": []
+      }
     },
     {
       "ref": "d-badminton",
@@ -78,7 +90,19 @@
             "e-dahl"
           ]
         }
-      ]
+      ],
+      "scheduleConfig": {
+        "startAt": "2099-01-01T09:00:00.000Z",
+        "matchMinutes": 30,
+        "gapMinutes": 0,
+        "courts": [
+          "@c-tiny-1",
+          "@c-tiny-2"
+        ],
+        "perEntrantMinRest": 0,
+        "blackouts": [],
+        "sessionWindows": []
+      }
     },
     {
       "ref": "d-registration",
@@ -776,6 +800,24 @@
       ]
     }
   ],
+  "venues": [
+    {
+      "ref": "v-tiny",
+      "name": "Bench Tiny Venue",
+      "courts": [
+        {
+          "ref": "c-tiny-1",
+          "name": "Court 1",
+          "sort": 1
+        },
+        {
+          "ref": "c-tiny-2",
+          "name": "Court 2",
+          "sort": 2
+        }
+      ]
+    }
+  ],
   "officials": [
     {
       "ref": "off-dee",
@@ -1104,6 +1146,11 @@
         "what": "officials[] declares TWO officials against d-tiny only: off-dee (a named assignment onto rr-r1-c1 — MANUAL) and off-eli (no assignments at all — left to autoAssignOfficials). p-eli is a NEW official-lane person added alongside the already-declared, previously-unused p-dee — B03 T6 closes that dangling ref by giving it an official row at last.",
         "why": "pack-schema.ts's own comment on PackOfficial (\"an official with named assignments is manual, one without is left to autoAssignOfficials\") names both paths; one official can only ever prove one of them. d-badminton was deliberately left out — this addition is orthogonal to T5's, and mixing the two would make a failure here harder to attribute.",
         "where": "officials[]"
+      },
+      {
+        "what": "venues[] declares ONE venue with TWO courts, and BOTH scheduled divisions (d-tiny, d-badminton) carry the SAME scheduleConfig naming those courts by @-sigil. suites/tiny.ts's own ad-hoc one-venue/one-court HTTP creation is deleted; the pack is the one source.",
+        "why": "B04 design §7. One court makes design §3.3's court-double-booking rule unfalsifiable — every fixture sits on the same court, so the rule reports clean forever — which is exactly the vacuous-guard class this bench exists to catch. Two courts give it somewhere to happen. The config is SHARED between the two divisions rather than copied, so \"both divisions are scheduled onto the same courts\" is true by construction; gapMinutes: 0 is declared on purpose so the report carries a real EncodedConstraints.unmodelled entry and the \"unchecked beside the verdict\" rendering is exercised on a green run.",
+        "where": "venues[], divisions[0].scheduleConfig, divisions[1].scheduleConfig"
       },
       {
         "what": "claimInvites[] carries two entries, one per division's own star (p-ana from d-tiny, p-cho from d-badminton) — minted, never accepted (B03 §5: \"the accept flow is B05's, seeding only mints invites\").",

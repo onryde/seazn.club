@@ -49,6 +49,84 @@ import {
 type PackInput = z.input<typeof PackSchema>;
 
 // ---------------------------------------------------------------------------
+// B04 T6 — venues, and the per-division scheduleConfig (design §7)
+//
+// `_tiny` declared NO venues at all until now: `suites/tiny.ts` created one
+// venue and ONE court over HTTP itself, so nothing in the pack could name a
+// court and design §3.3's court-double-booking rule had nowhere to fire. The
+// pack is the one source from here on (`seedSuite` already seeds `pack.venues`,
+// seed.ts:332-378) and the ad-hoc creation is deleted.
+//
+// TWO courts, not one, and that is the whole point of the number: a single
+// court makes "two placed fixtures overlap on one courtId" unfalsifiable in
+// one direction (every fixture is on the same court) and unreachable in the
+// other, so the rule would report clean forever. Design §7 names the two.
+// ---------------------------------------------------------------------------
+
+const TINY_VENUE_REF = "v-tiny";
+const TINY_COURT_REFS = ["c-tiny-1", "c-tiny-2"] as const;
+
+const TINY_VENUES: NonNullable<PackInput["venues"]> = [
+  {
+    ref: TINY_VENUE_REF,
+    name: "Bench Tiny Venue",
+    courts: [
+      { ref: TINY_COURT_REFS[0], name: "Court 1", sort: 1 },
+      { ref: TINY_COURT_REFS[1], name: "Court 2", sort: 2 },
+    ],
+  },
+];
+
+/** The instant both scheduled divisions start at.
+ *
+ *  INSIDE the competition's own window (`2099-01-01`..`2099-01-03`):
+ *  `usecases/schedule.ts` refuses a division whose schedule starts before its
+ *  competition opens (`SCHEDULE_OUTSIDE_COMPETITION`), and the first live
+ *  `_tiny` run ever made 422'd on exactly that with a wall-clock `Date.now() +
+ *  24h`. Written as a literal here rather than derived from
+ *  `competition.startsOn` because this file emits a COMMITTED artefact — a
+ *  derived value would still be a literal in `_tiny.json`, and one that no
+ *  longer says where it came from.
+ *
+ *  The trailing `Z` is load-bearing: `encodeConstraints` THROWS on an
+ *  offsetless ISO date-time, because reading one against the host timezone
+ *  would make the checker's oracle answer differently on a BST dev box and a
+ *  UTC CI runner. */
+const TINY_SCHEDULE_START_AT = "2099-01-01T09:00:00.000Z";
+
+/** The `ScheduleConfig` both scheduled divisions get.
+ *
+ *  Shared rather than written twice: the two divisions have no reason to
+ *  differ, and two copies is how the badminton half quietly stops being
+ *  scheduled against the same courts the generic half is.
+ *
+ *  `courts` names the venue's courts by `@`-sigil — the pack cannot know the
+ *  real UUIDs, which only exist once `seedSuite` has run. `pack-schema.ts`'s
+ *  `checkReservations` resolves these against the DECLARED venues/courts at
+ *  stage 0; `board.ts`'s `encodeConstraints` resolves them against the SEEDED
+ *  ids at run time, and `schedule.ts` builds the config it PUTs from that one
+ *  resolution rather than resolving a second time.
+ *
+ *  `gapMinutes: 0` is declared deliberately, not omitted: it lands in
+ *  `EncodedConstraints.unmodelled` (a declared knob with no rule behind it —
+ *  court occupancy is judged on `matchMinutes` alone, ruling R12), and that
+ *  entry is what makes `_tiny`'s report exercise the "unchecked rendered
+ *  BESIDE the verdict" requirement on a green run instead of only on a
+ *  hypothetical one. `blackouts`/`sessionWindows` are empty arrays rather
+ *  than absent for the same declare-your-answer reason; both are MODELLED, and
+ *  an empty `sessionWindows` means UNRESTRICTED (checker.ts's own rule), never
+ *  "nothing is allowed". */
+const TINY_SCHEDULE_CONFIG: NonNullable<PackInput["divisions"][number]["scheduleConfig"]> = {
+  startAt: TINY_SCHEDULE_START_AT,
+  matchMinutes: 30,
+  gapMinutes: 0,
+  courts: TINY_COURT_REFS.map((ref) => `@${ref}`),
+  perEntrantMinRest: 0,
+  blackouts: [],
+  sessionWindows: [],
+};
+
+// ---------------------------------------------------------------------------
 // d-tiny — the generic division, carried through as a literal.
 //
 // Every value below is copied verbatim from the `_tiny.json` this generator
@@ -81,6 +159,11 @@ const TINY_DIVISION: PackInput["divisions"][number] = {
       seeding: ["e-alpha", "e-bravo"],
     },
   ],
+  // B04 T6 (design §7): BOTH scheduled divisions get one, and both are
+  // scheduled. `_INDEX.md` recorded that `runTinySuite` drove
+  // `divisions[0]`/`stages[0]` only and that B04 owned closing it; this
+  // declaration plus `suites/tiny.ts`'s per-division loop is where it closes.
+  scheduleConfig: TINY_SCHEDULE_CONFIG,
 };
 
 const TINY_PERSONS: NonNullable<PackInput["persons"]> = [
@@ -313,6 +396,11 @@ const TINY_ADAPTATIONS: PackInput["meta"]["adaptations"] = [
     where: "officials[]",
   },
   {
+    what: "venues[] declares ONE venue with TWO courts, and BOTH scheduled divisions (d-tiny, d-badminton) carry the SAME scheduleConfig naming those courts by @-sigil. suites/tiny.ts's own ad-hoc one-venue/one-court HTTP creation is deleted; the pack is the one source.",
+    why: "B04 design \u00a77. One court makes design \u00a73.3's court-double-booking rule unfalsifiable \u2014 every fixture sits on the same court, so the rule reports clean forever \u2014 which is exactly the vacuous-guard class this bench exists to catch. Two courts give it somewhere to happen. The config is SHARED between the two divisions rather than copied, so \"both divisions are scheduled onto the same courts\" is true by construction; gapMinutes: 0 is declared on purpose so the report carries a real EncodedConstraints.unmodelled entry and the \"unchecked beside the verdict\" rendering is exercised on a green run.",
+    where: "venues[], divisions[0].scheduleConfig, divisions[1].scheduleConfig",
+  },
+  {
     what: "claimInvites[] carries two entries, one per division's own star (p-ana from d-tiny, p-cho from d-badminton) — minted, never accepted (B03 §5: \"the accept flow is B05's, seeding only mints invites\").",
     why: "Bench design §9 P2: \"pc_ claim invites for ~3 stars/suite\". Two is enough for _tiny to prove the mapping generalises across divisions without inflating a fixture whose whole point is staying small.",
     where: "claimInvites[]",
@@ -425,6 +513,10 @@ const BADMINTON_DIVISION: PackInput["divisions"][number] = {
   // legal on a pack.
   tiebreakers: badminton.defaultTiebreakers,
   stages: [BADMINTON_STAGE],
+  // The SAME object d-tiny carries — see `TINY_SCHEDULE_CONFIG`. Sharing it
+  // is what makes "both divisions are scheduled onto the same two courts"
+  // true by construction rather than by two literals agreeing.
+  scheduleConfig: TINY_SCHEDULE_CONFIG,
 };
 
 // bestOf 3, straight games: home wins 2-0. `badminton`'s `pointsMap` default
@@ -673,6 +765,7 @@ export function buildTinyPack(): PackInput {
     persons: [...TINY_PERSONS, ...BADMINTON_PERSONS, ...REGISTRATION_PERSONS],
     entrants: [...TINY_ENTRANTS, ...BADMINTON_ENTRANTS, ...REGISTRATION_SHADOW_ENTRANTS],
     streams: [...TINY_STREAMS, BADMINTON_STREAM],
+    venues: TINY_VENUES,
     officials: TINY_OFFICIALS,
     claimInvites: TINY_CLAIM_INVITES,
     expected: {
