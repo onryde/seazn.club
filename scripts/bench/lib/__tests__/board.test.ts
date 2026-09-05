@@ -152,6 +152,46 @@ describe("encodeConstraints", () => {
     ]);
   });
 
+  // The oracle must name the same instant on every machine that runs the bench.
+  // `Date.parse` reads an OFFSETLESS ISO date-time as LOCAL time — measured on
+  // this box, `Date.parse("2027-06-01T08:00:00")` answers 1811836800000 under
+  // TZ=UTC, 1811833200000 under Europe/London and 1811817000000 under
+  // Asia/Kolkata, a 5.5-hour spread — so accepting one would put the machine's
+  // timezone inside a file whose whole contract is "no clock".
+  it("reads a Z instant and the SAME instant written with a +05:30 offset as one number", () => {
+    const out = encodeConstraints({
+      divisionRef: "d-tiny",
+      scheduleConfig: {
+        // 08:00Z and 13:30+05:30 are the same instant. A reader that dropped
+        // the offset would answer 1811836800000 for the first and
+        // 1811856600000 (13:30 read as UTC) for the second.
+        startAt: "2027-06-01T08:00:00Z",
+        endAt: "2027-06-01T13:30:00+05:30",
+      },
+      courtIdByRef: courts,
+      isRoundRobin: true,
+      pins: [],
+    });
+    // `date -u -r 1811836800` -> 2027-06-01T08:00:00Z, derived outside this
+    // process.
+    expect(out.startAt).toBe(1811836800000);
+    expect(out.endAt).toBe(1811836800000);
+  });
+
+  it("REFUSES an offsetless ISO date-time instead of reading it in the machine's own timezone", () => {
+    expect(() =>
+      encodeConstraints({
+        divisionRef: "d-tiny",
+        scheduleConfig: { startAt: "2027-06-01T08:00:00" },
+        courtIdByRef: courts,
+        isRoundRobin: true,
+        pins: [],
+      }),
+      // Names the offending field AND why, so a pack author can fix it without
+      // reading this file.
+    ).toThrow(/scheduleConfig\.startAt.*offset/s);
+  });
+
   it("leaves a global blackout global — an absent court is not resolved to one", () => {
     const out = encodeConstraints({
       divisionRef: "d-tiny",

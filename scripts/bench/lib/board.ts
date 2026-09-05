@@ -345,6 +345,18 @@ const NOT_MODELLED = "not modelled by the bench checker";
  *  same reason the defaults above are. */
 const HHMM = /^([01]\d|2[0-3]):[0-5]\d$/;
 
+/** The product's `IsoDateTime` is `z.iso.datetime({ offset: true })`
+ *  (`apps/web/src/server/api-v1/schemas.ts:1280`) — the offset is REQUIRED, and
+ *  this is that requirement restated as a suffix check for the same reason the
+ *  defaults above are restated: this function reads an opaque record and never
+ *  runs that zod schema.
+ *
+ *  A suffix check rather than a full ISO grammar, deliberately: `Date.parse`
+ *  below still has to reject a well-suffixed non-date (`"2027-06-31T25:00:00Z"`),
+ *  and folding both jobs into one regex would leave that guard unreachable and
+ *  therefore untested. */
+const ISO_OFFSET = /(?:Z|[+-]\d{2}:\d{2})$/;
+
 const REST_SCOPES = ["per_person", "feeder_to_dependent", "both"] as const;
 type RestScope = (typeof REST_SCOPES)[number];
 
@@ -404,10 +416,31 @@ function intField(
 /** ISO-with-offset -> epoch ms. `Date.parse` honours the offset, which is the
  *  whole point: a config that says `14:30+05:30` means 09:00Z, and a reader
  *  that dropped the offset would be five and a half hours out with nothing
- *  red. */
+ *  red.
+ *
+ *  The OFFSET IS REQUIRED, and its absence is a refusal rather than a
+ *  best-effort read. `Date.parse` resolves an offsetless ISO date-time against
+ *  the HOST's timezone, so `"2027-06-01T08:00:00"` measures 1811836800000 under
+ *  `TZ=UTC`, 1811833200000 under `Europe/London` and 1811817000000 under
+ *  `Asia/Kolkata` — a 5.5-hour spread. Accepting one would put the machine's
+ *  clock inside the oracle every containment rule in `checker.ts` measures
+ *  against, so the same pack would yield different `inside_blackout` /
+ *  `outside_session_windows` findings on a BST dev box and a UTC CI runner,
+ *  with nothing red. That is convention #1 at the top of this file — an instant
+ *  and a wall clock are different units — one layer down, and it is the only
+ *  place the module's "no clock" claim could stop being true.
+ *
+ *  The product never emits this shape (`IsoDateTime` refuses it on the way in),
+ *  so reaching here means a pack-authoring slip, which is what the message
+ *  names. */
 function epochMs(raw: unknown, where: string): number {
   if (typeof raw !== "string") {
     throw new Error(`board: ${where} must be an ISO instant string, got ${show(raw)}`);
+  }
+  if (!ISO_OFFSET.test(raw)) {
+    throw new Error(
+      `board: ${where} must carry an explicit UTC offset — a trailing "Z" or "±HH:MM" — got ${show(raw)}; an offsetless ISO date-time is read against the HOST timezone and would make this oracle machine-dependent`,
+    );
   }
   const ms = Date.parse(raw);
   if (!Number.isFinite(ms)) {
