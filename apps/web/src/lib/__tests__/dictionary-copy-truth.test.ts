@@ -3837,3 +3837,53 @@ describe("the annual saving the copy promises is one the seed delivers", () => {
     }
   });
 });
+
+// ── Key-set parity across the four locales ───────────────────────────────────
+//
+// WHY NOTHING CAUGHT `nav.dashboard` BEING ENGLISH-ONLY FOR SEVERAL WAVES.
+// `lib/i18n-keys.ts` is GENERATED FROM `en` ALONE, so the drift check it feeds
+// answers "does this key exist?" by looking at exactly one locale. A key added
+// to `en` and forgotten in `es`/`fr`/`nl` is invisible to it — 438 keys in `en`
+// against 437 in each of the others, on `main` as well as here, and every
+// existing guard in this file reads VALUES for keys it already knows about.
+//
+// This asks the question none of them do: do the four locales hold the SAME
+// keys, file for file? A missing key does not throw at runtime — `t()` falls
+// back — so the symptom is an English word on a Spanish page, which only a
+// person looking at that page in that language will ever notice.
+describe("every locale carries the same keys, file for file", () => {
+  const dictionaryFiles = readdirSync("src/dictionaries/en")
+    .filter((f) => f.endsWith(".json"))
+    .map((f) => f.replace(/\.json$/, ""))
+    .sort();
+
+  // Anti-vacuity: a glob that matched nothing, or a locale list of one, would
+  // make every assertion below pass by examining nothing at all.
+  it("has files and locales to compare", () => {
+    expect(dictionaryFiles.length).toBeGreaterThan(3);
+    expect(DICTIONARY_LOCALES.length).toBeGreaterThan(1);
+    expect(DICTIONARY_LOCALES).toContain("en");
+  });
+
+  for (const file of dictionaryFiles) {
+    it(`${file}.json holds one key set across every locale`, () => {
+      const enKeys = Object.keys(load("en", file));
+      const faults: string[] = [];
+      for (const locale of DICTIONARY_LOCALES.filter((l) => l !== "en")) {
+        const theirs = new Set(Object.keys(load(locale, file)));
+        // Both directions. A key present only in a translation is just as much
+        // a drift as one missing from it, and it is the shape a rename leaves
+        // behind — the old key orphaned in three locales, the new one in `en`.
+        const missing = enKeys.filter((k) => !theirs.has(k));
+        const extra = [...theirs].filter((k) => !enKeys.includes(k)).sort();
+        if (missing.length > 0) {
+          faults.push(`${locale} is missing ${missing.length}: ${missing.slice(0, 6).join(", ")}`);
+        }
+        if (extra.length > 0) {
+          faults.push(`${locale} has ${extra.length} key(s) en does not: ${extra.slice(0, 6).join(", ")}`);
+        }
+      }
+      expect(faults, `${file}.json key drift:\n  ${faults.join("\n  ")}`).toEqual([]);
+    });
+  }
+});
