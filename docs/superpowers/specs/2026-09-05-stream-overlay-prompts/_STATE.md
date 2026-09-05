@@ -16,6 +16,50 @@ Last updated: 2026-09-05 18:35 BST (session "overlay", branch
 | Design themes sheet (binding values, 1920×1080) | `docs/superpowers/specs/2026-09-05-stream-overlay-prompts/_THEMES.md` | `0106f4d50` |
 | Canvas (two directions, sport sheets, moments, phone test, panel) | https://claude.ai/code/artifact/2aebcbde-28ba-45ff-9028-1151873e4901 | published |
 
+## Both wave plans are written (2026-09-05 23:4x BST)
+
+| Wave | Plan | Size | State |
+|---|---|---|---|
+| W1 | `docs/superpowers/plans/2026-09-05-stream-overlay-w1.md` | 3475 lines, 8 tasks, 80 steps | committed `c303435a1`; no placeholders, no empty test bodies, 26 `_THEMES.md` citations. Ready to execute once the desk branch merges. |
+| W2 | `docs/superpowers/plans/2026-09-05-stream-overlay-w2-moments.md` | 1083 lines, 6 tasks | committed `f491867a7`; NOT executable until its RE-PIN rows close and its comment-sketched Task 1 test bodies are written out. |
+
+**Eight W1 deviations the planner recorded, each a decision to keep or
+reverse (they are argued in the plan; four need an owner answer):**
+
+1. `useLiveFixture` returns `{ data, live, subscribed, refresh }` — `LiveScore`
+   renders `subscribed` at `live-score.tsx:148`, so a bare payload would
+   change its render. Keep.
+2. `msg` is typed `OverlayMsg` (plain string key), not `MsgFn` — `MessageKey`
+   is `keyof ui.json` (`lib/messages.ts:12`), so every `public.overlay.*` key
+   would fail tsc. Keep.
+3. `overlayModel` takes a fourth input `decidedTemplates`, because `result`
+   must come from `renderDecidedOutcome`, the one decided-sentence authority.
+   Keep.
+4. **Start time formats in UTC**, server-side, because no public venue zone
+   exists on the payload. The competition-desk programme's "one zone per
+   fixture" ruling says a time belongs in the venue's zone. OWNER QUESTION:
+   accept UTC for W1, or add the zone to the public payload first.
+5. `detail` drops the discipline `person` name in W1; consent resolution is
+   W2's rule. Keep.
+6. Cricket chase reads "Need 45", not "Need 45 off 45" — `ballsLimit` is not
+   on the public payload. OWNER QUESTION: accept the shorter line, or extend
+   the payload. `_THEMES.md` §3 shows the longer form.
+7. The overlay e2e lives under `e2e/walkthrough/` (R9), not the path W2's
+   plan names. W1 wins; W2 re-points at execution.
+8. `.ovl-*` CSS lives in `globals.css`, because the panel preview mounts
+   `OverlayStage` outside the overlay layout. One extra file is touched:
+   `cookie-consent.tsx` gains a `data-testid` so the banner can be
+   suppressed — OBS would otherwise put the cookie banner on air. Keep.
+
+**Symbols that stayed unpinned:** football's match clock (no field on
+`ScoreSummary.detail`; `lib/public-site.ts:319-373` is the complete reader
+set), so `header.clock` is undefined for football until the payload carries
+it — `_THEMES.md` §3 and §4 show a clock, so either the payload grows or the
+football bar ships without it (OWNER QUESTION). Entrant short name does not
+exist (`public_entrants_v`, `V350:18-47`, has `display_name` and
+`team_display` only), so watch-list item 6 resolves to the three-letter
+fallback. Each sport's opener event for the capture spec is marked re-pin.
+
 ## What was in flight at the last stop
 
 Three Fable subagents, dispatched 2026-09-05 ~18:10–18:20 BST, owner
