@@ -137,6 +137,16 @@ interface ValidateOut {
   conflicts?: readonly WireConflict[];
 }
 
+/** `ScheduleSettings` (`schemas.ts:1446-1452`) — what `PUT
+ *  /divisions/{id}/schedule-settings` RETURNS: the persisted config, not an
+ *  echo of the request. `putScheduleSettings` returns it from the usecase and
+ *  the route forwards it unmapped, which is what makes the round-trip check in
+ *  `crossCheckSettings` possible at all. */
+interface PutSettingsOut {
+  config?: unknown;
+  tz?: string;
+}
+
 /** `S.Fixture` (`schemas.ts:1000-1055`) minus the frozen `venue`/`court_label`
  *  the route strips. NOTE `scheduled_at` and NO `ends_at` — design §4.2's
  *  whole reason for deriving the end. */
@@ -442,6 +452,79 @@ function toBoardCourt(venueId: string, court: NonNullable<WireVenue["courts"]>[n
   };
 }
 
+/** Compares what the product KEPT against what the pack DECLARED.
+ *
+ *  `ScheduleConfig` (`schemas.ts:1283`) is a plain `z.object`, NOT `.strict()`
+ *  — unlike `PatchFixture` and `ApplyScheduleRequest`, which both are. A zod
+ *  object STRIPS an unknown key rather than refusing it, so a pack that
+ *  declares a knob this product build does not have gets a 200, a config
+ *  without it, and no indication whatsoever. The checker then judges the board
+ *  against the declared value while the scheduler never received it: a
+ *  false-clean of the same family as the validated-but-unsent defect this
+ *  programme has already paid for, and the reason a 200 is not evidence that
+ *  anything was stored.
+ *
+ *  Two checks, deliberately separated because they carry different
+ *  false-positive risk:
+ *
+ *   - A DECLARED KEY THAT DID NOT COME BACK was stripped. Unambiguous.
+ *   - A KEY THAT CAME BACK CHANGED. Compared through `sameConfigValue`, which
+ *     treats two parseable instants as equal when they name the same moment —
+ *     the product re-serialises `IsoDateTime`, and `...Z` against `...+00:00`
+ *     is a formatting difference, not a divergence. Comparing those as strings
+ *     would red every run and the check would be deleted within a day.
+ *
+ *  Extra keys in the RESPONSE are not reported: `ScheduleConfig` applies
+ *  `.default()`s, and a product filling in a knob the pack left out is the
+ *  documented behaviour rather than a disagreement. */
+function crossCheckSettings(sent: Record<string, unknown>, persisted: unknown, sink: Sink): void {
+  if (!isRecord(persisted)) {
+    sink.error(
+      `schedule-settings returned no readable config (${show(persisted)}), so what the product kept ` +
+        "of the pack's declaration is unknown and every rule below is judged against an unverified oracle",
+    );
+    return;
+  }
+  for (const [key, value] of Object.entries(sent)) {
+    if (!(key in persisted)) {
+      sink.error(
+        `schedule-settings DROPPED "${key}" — the pack declared it and the product did not keep it. ` +
+          "ScheduleConfig is not .strict(), so an unknown key is stripped rather than refused, and the " +
+          "200 above means nothing; the checker would judge this board against a value the scheduler never had",
+      );
+      continue;
+    }
+    if (!sameConfigValue(value, persisted[key])) {
+      sink.error(
+        `schedule-settings CHANGED "${key}": the pack declared ${show(value)} and the product kept ` +
+          `${show(persisted[key])}`,
+      );
+    }
+  }
+}
+
+/** Structural equality, with two instants that name the same moment treated as
+ *  equal. Records compare only the keys the PACK declared — see
+ *  `crossCheckSettings` on why an added default is not a divergence. */
+function sameConfigValue(sent: unknown, kept: unknown): boolean {
+  if (typeof sent === "string" && typeof kept === "string") {
+    const a = instant(sent);
+    const b = instant(kept);
+    return a !== undefined && b !== undefined ? a === b : sent === kept;
+  }
+  if (Array.isArray(sent) && Array.isArray(kept)) {
+    const keptArr: readonly unknown[] = kept;
+    return (
+      sent.length === keptArr.length &&
+      (sent as readonly unknown[]).every((v, i) => sameConfigValue(v, keptArr[i]))
+    );
+  }
+  if (isRecord(sent) && isRecord(kept)) {
+    return Object.keys(sent).every((k) => k in kept && sameConfigValue(sent[k], kept[k]));
+  }
+  return sent === kept;
+}
+
 /** A sink both representations of one event go through, so the string and the
  *  struct can never disagree about what happened. */
 class Sink {
@@ -636,10 +719,16 @@ async function runDivision(
 
     // --- Step 2: PUT the resolved schedule settings ------------------------
     if (division.scheduleConfig !== undefined) {
-      await t.request(base, s, `/api/v1/divisions/${division.divisionId}/schedule-settings`, {
-        method: "PUT",
-        body: { config: resolvedConfig(division.scheduleConfig, resolution), tz: division.tz },
-      });
+      const sent = resolvedConfig(division.scheduleConfig, resolution);
+      const settings = await t.request<PutSettingsOut>(
+        base,
+        s,
+        `/api/v1/divisions/${division.divisionId}/schedule-settings`,
+        { method: "PUT", body: { config: sent, tz: division.tz } },
+      );
+      // THE RESPONSE IS EVIDENCE, NOT AN ACKNOWLEDGEMENT — see
+      // `crossCheckSettings`.
+      crossCheckSettings(sent, settings?.config, sink);
     }
 
     // --- Step 3: lock, then SNAPSHOT what the product reports as locked ----
@@ -668,25 +757,64 @@ async function runDivision(
     });
 
     // --- Step 4: propose ----------------------------------------------------
+    // `only_unlocked: false` IS THE BUILD, and an empty body cannot be one.
+    // `AutoScheduleRequest` is a `z.preprocess` that DERIVES `mode` from this
+    // flag (`schemas.ts:1643-1651`): `body.only_unlocked === false ? "build" :
+    // "reflow"`, with the strict `=== false` there precisely because an ABSENT
+    // flag defaults to `true` and must derive a reflow. So `body: {}` — the
+    // obvious call, and what `tiny.ts` sends today — silently asks for a
+    // REFLOW of a stage that has never been scheduled, and the bench would
+    // report a first-time build it never requested.
+    //
+    // The product's own primary Auto-schedule button posts `false` here for
+    // exactly this reason (`only_unlocked`'s doc comment), so this is the
+    // organiser path, not a bench-only trick. Pins are unaffected: since
+    // #pins-in-build "a lock is honoured on every mode now, unconditionally",
+    // and `ignore_locks` — which this driver never sends — is the only way off
+    // that. B04 issues only this one mode; design §4.5 defers the reflow/repair
+    // probe to B17, and if that arrives, the empty-proposal refusal below has
+    // to become conditional on the mode.
     const auto = await t.request<AutoScheduleOut>(
       base,
       s,
       `/api/v1/stages/${division.stageId}/schedule/auto`,
-      { method: "POST", body: {} },
+      { method: "POST", body: { only_unlocked: false } },
     );
     readSolver(auto, outcome, input.engine, sink);
 
     // --- Step 5: persist ----------------------------------------------------
-    await t.request(base, s, `/api/v1/stages/${division.stageId}/schedule/apply`, {
-      method: "POST",
-      body: {
-        assignments: (auto.assignments ?? []).map((a) => ({
-          fixture_id: a.fixture_id,
-          scheduled_at: a.scheduled_at,
-          court_id: a.court_id,
-        })),
-      },
-    });
+    // AN EMPTY PROPOSAL IS NOT AN EMPTY APPLY. `ApplyScheduleRequest`'s
+    // `assignments` is `.min(1).max(500)` (`schemas.ts:2146-2147`) while
+    // `AutoScheduleResult`'s has NO minimum (`:2098`), so the one response the
+    // solver returns on a capacity refusal is a body this endpoint rejects.
+    // Posting it anyway 400s, and the throw would abort this division BEFORE
+    // `/validate` and before the board fetch — destroying the exact evidence
+    // design §3.4's `UNPLACED` branch exists to report. A board the solver
+    // could not place is a finding, not a crash.
+    const proposed = auto.assignments ?? [];
+    if (proposed.length === 0) {
+      // Loud, because this driver only ever issues a BUILD (step 4): on a
+      // freshly generated stage an empty proposal is always a refusal, never a
+      // legitimate no-op. A future reflow leg (B17) would need this gated on
+      // the mode, since a reflow of an already-optimal board proposes nothing
+      // and is correct to.
+      sink.error(
+        `auto proposed 0 assignments, so nothing was applied — the board fetched below is the ` +
+          `PRE-AUTO state, not a scheduled one (solver.status=${outcome.solverStatus ?? "absent"}, ` +
+          `metrics.placed=${outcome.metrics?.placed ?? "absent"}/${outcome.metrics?.total ?? "absent"})`,
+      );
+    } else {
+      await t.request(base, s, `/api/v1/stages/${division.stageId}/schedule/apply`, {
+        method: "POST",
+        body: {
+          assignments: proposed.map((a) => ({
+            fixture_id: a.fixture_id,
+            scheduled_at: a.scheduled_at,
+            court_id: a.court_id,
+          })),
+        },
+      });
+    }
     crossCheckDurations(auto, encoded.matchMinutes, sink);
 
     // --- Step 6: layer 1 ----------------------------------------------------
@@ -720,10 +848,18 @@ async function runDivision(
     // permanently green. Only this driver knows both halves: `Board` and
     // `EncodedConstraints` carry no officials signal, so `checker.ts` cannot
     // tell "found none" from "had none to find".
-    if (division.declaresOfficials && board.fixtures.every((f) => f.officialIds.length === 0)) {
+    // Gated on a PLACED fixture existing: a division with nothing placed is the
+    // unplaced gate's business, and reding it here as well says "no officials
+    // came back" about a board that came back empty for a different reason.
+    const placedFixtures = board.fixtures.filter((f) => f.start !== undefined);
+    if (
+      division.declaresOfficials &&
+      placedFixtures.length > 0 &&
+      placedFixtures.every((f) => f.officialIds.length === 0)
+    ) {
       sink.error(
-        "the pack declared officials for this division and the fetched board carries none — " +
-          "every officials rule below is vacuous until it does",
+        `the pack declared officials for this division and not one of the ${placedFixtures.length} ` +
+          "placed fixtures came back with any — every officials rule below is vacuous until one does",
       );
     }
   } catch (err) {

@@ -63,6 +63,13 @@ const CONFIG: Record<string, unknown> = {
 const T0 = Date.parse("2099-01-01T09:00:00.000Z");
 const MIN = 60_000;
 
+/** One placed fixture. Used by every script whose subject is NOT the board, so
+ *  that `auto` has something to propose and `/apply` is actually reached — an
+ *  empty proposal is a solver refusal, not a neutral default. */
+const PLACED = (): Record<string, unknown>[] => [
+  fx({ id: "f1", scheduled_at: "2099-01-01T09:00:00.000Z", court_id: "court-1", court_name: "Court 1" }),
+];
+
 function divA(over: Partial<ScheduleDivision> = {}): ScheduleDivision {
   return {
     divisionRef: "d-a",
@@ -163,18 +170,59 @@ interface DivisionScript {
 interface Script {
   divisions?: Record<string, DivisionScript>;
   venues?: Record<string, unknown>[];
+  /** Config keys this product build silently drops on the PUT — a key the pack
+   *  declared and `ScheduleConfig` has no member for. */
+  stripConfigKeys?: string[];
+  /** Values the product persisted DIFFERENTLY from what was sent. */
+  configOverrides?: Record<string, unknown>;
 }
 
+/** `ScheduleConfig`'s own top-level keys (`schemas.ts:1283-1426`). The fake
+ *  PUT strips anything not in here, because that schema is a plain `z.object`
+ *  and a plain zod object STRIPS an unknown key rather than refusing it. A
+ *  fake that echoed the request back would model a `.strict()` schema the
+ *  product does not have. */
+const SCHEDULE_CONFIG_KEYS = new Set([
+  "startAt",
+  "endAt",
+  "matchMinutes",
+  "gapMinutes",
+  "courts",
+  "perEntrantMinRest",
+  "blackouts",
+  "sessionWindows",
+  "roundMinutes",
+  "constraints",
+]);
+
+/** NOTE: no `mode`. The fake DERIVES it from the request body exactly as
+ *  `AutoScheduleRequest`'s preprocess does, so a driver that sends the wrong
+ *  body gets the wrong mode back instead of the one this constant wished for.
+ *  Hard-coding `mode: "build"` here is what let an empty request body — which
+ *  can only ever derive `"reflow"` — look like a build for 41 green tests. */
 const OK_SOLVER = {
   engine: "optimized",
   status: "ok",
-  mode: "build",
   tiers_completed: 4,
   tiers_total: 4,
   budget_expired: false,
   elapsed_ms: 12,
   moved: 1,
 };
+
+/** `AutoScheduleRequest`'s preprocess (`schemas.ts:1645-1651`), reproduced so
+ *  the fake cannot be kinder than the product. `=== false` and not
+ *  `!only_unlocked`: an ABSENT flag defaults to true and derives a reflow. */
+function derivedMode(body: unknown): "build" | "reflow" | "polish" {
+  if (!isPlainObject(body)) return "reflow";
+  const declared = body.mode;
+  if (declared === "build" || declared === "reflow" || declared === "polish") return declared;
+  return body.only_unlocked === false ? "build" : "reflow";
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
 
 const OK_METRICS = {
   makespan_minutes: 45,
@@ -200,7 +248,27 @@ function fakeTransport(script: Script = {}): { transport: SeedTransport; calls: 
       calls.push({ method, path: reqPath, body: opts?.body });
 
       const settings = /^\/api\/v1\/divisions\/([^/]+)\/schedule-settings$/.exec(reqPath);
-      if (method === "PUT" && settings) return {} as T;
+      if (method === "PUT" && settings) {
+        // `putScheduleSettings` returns the PERSISTED `ScheduleSettings`
+        // (`schemas.ts:1446`), not an echo — and what it persists is what
+        // `ScheduleConfig` parsed, i.e. the declared keys it knows about and
+        // nothing else. `script.stripConfigKeys` lets a test model a product
+        // build that has additionally lost a key it used to have.
+        const body = isPlainObject(opts?.body) ? opts.body : {};
+        const sentConfig = isPlainObject(body.config) ? body.config : {};
+        const kept: Record<string, unknown> = {};
+        for (const [k, v] of Object.entries(sentConfig)) {
+          if (!SCHEDULE_CONFIG_KEYS.has(k)) continue;
+          if (script.stripConfigKeys?.includes(k)) continue;
+          kept[k] = v;
+        }
+        return {
+          division_id: settings[1],
+          config: { ...kept, ...(script.configOverrides ?? {}) },
+          tz: typeof body.tz === "string" ? body.tz : "UTC",
+          updated_at: "2099-01-01T00:00:00.000Z",
+        } as unknown as T;
+      }
 
       if (method === "PATCH" && /^\/api\/v1\/fixtures\/[^/]+$/.test(reqPath)) return {} as T;
 
@@ -218,17 +286,43 @@ function fakeTransport(script: Script = {}): { transport: SeedTransport; calls: 
       const auto = /^\/api\/v1\/stages\/([^/]+)\/schedule\/auto$/.exec(reqPath);
       if (method === "POST" && auto) {
         const d = divisionForStage(script, auto[1]!);
+        const scripted = d?.auto ?? {};
+        const solver = isPlainObject(scripted.solver)
+          ? scripted.solver
+          : "solver" in scripted
+            ? scripted.solver
+            : OK_SOLVER;
         return {
-          assignments: [],
+          assignments: autoAssignmentsFor(d),
           conflicts: [],
           metrics: OK_METRICS,
-          solver: OK_SOLVER,
-          ...(d?.auto ?? {}),
+          ...scripted,
+          // `mode` is ECHOED from the request's own derivation
+          // (ScheduleSolverInfo.mode: "which solver the request asked for,
+          // echoed back"), so it is stamped AFTER the scripted spread and a
+          // test cannot fake a mode the request could not have produced.
+          solver: isPlainObject(solver) ? { ...solver, mode: derivedMode(opts?.body) } : solver,
         } as unknown as T;
       }
 
       if (method === "POST" && /^\/api\/v1\/stages\/[^/]+\/schedule\/apply$/.test(reqPath)) {
-        return {} as T;
+        // `ApplyScheduleRequest.assignments` is `.min(1).max(500)`
+        // (`schemas.ts:2146-2147`). A fake that accepted `[]` is not a test
+        // double, it is a second implementation with kinder rules — the exact
+        // class that has now shipped four times in this repo, and the reason
+        // 41 green tests never saw the driver post a body the server refuses.
+        const body = isPlainObject(opts?.body) ? opts.body : {};
+        const assignments = Array.isArray(body.assignments) ? body.assignments : undefined;
+        if (assignments === undefined || assignments.length === 0) {
+          throw new Error(
+            `${reqPath}: unexpected HTTP 400 — {"ok":false,"error":"VALIDATION","issues":` +
+              `[{"path":["assignments"],"code":"too_small","minimum":1}]}`,
+          );
+        }
+        if (assignments.length > 500) {
+          throw new Error(`${reqPath}: unexpected HTTP 400 — assignments exceeds .max(500)`);
+        }
+        return { applied: assignments.length, conflicts: [] } as unknown as T;
       }
 
       const validate = /^\/api\/v1\/divisions\/([^/]+)\/schedule\/validate$/.exec(reqPath);
@@ -249,6 +343,33 @@ function fakeTransport(script: Script = {}): { transport: SeedTransport; calls: 
 
 /** Stage -> division script. The fixture data is keyed by division id; `auto`
  *  and `apply` are addressed by STAGE id, so the two have to be joined. */
+/** What `auto` proposes by default: one assignment per fixture the script will
+ *  later report as PLACED.
+ *
+ *  A fake whose default proposal is `[]` cannot exercise `/apply` at all — and
+ *  since `ApplyScheduleRequest.assignments` is `.min(1)`, an empty default is
+ *  also the one shape the real endpoint refuses. `ends_at` is always present
+ *  because `ScheduleAssignment.ends_at` is a REQUIRED `z.string()` on the wire
+ *  (`schemas.ts:1624`), and it is set to exactly `CONFIG.matchMinutes` so the
+ *  §4.2 cross-check stays silent unless a test deliberately disagrees. */
+function autoAssignmentsFor(d: DivisionScript | undefined): Record<string, unknown>[] {
+  const rows = d?.fixturesAfter ?? d?.fixturesBefore ?? [];
+  const out: Record<string, unknown>[] = [];
+  for (const f of rows) {
+    const at = f.scheduled_at;
+    const court = f.court_id;
+    if (typeof at !== "string" || typeof court !== "string") continue;
+    out.push({
+      fixture_id: f.id,
+      scheduled_at: at,
+      ends_at: new Date(Date.parse(at) + 45 * MIN).toISOString(),
+      court_id: court,
+      court_name: typeof f.court_name === "string" ? f.court_name : null,
+    });
+  }
+  return out;
+}
+
 function divisionForStage(script: Script, stageId: string): DivisionScript | undefined {
   for (const [divisionId, d] of Object.entries(script.divisions ?? {})) {
     if (stageId === `stage-${divisionId.replace(/^div-/, "")}`) return d;
@@ -328,7 +449,7 @@ describe("runScheduleLayer — the engine assertion", () => {
   });
 
   it("passes when the engine matches, and records it either way", async () => {
-    const optimized = fakeTransport({ divisions: { "div-a": {} } });
+    const optimized = fakeTransport({ divisions: { "div-a": { fixturesAfter: PLACED() } } });
     const rOpt = await runScheduleLayer(layer({ transport: optimized.transport, engine: "optimized" }));
     expect(rOpt.outcomes[0].errors).toEqual([]);
     expect(rOpt.outcomes[0].actualEngine).toBe("optimized");
@@ -336,14 +457,16 @@ describe("runScheduleLayer — the engine assertion", () => {
     // The other direction, so the assertion cannot be a one-sided
     // "always expect optimized" that happens to be right today.
     const greedy = fakeTransport({
-      divisions: { "div-a": { auto: { solver: { ...OK_SOLVER, engine: "greedy" } } } },
+      divisions: {
+        "div-a": { fixturesAfter: PLACED(), auto: { solver: { ...OK_SOLVER, engine: "greedy" } } },
+      },
     });
     const rGreedy = await runScheduleLayer(layer({ transport: greedy.transport, engine: "greedy" }));
     expect(rGreedy.outcomes[0].errors).toEqual([]);
     expect(rGreedy.outcomes[0].actualEngine).toBe("greedy");
 
     // ...and asking for greedy while optimized ran reds too.
-    const crossed = fakeTransport({ divisions: { "div-a": {} } });
+    const crossed = fakeTransport({ divisions: { "div-a": { fixturesAfter: PLACED() } } });
     const rCrossed = await runScheduleLayer(layer({ transport: crossed.transport, engine: "greedy" }));
     expect(rCrossed.outcomes[0].errors.join(" ")).toMatch(/expected greedy.*got optimized/i);
   });
@@ -351,7 +474,10 @@ describe("runScheduleLayer — the engine assertion", () => {
   it("--engine both asserts nothing about the engine", async () => {
     const { transport } = fakeTransport({
       divisions: {
-        "div-a": { auto: { solver: { ...OK_SOLVER, engine: "greedy", status: "solver_busy" } } },
+        "div-a": {
+          fixturesAfter: PLACED(),
+          auto: { solver: { ...OK_SOLVER, engine: "greedy", status: "solver_busy" } },
+        },
       },
     });
 
@@ -368,6 +494,7 @@ describe("runScheduleLayer — the engine assertion", () => {
     const { transport } = fakeTransport({
       divisions: {
         "div-a": {
+          fixturesAfter: PLACED(),
           auto: { solver: { ...OK_SOLVER, engine: "greedy" } },
           validate: {
             conflicts: [
@@ -388,11 +515,19 @@ describe("runScheduleLayer — the engine assertion", () => {
     // `AutoScheduleResult.solver` is NON-optional on the wire (schemas.ts:2101).
     // A response without it cannot be asserted against, and silently recording
     // `actualEngine: undefined` would put `engine-undefined.json` on disk.
-    const { transport } = fakeTransport({ divisions: { "div-a": { auto: { solver: undefined } } } });
+    const { transport } = fakeTransport({
+      // A PLACED board, so the only thing wrong here is the missing telemetry.
+      // Without it this test passed against the empty-proposal refusal instead,
+      // whose message also contains the word "solver" — a mutation sweep caught
+      // it surviving the deletion of the very error it is named for.
+      divisions: { "div-a": { fixturesAfter: PLACED(), auto: { solver: undefined } } },
+    });
 
     const r = await runScheduleLayer(layer({ transport, engine: "optimized" }));
 
-    expect(r.outcomes[0].errors.join(" ")).toMatch(/solver/i);
+    // Anchored on the phrase only THIS error uses, not a bare /solver/i that
+    // three other messages also satisfy.
+    expect(r.outcomes[0].errors.join(" ")).toMatch(/no solver\.engine/);
     expect(r.outcomes[0].actualEngine).toBeUndefined();
   });
 
@@ -400,8 +535,9 @@ describe("runScheduleLayer — the engine assertion", () => {
     const { transport } = fakeTransport({
       divisions: {
         "div-a": {
+          fixturesAfter: PLACED(),
           auto: {
-            solver: { ...OK_SOLVER, mode: "reflow", tiers_completed: 2, tiers_total: 6, budget_expired: true },
+            solver: { ...OK_SOLVER, tiers_completed: 2, tiers_total: 6, budget_expired: true },
             metrics: { ...OK_METRICS, makespan_minutes: 135, placed: 3, total: 4 },
           },
         },
@@ -411,7 +547,9 @@ describe("runScheduleLayer — the engine assertion", () => {
     const r = await runScheduleLayer(layer({ transport }));
     const o = r.outcomes[0];
 
-    expect(o.mode).toBe("reflow");
+    // "build", and the fake could not have said otherwise: it DERIVES the mode
+    // from the request body the way the product's preprocess does.
+    expect(o.mode).toBe("build");
     expect(o.tiersCompleted).toBe(2);
     expect(o.tiersTotal).toBe(6);
     expect(o.budgetExpired).toBe(true);
@@ -774,7 +912,7 @@ describe("runScheduleLayer — pins", () => {
   });
 
   it("walks the seven steps in the design's order", async () => {
-    const { transport, calls } = fakeTransport({ divisions: { "div-a": {} } });
+    const { transport, calls } = fakeTransport({ divisions: { "div-a": { fixturesAfter: PLACED() } } });
 
     await runScheduleLayer(layer({ transport }));
 
@@ -868,7 +1006,17 @@ describe("runScheduleLayer — every division", () => {
   it("keeps scheduling after one division fails, and keys its output by divisionRef", async () => {
     const { transport } = fakeTransport({
       divisions: {
-        "div-b": { fixturesAfter: [fx({ id: "fb", division_id: "div-b", stage_id: "stage-b" })] },
+        "div-b": {
+          fixturesAfter: [
+            fx({
+              id: "fb",
+              division_id: "div-b",
+              stage_id: "stage-b",
+              scheduled_at: "2099-01-01T10:00:00.000Z",
+              court_id: "court-2",
+            }),
+          ],
+        },
       },
     });
 
@@ -1191,5 +1339,208 @@ describe("engine artifacts", () => {
     const payload = snapshot("optimized", 180);
     const file = await writeEngineArtifact(dir, "sha", "optimized", payload);
     expect(JSON.parse(await readFile(file, "utf8"))).toEqual(payload);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Fix round 1 — the four things 41 green tests could not see
+// ---------------------------------------------------------------------------
+
+describe("runScheduleLayer — an empty proposal is a refusal, not an empty apply", () => {
+  it("never POSTs an empty assignments array, because /apply refuses one", async () => {
+    // `ApplyScheduleRequest.assignments` is `.min(1)` (schemas.ts:2146) while
+    // `AutoScheduleResult.assignments` has no minimum — so the exact response a
+    // capacity refusal produces is a body /apply rejects. The fake throws a 400
+    // on `[]` the way the server does, so a driver that posts it fails here.
+    const { transport, calls } = fakeTransport({
+      divisions: {
+        "div-a": {
+          auto: { assignments: [], metrics: { ...OK_METRICS, placed: 0, total: 4 } },
+          fixturesAfter: [fx({ id: "f1", scheduled_at: null }), fx({ id: "f2", scheduled_at: null })],
+        },
+      },
+    });
+
+    const r = await runScheduleLayer(layer({ transport }));
+
+    expect(calls.map((c) => c.path)).not.toContain("/api/v1/stages/stage-a/schedule/apply");
+    expect(r.outcomes[0].errors.join(" ")).toMatch(/auto proposed 0 assignments/);
+  });
+
+  it("still reaches validate AND the board fetch after a refusal, so UNPLACED keeps its evidence", async () => {
+    // This is the whole point: a 400 out of /apply would abort the division
+    // before either, and design §3.4's UNPLACED branch would have nothing to
+    // report about the board the solver could not place.
+    const { transport, calls } = fakeTransport({
+      divisions: {
+        "div-a": {
+          auto: { assignments: [], metrics: { ...OK_METRICS, placed: 0, total: 2 } },
+          validate: {
+            conflicts: [{ fixture_id: "f1", code: "warn.no_slot", blocking: false, details: { kind: "no_slot_lattice" } }],
+          },
+          fixturesAfter: [fx({ id: "f1", scheduled_at: null }), fx({ id: "f2", scheduled_at: null })],
+        },
+      },
+    });
+
+    const r = await runScheduleLayer(layer({ transport }));
+
+    expect(calls.map((c) => `${c.method} ${c.path}`)).toEqual([
+      "PUT /api/v1/divisions/div-a/schedule-settings",
+      "GET /api/v1/divisions/div-a/fixtures",
+      "POST /api/v1/stages/stage-a/schedule/auto",
+      // no apply
+      "POST /api/v1/divisions/div-a/schedule/validate",
+      "GET /api/v1/divisions/div-a/fixtures",
+      "GET /api/v1/orgs/org-1/venues",
+    ]);
+    expect(r.outcomes[0].unplacedCount).toBe(2);
+    expect(r.outcomes[0].metrics).toMatchObject({ placed: 0, total: 2 });
+    expect(r.outcomes[0].warnKindTally).toEqual({ no_slot_lattice: 1 });
+    expect(r.boards[0].fixtures).toHaveLength(2);
+  });
+
+  it("applies exactly the assignments auto proposed when there ARE some", async () => {
+    const { transport, calls } = fakeTransport({ divisions: { "div-a": { fixturesAfter: PLACED() } } });
+
+    await runScheduleLayer(layer({ transport }));
+
+    const apply = calls.find((c) => c.path === "/api/v1/stages/stage-a/schedule/apply");
+    expect(apply).toBeDefined();
+    expect(apply!.body).toEqual({
+      assignments: [
+        { fixture_id: "f1", scheduled_at: "2099-01-01T09:00:00.000Z", court_id: "court-1" },
+      ],
+    });
+    // `ends_at` and `court_name` are echoed-and-ignored by the endpoint; not
+    // sending them keeps the body to what `.strict()` actually wants.
+    expect(Object.keys(apply!.body as { assignments: object[] }).sort()).toEqual(["assignments"]);
+  });
+});
+
+describe("runScheduleLayer — the auto request body", () => {
+  it("asks for a BUILD explicitly, because an empty body can only derive a reflow", async () => {
+    const { transport, calls } = fakeTransport({ divisions: { "div-a": { fixturesAfter: PLACED() } } });
+
+    const r = await runScheduleLayer(layer({ transport }));
+
+    const auto = calls.find((c) => c.path === "/api/v1/stages/stage-a/schedule/auto");
+    // `only_unlocked: false` is the ONLY thing that derives `mode: "build"`
+    // (schemas.ts:1645-1651). `{}` derives "reflow" — a re-flow of a stage that
+    // has never been scheduled.
+    expect(auto!.body).toEqual({ only_unlocked: false });
+    // And the fake DERIVES the echoed mode from that body, so this assertion
+    // cannot be satisfied by a hard-coded constant.
+    expect(r.outcomes[0].mode).toBe("build");
+  });
+
+  it("never sends ignore_locks — a pin must survive the build it was snapshotted for", async () => {
+    const { transport, calls } = fakeTransport({ divisions: { "div-a": { fixturesAfter: PLACED() } } });
+
+    await runScheduleLayer(layer({ transport }));
+
+    // Since #pins-in-build every mode honours a lock unconditionally, and
+    // `ignore_locks` is the only way off that. Sending it would silently void
+    // every pin the checker is about to judge.
+    const auto = calls.find((c) => c.path === "/api/v1/stages/stage-a/schedule/auto");
+    expect(Object.keys(auto!.body as object)).not.toContain("ignore_locks");
+  });
+});
+
+describe("runScheduleLayer — the schedule-settings round trip", () => {
+  it("reports a config key the product silently dropped", async () => {
+    const { transport } = fakeTransport({
+      divisions: { "div-a": { fixturesAfter: PLACED() } },
+      // `ScheduleConfig` is a plain z.object, so an unknown key is STRIPPED and
+      // the PUT still 200s. The pack declared it; the scheduler never got it.
+      stripConfigKeys: ["perEntrantMinRest"],
+    });
+
+    const r = await runScheduleLayer(layer({ transport }));
+
+    expect(r.outcomes[0].errors.join(" ")).toMatch(/DROPPED "perEntrantMinRest"/);
+  });
+
+  it("reports a config value the product persisted differently", async () => {
+    const { transport } = fakeTransport({
+      divisions: { "div-a": { fixturesAfter: PLACED() } },
+      configOverrides: { matchMinutes: 30 },
+    });
+
+    const r = await runScheduleLayer(layer({ transport }));
+
+    // The pack declared 45 and the product kept 30 — every overlap rule below
+    // would be measured against a duration the scheduler never used.
+    expect(r.outcomes[0].errors.join(" ")).toMatch(/CHANGED "matchMinutes".*45.*30/);
+  });
+
+  it("does NOT report a re-serialised instant as a divergence", async () => {
+    const { transport } = fakeTransport({
+      divisions: { "div-a": { fixturesAfter: PLACED() } },
+      // Same moment, different spelling — the product re-serialises IsoDateTime.
+      configOverrides: { startAt: "2099-01-01T09:00:00+00:00" },
+    });
+
+    const r = await runScheduleLayer(layer({ transport }));
+
+    // Without this, the check reds on every live run and gets deleted.
+    expect(r.outcomes[0].errors).toEqual([]);
+  });
+
+  it("does NOT report a default the product added that the pack never declared", async () => {
+    const { transport } = fakeTransport({
+      divisions: { "div-a": { fixturesAfter: PLACED() } },
+      configOverrides: { roundMinutes: 90 },
+    });
+
+    const r = await runScheduleLayer(layer({ transport }));
+
+    expect(r.outcomes[0].errors).toEqual([]);
+  });
+
+  it("reports a PUT that answered with no readable config at all", async () => {
+    const transport: SeedTransport = {
+      async signIn() {
+        throw new Error("unused");
+      },
+      async request<T>(_b: string, _s: Session, reqPath: string): Promise<T> {
+        if (/schedule-settings$/.test(reqPath)) return {} as T;
+        throw new Error("fake: only the PUT is scripted here");
+      },
+    };
+
+    const r = await runScheduleLayer(layer({ transport }));
+
+    expect(r.outcomes[0].errors.join(" ")).toMatch(/no readable config/);
+  });
+});
+
+describe("runScheduleLayer — the officials red is not vacuous", () => {
+  it("stays silent on a board with nothing placed, which is the unplaced gate's business", async () => {
+    const { transport } = fakeTransport({
+      divisions: {
+        "div-a": {
+          auto: { assignments: [], metrics: { ...OK_METRICS, placed: 0, total: 1 } },
+          fixturesAfter: [fx({ id: "f1", scheduled_at: null, officials: [] })],
+        },
+      },
+    });
+
+    const r = await runScheduleLayer(layer({ transport, divisions: [divA({ declaresOfficials: true })] }));
+
+    // The refusal above is reported; the officials rule must NOT pile a second,
+    // misleading reason ("no officials came back") onto a board that came back
+    // empty for an entirely different reason.
+    expect(r.outcomes[0].errors.join(" ")).not.toMatch(/declared officials/);
+  });
+
+  it("still reds when a PLACED fixture came back with no officials", async () => {
+    const { transport } = fakeTransport({
+      divisions: { "div-a": { fixturesAfter: PLACED() } },
+    });
+
+    const r = await runScheduleLayer(layer({ transport, divisions: [divA({ declaresOfficials: true })] }));
+
+    expect(r.outcomes[0].errors.join(" ")).toMatch(/declared officials/);
   });
 });
