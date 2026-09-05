@@ -101,6 +101,8 @@ That blindness is the whole reason the defects survived.
 | `registration-connect` | the money path: organiser settings → public team entry on a paid division → card on `checkout.stripe.com` → webhook → confirmed |
 | `rs007-invite-pay-cancel` | invite + pay + cancel: two team entries in one cart (capacity ONE waitlists the second), one Stripe checkout for the cart's real subtotal, a claim link followed, the waitlisted sibling promoted but never paid, then cancelled through the status page — witnesses two confirmed defects (the subtotal keeping a withdrawn entry's fee; the cancel dialog promising a refund sourced from a sibling's charge). Meant to FAIL. |
 | `settings-admin` | the platform fee — the one global number every entry fee is cut by: a support-role staff member offered a dead Save the route also refuses, a cleared field that must not save a silent 0%, the fee changed through the form and read back from the store, and both bounds driven on the form AND on the route. Then the four legacy `/settings/*` shims, landing org-scoped with the `?tab=` and Stripe return params they carry — `/settings/payments` via two hops — and an email-change confirmation keeping its OUTCOME through `/settings`, driven on two outcomes so a shim forwarding a constant, or a banner ignoring the value, fails |
+| `scheduling-organiser-day` | the organiser's scheduling day: division settings and the court multi-picker → the constraints panel's real commit semantics (blur-commit numbers, instant-commit checkboxes, a blackout saved through its own editor) → required court tags on the stage → a capacity pre-check derived from the settings, including a case where the per-day cap BINDS → auto-schedule → the timetable read back off the record (time AND court, not a count) → freeze → clear and restore both refused, on screen and at 422 → publish and start, with the freeze asserted still in force on both sides |
+| `scheduling-officials-handoff` | the two-person handoff: the organiser invites an official from the directory, the claim link is read off the page that emits it (it is a `<code>`, not an anchor — §S16) and followed in a SECOND context with `storageState: undefined`, the official sets a blackout day on `/me`, the organiser assigns them by name through the per-fixture select and sees the unavailable cue, and the official accepts from their own screen — every step read back out of `fixture_officials`. Also drives propose → apply → read-back to completion, seating an uncapped official on BOTH same-day fixtures — which is how §S4 was resolved: the apply control is not dead, it is the block-conflict branch refusing a proposal the `max_per_day` cap cannot cover. The residual finding is that a blocked draft gives the organiser no reason. |
 
 `registration-connect` and `rs007-invite-pay-cancel` are both **opt-in** and
 skip loudly without `CONNECT_WALKTHROUGH=1` and `STRIPE_CONNECT_TEST_ACCOUNT`
@@ -120,6 +122,57 @@ They are their own Playwright project and their own CI leg — see
 `apps/web/src/lib/__tests__/e2e-ci-wiring.test.ts` proves the project is
 dispatched and selects these files, because a project nothing dispatches is
 indistinguishable from a passing one.
+
+## What they cost
+
+Every spec here carries a **derived** budget rather than a flat literal, and
+asserts its own ceiling as the test's FIRST act — never at module scope, where
+a load-time failure reports as zero collected tests instead of a red one.
+Ceiling: **90s per spec.**
+
+| Spec | Measured | Budget derives to | How |
+|---|---|---|---|
+| `scheduling-organiser-day` | **31.08s**, three consecutive clean runs, warm `:3313` | 81s | `14 × 4_000 + 2 × solverWall() + 5_000`, where `solverWall()` mirrors `autoSolverWallMs()` (env-tunable, 10s default) |
+| `scheduling-officials-handoff` | **~25s** solo for the file (2 tests; the second drives propose → apply → read-back, and PASSES — the §S4 `test.fail()` pin it replaced is gone) | 82.5s | `25 × 2_500 + 20_000`, the 20s citing `loginUi`'s own wait |
+
+**Leg-level number, measured 2026-09-05** on a quiet machine against a server
+rebuilt from this tree:
+
+| | |
+|---|---|
+| whole `walkthrough` project | **593s** (9.9 min) at `workers=4` |
+| its floor | `scorepad-v3-tennis-mtb`, **307s** in ONE unsplittable test |
+| `scheduling-organiser-day` | **43.7s** under contention (27.2s solo), budget 81s |
+| `scheduling-officials-handoff` | **34.9s** for its two tests under contention (38s solo for the file), budget 82.5s |
+
+So the two scheduling specs do hide under the tennis tail, as the pass condition
+required — together they are about an eighth of a leg whose floor is one test
+they cannot influence.
+
+The numbers that matter are the CONTENTION ones, not the solo ones. Both
+budgets are derived, and both hold at `workers=4` where the specs compete with
+the scorepad files and with each other. A budget that only holds in a quiet run
+is a budget that reds in CI.
+
+Two caveats on this measurement, so nobody over-reads it:
+
+- It was taken at `workers=4`, not the `workers=3` this note originally
+  specified. Compare like with like before drawing a trend.
+- There is still no **pre-wave** figure for the same invocation, so "not
+  materially above its pre-task value" is argued from the marginal cost of the
+  two specs rather than from a before-and-after. That is weaker evidence, and
+  it is the honest description of what was measured.
+
+- The measurement must confirm `suites > 0` and `expected > 0`. A walkthrough
+  run that aborts at preflight reports `suites: 0, expected: 0, unexpected: 0`
+  — a pass to any gate reading `unexpected === 0` alone.
+
+One flake seen once and not reproduced in three clean runs:
+`scheduling-officials-handoff` hit its own 82.5s budget on
+`official-blackout-add` staying disabled. That is ~3× the clean wall clock, so
+it is a stall rather than accumulated slowness — a controlled date input whose
+`fill()` lost the hydration race, leaving `disabled={busy || !date}` true while
+`click()` waits out the whole test budget. **Do not raise the budget for it.**
 
 ### Watch one in a real browser
 

@@ -237,8 +237,14 @@ export default async function DivisionPage({
   // frozen/editable derivation, unchanged) — the P6/D4b task B proposal
   // panel below needs it to gate getSeedProposal, which must not fetch (let
   // alone render mutating controls) for a viewer or a frozen competition.
-  const frozen = competition.frozen ?? false;
-  const editable = canEdit && !frozen;
+  // `billingFrozen`, never `frozen`: this repo has THREE unrelated freezes and
+  // two of them meet on this page. This one is the org's BILLING freeze
+  // (`assertCompetitionNotFrozen`, competitions.ts:320) — an over-quota org is
+  // read-only. It is NOT `divisions.schedule_locked`, the schedule freeze that
+  // stops a board being edited, which is passed separately as `scheduleLocked`.
+  // Gating a schedule control on this one silently never fires.
+  const billingFrozen = competition.frozen ?? false;
+  const editable = canEdit && !billingFrozen;
   const sportModule = resolveModule(division.sport_key, division.module_version);
   // Effective entrant model (sport default ← config.entrants override) — shared
   // by the entrants panel (add form + roster editor) and the Settings tab.
@@ -393,7 +399,7 @@ export default async function DivisionPage({
               {division.sport_key} · {division.variant_key}
             </span>
             <StatusChip state={divisionChipState(division.status)} locale={locale} />
-            {frozen && <StatusChip state="frozen" locale={locale} />}
+            {billingFrozen && <StatusChip state="frozen" locale={locale} />}
             <div className="flex-1" />
             {/* Icon + label on desktop, icon-only under `sm` (v3/02 pattern 5). */}
             <Link

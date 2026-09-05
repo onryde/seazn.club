@@ -198,10 +198,36 @@ export async function applyJointPlan(
  */
 export type JointUndoRefusal = "retry" | "changed" | "gone";
 
+/** One division the joint undo could not revert, WITH the server's own reason.
+ *
+ *  The reason used to be dropped here (`out.failed.map(f => f.division_id)`),
+ *  which made the freeze refusal invisible on this path: the usecase answers a
+ *  frozen division with "the division schedule is locked — unlock it to edit",
+ *  the one sentence that tells the organiser what to do, and the console named
+ *  the division and said nothing else. The copy existed and nothing rendered it.
+ */
+export interface JointUndoFailure {
+  divisionId: string;
+  /** The server's sentence for THIS division. Empty only on the catch branch
+   *  below, where the call itself failed and a per-division reason would be a
+   *  guess — the console renders no "why" line for an empty reason. */
+  reason: string;
+  /** The refusal's machine-readable code, where it had one — `SCHEDULE_LOCKED`
+   *  for a frozen division, absent for a bare `HttpError` or a thrown `Error`.
+   *
+   *  Carried for exactly one purpose: the console renders a LOCAL dictionary
+   *  sentence for a refusal it recognises, because `reason` is English prose
+   *  and painting it into `board.ai.joint.undoneReason`'s `{reason}` put an
+   *  English clause mid-sentence inside a fully translated card. Branch on
+   *  THIS, never on `reason` — matching the sentence breaks the moment the
+   *  sentence is reworded. */
+  code?: string;
+}
+
 export interface JointUndoOutcome {
   ok: boolean;
   /** Divisions still carrying the AI board. Empty on a `refusal` — nothing ran. */
-  failed: string[];
+  failed: JointUndoFailure[];
   refusal?: JointUndoRefusal;
 }
 
@@ -214,8 +240,10 @@ export interface JointUndoOutcome {
  * takes one competition lock, rewinds every division in sorted order and reports
  * per division, so the loop cannot be abandoned.
  *
- * `{ ok, failed }` is unchanged so the console's partial-undo copy still reads
- * the same field; `refusal` is additive, and only set when NOTHING was tried.
+ * `refusal` is additive, and only set when NOTHING was tried. `failed` carries
+ * `{ divisionId, reason }` rather than a bare id: the reason is the half an
+ * organiser can act on, and dropping it is what made the freeze refusal
+ * invisible on this path.
  */
 export async function undoJointApply(
   competitionId: string,
@@ -230,7 +258,7 @@ export async function undoJointApply(
   try {
     const out = await api<{
       restored: { division_id: string; watermark: number; steps: number }[];
-      failed: { division_id: string; reason: string }[];
+      failed: { division_id: string; reason: string; code?: string }[];
       ok: boolean;
     }>(`/api/v1/competitions/${competitionId}/schedule/restore`, {
       method: "POST",
@@ -242,7 +270,19 @@ export async function undoJointApply(
         confirm: true,
       },
     });
-    return { ok: out.ok, failed: out.failed.map((f) => f.division_id) };
+    return {
+      ok: out.ok,
+      // `reason` carried through, not discarded: it is per DIVISION on the
+      // wire (the usecase catches around each `restoreCheckpoint`), so the
+      // console can say why each one is still on the AI board. `code` rides
+      // beside it — the reason is what an unrecognised refusal shows, the code
+      // is what a recognised one is SAID with, in the reader's own language.
+      failed: out.failed.map((f) => ({
+        divisionId: f.division_id,
+        reason: f.reason,
+        ...(f.code ? { code: f.code } : {}),
+      })),
+    };
   } catch (err) {
     // Keyed on the STATUS, not the code: the usecase throws a bare
     // `HttpError(404 | 422, message)` with no code at all, so a code match
@@ -251,7 +291,10 @@ export async function undoJointApply(
     if (refusal) return { ok: false, failed: [], refusal };
     // The call itself failed — nothing was restored, and saying "some divisions
     // failed" would be a guess. Report every division as unrestored.
-    return { ok: false, failed: checkpoints.map((c) => c.divisionId) };
+    // No per-division reason exists here — one request failed as a whole — and
+    // repeating its message against every division would read as N separate
+    // findings. Empty, and the console prints no "why" line.
+    return { ok: false, failed: checkpoints.map((c) => ({ divisionId: c.divisionId, reason: "" })) };
   }
 }
 

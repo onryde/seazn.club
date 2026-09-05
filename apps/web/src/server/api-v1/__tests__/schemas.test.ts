@@ -20,10 +20,13 @@ import {
   PatchEntrant,
   PatchFixture,
   PutRegistrationSettings,
+  RestoreCompetitionScheduleResult,
   SetTeamSquad,
 } from "../schemas";
 
 const UUID = "11111111-1111-4111-8111-111111111111";
+/** A SECOND id, so a two-division payload cannot pass by echoing the first. */
+const UUID2 = "22222222-2222-4222-8222-222222222222";
 
 describe("CreateEntrant", () => {
   it("accepts display_name without team_id", () => {
@@ -793,5 +796,46 @@ describe("EventImportRequest (P11 batch import)", () => {
       const r = EventImportRequest.safeParse(stream({ type: "core.start", at }));
       expect(r.success, `expected ${JSON.stringify(at)} to be accepted`).toBe(true);
     }
+  });
+});
+
+
+// The joint-undo refusal's MACHINE-READABLE half (schedule-lock copy fix).
+//
+// `restoreCompetitionSchedule` catches per division and reports each refusal in
+// `failed[]`. It used to carry the message alone, so the board's joint-undo
+// card had nothing to branch on but English prose — and interpolating
+// `SCHEDULE_LOCKED_MESSAGE` into a dictionary placeholder put a raw English
+// clause mid-sentence inside a fully translated card, on the first request.
+//
+// A zod object STRIPS an undeclared key silently. Dropping `code` from this
+// schema therefore breaks the card with no type error anywhere: the usecase
+// still returns it, `tsc` is satisfied, and the browser simply never sees it.
+describe("RestoreCompetitionScheduleResult — the per-division refusal code", () => {
+  const payload = {
+    restored: [{ division_id: UUID, watermark: 3, steps: 2 }],
+    failed: [
+      { division_id: UUID2, reason: "the division schedule is locked", code: "SCHEDULE_LOCKED" },
+    ],
+    ok: false,
+  };
+
+  it("survives the published schema instead of being stripped on the way out", () => {
+    const parsed = RestoreCompetitionScheduleResult.parse(payload);
+    expect(parsed.failed[0]!.code).toBe("SCHEDULE_LOCKED");
+    // Nothing else moved: the whole body round-trips unchanged.
+    expect(parsed).toEqual(payload);
+  });
+
+  it("stays optional, because most refusals carry no code at all", () => {
+    // A bare `HttpError(404, "checkpoint not found")` and a thrown `Error` both
+    // reach `failed[]` with a reason and nothing else. Requiring the code would
+    // 500 the endpoint on the commonest refusal it has.
+    const r = RestoreCompetitionScheduleResult.safeParse({
+      ...payload,
+      failed: [{ division_id: UUID2, reason: "checkpoint not found" }],
+    });
+    expect(r.success).toBe(true);
+    if (r.success) expect(r.data.failed[0]!.code).toBeUndefined();
   });
 });

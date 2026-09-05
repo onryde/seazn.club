@@ -291,6 +291,7 @@ export function OfficialsPanel({
             </label>
             <button
               type="button"
+              data-testid="officials-propose"
               className="btn btn-primary"
               disabled={busy}
               onClick={() =>
@@ -310,6 +311,7 @@ export function OfficialsPanel({
             {proposal && proposal.assignments.length > 0 && (
               <button
                 type="button"
+                data-testid="officials-apply"
                 className="btn btn-primary"
                 disabled={busy || proposal.conflicts.some((c) => c.severity === "block")}
                 onClick={() =>
@@ -501,6 +503,7 @@ export function OfficialsPanel({
                             {o.locked && <span aria-label={msg("officials.locked")} title={msg("officials.locked")}> 🔒</span>}
                             {unavailableFor(o.official_id, f.scheduled_at) && (
                               <span
+                                data-testid="officials-unavailable-note"
                                 className="ml-1 text-amber-600"
                                 title={msg("officials.unavailableOn")}
                               >
@@ -527,6 +530,8 @@ export function OfficialsPanel({
                 {canEdit && (
                   <td className="px-4 py-2 text-right">
                     <select
+                      data-testid="officials-assign-select"
+                      data-fixture-id={f.id}
                       className="input"
                       aria-label={msg("officials.assignAria", { label: f.label })}
                       value={f.officials[0]?.official_id ?? ""}

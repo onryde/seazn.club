@@ -4170,8 +4170,14 @@ export const RestoreCompetitionScheduleResult = z.object({
       steps: z.number().int(),
     }),
   ),
-  /** `reason` is the refusal's message (a missing checkpoint, a stale seq, …). */
-  failed: z.array(z.object({ division_id: Uuid, reason: z.string() })),
+  /** `reason` is the refusal's message (a missing checkpoint, a stale seq, …).
+   *  `code` is `HttpError.code` where the refusal carried one — present for a
+   *  frozen division (SCHEDULE_LOCKED), absent for a bare `HttpError` or a
+   *  plain `Error`. It is what lets the console say a refusal it recognises in
+   *  the reader's own language instead of painting the server's English prose
+   *  into a translated card; a client that does not recognise it falls back to
+   *  `reason`. Optional, so every existing consumer keeps working. */
+  failed: z.array(z.object({ division_id: Uuid, reason: z.string(), code: z.string().optional() })),
   ok: z.boolean(),
 });
 export type RestoreCompetitionScheduleResult = z.infer<typeof RestoreCompetitionScheduleResult>;

@@ -11,6 +11,10 @@ import { UpgradeGate } from "@/components/upgrade-gate";
 import { useConfirm } from "@/components/ui/confirm-provider";
 import { Tip } from "@/components/ui/tip";
 import { useMsg } from "@/components/i18n/dict-provider";
+// Zero imports of its own, so a client component may hold it. The CODE is the
+// contract between a schedule-lock refusal and this panel; the SENTENCE is not.
+import { SCHEDULE_LOCKED_CODE } from "@/lib/schedule-lock";
+import type { MessageKey } from "@/lib/messages";
 
 interface HistoryRow {
   seq: number;
@@ -46,19 +50,23 @@ const CHECKPOINT_GROUPS = [
   { kind: "ai", headingKey: "history.checkpoint.groupAi", noteKey: "history.checkpoint.notCounted" },
 ] as const;
 
-const TYPE_LABELS: Record<string, string> = {
-  schedule_applied: "Schedule applied",
-  schedule_edited: "Fixture moved",
-  schedule_cleared: "Schedule cleared",
-  schedule_restored: "Schedule restored",
-  fixtures_generated: "Fixtures generated",
-  fixtures_cleared: "Fixtures removed",
-  pool_entrants_cleared: "Pool emptied",
-  pool_entrants_restored: "Pool restored",
-  officials_assigned: "Officials assigned",
-  participants_imported: "Participants imported",
-  schedule_published: "Schedule published",
-  division_started: "Division started",
+/** Event type -> the dictionary key that names it. Keyed by the event TYPE, not
+ *  by the English label, so rewording a label never orphans its key. These
+ *  render INSIDE the "Recent edits" list: left as literals they made a
+ *  translated heading sit above a list of English event names. */
+const TYPE_LABEL_KEYS: Record<string, MessageKey> = {
+  schedule_applied: "history.event.scheduleApplied",
+  schedule_edited: "history.event.scheduleEdited",
+  schedule_cleared: "history.event.scheduleCleared",
+  schedule_restored: "history.event.scheduleRestored",
+  fixtures_generated: "history.event.fixturesGenerated",
+  fixtures_cleared: "history.event.fixturesCleared",
+  pool_entrants_cleared: "history.event.poolEntrantsCleared",
+  pool_entrants_restored: "history.event.poolEntrantsRestored",
+  officials_assigned: "history.event.officialsAssigned",
+  participants_imported: "history.event.participantsImported",
+  schedule_published: "history.event.schedulePublished",
+  division_started: "history.event.divisionStarted",
 };
 
 export function HistoryPanel({
@@ -132,15 +140,46 @@ export function HistoryPanel({
       if (err instanceof ApiV1Error && err.code === "PAYMENT_REQUIRED") {
         setPaywallFeature(String(err.extra.feature_key ?? ""));
       } else if (err instanceof ApiV1Error && err.code === "SEQ_CONFLICT") {
-        setError("Someone else edited this division — reloaded the latest state.");
+        // Same rule as the freeze branch below, and the same defect before it:
+        // this sentence was an English literal in a fully translated panel, on
+        // a path an organiser reaches whenever a second tab or a second person
+        // writes first. Branching on the CODE is already right here — only the
+        // sentence was hardcoded.
+        setError(msg("history.error.seqConflict"));
         await load();
+      } else if (err instanceof ApiV1Error && err.code === SCHEDULE_LOCKED_CODE) {
+        // A refusal this panel recognises is said in the reader's language. The
+        // server's sentence is English prose (`SCHEDULE_LOCKED_MESSAGE`), and
+        // painting it here put an English line in the middle of a translated
+        // console. Reachable without any race: `scheduleLocked` is a prop
+        // resolved when the page rendered, so a second tab or a second
+        // organiser freezing the division leaves every control on this page
+        // live and the 422 as the only thing that says no.
+        //
+        // Branch on the CODE, never on the message: matching an English
+        // sentence to decide how to render it breaks the moment the sentence is
+        // reworded, which is exactly what `@/lib/schedule-lock` makes cheap.
+        setError(msg("history.error.frozen"));
       } else {
+        // Deliberately NOT blanket-suppressed. Every refusal this client can
+        // recognise now has its own sentence; what is left is the unanticipated
+        // failure, and that is the one an organiser most needs to be able to
+        // quote. A generic "something went wrong" would trade an untranslated
+        // known refusal for an unreportable unknown one.
         setError(err instanceof Error ? err.message : "Failed");
       }
     } finally {
       setBusy(false);
     }
   }
+
+  /** The event's name in the reader's language, falling through to the raw type
+   *  for an event this build has no key for — the same fall-through the old
+   *  label map had, so a new server-side event type still reads as something. */
+  const eventLabel = (type: string): string => {
+    const key = TYPE_LABEL_KEYS[type];
+    return key ? msg(key) : type;
+  };
 
   const step = (direction: "undo" | "redo") =>
     run(() =>
@@ -151,21 +190,52 @@ export function HistoryPanel({
     );
 
   return (
-    <section className="mt-8 space-y-4" aria-label="Schedule history">
+    <section className="mt-8 space-y-4" aria-label={msg("history.aria")}>
       <div className="flex flex-wrap items-center gap-2">
         {/* Tip sits OUTSIDE the h2 — inside it would pollute the heading's
             accessible name ("History About: …"). */}
         <div className="flex items-center gap-1.5">
-          <h2 className="text-lg font-semibold tracking-tight text-slate-900">History</h2>
+          <h2 className="text-lg font-semibold tracking-tight text-slate-900">
+            {msg("history.title")}
+          </h2>
           <Tip id="schedule.undo-watermark" />
         </div>
         {canEdit && (
           <>
-            <button type="button" className="btn btn-ghost" disabled={busy} onClick={() => void step("undo")}>
-              ↩ Undo
+            {/* The arrow stays in the JSX, OUTSIDE the dictionary value: it is
+                decorative, identical in all four (LTR) locales, and part of the
+                accessible name schedule-panels.spec.ts selects on ("↩ Undo") —
+                a translator who dropped or reordered it would break that spec
+                with no way to see why. Interpolated into ONE template literal
+                rather than sitting beside the expression so the button renders
+                a single text node, exactly as it did before. */}
+            {/* The freeze binds the REWIND primitives too. `restoreCheckpoint`
+                is a loop of `undoDivision`, so the freeze that disabled Restore
+                a few hundred pixels below left the thing it is built out of
+                live right here. `scheduleLocked` is the prop, NOT anything
+                derived from `canEdit`: the mount site passes
+                `canEdit && !billingFrozen`, the ORG's billing freeze, and
+                gating on that would make this silently unreachable on a frozen
+                division. Both are `.btn`, which already carries
+                `disabled:cursor-not-allowed disabled:opacity-50`, so unlike the
+                bare-text Restore these read as disabled without extra tokens. */}
+            <button
+              type="button"
+              data-testid="history-undo"
+              className="btn btn-ghost"
+              disabled={busy || scheduleLocked}
+              onClick={() => void step("undo")}
+            >
+              {`↩ ${msg("history.undo")}`}
             </button>
-            <button type="button" className="btn btn-ghost" disabled={busy} onClick={() => void step("redo")}>
-              ↪ Redo
+            <button
+              type="button"
+              data-testid="history-redo"
+              className="btn btn-ghost"
+              disabled={busy || scheduleLocked}
+              onClick={() => void step("redo")}
+            >
+              {`↪ ${msg("history.redo")}`}
             </button>
             <label className="ml-auto flex items-center gap-2 text-sm text-slate-600">
               <input
@@ -181,20 +251,45 @@ export function HistoryPanel({
                   )
                 }
               />
-              Freeze whole schedule
+              {msg("history.freezeAll")}
             </label>
           </>
         )}
       </div>
 
+      {/* ONE note for both controls: they are refused for the same single
+          reason, and repeating the sentence beside each would be noise. It sits
+          BELOW the row rather than inside it — the row is a `flex-wrap`, so a
+          paragraph in it would be laid out as a third control — which also
+          makes each locale's own "above" (arriba / ci-dessus / hierboven) true
+          of the freeze checkbox at the end of that row. The sibling sentences
+          `history.danger.body` and `history.checkpoint.frozen` already point
+          the same way in the same word; three sentences in one console must not
+          disagree about which direction the checkbox is in.
+
+          `history.danger.frozen` is NOT reusable here even though the shape
+          matches: it ends "to clear slots", which names a different control. */}
+      {canEdit && scheduleLocked && (
+        <p className="text-xs text-slate-500" data-testid="history-step-reason">
+          {msg("history.step.frozen")}
+        </p>
+      )}
+
       {paywallFeature && <UpgradeGate feature={paywallFeature} />}
-      {error && <p className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-600">{error}</p>}
+      {error && (
+        <p
+          data-testid="history-error"
+          className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-600"
+        >
+          {error}
+        </p>
+      )}
 
       <div className="grid gap-4 lg:grid-cols-2">
         <div className="card p-4">
-          <h3 className="mb-2 text-sm font-semibold text-slate-900">Recent edits</h3>
+          <h3 className="mb-2 text-sm font-semibold text-slate-900">{msg("history.recent.title")}</h3>
           {!history || history.events.length === 0 ? (
-            <p className="text-sm text-slate-500">Nothing yet.</p>
+            <p className="text-sm text-slate-500">{msg("history.recent.empty")}</p>
           ) : (
             <ol className="space-y-1 text-sm">
               {history.events.slice(0, 12).map((e) => (
@@ -203,8 +298,10 @@ export function HistoryPanel({
                   className={`flex items-center gap-2 ${e.undone ? "text-slate-400 line-through" : "text-slate-700"}`}
                 >
                   <span className="font-mono text-xs text-slate-400">#{e.seq}</span>
-                  {TYPE_LABELS[e.type] ?? e.type}
-                  {!e.undoable && <span className="text-xs text-slate-400">(not undoable)</span>}
+                  {eventLabel(e.type)}
+                  {!e.undoable && (
+                    <span className="text-xs text-slate-400">{msg("history.notUndoable")}</span>
+                  )}
                   <time className="ml-auto text-xs text-slate-400">
                     {new Date(e.created_at).toLocaleTimeString()}
                   </time>
@@ -217,7 +314,7 @@ export function HistoryPanel({
         <div className="card space-y-2 p-4">
           {/* Tip beside, not inside, the heading (accessible-name hygiene). */}
           <div className="flex items-center gap-1.5">
-            <h3 className="text-sm font-semibold text-slate-900">Save points</h3>
+            <h3 className="text-sm font-semibold text-slate-900">{msg("history.savePoints.title")}</h3>
             <Tip id="schedule.save-points" />
           </div>
           {canEdit && (
@@ -251,17 +348,19 @@ export function HistoryPanel({
                 // sizing test above (history-panel-save-button.test.tsx)
                 // still checks for.
                 className="input min-h-11 py-1.5 text-xs"
-                placeholder="e.g. before rain reshuffle"
+                data-testid="savepoint-label"
+                placeholder={msg("history.savePoints.placeholder")}
                 value={label}
                 onChange={(e) => setLabel(e.target.value)}
-                aria-label="Save point label"
+                aria-label={msg("history.savePoints.labelAria")}
               />
               <button
                 type="submit"
+                data-testid="savepoint-create"
                 className="btn btn-ghost shrink-0 whitespace-nowrap px-2.5 py-1.5 text-xs"
                 disabled={busy}
               >
-                Save point
+                {msg("history.savePoints.create")}
               </button>
             </form>
           )}
@@ -310,6 +409,41 @@ export function HistoryPanel({
               Each group is a rewind rail — the node is the save point, the line
               is the history between them. A filled node is the live AI anchor
               (what Undo targets); hollow nodes are still restorable. */}
+          {/* The freeze binds the rewind as well as the clear, and says so the
+              same way the Danger zone does: the control stays on the page,
+              disabled, with a reason beside it — a vanished button reads as a
+              missing feature, a disabled one teaches that unfreezing is the way
+              back. Restore is the WIDER of the two edits (clear empties
+              unlocked slots; this rewrites every fixture's time and court back
+              to the save point), so the freeze that stopped the smaller one a
+              few hundred pixels below had to stop this.
+
+              One note for the whole list rather than one per row: every Restore
+              on it is disabled for the same single reason, and repeating the
+              sentence down the rail would be noise. It is suppressed when there
+              are no save points — a paragraph explaining a button that is not
+              rendered.
+
+              `scheduleLocked` is the prop, NOT anything derived from `canEdit`:
+              the mount site passes `canEdit && !billingFrozen`, and
+              `billingFrozen` is the ORG's billing freeze, a different thing
+              with a confusingly similar name. */}
+          {/* Names BOTH refused actions when both are on the list, and only
+              Restore when they are not: Delete is offered on MANUAL save points
+              alone, so on a list of AI anchors "unfreeze it to restore or
+              delete" would promise a control that unfreezing does not produce.
+              One note either way — every control on the rail is refused for the
+              same single reason, and repeating the sentence down it would be
+              noise. */}
+          {canEdit && scheduleLocked && checkpoints.length > 0 && (
+            <p className="text-xs text-slate-500" data-testid="checkpoint-restore-reason">
+              {msg(
+                checkpoints.some((c) => (c.kind ?? "manual") === "manual")
+                  ? "history.checkpoint.frozenDelete"
+                  : "history.checkpoint.frozen",
+              )}
+            </p>
+          )}
           {checkpoints.length === 0 ? (
             <p className="text-sm text-slate-600">{msg("history.checkpoint.empty")}</p>
           ) : (
@@ -340,6 +474,8 @@ export function HistoryPanel({
                           return (
                             <li
                               key={cp.id}
+                              data-testid="checkpoint-row"
+                              data-checkpoint-id={cp.id}
                               className={`relative flex items-center gap-2 py-[5px] before:absolute before:left-[-18px] before:top-[11px] before:h-[9px] before:w-[9px] before:rounded-full before:border-[1.5px] before:content-[''] ${
                                 live
                                   ? "before:border-purple-600 before:bg-purple-600"
@@ -366,8 +502,19 @@ export function HistoryPanel({
                               {canEdit && (
                                 <button
                                   type="button"
-                                  className={`text-[10.5px] hover:underline ${cp.superseded ? "text-slate-600" : "text-purple-600"}`}
-                                  disabled={busy}
+                                  data-testid="checkpoint-restore"
+                                  // `enabled:hover:underline`, not
+                                  // `hover:underline`: `:hover` still matches a
+                                  // DISABLED button, so the bare variant keeps
+                                  // painting the link affordance on a control
+                                  // that does nothing. The other two are the
+                                  // pair `.btn` carries (globals.css) — this is
+                                  // a bare text button and inherits none of it,
+                                  // so a frozen Restore would otherwise render
+                                  // pixel-identical to a live one and lie about
+                                  // itself while the note beside it says why.
+                                  className={`text-[10.5px] enabled:hover:underline disabled:cursor-not-allowed disabled:opacity-50 ${cp.superseded ? "text-slate-600" : "text-purple-600"}`}
+                                  disabled={busy || scheduleLocked}
                                   onClick={async () => {
                                     const ok = await confirmDialog({
                                       title: msg("confirm.restoreCheckpoint.title"),
@@ -401,8 +548,28 @@ export function HistoryPanel({
                               {canEdit && (cp.kind ?? "manual") === "manual" && (
                                 <button
                                   type="button"
-                                  className="text-[11px] text-slate-400 hover:text-rose-600"
-                                  disabled={busy}
+                                  data-testid="checkpoint-delete"
+                                  // `enabled:hover:text-rose-600`, and the two
+                                  // disabled tokens spelled out: `:hover` still
+                                  // matches a DISABLED button, and this is a
+                                  // bare text button that inherits none of
+                                  // `.btn`'s `disabled:*` pair (globals.css).
+                                  // Without them a frozen Delete renders
+                                  // pixel-identical to a live one and still
+                                  // reddens under the cursor — a control lying
+                                  // about itself while the note above says why.
+                                  // Exactly the reasoning the Restore beside it
+                                  // already carries.
+                                  className="text-[11px] text-slate-400 enabled:hover:text-rose-600 disabled:cursor-not-allowed disabled:opacity-50"
+                                  // Matched to the Restore ON THIS ROW. Delete
+                                  // is the IRREVERSIBLE half of the pair — it
+                                  // destroys the rewind the freeze exists to
+                                  // protect, where Restore merely uses it — and
+                                  // `deleteCheckpoint` now answers a frozen
+                                  // division with a live 422, so leaving it
+                                  // `disabled={busy}` offered a button that
+                                  // could only fail.
+                                  disabled={busy || scheduleLocked}
                                   aria-label={msg("history.checkpoint.delete")}
                                   title={msg("history.checkpoint.delete")}
                                   onClick={async () => {
@@ -437,19 +604,31 @@ export function HistoryPanel({
 
       {canEdit && (
         <div className="card border-red-100 p-4">
-          <h3 className="text-sm font-semibold text-red-700">Danger zone</h3>
-          <p className="mt-1 text-xs text-slate-500">
-            Clears timetable slots only — locked and decided fixtures always survive, and
-            the action is undoable above.
-          </p>
+          <h3 className="text-sm font-semibold text-red-700">{msg("history.danger.title")}</h3>
+          <p className="mt-1 text-xs text-slate-500">{msg("history.danger.body")}</p>
+          {/* The freeze is a REASON, not a disappearance: the control stays on
+              the page and explains itself, because a vanished button reads as a
+              missing feature. `scheduleLocked` is the prop the page already
+              hands down (`division.schedule_locked`) — deliberately NOT
+              anything derived from `canEdit`, whose value at the mount site is
+              `canEdit && !billingFrozen`, the org's BILLING freeze. Gating on
+              that would make this guard silently unreachable on a frozen
+              division, which is the exact defect this closes: the server's 422
+              was the only thing saying no. */}
+          {scheduleLocked && (
+            <p className="mt-1 text-xs text-slate-500" data-testid="schedule-clear-reason">
+              {msg("history.danger.frozen")}
+            </p>
+          )}
           {/* btn-danger, not hand-rolled: `border-red-200` sets a border colour
               but no width, so this painted no border and no background — a
               destructive action that read as bare red text, its .btn padding
               showing only as a stray indent. */}
           <button
             type="button"
+            data-testid="schedule-clear"
             className="btn btn-danger mt-2"
-            disabled={busy}
+            disabled={busy || scheduleLocked}
             onClick={async () => {
               const ok = await confirmDialog({
                 title: msg("confirm.clearSlots.title"),
@@ -466,7 +645,7 @@ export function HistoryPanel({
               );
             }}
           >
-            Clear schedule…
+            {msg("history.danger.clear")}
           </button>
         </div>
       )}
