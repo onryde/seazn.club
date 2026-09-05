@@ -529,6 +529,44 @@ they are used rather than worked around silently:
 one". Task 3 turned that into the assertion proving the pin took effect
 rather than filing it as a defect.
 
+### W2 result — measured, not asserted
+
+All five tasks closed. Wave gate run by the controller, not by a task.
+
+| Gate | Result |
+| --- | --- |
+| `walkthrough` project, whole leg, 4 workers | 43 passed / 5 failed — **all 19 settings tests green**; every failure explained below |
+| `mobile.spec.ts`, all seven width projects | **289 passed, 5 skipped, 0 failed**, zero "did not run" |
+| `apps/web` vitest, JSON reporter | **13,760 / 13,828 passed, 0 failed, 0 suites failed**; paths confirmed inside this worktree |
+| lint + typecheck (`turbo`, 0 cached, so actually run) | 0 errors, 139 warnings — **none in any file this wave touched** |
+
+**The five walkthrough failures, each settled by re-running rather than
+assumed.** Four — `scorepad-v3-r7-console-chrome` ×3 and
+`scorepad-v3-tabletennis-match` — passed in isolation (25.2s/25.4s/25.6s and
+green), so they are the contention effect recorded above. The fifth,
+`rs012-solo-signup-pool:264`, fails in isolation too and says why:
+`CRON_SECRET env var required to drive /api/cron/registrations`. A missing
+local secret, self-reported by an explicit throw rather than a timeout — which
+is how an environment fault should announce itself.
+
+### Speed budget — W2's cost, and a warning for the rest of the programme
+
+W2 adds **12 new walkthrough tests, 108.1s serial, ~27s wall-clock at 4
+workers**, plus Task 5's measured **+3.3s** on the existing `settings-admin`
+file. Call it **~30s of leg time**.
+
+**The programme budget is ≤60s TOTAL across all eight waves.** W1 has already
+spent some of it and W2 spends about half of what remains. W3-W8 cover more
+surface than W2 did — the gating matrix, competition settings, two division
+surfaces and a fix wave. **On this trajectory the budget will be exceeded,
+probably by W5.**
+
+That is a finding for the owner, not something to quietly absorb: the budget
+was an explicit ruling ("walkthroughs must be optimized and fast"), and the
+rule beside it says a wave that blows it gets restructured rather than the
+budget raised. The choice — restructure the later waves, or revisit the
+ceiling — belongs to the owner and should be put to them before W3 starts.
+
 ### Machine note
 
 The box was carrying seven seazn-env labels at load 269 and OOM-killed a
