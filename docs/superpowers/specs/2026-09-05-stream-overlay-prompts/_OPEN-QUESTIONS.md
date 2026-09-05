@@ -274,7 +274,21 @@ buffering. Worth doing, worth doing separately.
 
 ---
 
-## Q14. What exactly is the "header" that reveals the feature? — NEW, blocks W1
+## ~~Q14~~ ANSWERED 2026-09-06 — per-org override only
+
+The owner chose the entitlement override as the hiding mechanism, over a
+preview cookie and over an environment flag. **Nothing in either wave plan
+changes**: both are already written against `streaming.overlay` granted by no
+plan, absent from `ENTITLEMENT_DOMAINS`, with one
+`org_entitlement_overrides` row revealing the feature to a single
+organisation. The console panel is visible for that org only; the overlay
+page returns 200 for it and 404 for everyone else; the pricing page shows
+nothing. No proxy branch, no cookie, no environment variable.
+
+If a demo on production without granting any club the feature is ever wanted,
+option (a) below is the build to revisit.
+
+## Q14 (original text, kept for the record — ANSWERED above). What exactly is the "header" that reveals the feature?
 
 **Owner, 2026-09-06: "now we can plan to load only if header appears."**
 Pricing is deferred, so a hiding mechanism is wanted in the meantime. Taken

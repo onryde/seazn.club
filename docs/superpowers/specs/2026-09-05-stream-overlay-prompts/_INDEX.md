@@ -102,9 +102,13 @@ Full text and consequences: `_OPEN-QUESTIONS.md`.
 15. **"we will plan it later on"** (Q4) — pricing deferred to launch; the key
     stays granted by no plan and out of `ENTITLEMENT_DOMAINS`.
 16. **"now we can plan to load only if header appears"** — a hiding mechanism
-    is wanted while pricing is deferred. Taken as a directive; the mechanism
-    is **Q14**, open, because a plain request header cannot gate either
-    surface (a browser cannot set one on a navigation, and OBS sends none).
+    is wanted while pricing is deferred. A plain request header cannot gate
+    either surface (a browser cannot set one on a navigation, and OBS sends
+    none), so three workable mechanisms were put to the owner.
+17. **Q14 answered same day: the per-organisation entitlement override**, over
+    a preview cookie and over an environment flag. Both wave plans already
+    assume exactly this, so no plan changes. One override row reveals the
+    feature to one club, on production, with nothing on the pricing page.
 
 ## Product-owner calls made in-session (mine, recorded so they can be reversed)
 
