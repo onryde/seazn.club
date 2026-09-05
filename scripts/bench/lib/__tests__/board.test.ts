@@ -234,6 +234,51 @@ describe("encodeConstraints", () => {
     expect(out.blackouts[0]?.courtId).toBeUndefined();
   });
 
+  // `null` and ABSENT are the same thing for a `.nullish()` product field and
+  // different things for an `.optional()` one, and `blackouts[].court` is the
+  // second kind. Both directions below, because a helper that got this right in
+  // one direction only would still pass a one-sided test.
+  it("REFUSES a present-but-null blackout court instead of widening it to every court", () => {
+    expect(() =>
+      encodeConstraints({
+        divisionRef: "d-tiny",
+        scheduleConfig: {
+          blackouts: [
+            {
+              // `court` is `.optional()`, not `.nullish()` — a `null` fails the
+              // product's own parse. Reading it as "no court" turns ONE court's
+              // blackout into a venue-wide one that blocks every court for the
+              // window, which is precisely what `schemas.ts`'s `blackouts` doc
+              // comment says must never happen: an entry whose court cannot be
+              // identified is DROPPED, never widened.
+              court: null,
+              from: "2027-06-01T12:00:00+00:00",
+              to: "2027-06-01T13:00:00+00:00",
+            },
+          ],
+        },
+        courtIdByRef: courts,
+        isRoundRobin: true,
+        pins: [],
+      }),
+    ).toThrow(/scheduleConfig\.blackouts\[0\]\.court.*null/);
+  });
+
+  it("keeps null meaning ABSENT for startAt/endAt, which the product declares nullish", () => {
+    const out = encodeConstraints({
+      divisionRef: "d-tiny",
+      // `schemas.ts:1284`/`:1286` are `.nullish()`, so a stored config
+      // round-trips these as nulls and refusing one would red every division
+      // that never set a window.
+      scheduleConfig: { startAt: null, endAt: null },
+      courtIdByRef: courts,
+      isRoundRobin: true,
+      pins: [],
+    });
+    expect(out.startAt).toBeUndefined();
+    expect(out.endAt).toBeUndefined();
+  });
+
   it("converts not_before/not_after wall clock to minutes into the day", () => {
     const out = encodeConstraints({
       divisionRef: "d-tiny",

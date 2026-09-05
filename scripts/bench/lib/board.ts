@@ -446,11 +446,34 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
     : undefined;
 }
 
-/** An absent key and an explicit `null` mean the same thing here: the
- *  product's own `startAt`/`endAt` are `.nullish()` (`schemas.ts:1284`), so a
- *  stored config round-trips nulls. */
+/** For a `.nullish()` product field, an absent key and an explicit `null` mean
+ *  the same thing: `startAt`/`endAt` are `.nullish()` (`schemas.ts:1284`,
+ *  `:1286`), so a stored config round-trips nulls and refusing one would red
+ *  every division that simply never set a window.
+ *
+ *  NOT for `.optional()` fields — see `isMissing`. The two are a matched pair
+ *  and picking the wrong one is a correctness bug, not a style choice. */
 function isAbsent(value: unknown): boolean {
   return value === undefined || value === null;
+}
+
+/** For an `.optional()` product field, where only the KEY may be absent and an
+ *  explicit `null` is a present-but-unreadable value that the product's own
+ *  parse rejects — so the refuse-vs-report rule at the top of this file makes
+ *  it a THROW.
+ *
+ *  `blackouts[].court` is the field this exists for, and the distinction is not
+ *  academic. Reading its `null` as "no court" widens a ONE-COURT blackout into
+ *  a global one that blocks every court for the window — the exact widening
+ *  `schemas.ts`'s `blackouts` doc comment forbids ("an entry that cannot be
+ *  mapped is DROPPED entirely ... never widened into a venue-wide blackout by
+ *  dropping just the `court` key"), and the opposite of a missed check: the
+ *  checker would red fixtures on courts the organiser never blacked out.
+ *
+ *  A JSON pack cannot express `undefined`, so `null` is the only present-but-
+ *  empty value that can actually arrive here. */
+function isMissing(value: unknown): boolean {
+  return value === undefined;
 }
 
 function recordField(
@@ -718,9 +741,12 @@ export function encodeConstraints(input: {
     if (row === undefined) throw new Error(`board: ${at} must be an object, got ${show(raw)}`);
     const from = epochMs(row.from, `${at}.from`);
     const to = epochMs(row.to, `${at}.to`);
-    // An absent `court` is a GLOBAL blackout and stays one — see the field's
-    // own note on EncodedConstraints.
-    return isAbsent(row.court)
+    // An ABSENT `court` is a GLOBAL blackout and stays one — see the field's
+    // own note on EncodedConstraints. `isMissing`, deliberately not `isAbsent`:
+    // a present-but-null `court` falls through to `resolveCourt`, which refuses
+    // it as present-but-unreadable rather than silently widening the blackout
+    // to every court.
+    return isMissing(row.court)
       ? { from, to }
       : { courtId: resolveCourt(row.court, input.courtIdByRef, `${at}.court`), from, to };
   });
