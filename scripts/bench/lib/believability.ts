@@ -7,10 +7,14 @@
 // Design §3.5 and `_RULES.md` §1's timings-and-measurements rule: believability
 // metrics never gate. Correctness gates in this repo; measurements do not. So
 // this module throws for no input — a malformed engine artifact, a board with
-// no fixtures and a history row full of nonsense all come back as a REPORT
-// that says what it could not do, never as an exception that fails the leg.
-// A gate added here would be a change to what the bench asserts, not a
-// hardening of it.
+// no fixtures, a history row full of nonsense and a `Board` carrying a zone
+// `Intl` has never heard of all come back as a REPORT that says what it could
+// not do, never as an exception that fails the leg. A gate added here would be
+// a change to what the bench asserts, not a hardening of it.
+//
+// That guarantee is TOTAL, and it is enforced rather than asserted: the two
+// computations that can throw are each wrapped, and each reports its own
+// reason. See `metricsNote` and `similarityNote`.
 //
 // -------------------------------------------------------------------------
 // Why `assessHealth` is imported as a VALUE, and why the checker may not
@@ -30,30 +34,24 @@
 // Same functions, same arithmetic; strictly less pulled in.
 //
 // -------------------------------------------------------------------------
-// Three absences that are NOT zeroes
+// Two absences that are NOT zeroes, and one that is a different SHAPE
 // -------------------------------------------------------------------------
-//
-// Each of these was specified as an absence because the zero would be a false
-// CLAIM rather than a missing measurement:
 //
 //  1. `homeAwayAlternation` for a non-round-robin stage. `assessHealth` omits
 //     it itself; this module does not add it back. A bracket has no home/away
 //     pattern, so "0" would report a fairness failure on a property the stage
 //     does not have.
-//  2. `engineDelta` when only one leg ran. The delta is assembled from two
-//     separate RUNS (design §2.1 — `AutoScheduleRequest` carries no engine
-//     field, nothing selects an engine, and the product always attempts the
-//     solver and falls back to greedy on capacity or an unreachable placement
-//     service). One leg is not a comparison, and a partial one rendered as a
-//     comparison is worse than none. `engineDeltaNote` says which leg was
-//     there, so the absence is legible rather than silent.
-//  3. `similarityToHistoricalPct` without history. 0 reads as "completely
-//     dissimilar", which is an assertion about a corpus that does not exist.
+//  2. `similarityToHistorical` when the pack declares no history for this
+//     division. 0 would read as "we reproduced none of it", which is a claim
+//     about a timetable nobody supplied.
+//  3. The engine delta is NOT part of this per-division report at all — it is
+//     `assessEngineDelta`, a separate run-level call. See its own note.
 
 import { assessHealth, type HealthConfig, type HealthFixture, type HealthWindow } from "@seazn/engine/scheduling/health";
 import { dayKeyInTz } from "@seazn/engine/scheduling/tz";
 
 import type { Board, EncodedConstraints } from "./board.ts";
+import type { PackHistoricalAssignment } from "./pack-schema.ts";
 import type { EngineSnapshot, EngineSnapshotDivision } from "./schedule.ts";
 
 // ---------------------------------------------------------------------------
@@ -68,46 +66,35 @@ export interface BelievabilityMetric {
   score: number;
 }
 
-/** The engine names that become artifact FILENAMES (`engine-<engine>.json`,
- *  `schedule.ts:writeEngineArtifact`) and therefore the keys
- *  `readEngineArtifacts` returns. Exported so a caller and a test name the
- *  same string this module matches on, rather than three copies of a literal
- *  that can drift apart. */
-export const GREEDY_ARTIFACT_KEY = "greedy";
-export const OPTIMIZED_ARTIFACT_KEY = "optimized";
-
-export interface EngineDelta {
-  /** The two legs, echoed whole, so the report can show what was compared
-   *  rather than only the difference. */
-  greedy: EngineSnapshot;
-  optimized: EngineSnapshot;
-  /** GREEDY MINUS OPTIMIZED, summed over the divisions both legs scheduled.
-   *  Positive is what optimizing BOUGHT — 60 here means the optimizer's boards
-   *  finished 60 minutes earlier in total. Negative means it did worse, which
-   *  is a legitimate and interesting result, so the sign is kept rather than
-   *  reported as a magnitude. */
-  makespanDeltaMinutes: number;
-  /** Same convention and same sign: greedy minus optimized. */
-  courtImbalanceDeltaMinutes: number;
-  /** Exactly which divisions the two sums cover, in the greedy leg's own
-   *  order.
-   *
-   *  Carried because the sums cannot speak for themselves: a run where the two
-   *  legs share NO division produces `0` and `0`, which reads identically to
-   *  "the two engines tied". This list is what tells those apart, and an empty
-   *  one is the report saying it compared nothing. */
-  comparedDivisionRefs: readonly string[];
-}
-
-/** One previously-accepted board's metric scores.
+/** How much of the REAL tournament's timetable this board reproduced.
  *
- *  History is supplied by the CALLER and is not produced anywhere yet — no
- *  corpus of accepted boards exists in this repo. The shape is the report's
- *  own metric vector so that yesterday's report is directly usable as
- *  tomorrow's history, with no adapter and no second definition of what a
- *  "historical board" is. */
-export interface BelievabilityHistory {
-  metrics: readonly BelievabilityMetric[];
+ *  The parent spec names this quantity "similarity to historical timetable %"
+ *  (`2026-08-12-scheduler-bench-design.md:35,178`, `_PACK-PLAYBOOK.md:34`) — a
+ *  claim about WHERE AND WHEN fixtures landed, not about how alike two metric
+ *  vectors are. The input is the pack's own `historicalAssignment` rows
+ *  (`pack-schema.ts:838-845`, wired at `:1372`), matched to placed fixtures by
+ *  `fixtureExtKey`.
+ *
+ *  Two fractions, because they answer different questions and the strict one
+ *  alone would be misleading: putting the final on the right DAY is the
+ *  meaningful resemblance, and hitting the exact minute is a bonus. */
+export interface TimetableSimilarity {
+  /** THE HEADLINE. Fraction of compared fixtures placed on the same calendar
+   *  day as history, in the board's own timezone. */
+  sameDayPct: number;
+  /** The strict bonus. Fraction placed at the same INSTANT. Necessarily less
+   *  than or equal to `sameDayPct` — same instant implies same day. */
+  sameInstantPct: number;
+  /** The denominator, stated rather than implied.
+   *
+   *  Both percentages are over fixtures that were matched to a historical row
+   *  AND placed. Without this number "100%" over a single lucky match reads
+   *  exactly like "100%" over a full timetable. */
+  comparedFixtures: number;
+  /** How many rows the pack declared for this division. `historicalRows`
+   *  well above `comparedFixtures` means most of history matched nothing — a
+   *  fact about `fixtureExtKey` agreement, not about scheduling quality. */
+  historicalRows: number;
 }
 
 export interface BelievabilityInput {
@@ -119,22 +106,24 @@ export interface BelievabilityInput {
    *  window). Nothing here is checked against the board — that is
    *  `checker.ts`'s job, and this module has no verdict. */
   constraints: EncodedConstraints;
-  /** `readEngineArtifacts(reportDir, runId)`'s return, keyed by the engine in
-   *  each filename. Absent when the caller did not read the run directory. */
-  engineArtifacts?: Readonly<Record<string, unknown>>;
-  history?: readonly BelievabilityHistory[];
+  /** The pack's `historicalAssignment` rows. Rows naming ANOTHER division are
+   *  ignored, so a caller may pass the pack's whole array unfiltered. */
+  historicalAssignment?: readonly PackHistoricalAssignment[];
 }
 
 export interface BelievabilityReport {
+  /** Empty when the metrics could not be computed at all — see `metricsNote`,
+   *  which is then present. */
   metrics: readonly BelievabilityMetric[];
-  /** Present ONLY when both legs' artifacts were read and agree about which
-   *  run and which engine each is. */
-  engineDelta?: EngineDelta;
-  /** Why `engineDelta` is absent, when it is — the explicit statement that
-   *  keeps "only greedy ran" from looking like "the engines tied". Report
-   *  copy, never a gate, and absent whenever the delta itself is present. */
-  engineDeltaNote?: string;
-  similarityToHistoricalPct?: number;
+  /** Why `metrics` is empty, when it is. Absent on a normal run. */
+  metricsNote?: string;
+  /** Absent when the pack declared no history for this division. */
+  similarityToHistorical?: TimetableSimilarity;
+  /** Why `similarityToHistorical` is absent DESPITE history being declared —
+   *  the case where rows exist and none of them matched a placed fixture.
+   *  Absent when no history was declared at all, because that is the ordinary
+   *  state and needs no explanation. */
+  similarityNote?: string;
 }
 
 const SCORE_RANGE = 100;
@@ -237,8 +226,120 @@ function courtWindowsFor(
 }
 
 // ---------------------------------------------------------------------------
-// The engine delta
+// Similarity to the historical timetable
 // ---------------------------------------------------------------------------
+
+function pct(n: number, d: number): number {
+  return Math.round((SCORE_RANGE * n) / d);
+}
+
+interface SimilarityResolution {
+  similarity?: TimetableSimilarity;
+  note?: string;
+}
+
+/** Matches this board's placed fixtures to the real tournament's own
+ *  assignments by `fixtureExtKey`, and reports how much of the timetable was
+ *  reproduced.
+ *
+ *  `divisionRef` scoping happens HERE rather than at the call site: the pack's
+ *  array is competition-wide (`pack-schema.ts:1372`), and comparing a
+ *  division's board against another division's history would silently score 0
+ *  on rows this board was never going to place. */
+function timetableSimilarity(
+  board: Board,
+  rows: readonly PackHistoricalAssignment[] | undefined,
+): SimilarityResolution {
+  if (rows === undefined) return {};
+  const mine = rows.filter((r) => r.divisionRef === board.divisionRef);
+  // No history for THIS division is the ordinary state, and it needs no note:
+  // a pack that declares history for one division would otherwise print an
+  // explanation on every other division's report.
+  if (mine.length === 0) return {};
+
+  const byExtKey = new Map<string, PackHistoricalAssignment>();
+  for (const r of mine) {
+    if (!byExtKey.has(r.fixtureExtKey)) byExtKey.set(r.fixtureExtKey, r);
+  }
+
+  let sameDay = 0;
+  let sameInstant = 0;
+  let compared = 0;
+  for (const f of board.fixtures) {
+    // Unplaced fixtures are not comparable: there is no "when" to compare.
+    if (f.start === undefined || f.extKey === undefined) continue;
+    const row = byExtKey.get(f.extKey);
+    if (row === undefined) continue;
+    // `startsAt` is `z.iso.datetime({ offset: true })`, so the offset is
+    // always present and `Date.parse` is unambiguous — no host-zone reading.
+    // Re-checked anyway: this row came off a JSON file.
+    const historical = Date.parse(row.startsAt);
+    if (!Number.isFinite(historical)) continue;
+    compared += 1;
+    if (f.start === historical) sameInstant += 1;
+    if (dayKeyInTz(f.start, board.tz) === dayKeyInTz(historical, board.tz)) sameDay += 1;
+  }
+
+  if (compared === 0) {
+    return {
+      note:
+        `similarity omitted: the pack declares ${mine.length} historical assignment(s) for this division ` +
+        `and none of them matched a placed fixture by fixtureExtKey`,
+    };
+  }
+  return {
+    similarity: {
+      sameDayPct: pct(sameDay, compared),
+      sameInstantPct: pct(sameInstant, compared),
+      comparedFixtures: compared,
+      historicalRows: mine.length,
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// The engine delta — a RUN-level fact, deliberately not part of the report
+// above
+// ---------------------------------------------------------------------------
+
+/** The engine names that become artifact FILENAMES (`engine-<engine>.json`,
+ *  `schedule.ts:writeEngineArtifact`) and therefore the keys
+ *  `readEngineArtifacts` returns. Exported so a caller and a test name the
+ *  same string this module matches on, rather than three copies of a literal
+ *  that can drift apart. */
+export const GREEDY_ARTIFACT_KEY = "greedy";
+export const OPTIMIZED_ARTIFACT_KEY = "optimized";
+
+export interface EngineDelta {
+  /** The two legs, echoed whole, so the report can show what was compared
+   *  rather than only the difference. */
+  greedy: EngineSnapshot;
+  optimized: EngineSnapshot;
+  /** GREEDY MINUS OPTIMIZED, summed over the divisions both legs scheduled.
+   *  Positive is what optimizing BOUGHT — 60 here means the optimizer's boards
+   *  finished 60 minutes earlier in total. Negative means it did worse, which
+   *  is a legitimate and interesting result, so the sign is kept rather than
+   *  reported as a magnitude. */
+  makespanDeltaMinutes: number;
+  /** Same convention and same sign: greedy minus optimized. */
+  courtImbalanceDeltaMinutes: number;
+  /** Exactly which divisions the two sums cover, in the greedy leg's own
+   *  order.
+   *
+   *  Carried because the sums cannot speak for themselves: a run where the two
+   *  legs share NO division produces `0` and `0`, which reads identically to
+   *  "the two engines tied". This list is what tells those apart, and an empty
+   *  one is the report saying it compared nothing. */
+  comparedDivisionRefs: readonly string[];
+}
+
+export interface EngineDeltaReport {
+  delta?: EngineDelta;
+  /** Why `delta` is absent, when it is — the explicit statement that keeps
+   *  "only greedy ran" from looking like "the engines tied". Report copy,
+   *  never a gate, and absent whenever the delta itself is present. */
+  note?: string;
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -331,18 +432,28 @@ function sumDelta(greedy: EngineSnapshot, optimized: EngineSnapshot): DeltaSums 
   return { makespan, courtImbalance, refs };
 }
 
-interface DeltaResolution {
-  delta?: EngineDelta;
-  note?: string;
-}
-
 const NO_ARTIFACTS_NOTE =
   "engine delta omitted: no engine artifact was read for this run, so there is nothing to compare";
 
-/** Decides whether a delta may be emitted at all, and says why when it may
- *  not. Every refusal below is a DIFFERENT fact about the run, so each gets
- *  its own note rather than one shared "unavailable". */
-function resolveDelta(artifacts: Readonly<Record<string, unknown>> | undefined): DeltaResolution {
+/** The greedy-vs-optimized comparison for the WHOLE RUN.
+ *
+ *  A separate top-level call rather than a field on `BelievabilityReport`,
+ *  because it is a run-level fact and that report is per-division. T6 calls
+ *  `assessBelievability` once per division (its step 3) and renders
+ *  believability and the engine delta as two separate report sections (its
+ *  step 6); a delta carried on the per-division report would be emitted N
+ *  times, each copy listing every OTHER division's refs in
+ *  `comparedDivisionRefs`. Scoping the sums to one division instead would
+ *  destroy the run-level total that design §2.1 actually asks for.
+ *
+ *  Call it ONCE, after the division loop, with `readEngineArtifacts`' return.
+ *
+ *  The delta is assembled from two separate RUNS, not two calls: design §2.1 —
+ *  `AutoScheduleRequest` carries no engine field, nothing selects an engine,
+ *  and the product always attempts the solver and falls back to greedy on
+ *  capacity or an unreachable placement service. One leg is not a comparison,
+ *  and a partial one rendered as a comparison is worse than none. */
+export function assessEngineDelta(artifacts: Readonly<Record<string, unknown>> | undefined): EngineDeltaReport {
   if (artifacts === undefined) return { note: NO_ARTIFACTS_NOTE };
 
   const rawGreedy = artifacts[GREEDY_ARTIFACT_KEY];
@@ -415,84 +526,67 @@ function resolveDelta(artifacts: Readonly<Record<string, unknown>> | undefined):
 }
 
 // ---------------------------------------------------------------------------
-// Similarity to historical
-// ---------------------------------------------------------------------------
-
-/** How close this board's metric vector sits to the mean of the historical
- *  ones, as a percentage: 100 minus the mean absolute per-metric difference,
- *  expressed against the metrics' own 0-100 range.
- *
- *  Only keys THIS board scored are compared. A history row carrying
- *  `homeAwayAlternation` for a board whose stage is a bracket describes a
- *  property this board does not have, and averaging it in would move a number
- *  that is supposed to describe this board.
- *
- *  `undefined` — never 0 — when there is no history, when it is empty, or when
- *  it shares no key with this board. */
-function similarityPct(
-  current: readonly BelievabilityMetric[],
-  history: readonly BelievabilityHistory[] | undefined,
-): number | undefined {
-  if (history === undefined || history.length === 0) return undefined;
-
-  const byKey = new Map<string, { total: number; n: number }>();
-  for (const observation of history) {
-    for (const m of observation.metrics) {
-      if (typeof m.score !== "number" || !Number.isFinite(m.score)) continue;
-      const acc = byKey.get(m.key);
-      if (acc === undefined) byKey.set(m.key, { total: m.score, n: 1 });
-      else {
-        acc.total += m.score;
-        acc.n += 1;
-      }
-    }
-  }
-
-  const diffs: number[] = [];
-  for (const m of current) {
-    const acc = byKey.get(m.key);
-    if (acc === undefined || acc.n === 0) continue;
-    diffs.push(Math.abs(m.score - acc.total / acc.n) / SCORE_RANGE);
-  }
-  if (diffs.length === 0) return undefined;
-
-  const meanDiff = diffs.reduce((s, d) => s + d, 0) / diffs.length;
-  const pct = SCORE_RANGE * (1 - meanDiff);
-  return Math.round(Math.max(0, Math.min(SCORE_RANGE, pct)));
-}
-
-// ---------------------------------------------------------------------------
 // assessBelievability
 // ---------------------------------------------------------------------------
 
-/** Measures one division's fetched board and, where both legs of the run left
- *  an artifact, reports what the optimizer bought.
+function messageOf(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
+/** Measures one division's fetched board.
  *
- *  Pure and total: no HTTP, no DB, no clock, no filesystem (the caller reads
- *  the artifacts and hands them in), and no throw. Same inputs, same report. */
+ *  Pure and TOTAL: no HTTP, no DB, no clock, no filesystem, and no throw for
+ *  any input. Same inputs, same report.
+ *
+ *  The two `try` blocks are the whole of that "no throw" guarantee, and they
+ *  exist for one reachable cause: `dayKeyInTz` builds an
+ *  `Intl.DateTimeFormat` from `board.tz` (`tz.ts:57-70`), which raises
+ *  `RangeError` for any string that is not a recognised IANA zone. A `Board`
+ *  carries whatever zone the division was configured with, so a typo'd zone in
+ *  a pack would otherwise take a whole bench run down from the one module that
+ *  is specified never to fail one. Degraded to an empty metric list plus the
+ *  reason, which is the reportable form of the same fact. */
 export function assessBelievability(input: BelievabilityInput): BelievabilityReport {
-  const fixtures = toHealthFixtures(input.board);
-  const courtWindows = courtWindowsFor(input.board, input.constraints, fixtures);
-  const config: HealthConfig = {
-    // The pack's declaration, forwarded — never re-derived from the board.
-    // Nothing on a `Board` can tell a round-robin stage from a bracket, and a
-    // guess here would decide whether a fairness metric is reported at all.
-    isRoundRobin: input.constraints.isRoundRobin,
-    ...(courtWindows === undefined ? {} : { courtWindows }),
-  };
+  // Deliberately NOT initialised: the empty list belongs to the catch, where
+  // it is the reported value. Initialising here would make that assignment
+  // dead code (the `try` never completes its own assignment when it throws),
+  // and dead code in a degrade path is how a degrade path stops working
+  // without anything noticing.
+  let metrics: BelievabilityMetric[];
+  let metricsNote: string | undefined;
+  try {
+    const fixtures = toHealthFixtures(input.board);
+    const courtWindows = courtWindowsFor(input.board, input.constraints, fixtures);
+    const config: HealthConfig = {
+      // The pack's declaration, forwarded — never re-derived from the board.
+      // Nothing on a `Board` can tell a round-robin stage from a bracket, and a
+      // guess here would decide whether a fairness metric is reported at all.
+      isRoundRobin: input.constraints.isRoundRobin,
+      ...(courtWindows === undefined ? {} : { courtWindows }),
+    };
+    metrics = assessHealth(fixtures, config).metrics.map((m) => ({ key: m.key, score: m.score }));
+  } catch (err) {
+    metrics = [];
+    metricsNote =
+      `metrics unavailable: this board could not be bucketed by calendar day in timezone ` +
+      `"${input.board.tz}" (${messageOf(err)})`;
+  }
 
-  const metrics: BelievabilityMetric[] = assessHealth(fixtures, config).metrics.map((m) => ({
-    key: m.key,
-    score: m.score,
-  }));
-
-  const { delta, note } = resolveDelta(input.engineArtifacts);
-  const similarity = similarityPct(metrics, input.history);
+  let similarity: SimilarityResolution;
+  try {
+    similarity = timetableSimilarity(input.board, input.historicalAssignment);
+  } catch (err) {
+    similarity = {
+      note:
+        `similarity unavailable: historical assignments could not be compared in timezone ` +
+        `"${input.board.tz}" (${messageOf(err)})`,
+    };
+  }
 
   return {
     metrics,
-    ...(delta === undefined ? {} : { engineDelta: delta }),
-    ...(note === undefined ? {} : { engineDeltaNote: note }),
-    ...(similarity === undefined ? {} : { similarityToHistoricalPct: similarity }),
+    ...(metricsNote === undefined ? {} : { metricsNote }),
+    ...(similarity.similarity === undefined ? {} : { similarityToHistorical: similarity.similarity }),
+    ...(similarity.note === undefined ? {} : { similarityNote: similarity.note }),
   };
 }

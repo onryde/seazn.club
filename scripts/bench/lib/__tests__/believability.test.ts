@@ -5,7 +5,7 @@
 // so this file never asserts a throw as a desired behaviour — it asserts the
 // opposite, that hostile input still returns a report.
 //
-// Two habits this suite keeps, both bought the hard way in this programme:
+// Three habits this suite keeps, all bought the hard way in this programme:
 //
 //  * Scores are pinned to HAND-COMPUTED values on purpose-built boards, never
 //    to a second call of `assessHealth` from inside the test. Folding the same
@@ -14,22 +14,26 @@
 //  * The metric KEY SET is derived from `assessHealth`'s own output rather than
 //    typed in, so an engine-side rename moves this suite instead of leaving it
 //    asserting yesterday's names (recurring failure class 19).
+//  * An exclusion probe must sit on a board that can SEE the leak it denies.
+//    Two of them here once passed while proving nothing; the guard test in the
+//    mapping block exists to stop that recurring silently.
 
 import { describe, expect, it } from "vitest";
 
 import { assessHealth } from "@seazn/engine/scheduling/health";
 
 import type { Board, BoardFixture, EncodedConstraints } from "../board.ts";
+import type { PackHistoricalAssignment } from "../pack-schema.ts";
 import type { ActualEngine, EngineSnapshot } from "../schedule.ts";
 import {
   assessBelievability,
+  assessEngineDelta,
   GREEDY_ARTIFACT_KEY,
   OPTIMIZED_ARTIFACT_KEY,
-  type BelievabilityHistory,
-  type BelievabilityMetric,
   type BelievabilityReport,
+  type EngineDeltaReport,
 } from "../believability.ts";
-import { at, cleanConstraints, DIVISION_ID, DIVISION_REF, MON, TZ } from "./_board-fixtures.ts";
+import { at, cleanConstraints, DIVISION_ID, DIVISION_REF, MON, TUE, TZ } from "./_board-fixtures.ts";
 
 // ---------------------------------------------------------------------------
 // The engine's own vocabulary, read from the engine
@@ -48,6 +52,11 @@ const PRIME_SLOT = "primeSlotFairness";
 const COURT_1 = "court-1";
 const COURT_2 = "court-2";
 const MINUTE_MS = 60_000;
+
+/** A zone `Intl` has never heard of. `dayKeyInTz` builds an
+ *  `Intl.DateTimeFormat` from it and raises `RangeError` — the one reachable
+ *  way this never-red module could red a run. */
+const BOGUS_TZ = "Not/AZone";
 
 // ---------------------------------------------------------------------------
 // Builders
@@ -80,8 +89,13 @@ function placed(
   return fixtureOf({ fixtureId, courtId, start, end: start + minutes * MINUTE_MS, entrantIds: entrants });
 }
 
-function boardOf(fixtures: readonly BoardFixture[]): Board {
-  return { divisionId: DIVISION_ID, divisionRef: DIVISION_REF, tz: TZ, fixtures, courts: [] };
+/** A placed fixture that also carries the `ext_key` history is matched on. */
+function keyed(fixtureId: string, extKey: string, hhmm: string, ymd: string = MON): BoardFixture {
+  return { ...placed(fixtureId, COURT_1, hhmm, ["e-a", "e-b"], 30, ymd), extKey };
+}
+
+function boardOf(fixtures: readonly BoardFixture[], tz: string = TZ): Board {
+  return { divisionId: DIVISION_ID, divisionRef: DIVISION_REF, tz, fixtures, courts: [] };
 }
 
 /** `cleanConstraints()` with NO session windows by default, so a test that
@@ -93,6 +107,20 @@ function constraintsOf(over: Partial<EncodedConstraints> = {}): EncodedConstrain
 
 function scoreOf(report: BelievabilityReport, key: string): number | undefined {
   return report.metrics.find((m) => m.key === key)?.score;
+}
+
+/** The real tournament's own row for one fixture. The `+01:00` is written out
+ *  for the same reason `_board-fixtures.ts:at` writes it: an offsetless
+ *  timestamp resolves against the HOST zone and makes the suite
+ *  machine-dependent. `PackHistoricalAssignment.startsAt` is
+ *  `z.iso.datetime({ offset: true })`, so a real row always carries one. */
+function historyRow(
+  fixtureExtKey: string,
+  ymd: string,
+  hhmm: string,
+  divisionRef: string = DIVISION_REF,
+): PackHistoricalAssignment {
+  return { divisionRef, fixtureExtKey, venue: "Somewhere Real", startsAt: `${ymd}T${hhmm}:00+01:00` };
 }
 
 function snapshot(
@@ -122,10 +150,6 @@ function snapshot(
       wallMs: 1,
     })),
   };
-}
-
-function shifted(metrics: readonly BelievabilityMetric[], by: number): BelievabilityHistory {
-  return { metrics: metrics.map((m) => ({ key: m.key, score: m.score + by })) };
 }
 
 // ---------------------------------------------------------------------------
@@ -158,6 +182,16 @@ function fourOnOneCourtDay(): Board {
   ]);
 }
 
+/** Four keyed fixtures at 09:00, 10:00, 11:00 and 12:00 on MON. */
+function keyedBoard(): Board {
+  return boardOf([
+    keyed("fx-1", "k1", "09:00"),
+    keyed("fx-2", "k2", "10:00"),
+    keyed("fx-3", "k3", "11:00"),
+    keyed("fx-4", "k4", "12:00"),
+  ]);
+}
+
 describe("assessBelievability — metrics come from assessHealth", () => {
   it("carries assessHealth's metric keys, in the engine's own order", () => {
     const report = assessBelievability({
@@ -165,6 +199,7 @@ describe("assessBelievability — metrics come from assessHealth", () => {
       constraints: constraintsOf({ isRoundRobin: true }),
     });
     expect(report.metrics.map((m) => m.key)).toEqual(RR_KEYS);
+    expect(report.metricsNote).toBeUndefined();
   });
 
   it("scores gapDispersion 0 for a hole that fills the whole measured span", () => {
@@ -192,7 +227,7 @@ describe("assessBelievability — metrics come from assessHealth", () => {
     // The same board again, with the day split into 09:00-12:00 and
     // 13:00-20:00. The envelope is 09:00-20:00, so the score is the 95 above.
     // An implementation that kept only the first window would measure against
-    // 180 minutes instead of 660 - frag 30/120 = 0.25 => 75 - so this case is
+    // 180 minutes instead of 660 — frag 30/120 = 0.25 => 75 — so this case is
     // what stops "the first window on the day" from passing as "the day".
     const report = assessBelievability({
       board: twoWithAHole(),
@@ -213,8 +248,7 @@ describe("assessBelievability — metrics come from assessHealth", () => {
       placed("fx-3", COURT_1, "11:00", ["e-a", "e-d"]),
       placed("fx-4", COURT_2, "12:00", ["e-a", "e-e"]),
     ]);
-    const report = assessBelievability({ board, constraints: constraintsOf() });
-    expect(scoreOf(report, COURT_BALANCE)).toBe(100);
+    expect(scoreOf(assessBelievability({ board, constraints: constraintsOf() }), COURT_BALANCE)).toBe(100);
   });
 
   it("scores courtBalance 0 when the same four fixtures all land on one court", () => {
@@ -228,8 +262,7 @@ describe("assessBelievability — metrics come from assessHealth", () => {
       placed("fx-4", COURT_1, "12:00", ["e-a", "e-e"]),
       placed("fx-5", COURT_2, "09:00", ["e-f", "e-g"]),
     ]);
-    const report = assessBelievability({ board, constraints: constraintsOf() });
-    expect(scoreOf(report, COURT_BALANCE)).toBe(0);
+    expect(scoreOf(assessBelievability({ board, constraints: constraintsOf() }), COURT_BALANCE)).toBe(0);
   });
 });
 
@@ -318,7 +351,7 @@ describe("assessBelievability — the board mapping", () => {
   it("gives the exclusion probes below a board that can SEE a leak", () => {
     // Guard for the two `toEqual` probes that follow. They compare a board
     // against itself-plus-one-ignored-fixture, which passes trivially if no
-    // metric on the board could move anyway - which is exactly how both of
+    // metric on the board could move anyway — which is exactly how both of
     // them survived this suite's first mutation sweep. primeSlotFairness
     // sitting below 100 is what says this board discriminates; if it ever
     // reads 100, those probes have gone vacuous and must be rebuilt.
@@ -329,7 +362,7 @@ describe("assessBelievability — the board mapping", () => {
   it("excludes an UNPLACED fixture even when it already holds a COURT", () => {
     // A court assigned with no time yet is a real board state:
     // `schedule.ts:toBoardFixture` reads `court_id` and `scheduled_at`
-    // independently. The court is deliberately COURT_1 - a probe whose fixture
+    // independently. The court is deliberately COURT_1 — a probe whose fixture
     // lacks BOTH a court and a start is skipped by either half of the guard,
     // and so tests neither half.
     const constraints = constraintsOf();
@@ -355,38 +388,219 @@ describe("assessBelievability — the board mapping", () => {
   });
 });
 
-describe("assessBelievability — the engine delta comes from two RUNS", () => {
-  const board = twoWithAHole();
-  const constraints = constraintsOf();
+describe("assessBelievability — a board timezone Intl rejects DEGRADES, it does not throw", () => {
+  // This is the ONE reachable path that could red a module specified never to
+  // red a run: `dayKeyInTz` builds an `Intl.DateTimeFormat` from `board.tz`
+  // (`tz.ts:57-70`) and raises RangeError for an unrecognised zone. A pack
+  // with a typo'd zone would otherwise take a whole bench leg down.
+  it("does not throw", () => {
+    expect(() =>
+      assessBelievability({ board: boardOf(twoWithAHole().fixtures, BOGUS_TZ), constraints: constraintsOf() }),
+    ).not.toThrow();
+  });
 
-  function withArtifacts(engineArtifacts: Record<string, unknown>): BelievabilityReport {
-    return assessBelievability({ board, constraints, engineArtifacts });
-  }
+  it("reports NO metrics and says why, naming the zone", () => {
+    const report = assessBelievability({
+      board: boardOf(twoWithAHole().fixtures, BOGUS_TZ),
+      constraints: constraintsOf(),
+    });
+    expect(report.metrics).toEqual([]);
+    expect(report.metricsNote).toContain(BOGUS_TZ);
+  });
 
+  it("degrades similarity for the same reason, separately", () => {
+    const report = assessBelievability({
+      board: boardOf(keyedBoard().fixtures, BOGUS_TZ),
+      constraints: constraintsOf(),
+      historicalAssignment: [historyRow("k1", MON, "09:00")],
+    });
+    expect(report.similarityToHistorical).toBeUndefined();
+    expect(report.similarityNote).toContain(BOGUS_TZ);
+  });
+
+  it("still computes metrics normally for a zone Intl DOES know — the positive pair", () => {
+    const report = assessBelievability({ board: twoWithAHole(), constraints: constraintsOf() });
+    expect(report.metrics).toHaveLength(RR_KEYS.length);
+    expect(report.metricsNote).toBeUndefined();
+  });
+});
+
+describe("assessBelievability — similarity to the historical TIMETABLE", () => {
+  it("reports the same-day and same-instant fractions over the fixtures it matched", () => {
+    // k1 at the same instant; k2 the same day at a different time; k3 a day
+    // late; k4 has no historical row at all. Compared 3 => same day 2/3 = 67,
+    // same instant 1/3 = 33.
+    const report = assessBelievability({
+      board: keyedBoard(),
+      constraints: constraintsOf(),
+      historicalAssignment: [
+        historyRow("k1", MON, "09:00"),
+        historyRow("k2", MON, "15:00"),
+        historyRow("k3", TUE, "10:00"),
+      ],
+    });
+    expect(report.similarityToHistorical).toEqual({
+      sameDayPct: 67,
+      sameInstantPct: 33,
+      comparedFixtures: 3,
+      historicalRows: 3,
+    });
+    expect(report.similarityNote).toBeUndefined();
+  });
+
+  it("reaches 100% same-day once every matched fixture lands on history's day", () => {
+    // Same three rows, but k3's row now names MON. The differential is what
+    // proves the day comparison reads the rows rather than counting matches.
+    const report = assessBelievability({
+      board: keyedBoard(),
+      constraints: constraintsOf(),
+      historicalAssignment: [
+        historyRow("k1", MON, "09:00"),
+        historyRow("k2", MON, "15:00"),
+        historyRow("k3", MON, "10:00"),
+      ],
+    });
+    expect(report.similarityToHistorical?.sameDayPct).toBe(100);
+    // Only k1 is at the same instant, so the strict fraction stays behind.
+    expect(report.similarityToHistorical?.sameInstantPct).toBe(33);
+  });
+
+  it("never reports a same-instant fraction above its same-day fraction", () => {
+    // Same instant implies same day, so this ordering is structural. It is
+    // asserted because an implementation that compared instants against the
+    // day bucket (or vice versa) would break it silently.
+    const report = assessBelievability({
+      board: keyedBoard(),
+      constraints: constraintsOf(),
+      historicalAssignment: [historyRow("k1", MON, "09:00"), historyRow("k2", MON, "15:00"), historyRow("k3", TUE, "10:00")],
+    });
+    const s = report.similarityToHistorical;
+    expect(s).toBeDefined();
+    expect(s!.sameInstantPct).toBeLessThanOrEqual(s!.sameDayPct);
+  });
+
+  it("compares the calendar day in the BOARD'S timezone, not UTC", () => {
+    // Our fixture sits at 09:00 London on MON; history put it at 00:30 London
+    // the same MON, which is 23:30 UTC on SUNDAY. Read in London they share a
+    // day (100%); read in UTC they do not (0%).
+    const board = boardOf([keyed("fx-1", "k1", "09:00")]);
+    const report = assessBelievability({
+      board,
+      constraints: constraintsOf(),
+      historicalAssignment: [historyRow("k1", MON, "00:30")],
+    });
+    expect(report.similarityToHistorical?.sameDayPct).toBe(100);
+    expect(report.similarityToHistorical?.sameInstantPct).toBe(0);
+  });
+
+  it("is UNDEFINED, with no note, when the pack declares no history at all", () => {
+    // 0 would read as "we reproduced none of the timetable", which is a claim
+    // about a timetable nobody supplied.
+    const report = assessBelievability({ board: keyedBoard(), constraints: constraintsOf() });
+    expect(report.similarityToHistorical).toBeUndefined();
+    expect("similarityToHistorical" in report).toBe(false);
+    expect(report.similarityNote).toBeUndefined();
+  });
+
+  it("ignores rows belonging to ANOTHER division", () => {
+    // The pack's array is competition-wide, so scoping is this module's job.
+    // Scoring this board against another division's rows would report 0% on
+    // fixtures it was never going to place.
+    const report = assessBelievability({
+      board: keyedBoard(),
+      constraints: constraintsOf(),
+      historicalAssignment: [historyRow("k1", MON, "09:00", "d-somewhere-else")],
+    });
+    expect(report.similarityToHistorical).toBeUndefined();
+    expect(report.similarityNote).toBeUndefined();
+  });
+
+  it("SAYS SO when history is declared for this division and nothing matched", () => {
+    // Rows exist and no ext key lines up — a fact about ext-key agreement, not
+    // about scheduling. Silently returning undefined would hide it behind the
+    // ordinary "no history" state.
+    const report = assessBelievability({
+      board: keyedBoard(),
+      constraints: constraintsOf(),
+      historicalAssignment: [historyRow("nothing-like-it", MON, "09:00"), historyRow("nor-this", MON, "10:00")],
+    });
+    expect(report.similarityToHistorical).toBeUndefined();
+    expect(report.similarityNote).toContain("2 historical assignment(s)");
+    expect(report.similarityNote).toContain("fixtureExtKey");
+  });
+
+  it("cannot match a fixture that carries no extKey", () => {
+    const board = boardOf([placed("fx-1", COURT_1, "09:00", ["e-a", "e-b"])]);
+    const report = assessBelievability({
+      board,
+      constraints: constraintsOf(),
+      historicalAssignment: [historyRow("k1", MON, "09:00")],
+    });
+    expect(report.similarityToHistorical).toBeUndefined();
+    expect(report.similarityNote).toContain("1 historical assignment(s)");
+  });
+
+  it("does not compare an UNPLACED fixture, even when history has its row", () => {
+    // The whole quantity is "where and when did this land"; an unplaced
+    // fixture landed nowhere. Counting it would put a fixture with no instant
+    // into a fraction reported as measured.
+    const board = boardOf([keyed("fx-1", "k1", "09:00"), fixtureOf({ fixtureId: "fx-2", extKey: "k2", courtId: COURT_1 })]);
+    const report = assessBelievability({
+      board,
+      constraints: constraintsOf(),
+      historicalAssignment: [historyRow("k1", MON, "09:00"), historyRow("k2", MON, "10:00")],
+    });
+    expect(report.similarityToHistorical?.comparedFixtures).toBe(1);
+    // historicalRows still reports 2 — the unmatched half of history stays
+    // visible rather than shrinking the denominator out of sight.
+    expect(report.similarityToHistorical?.historicalRows).toBe(2);
+    expect(report.similarityToHistorical?.sameDayPct).toBe(100);
+  });
+
+  it("skips a row whose startsAt will not parse, without throwing", () => {
+    const report = assessBelievability({
+      board: keyedBoard(),
+      constraints: constraintsOf(),
+      historicalAssignment: [{ ...historyRow("k1", MON, "09:00"), startsAt: "not a timestamp" }],
+    });
+    expect(report.similarityToHistorical).toBeUndefined();
+    expect(report.similarityNote).toContain("1 historical assignment(s)");
+  });
+});
+
+describe("assessEngineDelta — the comparison comes from two RUNS, and is RUN-level", () => {
   it("emits the delta when BOTH legs' artifacts are present", () => {
-    const report = withArtifacts({
+    const report: EngineDeltaReport = assessEngineDelta({
       [GREEDY_ARTIFACT_KEY]: snapshot("greedy", [{ ref: "d-1", makespan: 300, imbalance: 90 }]),
       [OPTIMIZED_ARTIFACT_KEY]: snapshot("optimized", [{ ref: "d-1", makespan: 240, imbalance: 30 }]),
     });
-    expect(report.engineDelta).toBeDefined();
-    expect(report.engineDelta?.makespanDeltaMinutes).toBe(60);
-    expect(report.engineDelta?.courtImbalanceDeltaMinutes).toBe(60);
-    expect(report.engineDelta?.comparedDivisionRefs).toEqual(["d-1"]);
-    expect(report.engineDelta?.greedy.engine).toBe("greedy");
-    expect(report.engineDelta?.optimized.engine).toBe("optimized");
-    expect(report.engineDeltaNote).toBeUndefined();
+    expect(report.delta).toBeDefined();
+    expect(report.delta?.makespanDeltaMinutes).toBe(60);
+    expect(report.delta?.courtImbalanceDeltaMinutes).toBe(60);
+    expect(report.delta?.comparedDivisionRefs).toEqual(["d-1"]);
+    expect(report.delta?.greedy.engine).toBe("greedy");
+    expect(report.delta?.optimized.engine).toBe("optimized");
+    expect(report.note).toBeUndefined();
+  });
+
+  it("is NOT part of the per-division believability report", () => {
+    // T6 calls `assessBelievability` once per division. A delta carried there
+    // would be emitted N times, each copy listing every OTHER division's refs.
+    const report = assessBelievability({ board: twoWithAHole(), constraints: constraintsOf() });
+    expect(report).not.toHaveProperty("engineDelta");
+    expect(report).not.toHaveProperty("engineDeltaNote");
   });
 
   it("signs the delta NEGATIVE when the optimized leg produced the worse board", () => {
     // The sign is directional, not a magnitude: greedy minus optimized, so a
     // positive number is what optimizing BOUGHT. Without this case an
     // `Math.abs` would survive the case above.
-    const report = withArtifacts({
+    const report = assessEngineDelta({
       [GREEDY_ARTIFACT_KEY]: snapshot("greedy", [{ ref: "d-1", makespan: 240, imbalance: 30 }]),
       [OPTIMIZED_ARTIFACT_KEY]: snapshot("optimized", [{ ref: "d-1", makespan: 300, imbalance: 90 }]),
     });
-    expect(report.engineDelta?.makespanDeltaMinutes).toBe(-60);
-    expect(report.engineDelta?.courtImbalanceDeltaMinutes).toBe(-60);
+    expect(report.delta?.makespanDeltaMinutes).toBe(-60);
+    expect(report.delta?.courtImbalanceDeltaMinutes).toBe(-60);
   });
 
   it("pairs divisions by divisionRef, NEVER by index", () => {
@@ -395,20 +609,20 @@ describe("assessBelievability — the engine delta comes from two RUNS", () => {
     // witness it is a division the sibling leg never scheduled — greedy has
     // d-1 and d-2, optimized only d-2, so index-pairing would compare d-1's
     // 300 against d-2's 90 and report 210 over the ref ["d-1"].
-    const report = withArtifacts({
+    const report = assessEngineDelta({
       [GREEDY_ARTIFACT_KEY]: snapshot("greedy", [
         { ref: "d-1", makespan: 300, imbalance: 90 },
         { ref: "d-2", makespan: 120, imbalance: 40 },
       ]),
       [OPTIMIZED_ARTIFACT_KEY]: snapshot("optimized", [{ ref: "d-2", makespan: 90, imbalance: 10 }]),
     });
-    expect(report.engineDelta?.comparedDivisionRefs).toEqual(["d-2"]);
-    expect(report.engineDelta?.makespanDeltaMinutes).toBe(30);
-    expect(report.engineDelta?.courtImbalanceDeltaMinutes).toBe(30);
+    expect(report.delta?.comparedDivisionRefs).toEqual(["d-2"]);
+    expect(report.delta?.makespanDeltaMinutes).toBe(30);
+    expect(report.delta?.courtImbalanceDeltaMinutes).toBe(30);
   });
 
   it("sums every division the two legs share", () => {
-    const report = withArtifacts({
+    const report = assessEngineDelta({
       [GREEDY_ARTIFACT_KEY]: snapshot("greedy", [
         { ref: "d-1", makespan: 300, imbalance: 90 },
         { ref: "d-2", makespan: 120, imbalance: 40 },
@@ -418,21 +632,21 @@ describe("assessBelievability — the engine delta comes from two RUNS", () => {
         { ref: "d-1", makespan: 250, imbalance: 60 },
       ]),
     });
-    expect(report.engineDelta?.comparedDivisionRefs).toEqual(["d-1", "d-2"]);
-    expect(report.engineDelta?.makespanDeltaMinutes).toBe(80);
-    expect(report.engineDelta?.courtImbalanceDeltaMinutes).toBe(60);
+    expect(report.delta?.comparedDivisionRefs).toEqual(["d-1", "d-2"]);
+    expect(report.delta?.makespanDeltaMinutes).toBe(80);
+    expect(report.delta?.courtImbalanceDeltaMinutes).toBe(60);
   });
 
   it("skips a division whose metrics one leg never reported", () => {
-    const report = withArtifacts({
+    const report = assessEngineDelta({
       [GREEDY_ARTIFACT_KEY]: snapshot("greedy", [
         { ref: "d-1", makespan: 300, imbalance: 90 },
         { ref: "d-2", makespan: 120, imbalance: 40 },
       ]),
       [OPTIMIZED_ARTIFACT_KEY]: snapshot("optimized", [{ ref: "d-1" }, { ref: "d-2", makespan: 90, imbalance: 10 }]),
     });
-    expect(report.engineDelta?.comparedDivisionRefs).toEqual(["d-2"]);
-    expect(report.engineDelta?.makespanDeltaMinutes).toBe(30);
+    expect(report.delta?.comparedDivisionRefs).toEqual(["d-2"]);
+    expect(report.delta?.makespanDeltaMinutes).toBe(30);
   });
 
   it("says WHICH divisions it compared when the two legs share none", () => {
@@ -440,163 +654,104 @@ describe("assessBelievability — the engine delta comes from two RUNS", () => {
     // bare `0` here is indistinguishable from "the two engines tied", which is
     // the suppressed-symptom trap; `comparedDivisionRefs` is what tells them
     // apart, so it is asserted rather than the zeroes alone.
-    const report = withArtifacts({
+    const report = assessEngineDelta({
       [GREEDY_ARTIFACT_KEY]: snapshot("greedy", [{ ref: "d-1", makespan: 300, imbalance: 90 }]),
       [OPTIMIZED_ARTIFACT_KEY]: snapshot("optimized", [{ ref: "d-9", makespan: 90, imbalance: 10 }]),
     });
-    expect(report.engineDelta?.comparedDivisionRefs).toEqual([]);
-    expect(report.engineDelta?.makespanDeltaMinutes).toBe(0);
+    expect(report.delta?.comparedDivisionRefs).toEqual([]);
+    expect(report.delta?.makespanDeltaMinutes).toBe(0);
   });
 
   it("omits the delta and NAMES the leg that ran when only greedy's artifact exists", () => {
-    const report = withArtifacts({ [GREEDY_ARTIFACT_KEY]: snapshot("greedy", [{ ref: "d-1", makespan: 300, imbalance: 90 }]) });
-    expect(report.engineDelta).toBeUndefined();
-    expect(report.engineDeltaNote).toContain(`only the ${GREEDY_ARTIFACT_KEY} leg`);
+    const report = assessEngineDelta({
+      [GREEDY_ARTIFACT_KEY]: snapshot("greedy", [{ ref: "d-1", makespan: 300, imbalance: 90 }]),
+    });
+    expect(report.delta).toBeUndefined();
+    expect(report.note).toContain(`only the ${GREEDY_ARTIFACT_KEY} leg`);
   });
 
   it("omits the delta and NAMES the leg that ran when only optimized's artifact exists", () => {
-    const report = withArtifacts({
+    const report = assessEngineDelta({
       [OPTIMIZED_ARTIFACT_KEY]: snapshot("optimized", [{ ref: "d-1", makespan: 240, imbalance: 30 }]),
     });
-    expect(report.engineDelta).toBeUndefined();
-    expect(report.engineDeltaNote).toContain(`only the ${OPTIMIZED_ARTIFACT_KEY} leg`);
+    expect(report.delta).toBeUndefined();
+    expect(report.note).toContain(`only the ${OPTIMIZED_ARTIFACT_KEY} leg`);
   });
 
   it("omits the delta when no artifacts were read at all", () => {
-    expect(assessBelievability({ board, constraints }).engineDelta).toBeUndefined();
-    expect(assessBelievability({ board, constraints }).engineDeltaNote).toContain("no engine artifact");
-    expect(withArtifacts({}).engineDeltaNote).toContain("no engine artifact");
+    expect(assessEngineDelta(undefined).delta).toBeUndefined();
+    expect(assessEngineDelta(undefined).note).toContain("no engine artifact");
+    expect(assessEngineDelta({}).note).toContain("no engine artifact");
   });
 
   it("omits the delta, without throwing, when GREEDY'S artifact is not a readable snapshot", () => {
     // A truncated artifact must not be read as "that leg never ran": the note
     // names the file, so a two-leg run cannot be reported as a one-leg run.
-    const report = withArtifacts({
+    const report = assessEngineDelta({
       [GREEDY_ARTIFACT_KEY]: { runId: "sha-aaaa" },
       [OPTIMIZED_ARTIFACT_KEY]: snapshot("optimized", [{ ref: "d-1", makespan: 240, imbalance: 30 }]),
     });
-    expect(report.engineDelta).toBeUndefined();
-    expect(report.engineDeltaNote).toContain(`the ${GREEDY_ARTIFACT_KEY} artifact is not a readable`);
+    expect(report.delta).toBeUndefined();
+    expect(report.note).toContain(`the ${GREEDY_ARTIFACT_KEY} artifact is not a readable`);
   });
 
   it("omits the delta, without throwing, when OPTIMIZED'S artifact is not a readable snapshot", () => {
     // The mirror of the case above. Without it, a guard covering only one of
     // the two files passes on the strength of the other's test.
-    const report = withArtifacts({
+    const report = assessEngineDelta({
       [GREEDY_ARTIFACT_KEY]: snapshot("greedy", [{ ref: "d-1", makespan: 300, imbalance: 90 }]),
       [OPTIMIZED_ARTIFACT_KEY]: { runId: "sha-aaaa", requestedEngine: "both", engine: "optimized", divisions: "nope" },
     });
-    expect(report.engineDelta).toBeUndefined();
-    expect(report.engineDeltaNote).toContain(`the ${OPTIMIZED_ARTIFACT_KEY} artifact is not a readable`);
+    expect(report.delta).toBeUndefined();
+    expect(report.note).toContain(`the ${OPTIMIZED_ARTIFACT_KEY} artifact is not a readable`);
   });
 
   it("omits the delta when the two legs carry different runIds", () => {
-    const report = withArtifacts({
+    const report = assessEngineDelta({
       [GREEDY_ARTIFACT_KEY]: snapshot("greedy", [{ ref: "d-1", makespan: 300, imbalance: 90 }], "sha-aaaa"),
       [OPTIMIZED_ARTIFACT_KEY]: snapshot("optimized", [{ ref: "d-1", makespan: 240, imbalance: 30 }], "sha-bbbb"),
     });
-    expect(report.engineDelta).toBeUndefined();
-    expect(report.engineDeltaNote).toContain("runId");
+    expect(report.delta).toBeUndefined();
+    expect(report.note).toContain("runId");
   });
 
   it("omits the delta when an artifact's own engine field disagrees with the file it came from", () => {
     // Two greedy legs filed as one of each would otherwise be subtracted from
     // one another and reported as the optimizer's gain.
-    const report = withArtifacts({
+    const report = assessEngineDelta({
       [GREEDY_ARTIFACT_KEY]: snapshot("greedy", [{ ref: "d-1", makespan: 300, imbalance: 90 }]),
       [OPTIMIZED_ARTIFACT_KEY]: snapshot("greedy", [{ ref: "d-1", makespan: 240, imbalance: 30 }]),
     });
-    expect(report.engineDelta).toBeUndefined();
-    expect(report.engineDeltaNote).toContain("engine field");
-  });
-});
-
-describe("assessBelievability — similarity to historical", () => {
-  const board = twoWithAHole();
-  const constraints = constraintsOf({ isRoundRobin: true });
-  const base = assessBelievability({ board, constraints });
-
-  it("is UNDEFINED, never 0, when no history is supplied", () => {
-    // 0 reads as "completely dissimilar", which is a claim. Absence is the
-    // truth, so the field is absent.
-    expect(base.similarityToHistoricalPct).toBeUndefined();
-    expect("similarityToHistoricalPct" in base).toBe(false);
+    expect(report.delta).toBeUndefined();
+    expect(report.note).toContain("engine field");
   });
 
-  it("is UNDEFINED for an empty history array", () => {
-    expect(assessBelievability({ board, constraints, history: [] }).similarityToHistoricalPct).toBeUndefined();
-  });
-
-  it("is UNDEFINED when history shares no metric key with this board", () => {
-    const history: BelievabilityHistory[] = [{ metrics: [{ key: "aMetricNobodyEmits", score: 50 }] }];
-    expect(assessBelievability({ board, constraints, history }).similarityToHistoricalPct).toBeUndefined();
-  });
-
-  it("is 100 when this board scores exactly what history did", () => {
-    const history: BelievabilityHistory[] = [{ metrics: base.metrics }];
-    expect(assessBelievability({ board, constraints, history }).similarityToHistoricalPct).toBe(100);
-  });
-
-  it("is 90 when every metric sits 10 points off history", () => {
-    const history = [shifted(base.metrics, 10)];
-    expect(assessBelievability({ board, constraints, history }).similarityToHistoricalPct).toBe(90);
-  });
-
-  it("floors at 0 for history nothing like this board - and 0 is a REAL value here", () => {
-    // This is what makes the absence cases above meaningful: 0 is reachable,
-    // and it means "measured, and completely dissimilar". `undefined` means
-    // "not measured". A percentage that ran negative and printed as such, or
-    // one that collapsed both states onto 0, would lose that distinction.
-    const history = [shifted(base.metrics, 500)];
-    expect(assessBelievability({ board, constraints, history }).similarityToHistoricalPct).toBe(0);
-  });
-
-  it("averages ACROSS observations rather than reading only the first", () => {
-    // +10 and -10 average back to this board's own scores => 100. An
-    // implementation that took history[0] would report 90, which is exactly
-    // the case above — so the two together pin the mean.
-    const history = [shifted(base.metrics, 10), shifted(base.metrics, -10)];
-    expect(assessBelievability({ board, constraints, history }).similarityToHistoricalPct).toBe(100);
-  });
-
-  it("compares only the keys THIS board has, ignoring a metric history carries and it does not", () => {
-    // A non-round-robin board has no homeAwayAlternation. A history row that
-    // carries one must not drag the percentage around.
-    const nonRr = constraintsOf({ isRoundRobin: false });
-    const nonRrBase = assessBelievability({ board, constraints: nonRr });
-    const history: BelievabilityHistory[] = [
-      { metrics: [...shifted(nonRrBase.metrics, 10).metrics, { key: HOME_AWAY, score: -1000 }] },
-    ];
-    expect(assessBelievability({ board, constraints: nonRr, history }).similarityToHistoricalPct).toBe(90);
+  it("never throws on hostile artifacts", () => {
+    expect(() =>
+      assessEngineDelta({ [GREEDY_ARTIFACT_KEY]: null, [OPTIMIZED_ARTIFACT_KEY]: 42, "engine-x": "nope" }),
+    ).not.toThrow();
   });
 });
 
 describe("assessBelievability — report-only, and pure", () => {
-  it("never throws on hostile artifacts", () => {
-    const board = twoWithAHole();
-    const constraints = constraintsOf();
-    expect(() =>
-      assessBelievability({
-        board,
-        constraints,
-        engineArtifacts: { [GREEDY_ARTIFACT_KEY]: null, [OPTIMIZED_ARTIFACT_KEY]: 42, "engine-x": "nope" },
-      }),
-    ).not.toThrow();
-  });
-
   it("never throws on a board with no fixtures at all", () => {
     expect(() => assessBelievability({ board: boardOf([]), constraints: constraintsOf() })).not.toThrow();
   });
 
   it("returns the same report for the same input, twice", () => {
     const input = {
-      board: twoWithAHole(),
+      board: keyedBoard(),
       constraints: constraintsOf({ isRoundRobin: true }),
-      engineArtifacts: {
-        [GREEDY_ARTIFACT_KEY]: snapshot("greedy", [{ ref: "d-1", makespan: 300, imbalance: 90 }]),
-        [OPTIMIZED_ARTIFACT_KEY]: snapshot("optimized", [{ ref: "d-1", makespan: 240, imbalance: 30 }]),
-      },
+      historicalAssignment: [historyRow("k1", MON, "09:00"), historyRow("k2", TUE, "15:00")],
     };
     expect(assessBelievability(input)).toEqual(assessBelievability(input));
+  });
+
+  it("returns the same engine delta for the same artifacts, twice", () => {
+    const artifacts = {
+      [GREEDY_ARTIFACT_KEY]: snapshot("greedy", [{ ref: "d-1", makespan: 300, imbalance: 90 }]),
+      [OPTIMIZED_ARTIFACT_KEY]: snapshot("optimized", [{ ref: "d-1", makespan: 240, imbalance: 30 }]),
+    };
+    expect(assessEngineDelta(artifacts)).toEqual(assessEngineDelta(artifacts));
   });
 });
