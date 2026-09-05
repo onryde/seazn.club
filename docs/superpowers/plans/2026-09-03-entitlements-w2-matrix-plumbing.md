@@ -16,6 +16,32 @@ surface work — that is W3.
 
 ## Current state — 2026-09-04, written for a session that has none of this in context
 
+**STATE AT 2026-09-05 (late) — read this first.**
+
+**Draft PR #719 is open**, branch pushed, 146 commits ahead of `origin/main` and 3
+behind (main moves fast; rebase before merging). CI is the venue now, not this
+machine: `ci.yml` triggers on `pull_request:` ONLY — typecheck, lint, sharded unit and
+smoke — and `e2e.yml` triggers on push to `main` only, so `workflow_dispatch` with a
+`pr` input is the SOLE pre-merge e2e signal for a feature branch. One dispatch has run
+against #719; that is the first e2e this wave has ever had, and the seven width
+projects had never seen this branch.
+
+**Boundary gate, run locally on this branch: 14,034 tests / 13,954 passed / 67 pending
+/ 0 real failures.** 1,117 files, every `.testResults[].name` inside the worktree. The
+13 reds were environmental and BOTH causes were proven, not assumed: ten were a
+hand-written `PLACEMENT_SERVICE_HOST=127.0.0.1` (it is a **host:port** string —
+`eval "$(seazn-env env --label entw2)"` and they are 27/27), and three were
+`credits-monthly-cron` losing to cross-suite contention, 24/24 alone. `tsc` 0 on both
+configs.
+
+**Driven in a browser** against a prod build of this branch at 1280/768/320 and in four
+locales. That is what found the copy defects the unit suite could not see.
+
+**IN FLIGHT at the time of writing:** an implementer localising
+`components/pro-price-card.tsx` and widening the source scan. If the tree is dirty when
+you arrive, that is its work — check `git status` before assuming anything was lost, and
+read its commit messages rather than only its report.
+
 **2026-09-05: rebased onto `origin/main` cleanly — 44 commits in, no conflicts, now
 134 ahead / 0 behind, tsc 0, and PR #716 is in the branch so builds get the Turbopack
 cache.** Deferred on machine load (peaks of 252 on 12 cores, five labels resident):
