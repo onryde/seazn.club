@@ -2,8 +2,10 @@
 
 Date: 2026-09-04. Branch `feat/spectator-surface`, worktree `.claude/worktrees/spectator`.
 Programme index: `2026-09-04-spectator-prompts/_INDEX.md`; subagent rules: `_RULES.md` beside it.
-W0 canvas (today's screens, two match-centre directions, two poster directions, on real
-seeded data): https://claude.ai/code/artifact/f745adf2-fd1f-4f14-9184-ba6f0eb41978
+W0 canvas (today's screens, two match-centre directions incl. football and tennis, two
+poster directions, on real seeded data): https://claude.ai/code/artifact/f745adf2-fd1f-4f14-9184-ba6f0eb41978
+Plain single-page view of the same boards (fast, no editor):
+https://claude.ai/code/artifact/e7ced691-6978-4036-8f20-cd134b5cfca5
 Reference the owner pointed at (cricheroes tournament + three scorecard pages, fetched
 2026-09-04 — see "Reference structure"). The owner's brief: *"we don't want to replicate
 this, at least we want to have good details … most of the customer will come here and
