@@ -644,6 +644,105 @@ test.describe("zone-split cases — they share organizations.timezone", () => {
     expect(display.inTz, "the two zones must render differently, or this proves nothing").not.toBe(display.inOrgTz);
     await expect(row.getByTestId("run-sheet-edit-time")).toHaveText(display.inTz);
   });
+
+  // ADJUDICATED FIX — a CANCELLED edit survived in the field.
+  //
+  // `when` used to be seeded by `useState`'s initializer, which runs once per
+  // MOUNT, while `editing` toggles many times inside one mount and Cancel was
+  // `setEditing(false)` and nothing else. Driven by hand: open the editor on
+  // a fixture stored at 09:00, type a different time, press Cancel, reopen —
+  // and the field still showed the abandoned value while the row's own time
+  // cell printed the stored one. Two different times in one row, and ONE
+  // confirming tap on Save would have committed the edit the organiser had
+  // explicitly given up on. Clearing the date half and cancelling produced
+  // the same lie inverted: a blank field, Save disabled, on a fixture that
+  // has a time.
+  //
+  // BOTH DIRECTIONS ARE ASSERTED, and not for thoroughness' sake — a fix that
+  // only reseeds when the stored value is non-empty passes the first case and
+  // fails the second, so one case alone cannot tell a real fix from half of
+  // one.
+  //
+  // It lives in THIS block, not outside it, because the expected seed has to
+  // be exact: `zonedDateTimeInput(stored, ORG_TZ)` through the same helper the
+  // component seeds with. Outside the block `orgTz` is whatever the shared
+  // column happens to hold, which three other spec files also write — an
+  // expectation derived from a value read at the top of a test can be stale by
+  // the time the page renders (proven in round 4). Here the zone is set, so
+  // the assertion is a real value pin rather than "stable across opens",
+  // which a consistently WRONG seed would also satisfy.
+  test("adjudicated fix: cancelling an edit does not leave the abandoned value in the field", async ({
+    page,
+    request,
+  }) => {
+    const { divisionId, fixtureIds } = await seedRunSheetDivision(request);
+    expect(fixtureIds.length, "seed produced no fixtures — setup failed, not the sheet").toBeGreaterThanOrEqual(1);
+    const target = fixtureIds[0]!;
+    const fixtureNo = (await apiJson<{ fixture_no: number }>(request, `/api/v1/fixtures/${target}`)).data!.fixture_no;
+
+    const stored = "2030-06-15T09:00:00.000Z";
+    await setZoneSplitSql({
+      divisionId,
+      orgTz: ORG_TZ,
+      divisionTz: "Asia/Tokyo",
+      fixtureNo,
+      at: stored,
+      registerRestore: (undo) => {
+        pendingOrgTzRestore = undo;
+      },
+    });
+    // Derived through the component's own helper, never typed.
+    const expectedSeed = zonedDateTimeInput(stored, ORG_TZ);
+
+    await page.goto(await divisionPath(request, divisionId, "?tab=fixtures"));
+    // POSITIVE PAIR, first: the sheet and the row really rendered, so every
+    // field reading below is about a page that got where it was going.
+    await expect(page.getByTestId("run-sheet")).toBeVisible();
+    const row = page.locator(`[data-fixture-no="${fixtureNo}"]`);
+    await expect(row).toHaveCount(1);
+    const editor = row.getByTestId("run-sheet-set-time-editor");
+
+    const openEditor = async () => {
+      await row.getByTestId("run-sheet-edit-time").click();
+      // Second half of the positive pair — a value read from a closed editor
+      // would be meaningless, and an absence assertion would pass on it.
+      await expect(editor).toBeVisible();
+      await expect(editor.locator('input[type="date"]')).toBeVisible();
+    };
+    const fieldValue = () =>
+      editor.evaluate((el) => {
+        const d = (el.querySelector('input[type="date"]') as HTMLInputElement | null)?.value ?? "";
+        const t = (el.querySelector("select") as HTMLSelectElement | null)?.value ?? "";
+        return `${d}T${t}`;
+      });
+    const cancel = async () => {
+      await row.getByRole("button", { name: "Cancel", exact: true }).click();
+      await expect(editor).toHaveCount(0);
+    };
+
+    await openEditor();
+    expect(await fieldValue(), "the editor did not open on the stored instant").toBe(expectedSeed);
+
+    // ---- direction 1: a TYPED value must not survive Cancel ----
+    const typed = `${expectedSeed.slice(0, 10)}T16:45`;
+    expect(typed, "pick a time that differs from the stored one, or this proves nothing").not.toBe(expectedSeed);
+    await setDateTime(editor, typed);
+    expect(await fieldValue(), "the typed value did not take").toBe(typed);
+    await cancel();
+    await openEditor();
+    const afterCancel = await fieldValue();
+    console.log("typed", typed, "then cancelled and reopened — field shows:", afterCancel, "| stored:", expectedSeed);
+    expect(afterCancel, "a cancelled edit survived in the field").toBe(expectedSeed);
+
+    // ---- direction 2: a CLEARED value must not survive Cancel either ----
+    await editor.locator('input[type="date"]').fill("");
+    expect((await fieldValue()).startsWith("T"), "the date half did not clear").toBe(true);
+    await cancel();
+    await openEditor();
+    const afterClearCancel = await fieldValue();
+    console.log("cleared the date then cancelled and reopened — field shows:", afterClearCancel);
+    expect(afterClearCancel, "a cancelled CLEAR left the field blank on a fixture that has a time").toBe(expectedSeed);
+  });
 });
 
 // Fix round 4, CRITICAL — the "When" field in this editor was ZERO PIXELS

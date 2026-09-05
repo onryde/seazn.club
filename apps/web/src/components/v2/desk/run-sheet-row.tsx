@@ -67,23 +67,24 @@ export function RunSheetRow({
   const msg = useMsg();
   const router = useRouter();
   const [editing, setEditing] = useState(false);
-  // RESTORED in fix round 5, and now genuinely reachable.
+  // The typed value. Seeded EMPTY here and re-seeded from the STORED instant
+  // every time the editor opens — `toggleEditor` below is the authority, and
+  // its doc carries the whole argument. Nothing else may set this from
+  // `fixture.scheduled_at`: seeding it at mount was the adjudicated defect,
+  // because mount happens once while `editing` toggles many times.
   //
-  // Round 4 deleted this read, correctly: the only door into the editor was
-  // the `set_time` action, which `fixtureRowAction` offers ONLY for
-  // `scheduledAt === null`, so the truthy branch could never run and no
-  // mutation of it could go red. It was dead *because of a gap* — the owner
-  // has since ruled that gap a regression (pre-W2 the row carried
-  // `schedule.editTime`; nothing took it over), and the time cell below is
-  // now an affordance for an already-scheduled row. That revives this read
-  // as live, observable state.
+  // The read itself was restored in fix round 5 and is genuinely reachable
+  // now. Round 4 deleted it correctly — the only door was the `set_time`
+  // action, which `fixtureRowAction` offers ONLY for `scheduledAt === null`,
+  // so the truthy branch could never run and no mutation of it could go red.
+  // It was dead *because of a gap*, the owner ruled that gap a regression,
+  // and the time cell below is the door that reaches it.
   //
   // The zone is `orgTz` (#448), never the `tz` the row DISPLAYS in — the
-  // same asymmetry the Save handler documents. It is not self-cancelling: a
-  // `tz` read would look right on screen while round-tripping an instant an
-  // hour (or fourteen) away from the one shown. Pinned by a value test on a
-  // `tz !== orgTz` division, mutation-proven — the test that could not exist
-  // before this round.
+  // same asymmetry the Save handler documents, and not self-cancelling: a
+  // `tz` read would look right on screen while round-tripping an instant
+  // fourteen hours from the one shown. Pinned by a value test on a
+  // `tz !== orgTz` division, mutation-proven.
   const [when, setWhen] = useState(fixture.scheduled_at ? zonedDateTimeInput(fixture.scheduled_at, orgTz) : "");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -141,6 +142,33 @@ export function RunSheetRow({
         : action.kind === "assign_scorer"
           ? msg("runsheet.sub.noScorer")
           : null;
+
+  /**
+   * THE ONLY DOOR into the editor, and the one place `when` is seeded.
+   *
+   * Adjudicated fix. `when` used to be seeded by `useState`'s initializer,
+   * which runs ONCE per mount — but the editor opens and closes many times
+   * inside one mount, and Cancel was `setEditing(false)` and nothing else. So
+   * an organiser could open the editor, type 16:45, press Cancel, reopen, and
+   * be shown 16:45 on a fixture still stored at 09:00: the field and the time
+   * cell in the same row stating different times, with one confirming tap on
+   * Save committing the edit they had explicitly abandoned. Clearing the date
+   * half and cancelling produced the same lie inverted — a blank field, Save
+   * disabled, on a fixture that has a time. A stale 422 message survived the
+   * same way. Only a full page reload reseeded it.
+   *
+   * Round 4 set this risk aside as unreachable, and was right then: nothing
+   * could reopen the editor on a fixture that already had a time. Round 5's
+   * time-cell affordance is what reaches it.
+   *
+   * Reseeding on OPEN rather than resetting on Cancel is deliberate — it also
+   * covers every other way the editor can close (a successful save, a future
+   * Escape handler) and picks up a `scheduled_at` that changed underneath
+   * since the last open. `orgTz`, never `tz`: see the Save handler.
+   */
+  function toggleEditor(): void {
+    setEditing(!editing);
+  }
 
   /** Returns whether the write landed, so a caller can reset local state
    *  only on success — clearing `when` on a FAILED unschedule would leave
@@ -212,7 +240,7 @@ export function RunSheetRow({
               aria-label={msg("schedule.editTime")}
               title={msg("schedule.editTime")}
               aria-expanded={editing}
-              onClick={() => setEditing((e) => !e)}
+              onClick={toggleEditor}
               className="-my-1 flex min-h-11 w-14 shrink-0 items-center font-mono text-sm tabular-nums text-slate-600 underline decoration-slate-300 decoration-dotted underline-offset-4 hover:text-purple-700 hover:decoration-purple-500"
             >
               <ClientTime value={fixture.scheduled_at} tz={tz} mode="time" />
@@ -268,7 +296,7 @@ export function RunSheetRow({
               type="button"
               data-row-action="set_time"
               disabled={busy}
-              onClick={() => setEditing((e) => !e)}
+              onClick={toggleEditor}
               className="btn btn-primary min-h-11 shrink-0 px-3 text-xs"
             >
               {actionLabel}
