@@ -1,11 +1,15 @@
 "use client";
 // Live scoreboard for the public match page (doc 09 §2). Entitlement split
 // (doc 09 §4): Pro orgs get Supabase Realtime push on `fixture:{id}`; everyone
-// falls back to 15 s polling of the public fixture endpoint. Reuses the
-// use-tournament-realtime pattern (renamed per PROMPT-12 item 3), inlined here
-// because the public page authenticates with a public token endpoint instead
-// of the org-member one.
-import { useCallback, useEffect, useState } from "react";
+// falls back to 15 s polling of the public fixture endpoint.
+//
+// Task 10 (spectator surface W1) lifted the transport (poll/realtime/debounce)
+// out into `useLiveFixture` (`./match-centre/use-live-fixture.ts`), shared
+// with the new `MatchCentre` root, so this file now only delegates to it and
+// renders. `LiveScoreBody` is exported separately (no behaviour change) so a
+// later task can reuse today's JSX from inside the match centre's own summary
+// tab without a second copy of it.
+import type { Dict } from "@/lib/i18n-constants";
 import {
   disciplineLabel,
   disciplineList,
@@ -15,18 +19,13 @@ import {
   setBreakdown,
   stripLiveSetPoints,
 } from "@/lib/public-site";
-import {
-  fetchLiveFixture,
-  fetchPublicRealtimeToken,
-  type LiveFixtureData,
-} from "./live-score-data";
+import { type LiveFixtureData } from "./live-score-data";
 import {
   renderDecidedOutcome,
   shootoutScoreFromDetail,
   type DecidedOutcomeTemplates,
 } from "@/lib/scoring-vocab";
-
-const POLL_MS = 15_000;
+import { useLiveFixture } from "./match-centre/use-live-fixture";
 
 export type { LiveFixtureData };
 
@@ -56,66 +55,57 @@ export function LiveScore({
   sportKey,
   decidedTemplates,
 }: Props) {
-  const [data, setData] = useState<LiveFixtureData>(initial);
+  const { data, transport } = useLiveFixture(fixtureId, initial, realtime);
+  // Called as a plain function, not `<LiveScoreBody .../>` — `LiveScoreBody`
+  // is hookless (no local state of its own; everything it renders is derived
+  // from `data`/`entrantNames`/etc. on every call), so this is behaviourally
+  // identical to JSX composition and keeps `LiveScore`'s OWN returned tree
+  // flat, exactly as it was before this task's extraction — the
+  // `_hook-harness`-driven `live-score.test.tsx` walks that tree directly
+  // (`island.text()`), and a `<LiveScoreBody/>` element would be an opaque,
+  // unexpanded leaf to it (the harness renders one function component one
+  // level deep, by design — see `_hook-harness.tsx`'s own doc comment).
+  return LiveScoreBody({
+    data,
+    entrantNames,
+    sportKey,
+    decidedTemplates,
+    subscribed: transport === "realtime",
+  });
+}
 
-  const refresh = useCallback(async () => {
-    try {
-      setData(await fetchLiveFixture(fixtureId));
-    } catch {
-      // transient — keep the last known score
-    }
-  }, [fixtureId]);
+interface LiveScoreBodyProps {
+  data: LiveFixtureData;
+  entrantNames: Record<string, string>;
+  sportKey: string;
+  decidedTemplates: DecidedOutcomeTemplates;
+  /**
+   * Task 10 dispatch ruling 4 — threaded through for a future caller with a
+   * real dictionary (the eventual match-centre "summary" panel). Not
+   * consumed yet: every string this body renders today is the pre-existing
+   * hardcoded English (no behaviour change this task; a later pass that
+   * DOES read `dict` here owes those strings to all four locale
+   * dictionaries per the standing i18n rule).
+   */
+  dict?: Dict;
+  /**
+   * Whether the live transport is currently receiving realtime pushes —
+   * not in the dispatch's own literal prop list, added because dropping the
+   * pre-existing "· realtime" indicator text below would itself have been a
+   * (forbidden) behaviour change. Defaults to `false` so `LiveScoreBody` can
+   * be mounted directly (e.g. from a future match-centre panel) without a
+   * transport in hand.
+   */
+  subscribed?: boolean;
+}
 
-  const live = data.status === "in_play" || data.status === "scheduled";
-
-  // Realtime push (Pro orgs). Any failure — no entitlement (403), env missing,
-  // websocket refused — leaves `subscribed` false and polling takes over.
-  const [subscribed, setSubscribed] = useState(false);
-  useEffect(() => {
-    if (!realtime || !live) return;
-    if (!process.env.NEXT_PUBLIC_SUPABASE_URL) return;
-    let cancelled = false;
-    let debounce: ReturnType<typeof setTimeout> | null = null;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    let channel: any = null;
-
-    (async () => {
-      let token: { token: string; channel: string };
-      try {
-        token = await fetchPublicRealtimeToken(fixtureId);
-      } catch {
-        return; // not entitled or server error → polling
-      }
-      if (cancelled) return;
-      const { supabaseBrowser } = await import("@/lib/supabase-browser");
-      const sb = supabaseBrowser();
-      await sb.realtime.setAuth(token.token);
-      channel = sb
-        .channel(token.channel, { config: { private: true } })
-        .on("broadcast", { event: "state_changed" }, () => {
-          if (debounce) clearTimeout(debounce);
-          debounce = setTimeout(refresh, 250);
-        })
-        .subscribe((status: string) => {
-          if (!cancelled) setSubscribed(status === "SUBSCRIBED");
-        });
-    })();
-
-    return () => {
-      cancelled = true;
-      if (debounce) clearTimeout(debounce);
-      channel?.unsubscribe();
-      setSubscribed(false);
-    };
-  }, [fixtureId, realtime, live, refresh]);
-
-  // 15 s polling fallback (Community, or realtime not connected).
-  useEffect(() => {
-    if (!live || subscribed) return;
-    const id = setInterval(refresh, POLL_MS);
-    return () => clearInterval(id);
-  }, [live, subscribed, refresh]);
-
+export function LiveScoreBody({
+  data,
+  entrantNames,
+  sportKey,
+  decidedTemplates,
+  subscribed = false,
+}: LiveScoreBodyProps) {
   const inPlay = data.status === "in_play";
   const decided = data.status === "decided" || data.status === "finalized";
   const breakdown = setBreakdown(data.summary, sportKey);

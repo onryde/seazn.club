@@ -23,5 +23,16 @@
   "news.kind.recap": "Samenvatting",
   "news.kind.announcement": "Aankondiging",
   "news.kind.news": "Clubnieuws",
-  "news.kind.weekly_digest": "Wekelijkse samenvatting"
+  "news.kind.weekly_digest": "Wekelijkse samenvatting",
+  "matchCentre.tabs.label": "Tabbladen wedstrijdcentrum",
+  "matchCentre.tab.summary": "Samenvatting",
+  "matchCentre.tab.scorecard": "Scorebord",
+  "matchCentre.tab.commentary": "Commentaar",
+  "matchCentre.tab.timeline": "Tijdlijn",
+  "matchCentre.tab.sets": "Sets",
+  "matchCentre.tab.info": "Info",
+  "matchCentre.status.live": "Live",
+  "matchCentre.status.decided": "Afgelopen",
+  "matchCentre.status.scheduled": "Gepland",
+  "matchCentre.updatedAgo": "Bijgewerkt {seconds}s geleden"
 }

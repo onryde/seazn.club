@@ -23,5 +23,16 @@
   "news.kind.recap": "Recap",
   "news.kind.announcement": "Announcement",
   "news.kind.news": "Club news",
-  "news.kind.weekly_digest": "Weekly digest"
+  "news.kind.weekly_digest": "Weekly digest",
+  "matchCentre.tabs.label": "Match centre tabs",
+  "matchCentre.tab.summary": "Summary",
+  "matchCentre.tab.scorecard": "Scorecard",
+  "matchCentre.tab.commentary": "Commentary",
+  "matchCentre.tab.timeline": "Timeline",
+  "matchCentre.tab.sets": "Sets",
+  "matchCentre.tab.info": "Info",
+  "matchCentre.status.live": "Live",
+  "matchCentre.status.decided": "Ended",
+  "matchCentre.status.scheduled": "Scheduled",
+  "matchCentre.updatedAgo": "Updated {seconds}s ago"
 }

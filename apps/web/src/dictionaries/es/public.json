@@ -23,5 +23,16 @@
   "news.kind.recap": "Resumen",
   "news.kind.announcement": "Anuncio",
   "news.kind.news": "Noticia del club",
-  "news.kind.weekly_digest": "Resumen semanal"
+  "news.kind.weekly_digest": "Resumen semanal",
+  "matchCentre.tabs.label": "Pestañas del centro de partido",
+  "matchCentre.tab.summary": "Resumen",
+  "matchCentre.tab.scorecard": "Marcador",
+  "matchCentre.tab.commentary": "Comentario",
+  "matchCentre.tab.timeline": "Cronología",
+  "matchCentre.tab.sets": "Sets",
+  "matchCentre.tab.info": "Información",
+  "matchCentre.status.live": "En vivo",
+  "matchCentre.status.decided": "Finalizado",
+  "matchCentre.status.scheduled": "Programado",
+  "matchCentre.updatedAgo": "Actualizado hace {seconds}s"
 }

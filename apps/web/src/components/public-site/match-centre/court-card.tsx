@@ -1,0 +1,97 @@
+// Spectator surface W1, Task 10 — the court-slab scorebug at the top of the
+// match centre (W0 option A). Classes copied from `live-score.tsx:143` (the
+// court card shell) and its score type scale — phone `text-2xl`, `md:text-4xl`
+// (the brief's own token sheet; the legacy scoreboard used a single
+// `text-5xl sm:text-6xl` because it never had a tab rail competing for the
+// fold). Every `Msg` (`statusLine`) is resolved client-side via `t()` — the
+// document carries a dictionary key + params, never pre-rendered copy, so a
+// live poll/realtime push that changes which sentence applies re-resolves it
+// in the viewer's own locale on the same tick, the same reasoning
+// `renderDecidedOutcome` already established for the legacy scoreboard.
+import type { Dict as PublicDict } from "@/lib/i18n-constants";
+import { t } from "@/lib/i18n-runtime";
+import type { MatchCentreHeaderT } from "@/server/public-site/match-centre-schema";
+
+export interface CourtCardProps {
+  header: MatchCentreHeaderT;
+  dict: PublicDict;
+  updatedAt: number;
+}
+
+export function CourtCard({ header, dict, updatedAt }: CourtCardProps) {
+  // `Date.now()` at render time trips the (warn-only, per eslint.config.mjs)
+  // react-hooks/purity rule — the "updated Xs ago" line is inherently a
+  // function of wall-clock time, and re-renders only on `updatedAt` changing
+  // (a fresh poll/realtime push) or a parent re-render, same accepted
+  // pattern as every other React-Compiler-era warning this repo defers
+  // (development/DEFERRED.md); a ticking clock is out of this task's scope.
+  const seconds = Math.max(0, Math.floor((Date.now() - updatedAt) / 1000));
+  const statusKey =
+    header.status === "decided" ? "public.matchCentre.status.decided" : "public.matchCentre.status.scheduled";
+  return (
+    <div
+      data-testid="mc-court-card"
+      className="overflow-hidden rounded-2xl bg-court text-court-ink shadow-lg"
+    >
+      <div className="p-5 sm:p-6">
+        {header.live ? (
+          <p
+            data-testid="mc-live-pill"
+            className="mb-3 flex items-center gap-2 text-[11px] font-bold uppercase tracking-[0.22em] text-emerald-300"
+          >
+            <span className="animate-live-pulse h-2 w-2 rounded-full bg-emerald-400" />
+            {t(dict, "public.matchCentre.status.live")}
+          </p>
+        ) : (
+          <p
+            data-testid="mc-result-chip"
+            className="mb-3 text-[11px] font-semibold uppercase tracking-[0.22em] text-court-muted"
+          >
+            {t(dict, statusKey)}
+          </p>
+        )}
+        <div className="space-y-2">
+          {header.sides.map((side, i) => {
+            const idx = i as 0 | 1;
+            const batting = header.battingIndex === idx;
+            return (
+              <div
+                key={side.entrantId}
+                className={`flex items-baseline justify-between gap-3 tabular-nums ${batting ? "font-bold" : ""}`}
+              >
+                <span className="truncate font-display text-xl font-semibold uppercase tracking-wide sm:text-2xl">
+                  {side.short || side.name}
+                </span>
+                <span className="shrink-0 text-right">
+                  <span
+                    data-testid={`mc-score-${idx}`}
+                    className="font-display text-2xl font-bold tabular-nums md:text-4xl"
+                  >
+                    {header.scoreLines[idx] ?? "—"}
+                  </span>
+                  {header.subLines[idx] ? (
+                    <span className="ml-1.5 text-xs text-court-muted">{header.subLines[idx]}</span>
+                  ) : null}
+                </span>
+              </div>
+            );
+          })}
+        </div>
+        {header.statusLine ? (
+          <p data-testid="mc-status-line" className="mt-3 text-sm text-court-muted">
+            {t(dict, header.statusLine.key, header.statusLine.params)}
+          </p>
+        ) : null}
+        {header.rateLine ? (
+          <p data-testid="mc-rate-line" className="mt-1 text-xs text-court-muted">
+            {header.rateLine}
+          </p>
+        ) : null}
+        <p data-testid="mc-updated-at" className="mt-3 text-[11px] text-court-muted/70">
+          {t(dict, "public.matchCentre.updatedAgo", { seconds })}
+        </p>
+      </div>
+      <div aria-hidden className={`h-1 ${header.live ? "bg-emerald-400" : "bg-accent"}`} />
+    </div>
+  );
+}
