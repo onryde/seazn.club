@@ -159,3 +159,58 @@ standing env: bring it up for a capture or a gate, take it down after (peer
 session request, 2026-09-04). The server port moves on every rebuild — re-`eval`
 the env script. `db:apply` alone is not a fresh schema (needs `sync:sports`).
 Confirm `show data_directory` is yours before trusting a `createdb`.
+
+## Verification lens (owner, 2026-09-06) — applies to Tasks 15–16 and every later wave
+
+Verify as the customer:
+- Drive it in the browser/DOM. A grep or an HTML-payload match is not proof — the i18n
+  dictionary serialises into the page, so the payload matches mutant, control and absent
+  alike. Assert `toBeVisible` + `toHaveCount`, not text presence.
+- `page.route` never fires on a redirect TARGET, only the initial navigation; zero fires
+  still reads green — a false proof.
+- A rebuild is not a fresh server: an old server can survive on the old port serving a
+  deleted bundle with health 200. Probe `_buildManifest.js` / `BUILD_ID`, never
+  `/api/health`.
+- Playwright `storageState` is ORIGIN-scoped (port included). A port change after a
+  rebuild silently drops cookie-consent state while the session stays "logged in" —
+  it misreads as a click timeout.
+- A class present is not a class in effect — confirm computed style or behaviour.
+- An English string can hide inside a translated surface (server error message, static
+  bullets) invisibly to render tests; only a SOURCE scan catches it.
+
+Product-owner lens:
+- An entitlement-row deletion ships WITH its copy, same commit.
+- A validated field transmitted nowhere is a camouflaged inert seam (the `org.currency`
+  case settled charges in the wrong currency).
+- `Number("") === 0`: an empty numeric input silently zeroes live business values — pin
+  every numeric field's empty-state meaning; never assume "delete rule".
+- Red main is an attribution trap: e2e fires only on push-to-main or manual dispatch,
+  smoke only on PRs; merging into a red main makes OUR e2e read as our regression. A
+  conflicting PR gets ZERO checks, not even smoke.
+- A new or changed walkthrough spec MUST be named in `WALKTHROUGH_SPECS` (repo-wide since
+  PR #723 / 01ea4a455) or `e2e-ci-wiring.test.ts` reds for whoever merges across it.
+- "Smoke — usecases" 0 failed + an Unhandled Rejection is a real floating promise; never
+  rerun-to-green and walk away.
+- UNRESOLVED (cite as such): the settings-admin walkthrough is red on main, bisected to
+  PR #720; the cause is open (origin/bind-address vs a `getCurrentUser()` bug) until
+  someone captures the runtime `req.url` in a red run.
+
+Test-case design:
+- A clean textual merge proves nothing beyond mergeability — not types, not premises.
+  Run tsc as its own gate (vitest can be structurally blind: `tsconfig.scripts.json`
+  excludes tests; 884 tests stayed green on a non-compiling tree), then judge a suite on
+  the TOTAL count rising, never on zero failures alone.
+- Mutation testing mutates the MONEY path specifically (a deleted `pay()` guard left
+  714/714 green because tests read a pre-seeded end state). Mutate per SURFACE, not per
+  test. A collection-breaking mutant shows a reduced TOTAL, not a failure count — read
+  it as survived otherwise.
+- A negative assertion needs its positive pair — "write refused" passes vacuously on a
+  zero-rows no-op or a zero-resolving locator.
+- A bench report directory is keyed by git SHA, not timestamp — a commit mid-investigation
+  silently redirects to a stale prior report.
+- `try/finally` never runs on a Playwright timeout — only `afterEach` does. Arm cleanup
+  and captured ids there.
+- Retraction discipline: correcting a claim must downgrade the memory's DESCRIPTION field
+  too, not just its body — the description is what recall scans.
+- A rebase or merge conflict is a free re-read: check the content is still TRUE, not
+  just how to merge it syntactically.
