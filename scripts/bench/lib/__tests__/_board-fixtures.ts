@@ -198,15 +198,11 @@ export function cleanConstraints(): EncodedConstraints {
       { from: at(MON, "09:00"), to: at(MON, "20:00") },
       { from: at(TUE, "09:00"), to: at(TUE, "20:00") },
     ],
-    hard: [
-      { type: "max_fixtures_per_day", count: 2, scope: { kind: "every_entrant" } },
-      {
-        type: "min_rest_minutes",
-        minutes: 60,
-        restScope: "per_person",
-        scope: { kind: "every_person" },
-      },
-    ],
+    // Only `max_fixtures_per_day` — `min_rest_minutes` is no longer part of
+    // `EncodedHardRule` at all (ruling R23: unmeasurable in every rest_scope,
+    // reported in `unmodelled[]` instead), and `not_before`/`not_after` are
+    // supplied per-test so a bound cannot answer for another rule.
+    hard: [{ type: "max_fixtures_per_day", count: 2, scope: { kind: "every_entrant" } }],
     pins: [],
     isRoundRobin: true,
     declaresOfficials: true,

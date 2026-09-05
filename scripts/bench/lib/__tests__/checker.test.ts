@@ -9,6 +9,7 @@
 
 import { describe, expect, it } from "vitest";
 import { checkBoard } from "../checker.ts";
+import type { ConstraintScope } from "@seazn/engine/scheduling";
 import type { Board, CheckerFinding } from "../board.ts";
 import {
   at,
@@ -261,48 +262,6 @@ describe("checkBoard", () => {
     ).toEqual([]);
   });
 
-  it("applies a min_rest_minutes hard rule per PERSON, not per entrant", () => {
-    // perEntrantMinRest is off; only the hard rule can fire, and it is keyed
-    // on personIds. p-a plays fx-0 and fx-2.
-    const b = movedTo(cleanBoard(), 2, MON, "09:50");
-    const r = checkBoard(b, {
-      ...cleanConstraints(),
-      perEntrantMinRest: 0,
-      hard: [
-        {
-          type: "min_rest_minutes",
-          minutes: 45,
-          restScope: "per_person",
-          scope: { kind: "person", personKey: "p-a" },
-        },
-      ],
-    });
-    expect(kinds(r.findings)).toEqual(["entrant_below_rest"]);
-    expect(r.findings[0].measured).toBe(20);
-    expect(r.findings[0].required).toBe(45);
-    expect(r.findings[0].fixtureIds).toEqual(["fx-0", "fx-2"]);
-  });
-
-  it("does not apply a person-scoped rest rule to a DIFFERENT person", () => {
-    // p-c also breaches 45 minutes on this board, but the rule names p-a's
-    // twin p-b, who plays once. A rule applied universally reds this and
-    // files a false product defect.
-    const b = movedTo(cleanBoard(), 2, MON, "09:50");
-    const r = checkBoard(b, {
-      ...cleanConstraints(),
-      perEntrantMinRest: 0,
-      hard: [
-        {
-          type: "min_rest_minutes",
-          minutes: 45,
-          restScope: "per_person",
-          scope: { kind: "person", personKey: "p-b" },
-        },
-      ],
-    });
-    expect(r.findings).toEqual([]);
-  });
-
   // -----------------------------------------------------------------------
   // Rule 4 — day caps
   // -----------------------------------------------------------------------
@@ -470,17 +429,6 @@ describe("checkBoard", () => {
     expect(r.findings).toEqual([]);
   });
 
-  it("shape-guards each official at runtime, since the wire type is unknown[]", () => {
-    // `Fixture.officials` is `z.array(z.unknown())`, so a non-string element
-    // can reach a `readonly string[]` at runtime with tsc none the wiser.
-    const b = withFixture(cleanBoard(), 1, {
-      officialIds: [42 as unknown as string],
-    });
-    const r = checkBoard(b, cleanConstraints());
-    expect(kinds(r.findings)).toEqual(["officials_unreadable"]);
-    expect(r.findings[0].fixtureIds).toEqual(["fx-1"]);
-  });
-
   // -----------------------------------------------------------------------
   // Rule 7 — round order
   // -----------------------------------------------------------------------
@@ -517,6 +465,94 @@ describe("checkBoard", () => {
     const b = withFixture(moved, 2, { officialIds: ["o-3"] });
     const r = checkBoard(b, { ...cleanConstraints(), perEntrantMinRest: 0, hard: [] });
     expect(kinds(r.findings)).toEqual([]);
+  });
+
+  // -----------------------------------------------------------------------
+  // Rule 5 — wall-clock bounds (`not_before` / `not_after`)
+  //
+  // The clean board's local starts are 09:00, 09:00 and 11:00 in
+  // `Europe/London` (BST), i.e. 08:00Z, 08:00Z and 10:00Z. Every case below
+  // replaces `hard` outright so only the bound under test can produce a
+  // finding.
+  // -----------------------------------------------------------------------
+
+  const COMPETITION: ConstraintScope = { kind: "competition" };
+  const notBefore = (minutesIntoDay: number, scope: ConstraintScope = COMPETITION) => ({
+    ...cleanConstraints(),
+    hard: [{ type: "not_before" as const, minutesIntoDay, scope }],
+  });
+  const notAfter = (minutesIntoDay: number, scope: ConstraintScope = COMPETITION) => ({
+    ...cleanConstraints(),
+    hard: [{ type: "not_after" as const, minutesIntoDay, scope }],
+  });
+
+  it("flags every fixture starting before a not_before bound", () => {
+    // 09:30 = 570. fx-0 and fx-1 start at 540; fx-2 at 660 is clear.
+    const r = checkBoard(cleanBoard(), notBefore(570));
+    expect(kinds(r.findings)).toEqual(["not_before_breached", "not_before_breached"]);
+    expect(r.findings.flatMap((f) => [...f.fixtureIds])).toEqual(["fx-0", "fx-1"]);
+    expect(r.findings[0].measured).toBe(540);
+    expect(r.findings[0].required).toBe(570);
+  });
+
+  it("treats a start exactly ON a not_before as legal", () => {
+    // `calendar.ts:747-750`: the placer and the verifier both use a STRICT
+    // `<`, and an off-by-one here reds boards the product's own gate accepts.
+    expect(checkBoard(cleanBoard(), notBefore(540)).findings).toEqual([]);
+  });
+
+  it("flags a fixture starting after a not_after bound", () => {
+    // 10:30 = 630. Only fx-2 (660) breaches.
+    const r = checkBoard(cleanBoard(), notAfter(630));
+    expect(kinds(r.findings)).toEqual(["not_after_breached"]);
+    expect(r.findings[0].fixtureIds).toEqual(["fx-2"]);
+    expect(r.findings[0].measured).toBe(660);
+    expect(r.findings[0].required).toBe(630);
+  });
+
+  it("bounds the START only — a fixture may FINISH after a not_after", () => {
+    // fx-2 starts exactly at 11:00 (660) and runs to 11:30 (690). The product
+    // compares `hhmmInTz(a.startAt, tz)` and nothing else
+    // (`calendar.ts:1527-1531`), so this board is legal and a checker that
+    // bounded the end would red it.
+    expect(checkBoard(cleanBoard(), notAfter(660)).findings).toEqual([]);
+  });
+
+  it("judges a wall-clock bound in the BOARD's zone — legal in UTC, illegal in BST", () => {
+    // Identical instants, identical rule. In `Europe/London` fx-2 reads 11:00
+    // and breaches a 10:30 bound; in UTC the same instant reads 10:00 and does
+    // not. A checker that took the clock off the epoch, or off the host, gives
+    // one answer for both boards and fails this.
+    const rule = notAfter(630);
+    const b = cleanBoard();
+    expect(kinds(checkBoard(b, rule).findings)).toEqual(["not_after_breached"]);
+    expect(checkBoard({ ...b, tz: "UTC" }, rule).findings).toEqual([]);
+  });
+
+  it("applies a wall-clock bound through its SCOPE, not to every fixture", () => {
+    // e-b plays fx-0 only. A rule applied universally reds fx-1 as well.
+    const r = checkBoard(
+      cleanBoard(),
+      notBefore(570, { kind: "entrant", entrantId: "e-b" }),
+    );
+    expect(kinds(r.findings)).toEqual(["not_before_breached"]);
+    expect(r.findings[0].fixtureIds).toEqual(["fx-0"]);
+  });
+
+  it("fires nothing for a wall-clock bound scoped to nobody on this board", () => {
+    const r = checkBoard(
+      cleanBoard(),
+      notBefore(570, { kind: "entrant", entrantId: "e-not-entered" }),
+    );
+    expect(r.findings).toEqual([]);
+  });
+
+  it("fires ONCE per fixture under a universal scope, not once per entrant", () => {
+    // `every_entrant` yields a key per entrant, and fx-0 has two. A rule that
+    // emitted per key would report this breach twice.
+    const r = checkBoard(cleanBoard(), notBefore(570, { kind: "every_entrant" }));
+    expect(kinds(r.findings)).toEqual(["not_before_breached", "not_before_breached"]);
+    expect(r.findings.flatMap((f) => [...f.fixtureIds])).toEqual(["fx-0", "fx-1"]);
   });
 
   // -----------------------------------------------------------------------

@@ -100,6 +100,10 @@ type SharedWithProduct =
   | "entrant_below_rest"
   | "round_order_day"
   | "round_order_same_day";
+// `not_before_breached` / `not_after_breached` are deliberately ABSENT from
+// this list: the product collapses both into one `instruction_time` kind with
+// a `ruleType` field (`calendar.ts:1531`), so there is no token to share and
+// pinning them here would assert a correspondence that does not exist.
 type _KindsExistInProduct = Assert<SharedWithProduct extends ConflictDetailKind ? true : false>;
 type _KindsExistInBench = Assert<SharedWithProduct extends CheckerFindingKind ? true : false>;
 
@@ -255,39 +259,6 @@ function tallyKeys(fixture: BoardFixture, scope: ConstraintScope): string[] {
       return fixture.entrantIds.map((id) => `entrant:${id}`);
     case "every_person":
       return fixture.personIds.map((id) => `person:${id}`);
-  }
-}
-
-/** The keys a REST rule measures a series along.
- *
- *  Same idea as `tallyKeys`, with one difference that matters: the three
- *  FAMILY scopes (`competition`, `division`, `pool`) name a set of fixtures
- *  rather than a subject, so the subject has to come from `rest_scope`
- *  instead — a competition-wide "60 minutes between matches" is a rule about
- *  each PERSON, not about the competition as a single series. The entity and
- *  universal scopes already name their subject and keep it.
- *
- *  `feeder_to_dependent` produces NO series here and is recorded as a gap in
- *  the task report: it needs the bracket's `feeds` edges, and a `Board`
- *  carries none. It is not silently folded into the per-person reading, which
- *  would measure a rule nobody wrote. */
-type MinRestRule = Extract<EncodedHardRule, { type: "min_rest_minutes" }>;
-
-function restSeriesKeys(
-  fixture: BoardFixture,
-  scope: ConstraintScope,
-  restScope: MinRestRule["restScope"],
-): string[] {
-  if (restScope === "feeder_to_dependent") return [];
-  switch (scope.kind) {
-    case "competition":
-    case "division":
-    case "pool":
-      return tallyKeys(fixture, scope).length === 0
-        ? []
-        : fixture.personIds.map((id) => `person:${id}`);
-    default:
-      return tallyKeys(fixture, scope);
   }
 }
 
@@ -447,6 +418,16 @@ function windowContainment(
 
 // ---------------------------------------------------------------------------
 // Rule 3 — rest minima
+//
+// ONE rest rule, not two. `perEntrantMinRest` is a division knob
+// (`schemas.ts:1303`) keyed on `entrantIds`, which the product's `Fixture`
+// genuinely carries (`home_entrant_id` / `away_entrant_id`) — so it is
+// measurable and it is checked here. The `min_rest_minutes` HARD rule is a
+// different constraint keyed on PERSONS or on feeder edges, neither of which
+// reaches a `Board`; `board.ts` reports every one of them in `unmodelled[]`
+// and none reaches `EncodedHardRule`, so there is deliberately no branch for
+// it here. Neither rule stands in for the other, and substituting the entrant
+// series for the person one would measure something nobody declared.
 // ---------------------------------------------------------------------------
 
 /** Consecutive-pair gaps along one series, in minutes. A series is sorted by
@@ -504,22 +485,6 @@ function restMinima(
     );
   }
 
-  // The scoped rules.
-  for (const rule of constraints.hard) {
-    if (rule.type !== "min_rest_minutes") continue;
-    const series = groupBy(placed, (p) => restSeriesKeys(p.fixture, rule.scope, rule.restScope));
-    for (const [key, group] of series) {
-      out.push(
-        ...restBreaches(
-          group,
-          rule.minutes,
-          (a, b, measured) =>
-            `${key} rests ${measured}m between ${a.fixture.fixtureId} (${localLabel(a)}) and ${b.fixture.fixtureId} (${localLabel(b)}), below a min_rest_minutes rule scoped ${rule.scope.kind} (rest_scope ${rule.restScope})`,
-          constraints,
-        ),
-      );
-    }
-  }
   return out;
 }
 
@@ -553,7 +518,68 @@ function dayCaps(placed: readonly Placed[], constraints: EncodedConstraints): Ch
 }
 
 // ---------------------------------------------------------------------------
-// Rule 5 — pin integrity
+// Rule 5 — wall-clock bounds (`not_before` / `not_after`)
+// ---------------------------------------------------------------------------
+
+/** The two `HardConstraint` members that bound a fixture's LOCAL START.
+ *
+ *  Three semantics taken from the product rather than invented, because a
+ *  checker that disagrees with the placer here reds boards the product's own
+ *  gate accepts — and `calendar.ts:747-750` says so in as many words ("an
+ *  off-by-one here would place boards the gate then refuses"):
+ *
+ *   1. BOTH BOUNDS ARE ON THE START, never the end (`calendar.ts:1527-1531`
+ *      reads `hhmmInTz(a.startAt, tz)` and compares that alone). A 30-minute
+ *      match starting exactly at a `not_after` of 11:00 finishes at 11:30 and
+ *      is LEGAL. That is not an oversight to fix here.
+ *   2. THE COMPARISON IS STRICT — `start < time` and `start > time` — so a
+ *      start landing exactly ON the bound is legal to both the placer and the
+ *      verifier.
+ *   3. THE CLOCK IS A WALL CLOCK IN THE BOARD'S ZONE, never the instant and
+ *      never the host's zone (`constraints.ts:56`; `board.ts`'s convention 1).
+ *      `EncodedHardRule` already carries `minutesIntoDay`, so the units match
+ *      by construction and the only remaining job is to read the fixture's own
+ *      local clock — which `civil()` does through `Intl` with the board's zone,
+ *      DST included.
+ *
+ *  Scope goes through `tallyKeys`, NOT a second hand-rolled predicate. These
+ *  rules count nothing, so coverage is "the fixture produces at least one key"
+ *  — which is exactly `scopeCoversFixture`'s answer — and routing it through
+ *  the same function is what stops the universal/entity distinction being lost
+ *  in a place where it is easy to write `scope.kind === "competition"` and mean
+ *  it. One finding per covered fixture, never one per key: `every_entrant`
+ *  yields a key per entrant and the fixture still breaches only once. */
+function wallClockBounds(
+  placed: readonly Placed[],
+  constraints: EncodedConstraints,
+): CheckerFinding[] {
+  const out: CheckerFinding[] = [];
+  for (const rule of constraints.hard) {
+    if (rule.type !== "not_before" && rule.type !== "not_after") continue;
+    for (const p of placed) {
+      if (tallyKeys(p.fixture, rule.scope).length === 0) continue;
+      const breached =
+        rule.type === "not_before"
+          ? p.startMinutes < rule.minutesIntoDay
+          : p.startMinutes > rule.minutesIntoDay;
+      if (!breached) continue;
+      out.push(
+        finding(
+          rule.type === "not_before" ? "not_before_breached" : "not_after_breached",
+          constraints,
+          [p.fixture.fixtureId],
+          `${p.fixture.fixtureId} starts at ${localLabel(p)} (${p.startMinutes} minutes into the day, ${p.ymd}), breaching a ${rule.type} of ${rule.minutesIntoDay} minutes scoped ${rule.scope.kind}`,
+          p.startMinutes,
+          rule.minutesIntoDay,
+        ),
+      );
+    }
+  }
+  return out;
+}
+
+// ---------------------------------------------------------------------------
+// Rule 6 — pin integrity
 // ---------------------------------------------------------------------------
 
 function pinIntegrity(board: Board, constraints: EncodedConstraints): CheckerFinding[] {
@@ -597,44 +623,23 @@ function pinIntegrity(board: Board, constraints: EncodedConstraints): CheckerFin
 }
 
 // ---------------------------------------------------------------------------
-// Rule 6 — officials
+// Rule 7 — officials
 // ---------------------------------------------------------------------------
 
-/** `Fixture.officials` is `z.array(z.unknown())` on the wire
- *  (design §4.3), so `BoardFixture.officialIds`'s `readonly string[]` is a
- *  TYPE claim that no runtime check stands behind. Shape-guarding here is what
- *  stops a `[{ person_id: … }]` element from being compared as an id and
- *  matching nothing — a silent pass. */
-function readableOfficials(fixture: BoardFixture): { ids: string[]; unreadable: boolean } {
-  const raw: unknown = fixture.officialIds;
-  if (!Array.isArray(raw)) return { ids: [], unreadable: true };
-  const ids: string[] = [];
-  let unreadable = false;
-  for (const entry of raw as readonly unknown[]) {
-    if (typeof entry === "string" && entry.length > 0) ids.push(entry);
-    else unreadable = true;
-  }
-  return { ids, unreadable };
-}
-
+/** NO PER-ELEMENT SHAPE GUARD, deliberately (ruling R21).
+ *
+ *  `Fixture.officials` is `z.array(z.unknown())` at the WIRE, and that is
+ *  `schedule.ts`'s side of the boundary: by the time a `BoardFixture` exists
+ *  the field is `readonly string[]`, produced by bench code and consumed by
+ *  bench code. A per-element `typeof entry === "string"` check here could only
+ *  ever be witnessed by a test that casts a number into the array itself — a
+ *  guard nothing real can kill, with a test implying it fires. It was written,
+ *  reviewed, and removed; the shape work belongs where the `unknown[]` is.
+ *
+ *  What survives is the check that CAN fail on a real board: a division whose
+ *  pack declared officials and whose fetch returned none. */
 function officials(placed: readonly Placed[], constraints: EncodedConstraints): CheckerFinding[] {
   const out: CheckerFinding[] = [];
-  const readable = new Map<string, string[]>();
-
-  for (const p of placed) {
-    const { ids, unreadable } = readableOfficials(p.fixture);
-    readable.set(p.fixture.fixtureId, ids);
-    if (unreadable) {
-      out.push(
-        finding(
-          "officials_unreadable",
-          constraints,
-          [p.fixture.fixtureId],
-          `${p.fixture.fixtureId} carries an official this checker cannot read as an id — Fixture.officials is z.array(z.unknown()) and the element is not a non-empty string`,
-        ),
-      );
-    }
-  }
 
   // Design §4.3's other half, and the reason this rule can fail at all: a
   // division whose PACK declared officials and whose board fetched none is not
@@ -643,7 +648,7 @@ function officials(placed: readonly Placed[], constraints: EncodedConstraints): 
   // forever. Only red when something WAS placed: a division with no placed
   // fixtures is Task 4's unplaced gate, not this one's.
   if (constraints.declaresOfficials && placed.length > 0) {
-    const anyOfficial = placed.some((p) => (readable.get(p.fixture.fixtureId) ?? []).length > 0);
+    const anyOfficial = placed.some((p) => p.fixture.officialIds.length > 0);
     if (!anyOfficial) {
       out.push(
         finding(
@@ -661,9 +666,7 @@ function officials(placed: readonly Placed[], constraints: EncodedConstraints): 
       const a = placed[i];
       const b = placed[j];
       if (!overlaps(a, b)) continue;
-      const aIds = readable.get(a.fixture.fixtureId) ?? [];
-      const bIds = readable.get(b.fixture.fixtureId) ?? [];
-      const shared = aIds.filter((id) => bIds.includes(id));
+      const shared = a.fixture.officialIds.filter((id) => b.fixture.officialIds.includes(id));
       if (shared.length === 0) continue;
       out.push(
         finding(
@@ -679,7 +682,7 @@ function officials(placed: readonly Placed[], constraints: EncodedConstraints): 
 }
 
 // ---------------------------------------------------------------------------
-// Rule 7 — round order
+// Rule 8 — round order
 // ---------------------------------------------------------------------------
 
 /** Round-robin ONLY. `ConstraintScope` deliberately carries no `round` member
@@ -752,6 +755,7 @@ export function checkBoard(board: Board, constraints: EncodedConstraints): Check
     ...windowContainment(placed, board, constraints),
     ...restMinima(placed, constraints),
     ...dayCaps(placed, constraints),
+    ...wallClockBounds(placed, constraints),
     ...pinIntegrity(board, constraints),
     ...officials(placed, constraints),
     ...roundOrder(placed, constraints),
