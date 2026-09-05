@@ -428,6 +428,82 @@ set 33 controls, identical membership, order and repeats at all eight widths.
 A composition, not a groomed shrink. Full sweep: **289 passed, 5 skipped, 0
 failed** across all seven projects, every run a total with zero "did not run".
 
+### `flex-wrap` does ALL the work — `basis-40` alone buys NOTHING
+
+Proven by mutation on 2026-09-05, and it cuts against the natural reading of
+the fix. Dropping `flex-wrap` (leaving `basis-40 md:basis-0` and
+`md:flex-nowrap` untouched) put the name box back to **6px** — identical to
+the original defect, not the ~46px predicted. The badge absorbed nothing: it
+sat at its min-content 57px exactly as before, so the name took the entire
+154px of overflow alone. Under `nowrap`, a 160px basis with `flex-shrink: 1`
+collapses straight back to 6.
+
+**So anyone who later "simplifies" this by keeping the basis and dropping the
+wrap lands back on the exact original defect.** Both classes are load-bearing
+and neither is decoration.
+
+The mutant also proved the `expect.soft` change: one test reported TWO
+independent errors in one run — the width floor (`Expected: > 140 / Received:
+6`) and the composition (`tops 252,256,264,255` — four children on one line,
+no wrap anywhere). On the original red only the width half ever spoke, because
+a hard first expectation aborted the test. `tablet-768` stayed 41 passed / 0
+failed, so the mutation is a genuine no-op above `md`.
+
+The composition half is therefore **runner-witnessed red**, not merely
+evidenced — the earlier "evidence, not witnessed" caveat no longer applies.
+
+### An empty `git status --porcelain` is meaningless if the pathspec missed
+
+Nearly produced a false clean-tree signal. `git status --porcelain -- apps/web/...`
+run from INSIDE `apps/web` resolves to `apps/web/apps/web/...`, prints
+`warning: could not open directory` and `fatal: pathspec did not match any
+files` — and the empty result reads exactly like a clean tree. Caught on the
+fatal line, but the shape is nasty: **a pathspec that matches nothing produces
+the same empty output as a tree with nothing to report.** Same family as the
+empty-grep-from-wrong-cwd trap. Run it bare from the worktree root, or confirm
+the pathspec resolved before believing the silence.
+
+### An HTML grep for dictionary copy CANNOT see a banner — it passes in every state
+
+The dictionary is serialised into the page payload, so `settings.emailChange.*`
+copy is present in the HTML of **every** settings tab regardless of the
+`email_change` param. A grep of the served HTML for the banner's text matched
+the mutant URL, the control, **and** a page with no `email_change` param at
+all. It is a probe that cannot fail.
+
+Settled at the DOM instead, against the live mutant build:
+
+| URL | banner |
+|---|---|
+| `?email_change=invalid` (tab dropped) | `visible=false count=0` |
+| `?tab=account&email_change=invalid` | `visible=true count=1` |
+
+Same family as this repo's existing rule that assertions on a Next HTML body
+must anchor on `="`, because React serialises an omitted prop as
+`"$undefined"` — a bare probe passes in both states. Copy in the payload is
+the same shape of lie one level up.
+
+### The email-change mutants — what each proves about a PERSON
+
+Both killed, both by two independent tests (one signed in, one arriving cold
+from a mail client, which is the population that actually meets this link).
+
+- **A** (`email_change=invalid` → `nope`): a changed outcome string is caught.
+  `nope` fails the page's whitelist, `emailChangeMessage` goes null, and the
+  banner silently does not render — the person who clicked a dead link is told
+  nothing. **The three hand-typed tests this task replaced would all have
+  stayed GREEN**, because they typed `email_change=invalid` themselves and
+  never asked the route what it emits.
+- **B** (drop `tab=account`): the outcome arrives INTACT but lands on the
+  organization tab (`page.tsx:119` falls back to `"organization"` for an
+  absent or unknown tab), where the banner block is never rendered. A correct
+  answer delivered to a page that never displays it — **F4's original defect
+  exactly**.
+
+Caveat kept on the record: both tests died on the URL assertion, which runs
+first, so the banner assertion never executed. The kill proves the URL
+contract; the user-facing claim above was settled separately, at the DOM.
+
 ### W2 findings from driving the tabs
 
 **F8 — `e2e/api-keys.spec.ts:30` may not be testing the key at all.**
