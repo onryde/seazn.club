@@ -343,6 +343,34 @@ it needs three keys across four dictionaries plus a `gen-keys` regen. Assign
 it at the W2 boundary or to W8, but do not let it sit unrecorded: `/admin` is
 the only surface with an English-only ruling, and this is not `/admin`.
 
+### `/api/health` returns 200 while the bundle underneath is DELETED
+
+Found 2026-09-05, and it is a NEW signature — a sibling of the "server already
+up = old bundle" trap this repo records, but failing differently.
+
+`seazn-env rebuild` wipes `.next` (keeping `.next/cache`) BEFORE compiling, so
+for the whole build window the still-running server is serving from removed
+files. During that window:
+
+- `curl /api/health` → **200**
+- `curl /_next/static/<BUILD_ID>/_buildManifest.js` → **500**
+- `.next/BUILD_ID` → **empty**; `.next/standalone/apps/web/server.js` → **gone**
+
+A Playwright run started in that window produces NO OUTPUT, or a half-served
+page — and the failure reads as a broken spec, not a broken environment. It is
+not a stale build serving old code; it is a deleted build still answering the
+health check.
+
+**The honest probe** — never `/api/health` alone:
+
+```bash
+curl -s -o /dev/null -w "%{http_code}\n" \
+  "http://localhost:<port>/_next/static/$(cat apps/web/.next/BUILD_ID)/_buildManifest.js"
+```
+
+200 there means the bundle is really being served. This is why builds on a
+shared label have ONE owner and every agent requests rather than runs one.
+
 ### Machine note
 
 The box was carrying seven seazn-env labels at load 269 and OOM-killed a
