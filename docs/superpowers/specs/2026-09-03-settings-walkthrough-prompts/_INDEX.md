@@ -256,7 +256,7 @@ captures and restores the previous value.
 
 **D. The tab rail in the owner's 320px capture is ALREADY CORRECT — a case
 that turned out fine, not a defect.** The capture shows it cut off at the
-right edge. `settings-nav.tsx:216` carries `scroll-x scroll-x-fade` inside a
+right edge. `settings-nav.tsx:217` carries `scroll-x scroll-x-fade` inside a
 `ScrollActiveTabIntoView`, and `.scroll-x` is `@apply overflow-x-auto`
 (`apps/web/src/app/globals.css:396-399`). Under AGENTS.md failure class 23
 that is the REACHABLE kind of overflow — a feature — and `overflowingIn`
@@ -267,6 +267,18 @@ defect is the identity row** (`page.tsx:288`): the name block is `flex-1`
 content, so the org name is the only child that yields and gets ~38px of a
 ~240px row. `min-w-0` is already present — the usual `truncate` diagnosis is
 NOT the cause here.
+
+**E. `org-switcher.tsx` is hardcoded English on a surface this wave drives.**
+Found while reading the identity row, not by looking for it:
+`aria-label="Switch organisation"` (`:103`), the button label `Switch`
+(`:107`) and `Switching…` (`:144`) are literals with no `t`/`dict`. That
+breaks the repo's standing rule for every non-English locale, and this control
+sits in the org identity row on `?tab=organization` — the exact row the owner
+photographed. It is PRE-EXISTING and outside W2's stated scope, so it is
+recorded rather than swept into a wave already carrying four parallel tasks;
+it needs three keys across four dictionaries plus a `gen-keys` regen. Assign
+it at the W2 boundary or to W8, but do not let it sit unrecorded: `/admin` is
+the only surface with an English-only ruling, and this is not `/admin`.
 
 ### Machine note
 

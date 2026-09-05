@@ -123,7 +123,7 @@ previous active org, or a later assertion reads the wrong org's page.
 ### D. The tab rail is already a REACHABLE scrolling rail — do not "fix" it
 
 The owner's 320px capture shows the rail cut off at the right edge. That is
-the feature, not the defect. `settings-nav.tsx:216` carries
+the feature, not the defect. `settings-nav.tsx:217` carries
 `scroll-x scroll-x-fade`, and `.scroll-x` is `@apply overflow-x-auto`
 (`apps/web/src/app/globals.css:396-399`), inside a `ScrollActiveTabIntoView`
 wrapper. Under AGENTS.md failure class 23 that is the reachable kind of
