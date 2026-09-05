@@ -9,6 +9,7 @@ import {
   resolveRunId,
   writeReport,
   type BenchReport as BenchReportType,
+  type DivisionScheduleReport,
   type RegistrationDivisionReport,
 } from "../report.ts";
 
@@ -328,5 +329,307 @@ describe("renderMarkdown — registration (B03r task 8)", () => {
 
     const adminFlag: BenchReportType = { ...withoutFlag, entryMode: "admin" };
     expect(renderMarkdown(adminFlag)).not.toContain("Registration at volume");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// B04 — the five scheduling sections
+//
+// Values are deliberately ALL-DISTINCT (no two numbers share a value), so a
+// swapped column is witnessed by a wrong number landing in a specific cell
+// rather than by "a number is present somewhere" — the same discipline the
+// registration fixture above already uses.
+// ---------------------------------------------------------------------------
+
+function divisionSchedule(
+  overrides: Partial<DivisionScheduleReport> = {},
+): DivisionScheduleReport {
+  return {
+    divisionRef: "d-tiny",
+    requestedEngine: "optimized",
+    actualEngine: "greedy",
+    solverStatus: "fallback",
+    mode: "build",
+    metrics: {
+      makespanMinutes: 91,
+      worstIdleGapMinutes: 12,
+      courtImbalanceMinutes: 7,
+      placed: 5,
+      total: 6,
+    },
+    blockingCount: 0,
+    warnKindTally: { court_gap: 4 },
+    unplacedCount: 1,
+    wallMs: 314,
+    scheduleErrors: [],
+    checker: {
+      clean: true,
+      findings: [],
+      unchecked: [{ type: "gapMinutes", reason: "not modelled by the bench checker" }],
+    },
+    certificate: {
+      branch: "SKIPPED_NO_HISTORY",
+      reason: "the pack declares no historicalAssignment for d-tiny",
+      red: false,
+      violations: [],
+    },
+    believability: {
+      metrics: [
+        { key: "restSpread", score: 88 },
+        { key: "courtBalance", score: 73 },
+      ],
+    },
+    red: false,
+    reasons: [],
+    ...overrides,
+  };
+}
+
+function scheduledReport(rows: readonly DivisionScheduleReport[]): BenchReportType {
+  const base = fullReport();
+  return {
+    ...base,
+    suites: base.suites.map((s) => ({ ...s, scheduling: rows })),
+  };
+}
+
+describe("renderMarkdown — B04 scheduling sections", () => {
+  it("renders nothing at all for a report that scheduled nothing", () => {
+    // A pre-B04 report, a `--keep` short circuit and a stage-0 refusal all
+    // land here, and every one of them must render byte-identically to what
+    // it rendered before this task.
+    const md = renderMarkdown(fullReport());
+    expect(md).not.toContain("## Scheduling");
+    expect(md).not.toContain("## Checker");
+    expect(md).not.toContain("## Feasibility certificate");
+    expect(md).not.toContain("## Believability");
+    expect(md).not.toContain("## Engine delta");
+  });
+
+  it("renders one scheduling row per division, with BOTH denominators in their own columns", () => {
+    const md = renderMarkdown(
+      scheduledReport([divisionSchedule(), divisionSchedule({ divisionRef: "d-badminton", wallMs: 271 })]),
+    );
+    expect(md).toContain("## Scheduling");
+    // The requested engine and the one that actually answered, side by side —
+    // the whole point of design §2.1's assertion is that they can differ.
+    expect(md).toContain("| _tiny | d-tiny | optimized | greedy | fallback | build | 0 | 1 | 5/6 | 314ms |");
+    expect(md).toContain("| _tiny | d-badminton | optimized | greedy | fallback | build | 0 | 1 | 5/6 | 271ms |");
+    // `1` (the fetched board) and `5/6` (the proposal) are DIFFERENT cells.
+    expect(md).toContain("Unplaced (board)");
+    expect(md).toContain("Placed/Total (proposal)");
+  });
+
+  it("renders the checker's UNCHECKED list BESIDE its verdict", () => {
+    // The requirement, not a layout preference: "checker clean" is a claim
+    // about the constraints the checker modelled, and a report that prints
+    // the verdict without the list lets that read as "every declared
+    // constraint was verified".
+    const md = renderMarkdown(scheduledReport([divisionSchedule()]));
+    const section = md.slice(md.indexOf("## Checker"));
+    expect(section).toContain("CLEAN");
+    expect(section).toContain("Unchecked constraints (1)");
+    expect(section).toContain("`gapMinutes`");
+    // The verdict and the caveat are in the SAME section, so one cannot be
+    // read without the other.
+    expect(section.indexOf("CLEAN")).toBeLessThan(section.indexOf("gapMinutes"));
+  });
+
+  it("says so explicitly when NOTHING was left unchecked, rather than rendering silence", () => {
+    const md = renderMarkdown(
+      scheduledReport([
+        divisionSchedule({ checker: { clean: true, findings: [], unchecked: [] } }),
+      ]),
+    );
+    expect(md).toContain("Unchecked constraints: none");
+  });
+
+  it("names every checker finding, with both fixtures of a pairwise breach", () => {
+    const md = renderMarkdown(
+      scheduledReport([
+        divisionSchedule({
+          checker: {
+            clean: false,
+            findings: [
+              {
+                kind: "court_double_booking",
+                divisionRef: "d-tiny",
+                fixtureIds: ["fx-1", "fx-2"],
+                detail: "fx-1 and fx-2 overlap on court-1",
+              },
+            ],
+            unchecked: [],
+          },
+          red: true,
+          reasons: ["d-tiny: checker findings = 1 (court_double_booking)"],
+        }),
+      ]),
+    );
+    expect(md).toContain("1 FINDING(S)");
+    expect(md).toContain("`court_double_booking` [fx-1, fx-2]");
+  });
+
+  it("renders the certificate branch, its redness and its reason", () => {
+    const md = renderMarkdown(
+      scheduledReport([
+        divisionSchedule({
+          certificate: {
+            branch: "PACK_AUTHORING_BUG",
+            reason: "history violates this pack's own encoding",
+            red: true,
+            violations: [
+              {
+                kind: "inside_blackout",
+                divisionRef: "d-tiny",
+                fixtureIds: ["fx-9"],
+                detail: "fx-9 runs inside a blackout",
+              },
+            ],
+          },
+        }),
+      ]),
+    );
+    expect(md).toContain("## Feasibility certificate");
+    expect(md).toContain("| _tiny | d-tiny | `PACK_AUTHORING_BUG` | yes | history violates this pack's own encoding |");
+    expect(md).toContain("History's own violations");
+    expect(md).toContain("`inside_blackout` [fx-9]");
+  });
+
+  it("renders believability with its own denominator, and says it gates nothing", () => {
+    const md = renderMarkdown(
+      scheduledReport([
+        divisionSchedule({
+          believability: {
+            metrics: [{ key: "restSpread", score: 88 }],
+            similarityToHistorical: {
+              sameDayPct: 66,
+              sameInstantPct: 33,
+              comparedFixtures: 3,
+              historicalRows: 9,
+            },
+          },
+        }),
+      ]),
+    );
+    expect(md).toContain("## Believability");
+    expect(md).toContain("nothing here ever reds a run");
+    expect(md).toContain("restSpread=88");
+    // The denominator, stated: "66%" over three compared fixtures of nine
+    // declared rows reads very differently from "66%" alone.
+    expect(md).toContain("66% same day, 33% same instant over 3 compared fixture(s) of 9 declared row(s)");
+  });
+
+  it("prints the scheduling notes a bare table would hide", () => {
+    const md = renderMarkdown(
+      scheduledReport([
+        divisionSchedule({
+          metrics: undefined,
+          metricsNote: "auto returned no metrics for d-tiny, so the proposal is UNKNOWN",
+          notSearchedReason: "placement service unreachable",
+          budgetExpired: true,
+          tiersCompleted: 2,
+          tiersTotal: 5,
+          scheduleErrors: ["d-tiny: schedule-settings DROPPED \"perEntrantMinRest\""],
+          red: true,
+          reasons: ["d-tiny: schedule errors = 1"],
+        }),
+      ]),
+    );
+    expect(md).toContain("UNKNOWN");
+    expect(md).toContain("solver did not search — placement service unreachable");
+    expect(md).toContain("solver budget expired (tiers 2/5)");
+    expect(md).toContain("court_gap=4");
+    expect(md).toContain("ERROR: d-tiny: schedule-settings DROPPED");
+  });
+});
+
+describe("renderMarkdown — B04 engine delta", () => {
+  const snapshot = (engine: "greedy" | "optimized", runId: string) => ({
+    runId,
+    requestedEngine: engine,
+    engine,
+    divisions: [
+      {
+        divisionRef: "d-tiny",
+        blockingCount: 0,
+        unplacedCount: 0,
+        wallMs: 100,
+      },
+    ],
+  });
+
+  it("renders the note when there is no delta — so 'only greedy ran' cannot read as a tie", () => {
+    const base = fullReport();
+    const md = renderMarkdown({
+      ...base,
+      suites: base.suites.map((s) => ({
+        ...s,
+        engineDelta: { note: "engine delta omitted: only the greedy leg has an artifact for this run" },
+      })),
+    });
+    expect(md).toContain("## Engine delta");
+    expect(md).toContain("only the greedy leg has an artifact");
+  });
+
+  it("renders both sums with their sign, and the divisions they actually cover", () => {
+    const base = fullReport();
+    const md = renderMarkdown({
+      ...base,
+      suites: base.suites.map((s) => ({
+        ...s,
+        engineDelta: {
+          delta: {
+            greedy: snapshot("greedy", "sha-1"),
+            optimized: snapshot("optimized", "sha-1"),
+            makespanDeltaMinutes: 60,
+            courtImbalanceDeltaMinutes: -5,
+            comparedDivisionRefs: ["d-tiny", "d-badminton"],
+          },
+        },
+      })),
+    });
+    expect(md).toContain("makespan 60min, court imbalance -5min");
+    expect(md).toContain("over: d-tiny, d-badminton");
+  });
+
+  it("says the sums compared NOTHING when the two legs share no division", () => {
+    // Two legs sharing no division produce 0 and 0, which reads identically
+    // to "the engines tied". This line is what tells them apart.
+    const base = fullReport();
+    const md = renderMarkdown({
+      ...base,
+      suites: base.suites.map((s) => ({
+        ...s,
+        engineDelta: {
+          delta: {
+            greedy: snapshot("greedy", "sha-1"),
+            optimized: snapshot("optimized", "sha-1"),
+            makespanDeltaMinutes: 0,
+            courtImbalanceDeltaMinutes: 0,
+            comparedDivisionRefs: [],
+          },
+        },
+      })),
+    });
+    expect(md).toContain("NO divisions in common");
+  });
+});
+
+describe("report schema round-trip — B04", () => {
+  it("write then parse-back keeps every scheduling field", async () => {
+    // `writeReport` PARSES before it writes, and a `z.object` strips an
+    // unknown key — so a field missing from the schema vanishes from
+    // report.json and from report.md with it, silently. A renderer test alone
+    // cannot see that: it renders the in-memory object.
+    const dir = await tempDir();
+    const report = scheduledReport([divisionSchedule()]);
+    const written = await writeReport(dir, report);
+    const onDisk: unknown = JSON.parse(await readFile(written.jsonPath, "utf8"));
+    const reparsed = BenchReport.parse(onDisk);
+    expect(reparsed).toEqual(JSON.parse(JSON.stringify(report)));
+    // And specifically the two fields whose loss would be invisible:
+    const row = (reparsed.suites[0]?.scheduling ?? [])[0];
+    expect(row?.checker?.unchecked).toHaveLength(1);
+    expect(row?.metrics?.placed).toBe(5);
   });
 });
