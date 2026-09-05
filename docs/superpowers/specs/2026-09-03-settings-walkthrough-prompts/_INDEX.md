@@ -218,7 +218,12 @@ without asking them again — that choice is theirs and does not carry forward.
 
 - Branch: `feat/settings-w1-followups`, worktree
   `.claude/worktrees/settings-followups`, based on `d41b92ab0` (PR #712 merge).
-- Commits: `fb0100bc3` (F5 + the permanent guard + F4), `106f78f25` (README row).
+- Commits (8 — this list goes stale, `git log --oneline d41b92ab0..HEAD` is
+  the authority): `fb0100bc3` (F5 + F4 + the first guard), `106f78f25` (README),
+  `287f127ec` / `f07ecae70` / `daf4813e8` / `e0df94c05` (this handoff record),
+  `f2c937143` (tennis-mtb budget), `8f9cb53dc` (the review's findings — two
+  further money paths, the CI-running seam guard, and a rebuild of the tennis
+  budget this branch itself got wrong).
   Working tree clean.
 
 ### What was actually proven, and how
@@ -229,9 +234,10 @@ Not "tests pass" — the specific evidence, so a fresh session does not re-run i
 |---|---|
 | Full `apps/web` vitest | 13,708 passed / 13,786, every suite path under this worktree |
 | The 4 reds in it | `schedule-build-honours-locks.test.ts` — **environmental**, 12/12 once the CP-SAT placement service was up. Re-proven this session, not taken from memory. |
-| `settings-admin.spec.ts` vs a prod build | 7/7 |
+| `settings-admin.spec.ts` vs a prod build | 5 spec tests green, + the 2 `setup` auth tests = 7 reported. The file itself has 5; earlier notes said "7/7" without saying that. |
 | F4 mutant (pre-fix shim, rebuilt and re-run) | **Killed** — the new test red, the PRE-EXISTING redirect test still green. That pair is the finding: W1's own suite could not see F4. |
-| `decodeFeePercent` mutants | 5/5 killed (bare `Number()`, dropped `typeof`, `>=0`→`>0`, `<=100`→`<100`, `null`→`0`) |
+| `decodeFeePercent` mutants | **4 distinct kills, not the 5 first recorded.** Killed: bare `Number()`, `>=0`→`>0`, `<=100`→`<100`, `null`→`0` — each with `numTotalTests` held at 4, so none is a collection failure wearing a kill's clothes. The fifth, labelled "dropped `typeof`", did not drop it: it ADDED coercion, which is the bare-`Number()` mutant again. A true drop of either clause is an EQUIVALENT mutant — measured over 18 hand-picked values, zero behavioural differences either way, because `Number.isFinite` does not coerce (so `typeof` is redundant) and the 0..100 bounds already reject `NaN`/`±Infinity` (so `Number.isFinite` is redundant). Unkillable by definition. The clauses are kept for readability; the COUNT was inflated. |
+| `platformFeeDefault` seam mutants | 2/2 killed, no DB — reverting the call site to `Number(row?.value)`, and `envFallback` to `?? "5"` (`platform-fee-seam.test.ts`). |
 | F5 vs real Postgres | Reproduced against the pre-fix decode: `expected +0 to be 11` |
 | tsc, eslint | clean, exit 0 |
 
@@ -285,10 +291,17 @@ in **16-29s each** against a 180s budget.
 **`tennis-mtb` is NOT load, and this is a real finding — F6, owed to whichever
 wave owns that file (R4/MTB, #670), not to this programme.** Run alone, at
 `--workers=1`, on an idle machine, it took **307.4s** against
-`test.setTimeout(300_000)` (`scorepad-v3-tennis-mtb.spec.ts:142`). W1 measured
+`test.setTimeout(300_000)` (`scorepad-v3-tennis-mtb.spec.ts:142` **on `main`** — cite the symbol, not the line; this branch moved it). W1 measured
 306.9s. Two measurements, two sessions, both over the line by ~2.5%: it is
 reproducible, not flaky, and "it passed in CI" only means CI's runner is
 fractionally faster than this one.
+
+**That last sentence was wrong, and the correction matters.** CI does not pass
+because its runner is quicker: `e2e.yml` pins
+`NEXT_PUBLIC_SCOREPAD_HOLD_MS: "3000"` at job level, a QUARTER of the product
+default this machine runs at. CI was never near the ceiling. Believing the
+"faster runner" story is also what let the first fix ship with a `300_000`
+floor that made the whole derivation inert in exactly that band.
 
 The budget is a FLAT LITERAL beside a cost derived from `HOLD_MS` and the tap
 count — exactly AGENTS.md failure class 20 ("a flat timeout beside a derived
