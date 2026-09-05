@@ -186,6 +186,22 @@ const WALKTHROUGH_SPECS: string[] = [
   // The organiser desks.
   "competition-desk-organiser.spec.ts",
   "settings-admin.spec.ts",
+
+  // Settings W2 — the organisation and news panels, the four people-facing
+  // tabs (team, api, preferences, account), and the five-org support cap.
+  "settings-org-tabs.spec.ts",
+  "settings-people-tabs.spec.ts",
+  "settings-support-smoke.spec.ts",
+
+  // The directory — the organiser's own records, driven through the screens
+  // that own them: club import caps, the import paywall preview, officials'
+  // roles against the upgrade gate, player identity and its duplicate queue,
+  // and a venue carrying three courts.
+  "directory-clubs-import-limits.spec.ts",
+  "directory-import-paywall-preview.spec.ts",
+  "directory-officials-roles.spec.ts",
+  "directory-player-identity.spec.ts",
+  "directory-venues-courts.spec.ts",
 ];
 
 afterEach(() => {
