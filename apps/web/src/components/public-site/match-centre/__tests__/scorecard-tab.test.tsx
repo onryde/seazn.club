@@ -262,6 +262,17 @@ describe("ScorecardTab", () => {
     expect(populated).toContain("<table");
   });
 
+  it("the root IS the tab panel — role, id and the label the rail points at", () => {
+    // The tab rail carries `id="mc-tab-scorecard"` + `aria-controls`; a panel
+    // that only has a testid is not announced as a tab panel at all, and the
+    // relationship is unverifiable from either side alone.
+    const html = render(DECIDED);
+    expect(html).toContain('role="tabpanel"');
+    expect(html).toContain('id="mc-tab-panel-scorecard"');
+    expect(html).toContain('aria-labelledby="mc-tab-scorecard"');
+    expect(html).toContain('data-testid="mc-tab-panel-scorecard"');
+  });
+
   it("a null cricket view renders the panel container, not a crash", () => {
     const html = renderToStaticMarkup(
       <ScorecardTab doc={{ ...EMPTY, cricket: null }} dict={dict} data={data} />,
