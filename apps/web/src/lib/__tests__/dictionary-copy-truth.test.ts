@@ -690,6 +690,19 @@ const KNOWN_POSITIVES: string[] = [
   "Chaque niveau de détail est disponible sur tous les forfaits.",
   "Bal-voor-bal scoren vereist een Pro-abonnement.",
   "Elk detailniveau is beschikbaar op elk abonnement.",
+  // ── Per-plan CAPACITY claims (entitlements v18 / W2) ──
+  //    Six one-word fixtures, because these patterns read TABLE CELLS rather
+  //    than sentences: `PLAN_CAP_AXES[*].column` and the two cell patterns are
+  //    `^…$`-anchored on purpose, so that "20 per club" is not read as the cap
+  //    20 and "No change" is not read as a grant. A prose fixture matches none
+  //    of them, and a pattern nothing matches is exactly what this list exists
+  //    to catch.
+  "Clubs",
+  "Teams",
+  "Squad size",
+  "Members",
+  "Unlimited",
+  "23",
   // ── Task 3's APPROVED FORMS (the help-tree allowlist) ──
   // These are positives in the opposite sense to everything else here: they are
   // the shapes the help copy is ALLOWED to use, so each one is a real sentence

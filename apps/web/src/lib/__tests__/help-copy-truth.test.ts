@@ -45,6 +45,13 @@ import {
   unapprovedClaimFaults,
   lockedRateConstantFaults,
   markdownSection,
+  PLAN_CAP_AXES,
+  PLAN_KEY_BY_LABEL,
+  planCapProseClaims,
+  planCapProseFaults,
+  planCapTableFaults,
+  planCapTables,
+  type PlanCapLookup,
   multiDivisionBoardPlanGateFaults,
   plainProse,
   passBoundProseFaults,
@@ -59,6 +66,7 @@ import {
   unmeteredAiRunProseFaults,
   unqualifiedFeeReversionFaults,
 } from "@/lib/copy-truth";
+import { ALL_PLAN_KEYS } from "@/lib/currency";
 import { HELP_ARTICLE_SLUGS, helpUrl } from "@/lib/help";
 import { allHelpArticles } from "@/server/help-content";
 import { TIPS } from "@/config/tips";
@@ -3165,5 +3173,199 @@ describe("no help article anywhere prices scoring detail (W1: it is free on ever
       },
     ]);
     expect(faults.filter((f) => f.startsWith("scoring/probe-true"))).toEqual([]);
+  });
+});
+
+// =============================================================================
+// PER-PLAN CAPACITY CLAIMS - the scale axes nothing was scanning
+// =============================================================================
+//
+// `directory/clubs-and-teams.md` shipped a twelve-cell per-plan limits table in
+// which NINE cells disagreed with `plan_entitlements`, and the worst of them --
+// "Pro | Squad size | Unlimited" against a hard `teams.squad_max` of 40 --
+// promised an organiser no squad limit and refused them at the 41st player.
+//
+// The fee ladder had a guard. The SCALE axes had none: the tree was scanned for
+// entrants, divisions, credits and fee rates, and never once for clubs, teams,
+// squad size or seats. So the sweep below is by AXIS rather than by article, in
+// both shapes a scale claim takes, over every article `allHelpArticles()`
+// returns -- the same "shape, not filename" rule the fee ladder learned the hard
+// way one wave earlier.
+describe.skipIf(!HAS_DB)("no help article misquotes a per-plan capacity cap", () => {
+  /**
+   * The matrix, read ONCE and kept three-valued.
+   *
+   * `undefined` (no row) and `null` (a row with a null `int_value`) are OPPOSITE
+   * answers -- `getLimit` reads `row ? row.int_value : 0`, so a missing row
+   * refuses everything while a null one is unlimited -- and collapsing them is
+   * exactly how the Event Pass came to publish a 2/2/20 row for caps it does not
+   * set. Loaded as a Map of every (feature, plan) pair that EXISTS, so absence
+   * is absence rather than a default.
+   */
+  const loadMatrix = async (): Promise<PlanCapLookup> => {
+    const features = [...new Set(PLAN_CAP_AXES.map((a) => a.feature))];
+    const rows = await sql<{ feature_key: string; plan_key: string; int_value: number | null }[]>`
+      select feature_key, plan_key, int_value from plan_entitlements
+      where feature_key = any(${features})`;
+    expect(rows.length, "no capacity rows at all - this sweep would pass vacuously").toBeGreaterThan(
+      0,
+    );
+    const byPair = new Map(rows.map((r) => [`${r.feature_key} ${r.plan_key}`, r.int_value]));
+    return (feature, planKey) => {
+      const pair = `${feature} ${planKey}`;
+      return byPair.has(pair) ? byPair.get(pair)! : undefined;
+    };
+  };
+
+  const sweep = async (extra: { slug: string; text: string }[] = []) => {
+    const live = await loadMatrix();
+    const articles = [
+      ...[...allHelpArticles().values()].map((a) => ({ slug: a.slug, text: helpArticleBySlug(a.slug) })),
+      ...extra,
+    ];
+    const faults: string[] = [];
+    let cells = 0;
+    let claims = 0;
+    for (const { slug, text } of articles) {
+      const tables = planCapTables(text, PLAN_KEY_BY_LABEL);
+      const prose = planCapProseClaims(text, PLAN_KEY_BY_LABEL);
+      cells += tables.reduce((n, t) => n + t.cells.length, 0);
+      claims += prose.length;
+      faults.push(...planCapTableFaults(`${slug}.md`, tables, live));
+      faults.push(...planCapProseFaults(`${slug}.md`, prose, live));
+    }
+    return { faults, cells, claims };
+  };
+
+  it("the tree, as it stands today, quotes the matrix everywhere", async () => {
+    const { faults } = await sweep();
+    expect(faults).toEqual([]);
+  });
+
+  // -- ANTI-VACUITY ---------------------------------------------------------
+  // Every assertion above is a loop, and a sweep that matched nothing reports
+  // exactly what a clean tree reports. Both halves must have actually read
+  // something, and the floors are floors so a new article is a pass.
+  it("actually read the cells and the claims it says are clean", async () => {
+    const { cells, claims } = await sweep();
+    expect(
+      cells,
+      "no capacity TABLE cells were compared - the table half is inert",
+    ).toBeGreaterThanOrEqual(12);
+    expect(
+      claims,
+      "no capacity PROSE claims were compared - the prose half is inert",
+    ).toBeGreaterThanOrEqual(4);
+  });
+
+  // ...and the vocabulary itself must be live. A label map built from a renamed
+  // or emptied `ALL_PLAN_KEYS` matches no row label at all, and every table in
+  // the tree then reports "not a live plan name" -- or, worse, is skipped.
+  it("reads row labels with the vocabulary the product renders", () => {
+    expect(PLAN_KEY_BY_LABEL["Community"]).toBe("community");
+    expect(PLAN_KEY_BY_LABEL["Pro"]).toBe("pro");
+    expect(PLAN_KEY_BY_LABEL["Enterprise"]).toBe("enterprise");
+    expect(PLAN_KEY_BY_LABEL["Event Pass"]).toBe("event_pass");
+    expect(Object.keys(PLAN_KEY_BY_LABEL).length, "the label vocabulary collapsed").toBe(
+      ALL_PLAN_KEYS.length,
+    );
+  });
+
+  // -- PROVING THE GUARD, by writing the falsehood a different way -----------
+  // Not by restoring the nine cells this task corrected: that only shows the
+  // rule notices the one table it was written against, which is how two guards
+  // shipped green in wave 6. Each probe below is an article nothing names,
+  // carrying the falsehood in a shape the corrected copy never had.
+
+  it("catches a finite cap sold as Unlimited, in a column", async () => {
+    const { faults } = await sweep([
+      {
+        slug: "probe/uncapped-cell",
+        text: "| Plan | Squad size |\n| --- | --- |\n| Pro | Unlimited |\n",
+      },
+    ]);
+    expect(faults.join(" ")).toContain("probe/uncapped-cell.md: Pro/Squad size");
+    expect(faults.join(" ")).toContain("teams.squad_max");
+  });
+
+  it("catches a wrong FIGURE in a column, not just an unlimited word", async () => {
+    const { faults } = await sweep([
+      { slug: "probe/wrong-figure", text: "| Plan | Clubs |\n| --- | --- |\n| Community | 2 |\n" },
+    ]);
+    expect(faults.join(" ")).toContain("probe/wrong-figure.md: Community/Clubs");
+  });
+
+  it("catches an unlimited cap printed as a ceiling", async () => {
+    const { faults } = await sweep([
+      {
+        slug: "probe/false-ceiling",
+        text: "| Plan | Teams |\n| --- | --- |\n| Enterprise | 500 |\n",
+      },
+    ]);
+    expect(faults.join(" ")).toContain("probe/false-ceiling.md: Enterprise/Teams");
+    expect(faults.join(" ")).toContain("unlimited on enterprise");
+  });
+
+  it("catches a cap invented for a plan that sets none", async () => {
+    const { faults } = await sweep([
+      {
+        slug: "probe/invented-grant",
+        text: "| Plan | Clubs | Teams |\n| --- | --- | --- |\n| Event Pass | 2 | Unlimited |\n",
+      },
+    ]);
+    expect(faults.join(" ")).toContain("Event Pass/Clubs");
+    expect(faults.join(" ")).toContain("Event Pass/Teams");
+    expect(faults.join(" ")).toContain("does not set this cap at all");
+  });
+
+  it("catches an unlimited word whose NOUN is a clause away - finding 2's shape", async () => {
+    const { faults } = await sweep([
+      {
+        slug: "probe/elided-noun",
+        text: "## Common questions\n\nCommunity orgs get 3 members total; Pro is unlimited.\n",
+      },
+    ]);
+    expect(faults.join(" ")).toContain("calls pro unlimited on members.max");
+  });
+
+  it("catches the same elision written with a dash instead of a semicolon", async () => {
+    const { faults } = await sweep([
+      {
+        slug: "probe/elided-dash",
+        text: "## Common questions\n\nCommunity holds 3 seats — Pro has no limit at all.\n",
+      },
+    ]);
+    expect(faults.join(" ")).toContain("calls pro unlimited on members.max");
+  });
+
+  it("catches a wrong figure in prose, attributed by its section heading", async () => {
+    const { faults } = await sweep([
+      {
+        slug: "probe/heading-scoped",
+        text: "## Pro - the club plan\n\nYou can create 40 teams.\n",
+      },
+    ]);
+    expect(faults.join(" ")).toContain("quotes 40 for pro/teams.max");
+  });
+
+  // -- ...AND IT LEAVES TRUE COPY ALONE --------------------------------------
+  // The half a fault-counting sweep cannot show. Each of these is a real
+  // sentence shape from this tree that an earlier, noisier version of the rule
+  // reported: they are the reason the attribution is heading-first, the reason
+  // an unlimited word reaches only across list glue, and the reason "team
+  // members" is not a teams claim.
+  it("leaves true copy alone - heading beats a plan named inside the sentence", async () => {
+    const { faults } = await sweep([
+      {
+        slug: "probe/true-copy",
+        text: [
+          "## Enterprise - talk to us",
+          "Everything in Pro, plus unlimited seats, teams, clubs and organisations.",
+          "## Pro - the club plan",
+          "Unlimited active competitions, 20 divisions in each, 10 team members.",
+        ].join("\n\n"),
+      },
+    ]);
+    expect(faults.filter((f) => f.startsWith("probe/true-copy"))).toEqual([]);
   });
 });

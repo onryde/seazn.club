@@ -38,6 +38,8 @@
  * cannot be satisfied by a guard that silently scanned nothing.
  */
 import { PASS_CREDIT_GRANT } from "@/lib/pricing-cards";
+import { ALL_PLAN_KEYS } from "@/lib/currency";
+import { planLabel } from "@/lib/plan-label";
 
 // ── Surfaces ─────────────────────────────────────────────────────────────────
 
@@ -3304,6 +3306,391 @@ export function feeLadderFaults(
   }
   for (const plan of require) {
     if (!seen.has(plan)) faults.push(`fee ladder: no row for ${plan}`);
+  }
+  return faults;
+}
+
+// ── Per-plan CAPACITY claims, against the matrix ─────────────────────────────
+//
+// WHY THIS EXISTS, AND WHY IT IS NOT `feeLadderFaults` WITH DIFFERENT COLUMNS.
+//
+// `directory/clubs-and-teams.md` published a four-row, three-column table of
+// per-plan limits in which NINE of twelve value cells disagreed with
+// `plan_entitlements` — Community's clubs cap read 2 against a live 5, Pro's
+// teams cap read 40 against a live 100, and Pro's squad cap read "Unlimited"
+// against a hard 40, so an organiser was promised no squad limit and refused at
+// the 41st player. Every one of those cells sat inside ~4,000 passing tests.
+//
+// Nothing red because nothing looked. The fee ladder has a guard; the SCALE
+// axes had none, and the two shapes a scale claim takes are exactly the two
+// shapes a prose regex cannot read:
+//
+//   1. A TABLE puts the noun in the column HEADER and the value in a cell, so
+//      `/unlimited\s+squad/` never matches `| Pro | 20 | 40 | Unlimited |`.
+//      This is the same blind spot `uncappedEntrantCells` was written for in
+//      `help-copy-truth.test.ts` after it shipped in the pass comparison table;
+//      it has now shipped twice, on two different axes, so the rule is
+//      generalised here rather than copied a third time.
+//   2. PROSE ELIDES THE NOUN across a clause boundary. "Community orgs get 3
+//      members total across all roles; Pro is unlimited" says nothing about
+//      members in the clause that carries the falsehood, so word adjacency
+//      cannot see it either. The reader carries the noun across the semicolon
+//      and so does `planCapProseClaims` below.
+//
+// Both halves are driven by SHAPE over every article `allHelpArticles()`
+// returns — never a filename list, which is the scoping mistake
+// `feeLadderTables`' own header records.
+
+/** How a reader names one capped scale axis: as a table COLUMN, and as a NOUN. */
+export interface PlanCapAxis {
+  /** The `plan_entitlements.feature_key` the claim is about. */
+  feature: string;
+  /** A table column header, matched WHOLE — a header cell is a label, not prose. */
+  column: RegExp;
+  /** The noun the same axis takes in a sentence. */
+  noun: RegExp;
+}
+
+/**
+ * The org-scale axes a help article quotes per plan.
+ *
+ * `teams?` is NEGATIVE-LOOKAHEAD'd against "team member(s)", which is what
+ * `plans.md` calls a SEAT: without it "10 team members" reads as a teams.max
+ * claim of 10 against a live 100 and the guard reds on true copy. Measured, not
+ * anticipated — it was two of the three faults the first sweep of this tree
+ * reported, and both were the rule mis-reading correct prose.
+ *
+ * `entrants.per_division.max` and `divisions.per_competition.max` are NOT here.
+ * They are already guarded, by name and by cell, in the Event Pass block of
+ * `help-copy-truth.test.ts`; a second rule over the same claim would make each
+ * of them individually unkillable by mutation, which is the "two guards
+ * covering for each other" failure this repo has shipped before.
+ */
+export const PLAN_CAP_AXES: readonly PlanCapAxis[] = [
+  { feature: "clubs.max", column: /^clubs$/i, noun: /\bclubs?\b/i },
+  { feature: "teams.max", column: /^teams$/i, noun: /\bteams?(?!\s+members?\b)\b/i },
+  { feature: "teams.squad_max", column: /^squad(\s+size)?$/i, noun: /\bsquads?\b/i },
+  { feature: "members.max", column: /^(team\s+)?(members|seats)$/i, noun: /\b(members?|seats?)\b/i },
+];
+
+/**
+ * Every live plan's DISPLAY NAME to its `plans.key` — the vocabulary both halves
+ * below read row labels and prose with.
+ *
+ * Derived, never hand-typed: `ALL_PLAN_KEYS` is pinned against
+ * `select key from plans` by `retired-matrix-keys.test.ts`, and `planLabel` is
+ * the same labeller every display call site uses, so a plan that is renamed or
+ * retired moves this map with it instead of leaving a guard matching a name
+ * nobody can buy. Longest label first at every use site, so "Event Pass L" is
+ * never read as "Event Pass" with a stray L.
+ */
+export const PLAN_KEY_BY_LABEL: Record<string, string> = Object.fromEntries(
+  ALL_PLAN_KEYS.map((key) => [planLabel(key), key]),
+);
+
+/**
+ * The live matrix, as a lookup with THREE outcomes — and the third is the point.
+ *
+ *   a number   the cap the resolver enforces
+ *   null       a row exists with a null `int_value`: genuinely UNLIMITED
+ *   undefined  NO ROW AT ALL
+ *
+ * `getLimit` (lib/entitlements.ts) reads `row ? row.int_value : 0`, so the
+ * middle and the third case are opposite answers — unlimited versus refuse
+ * everything — and a guard that collapses them into "no number" cannot tell a
+ * true "Unlimited" cell from a plan that has no such grant.
+ */
+export type PlanCapLookup = (feature: string, planKey: string) => number | null | undefined;
+
+/** One value cell of a per-plan capacity table. */
+export interface PlanCapCell {
+  /** The row label as printed, e.g. "Event Pass". */
+  plan: string;
+  planKey: string;
+  /** The column header as printed, e.g. "Squad size". */
+  axis: string;
+  feature: string;
+  /** The cell's text, formatting stripped. */
+  value: string;
+}
+
+/** One per-plan capacity table found in an article. */
+export interface PlanCapTable {
+  header: string;
+  cells: PlanCapCell[];
+  /** Row labels that are not live plan names — reported, never skipped. */
+  unknownRows: string[];
+}
+
+/** What a cell says when the cap is genuinely unlimited. "None" is NOT here and
+ *  must not be: in a limits column it reads as ZERO, and accepting it would let
+ *  a cell say the opposite of unlimited and still satisfy a null matrix row. */
+export const UNLIMITED_CELL = /^(unlimited|unbounded|no limit|∞)$/i;
+/** A cell that is a bare figure, and nothing else: "20 per club" is a
+ *  qualified claim this rule must not read as the cap 20. EXPORTED, like every
+ *  pattern in this module, so the module-wide anti-vacuity walk in
+ *  `dictionary-copy-truth.test.ts` can prove it still fires. */
+export const NUMBER_CELL = /^(\d[\d,]*)$/;
+
+/**
+ * EVERY per-plan capacity table in an article, found by SHAPE: a `|` run whose
+ * second line is a markdown separator, and at least one of whose column headers
+ * names an axis in `PLAN_CAP_AXES`.
+ *
+ * Keyed on the HEADER, not the heading and not the filename, for the reason
+ * `feeLadderTables` records: a guard scoped by name looks authoritative and its
+ * real scope lives at a call site hundreds of lines away.
+ *
+ * @param planKeyByLabel maps a printed row label to a `plans.key`. Passed in
+ *   rather than built here so the vocabulary comes from `ALL_PLAN_KEYS` through
+ *   `planLabel` — the DB-free authority `retired-matrix-keys.test.ts` already
+ *   pins against `select key from plans` — and no guard hand-types a plan name.
+ */
+export function planCapTables(
+  markdown: string,
+  planKeyByLabel: Record<string, string>,
+): PlanCapTable[] {
+  const lines = markdown.split("\n");
+  const tables: PlanCapTable[] = [];
+  const cellsOf = (line: string): string[] =>
+    plainProse(line.trim()).replace(/^\||\|$/g, "").split("|").map((c) => c.trim());
+
+  for (let i = 0; i < lines.length; i++) {
+    if (!lines[i]!.trim().startsWith("|")) continue;
+    const next = lines[i + 1];
+    if (!next || !/^\s*\|[\s:|-]+\|\s*$/.test(next)) continue;
+
+    const header = cellsOf(lines[i]!);
+    const mapped = new Map<number, PlanCapAxis>();
+    header.forEach((h, col) => {
+      if (col === 0) return; // the row-label column
+      const axis = PLAN_CAP_AXES.find((a) => a.column.test(h));
+      if (axis) mapped.set(col, axis);
+    });
+    if (mapped.size === 0) continue;
+
+    const table: PlanCapTable = { header: lines[i]!.trim(), cells: [], unknownRows: [] };
+    for (let r = i + 2; r < lines.length && lines[r]!.trim().startsWith("|"); r++) {
+      const row = cellsOf(lines[r]!);
+      const planKey = planKeyByLabel[row[0] ?? ""];
+      if (!planKey) {
+        table.unknownRows.push(row[0] ?? "");
+        continue;
+      }
+      for (const [col, axis] of mapped) {
+        if (col >= row.length) continue;
+        table.cells.push({
+          plan: row[0]!,
+          planKey,
+          axis: header[col]!,
+          feature: axis.feature,
+          value: row[col]!,
+        });
+      }
+    }
+    tables.push(table);
+  }
+  return tables;
+}
+
+/**
+ * Every capacity cell against the matrix, in all THREE directions.
+ *
+ * The third is the one that had never been checked anywhere: a plan with NO row
+ * for an axis is not capped by that plan at all, and a cell printing either a
+ * number or "Unlimited" invents a grant. `directory/clubs-and-teams.md` gave
+ * the Event Pass a 2/2/20 row copied from Community's, which is a claim the
+ * pass makes nowhere — `resolveFromDb` INNER JOINs `plan_entitlements` on the
+ * pass key, so a key the pass matrix omits falls through to the org's own plan,
+ * and all four of these axes are resolved with no `competitionId` anyway, which
+ * means the pass overlay arm never even runs for them.
+ */
+export function planCapTableFaults(
+  label: string,
+  tables: readonly PlanCapTable[],
+  live: PlanCapLookup,
+): string[] {
+  const faults: string[] = [];
+  for (const table of tables) {
+    for (const row of table.unknownRows) {
+      faults.push(`${label}: capacity table row "${row}" is not a live plan name`);
+    }
+    for (const cell of table.cells) {
+      const cap = live(cell.feature, cell.planKey);
+      const where = `${label}: ${cell.plan}/${cell.axis}`;
+      if (cap === undefined) {
+        if (NUMBER_CELL.test(cell.value) || UNLIMITED_CELL.test(cell.value)) {
+          faults.push(
+            `${where} says "${cell.value}", but ${cell.planKey} has no ${cell.feature} row — that plan does not set this cap at all, so a figure here invents a grant`,
+          );
+        }
+      } else if (cap === null) {
+        if (!UNLIMITED_CELL.test(cell.value)) {
+          faults.push(
+            `${where} says "${cell.value}", but ${cell.feature} is unlimited on ${cell.planKey}`,
+          );
+        }
+      } else if (!NUMBER_CELL.test(cell.value) || Number(cell.value.replace(/,/g, "")) !== cap) {
+        faults.push(
+          `${where} says "${cell.value}", but the matrix caps ${cell.feature} at ${cap} on ${cell.planKey}`,
+        );
+      }
+    }
+  }
+  return faults;
+}
+
+/** One per-plan capacity claim made in PROSE. */
+export interface PlanCapClaim {
+  /** The clause it was read out of, for a fault a human can locate. */
+  clause: string;
+  planKey: string;
+  feature: string;
+  /** `null` when the claim is an unlimited WORD rather than a figure. */
+  quoted: number | null;
+}
+
+export const UNLIMITED_WORD = /\b(unlimited|unbounded|no limit|∞)\b/i;
+/** Between an unlimited word and the noun it governs: list glue and nothing
+ *  else — words, commas, and/or, whitespace. A digit or any other punctuation
+ *  ends the reach, which is what stops "Unlimited active competitions, 20
+ *  divisions in each, ... 10 team members" from reading as an unlimited claim
+ *  about seats four items down the same sentence. */
+export const LIST_GLUE = /^[a-z\-,\s]*$/i;
+const GLUE_REACH = 60;
+
+/**
+ * Per-plan capacity claims made in prose, attributed the way a READER
+ * attributes them.
+ *
+ * Three rules, each of which was measured against the whole help tree rather
+ * than reasoned about, because the first two shapes tried had a 3-in-4 false
+ * positive rate:
+ *
+ *  - THE PLAN comes from the section HEADING when the heading names exactly one
+ *    ("## Pro — $14.99/month"), and only otherwise from plan names in the clause.
+ *    Heading-first is load-bearing: `plans.md`'s Enterprise paragraph opens
+ *    "Everything in Pro, plus unlimited ... teams, clubs and organisations",
+ *    which is TRUE of enterprise and false of the pro named inside it.
+ *  - THE AXIS is the noun the unlimited word GOVERNS — reachable across list
+ *    glue only. "unlimited seats, teams, clubs and organisations" claims all
+ *    four; "Unlimited active competitions, 20 divisions in each" claims none of
+ *    them.
+ *  - AN ELIDED NOUN is carried from earlier in the same SENTENCE. That is the
+ *    whole of finding 2: "Community orgs get 3 members total across all roles;
+ *    Pro is unlimited" puts the falsehood in a clause with no noun in it.
+ *
+ * Figures are collected too, not just unlimited words, so a wrong NUMBER in
+ * prose reds the same way a wrong number in a cell does.
+ */
+export function planCapProseClaims(
+  markdown: string,
+  planKeyByLabel: Record<string, string>,
+): PlanCapClaim[] {
+  const claims: PlanCapClaim[] = [];
+  const labels = Object.keys(planKeyByLabel).sort((a, b) => b.length - a.length);
+  const plansIn = (text: string): string[] => {
+    const keys: string[] = [];
+    let rest = text;
+    for (const label of labels) {
+      const re = new RegExp(`\\b${label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`);
+      if (re.test(rest)) {
+        keys.push(planKeyByLabel[label]!);
+        rest = rest.replace(re, " ");
+      }
+    }
+    return keys;
+  };
+
+  let headingPlan: string | null = null;
+  for (const raw of markdown.split("\n")) {
+    if (raw.startsWith("#")) {
+      const named = plansIn(plainProse(raw));
+      headingPlan = named.length === 1 ? named[0]! : null;
+      continue;
+    }
+    if (raw.trimStart().startsWith("|")) continue; // tables are the other half
+    for (const sentence of plainProse(raw).split(/(?<=[.!?])\s+/)) {
+      let carried: string[] = [];
+      for (const clause of sentence.split(/[;—]/)) {
+        const present = PLAN_CAP_AXES.map((axis) => ({ axis, hit: axis.noun.exec(clause) })).filter(
+          (x): x is { axis: PlanCapAxis; hit: RegExpExecArray } => x.hit !== null,
+        );
+        if (present.length > 0) carried = present.map((p) => p.axis.feature);
+
+        const inClause = plansIn(clause);
+        const targets = headingPlan ? [headingPlan] : inClause;
+        if (targets.length === 0) continue;
+
+        // Figures: "3 members", "10 team members", "20 clubs".
+        for (const { axis } of present) {
+          const source = axis.noun.source.replace(/^\\b|\\b$/g, "");
+          const re = new RegExp(`\\b(\\d[\\d,]*)\\s+(?:[a-z-]+\\s+){0,1}(?:${source})`, "gi");
+          for (const m of clause.matchAll(re)) {
+            for (const planKey of targets) {
+              claims.push({
+                clause: clause.trim(),
+                planKey,
+                feature: axis.feature,
+                quoted: Number(m[1]!.replace(/,/g, "")),
+              });
+            }
+          }
+        }
+
+        // Unlimited words, over the axes they reach.
+        const unlimited = UNLIMITED_WORD.exec(clause);
+        if (!unlimited) continue;
+        const reached =
+          present.length > 0
+            ? present.filter(({ hit }) => governs(clause, unlimited, hit)).map(({ axis }) => axis.feature)
+            : carried;
+        for (const feature of reached) {
+          for (const planKey of targets) {
+            claims.push({ clause: clause.trim(), planKey, feature, quoted: null });
+          }
+        }
+      }
+    }
+  }
+  return claims;
+}
+
+/** Whether an unlimited word reaches a noun across list glue alone. */
+function governs(clause: string, unlimited: RegExpExecArray, noun: RegExpExecArray): boolean {
+  const [first, second] =
+    noun.index >= unlimited.index + unlimited[0].length
+      ? [unlimited.index + unlimited[0].length, noun.index]
+      : [noun.index + noun[0].length, unlimited.index];
+  if (second < first) return false;
+  const span = clause.slice(first, second).replace(/\b(is|are|was|were)\b/g, "");
+  return span.length <= GLUE_REACH && LIST_GLUE.test(span);
+}
+
+/** Prose capacity claims against the matrix — the same three directions as the
+ *  table half, so the two shapes of the same falsehood get the same answer. */
+export function planCapProseFaults(
+  label: string,
+  claims: readonly PlanCapClaim[],
+  live: PlanCapLookup,
+): string[] {
+  const faults: string[] = [];
+  for (const claim of claims) {
+    const cap = live(claim.feature, claim.planKey);
+    const where = `${label}: "${claim.clause.slice(0, 90)}"`;
+    if (cap === undefined) {
+      faults.push(
+        `${where} makes a ${claim.feature} claim about ${claim.planKey}, which has no such row — that plan does not set this cap`,
+      );
+    } else if (claim.quoted === null) {
+      if (cap !== null) {
+        faults.push(`${where} calls ${claim.planKey} unlimited on ${claim.feature}, which the matrix caps at ${cap}`);
+      }
+    } else if (cap === null) {
+      faults.push(`${where} quotes ${claim.quoted} for ${claim.planKey}/${claim.feature}, which the matrix leaves unlimited`);
+    } else if (cap !== claim.quoted) {
+      faults.push(`${where} quotes ${claim.quoted} for ${claim.planKey}/${claim.feature}, but the matrix says ${cap}`);
+    }
   }
   return faults;
 }

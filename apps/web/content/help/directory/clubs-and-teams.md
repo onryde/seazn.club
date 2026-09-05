@@ -40,10 +40,12 @@ Your plan sets how many clubs and teams you can create, and how large a single s
 
 | Plan | Clubs | Teams | Squad size |
 | --- | --- | --- | --- |
-| Community | 2 | 2 | 20 |
-| Event Pass | 2 | 2 | 20 |
-| Pro | 20 | 40 | Unlimited |
+| Community | 5 | 8 | 23 |
+| Event Pass | No change | No change | No change |
+| Pro | 25 | 100 | 40 |
 | Enterprise | Unlimited | Unlimited | Unlimited |
+
+An Event Pass lifts one **competition** — its entrants, its divisions and the platform fee it charges. Clubs, teams and squads are organisation-wide, so a pass leaves all three exactly where your own plan sets them.
 
 Grouping teams under a club (the club hierarchy) works on every plan — the caps above are what a bigger plan lifts. When you hit a limit, the page tells you which one and links to upgrade. Upgrade any time to raise the ceilings.
 
