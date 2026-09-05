@@ -10,8 +10,38 @@ import { PaymentRequiredError } from "@/lib/errors";
 
 type Tx = postgres.TransactionSql;
 
-// Competition statuses that count against `competitions.max_active`.
-export const ACTIVE_COMPETITION_STATUSES = ["draft", "published", "live"] as const;
+// Competition statuses that count against `competitions.max_active`. A draft
+// IS an active slot — it is work in progress the org is holding open.
+export const ACTIVE_COMPETITION_STATUSES = [
+  "draft",
+  "published",
+  "live",
+] as const;
+
+/**
+ * Competition statuses that count against `dashboard.public.max` — the SAME
+ * question asked of a different cap, and deliberately a smaller set.
+ *
+ * A draft shows the world nothing. `public_competitions_v` is keyed on
+ * visibility, but a draft competition has no standings, no fixtures anyone is
+ * reading and no link an organiser has handed out yet — so metering it charges
+ * a PUBLIC DASHBOARD quota for something that is not a public dashboard.
+ *
+ * This was not a hypothetical. With drafts counted, Free (cap 2) meant an
+ * organiser planning next season with two drafts had their THIRD competition
+ * silently created private (`resolveCreateVisibility` degrades rather than
+ * refusing), and the first they knew of it was a share link that 404ed. The
+ * same shape took out five public-page e2e specs on a fixture org holding 279
+ * drafts against a cap of 50.
+ *
+ * Splitting the sets moves the enforcement point from create to PUBLISH, which
+ * is where it belongs and matches the rule `patchCompetition`'s visibility
+ * guard already follows: a create is not a deliberate act with a wrong answer
+ * available, so it degrades; publishing is, so it 402s. The organiser now
+ * learns the cap at the moment it means something, with the competition
+ * already built, instead of discovering it as a dead link.
+ */
+export const PUBLIC_DASHBOARD_STATUSES = ["published", "live"] as const;
 
 /**
  * THE VISIBILITIES `dashboard.public.max` METERS.
@@ -40,7 +70,8 @@ export const ACTIVE_COMPETITION_STATUSES = ["draft", "published", "live"] as con
  * `/shared/...` page 404s for it (V230, see usecases/exports.ts).
  */
 export const PUBLICLY_READABLE_VISIBILITIES = ["public", "unlisted"] as const;
-export type PubliclyReadableVisibility = (typeof PUBLICLY_READABLE_VISIBILITIES)[number];
+export type PubliclyReadableVisibility =
+  (typeof PUBLICLY_READABLE_VISIBILITIES)[number];
 
 /**
  * Does this visibility consume a `dashboard.public.max` slot?
@@ -56,8 +87,12 @@ export type PubliclyReadableVisibility = (typeof PUBLICLY_READABLE_VISIBILITIES)
  * competition is not a launch. The two ideas were one word until this ruling
  * split them.
  */
-export function countsTowardPublicQuota(visibility: string): visibility is PubliclyReadableVisibility {
-  return (PUBLICLY_READABLE_VISIBILITIES as readonly string[]).includes(visibility);
+export function countsTowardPublicQuota(
+  visibility: string,
+): visibility is PubliclyReadableVisibility {
+  return (PUBLICLY_READABLE_VISIBILITIES as readonly string[]).includes(
+    visibility,
+  );
 }
 
 /**
@@ -82,9 +117,17 @@ export function countsTowardPublicQuota(visibility: string): visibility is Publi
  * again", and `assertPublicQuota` was conspicuously not one of those three —
  * it had NEITHER half. Copying the clauses into it would have made a fourth
  * place to drift; this makes it impossible.
+ *
+ * The STATUS half is a parameter, because the two caps meter different sets
+ * (see `PUBLIC_DASHBOARD_STATUSES`): a draft is an active slot but not a public
+ * dashboard. The pass-exclusion half is NOT a parameter and must never become
+ * one — it is the clause this function was extracted to stop being copied.
  */
-export function liveUnpassedCompetition(t: Tx) {
-  return t`c.status in ${t([...ACTIVE_COMPETITION_STATUSES])}
+export function liveUnpassedCompetition(
+  t: Tx,
+  statuses: readonly string[] = ACTIVE_COMPETITION_STATUSES,
+) {
+  return t`c.status in ${t([...statuses])}
       and not exists (
         select 1 from competition_passes cp
          where cp.competition_id = c.id
@@ -122,9 +165,17 @@ async function quotaCount(
   t: Tx,
   scope: { publiclyReadable: boolean; excludeId?: string },
 ): Promise<number> {
+  // The status set moves WITH the axis: `dashboard.public.max` meters only
+  // competitions that are actually published, `competitions.max_active` meters
+  // drafts too. Two axes, one predicate, no second spelling.
   const [row] = await t<{ n: number }[]>`
     select count(*)::int as n from competitions c
-    where ${liveUnpassedCompetition(t)}
+    where ${liveUnpassedCompetition(
+      t,
+      scope.publiclyReadable
+        ? PUBLIC_DASHBOARD_STATUSES
+        : ACTIVE_COMPETITION_STATUSES,
+    )}
       ${
         scope.publiclyReadable
           ? t`and c.visibility in ${t([...PUBLICLY_READABLE_VISIBILITIES])}`
@@ -147,7 +198,9 @@ export async function countPublicDashboards(
   orgId: string,
   excludeId?: string,
 ): Promise<number> {
-  return withTenant(orgId, (t) => quotaCount(t, { publiclyReadable: true, excludeId }));
+  return withTenant(orgId, (t) =>
+    quotaCount(t, { publiclyReadable: true, excludeId }),
+  );
 }
 
 export interface FreezeCandidate {
@@ -209,7 +262,9 @@ async function loadCandidates(tx: Tx): Promise<FreezeCandidate[]> {
  * is gone rather than fixed so the trap cannot be re-set; callers inside a
  * transaction resolve the set first and use `assertNotFrozen` below.
  */
-export async function frozenCompetitionIds(orgId: string): Promise<Set<string>> {
+export async function frozenCompetitionIds(
+  orgId: string,
+): Promise<Set<string>> {
   const limit = await getLimit(orgId, "competitions.max_active");
   if (limit === null) return new Set();
   const run = async (t: Tx): Promise<Set<string>> => {
@@ -240,7 +295,10 @@ export async function frozenCompetitionIds(orgId: string): Promise<Set<string>> 
  * needs an id the transaction has not read yet, and the entity's own 404 still
  * fires first (an unknown id is never a member of the set).
  */
-export function assertNotFrozen(frozen: ReadonlySet<string>, competitionId: string): void {
+export function assertNotFrozen(
+  frozen: ReadonlySet<string>,
+  competitionId: string,
+): void {
   if (frozen.has(competitionId)) {
     throw new PaymentRequiredError("competitions.max_active");
   }
@@ -275,8 +333,10 @@ export async function assertCompetitionNotFrozen(
 export async function frozenMemberIds(orgId: string): Promise<Set<string>> {
   const limit = await getLimit(orgId, "members.max");
   if (limit === null) return new Set();
-  const rows = await withTenant(orgId, (tx) =>
-    tx<{ user_id: string; role: string; created_at: string }[]>`
+  const rows = await withTenant(
+    orgId,
+    (tx) =>
+      tx<{ user_id: string; role: string; created_at: string }[]>`
       select user_id, role, created_at from org_members
       where org_id = ${orgId} and role <> 'scorer'`,
   );
@@ -292,7 +352,10 @@ export async function frozenMemberIds(orgId: string): Promise<Set<string>> {
 }
 
 /** 402 when this member's seat is frozen (doc 10 §2.4) — call on write auth. */
-export async function assertMemberNotFrozen(orgId: string, userId: string): Promise<void> {
+export async function assertMemberNotFrozen(
+  orgId: string,
+  userId: string,
+): Promise<void> {
   const frozen = await frozenMemberIds(orgId);
   if (frozen.has(userId)) throw new PaymentRequiredError("members.max");
 }

@@ -29,15 +29,22 @@ async function provision(page: Page, email: string): Promise<void> {
     loginUrl = await mintLoginPathBySql(email);
   } else {
     // Dev exposes the link as `login_url` so the flow is testable without email.
-    const linkRes = await page.request.post("/api/auth/magic-link", { data: { email } });
-    loginUrl = ((await linkRes.json()) as { data?: { login_url?: string } }).data?.login_url;
+    const linkRes = await page.request.post("/api/auth/magic-link", {
+      data: { email },
+    });
+    loginUrl = ((await linkRes.json()) as { data?: { login_url?: string } })
+      .data?.login_url;
   }
   if (!loginUrl)
-    throw new Error("magic-link login_url missing — dev server (non-production) required for e2e");
+    throw new Error(
+      "magic-link login_url missing — dev server (non-production) required for e2e",
+    );
 
   // Opening the link consumes the token, signs in, and redirects (→ onboarding).
   await page.goto(loginUrl);
-  await page.waitForURL((u) => !u.pathname.startsWith("/magic-link"), { timeout: 30_000 });
+  await page.waitForURL((u) => !u.pathname.startsWith("/magic-link"), {
+    timeout: 30_000,
+  });
 
   // The browser context is now authenticated — drive setup through it.
   await page.request.post("/api/onboarding/complete", { data: {} });
@@ -56,9 +63,8 @@ async function capture(page: Page, path: string): Promise<void> {
   // analytics off for tests. Both keys are required — the version stamp must
   // match COOKIE_POLICY_VERSION or the re-prompt logic reopens the banner.
   // Captured into storageState → reused by every spec.
-  const { CONSENT_KEY, CONSENT_VERSION_KEY, COOKIE_POLICY_VERSION } = await import(
-    "../src/lib/consent"
-  );
+  const { CONSENT_KEY, CONSENT_VERSION_KEY, COOKIE_POLICY_VERSION } =
+    await import("../src/lib/consent");
   await page.evaluate(
     ([k, vk, v]) => {
       localStorage.setItem(k, "rejected");
@@ -89,22 +95,36 @@ setup("authenticate as a fresh Pro org", async ({ page }) => {
   // Nothing in e2e asserts this value; the only assertion on the key is
   // src/server/usecases/__tests__/scorers.test.ts (own fixtures), so raising
   // it is free. Raise it further rather than hunting for the true count.
-  const orgs = (await (
-    await page.request.get("/api/orgs")
-  ).json()) as { data?: { id: string }[] };
+  const orgs = (await (await page.request.get("/api/orgs")).json()) as {
+    data?: { id: string }[];
+  };
   const setupOrgId = orgs.data?.[0]?.id;
-  if (setupOrgId) await setEntitlementOverrideSql(setupOrgId, "orgs.max_owned", 50);
+  if (setupOrgId)
+    await setEntitlementOverrideSql(setupOrgId, "orgs.max_owned", 50);
   // Same argument, second axis. V396 retired Pro's "unlimited public
   // dashboards" for a finite `dashboard.public.max` of 10, and competitions are
-  // PUBLIC BY DEFAULT now — so competitions accumulate against that cap across
-  // the whole run exactly as owned orgs do. Past it a create is not refused
-  // (T15/F): it comes back PRIVATE, which drops the competition out of
-  // `public_fixtures_v` and, since T20, stops the template gallery navigating
-  // at all — so an unrelated new spec would turn into a mystery failure in
-  // whichever spec happened to run last. `public-dashboards.spec.ts` drives the
-  // cap deliberately and restores it to this same value; nothing else in e2e
-  // asserts it.
-  if (setupOrgId) await setEntitlementOverrideSql(setupOrgId, "dashboard.public.max", 50);
+  // PUBLIC BY DEFAULT now. Past the cap a create is not refused (T15/F): it
+  // comes back PRIVATE, which drops the competition out of `public_fixtures_v`
+  // and, since T20, stops the template gallery navigating at all — so an
+  // unrelated new spec turns into a mystery failure in whichever spec happened
+  // to run last.
+  //
+  // That is not hypothetical: it happened. This override was 50, the run put
+  // 279 competitions on this org, and the 229 after the fiftieth were created
+  // private — taking out five public-page specs (`ui-system`, `seo-meta`,
+  // `v6-sports`, both `scorepad-v3-football` public-page cases) plus the
+  // `setup:` fixture on tablet-834, none of which look anything like a quota
+  // failure from the outside.
+  //
+  // The cap now meters only PUBLISHED competitions (`PUBLIC_DASHBOARD_STATUSES`
+  // — a draft shows the world nothing), and nearly everything this suite
+  // creates stays a draft, so the pressure that caused that is gone rather than
+  // merely raised. 50 is kept as headroom for the specs that do publish; it is
+  // deliberate slack, not a ledger. `public-dashboards.spec.ts` drives the cap
+  // deliberately and restores it to this same value; nothing else in e2e
+  // asserts it. Raise it further rather than hunting for the true count.
+  if (setupOrgId)
+    await setEntitlementOverrideSql(setupOrgId, "dashboard.public.max", 50);
   await capture(page, PRO_STATE);
 });
 
