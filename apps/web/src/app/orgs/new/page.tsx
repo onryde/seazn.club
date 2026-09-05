@@ -3,16 +3,28 @@ import Link from "next/link";
 import { BackLink } from "@/components/back-link";
 import { redirect } from "next/navigation";
 import { getCurrentUser, getUserOrgs } from "@/lib/auth";
+import { newOrgDestination } from "@/server/page-auth";
 import { Nav } from "@/components/nav";
 import { CreateOrgForm } from "@/components/create-org-form";
 import { resolveLocale } from "@/lib/resolve-locale";
 import { getDictionary, t } from "@/lib/i18n";
 import { DictProvider } from "@/components/i18n/dict-provider";
 
-export default async function NewOrgPage() {
+export default async function NewOrgPage({
+  searchParams,
+}: {
+  // App Router hands these in as a promise in this Next (16.2.9) — the same
+  // shape the /settings shim next door awaits. Reading it without awaiting
+  // yields a promise object, not params.
+  searchParams: Promise<Record<string, string | undefined>>;
+}) {
   const user = await getCurrentUser();
   if (!user) redirect("/login");
   const orgs = await getUserOrgs(user.id);
+  // Where the org-less bounce was headed before it landed here (`requirePageAuth`
+  // → `orgLessRedirect`). Refused or absent → null, and the form keeps its
+  // /dashboard default, i.e. exactly today's behaviour.
+  const next = newOrgDestination(await searchParams);
   const locale = await resolveLocale();
   const ui = await getDictionary(locale, "ui");
 
@@ -35,6 +47,7 @@ export default async function NewOrgPage() {
             requireOrgPage bounces them to /my-matches. */}
         <CreateOrgForm
           memberOrgIds={orgs.filter((o) => o.role !== "scorer").map((o) => o.id)}
+          next={next}
         />
         {orgs.length > 0 && (
           <p className="mt-4 text-center text-sm text-slate-500">

@@ -264,8 +264,14 @@ export function BillRow({
 }
 
 /** Create an organization; the creator becomes its owner. Slug is automatic. */
+/** Where a successful create lands when the visitor asked for nowhere in
+ *  particular. Named so the "no destination" default is one value, not three
+ *  string literals that can drift apart. */
+const DEFAULT_DESTINATION = "/dashboard";
+
 export function CreateOrgForm({
   memberOrgIds,
+  next = null,
 }: {
   /** Ids of the organisations this user can actually OPEN — their memberships,
    *  minus scorer roles, which `requireOrgPage` bounces to /my-matches. Passed
@@ -273,6 +279,14 @@ export function CreateOrgForm({
    *  payload this form fetches names organisations the payer may not belong
    *  to, and a link into one of those is a 404. */
   memberOrgIds: readonly string[];
+  /** Where the org-less bounce was originally headed, ALREADY VALIDATED by
+   *  `safeNextPath` on the server (`newOrgDestination`, page-auth.ts). It is
+   *  validated there and only there on purpose: this is a client island and
+   *  `safeNextPath` lives in `@/lib/auth`, a server module whose import would
+   *  break the build — and a second, client-side copy of an origin check is
+   *  exactly the "two answers to one question" W1.5's open redirect came out
+   *  of. `null` (the default) means today's behaviour: the board. */
+  next?: string | null;
 }) {
   const msg = useMsg();
   const router = useRouter();
@@ -393,7 +407,11 @@ export function CreateOrgForm({
         setBusy(false);
         return;
       }
-      router.push("/dashboard");
+      // The one place the destination contract pays off: an org-less visitor
+      // who was on their way to `/settings?tab=account&email_change=success`
+      // now finishes onboarding and lands back on the outcome they came for,
+      // instead of a board that never mentions it.
+      router.push(next ?? DEFAULT_DESTINATION);
       router.refresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : msg("orgNew.failed"));
@@ -551,7 +569,14 @@ export function CreateOrgForm({
         <button
           type="button"
           onClick={() => {
-            router.push("/dashboard");
+            // Stays on the board even when a `next` was carried, and that is
+            // deliberate: this button only appears in the attach-FAILED state,
+            // its label is `orgNew.continueToBoard` — copy that names the
+            // board — and sending it somewhere else would make the label lie.
+            // Re-pointing it would also need a new string in all four locale
+            // dictionaries plus a `gen-keys` regen, which is not this task's
+            // scope. The success path above is the one that honours `next`.
+            router.push(DEFAULT_DESTINATION);
             router.refresh();
           }}
           className="btn btn-primary w-full py-2.5"
