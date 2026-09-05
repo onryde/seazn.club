@@ -694,6 +694,15 @@ test("settings identity row: the org name keeps a readable share, and the chrome
   // A row that renders an empty name would satisfy every box assertion below.
   await expect(name).not.toHaveText("");
 
+  // The 140px floor is NOT a soft margin, and it is not tightest at the
+  // narrowest width. Measured after the fix: 320→182, 360→222, 375→168,
+  // 390→183, 430→223. 375 sits LOWER than 320 because the badge's 57px still
+  // fits on the first line there and takes 57+12 out of the name's share,
+  // while at 320 it wraps away and gives that space back. So the width with
+  // the least headroom over this floor is 375, not 320 — a change that looks
+  // safe when eyeballed at 320 can breach it at 375 first. Check 375 whenever
+  // anything joins or leaves this row.
+  //
   // Both halves are SOFT so neither can hide behind the other. A hard first
   // expectation aborts the test, which is how one half of a two-part gate ends
   // up never having been watched to fail — failure class 3, an assertion only
