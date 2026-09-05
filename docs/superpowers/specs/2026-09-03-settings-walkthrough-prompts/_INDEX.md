@@ -743,6 +743,99 @@ stores localStorage origin-scoped and the origin includes the port, so a port
 change silently voids the cookie-consent flag and the banner then intercepts
 clicks. **Never `--no-deps`**: it is what stops the state re-minting.
 
+### W3 finding 1 — the W2 merge reddened the walkthrough leg on `main`, and the
+### cause was a live product defect, not a test artifact. FIXED `ad2fe615d`.
+
+E2E run `33968571673` on `997ad225b` (W2's merge commit) failed:
+`settings-admin.spec.ts:661` and `:834` both landed on
+`/login?next=%2Fsettings%3Ftab%3Daccount%26email_change%3Dinvalid` instead of
+the org-scoped account tab. **Both are green locally, at
+`--workers=3`, in the full 61-test leg.** That gap is the whole finding.
+
+`confirm/route.ts` built all five of its redirects as
+`NextResponse.redirect(new URL(path, req.url))`. **`req.url` is the server's
+INTERNAL BINDING, not the address the browser is on.** `lib/oauth.ts:25-26`
+already says exactly that — "Behind a reverse proxy (Fly.io), req.url is the
+internal binding (http://0.0.0.0:3000)" — which is why the OAuth routes go
+through `baseUrl(req)`. This route never did.
+
+CI starts the standalone server with **no `HOSTNAME`** (`e2e.yml:527`) and Next
+standalone defaults to `0.0.0.0`, so the Location read
+`http://0.0.0.0:3000/settings?…` while the browser sat on
+`http://localhost:3000`. The browser withholds the session cookie across that
+origin hop, `/settings` finds no session, and the confirmation lands on
+`/login`. Locally `seazn-env` binds `127.0.0.1` and `req.url` reports
+`localhost`, the origins match, and the identical code passes.
+
+Reproduced directly rather than inferred — a standalone server started with
+`HOSTNAME=0.0.0.0` answers:
+
+```
+location: http://0.0.0.0:3399/settings?tab=account&email_change=invalid
+```
+
+**This is a live customer defect.** Behind any reverse proxy every email-change
+confirmation sends the user cross-origin, and the SUCCESS outcome does it
+*after* the new address has already committed — the user is bounced to a login
+screen by the link that worked.
+
+**`baseUrl(req)` is NOT the fix.** With no proxy there is no
+`x-forwarded-host`, so it falls back to `new URL(req.url).origin` and
+reproduces the same binding. The fix is a **relative** Location, which has no
+origin to get wrong: the browser resolves it against the URL it requested.
+
+Three rules follow, and the third is the one that let this ship green:
+
+1. **A route-handler redirect built from `req.url` is a latent cross-origin
+   bounce.** Grep for `new URL("/…", req.url)` before adding another.
+2. **An origin difference is invisible to a `pathname + search` assertion.**
+   Both banner tests compared exactly that, so an absolute Location satisfied
+   them whenever the browser happened to be on that host — which it is,
+   locally. The guard added at `settings-admin.spec.ts:943` pins the exact
+   RELATIVE string with `maxRedirects: 0`; following the redirect is precisely
+   what erases the evidence, since the landing URL is identical either way.
+3. **`localhost` vs `0.0.0.0` is a REAL environment axis this repo's local
+   harness does not cover.** Local seazn-env pins `HOSTNAME=127.0.0.1`
+   (`seazn-env.sh:521`); CI pins nothing. Any redirect, absolute asset URL or
+   cookie-domain behaviour can differ between them, and the local leg cannot
+   see it. When CI reds on a hop the local leg passes, check the binding
+   before checking the code.
+
+Witnessed both ways: the new guard **fails** against the pre-fix server
+(1 failed / 9 passed) and passes after the rebuild.
+
+### W3 finding 2 — `_RULES.md` §2's premise is FALSE against current `main`
+
+`_RULES.md` §2 and design §3 trap 3 both say "`POST /api/orgs` creates an org
+that joins its creator's **existing** billing group", and derive from it the
+"split the group first" ceremony. **`createOrgForUser` mints its own community
+group per org** — `auth.ts:292-330` inserts a fresh `subscriptions` row inside
+the create transaction, and the doc comment names the history: "Individual by
+default (#212): every new org mints its OWN community group. The old auto-join
+(V309) dropped a user's second org onto their first group; that is now opt-in."
+
+Consequence for the matrix: `setOrgPlanBySql` on a **freshly created** org is
+group-scoped to a group containing only that org, so it cannot drag the shared
+Pro org. The split ceremony is harmless but unnecessary on that path. The rule
+still holds for any org attached to a group through `attachOrgToGroup`.
+`settings-support.ts:88-95` already documents its own split call as a retained
+no-op for the retired V309 shape.
+
+### W3 finding 3 — the shared Pro user's org cap is 50, not 5
+
+The W3 kickoff above carries "the shared Pro user is at 5 of 5 org slots" from
+W2. Verified against the tree: `assertMayOwnAnotherOrg` takes
+`limit = Math.max(...limits)` over `orgs.max_owned` for **every** owned org
+(`auth.ts:245-254`), and `auth.setup.ts:96` writes an
+`orgs.max_owned = 50` override onto the first org `GET /api/orgs` returns. So
+the effective cap is **50**, against roughly twenty orgs created across the
+suite. Two caveats that keep this from being a licence to seed freely: the
+override is attached to ONE org and nothing re-attaches it if that org is ever
+released, and `owned` counts by `org_members.user_id` with **no `deleted_at`
+filter** (`auth.ts:224-226`) — a soft-deleted org still occupies a slot, so
+only `releaseSeededOrgSql`, which deletes the membership row, actually returns
+one.
+
 ## False premises found
 
 Recorded so the next session does not re-derive them.
