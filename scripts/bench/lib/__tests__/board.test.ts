@@ -393,6 +393,73 @@ describe("encodeConstraints", () => {
     expect(out.unmodelled[0]?.reason).toMatch(/scope/i);
   });
 
+  // --- `encodeHardRule`'s last two exits (finding R01) --------------------
+  //
+  // These two arms are the encoder's ONLY remaining uncovered exits, and both
+  // are the same failure shape: a rule that lands in NEITHER `hard[]` nor
+  // `unmodelled[]` is a constraint the checker silently ignored while the
+  // report still says nothing was left unchecked — design §1.4's one
+  // forbidden outcome. The code is correct today; what was missing is the
+  // teeth that keep it correct, on the exact switch that produced this wave's
+  // most-repeated defect.
+  //
+  // Both assert `hard` is EMPTY as well as the `unmodelled` entry, because a
+  // mutant that pushed the rule onto `hard[]` instead would also leave a
+  // one-entry answer and a `toHaveLength(1)` on the wrong list cannot tell
+  // the two apart.
+  it("REPORTS an unknown hard-constraint type rather than dropping it", () => {
+    const out = encodeConstraints({
+      divisionRef: "d-tiny",
+      // A type no `HardConstraint` member carries. `scheduleConfig` is an
+      // opaque record that nothing type-checks, so this reaches the switch's
+      // `default` arm exactly as a future product-side rule type would —
+      // which is the real scenario: the product grows a member, the bench
+      // does not, and the pack declaring it must be REPORTED, not ignored.
+      scheduleConfig: { constraints: { hard: [{ type: "nonsense", scope: { kind: "competition" } }] } },
+      courtIdByRef: courts,
+      isRoundRobin: true,
+      pins: [],
+      declaresOfficials: false,
+    });
+    expect(out.hard).toEqual([]);
+    expect(out.unmodelled).toEqual([
+      { type: "nonsense", reason: expect.stringContaining("not modelled") },
+    ]);
+    // Names the TYPE it could not read. Without this the entry could carry
+    // any reason at all and still satisfy the shape above, and a reader of
+    // the report would be told a constraint was skipped without being told
+    // which one.
+    expect(out.unmodelled[0]?.reason).toMatch(/unknown HardConstraint type/i);
+    expect(out.unmodelled[0]?.reason).toContain("nonsense");
+  });
+
+  it("REPORTS a hard rule carrying no readable type, as (unreadable)", () => {
+    // Two shapes, because the guard is one `if` with TWO operands and a
+    // mutant may drop either: `{}` is a readable RECORD whose `type` is not a
+    // string (the `typeof type !== "string"` half), and `"nope"` is not a
+    // record at all (the `rule === undefined` half, via `asRecord`). Asserted
+    // one at a time so neither operand can cover for the other — the same
+    // discipline the scope/operand pair above already uses.
+    for (const raw of [{}, "nope"]) {
+      const out = encodeConstraints({
+        divisionRef: "d-tiny",
+        scheduleConfig: { constraints: { hard: [raw] } },
+        courtIdByRef: courts,
+        isRoundRobin: true,
+        pins: [],
+        declaresOfficials: false,
+      });
+      expect(out.hard).toEqual([]);
+      expect(out.unmodelled).toEqual([
+        { type: "(unreadable)", reason: expect.stringContaining("not modelled") },
+      ]);
+      // The INDEX, so a pack with twenty hard rules tells its author which
+      // entry to open. `[0]` here is the only element, so the literal is the
+      // whole point rather than an incidental.
+      expect(out.unmodelled[0]?.reason).toContain("constraints.hard[0]");
+    }
+  });
+
   it("carries a DIVISION-scoped rule's own divisionId, and refuses one without it", () => {
     // `readScope`'s `division` arm had NO test: a `return undefined` mutant on
     // it survived the whole suite, and the only `kind: "division"` anywhere in
