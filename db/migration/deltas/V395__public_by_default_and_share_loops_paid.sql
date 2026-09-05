@@ -4,7 +4,7 @@
 -- parses that table and pins every cell below against it, so the doc and this
 -- migration cannot drift apart in one direction only).
 --
--- Resolver semantics this file is written against, unchanged since V391's
+-- Resolver semantics this file is written against, unchanged since V392's
 -- header: for an int key only `int_value` is read, `int_value = NULL` means
 -- unlimited, and a key with NO ROW resolves to 0 — DENY, not unlimited. For a
 -- bool, `bool_value = true` exactly; a pass row can only GRANT on top of the
