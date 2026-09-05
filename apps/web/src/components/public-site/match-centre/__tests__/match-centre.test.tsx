@@ -75,7 +75,11 @@ describe("MatchCentre", () => {
 
   it("shows the active tab's panel container and hides every other tab's panel — no ?tab param defaults to the first listed tab", () => {
     const html = renderToStaticMarkup(<MatchCentre {...props(fullDoc)} />);
-    expect(html).toContain('data-testid="mc-tab-panel-summary"'); // doc.tabs[0]
+    // doc.tabs[0] is "summary" — Task 11 replaced its placeholder with the
+    // real SummaryTab, which (fullDoc.cricket === null) renders LiveScoreBody;
+    // "Not started" is LiveScoreBody's own headline fallback (live-score.tsx),
+    // so its presence here is proof the summary tab is the one active.
+    expect(html).toContain("Not started");
     expect(html).not.toContain('data-testid="mc-tab-panel-scorecard"');
     expect(html).not.toContain('data-testid="mc-tab-panel-commentary"');
     expect(html).not.toContain('data-testid="mc-tab-panel-timeline"');
@@ -87,12 +91,12 @@ describe("MatchCentre", () => {
     const html = renderToStaticMarkup(<MatchCentre {...props(fullDoc, "sets")} />);
     expect(html).toContain('data-testid="mc-tab-panel-sets"');
     expect(html).toContain('data-testid="mc-tab-sets" aria-selected="true"');
-    expect(html).not.toContain('data-testid="mc-tab-panel-summary"');
+    expect(html).not.toContain("Not started"); // summary (LiveScoreBody's marker) is NOT active
   });
 
   it("a ?tab param NOT in the document's tabs falls back to the first listed tab, not a crash", () => {
     const html = renderToStaticMarkup(<MatchCentre {...props(band2Doc, "commentary")} />);
-    expect(html).toContain('data-testid="mc-tab-panel-summary"');
+    expect(html).toContain("Not started"); // falls back to "summary" (doc.tabs[0])
     expect(html).not.toContain('data-testid="mc-tab-commentary"');
   });
 
