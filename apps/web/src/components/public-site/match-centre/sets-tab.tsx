@@ -23,9 +23,17 @@
 //    ENGINE'S OWN `closedMask`, never inferred from position. A set can be
 //    open at any index — a suspended match, a super over — and "the last one"
 //    is a guess that is usually right, which is the worst kind.
+//
+// 4. `columnLabels` CARRIES THE ENGINE'S PHASE TOKEN, and it wins over the
+//    ordinal. "Period 4" is not what extra time is called, and the difference
+//    between regulation, extra time and overtime is most of what a spectator
+//    opens this tab to see. The tokens are unbounded by construction
+//    (`periodLabels` in the period kernel builds `P1..Pn`, `otLabels` builds
+//    `OT1..OTk`), so a missing `term.<label>` is EXPECTED rather than a defect
+//    — it falls through to the ordinal, which still reads correctly.
 import type { ReactNode } from "react";
 import type { Dict as PublicDict } from "@/lib/i18n-constants";
-import { t } from "@/lib/i18n-runtime";
+import { lookup, t } from "@/lib/i18n-runtime";
 import type { MatchCentreDocT } from "@/server/public-site/match-centre-schema";
 import type { LiveFixtureData } from "../live-score-data";
 import { TabPanel } from "./tab-panel";
@@ -42,11 +50,22 @@ export function SetsTab({ doc, dict }: SetsTabProps): ReactNode {
   if (sets === null) return <TabPanel id="sets" className="grid gap-2" />;
 
   const caption = t(dict, sets.kind === "periods" ? "matchCentre.periods" : "matchCentre.sets");
-  // See notes 1 and 2.
-  const labelFor = (i: number): string =>
-    sets.unit === undefined
-      ? (sets.columns[i] ?? String(i + 1))
-      : t(dict, `matchCentre.col.${sets.unit}`, { n: i + 1 });
+
+  // See notes 1, 2 and 4. Three tiers, in order:
+  //   1. the engine's own phase token localised — "ET 2nd half", "Overtime";
+  //   2. the sport's unit and the ordinal — "Period 4", "Game 2", "Set 3";
+  //   3. the raw `columns` string, for a document built before `unit` existed.
+  const labelFor = (i: number): string => {
+    const phase = sets.columnLabels?.[i];
+    if (phase !== undefined && phase !== "") {
+      // `lookup`, not `t` — `t` RETURNS THE KEY on a miss, so it would answer
+      // "yes, `term.OT3`" for every phase and print the key to a spectator.
+      const term = lookup(dict, `term.${phase}`);
+      if (typeof term === "string") return term;
+    }
+    if (sets.unit !== undefined) return t(dict, `matchCentre.col.${sets.unit}`, { n: i + 1 });
+    return sets.columns[i] ?? String(i + 1);
+  };
 
   return (
     <TabPanel id="sets" className="grid gap-2">

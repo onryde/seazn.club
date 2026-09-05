@@ -85,6 +85,7 @@ import {
 import {
   TIMELINE_KEY_FOR,
   TIMELINE_NEUTRAL_KEY,
+  TIMELINE_OVERRIDE_KEYS,
   TIMELINE_PERIOD_END_KEY,
   TIMELINE_SET_WON_KEY,
   buildSets,
@@ -469,6 +470,56 @@ describe("buildTimeline", () => {
     expect(lines.find((l) => l.text.key === "timeline.football.goal")!.marker).toBe("23'");
   });
 
+  it("a period-advance line NAMES the phase in its sentence", () => {
+    // The positive pair for "a phase is named ONCE": the marker is null now,
+    // so the phase has to be in the params or the line says nothing at all.
+    const lines = linesOf(
+      args({
+        sportKey: "icehockey",
+        events: [env(0, "core.start", {}), env(1, "icehockey.period.advance", { to: "P2" })],
+      }),
+    );
+    const advance = lines.find((l) => l.text.key === "timeline.periodsport.advance")!;
+    expect(advance.text.params?.phase).toBe("P2");
+    expect(advance.marker).toBeNull();
+  });
+
+  it("core.award carries the award key as a localisable token", () => {
+    const lines = linesOf(
+      args({ events: [env(0, "core.award", { person: "H-p1", key: "motm" })] }),
+    );
+    expect(lines[0]!.text.key).toBe("timeline.core.award");
+    expect(lines[0]!.text.params).toMatchObject({ person: "Player H-p1", key: "motm" });
+  });
+
+  it("a winner naming NEITHER entrant takes the draw branch, never an empty {side}", () => {
+    // A stale fixture, or an entrant deleted after scoring: `winner` is a
+    // non-empty string that resolves to no side. Keying the override on the
+    // RESOLVED index means this cannot reach the decisive template.
+    const orphan = linesOf(
+      args({
+        sportKey: "boardgame",
+        events: [env(0, "boardgame.result", { winner: "GONE", method: "resign" })],
+      }),
+    );
+    expect(orphan[0]!.sideIndex).toBeNull();
+    expect(orphan[0]!.text.key).toBe("timeline.boardgame.draw");
+    expect(orphan[0]!.text.params?.side).toBeUndefined();
+  });
+
+  it("a lineup event whose side resolves to nothing omits {side} rather than emptying it", () => {
+    const orphan = linesOf(
+      args({ events: [env(0, "core.lineup.entry", { side: "GONE", on: { personId: "x" } })] }),
+    );
+    expect(orphan[0]!.text.key).toBe("timeline.core.lineup");
+    expect(orphan[0]!.text.params?.side).toBeUndefined();
+    // Positive pair: a side that DOES resolve is named.
+    const known = linesOf(
+      args({ events: [env(0, "core.lineup.entry", { side: "H", on: { personId: "x" } })] }),
+    );
+    expect(known[0]!.text.params?.side).toBe(SIDES[0].name);
+  });
+
   it("a drawn board game does not render an empty winner", () => {
     // `boardgame.result` says two different things: `{ winner, method }` is a
     // decisive result, `{ method }` alone is a draw. Through the decisive
@@ -566,25 +617,43 @@ describe("buildSets", () => {
         const sets = (summaryOf(s).detail as { sets?: unknown[] } | undefined)?.sets;
         return Array.isArray(sets) && sets.length >= 2;
       });
-      const view = buildSets({ sportKey: key, summary: summaryOf(stream), sides: SIDES })!;
+      // THROUGH `SetsView.parse`, not on the raw builder return: zod STRIPS an
+      // unknown key, so a field the schema does not declare would survive every
+      // assertion on the object the builder handed back and vanish the moment
+      // the document was parsed. Parsing is the only assertion that proves the
+      // field reaches a consumer.
+      const view = SetsView.parse(
+        buildSets({ sportKey: key, summary: summaryOf(stream), sides: SIDES }),
+      );
       expect(view.kind, key).toBe("sets");
       expect(view.unit, key).toBe("game");
+      // A set has no name beyond its number.
+      expect(view.columnLabels, key).toBeUndefined();
     }
     for (const key of ["tennis", "volleyball"] as const) {
       const stream = streamWhere(key, (s) => {
         const sets = (summaryOf(s).detail as { sets?: unknown[] } | undefined)?.sets;
         return Array.isArray(sets) && sets.length >= 2;
       });
-      const view = buildSets({ sportKey: key, summary: summaryOf(stream), sides: SIDES })!;
+      const view = SetsView.parse(
+        buildSets({ sportKey: key, summary: summaryOf(stream), sides: SIDES }),
+      );
       expect(view.unit, key).toBe("set");
+      expect(view.columnLabels, key).toBeUndefined();
     }
     for (const key of ["football", "hockey", "icehockey"] as const) {
       const stream = streamWhere(key, (s) => {
         const periods = (summaryOf(s).detail as { periods?: unknown[] } | undefined)?.periods;
         return Array.isArray(periods) && periods.length >= 2;
       });
-      const view = buildSets({ sportKey: key, summary: summaryOf(stream), sides: SIDES })!;
+      const view = SetsView.parse(
+        buildSets({ sportKey: key, summary: summaryOf(stream), sides: SIDES }),
+      );
       expect(view.unit, key).toBe("period");
+      // The engine's own phase tokens, one per column, so the renderer can say
+      // "ET 2nd half" rather than "Period 4".
+      const periods = (summaryOf(stream).detail as { periods: { phase: string }[] }).periods;
+      expect(view.columnLabels, key).toEqual(periods.map((p) => p.phase));
     }
   });
 
@@ -624,6 +693,23 @@ describe("buildSets", () => {
       sides: SIDES,
     })!;
     expect(shootoutView.closedMask).toEqual([true, true]);
+  });
+
+  it("football extra time keeps its own name — the ordinal is only a fallback", () => {
+    // A stream that actually reached extra time, chosen by predicate.
+    const stream = streamWhere("football", (s) => {
+      const periods = (summaryOf(s).detail as { periods?: { phase: string }[] } | undefined)
+        ?.periods;
+      return Array.isArray(periods) && periods.some((p) => p.phase.startsWith("ET_"));
+    });
+    const view = SetsView.parse(
+      buildSets({ sportKey: "football", summary: summaryOf(stream), sides: SIDES }),
+    );
+    expect(view.columnLabels).toContain("ET_H1");
+    expect(view.columnLabels).toContain("ET_H2");
+    // …and the ordinal columns are still there for the fallback path.
+    expect(view.columns).toEqual(view.columnLabels!.map((_, i) => String(i + 1)));
+    expect(view.columnLabels).not.toEqual(view.columns);
   });
 
   it("cricket and generic: null", () => {
@@ -682,6 +768,7 @@ describe("timeline dictionary coverage (derived from the engine's own golden cor
     // flat key first), so nothing else in the suite can catch the slip.
     const emitted = [
       ...Object.values(TIMELINE_KEY_FOR),
+      ...TIMELINE_OVERRIDE_KEYS,
       TIMELINE_NEUTRAL_KEY,
       TIMELINE_SET_WON_KEY,
       TIMELINE_PERIOD_END_KEY,
@@ -710,6 +797,9 @@ describe("timeline dictionary coverage (derived from the engine's own golden cor
     const keys = [
       ...new Set([
         ...Object.values(TIMELINE_KEY_FOR),
+        // A key reachable at RUNTIME that no locale carries is the same defect
+        // whether it comes from the table or from a per-payload override.
+        ...TIMELINE_OVERRIDE_KEYS,
         TIMELINE_NEUTRAL_KEY,
         TIMELINE_SET_WON_KEY,
         TIMELINE_PERIOD_END_KEY,
@@ -782,7 +872,10 @@ describe("timeline dictionary coverage (derived from the engine's own golden cor
           events: envelopesOf(stream),
           module: mod,
           cfg,
-          lineups: defaultLineupPair(resolvePositions(mod, cfg)),
+          // The stream's OWN lineups when it recorded any — a football coverage
+          // stream needs a bench, and replaying it against the default squads
+          // is replaying a different match.
+          lineups: stream.lineups ?? defaultLineupPair(resolvePositions(mod, cfg)),
           sides: SIDES,
           personOf,
         });

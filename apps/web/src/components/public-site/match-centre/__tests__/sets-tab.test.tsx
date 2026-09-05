@@ -63,6 +63,35 @@ const FOOTBALL: SetsViewT = {
   closedMask: [true, false],
 };
 
+/** A football match that went to extra time: the engine's own phase tokens ride
+ *  in `columnLabels`, and they must WIN over the ordinal. "Period 4" is not what
+ *  extra time is called. */
+const EXTRA_TIME: SetsViewT = {
+  kind: "periods",
+  unit: "period",
+  columns: ["1", "2", "3", "4"],
+  columnLabels: ["H1", "H2", "ET_H1", "ET_H2"],
+  rows: [
+    ["1", "0", "1", "0"],
+    ["0", "1", "1", "0"],
+  ],
+  closedMask: [true, true, true, true],
+};
+
+/** An overtime label the dictionary does NOT carry — `OT3` is reachable by
+ *  construction (`otLabels` builds `OT1..OTk`), so the fallback has to hold. */
+const DEEP_OVERTIME: SetsViewT = {
+  kind: "periods",
+  unit: "period",
+  columns: ["1", "2"],
+  columnLabels: ["P1", "OT9"],
+  rows: [
+    ["1", "0"],
+    ["1", "1"],
+  ],
+  closedMask: [true, false],
+};
+
 /** A document built before `unit` existed — the field is optional, so the
  *  renderer must still label the columns from the raw `columns` strings. */
 const LEGACY: SetsViewT = {
@@ -78,7 +107,15 @@ const LEGACY: SetsViewT = {
 const render = (sets: SetsViewT | null): string =>
   renderToStaticMarkup(<SetsTab doc={makeDoc({ sets })} dict={dict} data={data} />);
 
-const DOCS: MatchCentreDocT[] = [TENNIS, BADMINTON, FOOTBALL, LEGACY, null].map((s) =>
+const DOCS: MatchCentreDocT[] = [
+  TENNIS,
+  BADMINTON,
+  FOOTBALL,
+  EXTRA_TIME,
+  DEEP_OVERTIME,
+  LEGACY,
+  null,
+].map((s) =>
   makeDoc({ sets: s }),
 );
 
@@ -152,6 +189,34 @@ describe("SetsTab", () => {
     expect(render(BADMINTON)).not.toContain("Set 1"); // the differential case
     expect(render(FOOTBALL)).toContain("Period 1");
     expect(render(FOOTBALL)).not.toContain("Game 1");
+  });
+
+  it("the engine's phase token WINS over the ordinal, and falls back when unknown", () => {
+    const et = render(EXTRA_TIME);
+    // Extra time is named, not numbered.
+    expect(et).toContain(en["term.ET_H1"]);
+    expect(et).toContain(en["term.ET_H2"]);
+    expect(et).toContain(en["term.H1"]);
+    // …and specifically NOT the ordinal fallback for those columns. This is the
+    // differential: "Period 3"/"Period 4" is what the ordinal path would print.
+    expect(et).not.toContain("Period 3");
+    expect(et).not.toContain("Period 4");
+
+    // An unbounded label the dictionary cannot carry falls through to the
+    // ordinal rather than printing the key — `lookup`, not `t`, is what makes
+    // that possible.
+    const deep = render(DEEP_OVERTIME);
+    expect(deep).toContain(en["term.P1"]);
+    expect(deep).toContain("Period 2");
+    expect(deep).not.toContain("term.OT9");
+    expect(deep).not.toContain("OT9");
+  });
+
+  it("sets are still numbered — `columnLabels` is a period-sport concern", () => {
+    const html = render(TENNIS);
+    expect(html).toContain("Set 1");
+    expect(html).toContain("Set 3");
+    expect(TENNIS.columnLabels).toBeUndefined();
   });
 
   it("without `unit` the raw column strings are used — a pre-`unit` document still reads", () => {

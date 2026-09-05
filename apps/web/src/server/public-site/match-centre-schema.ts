@@ -47,13 +47,28 @@ export const TimelineLine = z.object({ seq: z.number(), at: z.string().nullable(
 // volleyball score SETS, and the period sports score PERIODS. It is optional
 // so a document built before this field existed still parses; the renderer
 // falls back to the raw `columns` string when it is absent.
-export const SetsView = z.object({ kind: z.enum(["sets", "periods"]), unit: z.enum(["set", "game", "period"]).optional(), columns: z.array(z.string()), rows: z.tuple([z.array(z.string().nullable()), z.array(z.string().nullable())]), closedMask: z.array(z.boolean()) });
+// `columnLabels` (product ruling): the ENGINE'S OWN phase token for each column
+// — "H1", "ET_H2", "OT", "P3", "SHOOTOUT" — so the renderer can print "ET 2nd
+// half" rather than the ordinal fallback "Period 4". Undefined for set-based
+// sports, where a set has no name beyond its number. The renderer resolves each
+// token through `term.<label>` and falls back to `matchCentre.col.<unit>` when
+// there is no such key, so an unbounded label (`P7`, `OT3`) still reads.
+export const SetsView = z.object({ kind: z.enum(["sets", "periods"]), unit: z.enum(["set", "game", "period"]).optional(), columns: z.array(z.string()), columnLabels: z.array(z.string()).optional(), rows: z.tuple([z.array(z.string().nullable()), z.array(z.string().nullable())]), closedMask: z.array(z.boolean()) });
 export const InfoView = z.object({ rows: z.array(z.object({ label: Msg, value: Msg })), calendarHref: z.string().nullable(), divisionHref: z.string(), competitionHref: z.string() });
 
 export const MatchCentreDoc = z.object({
   fixtureId: z.string(), sportKey: z.string(), header: MatchCentreHeader,
   tabs: z.array(MatchCentreTabId).min(1),
   cricket: CricketView.nullable(), timeline: z.array(TimelineLine).nullable(), sets: SetsView.nullable(), info: InfoView,
+  // Did the timeline's DERIVED pass run to completion? `buildTimeline` replays
+  // the module to find closed sets and period ends, and a ledger the module
+  // refuses part-way stops that replay — the recorded lines all still render,
+  // so the tab looks complete while every set-won line after the failure is
+  // silently missing. `false` is how a consumer (a debug view, a monitor, a
+  // future "some detail unavailable" note) can tell the two apart. Defaulted so
+  // a document built before this field existed still parses, and so cricket —
+  // which has no timeline and therefore nothing to derive — need not say so.
+  derivedComplete: z.boolean().default(true),
 });
 export type MatchCentreDocT = z.infer<typeof MatchCentreDoc>;
 export type MatchCentreHeaderT = z.infer<typeof MatchCentreHeader>;

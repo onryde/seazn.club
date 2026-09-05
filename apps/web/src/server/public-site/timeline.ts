@@ -69,6 +69,12 @@ import {
 import type { AnySportModule } from "@seazn/engine/sport";
 import { periodBreakdown, setBreakdown, type PeriodScoreRow, type SetScore } from "@/lib/public-site";
 import { log } from "@/server/logger";
+import {
+  TIMELINE_KEY_FOR,
+  TIMELINE_NEUTRAL_KEY,
+  TIMELINE_PERIOD_END_KEY,
+  TIMELINE_SET_WON_KEY,
+} from "@/lib/timeline-keys";
 import type { MsgT, PersonT, SetsViewT, SideT, TimelineLineT } from "./match-centre-schema";
 
 export interface TimelineArgs {
@@ -91,113 +97,20 @@ export interface SetsArgs {
   sides: [SideT, SideT];
 }
 
-// KEYS ARE BARE — `timeline.football.goal`, never `public.timeline.football.goal`.
-// The namespace is the FILE (`dictionaries/<locale>/public.json`), which
-// `getDictionary(locale, "public")` loads whole, so re-stating it inside a key
-// would make the key `public.public.…` in intent and read wrong beside every
-// other key in that file (`org.competitionsBy`, `news.kind.result`). It
-// *resolves* either way — `lookup()` tries the literal flat key first — which is
-// exactly why this is written down rather than left to be noticed.
-/** The line a recorded type with no template of its own renders. Never nothing. */
-export const TIMELINE_NEUTRAL_KEY = "timeline.generic.event";
-/** Derived, not recorded: emitted when `summary.detail.sets[i].closed` flips. */
-export const TIMELINE_SET_WON_KEY = "timeline.set.won";
-/** Derived, not recorded: emitted when `summary.detail.periods` grows. */
-export const TIMELINE_PERIOD_END_KEY = "timeline.period.end";
-
-const FOOTBALL = "timeline.football.";
-const TENNIS = "timeline.tennis.";
-const SETBASED = "timeline.setbased.";
-/** Field hockey and ice hockey ride the period kernel and one vocabulary. */
-const PERIODSPORT = "timeline.periodsport.";
-
-/** The template table: recorded event type -> dictionary key. */
-export const TIMELINE_KEY_FOR: Readonly<Record<string, string>> = {
-  "core.start": "timeline.core.start",
-  "core.forfeit": "timeline.core.forfeit",
-  "core.abandon": "timeline.core.abandon",
-  // The rest of the KERNEL's own vocabulary. The golden corpora record only
-  // start / forfeit / abandon, so a table built from the corpora alone would
-  // have left the other nine to the neutral line — and one of them,
-  // `core.note`, is an OFFICIAL'S OWN ANNOTATION: rendering that as "Match
-  // event" throws away the only free text in the ledger.
-  "core.note": "timeline.core.note",
-  "core.finalize": "timeline.core.finalize",
-  "core.award": "timeline.core.award",
-  "core.suspend": "timeline.core.suspend",
-  "core.resume": "timeline.core.resume",
-  // The five lineup siblings share ONE sentence: which side changed its
-  // line-up. Naming the person would need the squad state this builder
-  // deliberately does not fold for itself.
-  "core.lineup.substitution": "timeline.core.lineup",
-  "core.lineup.replacement": "timeline.core.lineup",
-  "core.lineup.position": "timeline.core.lineup",
-  "core.lineup.retirement": "timeline.core.lineup",
-  "core.lineup.entry": "timeline.core.lineup",
-  // `core.void` is deliberately ABSENT: `resolveVoids` removes it and its
-  // target before pass 1, so it can never reach a line. The neutral key covers
-  // it if that ever changes.
-
-  "football.goal": `${FOOTBALL}goal`,
-  "football.card": `${FOOTBALL}card`,
-  "football.sub": `${FOOTBALL}sub`,
-  "football.period": `${FOOTBALL}period`,
-  "football.shootout.kick": `${FOOTBALL}shootout.kick`,
-  "football.penalty": `${FOOTBALL}penalty`,
-  "football.sinbin.start": `${FOOTBALL}sinbin.start`,
-  "football.sinbin.end": `${FOOTBALL}sinbin.end`,
-  "football.shot": `${FOOTBALL}shot`,
-
-  "tennis.point": `${TENNIS}point`,
-  "tennis.game.award": `${TENNIS}game.award`,
-  "tennis.set_summary": `${TENNIS}set_summary`,
-  "tennis.sanction": `${TENNIS}sanction`,
-  "tennis.interruption": `${TENNIS}interruption`,
-
-  "volleyball.rally": `${SETBASED}rally`,
-  "volleyball.set.summary": `${SETBASED}set.summary`,
-  "volleyball.sanction": `${SETBASED}sanction`,
-  "volleyball.sub": `${SETBASED}sub`,
-  "volleyball.timeout": `${SETBASED}timeout`,
-  "volleyball.expedite.start": `${SETBASED}expedite`,
-  "badminton.rally": `${SETBASED}rally`,
-  "badminton.game.summary": `${SETBASED}game.summary`,
-  "badminton.sanction": `${SETBASED}sanction`,
-  "badminton.sub": `${SETBASED}sub`,
-  "badminton.timeout": `${SETBASED}timeout`,
-  "badminton.expedite.start": `${SETBASED}expedite`,
-  "tabletennis.rally": `${SETBASED}rally`,
-  "tabletennis.game.summary": `${SETBASED}game.summary`,
-  "tabletennis.sanction": `${SETBASED}sanction`,
-  "tabletennis.sub": `${SETBASED}sub`,
-  "tabletennis.timeout": `${SETBASED}timeout`,
-  "tabletennis.expedite.start": `${SETBASED}expedite`,
-
-  "hockey.goal": `${PERIODSPORT}goal`,
-  "hockey.period.advance": `${PERIODSPORT}advance`,
-  "hockey.set_piece": `${PERIODSPORT}setPiece`,
-  "hockey.shootout.attempt": `${PERIODSPORT}shootout.attempt`,
-  "hockey.shot": `${PERIODSPORT}shot`,
-  "hockey.suspension.start": `${PERIODSPORT}suspension.start`,
-  "hockey.suspension.end": `${PERIODSPORT}suspension.end`,
-  "icehockey.goal": `${PERIODSPORT}goal`,
-  "icehockey.period.advance": `${PERIODSPORT}advance`,
-  "icehockey.set_piece": `${PERIODSPORT}setPiece`,
-  "icehockey.shootout.attempt": `${PERIODSPORT}shootout.attempt`,
-  "icehockey.shot": `${PERIODSPORT}shot`,
-  "icehockey.suspension.start": `${PERIODSPORT}suspension.start`,
-  "icehockey.suspension.end": `${PERIODSPORT}suspension.end`,
-
-  "carrom.toss": "timeline.carrom.toss",
-  "carrom.board.summary": "timeline.carrom.board.summary",
-  "carrom.game.adjust": "timeline.carrom.game.adjust",
-
-  "boardgame.pairing": "timeline.boardgame.pairing",
-  "boardgame.result": "timeline.boardgame.result",
-
-  "generic.score": "timeline.generic.score",
-  "generic.result": "timeline.generic.result",
-};
+// THE KEY TABLE LIVES IN `@/lib/timeline-keys`, NOT HERE, and is re-exported
+// for this module's own callers. The reason is mechanical: this file imports
+// pino (see the header), and in this app a client component importing anything
+// under `@/server/**` is a BUILD FAILURE — so a renderer that needs to
+// recognise a derived line has to be able to reach the keys without reaching
+// this module. A component imports `@/lib/timeline-keys`; the server imports
+// either.
+export {
+  TIMELINE_KEY_FOR,
+  TIMELINE_NEUTRAL_KEY,
+  TIMELINE_OVERRIDE_KEYS,
+  TIMELINE_PERIOD_END_KEY,
+  TIMELINE_SET_WON_KEY,
+} from "@/lib/timeline-keys";
 
 // --------------------------------------------------------------- primitives
 
@@ -328,6 +241,9 @@ function personListOf(ctx: ParamCtx, field: string): string {
   return names.length === 0 ? "" : `(${names.join(", ")})`;
 }
 
+const lineupParams = (c: ParamCtx): Params =>
+  c.sideIndex === null ? {} : { side: sideNameOf(c) };
+
 /** Per-type params. Keyed by RECORDED TYPE (not by dictionary key) so two
  *  sports sharing one template can still read their own payload field names. */
 const PARAMS_FOR: Record<string, (ctx: ParamCtx) => Params> = {
@@ -341,7 +257,7 @@ const PARAMS_FOR: Record<string, (ctx: ParamCtx) => Params> = {
   // `CoreAward` is `{ person, key }` — a PERSON and an award key, with no
   // entrant on it at all (`core/events.ts`). The review brief said `{side}`;
   // the schema says otherwise, so the line names the person.
-  "core.award": (c) => ({ person: nameOf(c, "person") }),
+  "core.award": (c) => ({ person: nameOf(c, "person"), key: S(c.payload.key) }),
   "core.suspend": () => ({}),
   "core.resume": () => ({}),
 
@@ -421,11 +337,15 @@ const PARAMS_FOR: Record<string, (ctx: ParamCtx) => Params> = {
     const method = S(c.payload.method);
     return c.sideIndex === null ? { method } : { side: sideNameOf(c), method };
   },
-  "core.lineup.substitution": (c) => ({ side: sideNameOf(c) }),
-  "core.lineup.replacement": (c) => ({ side: sideNameOf(c) }),
-  "core.lineup.position": (c) => ({ side: sideNameOf(c) }),
-  "core.lineup.retirement": (c) => ({ side: sideNameOf(c) }),
-  "core.lineup.entry": (c) => ({ side: sideNameOf(c) }),
+  // `side` only when it RESOLVED. An unrecognised entrant id would otherwise
+  // supply the empty string and render "Line-up change — " with a dangling
+  // dash; omitted, the renderer at least shows the unfilled placeholder, which
+  // is a visible defect rather than a plausible-looking wrong line.
+  "core.lineup.substitution": lineupParams,
+  "core.lineup.replacement": lineupParams,
+  "core.lineup.position": lineupParams,
+  "core.lineup.retirement": lineupParams,
+  "core.lineup.entry": lineupParams,
 
   "generic.score": (c) => ({
     side: sideNameOf(c),
@@ -510,11 +430,17 @@ for (const sport of ["hockey", "icehockey"] as const) {
  * decisive template printed "Result (agreement) — " with an empty side, which
  * is worse than saying nothing.
  */
-const KEY_OVERRIDE: Readonly<Record<string, (payload: Payload) => string | null>> = {
-  "boardgame.result": (payload) =>
-    typeof payload.winner === "string" && payload.winner !== ""
-      ? null
-      : "timeline.boardgame.draw",
+const KEY_OVERRIDE: Readonly<
+  Record<string, (payload: Payload, sideIndex: 0 | 1 | null) => string | null>
+> = {
+  // Keyed on the RESOLVED side, not on `payload.winner` being a non-empty
+  // string. A winner id that matches NEITHER entrant — a stale fixture, an
+  // entrant deleted after scoring — resolved to `sideIndex: null` and then took
+  // the decisive template anyway, printing "Result (resign) — " with nothing
+  // where the winner should be. Reading the resolved index means "we could not
+  // name a winner" and "there is no winner" take the same, safe branch.
+  "boardgame.result": (_payload, sideIndex) =>
+    sideIndex === null ? "timeline.boardgame.draw" : null,
 };
 
 /** Internal only: the ledger order a line was produced in. Two lines can share
@@ -533,7 +459,9 @@ function recordedLine(
   const payload = asPayload(event.payload);
   const sideIndex = sideIndexOf(payload, sides);
   const key =
-    KEY_OVERRIDE[event.type]?.(payload) ?? TIMELINE_KEY_FOR[event.type] ?? TIMELINE_NEUTRAL_KEY;
+    KEY_OVERRIDE[event.type]?.(payload, sideIndex) ??
+    TIMELINE_KEY_FOR[event.type] ??
+    TIMELINE_NEUTRAL_KEY;
   const build = PARAMS_FOR[event.type];
   const params = build ? build({ payload, sides, sideIndex, personOf }) : {};
   const text: MsgT = Object.keys(params).length === 0 ? { key } : { key, params };
@@ -750,12 +678,15 @@ export function buildSets(args: SetsArgs): SetsViewT | null {
     return {
       kind: "periods",
       unit: "period",
-      // Plain ordinals; the renderer labels them "Period {n}" in the viewer's
-      // own locale (controller ruling). NOTE, and it is a real loss worth
-      // saying out loud: the engine's own phase labels — "H1", "ET_H2", "OT",
-      // "P3" — no longer reach the column head, so extra time and overtime now
-      // read as "Period 3" / "Period 4". See the report.
+      // Ordinals for the fallback label ("Period 3"), and the ENGINE'S OWN
+      // phase token beside each one so the renderer can say "ET 2nd half"
+      // instead. Product ruling, and it is the right one: "Period 4" is not
+      // what extra time is called, and the distinction between regulation,
+      // extra time and overtime is exactly what a spectator opening this tab
+      // is looking for. Set-based sports leave `columnLabels` undefined —
+      // a set has no name beyond its number.
       columns: periods.map((_, i) => String(i + 1)),
+      columnLabels: periods.map((p) => p.phase),
       rows: [periods.map((p) => String(p.home)), periods.map((p) => String(p.away))],
       // `detail.periods` carries no `closed` flag: a period is closed once a
       // later one exists, and the last one is closed too when the kernel says
