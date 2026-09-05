@@ -129,6 +129,69 @@ async function goTab(page: Page, path: string, tab: string): Promise<void> {
   await expect(page.getByRole("main")).toBeVisible();
 }
 
+/**
+ * Point a CLEANUP hook's cookie jar at the org this spec created, before it
+ * reads or writes anything.
+ *
+ * Every hook gets its OWN `request` context, built from the config's on-disk
+ * `storageState` (Playwright 1.61, `index.js:176`) — so an `afterAll`'s jar
+ * has never seen the org `beforeAll` created. Its `seazn_org` cookie is
+ * whatever the shared auth-setup account was left holding, and `requireAuth`
+ * resolves `auth.orgId` from that cookie alone (`resolveActiveOrg`,
+ * lib/auth.ts:183-193).
+ *
+ * MEASURED against this build rather than reasoned, because the two officials
+ * routes do NOT agree and the difference decides what is broken:
+ *
+ *  - `GET /api/v1/officials` is `requireAuth` (officials/route.ts:7) — the
+ *    ACTIVE-ORG COOKIE. Replayed with the stored jar against a foreign org's
+ *    official, it returns `[]`. So `resolveOfficialIdByName`, which is built
+ *    on that list, could never resolve an id, and every `stillThere` check
+ *    built on it was vacuous — "not in the list" for the wrong reason, read
+ *    back as proof a delete had taken.
+ *  - `DELETE /api/v1/officials/{id}` is `requireResourceAuth`
+ *    (officials/[id]/route.ts:35 → `resourceOrg`), which re-pins auth to the
+ *    RESOURCE's own org. Replayed the same way it returned `HTTP 200
+ *    {"deleted": true}` and the row really went. That is why nothing has been
+ *    observed leaking: the delete never needed the cookie. The leak is real
+ *    only on the path the fallback exists for — the closure's `officialId`
+ *    still empty because the test died between the write and the response —
+ *    and on that path the fallback was dead code.
+ *
+ * Logged, never thrown: an `afterAll` that throws masks the test's own
+ * failure, which is what the next person actually needs to read. But never
+ * silent either — a cleanup that cannot activate cannot verify itself, and
+ * that is precisely the "silently no-ops" shape this fixes.
+ */
+async function activateOrgForCleanup(
+  request: APIRequestContext,
+  orgId: string,
+  label: string,
+): Promise<boolean> {
+  const prefix = `[scheduling-officials-handoff] ${label} cleanup`;
+  const consequence =
+    "every read below is against the WRONG TENANT: name resolution cannot resolve and the " +
+    "read-back verifications are vacuous.";
+  if (!orgId) {
+    console.error(`${prefix} could not activate an org — orgId was never resolved; ${consequence}`);
+    return false;
+  }
+  try {
+    const activated = await apiJson(request, "/api/orgs/active", "POST", { org_id: orgId });
+    if (activated.status >= 300) {
+      console.error(
+        `${prefix} could not activate org ${orgId} — POST /api/orgs/active → ${activated.status} ` +
+          `${JSON.stringify(activated.error ?? {})}; ${consequence}`,
+      );
+      return false;
+    }
+    return true;
+  } catch (err) {
+    console.error(`${prefix} org activation THREW: ${String(err)}; ${consequence}`);
+    return false;
+  }
+}
+
 /** Resolve an official's id by its (unique, TAG-suffixed) display name —
  *  the afterAll fallback for AMENDMENT B's refinement below: cleanup must be
  *  ARMED BEFORE the write, not after, because a crash between "the write
@@ -137,7 +200,14 @@ async function goTab(page: Page, path: string, tab: string): Promise<void> {
  *  itself is known (the id only exists once the create round-trip returns),
  *  so afterAll re-resolves it by name instead of trusting a possibly-still-
  *  empty closure variable. Swallows its own errors — this is cleanup, not a
- *  fact the caller should throw on. */
+ *  fact the caller should throw on.
+ *
+ *  ONLY MEANINGFUL AFTER `activateOrgForCleanup`: `GET /api/v1/officials` is
+ *  `requireAuth`, so it answers from the ACTIVE-ORG COOKIE. Called from an
+ *  un-activated hook it reads `[]` and this returns `null` every time — the
+ *  fallback was dead code until the activation above it landed, proven by
+ *  forcing this path with the activation removed (both officials leaked, and
+ *  the run still reported 4 passed) and then restored (both deleted). */
 async function resolveOfficialIdByName(request: APIRequestContext, name: string): Promise<string | null> {
   try {
     const { data } = await apiJson<{ id: string; display_name: string }[]>(request, "/api/v1/officials");
@@ -323,6 +393,13 @@ test.describe("the officials handoff, both people driven", () => {
     // itself may still be empty here (it is only known once the create
     // round-trip returns), so it is re-resolved by its known, unique,
     // TAG-suffixed name rather than trusted from the closure.
+    //
+    // ACTIVATE FIRST. This hook's jar has never seen the org `beforeAll`
+    // created, and the name resolution below reads a route that answers from
+    // the ACTIVE-ORG COOKIE — so without this it reads an empty list, can
+    // never resolve, and both read-back verifications below are vacuous.
+    // Full, measured mechanism in `activateOrgForCleanup`.
+    await activateOrgForCleanup(request, orgId, "main");
     const resolvedOfficialId = officialId || (officialWritten ? await resolveOfficialIdByName(request, officialName) : null);
     if (blackoutWritten && resolvedOfficialId) {
       // ROUTE FIX: the DELETE handler reads the date from a QUERY PARAM
@@ -666,9 +743,11 @@ test.describe("S4: an applied draft should seat the proposed officials", () => {
 
   test.afterAll(async ({ request }) => {
     // Same idempotent-and-verifying convention as the main describe's
-    // afterAll above; see its comments for why (AMENDMENT B) and for the
+    // afterAll above; see its comments for why (AMENDMENT B), for the
     // controller refinement (armed before the write, resolved by name if
-    // the closure's own `officialId` is still empty).
+    // the closure's own `officialId` is still empty), and for why this hook
+    // must activate the org before it reads anything.
+    await activateOrgForCleanup(request, orgId, "S4-pin");
     const resolvedOfficialId = officialId || (officialWritten ? await resolveOfficialIdByName(request, s4OfficialName) : null);
     if (officialWritten && resolvedOfficialId) {
       try {
@@ -698,20 +777,44 @@ test.describe("S4: an applied draft should seat the proposed officials", () => {
     // forever; this reds as "passed unexpectedly" the moment S4 is fixed,
     // which forces someone to come back and delete this line. Do not weaken
     // the assertions below to make it "pass" — it is supposed to fail now.
+    //
+    // THE SETUP RUNS ABOVE THE MODIFIER, DELIBERATELY. `test.fail()` flips
+    // this test's expected status at the moment it EXECUTES (Playwright
+    // 1.61's `TestInfo._modifier`: `type === "fail"` assigns
+    // `expectedStatus = "failed"` there and then), so everything before it is
+    // still held to a normal pass and everything after it is expected to
+    // fail. Written the other way — the modifier as the body's first
+    // statement, which is how this started — the two `/api/orgs/active` round
+    // trips, the navigation, the propose click and the 20s wait were ALL
+    // expected-to-fail as well: six distinct setup failures would have
+    // reported GREEN, and the pin could not tell "S4 is still broken" from
+    // "the test never got as far as S4". Nothing below the modifier may move
+    // above it, and nothing above it may move below.
+    const apply = page.getByTestId("officials-apply");
+
+    await test.step("setup: propose a draft and reach the Apply control", async () => {
+      // See the main describe's test body for why BOTH jars need this: a
+      // hook-scoped `beforeAll` `request` never reaches the test body at all,
+      // and even here `request` and `page.context()` are separate cookie jars.
+      const reactivated = await apiJson(request, "/api/orgs/active", "POST", { org_id: orgId });
+      expect(reactivated.status, `org re-activate (request) → ${reactivated.status}`).toBeLessThan(300);
+      const reactivatedPage = await apiJson(page.request, "/api/orgs/active", "POST", { org_id: orgId });
+      expect(reactivatedPage.status, `org re-activate (page) → ${reactivatedPage.status}`).toBeLessThan(300);
+
+      await goTab(page, base, "officials");
+      await page.getByTestId("officials-propose").click();
+      // VISIBLE only. That a draft came back and rendered a control is setup;
+      // whether that control can be PRESSED is the whole of finding S4, and
+      // it is asserted below the modifier where a failure is expected.
+      await expect(apply).toBeVisible({ timeout: 20_000 });
+    });
+
     test.fail();
 
-    // See the main describe's test body for why BOTH jars need this: a
-    // hook-scoped `beforeAll` `request` never reaches the test body at all,
-    // and even here `request` and `page.context()` are separate cookie jars.
-    const reactivated = await apiJson(request, "/api/orgs/active", "POST", { org_id: orgId });
-    expect(reactivated.status, `org re-activate (request) → ${reactivated.status}`).toBeLessThan(300);
-    const reactivatedPage = await apiJson(page.request, "/api/orgs/active", "POST", { org_id: orgId });
-    expect(reactivatedPage.status, `org re-activate (page) → ${reactivatedPage.status}`).toBeLessThan(300);
-
-    await goTab(page, base, "officials");
-    await page.getByTestId("officials-propose").click();
-    const apply = page.getByTestId("officials-apply");
-    await expect(apply).toBeVisible({ timeout: 20_000 });
+    // THE PIN, and nothing else. Finding S4: "Apply 6 assignments" renders
+    // with the DOM property `disabled === true`, carrying no title, no
+    // `aria-disabled` and no explanation anywhere on the page — so this is
+    // the assertion that fails today, and the one a fix makes green.
     await expect(apply).toBeEnabled();
     await apply.click();
 
