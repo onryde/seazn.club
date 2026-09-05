@@ -61,3 +61,70 @@ organiser console; entitlement matrix/copy; the engine.
 ## Gates
 
 As W1.
+
+## Plan (DRAFT, 2026-09-05)
+
+**Plan:** `docs/superpowers/plans/2026-09-05-spectator-w3-poster.md` (DRAFT — the
+path the header of this prompt names, `2026-09-04-spectator-w3.md`, is superseded
+by this one; not yet approved for execution). Drafted by a Fable agent under
+owner ruling 14 (corrected): planning only, docs only.
+
+**Tasks and order:** 10 tasks, TDD, all four test types — 1 fonts + renderer
+spike → 2 image fetcher → 3 `describeFormat` (consume W2's or own it) → 4 pure
+model → 5 satori card → 6 route → 7 dictionaries → 8 download control + page →
+9 walkthrough v3 + smoke + OG regression → 10 gates, review, R11 sign-off.
+Lanes: 2 beside 1; 7 beside 5–6. Hard dependencies: W1 Task 9 (`matchCentre` on
+`getPublicFixture`) before 6; W1 Tasks 14–15 (page, walkthrough file) before 8–9;
+W2 Task 4 (`describeFormat`, `PublicDivision.config`) before 3, else W3 owns them.
+
+**Open owner questions (recommendation each):**
+- Q1 Fonts — which OFL pair and where. Recommend Barlow Condensed 700/600 +
+  Geist 400/700 STATIC TTFs (the app's own faces; satori takes no woff2 and no
+  variable fonts) under `apps/web/public/fonts` per the spec; Inter statics as
+  the recorded substitute if Geist ships no static TTF.
+- Q2 Title sponsor on posters of orgs without `sponsors.tiers` — the spec's
+  rule means a free org's sponsor never reaches the poster. Recommend keeping
+  the spec this wave (R6: no new or looser gate); revisit in entitlements v18.
+- Q3 Ownership of `describeFormat` + `PublicDivision.config` if W2 has not
+  merged when W3 starts. Recommend W3 builds both with W2's exact contract and
+  W2 drops its copy — one owner for the shared literal.
+- Q4 (minor) Testid prefix: the spec and this prompt say `poster-*`; the
+  dispatch brief said `mc-poster-*`. The plan follows the spec.
+- Q5 (minor) Poster locale: the org's `default_locale` (as `poster.pdf`), not
+  the downloader's.
+
+**False premises found while reading the tree:**
+- The spec's watch-list item "`entrants.badge_url` may be written nowhere" is
+  FALSE: it is written on create (`usecases/entrants.ts:381`), cleared (`:545`)
+  and set by the upload route (`:562`, `api/v1/entrants/[id]/badge/route.ts`),
+  and edited from `components/v2/entrants-panel.tsx`. Both crest sources are
+  live and `resolveEntrantBadge` (`lib/entrant-badge.ts:8-16`) already merges
+  them. The upload accepts webp and svg — satori/resvg decode neither webp nor
+  arbitrary sizes well, so every badge is normalised through `sharp` (already a
+  dependency) before it reaches the card.
+- "Rendered exactly as `story.png` is" hides two differences: every existing
+  `ImageResponse` call site passes NO `fonts:` option and uses
+  `fontFamily: "sans-serif"` (so today's OG "bold" is satori's single default
+  face, not a bold), and `story.png` is statically cacheable (`revalidate`)
+  because it never reads the request — the poster reads `?format`, is therefore
+  dynamic, and must set `Cache-Control` per variant itself.
+- No image taller than 1350 px has ever been rendered here, and no unit test
+  decodes an `ImageResponse` PNG — the plan's Task 1 is the spike that proves
+  1080×1920 with custom fonts, both under vitest and on the `spx` prod build
+  (standalone `public/` layout, `Dockerfile:81-88`).
+- `describeFormat` exists nowhere on the branch; the W2 DRAFT owns it. This
+  prompt's "`describeFormat` per sport module" is a dependency, not a reuse.
+- Existing `poster.*` keys are in the `ui` namespace (`en/ui.json:4663-4665`,
+  read by `poster.pdf` through `msgFor`); this wave's keys go into
+  `public.json` — no collision, but grep both before adding.
+- Team colours: `team_display_v.colors` is jsonb typed `unknown` everywhere;
+  the spec's `colors.primary` key is unverified — the model reads `primary`
+  defensively and falls back to the palette; pin the real shape in Task 4.
+- The `walkthrough` Playwright project is SIGNED IN (`storageState: AUTH_STATE`);
+  "anonymous" needs an explicit empty-state context.
+
+**Re-pin after W1/W2 merge:** every `file:line` in the plan's premises table
+(P1–P20) was opened on 2026-09-05 on `feat/spectator-surface`; W1 Tasks 6, 8, 9,
+14–18 are on lane branches and W2 is an unreviewed draft, so P1–P5, P17–P18
+move on merge. Re-pin before dispatching Task 3 or later; a false premise is a
+finding for `_INDEX.md`, not a blocker.

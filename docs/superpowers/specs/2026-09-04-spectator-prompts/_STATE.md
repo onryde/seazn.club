@@ -33,7 +33,7 @@
 | 7 timeline/sets builders | complete, reviewed | branch (lane C picks) |
 | 10, 11 shell + summary tab + live-score localisation | complete, reviewed | branch (lane B picks) |
 | 12, 13 scorecard / commentary / timeline / sets / info tabs | complete, reviewed | branch (lane C picks) |
-| 17 engine enriched band-2 lines | merged 514bd2176; fix round 1 = 1a1849454 (snapshot + golden corpus); scoped re-review IN FLIGHT | branch |
+| 17 engine enriched band-2 lines | complete, reviewed (514bd2176 + fix 1a1849454: snapshot regenerated, golden corpus 28→30 streams) | branch |
 | 6 `buildMatchCentre` | IN FLIGHT, isolated worktree `agent-af7842db778895abe` (reset to b8ed8fa31) | not on branch |
 | 8 dictionaries + coverage test | IN FLIGHT, isolated worktree `agent-a733c4deec73194d4` (reset to b8ed8fa31) | not on branch |
 | 18 pad More sheet + first line e2e | IN FLIGHT, isolated worktree `agent-a749a9f65817abaa0` (reset to 514bd2176); env label `t18` (down it if `seazn-env status` lists it) | not on branch |
@@ -74,7 +74,8 @@ Verification on b8ed8fa31: public-site suites 537/0 (26 pending = DB suites on e
 - W2: DRAFT plan committed (f0d06b1f1); prompt `W2-landing.md` carries the plan section and
   three owner questions with recommendations (`mh-*` testids; count leaders now + one
   additive engine `leaderboards` declaration for ratio leaders; org-home poll-only).
-- W3, W4: plans + prompt sections being written (agents in flight at 18:35).
+- W3: DRAFT plan written (`…-w3-poster.md`, 10 tasks) + prompt section; owner questions Q1 fonts (static TTFs), Q2 title sponsor on free orgs (keep rule), Q3 `describeFormat`/`division.config` ownership vs W2 (W3 builds to W2's contract if W2 unmerged).
+- W4: plan + prompt section being written (agent in flight at 18:50).
 - W5: CANDIDATE DRAFT plan with a design section + new prompt `W5-team-page.md` being
   written (agent in flight). W5 is NOT ruled in scope.
 - `_DESIGN.md` + theme sheet being written by the design agent; phase 2 (per-wave "Design
