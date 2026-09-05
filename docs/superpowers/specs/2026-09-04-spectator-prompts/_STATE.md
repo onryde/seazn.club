@@ -7,7 +7,7 @@
 > spectator worktree; its "RESUME HERE" block carries per-task detail). Update this file at
 > every handoff; it is committed, the ledger is not.
 
-**Last updated:** 2026-09-06 00:0x London.
+**Last updated:** 2026-09-06 00:5x London.
 
 ## Where things live
 
@@ -34,13 +34,14 @@
 | 10, 11 shell + summary tab + live-score localisation | complete, reviewed | branch (lane B picks) |
 | 12, 13 scorecard / commentary / timeline / sets / info tabs | complete, reviewed | branch (lane C picks) |
 | 17 engine enriched band-2 lines | complete, reviewed (514bd2176 + fix 1a1849454: snapshot regenerated, golden corpus 28→30 streams) | branch |
-| 6 `buildMatchCentre` | implementer DONE (lane commit 1a88e8bc6 in `agent-af7842db778895abe`); review = Needs fixes → fix round 1 IN FLIGHT (result keys by engine method + `{margin}` verbatim; `resolveModule(sportKey, moduleVersion)` with `moduleVersion` on the input; six Info rows incl. the band line); NOT yet cherry-picked | lane |
+| 6 `buildMatchCentre` | complete, reviewed (3 fix rounds); cherry-picked as 1dced1192 557e967d0 d70675739 85297f5e0. Follow-up 8b IN FLIGHT: 14 builder keys missing from the dictionaries (coverage test red on the branch until it lands) | branch |
 | 8 dictionaries + coverage test | complete, reviewed; cherry-picked onto the branch as 45ed8c2e9 edd8de9d0 d1c333e5f (result keys by engine METHOD + tie/no_result/draw with `{winner}` `{margin}`; `GLYPH_CLASSES` single source; parity both ways). Branch verified: public-site 545/0, tsc 0, i18n parity OK | branch |
 | 18 pad More sheet + first line e2e | complete, reviewed; cherry-picked as 57793bf53 cab4536d3 c14c76e50 (eight labels ×4 locales; line-entry e2e `test.fixme` until the console mount fix — OWNER DECISION 1 open; public-page assertion owed to Task 15). Branch verified: scorepad 2556/0, engine 400/400, tsc 0 | branch |
-| 9 API + realtime | not started (after 6; adds the Task-6-exports ⊆ dictionary-keys parity test) | — |
+| 9 API + realtime | IN FLIGHT in an isolated lane (reset c14c76e50 + Task 6's lane commits); env t9; notes `task-9-contract-notes.md`; adds the parity test and retires `BUILDER_ONLY_KEYS` | lane |
 | 14 page wiring | not started (after 6, 8, 9; retires `BUILDER_ONLY_KEYS`) | — |
 | 15 walkthrough e2e | not started (owes the public-page assertion of Task 18's enriched line; testids `mc-over-<innings>.<over>`, `mc-ball-<innings>.<over>.<ball>`) | — |
 | 16 gates + R11 visual sign-off + final review + `_INDEX.md` | not started | — |
+| 19 console mount fix (owner ruling 17) | IN FLIGHT in an isolated lane (reset 912e4cd26); env t19 (server); un-fixmes the Task 18 e2e; screens owed by Task 18 | lane |
 
 Integration already done on the branch: lane B (7 commits) and lane C (14 commits) were
 CHERRY-PICKED (never merged — lane branches carry copies of each other's commits), the four
