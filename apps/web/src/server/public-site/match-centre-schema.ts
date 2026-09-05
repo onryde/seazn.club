@@ -42,7 +42,12 @@ export const CricketView = z.object({
   topPerformers: z.array(z.object({ role: z.enum(["batter", "bowler"]), person: Person, side: Side, line: z.string(), detail: z.string().nullable() })),
 });
 export const TimelineLine = z.object({ seq: z.number(), at: z.string().nullable(), marker: z.string().nullable(), sideIndex: z.union([z.literal(0), z.literal(1)]).nullable(), text: Msg, emphasis: z.enum(["normal", "score", "strong"]) });
-export const SetsView = z.object({ kind: z.enum(["sets", "periods"]), columns: z.array(z.string()), rows: z.tuple([z.array(z.string().nullable()), z.array(z.string().nullable())]), closedMask: z.array(z.boolean()) });
+// `unit` (controller ruling, Task 7 review): what ONE column is called in the
+// sport's own vocabulary — badminton and table tennis score GAMES, tennis and
+// volleyball score SETS, and the period sports score PERIODS. It is optional
+// so a document built before this field existed still parses; the renderer
+// falls back to the raw `columns` string when it is absent.
+export const SetsView = z.object({ kind: z.enum(["sets", "periods"]), unit: z.enum(["set", "game", "period"]).optional(), columns: z.array(z.string()), rows: z.tuple([z.array(z.string().nullable()), z.array(z.string().nullable())]), closedMask: z.array(z.boolean()) });
 export const InfoView = z.object({ rows: z.array(z.object({ label: Msg, value: Msg })), calendarHref: z.string().nullable(), divisionHref: z.string(), competitionHref: z.string() });
 
 export const MatchCentreDoc = z.object({

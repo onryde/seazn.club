@@ -1,0 +1,214 @@
+// Spectator surface W1, Task 13 — TimelineTab static-markup tests plus the
+// `localiseParams` unit tests. `environment: "node"`, real React SSR.
+//
+// ---------------------------------------------------------------------------
+// Mutants killed (Task 13) — Timeline
+// ---------------------------------------------------------------------------
+//  (n) DROP THE TERM LOOKUP — `localiseParams` returns its `params` argument
+//      unchanged, so an engine token reaches the reader untranslated.
+//      → RED: "localiseParams maps a known token through term.*".
+//
+//  (o) BADGE ALWAYS — the `sideIndex !== null` guard on the side badge removed
+//      (rendering `sides[0]` for a null index).
+//      → RED: "the side badge appears ONLY when sideIndex is non-null".
+//
+// Both compile and collect (`numTotalTests` unchanged), so neither is the
+// collection-break shape that reads as a survivor.
+import { beforeAll, describe, expect, it } from "vitest";
+import { renderToStaticMarkup } from "react-dom/server";
+import en from "@/dictionaries/en/public.json";
+import es from "@/dictionaries/es/public.json";
+import fr from "@/dictionaries/fr/public.json";
+import nl from "@/dictionaries/nl/public.json";
+import type { Dict } from "@/lib/i18n-constants";
+import { MatchCentreDoc, type MatchCentreDocT } from "@/server/public-site/match-centre-schema";
+import type { LiveFixtureData } from "../../live-score-data";
+import { TimelineTab, localiseParams } from "../timeline-tab";
+import { AWAY, HOME, line, makeDoc } from "./fixtures";
+
+const dict = en as Dict;
+const data = {} as LiveFixtureData;
+const LOCALES: Record<string, Dict> = { en: en as Dict, es: es as Dict, fr: fr as Dict, nl: nl as Dict };
+
+// Delivered newest first by `buildTimeline`; the panel must NOT re-sort.
+const LINES = [
+  line(9, "timeline.football.card", {
+    marker: "31'",
+    sideIndex: 1,
+    emphasis: "strong",
+    text: {
+      key: "timeline.football.card",
+      params: { side: "Rajasthan Rajvansh", colour: "yellow", detail: "S. Samson" },
+    },
+  }),
+  line(5, "timeline.set.won", {
+    sideIndex: 0,
+    emphasis: "strong",
+    text: {
+      key: "timeline.set.won",
+      params: { set: 1, home: 6, away: 4, winner: "Mumbai Kings" },
+    },
+  }),
+  line(2, "timeline.football.goal", {
+    marker: "23'",
+    sideIndex: 0,
+    emphasis: "score",
+    text: { key: "timeline.football.goal", params: { side: "Mumbai Kings", detail: "R. Sharma" } },
+  }),
+  line(1, "timeline.core.start", { emphasis: "strong" }),
+];
+
+const FULL = makeDoc({ timeline: LINES });
+const EMPTY_LIST = makeDoc({ timeline: [] });
+const NULL_LIST = makeDoc({ timeline: null });
+
+const render = (d: MatchCentreDocT): string =>
+  renderToStaticMarkup(<TimelineTab doc={d} dict={dict} data={data} />);
+
+/** Raw SSR markup with the entities React escapes decoded back — for
+ *  assertions about the COPY a reader sees, not about the serialisation. */
+const text = (html: string): string =>
+  html
+    .replace(/&#x27;/g, "'")
+    .replace(/&quot;/g, '"')
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&amp;/g, "&");
+
+beforeAll(() => {
+  for (const d of [FULL, EMPTY_LIST, NULL_LIST]) {
+    expect(MatchCentreDoc.safeParse(d).success).toBe(true);
+  }
+});
+
+describe("localiseParams", () => {
+  it("maps a known token through term.*", () => {
+    // The BRANCH THAT TRANSLATES. `yellow` is an engine enum member that Task 7
+    // puts in a param verbatim; without this it reaches a Dutch reader as
+    // "yellow kaart".
+    expect(localiseParams(dict, { colour: "yellow" })).toEqual({ colour: en["term.yellow"] });
+    expect(localiseParams(dict, { kind: "double_fault" })).toEqual({
+      kind: en["term.double_fault"],
+    });
+    // …in every locale, not only English.
+    expect(localiseParams(LOCALES.fr, { colour: "yellow" })).toEqual({ colour: fr["term.yellow"] });
+    expect(localiseParams(LOCALES.nl, { colour: "red" })).toEqual({ colour: nl["term.red"] });
+    expect(localiseParams(LOCALES.es, { kind: "ue" })).toEqual({ kind: es["term.ue"] });
+  });
+
+  it("passes an unknown token through UNCHANGED", () => {
+    // The OTHER branch, and the one that matters most: side names, person
+    // names and free text must never be mangled by a term lookup.
+    expect(localiseParams(dict, { side: "Mumbai Kings" })).toEqual({ side: "Mumbai Kings" });
+    expect(localiseParams(dict, { detail: "R. Sharma" })).toEqual({ detail: "R. Sharma" });
+    expect(localiseParams(dict, { outcome: "some_future_token" })).toEqual({
+      outcome: "some_future_token",
+    });
+    // Numbers are left alone (a `term.1` lookup would be nonsense).
+    expect(localiseParams(dict, { set: 1, home: 6 })).toEqual({ set: 1, home: 6 });
+    // Absent params stay absent rather than becoming `{}`.
+    expect(localiseParams(dict, undefined)).toBeUndefined();
+  });
+
+  it("does not mangle a side name that merely LOOKS like a token", () => {
+    // `term.red` exists; a club called "Red" must still print as "Red". The
+    // lookup is case-sensitive and the dictionary tokens are lower case, which
+    // is what keeps these apart — asserted so a future "normalise the case"
+    // tidy-up cannot land silently.
+    expect(localiseParams(dict, { side: "Red" })).toEqual({ side: "Red" });
+  });
+});
+
+describe("TimelineTab", () => {
+  it("EMPTY: a null or empty timeline renders the panel container and no rows", () => {
+    for (const d of [EMPTY_LIST, NULL_LIST]) {
+      const html = render(d);
+      expect(html).toContain('data-testid="mc-tab-panel-timeline"');
+      expect(html).not.toContain('data-testid="mc-timeline-line-');
+    }
+    expect(render(FULL)).toContain('data-testid="mc-timeline-line-'); // positive pair
+  });
+
+  it("the root IS the tab panel — role, id and the label the rail points at", () => {
+    const html = render(FULL);
+    expect(html).toContain('role="tabpanel"');
+    expect(html).toContain('id="mc-tab-panel-timeline"');
+    expect(html).toContain('aria-labelledby="mc-tab-timeline"');
+  });
+
+  it("renders one row per line, in the DELIVERED order — never re-sorted", () => {
+    const html = render(FULL);
+    const at = (seq: number) => html.indexOf(`data-testid="mc-timeline-line-${seq}"`);
+    for (const seq of [9, 5, 2, 1]) expect(at(seq), `seq ${seq}`).toBeGreaterThanOrEqual(0);
+    expect(at(9)).toBeLessThan(at(5));
+    expect(at(5)).toBeLessThan(at(2));
+    expect(at(2)).toBeLessThan(at(1));
+  });
+
+  it("resolves the text, localises token params and leaves names alone", () => {
+    const html = render(FULL);
+    expect(html).toContain("Rajasthan Rajvansh");
+    expect(html).toContain("S. Samson");
+    // The derived set line's numbers and side name survive untouched.
+    expect(html).toContain("Set 1 to Mumbai Kings");
+    expect(html).not.toContain("{side}");
+    expect(html).not.toContain("{colour}");
+  });
+
+  it("a token param is localised IN THE RENDERED LINE, witnessed where the term differs from the token", () => {
+    // Asserted in FRENCH deliberately. `term.yellow` is the string "yellow" in
+    // English, so an English assertion is satisfied by the UNLOCALISED token
+    // too and cannot witness a dropped lookup — the mutation sweep found
+    // exactly that. In French the right answer ("jaune") and the wrong one
+    // ("yellow") are different strings.
+    const html = renderToStaticMarkup(
+      <TimelineTab doc={FULL} dict={LOCALES.fr} data={data} />,
+    );
+    expect(fr["term.yellow"]).not.toBe("yellow"); // the differential holds
+    expect(html).toContain(fr["term.yellow"]);
+    expect(html).not.toContain("yellow");
+    // …and a real name in the same params is still untouched.
+    expect(html).toContain("Rajasthan Rajvansh");
+    expect(html).toContain("S. Samson");
+  });
+
+  it("the marker column carries the sport notation as given", () => {
+    const html = render(FULL);
+    expect(html).toContain('data-testid="mc-marker-9"');
+    // React SSR escapes the apostrophe in "31'" to `&#x27;`, so the raw markup
+    // is decoded before asserting on the notation a reader actually sees —
+    // asserting the entity instead would pin React's escaping, not the copy.
+    expect(text(html)).toContain("31'");
+    expect(text(html)).toContain("23'");
+    // A line with no marker renders no marker cell content to mistake for one.
+    expect(html).not.toContain('data-testid="mc-marker-1"');
+  });
+
+  it("the side badge appears ONLY when sideIndex is non-null", () => {
+    const html = render(FULL);
+    // seq 9 is the away side, seq 2 the home side…
+    expect(html).toContain('data-testid="mc-side-badge-9"');
+    expect(html).toContain('data-testid="mc-side-badge-2"');
+    expect(html).toContain(AWAY.short);
+    expect(html).toContain(HOME.short);
+    // …and seq 1 (core.start) belongs to neither. This is the negative half.
+    expect(html).not.toContain('data-testid="mc-side-badge-1"');
+  });
+
+  it("emphasis reaches the markup, and the three values are distinguishable", () => {
+    const html = render(FULL);
+    expect(html).toContain('data-emphasis="score"');
+    expect(html).toContain('data-emphasis="strong"');
+    const normalOnly = render(makeDoc({ timeline: [line(1, "timeline.core.start")] }));
+    expect(normalOnly).toContain('data-emphasis="normal"');
+  });
+
+  it("no dictionary key leaks into the markup unresolved", () => {
+    for (const d of [FULL, EMPTY_LIST, NULL_LIST]) {
+      const html = render(d);
+      expect(html).not.toContain("timeline.");
+      expect(html).not.toContain("matchCentre.");
+      expect(html).not.toContain("term.");
+    }
+  });
+});
