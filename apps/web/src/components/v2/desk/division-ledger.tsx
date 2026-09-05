@@ -148,7 +148,7 @@ export function DivisionLedger({
           the "+ Add division" control) already owns this section — a second
           "DIVISIONS · N" heading here duplicated it. The page passes the
           count into its own heading now. */}
-      <div className="card divide-y divide-purple-50">
+      <div className="card flex flex-col gap-[3px] overflow-hidden bg-purple-50">
         {rows.map((r, i) => {
           const d = r.desk;
           const pct = d && d.total > 0 ? Math.round((d.played / d.total) * 100) : 0;
@@ -173,7 +173,7 @@ export function DivisionLedger({
             </span>
           );
           return (
-            <div key={r.id} data-testid="desk-ledger-row" data-phase={d ? d.phase : "unknown"}>
+            <div key={r.id} className="bg-white" data-testid="desk-ledger-row" data-phase={d ? d.phase : "unknown"}>
               {/* Mobile card (review round 1, owner ruling supersedes the
                   earlier V2/V3 patch): below `md` this is NOT the desktop
                   grid reflowed — it is its own composition. The whole card
