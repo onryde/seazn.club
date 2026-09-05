@@ -1,7 +1,23 @@
 // Spectator match centre — cricket scorecard fold (Task 1: totals, extras by
-// kind, fidelity band). Every expectation is derived from the reducer's own
-// state (`cricket.summary`) or the script that built the ledger — never a
-// hand-typed constant standing in for one.
+// kind, fidelity band; Task 2: batting/bowling lines, did-not-bat). Every
+// expectation is derived from the reducer's own state (`cricket.summary`,
+// `FineInnings`) or the script that built the ledger — never a hand-typed
+// constant standing in for one.
+//
+// Mutants killed (Task 2)
+// -----------------------
+// (a) Deleted the `extras.kind === "wide"` branch that credits
+//     `widesByIndex[bowler]` in `InningsAccumulator.onBall` (scorecard.ts).
+//     RED: "a wide and a no-ball count against the bowler…" —
+//     `expect(a7.wides).toBe(1)` → received 0. Restored (`cp` backup, diffed
+//     identical), re-ran GREEN.
+// (b) Widened the bowler-charged-runs condition in the same method from
+//     `extras?.kind === "wide" || extras?.kind === "noball"` to also match
+//     `"bye"`, so a bye's runs get charged to the bowler. RED: the same test
+//     — `expect(conceded).toBe(inn1.total.runs - byes - legByes - penalties)`
+//     → conceded came out 1 higher than the right-hand side (innings 1's one
+//     bye leaking into a8's `runs`). Restored (`cp` backup, diffed
+//     identical), re-ran GREEN.
 import { describe, expect, it } from "vitest";
 import { cricket } from "../cricket.ts";
 import { deriveCricketScorecard } from "../scorecard.ts";
@@ -61,6 +77,30 @@ export const TWO_INNINGS: Script = {
   ],
 };
 
+// Derives an expected `fours` count STRAIGHT FROM THE SCRIPT'S OWN LEDGER —
+// never a hand-typed literal. `scriptLedger` already replays `cricket.apply`
+// event by event and stamps each recorded `cricket.ball` payload's
+// `striker`/`nonStriker` from the reducer's own state as it goes (see
+// `scorecard-ledger.ts`'s header), so a ball's `striker` field IS the
+// reducer's own answer to "who was facing this delivery", not a re-derived
+// guess. Counting `boundary === 4` balls by that field is exactly "replaying
+// cricket.apply and reading who was on strike" — it just reuses the replay
+// scriptLedger already did rather than running a second, parallel one.
+//
+// This caught a real false premise in the brief's own illustrative comment
+// ("HOME's h1 faces balls 1-2 (1 run then 4)"): ball 1 is `{ bat: 1 }`, an
+// ODD run, so the reducer rotates strike before ball 2 — the four is h2's,
+// not h1's. Confirmed by dumping `scriptLedger(TWO_INNINGS).events`: ball 2's
+// payload has `striker: "h2"`. `scriptFours(TWO_INNINGS, "h1")` is 0.
+function scriptFours(script: Script, person: string): number {
+  const { events } = scriptLedger(script);
+  return events.filter((ev) => {
+    if (ev.type !== "cricket.ball" && ev.type !== "cricket.superover.ball") return false;
+    const payload = ev.payload as { striker: string; boundary?: number };
+    return payload.striker === person && payload.boundary === 4;
+  }).length;
+}
+
 describe("deriveCricketScorecard — totals", () => {
   it("empty ledger → no innings, no live, band 0, result null (EMPTY CASE FIRST)", () => {
     const { cfg, lineups } = scriptLedger({ ...TWO_INNINGS, innings: [] });
@@ -91,5 +131,50 @@ describe("deriveCricketScorecard — totals", () => {
   it("band is the max band present: balls → 3", () => {
     const { events, cfg, lineups } = scriptLedger(TWO_INNINGS);
     expect(deriveCricketScorecard({ events, cfg, lineups }).band).toBe(3);
+  });
+});
+
+describe("deriveCricketScorecard — batting and bowling", () => {
+  it("batting lines carry runs, balls, 4s, 6s, SR and the dismissal with credit", () => {
+    const { events, cfg, lineups } = scriptLedger(TWO_INNINGS);
+    const [inn1] = deriveCricketScorecard({ events, cfg, lineups }).innings;
+    const h1 = inn1!.batting.find((b) => b.person === "h1")!;
+    // The 4 off ball 2 is h2's, not h1's — derived from the script, never a
+    // typed literal (see `scriptFours`'s header).
+    expect(h1.fours).toBe(scriptFours(TWO_INNINGS, "h1"));
+    expect(h1.strikeRate).toBe(Math.round(((h1.runs * 100) / h1.balls) * 10) / 10);
+    const caught = inn1!.batting.find((b) => b.dismissal.kind === "caught")!;
+    expect(caught.dismissal).toEqual({ kind: "caught", bowler: "a7", fielder: "a3", fielderAssist: null });
+    const runout = inn1!.batting.find((b) => b.dismissal.kind === "runout")!;
+    expect(runout.dismissal).toMatchObject({ kind: "runout", bowler: null, fielder: "a5", fielderAssist: "a6" });
+  });
+
+  it("a wide and a no-ball count against the bowler; byes, leg-byes and penalties do not", () => {
+    const { events, cfg, lineups } = scriptLedger(TWO_INNINGS);
+    const [inn1, inn2] = deriveCricketScorecard({ events, cfg, lineups }).innings;
+    const a7 = inn1!.bowling.find((b) => b.person === "a7")!;
+    expect(a7.wides).toBe(1);
+    // runs conceded by a7 = bat runs off a7 + wides + no-ball runs, minus nothing else — assert against the
+    // reducer: inn1.total.runs - byes - legByes - penalties === sum(bowling.runs)
+    const conceded = inn1!.bowling.reduce((s, b) => s + b.runs, 0);
+    expect(conceded).toBe(inn1!.total.runs - inn1!.extras!.byes - inn1!.extras!.legByes - inn1!.extras!.penalties);
+    expect(inn2!.bowling.find((b) => b.person === "h7")!.maidens).toBe(1); // the six dots
+  });
+
+  it("did-not-bat lists the lineup persons who never reached the crease, in lineup order", () => {
+    const { events, cfg, lineups } = scriptLedger(TWO_INNINGS);
+    const [inn1] = deriveCricketScorecard({ events, cfg, lineups }).innings;
+    const atCrease = new Set(inn1!.batting.map((b) => b.person));
+    expect(inn1!.didNotBat).toEqual(HOME.filter((p) => !atCrease.has(p)));
+  });
+
+  it("economy and strike rate are null when nothing was bowled or faced (no NaN, no Infinity)", () => {
+    const { events, cfg, lineups } = scriptLedger({
+      ...TWO_INNINGS,
+      innings: [{ batting: "home", bowlers: ["a7"], deliveries: [{ extra: "wide", runs: 1 }] }],
+    });
+    const [inn1] = deriveCricketScorecard({ events, cfg, lineups }).innings;
+    expect(inn1!.batting[0]!.strikeRate).toBeNull();
+    expect(inn1!.bowling[0]!.economy).toBeNull(); // 0 legal balls
   });
 });
