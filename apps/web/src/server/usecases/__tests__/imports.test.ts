@@ -7,7 +7,7 @@ import ExcelJS from "exceljs";
 import { football } from "@seazn/engine/sports/football";
 import { sql } from "@/lib/db";
 import { PaymentRequiredError } from "@/lib/errors";
-import { invalidateOrgEntitlements } from "@/lib/entitlements";
+import { getLimit, invalidateOrgEntitlements } from "@/lib/entitlements";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { createCompetition } from "../competitions";
 import { createDivision } from "../divisions";
@@ -195,6 +195,131 @@ describe.skipIf(!HAS_DB)("bulk import (Jul3/01)", () => {
     expect(result.stats.clubs).toBe(1);
     const clubs = await listClubs(auth);
     expect(clubs.map((c) => c.name)).toEqual(["Acme SC"]);
+  });
+
+  /**
+   * The cap sweep: which key refuses, across sizes, and in what ORDER.
+   *
+   * Every other cap test in this file sits on ONE boundary — 5 clubs +1, 8
+   * teams +1, 51 rows. A single sample cannot see a precedence bug: when two
+   * caps bind at once, only the ORDER of the gates decides which key the
+   * organiser is shown, and that order is load-bearing product behaviour
+   * (an organiser told "clubs" buys clubs; told "rows" they split the file).
+   *
+   * `commitImport` gates in this order, and the table below pins it:
+   *   import.bulk (:339, before anything is planned)
+   *   -> clubs.hierarchy (:442) -> clubs.max (:452) -> teams.max (:456)
+   *
+   * Caps are READ from the live catalog rather than typed, so a re-valuation
+   * moves the test with it instead of leaving it asserting yesterday's numbers.
+   * Row A is the control: without a case that COMMITS, an all-refusing mutant
+   * satisfies every other row.
+   */
+  it("the cap sweep: which key refuses at each size, and which wins when two bind", async () => {
+    const { auth } = await seedOrg("community");
+    const clubCap = await getLimit(auth.orgId, "clubs.max");
+    const teamCap = await getLimit(auth.orgId, "teams.max");
+    const bulkCap = await getLimit(auth.orgId, "import.bulk");
+    // Derived, not assumed: a null (unlimited) cap would make every row below
+    // vacuous, and the sweep would pass by refusing nothing.
+    expect(clubCap, "community clubs.max is unlimited — the sweep cannot bind").not.toBeNull();
+    expect(teamCap, "community teams.max is unlimited — the sweep cannot bind").not.toBeNull();
+    expect(bulkCap, "community import.bulk is unlimited — the sweep cannot bind").not.toBeNull();
+
+    /** Seed `n` existing clubs so the NEXT import crosses `clubs.max`. */
+    const fillClubs = async (orgId: string, n: number) => {
+      for (let i = 0; i < n; i++) {
+        await sql`insert into clubs (org_id, name) values (${orgId}, ${`Fill C${i} ${randomUUID().slice(0, 6)}`})`;
+      }
+    };
+    const fillTeams = async (orgId: string, n: number) => {
+      for (let i = 0; i < n; i++) {
+        await sql`insert into teams (org_id, name) values (${orgId}, ${`Fill T${i} ${randomUUID().slice(0, 6)}`})`;
+      }
+    };
+    /** One club + one team per row, so club count == team count == row count. */
+    const clubCsv = (n: number, prefix: string) =>
+      ["Club,Team", ...Array.from({ length: n }, (_, i) => `${prefix} C${i},${prefix} T${i}`)].join("\n");
+
+    // --- A. under every cap: it COMMITS. The control. ---------------------
+    {
+      const { auth: a } = await seedOrg("community");
+      await seedDivision(a);
+      const preview = await createImport(a, csvUpload(clubCsv(1, "A")));
+      const result = await commitImport(a, preview.importId, null);
+      expect(result.stats.clubs, "a file under every cap must commit").toBe(1);
+    }
+
+    // --- B. rows over import.bulk: refused at CREATE, before a plan exists -
+    {
+      const { auth: b } = await seedOrg("community");
+      await seedDivision(b);
+      await expect(
+        createImport(b, csvUpload(clubCsv(bulkCap! + 1, "B"))),
+        "a file over the row cap must be refused at upload",
+      ).rejects.toMatchObject({ featureKey: "import.bulk" });
+    }
+
+    // --- C. clubs over clubs.max, rows fine: clubs.max at COMMIT ----------
+    {
+      const { auth: c } = await seedOrg("community");
+      await seedDivision(c);
+      await fillClubs(c.orgId, clubCap!);
+      const preview = await createImport(c, csvUpload(clubCsv(1, "C")));
+      await expect(commitImport(c, preview.importId, null)).rejects.toMatchObject({
+        featureKey: "clubs.max",
+      });
+    }
+
+    // --- D. teams over teams.max, clubs fine: teams.max at COMMIT ---------
+    //
+    // Clubs deliberately left well under their cap, so the ONLY thing this row
+    // can be refused for is teams — otherwise it would pass on C's answer.
+    {
+      const { auth: d } = await seedOrg("community");
+      await seedDivision(d);
+      await fillTeams(d.orgId, teamCap!);
+      const preview = await createImport(d, csvUpload(clubCsv(1, "D")));
+      await expect(commitImport(d, preview.importId, null)).rejects.toMatchObject({
+        featureKey: "teams.max",
+      });
+    }
+
+    // --- E. BOTH clubs and teams over: clubs.max wins (:452 before :456) ---
+    //
+    // The order-differential case. Swap those two gates and this row reports
+    // teams.max while C and D both stay green — which is exactly the bug a
+    // one-sample-per-cap suite cannot see.
+    {
+      const { auth: e } = await seedOrg("community");
+      await seedDivision(e);
+      await fillClubs(e.orgId, clubCap!);
+      await fillTeams(e.orgId, teamCap!);
+      const preview = await createImport(e, csvUpload(clubCsv(1, "E")));
+      await expect(
+        commitImport(e, preview.importId, null),
+        "with both caps breached the organiser must be told CLUBS — clubs.max is gated first",
+      ).rejects.toMatchObject({ featureKey: "clubs.max" });
+    }
+
+    // --- F. rows AND clubs both over at commit: import.bulk wins ----------
+    //
+    // Reached only by planning under a bigger allowance and lapsing, since the
+    // row cap would otherwise refuse at upload. Pins that the row gate sits
+    // ahead of the club gate: the file is refused for its SIZE before anything
+    // is planned, so the organiser is told to split rather than to buy clubs.
+    {
+      const { auth: f } = await seedOrg("pro");
+      await seedDivision(f);
+      const preview = await createImport(f, csvUpload(clubCsv(bulkCap! + 1, "F")));
+      await fillClubs(f.orgId, clubCap!);
+      await setOrgPlan(f.orgId, "community");
+      await invalidateOrgEntitlements(f.orgId);
+      await expect(
+        commitImport(f, preview.importId, null),
+        "with rows and clubs both over, the refusal must name the row cap — it is gated first",
+      ).rejects.toMatchObject({ featureKey: "import.bulk" });
+    }
   });
 
   it("a plan made under a bigger allowance is re-gated on import.bulk at COMMIT", async () => {
