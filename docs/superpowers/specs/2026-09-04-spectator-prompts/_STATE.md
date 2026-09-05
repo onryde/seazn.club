@@ -7,7 +7,7 @@
 > spectator worktree; its "RESUME HERE" block carries per-task detail). Update this file at
 > every handoff; it is committed, the ledger is not.
 
-**Last updated:** 2026-09-05 18:35 London (deadline handoff in progress — see "In flight").
+**Last updated:** 2026-09-05 23:3x London (after the third limit outage; agents resumed at 23:18).
 
 ## Where things live
 
@@ -34,9 +34,9 @@
 | 10, 11 shell + summary tab + live-score localisation | complete, reviewed | branch (lane B picks) |
 | 12, 13 scorecard / commentary / timeline / sets / info tabs | complete, reviewed | branch (lane C picks) |
 | 17 engine enriched band-2 lines | complete, reviewed (514bd2176 + fix 1a1849454: snapshot regenerated, golden corpus 28→30 streams) | branch |
-| 6 `buildMatchCentre` | IN FLIGHT, isolated worktree `agent-af7842db778895abe` (reset to b8ed8fa31) | not on branch |
-| 8 dictionaries + coverage test | IN FLIGHT, isolated worktree `agent-a733c4deec73194d4` (reset to b8ed8fa31) | not on branch |
-| 18 pad More sheet + first line e2e | IN FLIGHT, isolated worktree `agent-a749a9f65817abaa0` (reset to 514bd2176); env label `t18` (down it if `seazn-env status` lists it) | not on branch |
+| 6 `buildMatchCentre` | implementer DONE (lane commit 1a88e8bc6 in `agent-af7842db778895abe`); task review IN FLIGHT; NOT yet cherry-picked | lane |
+| 8 dictionaries + coverage test | implementer DONE (lane commits c1bf271f3 + 58a74f982 in `agent-a733c4deec73194d4`); review = Needs fixes → fix round 1 IN FLIGHT (result keys by engine METHOD `regulation/dls/innings/super_over/boundary_count` + tie/no_result/draw with `{winner}` `{margin}`; `GLYPH_KINDS` derived from the classes map; parity both ways) | lane |
+| 18 pad More sheet + first line e2e | implementer RESUMED 23:18 (was re-linting before commit) in `agent-a749a9f65817abaa0`; env label `t18` (down it if `seazn-env status` lists it) | lane |
 | 9 API + realtime | not started (after 6; adds the Task-6-exports ⊆ dictionary-keys parity test) | — |
 | 14 page wiring | not started (after 6, 8, 9; retires `BUILDER_ONLY_KEYS`) | — |
 | 15 walkthrough e2e | not started (owes the public-page assertion of Task 18's enriched line; testids `mc-over-<innings>.<over>`, `mc-ball-<innings>.<over>.<ball>`) | — |
@@ -74,12 +74,11 @@ Verification on b8ed8fa31: public-site suites 537/0 (26 pending = DB suites on e
 - W2: DRAFT plan committed (f0d06b1f1); prompt `W2-landing.md` carries the plan section and
   three owner questions with recommendations (`mh-*` testids; count leaders now + one
   additive engine `leaderboards` declaration for ratio leaders; org-home poll-only).
+- RULING 2026-09-05 23:2x (binds Tasks 6 and 8): result message keys follow the engine's `outcome.method` vocabulary plus non-win outcomes — `matchCentre.result.{regulation,dls,innings,super_over,boundary_count,tie,no_result,draw}` — params `{winner}` + `{margin}` (engine margin string verbatim, never parsed).
 - W3: DRAFT plan written (`…-w3-poster.md`, 10 tasks) + prompt section; owner questions Q1 fonts (static TTFs), Q2 title sponsor on free orgs (keep rule), Q3 `describeFormat`/`division.config` ownership vs W2 (W3 builds to W2's contract if W2 unmerged).
-- W4: plan + prompt section being written (agent in flight at 18:50).
-- W5: CANDIDATE DRAFT plan with a design section + new prompt `W5-team-page.md` being
-  written (agent in flight). W5 is NOT ruled in scope.
-- `_DESIGN.md` + theme sheet being written by the design agent; phase 2 (per-wave "Design
-  theme" sections in prompts and plans) not started.
+- W4: NOT written by the Fable agent (died before writing); an Opus agent is writing it from the dead agent's transcript pins (23:18).
+- W5: CANDIDATE DRAFT plan WRITTEN before the outage (`…-w5-public-team-page.md`, 9 tasks, complete on disk, uncommitted); prompt `W5-team-page.md` NOT yet written — an Opus agent verifies the plan and writes the prompt (23:18). W5 is NOT ruled in scope.
+- `_DESIGN.md` (52.9 KB) + theme sheet HTML WRITTEN before the outage (complete on disk, uncommitted); an Opus agent verifies both (23:18). Phase 2 (per-wave "Design theme" sections in prompts and plans; publish the theme sheet as an artifact) not started.
 - `_INDEX.md` single-pass update (plans list, wave rows, design pointer) pending the above.
 
 ## Open owner questions (recommendations recorded in `_INDEX.md` / the ledger)
@@ -90,7 +89,6 @@ Verification on b8ed8fa31: public-site suites 537/0 (26 pending = DB suites on e
 4. W5: in scope or not — plan drafted as a candidate for a ruling.
 5. Any "proposed" token in `_DESIGN.md` — owner rules; existing tokens are cited, not changed.
 
-## In flight at the deadline handoff (fill in at 18:58)
+## In flight at 23:3x (post-outage)
 
-_To be completed at the deadline: for each agent still running, its worktree, dirty files,
-WIP commit (if any), and the exact next step._
+- Task 6 review; Task 8 fix round 1; Task 18 implementer (resumed); W4 plan (Opus, new); W5 prompt + plan verification (Opus); design verification (Opus). Next after they land: cherry-pick Tasks 6, 8, 18 onto the feature branch (union dictionaries, regenerate keys, tsc), commit the W4/W5/_DESIGN docs, `_INDEX.md` single-pass update, design phase 2, then Task 9.
