@@ -335,10 +335,18 @@ const HALF_CLAIM_VALUES: LocalisedValue[] = [
 // the corpus doing exactly its job: a pattern nobody exercises makes every
 // assertion resting on it report clean.
 const ATTRIBUTION_POSITIVES = [
-  // PRO_ATTRIBUTION
+  // PRO_ATTRIBUTION — all four arms. The "is on Pro" arm was added 2026-09-05
+  // with the twelve reasons that name both plans; without a fixture here it was
+  // a pattern nothing proved, which is the exact defect the rule below exists
+  // for. It was added WITHOUT one, in the same commit that added the pattern.
   "Custom tiebreaker order is a Pro feature.",
+  "Player stats are on Pro and the Event Pass.",
   "this needs a Pro plan",
   "upgrade to Pro",
+  // PASS_ATTRIBUTION. Used only negatively — a Pro claim is a fault when a pass
+  // rung also grants the key and the sentence does not say so — but it is still
+  // a pattern, and a pattern nobody can fire is a rule that examines nothing.
+  "the Event Pass covers this competition",
   // ENTERPRISE_ATTRIBUTION — both arms, because the second ("needs an
   // Enterprise plan") is the one no shipped sentence uses today.
   "Write access via the API is an Enterprise feature",
