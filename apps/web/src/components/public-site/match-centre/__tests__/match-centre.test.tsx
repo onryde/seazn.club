@@ -75,11 +75,11 @@ describe("MatchCentre", () => {
 
   it("shows the active tab's panel container and hides every other tab's panel — no ?tab param defaults to the first listed tab", () => {
     const html = renderToStaticMarkup(<MatchCentre {...props(fullDoc)} />);
-    // doc.tabs[0] is "summary" — Task 11 replaced its placeholder with the
-    // real SummaryTab, which (fullDoc.cricket === null) renders LiveScoreBody;
-    // "Not started" is LiveScoreBody's own headline fallback (live-score.tsx),
-    // so its presence here is proof the summary tab is the one active.
-    expect(html).toContain("Not started");
+    // doc.tabs[0] is "summary" — anchored on the STRUCTURAL tabpanel id
+    // (review fix round 2 minor), not an English literal like "Not started"
+    // (SummaryTab's own rendered content, which is locale- and
+    // sport-dependent and so a fragile identity check).
+    expect(html).toContain('id="mc-tab-panel-summary"');
     expect(html).not.toContain('data-testid="mc-tab-panel-scorecard"');
     expect(html).not.toContain('data-testid="mc-tab-panel-commentary"');
     expect(html).not.toContain('data-testid="mc-tab-panel-timeline"');
@@ -91,12 +91,12 @@ describe("MatchCentre", () => {
     const html = renderToStaticMarkup(<MatchCentre {...props(fullDoc, "sets")} />);
     expect(html).toContain('data-testid="mc-tab-panel-sets"');
     expect(html).toContain('data-testid="mc-tab-sets" aria-selected="true"');
-    expect(html).not.toContain("Not started"); // summary (LiveScoreBody's marker) is NOT active
+    expect(html).not.toContain('id="mc-tab-panel-summary"'); // summary is NOT the active panel
   });
 
   it("a ?tab param NOT in the document's tabs falls back to the first listed tab, not a crash", () => {
     const html = renderToStaticMarkup(<MatchCentre {...props(band2Doc, "commentary")} />);
-    expect(html).toContain("Not started"); // falls back to "summary" (doc.tabs[0])
+    expect(html).toContain('id="mc-tab-panel-summary"'); // falls back to "summary" (doc.tabs[0])
     expect(html).not.toContain('data-testid="mc-tab-commentary"');
   });
 
@@ -107,10 +107,17 @@ describe("MatchCentre", () => {
     expect(html).toContain("AWY");
   });
 
-  it("each tab's panel is wrapped in role=tabpanel with the id/aria-labelledby pairing its tab button controls", () => {
+  it("each tab's panel is wrapped in EXACTLY ONE role=tabpanel with the id/aria-labelledby pairing its tab button controls", () => {
     const html = renderToStaticMarkup(<MatchCentre {...props(fullDoc, "sets")} />);
-    expect(html).toContain('role="tabpanel"');
+    // Review fix round 2 (Task 10 deferred minor, + a follow-up correction)
+    // — exactly one, not just "at least one": a second stray tabpanel
+    // wrapper (or, before the follow-up, the "sets" PLACEHOLDER's own now-
+    // removed `data-testid="mc-tab-panel-sets"` duplicating the wrapper's)
+    // would still pass a bare `.toContain`.
+    expect(html.match(/role="tabpanel"/g)?.length).toBe(1);
+    expect(html.match(/data-testid="mc-tab-panel-[a-z]+"/g)?.length).toBe(1);
     expect(html).toContain('id="mc-tab-panel-sets"');
+    expect(html).toContain('data-testid="mc-tab-panel-sets"');
     expect(html).toContain('aria-labelledby="mc-tab-sets"');
     // The rail's own button carries the id this aria-labelledby points at.
     expect(html).toContain('id="mc-tab-sets"');
@@ -133,10 +140,25 @@ describe("MatchCentre — graceful fallback (no document, or an empty tabs list)
     expect(html).not.toContain('data-testid="mc-court-card"');
   });
 
-  it("a document with an EMPTY tabs array also falls back, rather than crashing on tabs[0]", () => {
+  it("a document with an EMPTY tabs array also falls back, rather than crashing on tabs[0] — AND still names both sides (the document HAD a header, unlike the no-document case)", () => {
     const emptyTabsDoc = buildDoc({ tabs: [] as unknown as MatchCentreTabIdT[] });
     expect(() => renderToStaticMarkup(<MatchCentre {...props(emptyTabsDoc)} />)).not.toThrow();
-    const html = renderToStaticMarkup(<MatchCentre {...props(emptyTabsDoc)} />);
+    // A `summary.perSide` is what actually surfaces `entrantNames` in
+    // `LiveScoreBody`'s markup — the bare `props()` helper's `summary: null`
+    // fixture renders nothing that would exercise the names lookup at all.
+    const initial: LiveFixtureData = {
+      status: "scheduled",
+      summary: { perSide: [{ entrantId: "home", line: "—" }, { entrantId: "away", line: "—" }] },
+      outcome: null,
+      match_centre: emptyTabsDoc,
+    };
+    const html = renderToStaticMarkup(
+      <MatchCentre fixtureId={emptyTabsDoc.fixtureId} initial={initial} realtime={false} dict={dict} locale="en" tabParam={null} />,
+    );
     expect(html).toContain('data-testid="mc-fallback"');
+    // Review fix round 2 (Task 10 deferred minor) — the document (just an
+    // empty tabs list) still has a real header with both sides' names.
+    expect(html).toContain("Home");
+    expect(html).toContain("Away");
   });
 });

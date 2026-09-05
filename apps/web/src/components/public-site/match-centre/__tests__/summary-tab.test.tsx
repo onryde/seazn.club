@@ -219,8 +219,11 @@ beforeAll(() => {
 });
 
 describe("SummaryTab — cricket", () => {
-  it("a cricket doc with a null live block and no performers renders no live block, no top performers, and no rails (empty case)", () => {
+  it("PRE-PLAY cricket (no live block, no performers, no innings) renders the scorebug, not a blank tab, and no mc-* cricket blocks", () => {
     const html = renderToStaticMarkup(<SummaryTab doc={emptyDoc} dict={dict} data={liveFixtureFor(emptyDoc)} />);
+    // Positive: the scorebug (LiveScoreBody's fallback headline) is present.
+    expect(html).toContain("Not started");
+    // Negative: none of the cricket-specific blocks a "blank tab" would lack anyway.
     expect(html).not.toContain('data-testid="mc-live-block"');
     expect(html).not.toContain('data-testid="mc-top-performers"');
     expect(html).not.toContain('data-testid="mc-fow-');
@@ -245,12 +248,34 @@ describe("SummaryTab — cricket", () => {
     expect(html).not.toContain('data-testid="mc-live-block"'); // negative; the live-doc test above is its positive pair
   });
 
-  it("the fall-of-wickets rail is a focusable, labelled list", () => {
+  it("the fall-of-wickets rail is a focusable, labelled list, with the label's real VALUE from the dictionary", () => {
     const html = renderToStaticMarkup(<SummaryTab doc={cricketDoc} dict={dict} data={liveFixtureFor(cricketDoc)} />);
     expect(html).toContain('data-testid="mc-fow-1"');
     expect(html).toContain('role="list"');
     expect(html).toContain('tabindex="0"');
-    expect(html).toContain('aria-label="');
+    expect(html).toContain(`aria-label="${dict["matchCentre.fallOfWickets"] as string}"`);
+  });
+
+  // Review fix round 2 (IMPORTANT 1, corrected) — the name cell only
+  // truncates under `table-fixed` layout with every NUMERIC column claiming
+  // an explicit width (only honoured under fixed layout) so the name column
+  // — which carries NO width utility itself — takes the remainder. A first
+  // attempt gave the name cell `w-full max-w-0`, which gives the inner
+  // `block truncate` span a used width of ZERO (clips every name to
+  // nothing) — corrected to no width class at all on the name cell/span.
+  it("the batters table is table-fixed, every numeric header has an explicit width, and the name span is exactly 'block truncate'", () => {
+    const html = renderToStaticMarkup(<SummaryTab doc={cricketDoc} dict={dict} data={liveFixtureFor(cricketDoc)} />);
+    expect(html).toMatch(/<table class="[^"]*\btable-fixed\b[^"]*"/);
+    // Every numeric <th> (R, B, 4s, 6s, SR for batters) carries a `w-` class.
+    const numericHeaderMatches = [...html.matchAll(/<th scope="col" title="[^"]*" class="([^"]*)">(?:R|B|4s|6s|SR)<\/th>/g)];
+    expect(numericHeaderMatches.length).toBeGreaterThan(0);
+    for (const m of numericHeaderMatches) {
+      expect(m[1]).toMatch(/\bw-\d+\b/);
+    }
+    // The name span's class list is EXACTLY "block truncate" — no max-w-0,
+    // no min-w-0, no width utility of any kind.
+    const nameSpanMatch = html.match(/data-testid="mc-stat-name-cell"[^>]*><span class="([^"]*)">/);
+    expect(nameSpanMatch?.[1]).toBe("block truncate");
   });
 
   it("a partnership bar's inline width equals Math.round(runs/total*100)%, and a 0-total-runs innings renders 0% (never NaN)", () => {
@@ -285,10 +310,42 @@ describe("SummaryTab — non-cricket", () => {
     expect(html).not.toContain('data-testid="mc-fow-');
     expect(html).not.toContain('data-testid="mc-partnerships-');
   });
+
+  // Review fix round 2 (IMPORTANT 4) — suppressing LiveScoreBody's own
+  // decided-line assumes `header.statusLine` is set for a decided fixture, a
+  // contract the server-side document builder owes (recorded, not enforced
+  // here). This proves the HAPPY path: when the contract holds, the court
+  // card carries the sentence and the summary body shows nothing garbled or
+  // empty in its place.
+  it("a DECIDED non-cricket fixture with a real outcome AND a set statusLine: court card carries the sentence, summary body has no garbled/empty decided line", () => {
+    const decidedDoc: MatchCentreDocT = {
+      ...nonCricketDoc,
+      fixtureId: "fx-decided-noncricket",
+      header: {
+        ...nonCricketDoc.header,
+        status: "decided",
+        live: false,
+        statusLine: { key: "org.competitionsBy", params: { org: "Home XI won by 20 runs" } },
+      },
+    };
+    const initial: LiveFixtureData = {
+      status: "decided",
+      summary: null,
+      outcome: { kind: "win", winner: "home" },
+      match_centre: decidedDoc,
+    };
+    const html = renderToStaticMarkup(
+      <MatchCentre fixtureId={decidedDoc.fixtureId} initial={initial} realtime={false} dict={dict} locale="en" tabParam={null} />,
+    );
+    expect(html).toContain('data-testid="mc-status-line"');
+    expect(html).toContain("Competitions run by Home XI won by 20 runs"); // positive pair — the court card carries it
+    expect(html).not.toContain("undefined");
+    expect(html).not.toContain("NaN");
+  });
 });
 
-describe("no raw i18n key with a stray 'public.' prefix leaks into any match-centre component", () => {
-  it("MatchCentre's full render (court card + tab rail + summary tab) contains no 'public.'-prefixed text anywhere", () => {
+describe("no raw i18n key leaks into any match-centre component", () => {
+  it("MatchCentre's full render (court card + tab rail + summary tab, the RICH cricket doc) contains the real live block AND no raw key anywhere", () => {
     const html = renderToStaticMarkup(
       <MatchCentre
         fixtureId={cricketDoc.fixtureId}
@@ -299,6 +356,14 @@ describe("no raw i18n key with a stray 'public.' prefix leaks into any match-cen
         tabParam={null}
       />,
     );
+    // Positive pair — a placeholder (or a blank/failed render) would also
+    // satisfy the negative assertions below; this proves the tree actually
+    // rendered the rich cricket content, not an empty shell.
+    expect(html).toContain('data-testid="mc-live-block"');
+    // Negative: neither a stray "public." prefix (the bug this describe
+    // block was written to catch) nor a bare "matchCentre.xxx" raw key
+    // (the shape a MISSING or renamed key would leak as) appears anywhere.
     expect(html).not.toMatch(/\bpublic\.[a-zA-Z]/);
+    expect(html).not.toMatch(/\bmatchCentre\.[a-z]/);
   });
 });

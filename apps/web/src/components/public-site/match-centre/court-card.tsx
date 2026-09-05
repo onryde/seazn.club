@@ -10,22 +10,39 @@
 // `renderDecidedOutcome` already established for the legacy scoreboard.
 //
 // Review fix round 1 (IMPORTANT 4, 5):
-// - The freshness line now derives from `header.updatedAt` (the document's
-//   OWN timestamp) ticked every second by `useNow()`, not the hook's
-//   `updatedAt` (which resets to `Date.now()` on every render-causing event
-//   and so could only ever read "0s ago"). This also means no `Date.now()`
-//   call happens during render any more (it moves into `useNow`'s effect and
-//   one-time lazy `useState` initializer), which incidentally clears the
+// - The freshness line derives from `header.updatedAt` (the document's OWN
+//   timestamp) ticked every second by `useNow()`, not the hook's `updatedAt`
+//   (which resets to `Date.now()` on every render-causing event and so could
+//   only ever read "0s ago"). This also means no `Date.now()` call happens
+//   during render any more (it moves into `useNow`'s effect and one-time
+//   lazy `useState` initializer), which incidentally clears the
 //   `react-hooks/purity` warning this file used to carry and document.
-// - The status chip switches EXHAUSTIVELY on `header.status` — `in_play` →
-//   the LIVE pill, `decided` → the result chip, `scheduled` → the same chip
-//   with different text, `other` (postponed/abandoned/walkover/cancelled) →
-//   NO chip at all (the server's own `header.statusLine` Msg is expected to
-//   name the reason — a later task's copy, not this component's job to
-//   guess at). `header.live` no longer selects which chip renders; it is
-//   read ONLY to decide whether the live pill's dot pulses (a fixture can be
-//   `in_play` with play temporarily stopped — a rain delay, a drinks break —
-//   without that meaning "not live" in the status-enum sense).
+// - The status chip switches EXHAUSTIVELY on `header.status` (a real
+//   `switch`, `never`-checked in `default` — see `statusChip` below) —
+//   `in_play` → the LIVE pill, `decided` → the result chip, `scheduled` →
+//   the same chip with different text, `other` (postponed/abandoned/
+//   walkover/cancelled) → NO chip at all (the server's own
+//   `header.statusLine` Msg is expected to name the reason — a later task's
+//   copy, not this component's job to guess at). `header.live` no longer
+//   selects which chip renders; it is read ONLY to decide whether the live
+//   pill's dot pulses (a fixture can be `in_play` with play temporarily
+//   stopped — a rain delay, a drinks break — without that meaning "not
+//   live" in the status-enum sense).
+//
+// Review fix round 2 (Task 10 deferred minors):
+// - The freshness line is shown ONLY while `header.status === "in_play"` —
+//   a decided or scheduled fixture's `updatedAt` is whenever the document
+//   was last (re)built, not a "how stale is the live score" signal, and
+//   left unconditional it could read something absurd like "Updated
+//   47231s ago" on a page that finished hours ago.
+// - `Date.parse` is guarded with `Number.isFinite`: a malformed
+//   `header.updatedAt` now reads "Updated 0s ago" rather than the
+//   `Math.floor(NaN / 1000)` → `NaN` this would otherwise produce.
+// - `suppressHydrationWarning` on the freshness `<p>` — its text is a
+//   function of wall-clock time, so the server-rendered and first-client-
+//   render values can legitimately differ by the seconds the network round
+//   trip took; that is expected drift, not the corruption
+//   `suppressHydrationWarning` normally papers over on OTHER attributes.
 import type { Dict as PublicDict } from "@/lib/i18n-constants";
 import { t } from "@/lib/i18n-runtime";
 import type { MatchCentreHeaderT } from "@/server/public-site/match-centre-schema";
@@ -36,34 +53,55 @@ export interface CourtCardProps {
   dict: PublicDict;
 }
 
+/** Exhaustive on `header.status` — a `never` check in `default` means a new
+ *  status value added to the schema fails to COMPILE here rather than
+ *  silently falling through to "no chip". */
+function statusChip(status: MatchCentreHeaderT["status"], dict: PublicDict): { testId: string; text: string } | null {
+  switch (status) {
+    case "in_play":
+      return { testId: "mc-live-pill", text: t(dict, "matchCentre.status.live") };
+    case "decided":
+      return { testId: "mc-result-chip", text: t(dict, "matchCentre.status.decided") };
+    case "scheduled":
+      return { testId: "mc-result-chip", text: t(dict, "matchCentre.status.scheduled") };
+    case "other":
+      // No chip — `header.statusLine` below is expected to name the reason
+      // (postponed/abandoned/walkover/cancelled), a later task's copy.
+      return null;
+    default: {
+      const _exhaustive: never = status;
+      return _exhaustive;
+    }
+  }
+}
+
 export function CourtCard({ header, dict }: CourtCardProps) {
   const now = useNow();
-  const seconds = Math.max(0, Math.floor((now - Date.parse(header.updatedAt)) / 1000));
+  const parsedUpdatedAt = Date.parse(header.updatedAt);
+  const seconds = Number.isFinite(parsedUpdatedAt) ? Math.max(0, Math.floor((now - parsedUpdatedAt) / 1000)) : 0;
   const inPlay = header.status === "in_play";
+  const chip = statusChip(header.status, dict);
   return (
     <div
       data-testid="mc-court-card"
       className="overflow-hidden rounded-2xl bg-court text-court-ink shadow-lg"
     >
       <div className="p-5 sm:p-6">
-        {inPlay ? (
+        {chip ? (
           <p
-            data-testid="mc-live-pill"
-            className="mb-3 flex items-center gap-2 text-[11px] font-bold uppercase tracking-[0.22em] text-emerald-300"
+            data-testid={chip.testId}
+            className={
+              chip.testId === "mc-live-pill"
+                ? "mb-3 flex items-center gap-2 text-[11px] font-bold uppercase tracking-[0.22em] text-emerald-300"
+                : "mb-3 text-[11px] font-semibold uppercase tracking-[0.22em] text-court-muted"
+            }
           >
-            <span
-              className={`h-2 w-2 rounded-full bg-emerald-400 ${header.live ? "animate-live-pulse" : ""}`}
-            />
-            {t(dict, "matchCentre.status.live")}
+            {inPlay ? (
+              <span className={`h-2 w-2 rounded-full bg-emerald-400${header.live ? " animate-live-pulse" : ""}`} />
+            ) : null}
+            {chip.text}
           </p>
-        ) : header.status === "decided" || header.status === "scheduled" ? (
-          <p
-            data-testid="mc-result-chip"
-            className="mb-3 text-[11px] font-semibold uppercase tracking-[0.22em] text-court-muted"
-          >
-            {t(dict, header.status === "decided" ? "matchCentre.status.decided" : "matchCentre.status.scheduled")}
-          </p>
-        ) : null /* "other" — no chip; header.statusLine below names the reason */}
+        ) : null}
         <div className="space-y-2">
           {header.sides.map((side, i) => {
             const idx = i as 0 | 1;
@@ -101,9 +139,15 @@ export function CourtCard({ header, dict }: CourtCardProps) {
             {header.rateLine}
           </p>
         ) : null}
-        <p data-testid="mc-updated-at" className="mt-3 text-[11px] text-court-muted/70">
-          {t(dict, "matchCentre.updatedAgo", { seconds })}
-        </p>
+        {inPlay ? (
+          <p
+            data-testid="mc-updated-at"
+            className="mt-3 text-[11px] text-court-muted/70"
+            suppressHydrationWarning
+          >
+            {t(dict, "matchCentre.updatedAgo", { seconds })}
+          </p>
+        ) : null}
       </div>
       <div aria-hidden className={`h-1 ${inPlay ? "bg-emerald-400" : "bg-accent"}`} />
     </div>

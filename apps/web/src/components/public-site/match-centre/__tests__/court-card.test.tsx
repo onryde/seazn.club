@@ -120,6 +120,29 @@ describe("CourtCard", () => {
     const fiveSecondsAgo = new Date(Date.now() - 5000).toISOString();
     const header: MatchCentreHeaderT = { ...liveHeader, updatedAt: fiveSecondsAgo };
     const html = renderToStaticMarkup(<CourtCard header={header} dict={dict} />);
+    expect(html).toContain('data-testid="mc-updated-at"');
     expect(html).toContain("Updated 5s ago");
+  });
+
+  // Review fix round 2 (Task 10 deferred minor) — the freshness line is a
+  // "how stale is the LIVE score" signal; a decided/scheduled/other page's
+  // `updatedAt` is just whenever the document was last built, so showing it
+  // there could read something absurd ("Updated 47231s ago" on a page that
+  // finished hours ago). It's positive pair is the in_play test above.
+  it("the freshness line renders ONLY while in_play — absent for decided, scheduled, and other", () => {
+    for (const header of [decidedHeader, scheduledHeader, otherHeader]) {
+      const html = renderToStaticMarkup(<CourtCard header={header} dict={dict} />);
+      expect(html).not.toContain('data-testid="mc-updated-at"');
+    }
+  });
+
+  // Review fix round 2 (Task 10 deferred minor) — a malformed/unparsable
+  // `header.updatedAt` must read "0s ago", never the `NaN` a bare
+  // `Math.floor(NaN / 1000)` would otherwise produce.
+  it("a malformed header.updatedAt reads '0s ago' rather than NaN", () => {
+    const header: MatchCentreHeaderT = { ...liveHeader, updatedAt: "not-a-real-date" };
+    const html = renderToStaticMarkup(<CourtCard header={header} dict={dict} />);
+    expect(html).toContain("Updated 0s ago");
+    expect(html).not.toContain("NaN");
   });
 });

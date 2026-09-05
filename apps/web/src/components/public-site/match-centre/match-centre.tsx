@@ -26,7 +26,6 @@
 //   panel file individually.
 import { useCallback, useState } from "react";
 import type { Dict as PublicDict } from "@/lib/i18n-constants";
-import type { DecidedOutcomeTemplates } from "@/lib/scoring-vocab";
 import type { MatchCentreTabIdT } from "@/server/public-site/match-centre-schema";
 import type { LiveFixtureData } from "../live-score-data";
 import { LiveScoreBody } from "../live-score";
@@ -34,6 +33,7 @@ import { useLiveFixture } from "./use-live-fixture";
 import { CourtCard } from "./court-card";
 import { TabRail } from "./tab-rail";
 import { TAB_PANELS } from "./tab-panels";
+import { EMPTY_DECIDED_TEMPLATES } from "./decided-templates";
 
 export interface MatchCentreProps {
   fixtureId: string;
@@ -49,19 +49,13 @@ function initialTab(tabParam: string | null, tabs: MatchCentreTabIdT[]): MatchCe
   return tabs[0]!;
 }
 
-// Same reasoning as `SummaryTab`'s own `EMPTY_DECIDED_TEMPLATES` (Task 11):
-// `LiveScoreBody`'s decided-sentence templates live in the "ui" dictionary
-// namespace, not "public", and this fallback has no document at all — never
-// mind a namespace to reach into. All-empty templates make
-// `renderDecidedOutcome` resolve to `""`, which `LiveScoreBody` treats as
-// falsy and renders nothing for, rather than leaking a raw key.
-const EMPTY_DECIDED_TEMPLATES: DecidedOutcomeTemplates = { tie: "", plain: "", shootoutPlain: "", byMethod: {} };
-
 export function MatchCentre({ fixtureId, initial, realtime, dict, tabParam }: MatchCentreProps) {
-  // Only `data` is needed here — CourtCard now derives its freshness line
-  // from `doc.header.updatedAt` (IMPORTANT 4), not the hook's own
-  // `updatedAt`/`transport`.
-  const { data } = useLiveFixture(fixtureId, initial, realtime);
+  // CourtCard derives its freshness line from `doc.header.updatedAt`
+  // (IMPORTANT 4), not the hook's own `updatedAt` — but `transport` is
+  // still needed here, to thread `subscribed` down to whichever panel (or
+  // the fallback) ends up calling `LiveScoreBody` (review fix round 2 minor).
+  const { data, transport } = useLiveFixture(fixtureId, initial, realtime);
+  const subscribed = transport === "realtime";
   const doc = data.match_centre;
 
   // Hooks run unconditionally every render (Rules of Hooks) even though `doc`
@@ -85,14 +79,22 @@ export function MatchCentre({ fixtureId, initial, realtime, dict, tabParam }: Ma
   }, []);
 
   if (!doc || doc.tabs.length === 0) {
+    // Review fix round 2 (Task 10 deferred minor) — when a document IS
+    // present (just an empty `tabs` list), its `header.sides` still names
+    // both entrants; only the true no-document case has nothing to derive
+    // names from.
+    const entrantNames = doc
+      ? { [doc.header.sides[0].entrantId]: doc.header.sides[0].name, [doc.header.sides[1].entrantId]: doc.header.sides[1].name }
+      : {};
     return (
       <div data-testid="mc-fallback">
         <LiveScoreBody
           data={data}
-          entrantNames={{}}
-          sportKey=""
+          entrantNames={entrantNames}
+          sportKey={doc?.sportKey ?? ""}
           decidedTemplates={EMPTY_DECIDED_TEMPLATES}
           dict={dict}
+          subscribed={subscribed}
         />
       </div>
     );
@@ -106,8 +108,13 @@ export function MatchCentre({ fixtureId, initial, realtime, dict, tabParam }: Ma
     <div data-testid="mc-root" className="space-y-4">
       <CourtCard header={doc.header} dict={dict} />
       <TabRail tabs={doc.tabs} active={active} onChange={onChange} dict={dict} />
-      <div role="tabpanel" id={`mc-tab-panel-${active}`} aria-labelledby={`mc-tab-${active}`}>
-        <ActivePanel doc={doc} dict={dict} data={data} />
+      <div
+        role="tabpanel"
+        id={`mc-tab-panel-${active}`}
+        aria-labelledby={`mc-tab-${active}`}
+        data-testid={`mc-tab-panel-${active}`}
+      >
+        <ActivePanel doc={doc} dict={dict} data={data} subscribed={subscribed} />
       </div>
     </div>
   );

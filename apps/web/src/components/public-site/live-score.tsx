@@ -10,6 +10,8 @@
 // later task can reuse today's JSX from inside the match centre's own summary
 // tab without a second copy of it.
 import type { Dict } from "@/lib/i18n-constants";
+import { t } from "@/lib/i18n-runtime";
+import en from "@/dictionaries/en/public.json";
 import {
   disciplineLabel,
   disciplineList,
@@ -80,12 +82,12 @@ interface LiveScoreBodyProps {
   sportKey: string;
   decidedTemplates: DecidedOutcomeTemplates;
   /**
-   * Task 10 dispatch ruling 4 — threaded through for a future caller with a
-   * real dictionary (the eventual match-centre "summary" panel). Not
-   * consumed yet: every string this body renders today is the pre-existing
-   * hardcoded English (no behaviour change this task; a later pass that
-   * DOES read `dict` here owes those strings to all four locale
-   * dictionaries per the standing i18n rule).
+   * Task 11 review fix round 1 — now actually consumed (status text,
+   * "Winner:"). Optional so `LiveScore`'s own caller (the fixture detail
+   * page, which has no dictionary — R3.5/Task O's whole reason
+   * `decidedTemplates` is pre-resolved server-side instead) keeps working
+   * unchanged: an absent `dict` falls back to the English `public.json`
+   * import below, which is byte-for-byte what these strings already were.
    */
   dict?: Dict;
   /**
@@ -104,10 +106,27 @@ export function LiveScoreBody({
   entrantNames,
   sportKey,
   decidedTemplates,
+  dict,
   subscribed = false,
 }: LiveScoreBodyProps) {
+  const activeDict = dict ?? (en as Dict);
   const inPlay = data.status === "in_play";
   const decided = data.status === "decided" || data.status === "finalized";
+  // Task 11 review fix round 1 (IMPORTANT 3) — maps every status this field
+  // can carry onto the SAME three-plus-one keys CourtCard uses
+  // (matchCentre.status.{live,decided,scheduled}), so the two surfaces never
+  // drift onto separate vocabularies for the same concept. "finalized"
+  // folds into "decided" (matches the `decided` boolean above, unchanged
+  // from before this fix); anything else this loosely-typed `string` field
+  // could carry gets `matchCentre.status.other` ("Not played") rather than
+  // a raw, untranslated `data.status.replace("_", " ")`.
+  const statusKey = inPlay
+    ? "matchCentre.status.live"
+    : decided
+      ? "matchCentre.status.decided"
+      : data.status === "scheduled"
+        ? "matchCentre.status.scheduled"
+        : "matchCentre.status.other";
   const breakdown = setBreakdown(data.summary, sportKey);
   // Kernel perSide order is [home, away]; row labels come from it.
   const sideIds = data.summary?.perSide?.map((s) => s.entrantId) ?? [];
@@ -135,7 +154,7 @@ export function LiveScoreBody({
           {inPlay ? (
             <p className="mb-3 flex items-center gap-2 text-[11px] font-bold uppercase tracking-[0.22em] text-emerald-300">
               <span className="animate-live-pulse h-2 w-2 rounded-full bg-emerald-400" />
-              Live{subscribed ? " · realtime" : ""}
+              {t(activeDict, statusKey)}{subscribed ? " · realtime" : ""}
               {strength ? (
                 <span className="rounded-full bg-amber-400/20 px-2 py-0.5 font-mono text-[11px] font-bold tracking-normal text-amber-300">
                   {strength}
@@ -144,7 +163,7 @@ export function LiveScoreBody({
             </p>
           ) : (
             <p className="mb-3 text-[11px] font-semibold uppercase tracking-[0.22em] text-court-muted">
-              {decided ? "Ended" : data.status.replace("_", " ")}
+              {t(activeDict, statusKey)}
             </p>
           )}
           <p className="font-display text-5xl font-bold tabular-nums leading-none tracking-tight sm:text-6xl">
@@ -183,7 +202,7 @@ export function LiveScoreBody({
           {data.outcome?.winner ? (
             <p className="mt-4 flex items-center gap-1.5 text-sm text-court-muted">
               <span className="animate-trophy">🏆</span>
-              Winner:{" "}
+              {t(activeDict, "matchCentre.winner")}{" "}
               <strong className="text-amber-300">
                 {entrantNames[data.outcome.winner] ?? data.outcome.winner}
               </strong>
