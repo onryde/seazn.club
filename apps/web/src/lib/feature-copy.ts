@@ -4,7 +4,7 @@
 
 export const FEATURE_REASONS: Record<string, string> = {
   // Structure & scale
-  "embeds.enabled": "Embedding live widgets on your own website is a Pro feature.",
+  "embeds.enabled": "Embedding live widgets on your own website is on Pro and the Event Pass.",
   // Billing groups (spec 2026-07-21): the cap belongs to the billing GROUP, so
   // the way forward is the group's plan — not a per-org purchase. Never says
   // "clubs", which is a separate in-org entity with its own clubs.max cap.
@@ -75,16 +75,31 @@ export const FEATURE_REASONS: Record<string, string> = {
   // `standings.custom_points`, `scheduling.multi_division`) and three had been
   // free for waves (`exports` since V310, both officials keys since V319).
   //
-  // None of these gates can fire from a PLAN any more — `orgPlanKey` coalesces
-  // a subscription-less org to 'community', which grants them — so the only
-  // refusal left is an explicit `org_entitlement_overrides` deny. That is what
-  // the copy now says. A sentence nobody can reach is exactly where a
-  // falsehood survives: no customer complains, no test renders it, and the
-  // next reader takes it as a statement of the paywall.
+  // SOME of these fire from a plan and some cannot — read the row before
+  // trusting a sentence here. This comment used to say "None of these gates can
+  // fire from a PLAN any more", on the reasoning that `orgPlanKey` coalesces a
+  // subscription-less org to 'community', which grants them. True for three of
+  // the seven; FALSE for four. Community is `false` on `stats.player`,
+  // `discipline.enforced`, `scoring.audit_export` and `standings.carry_over`,
+  // so every free org reaches those four strings on the ordinary path.
+  //
+  // Which makes the comment's own warning land on itself: "a sentence nobody
+  // can reach is exactly where a falsehood survives — no customer complains, no
+  // test renders it, and the next reader takes it as a statement of the
+  // paywall". The unreachability was the falsehood, and it kept three
+  // misattributed sentences alive underneath it.
+  //
+  // The three that ARE unreachable from a plan — `cricket.dls`,
+  // `standings.custom_points`, `tiebreakers.custom`, all `true` on community —
+  // keep the override wording, because for them an explicit
+  // `org_entitlement_overrides` deny really is the only refusal left.
   "cricket.dls": "DLS revised targets are switched off for this organisation — a manual umpire target still works.",
-  "stats.player": "Player stats and scorecard entry are a Pro feature.",
-  "scoring.audit_export": "The signed match audit trail download is a Pro feature.",
-  "discipline.enforced": "Automatic suspension tracking is a Pro feature.",
+  // Reads only — `divisionPlayerStats`, `personStats`, `personCareerStats`.
+  // Nothing gates scorecard ENTRY on this key, so that half of the old
+  // sentence described a paywall the code does not have.
+  "stats.player": "Player stats are on Pro and the Event Pass.",
+  "scoring.audit_export": "The signed match audit trail download is on Pro and the Event Pass.",
+  "discipline.enforced": "Automatic suspension tracking is on Pro and the Event Pass.",
   "tiebreakers.custom": "Custom tiebreaker order is switched off for this organisation.",
   "standings.custom_points": "Bonus-point rules and forfeit points are switched off for this organisation — plain win/draw/loss points work on every plan.",
   "standings.carry_over": "Carrying Phase-1 standings into Phase 2 is a Pro feature.",
@@ -118,13 +133,13 @@ export const FEATURE_REASONS: Record<string, string> = {
   // ENTERPRISE_FEATURES, or this gate would quote Contact-us for something a
   // self-serve upgrade already covers.
   "dashboard.theme": "Your own colours on public pages, the slideshow and shared cards are a Pro feature — your club logo works on every plan.",
-  "dashboard.player_profiles": "Public player profiles are a Pro feature.",
-  realtime: "Live push updates are a Pro feature.",
+  "dashboard.player_profiles": "Public player profiles are on Pro and the Event Pass.",
+  realtime: "Live push updates are on Pro and the Event Pass.",
   // Platform
   "api.access": "API keys are a Pro feature.",
   "api.write": "Write access via the API is an Enterprise feature (Contact us) — read keys work on Pro.",
   exports: "CSV/PDF exports are switched off for this organisation.",
-  "exports.branded": "Branded print templates (club colours, sponsor logos) are a Pro feature.",
+  "exports.branded": "Branded print templates (club colours, sponsor logos) are on Pro and the Event Pass.",
   // Clubs & bulk import (Jul3/01 §7)
   // STATES NO NUMBER AND NO PLAN, deliberately, and both sides of a rebase
   // arrived at that independently — main removed the figure while this wave was
@@ -163,7 +178,7 @@ export const FEATURE_REASONS: Record<string, string> = {
   // moved with this one.
   "scheduling.multi_division":
     "The competition-wide schedule board is switched off for this organisation.",
-  "officials.auto": "Auto-assigning officials (solver, phased sourcing) is a Pro feature — manual assignment still works.",
+  "officials.auto": "Auto-assigning officials (solver, phased sourcing) is on Pro and the Event Pass — manual assignment still works.",
   "officials.roles_multi": "Multiple official roles per fixture (judge + referee) are switched off for this organisation.",
   "officials.marks": "Rating your match officials is switched off for this organisation.",
   "scheduling.ai": "AI Schedule (plan, refine and repair your schedule from plain-language instructions) is not available on this plan.",
@@ -180,7 +195,7 @@ export const FEATURE_REASONS: Record<string, string> = {
   "schedule.checkpoints.max":
     "You've reached your plan's save points — Community keeps 2 per division and Pro keeps 10. Undo/redo always works.",
   "scoring.device_links":
-    "Hand-this-device-over scoring links are a Pro feature — your scorer seat still works.",
+    "Hand-this-device-over scoring links are on Pro and the Event Pass — your scorer seat still works.",
   // Registration & entry fees (doc 16 §1.1)
   "registration.enabled": "Online registration is not available on this plan.",
   // V309 seeds registration.paid TRUE on every plan, so no PLAN can deny this
@@ -193,14 +208,14 @@ export const FEATURE_REASONS: Record<string, string> = {
   // renders these lines above a $29 CTA as well as the Pro one — say what is
   // still free on Community rather than implying sponsors need a plan at all.
   "sponsors.tiers":
-    "Sponsor tiers (Title, Gold, Silver) and per-competition placement are a Pro feature — the flat partner strip is free on every plan.",
+    "Sponsor tiers (Title, Gold, Silver) and per-competition placement are on Pro and the Event Pass — the flat partner strip is free on every plan.",
   "sponsors.monetize":
-    "Selling priced sponsorship packages is a Pro feature — showing sponsor logos is free on every plan.",
+    "Selling priced sponsorship packages is on Pro and the Event Pass — showing sponsor logos is free on every plan.",
   // Discovery showcase (doc 15 §5)
   "discovery.listed": "Showcasing on seazn.club is not available on this plan.",
   "discovery.featured": "The featured showcase row is a Pro perk.",
   "discovery.branding": "Card tagline and hero image on seazn.club are a Pro feature.",
-  "news.auto": "Auto-drafted result posts are a Pro feature.",
+  "news.auto": "Auto-drafted result posts are on Pro and the Event Pass.",
 };
 
 /** Human, contextual sentence for a 402 / paywall. Never throws. */

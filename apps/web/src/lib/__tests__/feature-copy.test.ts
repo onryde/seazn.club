@@ -202,8 +202,14 @@ describe("feature-copy V290", () => {
     expect("it's billed monthly on top of your current bill").not.toMatch(PRICES_THE_RIDER);
   });
   it("has copy for the v16 league-ops entitlements (V293/V294/V295, T84)", () => {
+    // Reworded 2026-09-05: V392 gave `discipline.enforced` to BOTH pass rungs,
+    // so "a Pro feature" told a pass holder to buy an upgrade they were already
+    // holding. Eleven other reasons had drifted the same way. The literal pin
+    // stays — its job is that copy EXISTS for these keys — but the sentence's
+    // TRUTH is `freeClaimFaults`' job, which is why this pin was allowed to sit
+    // wrong for as long as it did.
     expect(featureReason("discipline.enforced")).toBe(
-      "Automatic suspension tracking is a Pro feature.",
+      "Automatic suspension tracking is on Pro and the Event Pass.",
     );
     // `officials.marks` has been TRUE on community since V319 — the "Pro
     // feature" sentence this pinned had been false for several waves, and
@@ -214,7 +220,12 @@ describe("feature-copy V290", () => {
     expect(featureReason("officials.marks")).toBe(
       "Rating your match officials is switched off for this organisation.",
     );
-    expect(featureReason("news.auto")).toBe("Auto-drafted result posts are a Pro feature.");
+    // `news.auto` moved with the same twelve: V395 made auto posts paid again
+    // AND both pass rungs grant them, so this sentence named the dearer plan
+    // and stayed silent about the cheaper one that also unlocks it.
+    expect(featureReason("news.auto")).toBe(
+      "Auto-drafted result posts are on Pro and the Event Pass.",
+    );
     expect(featurePlan("discipline.enforced")).toBe("pro");
     expect(featurePlan("officials.marks")).toBe("pro");
     expect(featurePlan("news.auto")).toBe("pro");

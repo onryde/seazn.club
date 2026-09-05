@@ -832,7 +832,15 @@ export interface PaywallReason {
  * yours", not "this belongs to Pro".
  */
 export const PRO_ATTRIBUTION =
-  /\b(?:is|are)\s+(?:a|an)\s+(?:Pro|paid)\s+feature\b|\bneeds?\s+(?:a\s+)?Pro\s+plan\b|\bupgrade\s+to\s+Pro\b/i;
+  /\b(?:is|are)\s+(?:a|an)\s+(?:Pro|paid)\s+feature\b|\b(?:is|are)\s+on\s+Pro\b|\bneeds?\s+(?:a\s+)?Pro\s+plan\b|\bupgrade\s+to\s+Pro\b/i;
+// "…is on Pro and the Event Pass" was added 2026-09-05 with the twelve reasons
+// that now name both plans. Without it those sentences match no PAID
+// attribution at all, so a trailing contrast clause ("…the flat partner strip
+// is free on every plan") becomes the only thing the vocabulary sees and the
+// reason reads as a claim that the GATED capability is free — which is exactly
+// the false positive the `attributesFree` comment below describes. Measured:
+// rewording `sponsors.tiers` and `sponsors.monetize` produced precisely that
+// pair of phantom faults until this alternative existed.
 
 /**
  * "…is an Enterprise feature", the Contact-us tier's own attribution.
@@ -844,6 +852,16 @@ export const PRO_ATTRIBUTION =
  * `dashboard.branding` — badge removal, enterprise-only since V395 — be granted
  * on Pro, which is the very thing the sentence says it is not.
  */
+/**
+ * "…and the Event Pass", the sentence naming the other plan that grants a key.
+ *
+ * Only used NEGATIVELY: a "Pro feature" claim is a fault when a pass rung also
+ * grants the key and the sentence does NOT say so. Deliberately loose — any
+ * mention of the pass is enough, because the claim being tested is "did we tell
+ * them", not "did we phrase it a particular way".
+ */
+export const PASS_ATTRIBUTION = /\bevent\s+pass\b/i;
+
 export const ENTERPRISE_ATTRIBUTION =
   /\b(?:is|are)\s+(?:a|an)\s+Enterprise\s+feature\b|\bneeds?\s+(?:an\s+)?Enterprise\s+plan\b/i;
 
@@ -909,6 +927,27 @@ export function freeClaimFaults(
     // paywall point a Pro subscriber at an upgrade they already bought.
     if (attributesPro && proRow !== undefined && !grants(proRow)) {
       faults.push(`${key}: calls it a Pro feature, but pro does not grant it either`);
+    }
+    // …and the EVENT PASS, which not one of the rules above can see. They
+    // reason about community, pro and enterprise only, so "a Pro feature" for a
+    // key a pass rung ALSO grants satisfies every one of them — while telling a
+    // pass holder to go and buy an upgrade they are already holding. That is
+    // precisely the failure the Pro rule above exists to catch, one plan over.
+    //
+    // Three sentences sat wrong behind that blind spot until 2026-09-05:
+    // `stats.player`, `scoring.audit_export` and `discipline.enforced`, all
+    // granted to both rungs by V392 and all still reading "is a Pro feature".
+    // The guard was written before the pass held anything worth naming, and
+    // nothing widened it when V392 made it hold four things.
+    if (attributesPro && !PASS_ATTRIBUTION.test(text)) {
+      const rungs = (["event_pass", "event_pass_l"] as const).filter((rung) =>
+        grants(rows[key]?.[rung]),
+      );
+      if (rungs.length > 0) {
+        faults.push(
+          `${key}: calls it a Pro feature without naming the Event Pass, which grants it too (${rungs.join(", ")})`,
+        );
+      }
     }
     // …and the ENTERPRISE claim, judged the other way round: naming the
     // Contact-us tier asserts that PRO does not have it. A key Pro grants,
