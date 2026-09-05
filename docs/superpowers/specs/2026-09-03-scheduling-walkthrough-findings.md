@@ -1077,3 +1077,917 @@ screen anywhere.
    none at all (§S20).
 9. **§S14 is an owner question**, and should be asked before any phone work is
    scoped into this wave.
+
+---
+---
+
+# Part II — what building the walkthroughs turned up
+
+Part I above is Task 0: one session driving two journeys by hand, before any
+code was written. Part II is everything the **rest of the wave** found —
+ten tasks, eleven task reviews, three whole-branch review lenses and one
+max-effort code review, all of it while turning Part I's journeys into two
+executable specs.
+
+The shape of the wave changed underneath it. It was scoped as a walkthrough
+wave; the owner then ruled S1 and S3 in, so it also carries a CP-SAT wire fix
+and four new server guards. Most of Part II is therefore about things found
+**by building on Part I's findings** rather than by driving the product — and
+the single most useful section for the next wave is §J, the sixteen briefed
+premises that proved false.
+
+**Sources**, all under
+`.superpowers/sdd/2026-09-03-scheduling-walkthroughs/`: `progress.md` (the
+ledger — every ruling and what it costs if wrong), `code-review-max.md` (20
+verified findings, 3 rediscoveries, 5 unverified, one discarded section),
+`wb-review-logic.md` / `wb-review-i18n.md` / `wb-review-tests.md`,
+`task-4-review.md`, `task-5-review.md`, `task-9-rereview.md`,
+`spec-fixes-report.md`, `copy-fix-report.md` and the ten `task-N-report.md`
+files.
+
+**What "verified" means below.** Every finding carried into Part II was
+confirmed by someone opening the cited source, not by a grep. Where a claim
+rests on a mechanism nobody exercised, it says so in the entry. Line numbers
+are pinned against this branch (`feat/scheduling-walkthrough`) and are
+branch-relative — cite the symbol, not the number, if you carry one elsewhere.
+
+---
+
+## §B — Disposition of Part I and of the design's F1–F5
+
+The design document named five findings, F1–F5, before the wave started. Part I
+added S1–S22. Here is where every one of them ended.
+
+| # | Finding | Disposition |
+|---|---|---|
+| F1 | Clear ignores the freeze | **FIXED** — `clearScheduleScoped` guard (`25773433e`), UI disabled + reason (`ec3ed86dc`), e2e step 12 |
+| F2 | Danger zone hardcoded English | **FIXED, and widened** — all nine strings in `history-panel.tsx` plus twelve event labels, 4 locales |
+| F3 | Officials assign select never chosen | **FIXED** — Task 5 assigns a named official and reads `fixture_officials` back |
+| F4 | No UI has ever created a blackout | **FIXED** — the organiser walkthrough drives the blackout editor, including the court-scoped round trip |
+| F5 | Required court tags wholly API-driven | **FIXED** — both writers driven; the stale `test.fixme` in `court-tags-scheduling.spec.ts:276` can be retired (W6) |
+| S1 | Minimum rest has two homes | **FIXED, and the mechanism was not what S1 said** — see §J FP12. One line: `build.ts` read the raw field into the CP-SAT wire instead of the shared `restFloor` resolver |
+| S2 | Clear wipes a frozen board silently | **FIXED** (= F1) |
+| S3 | Restore also edits a frozen board | **FIXED** (`5833243a0`..`e6193c1c2`), and then undo/redo too (`463bdfc27`), after the reason for exempting them turned out to be false (§J FP5) |
+| S4 | Officials auto-draft cannot be applied | **NOT FIXED — encoded.** See §E |
+| S5 | Board grid shows local time, captions say UTC | **OPEN.** Not scoped; no work done |
+| S6 | Official's list names the wrong venue | **OPEN.** Task 5 seeds two venues so a fix is witnessable, but no fix |
+| S7 | Auto-draft prints internal diagnostics | **OPEN** |
+| S8 | Capacity card contradicts itself | **OPEN.** The organiser walkthrough derives its capacity assertion and includes a binding per-day cap case, so a fix is witnessable |
+| S9 | Capacity card ignores live play hours | **OPEN** |
+| S10 | Unmatched court tag saves with a success toast | **OPEN** |
+| S11 | Typing a number then clicking a toggle discards the toggle | **OPEN.** The walkthrough now pins the commit semantics that make this reproducible (blur commits, checkbox commits instantly) |
+| S12 | Danger zone hardcoded English, and wider | **PARTLY FIXED** (= F2). The six tab labels are still raw ids — see §H S31 |
+| S13 | Officials ASSIGN control 60% off-screen at 320 | **OPEN.** See §F |
+| S14 | Six-tab console is a groomed shrink | **PARTLY RETRACTED.** See §G |
+| S15 | Invited official lands on organiser onboarding | **OPEN** |
+| S16 | Claim link is not a link, truncated, shown once | **OPEN.** Task 5 works around it by reading the `<code>`'s text |
+| S17 | Blackout clash signalled by a hover-only glyph | **OPEN.** Task 5 asserts `officials-unavailable-note`, so the organiser-side half is now covered by a test |
+| S18 | Five empty round headers on an unscheduled run sheet | **OPEN** |
+| S19 | "Start tournament" is irreversible with no confirmation | **OPEN** |
+| S20 | Four tabs carry zero `data-testid` | **FIXED** — 27 testids across six files (`a74095b13`..`ff79a3dc9`), plus a contract test |
+| S21 | Court-picker checkboxes: duplicate names, 13×13 px | **OPEN** |
+| S22 | Clear reports no counts | **OPEN.** The walkthrough reads emptiness from the record instead |
+
+Nine closed, thirteen open, one encoded, one partly retracted. That ratio is
+the honest headline: **a walkthrough wave converts findings into tests far
+faster than it converts them into fixes**, and the tests are what stop the
+open ones being re-discovered from scratch next year.
+
+---
+
+## §C — S23: four more division write paths ignored the freeze
+
+**Critical (as a set). All four now FIXED — `816fe1525`, `cf3b11e26`.**
+
+The wave's headline claim is "a frozen division refuses edits". It shipped
+four guards (clear, restore, undo, redo) and a comment saying the enumeration
+was finished. Three whole-branch lenses and one max-effort review then found
+**four more live write paths** that never asked.
+
+| Path | Entry point | What it did on a frozen division |
+|---|---|---|
+| `clearPoolEntrants` (`history.ts:768`) | `POST /api/v1/pools/{id}/clear-entrants` | `delete from fixtures where … and status <> 'decided'` — fixtures **permanently removed** |
+| `shiftDivisionSchedule` (`schedule-plus.ts:34`) | `POST /api/v1/schedule/shift`, and the Constraints tab's "Shift whole timetable" | moved **every unlocked fixture** and set `edit_watermark = null`, destroying the redo stack |
+| `deleteCheckpoint` (`history.ts:606`) | the ✕ on a save-point row | `delete from division_checkpoints … returning id` — the save point **gone forever** |
+| `startDivision`'s quick-start write (`schedule.ts:3622`) | `board-start-division` on a `setup` division | wrote `scheduled_at` across the first stage and called `generateStageFixtures` |
+
+Each was found independently and verified by reading the function: none of the
+four contained a `divisionLockState` call, and `shiftDivisionSchedule`'s
+`schedule_locked` reads were the **per-fixture** column on a different table
+with the same name.
+
+**What the customer loses.** The four are not equivalent, and the differences
+matter more than the count:
+
+- `deleteCheckpoint` is the worst, because it is the only **unrecoverable**
+  one. Its Restore sibling **on the same row** was greyed out by this wave with
+  "The schedule is frozen. Unfreeze it above to restore a save point." — and
+  the ✕ beside it silently destroyed the thing the greyed button was protecting.
+  An organiser who is told they cannot restore, and who then tidies up the
+  list, loses the restore point permanently.
+- `shiftDivisionSchedule` is the widest, because it is a **first-class UI
+  control on a tab of the same console**, and it damages the rewind: nulling
+  `edit_watermark` means the History panel cannot put the board back even after
+  an unfreeze.
+- `clearPoolEntrants` deletes fixtures rather than un-scheduling them.
+- `startDivision`'s write is the narrowest — it needs a division still in
+  `setup` with rolling times configured — but it is the same class.
+
+**Blast radius.** Every frozen division, for the whole window between freezing
+and the tournament starting, which is exactly the window a freeze exists for.
+Three of the four are reachable from the scheduling console the organiser is
+already looking at; `shiftDivisionSchedule` and `clearPoolEntrants` are also
+exposed to any API key with `manage` scope (`key-scopes.ts:290`).
+
+**Recommendation — done.** All four now throw
+`HttpError(422, SCHEDULE_LOCKED_MESSAGE, SCHEDULE_LOCKED_CODE)` from the shared
+`apps/web/src/lib/schedule-lock.ts`, each placed after its own existence check
+so a missing row still 404s. Every guard was **seen red first** with the actual
+failure text recorded (`clearPoolEntrants` resolved `{ removed: 6, seq: 3 }`;
+`deleteCheckpoint` resolved `undefined`; `shiftDivisionSchedule` resolved
+`{ shifted: 1, … }`; `startDivision` left six fixtures alive because generation
+is its own transaction). `deleteCheckpoint` needed a restructure — its
+`delete … returning id` **was** its existence check, so there was nowhere to
+stand that kept 404 ahead of 422; it is now `select` → 404 → guard → `delete`,
+both halves in one transaction.
+
+**Strongest argument against.** Two, and they are not the same strength.
+
+For `shiftDivisionSchedule` there is a real one: shifting the whole timetable
+by a fixed offset is the classic "the venue moved us an hour later" operation,
+and it preserves relative order, so an organiser could argue it is the one edit
+a frozen board should still accept. The counter is decisive on the data rather
+than on taste — it nulls `edit_watermark`, so it is not order-preserving with
+respect to the rewind, and the freeze's own copy says "block ALL schedule
+EDITS (yours included)".
+
+For `startDivision` the counter-argument won, and it changed the fix: see §H
+S24 — **starting a frozen division must keep working**, and only its *write*
+refuses. A guard that refused the transition would have been a regression.
+
+The weakest argument against is the one nobody should accept: "these are
+pre-existing, not regressions from this branch." True of all four — verified
+with `git log -L` from the worktree. It is also irrelevant. The wave's claim is
+what makes them urgent: shipping "a frozen division refuses edits" while a live
+route deletes that division's fixtures makes the claim false, and the reader of
+the release note has no way to know which half is true.
+
+---
+
+## §D — S24: the comment that asserted the enumeration was complete
+
+**This is a finding about method, not a bug, and it is the most transferable
+thing in Part II.**
+
+`history.ts:255` shipped, in this wave, reading:
+
+> Undo and redo **were the last two** division write paths that ignored it.
+
+It was false at three sites on the day it was written — `clearPoolEntrants`
+fifty lines below it in the same file, `deleteCheckpoint` in the same file, and
+`shiftDivisionSchedule` in `schedule-plus.ts`. A sibling comment in
+`clearScheduleScoped` claimed "Clear was the one division write path a freeze
+did not stop", which was false in the same way.
+
+The mechanism is worth naming precisely, because everyone involved was being
+careful. The wave **did** enumerate write paths: the docstrings hunt down
+`applySchedule`, `moveFixture`, the joint apply and the AI-plan gate, and even
+disclose `patchFixture` as a known miss. What it did was enumerate the paths it
+could reach by grepping for the sentence it already knew about, and then write
+down a **count**. A grep over a sentence finds the sites that already say that
+sentence. It cannot find the site that says nothing.
+
+**What the customer loses.** Nothing directly — a comment ships no behaviour.
+What is lost is the next reader. A comment stating a closed enumeration is the
+cheapest possible way to stop someone checking, and it will be believed
+precisely because it is specific. Two of this wave's own reviewers cited it
+back as context.
+
+**Blast radius.** Every future change to the freeze. And the class is wider
+than freezes: any comment of the form "these are the only N places that do X".
+
+**Recommendation — done, and the shape is the point.** The replacement comment
+does **not** contain a corrected list. It names the enumeration's **source**:
+
+> The enumeration is now the IMPORT GRAPH of `@/lib/schedule-lock` … `grep -rn
+> SCHEDULE_LOCKED_MESSAGE apps/web/src` is the live answer and a freeze refusal
+> that does NOT import the constant is the bug.
+
+That converts a fact that rots into a query that cannot. It only works because
+the constant is import-clean — `apps/web/src/lib/schedule-lock.ts` has zero
+`import` statements, which makes "does everything share it?" arithmetic rather
+than an argument.
+
+**Strongest argument against.** A grep-recipe comment is less useful than a
+list at the moment you read it: a list tells you the answer, a recipe makes you
+run something. That is a genuine cost, paid on every read, against a benefit
+paid once when the list would have gone stale. Two things settle it here.
+First, this particular list had already gone stale **before it was committed**,
+which is the fastest possible refutation of "lists are fine if you keep them
+up". Second, the recipe is a one-line grep whose output is the list — so the
+cost is seconds, and the answer is never wrong.
+
+The residual honest weakness: the recipe is only as good as the constant's
+discipline. A path that refuses a freeze by re-typing the sentence would be
+invisible to the grep, exactly as before. The comment says so; nothing enforces
+it. **A lint rule or a test asserting no literal `"schedule is locked"` outside
+`schedule-lock.ts` is owed** and does not exist.
+
+---
+
+## §E — S4's disposition: encoded as actual behaviour plus a `test.fail()` pin
+
+**S4 is NOT fixed.** Propose still builds a real draft that cannot be applied.
+
+The wave's decision, and it was a deliberate one made twice: the walkthrough
+carries **both** encodings.
+
+1. The main journey asserts **what the product does today** —
+   `officials-apply` is `toBeVisible()` (load-bearing: the button renders only
+   under `proposal && proposal.assignments.length > 0`, so visibility proves
+   the half of S4 that says *propose builds a real draft*) and then
+   `toBeDisabled()`, under a comment naming S4 by id and by the findings-doc
+   line, and stating why `toBeEnabled()` was not used and why `toBeDisabled()`
+   **alone** would be wrong.
+2. A separate `test.fail()` test pins the **correct** behaviour: enable, click,
+   and poll that the fixture ends up with at least one official. It reds as
+   "passed unexpectedly" the moment S4 is fixed.
+
+`test.fail()`, never `test.skip()` — a skip is silent forever.
+
+**What the customer loses, unchanged from Part I.** The entire value of
+auto-assignment: the feature runs, reports what it would do, and then the
+organiser does all of it through fifteen dropdowns, having been shown that the
+product could have done it.
+
+**Blast radius.** Every organiser using officials auto-draft.
+
+**Recommendation.** Fix the predicate. Task 5's review established the
+mechanism with enough precision that the fix is now a product decision rather
+than an investigation: with `max_per_day: 1` and two fixtures on one day,
+`assign.ts:228-231` skips the second (`dayCount >= maxPerDay`), `best === null`,
+and `assign.ts:270-271` emits `role_unfilled` with `severity: "block"` — which
+is exactly what `officials-panel.tsx:316`'s
+`disabled={busy || proposal.conflicts.some(c => c.severity === "block")}`
+refuses on. So the product's position is *"a draft that cannot fill every slot
+cannot be applied at all"*. That is the thing to change: a partial draft should
+be applicable, seating the assignments it did make and leaving the unfilled
+slots unfilled — which is what the nine red rows already tell the organiser
+happened.
+
+**Strongest argument against, and it is stronger than Part I allowed.** Part I
+said "the button may be correctly disabled for a reason I did not eliminate",
+and that turned out to be true: it **is** correctly disabled by its own stated
+rule. All-or-nothing has a real defence — a partial apply leaves the roster in
+a state no one chose, and an organiser who applies six of fifteen and then
+forgets is worse off than one who was refused. If the owner takes that view,
+S4 shrinks to a copy defect: the button must say *why* it cannot be pressed
+("3 slots have no eligible official — resolve them or assign manually"), which
+today it does not, carrying no `title`, no `aria-label` and no `aria-disabled`.
+Either way the product owes the organiser a sentence, and the `test.fail()` pin
+is still the right shape — if the owner rules all-or-nothing correct, the pin
+is deleted with a comment saying so, which is a decision on the record rather
+than a silent skip.
+
+**Two things about the pin itself that are findings in their own right** — see
+§K T3: as first written, `test.fail()` was the first statement of the test
+body, so six setup steps were inside the inverted envelope and would have read
+green. Fixed in `4ef40fbe6`; the mechanism was read out of Playwright's own
+`workerProcessEntry.js:991-994` rather than assumed, and proven in both
+directions by running it.
+
+---
+
+## §F — S13 is still open
+
+**Medium. No work done. Nothing in this wave touched it.**
+
+At 320px on the Officials tab: the ASSIGN column header starts at x=285 — the
+right edge of the viewport — and the first assign `<select>` is 47px wide at
+x=301–348, so roughly 19px of it is on screen. The scrolling wrapper is
+`class="card scroll-x scroll-x-fade"` with **no `tabindex`, no `role` and no
+`aria-label`**, so a keyboard user cannot scroll the rail to reach the control
+at all.
+
+**Why it survives every gate we have.** The wrapper is a genuine
+`overflow-x: auto` rail, so the page-level no-horizontal-scroll gate passes
+correctly, and `mobile.spec.ts`'s clipping scan correctly excuses it as the
+reachable kind of overflow. Both gates are right; neither is asking the
+question that matters, which is whether the tab's primary action can be
+operated.
+
+**What the customer loses.** The officials tab's only action is unusable on a
+phone. This is one of the two tabs anyone actually opens courtside.
+
+**Blast radius.** Every phone width on the officials tab. The same `.scroll-x`
+wrapper pattern is used elsewhere and is worth auditing.
+
+**Recommendation.** Split it. The accessibility half is not optional and is
+cheap: `tabindex="0"` plus a role and an accessible name on the rail,
+unconditionally (`tabindex` cannot be varied by media query). The composition
+half — a stacked card per fixture at phone widths with the assign control
+full-width beneath the names — is a design decision that belongs with S14's.
+
+**Strongest argument against.** For the composition half there is a real one:
+scoping a phone composition into a wave that has already grown a CP-SAT fix and
+four server guards is how waves stop landing, and S14's own escalation was
+parked for the same reason. For the accessibility half there is none I can
+construct. `scrollable-region-focusable` is a SERIOUS-impact axe rule, the
+repo's own standing rule says any new scrolling region owes a `tabindex`, a
+role and a name, and this one is not new — it has simply never been checked.
+The only argument is scheduling, and scheduling is not an argument against
+correctness.
+
+---
+
+## §G — S14: the board-tab reading is RETRACTED; the other five stand
+
+### The retraction, first
+
+**S14 as written claimed six tabs presented identical control sets at 320 and
+1280. The board row was a measurement artefact and is WITHDRAWN.**
+
+`schedule-board.tsx:853-861` reads a **saved density from `localStorage`**
+before applying its mobile default. Part I's hand-drive walked 1280 → 768 → 320
+in **one browser context**, so the 320 measurement was reading a desktop
+density the same session had just chosen at 1280. It was never a responsive
+branch.
+
+Re-measured by Task 4 in a **fresh context with no saved preference**: the
+first phone visit at 320 opens at **Agenda**, the intended mobile default. The
+board tab is doing exactly what it should. **No phone work is owed for the
+board tab**, and any future S14 measurement must use a fresh context per width
+or it will reproduce this error.
+
+This retraction was recorded durably before it was acted on
+(`3e4d80d81`, then `ae7c61e04`), because a peer session had already been told
+the original reading.
+
+The general rule, which cost this wave two separate corrections: **a
+measurement taken in a context that carries state from a previous measurement
+is not a measurement of the second condition.** The same shape produced W1 in
+Part I (a `psql` session timezone manufacturing an hour) and produced §K T5
+below (a string grep confirming a string and being read as confirming a build).
+
+### What still stands
+
+Five of six tabs — health, settings, constraints, officials, history — present
+**exactly the same controls, in the same order, at 320 as at 1280**. None of
+them persists view state, so none of them can be contaminated the way the board
+row was. Raw dumps are preserved at
+`docs/superpowers/specs/2026-09-03-scheduling-walkthrough-evidence/`.
+
+**What the customer loses.** Nothing is broken; what is missing is a point of
+view about what an organiser needs on a phone. Five dense desk panels rendered
+at 25% width.
+
+**Blast radius.** The scheduling console is the largest organiser surface with
+no phone composition, at a moment when the scoring pad and the fixture console
+have both just had theirs.
+
+**Recommendation.** Still an owner question, not a defect. The scoping answer
+this wave would give, now that the board row is out of it: **officials is the
+one tab that needs composition work**, and it needs it for S13's reason (a
+dead primary action) rather than for S14's (an undifferentiated control set).
+Settings, constraints, history and health are desk work where an honest reflow
+is the right answer and a phone composition would be spending design budget on
+a use case that barely exists.
+
+**Strongest argument against, and it got stronger.** The owner scoped S14's
+phone work into this wave on 2026-09-04, on the strength of a six-tab finding.
+One of those six rows was wrong. That is a direct argument for *not* acting on
+the remaining five without re-deriving the case: the finding that justified the
+scope decision is not the finding that survived it. A decision made on
+contaminated evidence should be re-put, not inherited — which is why the phone
+work is PARKED rather than dropped or done.
+
+---
+
+## §H — New findings, still open
+
+Numbering continues Part I's series. Each was verified by reading the cited
+source; where the mechanism was not exercised, the entry says so.
+
+### S25 — Deleting a blackout row corrupts the surviving row's date
+
+**High. Silent data loss. `constraints-panel.tsx:844-848`, removal at `:881`.**
+
+The `<li>` is `key={i}` and removal is
+`rows.filter((_, j) => j !== i)`. The comment on the line this wave edited says
+*"Index key: every field is controlled from this array, so there is no per-row
+state for React to mis-reuse."* That is false. Each row's `from`/`to` are
+`DateTimeField kind="datetime-local"`, which delegates to `DateTimeSplitField`,
+whose state is `useState(() => splitValue(value))` — and whose **own docblock
+says** it is *"seeded once from the incoming `value` … never re-derived from
+props after mount"*.
+
+Trigger: two blackouts, row 0 on 2026-09-10, row 1 on 2026-09-12. Remove row 0.
+React keeps key `0` mounted and swaps its `value` prop to row 1's window;
+`halves` still reads 2026-09-10, so the surviving blackout **displays the
+deleted one's date**, and the next edit to either half writes 2026-09-10 back.
+
+**What the customer loses.** They black out a day they deleted and un-black the
+one they kept — and the screen agrees with the wrong version, so there is no
+cue. The next solve places matches in a window the venue is closed.
+
+**Blast radius.** Any division with two or more blackouts where one is removed.
+Also: `data-blackout-index={i}`, added by this wave as the contract test's
+identity column, is an array index and re-points at a different row after any
+removal — so it is not a stable identity and should not be used as one.
+
+**Recommendation.** Key the rows by a stable id (mint one on add), not by
+index. Then delete the comment that says index keys are safe here — it is the
+comment, not the key, that will cause the next instance.
+
+**Strongest argument against.** Index keys are genuinely fine for a list whose
+every field is controlled from the parent array — the comment states a true
+general rule. The defect is that one child in the tree is *not* controlled: it
+snapshots on mount by design, and its own docblock says so. So an equally valid
+fix is to make `DateTimeSplitField` re-derive on a `value` change, which would
+close this class everywhere rather than in one panel. That is the better fix
+and the riskier one: that component is shared, and something else may be
+relying on the snapshot. I would key the rows now and file the component
+question separately.
+
+### S26 — `settings-match-minutes` rewrites a cleared field to 30
+
+**Medium. `board/settings-panel.tsx:578`, a line this wave edited.**
+
+`onChange={(e) => setMatchMinutes(Number(e.target.value) || 30)}` on a
+controlled input. `Number("") === 0`, `0 || 30` is `30` — so backspacing the
+field to empty repaints it as `30` mid-edit and the next keystroke produces
+`309`, never `90`. Typing a literal `0` is likewise rewritten to `30`.
+
+The sibling on the **next line** already uses `sanitizeNonNegativeInt`, as does
+the rest field. And the wave was demonstrably thinking about this exact class:
+the organiser walkthrough deliberately pins that clearing `constraint-min-rest`
+writes `0`, with a comment quoting `Number("") === 0`. The one numeric field
+left on the old idiom is the one whose line the diff touched.
+
+**What the customer loses.** An organiser changing 40 → 90 gets 309 unless they
+select-all rather than backspace. Match length feeds every capacity number and
+the solver.
+
+**Blast radius.** One control, but a high-traffic one, on the settings tab.
+
+**Recommendation.** Use `sanitizeNonNegativeInt`, matching its two neighbours.
+
+**Strongest argument against.** The `|| 30` idiom exists to stop an empty field
+producing `NaN` downstream, and a naive change to `Number(...)` alone would
+reintroduce that. Fair — which is why the fix is the sibling's helper, not a
+bare `Number()`. There is no argument for keeping it as it is.
+
+**Note for whoever fixes it:** the new e2e cannot witness this. It drives the
+control with `fill(String(MATCH_MINUTES))`, which never produces the empty
+intermediate value. A regression test has to type, not fill.
+
+### S27 — Pool-keyed rest still never reaches the solver
+
+**Medium-High. Engine. `build.ts:1868`, `:1881`.**
+
+The S1 fix routes the CP-SAT wire through the shared `restFloor` resolver for
+three of its four sources. The fourth, `restByGroup` keyed by **pool**, still
+does not arrive: `restFloor(verifyConfig, { divisionId: f.divisionId })` omits
+`poolId`, while both consumers on the other side pass the whole fixture and so
+resolve `restByGroup[poolId]`.
+
+Trigger: a division with two pools and `restByGroup: { "<poolA-id>": 45 }`. The
+solver is sent no rest rule, honestly returns "SCHEDULED n/n", and the verifier
+then paints `rest` conflicts on every pair in that pool — **byte-identical to
+the 32-conflict symptom S1 exists to fix**.
+
+A second, narrower instance of the same class: `restByGroup[""]` is written as
+a legal wire key (`merged[f.divisionId ?? ""]`) but can never be *read*, because
+`rest-floor.ts:88` skips a lookup on an `undefined` key. The block comment
+directly above claims the opposite.
+
+**What the customer loses.** The exact defect S1 fixed, for anyone using
+pool-scoped rest — including the "Optimised, and here are 32 warnings" screen
+that made S1 findable.
+
+**Blast radius.** Divisions with pool-scoped rest rules. Not the common case,
+which is why it survived; the wire is keyed by division id while
+`effectiveRestMinutes` resolves with `poolId` **and** `divisionId`.
+
+**Recommendation.** Widen `buildRuleGroups`' division-keyed parameter. The
+implementer confirmed this needs no proto change — `RuleGroup` is already a
+fixture-id set, and only that parameter's key space blocks it. Add a test on
+the pool axis: `grep -n poolId build-rest-lattice.test.ts` returns nothing
+today, so there is no coverage of this axis at all.
+
+**Strongest argument against.** The deferral was deliberate and reasoned: the
+implementer refused to max-collapse pool floors into one division number
+because raising a floor for sibling pools can turn a feasible board
+**infeasible**, and a false `infeasible` is a hard stop rather than a warning.
+That reasoning is correct and the decision should stand — the argument is
+against *collapsing*, not against *widening*. What is not defensible is leaving
+it silent: nothing warns a caller, and the docblock beside it describes the
+old two-source fold. **The gap is a comment away from being a trap** rather
+than a known deferral.
+
+### S28 — A sibling role card stays clickable after its own row was answered
+
+**Medium. `me/officiating-lane.tsx:238`, `:248`, `:79`.**
+
+Cards are keyed `${fixture_id}:${official_id}:${role_key}` and each holds
+`useState(a.response)` — initial value only. The write is per **fixture** and
+`setMyOfficiatingResponse` matches every role the caller holds on that fixture.
+So an official who is both referee and umpire on one fixture sees two cards;
+accepting on one flips both DB rows, but only that card calls `setResponse`.
+`router.refresh()` re-renders with fresh props and the other card's `useState`
+initial value is never re-applied, so it keeps rendering Accept and Decline over
+a row the server already recorded as accepted. Clicking Decline there then 422s
+`RESPONSE_LOCKED`.
+
+The wave's own new comment asserts this two-card case is real, and adds
+`data-fixture-official-id` for it, without fixing the state.
+
+**What the customer loses.** An official is shown an unanswered offer they have
+already answered, and gets a raw 422 for pressing it.
+
+**Blast radius.** Any official holding two roles on one fixture.
+
+**Recommendation.** Derive `response` from props rather than snapshotting it —
+or key the optimistic update by fixture, since that is what the server does.
+
+**Strongest argument against.** The optimistic local state is what makes the
+button feel instant, and deriving from props reintroduces a flash of the old
+value while `router.refresh()` completes. Real, and the answer is the ordinary
+one: keep the optimistic write, but apply it to every card sharing the fixture,
+which is the same grouping the server already uses.
+
+### S29 — `restoreCheckpoint` can be stopped mid-loop, and reports it as "nothing happened"
+
+**Major. `history.ts:667-679` combined with the new per-step guard at `:283`.**
+
+`restoreCheckpoint` loops up to 500 times calling `undoDivision`, each iteration
+its own `withTenant` transaction with no lock spanning them. This wave added a
+freeze check **inside** `step`, re-read fresh on every iteration.
+`setDivisionLocks` takes no advisory lock and can commit at any time.
+
+So a freeze landing mid-restore throws a 422 out of `restoreCheckpoint`,
+uncaught, straight to the client — carrying the same sentence the pre-loop
+guard uses for the true no-op case, while *i* undos have already committed. The
+division is left at neither the original watermark nor the checkpoint's target.
+
+**This is a hazard the wave introduced.** Before this branch nothing could
+interrupt the loop except `UNDO_BLOCKED_HAS_RESULTS`.
+
+**What the customer loses.** A board in an intermediate state, and an error
+message that says nothing happened.
+
+**Blast radius.** Multi-step restores on a division two people are working on,
+or one person across two tabs. Narrow, and entirely invisible to the tests:
+every existing test freezes **before** the restore, never during.
+
+**Recommendation.** Two parts. Catch the 422 inside the loop and return a
+partial report — count restored, count remaining, the reason — instead of a
+bare refusal; the shape already exists on the joint path. And add the test that
+freezes mid-loop, which no test does today.
+
+**Strongest argument against.** The window is genuinely tiny and needs two
+actors, so the cheaper answer is to accept it and change only the *message*, so
+a 422 out of a partially-completed restore does not claim to be a no-op. That
+is a defensible smaller fix, and it is strictly better than today. What is not
+defensible is leaving the message as it is, because the one thing worse than a
+partial rewind is a partial rewind reported as none.
+
+### S30 — A long organisation name pushes "Sign out" off-screen at 768px
+
+**Medium, and the way it was found is the finding.
+`nav.tsx:112`/`:115`, `logout-button.tsx:37`.**
+
+The org chip is `hidden shrink-0 … sm:flex` and renders `{activeOrg.name}` raw
+— no `truncate`, no `max-w-*`. The sibling "Sign out" is also `shrink-0`, with a
+comment saying it must never shrink or the label wraps. Two unshrinkable
+siblings with an unbounded string between them.
+
+This is not theoretical, and it was **reproduced by this wave**: Task 5's first
+attempt used a ~32-character org name and *reproducibly failed the 768px scroll
+gate on exactly that button*. The spec's own comment records it, calls it "a
+real, pre-existing nav responsiveness gap", and says it is "worth a separate
+finding".
+
+**That finding was never filed.** The workaround shipped — org names shortened
+to `"OH"` and `"S4P"` — and the defect is now actively hidden from the
+seven-width gate by test-data choice. Its only record was a comment inside a
+spec, until this paragraph.
+
+**What the customer loses.** Any organisation whose name is long enough loses
+the Sign out button at tablet width.
+
+**Blast radius.** Every page — it is the global nav — for every org above the
+name-length threshold. Nobody has measured that threshold.
+
+**Recommendation.** `truncate` plus `min-w-0` on the chip and a `max-w-*`
+ceiling, with the full name as a `title`. Then measure the threshold and check
+the real distribution of org name lengths, because that decides whether this is
+an edge case or a live incident nobody has reported.
+
+**Strongest argument against.** The composition change is trivial; the argument
+is about whether the finding is worth a wave's attention when no customer has
+complained. The counter is the one that matters here: **a test that avoids a
+defect by choosing different data has removed the only signal we had.** The
+seven-width gate found this, once, and we taught it not to. That is worth
+recording even if the fix waits.
+
+### S31 — Five of six console tab labels are raw ids in every locale
+
+**Medium. `schedule/page.tsx:271`.**
+
+`{tabId === "health" ? <HealthTabLabel/> : tabId}` — the six tabs render as the
+literal strings `board`, `settings`, `constraints`, `officials`, `history`, in
+every locale. This is the navigation of the very page this wave's walkthrough
+drives.
+
+Pre-existing, not caused by this wave, and deliberately not fixed inside it:
+`page.tsx` sits in a file three live programmes are editing.
+
+**What the customer loses.** A French, Spanish or Dutch organiser gets an
+English — in fact untranslated-identifier — tab strip on every scheduling
+screen.
+
+**Blast radius.** Every scheduling screen, all four locales.
+
+**Recommendation.** Six keys, four locales, one line. It is the cheapest
+user-visible i18n win in the console.
+
+**Strongest argument against.** Contention: the file is shared with two other
+in-flight waves and the repo's own rule is not to reorder or rewrite shared
+literals concurrently. That argues for *sequencing*, not for skipping — and it
+is a two-line change that adds keys rather than reordering them, which is the
+merge-safe direction.
+
+### S32 — Five of six hard-constraint types have no UI writer at all
+
+**Medium. Product gap, found by enumerating the panels rather than the engine.**
+
+Of the engine's six hard-constraint types, only `max_fixtures_per_day` has a UI
+writer; of its seven scopes, only `division` does, and it is hard-coded inside
+`withMaxFixturesPerDay` rather than chosen. The Constraints tab instead writes
+its own flat siblings — `restMin`, `noBackToBack`, `fieldFairness`,
+`parallelism`, `crossPersonClash`, `startWindows`. Relatedly, the UI has **no
+venue scope for blackouts**: the selector is a flat list of court ids plus `""`
+meaning division-wide, so "all courts at venue X" is not expressible.
+
+**What the customer loses.** Capabilities the engine has and the product does
+not offer. They are reachable only through the AI console and the API.
+
+**Blast radius.** Every organiser who needs one of them.
+
+**Recommendation.** This is a roadmap input rather than a bug: decide which of
+the five are worth surfacing before anyone builds a sixth flat sibling beside
+the existing ones, because each flat sibling makes the eventual unification
+more expensive.
+
+**Strongest argument against.** A constraint vocabulary the organiser cannot
+express is not necessarily a gap — it may be deliberate simplification, and the
+flat siblings may be the better UX for the two or three rules people actually
+set. That is very likely right for most of them. The finding is not "expose all
+six"; it is that nobody has *decided*, and the divergence has been growing by
+accretion.
+
+---
+
+## §I — Closed in this wave, worth knowing about
+
+| # | Finding | Where it landed |
+|---|---|---|
+| S33 | The freeze sentence was hand-typed at five sites, and a sixth carried a code nobody else did — so "which paths refuse?" was answerable only by grepping prose | `apps/web/src/lib/schedule-lock.ts`, ten consumers, `816fe1525` |
+| S34 | The 422 refusal reached translated cards as raw server English, on the FIRST request, inside `board.ai.joint.undoneReason`'s `{reason}` | `66cd3cd2d`. Client-only was impossible — the code never reached the browser — so `failed[].code` was added to the wire and both surfaces now resolve a local string off `SCHEDULE_LOCKED_CODE` |
+| S35 | Delete-save-point stayed live while Restore on the same row was greyed | `66cd3cd2d`. Also given real disabled styling — a bare text button inherits none of `.btn`'s `disabled:` tokens, so it had rendered pixel-identical to a live one |
+| S36 | The joint console named the divisions it could not revert and never said why — the copy existed and nothing rendered it | `9f6d4117f` |
+| S37 | The two "frozen"s: `competition.frozen` (billing) and `divisions.schedule_locked` sat one line apart under the same name, and reusing the wrong one made a guard silently never fire | renamed to `billingFrozen` across three pages, `2ad1e9cb1` |
+
+**Residual on S34, recorded as a recommendation rather than fixed.** Both
+surfaces still show the server's own message for anything *without* a
+recognised code. That is deliberate: the leak worth closing was the known,
+expected, actionable refusal, and replacing an unanticipated error with
+"something went wrong" trades an untranslated known refusal for an unreportable
+unknown one. The right long-term shape is a translated **frame** around a
+quotable detail (`"Something went wrong: {detail}"`), which keeps the
+diagnostic and stops the card ever speaking English in its own voice. That
+touches every error path in the panel and is a separate task.
+
+---
+
+## §J — The sixteen false premises
+
+**This is the most useful section in this document for the next wave.**
+
+Sixteen briefed premises proved false. Most were written by the controller, in
+a spec or a task brief, and then handed to an implementer as fact. **Not one
+was caught by a passing test suite** — every single one was caught by a review,
+by an implementer building on it, or by someone driving the product.
+
+| # | The premise, as briefed | What was actually true | What it cost |
+|---|---|---|---|
+| FP1 | `restMin` is a `hard[]` rule of type `min_rest_minutes`; assert `config.hard.find(…).minutes === 60` | It writes `constraints.restMin`, a flat sibling — not a `hard[]` rule at all | The assertion **could never pass**. Had it shipped, Task 4 would have failed in a way that looks exactly like a product defect |
+| FP2 | A blackout with no `court` key is "venue-wide" | The UI has no venue scope: a flat list of court ids plus `""` = division-wide | A test would have asserted a scope the product cannot express (now S32) |
+| FP3 | `required_court_tags` is written from the run sheet | Two writers: `division-settings.tsx:628` and `stages-panel.tsx:2021` | Half the surface would have gone undriven |
+| FP4 | `repair-domain.ts:499` misses `restByGroup` and `noBackToBack` | Both were already handled and already pinned | One commit that was a **no-op refactor** presented as a fix. Cause: a scout's characterisation passed into a dispatch without opening the file |
+| FP5 | Undo/redo restore `divisions.schedule_locked`, so guarding them could strand an organiser | Those lines write `fixtures.schedule_locked` — a different column on a different table. `divisions.schedule_locked` has exactly one writer, which appends no ledger event, so **no rewind can ever unfreeze a division** | **This one reached the owner's decision.** The owner chose restore-only from an option list carrying this false reason, was told, and revisited: undo and redo are now guarded too |
+| FP6 | Joint restore returning 200/`ok:false` while joint apply throws 422 is an inconsistency | It is the correct atomic/non-atomic distinction. Apply is one transaction (its 422 truthfully means nothing was written); restore is N, and its module docblock says "NOT one transaction, deliberately" | A "fix" would have made a non-atomic loop claim nothing happened when N−1 divisions were already rewound. The rule kept: **ATOMIC ⇒ refuse with a status; NON-ATOMIC ⇒ 200 plus a per-division report** |
+| FP7 | `config.hard` exists | It is `config.constraints.hard` | The brief's snippet would have hung |
+| FP8 | `GET /divisions/{id}/fixtures` does not exist (per a sibling spec's comment) | It does; the comment is stale | Work almost routed around a route that was there |
+| FP9 | Asserting `board-start-division` is present after publish proves the publish worked | It is visible **before** publish | A **vacuous step**, caught before it shipped |
+| FP10 | The constraints checkboxes would fail `check()` | They fail it *because they behave correctly* — instant commit, no dirty state to check | Nearly recorded correct behaviour as a defect |
+| FP11 | `division-settings.tsx:626`'s "not read by scheduling" comment is accurate | It is wrong. Note it sits one line off the `:628` court-tags writer | A comment believed as evidence — the standing "a comment is a hypothesis" trap |
+| FP12 | S1: min rest has two homes, the solver reads one and the checker the other | A **shared resolver already exists** — `restFloor(config, group)`, MAX over four sources, owner ruling #459. The greedy placer and the verifier both honour it. The defect was **one line**: `build.ts:1814` read the raw field into the CP-SAT wire | Would have produced a config unification — a schema change and a migration — where a one-line repoint was correct. Caught before any code was written, by mapping call sites instead of trusting the finding |
+| FP13 | Task 5's step 4 should assert `officials-apply` is enabled | Contradicts S4, the wave's own High finding | Would have **frozen a High defect as expected behaviour** — the failure class this programme has already shipped twice. Caught by the controller re-reading its own brief before dispatch |
+| FP14 | The served bundle is pristine — the guard string is in all nine chunks | A string grep confirms a **string**, never the build's freshness. The server was serving a build stamped before the wave's own testids and guards existed, while agents tested against it | Agents ran against a stale build; a broadcast hazard had to be retracted to a peer. Rule: check the `BUILD_ID` stamp against the commit date |
+| FP15 | The `ui.json` merge conflict with the concurrent wave is four hunks, one per locale | Measured with `git merge-tree`: **three hunks per locale, twelve in all** | A resolver acting on the briefed sentence would have treated eight legitimate hunks as suspect |
+| FP16 | Place the freeze guard "after the existence check" in `deleteCheckpoint` | There was **no existence check** — its `delete … returning id` *was* the check | The function needed a restructure (select → 404 → guard → delete) rather than a four-line insert. Found by the implementer building on the brief |
+
+**The pattern, stated plainly.** Fourteen of the sixteen are the same error:
+**a property was asserted from a grep, a comment, or a relayed summary, rather
+than from opening the function.** FP4, FP5, FP11, FP12 and FP14 are that error
+exactly. The two exceptions (FP13, FP9) are self-caught by re-reading, which is
+the cheapest possible correction and the one worth institutionalising.
+
+**Three second-order rules this wave paid for:**
+
+1. **A correction is a NEW claim and inherits none of the verification of the
+   thing it corrects.** The wave produced three successive wrong versions of
+   one enumeration: the original comment, the fix-round replacement written
+   from a freshly-built mental model instead of a re-read, and then a third
+   round for a two-word error inside the sentence written to correct the second.
+2. **A truncated grep reads exactly like an absence.** `grep … | head -3`
+   returned three comment lines and the real call was the fourth match; the
+   conclusion "the call is missing" was one keystroke from being filed.
+3. **A disagreement between two measurements of a moving quantity is
+   staleness, not impossibility.** A peer's memory-pressure number was
+   "corrected" against a later reading of a value macOS grows and shrinks. Both
+   were true at their times. Quote the time with any machine measurement.
+
+---
+
+## §K — The vacuous-green traps
+
+Every one of these produced, or would have produced, a **green verdict on
+something that did not run or did not check**. They are listed with the
+signature to look for, because the signature is the transferable part.
+
+### T1 — A Playwright abort reports `suites: 0` and reads as a pass
+
+`scheduling-organiser-day.spec.ts` called `solverWallMs()` at **module scope**,
+and that function throws on a malformed `PLACEMENT_WALL_SECONDS`. A module-scope
+throw collects **zero tests**, and the JSON reporter emits
+`suites: 0, expected: 0, unexpected: 0` — which any gate reading
+`unexpected === 0` scores green.
+
+Demonstrated rather than argued, with `PLACEMENT_WALL_SECONDS=oops`:
+
+| | suites | expected | unexpected | exit |
+|---|---|---|---|---|
+| before | **0** | **0** | **0** | 1 |
+| after | 2 | 2 | **1** | 1 |
+
+The file's own docblock, six lines below the offending line, **states the rule
+it was breaking**. Fixed by making the parse total (`{ ms, fault }`, falling
+back to the documented default) and asserting `fault` as the test's first act.
+
+The same shape hit the wave from the other direction: a review dispatch omitted
+`PLAYWRIGHT_BASE`, the run aborted at preflight in 404ms, and returned
+`suites: 0, expected: 0, unexpected: 0, flaky: 0`. Only the reviewer noticing
+`suites: 0` stopped it being reported clean.
+
+> **Rule: assert `suites > 0` and `expected > 0`. Never `unexpected === 0`
+> alone.**
+
+### T2 — `rtk` fabricates clean verdicts for tools it wraps
+
+Three distinct instances in this wave, on three different tools:
+
+- **tsc**: the bare wrapper prints `No errors found` **whether or not tsc exits
+  1**. Use `rtk proxy` and read the exit code.
+- **prettier**: `npx prettier --version` answers
+  `Prettier: All files formatted correctly`. A re-review's "prettier --check
+  clean on both" was therefore worthless — and so was the conclusion drawn from
+  it that root and `apps/web` resolve config differently. Through `rtk proxy`
+  both warn identically. (Nothing is owed: this repo has **no** prettier config,
+  no format script and no prettier CI step. Formatting is not a gate here — do
+  not bundle a reformat into an unrelated commit to chase one.)
+- **git diff**: rewritten into a summary, so `grep '^[+-]'` returns **empty on
+  a non-empty diff**. That is the wrapper, not an empty change.
+
+An implementer independently rediscovered the tsc case and defended against it
+by confirming with `eslint --format json` that both files had really been
+linted rather than silently skipped by an ignore rule. That is the right
+posture: **make the tool prove it looked at the file.**
+
+### T3 — `test.fail()` covering its own setup
+
+As first written, `test.fail()` was the **first statement** of the S4 pin's
+body, so two `/api/orgs/active` round trips, a tab navigation, a propose click
+and a 20s `toBeVisible` were all inside the inverted envelope. Six setup
+failures would have recorded "failed as expected" and the suite would have been
+green.
+
+Worse in the long run: when S4 is actually fixed, the pin only reds if *every*
+setup step still works — so any concurrent rot leaves it permanently green, the
+stale `test.fail()` is never deleted, and the fixed behaviour returns to zero
+coverage. The comment above it promised the exact opposite.
+
+The mechanism was read out of Playwright's own
+`workerProcessEntry.js:991-994`: `type === "fail"` assigns
+`expectedStatus = "failed"` **at the moment it executes**. So moving the setup
+*above* the call is sufficient. Proven both ways by running it: unmodified gives
+`expected: 4, unexpected: 0`; with the setup deliberately broken, `unexpected: 2`
+naming the setup step.
+
+> **Rule: `test.fail()` goes immediately above the assertion it inverts, never
+> at the top of the body.** And the amendment that specifies the pattern must
+> also specify its **scope** — this gap was in the brief, not the implementation.
+
+### T4 — An `afterAll` querying the wrong tenant
+
+Both officials `afterAll` hooks called `resolveOfficialIdByName` without first
+activating the org. `GET /api/v1/officials` is `requireAuth` and answers from
+the **active-org cookie**, so it returned `[]` for the foreign org — the
+fallback could never resolve, and both `stillThere` read-backs were vacuous
+whatever happened.
+
+The refinement matters more than the finding: `DELETE /api/v1/officials/{id}`
+is `requireResourceAuth` and **re-pins to the resource's own org**, so the
+deletes had been succeeding all along and nothing was observed leaking. The
+leak is real exactly on the path the fallback exists for — the test dying
+between the write and the response — and there the fallback was dead code.
+
+Proven by mutation against the live DB, twice:
+
+| | rows left behind | run verdict |
+|---|---|---|
+| activation removed | **2 leaked** | 4 passed, exit 0 |
+| activation restored | 0 | 4 passed, exit 0 |
+
+**Both runs report "4 passed".** That is the whole trap: cleanup that silently
+no-ops is indistinguishable from cleanup that worked, from the summary.
+
+### T5 — Four more, recorded because each was a near-miss
+
+- **A guard's placement inside a single-transaction usecase cannot be witnessed
+  by any DB assertion.** A mutant that moved `step()`'s guard from before
+  `loadLedger` to *after* `execute` + `appendEvent` **survived** a 34/34 green
+  run, because the rollback erases the difference. The assertion was kept with
+  its real scope written into the code — it pins that the rewind stays *one*
+  transaction, which is live rather than hypothetical, since `restoreCheckpoint`
+  in the same file is N transactions.
+- **`not.toContain(undefined)` passes on anything.** Deriving a negative
+  assertion from `en/ui.json` without a key-exists guard only relocates the
+  vacuity. The fix needs the guard; the wave's proof was a mutation *pair*
+  (reword only → both green; reword **and** delete the skip branch → literal
+  still green on a real defect, derived red).
+- **A `suites: 0`-shaped abort has a sibling in vitest**: an unset
+  `DATABASE_URL` makes the vitest **config itself** throw before collection.
+  Run non-DB suites with an explicitly empty `DATABASE_URL=`, or the abort reads
+  as an environment problem rather than as the deliberate skip it is.
+- **A model floor changed results.** An opus sweep found two real defects (T3
+  and T4 above) inside a file a sonnet review lens had read and **approved**.
+  Recorded as a fact about this wave, not a general law — but where a
+  cheaper-model pass is the *only* gate on a file, re-run it.
+
+---
+
+## §L — What is still owed
+
+Not findings; open items, so nothing here is mistaken for done.
+
+1. **The wave-boundary gate has not run.** Full vitest on a quiet tree, the
+   full `walkthrough` project (the full-directory e2e form has never completed
+   — a 22-file invocation blew the tool cap and was SIGKILLed), a
+   `seazn-env rebuild`, and a browser re-drive of the fixed 32-conflict board.
+   Deferred at load ~279 with other sessions asked to serialize.
+2. **Three tasks' `scripts/smoke.ts` additions have never been executed.**
+   Written, typechecked, committed, never run.
+3. **`smoke.ts`'s `redoThawed`** is the only step that restores the board the
+   REFLOW check measures, and `check()` never throws — so a non-200 redo makes
+   REFLOW vacuously green *and* produces one red pointing at the wrong
+   subsystem. The block reasons about exactly this hazard for the freeze/thaw
+   pair and applies no equivalent guard to the rewind pair.
+4. **`enabled:hover:underline`** (`history-panel.tsx`) is the **only** use of
+   Tailwind's `enabled:` variant in the codebase. Nothing proves this build
+   emits it, and a node-env class-token test cannot witness it. The failure is
+   silent in the enabled direction. Needs a built-CSS check or a browser pass.
+5. **The testid rename guard excludes the file this wave added the most
+   testids to.** `scheduling-testid-contract.test.tsx`'s `OWNED` map covers five
+   files and deliberately omits `history-panel.tsx` — to which this branch added
+   ten testids the organiser walkthrough selects on. Rename one and the whole
+   vitest suite stays green; only the `walkthrough` Playwright project reds, and
+   **that runs on push to `main` only** — never on the PR that broke it. Its
+   IDENTITY check is also file-wide (`toContain("data-court-id={")`), so moving
+   the attribute off the element keeps it green.
+6. **`blackout-editor` and `court-picker` are inert** — added, listed in the
+   contract, selected by nothing.
+7. **`stages-panel.tsx:744-745`'s second `schedule-undo`** has no
+   `scheduleLocked` wiring, so a frozen division shows the raw untranslated
+   server sentence there. Deliberately not fixed from this branch: a concurrent
+   wave is rewriting that file.
+8. **A flake to watch.** The officials walkthrough once timed out at 82.5s
+   against its own 82.5s derived budget, on `official-blackout-add` staying
+   disabled. Task 5's review identified the mechanism — a controlled date input
+   whose `fill()` lost the hydration race, leaving `disabled={busy || !date}`
+   true while `click()` waits out the entire test budget — and the two-line
+   repair (`toHaveValue` then `toBeEnabled` before the click). **Do not raise
+   the budget:** 82.5s is roughly three times the ~25s clean wall clock, so it
+   is a stall, not accumulated slowness.
