@@ -221,6 +221,53 @@ is the thing that bar exists to catch. The seven-width `mobile.spec.ts` matrix
 is the backstop; a change here can redden all five phone projects while every
 unit test stays green, because `apps/web` vitest is `environment: "node"`.
 
+### Findings that changed the W2 design before a line was written
+
+Established 2026-09-05 by reading the tree. Two of them contradict documents
+this programme otherwise defers to, and they bind. Full text and the code they
+were read out of: `../../plans/2026-09-05-settings-walkthrough-w2.md`.
+
+**A. `_RULES.md` §2 is STALE.** It says `POST /api/orgs` joins the creator's
+existing billing group. That was V309. `createOrgForUser`
+(`apps/web/src/lib/auth.ts:326-329`) now inserts a fresh `subscriptions` row
+with `plan_key = 'community'` for every new org (#212, "individual by
+default"). Two consequences: `setOrgPlanBySql` on a seeded org can no longer
+drag the shared Pro org with it, and — the one that would have wrecked W2 —
+**a freshly seeded org is COMMUNITY**, so every Pro-gated control on these
+seven tabs renders as an upsell until the org is flipped. A spec that seeded
+an org and expected the Pro surface would have asserted against the wrong
+screen and called it a pass.
+
+**B. The shared Pro user may own FIVE organisations, ever.**
+`assertMayOwnAnotherOrg` (`auth.ts:223-226`) counts `org_members` rows with
+`role = 'owner'` **for the user** and applies **no `deleted_at` filter**, then
+refuses when `owned.length + 1 > limit` (5 on Pro,
+`lib/billing-group.ts:109`). Soft-deleting an org does NOT return the slot;
+only dropping the owner membership row does. The whole leg shares that user
+and `org-management.spec.ts:35` already spends one per run, so **the design's
+"one org per test" (§8.1) is not executable** — it exhausts the cap inside a
+single spec file and 402s with `PaymentRequiredError`. Ruling: one org per
+spec FILE, released in `afterAll` by a new `releaseSeededOrgSql`.
+
+**C. `POST /api/orgs` switches the active org.** `api/orgs/route.ts:29` calls
+`setActiveOrgId`, and an `APIRequestContext` shares the browser context's
+cookie jar — seeding moves `seazn_org` out from under the caller. Every seed
+captures and restores the previous value.
+
+**D. The tab rail in the owner's 320px capture is ALREADY CORRECT — a case
+that turned out fine, not a defect.** The capture shows it cut off at the
+right edge. `settings-nav.tsx:216` carries `scroll-x scroll-x-fade` inside a
+`ScrollActiveTabIntoView`, and `.scroll-x` is `@apply overflow-x-auto`
+(`apps/web/src/app/globals.css:396-399`). Under AGENTS.md failure class 23
+that is the REACHABLE kind of overflow — a feature — and `overflowingIn`
+(`e2e/mobile.spec.ts:91`) already classifies it as `scrollable` rather than
+`clipped`. "Fixing" it would have broken a working control. **The real phone
+defect is the identity row** (`page.tsx:288`): the name block is `flex-1`
+(`flex: 1 1 0%`), the avatar is `shrink-0` and the badge and switcher size to
+content, so the org name is the only child that yields and gets ~38px of a
+~240px row. `min-w-0` is already present — the usual `truncate` diagnosis is
+NOT the cause here.
+
 ### Machine note
 
 The box was carrying seven seazn-env labels at load 269 and OOM-killed a
