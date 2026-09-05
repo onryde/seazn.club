@@ -14,7 +14,59 @@ starts. Q5–Q9 can be answered during W1. Q10–Q13 are W2 or later.
 
 ---
 
-## Q1. The public payload is missing three fields the overlay wants
+## ~~Q1~~ ANSWERED 2026-09-06 — "we can add it as required"
+
+The three fields go on the public payload. Recommendation (a) accepted.
+**Owed:** a new **Task 0** at the head of the W1 plan — add the venue time
+zone, cricket's balls remaining and the football match clock to the public
+fixture payload, with the tests that fail without each. Then Task 2's
+`overlayModel` reads all three, the start time formats in the venue zone
+rather than UTC, the cricket chase line reads "Need 45 off 45" as
+`_THEMES.md` §3 draws it, and football's `header.clock` is populated.
+Deviations 4 and 6 in the W1 plan, and the "football clock unpinned" note,
+are all closed by this answer.
+
+## ~~Q2~~ ANSWERED 2026-09-06 — "we can remove"
+
+The overlay segment does not render the cookie consent banner.
+**Owed:** a step in the W1 overlay-route task that keeps `cookie-consent.tsx`
+off the overlay segment, plus the check the recommendation named — confirm
+nothing else on that segment sets a cookie, so "no consent needed" is true
+rather than convenient. The `data-testid` the plan added for test
+suppression stays, since the e2e still asserts the banner is absent.
+
+## ~~Q4~~ ANSWERED 2026-09-06 — "we will plan it later on"
+
+Pricing is deferred to launch. The key stays granted by no plan, out of
+`ENTITLEMENT_DOMAINS`, with the test org enabled by an override row. When it
+is eventually granted, the pricing copy in all four locales ships in the same
+change. The owner added a directive about the hiding mechanism in the
+meantime — see **Q14**.
+
+---
+
+## Q3. Should the overlay require the realtime entitlement? — ANSWERED IN PART
+
+**Owner, 2026-09-06: "we are using supabase realtime."** Recorded. That
+settles the transport: the overlay subscribes to the same Supabase private
+channel the public page uses, which is what both wave plans already assume.
+
+**What it does not settle.** Access to that channel is entitlement-gated, not
+merely technical: `/api/v1/public/fixtures/[id]/realtime-token` returns 403
+unless the fixture's org holds the `realtime` feature, and the client then
+falls back to a fifteen-second poll. So an org with `streaming.overlay` but
+without `realtime` would broadcast a score that lags the picture by up to
+fifteen seconds.
+
+**Resolution taken, needing no further answer today:** the test org's override
+grants both keys, so the question cannot bite while the feature is hidden. The
+coupling decision — whether every plan that grants `streaming.overlay` must
+also grant `realtime` — is folded into the pricing decision at launch,
+alongside Q4. Recommendation stands: grant them together.
+
+---
+
+## Q1 (original text, kept for the record). The public payload is missing three fields the overlay wants
 
 **What.** The overlay reads the same public payload the match page reads.
 Three things it needs are not on it: the venue's time zone, cricket's balls
@@ -42,7 +94,7 @@ bug.
 
 ---
 
-## Q2. The cookie banner will appear on air
+## Q2 (original text, kept for the record — ANSWERED above). The cookie banner will appear on air
 
 **What.** The overlay is a public page, so the site's cookie consent banner
 renders over it. In OBS that banner is composited into the broadcast and
@@ -84,7 +136,7 @@ buy the overlay alone. That coupling is honest.
 
 ---
 
-## Q4. Which plan eventually grants `streaming.overlay`?
+## Q4 (original text, kept for the record — ANSWERED above). Which plan eventually grants `streaming.overlay`?
 
 **What.** By design no plan grants it today; the owner's test org gets it
 through an override row, so nothing is customer-visible. That is the hiding
@@ -219,3 +271,49 @@ problem this design does not: the video is delayed five to thirty seconds
 behind our sub-second score, so the page would spoil the wicket before the
 viewer sees it. Solving that needs a per-stream delay setting and event
 buffering. Worth doing, worth doing separately.
+
+---
+
+## Q14. What exactly is the "header" that reveals the feature? — NEW, blocks W1
+
+**Owner, 2026-09-06: "now we can plan to load only if header appears."**
+Pricing is deferred, so a hiding mechanism is wanted in the meantime. Taken
+as a directive; the mechanism needs one decision because a plain HTTP request
+header cannot do this job in either place it would have to work.
+
+**Why the literal reading does not work.** A browser cannot attach a custom
+header to a normal page navigation, so the organiser console panel cannot be
+gated that way; and OBS's browser source sends no custom headers either, so
+the overlay page itself certainly cannot. The repo's only custom headers
+(`x-seazn-org`, `x-seazn-locale`) are set by our own proxy, never by a client.
+
+**Options that do work, in a browser and in OBS.**
+
+(a) **Preview cookie.** Visiting the console with a magic query parameter,
+say `?preview=stream`, sets a signed preview cookie; `proxy.ts` reads it and
+sets an internal header the pages already trust, which is the closest honest
+version of "load only if the header appears". The overlay page keeps its
+entitlement check, since OBS carries no cookie either. Cost: small, one proxy
+branch plus the cookie.
+
+(b) **Environment variable.** A server-side flag reveals the feature in
+whatever deployment has it set. Simplest possible, no per-user state, but it
+is all-or-nothing per environment, so it cannot be shown to one club on
+production.
+
+(c) **Keep the entitlement override alone**, which already hides it
+completely and is what both wave plans are written against. The override row
+is per-organisation, so it can reveal the feature to exactly one club on
+production, which is what a preview usually wants.
+
+**Recommendation: (c), with (a) added only if you want the feature revealed
+to a person rather than to an organisation.** The override already gives a
+private, per-club reveal with no new machinery, and every entitlement surface
+in this repo already reads it. A preview cookie is worth building when you
+want to demo on production without granting a club anything, which is a real
+but different need. Argument against (c): "header" was the owner's own word,
+and (a) is what it maps to; if the intent is a demo switch for yourself
+rather than a per-club grant, (a) is the right build and costs little.
+
+**Blocks:** the W1 entitlement task and the console panel task, both of which
+must know which gate they are written against.

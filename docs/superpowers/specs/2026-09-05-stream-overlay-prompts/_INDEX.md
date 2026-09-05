@@ -85,6 +85,27 @@ either to a peer session as the other.
     beginning"** — a stopped agent is RESUMED with its own context, never
     re-dispatched fresh onto half-done work (`_RULES.md` §Agents).
 
+## Owner answers to the open questions (2026-09-06, verbatim)
+
+Full text and consequences: `_OPEN-QUESTIONS.md`.
+
+12. **"we can add it as required"** (Q1) — the venue time zone, cricket's
+    balls remaining and the football match clock go onto the public fixture
+    payload. Adds a **Task 0** to the W1 plan; closes W1 deviations 4 and 6
+    and the unpinned football clock.
+13. **"we can remove"** (Q2) — the cookie consent banner does not render on
+    the overlay segment, so it cannot be composited into a club's broadcast.
+14. **"we are using supabase realtime"** (Q3) — settles the transport. The
+    entitlement coupling (must every plan granting `streaming.overlay` also
+    grant `realtime`?) is folded into the pricing decision; until then the
+    test org's override grants both, so it cannot bite.
+15. **"we will plan it later on"** (Q4) — pricing deferred to launch; the key
+    stays granted by no plan and out of `ENTITLEMENT_DOMAINS`.
+16. **"now we can plan to load only if header appears"** — a hiding mechanism
+    is wanted while pricing is deferred. Taken as a directive; the mechanism
+    is **Q14**, open, because a plain request header cannot gate either
+    surface (a browser cannot set one on a navigation, and OBS sends none).
+
 ## Product-owner calls made in-session (mine, recorded so they can be reversed)
 
 - **Per-sport default: cricket opens on the bar, every other sport on the bug.**
