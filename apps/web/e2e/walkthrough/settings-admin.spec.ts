@@ -642,4 +642,53 @@ test.describe("legacy settings redirects", () => {
       ).toHaveCount(0);
     }
   });
+
+  /**
+   * THE CASE THE TEST ABOVE CANNOT SEE, and the one that actually happens.
+   *
+   * `/api/auth/change-email/confirm` needs NO session — it acts on the token
+   * alone (confirm/route.ts) — and its link is mailed to the user's NEW
+   * address, so it is normally opened in whatever browser the mail client
+   * hands it to, with no `seazn` cookie. The test above runs as the shared
+   * signed-in Pro org member and is structurally blind to that.
+   *
+   * Before this wave the address change COMMITTED and then
+   * `requirePageAuth()`'s bare `redirect("/login")` (page-auth.ts:37) threw the
+   * outcome away — so success, expired and "already in use" were identical
+   * blank pages for exactly the users most likely to see them.
+   *
+   * `storageState: { cookies: [], origins: [] }` is load-bearing and NOT
+   * decoration: a bare `browser.newContext()` in this repo inherits the signed-
+   * in state from the `setup` project, which would send this test straight down
+   * the authenticated path and pass while proving nothing. Asserted below by
+   * landing on /login at all — a signed-in context would have been forwarded to
+   * the org-scoped page instead, failing the first expect.
+   */
+  test("an unauthenticated confirmation keeps its outcome across the login hop", async ({
+    browser,
+  }) => {
+    const anon = await browser.newContext({ storageState: { cookies: [], origins: [] } });
+    try {
+      const page = await anon.newPage();
+      const landing = await page.goto("/settings?tab=account&email_change=taken", {
+        waitUntil: "load",
+      });
+      expect(landing?.status()).toBeLessThan(400);
+
+      const landed = new URL(page.url());
+      expect(landed.pathname, "a signed-out visitor must reach the login page").toBe("/login");
+
+      // The whole point: the destination survived the bounce. `next` is
+      // percent-encoded, so decode before comparing rather than asserting on
+      // the encoding, which is not the contract.
+      const next = landed.searchParams.get("next");
+      expect(next, "login was reached but the destination was dropped").toBeTruthy();
+      expect(
+        next,
+        "the email-change outcome did not survive the login hop — the address change committed and the user still cannot be told which outcome it was",
+      ).toBe("/settings?tab=account&email_change=taken");
+    } finally {
+      await anon.close();
+    }
+  });
 });
