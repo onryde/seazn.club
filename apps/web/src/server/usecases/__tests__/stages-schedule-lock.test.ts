@@ -22,13 +22,14 @@
 // which is exactly why the third case is a 404 assertion and not a 422 one).
 //
 // Real Postgres required; skipped without DATABASE_URL.
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 
 import { sql } from "@/lib/db";
 import { SCHEDULE_LOCKED_CODE, SCHEDULE_LOCKED_MESSAGE } from "@/lib/schedule-lock";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { appendEvent } from "@/server/engine-db";
+import { log } from "@/server/logger";
 import { createCompetition } from "../competitions";
 import { createDivision } from "../divisions";
 import { createEntrants } from "../entrants";
@@ -39,11 +40,20 @@ import {
   createStages,
   deleteStage,
   generateStageFixtures,
+  issueChallenge,
   rebuildStageFixtures,
 } from "../stages";
 import { GENERIC_CONFIG, seedOrg } from "./_seed";
 
 const HAS_DB = !!process.env.DATABASE_URL;
+
+afterEach(() => {
+  // `log` is a module-level SINGLETON, and vitest does not reset a spy on it
+  // between tests in one file. Without this, the "was it logged?" assertions
+  // below can be satisfied by an EARLIER test's call — the assertion goes
+  // green while the code under test did nothing.
+  vi.restoreAllMocks();
+});
 
 afterAll(async () => {
   if (!HAS_DB) return;
@@ -400,6 +410,133 @@ describe.skipIf(!HAS_DB)("a frozen division refuses stages.ts's write paths", ()
       const gen = await generateStageFixtures(board.auth, board.koId);
       expect(gen.created).toBeGreaterThan(0);
       expect(await stageFixtureCount(board.koId)).toBe(gen.created);
+    }, 120_000);
+
+    // The catch that swallows this refusal is a BARE `catch { generated =
+    // undefined; }` — it swallows every cause equally and logs nothing at all,
+    // so a genuine generator fault (a bad bracket, a DB error) has always been
+    // exactly as invisible as this freeze refusal. The freeze did not create
+    // that hole, it revealed it. These two tests pin the fix: the catch still
+    // swallows (a completion that already committed must not be undone by a
+    // paywalled or frozen next stage) but it no longer swallows SILENTLY, and
+    // what it logs NAMES the error rather than merely saying "frozen".
+    it("frozen → the swallowed refusal is logged, naming the error it swallowed", async () => {
+      const board = await seedGroupsToKo();
+      await freeze(board.auth, board.divisionId, true);
+      const warn = vi.spyOn(log, "warn").mockImplementation((() => undefined) as never);
+
+      const done = await completeStage(board.auth, board.groupId);
+      expect(done.completed).toBe(true);
+      expect(done.next_stage_fixtures).toBeUndefined();
+
+      const skipped = warn.mock.calls.filter(
+        (c) => (c[0] as { event?: string } | undefined)?.event === "next_stage_generate_skipped",
+      );
+      expect(skipped).toHaveLength(1);
+      const payload = skipped[0]![0] as Record<string, unknown>;
+      expect(payload.nextStageId).toBe(board.koId);
+      expect(payload.code).toBe(SCHEDULE_LOCKED_CODE);
+      expect(payload.locked).toBe(true);
+      // The whole point: the swallowed ERROR is in the record, so a real fault
+      // reaching this catch is as legible as this refusal is.
+      expect(String(payload.err)).toContain(SCHEDULE_LOCKED_MESSAGE);
+    }, 120_000);
+
+    it("unfrozen → nothing is logged as skipped, because nothing was swallowed", async () => {
+      const board = await seedGroupsToKo();
+      const warn = vi.spyOn(log, "warn").mockImplementation((() => undefined) as never);
+
+      const done = await completeStage(board.auth, board.groupId);
+      expect(done.next_stage_fixtures).toBeGreaterThan(0);
+      expect(
+        warn.mock.calls.filter(
+          (c) => (c[0] as { event?: string } | undefined)?.event === "next_stage_generate_skipped",
+        ),
+      ).toHaveLength(0);
+    }, 120_000);
+  });
+
+  // -------------------------------------------------------------------------
+  // issueChallenge — POST /api/v1/stages/{id}/challenges
+  // -------------------------------------------------------------------------
+  // A ladder has no pre-generated timetable — fixtures are created on demand,
+  // one per challenge — but a challenge still INSERTS a fixture onto the
+  // division's board (and initialises `stage.config.ladder_order` on first
+  // use), at the same `requireResourceAuth(..., "write")` as the four above.
+  // Same class, same refusal.
+  describe("issueChallenge", () => {
+    async function seedLadder(): Promise<{
+      auth: AuthCtx;
+      divisionId: string;
+      stageId: string;
+      entrants: string[];
+    }> {
+      const { auth } = await seedOrg();
+      const comp = await createCompetition(auth, {
+        ends_on: "2030-12-31",
+        name: "Lock " + randomUUID().slice(0, 6),
+        visibility: "private",
+        branding: {},
+      });
+      const division = await createDivision(auth, comp.id, {
+        name: "Open",
+        slug: "open-" + randomUUID().slice(0, 6),
+        sport_key: "generic",
+        variant_key: "score",
+        config: GENERIC_CONFIG,
+      });
+      const entrants = await createEntrants(
+        auth,
+        division.id,
+        ["L1", "L2", "L3", "L4"].map((display_name, i) => ({
+          kind: "individual" as const,
+          display_name,
+          seed: i + 1,
+          members: [],
+        })),
+      );
+      const [ladder] = await createStages(auth, division.id, [
+        { seq: 1, kind: "ladder" as never, name: "Ladder", config: { challengeRange: 3 } },
+      ]);
+      return {
+        auth,
+        divisionId: division.id,
+        stageId: ladder!.id,
+        entrants: entrants.map((e) => e.id),
+      };
+    }
+
+    /** L3 (position 3) challenges L1 (position 1) — two places up, inside the
+     *  stage's `challengeRange: 3`, so nothing but the freeze can refuse it. */
+    const challenge = (board: { entrants: string[] }) => ({
+      challenger_id: board.entrants[2]!,
+      opponent_id: board.entrants[0]!,
+    });
+
+    it("frozen → 422 SCHEDULE_LOCKED, and inserts no fixture", async () => {
+      const board = await seedLadder();
+      const before = await fixtureCount(board.divisionId);
+      await freeze(board.auth, board.divisionId, true);
+
+      await expectScheduleLocked(() => issueChallenge(board.auth, board.stageId, challenge(board)));
+      expect(await fixtureCount(board.divisionId)).toBe(before);
+    }, 120_000);
+
+    it("unfrozen → still creates the challenge fixture", async () => {
+      const board = await seedLadder();
+      const before = await fixtureCount(board.divisionId);
+      const out = await issueChallenge(board.auth, board.stageId, challenge(board));
+      expect(out.fixture_id).toBeTruthy();
+      expect(out.ladder_order).toHaveLength(4);
+      expect(await fixtureCount(board.divisionId)).toBe(before + 1);
+    }, 120_000);
+
+    it("an unknown stage id → still 404, never the freeze refusal", async () => {
+      const board = await seedLadder();
+      await freeze(board.auth, board.divisionId, true);
+      await expect(
+        issueChallenge(board.auth, randomUUID(), challenge(board)),
+      ).rejects.toMatchObject({ status: 404 });
     }, 120_000);
   });
 });

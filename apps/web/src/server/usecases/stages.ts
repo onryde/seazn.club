@@ -2459,11 +2459,49 @@ export async function completeStage(auth: AuthCtx, stageId: string): Promise<Com
     });
     return divisionCompleted ? { ...result, division_completed: true } : result;
   }
-  // Best-effort: completion stands even if generation trips (e.g. paywall).
+  // Best-effort: completion stands even if generation trips (e.g. paywall, or
+  // — since the freeze guard at the top of `generateStageFixtures` — a frozen
+  // division refusing the write). The completion above has ALREADY committed;
+  // undoing it because the next stage could not be drawn would be worse than
+  // leaving that stage empty, and refusing the completion itself would make
+  // the freeze bind a lifecycle TRANSITION, which is exactly the line
+  // `startDivision` was built to hold (see schedule-start-gate.test.ts).
+  //
+  // WHY THIS STILL SWALLOWS EVERYTHING. Narrowing it to re-throw non-freeze
+  // faults is not a free change: the paywall case this comment has always
+  // named reaches here as a `PaymentRequiredError` (402), and an incomplete
+  // multi-source progression reaches it as `STAGE_NOT_READY` — both are
+  // legitimate, expected trips that must not fail a committed completion.
+  // Deciding which of the remaining causes SHOULD fail it is a product call,
+  // not a guard's to make, so the shape is deliberately unchanged.
+  //
+  // WHAT DID CHANGE: it no longer swallows SILENTLY. This was a bare
+  // `catch { generated = undefined; }` that logged nothing at all, so a real
+  // generator fault — a bad bracket, a DB error — was exactly as invisible as
+  // a freeze refusal, and an organiser's next stage stayed empty with no
+  // record anywhere of why. The freeze did not create that hole; it revealed
+  // it. So the record NAMES the error, and flags the freeze case specifically
+  // (`locked`) so the two can be told apart without parsing prose.
   let generated: number | undefined;
   try {
     generated = (await generateStageFixtures(auth, qualified.stage_id)).created;
-  } catch {
+  } catch (err) {
+    const code = err instanceof HttpError ? err.code : undefined;
+    const locked = code === SCHEDULE_LOCKED_CODE;
+    log.warn(
+      {
+        event: "next_stage_generate_skipped",
+        stageId,
+        nextStageId: qualified.stage_id,
+        locked,
+        code,
+        status: err instanceof HttpError ? err.status : undefined,
+        err: String(err),
+      },
+      locked
+        ? "next stage not generated: the division schedule is locked"
+        : "next stage not generated: the generator failed",
+    );
     generated = undefined;
   }
   return { ...result, qualified, ...(generated !== undefined ? { next_stage_fixtures: generated } : {}) };
@@ -3249,6 +3287,20 @@ export async function issueChallenge(
     if (!stage) throw new HttpError(404, "stage not found");
     if (stage.kind !== "ladder") throw new HttpError(422, "challenges only exist on ladder stages");
     await tx`select pg_advisory_xact_lock(hashtext(${"division:" + stage.division_id}))`;
+    // A frozen division refuses a challenge. A ladder has no pre-generated
+    // timetable — its fixtures are created on demand, one per challenge — but
+    // a challenge still INSERTS a fixture onto the division's board, and on
+    // first use also writes `stage.config.ladder_order`. Both happen below,
+    // under this lock; both are board writes, and the freeze binds board
+    // writes wherever they come from.
+    //
+    // AFTER the 404 and the ladder-kind 422 (an unknown stage still 404s —
+    // `divisionLockState` reads a missing row as UNFROZEN), and after the
+    // advisory lock, matching every other refusing site.
+    const lockState = await divisionLockState(tx, stage.division_id);
+    if (lockState.frozen) {
+      throw new HttpError(422, SCHEDULE_LOCKED_MESSAGE, SCHEDULE_LOCKED_CODE);
+    }
 
     // ladder order initialises from seed order on first use
     let order = stage.config.ladder_order as string[] | undefined;
