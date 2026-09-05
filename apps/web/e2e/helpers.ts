@@ -4,6 +4,12 @@ import { expect, type APIRequestContext, type Locator, type Page, type TestInfo 
 // rather than re-declaring it is what keeps a new rung from needing a sixth
 // hand-maintained list.
 import type { PassKey } from "../src/lib/currency";
+// The one VALUE import from the app, and deliberately so: lib/platform-fee.ts
+// has zero imports of its own (no server-only, no db, no Redis), so nothing of
+// the app's runtime follows it in. Sharing the decoder is the point — the
+// fixture and production must agree on what a fee row says, or the restore
+// hook writes a value production would have refused.
+import { decodeFeePercent } from "../src/lib/platform-fee";
 
 /**
  * v3/02 §4 viewport gate: the page-level rule is "no horizontal scroll,
@@ -1178,12 +1184,22 @@ export async function setOwnerStaffRoleSql(
  * superadmin-only, and the one caller that needs this value needs it BEFORE any
  * privilege has been borrowed — a `beforeEach` capturing the row so a hook can
  * put it back after a test that timed out mid-write. Returns `null` when the
- * row is absent or its `value` is not a jsonb NUMBER (a jsonb `null`, string or
- * boolean all decode to something `Number()` reads as a finite 0 — see below),
- * so a caller can decline to "restore" a value
- * that never existed (with no row, `platformFeeDefault()` falls through to the
- * PLATFORM_FEE_PERCENT env and then to 5 — writing one would not be a restore,
- * it would be a new setting).
+ * row is absent, when its `value` is not a jsonb NUMBER (a jsonb `null`, string
+ * or boolean all decode to something `Number()` reads as a finite 0 — see
+ * below), AND — since it adopted the shared decoder — when the number is
+ * outside 0..100. That last case is a narrowing worth stating: this helper used
+ * to accept any finite number, so a row holding 150 was captured and restored
+ * (loudly, via the route's own 422). It now reads as `null`, the caller's
+ * `if (fee !== null)` guard is false, and NOTHING is restored — including the
+ * `console.warn` in that branch, which is unreachable in exactly the case it
+ * would be most wanted. Acceptable because the only writer is bounds-checked,
+ * so an out-of-band row means someone wrote raw SQL; recorded because a silent
+ * skip is a bad failure mode to discover later.
+ *
+ * A caller can therefore decline to "restore" a value that never existed (with
+ * no row, `platformFeeDefault()` falls through to the PLATFORM_FEE_PERCENT env
+ * and then to 5 — writing one would not be a restore, it would be a new
+ * setting).
  *
  * READS ONLY. There is deliberately no SQL writer beside it: `value` is cached
  * in Redis for 300s (`lib/platform-settings.ts`, cache-aside), and
@@ -1196,17 +1212,14 @@ export async function platformFeePercentSql(): Promise<number | null> {
   return withDb(async (sql) => {
     const [row] = await sql<{ value: unknown }[]>`
       select value from platform_settings where key = 'platform_fee_percent'`;
-    const value = row?.value;
-    // Narrowed to a real number BEFORE it is measured, and that is the whole
-    // point. `value` is jsonb, so postgres.js decodes it to whatever JSON says
-    // — `null` for a jsonb `null` row, a string or boolean for a hand-written
-    // one — and `Number(null)`, `Number("")` and `Number(false)` are each a
-    // FINITE `0`. A bare `Number(value)` therefore reads a valueless row as a
-    // perfectly good 0%, the afterEach hook PUTs that 0 back as a "restore",
-    // and the platform's entire cut on entry fees is zeroed through the route
-    // with the cache invalidated: this wave's own headline defect, reproduced
-    // inside the fixture built to prevent it.
-    return typeof value === "number" && Number.isFinite(value) ? value : null;
+    // The SAME decoder production reads this row with (lib/platform-fee.ts),
+    // imported rather than restated. A bare `Number(value)` reads a jsonb
+    // `null`/`false`/`""` row as a finite 0, the afterEach hook PUTs that 0
+    // back as a "restore", and the platform's entire cut on entry fees is
+    // zeroed through the route with the cache invalidated — this wave's own
+    // headline defect, reproduced inside the fixture built to prevent it. A
+    // second copy of the rule here is how the two drift apart.
+    return decodeFeePercent(row?.value);
   });
 }
 

@@ -1,5 +1,15 @@
 import { test, expect, type APIRequestContext } from "@playwright/test";
 import { activeOrg, apiJson, platformFeePercentSql, setOwnerStaffRoleSql } from "../helpers";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+
+/** Banner copy read from the dictionary the page renders from, not retyped
+ *  here — a test carrying its own copy of a string asserts yesterday's wording
+ *  and goes red on a rewrite that broke nothing (this folder's idiom:
+ *  division-delete.spec.ts:19, board-v3.spec.ts:280). */
+const UI_EN: Record<string, string> = JSON.parse(
+  readFileSync(fileURLToPath(new URL("../../src/dictionaries/en/ui.json", import.meta.url)), "utf8"),
+);
 
 /**
  * W1 of the settings walkthrough programme. Complements nothing — this
@@ -409,7 +419,11 @@ test.describe("admin platform settings", () => {
         // platform-settings.ts:64), so a silent round to 3 shows up here.
         //
         // Its LIMIT, stated so nobody over-reads it: that reader is
-        // `Number(value)` plus a 0–100 clamp (platform-settings.ts:48-49). So
+        // `decodeFeePercent(row?.value) ?? envFallback()` (platform-settings.ts,
+        // `platformFeeDefault`). It WAS `Number(value)` plus a 0–100 clamp at
+        // :48-49 until the follow-up wave replaced those two lines, so the
+        // read-back is now type-gated as well as bounded — a pin at the old
+        // line numbers now lands on the comment explaining the change. So
         // this pins what every CONSUMER of the fee gets, which is the thing
         // that matters — not the literal jsonb bytes in the column.
         if (c.status === 200) {
@@ -569,6 +583,112 @@ test.describe("legacy settings redirects", () => {
         landing?.status(),
         `${hop.from} reached ${hop.to} but the page returned HTTP ${landing?.status()} — the query arrived at a dead page`,
       ).toBeLessThan(400);
+    }
+  });
+
+  /**
+   * The hop above proves a query SURVIVES. This one proves the surviving value
+   * is USED — and it is a separate test because the two failed separately.
+   *
+   * `/settings` forwarded `tab` alone until this wave (it typed searchParams as
+   * `{ tab?: string }` and rebuilt the URL from that one field, while its three
+   * siblings forwarded everything). The only other param the destination reads
+   * is `email_change`, and `/api/auth/change-email/confirm` redirects ALL FIVE
+   * of its outcomes through exactly this shim — success, invalid, expired,
+   * taken, error (confirm/route.ts:26-57) — so every email-change confirmation
+   * landed on an identical bannerless page. The banner code
+   * (o/[orgSlug]/settings/page.tsx:270,564) was live the whole time; nothing
+   * reachable ever sent it a value.
+   *
+   * TWO OUTCOMES, NOT ONE, and asserted against each other. A single row is
+   * satisfied by a shim that forwards a CONSTANT `email_change`, and equally by
+   * a banner that renders one fixed string regardless of the value — both of
+   * which are the same class of defect as the one being fixed. The pair pins
+   * that the VALUE arrives: each outcome shows its own copy, and the other
+   * outcome's copy is absent from the page.
+   *
+   * They are also chosen to differ in COLOUR class (`taken` is a red banner,
+   * `success` an emerald one, page.tsx:564), so a mutant that hardcoded the
+   * error branch cannot pass by luck.
+   */
+  test("an email-change confirmation keeps its outcome through the shim", async ({ page }) => {
+    const org = await activeOrg(page);
+    const outcomes = ["taken", "success"] as const;
+
+    for (const outcome of outcomes) {
+      const mine = UI_EN[`settings.emailChange.${outcome}`];
+      const other = UI_EN[`settings.emailChange.${outcomes.find((o) => o !== outcome)!}`];
+      // Guards the guard: a renamed dictionary key would otherwise make both
+      // assertions below compare `undefined` against the page and pass.
+      expect(mine, "settings.emailChange copy missing from en/ui.json").toBeTruthy();
+      expect(other).toBeTruthy();
+      expect(mine).not.toBe(other);
+
+      const landing = await page.goto(`/settings?tab=account&email_change=${outcome}`, {
+        waitUntil: "load",
+      });
+      const landed = new URL(page.url());
+      expect(`${landed.pathname}${landed.search}`, `email_change=${outcome} must survive the hop`)
+        .toBe(`/o/${org.slug}/settings?tab=account&email_change=${outcome}`);
+      expect(landing?.status()).toBeLessThan(400);
+
+      await expect(
+        page.getByText(mine, { exact: true }),
+        `the ${outcome} banner must render — the param arrived but the page ignored it`,
+      ).toBeVisible();
+      await expect(
+        page.getByText(other, { exact: true }),
+        `the ${outcome} page is showing the OTHER outcome's banner`,
+      ).toHaveCount(0);
+    }
+  });
+
+  /**
+   * THE CASE THE TEST ABOVE CANNOT SEE, and the one that actually happens.
+   *
+   * `/api/auth/change-email/confirm` needs NO session — it acts on the token
+   * alone (confirm/route.ts) — and its link is mailed to the user's NEW
+   * address, so it is normally opened in whatever browser the mail client
+   * hands it to, with no `seazn` cookie. The test above runs as the shared
+   * signed-in Pro org member and is structurally blind to that.
+   *
+   * Before this wave the address change COMMITTED and then
+   * `requirePageAuth()`'s bare `redirect("/login")` (page-auth.ts:37) threw the
+   * outcome away — so success, expired and "already in use" were identical
+   * blank pages for exactly the users most likely to see them.
+   *
+   * `storageState: { cookies: [], origins: [] }` is load-bearing and NOT
+   * decoration: a bare `browser.newContext()` in this repo inherits the signed-
+   * in state from the `setup` project, which would send this test straight down
+   * the authenticated path and pass while proving nothing. Asserted below by
+   * landing on /login at all — a signed-in context would have been forwarded to
+   * the org-scoped page instead, failing the first expect.
+   */
+  test("an unauthenticated confirmation keeps its outcome across the login hop", async ({
+    browser,
+  }) => {
+    const anon = await browser.newContext({ storageState: { cookies: [], origins: [] } });
+    try {
+      const page = await anon.newPage();
+      const landing = await page.goto("/settings?tab=account&email_change=taken", {
+        waitUntil: "load",
+      });
+      expect(landing?.status()).toBeLessThan(400);
+
+      const landed = new URL(page.url());
+      expect(landed.pathname, "a signed-out visitor must reach the login page").toBe("/login");
+
+      // The whole point: the destination survived the bounce. `next` is
+      // percent-encoded, so decode before comparing rather than asserting on
+      // the encoding, which is not the contract.
+      const next = landed.searchParams.get("next");
+      expect(next, "login was reached but the destination was dropped").toBeTruthy();
+      expect(
+        next,
+        "the email-change outcome did not survive the login hop — the address change committed and the user still cannot be told which outcome it was",
+      ).toBe("/settings?tab=account&email_change=taken");
+    } finally {
+      await anon.close();
     }
   });
 });

@@ -19,7 +19,7 @@ check expressed as a client `disabled` prop, and `apps/web` vitest is
 | Wave | Scope | State |
 | --- | --- | --- |
 | W1 | `/admin/settings` + 4 legacy redirects; `setOwnerStaffRoleSql` ships with it | **DONE** — 6 tasks, 5 fix rounds, all reviews clean |
-| W2 | `/o/{org}/settings` 7 tabs — drive+persist (sponsors CRUD half) | Not started — **carries 3 W1 follow-ups, see below** |
+| W2 | `/o/{org}/settings` 7 tabs — drive+persist (sponsors CRUD half) | Not started — W1's follow-ups were **closed in W1.5**, not carried here |
 | W3 | `/o/{org}/settings` 7 tabs — gating matrix + first mutation sweep | Not started |
 | W4 | `settings/{connect,credits,add-ons}`, billing's uncovered panels, sponsor monetize half | Not started |
 | W5 | Competition settings — frozen, visibility, discoverable | Not started |
@@ -63,6 +63,16 @@ the other.
    one more hardcoded English string is consistent with the file and
    inconsistent with the rule. Needs an owner call.
 
+   **RULED 2026-09-04 (owner):** "only for staff, not the enduser so don't
+   spend more time on that in /admin". `/admin` is staff-only and stays
+   English-only; no dictionary work is owed for it, and the two declared i18n
+   exceptions are joined by a third in practice. The evidence agrees with the
+   ruling: none of the five `/admin` files import `t`/`dict`, and
+   `admin-credits-panel.tsx:9` says so in a comment — "English-only (no
+   `t`/`dict` island)". A session in between briefly reported the opposite from
+   a loose `t(` grep that matched inside unrelated identifiers; a grep is not a
+   read, and the correction was the error.
+
 ## Findings
 
 Recorded as they are found, not held to the end. Each is a hypothesis until
@@ -73,11 +83,82 @@ driven — see `_RULES.md` §8.
 | F1 | `/admin/settings` Save rendered enabled for a `support`-role staff user while `PUT` threw `AuthError` → **401**. Page gates on `requireStaff()`, route on `requireSuperadmin()`, and the component's only `disabled` was `busy \|\| !valid`. | **FIXED** — `fdbe826b5`, mutation-killed | W1 |
 | F2 | Clearing the fee input saved **0%**. `Number("") === 0`, so `valid` stayed true, the button stayed live, and zod accepted 0 — the platform's entire cut on entry fees zeroed by clearing a field and one click. | **FIXED** — `f9ab8e5f7`, mutation-killed | W1 |
 | F3 | `step={0.5}` is enforced by nothing — not by `valid`, not by the route's zod schema. Driven and confirmed: `2.7` is accepted end to end and stored **unrounded**. | **PINNED as behaviour**, not a defect | W1 |
-| F4 | `/settings` forwards only `tab`; `/settings/billing`, `/settings/connect` and `/settings/payments` rebuild the full query string. Its searchParams is typed `{tab?: string}` and drops the rest. Customer impact today is nil — nothing links there with a second param — but the first link that adds one loses it silently. | Open — routed to **W2** | W2 |
+| F4 | `/settings` forwards only `tab`; `/settings/billing`, `/settings/connect` and `/settings/payments` rebuild the full query string. Its searchParams is typed `{tab?: string}` and drops the rest. **Customer impact is NOT nil** — see the correction below. | **FIXED** — follow-up wave | W1.5 |
+| F5 | `lib/platform-settings.ts:48` did `Number(row?.value)` on a jsonb column, so a row holding jsonb `null`/`false`/`""`/`[]` read as a finite, in-range `0` and served a **0% platform cut** to the settings page and to every checkout, overriding the fallback an ABSENT row correctly reaches. | **FIXED** — follow-up wave, mutation-killed | W1.5 |
+
+## F7 — FIXED on this branch, with two branches still residual
+
+`bf16ea599`. **This section previously said "Open. Not fixed on this branch",
+which was true when written and false by the time a reviewer read it** — the
+index is what a fresh session reads first, so a stale "open" here costs more
+than no entry at all.
+
+**What was wrong.** `/settings` forwarded the whole query, but
+`requirePageAuth()` runs first and its unauthenticated branch is a bare
+`redirect("/login")` carrying no destination (`page-auth.ts:37`). That is the
+DEFAULT path for the one param the shim exists to carry:
+`/api/auth/change-email/confirm` needs no session — it acts on the token alone —
+and the link is mailed to the user's NEW address, so it is normally opened with
+no cookie. The address change committed and the outcome was still discarded.
+
+**What fixed it.** No new auth machinery. `AuthForm` already forwards a `next`
+to the magic-link/signup/google routes, `safeNextPath` already validates it, and
+`postAuthLanding` already honours it — `LoginPage` simply never read `?next=`
+from its own URL. The shim checks auth itself so it can build the destination
+from the query it is holding.
+
+**And it opened a hole, which is the part worth remembering.** Making
+`/login?next=` a reachable GET turned a latent `safeNextPath` weakness into a
+live open redirect. `startsWith("/") && !startsWith("//")` treats a backslash as
+an ordinary character; the URL parser normalises it to a slash in the authority
+position, so `/\evil.com` passed and
+`new URL("/\evil.com", "https://seazn.club").href` is `https://evil.com/` —
+verified in node, not reasoned. Two live paths: a signed-in victim is thrown
+off-site by the login page's own `redirect()`, and a signed-out victim completes
+a real sign-in and is delivered to the attacker's page authenticated.
+`safeNextPath` now validates the property actually wanted — resolves to the same
+origin — instead of prefix arithmetic, and has the repo's first tests for it
+(`safe-next-path.test.ts`), which fail 2/5 against the old implementation.
+
+**A hardening change with no test is how this got here**: `safeNextPath` existed
+with zero coverage anywhere in `src/` or `e2e/`.
+
+### Residual, NOT fixed — for whoever picks this up
+
+`requirePageAuth` drops the query on two further branches: `orgs.length === 0`
+-> `/orgs/new` (`page-auth.ts:39`) and `role === "scorer"` -> `/my-matches`
+(`:42`). The F7 flow makes the first MORE reachable, not less: `postAuthLanding`
+returns a safe `next` **without provisioning an org** (`auth.ts:413-419`), so a
+first-time signup arriving through `/login?next=/settings?...` lands org-less
+and is bounced to `/orgs/new` with the outcome gone.
+
+Not fixed here because `/orgs/new` has no `next` handling at all (checked), so
+closing it means giving that page a destination contract too — a second
+auth-flow change, unverified, at the end of a wave. Neither user has an
+org-scoped settings page to land on, so the banner has no home for them today;
+that is an explanation of the current shape, not a defence of it.
+
+The e2e also still hand-types the URL the producer should emit. Driving
+`GET /api/auth/change-email/confirm?token=<garbage>` yields the `invalid`
+outcome with no seeding and would prove producer -> shim -> banner in one hop.
 
 ## False premises found
 
 Recorded so the next session does not re-derive them.
+
+**F4's own severity, written by W1 and wrong.** The finding above originally
+read "Customer impact today is nil — nothing links there with a second param".
+Nothing links there was asserted, not checked. `/api/auth/change-email/confirm`
+redirects **all five** of its outcomes through exactly that shim —
+`/settings?tab=account&email_change=success|invalid|expired|taken|error`
+(`confirm/route.ts:26-57`) — and the org-scoped page renders its banner off
+that param alone (`o/[orgSlug]/settings/page.tsx:270,564`). Every email-change
+confirmation therefore landed on an identical bannerless page: "updated
+successfully", "that address is already in use" and "this link has expired"
+were indistinguishable to the user. The banner code was live the whole time;
+nothing reachable ever sent it a value. A grep for `/settings?` would have
+found the producer in one call, and the wave routed the finding to a later
+wave on the strength of a guess instead.
 
 1. **`AuthError` maps to 401, not 403.** A first draft of W1's gate test
    asserted 403. `lib/http.ts:34` returns 401.
@@ -135,32 +216,186 @@ programme:
 - **A SHA-256 taken after a run settles drift, not ordering** — hash in the
   same invocation as the run.
 
-## W1 follow-ups owed to W2
+## W1 follow-ups — CLOSED in the follow-up wave (2026-09-04)
 
-1. **F5 — the production twin, and the one that touches customers.**
-   `lib/platform-settings.ts:48` does `Number(row?.value)` on a jsonb column.
-   `Number(null)` is a finite `0`, which passes the `>= 0 && <= 100` guard, so
-   a jsonb-null row makes the platform serve a **0% cut** — to the settings
-   page and to every checkout — instead of falling through to `envFallback()`.
-   Unreachable through `setPlatformFeeDefault` today, because its only writer
-   is a bounds-checked `sql.json(pct)`. Pre-existing; W1 fixed the test-helper
-   twin and deliberately left this one, which is the server-side half of this
-   wave's own thesis.
+Branch `feat/settings-w1-followups`. All five items W1 left open are resolved.
 
-2. **The Critical fix has no permanent guard.** `vitest.config` excludes
-   `e2e/**` (`:162`), so `platformFeePercentSql`'s `typeof` narrowing cannot be
-   unit-tested where it sits, and a healthy DB never holds the row that would
-   trigger it. Deleting the narrowing would go unnoticed.
+1. **F5 — FIXED.** `lib/platform-settings.ts` no longer does `Number(row?.value)`
+   on a jsonb column. A row holding jsonb `null`, `false`, `""` or `[]` decodes
+   to a JS value `Number()` maps to a *finite, in-range* `0` — it clears the
+   `>= 0 && <= 100` guard and is served as a 0% platform cut, overriding the
+   `PLATFORM_FEE_PERCENT`/5 fallback that an ABSENT row correctly reaches.
+   Reproduced against real Postgres before the fix: `expected +0 to be 11`.
 
-3. **One change closes both.** Move the decode into
-   `src/lib/platform-settings.ts` as an exported pure predicate, unit-test it
-   there, and have `e2e/helpers.ts` import it. That gives the narrowing a real
-   regression test and fixes the production twin in the same edit.
+2. **The Critical fix now has a permanent guard — FIXED.** `decodeFeePercent`
+   is unit-tested in `src/lib/__tests__/platform-fee.test.ts`: pure, no
+   `skipIf`, so it runs in every suite on every machine. Five mutants — bare
+   `Number()`, dropped `typeof`, `>=0`→`>0`, `<=100`→`<100`, `null`→`0` — all
+   killed. `platform-settings.test.ts` gains the real-Postgres half.
 
-Also owed, smaller: `borrowedOrgId` should become a `Set<string>`
-(`billing-states.spec.ts` already has the idiom) before any test borrows on two
-orgs; the per-test restore PUT writes a `platform_fee_default_set` audit row,
-which constrains any future audit-trail assertion; two comments state the Redis
-staleness argument as observed when it was only reasoned (the leg runs with no
-Redis, so it is unmeasurable there); and F4 — `/settings` forwards only `tab`
-while its three sibling shims forward every param.
+3. **RULING — the decoder lives in a NEW module, not in `platform-settings.ts`.**
+   W1's item 3 said to export the predicate from `lib/platform-settings.ts` and
+   import it from `e2e/helpers.ts`. That is not possible: that file starts with
+   `import "server-only"` and pulls in the db and Redis clients, so importing it
+   would drag the app's server runtime into the Playwright process. It lives in
+   `src/lib/platform-fee.ts` instead — **zero imports of its own** — and both
+   production and the fixture import it from there. Same outcome the item
+   wanted (one authority for the rule, two callers); different address. Cost if
+   wrong: one more small module in `lib/`.
+
+4. **F4 — FIXED, and it was a live customer defect, not the "nil impact" shim
+   nit W1 recorded.** See "False premises found" above. `/settings` now forwards
+   the whole query, exactly as its three siblings do. The e2e test drives TWO
+   outcomes (`taken`, `success`) and asserts each renders its own banner and not
+   the other's, because one row is satisfied by a shim forwarding a constant and
+   by a banner ignoring the value — both the same class of defect as the one
+   fixed. Expected copy is read from `en/ui.json`, not retyped.
+
+5. **i18n of the admin strings — CLOSED, no change.** Owner ruled `/admin` is
+   staff-only and stays English-only (see the ruling above).
+
+Still owed, smaller, and genuinely W2's: `borrowedOrgId` should become a
+`Set<string>` (`billing-states.spec.ts` already has the idiom) before any test
+borrows on two orgs; the per-test restore PUT writes a
+`platform_fee_default_set` audit row, which constrains any future audit-trail
+assertion; and two comments state the Redis staleness argument as observed when
+it was only reasoned (the leg runs with no Redis, so it is unmeasurable there).
+
+The Playwright/`page.route`/mutation traps listed above are being carried into
+`AGENTS.md` by the owner, out of this session — deliberately not edited here,
+because a shared instruction file taking concurrent edits from two sessions is
+how a rule gets half-written.
+
+## Session status — 2026-09-04 (handoff)
+
+**W1.5 is complete, verified, and DELIBERATELY UNMERGED.** Owner chose "keep the
+branch as-is" when offered push+PR / merge / keep. Do not push or merge it
+without asking them again — that choice is theirs and does not carry forward.
+
+- Branch: `feat/settings-w1-followups`, worktree
+  `.claude/worktrees/settings-followups`, based on `d41b92ab0` (PR #712 merge).
+- Commits (8 — this list goes stale, `git log --oneline d41b92ab0..HEAD` is
+  the authority): `fb0100bc3` (F5 + F4 + the first guard), `106f78f25` (README),
+  `287f127ec` / `f07ecae70` / `daf4813e8` / `e0df94c05` (this handoff record),
+  `f2c937143` (tennis-mtb budget), `8f9cb53dc` (the review's findings — two
+  further money paths, the CI-running seam guard, and a rebuild of the tennis
+  budget this branch itself got wrong).
+  Working tree clean.
+
+### What was actually proven, and how
+
+Not "tests pass" — the specific evidence, so a fresh session does not re-run it:
+
+| Gate | Result |
+|---|---|
+| Full `apps/web` vitest | 13,708 passed / 13,786, every suite path under this worktree |
+| The 4 reds in it | `schedule-build-honours-locks.test.ts` — **environmental**, 12/12 once the CP-SAT placement service was up. Re-proven this session, not taken from memory. |
+| `settings-admin.spec.ts` vs a prod build | 5 spec tests green, + the 2 `setup` auth tests = 7 reported. The file itself has 5; earlier notes said "7/7" without saying that. |
+| F4 mutant (pre-fix shim, rebuilt and re-run) | **Killed** — the new test red, the PRE-EXISTING redirect test still green. That pair is the finding: W1's own suite could not see F4. |
+| `decodeFeePercent` mutants | **4 distinct kills, not the 5 first recorded.** Killed: bare `Number()`, `>=0`→`>0`, `<=100`→`<100`, `null`→`0` — each with `numTotalTests` held at 4, so none is a collection failure wearing a kill's clothes. The fifth, labelled "dropped `typeof`", did not drop it: it ADDED coercion, which is the bare-`Number()` mutant again. A true drop of either clause is an EQUIVALENT mutant — measured over 18 hand-picked values, zero behavioural differences either way, because `Number.isFinite` does not coerce (so `typeof` is redundant) and the 0..100 bounds already reject `NaN`/`±Infinity` (so `Number.isFinite` is redundant). Unkillable by definition. The clauses are kept for readability; the COUNT was inflated. |
+| `platformFeeDefault` seam mutants | 2/2 killed, no DB — reverting the call site to `Number(row?.value)`, and `envFallback` to `?? "5"` (`platform-fee-seam.test.ts`). |
+| F5 vs real Postgres | Reproduced against the pre-fix decode: `expected +0 to be 11` |
+| tsc, eslint | clean, exit 0 |
+
+**A worktree trap worth the next session's time:** this worktree had no root
+`node_modules` and produced 22 tsc errors (`Cannot find module 'pino'`, then a
+cascade of TS7006) that `main` did not have. They are not defects. `pnpm install`
+— not `npm install`, which fails on `workspace:` protocol — cleared all 22.
+
+### The full local e2e run — RESULT
+
+Ran `parallel`, `walkthrough`, `serial`, 5 mobile widths, 2 tablet against the
+prod build on the `swf` label (`gallery` skipped — capture harness, no CI job).
+**709 passed, 38 failed, 125 skipped.** Then triaged by RE-RUNNING, not by
+reading the error text:
+
+| Cluster | Was | After re-run |
+|---|---|---|
+| Optimiser — `data-status="solver_unavailable"` | 10 red | **12/12 green** |
+| Scoring — `core.start` ledger empty | 5 red | **39/39 green** |
+| `competition-desk` (ECONNRESET), `player-accounts`, `rs011`, mobile-320/360 | 6 red | **green** |
+| Stripe — `event-pass` + `payments-hardening` | 16 red | cannot close here |
+| `rs012` — `CRON_SECRET` | 1 red | cannot close here |
+| `ai-architect`, `partial-amend` ×2, `tennis-mtb` | 4 red | preconditions absent |
+
+**None of the 38 was attributable to W1.5.** Its blast radius is the
+platform-fee decode and the `/settings` shim; `settings-admin.spec.ts` passed
+7/7 INSIDE the failing run, and both money specs fail on preconditions
+(`needs a Stripe TEST key in STRIPE_SECRET_KEY`; a signed webhook answering 400)
+before any fee arithmetic executes.
+
+**Two of those 38 were caused by how the environment was built, and that is the
+reusable lesson:**
+
+1. **The server must be started AFTER the placement service, or restarted once
+   it is up.** `seazn-env up --label X --server` then a later
+   `up --label X --placement` leaves the already-running standalone server with
+   no `PLACEMENT_SERVICE_HOST`, and ten tests fail asserting the real optimiser
+   ran. `seazn-env rebuild --label X` fixes it. Bring it up as
+   `up --label X --all` instead.
+2. **`--workers=4` against one standalone server saturates it.** The symptom is
+   not a timeout message — it is `apiRequestContext.fetch: read ECONNRESET` in
+   one spec and an EMPTY EVENT LEDGER in five others, which reads exactly like a
+   scoring defect. All five passed at `--workers=2`.
+
+**Not verifiable on this machine, and not defects:** `STRIPE_SECRET_KEY` /
+`STRIPE_WEBHOOK_SECRET` (17 tests between Stripe and the webhook signature),
+`CRON_SECRET` (1), `SCHEDULING_AI_BASE_URL` + `ANTHROPIC_API_KEY` (ai-architect).
+`partial-amend` is load, settled: all four of its tests pass at `--workers=1`
+in **16-29s each** against a 180s budget.
+
+**`tennis-mtb` is NOT load, and this is a real finding — F6, owed to whichever
+wave owns that file (R4/MTB, #670), not to this programme.** Run alone, at
+`--workers=1`, on an idle machine, it took **307.4s** against
+`test.setTimeout(300_000)` (`scorepad-v3-tennis-mtb.spec.ts:142` **on `main`** — cite the symbol, not the line; this branch moved it). W1 measured
+306.9s. Two measurements, two sessions, both over the line by ~2.5%: it is
+reproducible, not flaky, and "it passed in CI" only means CI's runner is
+fractionally faster than this one.
+
+**That last sentence was wrong, and the correction matters.** CI does not pass
+because its runner is quicker: `e2e.yml` pins
+`NEXT_PUBLIC_SCOREPAD_HOLD_MS: "3000"` at job level, a QUARTER of the product
+default this machine runs at. CI was never near the ceiling. Believing the
+"faster runner" story is also what let the first fix ship with a `300_000`
+floor that made the whole derivation inert in exactly that band.
+
+The budget is a FLAT LITERAL beside a cost derived from `HOLD_MS` and the tap
+count — exactly AGENTS.md failure class 20 ("a flat timeout beside a derived
+cost is a latent red"). Its own sibling `scorepad-v3-partial-amend.spec.ts:50`
+already derives its budget from the hold and says so in a comment. The fix is
+to adopt that pattern here, so moving `HOLD_MS` moves this budget with it.
+
+**FIXED — `f2c937143`, on this branch, after the owner asked for it.** The
+paragraph above originally said this was deliberately left alone as another
+programme's file; the owner then said to proceed, so it ships here. A reviewer
+of `feat/settings-w1-followups` will therefore find one commit touching a spec
+that has nothing to do with settings — that is intentional, and this is the
+record of why.
+
+The budget now derives from the constant:
+`Math.max(300_000, 120_000 + TAPS * (HOLD_MS + 1_500))` — 444s at the default
+12s hold. Verified by running it: **310.6s, passed**. That third measurement
+(after 306.9s and 307.4s) is also the strongest evidence the old ceiling was
+wrong, since all three sit above 300s while the machine was idle and
+`--workers=1`.
+
+**The generalisable half, for whoever meets this next:** distinguishing a real
+budget overrun from load costs one run. Run the spec ALONE at `--workers=1`.
+Load shows up as a huge margin — `partial-amend`, same family, same soft-commit
+tax, came in at 16-29s against 180s. A real overrun lands just past the line,
+repeatedly. Reading the error text cannot tell them apart, because a blown
+budget prints whichever `expect.poll` was in flight and reports itself as a
+DATA defect ("Expected: 24 / Received: 23").
+
+**A method note worth keeping:** `ps eww -p <pid>` returns NOTHING on this
+machine — zero env vars, for any process. An empty result there is not evidence
+the process lacks a variable. This session briefly reported "confirmed, the
+server has no placement env" on that empty output. The question was settled by
+re-running the spec, which is the only thing that could settle it.
+
+### W2 — not started, deliberately
+
+Owner said "hold W2". Nothing is written, planned, or scaffolded for it. Its
+scope is unchanged in the design doc: `/o/{org}/settings` 7 tabs, drive+persist,
+sponsors CRUD half only, 2 specs.
+
