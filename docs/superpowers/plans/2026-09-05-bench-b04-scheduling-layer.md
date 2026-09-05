@@ -515,8 +515,17 @@ it("FEASIBLE when history is clean and a full board was produced", () => {
 - [ ] **Step 2: Run to verify it fails.** Expected: module not found.
 - [ ] **Step 3: Implement.** Branch order, top to bottom: no history →
   `SKIPPED_NO_HISTORY`; `checkBoard(historyBoard, constraints)` not clean →
-  `PACK_AUTHORING_BUG`; `placed < total` → `UNPLACED`; `solverStatus ===
-  "infeasible"` → `PRODUCT_DEFECT`; else `FEASIBLE`. Reuse `checkBoard`
+  `PACK_AUTHORING_BUG`; `solverStatus === "infeasible"` → `PRODUCT_DEFECT`;
+  `placed < total` → `UNPLACED`; else `FEASIBLE`. **This order is the design's
+  (§3.4) and it is binding — an earlier draft of this plan reversed the middle
+  two and the dispatch copied the error.** It matters on the merits, not only
+  by authority: when the solver returns `infeasible`, `placed < total` is a
+  CONSEQUENCE of that infeasibility, so ranking `UNPLACED` first reports the
+  symptom in place of the cause and discards the attribution the certificate
+  exists to make. `UNPLACED`'s own job is the case parent spec §6.3 names —
+  UNKNOWN or timeout leaving fixtures unplaced *without* an infeasible verdict.
+  Only a case supplying BOTH `infeasible` and `placed < total` separates the
+  two orders, and none of the six tests above does. Reuse `checkBoard`
   verbatim — a second implementation would break the claim the certificate
   makes.
 - [ ] **Step 4: Run to verify it passes.** Expected: PASS, 6 tests.
