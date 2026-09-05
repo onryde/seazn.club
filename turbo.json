@@ -40,7 +40,10 @@
         "SENTRY_ORG",
         "SENTRY_PROJECT",
         "SENTRY_AUTH_TOKEN",
-        "SKIP_TYPECHECK"
+        "SKIP_TYPECHECK",
+        // Gates experimental.turbopackFileSystemCacheForBuild in next.config.js;
+        // strict env mode would otherwise strip it before Next reads it.
+        "NEXT_BUILD_FS_CACHE"
       ]
     },
 
