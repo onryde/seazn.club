@@ -10,6 +10,9 @@
 // or a fee re-cut moves the test with the product instead of leaving it
 // asserting yesterday's number.
 import { afterAll, describe, expect, it } from "vitest";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { feeCrossoverMinor, readableMinor } from "../pricing-crossover";
 import { SUPPORTED_CURRENCIES, formatMinor, passPrice, proPrice } from "../currency";
 import { sql } from "@/lib/db";
@@ -108,6 +111,178 @@ describe("readableMinor — a threshold a person can hold in their head", () => 
   it("returns 0 for a figure there is nothing to render", () => {
     expect(readableMinor(0)).toBe(0);
     expect(readableMinor(-5000)).toBe(0);
+  });
+});
+
+
+// ── THE ASSUMPTION UNDER THE LINE ───────────────────────────────────────────
+//
+// `feeCrossoverMinor` compares a ONE-TIME pass against ONE MONTH of Pro. That
+// is stated in the module header and in this suite's own title, and it was
+// stated NOWHERE the buyer could read it: /pricing rendered the answer and not
+// the question, so for a season the sentence recommended the wrong offer.
+//
+// The arithmetic below is the evidence. It is deliberately built from the same
+// function the page calls — the M-month crossing is `feeCrossoverMinor` with M
+// months of Pro on the other side, so nothing here re-implements the formula it
+// is checking.
+describe("the crossing is a ONE-MONTH crossing, and the copy has to say so", () => {
+  // The live usd ladder, spelled out once: $11.99 pass at 4%, $14.99/mo Pro at
+  // 2%. Pinned against the catalogue in the DB-backed block below, so a reprice
+  // moves both together.
+  const PASS = 1199;
+  const PRO_MONTH = 1499;
+  const fees = (total: number, sticker: number, rate: number) => sticker + (total * rate) / 100;
+
+  /** The crossing over `months` of competition, in TOTAL entry fees. */
+  const crossingOver = (months: number): number | null =>
+    feeCrossoverMinor({
+      passMinor: PASS,
+      proMonthlyMinor: PRO_MONTH * months,
+      passFeePercent: 4,
+      proFeePercent: 2,
+    });
+
+  it("recommends the WRONG offer for a season, if read without the assumption", async () => {
+    // The worked case that opened this finding: a three-month event taking $300
+    // a month in entry fees is well above the $150 the line quotes, so the line
+    // as it stood said "Pro". It is not: the pass is bought once and Pro is
+    // billed three times.
+    const monthlyFees = 30000;
+    const months = 3;
+    const passTotal = fees(monthlyFees * months, PASS, 4);
+    const proTotal = fees(monthlyFees * months, PRO_MONTH * months, 2);
+    expect(passTotal).toBe(4799); // $47.99
+    expect(proTotal).toBe(6297); // $62.97
+    expect(passTotal).toBeLessThan(proTotal);
+    // …and $300/mo is comfortably past the threshold the sentence quotes, which
+    // is exactly why the unqualified sentence was false.
+    expect(monthlyFees).toBeGreaterThan(readableMinor(crossingOver(1)!));
+  });
+
+  it("puts the real three-month crossing far above the one-month one", () => {
+    // Same shape, from the other side: at three months the offers actually
+    // cross at ~$550 a month, not $150.
+    const oneMonth = crossingOver(1)!;
+    const threeMonths = crossingOver(3)!;
+    expect(oneMonth).toBe(15000); // $150 of fees, over one month
+    expect(threeMonths / 3).toBeCloseTo(54966.67, 1); // ~$550 a month, over three
+    expect(threeMonths / 3).toBeGreaterThan(oneMonth * 3);
+  });
+
+  it("moves MONOTONICALLY with the length of the competition", () => {
+    // The property the copy leans on when it says a longer competition puts the
+    // threshold higher. It holds for every ladder that renders a line at all:
+    // F(M) = k*P/M - k*R with k = 100/(proFee - passFee) < 0, so dF/dM > 0
+    // whenever the pass is the cheaper sticker. A one-off pair of numbers would
+    // not show that; the sweep does.
+    const perMonth = [1, 2, 3, 6, 12].map((m) => crossingOver(m)! / m);
+    for (let i = 1; i < perMonth.length; i += 1) {
+      expect(perMonth[i], `${i + 1} months must clear the previous rung`).toBeGreaterThan(
+        perMonth[i - 1]!,
+      );
+    }
+  });
+});
+
+// ── THE LINE ITSELF, IN ALL FOUR LOCALES ────────────────────────────────────
+//
+// The fix for the above is copy, not arithmetic — the page has no duration
+// input and inventing one would be a different product. So the sentence names
+// the competition length it assumes, and this is the guard that it does.
+//
+// It is NOT a verbatim pin (`lib/__tests__/_approved-dictionary-copy.ts` already
+// holds one). It asks a structural question: does the sentence tie a COMPETITION
+// to a MONTH, in the same breath? The four strings as they shipped tie the
+// MONTH to the entry fees and never mention the competition at all, which is
+// precisely the omission — so they are kept below as a retired registry and
+// asserted to FAIL this scan. Without that half the scan would be a rule nobody
+// has ever seen red.
+describe("the /pricing crossover line states its own assumption, in every locale", () => {
+  const HERE = join(fileURLToPath(import.meta.url), "..");
+  const KEY = "pricing.pass.crossover";
+
+  /** The noun pair that has to appear together, per locale. */
+  const VOCABULARY = {
+    en: { subject: "competition", period: "month" },
+    es: { subject: "competición", period: "mes" },
+    fr: { subject: "compétition", period: "mois" },
+    nl: { subject: "competitie", period: "maand" },
+  } as const;
+  type Locale = keyof typeof VOCABULARY;
+  const LOCALES = Object.keys(VOCABULARY) as Locale[];
+
+  /** Every index of `needle` in `hay`, case-insensitively. */
+  const indices = (hay: string, needle: string): number[] => {
+    const out: number[] = [];
+    const h = hay.toLowerCase();
+    const n = needle.toLowerCase();
+    for (let i = h.indexOf(n); i !== -1; i = h.indexOf(n, i + 1)) out.push(i);
+    return out;
+  };
+
+  /**
+   * A locale FAULTS unless its subject and period nouns sit inside one phrase.
+   * 40 characters is a clause, not a sentence: it is short enough that
+   * "…entry fees a month, this is the cheaper option" (the retired wording,
+   * whose only `competition` is absent entirely) cannot satisfy it by accident,
+   * and long enough to survive a reword of the phrase between them.
+   */
+  const NEAR = 40;
+  const durationFaults = (values: Record<Locale, string>): string[] =>
+    LOCALES.flatMap((locale) => {
+      const { subject, period } = VOCABULARY[locale];
+      const subjects = indices(values[locale], subject);
+      const periods = indices(values[locale], period);
+      if (subjects.length === 0) return [`${locale}: never mentions the ${subject}`];
+      if (periods.length === 0) return [`${locale}: never mentions a ${period}`];
+      const closest = Math.min(
+        ...subjects.flatMap((a) => periods.map((b) => Math.abs(a - b))),
+      );
+      return closest <= NEAR
+        ? []
+        : [`${locale}: ${subject} and ${period} are ${closest} chars apart — not one claim`];
+    });
+
+  const live = (): Record<Locale, string> =>
+    Object.fromEntries(
+      LOCALES.map((locale) => {
+        const file = join(HERE, "..", "..", "dictionaries", locale, "marketing.json");
+        const dict = JSON.parse(readFileSync(file, "utf8")) as Record<string, string>;
+        const value = dict[KEY];
+        expect(value, `${locale}/marketing.json has no ${KEY}`).toBeTypeOf("string");
+        return [locale, value!];
+      }),
+    ) as Record<Locale, string>;
+
+  it("names the competition length the crossing assumes", () => {
+    expect(durationFaults(live())).toEqual([]);
+  });
+
+  it("would have caught the wording that shipped without it", () => {
+    // The retired strings, verbatim. Four identical omissions, one scan: this
+    // is the mutation for a guard that cannot otherwise be seen failing.
+    const RETIRED: Record<Locale, string> = {
+      en: "Up to about {amount} of entry fees a month, this is the cheaper option; above that it is Pro at {pro}/mo — a {proFee}% platform fee against {passFee}%.",
+      es: "Hasta unos {amount} de cuotas de inscripción al mes, esta es la opción más barata; por encima de eso lo es Pro a {pro}/mes: una comisión de plataforma del {proFee}% frente al {passFee}%.",
+      fr: "Jusqu’à environ {amount} de frais d’inscription par mois, c’est l’option la moins chère ; au-delà, c’est Pro à {pro}/mois — {proFee} % de frais de plateforme contre {passFee} %.",
+      nl: "Tot ongeveer {amount} aan inschrijfgelden per maand is dit de goedkoopste keuze; daarboven is dat Pro voor {pro}/mnd — {proFee}% platformkosten tegen {passFee}%.",
+    };
+    expect(durationFaults(RETIRED)).toHaveLength(LOCALES.length);
+    // …and no live string may simply BE one of them.
+    const now = live();
+    for (const locale of LOCALES) expect(now[locale]).not.toBe(RETIRED[locale]);
+  });
+
+  it("still carries every figure the line is built from", () => {
+    // The rewrite must not drop a placeholder: `t()` leaves an unknown token
+    // alone, so a lost `{passFee}` would render as literal braces on the card
+    // rather than failing anything.
+    for (const [locale, value] of Object.entries(live())) {
+      for (const token of ["{amount}", "{pro}", "{proFee}", "{passFee}"]) {
+        expect(value, `${locale} lost ${token}`).toContain(token);
+      }
+    }
   });
 });
 

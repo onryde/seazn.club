@@ -83,7 +83,7 @@
   "pricing.pass.rung.l": "L",
   "pricing.pass.ladder.caps": "Up to {divisions} divisions, {entrants} entrants each",
   "pricing.pass.ladder.capsUnlimited": "Up to {divisions} divisions, unlimited entrants",
-  "pricing.pass.crossover": "Up to about {amount} of entry fees a month, this is the cheaper option; above that it is Pro at {pro}/mo — a {proFee}% platform fee against {passFee}%.",
+  "pricing.pass.crossover": "For a competition running about a month, up to about {amount} of entry fees this is the cheaper option; above that it is Pro at {pro}/mo — a {proFee}% platform fee against {passFee}%. The pass is one-time, so a longer competition puts that threshold higher.",
   "pricing.pass.ladderNote": "The same platform fee either way; the credit top-up is sized with the pass. Choose your size when you check out.",
   "pricing.pass.cta": "Start free, upgrade in-app",
   "pricing.pass.ctaSignedIn": "Pick a competition",
