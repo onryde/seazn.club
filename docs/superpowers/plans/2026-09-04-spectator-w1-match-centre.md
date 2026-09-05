@@ -721,8 +721,9 @@ describe("buildMatchCentre — cricket", () => {
 
 **Files:**
 - Create: `apps/web/src/server/public-site/timeline.ts`
-- Modify: `apps/web/src/server/public-site/match-centre.ts` (non-cricket branch)
+- Create/modify: the four `public.json` dictionaries — the `public.timeline.*` keys this module emits (Task 8 fills everything else)
 - Test: `apps/web/src/server/public-site/__tests__/timeline.test.ts`
+- NOT `match-centre.ts`: Task 6 wires the non-cricket branch (`tabs`, `timeline`, `sets`) by importing from `timeline.ts` — this keeps Task 7's file set disjoint so it can run on a parallel lane.
 
 **Interfaces:**
 - Consumes: the sport module registry (`registry` from `@seazn/engine/sport`, `registerBuiltins` from `@seazn/engine/sports` — as `apps/web/src/server/engine-db/registry.ts:6-8` does), each module's `init/apply/summary`; `summary.detail.sets` (`{home, away, closed}[]`, `setbased/kernel.ts:2400`, `nested/kernel.ts:2164`) and `detail.periods` (`period/kernel.ts:2513`, `football.ts:2552`); football payloads `FootballGoal{by,scorer?,assist?,minute?,ownGoal?,penalty?}`, `FootballCard{by,person?,color,minute?}`, `FootballPeriod{phase}`, `FootballShootoutKick{by,person?,scored}` (`football.ts:212-294`); `tennis.point` `{by, server?, scorer?, meta?: {kind?}}` (`nested/kernel.ts:223`).
