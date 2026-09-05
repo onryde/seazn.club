@@ -7,6 +7,18 @@ every stop; it is the handoff, the index is the record.
 Last updated: 2026-09-05 18:35 BST (session "overlay", branch
 `feat/stream-overlay`, worktree `.claude/worktrees/stream-overlay`).
 
+## Where the work lives
+
+Branch `feat/stream-overlay` is **pushed to `origin`** (2026-09-06, head
+`96a487d31`), tracking set. **No pull request yet, deliberately**: the branch
+is documentation only (13 commits, 10 files, all under `docs/superpowers/`),
+and the repo's CI runs on `pull_request` while e2e runs on `push` to `main`,
+so a PR now would spend CI minutes on a change with no code to test. Open the
+PR when W1's code lands.
+
+The competition desk branch merged as **PR #708**, so W1's stated rebase
+blocker is cleared.
+
 ## What exists and is committed
 
 | Artefact | Path | Commit |
