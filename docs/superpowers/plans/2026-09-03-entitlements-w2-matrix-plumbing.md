@@ -1384,3 +1384,85 @@ before W3 ships the surfaces, so the trade can be read later instead of argued.
 - Never `git stash` in a worktree here. Never `UPDATE_GOLDEN=1`.
 - Smoke is the PR-only gate; e2e runs on push-to-main only, so a PR carries no e2e
   signal — read `.github/workflows/e2e.yml` rather than trusting any summary of it.
+
+## Post-rebase findings (2026-09-06) — found by CI and by driving the product
+
+Three defects that only exist because two correct waves met, plus one product
+ruling. None was visible to a green local gate.
+
+### 1. Duplicate Flyway version — a MERGE-ONLY defect, invisible to git
+
+main's #728 landed `V392__fix_double_encoded_bracket_bye_outcome.sql` while this
+branch already held `V392__entitlements_v18.sql`. Different filenames, so the
+rebase replayed 156 commits **clean** and reported success; tsc and the whole
+suite pass, because migrations are SQL. Flyway then refuses to run **at all** —
+not "skips one" — so no fresh clone, worktree or CI Postgres job can build a
+schema.
+
+This branch yielded (V392–V397 → **V393–V398**, 108 referencing files) because
+#728 is merged and moving a merged version breaks `schema_history` for anyone
+who ran it. Proven, not asserted: a fresh DB reported `now at version v398`, and
+the references reconcile exactly — 109 files matched `V392` before (108 ours + 1
+theirs), 108 now cite `V393` and exactly one still cites `V392`.
+
+**Standing check, third occurrence in this repo:** after ANY rebase that pulls
+schema, `ls db/migration/deltas | tail` before opening the PR.
+
+### 2. `dashboard.public.max` metered DRAFTS — silent private downgrade
+
+The cap shared `ACTIVE_COMPETITION_STATUSES` with `competitions.max_active`, so
+a draft consumed a public-dashboard slot while publishing nothing. On Free (cap
+2) an organiser holding two drafts for next season had their THIRD competition
+created **private** — and since T15/F a create degrades rather than refusing,
+the only symptom was a share link that 404ed.
+
+Found by CI, then reproduced locally and confirmed against the live DB: the
+shared fixture org held **279 competitions against an override of 50**, and the
+229 after the fiftieth were private. Five public-page specs failed with "This
+link is no longer valid", which looks nothing like a quota failure.
+
+Fixed by splitting the sets (`PUBLIC_DASHBOARD_STATUSES` = published/live) and
+moving enforcement from create to **publish**, which needed a new 402 in
+`patchCompetition` — without it, freeing drafts opens a wider bypass than it
+closes (create N public drafts metering zero, publish them all, cap enforced
+nowhere). Only a real transition charges: republishing and published → live must
+not re-charge a held slot.
+
+**Owner ruling (2026-09-06):** a draft is an active slot but not a public
+dashboard. The organiser now meets the cap with the competition already built,
+rather than discovering it as a dead link.
+
+### 3. Sentinels that guarded what this wave deliberately freed
+
+`open-scheduling.spec.ts` asserted `scheduling.multi_division` still walls
+Community — a guaranteed red the moment this branch reaches main, and invisible
+until then because **e2e runs only on push to main**. Inverted rather than
+deleted, so it now guards the ruling that the joint board is free.
+
+Cost worth recording: that file was two-sided by design, with
+`multi_division` as its counterweight. Every scheduling key is now free on
+Community (`scheduling.ai` V302, board/constraints V353, multi_division V393),
+so the counterweight is **gone and cannot be rebuilt from that surface**. It is
+stated in the file, because its shape still looks like it proves gates bind.
+
+Sweep method that found it, and should be repeated for any key a migration
+frees: `grep -rn -a 'data-feature="<key>"' apps/web/e2e` per key in the
+migration's `feature_key in (...)` list. Of eight keys freed, exactly one had a
+sentinel — and it was fatal.
+
+### 4. A retired plan crashed a live billing probe
+
+`billing-proration.live.test.ts` selected `from plans where key = 'pro_plus'`,
+which V393 deletes, so the bare `plus.annual` threw a TypeError rather than
+failing an assertion — the row above it was already guarded with `pro?.annual`,
+the sibling never was. Now derived from the catalog (`is_public and key <>
+'pro'`) rather than named, so a plan added or retired moves the loop with it.
+
+### Still open
+
+- Does anything SURFACE `public_quota_degraded` on a screen? The API carries the
+  note; if no UI reads it, the organiser still just sees a dead link and the
+  note is an inert seam.
+- `mobile.spec.ts:4384` (2048 swipe) fails at both tablet widths; main passes it.
+  Unrelated to this wave, needs its own look.
+- `org-less-destination.spec.ts:137` is red on main itself — not ours.
