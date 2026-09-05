@@ -142,6 +142,46 @@ describe.skipIf(!HAS_DB)("the table's rows against the live matrix", () => {
     }
   });
 
+  it("still names the share loop V395 put back behind the pass", async () => {
+    // The row this table lost and had to be given back.
+    //
+    // V392 retired `dashboard.player_profiles` from the table on a true
+    // premise — community had caught up, so the row showed the same tick on
+    // both sides. V395 (owner ruling 2026-09-03) REVERSED that: the three
+    // share loops became paid on Free again while both pass rungs kept them.
+    // `lib/pass-features.ts` re-entered the key into `PASS_LIFTED_FEATURES` in
+    // that same wave, and this table did not follow — so for a wave the
+    // comparison a buyer reads to justify $29 was silent about one of the
+    // things the $29 buys, and the paywall was offering a pass for a key the
+    // comparison never mentioned.
+    //
+    // Nothing above could see it. Every rule in this block iterates
+    // `PASS_COMPARE_ROWS`, so a row that is ABSENT is absent from the check
+    // too — the omission is invisible to a guard shaped as "each row I have is
+    // honest". This is the missing direction: a grant the pass really lifts
+    // must have a row.
+    //
+    // Both halves are read from the live matrix rather than asserted on faith.
+    // If community ever catches up for real, this fails and the row should
+    // leave a SECOND time — which is the outcome we want, because the same
+    // reasoning that removed it in V392 was sound on the matrix of the day.
+    const [free] = await sql<{ bool_value: boolean | null }[]>`
+      select bool_value from plan_entitlements
+       where plan_key = 'community' and feature_key = 'dashboard.player_profiles'`;
+    const [pass] = await sql<{ bool_value: boolean | null }[]>`
+      select bool_value from plan_entitlements
+       where plan_key = 'event_pass' and feature_key = 'dashboard.player_profiles'`;
+    expect(free?.bool_value, "community must still be DENIED player profiles").toBe(false);
+    expect(pass?.bool_value, "the pass must still GRANT player profiles").toBe(true);
+
+    const row = PASS_COMPARE_ROWS.find((r) => r.features.includes("dashboard.player_profiles"));
+    expect(row, "the pass comparison has no public-player-profiles row").toBeDefined();
+    expect(row!.kind, "a grant is a flag, not a figure").toBe("flag");
+    // The label has to exist for the page to render it; it survived V392's
+    // removal in all four dictionaries precisely so this restore is copy-free.
+    expect(row!.labelKey).toBe("upgrade.limit.profiles");
+  });
+
   it("keeps the entrants row honest — the claim this table was built to fix", async () => {
     // The dictionary said "32 entrants per division (Free: 16)". The matrix
     // now says 64 free and 128 on the pass (V319). Pinned by name because it is

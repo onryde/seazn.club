@@ -54,13 +54,25 @@ export const PASS_COMPARE_ROWS: readonly CompareRow[] = [
   },
   { labelKey: "upgrade.limit.realtime", features: ["realtime"], kind: "flag" },
   { labelKey: "upgrade.limit.exports", features: ["exports.branded"], kind: "flag" },
-  // The public-player-profiles row was retired here by entitlements v18
-  // (V392): `dashboard.player_profiles` is now true on Community, so the row
-  // showed the same tick on both sides — padding on a page whose whole job is
-  // to justify the pass's price. `pass-comparison.test.ts`'s "only claims the
-  // pass improves on Community where the matrix says so" is what caught it.
-  // Its `upgrade.limit.profiles` label is left in the four dictionaries for
-  // W3's copy pass rather than deleted from a tree this wave does not own.
+  // Public player profiles LEFT this table at V392 and came BACK at V395.
+  //
+  // V392 retired the row on a premise that was true that day: community had
+  // caught up on `dashboard.player_profiles`, so the row showed the same tick
+  // on both sides — padding on a page whose whole job is to justify the pass's
+  // price. V395 (owner ruling 2026-09-03) reversed exactly that move: the
+  // three share loops became paid on Free again while both pass rungs kept
+  // them, and `lib/pass-features.ts` re-entered this key into
+  // `PASS_LIFTED_FEATURES` for that reason in the same wave. The removal
+  // outlived its justification by a wave, and a comparison that omits a grant
+  // the pass really lifts hides something the customer is paying for — the
+  // same class of harm as the entrants claim this module was written to fix,
+  // pointing the other way.
+  //
+  // The two lists must not disagree about whether the pass lifts this key:
+  // `pass-comparison.test.ts`'s "still names the share loop V395 put back
+  // behind the pass" reads community and event_pass out of the live matrix and
+  // fails if either the row or the differential goes away.
+  { labelKey: "upgrade.limit.profiles", features: ["dashboard.player_profiles"], kind: "flag" },
   {
     labelKey: "upgrade.limit.sponsors",
     features: ["sponsors.tiers", "sponsors.monetize"],
