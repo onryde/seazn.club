@@ -7,7 +7,7 @@ import "server-only";
 // the seazn_org cookie no longer decides what a page shows, so two tabs on
 // two orgs can't corrupt each other. Renamed slugs permanent-redirect.
 import { notFound, permanentRedirect, redirect } from "next/navigation";
-import { getCurrentUser, getUserOrgs, getActiveOrgId } from "@/lib/auth";
+import { getCurrentUser, getUserOrgs, getActiveOrgId, safeNextPath } from "@/lib/auth";
 import { sql } from "@/lib/db";
 import { EDITOR_ROLES, type OrgMembership, type User } from "@/lib/types";
 import { resourceOrg, type AuthCtx, type ResourceKind } from "@/server/api-v1/auth";
@@ -29,16 +29,87 @@ export interface PageAuth {
   canEdit: boolean;
 }
 
+// ---------------------------------------------------------------------------
+// The /orgs/new destination contract (W2 task 6 — F7's residual).
+//
+// The org-less bounce used to be a bare `redirect("/orgs/new")` that threw the
+// destination away. W1.5 made that reachable rather than theoretical:
+// `postAuthLanding` now honours a safe `next` WITHOUT provisioning an org
+// (lib/auth.ts:444-453), so a first-time signup arriving at
+// `/login?next=/settings?tab=account&email_change=success` lands org-less, is
+// bounced here, and the outcome of the email change they just confirmed is
+// gone — they see an ordinary onboarding page and never learn what happened.
+//
+// Both ends REUSE `safeNextPath`. It is not widened, not relaxed, and not
+// re-implemented: it is the single origin check in this repo, and W1.5 wrote
+// it the way it is because a prefix test on a leading "/" is NOT origin
+// validation — `new URL("/\\evil.com", "https://seazn.club").href` is
+// "https://evil.com/", the URL parser having normalised the backslash to a
+// slash in the authority position. Widening reach to an untouched validator
+// is itself a security change, so the reach is exactly two call sites and
+// both refuse identically.
+//
+// Both are exported (rather than inlined where they are used) because neither
+// branch is reachable from a node-env unit test: `requirePageAuth` needs a
+// session, a database and Next's `redirect()`, and `/orgs/new` is a Server
+// Component. `safe-next-path.test.ts` pins the refusals here.
+// ---------------------------------------------------------------------------
+
+/**
+ * Where an org-less visitor is sent, carrying the destination they asked for.
+ *
+ * A refused or absent `next` yields the exact literal this branch has always
+ * emitted, so no visitor's behaviour today can move: the query is added or it
+ * is not, and there is no third outcome.
+ */
+export function orgLessRedirect(next: unknown): string {
+  const safe = safeNextPath(next);
+  // Encoded, not interpolated raw: the destination carries its own `?` and
+  // `&` (`/settings?tab=account&email_change=success` is the archetype), and
+  // pasted in unencoded those become extra params OF /orgs/new — the page
+  // would then read `next` as "/settings" and silently drop the two params
+  // the whole contract exists to preserve.
+  return safe ? `/orgs/new?next=${encodeURIComponent(safe)}` : "/orgs/new";
+}
+
+/**
+ * The post-create destination `/orgs/new` will honour, read from its own
+ * query. `null` means "no destination" and the form keeps its `/dashboard`
+ * default.
+ *
+ * Validated HERE as well as at the producer, deliberately. `/orgs/new` is a
+ * public URL — nothing stops anyone mailing `/orgs/new?next=/\evil.com` — so
+ * a check that lived only in `orgLessRedirect` would leave the page pushing a
+ * stranger's origin after a successful create. Two guards covering for each
+ * other are each untested; these two are mutated one at a time.
+ */
+export function newOrgDestination(sp: Record<string, string | undefined>): string | null {
+  return safeNextPath(sp.next);
+}
+
 /** Session auth against the active org. Redirects out when unauthenticated.
  *  A scorer-role active org has no organiser surface (doc 13 §4): straight
- *  to "My matches". */
-export async function requirePageAuth(): Promise<PageAuth> {
+ *  to "My matches".
+ *
+ *  `opts.next` is where the caller was actually trying to go. It has to be
+ *  passed in: this is a Server Component helper and there is no current-URL
+ *  API to read it from — the repo runs no middleware, Next's `next-url`
+ *  header exists only on client-side RSC navigations (and every route into
+ *  this bounce is a server `NextResponse.redirect`, i.e. a document request),
+ *  and `x-matched-path` is minimal-mode only. */
+export async function requirePageAuth(opts: { next?: unknown } = {}): Promise<PageAuth> {
   const user = await getCurrentUser();
   if (!user) redirect("/login");
   const orgs = await getUserOrgs(user.id);
-  if (orgs.length === 0) redirect("/orgs/new");
+  if (orgs.length === 0) redirect(orgLessRedirect(opts.next));
   const activeId = await getActiveOrgId();
   const org = orgs.find((o) => o.id === activeId) ?? (orgs[0] as OrgMembership);
+  // Deliberately NOT given the same treatment, and this is not an oversight to
+  // "finish": a scorer has no organiser surface at all (doc 13 §4). Every
+  // destination this contract carries is an organiser page — the settings tabs
+  // — so forwarding one through here would land them on a page that 404s or
+  // bounces them straight back. For a scorer the bounce is the answer, not a
+  // stop on the way to somewhere else.
   if (org.role === "scorer") redirect("/my-matches");
   return {
     auth: { orgId: org.id, via: "session", userId: user.id, role: org.role, keyId: null },

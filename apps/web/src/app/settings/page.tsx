@@ -40,6 +40,17 @@ export default async function LegacySettings({
   const target = `/settings${qs ? `?${qs}` : ""}`;
   if (!(await getCurrentUser())) redirect(`/login?next=${encodeURIComponent(target)}`);
 
-  const { org } = await requirePageAuth();
+  // The SAME `target` the unauthenticated branch above carries, handed to the
+  // ORG-LESS branch as well (W2 task 6 — F7's residual). Without it,
+  // `requirePageAuth` bounces a signed-in visitor with no organisation to a
+  // bare `/orgs/new` and the query dies one hop further along than it used to:
+  // W1.5 taught `postAuthLanding` to honour a safe `next` WITHOUT provisioning
+  // an org, so this is now the DEFAULT shape of a first-time email-change
+  // confirmation, not an edge case.
+  //
+  // `target` deliberately points back at THIS shim rather than at
+  // `routes.orgSettings(...)`: the visitor has no org to name yet, and coming
+  // back through here after they create one runs the forward below normally.
+  const { org } = await requirePageAuth({ next: target });
   redirect(routes.orgSettings(org.slug) + (qs ? `?${qs}` : ""));
 }
