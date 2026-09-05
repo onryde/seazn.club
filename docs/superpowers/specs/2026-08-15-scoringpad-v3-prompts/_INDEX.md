@@ -7573,3 +7573,37 @@ The panel never renders for the fixture this test builds. **Owner should decide
 whether this blocks anything** — it is a 320px mobile-matrix red on main and
 therefore fails CI on every push to main, but it predates this wave and fixing
 it is not R8 scope.
+
+## 2026-09-05 — the ONLY deliberate scorepad touch of the spectator match-centre programme (owner ruling 12, Task 18)
+
+The spectator match-centre programme's Task 17 (engine) gave
+`cricket.player.line` six new optional band-2 fields
+(`batting.fours`/`.sixes`/`.dismissal{kind,bowler,fielder}`,
+`bowling.maidens`/`.wides`/`.noBalls`); Task 18 wired the pad's generic
+"More" sheet to collect them, per owner ruling 12 of that programme (`spectator
+surface`, not this one) explicitly relaxing the "do not touch the scorepad"
+line for exactly this one action's fields/attribution and the generic
+renderer/builder that draws them —
+`apps/web/src/components/v2/scorepad/v3/action-form.tsx`,
+`apps/web/src/components/v2/scorepad/view-model.ts`,
+`packages/engine/src/sport/module.ts`,
+`packages/engine/src/sports/cricket/cricket.ts` (the `playerLineAction`
+declaration only). No skin, no styling, no other action touched.
+
+Two new engine-level data flags this wave added, both hand-authored (never
+schema-derived), mirroring `PadAttributionItem.optional`'s own precedent from
+Task 17: `PadField.optional` (a field may stay unset without blocking
+Confirm — needed because `checkActionValidity` gates on EVERY declared field,
+and the six new ones would otherwise silently make the WHOLE action require
+more input than before) and `PadAttributionItem.requiresField` (an
+attribution's value is dropped from the built payload whenever a named
+sibling field is unset — needed because `batting.dismissal.kind` is required
+INSIDE the schema's `dismissal` sub-object, so naming a bowler/fielder without
+ever picking a kind would otherwise build a payload the engine rejects
+outright). `PadFieldEnum.chips` renders an enum as a chip row instead of the
+generic `<select>`, set only on `batting.dismissal.kind`.
+
+First e2e ever to drive a `cricket.player.line` through the pad UI
+(`apps/web/e2e/scorepad-v3-cricket-lines.spec.ts`) — stops at the ledger
+(`/api/v1/fixtures/:id/events`), never the public match centre (that page is
+not wired yet; owed to the spectator programme's Task 15).

@@ -212,6 +212,18 @@ export interface PadFieldEnum {
    *  by variant). */
   values: readonly string[];
   labelKey?: PadLabel;
+  /** Owner ruling 12, S18 — render this field's values as a chip row (one
+   *  button per value, `data-value`, ≥44px) instead of the default `<select>`.
+   *  Absent/false keeps every existing enum field's rendering byte-identical;
+   *  this is data the module declares, never a renderer decision keyed off
+   *  `path` (the renderer still has ZERO per-path branching — see
+   *  action-form.tsx's own header). Cricket sets this on
+   *  `batting.dismissal.kind` only. */
+  chips?: boolean;
+  /** Owner ruling 12, S18 — same meaning as `PadFieldNumber.optional` below,
+   *  restated here because `PadField` is a discriminated union and each
+   *  member carries its own copy of the flag. */
+  optional?: boolean;
 }
 export interface PadFieldNumber {
   kind: "number";
@@ -220,11 +232,27 @@ export interface PadFieldNumber {
   max: number;
   step?: number;
   labelKey?: PadLabel;
+  /** Owner ruling 12, S18 — a DIFFERENT, hand-authored flag from anything
+   *  schema-derived (mirrors `PadAttributionItem.optional`'s own doc comment
+   *  below, which explains the pattern in full): `checkActionValidity`
+   *  (view-model.ts) does not gate Confirm on this field being set. Absent
+   *  means "required, same as every field before this flag existed" — no
+   *  existing field changes behaviour. Cricket sets this on the six band-2
+   *  enrichment fields `cricket.player.line` gained (S17): `batting.fours`,
+   *  `.sixes`, `.dismissal.kind`, `bowling.maidens`, `.wides`, `.noBalls` —
+   *  the ORIGINAL seven fields on that same action stay unmarked (still
+   *  required), which is what keeps the legacy 7-field payload reachable
+   *  from the pad with nothing new touched. */
+  optional?: boolean;
 }
 export interface PadFieldToggle {
   kind: "toggle";
   path: string;
   labelKey?: PadLabel;
+  /** See `PadFieldNumber.optional`. No shipped toggle field uses this yet —
+   *  present for union symmetry, so `checkActionValidity` can read
+   *  `field.optional` generically without a per-kind type narrow. */
+  optional?: boolean;
 }
 export type PadField = PadFieldEnum | PadFieldNumber | PadFieldToggle;
 
@@ -255,10 +283,37 @@ export type PadField = PadFieldEnum | PadFieldNumber | PadFieldToggle;
  * `required: false`, e.g. cricket's `batting.dismissal.bowler`/`.fielder`.
  * Absent means "required, same as before this flag existed" — no existing
  * item changes behaviour.
+ *
+ * `requiresField` (owner ruling 12, S18) — ANOTHER hand-authored flag,
+ * independent of `optional`/`required`: a dotted `PadField` path that must
+ * also be set for this item's collected value to survive into the built
+ * payload. `buildActionPayload` (view-model.ts) drops this item's value
+ * (builds it as `undefined`, which `buildPathObject` then omits) whenever
+ * the named field is unset — regardless of what the scorer tapped, and
+ * regardless of the order fields/attribution were filled in. This exists
+ * because a nested object can have one member REQUIRED alongside others
+ * that are optional (cricket's `batting.dismissal` needs `kind`; `bowler`/
+ * `fielder` are optional siblings) — three independent `PadField`/
+ * `PadAttribution` entries with no schema-level relationship view-model.ts
+ * could otherwise see (this file's own module-level note: view-model.ts
+ * never reads a module's zod `eventSchemas`). Without this gate, a scorer
+ * who tapped a bowler/fielder chip before ever picking a dismissal kind
+ * would build `batting.dismissal.{bowler}` with no `kind` — a shape
+ * `CricketPlayerLine`'s schema rejects outright (`dismissal.kind` is NOT
+ * optional inside that sub-object), turning Confirm into a silent dead end.
+ * Absent means "no gating field" — no existing item changes behaviour.
  */
 export type PadAttributionItem =
-  | { kind: "side"; path: string; labelKey?: PadLabel; required?: boolean; optional?: boolean }
-  | { kind: "person"; path: string; role?: string; labelKey?: PadLabel; required?: boolean; optional?: boolean };
+  | { kind: "side"; path: string; labelKey?: PadLabel; required?: boolean; optional?: boolean; requiresField?: string }
+  | {
+      kind: "person";
+      path: string;
+      role?: string;
+      labelKey?: PadLabel;
+      required?: boolean;
+      optional?: boolean;
+      requiresField?: string;
+    };
 
 /**
  * A LIST of attribution requirements, not a single discriminated choice —

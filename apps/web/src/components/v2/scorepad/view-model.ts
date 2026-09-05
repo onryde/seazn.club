@@ -223,7 +223,13 @@ export function checkActionValidity(
   action: Pick<PadAction, "fields" | "attribution">,
   values: Readonly<Record<string, PadFieldValue | undefined>>,
 ): ActionValidity {
-  const missingFields = action.fields.filter((field) => values[field.path] === undefined);
+  // Owner ruling 12, S18 — `field.optional` (module.ts, hand-authored, never
+  // derived) is skipped from the gate entirely: a field flagged this way may
+  // stay unset and Confirm still fires. Absent/falsy behaves exactly as
+  // before this flag existed — every pre-ruling-12 field on every action
+  // stays required. See cricket's `cricket.player.line` for the shipped
+  // example (its six band-2 enrichment fields vs. its original seven).
+  const missingFields = action.fields.filter((field) => field.optional !== true && values[field.path] === undefined);
   if (missingFields.length > 0) return { ok: false, missing: missingFields, reason: MISSING_FIELDS_REASON };
   // The `?? []` stays deliberately, even though the type now forbids the
   // case: this is the Confirm path of a live scoring pad, and an untyped
@@ -246,6 +252,15 @@ export function checkActionValidity(
  * an explicit `undefined`), matching the engine's own `z.strictObject`
  * payload shapes and the exact technique `testkit/conformance-pad.ts`'s
  * property test uses to build its reference payloads.
+ *
+ * Owner ruling 12, S18 — an attribution item declaring `requiresField` (a
+ * dotted `PadField` path, module.ts) has its collected value dropped to
+ * `undefined` here whenever that field is itself unset, REGARDLESS of what
+ * the scorer tapped — so `buildPathObject` omits it exactly like any other
+ * unset path. This is what keeps `batting.dismissal.bowler`/`.fielder` from
+ * ever reaching the payload without `batting.dismissal.kind` alongside them
+ * (the schema requires `kind` inside that sub-object; see the field's own
+ * doc in sport/module.ts).
  */
 export function buildActionPayload(
   action: Pick<PadAction, "fields" | "attribution">,
@@ -253,7 +268,10 @@ export function buildActionPayload(
 ): Record<string, unknown> {
   const entries: (readonly [string, unknown])[] = [];
   for (const field of action.fields) entries.push([field.path, values[field.path]]);
-  for (const item of action.attribution) entries.push([item.path, values[item.path]]);
+  for (const item of action.attribution) {
+    const gated = item.requiresField !== undefined && values[item.requiresField] === undefined;
+    entries.push([item.path, gated ? undefined : values[item.path]]);
+  }
   return buildPathObject(entries);
 }
 

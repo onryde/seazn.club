@@ -637,3 +637,264 @@ describe("ActionFormList — required attribution gates Confirm (R8/WS-B2, disab
     expect(propsOf(confirm).disabled).toBe(true);
   });
 });
+
+// Task 18 — owner ruling 12 (S18): cricket.player.line's real padSpec entry
+// (packages/engine/src/sports/cricket/cricket.ts) now sets `chips: true` on
+// its `batting.dismissal.kind` field (PadFieldEnum, module.ts) — the SAME
+// "enum" kind every other pad enum field already uses, rendered as a chip
+// row instead of a `<select>`, per this file's existing per-KIND branching
+// (renderField), never a per-path one. A hand-typed fixture, mirroring this
+// file's own convention (see `reviewAction` above) rather than the real
+// engine padSpec (view-model.test.ts's job, memory rule #19).
+describe("ActionFormList — an enum field with chips: true renders a chip row, not a select (owner ruling 12, S18)", () => {
+  const chipField = { kind: "enum" as const, path: "batting.dismissal.kind", values: ["bowled", "caught", "lbw"], chips: true };
+  const lineAction = action({
+    type: "cricket.player.line",
+    labelKey: label("Scorecard line"),
+    fields: [chipField],
+  });
+
+  function renderLine() {
+    const calls: { type: string; payload: Record<string, unknown> }[] = [];
+    const island = renderIsland(ActionFormList, {
+      actions: [lineAction],
+      t,
+      submittingType: null,
+      onSubmit: (type, payload) => calls.push({ type, payload }),
+      squads: NO_SQUADS,
+      lineups: NO_LINEUPS,
+      personNames: NO_NAMES,
+    });
+    click(buttonsOf(island.tree())[0]!); // expand
+    return { island, calls };
+  }
+
+  it("renders one chip per declared value, each ≥44px carrying its own data-value — never a <select>", () => {
+    const { island } = renderLine();
+    const tree = island.tree();
+    expect(tree.some((el) => el.type === "select")).toBe(false);
+    const chips = buttonsOf(tree).filter((b) => propsOf(b)["data-value"] !== undefined);
+    expect(chips.map((c) => propsOf(c)["data-value"])).toEqual(["bowled", "caught", "lbw"]);
+    for (const chip of chips) expect(propsOf(chip).style).toMatchObject({ minHeight: 44 });
+  });
+
+  it("tapping a chip marks it pressed, and confirming builds the payload nesting the tapped value", () => {
+    const { island, calls } = renderLine();
+    const chip = () => buttonsOf(island.tree()).find((b) => propsOf(b)["data-value"] === "caught")!;
+    click(chip());
+    expect(propsOf(chip())["aria-pressed"]).toBe(true);
+
+    const confirm = buttonsOf(island.tree()).find((b) => textOf(b) === "scorepad.action.confirm")!;
+    click(confirm);
+    expect(calls).toEqual([{ type: "cricket.player.line", payload: { batting: { dismissal: { kind: "caught" } } } }]);
+  });
+
+  it("re-tapping a pressed chip clears it back to unselected, mirroring every other chip control in v3", () => {
+    const { island } = renderLine();
+    const chip = () => buttonsOf(island.tree()).find((b) => propsOf(b)["data-value"] === "bowled")!;
+    click(chip());
+    expect(propsOf(chip())["aria-pressed"]).toBe(true);
+    click(chip());
+    expect(propsOf(chip())["aria-pressed"]).toBe(false);
+  });
+});
+
+// Task 18 — owner ruling 12 (S18): `field.optional` (module.ts, hand-authored)
+// lets a declared field stay unset without blocking Confirm — proved here at
+// the RENDERING layer (checkActionValidity's own unit is view-model.test.ts's
+// job). Mutant (a) in the task's verification: drop the `field.optional !==
+// true` half of the missingFields filter and this test reds (Confirm stays
+// disabled forever).
+describe("ActionFormList — an optional field does not block Confirm (owner ruling 12, S18)", () => {
+  const mixedAction = action({
+    type: "cricket.player.line",
+    labelKey: label("Scorecard line"),
+    fields: [
+      { kind: "number" as const, path: "batting.runs", min: 0, max: 300 },
+      { kind: "number" as const, path: "batting.fours", min: 0, max: 20, optional: true },
+    ],
+  });
+
+  function numberInputs(island: { tree: () => ReturnType<typeof walk> }) {
+    return island.tree().filter((el) => el.type === "input" && propsOf(el).type === "number");
+  }
+
+  it("Confirm enables once the required field is set, even though the optional one is left unset", () => {
+    const island = renderIsland(ActionFormList, {
+      actions: [mixedAction],
+      t,
+      submittingType: null,
+      onSubmit: () => {},
+      squads: NO_SQUADS,
+      lineups: NO_LINEUPS,
+      personNames: NO_NAMES,
+    });
+    click(buttonsOf(island.tree())[0]!); // expand
+    const [runsInput] = numberInputs(island);
+    (propsOf(runsInput!).onChange as (e: { target: { value: string } }) => void)({ target: { value: "30" } });
+
+    const confirm = buttonsOf(island.tree()).find((b) => textOf(b) === "scorepad.action.confirm")!;
+    expect(propsOf(confirm).disabled).toBeFalsy();
+  });
+
+  it("the required (non-optional) field still blocks Confirm when left unset — negative pair for the check above", () => {
+    const island = renderIsland(ActionFormList, {
+      actions: [mixedAction],
+      t,
+      submittingType: null,
+      onSubmit: () => {},
+      squads: NO_SQUADS,
+      lineups: NO_LINEUPS,
+      personNames: NO_NAMES,
+    });
+    click(buttonsOf(island.tree())[0]!); // expand
+    const [, foursInput] = numberInputs(island);
+    (propsOf(foursInput!).onChange as (e: { target: { value: string } }) => void)({ target: { value: "2" } });
+
+    const confirm = buttonsOf(island.tree()).find((b) => textOf(b) === "scorepad.action.confirm")!;
+    expect(propsOf(confirm).disabled).toBe(true);
+  });
+});
+
+// Task 18 — ruling 4: `Number("")` is `0`, so a cleared numeric input must
+// reach the built payload as genuinely ABSENT, never a coerced 0. The
+// renderer's existing number-field `onChange` already special-cases the
+// empty string (pre-dates this task); this proves the full round trip
+// through a real optional field the scorer can legitimately leave blank
+// after having typed into it. Mutant (b): make the `raw === ""` branch fall
+// through to `Number(raw)` and this test reds (payload carries `fours: 0`).
+describe("ActionFormList — clearing a numeric field never coerces to 0 (owner ruling 12, ruling 4)", () => {
+  it("typing then clearing batting.fours builds no key at all, never fours: 0", () => {
+    const calls: { type: string; payload: Record<string, unknown> }[] = [];
+    const withField = action({
+      type: "cricket.player.line",
+      labelKey: label("Scorecard line"),
+      fields: [{ kind: "number" as const, path: "batting.fours", min: 0, max: 20, optional: true }],
+    });
+    const island = renderIsland(ActionFormList, {
+      actions: [withField],
+      t,
+      submittingType: null,
+      onSubmit: (type, payload) => calls.push({ type, payload }),
+      squads: NO_SQUADS,
+      lineups: NO_LINEUPS,
+      personNames: NO_NAMES,
+    });
+    click(buttonsOf(island.tree())[0]!); // expand
+    const input = () => island.tree().find((el) => el.type === "input" && propsOf(el).type === "number")!;
+    (propsOf(input()).onChange as (e: { target: { value: string } }) => void)({ target: { value: "3" } });
+    expect(propsOf(input()).value).toBe(3);
+    (propsOf(input()).onChange as (e: { target: { value: string } }) => void)({ target: { value: "" } });
+    expect(propsOf(input()).value).toBe("");
+
+    const confirm = buttonsOf(island.tree()).find((b) => textOf(b) === "scorepad.action.confirm")!;
+    click(confirm);
+    expect(calls).toEqual([{ type: "cricket.player.line", payload: {} }]);
+  });
+});
+
+// Task 18 — the brief's own acceptance criterion: "the legacy 7-field
+// payload is byte-identical when no new field is touched". A hand-typed
+// fixture mirroring cricket.player.line's REAL 13-field/3-attribution shape
+// (cricket.ts's playerLineAction post-Task-18), per this file's own
+// established convention of mirroring rather than importing the real
+// padSpec (memory rule #19 — the derivation itself is proved in
+// player-line.test.ts/view-model.test.ts). Only the seven legacy fields plus
+// the one required attribution are ever touched here; the six new fields
+// and the two optional attributions are never set.
+describe("ActionFormList — the legacy 7-field player-line payload stays byte-identical (owner ruling 12, S18)", () => {
+  const lineAction = action({
+    type: "cricket.player.line",
+    labelKey: label("Scorecard line"),
+    fields: [
+      { kind: "number" as const, path: "innings", min: 1, max: 4 },
+      { kind: "toggle" as const, path: "batting.out" },
+      { kind: "number" as const, path: "batting.runs", min: 0, max: 300 },
+      { kind: "number" as const, path: "batting.balls", min: 0, max: 300 },
+      { kind: "number" as const, path: "batting.fours", min: 0, max: 300, optional: true },
+      { kind: "number" as const, path: "batting.sixes", min: 0, max: 300, optional: true },
+      { kind: "enum" as const, path: "batting.dismissal.kind", values: ["bowled", "caught"], chips: true, optional: true },
+      { kind: "number" as const, path: "bowling.legalBalls", min: 0, max: 300 },
+      { kind: "number" as const, path: "bowling.runs", min: 0, max: 300 },
+      { kind: "number" as const, path: "bowling.wickets", min: 0, max: 10 },
+      { kind: "number" as const, path: "bowling.maidens", min: 0, max: 50, optional: true },
+      { kind: "number" as const, path: "bowling.wides", min: 0, max: 300, optional: true },
+      { kind: "number" as const, path: "bowling.noBalls", min: 0, max: 300, optional: true },
+    ],
+    attribution: [
+      { kind: "person" as const, path: "person" },
+      { kind: "person" as const, path: "batting.dismissal.bowler", optional: true, requiresField: "batting.dismissal.kind" },
+      { kind: "person" as const, path: "batting.dismissal.fielder", optional: true, requiresField: "batting.dismissal.kind" },
+    ],
+  });
+
+  const SQUADS: SquadState = {
+    home: {
+      entrantId: "home-1",
+      members: [
+        { personId: "p-home", role: "player", provenance: "named", orderNo: 1, onField: true, started: true, timesOff: 0, timesOn: 0 },
+      ],
+      subsUsed: 0,
+      exemptUsed: {},
+    },
+    away: { entrantId: "away-1", members: [], subsUsed: 0, exemptUsed: {} },
+  };
+  const LINEUPS: LineupPair = {
+    home: { entrantId: "home-1", slots: [{ personId: "p-home", slot: "starting", orderNo: 1 }] },
+    away: { entrantId: "away-1", slots: [] },
+  };
+  const NAMES = { "p-home": "Home Player" };
+
+  it("touching only the seven legacy fields plus person builds the exact legacy payload — no extra keys", () => {
+    const calls: { type: string; payload: Record<string, unknown> }[] = [];
+    const island = renderIsland(ActionFormList, {
+      actions: [lineAction],
+      t,
+      submittingType: null,
+      onSubmit: (type, payload) => calls.push({ type, payload }),
+      squads: SQUADS,
+      lineups: LINEUPS,
+      personNames: NAMES,
+    });
+    click(buttonsOf(island.tree())[0]!); // expand
+
+    const numberInputByOrder = (n: number) =>
+      island.tree().filter((el) => el.type === "input" && propsOf(el).type === "number")[n]!;
+    const setNumber = (n: number, v: string) =>
+      (propsOf(numberInputByOrder(n)).onChange as (e: { target: { value: string } }) => void)({ target: { value: v } });
+
+    // Declared order: innings(0, number), batting.out(toggle, skipped from
+    // this indexed list), batting.runs(1), batting.balls(2), fours(3, SKIPPED
+    // — legacy-only), sixes(4, SKIPPED), dismissal.kind(enum, SKIPPED),
+    // bowling.legalBalls(5), bowling.runs(6), bowling.wickets(7),
+    // maidens(8, SKIPPED), wides(9, SKIPPED), noBalls(10, SKIPPED).
+    setNumber(0, "1"); // innings
+    setNumber(1, "30"); // batting.runs
+    setNumber(2, "20"); // batting.balls
+    setNumber(5, "12"); // bowling.legalBalls
+    setNumber(6, "20"); // bowling.runs
+    setNumber(7, "2"); // bowling.wickets
+
+    const toggle = island.tree().find((el) => el.type === "input" && propsOf(el).type === "checkbox")!;
+    (propsOf(toggle).onChange as (e: { target: { checked: boolean } }) => void)({ target: { checked: true } });
+
+    const personGroup = island.tree().find((el) => propsOf(el)["data-attribution-path"] === "person")!;
+    const personChip = walk(propsOf(personGroup).children as never).filter((el) => el.type === "button")[0]!;
+    click(personChip);
+
+    const confirm = buttonsOf(island.tree()).find((b) => textOf(b) === "scorepad.action.confirm")!;
+    click(confirm);
+
+    expect(calls).toEqual([
+      {
+        type: "cricket.player.line",
+        payload: {
+          innings: 1,
+          person: "p-home",
+          batting: { out: true, runs: 30, balls: 20 },
+          bowling: { legalBalls: 12, runs: 20, wickets: 2 },
+        },
+      },
+    ]);
+  });
+});

@@ -2996,6 +2996,25 @@ export function padSpec(cfg: CricketCfg): PadSpec {
   // schema's own `.optional()` on `dismissal.bowler`/`.fielder`; `optional`
   // is a separate, hand-authored flag the picker reads (see `PadAttributionItem`
   // in sport/module.ts).
+  //
+  // S18/owner ruling 12 (pad wiring) — three more flags on these same six
+  // fields/two attributions, closing gaps found by reading `checkActionValidity`/
+  // `buildActionPayload` rather than assumed:
+  // - `optional: true` on all six new FIELDS. Every field on this action used
+  //   to be required for Confirm (`checkActionValidity` gates on EVERY
+  //   declared field); without this, the six new fields would silently make
+  //   the whole action require MORE input than before, and the legacy
+  //   7-field payload would become unreachable from the pad — exactly the
+  //   opposite of "additive, band-2 unchanged" this ruling promises.
+  // - `chips: true` on `batting.dismissal.kind` — the ten dismissal modes
+  //   render as a chip row (data-value, ≥44px), like every other pad chip,
+  //   rather than the generic enum `<select>`.
+  // - `requiresField: "batting.dismissal.kind"` on both dismissal-credit
+  //   attributions — `dismissal.kind` is NOT optional inside the schema's own
+  //   `dismissal` sub-object, so a scorer who names a bowler/fielder without
+  //   ever picking a kind would otherwise build a payload the schema rejects
+  //   outright. See `PadAttributionItem.requiresField`'s own doc in
+  //   sport/module.ts for the full mechanism.
   const playerLineAction: PadAction = {
     type: "cricket.player.line",
     labelKey: { key: "pad.cricket.action.playerLine", label: "Scorecard line" },
@@ -3004,9 +3023,9 @@ export function padSpec(cfg: CricketCfg): PadSpec {
       { kind: "toggle", path: "batting.out" },
       { kind: "number", path: "batting.runs", min: 0, max: MAX_PLAUSIBLE_RUNS },
       { kind: "number", path: "batting.balls", min: 0, max: inningsBallsBound(cfg) },
-      { kind: "number", path: "batting.fours", min: 0, max: inningsBallsBound(cfg) },
-      { kind: "number", path: "batting.sixes", min: 0, max: inningsBallsBound(cfg) },
-      { kind: "enum", path: "batting.dismissal.kind", values: DISMISSAL_KINDS },
+      { kind: "number", path: "batting.fours", min: 0, max: inningsBallsBound(cfg), optional: true },
+      { kind: "number", path: "batting.sixes", min: 0, max: inningsBallsBound(cfg), optional: true },
+      { kind: "enum", path: "batting.dismissal.kind", values: DISMISSAL_KINDS, chips: true, optional: true },
       { kind: "number", path: "bowling.legalBalls", min: 0, max: inningsBallsBound(cfg) },
       { kind: "number", path: "bowling.runs", min: 0, max: MAX_PLAUSIBLE_RUNS },
       { kind: "number", path: "bowling.wickets", min: 0, max: Math.max(0, cfg.playersPerSide - 1) },
@@ -3015,14 +3034,15 @@ export function padSpec(cfg: CricketCfg): PadSpec {
         path: "bowling.maidens",
         min: 0,
         max: Math.max(0, Math.floor(inningsBallsBound(cfg) / cfg.ballsPerOver)),
+        optional: true,
       },
-      { kind: "number", path: "bowling.wides", min: 0, max: MAX_PLAUSIBLE_RUNS },
-      { kind: "number", path: "bowling.noBalls", min: 0, max: MAX_PLAUSIBLE_RUNS },
+      { kind: "number", path: "bowling.wides", min: 0, max: MAX_PLAUSIBLE_RUNS, optional: true },
+      { kind: "number", path: "bowling.noBalls", min: 0, max: MAX_PLAUSIBLE_RUNS, optional: true },
     ],
     attribution: [
       { kind: "person", path: "person" },
-      { kind: "person", path: "batting.dismissal.bowler", optional: true },
-      { kind: "person", path: "batting.dismissal.fielder", optional: true },
+      { kind: "person", path: "batting.dismissal.bowler", optional: true, requiresField: "batting.dismissal.kind" },
+      { kind: "person", path: "batting.dismissal.fielder", optional: true, requiresField: "batting.dismissal.kind" },
     ],
   };
 

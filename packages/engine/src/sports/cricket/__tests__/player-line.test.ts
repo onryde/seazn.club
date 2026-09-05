@@ -130,3 +130,48 @@ describe("CricketPlayerLine — enriched band-2 lines", () => {
     expect(padSpec(cfg).fidelity["cricket.player.line"]).toBe(2);
   });
 });
+
+// Task 18 — owner ruling 12 (S18): the pad wiring these declarations feed.
+// `checkActionValidity` (apps/web view-model.ts) gates Confirm on EVERY
+// declared field unless it is flagged `optional`, so the six new fields
+// need that flag or the "legacy 7-field payload stays reachable" half of
+// ruling 12 is broken at the pad, even though the schema itself already
+// accepts the legacy shape (proved above). `chips`/`requiresField` are the
+// other two pieces of pad-facing data this task's renderer/builder read.
+describe("cricket.player.line padSpec — S18 pad-wiring flags", () => {
+  const cfg = cricket.configSchema.parse({});
+  const action = padSpec(cfg)
+    .panels.flatMap((p) => p.actions)
+    .find((a) => a.type === "cricket.player.line")!;
+
+  it("flags exactly the six band-2 fields optional — the original seven stay required", () => {
+    const optionalPaths = action.fields.filter((f) => f.optional === true).map((f) => f.path);
+    expect(optionalPaths.sort()).toEqual(
+      [
+        "batting.fours",
+        "batting.sixes",
+        "batting.dismissal.kind",
+        "bowling.maidens",
+        "bowling.wides",
+        "bowling.noBalls",
+      ].sort(),
+    );
+    const legacyPaths = ["innings", "batting.out", "batting.runs", "batting.balls", "bowling.legalBalls", "bowling.runs", "bowling.wickets"];
+    for (const path of legacyPaths) {
+      expect(action.fields.find((f) => f.path === path)!.optional).not.toBe(true);
+    }
+  });
+
+  it("declares batting.dismissal.kind as a chip-rendered enum", () => {
+    const kindField = action.fields.find((f) => f.path === "batting.dismissal.kind")!;
+    expect(kindField.kind).toBe("enum");
+    if (kindField.kind === "enum") expect(kindField.chips).toBe(true);
+  });
+
+  it("gates both dismissal-credit attributions on batting.dismissal.kind", () => {
+    const bowler = action.attribution.find((a) => a.path === "batting.dismissal.bowler")!;
+    const fielder = action.attribution.find((a) => a.path === "batting.dismissal.fielder")!;
+    expect(bowler.requiresField).toBe("batting.dismissal.kind");
+    expect(fielder.requiresField).toBe("batting.dismissal.kind");
+  });
+});

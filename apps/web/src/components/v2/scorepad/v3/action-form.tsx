@@ -117,6 +117,42 @@ function renderField(
 
   if (field.kind === "enum") {
     const bareField = field.path.split(".").pop()!;
+
+    // Owner ruling 12, S18 — a field-level rendering flag (module.ts,
+    // `PadFieldEnum.chips`), never a per-path branch: this stays the SAME
+    // "enum" kind as every `<select>` field above, just declared to draw as
+    // a chip row instead. Cricket sets this on `batting.dismissal.kind`
+    // only — every pre-existing enum field renders exactly as before.
+    if (field.chips === true) {
+      return (
+        <div key={field.path} data-field-path={field.path} className="space-y-1">
+          {caption && <span className={fieldLabelClass}>{caption}</span>}
+          <div className="flex flex-wrap gap-2">
+            {field.values.map((v) => {
+              const pressed = value === v;
+              return (
+                <button
+                  key={v}
+                  type="button"
+                  data-value={v}
+                  aria-pressed={pressed}
+                  onClick={() => onChange(pressed ? undefined : v)}
+                  style={{ minHeight: 44 }}
+                  className={`inline-flex shrink-0 items-center rounded-full border px-4 text-sm font-medium transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-lime-400 ${
+                    pressed
+                      ? "border-transparent bg-violet-600 text-white hover:bg-violet-700"
+                      : "border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
+                  }`}
+                >
+                  {enumLabel(bareField, v, t)}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      );
+    }
+
     return (
       <label key={field.path} className="block">
         {caption && <span className={fieldLabelClass}>{caption}</span>}
