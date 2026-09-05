@@ -399,7 +399,7 @@ test.describe("the officials handoff, both people driven", () => {
     // the ACTIVE-ORG COOKIE — so without this it reads an empty list, can
     // never resolve, and both read-back verifications below are vacuous.
     // Full, measured mechanism in `activateOrgForCleanup`.
-    await activateOrgForCleanup(request, orgId, "main");
+    const activated = await activateOrgForCleanup(request, orgId, "main");
     const resolvedOfficialId = officialId || (officialWritten ? await resolveOfficialIdByName(request, officialName) : null);
     if (blackoutWritten && resolvedOfficialId) {
       // ROUTE FIX: the DELETE handler reads the date from a QUERY PARAM
@@ -447,9 +447,19 @@ test.describe("the officials handoff, both people driven", () => {
         console.error(`[scheduling-officials-handoff] official cleanup THREW: ${String(err)}`);
       }
     } else if (officialWritten && !resolvedOfficialId) {
+      // "could not look" and "nothing was there" are DIFFERENT FACTS and the
+      // log must not merge them. Unresolved after a FAILED activation means
+      // the lookup was against the wrong tenant and says nothing about whether
+      // a row exists — assume it leaked. Unresolved after a good activation is
+      // the real "the create failed, nothing to clean up".
       console.error(
-        `[scheduling-officials-handoff] official cleanup SKIPPED — write was armed but no official named ` +
-          `"${officialName}" could be resolved (create may genuinely have failed; nothing to clean up).`,
+        activated
+          ? `[scheduling-officials-handoff] official cleanup SKIPPED — write was armed but no official ` +
+              `named "${officialName}" could be resolved against the CORRECT org ${orgId} (the create ` +
+              `genuinely failed; nothing to clean up).`
+          : `[scheduling-officials-handoff] official cleanup COULD NOT LOOK — org ${orgId} was never ` +
+              `activated, so the lookup for "${officialName}" ran against the wrong tenant and proves ` +
+              `nothing. ASSUME THE ROW LEAKED.`,
       );
     }
     await officialPage?.close();
@@ -539,6 +549,29 @@ test.describe("the officials handoff, both people driven", () => {
     await expect(claimCode).toBeVisible();
     const claimUrl = (await claimCode.textContent())?.trim();
     expect(claimUrl, "the directory emitted no claim link").toBeTruthy();
+    // `claim_url` is ABSOLUTE, and its origin comes from `baseUrl()`
+    // (lib/oauth.ts:19-23), which prefers `OAUTH_BASE_URL` /
+    // `NEXT_PUBLIC_BASE_URL` over the request's own origin. So a misconfigured
+    // base emits a link pointing at a DIFFERENT deployment — and a bare
+    // `goto(claimUrl)` would follow it, silently driving that one instead of
+    // the app under test. Every later claim to be reading "the official's
+    // screen" would then be about somebody else's server, and this whole step
+    // exists to prove the link RESOLVES.
+    //
+    // Two guards, because they catch different failures: the origin is pinned
+    // (a misconfigured base reds here, naming the two env vars), and the
+    // navigation is rebuilt on a PATH so it cannot wander off this origin even
+    // if that assertion is later relaxed. Relative `goto` resolves against the
+    // project's `baseURL` — the same way `officialPage.goto("/me")` below and
+    // `loginUi`'s own path navigation already do.
+    const claimTarget = new URL(claimUrl!);
+    const appOrigin = new URL(page.url()).origin;
+    expect(
+      claimTarget.origin,
+      `the claim link points at ${claimTarget.origin} but this run drives ${appOrigin} — ` +
+        `an official would be sent to the wrong deployment. Check OAUTH_BASE_URL / NEXT_PUBLIC_BASE_URL.`,
+    ).toBe(appOrigin);
+    const claimPath = `${claimTarget.pathname}${claimTarget.search}`;
 
     // Same claim-rail sequence officials-directory.spec.ts's own
     // officiating describe block already exercises: visit anonymously, log
@@ -546,15 +579,26 @@ test.describe("the officials handoff, both people driven", () => {
     // "This is me" has no dictionary key at all — it's a hardcoded literal in
     // claim-accept.tsx, not `msg(...)` — so it cannot be sourced from `en`;
     // this reuses the same regex the existing spec already established.
-    await officialPage.goto(claimUrl!);
+    await officialPage.goto(claimPath);
     await expect(officialPage.locator("main .card").first()).toBeVisible();
     // `loginUi` auto-creates the account (unknown email) and waits up to its
     // own 20_000ms for the post-login redirect to land — the constant this
-    // spec's CLAIM_FLOW_MS budget cites. No `next` here, matching the exact
-    // sequence officials-directory.spec.ts's own officiating describe block
-    // already exercises: log in, then return to the claim link explicitly.
-    await loginUi(officialPage, officialEmail);
-    await officialPage.goto(claimUrl!);
+    // spec's CLAIM_FLOW_MS budget cites.
+    //
+    // `next` IS PASSED, and it is not cosmetic. `loginUi`'s own docblock
+    // (helpers.ts:260-264): a bare login runs the org-resolution branch, which
+    // auto-provisions "My organization" for a user who belongs to none — so
+    // omitting it leaked one user AND one org per run, and quietly turned this
+    // official into an organiser, which is the opposite of the identity this
+    // step is about. Every real entry point that logs someone in on their way
+    // somewhere (claim, join, invite) carries one; the claim link is exactly
+    // such an entry point, so passing it reproduces the REAL flow rather than
+    // a leakier approximation of it.
+    //
+    // The explicit re-navigation below is kept: it costs one navigation, and
+    // it makes the claim page's arrival independent of the redirect working.
+    await loginUi(officialPage, officialEmail, claimPath);
+    await officialPage.goto(claimPath);
     await officialPage.getByRole("button", { name: /This is me/ }).click();
     await officialPage.waitForURL(/\/me\?claimed=1/);
 
@@ -562,11 +606,54 @@ test.describe("the officials handoff, both people driven", () => {
     // The official blacks out a day, from their own screen. First assertion
     // anywhere on the G9 read-back route from a browser.
     await officialPage.goto("/me");
-    await officialPage.getByTestId("official-blackout-date").fill(BLACKOUT_DATE);
+    const blackoutDate = officialPage.getByTestId("official-blackout-date");
+    const addBlackout = officialPage.getByTestId("official-blackout-add");
+
+    // THE HYDRATION RACE, and the measured cause of an 82_500ms stall this
+    // spec really hit — not bad luck and not a tight budget.
+    //
+    // The date input is CONTROLLED (`value={date}`,
+    // components/me/officiating-lane.tsx:475) and Add is
+    // `disabled={busy || !date}` (:486). `page.goto` resolves on `load`, which
+    // is BEFORE React attaches `onChange`. A `fill()` that lands in that
+    // window writes the DOM value with nothing listening; hydration then
+    // re-renders `value={date}` with `date` still `""` and wipes it. The click
+    // that follows is never REFUSED — `click()` waits for actionability, so it
+    // burns the whole test timeout (82_500ms = STEPS 25 x PER_STEP_MS 2_500 +
+    // CLAIM_FLOW_MS 20_000, the spec's OWN derived budget, not the 90s
+    // ceiling) and then reports whichever `expect.poll` was in flight, which
+    // reads as a DATA defect. AGENTS.md §20, and the same class
+    // mobile.spec.ts:1738 records for a pre-hydration click.
+    //
+    // The fill is therefore RETRIED until React's own state proves it took.
+    // A bare assertion could only relabel this, not fix it: once hydration has
+    // discarded a fill, no amount of waiting brings the value back — it has to
+    // be typed again on the hydrated input. Errors are swallowed per attempt
+    // (an element can detach mid-hydration) exactly as mobile.spec.ts does.
+    await expect
+      .poll(
+        async () => {
+          await blackoutDate.fill(BLACKOUT_DATE, { timeout: 5_000 }).catch(() => undefined);
+          return await addBlackout.isEnabled().catch(() => false);
+        },
+        {
+          timeout: 20_000,
+          message:
+            "the blackout date must reach React's state — Add is `disabled={busy || !date}`, so it " +
+            "stays dead while `date` is empty, however many times the DOM value is set",
+        },
+      )
+      .toBe(true);
+    // The two facts the click depends on, pinned separately from the retry
+    // above so a regression says WHICH half went: the value survived the
+    // render, and the control it gates is live.
+    await expect(blackoutDate).toHaveValue(BLACKOUT_DATE);
+    await expect(addBlackout).toBeEnabled();
+
     // CONTROLLER REFINEMENT to AMENDMENT B: armed BEFORE the click that fires
     // the write, not after — verified for real by the poll immediately below.
     blackoutWritten = true;
-    await officialPage.getByTestId("official-blackout-add").click();
+    await addBlackout.click();
     await expect
       .poll(async () => {
         const { data } = await apiJson<{ date: string }[]>(
@@ -594,7 +681,27 @@ test.describe("the officials handoff, both people driven", () => {
     // it to `toBeDisabled()` alone (with no companion pin) would instead
     // freeze this High defect as expected behaviour, which is the exact
     // failure this programme has already shipped twice.
+    //
+    // `toBeDisabled()` ALONE CANNOT SAY WHY. The predicate is
+    // `busy || proposal.conflicts.some((c) => c.severity === "block")`
+    // (officials-panel.tsx:316), so an in-flight request satisfies it just as
+    // well as the conflict this step claims — and a comment asserting the
+    // second while the test only witnesses the disjunction is how a test comes
+    // to lie about what it pins. Two companions make it discriminate:
+    //
+    //  - PROPOSE shares `busy` (officials-panel.tsx:296) and NOTHING else. A
+    //    live Propose beside a dead Apply is only possible when the second
+    //    disjunct is what is holding Apply down.
+    //  - the block conflict names itself on screen. `role_unfilled` is the
+    //    engine's own `kind` for the day-cap refusal
+    //    (packages/engine/src/officials/assign.ts:270-271, `severity: "block"`),
+    //    rendered verbatim into the conflict list at officials-panel.tsx:351.
+    //
+    // MUTATION-CHECKED: delete the `max_per_day: 1` PATCH above and this pair
+    // reds — no cap, no `role_unfilled`, and Apply comes back ENABLED.
+    await expect(page.getByTestId("officials-propose")).toBeEnabled();
     await expect(apply).toBeDisabled();
+    await expect(page.getByText(/role_unfilled/).first()).toBeVisible();
 
     // The manual assign. Pin what the control OPENS AT and what was chosen —
     // reachability is satisfied by any value, and a bare "the select is
@@ -747,7 +854,7 @@ test.describe("S4: an applied draft should seat the proposed officials", () => {
     // controller refinement (armed before the write, resolved by name if
     // the closure's own `officialId` is still empty), and for why this hook
     // must activate the org before it reads anything.
-    await activateOrgForCleanup(request, orgId, "S4-pin");
+    const activated = await activateOrgForCleanup(request, orgId, "S4-pin");
     const resolvedOfficialId = officialId || (officialWritten ? await resolveOfficialIdByName(request, s4OfficialName) : null);
     if (officialWritten && resolvedOfficialId) {
       try {
@@ -764,9 +871,16 @@ test.describe("S4: an applied draft should seat the proposed officials", () => {
         console.error(`[scheduling-officials-handoff] S4-pin official cleanup THREW: ${String(err)}`);
       }
     } else if (officialWritten && !resolvedOfficialId) {
+      // Same split as the main describe's afterAll: "could not look" is not
+      // "nothing was there".
       console.error(
-        `[scheduling-officials-handoff] S4-pin official cleanup SKIPPED — write was armed but no official ` +
-          `named "${s4OfficialName}" could be resolved (create may genuinely have failed; nothing to clean up).`,
+        activated
+          ? `[scheduling-officials-handoff] S4-pin official cleanup SKIPPED — write was armed but no ` +
+              `official named "${s4OfficialName}" could be resolved against the CORRECT org ${orgId} ` +
+              `(the create genuinely failed; nothing to clean up).`
+          : `[scheduling-officials-handoff] S4-pin official cleanup COULD NOT LOOK — org ${orgId} was ` +
+              `never activated, so the lookup for "${s4OfficialName}" ran against the wrong tenant and ` +
+              `proves nothing. ASSUME THE ROW LEAKED.`,
       );
     }
   });
@@ -790,6 +904,20 @@ test.describe("S4: an applied draft should seat the proposed officials", () => {
     // reported GREEN, and the pin could not tell "S4 is still broken" from
     // "the test never got as far as S4". Nothing below the modifier may move
     // above it, and nothing above it may move below.
+    //
+    // THE BUDGET, first, and ABOVE the modifier for exactly that reason.
+    // `test.setTimeout(TEST_BUDGET_MS)` is module-scoped, so this pin runs
+    // under the SAME derived clock as the main walkthrough and is equally
+    // exposed to it drifting over the 90s ceiling — but it carried no
+    // assertion of its own, so raising STEPS or PER_STEP_MS would have gone
+    // unremarked here. Below `test.fail()` the check would be worse than
+    // absent: an over-budget spec would report as the expected failure.
+    expect(
+      TEST_BUDGET_MS,
+      `derived budget ${TEST_BUDGET_MS}ms = ${STEPS} steps x ${PER_STEP_MS}ms + ${CLAIM_FLOW_MS}ms claim flow, ` +
+        `over the ${HARD_BUDGET_MS}ms this leg is allowed.`,
+    ).toBeLessThanOrEqual(HARD_BUDGET_MS);
+
     const apply = page.getByTestId("officials-apply");
 
     await test.step("setup: propose a draft and reach the Apply control", async () => {
