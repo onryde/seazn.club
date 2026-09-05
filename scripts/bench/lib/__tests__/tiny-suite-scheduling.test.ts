@@ -30,7 +30,7 @@ import {
   type ScheduleLockResolution,
 } from "../suites/tiny.ts";
 import { buildSeedPlan } from "../seed-plan.ts";
-import type { SuiteReport } from "../report.ts";
+import { BenchReport, writeReport, type SuiteReport } from "../report.ts";
 import { makeFakeServer } from "./tiny-suite.test.ts";
 import type { FakeScheduleOptions } from "./_schedule-routes.ts";
 
@@ -722,6 +722,65 @@ describe("runTinySuite — a thrown guard is routed to the verdict, never swallo
       expect(row?.red).toBe(true);
       // The division with no history of its own is untouched.
       expect(rowFor(report, "d-badminton")?.certificate?.branch).toBe("SKIPPED_NO_HISTORY");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The REAL report, actually written
+// ---------------------------------------------------------------------------
+
+describe("writeReport — a real _tiny run's own report reaches disk intact", () => {
+  it("parses, round-trips, and renders every scheduling section", async () => {
+    // `report.test.ts` proves the schema against a hand-built fixture, which
+    // cannot see a mismatch between the schema and what `runTinySuite`
+    // actually produces — and `writeReport` PARSES before writing, so a
+    // missing or mistyped field throws at run time, in `main()`, invisible to
+    // tsc and to every test that renders an in-memory object.
+    //
+    // This drives the real producer into the real writer. It is the same
+    // "prove the seam through its own producer and consumer" rule the rest of
+    // this wave is built on.
+    const { report: suite } = await run();
+    const dir = mkdtempSync(path.join(tmpdir(), "bench-b04-report-"));
+    try {
+      const written = await writeReport(dir, {
+        runId: "real-run",
+        startedAt: "2099-01-01T00:00:00.000Z",
+        engine: "optimized",
+        base: "http://bench.example",
+        preflight: { ok: true, refusals: [], placement: { status: "live", detail: "answered" } },
+        suites: [suite],
+        gate: "green",
+      });
+
+      const onDisk = BenchReport.parse(JSON.parse(readFileSync(written.jsonPath, "utf8")));
+      // The fields whose loss would be silent: a `z.object` STRIPS an unknown
+      // key, so a schema that forgot one would drop it from report.json and
+      // from report.md together, with no error anywhere.
+      const rows = onDisk.suites[0]?.scheduling ?? [];
+      expect(rows.map((d) => d.divisionRef)).toEqual(SCHEDULED_REFS);
+      expect(rows[0]?.checker?.unchecked.map((u) => u.type)).toContain("gapMinutes");
+      expect(rows[0]?.certificate?.branch).toBe("SKIPPED_NO_HISTORY");
+      expect((rows[0]?.believability?.metrics ?? []).length).toBeGreaterThan(0);
+      expect(onDisk.suites[0]?.engineDelta?.note).toContain("nothing to compare");
+
+      const md = readFileSync(written.mdPath, "utf8");
+      for (const heading of [
+        "## Scheduling",
+        "## Checker (independent verifier)",
+        "## Feasibility certificate",
+        "## Believability",
+        "## Engine delta",
+      ]) {
+        expect(md, `report.md is missing ${heading}`).toContain(heading);
+      }
+      // And the unchecked list is really IN the rendered file, beside the
+      // verdict — not merely in the JSON.
+      expect(md).toContain("Unchecked constraints (1)");
+      expect(md).toContain("`gapMinutes`");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
