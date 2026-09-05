@@ -7,12 +7,15 @@
 // 2026-09-02-competition-desk-prompts/_INDEX.md`). Fed by `buildRunSheet`
 // (`@/lib/run-sheet-groups`) — this component only RENDERS its blocks, it
 // never re-derives grouping, and it never restates `fixtureRowAction`'s
-// ladder (used here only for the filter counts/predicates, over the SAME
-// inputs each row computes for itself).
+// ladder. It no longer CALLS it either: the two counted filters ask
+// `division-phase.ts` (W1's ledger, and the same authority the "Needs you"
+// panel is built from) for the FACT, permission-blind, instead of reading a
+// row's offered action. See the block above `keep` for the two defects that
+// coupling produced.
 import { useEffect, useState } from "react";
 import { dayKeyInTz } from "@seazn/engine/scheduling/tz";
 import { useMsg, useMsgPlural } from "@/components/i18n/dict-provider";
-import { fixtureRowAction } from "@/lib/fixture-row-action";
+import { isResultMissing, isUnscheduledFixture } from "@/lib/division-phase";
 import { isBye, type RunSheetBlock, type RunSheetFixture } from "@/lib/run-sheet-groups";
 import { bracketRoundLabel } from "@/components/v2/stages-panel";
 import type { MessageKey } from "@/lib/messages";
@@ -35,6 +38,7 @@ export function RunSheet({
   tz,
   orgTz,
   nowMs,
+  matchMinutes,
   entrantNames,
   courtNames,
   canEdit,
@@ -56,6 +60,15 @@ export function RunSheet({
    *  actually resolves a zone against a typed value. */
   orgTz: string;
   nowMs: number;
+  /** The division's own `schedule_settings.config.matchMinutes`, already
+   *  resolved against `defaultMatchMinutes()` by the page (one derivation,
+   *  server-side — `ScheduleConfig` lives under `@/server` and a client
+   *  component that imports it breaks the build). It is the GRACE in the
+   *  "Needs result" predicate: a match is not overdue while it is still
+   *  being played. Required rather than defaulted, deliberately — a default
+   *  here would be a second authority for a number the page already owns,
+   *  and the chip would silently disagree with the "Needs you" panel. */
+  matchMinutes: number;
   entrantNames: Record<string, string>;
   courtNames?: Record<string, string>;
   canEdit: boolean;
@@ -75,23 +88,36 @@ export function RunSheet({
   const stageById = new Map(stages.map((s) => [s.id, s] as const));
   const today = dayKeyInTz(nowMs, tz);
 
-  const rowAction = (f: RunSheetFixture) =>
-    fixtureRowAction({
-      status: f.status,
-      scheduledAt: f.scheduled_at,
-      hasOfficials: f.officials.length > 0,
-      canEdit,
-      tz,
-      nowMs,
-    });
+  // The two counted filters are FACTS about a fixture, asked of the one
+  // module that owns them (`division-phase.ts`, W1's ledger) rather than
+  // re-derived here. Both used to come off `fixtureRowAction`'s ladder, and
+  // both were wrong for it (max-effort review, findings 1 and 2):
+  //
+  //  - `set_time` is returned only when `canEdit`, so a read-only viewer —
+  //    or an owner on a FROZEN competition — was shown "Unscheduled 0" above
+  //    a list of unscheduled fixtures, and clicking the chip asserted
+  //    absence ("No fixtures match…") where there was only inaccessibility.
+  //    A display filter's membership is never a write permission's business.
+  //  - `open_pad` is returned only for `in_play`, which is DISJOINT from
+  //    `result_missing` (that one requires `scheduled`). The organiser's
+  //    end-of-day backlog — the thing this chip exists for — read zero,
+  //    while a match still being played was counted as owing its result.
+  //
+  // `fixtureRowAction` is still the ONE authority for what a ROW OFFERS; it
+  // is simply not the authority for what a fixture IS. Each row asks it for
+  // itself (`RunSheetRow`), and this component no longer restates it at all.
+  const isUnscheduled = (f: RunSheetFixture) =>
+    isUnscheduledFixture({ status: f.status, scheduledAt: f.scheduled_at });
+  const needsResult = (f: RunSheetFixture) =>
+    isResultMissing({ status: f.status, scheduledAt: f.scheduled_at, matchMinutes }, nowMs);
 
   // Filter semantics (spec): "Today" / "Needs result" / "Unscheduled" / "All".
   // A bye is never actionable (R7a) and is always kept — it is context for
   // its round, not the "work" any filter is trying to isolate.
   const keep = (f: RunSheetFixture): boolean => {
     if (filter === "all" || isBye(f)) return true;
-    if (filter === "needs_result") return rowAction(f).kind === "open_pad";
-    if (filter === "unscheduled") return rowAction(f).kind === "set_time";
+    if (filter === "needs_result") return needsResult(f);
+    if (filter === "unscheduled") return isUnscheduled(f);
     // "today": only a TIMED fixture landing on today's venue-zone day counts.
     return f.scheduled_at !== null && dayKeyInTz(Date.parse(f.scheduled_at), tz) === today;
   };
@@ -103,9 +129,8 @@ export function RunSheet({
   for (const block of blocks) {
     for (const f of fixturesOf(block)) {
       if (isBye(f)) continue;
-      const kind = rowAction(f).kind;
-      if (kind === "open_pad") needsResultCount++;
-      if (kind === "set_time") unscheduledCount++;
+      if (needsResult(f)) needsResultCount++;
+      if (isUnscheduled(f)) unscheduledCount++;
     }
   }
 

@@ -137,6 +137,13 @@ export default async function DivisionPage({
     // and venue-qualified on the board — the same court, two labels.
     listVenues(auth, { includeArchived: true }),
   ]);
+  // How long a match is assumed to last on THIS division — resolved once,
+  // here, and used twice: by `resolvePhase`'s fixture shape below and by the
+  // run sheet's "Needs result" filter (`StagesPanel`'s `matchMinutes` prop).
+  // The panel cannot resolve it itself — its own schedule-settings fetch runs
+  // only `if (canEdit)`, so a viewer would never have it, and `ScheduleConfig`
+  // lives under `@/server` where a client component cannot import it.
+  const matchMinutes = scheduleSettings.config.matchMinutes ?? defaultMatchMinutes();
   // Competition Desk (2026-09-02, task 6): the division's derived phase
   // (`resolvePhase`, division-phase.ts) — this page needs only the phase
   // itself (gates the StagesPanel start-locks tip); ATTENTION is the
@@ -201,10 +208,11 @@ export default async function DivisionPage({
       // had already drifted from the desk's own schema-derived default (30).
       // `resolvePhase` never reads `matchMinutes` (only `resolveAttention`
       // does, and this page only calls the former — see the comment above),
-      // so this is inert today either way; sharing the one derivation keeps
-      // it from silently disagreeing with competition-desk.ts the day this
-      // page ever computes attention too.
-      matchMinutes: scheduleSettings.config.matchMinutes ?? defaultMatchMinutes(),
+      // so this is inert HERE either way; the same resolved value is what the
+      // run sheet's "Needs result" filter counts on, which is not inert at
+      // all, and sharing the one derivation keeps this page from silently
+      // disagreeing with competition-desk.ts.
+      matchMinutes,
       // Same reason as `eventCount` above: unread by `resolvePhase`, stubbed
       // rather than fetched (a scorer_assignments lookup belongs to the
       // competition desk's ATTENTION computation, not this page's phase-only
@@ -615,6 +623,7 @@ export default async function DivisionPage({
               orgTz={resolveVenueTz(null, page.org.timezone)}
               canExport={canExport}
               phase={phase}
+              matchMinutes={matchMinutes}
             />
           </>
         )}

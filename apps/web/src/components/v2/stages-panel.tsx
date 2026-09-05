@@ -17,7 +17,7 @@ import { useLocaleOrDefault, useMsg } from "@/components/i18n/dict-provider";
 import { seedingErrorMessage } from "@/lib/seeding-error";
 import type { Locale } from "@/lib/i18n-constants";
 import type { MessageKey } from "@/lib/messages";
-import { hasPlayedFixture, type DivisionPhase } from "@/lib/division-phase";
+import { DEFAULT_MATCH_MINUTES, hasPlayedFixture, type DivisionPhase } from "@/lib/division-phase";
 import { resolveSlotLabel } from "@/lib/slot-label";
 import { roundRoleFor, roundRoleLabel } from "@/lib/round-role-label";
 import { parseRoundRoleKey } from "@seazn/engine/competition";
@@ -211,6 +211,22 @@ interface Props {
    *  `stages-panel-*.test.tsx` files build props without it; an absent
    *  phase hides the start-locks tip below, which is the safe direction. */
   phase?: DivisionPhase;
+  /** The division's resolved `schedule_settings.config.matchMinutes`
+   *  (`page.tsx`, already falling back to `defaultMatchMinutes()`) — the
+   *  grace in the run sheet's "Needs result" filter, which is
+   *  `division-phase.ts`'s `result_missing`, the same predicate the "Needs
+   *  you" panel counts (max-effort review, finding 2).
+   *
+   *  Resolved SERVER-side and passed down rather than read here: this panel's
+   *  own `scheduleSettings` fetch runs only `if (canEdit)`, so a viewer would
+   *  never have it, and `ScheduleConfig` lives under `@/server` where a client
+   *  component cannot import it.
+   *
+   *  Optional for the same reason `venues`/`rosterDrift`/`phase` above are —
+   *  a dozen pre-existing `stages-panel-*.test.tsx` files build props without
+   *  it. The fallback is `DEFAULT_MATCH_MINUTES`, the schema's own default
+   *  pinned by `division-phase.test.ts`, never a number typed in here. */
+  matchMinutes?: number;
 }
 
 // PROMPT-66: stage kinds that accept an ad-hoc match (standings fold every
@@ -422,7 +438,7 @@ export function capacityRequestForStage(
 }
 
 
-export function StagesPanel({ divisionId, divisionSeq, competitionId, orgSlug, compSlug, divSlug, stages, fixtures, entrantNames, venues = [], rosterDrift = {}, canEdit, tz, orgTz, canExport, phase }: Props) {
+export function StagesPanel({ divisionId, divisionSeq, competitionId, orgSlug, compSlug, divSlug, stages, fixtures, entrantNames, venues = [], rosterDrift = {}, canEdit, tz, orgTz, canExport, phase, matchMinutes = DEFAULT_MATCH_MINUTES }: Props) {
   const msg = useMsg();
   // Only for Intl.ListFormat in attachmentWarning below — the rebuild
   // confirm dialog joins its "this also clears …" list per locale. The
@@ -1127,6 +1143,7 @@ export function StagesPanel({ divisionId, divisionSeq, competitionId, orgSlug, c
         tz={tz}
         orgTz={orgTz}
         nowMs={nowMs}
+        matchMinutes={matchMinutes}
         entrantNames={entrantNames}
         courtNames={courtNamesById}
         canEdit={canEdit}

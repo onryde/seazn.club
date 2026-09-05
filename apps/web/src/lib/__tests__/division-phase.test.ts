@@ -6,6 +6,9 @@ import {
   ledgerRank,
   leadingAttention,
   hasPlayedFixture,
+  isResultMissing,
+  isUnscheduledFixture,
+  DEFAULT_MATCH_MINUTES,
   NOT_RECORDING_GRACE_MINUTES,
   type Attention,
   type PhaseInput,
@@ -883,5 +886,97 @@ describe("ledgerRank — red outranks the phase", () => {
 
   it("a row with no desk data sorts last, below finished", () => {
     expect(ledgerRank(null)).toBeGreaterThan(ledgerRank({ phase: "finished", attention: [] }));
+  });
+});
+
+// SERVER module, imported here on purpose: `apps/web` vitest is node-env, so a
+// unit test can reach it even though the client components that consume the
+// copy below cannot (a client component importing `@/server` drags gRPC and
+// Node built-ins into the browser bundle — `tsc` and vitest both pass and
+// `next build` fails). Same pattern as `fixture-row-action.test.ts`'s
+// `TIMETABLE_MOVABLE_STATUS` pin and `bracket-kinds-sync.test.ts`.
+describe("DEFAULT_MATCH_MINUTES is the schema's own default", () => {
+  it("equals ScheduleConfig.matchMinutes' .default()", async () => {
+    const { ScheduleConfig } = await import("@/server/api-v1/schemas");
+    expect(DEFAULT_MATCH_MINUTES).toBe(ScheduleConfig.parse({}).matchMinutes);
+  });
+});
+
+// The two predicates `resolveAttention` raises `unscheduled` and
+// `result_missing` from, exported (max-effort review, findings 1 and 2) so
+// the run sheet's filter chips ask this module the question instead of
+// deriving their own answer from `fixtureRowAction` — which is gated on
+// `canEdit` and, for "needs result", on a DISJOINT status.
+describe("isUnscheduledFixture", () => {
+  it("is true for a real fixture with no time", () => {
+    expect(isUnscheduledFixture({ status: "scheduled", scheduledAt: null })).toBe(true);
+  });
+
+  it("is false once a time exists", () => {
+    expect(isUnscheduledFixture({ status: "scheduled", scheduledAt: "2026-09-05T10:00:00Z" })).toBe(false);
+  });
+
+  it("is false for every non-scheduled status — a decided match with no time is a RESULT", () => {
+    for (const status of ["in_play", "decided", "finalized", "cancelled", "abandoned", "forfeited"]) {
+      expect(isUnscheduledFixture({ status, scheduledAt: null }), status).toBe(false);
+    }
+  });
+
+  it("agrees with the `unscheduled` attention it was lifted out of", () => {
+    const fixtures: PhaseFixture[] = [
+      { id: "a", status: "scheduled", scheduledAt: null, startedAt: null, eventCount: 0, matchMinutes: 30, hasScorer: true, stageId: "s", tbd: false },
+      { id: "b", status: "scheduled", scheduledAt: "2026-09-05T10:00:00Z", startedAt: null, eventCount: 0, matchMinutes: 30, hasScorer: true, stageId: "s", tbd: false },
+      { id: "c", status: "decided", scheduledAt: null, startedAt: null, eventCount: 0, matchMinutes: 30, hasScorer: true, stageId: "s", tbd: false },
+    ];
+    const row = resolveAttention({
+      divisionStatus: "active", stages: [], fixtures,
+      now: "2026-09-05T18:00:00Z", tz: "UTC", awaitingRegistrations: 0,
+    }).find((a) => a.kind === "unscheduled");
+    expect(row?.kind === "unscheduled" ? row.count : 0).toBe(fixtures.filter(isUnscheduledFixture).length);
+  });
+});
+
+describe("isResultMissing", () => {
+  const NOW = Date.UTC(2026, 8, 5, 18, 0);
+  const base = { status: "scheduled", matchMinutes: 60 };
+
+  it("is true once kick-off + matchMinutes has passed", () => {
+    expect(isResultMissing({ ...base, scheduledAt: "2026-09-05T16:59:00Z" }, NOW)).toBe(true);
+  });
+
+  it("is false while the match is still inside its own matchMinutes", () => {
+    expect(isResultMissing({ ...base, scheduledAt: "2026-09-05T17:30:00Z" }, NOW)).toBe(false);
+  });
+
+  it("reads the fixture's OWN matchMinutes, not a constant", () => {
+    const at = "2026-09-05T17:00:00Z";
+    expect(isResultMissing({ status: "scheduled", scheduledAt: at, matchMinutes: 30 }, NOW)).toBe(true);
+    expect(isResultMissing({ status: "scheduled", scheduledAt: at, matchMinutes: 90 }, NOW)).toBe(false);
+  });
+
+  it("is false for a LIVE match, however long ago it started", () => {
+    // The exact disagreement finding 2 names: the run sheet used to count
+    // `in_play` — which this predicate never does — as "needs result".
+    expect(isResultMissing({ status: "in_play", scheduledAt: "2026-09-05T09:00:00Z", matchMinutes: 60 }, NOW)).toBe(false);
+  });
+
+  it("is false for an untimed fixture — an unknown kick-off cannot be overdue", () => {
+    expect(isResultMissing({ ...base, scheduledAt: null }, NOW)).toBe(false);
+  });
+
+  it("agrees with the `result_missing` attention it was lifted out of", () => {
+    const fixtures: PhaseFixture[] = [
+      { id: "a", status: "scheduled", scheduledAt: "2026-09-05T10:00:00Z", startedAt: null, eventCount: 1, matchMinutes: 60, hasScorer: true, stageId: "s", tbd: false },
+      { id: "b", status: "scheduled", scheduledAt: "2026-09-05T17:45:00Z", startedAt: null, eventCount: 1, matchMinutes: 60, hasScorer: true, stageId: "s", tbd: false },
+      { id: "c", status: "in_play", scheduledAt: "2026-09-05T09:00:00Z", startedAt: "2026-09-05T09:00:00Z", eventCount: 1, matchMinutes: 60, hasScorer: true, stageId: "s", tbd: false },
+    ];
+    const nowIso = "2026-09-05T18:00:00Z";
+    const row = resolveAttention({
+      divisionStatus: "active", stages: [], fixtures,
+      now: nowIso, tz: "UTC", awaitingRegistrations: 0,
+    }).find((a) => a.kind === "result_missing");
+    expect(row?.kind === "result_missing" ? row.fixtureIds : []).toEqual(
+      fixtures.filter((f) => isResultMissing(f, Date.parse(nowIso))).map((f) => f.id),
+    );
   });
 });
