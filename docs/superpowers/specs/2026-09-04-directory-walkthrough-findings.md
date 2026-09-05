@@ -66,6 +66,31 @@ Both now point at the live catalog instead of restating a number. Checked agains
 
 ---
 
+## 2b. The paywall BADGE still says Pro, after the sentence stopped — NOT FIXED
+
+**Found by driving the product at three widths, not by reading it** — the fixed
+sentence is correct and the gate around it is not. What actually renders is:
+
+> **PRO ✦**  This file has more rows than your plan allows — split it into
+> smaller files, or upgrade for a higher limit.
+
+`featurePlan()` (`feature-copy.ts:184`) is
+`PLUS_FEATURES.has(key) ? "pro_plus" : "pro"` — every key that is not Plus is
+badged **Pro**, with no notion of a key the customer already partly holds.
+`import.bulk` is dual-valued: a community org has a real 50-row allowance, so
+"PRO" misdescribes it exactly as the old sentence did. Fixing the copy and
+leaving the badge means the screen still makes the claim, more prominently and
+in fewer words.
+
+**Not fixed here, deliberately.** `featurePlan` feeds every `UpgradeGate` in the
+product and `feature-copy.test.ts` pins several of its answers, so changing it
+is a broad blast radius for a branch about directory walkthroughs. It belongs
+with the other entitlement-truth items (§3b below and the `openapi.ts` Pro
+claims) as one coherent "our paywalls overstate what is Pro" change.
+
+**Verified while there:** no horizontal page scroll at 1280, 768 or 320, and the
+copy wraps cleanly at 320.
+
 ## 3. The stranded-fixture banner and the board can disagree — NOT FIXED
 
 **What an organiser could hit.** Narrow a court's hours and be told
