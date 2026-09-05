@@ -4,6 +4,7 @@ import {
   dismissConsent,
   freshOrg,
   invalidateOrgEntitlements,
+  liveLimit,
   participantCsv,
   setEntitlementOverrideSql,
   stamp,
@@ -34,6 +35,11 @@ test.use({ storageState: { cookies: [], origins: [] } });
 
 const GOOD_ROWS = 3;
 const REFUSED_ROWS = 5;
+/** Strictly BELOW `GOOD_ROWS`, so re-previewing the first file is refused too.
+ *  At exactly `GOOD_ROWS` the guard is `wouldBe > limit`, so a 3-row re-map
+ *  would SUCCEED and step 1c would quietly exercise a successful remap while
+ *  claiming to test a failed one. */
+const CAP = GOOD_ROWS - 1;
 
 test("a refused upload clears the previous file's committable plan", async ({ page }) => {
   failOnNativeDialog(page);
@@ -66,17 +72,20 @@ test("a refused upload clears the previous file's committable plan", async ({ pa
   ).toBeVisible();
   await expect(commit, "the first file did not produce a committable plan").toBeVisible();
 
-  // --- 1b. a SUCCESSFUL remap must not tear the plan down -------------------
+  // --- 1b. a SUCCESSFUL remap leaves the plan standing ---------------------
   //
-  // `remap()` re-enters the same `upload()` this test's fix touches, so a fix
-  // written as "clear the preview whenever an upload starts" would unmount the
-  // mapping+preview card on every mapping change — a flash on the happy path,
-  // to cure a bug that only exists on the failing one. That regression shipped
-  // once and no spec could see it, because nothing here exercised remap.
+  // A STEADY-STATE check, and honest about it: it cannot witness a transient
+  // unmount. An earlier version of the fix cleared the preview at the top of
+  // `upload()`, which tore the card down mid-flight on every remap — but the
+  // POST returns in ~100-400ms and re-mounts it, and `toBeVisible()` retries
+  // for 15s, so both shapes settle identically and this assertion passes
+  // against either. Pinning that placement would mean holding the response
+  // with `page.route` and sampling while it is pending. What actually guards
+  // it is step 1c below, which needs no such trick.
   await page.getByRole("button", { name: "Re-map & re-preview" }).click();
   await expect(
     page.getByRole("heading", { name: `Preview — first.csv (${GOOD_ROWS} rows)` }),
-    "a successful re-map tore down the plan it was supposed to refresh",
+    "a successful re-map left no plan behind",
   ).toBeVisible();
   await expect(commit, "a successful re-map left no committable plan").toBeVisible();
 
@@ -85,8 +94,40 @@ test("a refused upload clears the previous file's committable plan", async ({ pa
   // The override alone is not enough: `liveLimit` warms a 300s entitlement
   // cache and `setEntitlementOverrideSql` invalidates nothing, so a read-then-
   // override-then-assert sequence asserts the STALE cap.
-  await setEntitlementOverrideSql(orgId, "import.bulk", GOOD_ROWS);
+  await setEntitlementOverrideSql(orgId, "import.bulk", CAP);
   await invalidateOrgEntitlements(page.request, orgId);
+  // Read it BACK. `invalidateOrgEntitlements` is unfalsifiable on a target with
+  // no Redis — `lib/cache.ts` is fail-open — so on a cached target where the
+  // invalidation silently fails, the refusal below never happens and the
+  // failure blames the importer for a fixture that never took.
+  expect(
+    await liveLimit(page, orgId, "import.bulk"),
+    "the entitlement override did not take — the rest of this test would be measuring the plan default",
+  ).toBe(CAP);
+
+  // --- 1c. a FAILED remap must NOT strand the organiser --------------------
+  //
+  // The mapping selects and the "Re-map & re-preview" button both live inside
+  // `{preview && !result}`. Clearing the preview when a RE-MAP fails therefore
+  // removes the only control that can retry it — and `remap()` has already
+  // written the rejected mapping to localStorage, so every later upload
+  // re-sends it. Unlike step 1b this one has teeth: drop the
+  // `withMapping === undefined` guard in `upload()`'s catch and the re-map
+  // button below is gone, so the assertion fails on a missing control rather
+  // than settling.
+  //
+  // The cap is now below this file's row count, so re-previewing the SAME file
+  // is refused — a failing remap with no route interception needed.
+  const remapButton = page.getByRole("button", { name: "Re-map & re-preview" });
+  await remapButton.click();
+  await expect(
+    page.locator('[data-feature="import.bulk"]'),
+    "the re-map was not refused, so this step is not exercising a failed remap at all",
+  ).toBeVisible();
+  await expect(
+    remapButton,
+    "a failed re-map removed the control needed to retry it — the organiser is stranded with a poisoned mapping in localStorage",
+  ).toBeVisible();
 
   // --- 3. the second file is refused at UPLOAD, not at commit --------------
   await fileInput.setInputFiles({

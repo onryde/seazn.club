@@ -149,23 +149,27 @@ export function ImportWizard() {
       setMapping(data.mapping ?? {});
       setWarnsAcknowledged(false);
     } catch (err) {
-      // Drop the PREVIOUS file's plan. Without this a refused upload — a row
-      // cap hit, a parse failure — leaves the last good preview mounted under
-      // the paywall or the error with its "Commit import" button still
-      // enabled, and pressing it imports a file the organiser was just told
-      // was rejected.
+      // A refused NEW FILE must take the previous file's plan with it.
+      // Otherwise the last good preview stays mounted under the paywall with
+      // its "Commit import" button live, and pressing it imports a file the
+      // organiser was just told was rejected.
       //
-      // In the CATCH, not at the top of `upload()`: `remap()` re-enters this
-      // same function on every mapping change, so clearing up front unmounted
-      // the mapping+preview card mid-flight on successful remaps too — a flash
-      // on the happy path, to fix a bug that only exists on the failing one.
+      // `withMapping` is the discriminator, and only `remap()` passes it. A
+      // failed RE-MAP must KEEP the preview: the mapping selects and the
+      // "Re-map & re-preview" button both live inside `{preview && !result}`,
+      // so clearing there removes the very control needed to retry — and
+      // `remap()` has already written the rejected mapping to localStorage, so
+      // every later upload re-sends it. The organiser is left with a bare file
+      // input and an error telling them to map headers they can no longer see.
+      // The plan kept in that case belongs to the SAME file, so committing it
+      // is legitimate; it is not the wrong-file hazard above.
       //
-      // And not in `fail()` either, which the COMMIT path shares: a commit 402
-      // must leave the plan on screen for the organiser to trim. (It does so
-      // by never clearing `preview` at all — `commit()` handles 402 inline and
-      // returns before `fail()` is reached, so this is about keeping the two
-      // paths independent, not about `fail()`'s own behaviour.)
-      setPreview(null);
+      // In the catch rather than at the top of `upload()`, so a SUCCESSFUL
+      // remap does not unmount the card mid-flight. And not in `fail()`, which
+      // the commit path shares: a commit 402 must leave the plan on screen to
+      // trim. (It does so by never clearing `preview` at all — `commit()`
+      // handles 402 inline and returns before `fail()` is reached.)
+      if (withMapping === undefined) setPreview(null);
       fail(err);
     } finally {
       setBusy(false);
