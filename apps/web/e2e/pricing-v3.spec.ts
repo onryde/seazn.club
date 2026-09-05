@@ -1,5 +1,8 @@
 import { test, expect } from "@playwright/test";
 import { apiJson, TAG, grantCompetitionPassSql, competitionPath } from "./helpers";
+// Prices from the seed, never from a literal — this file has carried a stale
+// one through two reprices already. See e2e/price-kit.ts.
+import { passLabel, proAnnualPerMonthLabel } from "./price-kit";
 
 // PROMPT-36 (v3/07): pricing page renders three offers from plan_entitlements
 // with a working currency switcher and zero "Business"; the in-competition
@@ -79,10 +82,15 @@ test.describe("pricing page v3", () => {
       await expect(page.locator("[data-annual-toggle]")).toHaveAttribute("aria-checked", "true");
       await expect(page.locator("main")).toContainText("$");
       await page.locator("[data-currency-switcher]").selectOption("gbp");
-      // Annual framing renders round(annual/12): Pro GBP 12500/12 → £10.42.
-      // (Repriced by the Pro $19 + 30%-annual change — the old £33 was Pro
-      // Plus monthly, which now sits behind the PlusReveal disclosure.)
-      await expect(page.locator("main")).toContainText("£10.42", { timeout: 15_000 });
+      // Annual framing renders `round(annual / 12)`, formatted. DERIVED, not
+      // typed: this figure has been wrong twice already — £33 (which was Pro
+      // Plus monthly, not an annual twelfth) then £10.42 (correct until the
+      // charm reprice moved the annual point). `proAnnualPerMonthLabel` is the
+      // page's own derivation, the one marketing/pricing/page.tsx hands
+      // ProPriceCard, so the expectation now moves with the seed.
+      await expect(page.locator("main")).toContainText(proAnnualPerMonthLabel("gbp"), {
+        timeout: 15_000,
+      });
     } finally {
       await ctx.close();
     }
@@ -151,7 +159,10 @@ test.describe.serial("event pass gate (community org)", () => {
     await page.getByRole("button", { name: "Create division" }).click();
     const gate = page.locator("[data-pass-gate]").first();
     await expect(gate).toBeVisible({ timeout: 20_000 });
-    await expect(gate.locator("[data-pass-cta]")).toContainText("$29");
+    // The CTA quotes the floor of what this org can actually buy — M, on a
+    // community plan. Its negative pair is the `data-pass-owned` assertion at
+    // the foot of this test, which needs this same string to mean anything.
+    await expect(gate.locator("[data-pass-cta]")).toContainText(passLabel("event_pass"));
     const passHref = await gate.locator("[data-pass-cta]").getAttribute("href");
     // The gate appends `?feature=<key>` so the upgrade page can render its
     // ceiling state; anchor on the path, not the whole string.
@@ -208,7 +219,10 @@ test.describe.serial("event pass gate (community org)", () => {
     // `grantCompetitionPassSql` grants M, and since v17 #294 this card names
     // the rung rather than the product family.
     await expect(owned).toContainText("Event Pass M active");
-    await expect(owned).not.toContainText("$29");
+    // The negative half of the CTA assertion above, and only meaningful
+    // because it names the string this very test watched the page render
+    // before the pass landed. A retired price passes here unconditionally.
+    await expect(owned).not.toContainText(passLabel("event_pass"));
     await expect(page.locator("[data-pass-cta]")).toHaveCount(0);
 
     const sibling = await apiJson<{ id: string }>(request, "/api/v1/competitions", "POST", { ends_on: "2030-12-31",

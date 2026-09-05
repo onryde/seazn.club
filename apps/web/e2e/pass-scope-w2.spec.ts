@@ -6,7 +6,7 @@ import { TAG, apiJson, loginUi, grantCompetitionPassSql, invalidateOrgEntitlemen
 //
 // lib/entitlements.ts only consults `competition_passes` when a competition is
 // in scope, and eight enforcement sites omitted it — so a Community org bought
-// a $29 pass and was refused the features the pricing page had just sold it.
+// an Event Pass and was refused the features the pricing page had just sold it.
 //
 // The vitest sibling (server/usecases/__tests__/pass-scope-w2.test.ts) calls the
 // usecases directly, and cannot see the route layer: each of these routes
@@ -20,7 +20,8 @@ import { TAG, apiJson, loginUi, grantCompetitionPassSql, invalidateOrgEntitlemen
 // the `getLimit` call sites unproven at the HTTP layer).
 //
 // Both directions on the SAME org throughout: a one-sided test stays green if
-// the gate leaks org-wide, which is the same $29 hole in the other direction.
+// the gate leaks org-wide, which is the same paid-for hole in the other
+// direction.
 //
 // Seeds are run-unique and the org is SQL-seeded with its own owner, so nothing
 // here touches the shared Pro e2e account or its org budget.
