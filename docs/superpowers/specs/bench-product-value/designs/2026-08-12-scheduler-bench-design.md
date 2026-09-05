@@ -480,3 +480,72 @@ bench v1; items 4–5 follow release-2; items 6–7 independent.
    migrating historical seasons from spreadsheets.
 7. **Auto-news enrichment** — inject round top-scorer/leaderboard movement
    from `divisionPlayerStats` into `resultDraft`/`roundRecapDraft` drafts.
+
+## 15. Appendix — product findings surfaced by the B04 BUILD (no issues filed)
+
+§14 records what the design surfaced. These four were surfaced by building
+B04's scheduling layer — before it had run against a live server once. Same
+policy: no GitHub issues (`RULES.md:98`, `_RULES.md:11`, §7). Owner ruled
+2026-09-05 that finding 1 is recorded here and fixed in a SEPARATE change,
+not inside B04.
+
+1. **A court can be double-booked across two competitions of one org, and
+   nothing notices.** CONFIRMED across all six enforcement seams.
+
+   `courts` are **org**-scoped (`V367__venues_and_courts.sql:48` —
+   `org_id not null references organizations(id)`), but every occupancy
+   consumer derives its board from `siblingAssignments`, whose one scoping
+   clause is `where division_id in (select id from divisions where
+   competition_id = ${competitionId} …)` (`usecases/schedule.ts:857-861`).
+
+   | Seam | Verdict |
+   |---|---|
+   | placer obstacle input (`autoSchedule`, `schedule.ts:1575`) | BLIND — `divisionFixtures` + competition-scoped siblings |
+   | `candidate-courts.ts:80` | N/A — pure tag/archived filter, no occupancy input of any scope |
+   | publish / start (`schedule.ts:3573`, `:3685`) | BLIND — both call the same competition-scoped validator |
+   | `moveFixture` (`schedule.ts:3040`) | BLIND — the drag gate's whole world is one competition |
+   | DB constraints | BLIND — no `exclude using` / `btree_gist` / `tstzrange` anywhere in `db/` |
+   | `services/placement/` | BLIND — no DB; sees only the caller's already-scoped board |
+
+   Cleared as non-substitutes: `resolveCourtCalendars`
+   (`court-candidates.ts:171`) reads only `court_hours`/`court_exceptions`, so
+   opening hours cannot stand in for a booking; `capacity-guard.ts:233`
+   assesses only `body.fixtures`.
+
+   **Customer:** a club runs a Saturday junior league and an adult ladder as
+   two competitions on the same six courts. Each organiser auto-schedules,
+   sees a green board, and publishes. Both send players to Court 3 at 10:00.
+   It surfaces when two pairs walk onto the same court.
+
+   Fixing it means widening sibling occupancy from competition to org scope
+   across five consumers (auto-schedule, drag-move, validate, publish, start),
+   plus a decision on whether a cross-competition clash blocks or warns —
+   blocking would refuse boards organisers can publish today.
+
+2. **`start_window` is coded as a hard refusal and never blocks.**
+   `ConflictReason`'s own comment calls it `(hard)` and `REASON_CODE`
+   (`apps/web/src/lib/schedule-board.ts:25-40`) gives it the `conflict.`
+   prefix reserved for hard refusals — but `isBlockingConflict`
+   (`calendar.ts:319-341`) omits it, so it ships `blocking: false`. That
+   function's three deliberate carve-outs each state their reasoning; this one
+   is unmentioned, which is what makes it look unintended rather than decided.
+   Either the prefix or the predicate is wrong.
+
+3. **`crossPersonClash` is deprecated and read by nothing**, so bench spec §5's
+   requirement that ≥2 suites cover that knob cannot be met. `#399` made an
+   introduced person double-booking refuse absolutely (`isBlockingConflict`
+   lists `person_overlap` unconditionally) and the placer avoids one for the
+   same reason, so neither side consults the setting: `"hard"` and `"warn"`
+   produce identical behaviour. **Affects B12's acceptance** — a pack setting
+   it proves nothing. The organiser-facing control it backs should be retired
+   with its UI and dictionaries, in its own change.
+
+4. **No one can request or require a scheduling engine.** `AutoScheduleRequest`
+   (`schemas.ts:1643-1688`) has no engine field, and no env var, flag, setting
+   or column selects one: `build.ts:1165-1204` always attempts the solver and
+   falls back to greedy only on `MAX_SOLVER_QUEUE`, `canSolveWithin`, or an
+   unreachable placement service. A customer cannot ask for a fast greedy
+   board, nor insist a board be solved rather than silently fall back.
+   `AutoScheduleResult.solver.engine` reports which ran, so the information
+   exists and nothing lets anyone act on it. This is why B04's `--engine`
+   became an assertion rather than a selector.
