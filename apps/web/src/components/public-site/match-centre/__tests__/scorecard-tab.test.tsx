@@ -571,7 +571,14 @@ describe("ScorecardTab", () => {
     // overflow.
     expect(html).toContain("px-0.5");
     expect(html).not.toMatch(/class="[^"]*px-1 text-right tabular-nums/);
-    expect(html).toMatch(/class="[^"]*w-11[^"]*"[^>]*title="Strike rate"/);
+    // Re-anchored on the dictionary's own value (Task 8 reworded the English
+    // title to the descriptive "Strike rate (runs per 100 balls)" — the
+    // abbreviation `SR` stays the visible header either way).
+    const strikeRateTitle = (en["matchCentre.col.strikeRate"] as string).replace(
+      /[.*+?^${}()|[\]\\]/g,
+      "\\$&",
+    );
+    expect(html).toMatch(new RegExp(`class="[^"]*w-11[^"]*"[^>]*title="${strikeRateTitle}"`));
     // Bowling: O at w-8, W at w-6.
     expect(html).toMatch(/class="[^"]*w-8[^"]*"[^>]*title="Overs"/);
     expect(html).toMatch(/class="[^"]*w-6[^"]*"[^>]*title="Wickets"/);
