@@ -371,6 +371,31 @@ curl -s -o /dev/null -w "%{http_code}\n" \
 200 there means the bundle is really being served. This is why builds on a
 shared label have ONE owner and every agent requests rather than runs one.
 
+**And the rebuild can MOVE the port** (stw2 went 3314 → 3315), which brings
+two more failures:
+
+- The OLD server may keep the OLD port, serving the DELETED bundle: health
+  200, new `BUILD_ID`'s manifest **404**. A run there does not fail — it
+  exercises PRE-FIX code and reports the fix as still broken. The orphan is
+  invisible to `seazn-env status`; only `lsof -nP -iTCP:<port> -sTCP:LISTEN`
+  sees it.
+- **A port change silently invalidates `e2e/.auth/*.json`.** Playwright's
+  storageState holds localStorage **origin-scoped, and the origin includes the
+  PORT**; cookies are only domain-scoped. So the SESSION survives the move —
+  logged in, 200s, right BUILD_ID — but the `seazn_cookie_consent` keys
+  `auth.setup.ts:53-65` pre-writes are lost. The consent banner then renders
+  everywhere and, at narrow widths (`fixed bottom-4 left-4 right-20 z-40`),
+  **intercepts pointer events**: a click times out on whatever is under it.
+  Seen as `RS009: the assign sheet holds at this width` failing with a 60s
+  `locator.click` timeout — a test unrelated to the change under test.
+  Fix: re-run `--project=setup` (3.5s).
+
+**`--no-deps` makes that last one PERMANENT** — it is exactly what stops the
+setup re-minting the state. This wave circulated `--no-deps` as a workaround
+for a "red Community leg" in `auth.setup.ts`; that leg was not red, it was
+this artifact, and the advice was retracted. A post-rebuild checklist is three
+items: manifest probe, `lsof` the old port, and re-run setup if the port moved.
+
 ### Machine note
 
 The box was carrying seven seazn-env labels at load 269 and OOM-killed a
