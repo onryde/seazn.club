@@ -155,6 +155,7 @@
   "matchCentre.result.tie": "Égalité",
   "matchCentre.result.no_result": "Aucun résultat",
   "matchCentre.result.draw": "Match nul",
+  "matchCentre.result.forfeit": "{winner} a gagné par forfait",
   "matchCentre.ball.boundary": "Boundary",
   "matchCentre.ball.wicket": "Wicket",
   "matchCentre.ball.dot": "Dot ball",

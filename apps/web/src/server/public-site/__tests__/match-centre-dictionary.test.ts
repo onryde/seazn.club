@@ -198,6 +198,9 @@ const RESULT_KINDS: readonly string[] = [
   "tie",
   "no_result",
   "draw",
+  // `core.award` outcomes carry no `method`; Task 6 keys them off
+  // `outcome.kind === "award"` (orchestrator ruling, 2026-09-06).
+  "forfeit",
 ];
 
 /**
@@ -292,7 +295,7 @@ describe("match-centre dictionary coverage (derived, never a typed list)", () =>
     // 5 engine methods (regulation/dls/innings/super_over/boundary_count) +
     // 3 non-win outcomes (tie/no_result/draw) — see RESULT_KINDS's own
     // comment for the call-site citations.
-    expect(RESULT_KINDS.length).toBe(8);
+    expect(RESULT_KINDS.length).toBe(9); // 5 methods + tie/no_result/draw + forfeit (award)
     // `classesFor`'s 5 real branches (boundary/wicket/dot/extras/run) — see
     // `GLYPH_CLASSES` in `glyphs.tsx`.
     expect(BALL_GLYPH_KINDS.length).toBe(5);

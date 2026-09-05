@@ -155,6 +155,7 @@
   "matchCentre.result.tie": "Gelijkspel",
   "matchCentre.result.no_result": "Geen resultaat",
   "matchCentre.result.draw": "Onbeslist",
+  "matchCentre.result.forfeit": "{winner} won door forfait",
   "matchCentre.ball.boundary": "Boundary",
   "matchCentre.ball.wicket": "Wicket",
   "matchCentre.ball.dot": "Dot ball",

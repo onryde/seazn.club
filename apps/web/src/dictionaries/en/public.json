@@ -155,6 +155,7 @@
   "matchCentre.result.tie": "Match tied",
   "matchCentre.result.no_result": "No result",
   "matchCentre.result.draw": "Match drawn",
+  "matchCentre.result.forfeit": "{winner} won by forfeit",
   "matchCentre.ball.boundary": "Boundary",
   "matchCentre.ball.wicket": "Wicket",
   "matchCentre.ball.dot": "Dot ball",

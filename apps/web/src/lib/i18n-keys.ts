@@ -2533,6 +2533,7 @@ export type DictionaryKey =
   | "matchCentre.result.boundary_count"
   | "matchCentre.result.dls"
   | "matchCentre.result.draw"
+  | "matchCentre.result.forfeit"
   | "matchCentre.result.innings"
   | "matchCentre.result.no_result"
   | "matchCentre.result.regulation"
