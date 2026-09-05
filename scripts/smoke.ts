@@ -727,6 +727,10 @@ async function main() {
   // which exist specifically to prove the optimizer beats greedy).
   await courtHoursSuite();
 
+  // Own fresh org, and it CHANGES PLAN mid-suite — hence its own, rather than
+  // riding boardRedesignSuite's import checks, which must stay on Pro.
+  await importCapAtCommitSuite();
+
   // --- v13 real-competition fidelity: badge + inline members, ad-hoc match,
   // knockout draw guard, bracket poster, signed audit (pro 200 / free 402),
   // public presentation mode.
@@ -12959,6 +12963,63 @@ async function venuesSuite(admin: Session, orgId: string): Promise<void> {
  * already exercises; proving the optimizer beats greedy is the placement-
  * cutover suites' job (above), a different claim entirely.
  */
+/**
+ * The per-file row cap is re-checked at COMMIT, not only at upload — and the
+ * refusal names no number.
+ *
+ * Why this is in smoke and not left to e2e: `.github/workflows/e2e.yml` is
+ * `push: branches: [main]` only, so a PR gets no e2e signal at all, and
+ * `apps/web` vitest is `environment: "node"`. Smoke is the ONLY gate that runs
+ * before these land. The commit-time cap is also the one with money attached:
+ * an `imports` row carries no expiry, so a plan built on Pro stays committable
+ * after the subscription lapses, and no UI is involved in that path.
+ *
+ * Deliberately NOT covering the wizard's preview behaviour — that is DOM-only
+ * and belongs to `e2e/walkthrough/directory-import-paywall-preview.spec.ts`.
+ */
+async function importCapAtCommitSuite(): Promise<void> {
+  const s = newSession();
+  const orgId = (await signIn(s, `smoke-import-cap-${tag}@example.com`)).org_id;
+  await setPlan(orgId, "pro", s);
+
+  // 51 rows: over community's cap, under Pro's (whose `import.bulk` row carries
+  // a null int_value, which getLimit resolves to null = unlimited).
+  const csv = ["Team", ...Array.from({ length: 51 }, (_, i) => `Cap Team ${i} ${tag}`)].join("\n");
+  const form = new FormData();
+  form.append("file", new Blob([csv], { type: "text/csv" }), "cap.csv");
+  const planned = await v1Multipart(s, "/api/v1/imports", form);
+  check("import cap: 51 rows plan on Pro", planned.status === 201);
+  const importId = v1data<{ importId: string }>(planned).importId;
+
+  // The subscription lapses between plan and commit. setPlan busts the
+  // entitlement cache, so the commit below resolves the NEW plan.
+  await setPlan(orgId, "community", s);
+
+  const committed = await v1(s, `/api/v1/imports/${importId}/commit`, "POST", undefined, {
+    "Idempotency-Key": `smoke-import-cap-${tag}`,
+  });
+  check("import cap: commit after downgrade is refused 402", committed.status === 402);
+  // The KEY, not merely a 402: 51 team rows also breach community's teams.max,
+  // so without the commit-time row gate this still fails — later, and for a
+  // different reason. Naming the key pins that the file is refused for its
+  // SIZE, before anything is planned.
+  const err =
+    (committed.json.error as { feature_key?: string; reason?: string } | undefined) ?? {};
+  check("import cap: refusal names import.bulk, not teams.max", err.feature_key === "import.bulk");
+  // And the customer-visible sentence states no cap. It used to say "over 20
+  // rows", which outlived the catalog's move to 50 and had organisers splitting
+  // files that would have imported whole.
+  check(
+    "import cap: refusal reason restates no number",
+    typeof err.reason === "string" && !/\d/.test(err.reason),
+  );
+
+  // Refused before a single write.
+  const teams = await v1(s, "/api/v1/teams");
+  const wrote = teams.status === 200 ? v1data<unknown[]>(teams).length : -1;
+  check("import cap: the refused commit wrote no teams", wrote === 0);
+}
+
 async function courtHoursSuite(): Promise<void> {
   const s = newSession();
   const orgId = (await signIn(s, `smoke-court-hours-${tag}@example.com`)).org_id;

@@ -1,0 +1,104 @@
+import { describe, it, expect } from "vitest";
+import { participantCsv, stamp, uniqueName } from "../../e2e/directory-kit";
+// The real TAG, not a shape typed into this file: a change to how helpers.ts
+// derives it moves this test with it instead of leaving it asserting
+// yesterday's format. Importing helpers.ts here is safe — its only top-level
+// import is `@playwright/test` (fine inside a vitest process, measured), and
+// every DB path is behind a lazy `await import("postgres")` inside withDb, so
+// nothing opens a connection at module load.
+import { TAG } from "../../e2e/helpers";
+
+// The kit under test lives at `e2e/directory-kit.ts`; this test does NOT.
+//
+// The task brief asked for `e2e/__tests__/directory-kit.test.ts`. Measured on
+// this tree, that path is collected by NEITHER runner and breaks one of them:
+//
+//   * vitest.config.ts excludes `e2e/**` outright ("Playwright specs (e2e/)
+//     run under `playwright test`, not vitest"), so `npx vitest run
+//     e2e/__tests__/directory-kit.test.ts` reported
+//     numTotalTestSuites 0 / numTotalTests 0 — no collection failure to see,
+//     just nothing collected, exit 1.
+//   * Playwright's `parallel` project carries no explicit testMatch, so its
+//     DEFAULT one (`**/*.@(spec|test).?(c|m)[jt]s?(x)`) matches a `.test.ts`
+//     anywhere under `testDir: "./e2e"`. `npx playwright test --list` then
+//     tried to load this file as a spec and aborted the entire listing with
+//     `Total: 0 tests in 0 files` — every project, not just walkthrough. Once
+//     the kit existed it would have failed one step later instead, on
+//     `import ... from "vitest"` outside a vitest process.
+//
+// So the file moved to where vitest already collects. The kit itself stays at
+// `e2e/` (importable from both, selected as a spec by neither) — importing
+// across the boundary is fine, since vitest's `exclude` governs which files
+// are COLLECTED as tests, not which may be imported.
+
+describe("participantCsv", () => {
+  it("emits a header row the importer recognises", () => {
+    const csv = participantCsv([{ club: "Harbour", team: "Harbour U13", player: "Ada" }]);
+    expect(csv.split("\n")[0]).toBe("Club,Team,Player");
+  });
+
+  it("emits one row per entry and no trailing newline", () => {
+    const csv = participantCsv([
+      { club: "A", team: "A1", player: "P1" },
+      { club: "B", team: "B1", player: "P2" },
+    ]);
+    expect(csv.split("\n")).toHaveLength(3);
+    expect(csv.endsWith("\n")).toBe(false);
+  });
+
+  // A club name carrying a comma must not become two columns. Without quoting,
+  // "Harbour, West" shifts Team into Player and the import silently plans the
+  // wrong entities rather than failing.
+  it("quotes a field containing a comma", () => {
+    const csv = participantCsv([{ club: "Harbour, West", team: "T", player: "P" }]);
+    expect(csv.split("\n")[1]).toBe('"Harbour, West",T,P');
+  });
+
+  it("escapes an embedded double quote by doubling it", () => {
+    const csv = participantCsv([{ club: 'The "Reds"', team: "T", player: "P" }]);
+    expect(csv.split("\n")[1]).toBe('"The ""Reds""",T,P');
+  });
+
+  // Both halves of the line-break class, in one case. Splitting on "\n" is
+  // meaningless here — the whole point is that the FIELD contains one — so
+  // these assert the emitted string whole.
+  it("quotes a field containing an embedded line break, CR and LF alike", () => {
+    expect(participantCsv([{ club: "Harbour\nWest", team: "T", player: "P" }])).toBe(
+      'Club,Team,Player\n"Harbour\nWest",T,P',
+    );
+    // The lone CR is the half a `\n`-only class misses: RFC4180's break is
+    // CRLF, so a reader that honours a bare CR splits this field in two and
+    // every later column shifts, silently.
+    expect(participantCsv([{ club: "Harbour\rWest", team: "T", player: "P" }])).toBe(
+      'Club,Team,Player\n"Harbour\rWest",T,P',
+    );
+  });
+});
+
+describe("stamp", () => {
+  // Both properties, deliberately. Either assertion ALONE leaves a live mutant:
+  // `return TAG` keeps the prefix and kills only the uniqueness case, while a
+  // body that dropped TAG for pure randomness stays unique and kills only the
+  // prefix case.
+  it("carries the run's shared TAG as a prefix, so a name is attributable to its run", () => {
+    expect(stamp().startsWith(`${TAG}-`)).toBe(true);
+  });
+
+  it("does not repeat across calls", () => {
+    const seen = new Set(Array.from({ length: 200 }, () => stamp()));
+    expect(seen.size).toBe(200);
+  });
+});
+
+describe("uniqueName", () => {
+  it("keeps the label as a prefix so a spec can still read the row", () => {
+    expect(uniqueName("Court A")).toMatch(/^Court A /);
+  });
+
+  // Two calls in the same process must not collide: every count in these specs
+  // is scoped by this string.
+  it("does not repeat across calls", () => {
+    const seen = new Set(Array.from({ length: 200 }, () => uniqueName("x")));
+    expect(seen.size).toBe(200);
+  });
+});
