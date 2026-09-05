@@ -566,3 +566,246 @@ describe.skipIf(!HAS_DB)("stripe-plans ladder — credit packs against the plan 
     );
   });
 });
+
+// ── The PLATFORM FEE ladder, in `plan_entitlements` ──────────────────────────
+//
+// Added after the W2 pass-4 review (2026-09-04) found the V397 guard NULL-blind.
+//
+// V397 re-cut `registration.fee_percent` for the additive fee model and closed
+// with a `do $$` block that lists the five rates and raises on "a rate this
+// migration does not set". That block is written as
+// `(plan_key, int_value) not in (...)`, and SQL's three-valued logic makes it
+// blind twice over: a row whose `int_value` is NULL compares UNKNOWN and is
+// never selected, and a ladder with NO ROWS AT ALL `string_agg`s to NULL, which
+// the `if wrong is not null` reads as clean. It also runs exactly once, at
+// apply time — every way the ladder can rot arrives AFTER that.
+//
+// NULL IS NOT UNLIMITED HERE. Everywhere else in this matrix a null `int_value`
+// means "no ceiling" (V392's header states it, and `compareCell` renders it as
+// "Unlimited"). A RATE has no such reading: `feePercentFor` resolves
+// `getLimit(...) == null || <= 0` to `platformFeeDefault()`, which is 5. So a
+// null on `pro` does not make Pro's registrations free and does not make them
+// uncapped — it silently charges an organiser sold 2% the Free rate of 5%, on
+// every entry, with nothing anywhere going red. A MISSING row lands in the same
+// place by a different route (`getLimit` reads no row as 0, and `<= 0` falls
+// through to the same default), which is why coverage and nullity are both
+// faults here rather than one being the other's proxy.
+//
+// Every rate is READ, never typed — the file rule at the top of this test. What
+// is stated here is the SHAPE the rates have to keep, so a legitimate reprice
+// moves the numbers and this block still refuses the combinations the owner
+// ruled out.
+
+/** `plan_key` → `registration.fee_percent`.`int_value`. A key absent from the
+ *  map is a plan with NO ROW, which is a different fault from a null rate. */
+type FeeRates = ReadonlyMap<string, number | null>;
+
+interface LadderShape {
+  /** Every plan key the `plans` table holds — each one owes a rate. */
+  plans: readonly string[];
+  /** The plan an organiser pays us nothing for: it must charge the MOST. */
+  free: string;
+  /** The cheapest graduated subscription — the plan the entry rung is a
+   *  strict subset of, which is why its rate must be the better one. */
+  entry: string;
+  /** The pass rungs, from the seed. */
+  rungs: readonly string[];
+}
+
+/**
+ * Every way the live fee ladder can be wrong, as strings. A faults array rather
+ * than an assertion per rule so one run reports the whole ladder — the shape
+ * `feeLadderFaults` in `lib/copy-truth.ts` already uses for the published fee
+ * tables this matrix is the source of truth for.
+ */
+function feeLadderFaults(rates: FeeRates, shape: LadderShape): string[] {
+  // THE EMPTY CASE FIRST. Every rule below is a loop or a lookup, and both
+  // answer "nothing is wrong" over an empty collection — which is exactly how
+  // V397's own guard passes on a ladder with no rows at all. An empty input is
+  // reported here and nothing else is, because every later verdict would be
+  // vacuous rather than clean.
+  const empty: string[] = [];
+  if (shape.plans.length === 0) empty.push("fee ladder: no plan keys to check");
+  if (shape.rungs.length === 0) empty.push("fee ladder: no pass rungs to check");
+  if (rates.size === 0) empty.push("fee ladder: registration.fee_percent has no rows at all");
+  if (empty.length > 0) return empty;
+
+  const faults: string[] = [];
+  /** The rates this function can actually reason about: present, non-null and
+   *  in range. Everything else is faulted on the way in. */
+  const usable = new Map<string, number>();
+
+  for (const plan of shape.plans) {
+    if (!rates.has(plan)) {
+      faults.push(
+        `${plan}: no registration.fee_percent row — getLimit reads a missing row as 0 and feePercentFor charges platformFeeDefault() instead`,
+      );
+      continue;
+    }
+    const rate = rates.get(plan) ?? null;
+    if (rate === null) {
+      faults.push(
+        `${plan}: registration.fee_percent is NULL — null means UNLIMITED for a cap key, but for a rate feePercentFor reads it as unset and charges platformFeeDefault() instead`,
+      );
+    } else if (rate <= 0) {
+      faults.push(
+        `${plan}: registration.fee_percent is ${rate} — a plan row of 0 or less means "this plan sets no rate", so feePercentFor charges platformFeeDefault() instead`,
+      );
+    } else if (rate > 100) {
+      faults.push(`${plan}: registration.fee_percent is ${rate}%, which is more than the whole fee`);
+    } else {
+      usable.set(plan, rate);
+    }
+  }
+
+  // Paying us must buy a lower cut. This is the whole shape of the V397 ladder
+  // and the claim the /pricing Event Pass card makes in words ("not 5%").
+  const free = usable.get(shape.free);
+  if (free === undefined) {
+    faults.push(`the free plan (${shape.free}) has no usable rate — the ladder has no anchor`);
+  } else {
+    for (const [plan, rate] of usable) {
+      if (plan === shape.free) continue;
+      if (rate >= free) {
+        faults.push(
+          `${plan}: ${rate}% does not undercut the free plan's ${free}% — an organiser who pays us a subscription or a pass must pay a smaller cut`,
+        );
+      }
+    }
+  }
+
+  // ...and the pass must stay the DEARER rate. Pass M is a strict subset of the
+  // entry plan on every other axis (see "keeps the entry pass rung under a
+  // MONTH of the plan that dominates it" above, which names the entry-fee rate
+  // as one of them). A rung that also charged less would make the subscription
+  // the dominated buy on every axis at once.
+  const entry = usable.get(shape.entry);
+  if (entry !== undefined) {
+    for (const rung of shape.rungs) {
+      const rate = usable.get(rung);
+      if (rate !== undefined && rate <= entry) {
+        faults.push(
+          `${rung}: ${rate}% is not dearer than the ${shape.entry} plan's ${entry}% — the rung is a subset of that plan on every other axis, so the subscription would be dominated`,
+        );
+      }
+    }
+  }
+
+  return faults;
+}
+
+describe("the platform fee ladder — the rules themselves", () => {
+  // The live matrix satisfies every rule below, so running these against the
+  // database alone would prove only that today's data is fine and nothing about
+  // whether the guard can SEE the faults it is written for. These are the
+  // mutants, as cases.
+  const LIVE: LadderShape = {
+    plans: ["community", "pro", "event_pass", "event_pass_l", "enterprise"],
+    free: "community",
+    entry: "pro",
+    rungs: ["event_pass", "event_pass_l"],
+  };
+  const rates = (over: Record<string, number | null> = {}): FeeRates =>
+    new Map<string, number | null>(
+      Object.entries({
+        community: 5,
+        pro: 2,
+        event_pass: 4,
+        event_pass_l: 4,
+        enterprise: 1,
+        ...over,
+      }),
+    );
+
+  it("passes a ladder shaped like today's", () => {
+    expect(feeLadderFaults(rates(), LIVE)).toEqual([]);
+  });
+
+  it("reports the EMPTY ladder rather than reading it as clean", () => {
+    // V397's `do $$` block string_aggs an empty ladder to NULL and its
+    // `if wrong is not null` calls that clean. The empty set answers "no" to
+    // every question a fault rule asks.
+    expect(feeLadderFaults(new Map(), LIVE)).toEqual([
+      "fee ladder: registration.fee_percent has no rows at all",
+    ]);
+    expect(feeLadderFaults(rates(), { ...LIVE, plans: [] }).join(" ")).toContain("no plan keys");
+    expect(feeLadderFaults(rates(), { ...LIVE, rungs: [] }).join(" ")).toContain("no pass rungs");
+  });
+
+  it("faults a NULL rate, naming what it silently charges instead", () => {
+    // The finding: `(plan_key, int_value) not in (...)` compares UNKNOWN
+    // against a null and never selects the row, so V397's guard would have
+    // passed a Pro plan quietly charging the 5% platform default.
+    const faults = feeLadderFaults(rates({ pro: null }), LIVE);
+    expect(faults.join(" ")).toContain("pro: registration.fee_percent is NULL");
+    expect(faults.join(" ")).toContain("platformFeeDefault()");
+  });
+
+  it("faults a MISSING rate, which lands in the same place by another route", () => {
+    const missing = new Map(rates());
+    missing.delete("pro");
+    expect(feeLadderFaults(missing, LIVE).join(" ")).toContain("pro: no registration.fee_percent row");
+  });
+
+  it("faults a zero rate — a plan row of 0 means unset, never free", () => {
+    expect(feeLadderFaults(rates({ pro: 0 }), LIVE).join(" ")).toContain(
+      'pro: registration.fee_percent is 0',
+    );
+  });
+
+  it("faults a paid plan that does not undercut the free rate", () => {
+    expect(feeLadderFaults(rates({ pro: 5 }), LIVE).join(" ")).toContain("does not undercut");
+    expect(feeLadderFaults(rates({ event_pass: 6 }), LIVE).join(" ")).toContain("does not undercut");
+  });
+
+  it("faults a pass rung priced better than the plan that dominates it", () => {
+    expect(feeLadderFaults(rates({ event_pass: 2 }), LIVE).join(" ")).toContain("is not dearer");
+    expect(feeLadderFaults(rates({ event_pass_l: 1 }), LIVE).join(" ")).toContain("is not dearer");
+  });
+});
+
+describe.skipIf(!HAS_DB)("the platform fee ladder — the live matrix", () => {
+  /** Every plan key the product actually sells or grants. */
+  async function liveShape(): Promise<{ shape: LadderShape; rates: FeeRates }> {
+    const planRows = await sql<{ key: string; is_public: boolean }[]>`
+      select key, is_public from plans order by key`;
+    const rateRows = await sql<{ plan_key: string; int_value: number | null }[]>`
+      select plan_key, int_value from plan_entitlements
+       where feature_key = 'registration.fee_percent'`;
+
+    // The free plan, DERIVED: the one public plan the Stripe seed does not sell.
+    // Named nowhere here, so a second free tier is a visible fault rather than
+    // a silently unchecked one.
+    const sold = new Set(plans.map((p) => p.key));
+    const free = planRows.filter((p) => p.is_public && !sold.has(p.key)).map((p) => p.key);
+    expect(free, "exactly one public plan should carry no Stripe price").toHaveLength(1);
+
+    // The entry subscription: the cheapest graduated plan, the same derivation
+    // `entryMonthly` uses for the price bounds above.
+    const entry = [...tieredPlans].sort(
+      (a, b) => point(a.prices.monthly, ANCHOR_CURRENCY) - point(b.prices.monthly, ANCHOR_CURRENCY),
+    )[0]!;
+
+    return {
+      shape: {
+        plans: planRows.map((p) => p.key),
+        free: free[0]!,
+        entry: entry.key,
+        rungs: passes.map((p) => p.key),
+      },
+      rates: new Map(rateRows.map((r) => [r.plan_key, r.int_value])),
+    };
+  }
+
+  it("has a ladder in the database to check at all", async () => {
+    const { shape, rates } = await liveShape();
+    expect(shape.plans.length, "no plans").toBeGreaterThan(1);
+    expect(rates.size, "registration.fee_percent has no rows").toBeGreaterThan(1);
+    expect(shape.rungs.length, "no pass rungs").toBeGreaterThan(1);
+  });
+
+  it("carries a usable rate for every plan and keeps the ladder's order", async () => {
+    const { shape, rates } = await liveShape();
+    expect(feeLadderFaults(rates, shape)).toEqual([]);
+  });
+});
