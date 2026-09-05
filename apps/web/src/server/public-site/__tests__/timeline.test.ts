@@ -40,8 +40,17 @@
 //      → RED: "racket sports: a set transition line is derived…" — which is why
 //        the tennis ledger closes one set for EACH side rather than two for one.
 //
-// All four compile and collect (`numTotalTests` stayed 21 in every run), so
-// none is the collection-break shape that reads as a survivor.
+//  (n) RE-STATE THE NAMESPACE — `const FOOTBALL = "timeline.football."` became
+//      `"public.timeline.football."`, the convention slip this file's own
+//      "keys are BARE" test exists for.
+//      → RED (7), that test among them. It matters that it is in the list: a
+//        key spelled `public.timeline.…` still RESOLVES, because `lookup()`
+//        tries the literal flat key first, so nothing about rendering would
+//        have caught it.
+//
+// All five compile and collect (`numTotalTests` unchanged in every run — 21
+// before the convention test was added, 22 after), so none is the
+// collection-break shape that reads as a survivor.
 import { readFileSync, readdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -200,13 +209,13 @@ describe("buildTimeline", () => {
     const lines = buildTimeline(args({ sportKey: "football", events: footballLedger }));
     expect(lines.map((l) => l.text.key)).toEqual(
       expect.arrayContaining([
-        "public.timeline.football.goal",
-        "public.timeline.football.card",
-        "public.timeline.football.period",
-        "public.timeline.football.shootout.kick",
+        "timeline.football.goal",
+        "timeline.football.card",
+        "timeline.football.period",
+        "timeline.football.shootout.kick",
       ]),
     );
-    const goal = lines.find((l) => l.text.key === "public.timeline.football.goal")!;
+    const goal = lines.find((l) => l.text.key === "timeline.football.goal")!;
     expect(goal.sideIndex).toBe(0);
     expect(goal.marker).toBe("23'");
     // The side NAME rides in the params, not an entrant id and not an English
@@ -214,7 +223,7 @@ describe("buildTimeline", () => {
     expect(goal.text.params?.side).toBe("Harbour Rovers");
     expect(String(goal.text.params?.detail)).toContain("Player H-p9");
 
-    const card = lines.find((l) => l.text.key === "public.timeline.football.card")!;
+    const card = lines.find((l) => l.text.key === "timeline.football.card")!;
     expect(card.sideIndex).toBe(1);
     expect(card.marker).toBe("31'");
     expect(card.text.params?.colour).toBe("yellow");
@@ -242,13 +251,13 @@ describe("buildTimeline", () => {
   it("an event type with no template renders the neutral line, never nothing", () => {
     const lines = buildTimeline(args({ events: [env(0, "some.future.type", {})] }));
     expect(lines).toHaveLength(1);
-    expect(lines[0]!.text.key).toBe("public.timeline.generic.event");
+    expect(lines[0]!.text.key).toBe("timeline.generic.event");
   });
 
   it("racket sports: a set transition line is derived by replaying the module and diffing summary.detail.sets", () => {
     const lines = buildTimeline(args({ sportKey: "tennis", events: tennisSetLedger }));
-    expect(lines.some((l) => l.text.key === "public.timeline.set.won")).toBe(true);
-    const won = lines.filter((l) => l.text.key === "public.timeline.set.won");
+    expect(lines.some((l) => l.text.key === "timeline.set.won")).toBe(true);
+    const won = lines.filter((l) => l.text.key === "timeline.set.won");
     // One per closed set, and the params carry NUMBERS and a SIDE NAME.
     expect(won).toHaveLength(2);
     const first = won.find((l) => l.text.params?.set === 1)!;
@@ -266,7 +275,7 @@ describe("buildTimeline", () => {
 
   it("period sports: a period-end line is derived when summary.detail.periods grows", () => {
     const lines = buildTimeline(args({ sportKey: "football", events: footballLedger }));
-    const end = lines.filter((l) => l.text.key === "public.timeline.period.end");
+    const end = lines.filter((l) => l.text.key === "timeline.period.end");
     expect(end).toHaveLength(1);
     // H1 closed 1–0 at the half-time marker (seq 3).
     expect(end[0]!.text.params).toMatchObject({ phase: "H1", home: 1, away: 0 });
@@ -275,8 +284,8 @@ describe("buildTimeline", () => {
 
   it("a derived line sorts ABOVE the event that caused it", () => {
     const lines = buildTimeline(args({ sportKey: "football", events: footballLedger }));
-    const derived = lines.findIndex((l) => l.text.key === "public.timeline.period.end");
-    const recorded = lines.findIndex((l) => l.text.key === "public.timeline.football.period");
+    const derived = lines.findIndex((l) => l.text.key === "timeline.period.end");
+    const recorded = lines.findIndex((l) => l.text.key === "timeline.football.period");
     expect(derived).toBeGreaterThanOrEqual(0);
     expect(recorded).toBeGreaterThanOrEqual(0);
     expect(derived).toBeLessThan(recorded);
@@ -286,7 +295,7 @@ describe("buildTimeline", () => {
     // `football.shootout.kick` in the first half is WRONG_PHASE — the derived
     // pass stops there and the recorded pass is unaffected.
     const lines = buildTimeline(args({ sportKey: "football", events: footballLedger }));
-    expect(lines.filter((l) => l.text.key === "public.timeline.football.shootout.kick")).toHaveLength(1);
+    expect(lines.filter((l) => l.text.key === "timeline.football.shootout.kick")).toHaveLength(1);
   });
 
   it("replays a real golden stream of every non-cricket sport, one line per recorded event, every line schema-valid", () => {
@@ -449,7 +458,7 @@ describe("timeline dictionary coverage (derived from the engine's own golden cor
     ].sort();
     const missing: string[] = [];
     for (const type of types) {
-      const key = TIMELINE_KEY_FOR[type] ?? "public.timeline.generic.event";
+      const key = TIMELINE_KEY_FOR[type] ?? "timeline.generic.event";
       for (const locale of LOCALES) {
         if (typeof DICTS[locale][key] !== "string") missing.push(`${locale}:${type} -> ${key}`);
       }
@@ -457,13 +466,43 @@ describe("timeline dictionary coverage (derived from the engine's own golden cor
     expect(missing).toEqual([]);
   });
 
+  it("keys are BARE — nothing this module emits re-states the `public` namespace", () => {
+    // The namespace is the FILE (`dictionaries/<locale>/public.json`). A key
+    // spelled `public.timeline.…` still RESOLVES (lookup() tries the literal
+    // flat key first), so nothing else in the suite can catch the slip.
+    const emitted = [
+      ...Object.values(TIMELINE_KEY_FOR),
+      "timeline.generic.event",
+      "timeline.set.won",
+      "timeline.period.end",
+    ];
+    expect(emitted.length).toBeGreaterThanOrEqual(20);
+    expect(emitted.filter((k) => k.startsWith("public."))).toEqual([]);
+    for (const key of emitted) expect(key).toMatch(/^timeline\./);
+
+    // …and the same for what the builder actually puts on a line, not just the
+    // table — a derived key could be spelled at its emission site.
+    const lines = [
+      ...buildTimeline(args({ sportKey: "football", events: footballLedger })),
+      ...buildTimeline(args({ sportKey: "tennis", events: tennisSetLedger })),
+      ...buildTimeline(args({ events: [env(0, "some.future.type", {})] })),
+    ];
+    expect(lines.length).toBeGreaterThan(8);
+    expect(lines.map((l) => l.text.key).filter((k) => k.startsWith("public."))).toEqual([]);
+
+    // …and the dictionaries themselves.
+    for (const locale of LOCALES) {
+      expect(Object.keys(DICTS[locale]).filter((k) => k.startsWith("public."))).toEqual([]);
+    }
+  });
+
   it("every key the module can emit — templates plus the three derived/neutral keys — exists in all four locales", () => {
     const keys = [
       ...new Set([
         ...Object.values(TIMELINE_KEY_FOR),
-        "public.timeline.generic.event",
-        "public.timeline.set.won",
-        "public.timeline.period.end",
+        "timeline.generic.event",
+        "timeline.set.won",
+        "timeline.period.end",
       ]),
     ].sort();
     expect(keys.length).toBeGreaterThanOrEqual(20);
@@ -478,7 +517,7 @@ describe("timeline dictionary coverage (derived from the engine's own golden cor
 
   it("no locale carries a public.timeline key the others lack", () => {
     const timelineKeys = (locale: (typeof LOCALES)[number]) =>
-      Object.keys(DICTS[locale]).filter((k) => k.startsWith("public.timeline.")).sort();
+      Object.keys(DICTS[locale]).filter((k) => k.startsWith("timeline.")).sort();
     const en = timelineKeys("en");
     expect(en.length).toBeGreaterThanOrEqual(20);
     for (const locale of LOCALES) expect(timelineKeys(locale)).toEqual(en);

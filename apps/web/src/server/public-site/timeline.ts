@@ -82,24 +82,31 @@ export interface SetsArgs {
   sides: [SideT, SideT];
 }
 
+// KEYS ARE BARE — `timeline.football.goal`, never `public.timeline.football.goal`.
+// The namespace is the FILE (`dictionaries/<locale>/public.json`), which
+// `getDictionary(locale, "public")` loads whole, so re-stating it inside a key
+// would make the key `public.public.…` in intent and read wrong beside every
+// other key in that file (`org.competitionsBy`, `news.kind.result`). It
+// *resolves* either way — `lookup()` tries the literal flat key first — which is
+// exactly why this is written down rather than left to be noticed.
 /** The line a recorded type with no template of its own renders. Never nothing. */
-export const TIMELINE_NEUTRAL_KEY = "public.timeline.generic.event";
+export const TIMELINE_NEUTRAL_KEY = "timeline.generic.event";
 /** Derived, not recorded: emitted when `summary.detail.sets[i].closed` flips. */
-export const TIMELINE_SET_WON_KEY = "public.timeline.set.won";
+export const TIMELINE_SET_WON_KEY = "timeline.set.won";
 /** Derived, not recorded: emitted when `summary.detail.periods` grows. */
-export const TIMELINE_PERIOD_END_KEY = "public.timeline.period.end";
+export const TIMELINE_PERIOD_END_KEY = "timeline.period.end";
 
-const FOOTBALL = "public.timeline.football.";
-const TENNIS = "public.timeline.tennis.";
-const SETBASED = "public.timeline.setbased.";
+const FOOTBALL = "timeline.football.";
+const TENNIS = "timeline.tennis.";
+const SETBASED = "timeline.setbased.";
 /** Field hockey and ice hockey ride the period kernel and one vocabulary. */
-const PERIODSPORT = "public.timeline.periodsport.";
+const PERIODSPORT = "timeline.periodsport.";
 
 /** The template table: recorded event type -> dictionary key. */
 export const TIMELINE_KEY_FOR: Readonly<Record<string, string>> = {
-  "core.start": "public.timeline.core.start",
-  "core.forfeit": "public.timeline.core.forfeit",
-  "core.abandon": "public.timeline.core.abandon",
+  "core.start": "timeline.core.start",
+  "core.forfeit": "timeline.core.forfeit",
+  "core.abandon": "timeline.core.abandon",
 
   "football.goal": `${FOOTBALL}goal`,
   "football.card": `${FOOTBALL}card`,
@@ -151,15 +158,15 @@ export const TIMELINE_KEY_FOR: Readonly<Record<string, string>> = {
   "icehockey.suspension.start": `${PERIODSPORT}suspension.start`,
   "icehockey.suspension.end": `${PERIODSPORT}suspension.end`,
 
-  "carrom.toss": "public.timeline.carrom.toss",
-  "carrom.board.summary": "public.timeline.carrom.board.summary",
-  "carrom.game.adjust": "public.timeline.carrom.game.adjust",
+  "carrom.toss": "timeline.carrom.toss",
+  "carrom.board.summary": "timeline.carrom.board.summary",
+  "carrom.game.adjust": "timeline.carrom.game.adjust",
 
-  "boardgame.pairing": "public.timeline.boardgame.pairing",
-  "boardgame.result": "public.timeline.boardgame.result",
+  "boardgame.pairing": "timeline.boardgame.pairing",
+  "boardgame.result": "timeline.boardgame.result",
 
-  "generic.score": "public.timeline.generic.score",
-  "generic.result": "public.timeline.generic.result",
+  "generic.score": "timeline.generic.score",
+  "generic.result": "timeline.generic.result",
 };
 
 // --------------------------------------------------------------- primitives
