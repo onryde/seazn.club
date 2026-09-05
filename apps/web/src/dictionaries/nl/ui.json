@@ -1834,6 +1834,7 @@
   "schedule.notice.undone": "Wijziging ongedaan gemaakt.",
   "schedule.error.undoFailed": "Ongedaan maken mislukt",
   "schedule.error.failed": "Mislukt",
+  "schedule.error.conflict": "Deze tijd en baan botsen met de rest van het schema — kies een andere tijd of baan en sla opnieuw op.",
   "schedule.error.completedSeedingFailed": "Fase afgerond, maar de plaatsing voor de volgende fase kon niet worden voorbereid: {reason}",
   "schedule.notice.nothingToSchedule": "Niets in te plannen — geen vrije plekken of niets ongepland.",
   "schedule.notice.placed": "{n} wedstrijd(en) geplaatst.",

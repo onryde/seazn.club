@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { test, expect, type APIRequestContext } from "@playwright/test";
 import { TAG, apiJson, activeOrg, seedVenueWithCourts, addEntrantsViaApi } from "./helpers";
 // The AUTHORITY for what a day label looks like, imported rather than
@@ -25,6 +27,18 @@ import { dayLabel, dayLabelLong } from "../src/lib/day-label";
 // seed's own instants), never typed.
 
 const LOCALES = ["en", "es", "fr", "nl"] as const;
+
+// The copy catalogs themselves, so the refusal test below asserts the SHIPPED
+// sentence rather than a hand-typed twin that would keep passing after a copy
+// edit moved the real one.
+const UI = Object.fromEntries(
+  LOCALES.map((l) => [
+    l,
+    JSON.parse(
+      readFileSync(fileURLToPath(new URL(`../src/dictionaries/${l}/ui.json`, import.meta.url)), "utf8"),
+    ) as Record<string, string>,
+  ]),
+) as Record<(typeof LOCALES)[number], Record<string, string>>;
 
 /** A league division whose fixtures all land on ONE venue-zone day, so the run
  *  sheet renders exactly one `kind: "day"` block to read the header off. */
@@ -349,8 +363,9 @@ test.describe("the inline editor's per-fixture court picker", () => {
     await expect(row2.getByTestId("fixture-court-select")).toHaveValue(c2!.id);
   });
 
-  test("a court that would double-book is REFUSED, and the organiser is told", async ({
+  test("a court that would double-book is REFUSED, and the organiser is told IN THEIR OWN LANGUAGE", async ({
     page,
+    context,
     request,
   }) => {
     const { comp, div, courts, fixtures } = await seedTimedLeague(request, ["C1", "C2"]);
@@ -374,17 +389,39 @@ test.describe("the inline editor's per-fixture court picker", () => {
     expect(blockerRes.status, JSON.stringify(blockerRes.error)).toBe(200);
 
     const org = await activeOrg(page);
-    await page.goto(`/o/${org.slug}/c/${comp.slug}/d/${div.slug}?tab=fixtures`);
+    const url = `/o/${org.slug}/c/${comp.slug}/d/${div.slug}?tab=fixtures`;
+    // FRENCH, deliberately. The retired code rendered `err.message` — the
+    // EngineError's own English sentence, thrown by `assertNoNewBlocking` in
+    // src/server/usecases/schedule.ts — so on an `en` console the defect and
+    // the fix are indistinguishable and this test would witness nothing. Every
+    // expected string below is READ from the dictionaries rather than typed, so
+    // a copy edit moves the assertion with it instead of leaving it pinned to
+    // yesterday's sentence.
+    await page.goto(url);
+    await context.addCookies([
+      { name: "seazn_locale", value: "fr", url: new URL(page.url()).origin },
+    ]);
+    await page.goto(url);
 
     const row = page.locator(`[data-fixture-no="${mover.fixture_no}"]`);
     await row.getByTestId("run-sheet-edit-time").click();
     await row.getByTestId("fixture-court-select").selectOption(c2!.id);
-    await row.getByRole("button", { name: "Save", exact: true }).click();
+    await row.getByRole("button", { name: UI.fr["schedule.save"]!, exact: true }).click();
 
     // The editor stays OPEN carrying an error — a refusal the organiser cannot
-    // see is a silent data loss wearing a success's clothes.
+    // see is a silent data loss wearing a success's clothes. POSITIVE PAIR
+    // FIRST: everything after this passes on a blank page otherwise.
     await expect(row.getByTestId("run-sheet-set-time-editor")).toBeVisible();
-    await expect(row.getByTestId("run-sheet-editor-error")).toBeVisible();
+    const err = row.getByTestId("run-sheet-editor-error");
+    await expect(err).toBeVisible();
+    // WHAT it says, not merely that it is there. Reachability proves nothing.
+    await expect(err).toHaveText(UI.fr["schedule.error.conflict"]!);
+    // The three things it must NOT be, each one a live defect at some point:
+    // the server's raw sentence, the English copy on a French console, and the
+    // bare "Échec" the unmapped fallback would give.
+    await expect(err).not.toHaveText(/blocking conflict/i);
+    await expect(err).not.toHaveText(UI.en["schedule.error.conflict"]!);
+    await expect(err).not.toHaveText(UI.fr["schedule.error.failed"]!);
     // And the write did not land.
     const after = await apiJson<{ court_id: string | null }>(
       request,

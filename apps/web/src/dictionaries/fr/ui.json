@@ -1834,6 +1834,7 @@
   "schedule.notice.undone": "Modification annulée.",
   "schedule.error.undoFailed": "Échec de l'annulation",
   "schedule.error.failed": "Échec",
+  "schedule.error.conflict": "Cet horaire et ce terrain entrent en conflit avec le reste du calendrier — choisissez un autre horaire ou un autre terrain, puis enregistrez à nouveau.",
   "schedule.error.completedSeedingFailed": "Phase terminée, mais la qualification de la phase suivante n'a pas pu être préparée : {reason}",
   "schedule.notice.nothingToSchedule": "Rien à planifier — aucun créneau libre ou rien à programmer.",
   "schedule.notice.placed": "{n} match(s) placé(s).",

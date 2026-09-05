@@ -13,8 +13,9 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "@/components/ui/console-link";
 import { ClientTime } from "@/components/client-time";
-import { apiV1 } from "@/lib/client-v1";
+import { apiV1, ApiV1Error } from "@/lib/client-v1";
 import { useMsg } from "@/components/i18n/dict-provider";
+import type { MessageKey } from "@/lib/messages";
 import { DateTimeField } from "../shared/datetime-field";
 import { resolveSlotLabel } from "@/lib/slot-label";
 import { courtDisplayName } from "@/components/v2/board/types";
@@ -27,6 +28,60 @@ import type { PatchFixture } from "@/server/api-v1/schemas";
 // seeds the field from an existing instant, `isoFromZonedDateTime` turns the
 // typed wall clock back into one. Never `tz` — that is display-only.
 import { zonedDateTimeInput, isoFromZonedDateTime } from "@/lib/zoned-datetime";
+
+/** What the editor says when it has no better answer. Already translated in all
+ *  four locales, and the destination for EVERY code this map does not name —
+ *  the server's raw `err.message` must never reach the organiser. */
+export const SCHEDULE_ERROR_FALLBACK_KEY = "schedule.error.failed" satisfies MessageKey;
+
+/**
+ * The inline editor's refusal copy: wire CODE -> organiser copy key.
+ *
+ * Before this, `patchSchedule`'s catch rendered `err.message` — the SERVER's
+ * own English sentence — into a console that ships in en/es/fr/nl. Driving a
+ * double-booked court through the editor put "schedule change hits a blocking
+ * conflict" on screen verbatim (the `EngineError` raised by
+ * `assertNoNewBlocking`, server/usecases/schedule.ts). The message is now never
+ * read; only `ApiV1Error.code` is, which is a first-class readonly field on it
+ * (lib/client-v1.ts) — the same branch six other v2 islands already make on
+ * `PAYMENT_REQUIRED`.
+ *
+ * ONE code is mapped, because one is what this PATCH can raise that is both
+ * reachable from this editor and distinct to an organiser. What was considered
+ * and deliberately left to the fallback:
+ *
+ *   SEQ_CONFLICT   — unreachable HERE. `assertFreshSeq` returns immediately
+ *                    when `expected_seq` is undefined (schedule.ts), and this
+ *                    editor never sends one. `stages-panel.tsx`'s
+ *                    `autoScheduleStage` does, and handles it itself.
+ *   the two 422s   — "the division schedule is locked" and "fixture is
+ *                    <status> — decided fixtures are immutable" both arrive as
+ *                    the GENERIC code "ERROR" (`statusCode(422)` in
+ *                    server/api-v1/http.ts), so branching on it would label
+ *                    every other 422 as a lock. A peer wave is adding a real
+ *                    SCHEDULE_LOCKED code; this map leaves room for it rather
+ *                    than guessing at the ambiguous one.
+ *   PAYMENT_REQUIRED — reachable (a frozen competition, `assertNotFrozen`) and
+ *                    its raw message is a wire string with a machine key in it
+ *                    ("Plan upgrade required: competitions.max_active"), so the
+ *                    fallback is already strictly better. Real copy for it
+ *                    belongs with the <UpgradeGate> the sibling islands render,
+ *                    which is a bigger piece of work than this fix.
+ *   VALIDATION     — the Save button rejects an unparseable wall clock before
+ *                    it can PATCH (`iso === null`), so a 400 needs a client bug
+ *                    to reach, not an organiser action.
+ *
+ * SCHEDULE_CONFLICT itself covers four blocking families, not just a court
+ * clash (`isBlockingConflict`: court double-booking, person overlap, session
+ * window, direct-feed order) — hence copy that names the clash with the rest of
+ * the schedule rather than the court alone.
+ */
+export function scheduleErrorKey(err: unknown): MessageKey {
+  if (err instanceof ApiV1Error && err.code === "SCHEDULE_CONFLICT") {
+    return "schedule.error.conflict";
+  }
+  return SCHEDULE_ERROR_FALLBACK_KEY;
+}
 
 export function RunSheetRow({
   fixture,
@@ -247,7 +302,10 @@ export function RunSheetRow({
       onRescheduled?.();
       return true;
     } catch (err) {
-      setError(err instanceof Error ? err.message : msg("schedule.error.failed"));
+      // `err.message` is deliberately NOT read: it is the server's own English
+      // sentence, and this console ships in four locales. See
+      // `scheduleErrorKey` for what is mapped and what is not.
+      setError(msg(scheduleErrorKey(err)));
       return false;
     } finally {
       setBusy(false);

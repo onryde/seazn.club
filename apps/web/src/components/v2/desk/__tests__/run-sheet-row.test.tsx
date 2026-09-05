@@ -1,8 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
-import { RunSheetRow } from "@/components/v2/desk/run-sheet-row";
+import { RunSheetRow, SCHEDULE_ERROR_FALLBACK_KEY, scheduleErrorKey } from "@/components/v2/desk/run-sheet-row";
 import { fixtureStatusLabel, outcomeText, VOID_STATUSES } from "@/components/v2/stages-panel";
 import { hasAssignedScorer } from "@/lib/fixture-row-action";
+import { ApiV1Error } from "@/lib/client-v1";
 import type { RunSheetFixture } from "@/lib/run-sheet-groups";
 import { messages } from "@/lib/messages";
 
@@ -172,5 +173,65 @@ describe("a declined scorer is still no scorer, on the rendered row", () => {
   it("the fixture under test really is scheduled today in the venue zone", () => {
     expect(TODAY_1400.slice(0, 10)).toBe(new Date(NOW_MS).toISOString().slice(0, 10));
     expect(hasAssignedScorer([{ response: "declined" }])).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// W2 fix — the inline editor's refusal copy. `patchSchedule`'s catch used to
+// render `err.message`, i.e. the SERVER's own English sentence ("schedule
+// change hits a blocking conflict", the EngineError raised by
+// `assertNoNewBlocking` in server/usecases/schedule.ts), to an organiser who
+// may be reading the console in es/fr/nl. The branch is on the wire CODE now
+// and the raw message is never read on any path.
+//
+// This suite pins the PURE half — code -> key. What that key RENDERS, and in
+// which locale, is only provable in a browser: `e2e/run-sheet-dates-and-court
+// .spec.ts` drives a real double-book through the editor and reads the copy off
+// the page in fr. A node-environment suite can see neither.
+describe("the inline editor maps a wire code to organiser copy, never a raw message", () => {
+  it("a SCHEDULE_CONFLICT gets its own key, not the generic failure", () => {
+    const err = new ApiV1Error("schedule change hits a blocking conflict", 409, "SCHEDULE_CONFLICT");
+    expect(scheduleErrorKey(err)).toBe("schedule.error.conflict");
+    // The differential that kills a "return the fallback for everything" mutant.
+    expect(scheduleErrorKey(err)).not.toBe(SCHEDULE_ERROR_FALLBACK_KEY);
+  });
+
+  it("every other wire code falls back — nothing unmapped invents copy", () => {
+    for (const code of ["SEQ_CONFLICT", "ERROR", "NOT_FOUND", "PAYMENT_REQUIRED", "VALIDATION", "INTERNAL"]) {
+      expect(scheduleErrorKey(new ApiV1Error("raw english", 422, code)), code).toBe(
+        SCHEDULE_ERROR_FALLBACK_KEY,
+      );
+    }
+  });
+
+  it("a non-ApiV1Error — a network drop, a thrown string — falls back too", () => {
+    expect(scheduleErrorKey(new TypeError("Failed to fetch"))).toBe(SCHEDULE_ERROR_FALLBACK_KEY);
+    expect(scheduleErrorKey("boom")).toBe(SCHEDULE_ERROR_FALLBACK_KEY);
+    expect(scheduleErrorKey(undefined)).toBe(SCHEDULE_ERROR_FALLBACK_KEY);
+  });
+
+  // A plain `Error` whose MESSAGE happens to be the code must NOT match: the
+  // branch reads `.code`, and only `ApiV1Error` carries one. Kills a mutant
+  // that sniffs the message text instead of the typed field.
+  it("an Error carrying the code only in its message is not a conflict", () => {
+    expect(scheduleErrorKey(new Error("SCHEDULE_CONFLICT"))).toBe(SCHEDULE_ERROR_FALLBACK_KEY);
+  });
+
+  // Both keys must exist in the catalog, or the editor renders the key string
+  // itself (`tRuntime`'s miss behaviour) — a raw dotted identifier on screen.
+  it("both keys are real catalog entries with distinct copy", () => {
+    for (const key of ["schedule.error.conflict", SCHEDULE_ERROR_FALLBACK_KEY]) {
+      const copy = (messages as Record<string, string>)[key];
+      expect(copy, key).toBeTruthy();
+      expect(copy, key).not.toBe(key);
+    }
+    // And they are DIFFERENT copy — a court clash that reads "Failed" is the
+    // defect this fix exists to remove, one indirection later.
+    expect(messages["schedule.error.conflict"]).not.toBe(messages[SCHEDULE_ERROR_FALLBACK_KEY]);
+    // The organiser must be told what to DO, not just that it broke. A bare
+    // status word is exactly the failure mode the fallback already is.
+    expect(messages["schedule.error.conflict"]!.length).toBeGreaterThan(
+      messages[SCHEDULE_ERROR_FALLBACK_KEY]!.length,
+    );
   });
 });

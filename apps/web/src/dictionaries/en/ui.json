@@ -1834,6 +1834,7 @@
   "schedule.notice.undone": "Change undone.",
   "schedule.error.undoFailed": "Undo failed",
   "schedule.error.failed": "Failed",
+  "schedule.error.conflict": "That time and court clash with the rest of the schedule — pick a different time or court, then save again.",
   "schedule.error.completedSeedingFailed": "Stage completed — but the next stage's seeding couldn't be prepared: {reason}",
   "schedule.notice.nothingToSchedule": "Nothing to schedule — no free slots or nothing unscheduled.",
   "schedule.notice.placed": "Placed {n} fixture(s).",
