@@ -86,6 +86,46 @@ driven — see `_RULES.md` §8.
 | F4 | `/settings` forwards only `tab`; `/settings/billing`, `/settings/connect` and `/settings/payments` rebuild the full query string. Its searchParams is typed `{tab?: string}` and drops the rest. **Customer impact is NOT nil** — see the correction below. | **FIXED** — follow-up wave | W1.5 |
 | F5 | `lib/platform-settings.ts:48` did `Number(row?.value)` on a jsonb column, so a row holding jsonb `null`/`false`/`""`/`[]` read as a finite, in-range `0` and served a **0% platform cut** to the settings page and to every checkout, overriding the fallback an ABSENT row correctly reaches. | **FIXED** — follow-up wave, mutation-killed | W1.5 |
 
+## F7 — the email-change fix is PARTIAL, and the common case is still broken
+
+**Open. Not fixed on this branch.** Found by the max-effort review of W1.5,
+verified against the tree.
+
+`/settings/page.tsx` now forwards the whole query — but `requirePageAuth()` runs
+FIRST (`page.tsx:21`), and it exits before the forwarding code on three
+branches: `if (!user) redirect("/login")`, `orgs.length === 0 -> /orgs/new`, and
+`role === "scorer" -> /my-matches` (`page-auth.ts:37,39,42`). Each is a bare
+`redirect()` that takes no return param, and `login/page.tsx` accepts none.
+
+That is not an edge case here, it is the DEFAULT path.
+`/api/auth/change-email/confirm` requires **no session** — it acts on the token
+alone (`confirm/route.ts:9-11`, no auth call anywhere in the handler) — and the
+link is mailed to the user's NEW address. So it is routinely opened in whatever
+browser the mail client hands it to, with no `seazn` cookie. The address change
+COMMITS, then the redirect lands on `/login` and `email_change` is discarded one
+hop later than it used to be. `success`, `taken` and `expired` remain
+indistinguishable for exactly the users most likely to hit them.
+
+**So W1.5's F4 fix is necessary and insufficient.** It is right for a signed-in,
+non-scorer user with an org — and that is the user the new e2e test drives,
+because the walkthrough leg runs as the shared Pro org member. The test is
+structurally blind to the case that matters most.
+
+**Why it was not fixed here:** closing it means a return-param contract through
+`/login` (or moving the banner to a surface that does not require auth), which
+is an auth-flow change with a blast radius well outside a settings walkthrough,
+and this session had no environment up to drive it. Recorded rather than
+half-done.
+
+**The cheap first step for whoever takes it:** the review names one, and it is
+worth taking regardless — `GET /api/auth/change-email/confirm?token=<garbage>`
+deterministically produces the `invalid` outcome with no seeding at all, so a
+test can drive PRODUCER -> shim -> banner in one hop instead of hand-typing the
+URL the producer is supposed to emit. The current test types that URL itself,
+so renaming the param or dropping `tab=account` (which gates the banner,
+`o/[orgSlug]/settings/page.tsx:559`) leaves it green while every real
+confirmation breaks again.
+
 ## False premises found
 
 Recorded so the next session does not re-derive them.
