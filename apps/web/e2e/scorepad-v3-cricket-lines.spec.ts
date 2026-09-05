@@ -1,5 +1,45 @@
 import { test, expect, type Page, type APIRequestContext } from "@playwright/test";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { apiJson, fixturePath, seedRosteredFixture, TAG } from "./helpers";
+
+// Review round 2 (task-18-rereview-ea888772b..74963d93b.md) — round 1's
+// `labelKey` additions (cricket.ts's `playerLineAction`) changed several of
+// this action's captions away from `deriveFieldPathLabel`'s fallback
+// ("Batting fours" -> "Fours", etc.), and this file had two hardcoded
+// selectors that assumed the OLD fallback text. Read as a file, not
+// `import … from "…json"` — Playwright's loader rejects a bare JSON import
+// without an import attribute (same reasoning `division-delete.spec.ts`'s
+// own header gives for the identical pattern).
+const uiEn = JSON.parse(
+  readFileSync(fileURLToPath(new URL("../src/dictionaries/en/ui.json", import.meta.url)), "utf8"),
+) as Record<string, string>;
+
+/** The eight new `pad.cricket.action.playerLine.field.*` keys owner ruling
+ *  12's fix round 1 registered (cricket.ts + scoring-vocab.ts's
+ *  `PAD_LABEL_KEYS` + all four `ui.json` dictionaries). Read from the SAME
+ *  dictionary the form renders, not retyped — a future caption change (a
+ *  key rename, a reworded label) moves this test with it instead of
+ *  silently drifting back out of sync, which is exactly what happened to
+ *  the two hardcoded selectors this fix round replaces. Throws loudly at
+ *  collection time if a key ever goes missing, rather than a selector
+ *  quietly timing out mid-test with no clue why. */
+function playerLineLabel(key: string): string {
+  const full = `pad.cricket.action.playerLine.field.${key}`;
+  const value = uiEn[full];
+  if (value === undefined) throw new Error(`scorepad-v3-cricket-lines.spec.ts: no ui.json entry for "${full}"`);
+  return value;
+}
+const PLAYER_LINE_LABEL = {
+  fours: playerLineLabel("fours"),
+  sixes: playerLineLabel("sixes"),
+  dismissalKind: playerLineLabel("dismissalKind"),
+  maidens: playerLineLabel("maidens"),
+  wides: playerLineLabel("wides"),
+  noBalls: playerLineLabel("noBalls"),
+  dismissalBowler: playerLineLabel("dismissalBowler"),
+  dismissalFielder: playerLineLabel("dismissalFielder"),
+} as const;
 
 // Task 18 — owner ruling 12 (2026-09-05, the ONLY deliberate scorepad touch
 // of the spectator match-centre programme). Task 17 (engine) made
@@ -202,8 +242,8 @@ test(
     await pad(page).getByLabel("Batting out", { exact: true }).check();
     await pad(page).getByLabel("Batting runs", { exact: true }).fill("42");
     await pad(page).getByLabel("Batting balls", { exact: true }).fill("30");
-    await pad(page).getByLabel("Batting fours", { exact: true }).fill("5");
-    await pad(page).getByLabel("Batting sixes", { exact: true }).fill("2");
+    await pad(page).getByLabel(PLAYER_LINE_LABEL.fours, { exact: true }).fill("5");
+    await pad(page).getByLabel(PLAYER_LINE_LABEL.sixes, { exact: true }).fill("2");
     // The original seven fields cover BOTH a batting and a bowling aspect on
     // one action (`checkActionValidity` requires every declared, non-
     // optional field) — this line only bats, so its bowling aspect is
@@ -214,18 +254,37 @@ test(
     await pad(page).getByLabel("Bowling wickets", { exact: true }).fill("0");
 
     // The dismissal-kind chip row (owner ruling 12/S18 — PadFieldEnum.chips).
+    // Scoped by `data-field-path`, not by PLAYER_LINE_LABEL.dismissalKind's
+    // own caption text — a field-chip row (renderField's "chips" branch,
+    // action-form.tsx) carries no `role`/`aria-label` grouping the way an
+    // ATTRIBUTION row does (below), only the bare `data-field-path`
+    // attribute, so there is no accessible name here for a caption change
+    // to invalidate. Selected by its VALUE ("Bowled"), never its caption,
+    // either way.
     await pad(page)
       .locator('[data-field-path="batting.dismissal.kind"]')
       .getByRole("button", { name: "Bowled", exact: true })
       .click();
 
-    // Person + bowler-credit attribution chips.
+    // Person: scoped by `data-attribution-path`, not caption text — this
+    // item has no `labelKey` (Task 17/18's own precedent of leaving the
+    // main person slot uncaptioned, `attribution-picker.tsx`), so
+    // `attributionItemCaption` derives it AND composes it with the
+    // action's own label ("Scorecard line — Person"), a two-part string
+    // this fix round did not touch and has no dictionary entry of its own
+    // to read back.
     await pad(page)
       .locator('[data-attribution-path="person"]')
       .getByRole("button", { name: batterName, exact: true })
       .click();
+    // Bowler credit: `renderAttributionRow` gives an item WITH a `labelKey`
+    // (fix round 1's addition here) a bare `role="group"` `aria-label`
+    // equal to that label, no action-name prefix
+    // (`attributionItemCaption` returns via `padLabel(item.labelKey...)`
+    // before ever composing with `actionLabel`) — so this one IS selected
+    // from the same dictionary value the form renders.
     await pad(page)
-      .locator('[data-attribution-path="batting.dismissal.bowler"]')
+      .getByRole("group", { name: PLAYER_LINE_LABEL.dismissalBowler, exact: true })
       .getByRole("button", { name: bowlerName, exact: true })
       .click();
 
