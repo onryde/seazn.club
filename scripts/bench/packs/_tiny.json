@@ -57,9 +57,31 @@
           "@c-tiny-1",
           "@c-tiny-2"
         ],
-        "perEntrantMinRest": 0,
-        "blackouts": [],
-        "sessionWindows": []
+        "perEntrantMinRest": 15,
+        "blackouts": [
+          {
+            "court": "@c-tiny-1",
+            "from": "2099-01-01T12:00:00.000Z",
+            "to": "2099-01-01T12:30:00.000Z"
+          }
+        ],
+        "sessionWindows": [
+          {
+            "from": "2099-01-01T08:00:00.000Z",
+            "to": "2099-01-01T20:00:00.000Z"
+          }
+        ],
+        "constraints": {
+          "hard": [
+            {
+              "type": "max_fixtures_per_day",
+              "count": 3,
+              "scope": {
+                "kind": "every_entrant"
+              }
+            }
+          ]
+        }
       }
     },
     {
@@ -99,9 +121,31 @@
           "@c-tiny-1",
           "@c-tiny-2"
         ],
-        "perEntrantMinRest": 0,
-        "blackouts": [],
-        "sessionWindows": []
+        "perEntrantMinRest": 15,
+        "blackouts": [
+          {
+            "court": "@c-tiny-1",
+            "from": "2099-01-01T12:00:00.000Z",
+            "to": "2099-01-01T12:30:00.000Z"
+          }
+        ],
+        "sessionWindows": [
+          {
+            "from": "2099-01-01T08:00:00.000Z",
+            "to": "2099-01-01T20:00:00.000Z"
+          }
+        ],
+        "constraints": {
+          "hard": [
+            {
+              "type": "max_fixtures_per_day",
+              "count": 3,
+              "scope": {
+                "kind": "every_entrant"
+              }
+            }
+          ]
+        }
       }
     },
     {
@@ -808,12 +852,46 @@
         {
           "ref": "c-tiny-1",
           "name": "Court 1",
-          "sort": 1
+          "sort": 1,
+          "hours": [
+            {
+              "weekday": 4,
+              "openMin": 480,
+              "closeMin": 1140
+            },
+            {
+              "weekday": 5,
+              "openMin": 480,
+              "closeMin": 1140
+            },
+            {
+              "weekday": 6,
+              "openMin": 480,
+              "closeMin": 1140
+            }
+          ]
         },
         {
           "ref": "c-tiny-2",
           "name": "Court 2",
-          "sort": 2
+          "sort": 2,
+          "hours": [
+            {
+              "weekday": 4,
+              "openMin": 480,
+              "closeMin": 1140
+            },
+            {
+              "weekday": 5,
+              "openMin": 480,
+              "closeMin": 1140
+            },
+            {
+              "weekday": 6,
+              "openMin": 480,
+              "closeMin": 1140
+            }
+          ]
         }
       ]
     }
@@ -1151,6 +1229,11 @@
         "what": "venues[] declares ONE venue with TWO courts, and BOTH scheduled divisions (d-tiny, d-badminton) carry the SAME scheduleConfig naming those courts by @-sigil. suites/tiny.ts's own ad-hoc one-venue/one-court HTTP creation is deleted; the pack is the one source.",
         "why": "B04 design §7. One court makes design §3.3's court-double-booking rule unfalsifiable — every fixture sits on the same court, so the rule reports clean forever — which is exactly the vacuous-guard class this bench exists to catch. Two courts give it somewhere to happen. The config is SHARED between the two divisions rather than copied, so \"both divisions are scheduled onto the same courts\" is true by construction; gapMinutes: 0 is declared on purpose so the report carries a real EncodedConstraints.unmodelled entry and the \"unchecked beside the verdict\" rendering is exercised on a green run.",
         "where": "venues[], divisions[0].scheduleConfig, divisions[1].scheduleConfig"
+      },
+      {
+        "what": "B04 T7a: both courts now declare weekly `hours` (Thu/Fri/Sat 08:00-19:00), and the shared scheduleConfig declares a real perEntrantMinRest (15), one blackout, one session window and one max_fixtures_per_day hard rule (count 3, scoped every_entrant) — every one of them previously a vacuous sentinel (0 / [] / [] / no constraints.hard at all).",
+        "why": "checker.ts's rules 2a (session windows), 2b (blackouts), 2c (court hours), 3 (rest) and 4 (day caps) could not fire on ANY input while _tiny, the only pack this bench runs, declared sentinel values for all five — a green live run reported CLEAN having measured half of what it claims. Each value is chosen to be satisfied by the schedule this pack's own live run actually produces and violable by a wrong one (proved in checker.test.ts against a hand-built board, not merely reachable) — see TINY_SCHEDULE_CONFIG's own comment for the per-value reasoning. Rule 5 (not_before/not_after) is deliberately LEFT vacuous: _tiny is the only pack this bench runs, so making all eight rules live would leave the report's own \"nothing to check\" unchecked-list section with an empty list on every real run — the same vacuous-report trap one level up.",
+        "where": "venues[0].courts[0].hours, venues[0].courts[1].hours, divisions[0].scheduleConfig, divisions[1].scheduleConfig"
       },
       {
         "what": "claimInvites[] carries two entries, one per division's own star (p-ana from d-tiny, p-cho from d-badminton) — minted, never accepted (B03 §5: \"the accept flow is B05's, seeding only mints invites\").",
