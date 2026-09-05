@@ -151,15 +151,25 @@ follows in its own commit once the writer finishes.
 
 ## Next actions, in order
 
-1. Commit whatever prompt-dir files are on disk (`_RULES.md`, `W1-step-one.md`,
-   `W2-moments.md`, reshaped `_INDEX.md`).
-2. Land or re-dispatch the two plans; self-review; commit.
-3. Add `_THEMES.md` pointers to `W1-step-one.md`, `W2-moments.md`, `_RULES.md`
-   and both plans if the writers did not.
-4. Owner pre-approved execution ("approve the plan now"): run
-   `superpowers:subagent-driven-development` on the W1 plan with Fable or Opus
-   implementers and reviewers (`model:` passed per dispatch, owner
-   instruction). W2 waits for `feat/spectator-surface` W1 to merge.
+**Implementation is deliberately NOT started.** Owner, 2026-09-05: "Let's do
+implementation later on, just note down all open questions and raise." The
+planning phase is complete and committed; nothing in `apps/web`, `packages`
+or `db` has been touched by this programme.
+
+1. Owner answers `_OPEN-QUESTIONS.md`. Q1–Q4 change what a viewer sees and
+   should be answered before W1 starts; Q5–Q9 can be answered during W1;
+   Q10–Q13 are W2 or later. Each answer moves to `_INDEX.md`'s decision log
+   with the date and the owner's own words, and is struck through in the
+   questions file.
+2. Fold the answers into the spec and the W1 plan (a payload extension from
+   Q1 becomes a new first task; Q2 becomes a step in the overlay-route task).
+3. Then, and only then, run `superpowers:subagent-driven-development` on the
+   W1 plan with Opus implementers and reviewers (`model:` passed per
+   dispatch, owner instruction). W2 waits for `feat/spectator-surface` W1 to
+   merge and its RE-PIN rows to close.
+4. Before W1 starts, reproduce `pass-scoping-guard.test.ts` on a clean
+   detached checkout of `997ad225b` (Q12) so its two reds are attributed
+   correctly.
 5. PR1 rebases after `feat/fixture-console-redesign` merges; register the
    walkthrough spec in `WALKTHROUGH_SPECS`; regenerate `i18n-keys.ts` post
    rebase and require zero diff; e2e via `workflow_dispatch pr=<n>` before
