@@ -47,9 +47,21 @@ async function capPublicDashboards(orgId: string, value: number): Promise<void> 
   await setEntitlementOverrideSql(orgId, "dashboard.public.max", value);
 }
 
-test.afterEach(async () => {
+// Takes `request` because the SQL write is only HALF the restore. The resolver
+// caches entitlements in Redis for up to 300s, so against a Redis-backed target
+// (PROD_TARGET) putting the row back to 50 while the cache still holds 0 leaves
+// the leak exactly as it was — every public competition the rest of the run
+// creates degrades silently to private, which is the failure this hook exists to
+// prevent and the one that took out ten smoke checks in this wave.
+//
+// The in-test restores below have always paired the two. This hook was added to
+// cover the case they cannot — a test-level TIMEOUT abandons `finally` — and
+// shipped with only the write, so it fixed the skipped-cleanup half and
+// reintroduced the stale-cache half. Both, or neither.
+test.afterEach(async ({ request }) => {
   for (const id of cappedOrgIds) {
     await setEntitlementOverrideSql(id, "dashboard.public.max", 50);
+    await invalidateOrgEntitlements(request, id);
   }
   cappedOrgIds.clear();
 });
