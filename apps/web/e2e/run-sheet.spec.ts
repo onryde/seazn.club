@@ -1,4 +1,4 @@
-import { test, expect } from "@playwright/test";
+import { test, expect, type Page } from "@playwright/test";
 import AxeBuilder from "@axe-core/playwright";
 import {
   TAG,
@@ -9,6 +9,7 @@ import {
   setFixtureStatusSql,
   setZoneSplitSql,
   setDateTime,
+  expectNoHorizontalScroll,
 } from "./helpers";
 // Same authority the row itself uses (`zoned-datetime.ts`, #448) — the
 // expected instant below is DERIVED from the two zones, not typed as a
@@ -61,6 +62,90 @@ test.afterEach(async () => {
   pendingOrgTzRestore = null;
   if (restore !== null) await restore();
 });
+
+/**
+ * REVIEW FINDING 4 — the run sheet's own clipping gate, and the half of the
+ * viewport rule `expectNoHorizontalScroll` STRUCTURALLY CANNOT COVER here.
+ *
+ * `data-testid="run-sheet"` is itself `div.card.overflow-hidden`
+ * (`run-sheet.tsx`), so nothing this sheet renders can ever reach the
+ * document's scroll width: the card clips it first. Measured, with a
+ * deliberately 900px-wide time cell at a 320px viewport — the span really was
+ * 900px and really did stick 646px past the card, and BOTH the old
+ * `documentElement.scrollWidth <= clientWidth` comparison and
+ * `expectNoHorizontalScroll` reported the page clean. The page-level helper is
+ * still called at both sites (it is the repo's one authority for "did the
+ * PAGE go wide", and it is the thing that would catch this row pushing `main`
+ * out), but on its own it is a gate that cannot witness this sheet's own
+ * overflow.
+ *
+ * So this is the second half, in the shape `mobile.spec.ts`'s `overflowingIn`
+ * established: split the overflow on computed `overflow-x`. Content wider
+ * than its box inside an `auto`/`scroll` box is a REACHABLE rail — a feature,
+ * and held to being keyboard-reachable rather than waved through. Inside a
+ * `hidden`/`visible`/`clip` box it is CLIPPED — content the organiser cannot
+ * get to, which is a defect. `text-overflow: ellipsis` / `-webkit-line-clamp`
+ * is the third case: shortened ON PURPOSE and carrying its own signal, which
+ * is what every `truncate` in the row is. All three are returned and each is
+ * held to something, so a future overflow cannot hide behind an exemption.
+ */
+async function expectRunSheetNotClipped(page: Page, label: string): Promise<void> {
+  const seen = await page.evaluate(() => {
+    const root = document.querySelector<HTMLElement>('[data-testid="run-sheet"]');
+    if (root === null) return { absent: true, clipped: [], scrollable: [], truncatedByDesign: [], visuallyHidden: [] };
+    const suspects: HTMLElement[] = [root, ...Array.from(root.querySelectorAll<HTMLElement>("*"))];
+    const over = suspects.filter((el) => el.scrollWidth - el.clientWidth > 1);
+    const describe = (el: HTMLElement) =>
+      `${el.tagName.toLowerCase()}${el.dataset.testid ? `[${el.dataset.testid}]` : ""}` +
+      `${typeof el.className === "string" && el.className.trim() !== "" ? `.${el.className.trim().split(/\s+/).slice(0, 3).join(".")}` : ""} ` +
+      `${el.scrollWidth}px content in ${el.clientWidth}px` +
+      `${el.hasAttribute("tabindex") ? ` tabindex=${el.getAttribute("tabindex")}` : ""}` +
+      `${el.textContent && el.textContent.trim() !== "" ? ` text=${JSON.stringify(el.textContent.trim().slice(0, 24))}` : ""}`;
+    const reachable = (el: HTMLElement) => /^(auto|scroll)$/.test(getComputedStyle(el).overflowX);
+    const shortenedOnPurpose = (el: HTMLElement) => {
+      const cs = getComputedStyle(el);
+      if (cs.textOverflow === "ellipsis") return true;
+      const clamp = cs.webkitLineClamp;
+      return clamp !== "" && clamp !== "none";
+    };
+    // The `sr-only` idiom, detected by COMPUTED STYLE and not by class name:
+    // absolutely positioned into a 1x1 box. Its content "overflows" by
+    // construction and is meant to — it is there for assistive tech, not for
+    // the eye. Recognising it by geometry rather than by `.sr-only` means a
+    // renamed utility keeps its exemption and a 300px box calling itself
+    // `sr-only` does not get one.
+    const visuallyHidden = (el: HTMLElement) =>
+      getComputedStyle(el).position === "absolute" && el.clientWidth <= 1 && el.clientHeight <= 1;
+    const controlCount = (el: HTMLElement) =>
+      el.querySelectorAll("button, a[href], input, select, textarea, [tabindex]").length;
+    const rest = over.filter((el) => !reachable(el));
+    const hidden = rest.filter(visuallyHidden);
+    const stillClipped = rest.filter((el) => !visuallyHidden(el));
+    return {
+      absent: false,
+      clipped: stillClipped.filter((el) => !shortenedOnPurpose(el)).map(describe),
+      scrollable: over.filter(reachable).map(describe),
+      truncatedByDesign: stillClipped.filter(shortenedOnPurpose).map(describe),
+      visuallyHidden: hidden.map((el) => `${describe(el)} controls=${controlCount(el)}`),
+    };
+  });
+  // PRINT WHAT WAS SEEN beside the gate (_RULES.md) — an empty `clipped` list
+  // means nothing unless the sheet was actually on the page to be measured.
+  console.log(`${label}: run sheet overflow —`, JSON.stringify(seen));
+  expect(seen.absent, `${label}: the run sheet was not in the DOM — nothing was measured`).toBe(false);
+  expect(seen.clipped, `${label}: content is clipped inside the run sheet's own card`).toEqual([]);
+  // The exemptions are ASSERTED, never assumed: a rail that lost its tab stop
+  // reddens instead of quietly becoming an unreachable clip.
+  for (const box of seen.scrollable) {
+    expect(box, `${label}: a scrolling box in the run sheet is not keyboard-reachable`).toMatch(/tabindex=0$/);
+  }
+  // A visually-hidden LABEL is the point of `sr-only`; a visually-hidden
+  // CONTROL is a control nobody can reach. The exemption is held to exactly
+  // that line, so a future 1x1 box that swallows a button reddens here.
+  for (const box of seen.visuallyHidden) {
+    expect(box, `${label}: a visually-hidden box in the run sheet contains a control`).toMatch(/ controls=0$/);
+  }
+}
 
 // Competition Desk W2, Task 4 — the fixtures tab as a run sheet. This is the
 // seam obligation for Tasks 2 and 3: `fixtureRowAction` and `buildRunSheet`
@@ -815,8 +900,6 @@ test("fix round 4: the inline Set-time field is a usable, tappable control at 32
         timeW: w(timeSelect),
         dateHit: hit(dateInput),
         timeHit: hit(timeSelect),
-        scrollW: document.documentElement.scrollWidth,
-        clientW: document.documentElement.clientWidth,
       };
     });
     console.log(`set-time field at ${width}px:`, JSON.stringify(seen));
@@ -831,9 +914,21 @@ test("fix round 4: the inline Set-time field is a usable, tappable control at 32
     expect(seen.timeW, `the time select is unusably narrow at ${width}px`).toBeGreaterThanOrEqual(120);
     expect(seen.dateHit, `the date input is not what a tap at its centre hits at ${width}px`).toBe("self");
     expect(seen.timeHit, `the time select is not what a tap at its centre hits at ${width}px`).toBe("self");
-    expect(seen.scrollW, `the open editor put the page into horizontal scroll at ${width}px`).toBeLessThanOrEqual(
-      seen.clientW,
-    );
+    // REVIEW FINDING 4 — this used to compare `documentElement.scrollWidth`
+    // to its own `clientWidth`, which CANNOT FAIL. `globals.css:71` sets
+    // `overflow-x: clip` on `html, body`, and a clipped overflow does not
+    // grow `scrollWidth`: the two numbers are equal on every page in this
+    // app no matter how far a child sticks out, so the assertion was a
+    // tautology dressed as a viewport gate (the same defect #325 already
+    // fixed once, in `helpers.ts`). `expectNoHorizontalScroll` is the
+    // repo's own answer: it lifts the clip, reads the real `scrollWidth`,
+    // and — crucially — only names a culprit that is NOT contained by its
+    // own `overflow-x: auto|scroll|hidden` ancestor, so a legitimate
+    // swipe rail stays a feature while a clipped overflow stays a defect.
+    await expectNoHorizontalScroll(page);
+    // ...and the sheet's own card clips, so the page-level helper alone
+    // still cannot witness an overflow that starts inside it.
+    await expectRunSheetNotClipped(page, `open Set-time editor at ${width}px`);
 
     // And it still WORKS as a control, not just as a box: type a time
     // through the same helper every other spec uses and read it back.
@@ -944,11 +1039,13 @@ test("fix round 5: the time cell opens the editor, corrects the time, and can cl
     expect(seen.hitsSelf, `a tap at the time cell's centre hits ${seen.hitTag} at ${width}px`).toBe(true);
     // It must SAY what it does — "09:00" alone is not an accessible name.
     expect(seen.name, "the time cell has no accessible name").toBeTruthy();
-    const scroll = await page.evaluate(() => [
-      document.documentElement.scrollWidth,
-      document.documentElement.clientWidth,
-    ]);
-    expect(scroll[0], `time cell put the page into horizontal scroll at ${width}px`).toBeLessThanOrEqual(scroll[1]!);
+    // REVIEW FINDING 4, second site — see the note in the round-4 case
+    // above. `scrollWidth <= clientWidth` is a tautology under
+    // `html, body { overflow-x: clip }` and could not fail; this helper
+    // lifts the clip, measures the document's real width, and is blind to
+    // sanctioned scrolling regions rather than blaming them.
+    await expectNoHorizontalScroll(page);
+    await expectRunSheetNotClipped(page, `time cell at ${width}px`);
   }
 
   // CORRECT THE TIME. Asserted as a round trip through the product's own
