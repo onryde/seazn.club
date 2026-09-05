@@ -542,6 +542,42 @@ they are used rather than worked around silently:
 one". Task 3 turned that into the assertion proving the pin took effect
 rather than filing it as a defect.
 
+### F9 — pre-auth existence oracle in `requireResourceAuth` (NOT fixed; owner call)
+
+Found while closing F8. **Verified in the tree by the controller, not taken on
+report.** `requireResourceAuth` (`apps/web/src/server/api-v1/auth.ts:352-360`)
+resolves the resource BEFORE authenticating:
+
+```ts
+const orgId = await resourceOrg(kind, id);   // unfiltered read, throws 404
+return requireOrgAuth(req, orgId, scope);    // auth happens AFTER
+```
+
+and `resourceOrg` (`:342-349`) runs `select org_id from <table> where id = $1`
+with **no tenant filter**, throwing `HttpError(404)` when the row is absent.
+
+So an **unauthenticated** caller gets **404 for an id that does not exist** and
+**401 for one that does — in any org**. That is a cross-tenant existence
+oracle, reachable with no credentials, on **120 route files**.
+
+**Honest severity: LOW, and it should not be overstated.** The ids are
+UUIDv4 (122 bits), so nothing is enumerable — this is not a scanning
+vulnerability. What it does leak is confirmation for a caller who ALREADY
+holds an id: a leaked log line, a shared URL, an ex-employee's bookmark. They
+can confirm the resource still exists, and that it exists somewhere in the
+platform, without any credential.
+
+**Not fixed here, deliberately.** The blast radius is every `/api/v1` resource
+route, and the fix has a real behavioural trade-off — authenticating first
+turns today's 404 into a 401 for absent ids, which is the correct shape but
+changes responses that clients and tests may depend on. `api-keys.spec.ts`
+already carries a comment about "the pin adds no existence oracle" that
+concerns a LOWER layer and does not cover this one.
+
+**Owner call needed:** fix it in W8's fix wave, or open it as its own piece of
+work. It is not a settings-walkthrough defect and should not be absorbed
+silently into one.
+
 ### W2 result — measured, not asserted
 
 All five tasks closed. Wave gate run by the controller, not by a task.
