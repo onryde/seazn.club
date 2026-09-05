@@ -37,12 +37,18 @@ acquisition channel, so the share loop is a feature, not chrome.
   renders the masked label, never a blank row. On a poster a masked performer's
   line is DROPPED, never printed as a mask — a poster is permanent. Youth rule
   as in `fixtureCardModel`.
-- **R4 — Fidelity ladder from the engine.** A match's fidelity is the max tier in
+- **R4 — Fidelity ladder from the engine.** A match's fidelity is the max band in
   its ledger, read from the engine's own per-type declarations (band closed at
-  0–3; "doc 14" in engine comments points at nothing — `module.ts` is the
-  authority). Tier 3 → all tabs; tier 2 → Summary + Scorecard + Info; tier 1 →
-  Summary (totals) + Info; tier 0 → Summary (result) + Info. **A tab that would be
-  empty is not rendered.** No "coming soon".
+  0–3; `FIDELITY = {0:"result",1:"card",2:"timeline",3:"detail"}` in
+  `sport/module.ts`; "doc 14" in engine comments points at nothing). The scorer
+  picks the band per match. Cricket bands as the ENGINE declares them — not as
+  you would guess: **0** = `cricket.innings.summary` (totals); **1** = toss,
+  closes, interruption, DLS revise, follow-on, new ball, powerplay, review;
+  **2** = `cricket.player.line` (runs/balls/out; bowling balls/runs/wickets — no
+  4s/6s, no how-out, no maidens/wides); **3** = balls. Render by PRESENCE: balls →
+  all tabs; lines → Summary + Scorecard + Info; totals → Summary + Info; bare
+  result → result + Info. **A tab that would be empty is not rendered.** Info
+  states the band in one line. No "coming soon".
 - **R5 — One authority per fact.** Ball semantics live in the engine cricket
   module; the web app maps, formats, localises. Chase maths (target, required
   rate, projected) sits beside the engine's `chaseTarget` (private today —
@@ -100,6 +106,31 @@ acquisition channel, so the share loop is a feature, not chrome.
   `"$undefined"`.
 - A blown Playwright budget reports itself as a data defect (`Expected 15 /
   Received 14` above the timeout line). Express budgets in the pad's `HOLD_MS`.
+
+## Verification checklist (consolidated from the owner's sessions, 2026-09-05)
+
+Verify as the customer: drive the flow, do not just look — golden path and edge
+cases; the same check at 1280/768/320 driven live; a 44 px box measured is not a
+tap proven (hit-test with `elementFromPoint`); read what renders and PRINT what
+you saw next to every pass/fail; all four locales whenever a string moved; no
+horizontal scroll is not a correct layout; a fresh browser context per width
+wherever view state persists; `Number("") === 0`.
+
+Product-owner lens on every finding: customer gain or loss, cost and blast
+radius, a recommendation, and the strongest counter-argument. Ship the earliest
+value that de-risks the rest — never a false customer-visible claim. Call out
+work that optimises the review artifact over the product.
+
+Test design: all four types per task; mutate per SURFACE, not per test, and the
+money path specifically where there is one; a negative assertion needs its
+positive pair; reachability proves nothing — pin the VALUE a control opens at;
+ladders get an ORDER-differential case and the EMPTY case FIRST; confirm the
+runner COLLECTED your suite by comparing TOTAL counts, never by exit code; a
+Playwright timeout skips `try/finally` — thaw shared state in `afterEach` /
+`afterAll`; subagents run vitest and tsc SCOPED, the orchestrator runs the full
+gate; `pnpm`, never `npm install`; a build that dies with exit 137 after
+"Compiled successfully" is OOM from environment saturation — no standing envs;
+review after every task group.
 
 ## Agents
 

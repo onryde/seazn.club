@@ -76,6 +76,13 @@ peer session as the other.
 - **W0 picks (2026-09-05): match centre option A (court header + tab rail), poster
   option A (crest tiles).** Reasoning in the spec §"Options shown and the
   product-owner pick". The owner reverses either by naming the other letter.
+- The Info tab names the scoring band in one line ("Scored ball-by-ball" / "from
+  scorecard lines" / "Totals only") and empty tabs never render — a spectator
+  reads the difference between two matches as the scorer's choice, not a broken
+  page. The W1 reader accepts optional `fours/sixes/dismissal` and
+  `maidens/wides/noBalls` on a band-2 line from day one; adding them to the
+  engine schema and the pad's tier-2 form is a scorepad-programme
+  recommendation (owner may pull it into W1).
 - Public team page queued as a W5 candidate ahead of the other sports' Timeline
   (recommended to the owner 2026-09-05, not yet ruled on) — captains share their
   team page to the whole squad; cheap once W2's match card, standings row and
@@ -102,6 +109,14 @@ None yet.
   brief premise.
 - **The division chip prints the VARIANT ("T20"), not the configured format**
   (8 overs). W2/W3 read the config.
+- **The spec's first R4 ladder typed the bands from memory and had them off by
+  one.** The engine declares innings totals as band **0** ("result") and the
+  toss/close/DLS card events as band **1** ("card"); player lines are 2, balls 3.
+  Found when the owner asked what tier 1/2 scoring leaves on the public page
+  (2026-09-05). R4 now quotes the engine's declaration and renders by presence.
+  The same question surfaced a real data gap: a band-2 player line carries no
+  4s/6s, how-out, maidens or wides — recommended to the scorepad programme as
+  additive optional fields, not built here.
 - **Posting a full tier-3 ledger through the API is slow** (~190 events ≈ 9 min:
   the strict fold replays the ledger per event). The first capture run spent
   its whole foreground budget seeding; the harness now reseeds from a saved

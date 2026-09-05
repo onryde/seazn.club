@@ -177,11 +177,24 @@ for photos. We copy the *level of detail*, not the site.
   the public-site consent resolver RS008 unified (the plan pins the symbol) — scorecards,
   commentary, top performers, posters, entrant lists. A masked line renders the masked
   label, never a blank row. Youth rule as in `fixtureCardModel`.
-- **R4 — Fidelity ladder from the engine.** A match's fidelity is the max tier present in
-  its ledger, read from the engine's own per-type declarations, never a table typed into
-  the web app. Tier 3 → all tabs; tier 2 → Summary + Scorecard + Info; tier 1 → Summary
-  (innings totals) + Info; tier 0 → Summary (result) + Info. **A tab that would be empty
-  is not rendered.** No "coming soon".
+- **R4 — Fidelity ladder from the engine.** A match's fidelity is the max band present in
+  its ledger, read from the engine's own per-type declarations (`fidelity` on the cricket
+  module; `FIDELITY = {0: "result", 1: "card", 2: "timeline", 3: "detail"}` in
+  `sport/module.ts`), never a table typed into the web app. The scorer picks the band per
+  match ("a UX filter only … no band is paywalled"), so the page adapts per match. What
+  each band carries for cricket, from the engine's own schemas: **band 0** =
+  `cricket.innings.summary` (runs, wickets, legal balls per innings — totals, nothing
+  more); **band 1** adds toss, innings close/declare, interruption, DLS revise, follow-on,
+  new ball, powerplay, review; **band 2** adds `cricket.player.line` (per player: batting
+  runs/balls/out, bowling legal balls/runs/wickets — no 4s/6s, no dismissal kind, no
+  maidens, no wides/no-balls per bowler); **band 3** adds every ball. So: balls present →
+  all tabs; player lines present → Summary + Scorecard (R · B · SR, out/not out; O · R · W ·
+  Econ) + Info, no Commentary/FoW/partnerships; totals only (with or without band-1 events)
+  → Summary (scores, overs, CRR/target/RRR, toss and DLS when present, result) + Info; a
+  bare result → result line + Info. **A tab that would be empty is not rendered.** No
+  "coming soon". The Info tab states the band in one line ("Scored ball-by-ball" /
+  "Scored from scorecard lines" / "Totals only") so the difference between two matches
+  reads as a choice, not a defect.
 - **R5 — One authority per fact.** Ball semantics (legal ball, extras attribution,
   dismissal credit) live in the engine cricket module; the web app maps, formats and
   localises and never re-derives a cricket rule. Chase derivations (target, required
@@ -248,11 +261,17 @@ type CricketInningsCard = {
 };
 ```
 
-Input by tier: tier 3 (`cricket.ball` / `cricket.superover.ball`) fills everything; tier
-2 (`cricket.player.line`) fills `batting`/`bowling` and leaves `overs`, `fallOfWickets`,
-`partnerships` empty; tier 1 (`cricket.innings.summary`) fills `total` only; tier 0
-(`match.close`) fills `result` only. `dismissal.kind` is the engine's wicket enum, not a
-string.
+Input by band (R4): band 3 (`cricket.ball` / `cricket.superover.ball`) fills everything;
+band 2 (`cricket.player.line`) fills `batting` (runs, balls, out) and `bowling` (legal
+balls, runs, wickets) — `fours`, `sixes`, `maidens`, `wides`, `noBalls` and
+`dismissal.kind` are absent for such a match and the view model renders "out" / "not
+out" and omits the empty columns; band 0/1 (`cricket.innings.summary` plus the card
+events) fills `total`, `toss`, DLS target and `result` only. `dismissal.kind` is the
+engine's wicket enum, not a string. **Recommendation recorded for the scorepad
+programme, not built here:** optional `fours`, `sixes`, `dismissal {kind, bowler?,
+fielder?}` on the line's `batting` and `maidens`, `wides`, `noBalls` on its `bowling` —
+additive, band unchanged — would let a scorecard-line match read like a ball-by-ball one;
+the W1 reader accepts those fields from day one if they arrive.
 
 **Tests derive expectations from the engine's own declarations.** Ledger fixtures are
 built through the engine's event schemas; totals are asserted equal to the reducer's
