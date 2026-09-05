@@ -12,10 +12,15 @@ import {
 } from "@/lib/oauth";
 import { redirectLocal } from "@/lib/http";
 
-// Redirect against the external base URL, not req.url — behind Fly's proxy
-// req.url is the internal binding (http://0.0.0.0:3000), which would send the
-// browser to an unreachable address.
-function fail(req: Request, reason: string) {
+// RELATIVE, so there is no origin to get wrong. This comment used to say
+// "redirect against the external base URL, not req.url", and its diagnosis was
+// right — req.url is the internal binding (http://0.0.0.0:3000), which sends
+// the browser to an unreachable address — but `baseUrl(req)` only escapes that
+// behind a proxy that actually sets x-forwarded-host; otherwise it falls back
+// to `new URL(req.url).origin` and lands on the binding again. `req` is kept
+// in the signature so every call site reads the same; it is deliberately
+// unused now.
+function fail(_req: Request, reason: string) {
   return redirectLocal(`/login?error=${reason}`);
 }
 

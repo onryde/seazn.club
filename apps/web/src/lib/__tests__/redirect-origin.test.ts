@@ -33,15 +33,46 @@ import { redirectLocal } from "@/lib/http";
  * plus an origin we guessed".
  */
 
-const ROUTE_GLOB = fileURLToPath(new URL("../../app/**/route.ts", import.meta.url));
+// Route handlers are route.ts AND route.tsx (one exists:
+// (public)/r/[ref]/ticket.png/route.tsx), plus middleware, plus anything under
+// src/server that builds a Response itself. A glob of route.ts alone was the
+// review's finding: it silently exempts three whole classes of file.
+const GLOBS = [
+  "../../app/**/route.ts",
+  "../../app/**/route.tsx",
+  "../../middleware.ts",
+  "../../server/**/*.ts",
+].map((g) => fileURLToPath(new URL(g, import.meta.url)));
 
 /** `NextResponse.redirect(new URL(<our path>, req.url | baseUrl(req)))` — the
  *  two spellings that bake a guessed origin into a Location header. */
-const GUESSED_ORIGIN = /NextResponse\s*\.\s*redirect\(\s*new URL\([\s\S]{0,200}?,\s*(?:req\.url|baseUrl\()/g;
+//
+// Matches a REDIRECT CALL whose argument derives from the request's origin.
+// Two revisions got this wrong in opposite directions and both are worth
+// keeping in mind:
+//
+//  - v1 matched one exact call shape and caught 1 of 11 hand-written variants.
+//  - v2 also matched `${baseUrl(req)}...` anywhere, and fired on 19 sites that
+//    are all CORRECT: emailed links, Stripe return_urls, invite/claim links, a
+//    QR code. Those must be absolute — they are resolved by a mail client, by
+//    Stripe, by a phone camera, not by a browser following a Location header.
+//    A scan that reds on 19 correct lines gets deleted, not obeyed.
+//
+// So the anchor is the redirect, not the origin: building an absolute URL is
+// fine, putting a guessed origin in a Location is not.
+//
+// KNOWN GAP, stated rather than papered over: a URL hoisted into a variable
+// (`const u = new URL(p, req.url); return NextResponse.redirect(u)`) is not
+// caught. Catching it needs real scope analysis, and the unit tests on
+// redirectLocal below are the second line of defence.
+const ORIGIN_SOURCE =
+  /(?:NextResponse|Response)\s*\.\s*redirect\([^;]{0,200}?(?:(?:req|request)\.(?:url|nextUrl)|baseUrl\()/g;
 
 describe("redirects to our own paths carry no guessed origin", () => {
   it("no route handler builds a Location on req.url or baseUrl(req)", () => {
-    const files = globSync(ROUTE_GLOB);
+    const files = GLOBS.flatMap((g) => globSync(g)).filter(
+      (f) => !/\.(test|spec)\.tsx?$/.test(f) && !f.includes("/__tests__/"),
+    );
     // Guards the guard: a glob that silently matches nothing would make every
     // assertion below vacuous, and this file would pass for ever while the
     // defect walked back in.
@@ -67,9 +98,10 @@ describe("redirects to our own paths carry no guessed origin", () => {
         .replace(/(^|[^:])\/\/[^\n]*/g, (m0, p1: string) =>
           p1 + " ".repeat(m0.length - p1.length),
         );
-      for (const m of code.matchAll(GUESSED_ORIGIN)) {
+      const rel = file.split("/apps/web/")[1];
+      for (const m of code.matchAll(ORIGIN_SOURCE)) {
         const line = code.slice(0, m.index).split("\n").length;
-        offenders.push(`${file.split("/apps/web/")[1]}:${line}`);
+        offenders.push(`${rel}:${line}`);
       }
     }
 
@@ -77,6 +109,29 @@ describe("redirects to our own paths carry no guessed origin", () => {
       offenders,
       "these redirect to one of our own paths on an origin taken from the request; behind a proxy, or on a server bound to 0.0.0.0, they send the user cross-origin and the browser withholds the session cookie. Use redirectLocal() from @/lib/http",
     ).toEqual([]);
+  });
+
+  it("percent-encodes, because a Location above U+00FF throws rather than redirects", () => {
+    // `safeNextPath` accepts non-Latin-1, and google/route.ts stores `next`
+    // raw behind a `startsWith("/")` check, so this input is reachable:
+    // /api/auth/google?next=/o/中文. The absolute spellings encoded it as a
+    // side effect of building a URL; dropping the origin without keeping the
+    // encoding turned that into a 500.
+    expect(redirectLocal("/o/中文").headers.get("location")).toBe(
+      "/o/%E4%B8%AD%E6%96%87",
+    );
+  });
+
+  it.each([
+    ["//evil.com", "protocol-relative — a valid Location, and not ours"],
+    ["https://evil.com/x", "absolute off-site"],
+    ["/\\\\evil.com", "backslash form some parsers read as protocol-relative"],
+  ])("refuses %s (%s)", (input) => {
+    expect(redirectLocal(input).headers.get("location")).toBe("/");
+  });
+
+  it("normalises traversal rather than emitting it", () => {
+    expect(redirectLocal("/a/../../b").headers.get("location")).toBe("/b");
   });
 
   it("redirectLocal emits a relative Location and no origin", () => {

@@ -40,7 +40,27 @@ export { HttpError, PaymentRequiredError } from "@/lib/errors";
  * to name a real origin. This helper is for our own paths only.
  */
 export function redirectLocal(path: string, status: 307 | 308 = 307): NextResponse {
-  return new NextResponse(null, { status, headers: { location: path } });
+  // PERCENT-ENCODE, because a Location header is a ByteString. Setting one to
+  // a value containing any character above U+00FF throws — not a bad
+  // redirect, a 500. The absolute spellings this helper replaces did the
+  // encoding for us as a side effect of building a URL, so dropping the origin
+  // without keeping the encoding turned `?next=/o/中文` into a crash.
+  // `safeNextPath` accepts non-Latin-1, so that input is reachable:
+  // `/api/auth/google?next=/o/中文` stores it raw behind a `startsWith("/")`
+  // check and hands it to the callback.
+  //
+  // REJECT anything that is not a path on this site. `//evil.com` and
+  // `https://evil.com` are both valid `Location` values and neither is ours;
+  // the helper's name and contract promise a local path, so it enforces one
+  // rather than trusting every present and future caller to have used
+  // `safeNextPath` first. Parsing against an opaque base also normalises `.`
+  // and `..` segments, so a traversal cannot climb out.
+  const local = /^\/(?![/\\])/.test(path) ? path : "/";
+  const u = new URL(local, "http://redirect-local.invalid");
+  return new NextResponse(null, {
+    status,
+    headers: { location: `${u.pathname}${u.search}${u.hash}` },
+  });
 }
 
 /** Wraps a route handler with consistent JSON error handling. Runs inside a
