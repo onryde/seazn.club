@@ -45,10 +45,15 @@ export function over(number: number, glyphs: string[], bowlerName: string | null
     runs: glyphs.length,
     wickets: glyphs.filter((g) => g === "W").length,
     scoreAfter: `${10 * number}/1`,
+    // A TEMPLATED key with a real placeholder. The first version used
+    // `matchCentre.commentary` ("Commentary", no placeholders), so a component
+    // that dropped `line.params` entirely would have rendered identically and
+    // the suite would have stayed green — the fixture could not witness the
+    // thing it existed to prove.
     lines: glyphs.map(
       (g, i): MsgT => ({
-        key: "matchCentre.commentary",
-        params: { over: number, ball: i + 1, glyph: g },
+        key: "matchCentre.dismissal.bowled",
+        params: { bowler: `Bowler ${number}.${i + 1}` },
       }),
     ),
   };
@@ -72,6 +77,9 @@ function inningsWith(number: number, overs: OverT[]): CricketViewT["innings"][nu
 
 export interface DocOver {
   overs?: OverT[];
+  /** A SECOND innings, so a test can prove that over numbers restarting does
+   *  not put two identical testids in the document. */
+  secondInningsOvers?: OverT[];
   timeline?: TimelineLineT[] | null;
   sets?: SetsViewT | null;
   info?: InfoViewT;
@@ -99,7 +107,12 @@ export function makeDoc(o: DocOver = {}): MatchCentreDocT {
         : {
             band: 3,
             toss: null,
-            innings: [inningsWith(1, o.overs)],
+            innings: [
+              inningsWith(1, o.overs),
+              ...(o.secondInningsOvers === undefined
+                ? []
+                : [inningsWith(2, o.secondInningsOvers)]),
+            ],
             live: null,
             topPerformers: [],
           },

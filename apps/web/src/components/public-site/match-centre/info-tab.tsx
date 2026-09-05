@@ -23,6 +23,7 @@
 //    — and that is the better split: the venue's time zone is a server fact,
 //    and formatting it here would mean shipping the zone to the client to get
 //    the same answer.
+import Link from "next/link";
 import type { ReactNode } from "react";
 import type { Dict as PublicDict } from "@/lib/i18n-constants";
 import { t } from "@/lib/i18n-runtime";
@@ -67,12 +68,16 @@ export function InfoTab({ doc, dict }: InfoTabProps): ReactNode {
             {t(dict, "matchCentre.info.addToCalendar")}
           </a>
         )}
-        <a data-testid="mc-info-division" href={divisionHref} className={LINK_CLASS}>
+        {/* INTERNAL routes go through next/link — client-side navigation and
+            prefetch. The calendar link above stays a plain <a> deliberately:
+            it is an .ics DOWNLOAD, not a route, and next/link would try to
+            prefetch a file. */}
+        <Link data-testid="mc-info-division" href={divisionHref} className={LINK_CLASS}>
           {t(dict, "matchCentre.info.division")}
-        </a>
-        <a data-testid="mc-info-competition" href={competitionHref} className={LINK_CLASS}>
+        </Link>
+        <Link data-testid="mc-info-competition" href={competitionHref} className={LINK_CLASS}>
           {t(dict, "matchCentre.info.competition")}
-        </a>
+        </Link>
       </div>
     </TabPanel>
   );

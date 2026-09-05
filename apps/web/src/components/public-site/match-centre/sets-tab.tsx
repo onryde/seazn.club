@@ -70,14 +70,22 @@ export function SetsTab({ doc, dict }: SetsTabProps): ReactNode {
   return (
     <TabPanel id="sets" className="grid gap-2">
       <div className="overflow-x-auto" tabIndex={0} role="region" aria-label={caption}>
-        <table className="w-full text-[13px]">
+        {/* `table-fixed` for the same reason as the Scorecard's tables:
+            `min-w-0` on a `<th>` is inert and an auto-layout table simply grows
+            to its longest entrant name, so `truncate` never fires. Each
+            set/period column is sized (`w-10`); the NAME column is left unsized
+            and takes the remainder. */}
+        <table className="w-full table-fixed text-[13px]">
           <caption className="pb-1 text-left text-[11px] font-semibold uppercase tracking-[0.14em] text-ink-muted">
             {caption}
           </caption>
           <thead>
             <tr className="border-b border-zinc-200/80">
+              {/* No visible heading — the row header names each side — but an
+                  empty `<th>` is an axe `empty-table-header` violation, so it
+                  carries one for a screen reader only. */}
               <th scope="col" className="px-1 text-left font-medium text-ink-muted">
-                {/* The side column needs no heading: the row header names it. */}
+                <span className="sr-only">{t(dict, "matchCentre.col.side")}</span>
               </th>
               {sets.columns.map((_, i) => {
                 const open = sets.closedMask[i] === false;
@@ -89,7 +97,7 @@ export function SetsTab({ doc, dict }: SetsTabProps): ReactNode {
                     // See note 3 — only when the engine says so, and `undefined`
                     // rather than "false" so the attribute is simply absent.
                     data-open={open ? "true" : undefined}
-                    className={`px-1 text-right font-medium tabular-nums ${
+                    className={`w-10 px-1 text-right font-medium tabular-nums ${
                       open ? "text-accent" : "text-ink-muted"
                     }`}
                   >
@@ -106,12 +114,13 @@ export function SetsTab({ doc, dict }: SetsTabProps): ReactNode {
                 data-testid={`mc-sets-row-${rowIndex}`}
                 className="border-b border-zinc-200/60 last:border-0"
               >
-                <th scope="row" className="min-w-0 px-1 py-1.5 text-left font-normal">
+                <th scope="row" className="px-1 py-1.5 text-left font-normal">
                   <span className="flex items-center gap-2">
                     <span className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-accent/15 text-[10px] font-bold uppercase">
                       {side.short || side.name.slice(0, 3)}
                     </span>
-                    <span className="truncate">{side.name}</span>
+                    {/* `block truncate`, not `min-w-0` — see the table comment. */}
+                    <span className="block truncate">{side.name}</span>
                   </span>
                 </th>
                 {sets.columns.map((_, i) => (

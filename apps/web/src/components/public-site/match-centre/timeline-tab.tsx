@@ -86,6 +86,7 @@ export function TimelineTab({ doc, dict }: TimelineTabProps): ReactNode {
   const lines = doc.timeline ?? [];
   return (
     <TabPanel id="timeline" className="grid gap-1">
+      <h2 className="sr-only">{t(dict, "matchCentre.timeline")}</h2>
       {/* See note 1: delivered order, preserved. */}
       {lines.map((line) => {
         const side = line.sideIndex === null ? null : doc.header.sides[line.sideIndex];

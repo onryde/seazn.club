@@ -233,6 +233,33 @@ describe("SetsTab", () => {
     expect(render(FOOTBALL)).not.toContain(`>${en["matchCentre.sets"]}<`);
   });
 
+  it("the table is fixed-layout with sized columns, and a reachable region", () => {
+    // Same ruled shape as the Scorecard's tables: `min-w-0` on a <th> is inert
+    // and an auto-layout table grows to its longest entrant name, so the name
+    // span needs a bounded column rather than a `min-w-0` that does nothing.
+    const html = render(TENNIS);
+    expect(html).toContain("table-fixed");
+    expect(html).not.toContain("min-w-0 px-1 py-1.5");
+    expect(html).toContain('<span class="block truncate">');
+    // Both attributes on the SAME tag, in whichever order React serialises
+    // them — pinning the order would be pinning React, not the contract.
+    expect(html).toMatch(/<th[^>]*data-testid="mc-sets-col-0"[^>]*\bw-10\b[^>]*>/);
+
+    // The region trio — an overflow whose content is REACHABLE is a feature;
+    // without these axe reds `scrollable-region-focusable` at SERIOUS impact.
+    expect(html).toContain("overflow-x-auto");
+    expect(html).toContain('tabindex="0"');
+    expect(html).toContain('role="region"');
+    expect(html).toMatch(/aria-label="[^"]+"/);
+
+    // A caption and real scopes, and the empty leading header carries an
+    // sr-only label (axe `empty-table-header`).
+    expect(html).toContain("<caption");
+    expect(html).toContain('scope="col"');
+    expect(html).toContain('scope="row"');
+    expect(html).toContain(`<span class="sr-only">${en["matchCentre.col.side"]}</span>`);
+  });
+
   it("no dictionary key leaks into the markup unresolved", () => {
     for (const s of [TENNIS, BADMINTON, FOOTBALL, LEGACY, null]) {
       expect(render(s)).not.toContain("matchCentre.");

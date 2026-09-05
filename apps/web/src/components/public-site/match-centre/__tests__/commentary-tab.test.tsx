@@ -22,7 +22,7 @@ import type { Dict } from "@/lib/i18n-constants";
 import { MatchCentreDoc, type MatchCentreDocT } from "@/server/public-site/match-centre-schema";
 import type { LiveFixtureData } from "../../live-score-data";
 import { CommentaryTab } from "../commentary-tab";
-import { makeDoc, over } from "./fixtures";
+import { AWAY, HOME, makeDoc, over } from "./fixtures";
 
 const dict = en as Dict;
 const data = {} as LiveFixtureData;
@@ -35,11 +35,18 @@ const NO_OVERS = makeDoc({ overs: [] });
 const NO_CRICKET = makeDoc();
 const NO_BOWLER = makeDoc({ overs: [over(1, ["1", "6"], null)] });
 
+// TWO innings whose over numbers COLLIDE — 1..3 in each. This is the shape
+// that made `mc-over-3` name two different overs.
+const TWO_INNINGS = makeDoc({
+  overs: [1, 2, 3].map((n) => over(n, ["1", "·"], `Bowler${n}`)),
+  secondInningsOvers: [1, 2, 3].map((n) => over(n, ["4", "W"], `Other${n}`)),
+});
+
 const render = (d: MatchCentreDocT): string =>
   renderToStaticMarkup(<CommentaryTab doc={d} dict={dict} data={data} />);
 
 beforeAll(() => {
-  for (const d of [SEVEN, THREE, NO_OVERS, NO_CRICKET, NO_BOWLER]) {
+  for (const d of [SEVEN, THREE, NO_OVERS, NO_CRICKET, NO_BOWLER, TWO_INNINGS]) {
     expect(MatchCentreDoc.safeParse(d).success).toBe(true);
   }
 });
@@ -73,7 +80,7 @@ describe("CommentaryTab", () => {
 
   it("over groups render NEWEST first", () => {
     const html = render(THREE);
-    const at = (n: number) => html.indexOf(`data-testid="mc-over-${n}"`);
+    const at = (n: number) => html.indexOf(`data-testid="mc-over-1.${n}"`);
     expect(at(3)).toBeGreaterThanOrEqual(0);
     expect(at(1)).toBeGreaterThanOrEqual(0);
     expect(at(3)).toBeLessThan(at(2));
@@ -82,9 +89,9 @@ describe("CommentaryTab", () => {
 
   it("only the last five of seven overs render, with the button", () => {
     const html = render(SEVEN);
-    for (const n of [7, 6, 5, 4, 3]) expect(html, `over ${n}`).toContain(`data-testid="mc-over-${n}"`);
+    for (const n of [7, 6, 5, 4, 3]) expect(html, `over ${n}`).toContain(`data-testid="mc-over-1.${n}"`);
     // …and the two oldest are withheld — the negative half of the same rule.
-    for (const n of [2, 1]) expect(html, `over ${n}`).not.toContain(`data-testid="mc-over-${n}"`);
+    for (const n of [2, 1]) expect(html, `over ${n}`).not.toContain(`data-testid="mc-over-1.${n}"`);
     expect(html).toContain('data-testid="mc-load-earlier"');
     expect(html).toContain("<button");
     expect(html).toContain(en["matchCentre.loadEarlier"]);
@@ -99,12 +106,12 @@ describe("CommentaryTab", () => {
   it("ball lines carry mc-ball-<over>.<ball>, one per line, numbered from 1", () => {
     const html = render(THREE);
     for (let ball = 1; ball <= 2; ball++) {
-      expect(html, `3.${ball}`).toContain(`data-testid="mc-ball-3.${ball}"`);
+      expect(html, `3.${ball}`).toContain(`data-testid="mc-ball-1.3.${ball}"`);
     }
     // Numbered from 1, never 0 — an off-by-one here reads as a real ball.
-    expect(html).not.toContain('data-testid="mc-ball-3.0"');
+    expect(html).not.toContain('data-testid="mc-ball-1.3.0"');
     // The glyph rides beside the text.
-    expect(html).toContain('data-testid="mc-glyph-3.1"');
+    expect(html).toContain('data-testid="mc-glyph-1.3.1"');
   });
 
   it("the over header names the bowler, and drops the clause when there is none", () => {
@@ -120,6 +127,54 @@ describe("CommentaryTab", () => {
     // and no literal placeholder.
     expect(without).not.toContain("{bowler}");
     expect(without).not.toContain("· ·");
+  });
+
+  it("over and ball testids are scoped by INNINGS — over numbers restart", () => {
+    const html = render(TWO_INNINGS);
+    // Both innings' over 3 are present, and distinguishable.
+    expect(html).toContain('data-testid="mc-over-1.3"');
+    expect(html).toContain('data-testid="mc-over-2.3"');
+    // No testid appears twice anywhere in the panel. This is the assertion the
+    // un-scoped shape could not pass.
+    const ids = [...html.matchAll(/data-testid="([^"]+)"/g)].map((m) => m[1]);
+    expect(ids.length).toBeGreaterThan(10);
+    expect(new Set(ids).size).toBe(ids.length);
+    // Balls too.
+    expect(html).toContain('data-testid="mc-ball-1.3.1"');
+    expect(html).toContain('data-testid="mc-ball-2.3.1"');
+  });
+
+  it("the NEWEST innings comes first, and each is announced by a separator", () => {
+    const html = render(TWO_INNINGS);
+    const at = (sel: string) => html.indexOf(sel);
+    // Innings 2 is the newer one, so it leads.
+    expect(at('data-testid="mc-commentary-innings-2"')).toBeGreaterThanOrEqual(0);
+    expect(at('data-testid="mc-commentary-innings-2"')).toBeLessThan(
+      at('data-testid="mc-commentary-innings-1"'),
+    );
+    expect(at('data-testid="mc-over-2.3"')).toBeLessThan(at('data-testid="mc-over-1.3"'));
+    // The separator names the side and its total.
+    expect(html).toContain(AWAY.name);
+    expect(html).toContain(HOME.name);
+    // Negative pair: a single-innings document has nothing to separate.
+    expect(render(THREE)).not.toContain('data-testid="mc-commentary-innings-');
+  });
+
+  it("ball lines interpolate their OWN params, not just their template", () => {
+    // The fixture's line key is `matchCentre.dismissal.bowled` = "b {bowler}",
+    // so a component that dropped `line.params` would leave the placeholder.
+    const html = render(THREE);
+    expect(html).toContain("b Bowler 3.1");
+    expect(html).toContain("b Bowler 3.2");
+    expect(html).not.toContain("{bowler}");
+  });
+
+  it("a line with NO params shows the unfilled placeholder — the negative pair", () => {
+    // Proves the assertion above is about interpolation and not about the
+    // template happening to contain that text.
+    const bare = makeDoc({ overs: [{ ...over(1, ["1"], "X"), lines: [{ key: "matchCentre.dismissal.bowled" }] }] });
+    expect(MatchCentreDoc.safeParse(bare).success).toBe(true);
+    expect(render(bare)).toContain("{bowler}");
   });
 
   it("no dictionary key leaks into the markup unresolved", () => {

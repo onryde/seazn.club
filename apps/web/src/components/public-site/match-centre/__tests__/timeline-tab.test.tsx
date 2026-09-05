@@ -20,6 +20,10 @@ import en from "@/dictionaries/en/public.json";
 import es from "@/dictionaries/es/public.json";
 import fr from "@/dictionaries/fr/public.json";
 import nl from "@/dictionaries/nl/public.json";
+import enUi from "@/dictionaries/en/ui.json";
+import esUi from "@/dictionaries/es/ui.json";
+import frUi from "@/dictionaries/fr/ui.json";
+import nlUi from "@/dictionaries/nl/ui.json";
 import type { Dict } from "@/lib/i18n-constants";
 import { MatchCentreDoc, type MatchCentreDocT } from "@/server/public-site/match-centre-schema";
 import type { LiveFixtureData } from "../../live-score-data";
@@ -116,6 +120,49 @@ describe("localiseParams", () => {
     // is what keeps these apart — asserted so a future "normalise the case"
     // tidy-up cannot land silently.
     expect(localiseParams(dict, { side: "Red" })).toEqual({ side: "Red" });
+  });
+});
+
+describe("phase vocabulary", () => {
+  it("`term.<phase>` matches `ui.json`'s `matchPhase.<phase>` in every locale", () => {
+    // ONE product, one name per phase. The console has called it "Half-time"
+    // since long before this surface existed, and `ui.json` is the authority —
+    // a spectator page saying "HT" where the console says "Half-time" is the
+    // drift this prevents. Derived from the intersection of the two files, so
+    // a phase added to either is covered without editing this test.
+    const pairs: Record<string, [Record<string, unknown>, Record<string, unknown>]> = {
+      en: [en as Record<string, unknown>, enUi as Record<string, unknown>],
+      es: [es as Record<string, unknown>, esUi as Record<string, unknown>],
+      fr: [fr as Record<string, unknown>, frUi as Record<string, unknown>],
+      nl: [nl as Record<string, unknown>, nlUi as Record<string, unknown>],
+    };
+    let compared = 0;
+    const drift: string[] = [];
+    for (const [locale, [pub, ui]] of Object.entries(pairs)) {
+      const shared = Object.keys(ui)
+        .filter((k) => k.startsWith("matchPhase."))
+        .map((k) => k.slice("matchPhase.".length))
+        .filter((phase) => typeof pub[`term.${phase}`] === "string");
+      for (const phase of shared) {
+        compared++;
+        if (pub[`term.${phase}`] !== ui[`matchPhase.${phase}`]) {
+          drift.push(`${locale}:${phase} "${String(pub[`term.${phase}`])}" vs "${String(ui[`matchPhase.${phase}`])}"`);
+        }
+      }
+    }
+    // The gate says what it compared: an empty intersection would pass silently.
+    expect(compared).toBeGreaterThanOrEqual(4 * 8);
+    expect(drift).toEqual([]);
+  });
+
+  it("the period labels the Sets tab needs are all present", () => {
+    // `term.H1`/`H2`/`ET_H1`/`ET_H2` serve BOTH surfaces: the football period
+    // marker on this timeline and `columnLabels` on the Sets table.
+    for (const phase of ["H1", "H2", "ET_H1", "ET_H2", "Q1", "P1", "OT"]) {
+      for (const [locale, d] of Object.entries(LOCALES)) {
+        expect(typeof d[`term.${phase}`], `${locale}:${phase}`).toBe("string");
+      }
+    }
   });
 });
 

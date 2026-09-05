@@ -138,6 +138,18 @@ describe("InfoTab", () => {
     expect(html).toMatch(/class="[^"]*grid-cols-2[^"]*"/);
   });
 
+  it("internal links are routes; the calendar link is a plain download", () => {
+    const html = render(FULL);
+    // next/link renders an <a> in static markup, so this asserts the
+    // DISTINCTION that matters at runtime rather than the element name: the
+    // .ics href is a file, the other two are routes.
+    expect(html).toContain('href="/api/v1/public/fixtures/fx-1/ics"');
+    expect(html).toContain('href="/o/acme/c/summer/d/a"');
+    expect(html).toContain('href="/o/acme/c/summer"');
+    // No link renders without a destination.
+    expect(html).not.toContain('href=""');
+  });
+
   it("no dictionary key leaks into the markup unresolved", () => {
     for (const info of [FULL, NO_CALENDAR, NO_ROWS]) {
       const html = render(info);
