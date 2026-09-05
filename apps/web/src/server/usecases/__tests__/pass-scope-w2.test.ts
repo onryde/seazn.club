@@ -1,7 +1,7 @@
-// W2 T13 — the five keys V392 granted the Event Pass are resolved against the
+// W2 T13 — the five keys V393 granted the Event Pass are resolved against the
 // COMPETITION being acted on, at every enforcement site.
 //
-// V392 turns these ON (or lifts the cap) for `event_pass`/`event_pass_l` and
+// V393 turns these ON (or lifts the cap) for `event_pass`/`event_pass_l` and
 // leaves them OFF (or lower) for `community`:
 //
 //   stats.player                true  vs false
@@ -354,7 +354,7 @@ describe.skipIf(!HAS_DB)("Event Pass grants resolve against the competition (W2 
   });
   // -------------------------------------------------------------------------
   // discipline.enforced, the OTHER six gates. The report bridge above is the
-  // only WRITE into the suspensions table, and it was the only site V392's
+  // only WRITE into the suspensions table, and it was the only site V393's
   // wave scoped. usecases/discipline.ts read its key from a module-local
   // `const FEATURE`, which `pass-scoping-guard.test.ts` cannot see (it matches
   // a string LITERAL in argument 2), so six gates kept asking org-wide and

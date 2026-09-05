@@ -19,7 +19,7 @@
  * from: `config/stripe-plans.json` (via lib/currency's `passPrice`/`proPrice`)
  * and `registration.fee_percent` in `plan_entitlements`. A typed "$150" is the
  * stale-number failure this wave has already paid for twice — and the figure
- * moves with BOTH: V397 re-cut the fee ladder to 5/4/2/1, and W3 put every sku
+ * moves with BOTH: V398 re-cut the fee ladder to 5/4/2/1, and W3 put every sku
  * on a charm price. It also differs per currency (usd $150, gbp £100), which a
  * literal cannot express at all.
  *

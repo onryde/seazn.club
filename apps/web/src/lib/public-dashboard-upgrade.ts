@@ -3,7 +3,7 @@
  *
  * ── Why this module exists ───────────────────────────────────────────────────
  * When an org at its `dashboard.public.max` cap creates a competition, the
- * create is not refused: V395 (entitlements v18 W2 T15) made it succeed as a
+ * create is not refused: V396 (entitlements v18 W2 T15) made it succeed as a
  * PRIVATE competition and return `public_quota_degraded: { feature_key, limit }`
  * on the 201. That is the best-timed upgrade moment in the product — the
  * organiser has just been told, in the middle of a successful create, that the
@@ -17,7 +17,7 @@
  *   - the cap they HIT comes back on the 201 (`public_quota_degraded.limit`);
  *   - the cap they would GET is this module's `PublicDashboardUpgrade`, which
  *     the create page reads for the plan `featurePlan()` names as the cheapest
- *     one that lifts this key — community 2 / pro 10 today (V395).
+ *     one that lifts this key — community 2 / pro 10 today (V396).
  *
  * Copy that quotes a limit rots the moment the matrix moves and nothing fails
  * when it does — the reason `lib/pass-comparison.ts` gives for reading every

@@ -199,7 +199,7 @@ describe.skipIf(!HAS_DB)("weekly digest (P3 / D7)", () => {
     // A DENY override beats both the plan and a pass (`resolve`'s precedence),
     // so it is the lever that proves the door shuts for a PRO org, which no
     // plan row can do. Same 402, same key, whether the refusal comes from the
-    // override or (since V395) from a plain Free org's empty scope.
+    // override or (since V396) from a plain Free org's empty scope.
     const ctx = await seedOrg("pro");
     // The org must OWN a competition for a refusal to be possible: the door is
     // "you may auto-publish about none of your competitions", and an org with
@@ -212,8 +212,8 @@ describe.skipIf(!HAS_DB)("weekly digest (P3 / D7)", () => {
     await expect(generateWeeklyDigest(ctx.auth, ctx.orgId)).rejects.toMatchObject({ status: 402 });
   });
 
-  it("402s a plain community org — V395 made news.auto paid again", async () => {
-    // V392 freed the key and this case asserted a digest; V395 (entitlements
+  it("402s a plain community org — V396 made news.auto paid again", async () => {
+    // V393 freed the key and this case asserted a digest; V396 (entitlements
     // v18 W2 T15, owner ruling 2026-09-03) re-gated it. The refusal now comes
     // from `newsAutoCompetitionScope` resolving to an EMPTY set rather than
     // from a bare `requireFeature`, which is what lets the pass case below

@@ -206,7 +206,7 @@ describe.skipIf(!HAS_DB)("importEvents — guards and dry run", () => {
   // import-side counterpart a non-entitled org buys a DLS target by
   // importing instead of scoring.
   it("rejects a DLS-computed cricket.revise when the org is denied cricket.dls (import.entitlement)", async () => {
-    // V392 (entitlements v18 §2) granted `cricket.dls` on every plan, so no
+    // V393 (entitlements v18 §2) granted `cricket.dls` on every plan, so no
     // plan withholds it. The import-side gate is still live code and still has
     // to match `scoreEvent`'s, so a DENY override is what drives it.
     const { auth } = await seedOrg();

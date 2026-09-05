@@ -163,7 +163,7 @@ export const Competition = z.object({
  * The create-time public-dashboard degrade, stated in the RESPONSE (T20,
  * reviewer pass 3, 2026-09-03).
  *
- * V395 made competitions public by default and, at `dashboard.public.max`,
+ * V396 made competitions public by default and, at `dashboard.public.max`,
  * made a create DEGRADE to private rather than 402 (T15/F, owner ruling
  * 2026-09-03). The degrade was invisible: a 201 came back carrying something
  * other than what was asked for, and the only way to notice was to diff the

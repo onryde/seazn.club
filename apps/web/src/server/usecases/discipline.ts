@@ -22,7 +22,7 @@ type Tx = postgres.TransactionSql;
 
 // The key is spelled out at every gate below, deliberately, and the module-local
 // constant it replaces is NOT coming back. `discipline.enforced` is
-// Event-Pass-lifted (V392), and lib/__tests__/pass-scoping-guard.test.ts finds
+// Event-Pass-lifted (V393), and lib/__tests__/pass-scoping-guard.test.ts finds
 // an unscoped gate by matching a string LITERAL in the resolver's second
 // argument — an identifier is invisible to it. Six gates in this file therefore
 // resolved org-wide for a whole wave with that guard green.
@@ -102,7 +102,7 @@ const SPORT_DEFAULT_RULES: Record<string, DisciplineRules> = {
  *  held — the self-deadlock lib/db.ts guards against.
  *
  *  A missing row yields `undefined`, which resolves the gate org-wide (the
- *  pre-V392 behaviour) and the 404 is raised inside the transaction as before. */
+ *  pre-V393 behaviour) and the 404 is raised inside the transaction as before. */
 async function competitionForDivision(divisionId: string): Promise<string | undefined> {
   const [row] = await sql<{ competition_id: string }[]>`
     select competition_id from divisions where id = ${divisionId}`;

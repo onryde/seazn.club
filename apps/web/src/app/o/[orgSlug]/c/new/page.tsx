@@ -18,14 +18,14 @@ import {
 
 /**
  * What the cheapest plan that lifts `dashboard.public.max` hosts, for the
- * degrade card both create paths render (V395 creates private over the cap
+ * degrade card both create paths render (V396 creates private over the cap
  * rather than refusing).
  *
  * Neither half is typed. WHICH plan comes from `featurePlan`, the same helper
  * `<UpgradeGate>`'s own CTA uses to decide between a priced Pro upgrade and a
  * Contact-us mailto, so the card cannot name one plan while the button offers
  * another. Its FIGURE comes from `plan_entitlements`, the table the resolver
- * enforces — `pro` is 10 and `community` 2 today (V395), and moving either one
+ * enforces — `pro` is 10 and `community` 2 today (V396), and moving either one
  * moves this sentence with it.
  *
  * `int_value` is legitimately NULL on this column (it means unlimited), so a

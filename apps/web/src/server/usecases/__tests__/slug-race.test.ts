@@ -32,7 +32,7 @@ const GENERIC_CONFIG = {
 
 // A paid (`pro`) plan throughout: the caps this suite races against
 // (`clubs.max`, `teams.max`) must have room, and a PaymentRequiredError from a
-// tighter plan would look like the race failing. V392 opened
+// tighter plan would look like the race failing. V393 opened
 // `clubs.hierarchy` to every plan, so it is no longer what picks the plan here.
 async function seedOrg(): Promise<{ auth: AuthCtx }> {
   const suffix = randomUUID().slice(0, 8);

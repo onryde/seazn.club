@@ -406,8 +406,8 @@ describe("stripe-plans ladder", () => {
 //
 // BOTH SIDES ARE READ FROM THEIR SOURCE OF TRUTH: the pack amount and its
 // `credits` grant from the seed, the plan's included allowance from the live
-// `plan_entitlements` matrix. That allowance is not a stable number — V392 cut
-// Pro from 60 to 35 and V394 from 35 to 25 inside a single wave — so a count
+// `plan_entitlements` matrix. That allowance is not a stable number — V393 cut
+// Pro from 60 to 35 and V395 from 35 to 25 inside a single wave — so a count
 // typed here would already have been stale twice, and would have moved this
 // rule's verdict without anyone repricing anything. It is why this block needs
 // a database when the six rules above do not; it carries the repo's standard
@@ -569,9 +569,9 @@ describe.skipIf(!HAS_DB)("stripe-plans ladder — credit packs against the plan 
 
 // ── The PLATFORM FEE ladder, in `plan_entitlements` ──────────────────────────
 //
-// Added after the W2 pass-4 review (2026-09-04) found the V397 guard NULL-blind.
+// Added after the W2 pass-4 review (2026-09-04) found the V398 guard NULL-blind.
 //
-// V397 re-cut `registration.fee_percent` for the additive fee model and closed
+// V398 re-cut `registration.fee_percent` for the additive fee model and closed
 // with a `do $$` block that lists the five rates and raises on "a rate this
 // migration does not set". That block is written as
 // `(plan_key, int_value) not in (...)`, and SQL's three-valued logic makes it
@@ -581,7 +581,7 @@ describe.skipIf(!HAS_DB)("stripe-plans ladder — credit packs against the plan 
 // apply time — every way the ladder can rot arrives AFTER that.
 //
 // NULL IS NOT UNLIMITED HERE. Everywhere else in this matrix a null `int_value`
-// means "no ceiling" (V392's header states it, and `compareCell` renders it as
+// means "no ceiling" (V393's header states it, and `compareCell` renders it as
 // "Unlimited"). A RATE has no such reading: `feePercentFor` resolves
 // `getLimit(...) == null || <= 0` to `platformFeeDefault()`, which is 5. So a
 // null on `pro` does not make Pro's registrations free and does not make them
@@ -621,7 +621,7 @@ interface LadderShape {
 function feeLadderFaults(rates: FeeRates, shape: LadderShape): string[] {
   // THE EMPTY CASE FIRST. Every rule below is a loop or a lookup, and both
   // answer "nothing is wrong" over an empty collection — which is exactly how
-  // V397's own guard passes on a ladder with no rows at all. An empty input is
+  // V398's own guard passes on a ladder with no rows at all. An empty input is
   // reported here and nothing else is, because every later verdict would be
   // vacuous rather than clean.
   const empty: string[] = [];
@@ -658,7 +658,7 @@ function feeLadderFaults(rates: FeeRates, shape: LadderShape): string[] {
     }
   }
 
-  // Paying us must buy a lower cut. This is the whole shape of the V397 ladder
+  // Paying us must buy a lower cut. This is the whole shape of the V398 ladder
   // and the claim the /pricing Event Pass card makes in words ("not 5%").
   const free = usable.get(shape.free);
   if (free === undefined) {
@@ -722,7 +722,7 @@ describe("the platform fee ladder — the rules themselves", () => {
   });
 
   it("reports the EMPTY ladder rather than reading it as clean", () => {
-    // V397's `do $$` block string_aggs an empty ladder to NULL and its
+    // V398's `do $$` block string_aggs an empty ladder to NULL and its
     // `if wrong is not null` calls that clean. The empty set answers "no" to
     // every question a fault rule asks.
     expect(feeLadderFaults(new Map(), LIVE)).toEqual([
@@ -734,7 +734,7 @@ describe("the platform fee ladder — the rules themselves", () => {
 
   it("faults a NULL rate, naming what it silently charges instead", () => {
     // The finding: `(plan_key, int_value) not in (...)` compares UNKNOWN
-    // against a null and never selects the row, so V397's guard would have
+    // against a null and never selects the row, so V398's guard would have
     // passed a Pro plan quietly charging the 5% platform default.
     const faults = feeLadderFaults(rates({ pro: null }), LIVE);
     expect(faults.join(" ")).toContain("pro: registration.fee_percent is NULL");

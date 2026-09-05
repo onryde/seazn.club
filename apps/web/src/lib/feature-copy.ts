@@ -29,7 +29,7 @@ export const FEATURE_REASONS: Record<string, string> = {
   // true on every plan and in every currency.
   "orgs.max_owned":
     "Your current plan covers the most organisations it allows (Community 1, Pro 5). On Pro, buy an extra organisation from Settings → Add-ons; it's billed monthly on top of your current bill. Community upgrades to Pro first.",
-  // `scorers.max` used to sit here. V394 (entitlements v18 W2 T12) deleted the
+  // `scorers.max` used to sit here. V395 (entitlements v18 W2 T12) deleted the
   // key from `plan_entitlements` outright and repointed both enforcement
   // branches at `members.max`, so nothing can raise a 402 for it any more —
   // same reasoning as the W1/W2 removals noted further down. A refusal on a
@@ -54,16 +54,16 @@ export const FEATURE_REASONS: Record<string, string> = {
   // stops. `featureReason` falls back to the generic line for any key not
   // listed, so their removal cannot crash a caller.
   //
-  // W2 (entitlements v18, V392): four more keys leave this map for the same
+  // W2 (entitlements v18, V393): four more keys leave this map for the same
   // reason — `stats.club_championship`, `officials.per_fixture.max`,
-  // `domains.custom` and `support.priority`. V392 deleted all four from
+  // `domains.custom` and `support.priority`. V393 deleted all four from
   // `plan_entitlements` outright, so no gate can raise a 402 for any of them
   // and a reason here would be an upsell nothing can reach. The last two
   // additionally named "Pro Plus", a plan that no longer exists.
   //
   // NOT removed, and deliberately: `schedule.checkpoints.max`. Its KEY is live
   // (§2 keeps it), so only the SENTENCE was stale — it said "Pro includes five,
-  // Pro Plus unlimited" against a plan V392 deleted and a Pro cap V319 moved to
+  // Pro Plus unlimited" against a plan V393 deleted and a Pro cap V319 moved to
   // 10. Rewritten here, in the retired-plan copy sweep, to the two rungs a
   // reader of this 402 can actually be on: community 2, pro 10. Above Pro is
   // unlimited and is the Contact-us conversation, which no 402 upsell reaches.
@@ -71,7 +71,7 @@ export const FEATURE_REASONS: Record<string, string> = {
   //
   // Found by `freeClaimFaults` (lib/copy-truth.ts) on its first run, which is
   // the whole argument for judging each sentence against its OWN row. Four were
-  // freed by V392 in this wave (`cricket.dls`, `tiebreakers.custom`,
+  // freed by V393 in this wave (`cricket.dls`, `tiebreakers.custom`,
   // `standings.custom_points`, `scheduling.multi_division`) and three had been
   // free for waves (`exports` since V310, both officials keys since V319).
   //
@@ -111,22 +111,22 @@ export const FEATURE_REASONS: Record<string, string> = {
   // Public & realtime
   // The number is NOT written here, for the same reason `import.bulk` stopped
   // writing its own: this sentence said "one public dashboard at a time"
-  // through caps of 1 (V112), 3 (V392) and 2 (V395) — a false customer-facing
+  // through caps of 1 (V112), 3 (V393) and 2 (V396) — a false customer-facing
   // claim on every plan but the first. `publicDashboardsReason` below builds
   // it from the limit `withinPublicQuota` actually resolved. This flat form is
   // the fallback for a caller with no limit to hand (the /admin reason column,
   // <UpgradeGate>'s key-only lookup).
   "dashboard.public.max": "Your plan's public dashboards are all in use — archive a finished one, or upgrade.",
-  // V395 made badge removal enterprise-only, so this must not say "Pro" — a
+  // V396 made badge removal enterprise-only, so this must not say "Pro" — a
   // Pro subscriber reading it would be told to buy what they already have.
   // `featurePlan` sends the gate to Contact-us via ENTERPRISE_FEATURES below.
   //
-  // It also must not still say "colours work on every plan": V396 split the
+  // It also must not still say "colours work on every plan": V397 split the
   // accent colour onto its own key and priced it at Pro, so that half of the
   // sentence stopped being true the moment this key stopped gating it. The
   // logo half is still true — `branding` is free on every plan (V310).
   "dashboard.branding": "Removing the seazn.club badge is an Enterprise feature (Contact us) — your own club logo works on every plan.",
-  // V396 (entitlements v18 W2 T17): the accent colour used to ride
+  // V397 (entitlements v18 W2 T17): the accent colour used to ride
   // `dashboard.branding` above, which is why it went dark for Pro when badge
   // removal became enterprise-only. It is a plain Pro feature and `featurePlan`
   // answers "pro" for it by default — it is deliberately NOT in
@@ -173,7 +173,7 @@ export const FEATURE_REASONS: Record<string, string> = {
   "scheduling.board": "Editing the schedule board is not available on this plan.",
   // Still a real paywall — and since V353 an Event Pass lifts it for one
   // competition, which is why the key is in `PASS_FEATURES`.
-  // V392 granted this to community: joint planning is free on every plan and
+  // V393 granted this to community: joint planning is free on every plan and
   // there is no door. `ai-scheduling.md` carried the same false sentence and
   // moved with this one.
   "scheduling.multi_division":
@@ -269,7 +269,7 @@ export function bulkImportRowsReason(limit: number | null): string {
 /**
  * The public-dashboard refusal, quoting the cap it was refused BY.
  *
- * Says ARCHIVE, not delete, and it is now true: since V395 the quota counts
+ * Says ARCHIVE, not delete, and it is now true: since V396 the quota counts
  * only LIVE public dashboards (`liveUnpassedCompetition`), so archiving a
  * finished season really does free a slot. Before that it did not, and telling
  * a customer to archive would have been advice that changed nothing.
@@ -282,12 +282,12 @@ export function publicDashboardsReason(limit: number | null): string {
 }
 
 // Cheapest plan that unlocks each feature (mirrors plan_entitlements,
-// V112 + V240 + V392). Everything not listed unlocks on Pro — only the
+// V112 + V240 + V393). Everything not listed unlocks on Pro — only the
 // above-Pro (Contact-us `enterprise`) exceptions need rows. (The AI run cap
 // that used to be a graded quota here — V302: 5/10/20/50 — was retired in
 // v17 Phase 2 Task 5, V322: the credit wallet meters runs on every tier now.)
 //
-// Entitlements v18 (V392): `pro_plus` is retired and its above-Pro
+// Entitlements v18 (V393): `pro_plus` is retired and its above-Pro
 // conversations move to a non-public, Contact-us-only `enterprise` plan.
 // `ENTERPRISE_FEATURES` holds ONE key, and the reason it holds exactly one
 // is worth stating, because the first version of this list held three and
@@ -295,7 +295,7 @@ export function publicDashboardsReason(limit: number | null): string {
 //
 // A key belongs here only when NO SELF-SERVE PLAN GRANTS IT AT ALL.
 // `api.write` qualifies: false on community, false on pro, true only on
-// enterprise (V392), so "contact us" really is the cheapest way to get it.
+// enterprise (V393), so "contact us" really is the cheapest way to get it.
 //
 // It briefly also held `competitions.max_active` and `dashboard.public.max`,
 // on the rule "every INT key whose Pro value is already the ceiling
@@ -310,8 +310,8 @@ export function publicDashboardsReason(limit: number | null): string {
 // in the product. Found in review, not by a test: the test that was supposed
 // to guard this DERIVED the same backwards rule and pinned it.
 //
-// `officials.auto` and `scorers.max` also left this set at v18: post-V392
-// both were plain, finite Pro caps (and V394 then deleted `scorers.max`
+// `officials.auto` and `scorers.max` also left this set at v18: post-V393
+// both were plain, finite Pro caps (and V395 then deleted `scorers.max`
 // entirely, so where the ladder lands it is moot — the documented default
 // applies). `domains.custom` and `support.priority` left for an unrelated
 // reason — T1 deleted both keys from `plan_entitlements` outright, so nothing
@@ -324,7 +324,7 @@ export function publicDashboardsReason(limit: number | null): string {
 // caller's current plan, so a plan-aware answer needs a different function,
 // not a bigger set.
 //
-// V395 (entitlements v18 W2 T15, owner ruling 2026-09-03) adds the SECOND key.
+// V396 (entitlements v18 W2 T15, owner ruling 2026-09-03) adds the SECOND key.
 // `dashboard.branding` — removing the "Powered by seazn.club" badge — moved to
 // false on Pro, so no self-serve plan grants it any more and it satisfies the
 // rule above exactly as `api.write` does. Leaving it out would have pointed a

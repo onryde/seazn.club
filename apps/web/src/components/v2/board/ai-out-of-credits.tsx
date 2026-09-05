@@ -38,7 +38,7 @@ export function AiOutOfCredits({ currency }: { currency: Currency }) {
           sm up — no horizontal scroll on mobile. */}
       <div className="mt-3 flex flex-col items-stretch gap-2 sm:flex-row sm:flex-wrap sm:items-center">
         <BuyCredits packs={packs} currency={currency} dict={dict} locale={locale} />
-        {/* WAS "Upgrade to Pro Plus", data-upgrade="pro_plus" — a plan V392
+        {/* WAS "Upgrade to Pro Plus", data-upgrade="pro_plus" — a plan V393
             deleted from `plans` outright, so the CTA pointed at a tier nobody
             can buy. Owner steer (2026-09-03): a Free org should be offered Pro;
             a Pro org is already at the top of self-serve and its offer is a

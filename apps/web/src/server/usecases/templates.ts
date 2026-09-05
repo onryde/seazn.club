@@ -169,7 +169,7 @@ export async function instantiateTemplate(
   const divisionCap = await getLimit(auth.orgId, "divisions.per_competition.max", competitionId);
   assertWithinLimit(divisionCap, "divisions.per_competition.max", template.divisions.length);
   // Same competition id, and for the same reason the `requireFeature` block
-  // above spells out: V392 lifts this cap on an Event Pass, so the read must be
+  // above spells out: V393 lifts this cap on an Event Pass, so the read must be
   // competition-scoped even though no pass can reference this id yet.
   const stageCap = await getLimit(auth.orgId, "stages.per_division.max", competitionId);
   for (const division of template.divisions) {

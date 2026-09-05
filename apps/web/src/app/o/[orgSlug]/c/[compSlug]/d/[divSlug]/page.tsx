@@ -792,7 +792,7 @@ export default async function DivisionPage({
             divisionPathPrefix={`/o/${orgSlug}/c/${compSlug}/d/`}
             fixturesHref={routes.division(orgSlug, compSlug, divSlug, "fixtures")}
             autoPosts={division.auto_posts}
-            // Both gates below carry the competition id: V395 made `news.auto`
+            // Both gates below carry the competition id: V396 made `news.auto`
             // and `embeds.enabled` false on Free and left them granted on both
             // Event Pass rungs, so an org-wide resolve would show a pass holder
             // a locked control on the competition they paid for.

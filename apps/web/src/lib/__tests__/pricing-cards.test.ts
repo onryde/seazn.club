@@ -313,7 +313,7 @@ interface ApprovedBullets {
 const APPROVED_CARD_BULLETS: ApprovedBullets[] = [
   {
     array: "FREE_FEATURES",
-    why: "the Community card on /pricing (and, sliced, the home ticket stub). Numbers pinned to the live matrix by CARD_SURFACES below: competitions.max_active, divisions.per_competition.max, entrants.per_division.max and registration.fee_percent, all on plan_key 'community'. The remaining bullets name capabilities community genuinely has (registration.paid, discovery.listed, dashboard.public.max >= 1). W2 (entitlements v18, V392): bullet 1 read '10 active competitions' against a cap V392 re-cut to 3 — the card oversold the free tier threefold. It quotes NO share loop: V395 (owner ruling 2026-09-03) made dashboard.player_profiles, embeds.enabled and news.auto paid on Free, so a bullet naming any of them would sell what the resolver now refuses. W2 ALSO MOVED THIS CARD INTO THE DICTIONARIES: the bullets are `pricing.<card>.f*` keys in all four locales and every figure above is INTERPOLATED from the row named beside it in lib/pricing-cards.ts, so the approved text below is what `cardBullets` renders in English from the live matrix rather than a sentence anybody typed. A number can no longer disagree with its row; the WORDS are what this entry pins.",
+    why: "the Community card on /pricing (and, sliced, the home ticket stub). Numbers pinned to the live matrix by CARD_SURFACES below: competitions.max_active, divisions.per_competition.max, entrants.per_division.max and registration.fee_percent, all on plan_key 'community'. The remaining bullets name capabilities community genuinely has (registration.paid, discovery.listed, dashboard.public.max >= 1). W2 (entitlements v18, V393): bullet 1 read '10 active competitions' against a cap V393 re-cut to 3 — the card oversold the free tier threefold. It quotes NO share loop: V396 (owner ruling 2026-09-03) made dashboard.player_profiles, embeds.enabled and news.auto paid on Free, so a bullet naming any of them would sell what the resolver now refuses. W2 ALSO MOVED THIS CARD INTO THE DICTIONARIES: the bullets are `pricing.<card>.f*` keys in all four locales and every figure above is INTERPOLATED from the row named beside it in lib/pricing-cards.ts, so the approved text below is what `cardBullets` renders in English from the live matrix rather than a sentence anybody typed. A number can no longer disagree with its row; the WORDS are what this entry pins.",
     bullets: [
       "3 active competitions, 4 divisions",
       "64 entrants per division",
@@ -325,7 +325,7 @@ const APPROVED_CARD_BULLETS: ApprovedBullets[] = [
   },
   {
     array: "PASS_FEATURES",
-    why: "the Event Pass card on /pricing (and, sliced, the home ticket stub). Bullet 1 is the pass's DURATION — V328/V334 `org_has_feature` drop the pass arm once the competition is archived/completed or 7 days past ends_on, so it is bounded, not permanent; that is asserted by passBulletDurationFaults. BULLET 2 CHANGED 2026-09-05 (owner decision: the L rung comes off sale): it read '10 divisions, 128 entrants each — 20 divisions & 512 entrants on L' and now reads M's ceilings alone, because the second half advertised a size with no checkout behind it. Re-read against the code before re-pinning: plan_entitlements gives event_pass 10 divisions and 128 entrants per division, and registration.fee_percent is 4 on event_pass against 5 on community (V397's additive ladder 5/4/2/1) — both still pinned to the live matrix by CARD_SURFACES below, which now names only the rungs in SELLABLE_PASS_KEYS. The withdrawn rung's own numbers are still checked where that is a claim about the SEED rather than about copy (pricing-matrix.test.ts, entitlements-sql-parity.test.ts), so the dormant matrix cannot rot; capClaimFaults still faults any surface that calls a numeric cap unlimited, which is the rule L's own cap needed after V392 gave it a real 512. Bullets 3 and 5-7 name boolean grants (formats.advanced, exports.branded, dashboard.player_profiles, sponsors.*, realtime) that the pass lifts off community. W2 ALSO MOVED THIS CARD INTO THE DICTIONARIES: the bullets are `pricing.<card>.f*` keys in all four locales and every figure above is INTERPOLATED from the row named beside it in lib/pricing-cards.ts, so the approved text below is what `cardBullets` renders in English from the live matrix rather than a sentence anybody typed. A number can no longer disagree with its row; the WORDS are what this entry pins.",
+    why: "the Event Pass card on /pricing (and, sliced, the home ticket stub). Bullet 1 is the pass's DURATION — V328/V334 `org_has_feature` drop the pass arm once the competition is archived/completed or 7 days past ends_on, so it is bounded, not permanent; that is asserted by passBulletDurationFaults. BULLET 2 CHANGED 2026-09-05 (owner decision: the L rung comes off sale): it read '10 divisions, 128 entrants each — 20 divisions & 512 entrants on L' and now reads M's ceilings alone, because the second half advertised a size with no checkout behind it. Re-read against the code before re-pinning: plan_entitlements gives event_pass 10 divisions and 128 entrants per division, and registration.fee_percent is 4 on event_pass against 5 on community (V398's additive ladder 5/4/2/1) — both still pinned to the live matrix by CARD_SURFACES below, which now names only the rungs in SELLABLE_PASS_KEYS. The withdrawn rung's own numbers are still checked where that is a claim about the SEED rather than about copy (pricing-matrix.test.ts, entitlements-sql-parity.test.ts), so the dormant matrix cannot rot; capClaimFaults still faults any surface that calls a numeric cap unlimited, which is the rule L's own cap needed after V393 gave it a real 512. Bullets 3 and 5-7 name boolean grants (formats.advanced, exports.branded, dashboard.player_profiles, sponsors.*, realtime) that the pass lifts off community. W2 ALSO MOVED THIS CARD INTO THE DICTIONARIES: the bullets are `pricing.<card>.f*` keys in all four locales and every figure above is INTERPOLATED from the row named beside it in lib/pricing-cards.ts, so the approved text below is what `cardBullets` renders in English from the live matrix rather than a sentence anybody typed. A number can no longer disagree with its row; the WORDS are what this entry pins.",
     bullets: [
       "Upgrades ONE competition while it runs",
       "10 divisions, 128 entrants each",
@@ -338,7 +338,7 @@ const APPROVED_CARD_BULLETS: ApprovedBullets[] = [
   },
   {
     array: "PRO_FEATURES",
-    why: "the Pro card on /pricing (and, sliced, the home ticket stub). Pinned to the live matrix by CARD_SURFACES below: competitions.max_active is null on pro but divisions.per_competition.max is 20 since V392, so the one bullet that covered both rows had to split into 'Unlimited competitions, 20 divisions each'; entrants.per_division.max is 256 and registration.fee_percent is 2. The capability bullets are boolean pro grants (stats.player, scoring.device_links, api.access, exports, dashboard.theme for the club colours (V395 took badge removal off Pro, so the badge bullet became false, and V396 split the accent colour onto its own Pro key — that is what replaced it), officials.auto (V392 brought it down from the deleted Pro Plus), discipline.enforced, news.auto, officials.marks). It must NOT claim a pro_plus-only feature — crossCardExclusivityFaults judges that against the rows. W1 (entitlements v18, owner ruling 2026-08-30): bullet 4 was 'Ball-by-ball & rally scoring, player stats'. V390 deleted scoring.ball_by_ball and scoring.rally_by_rally from plan_entitlements — recording detail is free on every plan — so two thirds of that sentence pointed at no row and sold Community something it already has. Only stats.player survives of the three, and it is what the bullet now names. W2 ALSO MOVED THIS CARD INTO THE DICTIONARIES: the bullets are `pricing.<card>.f*` keys in all four locales and every figure above is INTERPOLATED from the row named beside it in lib/pricing-cards.ts, so the approved text below is what `cardBullets` renders in English from the live matrix rather than a sentence anybody typed. A number can no longer disagree with its row; the WORDS are what this entry pins.",
+    why: "the Pro card on /pricing (and, sliced, the home ticket stub). Pinned to the live matrix by CARD_SURFACES below: competitions.max_active is null on pro but divisions.per_competition.max is 20 since V393, so the one bullet that covered both rows had to split into 'Unlimited competitions, 20 divisions each'; entrants.per_division.max is 256 and registration.fee_percent is 2. The capability bullets are boolean pro grants (stats.player, scoring.device_links, api.access, exports, dashboard.theme for the club colours (V396 took badge removal off Pro, so the badge bullet became false, and V397 split the accent colour onto its own Pro key — that is what replaced it), officials.auto (V393 brought it down from the deleted Pro Plus), discipline.enforced, news.auto, officials.marks). It must NOT claim a pro_plus-only feature — crossCardExclusivityFaults judges that against the rows. W1 (entitlements v18, owner ruling 2026-08-30): bullet 4 was 'Ball-by-ball & rally scoring, player stats'. V390 deleted scoring.ball_by_ball and scoring.rally_by_rally from plan_entitlements — recording detail is free on every plan — so two thirds of that sentence pointed at no row and sold Community something it already has. Only stats.player survives of the three, and it is what the bullet now names. W2 ALSO MOVED THIS CARD INTO THE DICTIONARIES: the bullets are `pricing.<card>.f*` keys in all four locales and every figure above is INTERPOLATED from the row named beside it in lib/pricing-cards.ts, so the approved text below is what `cardBullets` renders in English from the live matrix rather than a sentence anybody typed. A number can no longer disagree with its row; the WORDS are what this entry pins.",
     bullets: [
       "Unlimited competitions, 20 divisions each",
       "256 entrants per division",
@@ -354,7 +354,7 @@ const APPROVED_CARD_BULLETS: ApprovedBullets[] = [
   // The `PLUS_CARD_FEATURES` and `PLUS_COMING_SOON` entries were DELETED here in
   // W2 (entitlements v18) with the arrays themselves — see the note in
   // lib/pricing-cards.ts. Both described the Pro Plus card, a card `/pricing`
-  // stopped rendering and a plan V392 deleted from `plans`. The roadmap
+  // stopped rendering and a plan V393 deleted from `plans`. The roadmap
   // inventory was the only thing standing between a one-word edit and eight
   // undelivered features reading as shipped, and that argument still holds for
   // the `pricing.plus.soon1-8` DICTIONARY keys — which is why those stay
@@ -632,7 +632,7 @@ const CARD_SURFACES: CardSurface[] = [
       // rung goes back on sale rather than one to reinvent: L's entrant cap was
       // NULL, so the copy said so in words (a null cap with a number beside it
       // is M's ceiling sold to an L buyer, the defect v17 #294 was filed for);
-      // V392 then gave L a real 512, and the divisions half — pinned until then
+      // V393 then gave L a real 512, and the divisions half — pinned until then
       // by a single `20 & unlimited` regex reading BOTH rungs out of one phrase
       // — could not survive the word going away. Each rung's number ended up
       // matched on its own, scoped to "on L" so M's figures could not satisfy
@@ -669,7 +669,7 @@ const CARD_SURFACES: CardSurface[] = [
         unlimited: /\bunlimited\s+competitions\b/i,
       },
       {
-        // V392 capped Pro at 20 divisions per competition; `competitions.max_active`
+        // V393 capped Pro at 20 divisions per competition; `competitions.max_active`
         // is still null. The bullet that covered both rows with one "Unlimited
         // competitions & divisions" therefore had to split, and the `unlimited`
         // alternative goes with it — leaving it would let the word satisfy a
@@ -693,15 +693,15 @@ const CARD_SURFACES: CardSurface[] = [
       // and `officials.marks` were missed when only two of the four were pinned.
       { feature: "exports", plans: ["pro"], says: /\bofficials, exports\b/i },
       { feature: "officials.marks", plans: ["pro"], says: /\bofficials, exports\b/i },
-      // WAS the badge bullet, `dashboard.branding`. V395 (W2 T15) made badge
+      // WAS the badge bullet, `dashboard.branding`. V396 (W2 T15) made badge
       // removal enterprise-only — Pro carries the badge now — so that claim
       // became false on the card selling it, which is exactly the falsehood
-      // class this rule was built for. V396 split the accent COLOUR onto
+      // class this rule was built for. V397 split the accent COLOUR onto
       // `dashboard.theme`, which Pro does grant, and that is the bullet's
       // subject now.
       { feature: "dashboard.theme", plans: ["pro"], says: /\byour club colours on public pages\b/i },
       { feature: "discipline.enforced", plans: ["pro"], says: /\bsuspensions & discipline tracking\b/i },
-      // ONE bullet, TWO rows. V392 brought `officials.auto` down from the
+      // ONE bullet, TWO rows. V393 brought `officials.auto` down from the
       // deleted Pro Plus to Pro, so the Pro card can say it for the first time
       // — and `crossCardExclusivityFaults` needs at least one card to make a
       // claim its vocabulary recognises, or that rule examines nothing.
@@ -712,7 +712,7 @@ const CARD_SURFACES: CardSurface[] = [
   },
   // The `PLUS_CARD_FEATURES` and `PLUS_COMING_SOON` surfaces were DELETED here
   // in W2 (entitlements v18), with the arrays. Between them they declared nine
-  // claims against `pro_plus` rows, and V392 deleted every one of those rows —
+  // claims against `pro_plus` rows, and V393 deleted every one of those rows —
   // so the guards went on reporting five live falsehoods ("promises
   // support.priority, but pro_plus does not grant it") about a card nobody can
   // open. A guard whose subject is gone does not go quiet; it goes loud about
@@ -1050,7 +1050,7 @@ function cardBulletAttributionFaults(
 // "Everything in Pro, plus…" frame in the direction nobody else guarded — a
 // HIGHER plan quietly losing something the card one column left still promises
 // — and it was scoped to `pricing.plus.note`, a frame `/pricing` no longer
-// renders for a plan V392 deleted. Enterprise is a Contact-us strip, not a
+// renders for a plan V393 deleted. Enterprise is a Contact-us strip, not a
 // column that claims to contain Pro, so there is no superset frame left to
 // enforce. If W3 gives the enterprise strip a "everything in Pro, plus…"
 // sentence, this rule is what it owes.
@@ -1068,7 +1068,7 @@ function cardBulletAttributionFaults(
  *
  * Judged against the ROWS, not against a banned phrase, so it falls silent the
  * day a migration grants the feature lower down — and that is exactly what
- * happened. V392 deleted Pro Plus and moved `officials.auto` down to Pro, so
+ * happened. V393 deleted Pro Plus and moved `officials.auto` down to Pro, so
  * the Pro card now carries that bullet and this rule reports it clean. The
  * probe below still reds when the grant is taken away underneath it, which is
  * the only thing that makes the silence mean anything.
@@ -1101,7 +1101,7 @@ function crossCardExclusivityFaults(
     }
   }
   // Anti-vacuity. The Pro card matches one entry today (`officials.auto`,
-  // brought down from the deleted Pro Plus by V392); a vocabulary that
+  // brought down from the deleted Pro Plus by V393); a vocabulary that
   // stopped matching anything would have this rule examine nothing and report
   // clean, which is how five guards in this wave were found inert.
   if (recognised === 0) {
@@ -1209,8 +1209,8 @@ describe("the card-bullet guards survive a rewording", () => {
     const faults = approvedBulletFaults(APPROVED_CARD_BULLETS, PRE_FIX).join("\n");
     expect(faults).toContain("PASS_FEATURES[0]");
     expect(faults).toContain("Upgrades ONE competition, forever");
-    // The Pro card's two W2 falsehoods: a division cap V392 set to 20 sold as
-    // unlimited, and badge removal V395 moved to enterprise still promised.
+    // The Pro card's two W2 falsehoods: a division cap V393 set to 20 sold as
+    // unlimited, and badge removal V396 moved to enterprise still promised.
     expect(faults).toContain("PRO_FEATURES[0]");
     expect(faults).toContain("Unlimited competitions & divisions");
     expect(faults).toContain("PRO_FEATURES[5]");
@@ -1508,7 +1508,7 @@ describe.skipIf(!HAS_DB)("plan-card copy quotes the numbers the matrix enforces"
    * The bullet is "4% platform fee on entry fees, not 5%" — a saving, not a
    * rate. Quoting only the pass's own would survive community's moving and stop
    * being a saving at all, which is why the bullet reads two rows and this
-   * asserts both. V397 re-cut that ladder once already.
+   * asserts both. V398 re-cut that ladder once already.
    */
   it("the Event Pass card quotes BOTH live fee rates, its own and the one it beats", async () => {
     const passFee = await capFor("registration.fee_percent", "event_pass");
@@ -1531,8 +1531,8 @@ describe.skipIf(!HAS_DB)("plan-card copy quotes the numbers the matrix enforces"
   // failing test rather than as silent marketing drift.
   //
   // W2 (entitlements v18) re-cut all three: community 10 -> 5 and pro 60 -> 35
-  // (V392), pro 35 -> 25 (V394), and the 200 belonged to `pro_plus`, a plan
-  // V392 deleted — enterprise carries 500. LITERALS on purpose: reading them
+  // (V393), pro 35 -> 25 (V395), and the 200 belonged to `pro_plus`, a plan
+  // V393 deleted — enterprise carries 500. LITERALS on purpose: reading them
   // back out of the same table the cards read would make this a tautology.
   it("plan_entitlements grants the credit-line numbers the cards quote (5 / 25 / 500)", async () => {
     expect(await capFor("ai.credits.monthly", "community")).toBe(5);
@@ -1637,7 +1637,7 @@ describe.skipIf(!HAS_DB)("plan-card copy quotes the numbers the matrix enforces"
    * green.
    *
    * W2 (entitlements v18) is the case that rule was written for and never saw:
-   * V392 capped `divisions.per_competition.max` on pro at 20 while
+   * V393 capped `divisions.per_competition.max` on pro at 20 while
    * `competitions.max_active` stayed null, so ONE of the two rows the sentence
    * covered stopped being unlimited. The old assertion — "say unlimited, and
    * carry no digit at all" — would have to be WEAKENED to accept the truth,
@@ -1762,7 +1762,7 @@ describe.skipIf(!HAS_DB)("plan-card copy quotes the numbers the matrix enforces"
         `${await capFor("divisions.per_competition.max", rung)} divisions`,
       );
     }
-    // V392 gave L a real 512-entrant cap where it had been null, and the
+    // V393 gave L a real 512-entrant cap where it had been null, and the
     // article said "unlimited entrants" for as long as the row was null. That
     // word must not come back for ANY rung — an uncapped claim over a numeric
     // cap is the same defect whichever size it is made about.
@@ -1797,7 +1797,7 @@ describe.skipIf(!HAS_DB)("plan-card copy quotes the numbers the matrix enforces"
     expect(divisions, "no divisions answer").toBeTruthy();
     expect(divisions).toContain(`**${await capFor("divisions.per_competition.max", "community")}**`);
     // Pro's own division cap, and it is not decoration: this answer said "as
-    // many as you like on Pro" until 2026-09-05, which V392 had made false when
+    // many as you like on Pro" until 2026-09-05, which V393 had made false when
     // it capped Pro at 20 — a pre-existing overclaim, found while sweeping the
     // L rung out of this line and fixed in the same edit.
     expect(divisions).toContain(`**${await capFor("divisions.per_competition.max", "pro")}**`);
@@ -1809,7 +1809,7 @@ describe.skipIf(!HAS_DB)("plan-card copy quotes the numbers the matrix enforces"
     // The withdrawn rung's ceilings are what a reader would come here to find,
     // so they are exactly what must be gone (owner decision 2026-09-05). L's
     // entrant cap was NULL and this answer said so in words ("no limit at
-    // all"); V392 made it 512, and the words stayed wrong for a wave — so the
+    // all"); V393 made it 512, and the words stayed wrong for a wave — so the
     // uncapped phrasing is still banned as well as the number.
     //
     // The NUMBER can only be asserted absent where it belongs to the hidden
@@ -1899,7 +1899,7 @@ describe.skipIf(!HAS_DB)("plan-card copy quotes the numbers the matrix enforces"
           `${await capFor("divisions.per_competition.max", rung)} divisions`,
         );
       }
-      // V392 gave L a real 512-entrant cap where it had been null; the word
+      // V393 gave L a real 512-entrant cap where it had been null; the word
       // must not come back for any rung.
       expect(pass.toLowerCase(), "no rung is uncapped").not.toContain("unlimited entrants");
       expect(HIDDEN_PASS_KEYS.length).toBeGreaterThan(0);
@@ -1928,7 +1928,7 @@ describe.skipIf(!HAS_DB)("plan-card copy quotes the numbers the matrix enforces"
       }
       // Enterprise's cap is NULL in the matrix, so the article must say so in
       // words rather than print a number. It was Pro Plus's section until W2;
-      // V392 deleted that plan and enterprise took its place at the top of the
+      // V393 deleted that plan and enterprise took its place at the top of the
       // ladder (design §4 — a Contact-us tier, not a priced one).
       expect(await capFor("entrants.per_division.max", "enterprise")).toBeNull();
       expect(section("Enterprise").toLowerCase()).toContain("unlimited entrants per division");
@@ -1980,7 +1980,7 @@ describe.skipIf(!HAS_DB)("plan-card copy quotes the numbers the matrix enforces"
   // is not lost: `crossCardExclusivityFaults` below asks the same question of
   // every card that still exists, and `localeCreditLeadershipFaults` survives
   // in copy-truth.ts with the leading plan as an ARGUMENT (it hardcoded
-  // `pro_plus`, which V392 deleted), exercised by dictionary-copy-truth.test.ts
+  // `pro_plus`, which V393 deleted), exercised by dictionary-copy-truth.test.ts
   // against the live ordering — enterprise 500 > pro 25 > community 5.
 
   const boolGrants = async (features: string[]): Promise<FeatureGrants> => {
@@ -1995,7 +1995,7 @@ describe.skipIf(!HAS_DB)("plan-card copy quotes the numbers the matrix enforces"
 
   // `scheduling.ai` is granted on EVERY plan key there is, which is why no card
   // may sell it as something a plan adds. Asserted as the whole set rather than
-  // key by key: a plan APPEARING (enterprise, V392) or DISAPPEARING (pro_plus,
+  // key by key: a plan APPEARING (enterprise, V393) or DISAPPEARING (pro_plus,
   // same migration) is exactly the change that would make a per-key spot check
   // read as clean.
   it("scheduling.ai is granted on every plan, so it differentiates nothing", async () => {
@@ -2074,8 +2074,8 @@ describe.skipIf(!HAS_DB)("plan-card copy quotes the numbers the matrix enforces"
     }
     // A DELETED row must be a fault, not "unlimited". `?? null` would have read
     // a vanished feature key as an unlimited allowance and certified the card.
-    // W2 made this the LIVE case rather than the hypothetical one: V392 and
-    // V394 between them deleted five feature keys outright.
+    // W2 made this the LIVE case rather than the hypothetical one: V393 and
+    // V395 between them deleted five feature keys outright.
     const withoutEntrants = { ...live };
     delete withoutEntrants["entrants.per_division.max"];
     expect(cardMatrixFaults(CARD_SURFACES, LIVE_CARD_BULLETS, withoutEntrants).join(" | ")).toContain(
@@ -2149,8 +2149,8 @@ describe.skipIf(!HAS_DB)("plan-card copy quotes the numbers the matrix enforces"
       [feature]: { ...rows[feature], [plan]: { ...rows[feature]![plan]!, ...patch } },
     });
     for (const [feature, plan, patch, expected] of [
-      // WAS `dashboard.branding`. V395 made badge removal enterprise-only and
-      // V396 split the accent colour onto `dashboard.theme`, so the Pro card's
+      // WAS `dashboard.branding`. V396 made badge removal enterprise-only and
+      // V397 split the accent colour onto `dashboard.theme`, so the Pro card's
       // visual claim is the colour and this probe follows it.
       ["dashboard.theme", "pro", { bool: false }, "PRO_FEATURES: promises dashboard.theme, but pro does not grant it"],
       ["realtime", "event_pass", { bool: false }, "PASS_FEATURES: promises realtime, but event_pass does not grant it"],
@@ -2169,7 +2169,7 @@ describe.skipIf(!HAS_DB)("plan-card copy quotes the numbers the matrix enforces"
       ["registration.enabled", "community", { bool: false }, "FREE_FEATURES: promises registration.enabled, but community does not grant it"],
       ["discovery.listed", "community", { bool: false }, "FREE_FEATURES: promises discovery.listed, but community does not grant it"],
       ["news.auto", "pro", { bool: false }, "PRO_FEATURES: promises news.auto, but pro does not grant it"],
-      // V392 brought `officials.auto` down to Pro; the Pro card says so, so it
+      // V393 brought `officials.auto` down to Pro; the Pro card says so, so it
       // owes a probe like every other capability bullet.
       ["officials.auto", "pro", { bool: false }, "PRO_FEATURES: promises officials.auto, but pro does not grant it"],
       // Fresh probe G3 — an INT-shaped capability. No boolean moves at all.
@@ -2318,7 +2318,7 @@ describe.skipIf(!HAS_DB)("plan-card copy quotes the numbers the matrix enforces"
     expect(crossCardExclusivityFaults(CARD_SURFACES, LIVE_CARD_BULLETS, grants)).toEqual([]);
     // THE PROBE, repointed in W2. It used to append "Auto officials assignment"
     // to the Pro card — a contradiction while `officials.auto` was Pro Plus's
-    // exclusive. V392 granted that key to Pro, so the Pro card now says it and
+    // exclusive. V393 granted that key to Pro, so the Pro card now says it and
     // the sentence is TRUE; the probe would assert a fault that must not exist.
     // `api.write` is the key that plays the old role: enterprise-only, and
     // enterprise is a Contact-us strip rather than a card.

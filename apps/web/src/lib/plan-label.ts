@@ -41,8 +41,8 @@ const LABELS: Record<PlanKey, string> = {
  * copy obligation, not just bookkeeping.
  */
 export const RETIRED_PLAN_KEYS: readonly { key: string; retiredBy: string }[] = [
-  { key: "pro_plus", retiredBy: "V392 (entitlements v18) — replaced by enterprise" },
-  { key: "business", retiredBy: "V290 — folded into pro_plus, itself retired by V392" },
+  { key: "pro_plus", retiredBy: "V393 (entitlements v18) — replaced by enterprise" },
+  { key: "business", retiredBy: "V290 — folded into pro_plus, itself retired by V393" },
 ];
 
 /** `enterprise` → "Enterprise". An unknown (historical, or pre-map) key is

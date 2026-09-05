@@ -9,7 +9,7 @@ type Ctx = { params: Promise<{ id: string }> };
 /** POST /api/v1/divisions/{id}/events/import — P11 (D6) batch score-event
  *  import. Returns 200 whenever the CALL executed; per-stream outcomes are
  *  data, not transport errors (design doc §4). Gated behind `import.events`,
- *  which V395 (entitlements v18 W2 T14, owner ruling 2026-09-03) grants bool
+ *  which V396 (entitlements v18 W2 T14, owner ruling 2026-09-03) grants bool
  *  TRUE on all five plans — the rollout kill-switch is OPEN and this importer
  *  is a launched feature on Free. The check below STAYS: `orgPlanKey`
  *  coalesces a planless org to `community`, so no plan can deny the key any
@@ -28,7 +28,7 @@ export async function POST(req: Request, { params }: Ctx) {
   return v1(async () => {
     const { id } = await params;
     const auth = await requireResourceAuth(req, "division", id, "write");
-    await requireFeature(auth.orgId, "import.events"); // granted on every plan (V395); a staff override can still deny
+    await requireFeature(auth.orgId, "import.events"); // granted on every plan (V396); a staff override can still deny
     const body = await parseBody(req, EventImportRequest);
     return reply(200, await importEvents(auth, id, body));
   });

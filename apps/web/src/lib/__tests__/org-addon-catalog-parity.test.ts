@@ -63,7 +63,7 @@ describe("extra-organisation add-on catalog (v17 gap #293)", () => {
       expect(proAmount, `pro ${currency}`).toBe(extraOrgPrice("pro", "monthly", currency));
     }
     // The pro_plus half of this parity check is gone in both directions now:
-    // `extraOrgPrice()` narrowed to `PurchasablePlanKey` ("pro" only) in V392,
+    // `extraOrgPrice()` narrowed to `PurchasablePlanKey` ("pro" only) in V393,
     // and T4 deleted the `extra_org_pro_plus` row from the seed, so there is no
     // second tier left to price. ANTI-VACUITY for the loop above: an empty
     // currency list would pass it in silence.

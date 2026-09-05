@@ -15,7 +15,7 @@ import stripePlans from "@/config/stripe-plans.json";
 import { extraOrgPrice, proPrice, SUPPORTED_CURRENCIES } from "@/lib/currency";
 import { APPROVED_DICTIONARY_COPY } from "./_approved-dictionary-copy";
 
-// pro_plus retired (entitlements v18, V392) — extraOrgPrice narrows to "pro"
+// pro_plus retired (entitlements v18, V393) — extraOrgPrice narrows to "pro"
 // (lib/currency.ts), so this tuple drops to the one plan that still sells an
 // extra-organisation add-on.
 const PLANS = ["pro"] as const;
@@ -38,7 +38,7 @@ const HALF_RATE_DICTIONARY_KEYS = [
   "pricing.matrix.orgs.max_owned.note",
   "pricing.faq.groups.a",
   // `pricing.faq.proPlus.a` was the sixth. It is DELETED, with the plan it
-  // answered a question about (V392 removed `pro_plus` from `plans`), so it is
+  // answered a question about (V393 removed `pro_plus` from `plans`), so it is
   // gone from the approved inventory too and the two sides still agree —
   // which is exactly what the second half of the test below is for.
   "tips.billing.extra-org.body",
@@ -153,6 +153,6 @@ describe("extra-organisation price", () => {
   });
 
   // "charges less for a Pro extra organisation than Pro Plus does" removed —
-  // pro_plus is retired (entitlements v18, V392) and `extraOrgPrice` no
+  // pro_plus is retired (entitlements v18, V393) and `extraOrgPrice` no
   // longer accepts it; there is only one rung left to compare against itself.
 });

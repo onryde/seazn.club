@@ -2,10 +2,10 @@
 // /admin/entitlements so the two surfaces tell the same story (V290).
 // Keys NOT listed here are deliberately unadvertised (vestigial D9 keys) —
 // /admin still shows them under "other". `domains.custom` used to be named
-// here as "unadvertised until Spec 2 ships"; V392 deleted the key entirely, so
+// here as "unadvertised until Spec 2 ships"; V393 deleted the key entirely, so
 // there is no longer a row to advertise later.
 export const ENTITLEMENT_DOMAINS: { slug: string; features: string[] }[] = [
-  // scorers.max is not listed here because the KEY no longer exists: V394
+  // scorers.max is not listed here because the KEY no longer exists: V395
   // (entitlements v18 W2 T12, owner ruling 2026-09-03) deleted it from
   // plan_entitlements outright, and both enforcement branches now draw on
   // members.max. It used to be described here as "deliberately absent (#244) —
@@ -56,17 +56,17 @@ export const ENTITLEMENT_DOMAINS: { slug: string; features: string[] }[] = [
   // `dashboard.branding` left this list in W2 (entitlements v18 T17) and
   // `dashboard.theme` took its place. Not a rename — a correction of which key
   // the row was ever describing. The label has always read "Your colours on
-  // public pages" — and the colour is exactly what V396 split out, while
+  // public pages" — and the colour is exactly what V397 split out, while
   // `dashboard.branding` is badge removal alone. The four locale strings are
   // re-pointed rather than duplicated: nothing else read the old key.
   //
   // The badge row does not simply move across, for the same reason
-  // `support.priority` left below: V395 made badge removal ENTERPRISE-only,
+  // `support.priority` left below: V396 made badge removal ENTERPRISE-only,
   // enterprise is not a `/pricing` column (design §4 — it is the Contact-us
   // strip under the table), so the row would render a tick-free line in all
   // four columns. Worse than telling no story: it would have told a Pro
   // subscriber their colours are not included, which is what it did between
-  // V395 and V396. Badge removal is a Contact-us conversation now.
+  // V396 and V397. Badge removal is a Contact-us conversation now.
   //
   // /admin keeps showing `dashboard.branding` — `entitlement-admin.ts` files
   // every key this list omits under its trailing "other" section.
@@ -75,7 +75,7 @@ export const ENTITLEMENT_DOMAINS: { slug: string; features: string[] }[] = [
     "discovery.listed", "discovery.featured", "discovery.branding",
     "exports", "exports.branded", "news.auto",
   ]},
-  // support.priority left this list in W2 (entitlements v18): V392 deleted the
+  // support.priority left this list in W2 (entitlements v18): V393 deleted the
   // key from `plan_entitlements`, and a comparison row for a key with no rows
   // renders "—" in every column — a paywall tick for something no plan grants.
   // Priority support is now a Contact-us conversation (design §4), not a matrix

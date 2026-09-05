@@ -264,7 +264,7 @@ describe.skipIf(!HAS_DB)("stripe-plans.json quotes the numbers the matrix enforc
     }
   });
 
-  // THREE TESTS WERE DELETED HERE by W2 (entitlements v18, V392), all three
+  // THREE TESTS WERE DELETED HERE by W2 (entitlements v18, V393), all three
   // reading the retired `pro_plus` product description out of the seed:
   //
   //   • "Pro Plus claims no differentiator that Pro already has"
@@ -618,7 +618,7 @@ describe("the guards survive a rewording, not just a revert", () => {
   // The "Everything in Pro, plus …" rewording proof lived here and was DELETED
   // in W2 (entitlements v18) with `plusDifferentiatorFaults`. It ran on fixture
   // strings rather than the seed, so nothing about it was vacuous — but the
-  // frame it scoped to belongs to a plan V392 removed from `plans`, from
+  // frame it scoped to belongs to a plan V393 removed from `plans`, from
   // `stripe-plans.json` and from `/pricing`, and a guard kept alive on fixtures
   // alone guards a sentence nobody can write any more.
   //

@@ -105,7 +105,7 @@ describe.skipIf(!HAS_DB)("getAddOnsTab", () => {
   });
 
   // Was "pro_plus prices independently of pro", asserting a hardcoded cap of
-  // 10 for the second paid tier. V392 deleted that tier, and the property is
+  // 10 for the second paid tier. V393 deleted that tier, and the property is
   // repointed rather than deleted: what it really proved is that the tab reads
   // the org's OWN plan row after a plan change, instead of caching the plan it
   // was first seeded on. Community -> Pro exercises exactly that, and the caps

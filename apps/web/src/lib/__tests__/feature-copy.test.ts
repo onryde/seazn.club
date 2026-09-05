@@ -21,7 +21,7 @@ import { sql } from "@/lib/db";
 const PRICES_THE_RIDER =
   /[$£€]|\b(rates?|prices?|priced|pricing|costs?|fees?|half|double|cheaper|discount)\b/i;
 
-describe("V394 (entitlements v18 W2 T12) — the two reason strings that moved", () => {
+describe("V395 (entitlements v18 W2 T12) — the two reason strings that moved", () => {
   it("no longer sells a scorer seat: scorers.max falls back to the generic line", () => {
     // The key is deleted from plan_entitlements and both enforcement branches
     // read members.max, so nothing can raise a 402 for it. A reason here would
@@ -66,9 +66,9 @@ describe("feature-copy V290", () => {
     // in the product. They must offer a PRICE.
     expect(featurePlan("competitions.max_active")).toBe("pro");
     expect(featurePlan("dashboard.public.max")).toBe("pro");
-    // pro_plus is retired (V392). officials.auto and scorers.max were its
+    // pro_plus is retired (V393). officials.auto and scorers.max were its
     // above-Pro keys; entitlements v18 moves both to plain Pro (design §2/§4)
-    // — a paywall for either must no longer point at Contact-us. V394 then
+    // — a paywall for either must no longer point at Contact-us. V395 then
     // deleted `scorers.max` from plan_entitlements entirely, so it is now in
     // the same position as domains.custom below: nothing gates on it, and the
     // ladder's documented default (unknown key → "pro") is the answer.
@@ -128,14 +128,14 @@ describe("feature-copy V290", () => {
     expect(featureReason("officials.assignment")).toBe("This feature needs a plan upgrade.");
   });
 
-  // V392 (entitlements v18) deleted four inert keys from `plan_entitlements`.
+  // V393 (entitlements v18) deleted four inert keys from `plan_entitlements`.
   // Three of them used to be asserted in the case above as having reasons.
   // They moved here rather than being dropped, because the assertion that
   // matters INVERTED: a reason for a key no gate can raise is an upsell the
   // customer can never act on, and `domains.custom` / `support.priority` said
   // "Pro Plus" — a plan that no longer exists. The generic fallback is the
   // correct answer, and pinning it is what stops a reason drifting back in.
-  it("has NO reason for any key V392 deleted — they fall back to the generic line", () => {
+  it("has NO reason for any key V393 deleted — they fall back to the generic line", () => {
     for (const key of [
       "officials.per_fixture.max",
       "domains.custom",
@@ -196,13 +196,13 @@ describe("feature-copy V290", () => {
     // A no-digits rule would have been WRONG for exactly this reason — the
     // caps themselves are what the refusal is about.
     expect(featureReason("orgs.max_owned")).not.toMatch(PRICES_THE_RIDER);
-    // "Pro Plus 10" dropped from this literal with the plan (V392) — the cap
+    // "Pro Plus 10" dropped from this literal with the plan (V393) — the cap
     // list is Community/Pro only now, not a third tier's ceiling.
     expect("Community 1, Pro 5").not.toMatch(PRICES_THE_RIDER);
     expect("it's billed monthly on top of your current bill").not.toMatch(PRICES_THE_RIDER);
   });
   it("has copy for the v16 league-ops entitlements (V293/V294/V295, T84)", () => {
-    // Reworded 2026-09-05: V392 gave `discipline.enforced` to BOTH pass rungs,
+    // Reworded 2026-09-05: V393 gave `discipline.enforced` to BOTH pass rungs,
     // so "a Pro feature" told a pass holder to buy an upgrade they were already
     // holding. Eleven other reasons had drifted the same way. The literal pin
     // stays — its job is that copy EXISTS for these keys — but the sentence's
@@ -220,7 +220,7 @@ describe("feature-copy V290", () => {
     expect(featureReason("officials.marks")).toBe(
       "Rating your match officials is switched off for this organisation.",
     );
-    // `news.auto` moved with the same twelve: V395 made auto posts paid again
+    // `news.auto` moved with the same twelve: V396 made auto posts paid again
     // AND both pass rungs grant them, so this sentence named the dearer plan
     // and stayed silent about the cheaper one that also unlocks it.
     expect(featureReason("news.auto")).toBe(
@@ -273,18 +273,18 @@ describe("doubleElimFormatReason — formats.double_elim names the ACTUAL gated 
 // BOTH directions in one pass, and each direction lies differently:
 //
 //  - keys that became FREE (V390's three scoring-detail keys, `officials.auto`
-//    coming down to Pro in V392): a reason left saying "is a Pro feature" sells
+//    coming down to Pro in V393): a reason left saying "is a Pro feature" sells
 //    an upgrade for something the reader already has — and the gate it belongs
 //    to can no longer fire, so nobody ever sees it be wrong;
 //  - keys that became PAID (`dashboard.player_profiles`, `embeds.enabled`,
-//    `news.auto` in V395; the accent colour in V396): a reason left saying
+//    `news.auto` in V396; the accent colour in V397): a reason left saying
 //    "works on every plan" promises a capability the resolver refuses, which is
 //    the more expensive direction — the reader is told they have it, tries, and
 //    is stopped.
 //
-// The second direction caught a live one the day this was written: V395's own
+// The second direction caught a live one the day this was written: V396's own
 // `dashboard.branding` reason ended "your own club logo and colours work on
-// every plan", and V396 priced the colour at Pro four hours later.
+// every plan", and V397 priced the colour at Pro four hours later.
 //
 // Real Postgres required; skipped without DATABASE_URL.
 describe.skipIf(!process.env.DATABASE_URL)("every paywall reason names the plan its row does", () => {
@@ -312,7 +312,7 @@ describe.skipIf(!process.env.DATABASE_URL)("every paywall reason names the plan 
   it("reds in BOTH directions, and on an empty input", async () => {
     const live = await rows();
     // A key community GRANTS, sold as a Pro feature. `cricket.dls` is the case
-    // V392 created: free on every plan since that migration.
+    // V393 created: free on every plan since that migration.
     expect(
       freeClaimFaults(
         [{ key: "cricket.dls", text: "Rain-rule targets are a Pro feature." }],
@@ -321,7 +321,7 @@ describe.skipIf(!process.env.DATABASE_URL)("every paywall reason names the plan 
     ).toContain("cricket.dls: calls it a Pro feature, but community already grants it");
 
     // …and the other direction: a key community does NOT grant, sold as free.
-    // `embeds.enabled` is the case V395 created.
+    // `embeds.enabled` is the case V396 created.
     expect(
       freeClaimFaults(
         [{ key: "embeds.enabled", text: "Embeds work on every plan." }],
@@ -330,7 +330,7 @@ describe.skipIf(!process.env.DATABASE_URL)("every paywall reason names the plan 
     ).toContain("embeds.enabled: says it works on every plan, but community does not grant it");
 
     // A "Pro feature" claim for a key PRO does not grant either — the shape
-    // V395 made real by taking `dashboard.branding` off Pro, which is how a
+    // V396 made real by taking `dashboard.branding` off Pro, which is how a
     // paywall comes to point a Pro subscriber at an upgrade they already own.
     expect(
       freeClaimFaults(
@@ -340,7 +340,7 @@ describe.skipIf(!process.env.DATABASE_URL)("every paywall reason names the plan 
     ).toContain("dashboard.branding: calls it a Pro feature, but pro does not grant it either");
 
     // A reason for a key the matrix does not hold at all. `scorers.max` is the
-    // case V394 created by deleting the key: the resolver answers 0 for a
+    // case V395 created by deleting the key: the resolver answers 0 for a
     // missing row, so such a sentence describes a refusal nothing can lift.
     expect(
       freeClaimFaults(
@@ -351,7 +351,7 @@ describe.skipIf(!process.env.DATABASE_URL)("every paywall reason names the plan 
 
     // THE ENTERPRISE DIRECTION, which is the inverse claim and needs its own
     // probes: naming the Contact-us tier asserts that PRO does NOT have it.
-    // `officials.auto` is the live case — V392 brought it down to Pro, so
+    // `officials.auto` is the live case — V393 brought it down to Pro, so
     // selling it as enterprise-only would send a paying subscriber to a sales
     // conversation for something already on their bill.
     expect(

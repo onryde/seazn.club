@@ -124,7 +124,7 @@ describe("PATCH /api/admin/entitlements", () => {
   });
 
   it("400s on an unknown plan_key before any write", async () => {
-    // `pro_plus` was a real plan until V392 deleted it — the strongest probe
+    // `pro_plus` was a real plan until V393 deleted it — the strongest probe
     // available, because a resolver that still knew the retired key would let
     // an admin write rows against a plan nothing can resolve. (`enterprise`
     // used to sit here and is now a VALID key, asserted editable just above.)

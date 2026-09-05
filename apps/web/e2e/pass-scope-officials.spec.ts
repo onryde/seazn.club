@@ -4,7 +4,7 @@ import { TAG, apiJson, loginUi, grantCompetitionPassSql, invalidateOrgEntitlemen
 
 // W2 T6 — `officials.auto` through the REAL HTTP door, competition-scoped.
 //
-// V392 turns `officials.auto` TRUE on `event_pass`/`event_pass_l` and FALSE on
+// V393 turns `officials.auto` TRUE on `event_pass`/`event_pass_l` and FALSE on
 // `community`. The three officials gates in usecases/officials.ts used to call
 // `requireFeature(auth.orgId, "officials.auto")` with no competition, and the
 // Event Pass overlay in lib/entitlements.ts only consults `competition_passes`

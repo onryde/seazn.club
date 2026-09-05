@@ -91,7 +91,7 @@ describe.skipIf(!HAS_DB)("featurePlan names the cheapest unlocking plan (entitle
     // ordinary create path, so it must offer a PRICE.
     //
     // `dashboard.public.max` used to be the second key here and is gone from
-    // this list: V395 (W2 T15) capped it at 10 on Pro, so it is no longer an
+    // this list: V396 (W2 T15) capped it at 10 on Pro, so it is no longer an
     // unlimited-on-Pro case and could not witness the regression this test
     // exists for. It is still a `featurePlan` = "pro" key, which the
     // matrix-derived case above covers on its own.

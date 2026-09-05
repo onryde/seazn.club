@@ -46,9 +46,9 @@
 --
 -- Re-runnable, like every statement in this tree, and readable as the
 -- COMPLETE claim: a reader of this file should not have to hold V310, V270,
--- V392 and this delta in their head at once to know what the five rates are.
+-- V393 and this delta in their head at once to know what the five rates are.
 -- `bool_value` is left alone (these are int keys and every row's bool is
--- already null — see V392's header on leaving the stray opposite-type column
+-- already null — see V393's header on leaving the stray opposite-type column
 -- untouched).
 insert into plan_entitlements (plan_key, feature_key, bool_value, int_value)
 values ('community',    'registration.fee_percent', null, 5),
@@ -59,7 +59,7 @@ values ('community',    'registration.fee_percent', null, 5),
 on conflict (plan_key, feature_key) do update set int_value = excluded.int_value;
 
 -- ---------------------------------------------------------------------------
--- A loud guard, in the house style of V392/V395: a rate this migration did not
+-- A loud guard, in the house style of V393/V396: a rate this migration did not
 -- write means a plan row was added elsewhere and nobody re-read the ladder.
 -- Every published fee table in `content/help/**` is checked against these five
 -- numbers by `feeLadderFaults`, so a sixth rate is a customer-visible lie.
@@ -76,7 +76,7 @@ begin
   select count(*) into n
     from plan_entitlements where feature_key = 'registration.fee_percent';
   if n <> 5 then
-    raise exception 'V397: expected 5 registration.fee_percent rows, found %', n;
+    raise exception 'V398: expected 5 registration.fee_percent rows, found %', n;
   end if;
 
   -- ...and NULL asked separately, because `(plan_key, int_value) not in (...)`
@@ -97,6 +97,6 @@ begin
             ('community', 5), ('pro', 2), ('event_pass', 4), ('event_pass_l', 4), ('enterprise', 1)
           ));
   if wrong is not null then
-    raise exception 'V397: registration.fee_percent carries rates this migration does not set: %', wrong;
+    raise exception 'V398: registration.fee_percent carries rates this migration does not set: %', wrong;
   end if;
 end $$;

@@ -37,7 +37,7 @@ dictionaries, help and `copy-truth.ts`, so there are no parallel lanes.
 | Wave | Scope | Status |
 |---|---|---|
 | W1 | R9 "scoring goes free" — gate removal, `fidelityTiers` retirement, recording chip, three keys deleted, pinned tests moved | **MERGED** — PR #704, squashed onto `main` as `ae0751682` (2026-09-03). W2 is cut from that commit. |
-| W2 | Matrix & plumbing — migration, inert-key deletion, `featurePlan`, labels, add-on sets, credits math, per-rung pass grant, `stripe-plans.json`, copy-truth guards. **R12 prices and R13 hidden add-on land here.** | **IN PROGRESS** — branch `feat/entitlements-w2-matrix-plumbing`, 90 commits, migrations V392–V397, no PR. Scope grew well past the brief on owner rulings taken during execution (AUD removed, the whole catalogue re-priced to charm `.99`, the share loops made paid, competitions public by default, the platform fee made additive). **The state block and the remaining-work list live in `../../plans/2026-09-03-entitlements-w2-matrix-plumbing.md` — read it before touching this branch.** Not yet gated as a whole; five items owed. |
+| W2 | Matrix & plumbing — migration, inert-key deletion, `featurePlan`, labels, add-on sets, credits math, per-rung pass grant, `stripe-plans.json`, copy-truth guards. **R12 prices and R13 hidden add-on land here.** | **IN PROGRESS** — branch `feat/entitlements-w2-matrix-plumbing`, 90 commits, migrations V393–V398, no PR. Scope grew well past the brief on owner rulings taken during execution (AUD removed, the whole catalogue re-priced to charm `.99`, the share loops made paid, competitions public by default, the platform fee made additive). **The state block and the remaining-work list live in `../../plans/2026-09-03-entitlements-w2-matrix-plumbing.md` — read it before touching this branch.** Not yet gated as a whole; five items owed. |
 | W3 | Surfaces — pricing page redesign (R14), billing settings, gates, dictionaries ×4, emails, help, e2e replacements. **Plus W3-A (`stats.player`: free the record, keep the career rollup — and fix the public-beats-owner inversion) and W3-B (paywalls offer the pass as well as Pro), both owner-approved 2026-09-05 — scope and evidence in the section above.** | not started |
 | W4 | Proofs & walkthrough — pass and Free proof e2es, full product walkthrough on a prod build, Stripe archive ops step | not started |
 
@@ -155,17 +155,17 @@ against the tree or the `entw2` database. Full write-up with the arithmetic:
 `../../plans/2026-09-03-entitlements-w2-matrix-plumbing.md`, "Product-owner gaps".
 
 1. **SUPERSEDED THE SAME DAY — `on_behalf_of` cannot do this.** The recommendation as
-   first written ("the rail ships with V397 or V397 reverts") rested on the wave's own
-   false premise, asserted in three places in the tree including V397's header. Verified
+   first written ("the rail ships with V398 or V398 reverts") rested on the wave's own
+   false premise, asserted in three places in the tree including V398's header. Verified
    against `docs.stripe.com/connect/charges`: destination charges debit Stripe's fees
    from the PLATFORM's balance, and `on_behalf_of` sets the business of record —
    settlement country, that country's fee schedule, statement descriptor, payout timing —
    not who pays. **Only direct charges carry the lever**, and they are a charge-type plus
    Connect-account migration (refunds and disputes move to the connected account; Stripe
    does not recommend direct charges for the legacy Express accounts `stripe-connect.ts`
-   creates). **Owner ruling: keep V397's rates and gate LAUNCH on that migration** — no
+   creates). **Owner ruling: keep V398's rates and gate LAUNCH on that migration** — no
    club takes real registrations until it lands. It owes its own wave. The underlying
-   diagnosis was right and predates V397: any rate below Stripe's 2.9% is negative and
+   diagnosis was right and predates V398: any rate below Stripe's 2.9% is negative and
    worsens with volume, which was already true of Pro at 2%.
 2. **INR credit packs are re-anchored** — 10/25/50/100 to ₹399/₹999/₹1,999/₹3,999,
    which is 1.67× the included rate, exactly USD's ratio. They were carried as
@@ -237,7 +237,7 @@ work — W2 is closing and its pricing copy has already churned four times.
 **Why, and it is not generosity.** The paywall does not currently work.
 `publicDivisionStats` (`usecases/player-stats.ts:638`, served by
 `/api/v1/public/orgs/…/divisions/…/stats`) has **no entitlement gate at all**,
-while every authenticated reader has one. Combined with V395 making competitions
+while every authenticated reader has one. Combined with V396 making competitions
 public by default, the live behaviour for a default Free org is:
 
 | Who | Sees the player stats |
@@ -496,13 +496,13 @@ Each needs a task and an owner. Nothing here is fixed by W1.
      checkpoint is discarded instead of the request being refused. That is
      unusual for a cap in this codebase — every other quota raises a
      `PaymentRequiredError` — and it is now proven nowhere in a browser.
-     **The numbers moved too**: V392 sets community 2 (unchanged), pro 5 -> 10,
+     **The numbers moved too**: V393 sets community 2 (unchanged), pro 5 -> 10,
      and gave BOTH pass rungs their own row at 5 where they used to fall
      through to community. A replacement must read the cap from the matrix,
      not retype it — the old spec hardcoded 2 and 5.
    - **`officials.auto` and `api.write` gating, end to end, including that a
      read-only API key still mints when the write scope is refused.** Both
-     keys changed side in V392: `officials.auto` is now granted on Pro AND on
+     keys changed side in V393: `officials.auto` is now granted on Pro AND on
      both pass rungs (so W2 T6's competition-scoped resolution is what makes
      the pass grant safe, and that scoping has no browser test), and
      `api.write` is the only bool in `ENTERPRISE_FEATURES` — the sole
@@ -511,7 +511,7 @@ Each needs a task and an owner. Nothing here is fixed by W1.
    - **The billing surface's two states**: a Community org seeing the paid
      upsell with a price rendered, and a paid org having the upgrade grid
      HIDDEN. The second is the one that matters — an org that already pays
-     being shown an upgrade grid is a visible defect, and after V392 the paid
+     being shown an upgrade grid is a visible defect, and after V393 the paid
      state to assert is `pro`, with `enterprise` reaching the Contact-us CTA
      W2 T3 added rather than a priced card.
    - **`/admin/entitlements` renders a column per plan.** The old case asserted
@@ -521,7 +521,7 @@ Each needs a task and an owner. Nothing here is fixed by W1.
      `/pricing` deliberately does not show.
    - **`/pricing` renders a card per purchasable plan, with its price, and a
      comparison column to match, with no click needed.** `pricing-v18.spec.ts`
-     owns this. Two V392 facts make it more than a rename: `PRICING_PLAN_KEYS`
+     owns this. Two V393 facts make it more than a rename: `PRICING_PLAN_KEYS`
      is four wide (enterprise is a Contact-us strip, not a column), and the
      locale matters — `/pricing` reads the `[lang]` PATH, not the cookie.
 
@@ -550,7 +550,7 @@ Each needs a task and an owner. Nothing here is fixed by W1.
 8. **`scripts/smoke.ts` still seeds a `pro_plus` subscription at EIGHT sites,
    and no typecheck can see it.** `tsc -p tsconfig.scripts.json` exits 0 with
    all eight present, because `setPlan`'s plan argument is a plain `string`,
-   not `PlanKey` — so V392 left this entirely to a runtime FK violation
+   not `PlanKey` — so V393 left this entirely to a runtime FK violation
    (`subscriptions_plan_key_fkey`). The first one aborts the run, and every
    check after it never executes, which is the shape that reads as "smoke is
    broken" rather than as eight specific stale assertions.
@@ -587,7 +587,7 @@ Each needs a task and an owner. Nothing here is fixed by W1.
    `ai.credits.monthly` 10 -> 5 and its bootstrap wallet grant, Pro 60 -> 35,
    the deleted `officials.per_fixture.max` cap check (inverted to assert the
    key is not served at all, since `undefined === null` would now fail), and
-   the `dashboard.player_profiles` pair — V392 grants profiles on Community, so
+   the `dashboard.player_profiles` pair — V393 grants profiles on Community, so
    the unpassed sibling renders 200 where the old check demanded a 404.
 
 9. **The Stripe seed's `event_pass_l` description tells buyers the entrant cap
@@ -595,7 +595,7 @@ Each needs a task and an owner. Nothing here is fixed by W1.
    live right now: `plan-copy-truth.test.ts` fails with `event_pass_l: does not
    quote its live entrant cap (512)`.
 
-   The reason it was not caught when V392 landed is worth keeping. That whole
+   The reason it was not caught when V393 landed is worth keeping. That whole
    test file **failed to COLLECT** — W2 T4 deleted `pro_plus` from
    `stripe-plans.json` while the file's module scope still did
    `stripePlans.plans.find(p => p.key === "pro_plus")!.product.description`,
@@ -606,7 +606,7 @@ Each needs a task and an owner. Nothing here is fixed by W1.
    collect is repaired; the copy fault it exposes is real and belongs to the
    copy sweep (`stripe-plans.json` product descriptions + `capClaimFaults`).
 
-10. **V392 SOLD FIVE FEATURES ON THE EVENT PASS THAT A PASS HOLDER CANNOT
+10. **V393 SOLD FIVE FEATURES ON THE EVENT PASS THAT A PASS HOLDER CANNOT
     REACH.** This is a live product defect, not a test to retire, and it is the
     highest-value thing the T7/T9 sweep found. `pass-scoping-guard.test.ts`
     ("Event Pass grants are resolved with a competition in scope") is RED with
@@ -626,8 +626,8 @@ Each needs a task and an owner. Nothing here is fixed by W1.
     **Why it is new.** That guard computes the pass-lifted key set from the
     LIVE matrix — `event_pass` rows whose value `is distinct from` community's
     — and then scans production source for enforcement sites that resolve the
-    key WITHOUT a competition id. It was green before V392 because none of
-    these five keys was lifted. V392 lifted all five: `stats.player` and
+    key WITHOUT a competition id. It was green before V393 because none of
+    these five keys was lifted. V393 lifted all five: `stats.player` and
     `scoring.audit_export` granted on the pass, `discipline.enforced` granted,
     `scoring.device_links` granted, `stages.per_division.max` 2 -> 4, and
     `schedule.checkpoints.max` given its own pass row (5) where it used to fall
@@ -669,7 +669,7 @@ Each needs a task and an owner. Nothing here is fixed by W1.
       `schedule.checkpoints.max`, `scoring.audit_export`,
       `scoring.device_links`, `stats.player`, `stages.per_division.max`.
     - **Three are stale** (in the set, no longer lifted):
-      `dashboard.player_profiles` (V392 made it free on Community),
+      `dashboard.player_profiles` (V393 made it free on Community),
       `scheduling.multi_division` and `formats.double_elim` (granted on every
       plan, so the pass lifts nothing).
 
@@ -685,7 +685,7 @@ Each needs a task and an owner. Nothing here is fixed by W1.
 
     Both of these are the same failure shape and worth naming as a class: a
     guard whose target set is DERIVED FROM THE DATABASE goes red when a
-    migration lands, with no application diff to point at. Nothing in V392's
+    migration lands, with no application diff to point at. Nothing in V393's
     own diff mentions `player-stats.ts` or `pass-features.ts`. Run the
     source-scanning and matrix-derived guards explicitly after any
     `plan_entitlements` change — file-based test selection will never reach

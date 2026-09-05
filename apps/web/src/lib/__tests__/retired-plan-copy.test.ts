@@ -1,7 +1,7 @@
 // NO SHIPPED USER-FACING STRING MAY NAME A PLAN NOBODY CAN BUY.
 //
 // This file exists because the repo has already demonstrated that it has no
-// such rule. V392 deleted `pro_plus` from `plans`; the guard that would have
+// such rule. V393 deleted `pro_plus` from `plans`; the guard that would have
 // noticed — `plusDifferentiatorFaults` — was deleted in the same wave, because
 // it judged whether a Pro Plus differentiator was exclusive and there was no
 // longer a Pro Plus. Nothing replaced it. `/pricing` went on answering "What's
@@ -112,10 +112,10 @@ const CORPUS = [...dictionaryValues(), ...tipValues(), ...helpValues()];
 // ruling was that priced copy belongs to the repricing that follows, so the
 // five were exempted WITH A COUNT rather than half-fixed.
 //
-// W3 (2026-09-04) is that repricing: V397 re-cut the fee ladder for the
+// W3 (2026-09-04) is that repricing: V398 re-cut the fee ladder for the
 // additive model and every SKU moved onto charm points, so all five sentences
 // were rewritten against final numbers in one change — the fee ladders now end
-// "1% on Enterprise" (the row V392 moved, at the rate it kept), and groups.md's
+// "1% on Enterprise" (the row V393 moved, at the rate it kept), and groups.md's
 // worked example is rebuilt on Pro's own five-organisation cap at the new
 // prices. Nothing is left to permit.
 //

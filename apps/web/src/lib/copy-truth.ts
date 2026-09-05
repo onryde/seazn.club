@@ -385,11 +385,11 @@ export const RECURRING_GRANT_PATTERNS = [
  * int-shaped and are checked separately against their caps.
  *
  * RENAMED in W2 (entitlements v18). It was `PLUS_DIFFERENTIATOR_VOCAB`, framed
- * by Pro Plus's "Everything in Pro, plus …" — and that plan is gone: V392
+ * by Pro Plus's "Everything in Pro, plus …" — and that plan is gone: V393
  * deleted `pro_plus` from `plans` outright. The LIST is unchanged and still
  * earns its keep, because `crossCardExclusivityFaults` asks it a question about
  * EVERY card rather than one tier: does any card claim a feature its own plan
- * does not grant? `officials.auto` is what keeps it non-vacuous today — V392
+ * does not grant? `officials.auto` is what keeps it non-vacuous today — V393
  * moved that key down to Pro when Pro Plus went, and the Pro card now says so.
  */
 export const EXCLUSIVE_CLAIM_VOCAB: Array<[feature: string, claim: RegExp]> = [
@@ -754,7 +754,7 @@ export function capClaimFaults(rungs: Rung[], caps: RungCaps[]): string[] {
       if (!description.includes(`${own.entrants} entrants`)) {
         faults.push(`${key}: does not quote its live entrant cap (${own.entrants})`);
       }
-      // …and it may not ALSO say "unlimited". W2 (entitlements v18, V392) gave
+      // …and it may not ALSO say "unlimited". W2 (entitlements v18, V393) gave
       // the L rung a real 512-entrant cap where it had been null, and every
       // surface describing it said "unlimited entrants". Quoting the number
       // BESIDE the word would have satisfied the branch above while the
@@ -813,18 +813,18 @@ export function capClaimFaults(rungs: Rung[], caps: RungCaps[]): string[] {
  * direction lies differently:
  *
  *  - a key community GRANTS, described as "a Pro feature". V390 freed the three
- *    scoring-detail keys and V392 brought `officials.auto` down to Pro; a reason
+ *    scoring-detail keys and V393 brought `officials.auto` down to Pro; a reason
  *    left behind sells an upgrade for something the reader already has, and the
  *    gate it belongs to can no longer fire, so nobody ever sees it be wrong.
- *  - a key community does NOT grant, described as free / on every plan. V395
+ *  - a key community does NOT grant, described as free / on every plan. V396
  *    made `dashboard.player_profiles`, `embeds.enabled` and `news.auto` paid on
- *    Free and V396 took the accent colour off it; a reason left behind promises
+ *    Free and V397 took the accent colour off it; a reason left behind promises
  *    a capability the resolver refuses, which is the more expensive direction —
  *    the reader is told they have it, tries, and is stopped.
  *
- * The second direction caught a live one the day it was written: V395's own
+ * The second direction caught a live one the day it was written: V396's own
  * `dashboard.branding` reason still ended "your own club logo and colours work
- * on every plan" after V396 priced the colour at Pro.
+ * on every plan" after V397 priced the colour at Pro.
  *
  * A reason for a key with NO ROW is a fault too, not a skip: the resolver
  * answers 0/false for a missing row, so such a sentence describes a refusal
@@ -864,7 +864,7 @@ export const PRO_ATTRIBUTION =
  * `PRO_ATTRIBUTION`, because the two make DIFFERENT claims about the same row:
  * a Pro attribution says pro grants it, an Enterprise attribution says pro does
  * NOT. Folding them together would have had this guard demand that
- * `dashboard.branding` — badge removal, enterprise-only since V395 — be granted
+ * `dashboard.branding` — badge removal, enterprise-only since V396 — be granted
  * on Pro, which is the very thing the sentence says it is not.
  */
 /**
@@ -937,7 +937,7 @@ export function freeClaimFaults(
     if (attributesFree && !communityGrants) {
       faults.push(`${key}: says it works on every plan, but community does not grant it`);
     }
-    // …and the Pro half of a "Pro feature" claim has to be true as well. V395
+    // …and the Pro half of a "Pro feature" claim has to be true as well. V396
     // took `dashboard.branding` off Pro, which is the shape that makes a
     // paywall point a Pro subscriber at an upgrade they already bought.
     if (attributesPro && proRow !== undefined && !grants(proRow)) {
@@ -951,9 +951,9 @@ export function freeClaimFaults(
     //
     // Three sentences sat wrong behind that blind spot until 2026-09-05:
     // `stats.player`, `scoring.audit_export` and `discipline.enforced`, all
-    // granted to both rungs by V392 and all still reading "is a Pro feature".
+    // granted to both rungs by V393 and all still reading "is a Pro feature".
     // The guard was written before the pass held anything worth naming, and
-    // nothing widened it when V392 made it hold four things.
+    // nothing widened it when V393 made it hold four things.
     if (attributesPro && !PASS_ATTRIBUTION.test(text)) {
       const rungs = (["event_pass", "event_pass_l"] as const).filter((rung) =>
         grants(rows[key]?.[rung]),
@@ -989,7 +989,7 @@ export function freeClaimFaults(
 
 // `plusDifferentiatorFaults` and `localePlusDifferentiatorFaults` were DELETED
 // here in W2 (entitlements v18). Both judged the "Everything in Pro, plus …"
-// frame against `pro_plus` grants, and V392 deleted that plan from `plans` and
+// frame against `pro_plus` grants, and V393 deleted that plan from `plans` and
 // `plan_entitlements` outright — so every call reported the same four faults
 // ("claims officials.auto, which has no rows in plan_entitlements", and so on)
 // about a card `/pricing` no longer renders. A guard whose subject is gone does
@@ -2047,7 +2047,7 @@ export function multiDivisionBoardPlanGateFaults(label: string, markdown: string
   ];
   // THE EXEMPTION IS GONE (W2, entitlements v18). This used to clear the fault
   // when a sentence also named the Event Pass, on the premise that Pro and the
-  // pass were the two doors to planning several divisions together. V392 made
+  // pass were the two doors to planning several divisions together. V393 made
   // `scheduling.multi_division` TRUE on community, so there is no door at all —
   // it is free on every plan key, and "needs Pro, or this competition's Event
   // Pass" became just as false as "needs Pro" alone. An exemption whose premise
@@ -2072,7 +2072,7 @@ export function multiDivisionBoardPlanGateFaults(label: string, markdown: string
       for (const pattern of proOnlyDoor) {
         if (pattern.test(sentence)) {
           faults.push(
-            `${label}: "${sentence.slice(0, 72)}…" names Pro as a way to plan several divisions together — V392 grants scheduling.multi_division on EVERY plan key, community included, so any plan gate on it is false`,
+            `${label}: "${sentence.slice(0, 72)}…" names Pro as a way to plan several divisions together — V393 grants scheduling.multi_division on EVERY plan key, community included, so any plan gate on it is false`,
           );
         }
       }
@@ -3034,10 +3034,10 @@ export function localePassUncoveredFaults(
  * must be TRUE.
  *
  * W2 (entitlements v18): the leading plan is now an ARGUMENT. It was hardcoded
- * `pro_plus`, and V392 deleted that plan — so the guard compared `undefined`
+ * `pro_plus`, and V393 deleted that plan — so the guard compared `undefined`
  * against everything, reported the claim false in four locales, and named a
  * plan that no longer exists in its own failure message. The live ordering is
- * enterprise 500 > pro 25 > community 5 (V392 + V394), and enterprise is a
+ * enterprise 500 > pro 25 > community 5 (V393 + V395), and enterprise is a
  * Contact-us strip rather than a priced card, so a caller has to say which plan
  * its copy is claiming leadership FOR rather than inherit yesterday's answer.
  */
@@ -3364,7 +3364,7 @@ export const FEE_LADDER_PLAN_KEYS: Record<string, string[]> = {
   Community: ["community"],
   "Event Pass": ["event_pass", "event_pass_l"],
   Pro: ["pro"],
-  // W2 (entitlements v18): "Pro Plus" -> "Enterprise". V392 deleted `pro_plus`
+  // W2 (entitlements v18): "Pro Plus" -> "Enterprise". V393 deleted `pro_plus`
   // from `plans`, and the 1% floor moved onto `enterprise` — so the ladder's
   // bottom rung kept its rate and changed its name. The LABEL is what a reader
   // sees in the table, which is why this map is keyed on it rather than on the

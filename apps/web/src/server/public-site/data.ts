@@ -149,7 +149,7 @@ export interface PublicOrg {
   name: string;
   slug: string;
   branded: boolean; // dashboard.branding (enterprise) — removable seazn footer + OG badge
-  /** Org brand color blob — emptied in-query without dashboard.theme (V396).
+  /** Org brand color blob — emptied in-query without dashboard.theme (V397).
    *  A DIFFERENT key from `branded` above; see loadOrg's note. */
   branding: unknown;
   /** Resolved logo URL — null without the branding entitlement or a logo. */
@@ -346,12 +346,12 @@ export interface PublicPlayer {
 async function loadOrg(orgSlug: string): Promise<PublicOrg | null> {
   // Branding reads are entitlement-gated in the query, same rule as the
   // public_*_v views. THREE keys, three different things — they were two until
-  // V396 (entitlements v18 W2 T17, owner ruling 2026-09-03) split the third
+  // V397 (entitlements v18 W2 T17, owner ruling 2026-09-03) split the third
   // out, and the welding was invisible until it cost a customer something:
   //
   //   branding           org LOGO (upload + display)  free on every plan (V310)
-  //   dashboard.theme    org ACCENT COLOUR            Pro and above (V396)
-  //   dashboard.branding badge removal, ALONE         enterprise only (V395)
+  //   dashboard.theme    org ACCENT COLOUR            Pro and above (V397)
+  //   dashboard.branding badge removal, ALONE         enterprise only (V396)
   //
   // `branded` is NOT the logo/name gate — it is the "may remove the seazn
   // attribution" perk (the Powered-by footer and the OG-card badge; see
@@ -359,7 +359,7 @@ async function loadOrg(orgSlug: string): Promise<PublicOrg | null> {
   // every plan, which silently switched the footer off for community orgs and
   // killed the free-tier growth lever until this was re-gated.
   //
-  // The colour rode `dashboard.branding` too, until V395 made badge removal
+  // The colour rode `dashboard.branding` too, until V396 made badge removal
   // enterprise-only — and took Pro's brand colour off its public pages with
   // it, a visible downgrade nobody bought. Four smoke checks caught that and
   // were left RED rather than edited to match the defect. Do not re-weld these:

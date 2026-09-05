@@ -1,5 +1,5 @@
 // Embed door (v3/10 #4): private divisions 404, link-only render, Pro orgs
-// pass. V392 granted `embeds.enabled` on Community; V395 (entitlements v18 W2
+// pass. V393 granted `embeds.enabled` on Community; V396 (entitlements v18 W2
 // T15, owner ruling 2026-09-03) took it back — embedding is one of the three
 // share loops that became paid on Free — and inserted the two Event Pass rows
 // the key had never carried. So the PLAN denies it again on Community, and the
@@ -58,7 +58,7 @@ describe.skipIf(!HAS_DB)("embedDivisionData", () => {
     expect(res.ok).toBe(true);
   });
 
-  it("public division on Community → not_entitled (V395 made embeds paid again)", async () => {
+  it("public division on Community → not_entitled (V396 made embeds paid again)", async () => {
     const { divId } = await seed("public", "community");
     expect(await embedDivisionData(divId)).toEqual({
       ok: false,
@@ -66,7 +66,7 @@ describe.skipIf(!HAS_DB)("embedDivisionData", () => {
     });
   });
 
-  // THE TRAP V395's step 2 exists to avoid, driven end to end. `embeds.enabled`
+  // THE TRAP V396's step 2 exists to avoid, driven end to end. `embeds.enabled`
   // had no pass rows at all while Community granted it; flipping Community to
   // false without inserting them would leave an Event Pass holder falling
   // through to the community row and losing embeds on the competition they

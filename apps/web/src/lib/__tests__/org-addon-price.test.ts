@@ -33,7 +33,7 @@ describe("orgAddonPriceMinor", () => {
     // an annual group understates the rider by roughly a third AND implies a
     // yearly cadence that will actually arrive every month.
     // pro_plus dropped from this loop: `extraOrgPrice()` narrows to
-    // `PurchasablePlanKey` ("pro" only — entitlements v18, V392) and can no
+    // `PurchasablePlanKey` ("pro" only — entitlements v18, V393) and can no
     // longer price that tier. `orgAddonPriceMinor` itself still reads the
     // seed's `org_addons[1]` row directly (untouched, T4's to remove), so
     // its own coverage above is unaffected.

@@ -30,7 +30,7 @@ vi.mock("@/lib/posthog-server", () => ({ captureServer: vi.fn().mockResolvedValu
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
-/** V392 (entitlements v18 §2) granted several formerly-Pro keys to Community,
+/** V393 (entitlements v18 §2) granted several formerly-Pro keys to Community,
  *  so a plan alone no longer withholds them. The gate sites are still live
  *  code; a DENY override is the one remaining lever that takes a key away, and
  *  it beats both the pass and the plan — so it is what proves a gate shuts. */
@@ -322,7 +322,7 @@ describe.skipIf(!HAS_DB)("createFromTemplate — activation funnel events (P4 re
     vi.mocked(captureServer).mockClear();
   });
 
-  it("an omitted visibility instantiates a PUBLIC competition (V395)", async () => {
+  it("an omitted visibility instantiates a PUBLIC competition (V396)", async () => {
     // The two create paths must not disagree about what an omitted visibility
     // means: `CreateFromTemplate` and `CreateCompetition` both default to
     // public in the schema, and `createFromTemplate` coalesces the same way so
@@ -346,7 +346,7 @@ describe.skipIf(!HAS_DB)("createFromTemplate — activation funnel events (P4 re
 
   it("at the cap it degrades to private and SAYS SO in the result the gallery reads", async () => {
     // T20 CRITICAL (reviewer pass 3, 2026-09-03). `instantiateTemplate` has
-    // performed the identical degrade as `createCompetition` since V395, but
+    // performed the identical degrade as `createCompetition` since V396, but
     // `FromTemplateResult` carried no visibility at all — so the template
     // gallery, which is the DEFAULT create path (`/competitions/new` opens on
     // it), had nothing to diff and redirected unconditionally. A Free org at
@@ -415,7 +415,7 @@ describe.skipIf(!HAS_DB)("createFromTemplate — activation funnel events (P4 re
       divisions: [makeDivision("tennis", "grand-slam"), makeDivision("boardgame", "classical")],
     };
     // `visibility` is PASSED here, and explicitly private. It used to be
-    // omitted, and the omission used to mean private — V395 (W2 T15/F, owner
+    // omitted, and the omission used to mean private — V396 (W2 T15/F, owner
     // ruling 2026-09-03) made an omitted visibility PUBLIC, on both create
     // paths and in the zod schema alike. Stating it keeps this case testing
     // what its own assertions below are about (a private instantiation does

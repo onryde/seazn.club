@@ -480,7 +480,7 @@ async function main() {
       org2Ent.plan_key === "pro" && org2Ent.entitlements["exports.branded"]?.enabled === true,
     );
     check(
-      // 10, not 15: V392 (entitlements v18) re-cut the seat allowance. The
+      // 10, not 15: V393 (entitlements v18) re-cut the seat allowance. The
       // number is a LITERAL on purpose — this reads back through the live API,
       // which reads `plan_entitlements`, so deriving it from that table would
       // make the check a tautology.
@@ -648,7 +648,7 @@ async function main() {
   }
 
   // --- HEADROOM: org2's public dashboards --------------------------------
-  // V395 retired Pro's "unlimited public dashboards" and made the cap a finite
+  // V396 retired Pro's "unlimited public dashboards" and made the cap a finite
   // `dashboard.public.max` = 10, and (T15/F) a create past it is no longer
   // refused — it silently comes back PRIVATE. org2 is the shared Pro org that
   // ~30 suites below run against, and between them they create far more than
@@ -1665,7 +1665,7 @@ async function p72Suite(): Promise<void> {
  * T20 — `dashboard.public.max` DEGRADES a create; it never refuses one, and it
  * is never silent about it.
  *
- * V395 made competitions public by default and (T15/F, owner ruling
+ * V396 made competitions public by default and (T15/F, owner ruling
  * 2026-09-03) made a create at the cap come back PRIVATE rather than 402 —
  * Free is 3 active competitions against 2 public dashboards, so under the old
  * refusal the third create on the plan whose one-line sell is "run a club
@@ -1917,7 +1917,7 @@ async function smokePlanMatrix(): Promise<void> {
 
     // --- User 3 (member/scorer): a division-scoped scorer invite seats a
     // member who scores a DIFFERENT fixture via the assignment path
-    // (scoresViaAssignment). V394 deleted `scorers.max`; the seat is charged
+    // (scoresViaAssignment). V395 deleted `scorers.max`; the seat is charged
     // against `members.max` now, which on community is 3 — so one still fits.
     const scorerEmail = `scorer_${key}_${tag}@example.com`;
     const scorerSession = newSession();
@@ -2012,7 +2012,7 @@ async function smokePlanMatrix(): Promise<void> {
   );
   // V302: the AI Schedule Architect is granted on EVERY plan; the graded axis
   // is no longer a per-division run count (retired V322) but the monthly AI
-  // credit wallet allowance. V392 (entitlements v18) cut it from 10 to 5.
+  // credit wallet allowance. V393 (entitlements v18) cut it from 10 to 5.
   //
   // The literal is deliberate here, and stays a literal. This script reads the
   // number back out of the live API, which reads it out of `plan_entitlements`
@@ -2024,7 +2024,7 @@ async function smokePlanMatrix(): Promise<void> {
     commEnt.entitlements["scheduling.ai"]?.enabled === true,
   );
   check(
-    "matrix/community: ai.credits.monthly resolves 5 (V392)",
+    "matrix/community: ai.credits.monthly resolves 5 (V393)",
     commEnt.entitlements["ai.credits.monthly"]?.limit === 5,
   );
   // The bootstrap grant (createOrgForUser) synchronously seeds this period's
@@ -2108,10 +2108,10 @@ async function smokePlanMatrix(): Promise<void> {
     proEnt.entitlements["scheduling.ai"]?.enabled === true,
   );
   check(
-    "matrix/pro: ai.credits.monthly resolves 25 (V394 re-cut it from V392's 35)",
+    "matrix/pro: ai.credits.monthly resolves 25 (V395 re-cut it from V393's 35)",
     proEnt.entitlements["ai.credits.monthly"]?.limit === 25,
   );
-  // V392 DELETED `officials.per_fixture.max` — it resolved to ∞ on every plan
+  // V393 DELETED `officials.per_fixture.max` — it resolved to ∞ on every plan
   // and nothing read it. The check is INVERTED rather than dropped, because
   // "absent" and "unlimited" are different answers that this endpoint reports
   // differently, and the old assertion would now read `undefined === null` and
@@ -2120,7 +2120,7 @@ async function smokePlanMatrix(): Promise<void> {
   // proving is that the key is not being served at all — if it reappeared with
   // a row, every plan would silently gain a finite officials cap.
   check(
-    "matrix/pro: officials.per_fixture.max is not served at all (V392 deleted the key)",
+    "matrix/pro: officials.per_fixture.max is not served at all (V393 deleted the key)",
     proEnt.entitlements["officials.per_fixture.max"] === undefined,
   );
 
@@ -2151,7 +2151,7 @@ async function smokePlanMatrix(): Promise<void> {
   );
 
   // === PERSONA 3 — enterprise (the tier above Pro) ======================
-  // WAS pro_plus. V392 (entitlements v18) deleted that plan from `plans`, and
+  // WAS pro_plus. V393 (entitlements v18) deleted that plan from `plans`, and
   // `subscriptions.plan_key` carries a live FK, so this flip was throwing and
   // taking the rest of the run with it. The persona's JOB is unchanged — it is
   // the above-Pro rung of the matrix — so it follows the rung to `enterprise`
@@ -2166,7 +2166,7 @@ async function smokePlanMatrix(): Promise<void> {
   // would make the check a tautology. The independent oracle is design doc §2,
   // pinned cell-for-cell by `entitlements-v18-matrix.test.ts`.
   check(
-    "matrix/enterprise: ai.credits.monthly resolves 500 (V392)",
+    "matrix/enterprise: ai.credits.monthly resolves 500 (V393)",
     entEnt.entitlements["ai.credits.monthly"]?.limit === 500,
   );
   check(
@@ -2185,7 +2185,7 @@ async function smokePlanMatrix(): Promise<void> {
   check("matrix/enterprise: api.write grants a manage-scope key (201)", entKey.status === 201);
 
   // officials.auto: kept, but it is no longer a TIER assertion. V290 put the
-  // grant above Pro and this check was written against that; V392 brought it
+  // grant above Pro and this check was written against that; V393 brought it
   // back down to Pro (jul3Suite asserts the Pro side directly). What survives
   // here is the propose path working end to end on the top tier — coverage of
   // the feature, not of the rung it used to sit on.
@@ -2378,7 +2378,7 @@ async function smokePlanMatrix(): Promise<void> {
     passEnt.plan_key === "community",
   );
   check(
-    // 3, not 5 — V392 re-cut community's seats. Line 267 of this file already
+    // 3, not 5 — V393 re-cut community's seats. Line 267 of this file already
     // said 3 while this said 5; the two disagreed inside one script.
     "matrix/event_pass: org-wide members.max resolves the community value (3)",
     passEnt.entitlements["members.max"]?.limit === 3,
@@ -2418,7 +2418,7 @@ async function smokePlanMatrix(): Promise<void> {
  * ── Two numbers the plan brief got wrong, deliberately not asserted ─────────
  *  • `branding` — V310 made it true on EVERY plan, so "the pass delivers
  *    branding" is a test that cannot fail. Dropped. It is NOT the same key as
- *    `dashboard.theme` (the brand-colour gate since V396 — it was
+ *    `dashboard.theme` (the brand-colour gate since V397 — it was
  *    `dashboard.branding`, which is now badge removal alone and enterprise
  *    only), which is Pro and above and which the pass does not grant, so
  *    neither is substituted for the other.
@@ -2454,7 +2454,7 @@ async function passGrantsSuite(): Promise<void> {
   const orgs = (await call(s, "/api/orgs")) as { id: string; slug: string; name: string }[];
   const org = orgs.find((o) => o.id === orgId)!;
 
-  // Unlisted, not public: `dashboard.public.max` is 2 on community (V395 —
+  // Unlisted, not public: `dashboard.public.max` is 2 on community (V396 —
   // the comment said 1 until the retired-plan copy sweep re-read the row), and
   // both competitions still resolve through the public read model (only
   // `private` is excluded from public_competitions_v), so the public player
@@ -2639,10 +2639,10 @@ async function passGrantsSuite(): Promise<void> {
   // === dashboard.player_profiles — community FALSE, pass TRUE again =======
   //
   // This cell has moved twice in one day and the history is why the comment is
-  // this long. It was "community false, pass true" originally; V392
+  // this long. It was "community false, pass true" originally; V393
   // (entitlements v18 W2 T1) granted it on Community as one of design §2's
   // three "share loops go free" acquisition cells, and this block was inverted
-  // to assert the card renders on BOTH sides. V395 (W2 T15, owner ruling
+  // to assert the card renders on BOTH sides. V396 (W2 T15, owner ruling
   // 2026-09-03) REVERSED that — the owner chose value capture over the loop,
   // with the acquisition argument put and overruled.
   //
@@ -2657,7 +2657,7 @@ async function passGrantsSuite(): Promise<void> {
     passCard.status === 200,
   );
   check(
-    "pass grants/profiles: the UNPASSED sibling stays dark (404) — V395 made profiles paid again",
+    "pass grants/profiles: the UNPASSED sibling stays dark (404) — V396 made profiles paid again",
     plainCard.status === 404,
   );
 
@@ -2697,7 +2697,7 @@ async function passGrantsSuite(): Promise<void> {
     plainPackage.status === 402 && featureKey(plainPackage) === "sponsors.monetize",
   );
 
-  // === officials.auto — community false, pass true (V392) =================
+  // === officials.auto — community false, pass true (V393) =================
   // Auto-officials became a pass grant in v18. All THREE gates are probed,
   // because they resolve the competition by different routes: the two division
   // gates read `divisions.competition_id`, and `/stages/{id}/officials/source`
@@ -2746,8 +2746,8 @@ async function passGrantsSuite(): Promise<void> {
     plainSource.status === 402 && featureKey(plainSource) === "officials.auto",
   );
 
-  // === stats.player — community false, pass true (V392) ====================
-  // W2 T13. This and the two blocks below are the rest of what V392 handed the
+  // === stats.player — community false, pass true (V393) ====================
+  // W2 T13. This and the two blocks below are the rest of what V393 handed the
   // pass, and every enforcement site for them used to resolve ORG-WIDE — so the
   // pass was invisible and the passed competition 402'd on a feature the org
   // had just paid for. Both directions on the SAME org throughout: a one-sided
@@ -2764,7 +2764,7 @@ async function passGrantsSuite(): Promise<void> {
     plainStats.status === 402 && featureKey(plainStats) === "stats.player",
   );
 
-  // === scoring.device_links — community false, pass true (V392) ============
+  // === scoring.device_links — community false, pass true (V393) ============
   // Minted against the board fixtures generated above; both are still
   // scheduled, so the only difference between the two calls is the pass.
   const passLink = await v1(s, `/api/v1/fixtures/${board.pass.fixtureId}/device-links`, "POST", {
@@ -2782,7 +2782,7 @@ async function passGrantsSuite(): Promise<void> {
     plainLink.status === 402 && featureKey(plainLink) === "scoring.device_links",
   );
 
-  // === stages.per_division.max — community 2, pass 4 (V392) ================
+  // === stages.per_division.max — community 2, pass 4 (V393) ================
   // Run on the ENTRANT-CAP divisions, which carry NO stages at all — the board
   // divisions already hold one and both competitions are at their division
   // ceiling, so there is no fresh division to take instead. Counting from ZERO
@@ -2826,7 +2826,7 @@ async function passGrantsSuite(): Promise<void> {
   // keyless to observe. What IS assertable is split in two:
   //   • the matrix itself — the pass row must still sit UNDER community's,
   //     which fails the moment a migration regresses the grant. Read from the
-  //     table and compared to each other rather than pinned to 5 and 8: V397
+  //     table and compared to each other rather than pinned to 5 and 8: V398
   //     re-cut the whole ladder (community 8 -> 5, both pass rungs 5 -> 4) for
   //     the additive fee model, and the claim this suite is making is that the
   //     pass is CHEAPER, never that either rate is a particular number;
@@ -2863,14 +2863,14 @@ async function passGrantsSuite(): Promise<void> {
     "pass grants/scope: the org still resolves the community plan",
     ent.plan_key === "community",
   );
-  // `dashboard.player_profiles` left this list in V392, when Community was
+  // `dashboard.player_profiles` left this list in V393, when Community was
   // granted the key and asserting a paywall would have asserted one that no
-  // longer existed. V395 put the paywall back (owner ruling 2026-09-03), so the
+  // longer existed. V396 put the paywall back (owner ruling 2026-09-03), so the
   // key is pass-lifted again — it is asserted OFF org-wide in its own named
   // check below rather than folded into this && chain, because a chain this
   // long reports only "false" and this particular cell has now moved twice.
   check(
-    "pass grants/scope: every boolean grant stays OFF org-wide (realtime, exports.branded, sponsors, and the V392 keys)",
+    "pass grants/scope: every boolean grant stays OFF org-wide (realtime, exports.branded, sponsors, and the V393 keys)",
     flagOff("realtime") &&
       flagOff("exports.branded") &&
       flagOff("sponsors.tiers") &&
@@ -2884,7 +2884,7 @@ async function passGrantsSuite(): Promise<void> {
       flagOff("officials.auto"),
   );
   check(
-    "pass grants/scope: dashboard.player_profiles is OFF org-wide — paid again since V395, and pass-scoped",
+    "pass grants/scope: dashboard.player_profiles is OFF org-wide — paid again since V396, and pass-scoped",
     ent.entitlements["dashboard.player_profiles"]?.enabled === false,
   );
   check(
@@ -2894,12 +2894,12 @@ async function passGrantsSuite(): Promise<void> {
       ent.entitlements["ai.credits.monthly"]?.limit === 5 &&
       // The org's own row, read out of the matrix above — never the literal.
       // This is the LEAK half: the passed competition resolves `passFee`, and
-      // the org must still resolve its own, whatever V397 (or its successor)
+      // the org must still resolve its own, whatever V398 (or its successor)
       // set them to.
       ent.entitlements["registration.fee_percent"]?.limit === communityFee,
   );
   check(
-    "pass grants/scope: the two V392 caps stay at the community figure org-wide (2 stages, 2 save points)",
+    "pass grants/scope: the two V393 caps stay at the community figure org-wide (2 stages, 2 save points)",
     ent.entitlements["stages.per_division.max"]?.limit === 2 &&
       ent.entitlements["schedule.checkpoints.max"]?.limit === 2,
   );
@@ -3217,7 +3217,7 @@ async function passRungLSuite(): Promise<void> {
   // applies per axis.
   //
   // The DIVISIONS half used to be the second direction of that ("the plan wins
-  // on divisions"), and it stopped being one: entitlements v18 (V392, §2 "R2:
+  // on divisions"), and it stopped being one: entitlements v18 (V393, §2 "R2:
   // bounded; 20 is a federation") bounded Pro at 20, which is exactly what
   // event_pass_l already carried. Two equal numbers cannot witness which side
   // won, so this check no longer asserts that the 21st division lands — it
@@ -3243,7 +3243,7 @@ async function passRungLSuite(): Promise<void> {
 
   // The cap is READ from the org's own resolved entitlements, never typed: it
   // was written into this file as a bare 21-iteration loop against "L's 20",
-  // and V392 moved Pro onto the same 20 underneath it.
+  // and V393 moved Pro onto the same 20 underneath it.
   const proEnt = (await call(pro, `/api/orgs/${proOrgId}/entitlements`)) as {
     entitlements: Record<string, { limit?: number | null }>;
   };
@@ -3636,7 +3636,7 @@ async function referralSuite(): Promise<void> {
  * Own fresh group; keyless-safe, no Stripe calls.
  */
 async function extraOrgAddonSuite(): Promise<void> {
-  // orgs.max_owned: community 1 / pro 5. V392 (entitlements v18) deleted the
+  // orgs.max_owned: community 1 / pro 5. V393 (entitlements v18) deleted the
   // `pro_plus` plan this suite used to start on — and enterprise, the rung that
   // replaced it, resolves orgs.max_owned to NULL (unlimited), which would leave
   // this suite with no boundary to stand on and every refusal below vacuous.
@@ -3925,7 +3925,7 @@ async function addonChurnWebhookSuite(): Promise<void> {
     };
 
     // === #330 — churn. The subscription is gone; so is the capacity it billed.
-    // `pro`, not the deleted `pro_plus` (V392, entitlements v18). The plan key
+    // `pro`, not the deleted `pro_plus` (V393, entitlements v18). The plan key
     // is incidental here — what is under test is a webhook cancelling the
     // add-on rows on a PAID group — and Pro is the only self-serve paid tier
     // left that a Stripe subscription would legitimately sit on.
@@ -4041,7 +4041,7 @@ async function passLockEnforcementSuite(): Promise<void> {
   const s = newSession();
   const orgId = (await signIn(s, `passlock_${tag}@example.com`)).org_id;
   // READ, never typed. This was `const COMMUNITY_COMP_CAP = 10` on a comment
-  // citing V319; entitlements v18 (V392) cut `competitions.max_active` on
+  // citing V319; entitlements v18 (V393) cut `competitions.max_active` on
   // community to 3, so the fixture loop below 402'd on the fourth create,
   // threw on `v1data(...).id` and ABORTED the entire run from here down —
   // which is a large part of why nobody had a green smoke on this branch. The
@@ -5055,7 +5055,7 @@ async function newsSuite(admin: Session, proOrgId: string, proOrgSlug: string): 
 /** PLG growth loops (design/plg): the "Powered by Seazn Club" footer is an
  *  acquisition CTA (attribution-link.tsx) and every public competition page
  *  carries a fan-facing share bar (share-bar.tsx). The footer used to be the
- *  free tier's alone; V395 (entitlements v18 W2 T15, owner ruling 2026-09-03)
+ *  free tier's alone; V396 (entitlements v18 W2 T15, owner ruling 2026-09-03)
  *  made badge removal ENTERPRISE-only, so a Pro org now carries BOTH — the
  *  `org.branded` gate is unchanged, the row behind it moved. That is the
  *  acquisition loop the same ruling took off profiles, embeds and auto posts;
@@ -5084,14 +5084,14 @@ async function plgGrowthSuite(admin: Session, proOrgId: string, proOrgSlug: stri
     // community attribution line itself reads "Powered by Seazn Club", so that
     // substring never isolated the footer that org.branded drops.
     //
-    // INVERTED by V395, not deleted. This asserted that a Pro page DROPS the
+    // INVERTED by V396, not deleted. This asserted that a Pro page DROPS the
     // footer, which was true for as long as `dashboard.branding` was true on
-    // Pro (V112 → V394). The owner moved badge removal to enterprise on
+    // Pro (V112 → V395). The owner moved badge removal to enterprise on
     // 2026-09-03: every self-serve plan carries the badge now, Pro included,
     // and the assertion has to say so rather than be quietly retired. The
     // enterprise case has no persona in this script; `entitlements-v18-badge.test.ts`
     // covers all five plans through `org_has_feature` itself.
-    "plg pro page KEEPS the Seazn attribution footer (V395: badge removal is enterprise-only)",
+    "plg pro page KEEPS the Seazn attribution footer (V396: badge removal is enterprise-only)",
     proShared.body.includes("Run your own free"),
   );
 
@@ -11797,7 +11797,7 @@ async function placementPerCourtBlackoutSuite(): Promise<void> {
  *  402 is keyless-safe and always runs. The happy path uses its OWN fresh paid
  *  org rather than the passed pro org, so its wallet and entitlement cache are
  *  never shared with a sibling suite. (It used to say officials.auto is Pro Plus
- *  per V290 — V392 brought that grant back down to Pro and deleted the plan.) */
+ *  per V290 — V393 brought that grant back down to Pro and deleted the plan.) */
 async function v4AiSuite(admin: Session, proOrgId: string, proOrgSlug: string): Promise<void> {
   void admin;
   void proOrgId;
@@ -12381,7 +12381,7 @@ async function scheduleAiRoundOrderSuite(): Promise<void> {
   try {
     // Plan-agnostic: this suite is about round-order DETECTION, not a tier. It
     // sits on `pro` because that is the paid plan v4AiSuite uses and `pro_plus`
-    // no longer exists in `plans` (V392, entitlements v18).
+    // no longer exists in `plans` (V393, entitlements v18).
     const paid = newSession();
     const paidOrg = (await signIn(paid, `smoke-ai-roundorder-${tag}@example.com`)).org_id;
     await setPlan(paidOrg, "pro", paid);
@@ -12547,7 +12547,7 @@ async function jointAiSuite(): Promise<void> {
     const s = newSession();
     const orgId = (await signIn(s, `smoke-ai-joint-${tag}@example.com`)).org_id;
     // scheduling.multi_division is Pro and above, and Pro matches the sibling AI
-    // suite. (It used to flip to `pro_plus`, a plan V392 deleted from `plans`;
+    // suite. (It used to flip to `pro_plus`, a plan V393 deleted from `plans`;
     // the credit balance this suite reasons about is set by `drainWallet`
     // below, not by the plan's monthly allowance, so nothing here depended on
     // the larger grant.)
@@ -12762,7 +12762,7 @@ async function scheduledCountsByDivision(divisionIds: string[]): Promise<Record<
  *  402s on api.write, and the tier above Pro lifts the save-point window and
  *  mints the write-capable key.
  *
- *  Was `proPlusSuite`. V392 (entitlements v18) deleted `pro_plus` from `plans`,
+ *  Was `proPlusSuite`. V393 (entitlements v18) deleted `pro_plus` from `plans`,
  *  so the rung is `enterprise` now; the suite follows the rung rather than the
  *  plan name, because what it exists to prove — that api.write is the
  *  above-Pro differentiator — is still true.
@@ -12884,12 +12884,12 @@ async function aboveProRungSuite(): Promise<void> {
         "api.write",
   );
 
-  // (c) The rung ABOVE Pro. Was `pro_plus`; V392 (entitlements v18) deleted that
+  // (c) The rung ABOVE Pro. Was `pro_plus`; V393 (entitlements v18) deleted that
   // plan from `plans` and `subscriptions.plan_key` carries a live FK, so this
   // flip was throwing. `enterprise` is the rung now.
   await setPlan(orgId, "enterprise", owner);
 
-  // NOT a cap lift any more, and the old name said it was. V392 DELETED
+  // NOT a cap lift any more, and the old name said it was. V393 DELETED
   // `officials.per_fixture.max` outright — arm (a) above already gets 200 for
   // the same two officials on COMMUNITY. So what is worth asserting here is
   // that the key stays gone at the top of the ladder too: if a row for it ever
@@ -12897,7 +12897,7 @@ async function aboveProRungSuite(): Promise<void> {
   // tier where nobody would think to look.
   const officialsOk = await setTwoOfficials();
   check(
-    "rung: two officials on one fixture still land above Pro (V392 deleted officials.per_fixture.max)",
+    "rung: two officials on one fixture still land above Pro (V393 deleted officials.per_fixture.max)",
     officialsOk.status === 200,
   );
 
@@ -12929,7 +12929,7 @@ async function aboveProRungSuite(): Promise<void> {
 
   // (d) /pricing renders the matrix marker + the above-Pro offer — marketing
   // never drifts from what the resolver enforces (spec §5). The Pro Plus CARD
-  // is gone with the plan (V392); design §4 replaced it with a Contact-us strip
+  // is gone with the plan (V393); design §4 replaced it with a Contact-us strip
   // under the comparison table (`pricing.enterprise.*`), so that strip is what
   // the above-Pro offer looks like now.
   const pricing = await html(newSession(), "/en/pricing");
@@ -14876,7 +14876,7 @@ async function schedRegV3Suite(
   // Dual payments on community: offline fees were always plan-free, and since
   // V310 (registration.paid on every plan) the CARD method is free too — the
   // platform monetises it through the higher community fee (5% vs pro's 2%
-  // since V397; it was 8% vs 2%),
+  // since V398; it was 8% vs 2%),
   // not by gating it. It still requires Connect, so it is refused UNTIL Connect
   // is live, then allowed.
   const fOffline = await v1(free, `/api/v1/divisions/${fDiv.id}/registration-settings`, "PUT", {
@@ -15416,7 +15416,7 @@ async function v1Suite(admin: Session, orgId: string, orgSlug: string): Promise<
 
   // Public-page theming, free path (public redesign): the branding write is
   // accepted, but the public view empties it for orgs without
-  // `dashboard.theme` (V396 — the key was `dashboard.branding` until W2 T17
+  // `dashboard.theme` (V397 — the key was `dashboard.branding` until W2 T17
   // split badge removal off it) — the page must NOT carry the --ps-* accent
   // override.
   const branded = await v1(admin, `/api/v1/competitions/${compId}`, "PATCH", {
@@ -15532,9 +15532,9 @@ async function jul3Suite(admin: Session, orgId: string, orgSlug: string): Promis
   // the brand color through the public view and the competition page inlines
   // the --ps-* accent override for its whole subtree.
   //
-  // These four theme checks went RED under V395 and were left red on purpose:
+  // These four theme checks went RED under V396 and were left red on purpose:
   // badge removal became enterprise-only, and the colour rode the same key, so
-  // a paying Pro org lost its palette. V396 gave the colour its own key rather
+  // a paying Pro org lost its palette. V397 gave the colour its own key rather
   // than editing these to match the defect. If they red again, the two keys
   // have been re-welded somewhere — start at server/public-site/data.ts,
   // public_competitions_v and server/slideshow-data.ts.
@@ -15634,7 +15634,7 @@ async function jul3Suite(admin: Session, orgId: string, orgSlug: string): Promis
   await v1(admin, `/api/v1/divisions/${divId}/start`, "POST");
 
   const officialId = v1data<{ id: string }[]>(officials)[0]!.id;
-  // V290 moved officials.auto up to Pro Plus; V392 (entitlements v18 W2 T1)
+  // V290 moved officials.auto up to Pro Plus; V393 (entitlements v18 W2 T1)
   // brought it BACK to Pro when Pro Plus was deleted, and gave it to both pass
   // rungs as well. This suite runs on a plain Pro org, so the auto-propose path
   // succeeds here again. Rewritten rather than deleted: a 402 assertion on a
@@ -15644,7 +15644,7 @@ async function jul3Suite(admin: Session, orgId: string, orgSlug: string): Promis
     policy: { roles: ["referee"] },
   });
   check(
-    "jul3 officials auto is allowed on Pro (V392 brought it back off Pro Plus)",
+    "jul3 officials auto is allowed on Pro (V393 brought it back off Pro Plus)",
     auto.status === 200,
   );
   const patchOff = await v1(admin, `/api/v1/fixtures/${fixtures[0]!.id}/officials`, "PATCH", {
@@ -16076,9 +16076,9 @@ async function gapSuite(admin: Session, org1Id: string, proOrgId: string): Promi
     "gap scorer sees assigned fixtures",
     assigned.status === 200 && v1data<unknown[]>(assigned).length > 0,
   );
-  // V394 (entitlements v18 W2 T12) DELETED `scorers.max`. This check asserted
+  // V395 (entitlements v18 W2 T12) DELETED `scorers.max`. This check asserted
   // 402 on the second scorer against a Pro cap of 1, and its own NAME stated
-  // that rule — so it is INVERTED rather than dropped, the same way the V392
+  // that rule — so it is INVERTED rather than dropped, the same way the V393
   // `officials.per_fixture.max` check above was: the interesting fact is now
   // that the seat is FREE to take, and a check that quietly disappeared would
   // leave the deletion's most likely failure (a key with no row resolving to 0,
@@ -16095,7 +16095,7 @@ async function gapSuite(admin: Session, org1Id: string, proOrgId: string): Promi
   await signIn(scorer2, `scorer2_${tag}@example.com`);
   const secondSeat = await raw(scorer2, `/api/invites/${scorerInvite2.token}/accept`, "POST", {});
   check(
-    "gap second scorer seat is free to take (V394 deleted scorers.max)",
+    "gap second scorer seat is free to take (V395 deleted scorers.max)",
     secondSeat.status === 200,
   );
 

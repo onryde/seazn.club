@@ -161,7 +161,7 @@ async function seedDecidedFixture(
  * case below into a test of its own argument: the point of that case is that a
  * community org RESOLVES to false, so the resolution has to be real.
  *
- * WITH the competition id, mirroring what `refreshNews` now does: V395 made
+ * WITH the competition id, mirroring what `refreshNews` now does: V396 made
  * `news.auto` pass-lifted (false on Free, granted on both Event Pass rungs), so
  * an org-wide resolve here would answer a different question from the one
  * production asks and the pass case below could not exist.
@@ -478,7 +478,7 @@ describe.skipIf(!HAS_DB)("org-posts auto-drafts", () => {
   it("does not draft for an org DENIED news.auto, even if the toggle reads true", async () => {
     // A DENY override beats both the plan AND a pass (`resolve`'s precedence),
     // which is what makes it the right lever: it proves the probe is honoured
-    // even where an entitled org would draft. (V392 freed the key and V395
+    // even where an entitled org would draft. (V393 freed the key and V396
     // re-gated it; the override case is unaffected by either.)
     const ctx = await seedOrg("community");
     await sql`
@@ -491,8 +491,8 @@ describe.skipIf(!HAS_DB)("org-posts auto-drafts", () => {
     expect(await listPosts(ctx.auth, ctx.orgId)).toEqual([]);
   });
 
-  it("does NOT draft for a plain community org — V395 made news.auto paid again", async () => {
-    // V392 freed this key and this case asserted a draft; V395 (entitlements
+  it("does NOT draft for a plain community org — V396 made news.auto paid again", async () => {
+    // V393 freed this key and this case asserted a draft; V396 (entitlements
     // v18 W2 T15, owner ruling 2026-09-03) re-gated it as one of the three
     // share loops. Asserted on the RESOLVED value through the real probe, not
     // on the matrix row.

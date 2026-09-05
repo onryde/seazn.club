@@ -136,7 +136,7 @@ describe.skipIf(!HAS_DB)("org_addons — additive cap resolver", () => {
     const walletId = await walletIdFor(org.id);
 
     // The vehicle used to be `officials.per_fixture.max`, null on community
-    // under V319. V392 DELETED that key from plan_entitlements entirely, and a
+    // under V319. V393 DELETED that key from plan_entitlements entirely, and a
     // key with no row resolves to 0, not to unlimited — so the old assertion
     // (`toBeNull`) stopped describing an unlimited cap and started describing a
     // denial. `competitions.max_active` is null on pro, which is the same

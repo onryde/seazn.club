@@ -75,7 +75,7 @@ export async function embedDivisionData(divisionId: string): Promise<EmbedResolu
     from public_competitions_v where id = ${division.competition_id}`;
   if (!competition) return { ok: false, reason: "not_found" };
 
-  // The competition id is not optional here. V395 made `embeds.enabled` false
+  // The competition id is not optional here. V396 made `embeds.enabled` false
   // on Free and granted it on both Event Pass rungs, so this is now a
   // pass-lifted key: resolved org-wide it would fall straight through to the
   // community row and an Event Pass holder's embed — on the competition they

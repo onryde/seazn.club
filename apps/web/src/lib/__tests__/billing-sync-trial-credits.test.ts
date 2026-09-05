@@ -19,7 +19,7 @@ const uniq = () => randomUUID().slice(0, 8);
 const tempPlanKeys: string[] = [];
 
 /** Pro's own `ai.credits.trial`, READ from the matrix rather than typed. The
- *  figure has moved (V394 cut PRO from 20 to 15 and deliberately left
+ *  figure has moved (V395 cut PRO from 20 to 15 and deliberately left
  *  enterprise at 20), and a literal here would assert yesterday's number while
  *  still looking like it was testing the ordering this file is about. */
 async function proTrialCredits(): Promise<number> {

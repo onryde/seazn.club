@@ -142,7 +142,7 @@ export default async function BillingPage({
 
   const planKey = sub?.plan_key ?? "community";
   const status = sub?.status ?? "active";
-  // Entitlements v18 (V392): `pro_plus` is retired, so "paid" is simply
+  // Entitlements v18 (V393): `pro_plus` is retired, so "paid" is simply
   // "not Community" — it also covers a comped `enterprise` org, which is
   // just as paid as one on Pro and must not see the upgrade section either.
   const isPaid = planKey !== "community";
@@ -434,7 +434,7 @@ export default async function BillingPage({
               {overview && <PromoCodeBox discount={overview.discount} />}
               {/* The Pro -> Pro Plus upsell (PlanKeySwitcher) and the Plus
                   priority-support mailto that used to sit here are gone with
-                  the plan (entitlements v18, V392) — Pro is the ceiling of
+                  the plan (entitlements v18, V393) — Pro is the ceiling of
                   self-serve now; the above-Pro conversation is Contact-us,
                   owned by W3's ladder redesign, not restored here as a
                   stopgap (owner ruling: W2 ships no design work on this
@@ -630,7 +630,7 @@ export default async function BillingPage({
                 </ul>
               </div>
               {/* The Pro Plus card that used to sit here is gone with the
-                  plan (entitlements v18, V392) — Pro is the top of this
+                  plan (entitlements v18, V393) — Pro is the top of this
                   ladder now; W3 owns the redesigned Contact-us strip. */}
             </div>
             <p className="mb-4 text-xs text-slate-500">
@@ -660,7 +660,7 @@ export default async function BillingPage({
             </p>
             {/* The second "Pro Plus goes straight to checkout" button row
                 that used to sit here is gone with the plan (entitlements
-                v18, V392); Pro's two buttons above are the only self-serve
+                v18, V393); Pro's two buttons above are the only self-serve
                 checkout now. */}
           </section>
         )}

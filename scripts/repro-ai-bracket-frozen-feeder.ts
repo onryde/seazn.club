@@ -201,7 +201,7 @@ async function main() {
   console.log("Starting AI fixture server on 4319...");
   const fixture = await startAiFixtureServer();
   try {
-    // `pro`, mirroring v4AiSuite: V392 (entitlements v18) deleted `pro_plus`
+    // `pro`, mirroring v4AiSuite: V393 (entitlements v18) deleted `pro_plus`
     // from `plans`, and `plan_key` carries a live FK, so the old literal made
     // this script die on its first write.
     const paid = newSession();

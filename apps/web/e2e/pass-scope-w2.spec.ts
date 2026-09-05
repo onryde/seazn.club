@@ -2,7 +2,7 @@ import { test, expect, type APIRequestContext, type Page } from "@playwright/tes
 import { randomBytes } from "node:crypto";
 import { TAG, apiJson, loginUi, grantCompetitionPassSql, invalidateOrgEntitlements } from "./helpers";
 
-// W2 T13 — the five keys V392 granted the Event Pass, through the REAL HTTP door.
+// W2 T13 — the five keys V393 granted the Event Pass, through the REAL HTTP door.
 //
 // lib/entitlements.ts only consults `competition_passes` when a competition is
 // in scope, and eight enforcement sites omitted it — so a Community org bought

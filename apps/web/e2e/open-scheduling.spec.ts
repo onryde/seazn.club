@@ -11,7 +11,7 @@ import {
 
 /**
  * Scheduling is open to every plan — division boards since #382/V353, and the
- * JOINT competition board since entitlements v18/V392 — proven in the browser,
+ * JOINT competition board since entitlements v18/V393 — proven in the browser,
  * on a real COMMUNITY org.
  *
  * Why this file exists. V353 is a data change: three rows flipped, five
@@ -27,10 +27,10 @@ import {
  * over-grants everything, so `scheduling.multi_division` refusing community was
  * the counterweight that proved the gates still bound at all.
  *
- * Entitlements v18 (V392) granted that key to community deliberately, so the
+ * Entitlements v18 (V393) granted that key to community deliberately, so the
  * counterweight is GONE and cannot be replaced from this surface — every
  * scheduling key is now free on community (`scheduling.ai` since V302,
- * `board`/`constraints` since V353, `multi_division` since V392). Do not read
+ * `board`/`constraints` since V353, `multi_division` since V393). Do not read
  * a green run here as evidence that the entitlement system still refuses
  * anything; it no longer says that, and this paragraph exists so a later
  * session does not re-derive the old guarantee from the file's shape.
@@ -308,7 +308,7 @@ test.describe("Community reaches the board and the constraints (#382)", () => {
     // This test used to assert the opposite, and deliberately so: until
     // entitlements v18 `scheduling.multi_division` was the one scheduling
     // feature kept paid, and this was the file's counterweight against #382
-    // giving the whole area away by accident. V392 grants it to community on
+    // giving the whole area away by accident. V393 grants it to community on
     // purpose (design doc §2 — "charge for leverage, never correctness"), so
     // the sentinel is INVERTED rather than deleted: it now guards the ruling
     // that the joint board is free, and reds if anything walls it again.

@@ -1,7 +1,7 @@
 // Task 4 — the `dashboard.player_profiles` gate moved OUT of public_players_v
 // (V307) and INTO getPublicPlayer, the view's only consumer.
 //
-// V392 (entitlements v18 §2) GRANTED `dashboard.player_profiles` to Community.
+// V393 (entitlements v18 §2) GRANTED `dashboard.player_profiles` to Community.
 // The key is therefore no longer competition-scoped in practice: a community
 // org holds it org-wide, so a pass cannot be what separates two competitions on
 // this key any more, and the "unpassed competition stays dark" case it used to
@@ -88,11 +88,11 @@ interface Scene {
  * (dashboard.public.max), and unlisted is equally visible to public_players_v.
  */
 async function seedScene(): Promise<Scene> {
-  // Unstated precondition, stated. V392 granted this feature to a plain
-  // COMMUNITY org; V395 (entitlements v18 W2 T15, owner ruling 2026-09-03)
+  // Unstated precondition, stated. V393 granted this feature to a plain
+  // COMMUNITY org; V396 (entitlements v18 W2 T15, owner ruling 2026-09-03)
   // took it back — the three share loops became paid on Free and the PASS is
   // once again what separates the two competitions below, exactly as it was
-  // before V392 (V308). Read it, never write it — if the matrix flips again,
+  // before V393 (V308). Read it, never write it — if the matrix flips again,
   // this line says so instead of leaving a bare "expected null to be null"
   // under a test named for where the gate is evaluated.
   const [grant] = await sql<{ bool_value: boolean | null }[]>`
@@ -100,7 +100,7 @@ async function seedScene(): Promise<Scene> {
     where plan_key = 'community' and feature_key = 'dashboard.player_profiles'`;
   expect(
     grant?.bool_value,
-    "precondition: plan_entitlements('community','dashboard.player_profiles') must be FALSE (V395)",
+    "precondition: plan_entitlements('community','dashboard.player_profiles') must be FALSE (V396)",
   ).toBe(false);
 
   const suffix = randomUUID().slice(0, 8);
@@ -224,8 +224,8 @@ describe.skipIf(!HAS_DB)("getPublicPlayer — the player-profile gate sits outsi
 
   it("stays DARK on the unpassed competition — one $29 pass lights one competition", async () => {
     // The scoping assertion this pair exists for, restored. It asserted a 404
-    // until V392 made profiles free on Community (both sides rendered, and the
-    // pair proved nothing); V395 re-gated the key, so the pass is once again
+    // until V393 made profiles free on Community (both sides rendered, and the
+    // pair proved nothing); V396 re-gated the key, so the pass is once again
     // the only thing separating these two competitions in the SAME org on the
     // SAME plan. Both directions are pinned, so a re-freeing of the key shows
     // up here as a failure rather than as silence.

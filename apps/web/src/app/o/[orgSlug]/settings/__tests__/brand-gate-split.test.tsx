@@ -2,7 +2,7 @@
 // different keys, because the resolver already does.
 //
 //   branding         org logo upload + display   → free for everyone (V310)
-//   dashboard.theme  org THEME COLOUR            → Pro and above (V396)
+//   dashboard.theme  org THEME COLOUR            → Pro and above (V397)
 //
 // One flag drove both gates. V310 made `branding` free, so a Community org was
 // handed a working colour picker whose value is stripped on the way out:
@@ -12,8 +12,8 @@
 // kind of gate, one that takes the input and silently discards it.
 //
 // The colour key CHANGED in W2 (entitlements v18 T17, owner ruling 2026-09-03).
-// It was `dashboard.branding` until V396, which is the same key that removes the
-// "Powered by seazn.club" badge — and V395 had just made badge removal
+// It was `dashboard.branding` until V397, which is the same key that removes the
+// "Powered by seazn.club" badge — and V396 had just made badge removal
 // enterprise-only. So a Pro org lost the picker AND the rendered colour in one
 // step, for a perk it never asked to stop buying. `dashboard.branding` now
 // means the badge and nothing else; the colour rides `dashboard.theme`.
@@ -133,7 +133,7 @@ describe("settings → organisation: logo and brand colour are gated separately 
     expect(html).not.toContain("Org logo requires");
   });
 
-  it("a Pro org gets both — with the badge key OFF, as V395 leaves it", async () => {
+  it("a Pro org gets both — with the badge key OFF, as V396 leaves it", async () => {
     // The pairing that regressed: a Pro org has `dashboard.branding` FALSE
     // (the badge is shown on every self-serve plan) and must still get the
     // colour picker. Re-weld the two keys and this case fails — which is the

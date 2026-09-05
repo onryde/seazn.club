@@ -615,7 +615,7 @@ describe("scheduling/ai-scheduling.md gates the joint board on no plan at all", 
     const reverted = aiScheduling.replace(
       // The anchor moved in W2: the sentence used to begin "Planning several
       // divisions together needs **Pro**, or this competition's **Event
-      // Pass**". V392 made the key free on every plan, so the article gates
+      // Pass**". V393 made the key free on every plan, so the article gates
       // nothing and the anchor is the sentence that replaced it.
       /Planning several divisions together is[^\n]*/,
       "The multi-division board is a **Pro** feature.",
@@ -644,7 +644,7 @@ describe("scheduling/ai-scheduling.md gates the joint board on no plan at all", 
   });
 
   // INVERTED in W2 (entitlements v18). Naming the Event Pass used to CLEAR
-  // this rule, because Pro and the pass were the two doors. V392 granted
+  // this rule, because Pro and the pass were the two doors. V393 granted
   // `scheduling.multi_division` to community, so there is no door: both
   // sentences below are false now and both must red. The exemption is deleted
   // rather than left unexercised — an exemption whose premise has moved is a
@@ -682,7 +682,7 @@ describe.skipIf(!HAS_DB)("ai-scheduling.md's joint-board claim is the matrix's (
     // WHY THE ARTICLE MAY GATE NOTHING. This assertion is inverted from what it
     // was: community used to be false, which is what made "needs Pro, or this
     // competition's Event Pass" true and the guard's pass-exemption sensible.
-    // V392 (entitlements v18 W2 T1) granted the key to community, so joint
+    // V393 (entitlements v18 W2 T1) granted the key to community, so joint
     // planning is free on every plan and every plan gate on it is now false.
     for (const plan of ["community", "event_pass", "event_pass_l", "pro", "enterprise"]) {
       expect(grant("scheduling.multi_division", plan), `multi_division on ${plan}`).toBe(true);
@@ -883,13 +883,13 @@ describe.skipIf(!HAS_DB)("billing help articles quote the numbers the matrix enf
       entrants: await capFor("entrants.per_division.max", "event_pass_l"),
       divisions: await capFor("divisions.per_competition.max", "event_pass_l"),
     };
-    // INVERTED by V392, which gave L a real 512-entrant cap where it had been
+    // INVERTED by V393, which gave L a real 512-entrant cap where it had been
     // null. The word was the claim for as long as the row was null; now the
     // NUMBER is, and the word is the defect — asserted in both directions so a
     // page cannot carry "512 entrants" and "unlimited entrants" together. Kept
     // even though L is off sale: it is a claim about the SEED, and the rung is
     // dormant rather than deleted.
-    expect(l.entrants, "L's entrant cap is a number since V392").not.toBeNull();
+    expect(l.entrants, "L's entrant cap is a number since V393").not.toBeNull();
     // Anti-vacuity for the negatives below: the two rungs' figures differ, so
     // "the article does not quote L's numbers" cannot be satisfied by L and M
     // sharing a cap.
@@ -951,7 +951,7 @@ describe.skipIf(!HAS_DB)("billing help articles quote the numbers the matrix enf
   });
 
   it("every monthly AI credit figure in plans.md is that plan's live grant", async () => {
-    // `enterprise`, not `pro_plus`: V392 deleted that plan and moved the top
+    // `enterprise`, not `pro_plus`: V393 deleted that plan and moved the top
     // grant onto enterprise (500, re-cut from 200 in the same wave).
     for (const key of ["community", "pro", "enterprise"]) {
       const live = await capFor("ai.credits.monthly", key);
@@ -1335,7 +1335,7 @@ describe("the help-prose guards survive a rewording, not just a revert", () => {
   });
 
   it("catches a fee-ladder row that drifts from the matrix, and one that vanishes", () => {
-    // `enterprise`, not `pro_plus` — V392 deleted that plan and the 1% floor
+    // `enterprise`, not `pro_plus` — V393 deleted that plan and the 1% floor
     // moved onto enterprise, so the ladder's bottom rung kept its rate and
     // changed its name (see FEE_LADDER_PLAN_KEYS).
     const live = { community: 8, event_pass: 5, event_pass_l: 5, pro: 2, enterprise: 1 };
@@ -2858,7 +2858,7 @@ describe("the add-ons article's behaviour claims are pinned to the code", () => 
 });
 
 describe.skipIf(!HAS_DB)("the add-ons article quotes the caps the matrix enforces", () => {
-  // W2 (entitlements v18): the second plan was `pro_plus`, whose row V392
+  // W2 (entitlements v18): the second plan was `pro_plus`, whose row V393
   // deleted. Enterprise took its place at the top of the ladder — and its cap
   // is NULL, so the two halves of this test are no longer symmetrical. Pro has
   // a number and the article must quote it; enterprise has none and the article

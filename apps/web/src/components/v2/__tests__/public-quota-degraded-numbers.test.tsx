@@ -2,7 +2,7 @@
 // plan up hosts.
 //
 // ── What was missing ─────────────────────────────────────────────────────────
-// V395 made a create over the `dashboard.public.max` cap SUCCEED as a private
+// V396 made a create over the `dashboard.public.max` cap SUCCEED as a private
 // competition, returning `public_quota_degraded: { feature_key, limit }` on the
 // 201. Both create paths rendered a good card for it — and both destructured
 // only `{ name, slug }`, dropping `limit` on the floor. The organiser was told

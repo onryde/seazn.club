@@ -546,7 +546,7 @@ describe.skipIf(!HAS_DB)("org_has_feature parity with lib/entitlements", () => {
       values (${compId}, ${orgId}, 'event_pass_l')`;
     await invalidateOrgEntitlements(orgId);
 
-    // 512 entrants — diverges from M's 128. V392 (entitlements v18 §2) closed
+    // 512 entrants — diverges from M's 128. V393 (entitlements v18 §2) closed
     // L's formerly-unlimited entrants to a stated ceiling; #294's rule is
     // unchanged (L overrides M on exactly these two keys), only the number.
     expect(await getLimit(orgId, "entrants.per_division.max", compId)).toBe(512);

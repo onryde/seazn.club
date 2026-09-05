@@ -205,7 +205,7 @@ async function seedDivision(
   };
 }
 
-/** A paid (pro) org with a funded wallet. V392 opened every scheduling key on
+/** A paid (pro) org with a funded wallet. V393 opened every scheduling key on
  *  every plan, so `pro` is simply a real purchasable plan here. */
 async function seedPaidOrg(credits = 100): Promise<AuthCtx> {
   const { auth } = await seedOrg("community");

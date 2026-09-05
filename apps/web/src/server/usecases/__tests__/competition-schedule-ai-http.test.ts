@@ -168,7 +168,7 @@ async function seedDivision(
 const ALPHA_MOVABLE = 6;
 const BETA_MOVABLE = 10;
 
-/** enterprise (api.write is Enterprise-only after V392; scheduling keys are
+/** enterprise (api.write is Enterprise-only after V393; scheduling keys are
  *  free on every plan now)
  *  with a funded wallet, plus two divisions on DISJOINT courts so a legal joint
  *  plan exists. */

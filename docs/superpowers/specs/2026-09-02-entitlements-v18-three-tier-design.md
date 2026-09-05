@@ -34,7 +34,7 @@ everything bespoke to a conversation:
 | **Pro** ($14.99/mo, $128.99/yr) | Your whole season. | organisation scale: seats, teams, squads, credits |
 | **Contact Us** (dark `enterprise`) | Your federation. | unlimited + bespoke |
 
-Prices are the R2 ladder ruled 2026-09-02 and repriced in W3 alongside V397's
+Prices are the R2 ladder ruled 2026-09-02 and repriced in W3 alongside V398's
 additive fee (§3a is the live table; this row is a summary of it).
 
 Pro Plus is retired. No public plan carries an unlimited team, squad, seat or
@@ -157,7 +157,7 @@ Rationale is one line per changed row; unchanged rows say "keep".
 |---|---|---|---|---|---|---|
 | `registration.enabled` | T | T | T | T | T | keep |
 | `registration.paid` | T | T | T | T | T | keep |
-| `registration.fee_percent` | **5** | 2 | **4** | **4** | 1 | **W3, V397 (owner ruling 2026-09-04): the fee becomes ADDITIVE.** The connected account bears Stripe's own cost, so our percentage is pure margin and every rate comes down. At destination-charge rates today (2.9% + $0.30 US) our 2% on Pro never covers Stripe's cut, so Pro *and* Enterprise lose money on every registration regardless of its size — the loss is a rate, not an overhead a bigger entry fee absorbs. Additive also matches how the market quotes: LeagueApps "2.5% on top of Stripe", Regystra "1% plus standard Stripe processing". Pro stays 2 and Enterprise stays 1 (already pure margin); Free 8 → 5 is still how Free pays for itself, and the pass keeps a full point of daylight under it. The charge-path change (`on_behalf_of`) is a SEPARATE task — these rates are lower rates on the existing charge shape until it lands, so nobody is worse off at any point in the sequence |
+| `registration.fee_percent` | **5** | 2 | **4** | **4** | 1 | **W3, V398 (owner ruling 2026-09-04): the fee becomes ADDITIVE.** The connected account bears Stripe's own cost, so our percentage is pure margin and every rate comes down. At destination-charge rates today (2.9% + $0.30 US) our 2% on Pro never covers Stripe's cut, so Pro *and* Enterprise lose money on every registration regardless of its size — the loss is a rate, not an overhead a bigger entry fee absorbs. Additive also matches how the market quotes: LeagueApps "2.5% on top of Stripe", Regystra "1% plus standard Stripe processing". Pro stays 2 and Enterprise stays 1 (already pure margin); Free 8 → 5 is still how Free pays for itself, and the pass keeps a full point of daylight under it. The charge-path change (`on_behalf_of`) is a SEPARATE task — these rates are lower rates on the existing charge shape until it lands, so nobody is worse off at any point in the sequence |
 | `sponsors.tiers` | F | T | T | T | T | keep (organiser monetisation = leverage) |
 | `sponsors.monetize` | F | T | T | T | T | keep |
 
@@ -198,7 +198,7 @@ Rationale is one line per changed row; unchanged rows say "keep".
 | `scoring.audit_export` (signed audit trail) | F | T | **T** | **T** | T | tournament disputes are where the signed trail is wanted |
 | `cricket.dls` | **T** | T | T | T | T | correctness: a rain-rule result is the result. Manual target "still works" is exactly the correctness paywall R9 forbids |
 | `stats.player` | F | T | **T** | **T** | T | keep Pro (reach + data value); pass gets top-scorer tables for the weekend |
-| `dashboard.player_profiles` | **F** | T | T | T | T | W2 T15, owner ruling 2026-09-03: one of the three share loops that go PAID. Reverses V392's growth cell, with the acquisition-loop argument put and overruled — value capture over the loop. The pass rows (V308) are what separate one competition from the next again, so `public-players-gate.test.ts` is back to asserting a dark unpassed competition |
+| `dashboard.player_profiles` | **F** | T | T | T | T | W2 T15, owner ruling 2026-09-03: one of the three share loops that go PAID. Reverses V393's growth cell, with the acquisition-loop argument put and overruled — value capture over the loop. The pass rows (V308) are what separate one competition from the next again, so `public-players-gate.test.ts` is back to asserting a dark unpassed competition |
 | `realtime` (live scoreboard) | F | T | T | T | T | keep paid: it has marginal cost and it is THE pass trigger ("live scores on the big screen") |
 
 ### Reach & brand
@@ -211,11 +211,11 @@ Rationale is one line per changed row; unchanged rows say "keep".
 | `exports` | T | T | T | T | T | keep |
 | `exports.branded` | F | T | T | T | T | keep |
 | `logos.bulk` | F | T | – | – | T | keep (convenience) |
-| `embeds.enabled` | **F** | T | **T** | **T** | T | W2 T15, owner ruling 2026-09-03: paid on Free. The pass cells are the TRAP this row exists to record — the key had NO pass rows, because it did not need any while community granted it, so flipping Free without inserting them would have silently taken embeds off the competition an Event Pass paid for. V395 inserts both |
+| `embeds.enabled` | **F** | T | **T** | **T** | T | W2 T15, owner ruling 2026-09-03: paid on Free. The pass cells are the TRAP this row exists to record — the key had NO pass rows, because it did not need any while community granted it, so flipping Free without inserting them would have silently taken embeds off the competition an Event Pass paid for. V396 inserts both |
 | `discovery.listed` | T | T | T | T | T | keep |
 | `discovery.featured` | F | T | – | – | T | keep |
 | `discovery.branding` | F | T | – | – | T | keep |
-| `news.auto` (auto posts + weekly digest) | **F** | T | T | T | T | W2 T15, owner ruling 2026-09-03: paid on Free, reversing V392's own "owner asked" free cell. The pass rows stay, which makes this key pass-lifted — so the weekly digest, an ORG-level artefact, resolves its scope per competition (`newsAutoCompetitionScope`) instead of asking the org-wide question a pass cannot honestly answer |
+| `news.auto` (auto posts + weekly digest) | **F** | T | T | T | T | W2 T15, owner ruling 2026-09-03: paid on Free, reversing V393's own "owner asked" free cell. The pass rows stay, which makes this key pass-lifted — so the weekly digest, an ORG-level artefact, resolves its scope per competition (`newsAutoCompetitionScope`) instead of asking the org-wide question a pass cannot honestly answer |
 | `clubs.hierarchy` | T | T | T | T | T | keep |
 
 ### Platform & credits
@@ -279,7 +279,7 @@ re-derived from the matrix and guarded by `lib/copy-truth.ts`. Target copy
 
 **Superseded twice — read the W3 table below, not this paragraph's history.**
 W2 (2026-09-03) withdrew AUD outright, leaving four currencies; W3
-(2026-09-04) repriced every SKU onto CHARM POINTS alongside V397's additive
+(2026-09-04) repriced every SKU onto CHARM POINTS alongside V398's additive
 fee. What follows is the live table.
 
 Ladder rules that every number below satisfies and that
@@ -336,7 +336,7 @@ Two L passes stay cheaper than a year in every currency, so a two-tournament
 organiser is never pushed into a subscription; a third pass always costs more
 than subscribing.
 
-Why these points: the additive fee (V397) means our percentage is now margin
+Why these points: the additive fee (V398) means our percentage is now margin
 rather than a blended number, so the subscription can carry more of the price
 and the entry-fee rate less — Pro rises from $12 while Free's rate falls from
 8% to 5%. INR at ₹599/month is still the volume-market point and stays a

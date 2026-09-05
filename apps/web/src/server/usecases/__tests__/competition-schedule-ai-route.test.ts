@@ -321,7 +321,7 @@ function planResponse(p: unknown, usage: unknown = { input_tokens: 1200, output_
   return { parsed_output: p, stop_reason: "end_turn", usage, content: [] };
 }
 
-/** A paid (pro) org with a funded wallet. V392 opened every scheduling key on
+/** A paid (pro) org with a funded wallet. V393 opened every scheduling key on
  *  every plan, so `pro` is simply a real purchasable plan here. */
 async function seedPaidOrg(): Promise<AuthCtx> {
   const { auth } = await seedOrg("community");
@@ -401,7 +401,7 @@ afterAll(() => {
 describe.skipIf(!HAS_DB)("aiPlanForCompetition gates (#350 Task 4)", () => {
   it("kill switch → 403 FEATURE_DISABLED before BOTH paid gates", async () => {
     // Community HOLDS scheduling.ai (true on every plan since V302) and, since
-    // V392, scheduling.multi_division too — so neither paid gate fires from the
+    // V393, scheduling.multi_division too — so neither paid gate fires from the
     // plan any more and the kill switch must be pinned ahead of the FIRST of
     // them by an explicit deny. The 403 is then only reachable if the kill
     // switch is asked before either requireFeature.
@@ -440,7 +440,7 @@ describe.skipIf(!HAS_DB)("aiPlanForCompetition gates (#350 Task 4)", () => {
     // what pins the order.
     //
     // The DENY is now explicit. This case used to lean on Community simply not
-    // having the key, and V392 granted `scheduling.multi_division` on EVERY
+    // having the key, and V393 granted `scheduling.multi_division` on EVERY
     // plan — at which point the plan could no longer shut the gate and the
     // test read the 400 instead. The gate itself is NOT dead: an
     // `org_entitlement_overrides` deny still switches the key off for one org,

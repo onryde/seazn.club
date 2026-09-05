@@ -46,7 +46,7 @@
 //    no ('event_pass', ...) or ('event_pass_l', ...) insert for either key in
 //    db/migration/deltas"
 //
-// `V392__entitlements_v18.sql:108-109` inserts `officials.auto` for BOTH rungs.
+// `V393__entitlements_v18.sql:108-109` inserts `officials.auto` for BOTH rungs.
 // The claim was true when written and the file has no way to notice it stopped
 // being true — which is the whole hazard of recording a matrix fact in prose
 // next to code that deliberately reads the matrix at call time.

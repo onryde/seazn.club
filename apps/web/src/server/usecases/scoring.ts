@@ -339,7 +339,7 @@ export async function refreshNews(auth: AuthCtx, fixtureId: string): Promise<voi
     // that is about to open a transaction anyway.
     //
     // WITH the competition id, which costs the pooled lookup right above it.
-    // V395 made `news.auto` false on Free and left it granted on both Event
+    // V396 made `news.auto` false on Free and left it granted on both Event
     // Pass rungs, so an org-wide resolve falls through to the community row and
     // a pass holder's decided fixture silently drafts nothing on the
     // competition they paid for (`pass-scoping-guard.test.ts`).

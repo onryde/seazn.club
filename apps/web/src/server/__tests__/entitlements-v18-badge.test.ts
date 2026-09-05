@@ -1,4 +1,4 @@
-// The "Powered by seazn.club" badge, after V395 (entitlements v18 W2 T15,
+// The "Powered by seazn.club" badge, after V396 (entitlements v18 W2 T15,
 // owner ruling 2026-09-03): **shown on every plan except enterprise.**
 //
 // `dashboard.branding` is inverted copy — TRUE means the badge is REMOVED — so
@@ -58,15 +58,15 @@ afterAll(async () => {
   await client?.end();
 });
 
-describe.skipIf(!HAS_DB)("the seazn badge (V395: every plan except enterprise)", () => {
+describe.skipIf(!HAS_DB)("the seazn badge (V396: every plan except enterprise)", () => {
   it("is shown to a Free org's visitors", async () => {
     const { orgId } = await seedOrg("community");
     expect(await badgeShown(orgId)).toBe(true);
     expect(await hasFeature(orgId, "dashboard.branding")).toBe(false);
   });
 
-  it("is shown to a PRO org's visitors — the cell V395 moved", async () => {
-    // Pro carried `dashboard.branding` true from V112 all the way to V394, so
+  it("is shown to a PRO org's visitors — the cell V396 moved", async () => {
+    // Pro carried `dashboard.branding` true from V112 all the way to V395, so
     // this is the assertion that fails if the migration is reverted. Read
     // through the resolver, not off the row: `plan_entitlements` could hold
     // false and this could still come out true through an override or an

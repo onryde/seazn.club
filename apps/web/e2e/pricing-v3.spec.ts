@@ -95,7 +95,7 @@ test.describe("pricing page v3", () => {
 
       // Every figure below is READ FROM plan_entitlements. They were literals,
       // and the literals had already gone stale twice on this branch alone —
-      // V392 gave the pass rungs new caps and V397 re-cut the whole fee ladder,
+      // V393 gave the pass rungs new caps and V398 re-cut the whole fee ladder,
       // both after these lines were written. A pricing table that quotes the
       // matrix has to be ASSERTED against the matrix, or the test is a second,
       // slower copy of the same guess.

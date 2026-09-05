@@ -100,7 +100,7 @@ test("the wizard opens on Public, and at the cap it creates a PRIVATE competitio
 
     // THE DEFAULT, read off the control the organiser sees — deliberately
     // WITHOUT touching the visibility picker, because the thing under test is
-    // what the wizard opens on. Until V395 this was Private.
+    // what the wizard opens on. Until V396 this was Private.
     await expect(page.getByRole("radio", { name: /^public/i })).toBeChecked();
     await expect(page.getByRole("radio", { name: /^private/i })).not.toBeChecked();
 

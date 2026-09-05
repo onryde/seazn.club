@@ -14,7 +14,7 @@
 // The catalog is the authority, never a table typed in here: the assertions
 // below read `plan_entitlements` at run time, so a re-valuation moves this
 // test with it. That happened immediately — entitlements v18 (migration
-// V392) granted `officials.auto` to `pro`, deleted the `pro_plus` plan
+// V393) granted `officials.auto` to `pro`, deleted the `pro_plus` plan
 // outright, and made `tiebreakers.custom` free on `community` too. That red
 // the Pro/Pro Plus claims here and forced three summaries to be rewritten
 // (`officials/auto`, `officials/apply`, `officials/source` now say Pro; the

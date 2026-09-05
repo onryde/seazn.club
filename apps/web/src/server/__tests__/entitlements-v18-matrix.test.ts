@@ -1,4 +1,4 @@
-// V392 pin test — pins the LIVE `plan_entitlements` matrix against the
+// V393 pin test — pins the LIVE `plan_entitlements` matrix against the
 // design doc's own §2 markdown table, never a table typed into this file:
 //
 //   docs/superpowers/specs/2026-09-02-entitlements-v18-three-tier-design.md
@@ -17,7 +17,7 @@
 // entitlements.ts:459-460); NULL or no row denies. This test therefore
 // checks int_value for int keys and bool_value for bool keys, and leaves
 // any stray opposite-type value on the same row alone (the migration does
-// too — see V392's header comment).
+// too — see V393's header comment).
 import { describe, expect, it } from "vitest";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -83,7 +83,7 @@ function stripCell(raw: string): string {
 /**
  * Parses one already-stripped table cell into a typed value. `+1` is the
  * `competitions.max_active` pass-column annotation — per the migration
- * brief (V392 header, and
+ * brief (V393 header, and
  * docs/superpowers/plans/2026-09-03-entitlements-w2-matrix-plumbing.md) it
  * is deliberately backed by NO row (the effect is an exclusion in
  * `assertActiveQuota`, not an additive int), so it parses the same as a
@@ -159,7 +159,7 @@ const PARSED = parseMatrixSection(designDocText());
 // not pass. §2 carries 60 feature-key rows at the time this test was
 // written (61 table rows minus the one non-key "pass credit grant" row);
 // 45 is a floor with real slack, not a pin of the exact count.
-describe.skipIf(!HAS_DB)("V392 entitlements v18 matrix — pinned against design doc §2", () => {
+describe.skipIf(!HAS_DB)("V393 entitlements v18 matrix — pinned against design doc §2", () => {
   it("parsed a non-trivial matrix out of the design doc (anti-vacuity floor)", () => {
     expect(PARSED.length).toBeGreaterThanOrEqual(45);
   });
@@ -274,7 +274,7 @@ describe.skipIf(!HAS_DB)("V392 entitlements v18 matrix — pinned against design
     // T20 (reviewer pass 3, 2026-09-03). Every case above iterates rows PARSED
     // OUT OF the design doc and asks the database to match. Nothing went the
     // other direction, so a row in `plan_entitlements` that §2 never mentions
-    // passed unnoticed — while V395's header (`:3-5`), V396's header (`:3-4`)
+    // passed unnoticed — while V396's header (`:3-5`), V397's header (`:3-4`)
     // and this wave's plan all rest on the sentence "a row in the database
     // that §2 does not name is drift by construction". That guarantee did not
     // exist. There is no live defect (`import.events` and `dashboard.theme`

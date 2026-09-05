@@ -73,7 +73,7 @@ test("documents: Admit tickets on a competition with no confirmed registrations 
 });
 
 test("officials (PROMPT-22): propose → apply an auto-assignment", async ({ page, request }) => {
-  // officials.auto is a PAID grant: V290 put it above Pro, V392 (entitlements
+  // officials.auto is a PAID grant: V290 put it above Pro, V393 (entitlements
   // v18) brought it back down to Pro when it deleted the `pro_plus` plan. Run
   // this flow in a FRESH org flipped to pro by id — a fresh org has no cached
   // entitlements, and flipping the shared setup org would race the 5-min ent

@@ -120,7 +120,7 @@ const ymd = (ms: number) => new Date(ms).toISOString().slice(0, 10);
  *  officials or this feature, and out of this task's scope to fix (worth a
  *  separate finding) — worked around here by simply not typing a long org
  *  name into the walkthrough this task is supposed to be testing. */
-// RENAMED from `freshProPlusOrg` when entitlements v18 landed: V392 deleted the
+// RENAMED from `freshProPlusOrg` when entitlements v18 landed: V393 deleted the
 // `pro_plus` plan outright, so `setOrgPlanBySql` no longer accepts that key and
 // this file stopped compiling the moment the two branches met. `pro` is the top
 // SELF-SERVE plan now — `enterprise` exists but is `is_public = false`, the

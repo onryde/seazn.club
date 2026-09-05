@@ -140,7 +140,7 @@ export async function assertActiveQuota(auth: AuthCtx): Promise<void> {
  * thing under a different name.
  *
  * The count is the same `liveUnpassedCompetition` predicate `assertActiveQuota`
- * uses, and until V395 it was neither half of it: a flat
+ * uses, and until V396 it was neither half of it: a flat
  * `count(*) where visibility = 'public'` with no status filter and no pass
  * exclusion. So it metered HISTORY — a club three seasons in carried three
  * public dashboards for ever and was refused a fourth while nothing at all was
@@ -216,7 +216,7 @@ export async function resolveCreateVisibility(
   visibility: "private" | "unlisted" | "public";
   degraded: PublicQuotaDegraded | null;
 }> {
-  // PUBLIC BY DEFAULT (V395/T15). Applied here, before the guard reads it, so
+  // PUBLIC BY DEFAULT (V396/T15). Applied here, before the guard reads it, so
   // "what an omitted visibility means" is answered in exactly one place for
   // both create paths and for every direct usecase caller.
   const wanted = requested ?? "public";

@@ -94,7 +94,7 @@ setup("authenticate as a fresh Pro org", async ({ page }) => {
   ).json()) as { data?: { id: string }[] };
   const setupOrgId = orgs.data?.[0]?.id;
   if (setupOrgId) await setEntitlementOverrideSql(setupOrgId, "orgs.max_owned", 50);
-  // Same argument, second axis. V395 retired Pro's "unlimited public
+  // Same argument, second axis. V396 retired Pro's "unlimited public
   // dashboards" for a finite `dashboard.public.max` of 10, and competitions are
   // PUBLIC BY DEFAULT now — so competitions accumulate against that cap across
   // the whole run exactly as owned orgs do. Past it a create is not refused

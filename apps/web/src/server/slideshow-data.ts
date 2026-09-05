@@ -90,13 +90,13 @@ export type Slide =
 
 /**
  * Org chrome for the noticeboard masthead — brand color blob and logo URL,
- * entitlement-gated like the public pages (theme: dashboard.theme since V396,
+ * entitlement-gated like the public pages (theme: dashboard.theme since V397,
  * logo: branding). `themed` is exposed so callers gate the OTHER links of the
  * theme chain (competition.branding) with the same read-entitlement — the
  * console read model doesn't empty branding the way the public views do.
  *
  * The theme key is NOT `dashboard.branding`. That key is badge removal alone
- * (enterprise only, V395); reading it here is what took Pro's brand colour off
+ * (enterprise only, V396); reading it here is what took Pro's brand colour off
  * its own noticeboard and left the "pro slideshow carries the org accent theme"
  * smoke check red. `entitlements-v18-theme.test.ts` drives this function.
  */

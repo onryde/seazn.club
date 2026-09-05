@@ -79,7 +79,7 @@ belong to this programme, and changing them mid-flight without their tests would
 half a fix. Evidence and recommendation, so this can be decided rather than
 re-derived:
 
-**What happened.** `V392__entitlements_v18.sql` deleted the `pro_plus` plan outright
+**What happened.** `V393__entitlements_v18.sql` deleted the `pro_plus` plan outright
 and inserted `officials.auto` for both Event Pass rungs.
 `chooseGrantingPlanForCapabilities` (`scripts/bench/lib/plan.ts`) iterates
 `[...primaryGrantors].sort()` and breaks on the first plan satisfying every desired
@@ -95,7 +95,7 @@ no crash and no FK failure; the baseline just moved.
 **And the fixtures hide it.** `scripts/bench/lib/__tests__/plan.test.ts:27-30` and
 `dls-gate.test.ts:129-156,295-315` inject a fake catalog containing `pro_plus` and no
 `enterprise`, so they stay green while asserting a catalog shape that no longer exists
-— `dls-gate.test.ts:304` still expects `provisionedPlan === "pro_plus"`, a plan V392
+— `dls-gate.test.ts:304` still expects `provisionedPlan === "pro_plus"`, a plan V393
 deleted. The tests cannot witness the regression because their catalog is not the
 live one.
 

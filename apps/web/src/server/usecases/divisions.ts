@@ -608,7 +608,7 @@ export async function patchDivision(
 ): Promise<DivisionRow> {
   // Both gates below resolve against THIS division's competition, so one
   // lookup serves them: `formats.advanced` has always been pass-lifted, and
-  // V395 made `news.auto` pass-lifted too (false on Free, granted on both
+  // V396 made `news.auto` pass-lifted too (false on Free, granted on both
   // Event Pass rungs). On the pooled proxy and BEFORE `withTenant` opens —
   // `requireFeature` is a pooled read and issuing one inside a tenant
   // transaction is the pool self-deadlock (lib/db.ts).
@@ -625,7 +625,7 @@ export async function patchDivision(
     await requireFeature(auth.orgId, "formats.advanced", competitionId);
   }
   // SPEC-2: turning auto-drafted news ON is Pro `news.auto` — or an Event Pass
-  // on this competition since V395; turning it off is always allowed (a
+  // on this competition since V396; turning it off is always allowed (a
   // downgraded org can quiet its toggle).
   if (patch.auto_posts === true) {
     await requireFeature(auth.orgId, "news.auto", competitionId);

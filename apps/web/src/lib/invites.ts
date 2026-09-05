@@ -61,7 +61,7 @@ export function inviteProblem(invite: InviteRow): string | null {
  * scorer pool for scorer — still two separate COUNTS), and a scorer invite's
  * default_scope becomes an assignment atomically. No-op when already a member.
  *
- * V394 (entitlements v18 W2 T12, owner ruling 2026-09-03): both pools read
+ * V395 (entitlements v18 W2 T12, owner ruling 2026-09-03): both pools read
  * `members.max`. `scorers.max` is deleted from `plan_entitlements` and a key
  * with NO ROW resolves to 0, not unlimited (`getLimit`), so a grant that still
  * asked for it would refuse every scorer invite rather than freeing it. The two

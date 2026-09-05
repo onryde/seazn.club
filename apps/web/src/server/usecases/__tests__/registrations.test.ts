@@ -237,7 +237,7 @@ describe("fee math (pure)", () => {
   });
 
   it("rounds a charm-priced entry fee half-up, a cent either side", () => {
-    // Today's V397 rates against a live charm price, chosen so the cent is
+    // Today's V398 rates against a live charm price, chosen so the cent is
     // decided by the ROUNDING RULE and not by the arithmetic: 4% (both pass
     // rungs) of GBP 12.49 is 49.96 and goes UP to 50, 5% (Free) of the same
     // fee is 62.45 and goes DOWN to 62. One case each way, so neither

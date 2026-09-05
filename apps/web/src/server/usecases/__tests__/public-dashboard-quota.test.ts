@@ -1,4 +1,4 @@
-// `dashboard.public.max` — the cap on LIVE public dashboards, after V395
+// `dashboard.public.max` — the cap on LIVE public dashboards, after V396
 // (entitlements v18 W2 T15, owner rulings 2026-09-03).
 //
 // Two rulings land on one function. The cap counts **active** public
@@ -247,7 +247,7 @@ describe.skipIf(!HAS_DB)("assertPublicQuota counts LIVE public dashboards", () =
     expect(degraded.public_quota_degraded?.discoverable_dropped).toBeUndefined();
   });
 
-  it("Pro's cap is finite and larger than Free's (V395 retired 'unlimited public dashboards')", async () => {
+  it("Pro's cap is finite and larger than Free's (V396 retired 'unlimited public dashboards')", async () => {
     // Read from the matrix on both sides — the point is the ORDERING and the
     // finiteness, which is what the Pro card's old "unlimited" claim broke.
     const free = await seedOrg("community");

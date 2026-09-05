@@ -88,7 +88,7 @@ const M_RUNG = (enMarketing as Record<string, string>)[PASS_RUNG_MARKETING_KEY.e
  * NOT a mirror of the live matrix, and it never was — the header comment that
  * said so was wrong twice over. `event_pass_l`'s entrant cap is deliberately
  * NULL here because the unlimited branch is what two of the tests below exist
- * to pin, while V392 gave the live rung a real 512; and there was no fee row at
+ * to pin, while V393 gave the live rung a real 512; and there was no fee row at
  * all despite the comment promising one. The live figures are pinned against
  * `plan_entitlements` by lib/__tests__/pricing-cards.test.ts and
  * lib/__tests__/pricing-crossover.test.ts, which is where that job belongs.
@@ -102,7 +102,7 @@ const LIVE = [
   // null int_value on a PRESENT row = unlimited. This is the figure the L rung
   // is sold on.
   { plan_key: "event_pass_l", feature_key: "entrants.per_division.max", bool_value: null, int_value: null },
-  // The fee ladder the comparator is derived from (V397: community 5, pass 4,
+  // The fee ladder the comparator is derived from (V398: community 5, pass 4,
   // pro 2). The pass costs MORE per pound of entry fees and less up front,
   // which is the whole shape of the crossing.
   { plan_key: "community", feature_key: "registration.fee_percent", bool_value: null, int_value: 5 },

@@ -804,7 +804,7 @@ describe.skipIf(!HAS_DB)("applyCompetitionSchedule (#350)", () => {
     // The request carries client-supplied assignments, so this endpoint needs no
     // prior plan run and no AI: it is a multi-division bulk write in its own
     // right, reachable with a bare `manage` key. `scheduling.multi_division` is
-    // the gate for exactly that capability — and since V392 (entitlements v18
+    // the gate for exactly that capability — and since V393 (entitlements v18
     // §2) granted it on every plan, a DENY override is the only state that
     // still exercises the gate. Deleting this case instead would leave the
     // bulk-write door with no refusal test at all.

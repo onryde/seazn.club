@@ -1,6 +1,6 @@
 // W2 T6 — `officials.auto` is resolved against the competition being officiated.
 //
-// V392 turns `officials.auto` TRUE on `event_pass` and `event_pass_l` and FALSE
+// V393 turns `officials.auto` TRUE on `event_pass` and `event_pass_l` and FALSE
 // on `community`. usecases/officials.ts gated all three entry points ORG-WIDE
 // (`requireFeature(auth.orgId, "officials.auto")`, no third argument), and
 // lib/entitlements.ts only consults `competition_passes` when a competition is

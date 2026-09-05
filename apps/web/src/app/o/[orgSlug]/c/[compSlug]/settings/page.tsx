@@ -45,8 +45,8 @@ export default async function CompetitionSettingsPage({
       getCompetition(auth, id),
       hasFeature(auth.orgId, "discovery.branding"),
       // The competition BRANDING tab (accent colour) — `dashboard.theme` since
-      // V396 (entitlements v18 W2 T17), not `dashboard.branding`. That key is
-      // badge removal alone and has been enterprise-only since V395, so reading
+      // V397 (entitlements v18 W2 T17), not `dashboard.branding`. That key is
+      // badge removal alone and has been enterprise-only since V396, so reading
       // it here would have hidden this tab from every Pro subscriber while
       // `public_competitions_v` went on emptying the colour they had already
       // saved. Both ends of that chain move together, by design.

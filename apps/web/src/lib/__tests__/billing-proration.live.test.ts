@@ -40,7 +40,7 @@ describe.skipIf(!LIVE)(
       from plans where key = 'pro'`;
       // Every OTHER self-serve plan the console could switch to, READ from the
       // catalog rather than named. This query used to say `where key =
-      // 'pro_plus'`; entitlements v18 (V392) deleted that plan, so it returned no
+      // 'pro_plus'`; entitlements v18 (V393) deleted that plan, so it returned no
       // row and the bare `plus.annual` below threw a TypeError instead of failing
       // an assertion — a retired plan should not be able to crash this file.
       // Deriving the set means a plan added or retired moves the loop with it.

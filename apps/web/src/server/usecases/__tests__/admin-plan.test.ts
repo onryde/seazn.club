@@ -138,7 +138,7 @@ describe.skipIf(!HAS_DB)("admin plan tools", () => {
     await compToPro(actorId, orgId, null, "pre-test comp");
     const s = randomUUID().slice(0, 8);
     // TWO more active competitions than the community cap, read from the
-    // matrix (V319 10 -> V392 3), so the "two stalest freeze" arithmetic still
+    // matrix (V319 10 -> V393 3), so the "two stalest freeze" arithmetic still
     // exercises a PARTIAL freeze rather than an all-or-nothing one. A typed 12
     // against a cap of 3 froze nine and stopped testing the boundary.
     const [capRow] = await sql<{ int_value: number | null }[]>`
@@ -293,7 +293,7 @@ describe.skipIf(!HAS_DB)("admin plan tools", () => {
   });
 
   it("does not demote an org already comped above Pro", async () => {
-    // pro_plus is retired (entitlements v18, V392); "above Pro" is now the
+    // pro_plus is retired (entitlements v18, V393); "above Pro" is now the
     // non-public `enterprise` plan.
     const { orgId, actorId } = await seedOrg();
     await sql`update subscriptions set plan_key = 'enterprise' where id = (select subscription_id from organizations where id = ${orgId})`;

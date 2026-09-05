@@ -26,9 +26,9 @@ import type { MatrixData } from "@/lib/pricing-matrix";
 // Every figure a bullet quotes is a matrix claim, so each one names the
 // `plan_entitlements` row it comes from and `cardBullets` fills it at render
 // time. Copy that quotes a number goes stale under the row it describes — this
-// programme has fixed exactly that four times (V392 re-cut community's
-// active-competition cap to 3 against a card still promising 10; V395 took
-// badge removal off Pro; V397 re-cut the fee ladder to 5/4/2/1; the withdrawn
+// programme has fixed exactly that four times (V393 re-cut community's
+// active-competition cap to 3 against a card still promising 10; V396 took
+// badge removal off Pro; V398 re-cut the fee ladder to 5/4/2/1; the withdrawn
 // L rung's caps outlived its sale) — and a number typed into FOUR locale files
 // goes stale four times and is corrected once. `pricing-card-i18n.test.ts`
 // forbids a digit anywhere in these keys' copy, in any locale.
@@ -58,7 +58,7 @@ export interface CardBullet {
 const PASS_RUNG = "event_pass";
 
 export const FREE_CARD_BULLETS: readonly CardBullet[] = [
-  // 3, not 10: V392 (entitlements v18 W2 T1) re-cut community's active
+  // 3, not 10: V393 (entitlements v18 W2 T1) re-cut community's active
   // competition cap. Both figures are read from the matrix now, so this
   // sentence cannot be wrong about either of them again.
   {
@@ -71,7 +71,7 @@ export const FREE_CARD_BULLETS: readonly CardBullet[] = [
   { key: "pricing.community.f2", vars: { entrants: ["entrants.per_division.max", "community"] } },
   { key: "pricing.community.f3" },
   // V310: charging entry fees is free on every plan — only the platform cut
-  // differs (5 / 4 / 2 / 1% since V397). "Free-event" undersold Community and
+  // differs (5 / 4 / 2 / 1% since V398). "Free-event" undersold Community and
   // made the pass look like it unlocked payment rather than a cheaper rate.
   { key: "pricing.community.f4", vars: { fee: ["registration.fee_percent", "community"] } },
   { key: "pricing.community.f5" },
@@ -138,7 +138,7 @@ export const PASS_CARD_BULLETS: readonly CardBullet[] = [
 // bigger competition is exactly the one that needs more AI scheduling.
 //
 // W2 T12 (owner ruling 2026-09-03) re-cut L from 50 to 35, in the same pass
-// that took Pro's monthly grant 35 -> 25 and its trial 20 -> 15 (V394). The
+// that took Pro's monthly grant 35 -> 25 and its trial 20 -> 15 (V395). The
 // rungs still differ — that is the whole point of pricing the grant — but L is
 // no longer double M. Every figure in the copy that quotes it moved with this
 // line; `passCreditGrantFaults` / `passCreditProseFaults` /
@@ -162,7 +162,7 @@ export const PASS_CREDIT_GRANT: Record<PassKey, number> = {
 
 export const PRO_CARD_BULLETS: readonly CardBullet[] = [
   // HALF of this was true and half was not. `competitions.max_active` is still
-  // null on pro; `divisions.per_competition.max` is 20 since V392. One bullet
+  // null on pro; `divisions.per_competition.max` is 20 since V393. One bullet
   // covering two rows outlives a change to either, which is exactly how it
   // came to promise a cap the resolver enforces at 20.
   //
@@ -182,10 +182,10 @@ export const PRO_CARD_BULLETS: readonly CardBullet[] = [
   // still Pro-only, so the bullet keeps its row and loses its falsehood.
   { key: "pricing.pro.f4" },
   { key: "pricing.pro.f5" },
-  // WAS "Remove the “Powered by Seazn” badge". V395 (W2 T15, owner ruling
+  // WAS "Remove the “Powered by Seazn” badge". V396 (W2 T15, owner ruling
   // 2026-09-03) made badge removal ENTERPRISE-only — every self-serve plan
   // carries the badge now, Pro included — so this bullet promised a row Pro no
-  // longer holds. V396 then split the accent colour onto `dashboard.theme`,
+  // longer holds. V397 then split the accent colour onto `dashboard.theme`,
   // which IS a Pro grant and is the visual differentiator the badge line used
   // to stand in for. Replaced rather than dropped: the card keeps a claim about
   // how a Pro org's public pages look, and it is one the matrix backs.
@@ -193,7 +193,7 @@ export const PRO_CARD_BULLETS: readonly CardBullet[] = [
   // v16 league-ops (T84): suspensions/discipline, official ratings and
   // auto-drafted news posts all seed true on Pro (V293/V294/V295).
   { key: "pricing.pro.f7" },
-  // V392 brought `officials.auto` down from the deleted Pro Plus to Pro, so the
+  // V393 brought `officials.auto` down from the deleted Pro Plus to Pro, so the
   // Pro card can make this claim for the first time. Folded into the ratings
   // bullet rather than added as a tenth: one bullet, two rows
   // (`officials.auto` + `officials.marks`), both pinned in CARD_SURFACES.
@@ -201,9 +201,9 @@ export const PRO_CARD_BULLETS: readonly CardBullet[] = [
   { key: "pricing.pro.f9" },
 ];
 
-// The Pro Plus CARD ARRAYS were deleted here in W2 (entitlements v18, V392 +
+// The Pro Plus CARD ARRAYS were deleted here in W2 (entitlements v18, V393 +
 // T2): `PLUS_CARD_FEATURES`, `PLUS_COMING_SOON` and the whole "Everything in
-// Pro, plus…" surface. The plan does not exist — V392 deleted `pro_plus` from
+// Pro, plus…" surface. The plan does not exist — V393 deleted `pro_plus` from
 // `plans` and `plan_entitlements` outright — and `/pricing` had already stopped
 // rendering them: the page reads `pricing.plus.cta` as the PRO card's CTA label
 // and nothing else from that family, and `components/marketing/plus-reveal.tsx`
@@ -212,7 +212,7 @@ export const PRO_CARD_BULLETS: readonly CardBullet[] = [
 // Leaving them was not neutral. Every bullet was read under an EXCLUSIVITY
 // frame, and four of the five named rows that no longer exist on any plan
 // (`officials.auto` came back to Pro, `api.write` is enterprise-only,
-// `support.priority` was deleted by V392, `clubs.hierarchy` is free) — so the
+// `support.priority` was deleted by V393, `clubs.hierarchy` is free) — so the
 // guards that judged them reported five live falsehoods against a card nobody
 // can see, which is noise that hides the real ones.
 //

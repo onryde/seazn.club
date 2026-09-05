@@ -950,7 +950,7 @@ test.describe("T9 · past-due grace degrades to community after 14 days", () => 
 
   // Plan-generic (reviewer ITEM-3): the grace degrade applies above Pro too,
   // exercised end-to-end so the constraint is proven on the top paid tier.
-  // That tier is `enterprise` since V392 (entitlements v18) deleted `pro_plus`
+  // That tier is `enterprise` since V393 (entitlements v18) deleted `pro_plus`
   // from `plans` — the point of the test is that the degrade is not keyed to
   // one plan, so it follows the top tier rather than dying with the old one.
   test("banner shows and gated writes 402 for a >14d past_due ENTERPRISE org", async ({ page }) => {

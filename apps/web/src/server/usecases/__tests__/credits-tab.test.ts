@@ -24,7 +24,7 @@ import { creditHistory, getCreditsTab } from "../credits-tab";
 const HAS_DB = !!process.env.DATABASE_URL;
 
 /** `ai.credits.monthly` per plan, READ from the live matrix. The ladder has
- *  moved twice (V320 community 10 / pro 60, V392 community 5 / pro 35) and a
+ *  moved twice (V320 community 10 / pro 60, V393 community 5 / pro 35) and a
  *  typed number stops the meter assertions testing the clamp. */
 const rate: Record<string, number> = {};
 

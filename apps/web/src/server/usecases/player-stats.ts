@@ -275,7 +275,7 @@ export async function recomputePlayerStats(
 /** The competition a `stats.player` gate must be resolved against.
  *
  *  lib/entitlements.ts only consults `competition_passes` when a competition is
- *  in scope, and V392 turns `stats.player` TRUE on `event_pass`/`event_pass_l`
+ *  in scope, and V393 turns `stats.player` TRUE on `event_pass`/`event_pass_l`
  *  and FALSE on `community` — so gating org-wide sold a Free org player stats
  *  with the pass and then refused them on the competition it paid for.
  *

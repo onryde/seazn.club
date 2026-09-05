@@ -85,7 +85,7 @@ describe.skipIf(!HAS_DB)("an Event Pass under a paid plan (#327/#337)", () => {
   });
 
   it("keeps the pass's HIGHER entrant ceiling when the org upgrades to Pro", async () => {
-    // #337 itself. L lifts entrants to 512 (V392 closed the formerly-unlimited
+    // #337 itself. L lifts entrants to 512 (V393 closed the formerly-unlimited
     // cap); the upgrade to Pro must not put its own 256 ceiling back on a
     // competition the org already paid to unlock.
     await grantPass(orgId, compId, "event_pass_l");
@@ -97,7 +97,7 @@ describe.skipIf(!HAS_DB)("an Event Pass under a paid plan (#327/#337)", () => {
 
   it("keeps the PLAN's higher division ceiling rather than an M pass's lower one", async () => {
     // The other direction, and the one a naive "pass wins" overlay gets wrong.
-    // It used to be argued with L (20) against Pro's unlimited; V392 gave Pro
+    // It used to be argued with L (20) against Pro's unlimited; V393 gave Pro
     // 20 as well, so L can no longer witness it — an M pass (10) against Pro's
     // 20 is the pair that still discriminates, and it is the same rule.
     await setPlan(orgId, "pro");
@@ -123,7 +123,7 @@ describe.skipIf(!HAS_DB)("an Event Pass under a paid plan (#327/#337)", () => {
     // would strip a paid feature from exactly the competition the org paid
     // extra for.
     //
-    // The plan under test is `enterprise` because V395 (W2 T15) moved badge
+    // The plan under test is `enterprise` because V396 (W2 T15) moved badge
     // removal off Pro, and this key is now the ONLY plan-true / both-rungs-
     // false shape left in the whole matrix — a query for another candidate
     // returns nothing. So this case has to follow the key rather than stay on

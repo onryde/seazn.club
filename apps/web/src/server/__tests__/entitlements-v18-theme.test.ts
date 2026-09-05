@@ -1,9 +1,9 @@
-// The public ACCENT COLOUR, after V396 (entitlements v18 W2 T17, owner ruling
+// The public ACCENT COLOUR, after V397 (entitlements v18 W2 T17, owner ruling
 // 2026-09-03): its own key, `dashboard.theme`, Pro and above.
 //
 // `dashboard.branding` used to gate two unrelated things — removing the
 // "Powered by seazn.club" badge AND the accent colour on every public surface.
-// V395 made badge removal enterprise-only, and took a paying Pro customer's
+// V396 made badge removal enterprise-only, and took a paying Pro customer's
 // brand colour off their public pages with it. This suite is the witness that
 // the two are now independent, so the next ruling that moves ONE of them
 // cannot silently move the other.
@@ -96,10 +96,10 @@ afterAll(async () => {
   await client?.end();
 });
 
-describe.skipIf(!HAS_DB)("the public accent colour (V396: dashboard.theme)", () => {
+describe.skipIf(!HAS_DB)("the public accent colour (V397: dashboard.theme)", () => {
   it("reaches a PRO org's landing page, while the badge stays on", async () => {
     // The exact regression T17 exists to repair: these two facts were one key
-    // until V396, so a Pro org lost its palette the day the badge came back.
+    // until V397, so a Pro org lost its palette the day the badge came back.
     // Asserting them TOGETHER is what makes the split falsifiable — either
     // half alone passes with the keys re-welded.
     const scene = await seedScene("pro");

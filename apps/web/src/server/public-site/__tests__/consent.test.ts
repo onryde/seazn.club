@@ -80,7 +80,7 @@ async function seedPublicScene(
 ): Promise<PublicScene> {
   const { auth, orgId } = await seedOrg();
   // Consent is the variable under test here, so `dashboard.player_profiles` is
-  // STATED either way rather than inherited. V392 granted the key to Community,
+  // STATED either way rather than inherited. V393 granted the key to Community,
   // so the false arm now has to DENY explicitly — leaving the override out
   // would silently give every scene the feature and stop the entitlement split
   // being probed at all.
@@ -190,9 +190,9 @@ describe.skipIf(!HAS_DB)("public read model — visibility (doc 09 §1)", () => 
 });
 
 describe.skipIf(!HAS_DB)("entitlement split (doc 09 §4, doc 10)", () => {
-  // The view's key CHANGED in W2 (entitlements v18 T17, V396):
+  // The view's key CHANGED in W2 (entitlements v18 T17, V397):
   // `dashboard.branding` -> `dashboard.theme`. The colour and the "Powered by
-  // seazn.club" badge shared one key until then, so V395 making badge removal
+  // seazn.club" badge shared one key until then, so V396 making badge removal
   // enterprise-only silently emptied this blob for Pro. The assertion is
   // unchanged and still has its teeth — override the key the view reads and
   // the colour comes back, override anything else and it does not — but it now
@@ -246,7 +246,7 @@ describe.skipIf(!HAS_DB)("entitlement split (doc 09 §4, doc 10)", () => {
     const { auth } = await seedOrg();
     // The active-comp cap would fire first — lift it via override so this test
     // isolates the public-dashboard quota. The quota itself is READ from the
-    // matrix (V319 1 -> V392 3), so a re-tune moves the boundary this test
+    // matrix (V319 1 -> V393 3), so a re-tune moves the boundary this test
     // walks up to instead of leaving it asserting nothing.
     const [{ int_value: pub }] = await sql<{ int_value: number }[]>`
       select int_value from plan_entitlements
@@ -257,7 +257,7 @@ describe.skipIf(!HAS_DB)("entitlement split (doc 09 §4, doc 10)", () => {
     for (let i = 1; i <= pub; i++) {
       await createCompetition(auth, { ends_on: "2030-12-31", name: `Public ${i}`, visibility: "public", branding: {} });
     }
-    // V395 (W2 T15/F, owner ruling 2026-09-03): a CREATE over the cap no
+    // V396 (W2 T15/F, owner ruling 2026-09-03): a CREATE over the cap no
     // longer throws — it creates the competition PRIVATE and says so through
     // the row it returns. The boundary is still here, and this asserts it in
     // the shape the product now has: the competition exists and is not public.

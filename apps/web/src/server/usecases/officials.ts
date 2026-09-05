@@ -455,7 +455,7 @@ export type AutoAssignInput = z.infer<typeof AutoAssignInput>;
 
 /** The competition an `officials.auto` gate must be resolved against.
  *
- *  V392 turns `officials.auto` TRUE on `event_pass`/`event_pass_l` and FALSE on
+ *  V393 turns `officials.auto` TRUE on `event_pass`/`event_pass_l` and FALSE on
  *  `community`, and the Event Pass overlay in lib/entitlements.ts is
  *  competition-scoped — it only consults `competition_passes` when a competition
  *  is in scope. Gating org-wide would therefore sell a Free org auto-officials
@@ -469,7 +469,7 @@ export type AutoAssignInput = z.infer<typeof AutoAssignInput>;
  *  `createStages`' `divComp` lookup in usecases/stages.ts.
  *
  *  A missing row yields `undefined`, which resolves the gate org-wide — the
- *  pre-V392 behaviour — and the 404 for the vanished division/stage is then
+ *  pre-V393 behaviour — and the 404 for the vanished division/stage is then
  *  raised inside the transaction as before.
  */
 async function competitionForDivision(divisionId: string): Promise<string | undefined> {

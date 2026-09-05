@@ -5,7 +5,7 @@
 -- migration cannot drift apart in one direction only).
 --
 -- Four changes, all UPDATEs and one key deletion. Resolver semantics are the
--- ones V392's header records and this file is written against them: for an int
+-- ones V393's header records and this file is written against them: for an int
 -- key only `int_value` is read, `int_value = NULL` means unlimited, and a key
 -- with NO ROW resolves to 0 — DENY, not unlimited. That last one is why step 4
 -- ships with its two call-site edits and is not a data-only change.
@@ -68,7 +68,7 @@ update plan_entitlements
 -- for it in the same commit and fall back to the `members.max` pool:
 --   * app/api/orgs/[id]/members/[userId]/role/route.ts
 --   * lib/invites.ts (grantInvite)
--- Overrides go with the plan rows, the pairing V390 and V392 both use.
+-- Overrides go with the plan rows, the pairing V390 and V393 both use.
 delete from org_entitlement_overrides
  where feature_key = 'scorers.max';
 delete from plan_entitlements

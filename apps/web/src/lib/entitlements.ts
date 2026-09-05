@@ -104,7 +104,7 @@ export function isPaidPlan(planKey: string): boolean {
 }
 
 /** A subscription whose row still claims a paid plan (`pro`, or `enterprise`
- *  from a staff comp — `pro_plus` was dropped by V392 and no row can name it
+ *  from a staff comp — `pro_plus` was dropped by V393 and no row can name it
  *  any more) while
  *  the resolver has degraded it to community — a lapsed trial, an expired staff
  *  comp, or exhausted dunning. The billing page uses this to show the RESOLVED

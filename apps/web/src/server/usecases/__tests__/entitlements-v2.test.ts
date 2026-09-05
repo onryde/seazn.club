@@ -146,7 +146,7 @@ const MATRIX: { feature: string; plan: Plan; allowed: boolean }[] = [
   { feature: "stages.per_division.max",       plan: "pro",       allowed: true },
   { feature: "entrants.per_division.max",     plan: "community", allowed: false },
   { feature: "entrants.per_division.max",     plan: "pro",       allowed: true },
-  // V392 (entitlements v18 §2): double elimination and cricket DLS are free on
+  // V393 (entitlements v18 §2): double elimination and cricket DLS are free on
   // every plan now — the rows still EXIST in plan_entitlements (unlike
   // scoring.match_timeline below, which was deleted), so the community arm is
   // still a real assertion: it says the boundary was opened, not removed.
@@ -164,7 +164,7 @@ const MATRIX: { feature: string; plan: Plan; allowed: boolean }[] = [
   { feature: "cricket.dls",                   plan: "pro",       allowed: true },
   { feature: "api.access",                    plan: "community", allowed: false },
   { feature: "api.access",                    plan: "pro",       allowed: true },
-  // V392 (entitlements v18) re-homes api.write above Pro on Enterprise: score/manage keys need it (a
+  // V393 (entitlements v18) re-homes api.write above Pro on Enterprise: score/manage keys need it (a
   // community org's write-key attempt still 402s on api.access first, above).
   { feature: "api.write",                     plan: "pro",       allowed: false },
   { feature: "api.write",                     plan: "enterprise", allowed: true },
@@ -182,10 +182,10 @@ async function probe(feature: string, auth: AuthCtx): Promise<() => Promise<unkn
       // The active-comp cap would fire first; lift it via override so this
       // probe isolates the public-dashboard quota. Fill to the COMMUNITY cap,
       // read from the matrix rather than typed (it has moved 1 -> 3 -> 2), so
-      // the community arm sits exactly at its limit and pro (10 since V395)
+      // the community arm sits exactly at its limit and pro (10 since V396)
       // still has room.
       //
-      // THE PROBE IS A PATCH, NOT A CREATE, since V395 (T15/F, owner ruling
+      // THE PROBE IS A PATCH, NOT A CREATE, since V396 (T15/F, owner ruling
       // 2026-09-03): a create over this cap no longer 402s, it creates the
       // competition PRIVATE and says so, so a create could never satisfy the
       // `allowed: false` arm again. Switching an existing competition to
@@ -207,7 +207,7 @@ async function probe(feature: string, auth: AuthCtx): Promise<() => Promise<unkn
     case "divisions.per_competition.max": {
       // Fill to the COMMUNITY cap, read from the matrix. That one number does
       // both arms: community sits exactly at its limit and must 402, while pro
-      // (V392: 20, no longer unlimited) still has room and must succeed.
+      // (V393: 20, no longer unlimited) still has room and must succeed.
       // Filling to the ORG's own cap made the pro arm 402 the moment pro
       // stopped being unlimited.
       const comp = await makeCompetition(auth, "D");
@@ -391,7 +391,7 @@ describe.skipIf(!HAS_DB)("downgrade simulation (doc 10 §2.4)", () => {
     await setPlan(auth.orgId, "community");
 
     // Nothing deleted; the most recently active survive the community cap
-    // (V319 10 -> V392 3) and the rest freeze. The cap is READ, so a re-tune
+    // (V319 10 -> V393 3) and the rest freeze. The cap is READ, so a re-tune
     // moves this test instead of quietly freezing nothing.
     const [{ int_value: commCap }] = await sql<{ int_value: number }[]>`
       select int_value from plan_entitlements
@@ -565,7 +565,7 @@ describe.skipIf(!HAS_DB)("event pass (v3/07 §3)", () => {
     expect(await getLimit(auth.orgId, "entrants.per_division.max", comp.id)).toBe(128);
   });
 
-  // Fee ladder, re-cut by V397 for the additive-fee model: community 5 → pass 4
+  // Fee ladder, re-cut by V398 for the additive-fee model: community 5 → pass 4
   // → pro 2 → enterprise 1. The community leg is still the one that matters. It
   // once had no row at all and fell back to platformFeeDefault(), which was
   // EXACTLY the pass rate — so the pass discounted nothing.
@@ -574,7 +574,7 @@ describe.skipIf(!HAS_DB)("event pass (v3/07 §3)", () => {
   // would have hidden it. This test used to add `not.toBe(await
   // platformFeeDefault())`, reasoning that a resolved rate differing from the
   // fallback proves a real row was read. Sound while community was 8 and the
-  // default 5. V397 cut community to 5 and the default is ALSO 5, so delete the
+  // default 5. V398 cut community to 5 and the default is ALSO 5, so delete the
   // community row today and `feePercentFor` still answers 5 — from the
   // fallback — and the inequality check cannot tell the cases apart. Value
   // inequality was a proxy; the row's presence is the actual claim, so it is

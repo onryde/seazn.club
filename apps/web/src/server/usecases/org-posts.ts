@@ -1098,7 +1098,7 @@ const DECIDED_STATUSES = ["decided", "finalized", "forfeited"] as const;
  * The competitions this org may auto-publish for — the digest's entitlement
  * scope, resolved PER COMPETITION and never org-wide.
  *
- * V395 (entitlements v18 W2 T15) made `news.auto` false on Free and left it
+ * V396 (entitlements v18 W2 T15) made `news.auto` false on Free and left it
  * granted on both Event Pass rungs, which makes it a pass-lifted key: the
  * resolver only consults `competition_passes` when the caller hands it a
  * competition id, so `hasFeature(orgId, "news.auto")` would fall straight
@@ -1430,7 +1430,7 @@ export async function assembleDigestUpcoming(
   // (existing digestUpcoming tests) that predate this param.
   locale: Locale = "en",
   // The digest's entitlement scope (`newsAutoCompetitionScope`). Defaulted to
-  // `null` = unfiltered ONLY for the direct-test callers that predate V395;
+  // `null` = unfiltered ONLY for the direct-test callers that predate V396;
   // `digestForOrg` always passes a real set, and an empty set means "this org
   // may auto-publish for nothing", which is not the same as null.
   competitionIds: readonly string[] | null = null,
@@ -1600,7 +1600,7 @@ async function digestForOrg(
  *  the V295 migration draws between manual (free) and generated (Pro). */
 export async function generateWeeklyDigest(auth: AuthCtx, orgId: string): Promise<OrgPost> {
   void orgId; // RLS scopes to auth.orgId; the route proved auth against this org.
-  // V395: `news.auto` is pass-lifted, so the entitlement question is per
+  // V396: `news.auto` is pass-lifted, so the entitlement question is per
   // competition and the answer is a SET, not a boolean — see
   // `newsAutoCompetitionScope`. Nothing this org may auto-publish for = the
   // same 402 `requireFeature` used to raise, with the same key. `permitted`,
@@ -1667,7 +1667,7 @@ export async function sweepWeeklyDigests(
 
   let digestsCreated = 0;
   for (const orgId of candidates) {
-    // Per competition, never org-wide (V395 made the key pass-lifted) — the
+    // Per competition, never org-wide (V396 made the key pass-lifted) — the
     // sweep asks the same question the button path asks, through the same
     // resolver, so the two cannot answer differently.
     // The sweep's candidates all HAVE fixtures, so `total` is never 0 here in

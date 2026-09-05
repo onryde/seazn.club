@@ -60,7 +60,7 @@ async function shot(page: Page, name: string): Promise<void> {
 }
 
 /** Create + activate a fresh PRO org. `officials.auto` is what the officials
- *  auto-draft step needs; V290 put it above Pro, and V392 (entitlements v18)
+ *  auto-draft step needs; V290 put it above Pro, and V393 (entitlements v18)
  *  brought it back DOWN to Pro when it deleted the `pro_plus` plan outright, so
  *  Pro is the tier that grants it now. Same fresh-org-by-id flip
  *  schedule-panels.spec uses to dodge the shared org's primed entitlement cache. */
@@ -1424,7 +1424,7 @@ test.describe("community credit gate", () => {
       // Not a dead end: the recovery block's own CTAs, and the check still on
       // offer underneath once the wallet is topped up.
       await expect(outOfCredits.getByRole("button", { name: "Buy credits" })).toBeVisible();
-      // `pro`, not `pro_plus`: V392 deleted that plan from `plans`, so the CTA
+      // `pro`, not `pro_plus`: V393 deleted that plan from `plans`, so the CTA
       // pointed at a tier nobody can buy. The recovery block still offers an
       // upgrade — it now names the top self-serve plan (ai-out-of-credits.tsx).
       await expect(outOfCredits.locator('[data-upgrade="pro"]')).toBeVisible();

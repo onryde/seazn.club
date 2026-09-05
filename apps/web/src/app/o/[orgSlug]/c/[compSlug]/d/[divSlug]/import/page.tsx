@@ -7,7 +7,7 @@ export const dynamic = "force-dynamic";
 // needs to link a fixture — every string lives in ImportClient.tsx via
 // useMsg(), so there is nothing to localize here.
 //
-// Feature absent -> notFound(). V395 (entitlements v18 W2 T14, owner ruling
+// Feature absent -> notFound(). V396 (entitlements v18 W2 T14, owner ruling
 // 2026-09-03) grants `import.events` on all five plans, so this gate now
 // admits every org and only a staff `org_entitlement_overrides` deny closes
 // it — it is a deny hook, no longer a rollout curtain. The ROUTE (Task 5) is

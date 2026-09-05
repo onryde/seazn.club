@@ -202,7 +202,7 @@ const SELLABLE_GRANTS: readonly number[] = SELLABLE_PASS_KEYS.map((k) => PASS_CR
 
 // `PLUS_VALUES` — `pricing.faq.proPlus.a`, the /pricing FAQ answer to "What's
 // in Pro Plus?" — is DELETED here with the key itself (retired-plan copy sweep).
-// V392 removed `pro_plus` from `plans`, and a question ABOUT a plan that does
+// V393 removed `pro_plus` from `plans`, and a question ABOUT a plan that does
 // not exist has no true rewording: the answer went, not its wording. Its three
 // scans (the anti-vacuity floor, the retired-claim registry, the half-rate
 // axis) lose one input each; every one of them still has others.
@@ -1026,7 +1026,7 @@ describe.skipIf(!HAS_DB)("the four-locale dictionaries say what the resolver enf
     // the W8 review round. 256 -> 252: entitlements v18 R13 hid the extra-seat
     // add-on, so `pricing.addons.seat` no longer exists to pin in any locale.
     // 252 -> 248: the retired-plan copy sweep deleted `pricing.faq.proPlus.a`,
-    // the answer to a question about a plan V392 removed from `plans`.
+    // the answer to a question about a plan V393 removed from `plans`.
     // 248 -> 252: `pricing.pass.crossover`, the pass-vs-Pro comparator W2 added
     // to the Event Pass card — the page priced both offers and never said which
     // one was cheaper, or from what volume of entry fees that changes.
@@ -1574,7 +1574,7 @@ describe.skipIf(!HAS_DB)("the four-locale dictionaries say what the resolver enf
   }> = [
     { key: "billing.community.f4", plan: "community", polarity: "granted", features: ["registration.enabled", "registration.paid"] },
     { key: "billing.community.f5", plan: "community", polarity: "denied", features: ["exports.branded", "dashboard.player_profiles"] },
-    // TWO rows since V396 split the accent colour off badge removal, and this
+    // TWO rows since V397 split the accent colour off badge removal, and this
     // sentence names both things ("Theme colour & badge removal"). Pinning only
     // one of them would let the other move under the ✗ unnoticed.
     { key: "billing.community.f6", plan: "community", polarity: "denied", features: ["dashboard.branding", "dashboard.theme"] },
@@ -1584,9 +1584,9 @@ describe.skipIf(!HAS_DB)("the four-locale dictionaries say what the resolver enf
     // sentence used to name — `stats.player` — which is the one of the three
     // that is still Pro-only.
     { key: "billing.pro.f4", plan: "pro", polarity: "granted", features: ["stats.player"] },
-    // WAS `dashboard.branding`. V395 (W2 T15) made badge removal
+    // WAS `dashboard.branding`. V396 (W2 T15) made badge removal
     // enterprise-only, so that row went FALSE on pro and this ✓ would have been
-    // a live falsehood; V396 split the accent colour — which is what "Custom
+    // a live falsehood; V397 split the accent colour — which is what "Custom
     // branding" means here — onto `dashboard.theme`, which pro does grant.
     { key: "billing.pro.f5", plan: "pro", polarity: "granted", features: ["dashboard.theme"] },
     { key: "billing.pro.f6", plan: "pro", polarity: "granted", features: ["exports"] },
@@ -1991,7 +1991,7 @@ describe.skipIf(!HAS_DB)("the four-locale dictionaries say what the resolver enf
      *
      * `billing.pro.f1` was in `unlimited` — "BOTH competitions.max_active and
      * divisions.per_competition.max are null on pro, so the claim is the WORD
-     * and not a number". V392 capped pro at 20 divisions. Moving it to
+     * and not a number". V393 capped pro at 20 divisions. Moving it to
      * `numeric` would have dropped the requirement to say "unlimited" for the
      * row that still is; leaving it here would have kept forbidding the digit
      * the truth now requires. Either single-class answer WEAKENS a predicate,
@@ -2000,7 +2000,7 @@ describe.skipIf(!HAS_DB)("the four-locale dictionaries say what the resolver enf
      * A row here must do BOTH: say unlimited, and quote a number.
      */
     const mixed: Record<string, string> = {
-      "billing.pro.f1": "TWO rows, one of each shape: competitions.max_active is null on pro (the WORD) and divisions.per_competition.max is 20 since V392 (the NUMBER). Pinned by pricing-cards.test.ts 'billing.pro.f1 says unlimited for the unlimited row and quotes the cap for the capped one', which also forbids any digit that is not the live division cap — so a second figure cannot ride in beside it.",
+      "billing.pro.f1": "TWO rows, one of each shape: competitions.max_active is null on pro (the WORD) and divisions.per_competition.max is 20 since V393 (the NUMBER). Pinned by pricing-cards.test.ts 'billing.pro.f1 says unlimited for the unlimited row and quotes the cap for the capped one', which also forbids any digit that is not the live division cap — so a second figure cannot ride in beside it.",
     };
     const unclassified = PANEL_KEYS.filter(
       (k) => !declared.has(k) && !(k in numeric) && !(k in unlimited) && !(k in mixed),
@@ -2216,7 +2216,7 @@ describe.skipIf(!HAS_DB)("the four-locale dictionaries say what the resolver enf
     // floor computed from the thing it bounds is not a floor.
     // 3 -> 2 in the retired-plan copy sweep, and ONLY because the third key was
     // DELETED WITH ITS SUBJECT: `pricing.faq.proPlus.a` answered "What's in Pro
-    // Plus?" about a plan V392 removed from `plans`. A floor is lowered for a
+    // Plus?" about a plan V393 removed from `plans`. A floor is lowered for a
     // deleted subject, never for a reword — a value that stops matching
     // `halfClaim` while its key survives reds the derivation below instead, and
     // that is the direction this floor cannot see.
@@ -2378,7 +2378,7 @@ describe.skipIf(!HAS_DB)("the four-locale dictionaries match plan_entitlements",
   // ── W2: the four caps in the Event Pass FAQ answer ────────────────────────
   //
   // `pricing.faq.eventPass.a` describes BOTH rungs in one sentence and quotes
-  // four numbers. None of them was bound to anything, and it showed: V392 gave
+  // four numbers. None of them was bound to anything, and it showed: V393 gave
   // the L rung a real 512-entrant cap where `int_value` had been null, and the
   // answer went on promising "no entrant limit at all" — in all four locales,
   // for a whole wave.
@@ -2386,7 +2386,7 @@ describe.skipIf(!HAS_DB)("the four-locale dictionaries match plan_entitlements",
   // It survived two guards that look like they cover it. `APPROVED_DICTIONARY_COPY`
   // pins the WORDING, which is a different question from whether the wording is
   // true. `capClaimFaults` is the rule for exactly this claim family and even
-  // carries the V392 case in its own comment — but it is only ever called with
+  // carries the V393 case in its own comment — but it is only ever called with
   // the rung DESCRIPTIONS (plan-copy-truth.test.ts), and nothing pointed it at
   // this key. A guard's scope is its call site, not its name.
   //
@@ -2519,13 +2519,13 @@ describe.skipIf(!HAS_DB)("the four-locale dictionaries match plan_entitlements",
     expect(grants["scheduling.board"]!.event_pass, "V353 put the board on the pass").toBe(true);
     expect(grants["scheduling.multi_division"]!.event_pass).toBe(true);
     expect(grants["officials.marks"]!.event_pass).toBe(true);
-    // `stats.player` LEFT this card in W2. V392 granted it to both pass rungs,
+    // `stats.player` LEFT this card in W2. V393 granted it to both pass rungs,
     // so "player stats … the pass never covers" became the same falsehood V353
     // created with the schedule board — a Pro card arguing against the $29
     // purchase sitting directly above it. `api.access` is the one claim left,
     // and it is still true: no `event_pass` row, so the overlay falls through
     // to community's false.
-    expect(grants["stats.player"]?.event_pass ?? false, "V392 put player stats on the pass").toBe(true);
+    expect(grants["stats.player"]?.event_pass ?? false, "V393 put player stats on the pass").toBe(true);
     expect(grants["api.access"]?.event_pass ?? false, "no event_pass row").toBe(false);
 
     expect(localePassUncoveredFaults(PRO_CARD_BODY, grants)).toEqual([]);
@@ -2999,7 +2999,7 @@ describe("the dictionary guards survive a rewording, in every locale", () => {
   //
   // Four tests lived here and were DELETED in W2 (entitlements v18) with
   // `localePlusDifferentiatorFaults`, the guard they exercised. It judged the
-  // "Everything in Pro, plus …" frame against `pro_plus` grants, and V392
+  // "Everything in Pro, plus …" frame against `pro_plus` grants, and V393
   // deleted that plan from `plans` — so every call reported four faults about a
   // card `/pricing` no longer renders. The four LOCALE vocabularies that fed it
   // (`LocaleClaims.plusClaims`) went with it.
@@ -3007,11 +3007,11 @@ describe("the dictionary guards survive a rewording, in every locale", () => {
   // What the deletion does NOT give up: the same question, asked of the cards
   // that still exist, by `crossCardExclusivityFaults` in pricing-cards.test.ts
   // over `EXCLUSIVE_CLAIM_VOCAB` — the identical list, renamed. `officials.auto`
-  // is what keeps it non-vacuous: V392 moved that key down to Pro, and the Pro
+  // is what keeps it non-vacuous: V393 moved that key down to Pro, and the Pro
   // card now claims it.
 
   // The LEADER is an argument now (W2): it was hardcoded `pro_plus`, a plan
-  // V392 deleted, so the guard compared `undefined` against everything and
+  // V393 deleted, so the guard compared `undefined` against everything and
   // named a plan that does not exist in its own failure message. The live
   // ordering is enterprise 500 > pro 25 > community 5.
   it("judges the credit-leadership claim against the numbers, both ways", () => {
@@ -3566,7 +3566,7 @@ describe("no dictionary string sells scoring detail (W1: it is free on every pla
     // or above", which is a recording level, not a price).
     const ANCHORS: Array<[key: string, half: "planName" | "paidVerb"]> = [
       ["board.ai.error.upgrade", "paidVerb"],
-      // Renamed in W2: the key was `…upgradeToProPlus` and named a plan V392
+      // Renamed in W2: the key was `…upgradeToProPlus` and named a plan V393
       // deleted. Still a `planName` anchor — "Pro" is untranslated in all four
       // locales, which is exactly what makes it the right half to test here.
       ["board.ai.error.upgradeToPro", "planName"],

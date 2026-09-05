@@ -219,7 +219,7 @@ describe.skipIf(!HAS_DB)("revoked card intake gate (P2-10)", () => {
     // rung's rate sits under community's, and no override touches it.
     //
     // Both numbers are READ FROM THE MATRIX, never typed here. They were `5`
-    // and `8` until V397 re-cut the ladder for the additive fee model, and a
+    // and `8` until V398 re-cut the ladder for the additive fee model, and a
     // typed pair turns every legitimate reprice into a red that teaches the
     // next editor to retype the constants instead of re-checking the claim.
     // The `not.toBe` is what keeps the derivation honest: if the two rates ever

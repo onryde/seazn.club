@@ -3,7 +3,7 @@
  * `plan_entitlements` beats the `community` row.
  *
  * ONE key the pass lifts is deliberately absent: `registration.fee_percent`
- * (Free's rate → the pass's, 5% → 4% since V397). It is a deduction RATE read
+ * (Free's rate → the pass's, 5% → 4% since V398). It is a deduction RATE read
  * through `getLimit`
  * (server/usecases/registrations.ts) and never throws PaymentRequiredError, so
  * no paywall can ever render for it — listing it would be dead weight, not a
@@ -33,7 +33,7 @@ export const PASS_FEATURES = new Set([
   "exports.branded",
   "sponsors.tiers",
   "sponsors.monetize",
-  // V392 (entitlements v18 W2): the pass rungs became the Community org's route
+  // V393 (entitlements v18 W2): the pass rungs became the Community org's route
   // to the whole match-day layer, so seven more keys now beat the community row
   // and every one of them can throw at a real paywall.
   //
@@ -49,13 +49,13 @@ export const PASS_FEATURES = new Set([
   "scoring.audit_export",
   "stages.per_division.max",
   "schedule.checkpoints.max",
-  // V395 (entitlements v18 W2 T15, owner ruling 2026-09-03): the three share
+  // V396 (entitlements v18 W2 T15, owner ruling 2026-09-03): the three share
   // loops became paid on Free while both pass rungs kept them, so all three
   // beat the community row again and each can throw at a real paywall.
   // `dashboard.player_profiles` RE-ENTERS this set for that reason — it left at
-  // V392 when community caught up, and the catch-up has been reversed.
+  // V393 when community caught up, and the catch-up has been reversed.
   //
-  // Same ordering rule as the V392 block above, and it was followed: the
+  // Same ordering rule as the V393 block above, and it was followed: the
   // enforcement sites learned the competition first (embed-data, the division
   // console page, usecases/divisions, usecases/scoring, and the weekly digest's
   // own per-competition scope in usecases/org-posts), and only then does the
@@ -63,12 +63,12 @@ export const PASS_FEATURES = new Set([
   "dashboard.player_profiles",
   "embeds.enabled",
   "news.auto",
-  // Two keys LEFT this set at V392, and not because the pass stopped lifting
+  // Two keys LEFT this set at V393, and not because the pass stopped lifting
   // them — because `community` caught up: `formats.double_elim` and
   // `scheduling.multi_division` are TRUE on every plan key including community,
   // so no paywall can ever render for them and a pass CTA offering them would
   // promise something already free. (`dashboard.player_profiles` was the third
-  // and is back above — V395 re-gated it.)
+  // and is back above — V396 re-gated it.)
   //
   // scheduling.ai.runs_per_division.max retired earlier (v17 Phase 2 Task 5,
   // V322) — the AI credit wallet meters runs on every tier now, so it no longer

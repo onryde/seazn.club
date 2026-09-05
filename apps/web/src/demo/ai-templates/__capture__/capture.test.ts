@@ -378,7 +378,7 @@ describe.skipIf(!CAPTURING || !HAS_DB)("capture a real architect run", () => {
 
         // `pro` — and the old reason for the plan flip is gone twice over.
         // This said pro_plus was "the only plan holding BOTH gates a template
-        // can need"; V392 (entitlements v18) DELETED that plan from `plans`, so
+        // can need"; V393 (entitlements v18) DELETED that plan from `plans`, so
         // the write was an FK violation waiting for the next capture run, and
         // both gates it named (`scheduling.ai`, `scheduling.multi_division`) now
         // resolve true on every plan including community. The flip stays only

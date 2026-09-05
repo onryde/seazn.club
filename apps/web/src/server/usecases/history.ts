@@ -449,7 +449,7 @@ export async function listCheckpoints(auth: AuthCtx, divisionId: string): Promis
 /** The competition an Event-Pass-lifted gate must be resolved against.
  *
  *  lib/entitlements.ts only consults `competition_passes` when a competition is
- *  in scope, so a gate on a key V392 lifts (`schedule.checkpoints.max`) that omits it makes the
+ *  in scope, so a gate on a key V393 lifts (`schedule.checkpoints.max`) that omits it makes the
  *  pass INVISIBLE — the org pays $29 and is refused on the competition it
  *  bought. Same shape as usecases/officials.ts's `competitionForDivision` (T6).
  *
@@ -459,7 +459,7 @@ export async function listCheckpoints(auth: AuthCtx, divisionId: string): Promis
  *  still held — the self-deadlock lib/db.ts guards against.
  *
  *  A missing row yields `undefined`, which resolves the gate org-wide (the
- *  pre-V392 behaviour) and the 404 is raised inside the transaction as before. */
+ *  pre-V393 behaviour) and the 404 is raised inside the transaction as before. */
 async function competitionForDivision(divisionId: string): Promise<string | undefined> {
   const [row] = await sql<{ competition_id: string }[]>`
     select competition_id from divisions where id = ${divisionId}`;
@@ -476,7 +476,7 @@ export async function createCheckpoint(
   // transaction with the insert (doc 10 §2 rule 1). `getLimit` queries the
   // pooled `sql` proxy, and `withTenant` pins a pooled connection for its whole
   // callback — see `assertWithinLimit` in lib/entitlements.ts.
-  // V392 lifts this cap on an Event Pass (community 2 -> event_pass 5), so the
+  // V393 lifts this cap on an Event Pass (community 2 -> event_pass 5), so the
   // read is scoped to this division's competition.
   const checkpointLimit = await getLimit(
     auth.orgId,

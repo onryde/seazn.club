@@ -23,7 +23,7 @@ import { setOrgPlan } from "./_billing-group";
 
 /** `ai.credits.monthly` per plan, READ from the live matrix rather than typed
  *  here. The ladder has already moved twice (V320 community 10 / pro 60,
- *  V392 community 5 / pro 35 / enterprise 500) and a typed number stops
+ *  V393 community 5 / pro 35 / enterprise 500) and a typed number stops
  *  testing the sweep's arithmetic the moment it drifts. */
 const rate: Record<string, number> = {};
 

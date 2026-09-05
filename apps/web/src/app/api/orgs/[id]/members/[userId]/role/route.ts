@@ -10,7 +10,7 @@ import { setRoleSchema } from "@/lib/types";
  * pool and the scorer pool consumes a seat in the destination pool, counted in
  * the same tx as the update.
  *
- * V394 (entitlements v18 W2 T12, owner ruling 2026-09-03): BOTH pools now read
+ * V395 (entitlements v18 W2 T12, owner ruling 2026-09-03): BOTH pools now read
  * `members.max`. `scorers.max` is deleted from `plan_entitlements`, and a key
  * with NO ROW resolves to 0 (`getLimit`: `const base = row ? row.int_value : 0`)
  * — so asking for it here after the migration would 402 every single scorer
@@ -30,7 +30,7 @@ export async function POST(
     const { role } = setRoleSchema.parse(await req.json());
 
     // Resolve the destination pool's limit before the tx (cached read). One
-    // key for both pools since V394 — see the note above.
+    // key for both pools since V395 — see the note above.
     const quotaKey = "members.max";
     const limit = await getLimit(id, quotaKey);
 

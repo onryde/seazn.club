@@ -2,7 +2,7 @@
 
 **This file supersedes `2026-09-03-entitlements-w2-matrix-and-plumbing.md`** (note the
 "and"), which the W1 session wrote before W2 began and which was deleted in this wave. It
-was a Tasks 0-9 skeleton that still named V391 for the matrix migration — now **V392**,
+was a Tasks 0-9 skeleton that still named V391 for the matrix migration — now **V393**,
 after main's own V391 collided with it — and carried none of the owner rulings made during
 execution. Two plans for one wave is how the wrong one gets read; there is now one.
 
@@ -61,7 +61,7 @@ commits of your own.
 
 **e2e result on this branch so far: 6 of 8 jobs green**, including all seven width
 projects and the walkthrough. Of the two reds, one is genuinely ours —
-`open-scheduling.spec.ts:241` asserts a Community scheduling paywall that V392
+`open-scheduling.spec.ts:241` asserts a Community scheduling paywall that V393
 deliberately removed, so the test encodes pre-v18 packaging and would go red on `main`
 after merge. The other shard reports `Billing is not yet configured` (503), untriaged.
 
@@ -102,14 +102,14 @@ Branch `feat/entitlements-w2-matrix-plumbing` in worktree
 is owed and has not been done. Local env label `entw2` (Postgres :54788, placement
 :50832; the server on :3300 serves a STALE bundle — rebuild before driving anything).
 
-**Migrations added by this wave: V392–V397.** V392 the matrix rewrite, V393 drop AUD,
-V394 credits/squad/scorer seat, V395 public-by-default plus the three share loops going
-paid, V396 the dashboard accent key, V397 the additive platform fee. Note V391 is
+**Migrations added by this wave: V393–V398.** V393 the matrix rewrite, V394 drop AUD,
+V395 credits/squad/scorer seat, V396 public-by-default plus the three share loops going
+paid, V397 the dashboard accent key, V398 the additive platform fee. Note V391 is
 **main's** `official_availability_org_write`, not ours — the original V391 collided and
-ours renumbered to V392; do not "correct" a V392 reference back.
+ours renumbered to V393; do not "correct" a V393 reference back.
 
 **The last full gate is STALE.** It read unit 13859 total / 13792 passed / 0 failed,
-smoke 971 / 0, tsc 0 on both configs — but it ran before `5a8a1305a` (V397), the charm
+smoke 971 / 0, tsc 0 on both configs — but it ran before `5a8a1305a` (V398), the charm
 reprice, the fee/price copy rewrite and the ladder guard. Those four commits carry only
 their own scoped verification. **Nobody has run a whole-suite gate on this branch as it
 now stands**, and per RULES.md the wave boundary owes one: full vitest via
@@ -168,8 +168,8 @@ Learned the hard way this wave; a later session that reorders them pays twice.
    successfully"**, which reads like a code failure and is not one. Take the
    environment down to just Postgres first.
 
-**Flyway note for anyone with an existing local DB:** V395 and V397 were edited
-after applying (comments, and V397's guard). Their checksums changed, so
+**Flyway note for anyone with an existing local DB:** V396 and V398 were edited
+after applying (comments, and V398's guard). Their checksums changed, so
 `db:apply` will refuse to validate until `bash scripts/flyway.sh repair` — or use
 a fresh schema. Repaired on the `entw2` label already; 237 migrations validate at
 version 397.
@@ -177,14 +177,14 @@ version 397.
 ### What is left before this wave can be reviewed for merge
 
 1. **~~The payment rail~~ — RESOLVED as a launch gate, not W2 work.** See the correction
-   below: `on_behalf_of` cannot do this, and the owner ruled that V397's rates stand while
+   below: `on_behalf_of` cannot do this, and the owner ruled that V398's rates stand while
    LAUNCH waits on a direct-charge migration in its own wave. Nothing further is owed here
    by W2. Ships with the `admin-platform-settings.tsx:12-13` fix, where
    `Number("")` is `0`, so clearing the platform-fee field SAVES 0%. That fix owes a
    paired positive assertion (empty rejected AND a real value still accepted), or it
    passes by refusing everything. Also folded in: `server/usecases/registrations.ts:78`
    still comments `feePercentFor` as "(pro 2, event-pass 5)" — the pass rungs are 4
-   since V397. It was left deliberately (outside T22's touch list), not missed.
+   since V398. It was left deliberately (outside T22's touch list), not missed.
 2. **T16** — the rate on the Connect card, read from `registration.fee_percent` rather
    than typed in. Two help articles still quote "1% on Pro Plus", a plan that no longer
    exists.
@@ -200,7 +200,7 @@ Then W4 opens with the Stripe sandbox sync as its FIRST task — see "Owed to W4
 
 ### T22 closed 2026-09-04 — five commits, `5a8a1305a` … `7281dc594`
 
-V397 plus the charm reprice, every fee/price string rewritten once against the final
+V398 plus the charm reprice, every fee/price string rewritten once against the final
 numbers, the fee-ladder guard widened past `plans.md`, and smoke's fee assertions
 re-derived from the matrix instead of pinning 8 and 5. Verification as reported and
 spot-checked against the tree: tsc EXIT=0 on both configs, eslint EXIT=0 on the six
@@ -480,16 +480,16 @@ the brief is a **stale measured comment** at `dictionary-copy-truth.test.ts:3402
 actual enforced floor is a single literal `50`, identical for every locale and both
 axes. Widen the word lists and raise each floor to its own measured value.
 
-### T8b — the copy V392 has ALREADY falsified
+### T8b — the copy V393 has ALREADY falsified
 
 The brief sends the four locale dictionaries to W3. That ruling's stated reason is
 that two waves must never edit one tree at the same time — and W3 has not started,
 so the reason does not bind here. What does bind is the standing rule that a
 migration changing rows a copy surface quotes is ONE unit of work with the fix to
-that copy. V392 has already made these false; shipping the wave without them tells
+that copy. V393 has already made these false; shipping the wave without them tells
 customers a 512-entrant cap is unlimited.
 
-| surface | claim | truth after V392 |
+| surface | claim | truth after V393 |
 |---|---|---|
 | `pricing.pass.ladder.capsUnlimited` | "unlimited entrants" (L) | 512 |
 | `upgrade.ladder.entrantsUnlimited` | "Unlimited entrants" | 512 |
@@ -517,7 +517,7 @@ ability to collect entry fees in AUD.** AUD does two jobs here and this takes bo
 - `SUPPORTED_CURRENCIES` in `lib/currency.ts` drops to four. `REGISTRATION_CURRENCIES`
   is DERIVED from it (one authority, explicit exclusions) so it follows automatically —
   do not add a second list.
-- **Migration `V393`**: `organizations.currency` carries
+- **Migration `V394`**: `organizations.currency` carries
   `CHECK (currency = ANY (ARRAY['usd','eur','gbp','inr','aud']))`. Alter it to drop
   `aud`. `org-currency.test.ts` fails if code and constraint disagree, which is the
   guard that makes this safe — do not weaken it. Greenfield, so no rows need
@@ -618,7 +618,7 @@ locale is denominated in USD.
 
 Queued behind T5, which is editing `billing.ts` right now.
 
-### T12 — V394: credits re-cut, squad cap raised, scorer seat deleted
+### T12 — V395: credits re-cut, squad cap raised, scorer seat deleted
 
 Four changes in one migration plus their code and copy. All owner-ruled 2026-09-03.
 
@@ -645,7 +645,7 @@ numbers with this stated.
 
 Also check `localeCreditLeadershipFaults` (`copy-truth.ts:2782`) — it guards the claim
 "the largest monthly AI credit grant" and still names `pro_plus` in its failure message,
-a plan V392 deleted. It has to learn the new ordering (enterprise 500 > pro 25 >
+a plan V393 deleted. It has to learn the new ordering (enterprise 500 > pro 25 >
 community 5) as part of the copy sweep.
 
 **(1) Free `teams.squad_max` 20 → 23.**
@@ -716,7 +716,7 @@ So the cap is the part that is actually wrong, and it goes:
 - Deleting the key removes T12's original visibility problem at the root rather than
   restoring a row to two surfaces to describe something half-built.
 
-Scope: migration **V394** deleting `scorers.max` from `plan_entitlements` (and any
+Scope: migration **V395** deleting `scorers.max` from `plan_entitlements` (and any
 `org_entitlement_overrides`), the two enforcement branches that read it
 (`app/api/orgs/[id]/members/[userId]/role/route.ts` and `lib/invites.ts` — each falls
 back to the `members.max` pool, which is the honest answer once the seat is not
@@ -745,7 +745,7 @@ and a decision on what an org with live scorers sees the day it lands.
 
 ### T12-orig — the visibility finding this superseded (kept for the record)
 
-V392 turned `scorers.max` from a dormant 1/1 into a real differentiator (Free **2**,
+V393 turned `scorers.max` from a dormant 1/1 into a real differentiator (Free **2**,
 Pro **10**), and design §3's Pro card sells "10 staff + 10 scorer seats". The cap IS
 enforced — `app/api/orgs/[id]/members/[userId]/role/route.ts:22` on a role change to
 scorer, and `lib/invites.ts:67` on a scorer invite acceptance, against a pool separate
@@ -768,7 +768,7 @@ and `:15421,15430` ("scorers.max (Pro = 1): a second scorer can't take a seat",
 asserting 402). The second's NAME states the old rule, which is the shape this repo has
 been bitten by before — read what it asserts, then move it to Free 2 / Pro 10.
 
-### T14 — V394: grant `import.events` on every plan (owner ruling 2026-09-03)
+### T14 — V395: grant `import.events` on every plan (owner ruling 2026-09-03)
 
 Raised by the scheduler-bench session as "G4, blocked on W2". Verified before acting, and
 it was NOT what the report said: `import.events` has zero rows AND exactly one reader —
@@ -788,7 +788,7 @@ is a volume cap rather than a gate (`import.bulk` is 50 Free / 500 Pro); if even
 volume needs bounding later, add a CAP key, do not convert this into a gate.
 
 Scope:
-- Migration **V394** inserting `import.events` bool true for all five plans.
+- Migration **V395** inserting `import.events` bool true for all five plans.
 - **Add the key to design §2** — `entitlements-v18-matrix.test.ts` parses that table, so a
   row in the database that §2 does not name is drift by construction.
 - Update the `// 402 during rollout` comment at the call site; it is no longer true, and a
@@ -799,7 +799,7 @@ Scope:
 - `feature-copy.ts` reason string: with every plan granting it the 402 becomes unreachable
   for any org on a plan. Decide whether the reason stays for the no-plan case or goes.
 
-Sequenced AFTER T12 (V394) because that task is in flight; do not send a mid-task
+Sequenced AFTER T12 (V395) because that task is in flight; do not send a mid-task
 correction — this repo has had a subagent reject one as prompt injection.
 
 **For the bench session:** this unblocks their G4 once W2 merges. Their G7 (`business`
@@ -809,10 +809,10 @@ is community / enterprise / event_pass / event_pass_l / pro, `business` is long 
 `pro_plus` is deleted and `enterprise` added, the plan-key mirrors are converged onto one
 union, and the live catalogue is now pinned against design §2 by a test.
 
-### T15 — V394 part B: the three share loops become paid (owner ruling 2026-09-03)
+### T15 — V395 part B: the three share loops become paid (owner ruling 2026-09-03)
 
-**This REVERSES four cells V392 set eight hours ago**, and reverses design §2's growth
-thesis. Recorded in full because a reader finding V392 and V394 disagreeing will otherwise
+**This REVERSES four cells V393 set eight hours ago**, and reverses design §2's growth
+thesis. Recorded in full because a reader finding V393 and V395 disagreeing will otherwise
 assume one is a mistake.
 
 **Three loops move, not four.** An earlier draft also flipped `branding` (the org's own
@@ -939,7 +939,7 @@ additive implements what both the UI and the help already promise.
 3. The same stale list in `registration/open-registration.md:19` and
    `getting-started/create-your-organisation.md:21`.
 
-### T17 — V396: the public accent colour gets its own key (owner ruling 2026-09-03)
+### T17 — V397: the public accent colour gets its own key (owner ruling 2026-09-03)
 
 **`dashboard.branding` was overloaded and nobody knew.** It gates badge removal AND the
 public accent/theme colour, in one SQL expression — `server/public-site/data.ts:361-363`:
@@ -966,12 +966,12 @@ differentiator).
   `dashboard.branding` keeps ONLY the `branded` badge flag.
 - The four smoke checks then describe the truth again; do not edit them to match a defect.
 
-**Smoke fallout this wave still owes** (from V395's partial run — 159 passed / 6 failed,
+**Smoke fallout this wave still owes** (from V396's partial run — 159 passed / 6 failed,
 then `ERROR: fetch failed` aborted at check 165, so that is a FLOOR, not a green smoke):
-- `billing-group: quotas are per org…` asserts `members.max === 15`; V392 made Pro **10**.
-- `jul3 officials auto is Pro Plus only`; V392 gave `officials.auto` to **Pro**.
+- `billing-group: quotas are per org…` asserts `members.max === 15`; V393 made Pro **10**.
+- `jul3 officials auto is Pro Plus only`; V393 gave `officials.auto` to **Pro**.
 - `smoke.ts:2460` and `:2702` assert `dashboard.player_profiles` is free on Community —
-  V395 made it **false**; unreached in that run, so unobserved and WILL fail.
+  V396 made it **false**; unreached in that run, so unobserved and WILL fail.
 - `smoke.ts:4797`/`:4801` assert the free `news.auto` toggle and a digest 402 — now true
   again; will pass, but re-read them rather than assuming.
 
@@ -1046,7 +1046,7 @@ route, and the commit message should say so plainly.
 
 ### T20 — reviewer pass 3 findings (1 critical, 4 important)
 
-**CRITICAL — the degrade note ships on the MINORITY create path.** V395 made competitions
+**CRITICAL — the degrade note ships on the MINORITY create path.** V396 made competitions
 public by default and degrade to private at the cap instead of 402ing. `createCompetition`
 returns the full row so the wizard can diff requested-vs-created and render
 `public-quota-degraded`. `instantiateTemplate` performs the identical degrade, but
@@ -1094,7 +1094,7 @@ direction: nothing enumerates `plan_entitlements` and asks whether each key appe
 The sibling `retired-matrix-keys.test.ts:30-87` is absence-only against a hardcoded list
 and pins the `plans` table, not feature keys.
 
-V395's header (`:3-5`), V396's header (`:3-4`) and this plan's T14 all rest on the sentence
+V396's header (`:3-5`), V397's header (`:3-4`) and this plan's T14 all rest on the sentence
 "a row in the database that §2 does not name is drift by construction". **That guarantee
 does not exist.** I wrote it, and it was repeated into two migration headers.
 
@@ -1130,7 +1130,7 @@ surface before the wave that depends on it is finished.
 
 **Most of it self-heals.** `scripts/stripe-sync.ts:411-417` already archives on drift — for
 a still-named `lookup_key` whose amount changed it mints a replacement and sets the old
-price `active: false`. So running sync after V397 archives every superseded amount by
+price `active: false`. So running sync after V398 archives every superseded amount by
 itself.
 
 **The true orphans are only the entries whose seed rows this wave DELETED** — `pro_plus`
@@ -1166,12 +1166,12 @@ pro 2%, enterprise 1%.
 ### 1. The rate cut shipped; the thing that pays for it did not. BLOCKS MERGE.
 
 `on_behalf_of` appears **nowhere in the tree** — grep of `apps/web/src` and
-`packages` returns nothing — while V397's cut is already applied in the database.
+`packages` returns nothing — while V398's cut is already applied in the database.
 Today, on this branch, the platform charges less AND still absorbs Stripe's fee.
 
 | $1,000 competition | platform gross | Stripe | platform net |
 |---|---|---|---|
-| Before V397 (community 8%, no rail) | $80.00 | −$29.30 | **$50.70** |
+| Before V398 (community 8%, no rail) | $80.00 | −$29.30 | **$50.70** |
 | **Today** (community 5%, no rail) | $50.00 | −$29.30 | **$20.70** |
 | Intended (community 5% + rail) | $50.00 | club pays | **$50.00** |
 
@@ -1180,7 +1180,7 @@ A 37.5% headline cut is a **59% cut in contribution** without the rail, and roug
 taken on its own. The pass rungs move the same way (5%→4% is −48% net without the
 rail, +93% with it, because the rail is worth more than the point given away).
 
-**Recommendation: V397 and `on_behalf_of` are one unit of work and must land in one
+**Recommendation: V398 and `on_behalf_of` are one unit of work and must land in one
 commit, or the migration reverts with it.** Merging W2 as it stands ships a priced
 promise to clubs ("we absorb the card fee") that the code does not keep, and takes
 the revenue cut anyway. This is the same shape as W1's merge gate — a row-deleting
@@ -1210,30 +1210,30 @@ Custom accounts" — `stripe-connect.ts:133` creates exactly those, so it is a C
 onboarding migration to v2 accounts as well.
 
 **Three places in the tree asserted the false premise**, so this was the wave's belief and
-not one agent's misreading: this plan, the W3 spec, and `V397`'s own header.
+not one agent's misreading: this plan, the W3 spec, and `V398`'s own header.
 
 **What the arithmetic really says**, per $1,000 of entry fees, Stripe at 2.9% + $0.30:
 
 | | platform gross | Stripe | platform net |
 |---|---|---|---|
-| Community 8% (before V397) | $80 | −$29.30 | **$50.70** |
+| Community 8% (before V398) | $80 | −$29.30 | **$50.70** |
 | Community 5% (today) | $50 | −$29.30 | **$20.70** |
 | Pass 4% (today) | $40 | −$29.30 | **$10.70** |
-| Pro 2% (unchanged by V397) | $20 | −$29.30 | **−$9.30** |
+| Pro 2% (unchanged by V398) | $20 | −$29.30 | **−$9.30** |
 | Enterprise 1% (unchanged) | $10 | −$29.30 | **−$19.30** |
 | Direct charges, any rate | rate | club pays | **the full rate** |
 
-**V397 diagnosed this correctly and prescribed a mechanism that does not exist.** Its
+**V398 diagnosed this correctly and prescribed a mechanism that does not exist.** Its
 header's claim — "Pro and Enterprise LOSE MONEY on every registration… because the loss
 is a rate, not a fixed overhead a big entry fee eventually absorbs" — is exactly right,
-and was already true BEFORE V397: any rate under Stripe's own 2.9% is negative and gets
-more negative as the club grows. V397 did not create the hole; it deepened it for
+and was already true BEFORE V398: any rate under Stripe's own 2.9% is negative and gets
+more negative as the club grows. V398 did not create the hole; it deepened it for
 community and the passes while leaving the two negative rungs untouched.
 
 **Nothing is lost today** — greenfield, no live registrations — so this is a decision
 about what we launch with, not a leak to staunch.
 
-**OWNER RULING 2026-09-04: keep V397's rates, and gate LAUNCH on the charge-type
+**OWNER RULING 2026-09-04: keep V398's rates, and gate LAUNCH on the charge-type
 migration.** The rates stay 5 / 4 / 2 / 1 because they are the correct rates for the
 model we intend, and the cut costs nothing until clubs transact. Direct charges is what
 the design already commits to and how the market quotes ("2.5% on top of Stripe"), and
@@ -1246,10 +1246,10 @@ charges need v2 accounts and `stripe-connect.ts:133` creates Express — and it 
 own wave with its own design. Until it ships, every rate in the matrix is a promise
 about a charge shape we do not yet run.
 
-Rejected, with reasons, so they are not re-proposed: reverting V397 (restores community
+Rejected, with reasons, so they are not re-proposed: reverting V398 (restores community
 margin but leaves Pro and Enterprise structurally negative, and undoes a four-locale
 copy sweep); repricing above Stripe's cost (Pro to ~3.5%, contradicting the positioning
-V397's own header cites, and V316 locks a competition's rate at first paid entry so it
+V398's own header cites, and V316 locks a competition's rate at first paid entry so it
 would reach only unsold competitions); and running registrations as a subscription-funded
 loss leader (works at $1,000/month, and at $5,000/month the same Pro org is $30 under
 water every month, because the loss is a rate).
@@ -1312,7 +1312,7 @@ attempt — caught by grepping the resolved file for `canWrite` rather than trus
 resolution.
 
 **What we still owed, and kept:** the card's prose said "Pro carries 2%, Event Pass 5%".
-The pass rungs are 4% since V397, so main's copy was stale on arrival. It no longer
+The pass rungs are 4% since V398, so main's copy was stale on arrival. It no longer
 restates any rate — the plan matrix owns those numbers, and a staff card restating them
 is how this went stale in the first place. Our `parseFeePercentInput` helper and its unit
 test were dropped as redundant against main's e2e coverage, which drives the real control.

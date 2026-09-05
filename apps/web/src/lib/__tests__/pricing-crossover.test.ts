@@ -335,7 +335,7 @@ describe("the /pricing crossover line states its own assumption, in every locale
 describe("the L rung is why the line has to say which rung it means", () => {
   it("never crosses Pro in any currency we sell in", () => {
     for (const currency of SUPPORTED_CURRENCIES) {
-      // Same fee rate on both rungs (V397), so the ONLY thing separating them
+      // Same fee rate on both rungs (V398), so the ONLY thing separating them
       // is the sticker price — which is what makes L dominated on cost.
       expect(
         feeCrossoverMinor({

@@ -60,7 +60,7 @@ async function organiser(): Promise<AuthCtx> {
 
 /** Grant one boolean feature to an org out-of-plan — the same row
  *  `setBoolEntitlementOverrideSql` writes (apps/web/e2e/helpers.ts:342). It was
- *  the only way `import.events` was held during rollout; since V395 the plan
+ *  the only way `import.events` was held during rollout; since V396 the plan
  *  row grants it and this only proves the override path still overlays. */
 async function grant(orgId: string, key: string) {
   await sql`
@@ -69,7 +69,7 @@ async function grant(orgId: string, key: string) {
     on conflict (org_id, feature_key) do update set bool_value = true`;
 }
 
-/** The same row with `false` — a staff deny, the only refusal V395 leaves
+/** The same row with `false` — a staff deny, the only refusal V396 leaves
  *  reachable for this key. */
 async function deny(orgId: string, key: string) {
   await sql`
@@ -97,7 +97,7 @@ afterAll(async () => {
 });
 
 describe.skipIf(!HAS_DB)("POST /divisions/{id}/events/import", () => {
-  // V395 (entitlements v18 W2 T14, owner ruling 2026-09-03): the rollout
+  // V396 (entitlements v18 W2 T14, owner ruling 2026-09-03): the rollout
   // kill-switch is OPEN — `import.events` is bool true on all five plans, so a
   // fresh community org with no override at all imports. This case used to
   // assert the 402 that same org got; the 402 is not reachable from any PLAN

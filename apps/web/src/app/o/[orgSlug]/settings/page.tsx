@@ -124,7 +124,7 @@ export default async function SettingsPage({
   // always treated them that way:
   //
   //   branding         org LOGO upload + display  → free on every plan (V310)
-  //   dashboard.theme  org THEME COLOUR           → Pro and above (V396)
+  //   dashboard.theme  org THEME COLOUR           → Pro and above (V397)
   //
   // One `canBrand` flag drove both gates. That was harmless while `branding`
   // was Pro-only, and became a real bug the moment V310 made it free: a
@@ -134,8 +134,8 @@ export default async function SettingsPage({
   // Save a colour, see nothing change, anywhere, ever.
   //
   // The colour key is `dashboard.theme`, NOT `dashboard.branding`. It was
-  // `dashboard.branding` until V396 (entitlements v18 W2 T17) — the same key
-  // that removes the seazn badge, which V395 had just made enterprise-only. A
+  // `dashboard.branding` until V397 (entitlements v18 W2 T17) — the same key
+  // that removes the seazn badge, which V396 had just made enterprise-only. A
   // Pro org therefore lost this picker and the colour it renders in one step.
   // Reading the badge key here again would deny every Pro subscriber; the
   // matching assertion lives in brand-gate-split.test.ts.
@@ -192,7 +192,7 @@ export default async function SettingsPage({
       where org_id = ${active.id}
       order by created_at desc limit 100`;
     // ORG-LEVEL AFFORDANCE, so the org-wide question is the honest one and
-    // `hasFeatureOnAnyPass` is what asks it. V395 made `news.auto` false on
+    // `hasFeatureOnAnyPass` is what asks it. V396 made `news.auto` false on
     // Free while both Event Pass rungs keep it, so a plain `hasFeature` here
     // would hide the whole news tab from an org that holds a pass — and
     // passing one competition's id would be a lie about the other. The write
@@ -375,7 +375,7 @@ export default async function SettingsPage({
                     {/* D23: the logo above is free, this control is Pro. The
                         chip explains the split so the neighbouring upsell
                         doesn't read as arbitrary. It names `dashboard.theme`
-                        (V396) — badging it `dashboard.branding` would print
+                        (V397) — badging it `dashboard.branding` would print
                         "Contact us" for a self-serve Pro upgrade, because
                         featurePlan() routes that key to enterprise. */}
                     <SubSection

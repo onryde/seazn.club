@@ -4,7 +4,7 @@
 -- parses that table and pins every cell below against it, so the doc and this
 -- migration cannot drift apart in one direction only).
 --
--- Resolver semantics this file is written against, unchanged since V392's
+-- Resolver semantics this file is written against, unchanged since V393's
 -- header: for an int key only `int_value` is read, `int_value = NULL` means
 -- unlimited, and a key with NO ROW resolves to 0 — DENY, not unlimited. For a
 -- bool, `bool_value = true` exactly; a pass row can only GRANT on top of the
@@ -46,11 +46,11 @@ on conflict (plan_key, feature_key) do update set bool_value = true;
 -- ---------------------------------------------------------------------------
 -- Step 2 (T15): the three share loops become PAID on Free.
 --
--- This REVERSES four cells V392 set the previous day, and reverses §2's own
+-- This REVERSES four cells V393 set the previous day, and reverses §2's own
 -- growth thesis ("Three share loops go free… each one puts the badge in front
 -- of people who are not yet customers"). Owner ruling 2026-09-03, taken with
 -- that counter-argument put and overruled: value capture over the loop. A
--- reader who finds V392 and V395 disagreeing is not looking at a mistake — do
+-- reader who finds V393 and V396 disagreeing is not looking at a mistake — do
 -- not "restore" these to Free on the strength of the design doc, which is now
 -- the older decision.
 --

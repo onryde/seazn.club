@@ -1,7 +1,7 @@
-# W2 pass 4 — migrations V392–V397 and the entitlement matrix
+# W2 pass 4 — migrations V393–V398 and the entitlement matrix
 
 Branch `feat/entitlements-w2-matrix-plumbing` at `12c124211`, working tree clean.
-Scope: `db/migration/deltas/V392..V397`, `lib/entitlements*.ts`, `lib/feature-copy.ts`,
+Scope: `db/migration/deltas/V393..V398`, `lib/entitlements*.ts`, `lib/feature-copy.ts`,
 `server/usecases/competitions.ts`, `server/usecases/officials.ts`,
 `server/usecases/entitlement-freeze.ts`, the matrix-pinning tests.
 
@@ -18,7 +18,7 @@ no `pro_plus`. The DB agrees with the files.
 
 ### C1. `discipline.enforced` was granted to the Event Pass and wired into exactly one of its seven gates — and the paywall now sells the pass at the six that still refuse it
 
-`db/migration/deltas/V392__entitlements_v18.sql:89-92` turns `discipline.enforced`
+`db/migration/deltas/V393__entitlements_v18.sql:89-92` turns `discipline.enforced`
 TRUE on `event_pass` and `event_pass_l`; the key is FALSE on `community` (verified in
 the live matrix). The Event Pass overlay in `apps/web/src/lib/entitlements.ts:363-405`
 fires only when a `competitionId` is passed, so an org-wide read of this key can never
@@ -26,7 +26,7 @@ see the pass.
 
 One call site learned that. `apps/web/src/server/usecases/match-reports.ts:291` resolves
 `competitionForDivision(a.division_id)` first, and its own header at `:257-262` states
-the rule: *"a gate on a key V392 lifts (`discipline.enforced`) that omits it makes the
+the rule: *"a gate on a key V393 lifts (`discipline.enforced`) that omits it makes the
 pass INVISIBLE — the org pays $29 and is refused on the competition it bought."*
 
 Six do not, all of them behind the module-local constant at
@@ -86,18 +86,18 @@ competition, and must still be refused on a sibling competition in the same org.
 
 ## CONFIRMED — Important
 
-### I1. The pass comparison table dropped its player-profiles row on a justification V395 reversed three commits later
+### I1. The pass comparison table dropped its player-profiles row on a justification V396 reversed three commits later
 
 `apps/web/src/lib/pass-comparison.ts:57-63` removes the `upgrade.limit.profiles` row with
-the reason *"entitlements v18 (V392): `dashboard.player_profiles` is now true on
-Community, so the row showed the same tick on both sides."* That was true of V392.
-`V395__public_by_default_and_share_loops_paid.sql:61-64` then sets the key back to
+the reason *"entitlements v18 (V393): `dashboard.player_profiles` is now true on
+Community, so the row showed the same tick on both sides."* That was true of V393.
+`V396__public_by_default_and_share_loops_paid.sql:61-64` then sets the key back to
 `false` on `community`, and the live matrix confirms it: community `false`, both pass
 rungs `true`.
 
 The same wave noticed the reversal in the sibling file and acted on it —
 `apps/web/src/lib/pass-features.ts:55-63` explicitly says the key *"RE-ENTERS this set …
-it left at V392 when community caught up, and the catch-up has been reversed."* Only
+it left at V393 when community caught up, and the catch-up has been reversed."* Only
 `pass-comparison.ts` was left behind.
 
 **Failure scenario.** A Free org hits the public-player-profiles wall
@@ -122,7 +122,7 @@ removal, which it did — it cannot catch the restoration.
 
 `withinPublicQuota` (`server/usecases/competitions.ts:158-166`) counts
 `c.visibility = 'public'` and nothing else. But `unlisted` competitions serve the identical
-public dashboard: `V396__dashboard_theme_key.sql:75` keeps `public_competitions_v` at
+public dashboard: `V397__dashboard_theme_key.sql:75` keeps `public_competitions_v` at
 `where visibility in ('public','unlisted')`, and `getPublicCompetition`
 (`server/public-site/data.ts:436-441`) selects from that view with **no** visibility
 filter of its own. `unlisted` differs from `public` only in `app/sitemap.ts:34` and the
@@ -130,7 +130,7 @@ filter of its own. `unlisted` differs from `public` only in `app/sitemap.ts:34` 
 divisions, standings, live-now, player pages and the registration page all render.
 
 Pre-existing (the old flat count was also `= 'public'`), but this wave makes it matter:
-`V395:120-126` cuts Free 3 → **2** and Pro unlimited → **10**, and
+`V396:120-126` cuts Free 3 → **2** and Pro unlimited → **10**, and
 `resolveCreateVisibility` (`competitions.ts:213-240`) now **degrades to private** and
 returns a note naming the cap instead of refusing. The product therefore tells the
 organiser, at the moment they hit the cap, that visibility is the dial to turn — and one
@@ -151,9 +151,9 @@ test — so the next reader does not have to re-derive whether it was intended.
 
 ## CONFIRMED — Minor
 
-### M1. V397's ladder guard cannot see a NULL rate, and a NULL rate charges 5%
+### M1. V398's ladder guard cannot see a NULL rate, and a NULL rate charges 5%
 
-`db/migration/deltas/V397__additive_platform_fee_rates.sql:74-76` filters
+`db/migration/deltas/V398__additive_platform_fee_rates.sql:74-76` filters
 `(plan_key, int_value) not in (('community',5), …)`. A row-constructor comparison whose
 first element matches and whose second is NULL yields NULL, not true, so `not in` is NULL
 and the row is never selected. Verified against the live server:
@@ -162,7 +162,7 @@ and the row is never selected. Verified against the live server:
 - `('pro', null)` → **MISSED**
 
 `feePercentFor` (`server/usecases/registrations.ts:90-93`) maps a null limit to
-`platformFeeDefault()`, which `V397:40-42` documents as `platform_settings.platform_fee_percent`
+`platformFeeDefault()`, which `V398:40-42` documents as `platform_settings.platform_fee_percent`
 = **5**. So the one shape the guard exists to catch — a plan row written elsewhere with
 the "unlimited" idiom this schema uses everywhere else (`orgs.max_owned`,
 `competitions.max_active`) — silently charges a Pro organiser 5% instead of 2% on every
@@ -171,20 +171,20 @@ entry fee, and the guard that was written to be loud about it says nothing.
 **Fix.** `and (int_value is null or (plan_key, int_value) not in (…))`, or compare on
 `coalesce(int_value, -1)`.
 
-### M2. `V395:7` cites V391 for a header V391 does not have (renumber rot)
+### M2. `V396:7` cites V391 for a header V391 does not have (renumber rot)
 
-`V395__public_by_default_and_share_loops_paid.sql:7` — *"Resolver semantics this file is
+`V396__public_by_default_and_share_loops_paid.sql:7` — *"Resolver semantics this file is
 written against, unchanged since V391's header."* `V391__official_availability_org_write.sql`
 is nine lines granting `insert, update, delete on official_availability` and says nothing
-about the resolver. The resolver-semantics header is `V392:14-20`, which V394 cites
-correctly (`V394:8`). Same renumber rot pass 2 recorded. Repoint to V392.
+about the resolver. The resolver-semantics header is `V393:14-20`, which V395 cites
+correctly (`V395:8`). Same renumber rot pass 2 recorded. Repoint to V393.
 
 ### M3. `pass-vs-plan.ts`'s header table now misstates the L rung, and its rationale rests on the stale value
 
 `apps/web/src/lib/pass-vs-plan.ts:12-20` prints `Event Pass L | **unlimited**` for
 `entrants.per_division.max` and then argues from it: *"A Pro organiser running one
 division with more than 256 entrants had no self-serve path at all."*
-`V392:94` set the L rung to **512** and design §2:147 records `512`; the live matrix
+`V393:94` set the L rung to **512** and design §2:147 records `512`; the live matrix
 agrees. With L finite, the organiser needing 600 entrants is back to having no self-serve
 path — the exact gap the paragraph says the design closed. The file is unchanged on this
 branch, so the table went stale under it. Code is unaffected (`passBeatsPlan` computes
@@ -193,7 +193,7 @@ from `plan_entitlements`; 512 > 256 still sells L to Pro).
 ### M4. `entitlements.ts:103` still names `pro_plus` as a live paid plan
 
 `apps/web/src/lib/entitlements.ts:103` — *"A subscription whose row still claims a paid
-plan (`pro`/`pro_plus`)"*. `V392:146` dropped the plan. Comment only.
+plan (`pro`/`pro_plus`)"*. `V393:146` dropped the plan. Comment only.
 
 ### M5. A degraded create silently drops `discoverable`, and the response note does not say so
 
@@ -207,11 +207,11 @@ substituted; one is reported. The drop itself is correct (a private competition 
 showcased). Either add the dropped opt-in to `PublicQuotaDegraded`, or state in that
 schema's doc comment that showcase rides visibility so a consumer knows to re-request it.
 
-### M6. `scripts/bench/lib/plan.ts` states a matrix fact V392 falsified, and the bench now provisions `enterprise`
+### M6. `scripts/bench/lib/plan.ts` states a matrix fact V393 falsified, and the bench now provisions `enterprise`
 
 `scripts/bench/lib/plan.ts:34-38` records as *checked*: "every pass tier, for `cricket.dls`
 and `officials.auto` alike — checked: no `('event_pass', ...)` or `('event_pass_l', ...)`
-insert for either key in db/migration/deltas". `V392:108-109` inserts `officials.auto`
+insert for either key in db/migration/deltas". `V393:108-109` inserts `officials.auto`
 for both rungs.
 
 Behavioural consequence, traced: `chooseGrantingPlanForCapabilities` (`plan.ts`) iterates
@@ -233,8 +233,8 @@ because the migration is the cause.
 
 ### P1. A historical `registration_groups.currency = 'aud'` row has no type left to render under
 
-`V393` narrows `organizations_currency_check` to `('usd','eur','gbp','inr')` and
-`lib/currency.ts` drops `aud` from `SUPPORTED_CURRENCIES`. `V393:8-12` deliberately leaves
+`V394` narrows `organizations_currency_check` to `('usd','eur','gbp','inr')` and
+`lib/currency.ts` drops `aud` from `SUPPORTED_CURRENCIES`. `V394:8-12` deliberately leaves
 `registration_groups.currency` unconstrained so a submitted cart keeps the currency it was
 quoted in. Any such row is now outside the `Currency` union, so symbol/format lookups
 derived from `SUPPORTED_CURRENCIES` return `undefined` rather than throwing. Greenfield,
@@ -249,17 +249,17 @@ Worth one grep before W3 for a fixture or seed that writes `'aud'` into
 - **Migration numbering.** One file per version 392–397, no duplicate, V391 is main's.
   All internal cross-references check out except M2.
 - **DB vs files.** `flyway_schema_history` at 397, every row `success = t`.
-- **Every V392 step-3 UPDATE landed.** Checked cell by cell against the live matrix
+- **Every V393 step-3 UPDATE landed.** Checked cell by cell against the live matrix
   (community `members.max` 3, `competitions.max_active` 3, `ai.credits.monthly` 5 and the
   five bools still true; pro 10/10/20/6/100/40/25/500/10 and `officials.auto` true). No
   UPDATE silently matched zero rows.
-- **The DELETE/deny asymmetry was respected everywhere.** `scorers.max` (V394:72-75) and
-  the four V392:135-138 keys have zero surviving `hasFeature`/`requireFeature`/`getLimit`/
+- **The DELETE/deny asymmetry was respected everywhere.** `scorers.max` (V395:72-75) and
+  the four V393:135-138 keys have zero surviving `hasFeature`/`requireFeature`/`getLimit`/
   `withinLimit`/`org_has_feature` reads anywhere in `apps/`, `packages/`, `scripts/`, `db/`.
   Surviving references are dictionary labels, the generated `i18n-keys.ts` union, the
   deliberate retired-plan registry in `lib/plan-label.ts:44-45`, and comments.
-- **V392 step 3c's pass-row deletion is safe.** `teams.squad_max` deleted from both pass
-  rungs falls through to the plan row, and V394 then raised Free to 23 — the pass rungs
+- **V393 step 3c's pass-row deletion is safe.** `teams.squad_max` deleted from both pass
+  rungs falls through to the plan row, and V395 then raised Free to 23 — the pass rungs
   gained, not lost.
 - **Enterprise has no seeding hole.** Set difference over `plan_entitlements`: no
   `feature_key` present on `community` or `pro` is missing from `enterprise`, and

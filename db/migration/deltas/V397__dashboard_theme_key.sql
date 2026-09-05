@@ -9,7 +9,7 @@
 -- half done — the LOGO has ridden the separate `branding` key since V310 —
 -- but colour and badge stayed welded together.
 --
--- V395 (T15) then made badge removal enterprise-only by turning
+-- V396 (T15) then made badge removal enterprise-only by turning
 -- `dashboard.branding` false on Pro. That silently took a paying Pro
 -- customer's brand colour off their public pages, slideshow and competition
 -- pages: a visible downgrade nobody asked for. Four smoke checks caught it
@@ -24,7 +24,7 @@
 --
 -- After this file: `dashboard.theme` = the accent/theme colour (Free F, Pro T,
 -- Ent T); `dashboard.branding` = badge removal ALONE (enterprise-only, set by
--- V395 and untouched here).
+-- V396 and untouched here).
 
 -- ---------------------------------------------------------------------------
 -- Step 1: the new key.

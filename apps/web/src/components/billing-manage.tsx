@@ -447,7 +447,7 @@ export function PlanIntervalSwitcher({ current }: { current: "monthly" | "annual
 }
 
 // The Pro <-> Pro Plus PLAN SWITCHER that lived here is DELETED (entitlements
-// v18, V392). It targeted `plan_key=pro_plus` — a plan the migration removed
+// v18, V393). It targeted `plan_key=pro_plus` — a plan the migration removed
 // from `plans` — so for a Pro subscriber it rendered "Upgrade to Pro Plus" and
 // POSTed a key /api/billing/plan can no longer honour. The billing page had
 // already stopped rendering it (settings/billing/page.tsx), which left the

@@ -220,7 +220,7 @@ export const checkoutSchema = z.object({
 
 // ---- billing types -----------------------------------------------------------
 
-// Entitlements v18 (V392): `pro_plus` is retired. Its rows moved to a new,
+// Entitlements v18 (V393): `pro_plus` is retired. Its rows moved to a new,
 // non-public `enterprise` plan reached only through Contact-us / staff comp —
 // never a wider self-serve Pro — so `PlanKey` gains `enterprise`, not a
 // bigger `pro_plus`. It stays deliberately wider than what checkout can buy;

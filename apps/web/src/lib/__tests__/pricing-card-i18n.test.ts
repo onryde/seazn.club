@@ -592,9 +592,9 @@ describe("the plan-card bullet keys are real, translated, four-locale copy", () 
    * Every figure these bullets quote is a matrix claim: the community/pass/pro
    * entrant, division and active-competition caps, and the three platform-fee
    * rates. This wave has already fixed FOUR separate cases of a number typed
-   * into copy going stale under the row it described (V392 re-cut community's
-   * active-competition cap to 3 against a card still promising 10; V395 took
-   * badge removal off Pro; V397 re-cut the fee ladder; the L rung's caps
+   * into copy going stale under the row it described (V393 re-cut community's
+   * active-competition cap to 3 against a card still promising 10; V396 took
+   * badge removal off Pro; V398 re-cut the fee ladder; the L rung's caps
    * survived its withdrawal). A number typed into FOUR locale files goes stale
    * four times and is fixed once.
    *

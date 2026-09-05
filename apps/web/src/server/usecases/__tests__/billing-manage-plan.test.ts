@@ -1,5 +1,5 @@
 // Originally Task 7 (Pro Plus tier): live-subscription plan change Pro ↔ Pro
-// Plus. pro_plus is retired (entitlements v18, V392) — `applyPlanChange` /
+// Plus. pro_plus is retired (entitlements v18, V393) — `applyPlanChange` /
 // `previewPlanChange` still exist (they back `/api/billing/plan` + its
 // `preview` sibling, and their shared `resolvePriceChange` is also what the
 // separate `/api/billing/interval` endpoint calls), but "pro" is now the

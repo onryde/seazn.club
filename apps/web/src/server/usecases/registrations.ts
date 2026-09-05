@@ -80,7 +80,7 @@ export const REGISTRATION_TOKEN_PREFIX = "rg_";
  *
  *  No rate is written here on purpose. The ladder lives in `plan_entitlements`
  *  and this function reads it, so a number in this comment is a copy that can
- *  only drift — and had: it read "pro 2, event-pass 5" from V310 until V397
+ *  only drift — and had: it read "pro 2, event-pass 5" from V310 until V398
  *  re-cut the ladder underneath it. To learn the live rates, query that table
  *  or read the newest migration that writes `registration.fee_percent`.
  *
