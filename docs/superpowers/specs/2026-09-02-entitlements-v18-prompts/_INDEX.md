@@ -283,6 +283,32 @@ incoherent under any pricing.
 
 ### W3-B — the paywall should offer the cheaper route, not just the dearer one
 
+**Extended 2026-09-05, and hiding the L rung made it urgent.** The same fix must also
+stop the paywall selling a customer the plan they are already on. `UpgradeGate` reads
+`featurePlan(feature)`, a pure function of the KEY with no knowledge of the viewer's
+org, so it cannot tell "you need Pro" from "you have Pro". Two live consequences:
+
+- `components/v2/board/ai-out-of-credits.tsx` offers a Pro org "Upgrade to Pro"
+  (copy review M4).
+- **New since L came off sale:** L was the only rung exceeding Pro's
+  `entrants.per_division.max` of 256, so a Pro org with a larger division used to have
+  a self-serve route — buy an L pass for that competition. It no longer does, and the
+  gate it now hits says Go Pro. The v17 #327 self-serve path is closed, deliberately
+  and with the rule asserted intact in the tests rather than papered over, but the
+  DEAD END is not acceptable to ship: that org's real answer is Contact us.
+
+Note this cannot be fixed inside `featurePlan` — a Community org at 64 entrants
+should still be sold Pro for the same key. The answer depends on the viewer's plan, so
+the gate has to receive it. Make the prop REQUIRED rather than optional so `tsc`
+enumerates every call site; an optional one is exactly how a figure quietly stops
+arriving (the same lesson `public-quota-degraded` learned two days earlier).
+
+**Not owed:** the "from {price}" wording. With one sellable rung the two clauses that
+would be FALSE (`pricing.pass.ladderNote` and the `/pricing` "from" prefix) are
+suppressed by rung count rather than deleted, so they return automatically if L does.
+The remaining "from" on the in-app buy links is true of the credit packs it describes.
+W3 redesigns that page wholesale; rewording it twice is waste.
+
 W2 fixed twelve reasons that read "is a Pro feature" for keys the Event Pass also
 grants (`3c0463dec`); they now name both plans. That corrects the falsehood and
 leaves the commercial gap open: the sentence names two plans, and the CTA still
