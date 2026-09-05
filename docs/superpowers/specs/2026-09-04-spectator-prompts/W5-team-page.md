@@ -277,3 +277,5 @@ the public entrant payload (`public-site/data.ts:316-323`). `exports.ts:261-262`
 `colors.home_primary` through `public-theme.ts`'s 3:1 `contrast()` guard, else the
 `division-hue.ts` wheel keyed on the entrant, else neutral initials (`_DESIGN.md` P1);
 one shared resolver in W2 (`primaryColour`) consumed by W3 and W5 — no second palette.
+
+**Owner ruling 16 (2026-09-06): W5 is in scope** — "Keep it". Runs after W4; re-pin first.

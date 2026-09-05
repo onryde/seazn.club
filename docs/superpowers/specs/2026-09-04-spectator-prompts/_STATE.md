@@ -83,10 +83,11 @@ Verification on b8ed8fa31: public-site suites 537/0 (26 pending = DB suites on e
 
 ## Open owner questions (recommendations recorded in `_INDEX.md` / the ledger)
 
+0. RULED 2026-09-06: team colour source confirmed (ruling 15); W5 in scope (ruling 16). OPEN: Task 18's console mount fix (recommended approve).
 1. W2: testid prefix `mh-*` (spec) — recommend keep.
 2. W2: ratio leaders need an engine `leaderboards` declaration — recommend permit (additive).
 3. W2: org-home liveness poll-only — recommend yes.
-4. W5: in scope or not — plan drafted as a candidate for a ruling.
+4. W5: IN SCOPE (ruling 16); ten prompt questions carry recommendations.
 5. Any "proposed" token in `_DESIGN.md` — owner rules; existing tokens are cited, not changed.
 
 ## In flight at 23:3x (post-outage)

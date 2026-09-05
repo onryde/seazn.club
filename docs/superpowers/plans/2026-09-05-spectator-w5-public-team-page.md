@@ -1,6 +1,6 @@
 # Spectator W5 — Public Team Page: Design and Implementation Plan
 
-> **Status:** CANDIDATE DRAFT — W5 is not yet ruled in scope by the owner; design options and the plan for the recommended option; re-pin after W1–W4 merge.
+> **Status:** DRAFT — W5 ruled IN SCOPE by the owner 2026-09-06 (ruling 16, "Keep it"); design options and the plan for the recommended option (A); re-pin file:line references after W1–W4 merge before execution.
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking. Do NOT start Part 2 until the owner has ruled on the questions in Part 1 §"Owner questions" and W1–W4 have merged (every W2 name this plan consumes is a DRAFT name today).
 

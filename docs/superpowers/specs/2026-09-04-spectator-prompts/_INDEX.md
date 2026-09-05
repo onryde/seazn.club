@@ -7,7 +7,7 @@ Decision log and session status. Read `_RULES.md` beside this file first.
 - **Design system:** `_DESIGN.md` (tokens cited from the tree, W1's built vocabulary, per-wave themes with one memorable thing each, anti-patterns, R11 checklist; proposed items P1–P12 await an owner ruling). Visual theme sheet: https://claude.ai/code/artifact/45c81708-095d-458c-b49f-b471e2901415
 - **Resume state:** `_STATE.md` — start there after any session loss.
 - **Waves:** W0 capture + options · W1 match centre (every sport) · W2 landing ·
-  W3 poster · W4 gallery · W5 public team page (candidate; design options + plan drafted 2026-09-05, not yet ruled in scope)
+  W3 poster · W4 gallery · W5 public team page (in scope by ruling 16; plan drafted 2026-09-05)
 - **Reference the owner pointed at:** cricheroes tournament matches page and
   three scorecard pages (fetched 2026-09-04; structure recorded in the spec).
   Ruling: copy the level of detail, not the site.
@@ -21,7 +21,7 @@ Decision log and session status. Read `_RULES.md` beside this file first.
 | W2 | Competition landing rail (Overview · Matches · Table · Stats · Teams · Gallery slot · Info), division + player pages for the phone, i18n sweep, walkthrough v2 | Plan DRAFT 2026-09-05 (19 tasks); 3 owner questions in `W2-landing.md`; not started |
 | W3 | Match poster `poster.png` feed + story, upcoming/live/result, real crests, sponsor strip, download + native share, walkthrough v3 | Plan DRAFT 2026-09-05 (10 tasks); 3 owner questions in `W3-poster.md`; not started |
 | W4 | Gallery: `gallery_photos`, storage bucket, staff upload from the public page with media-consent gate, Gallery tab + Photos strip, walkthrough v4 | Plan DRAFT 2026-09-05 (12 tasks); 6 owner questions in `W4-gallery.md` (consent data cannot express "declined" today); not started |
-| W5 | Public team page (candidate; the other sports' Timeline moved into W1 by ruling 10) | Design options + CANDIDATE DRAFT plan 2026-09-05 (9 tasks, option A recommended); 10 owner questions in `W5-team-page.md`; NOT yet ruled in scope |
+| W5 | Public team page (the other sports' Timeline moved into W1 by ruling 10) | **In scope (ruling 16, 2026-09-06).** DRAFT plan 2026-09-05 (9 tasks, option A); 10 owner questions in `W5-team-page.md`; runs after W4; re-pin first |
 
 ## Owner rulings
 
@@ -187,3 +187,13 @@ agents resumed at 18:01 finish on Opus (a resume keeps the model).
 frontmatter reverted to `model: opus`; the W3 (poster) and W4 (gallery) plans are
 drafted by Fable agents (docs only, DRAFT status, re-pinned before execution); the W2
 draft already came from a Fable-model agent.
+
+**Owner ruling 15 (2026-09-06 00:3x): team colour source CONFIRMED** — "Confirm": public
+tiles use `team_display_v.colors.home_primary` through `public-theme.ts`'s 3:1 contrast
+guard, else the `division-hue.ts` wheel keyed on the entrant, else neutral initials; one
+resolver in W2 consumed by W3 and W5. `colors.primary` is a key nothing writes.
+
+**Owner ruling 16 (2026-09-06 00:3x): W5 public team page is IN SCOPE** — "Keep it": W5
+runs after W4 from `plans/2026-09-05-spectator-w5-public-team-page.md` (option A, `tm-*`
+testids); its ten prompt questions carry the product-owner recommendations unless the
+owner rules otherwise at re-pin.
