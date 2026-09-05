@@ -7,7 +7,7 @@
 > spectator worktree; its "RESUME HERE" block carries per-task detail). Update this file at
 > every handoff; it is committed, the ledger is not.
 
-**Last updated:** 2026-09-05 23:3x London (after the third limit outage; agents resumed at 23:18).
+**Last updated:** 2026-09-06 00:0x London.
 
 ## Where things live
 
@@ -36,7 +36,7 @@
 | 17 engine enriched band-2 lines | complete, reviewed (514bd2176 + fix 1a1849454: snapshot regenerated, golden corpus 28→30 streams) | branch |
 | 6 `buildMatchCentre` | implementer DONE (lane commit 1a88e8bc6 in `agent-af7842db778895abe`); task review IN FLIGHT; NOT yet cherry-picked | lane |
 | 8 dictionaries + coverage test | implementer DONE (lane commits c1bf271f3 + 58a74f982 in `agent-a733c4deec73194d4`); review = Needs fixes → fix round 1 IN FLIGHT (result keys by engine METHOD `regulation/dls/innings/super_over/boundary_count` + tie/no_result/draw with `{winner}` `{margin}`; `GLYPH_KINDS` derived from the classes map; parity both ways) | lane |
-| 18 pad More sheet + first line e2e | implementer RESUMED 23:18 (was re-linting before commit) in `agent-a749a9f65817abaa0`; env label `t18` (down it if `seazn-env status` lists it) | lane |
+| 18 pad More sheet + first line e2e | implementer DONE_WITH_CONCERNS (lane commit ea888772b in `agent-a749a9f65817abaa0`; env t18 down); review IN FLIGHT. PRODUCT FINDING: the player-line post-phase panel is unreachable — the console unmounts the pad the instant a fixture is `decided` — so band-2 player lines cannot be entered through the product today; the new e2e is red for that reason. OWNER DECISION NEEDED: allow the minimal organiser-console mount fix in this wave (recommended) or accept Tasks 17–18 as API-only until the pad programme fixes it. | lane |
 | 9 API + realtime | not started (after 6; adds the Task-6-exports ⊆ dictionary-keys parity test) | — |
 | 14 page wiring | not started (after 6, 8, 9; retires `BUILDER_ONLY_KEYS`) | — |
 | 15 walkthrough e2e | not started (owes the public-page assertion of Task 18's enriched line; testids `mc-over-<innings>.<over>`, `mc-ball-<innings>.<over>.<ball>`) | — |
@@ -76,10 +76,10 @@ Verification on b8ed8fa31: public-site suites 537/0 (26 pending = DB suites on e
   additive engine `leaderboards` declaration for ratio leaders; org-home poll-only).
 - RULING 2026-09-05 23:2x (binds Tasks 6 and 8): result message keys follow the engine's `outcome.method` vocabulary plus non-win outcomes — `matchCentre.result.{regulation,dls,innings,super_over,boundary_count,tie,no_result,draw}` — params `{winner}` + `{margin}` (engine margin string verbatim, never parsed).
 - W3: DRAFT plan written (`…-w3-poster.md`, 10 tasks) + prompt section; owner questions Q1 fonts (static TTFs), Q2 title sponsor on free orgs (keep rule), Q3 `describeFormat`/`division.config` ownership vs W2 (W3 builds to W2's contract if W2 unmerged).
-- W4: NOT written by the Fable agent (died before writing); an Opus agent is writing it from the dead agent's transcript pins (23:18).
-- W5: CANDIDATE DRAFT plan WRITTEN before the outage (`…-w5-public-team-page.md`, 9 tasks, complete on disk, uncommitted); prompt `W5-team-page.md` NOT yet written — an Opus agent verifies the plan and writes the prompt (23:18). W5 is NOT ruled in scope.
-- `_DESIGN.md` (52.9 KB) + theme sheet HTML WRITTEN before the outage (complete on disk, uncommitted); an Opus agent verifies both (23:18). Phase 2 (per-wave "Design theme" sections in prompts and plans; publish the theme sheet as an artifact) not started.
-- `_INDEX.md` single-pass update (plans list, wave rows, design pointer) pending the above.
+- W4: DRAFT plan written (`…-w4-gallery.md`, 12 tasks) + prompt section; 6 owner questions (consent gate — neither consent source can express "declined"; `assets` bucket + prefix; new table not a post kind; ride W1/W2 documents for liveness; testids `gl-*`; plan-tiered quota recorded not built).
+- W5: CANDIDATE DRAFT plan (9 tasks, option A) + prompt `W5-team-page.md` committed (56c0cd1ca). NOT ruled in scope.
+- `_DESIGN.md` verified + corrected (team colours EXIST: `team_display_v.colors` reaches the public payload unread) and committed (481f510a5); theme sheet published: https://claude.ai/code/artifact/45c81708-095d-458c-b49f-b471e2901415. Phase 2 (per-wave "Design theme" sections in prompts and plans) IN FLIGHT.
+- `_INDEX.md` single-pass update DONE (plans list, waves line, status rows, design + state pointers).
 
 ## Open owner questions (recommendations recorded in `_INDEX.md` / the ledger)
 

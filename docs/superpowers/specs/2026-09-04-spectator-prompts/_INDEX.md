@@ -3,9 +3,11 @@
 Decision log and session status. Read `_RULES.md` beside this file first.
 
 - **Design of record:** `../2026-09-04-spectator-surface-design.md`
-- **Plans:** `../../plans/2026-09-04-spectator-w1-match-centre.md` (W1, written 2026-09-05 after the W0 pick; 16 tasks, TDD, mutants a–l named)
+- **Plans:** W1 `../../plans/2026-09-04-spectator-w1-match-centre.md` (18 tasks — 17–18 added by ruling 12; EXECUTING) · W2 `../../plans/2026-09-05-spectator-w2-competition-landing.md` (DRAFT, 19 tasks) · W3 `../../plans/2026-09-05-spectator-w3-poster.md` (DRAFT, 10 tasks) · W4 `../../plans/2026-09-05-spectator-w4-gallery.md` (DRAFT, 12 tasks) · W5 `../../plans/2026-09-05-spectator-w5-public-team-page.md` (CANDIDATE DRAFT, 9 tasks). W2–W5 were drafted 2026-09-05 in parallel with W1 by planning agents on the owner's request ("write all waves"); every one is DRAFT until re-pinned after the wave before it merges. Each wave prompt carries a `## Plan` section with the owner questions and the product-owner recommendation.
+- **Design system:** `_DESIGN.md` (tokens cited from the tree, W1's built vocabulary, per-wave themes with one memorable thing each, anti-patterns, R11 checklist; proposed items P1–P12 await an owner ruling). Visual theme sheet: https://claude.ai/code/artifact/45c81708-095d-458c-b49f-b471e2901415
+- **Resume state:** `_STATE.md` — start there after any session loss.
 - **Waves:** W0 capture + options · W1 match centre (every sport) · W2 landing ·
-  W3 poster · W4 gallery · W5 public team page (candidate, designed after W4)
+  W3 poster · W4 gallery · W5 public team page (candidate; design options + plan drafted 2026-09-05, not yet ruled in scope)
 - **Reference the owner pointed at:** cricheroes tournament matches page and
   three scorecard pages (fetched 2026-09-04; structure recorded in the spec).
   Ruling: copy the level of detail, not the site.
@@ -15,11 +17,11 @@ Decision log and session status. Read `_RULES.md` beside this file first.
 | Wave | Scope | State |
 | --- | --- | --- |
 | W0 | Prod-build capture of every existing public page at 320/375/768/1280; current-state block II; two mockup options each for match centre and poster (+ football and tennis boards); pick | **Done 2026-09-05.** Canvas: https://claude.ai/code/artifact/f745adf2-fd1f-4f14-9184-ba6f0eb41978 · plain view: https://claude.ai/code/artifact/e7ced691-6978-4036-8f20-cd134b5cfca5 · picks: match centre A, poster A — owner-confirmed, for every sport |
-| W1 | Match centre for EVERY sport: engine cricket scorecard fold, ledger Timeline + Sets/Periods for the other sports, view model in the public fixture JSON, Summary/Scorecard/Commentary/Timeline/Sets/Info tabs by sport and tier, live transport carries the model, i18n, walkthrough v1 | Planned 2026-09-05 (`plans/2026-09-04-spectator-w1-match-centre.md`); implementation starting, subagent-driven, Opus |
-| W2 | Competition landing rail (Overview · Matches · Table · Stats · Teams · Gallery slot · Info), division + player pages for the phone, i18n sweep, walkthrough v2 | Not started |
-| W3 | Match poster `poster.png` feed + story, upcoming/live/result, real crests, sponsor strip, download + native share, walkthrough v3 | Not started |
-| W4 | Gallery: `gallery_photos`, storage bucket, staff upload from the public page with media-consent gate, Gallery tab + Photos strip, walkthrough v4 | Not started |
-| W5 | Public team page (candidate; the other sports' Timeline moved into W1 by ruling 10) | Not designed, not yet ruled |
+| W1 | Match centre for EVERY sport: engine cricket scorecard fold, ledger Timeline + Sets/Periods for the other sports, view model in the public fixture JSON, Summary/Scorecard/Commentary/Timeline/Sets/Info tabs by sport and tier, live transport carries the model, i18n, walkthrough v1 | **Executing** (subagent-driven): Tasks 1–5, 7, 10–13, 17 complete and integrated on `feat/spectator-surface`; 6, 8, 18 in review/fix rounds on isolated lanes; 9, 14, 15, 16 next. See `_STATE.md`. |
+| W2 | Competition landing rail (Overview · Matches · Table · Stats · Teams · Gallery slot · Info), division + player pages for the phone, i18n sweep, walkthrough v2 | Plan DRAFT 2026-09-05 (19 tasks); 3 owner questions in `W2-landing.md`; not started |
+| W3 | Match poster `poster.png` feed + story, upcoming/live/result, real crests, sponsor strip, download + native share, walkthrough v3 | Plan DRAFT 2026-09-05 (10 tasks); 3 owner questions in `W3-poster.md`; not started |
+| W4 | Gallery: `gallery_photos`, storage bucket, staff upload from the public page with media-consent gate, Gallery tab + Photos strip, walkthrough v4 | Plan DRAFT 2026-09-05 (12 tasks); 6 owner questions in `W4-gallery.md` (consent data cannot express "declined" today); not started |
+| W5 | Public team page (candidate; the other sports' Timeline moved into W1 by ruling 10) | Design options + CANDIDATE DRAFT plan 2026-09-05 (9 tasks, option A recommended); 10 owner questions in `W5-team-page.md`; NOT yet ruled in scope |
 
 ## Owner rulings
 
