@@ -330,19 +330,16 @@ class InningsAccumulator {
     // reducer's score once the ball is folded.
     const overs = this.oversByIndex[index] ?? (this.oversByIndex[index] = []);
     const overIndex = Math.floor(prevLegalBalls / bpo);
-    const over: OverLog = overs[overIndex] ?? {
-      number: overIndex + 1,
-      bowler: payload.bowler,
-      balls: [],
-      runs: 0,
-      wickets: 0,
-      scoreAfter: { runs: prevRuns, wickets: prevWickets },
-    };
-    overs[overIndex] = over;
+    const scoreAfter = { runs: innings.runs, wickets: innings.wickets };
+    let over = overs[overIndex];
+    if (over === undefined) {
+      over = { number: overIndex + 1, bowler: payload.bowler, balls: [], runs: 0, wickets: 0, scoreAfter };
+      overs[overIndex] = over;
+    }
     over.balls.push(glyphOf(payload));
     over.runs += innings.runs - prevRuns;
     over.wickets += innings.wickets - prevWickets;
-    over.scoreAfter = { runs: innings.runs, wickets: innings.wickets };
+    over.scoreAfter = scoreAfter;
 
     // Partnerships. The first one of an innings opens on its first ball with
     // the pair the LEDGER recorded at the crease for that ball — the same
@@ -428,29 +425,78 @@ class InningsAccumulator {
    * inferred from a state diff — because `fine.dismissed` alone can't say
    * which of two possible causes added a name to it.
    *
-   * Retirement also moves the open partnership's pair (Task 3's own report
-   * flagged this): who is at the crease changes exactly the way a wicket
-   * changes it, but `onBall` has no ball to see it happen on. Law 25 lets
-   * the innings continue straight through a retirement (out or not) — it is
-   * the SAME stand with a substitute at one end, not a new one, so only the
-   * pair moves; `runsAt`/`ballsAt` stay put. Left untouched when the
-   * retirement leaves no one to replace the retiree (state has already
-   * nulled that end) — an all-out autoClose settles the innings anyway.
+   * Retirement also moves the open partnership's pair: who is at the crease
+   * changes exactly the way a wicket changes it, but `onBall` has no ball to
+   * see it happen on.
+   *
+   * A retired-OUT is the ONE wicket in this sport that falls with no ball
+   * attached (Task 3 fix round 1, finding 1). `applyRetire` increments
+   * `innings.wickets` and runs `autoClose` just as `applyDelivery` does, so
+   * without this branch: no fall-of-wickets row exists for it, every LATER
+   * row's number skips past it, `fallOfWickets.length === total.wickets`
+   * stops holding, an innings all out on a retired-out never closes its last
+   * stand (it stays `"unbroken"` when a wicket ended it), and — worst,
+   * because it is silent — the previous-wickets marker goes stale, so the
+   * NEXT ball's over log absorbs this wicket as if it had fallen there. So a
+   * retired-out closes the stand and files the row exactly as `onBall` does,
+   * off the same state fields, then re-opens with the pair the reducer left
+   * at the crease.
+   *
+   * A retired-NOT-OUT costs no wicket (Law 25: hurt/ill/other; the batter may
+   * resume) and continues the SAME stand with a substitute at one end — so
+   * only the pair moves, `runsAt`/`ballsAt` stay put. Left untouched when the
+   * retirement leaves no one to replace the retiree (state has already nulled
+   * that end); an all-out autoClose settles the innings anyway.
+   *
+   * `state.innings` is the only container to look in: `applyRetire` goes
+   * through `requireOpenInnings`, which reads `state.innings`, so a
+   * retirement can never land in a super over.
    */
   onRetire(after: CricketState, ev: EventEnvelope): void {
     const index = after.innings.length - 1;
-    if (index < 0) return;
+    const innings = after.innings[index];
+    if (innings === undefined) return;
     const payload = ev.payload as { person: string; reason: "hurt" | "out" | "other" };
+    const fine = innings.fine;
+    const striker = fine?.striker ?? null;
+    const nonStriker = fine?.nonStriker ?? null;
 
     if (payload.reason === "out") {
       const dismissals = this.dismissalByIndex[index] ?? (this.dismissalByIndex[index] = {});
       dismissals[payload.person] = { kind: "retired", bowler: null, fielder: null, fielderAssist: null };
+
+      const fow = this.fowByIndex[index] ?? (this.fowByIndex[index] = []);
+      fow.push({
+        wicket: innings.wickets,
+        runs: innings.runs,
+        over: fmtOvers(innings.legalBalls, after.cfg.ballsPerOver),
+        batter: payload.person,
+      });
+
+      const ending = this.openPartnershipByIndex[index] ?? null;
+      if (ending !== null) {
+        const partnerships = this.partnershipsByIndex[index] ?? (this.partnershipsByIndex[index] = []);
+        partnerships.push({
+          batters: ending.batters,
+          runs: innings.runs - ending.runsAt,
+          balls: innings.legalBalls - ending.ballsAt,
+          wicket: innings.wickets,
+        });
+      }
+      this.openPartnershipByIndex[index] =
+        !innings.closed && striker !== null && nonStriker !== null
+          ? { batters: [striker, nonStriker], runsAt: innings.runs, ballsAt: innings.legalBalls }
+          : null;
+
+      // The marker `onBall` diffs the next delivery against. Without this the
+      // next ball's over log reports this wicket as its own.
+      this.prevWicketsByIndex[index] = innings.wickets;
+      return;
     }
 
     const open = this.openPartnershipByIndex[index] ?? null;
-    const fine = after.innings[index]?.fine;
-    if (open !== null && fine?.striker != null && fine.nonStriker != null) {
-      this.openPartnershipByIndex[index] = { ...open, batters: [fine.striker, fine.nonStriker] };
+    if (open !== null && striker !== null && nonStriker !== null) {
+      this.openPartnershipByIndex[index] = { ...open, batters: [striker, nonStriker] };
     }
   }
 
@@ -589,17 +635,26 @@ class InningsAccumulator {
    * container is empty and no innings is open, which is `null` by the same
    * rule.
    *
+   * A closed innings is not the only way a match ends, though (fix round 1,
+   * finding 2): `cricket.match.close` — the two-innings time-expiry draw —
+   * sets `phase: "done"` and an `outcome`, and leaves the innings it
+   * interrupted OPEN. So a decided match is live-less whether or not its
+   * innings closed. The `!inSuperOver` half of that gate is load-bearing in
+   * the other direction: a tie sets `outcome` BEFORE the super over is
+   * bowled, so a bare `outcome !== null` would blank the scoreboard for the
+   * whole of the thing that decides the match.
+   *
    * Every number here is the reducer's: the target from `chaseTarget` (the
    * one authority — DLS revisions and two-innings aggregates included), the
-   * balls remaining from the innings' OWN `ballsLimit` (`cfg.ballsPerInnings`
-   * at the start, and whatever a `cricket.revise` cut it to since), the rates
-   * from `cfg.ballsPerOver` rather than a hard six.
+   * balls remaining from the innings' OWN `ballsLimit`, the rates from
+   * `cfg.ballsPerOver` rather than a hard six.
    */
   live(state: CricketState): CricketLive | null {
     const { list, offset, inSuperOver } = activeInnings<InningsState>(state);
     const local = list.length - 1;
     const innings = list[local];
     if (innings === undefined || innings.closed) return null;
+    if (!inSuperOver && state.outcome !== null) return null;
     const index = offset + local;
     const bpo = state.cfg.ballsPerOver;
     const fine = innings.fine;
@@ -622,6 +677,12 @@ class InningsAccumulator {
     const isChase = !inSuperOver && index === state.cfg.inningsPerSide * 2 - 1;
     const target = isChase ? chaseTarget(state) : null;
     const needRuns = target === null ? null : target - innings.runs;
+    // `innings.ballsLimit`, NOT `cfg.ballsPerInnings`: the innings' own quota
+    // is initialised from `state.quota` (which is `cfg.ballsPerInnings`) and
+    // is what `cricket.revise` moves when rain shortens the game — reading
+    // the config instead would keep counting down to a length nobody is
+    // playing to. It is also already the super over's one over (`bpo`), set
+    // by `applySuperOverBall`. Identical to the config absent a revise.
     const ballsLeft = innings.ballsLimit === null ? null : innings.ballsLimit - innings.legalBalls;
 
     return {
@@ -631,9 +692,14 @@ class InningsAccumulator {
       // `null` between overs — `finishDelivery` clears the bowler at every
       // over boundary and the next ball names the replacement.
       bowler: fine?.currentBowler ?? null,
-      // The over in progress; between overs, the one just bowled — which is
-      // what a scoreboard keeps showing until the next ball is delivered.
-      thisOver: [...(overs[overs.length - 1]?.balls ?? [])],
+      // The OPEN over's glyphs, addressed the same way `onBall` files them:
+      // by the over the current `legalBalls` sits in. Between overs that is
+      // an over with no balls in it yet, so `[]` — the completed over is in
+      // the log and does not linger here (fix round 1, finding 5). Addressing
+      // it this way rather than "the last entry unless the count divides"
+      // also keeps a wide bowled as the first ball of a new over in `thisOver`
+      // where it belongs: it makes an entry without advancing `legalBalls`.
+      thisOver: [...(overs[Math.floor(innings.legalBalls / bpo)]?.balls ?? [])],
       partnership:
         open === null ? null : { runs: innings.runs - open.runsAt, balls: innings.legalBalls - open.ballsAt },
       lastWicket:
@@ -650,8 +716,12 @@ class InningsAccumulator {
       rrr: needRuns !== null && ballsLeft !== null && ballsLeft > 0 ? (needRuns * bpo) / ballsLeft : null,
       needRuns,
       ballsLeft,
-      // A projection only means anything in the innings that sets the target,
-      // and only when the innings has a length to project onto.
+      // "On this run rate, what does the innings finish on" — the current
+      // rate carried out to the innings' full quota, rounded to whole runs.
+      // Only the match's FIRST innings (`state.innings.length === 1`): a
+      // side batting later is chasing a number, and the projection a
+      // scoreboard shows then is the required rate, not this. Needs a quota
+      // to project onto and a ball already bowled to have a rate at all.
       projected:
         !inSuperOver && state.innings.length === 1 && innings.ballsLimit !== null && innings.legalBalls > 0
           ? Math.round((innings.runs * innings.ballsLimit) / innings.legalBalls)

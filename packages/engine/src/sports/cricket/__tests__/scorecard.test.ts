@@ -66,32 +66,60 @@
 //    maiden, paired with a dot-plus-bye over proving a bye does NOT (the
 //    re-recorded mutant (b) site — finding 1).
 //
-// Mutants killed (Task 3)
-// -----------------------
+// Mutants killed (Task 3, and its fix round 1)
+// -----------------------------------------------------------------------
+// Every one was applied to `scorecard.ts`, run scoped, then restored from a
+// `cp -p` backup verified byte-identical with `cmp -s` and re-run GREEN.
+// Line numbers are this file's, re-recorded after the last edit to it.
+//
 // (c) Swapped the pair when a partnership re-opens after a wicket —
-//     `batters: [striker, nonStriker]` → `[nonStriker, striker]` in
-//     `InningsAccumulator.onBall` (scorecard.ts). RED: "a new partnership
-//     opens with the pair the reducer put at the crease after the wicket" at
-//     scorecard.test.ts:327 — `expected [ 'h1', 'h4' ] to deeply equal
-//     [ 'h4', 'h1' ]` (the pair after innings 1's run-out). Restored (`cp`
-//     backup, `cmp` identical), re-ran GREEN.
+//     `batters: [striker, nonStriker]` -> `[nonStriker, striker]` in
+//     `InningsAccumulator.onBall`. RED: "a new partnership opens with the
+//     pair the reducer put at the crease after the wicket" at
+//     scorecard.test.ts:689 — `expected [ 'h1', 'h4' ] to deeply equal
+//     [ 'h4', 'h1' ]` (the pair after innings 1's run-out).
 // (d) Dropped the maiden credit — `if (overBowler !== null &&
-//     this.overRunsByIndex[index] === 0)` → `if (false && …)`, so a maiden
-//     over is never credited. RED: Task 2's "a wide and a no-ball count
-//     against the bowler…" at scorecard.test.ts:212 — `expected +0 to be 1`
-//     (h7's six dots). Restored (`cp` backup, `cmp` identical), re-ran GREEN.
-// (e) Computed the required rate over one ball too many — `(needRuns * bpo) /
-//     ballsLeft` → `/ (ballsLeft + 1)` in `live()`. RED: "chase maths:
-//     target, need, balls left, RRR…" at scorecard.test.ts:353 — `expected 20
-//     to be close to 24`. Restored (`cp` backup, `cmp` identical), re-ran
-//     GREEN.
-// (f) Not required by the brief — it kills the brief's OWN chase gate.
-//     Reverted `isChase` in `live()` from `index === inningsPerSide * 2 - 1`
-//     (the reducer's `isChaseIndex`) to the brief's `state.innings.length >=
-//     2`. RED: "no target, need or RRR in a third innings…" at
-//     scorecard.test.ts:393 — `expected 2 to be null`, i.e. a Test's third
-//     innings shown the FOURTH innings' target. Restored (`cp` backup, `cmp`
-//     identical), re-ran GREEN.
+//     this.overRunsByIndex[index] === 0)` -> `if (false && …)`. RED: Task 2's
+//     "a wide denies a maiden; a bye does not" at scorecard.test.ts:469 —
+//     `expected +0 to be 1`. NB the mutation has to remove the CREDIT, not
+//     the zero-runs predicate: the credited bowler bowls exactly one over and
+//     it is the maiden, so "every over is a maiden" and "this over is a
+//     maiden" agree and that mutant survives for a reason unrelated to the
+//     code.
+// (e) Required rate over one ball too many — `(needRuns * bpo) / ballsLeft`
+//     -> `/ (ballsLeft + 1)` in `live()`. RED: "chase maths: target, need,
+//     balls left, RRR…" at scorecard.test.ts:715 — `expected 20 to be close
+//     to 24`.
+// (f) The brief's OWN chase gate: `isChase` from `index === inningsPerSide *
+//     2 - 1` back to `state.innings.length >= 2`. RED: "no target, need or
+//     RRR in a third innings…" at scorecard.test.ts:755 — `expected 2 to be
+//     null`, i.e. a Test's third innings shown the FOURTH innings' target.
+// (g) Removed the match-wide innings offset in `onBall` —
+//     `(inSuperOver ? after.innings.length : 0) + local` -> `local`, i.e.
+//     Task 1's `after.innings.length - 1`. RED: "a super over leaves every
+//     main innings card byte-for-byte as it was…" at scorecard.test.ts:907.
+// (h) Deleted the previous-wickets refresh at the end of `onRetire`'s
+//     retired-out branch (`this.prevWicketsByIndex[index] = …`). RED: "a
+//     retired-out files its own fall-of-wickets row…" at
+//     scorecard.test.ts:838 — the over holding the NEXT delivery absorbs the
+//     ball-less wicket as its own.
+// (i) Deleted the decided-match gate in `live()` (`if (!inSuperOver &&
+//     state.outcome !== null) return null;`). RED: "live is null after a
+//     time-expiry draw…" at scorecard.test.ts:884.
+// (j) `thisOver` from the OPEN over back to the last entry in the log —
+//     `overs[Math.floor(innings.legalBalls / bpo)]` -> `overs[overs.length -
+//     1]`. RED: "between overs 'this over' is empty…" at
+//     scorecard.test.ts:1014.
+//
+// NOT killable, recorded so the next reader does not hunt for it: narrowing
+// (i) to a bare `state.outcome !== null` — the reviewer's stated reason for
+// the `!inSuperOver` half ("a tie sets outcome before the super over") is a
+// FALSE PREMISE. `decideTie` (cricket.ts) sets `phase: "super_over"` and
+// leaves `outcome` NULL whenever `cfg.superOver` is on; every path that does
+// set an outcome around a super over has already closed the innings the
+// `closed` check catches. The half is kept as ruled — it is correct, and it
+// is the difference between a robust gate and one that depends on that — but
+// no test can witness it today.
 //
 // Mutants killed (Task 2)
 // -----------------------
@@ -120,9 +148,10 @@ import { describe, expect, it } from "vitest";
 import type { EventEnvelope } from "../../../core/events.ts";
 import type { LineupPair } from "../../../core/types.ts";
 import { makeEnvelope } from "../../../testkit/helpers.ts";
-import { chaseTarget, cricket, type CricketCfg } from "../cricket.ts";
+import { chaseTarget, cricket, padSpec, type CricketCfg } from "../cricket.ts";
 import { deriveCricketScorecard } from "../scorecard.ts";
-import { scriptLedger, type Script } from "./scorecard-ledger.ts";
+import type { BallGlyph } from "../scorecard-types.ts";
+import { scriptLedger, type Delivery, type Script } from "./scorecard-ledger.ts";
 
 const HOME = ["h1", "h2", "h3", "h4", "h5", "h6", "h7", "h8"];
 const AWAY = ["a1", "a2", "a3", "a4", "a5", "a6", "a7", "a8"];
@@ -178,6 +207,39 @@ export const TWO_INNINGS: Script = {
   ],
 };
 
+// A match tied in regulation, then a super over in progress. Hoisted to
+// module scope (Task 3 fix round 1, findings 3 and 6) so the super-over
+// tests can also fold the SAME script WITHOUT its super-over entry and
+// deep-equal the two — the strongest form of "the super over touched no
+// main innings", since it compares every field of every card rather than
+// the handful anyone thought to name.
+const TIE_THEN_SUPER_OVER: Script = {
+  cfg: { ballsPerInnings: 12, playersPerSide: 8, minOversForResult: 2, superOver: true },
+  home: HOME,
+  away: AWAY,
+  tossWonBy: "home",
+  elected: "bat",
+  innings: [
+    { batting: "home", bowlers: ["a7"], deliveries: [{ bat: 1 }, { bat: 1 }], close: "other" },
+    // Away ties at 2-2 (target = home's 2 + 1 = 3; away's runs === target - 1).
+    { batting: "away", bowlers: ["h7"], deliveries: [{ bat: 1 }, { bat: 1 }], close: "other" },
+    // ICC alternation: away batted second in the match, so away bats
+    // FIRST in the super over — `soBattingSideAt`, not assumed. h7
+    // (home) bowls the same name that bowled innings 2, on purpose: a
+    // container mix-up would leak these 6 runs into h7's MAIN innings-2
+    // line.
+    // The wide is deliberate (Task 3 fix round 1, finding 3): NO main
+    // innings here scripts one, so `extras.wides` on a main card is a
+    // field only a super-over ball could ever move.
+    {
+      batting: "away",
+      bowlers: ["h7"],
+      deliveries: [{ bat: 4 }, { extra: "wide", runs: 1 }, { bat: 2 }],
+      superOver: true,
+    },
+  ],
+};
+
 // Derives an expected boundary count STRAIGHT FROM THE SCRIPT'S OWN LEDGER —
 // never a hand-typed literal. `scriptLedger` already replays `cricket.apply`
 // event by event and stamps each recorded `cricket.ball` payload's
@@ -212,7 +274,16 @@ function scriptBoundaries(script: Script, person: string, runs: 4 | 6): number {
 // the smallest legal summary-only ledger directly, the same way
 // `scriptLedger` itself does (`makeEnvelope` + a strict replay), for this
 // one test.
-function summaryOnlyLedger(): { events: EventEnvelope[]; cfg: CricketCfg; lineups: LineupPair } {
+// `partial: true` is what keeps the innings OPEN: `applySummary` ends in
+// `closeOpenInnings` for every summary that does not carry it (cricket.ts),
+// so a coarse ledger without it can never show a live block.
+function summaryOnlyLedger(
+  totals: { runs: number; wickets: number; legalBalls: number; partial?: boolean } = {
+    runs: 42,
+    wickets: 3,
+    legalBalls: 12,
+  },
+): { events: EventEnvelope[]; cfg: CricketCfg; lineups: LineupPair } {
   const cfg = cricket.configSchema.parse({ ballsPerInnings: 12, playersPerSide: 8, minOversForResult: 2 });
   const lineups: LineupPair = {
     home: { entrantId: "home", slots: HOME.map((personId, i) => ({ personId, slot: "starting" as const, orderNo: i + 1 })) },
@@ -226,7 +297,7 @@ function summaryOnlyLedger(): { events: EventEnvelope[]; cfg: CricketCfg; lineup
   }
   record("cricket.toss", { wonBy: "home", elected: "bat" });
   record("core.start", {});
-  record("cricket.innings.summary", { runs: 42, wickets: 3, legalBalls: 12 });
+  record("cricket.innings.summary", totals);
   return { events, cfg, lineups };
 }
 
@@ -489,27 +560,9 @@ describe("deriveCricketScorecard — batting and bowling", () => {
   });
 
   it("a super-over ball never touches a main innings' batting/bowling/extras, and no isSuperOver card is emitted (fix round 1, finding 6)", () => {
-    const TIE_THEN_SUPER_OVER: Script = {
-      cfg: { ballsPerInnings: 12, playersPerSide: 8, minOversForResult: 2, superOver: true },
-      home: HOME,
-      away: AWAY,
-      tossWonBy: "home",
-      elected: "bat",
-      innings: [
-        { batting: "home", bowlers: ["a7"], deliveries: [{ bat: 1 }, { bat: 1 }], close: "other" },
-        // Away ties at 2-2 (target = home's 2 + 1 = 3; away's runs === target - 1).
-        { batting: "away", bowlers: ["h7"], deliveries: [{ bat: 1 }, { bat: 1 }], close: "other" },
-        // ICC alternation: away batted second in the match, so away bats
-        // FIRST in the super over — `soBattingSideAt`, not assumed. h7
-        // (home) bowls the same name that bowled innings 2, on purpose: a
-        // container mix-up would leak these 6 runs into h7's MAIN innings-2
-        // line.
-        { batting: "away", bowlers: ["h7"], deliveries: [{ bat: 4 }, { bat: 2 }], superOver: true },
-      ],
-    };
     const { events, state, cfg, lineups } = scriptLedger(TIE_THEN_SUPER_OVER);
     expect(state.phase).toBe("super_over"); // confirms the tie actually fired
-    expect(state.superOver?.innings[0]?.runs).toBe(6); // the super-over ball's own runs
+    expect(state.superOver?.innings[0]?.runs).toBe(7); // 4 + a 1-run wide + 2, the super over's own
 
     const card = deriveCricketScorecard({ events, cfg, lineups });
     expect(card.innings).toHaveLength(2); // only the two main innings
@@ -575,7 +628,10 @@ function scriptPrefix(
   script: Script,
   inningsIndex: number,
   deliveryCount: number,
-): ReturnType<typeof scriptLedger> & { card: ReturnType<typeof deriveCricketScorecard>["innings"][number] } {
+): ReturnType<typeof scriptLedger> & {
+  scorecard: ReturnType<typeof deriveCricketScorecard>;
+  card: ReturnType<typeof deriveCricketScorecard>["innings"][number];
+} {
   const spec = script.innings[inningsIndex]!;
   const ledger = scriptLedger({
     ...script,
@@ -584,10 +640,8 @@ function scriptPrefix(
       { ...spec, deliveries: spec.deliveries.slice(0, deliveryCount), leaveOpen: true },
     ],
   });
-  const card = deriveCricketScorecard({ events: ledger.events, cfg: ledger.cfg, lineups: ledger.lineups }).innings[
-    inningsIndex
-  ]!;
-  return { ...ledger, card };
+  const scorecard = deriveCricketScorecard({ events: ledger.events, cfg: ledger.cfg, lineups: ledger.lineups });
+  return { ...ledger, scorecard, card: scorecard.innings[inningsIndex]! };
 }
 
 /** `TWO_INNINGS`'s first innings, left in play — the only way to observe a
@@ -704,5 +758,427 @@ describe("deriveCricketScorecard — the chase is the LAST innings, not the seco
     // …and it is genuinely a number being withheld, not an absent one: the
     // reducer answers for the fourth innings on this very state.
     expect(chaseTarget(s.state)).toEqual(expect.any(Number));
+  });
+});
+
+// The glyph a scripted delivery should produce, written from the SCRIPT's own
+// shape rather than from the ball payload `glyphOf` reads (Task 3 fix round 1,
+// finding 4). Two independent expressions of the same mapping: a `glyphOf`
+// that answered `{ kind: "runs", runs: 0 }` for everything, or that lost a
+// no-ball's bat runs, disagrees with this immediately.
+function expectedGlyph(delivery: Delivery): BallGlyph {
+  if ("out" in delivery) return { kind: "wicket", dismissal: delivery.out };
+  if ("extra" in delivery) {
+    const runs = delivery.runs + (delivery.bat ?? 0);
+    switch (delivery.extra) {
+      case "wide":
+        return { kind: "wide", runs };
+      case "noball":
+        return { kind: "noball", runs };
+      default:
+        return { kind: delivery.extra, runs };
+    }
+  }
+  if ("bat" in delivery) return { kind: "runs", runs: delivery.bat };
+  throw new Error("expectedGlyph: not a delivery");
+}
+
+describe("deriveCricketScorecard — fix round 1", () => {
+  // ---- finding 1: the one wicket that falls with no ball attached ---------
+
+  const RETIRED_OUT_MID_INNINGS: Script = {
+    cfg: { ballsPerInnings: 12, playersPerSide: 8, minOversForResult: 2 },
+    home: HOME,
+    away: AWAY,
+    tossWonBy: "home",
+    elected: "bat",
+    innings: [
+      {
+        batting: "home",
+        bowlers: ["a7"],
+        // A ball first: `cricket.retire` needs an innings in progress, and
+        // only a scoring event opens one.
+        deliveries: [{ bat: 1 }, { retire: true, reason: "out" }, { bat: 2 }, { out: "bowled" }, { bat: 1 }],
+        leaveOpen: true,
+      },
+    ],
+  };
+
+  it("a retired-out files its own fall-of-wickets row, and the wicket after it is still numbered 2", () => {
+    const s = scriptLedger(RETIRED_OUT_MID_INNINGS);
+    const [inn1] = deriveCricketScorecard({ events: s.events, cfg: s.cfg, lineups: s.lineups }).innings;
+    const retiree = (s.events.find((ev) => ev.type === "cricket.retire")!.payload as { person: string }).person;
+
+    // Numbering runs unbroken across a wicket that had no ball: without a row
+    // for the retirement the bowled would be filed as wicket 1 and this
+    // length/total pair would part company.
+    expect(inn1!.fallOfWickets.map((f) => f.wicket)).toEqual([1, 2]);
+    expect(inn1!.fallOfWickets.length).toBe(inn1!.total.wickets);
+    expect(inn1!.fallOfWickets[0]!.batter).toBe(retiree);
+
+    // The score and over at the fall are the reducer's own, read off a prefix
+    // replay ending on the retirement itself.
+    const atRetirement = scriptPrefix(RETIRED_OUT_MID_INNINGS, 0, 2);
+    expect(inn1!.fallOfWickets[0]!.runs).toBe(atRetirement.card.total.runs);
+    expect(inn1!.fallOfWickets[0]!.over).toBe(atRetirement.card.total.overs);
+
+    // The stand it broke is CLOSED, with that wicket's number.
+    expect(inn1!.partnerships[0]!.wicket).toBe(1);
+    expect(inn1!.partnerships[0]!.batters).not.toContain(undefined);
+    expect(inn1!.partnerships.at(-1)!.wicket).toBe("unbroken");
+    expect(inn1!.partnerships.reduce((sum, p) => sum + p.runs, 0)).toBe(inn1!.total.runs);
+
+    // No OVER absorbs it — a wicket that fell to no ball belongs to no over,
+    // and the marker the next delivery is diffed against has to move with it
+    // or that delivery's over reports this wicket as its own.
+    const retiredOut = s.events.filter(
+      (ev) => ev.type === "cricket.retire" && (ev.payload as { reason: string }).reason === "out",
+    ).length;
+    expect(retiredOut).toBe(1);
+    expect(inn1!.overs.reduce((sum, o) => sum + o.wickets, 0)).toBe(inn1!.total.wickets - retiredOut);
+  });
+
+  it("an innings all out ON a retired-out closes its last stand with that wicket, not 'unbroken'", () => {
+    // Two a side ⇒ `allOutWickets` is 1 (max(1, players - 1)), so the single
+    // retired-out IS the innings.
+    const ALL_OUT_ON_RETIREMENT: Script = {
+      cfg: { ballsPerInnings: 12, playersPerSide: 2, minOversForResult: 2 },
+      home: ["h1", "h2"],
+      away: ["a1", "a2"],
+      tossWonBy: "home",
+      elected: "bat",
+      innings: [{ batting: "home", bowlers: ["a1"], deliveries: [{ bat: 1 }, { retire: true, reason: "out" }] }],
+    };
+    const s = scriptLedger(ALL_OUT_ON_RETIREMENT);
+    const [inn1] = deriveCricketScorecard({ events: s.events, cfg: s.cfg, lineups: s.lineups }).innings;
+    expect(inn1!.closed).toBe(true); // the reducer's own autoClose, not the builder's
+    expect(inn1!.total.wickets).toBe(1);
+    expect(inn1!.partnerships).toHaveLength(1);
+    expect(inn1!.partnerships[0]!.wicket).toBe(1); // ended ON a wicket ⇒ not unbroken
+    expect(inn1!.fallOfWickets.length).toBe(inn1!.total.wickets);
+  });
+
+  // ---- finding 2: a decided match whose innings never closed ---------------
+
+  it("live is null after a time-expiry draw, even though the innings it interrupted is still open", () => {
+    const DRAWN_ON_TIME: Script = {
+      cfg: { inningsPerSide: 2, ballsPerInnings: 12, playersPerSide: 8, minOversForResult: 2 },
+      home: HOME,
+      away: AWAY,
+      tossWonBy: "home",
+      elected: "bat",
+      innings: [
+        { batting: "home", bowlers: ["a7"], deliveries: [{ bat: 1 }] },
+        { batting: "away", bowlers: ["h7"], deliveries: [{ bat: 1 }] },
+        { batting: "home", bowlers: ["a7"], deliveries: [{ bat: 1 }, { matchClose: true }], leaveOpen: true },
+      ],
+    };
+    const s = scriptLedger(DRAWN_ON_TIME);
+    // The premise this test exists for: the match is decided and the innings
+    // is STILL OPEN, so a `closed`-only gate cannot see it.
+    expect(s.state.outcome).not.toBeNull();
+    expect(s.state.innings.at(-1)!.closed).toBe(false);
+
+    const card = deriveCricketScorecard({ events: s.events, cfg: s.cfg, lineups: s.lineups });
+    expect(card.result).not.toBeNull();
+    expect(card.live).toBeNull();
+  });
+
+  // ---- findings 3 and 6: the super over ------------------------------------
+
+  it("a super over leaves every main innings card byte-for-byte as it was, and live reads the super-over slot", () => {
+    const beforeSuperOver = scriptLedger({
+      ...TIE_THEN_SUPER_OVER,
+      innings: TIE_THEN_SUPER_OVER.innings.slice(0, 2),
+    });
+    const before = deriveCricketScorecard({
+      events: beforeSuperOver.events,
+      cfg: beforeSuperOver.cfg,
+      lineups: beforeSuperOver.lineups,
+    });
+    const s = scriptLedger(TIE_THEN_SUPER_OVER);
+    const after = deriveCricketScorecard({ events: s.events, cfg: s.cfg, lineups: s.lineups });
+
+    // The three fields below are the ones the ACCUMULATOR owns. Everything
+    // else on a card is read back off `state.innings`, which a super-over ball
+    // cannot reach whatever index it is filed under — so an assertion built
+    // only from those cannot witness a misfiled super-over ball at all, and
+    // named ones come FIRST here so a failure says which field moved.
+    expect(after.innings.map((i) => i.overs.flatMap((o) => o.balls).length)).toEqual(
+      before.innings.map((i) => i.overs.flatMap((o) => o.balls).length),
+    );
+    // No main innings scripts a wide; the super over does. A main card
+    // reporting one has been fed a ball from the other container.
+    expect(after.innings.map((i) => i.extras!.wides)).toEqual([0, 0]);
+    expect(after.innings.map((i) => i.batting.map((b) => b.person))).toEqual(
+      before.innings.map((i) => i.batting.map((b) => b.person)),
+    );
+    // …and then every remaining field of every main card, as the catch-all:
+    // fall of wickets, partnerships, bowling and the totals too.
+    expect(after.innings).toEqual(before.innings);
+
+    // …and the super over is genuinely in progress, read from the reducer.
+    const so = s.state.superOver!.innings.at(-1)!;
+    expect(so.closed).toBe(false);
+    expect(after.live).not.toBeNull();
+    expect(after.live!.striker).toBe(so.fine!.striker);
+    expect(after.live!.battingSide).toBe(s.state.entrants[so.battingSide]);
+    expect(after.live!.thisOver).toHaveLength(TIE_THEN_SUPER_OVER.innings[2]!.deliveries.length);
+    expect(after.live!.crr).toBe((so.runs * s.cfg.ballsPerOver) / so.legalBalls);
+    // The super over has its own target, which this fold does not model; the
+    // MATCH chase target would be a wrong number here, so it is withheld.
+    expect(after.live!.target).toBeNull();
+    // The main innings' own live block is gone — `before` ends on a tie with
+    // both innings closed.
+    expect(before.live).toBeNull();
+  });
+
+  // ---- findings 4 and 5: the live block's unasserted fields, and glyphs -----
+
+  const GLYPH_OVER: Script = {
+    cfg: { ballsPerInnings: 12, playersPerSide: 8, minOversForResult: 2 },
+    home: HOME,
+    away: AWAY,
+    tossWonBy: "home",
+    elected: "bat",
+    innings: [
+      {
+        batting: "home",
+        bowlers: ["a7", "a8"],
+        // One of every glyph the type has, then one ball of the next over so
+        // the innings is left MID-over. The no-ball's free hit is consumed by
+        // the (legal) bye before the bowled, which the reducer would
+        // otherwise refuse.
+        deliveries: [
+          { bat: 0 },
+          { bat: 1 },
+          { bat: 4 },
+          { extra: "wide", runs: 1 },
+          { extra: "noball", runs: 1, bat: 2 },
+          { extra: "bye", runs: 1 },
+          { out: "bowled" },
+          { bat: 6 },
+          { bat: 1 },
+        ],
+        leaveOpen: true,
+      },
+    ],
+  };
+
+  it("every glyph in an over is the delivery the script wrote, in order", () => {
+    const s = scriptLedger(GLYPH_OVER);
+    const card = deriveCricketScorecard({ events: s.events, cfg: s.cfg, lineups: s.lineups });
+    const [inn1] = card.innings;
+    const scripted = GLYPH_OVER.innings[0]!.deliveries;
+    const expected = scripted.map(expectedGlyph);
+
+    // The first over holds every delivery up to and including the sixth LEGAL
+    // one; the extras inside it are in the over they were bowled in, not the
+    // next. Split the expectation where the reducer put the boundary.
+    const firstOverBalls = inn1!.overs[0]!.balls.length;
+    expect(inn1!.overs[0]!.balls).toEqual(expected.slice(0, firstOverBalls));
+    expect(inn1!.overs[1]!.balls).toEqual(expected.slice(firstOverBalls));
+    expect(inn1!.overs.flatMap((o) => o.balls)).toEqual(expected);
+    // Every kind actually appears — otherwise this is a test of dots.
+    expect(new Set(expected.map((g) => g.kind)).size).toBe(5);
+
+    // Mid-over: `thisOver` is the OPEN over's glyphs, which is the second one.
+    expect(card.live!.thisOver).toEqual(expected.slice(firstOverBalls));
+    expect(card.live!.thisOver.length).toBeGreaterThan(0);
+  });
+
+  it("between overs 'this over' is empty — the completed over is in the log, not on the strip", () => {
+    const ENDS_ON_AN_OVER: Script = {
+      cfg: { ballsPerInnings: 12, playersPerSide: 8, minOversForResult: 2 },
+      home: HOME,
+      away: AWAY,
+      tossWonBy: "home",
+      elected: "bat",
+      innings: [
+        {
+          batting: "home",
+          bowlers: ["a7", "a8"],
+          deliveries: [{ bat: 1 }, { bat: 0 }, { bat: 1 }, { bat: 0 }, { bat: 1 }, { bat: 0 }],
+          leaveOpen: true,
+        },
+      ],
+    };
+    const s = scriptLedger(ENDS_ON_AN_OVER);
+    const card = deriveCricketScorecard({ events: s.events, cfg: s.cfg, lineups: s.lineups });
+    const [inn1] = card.innings;
+    // The premise: the innings sits exactly on an over boundary, still open.
+    expect(inn1!.total.legalBalls % s.cfg.ballsPerOver).toBe(0);
+    expect(inn1!.closed).toBe(false);
+    expect(inn1!.overs).toHaveLength(1);
+    expect(inn1!.overs.at(-1)!.balls).toHaveLength(s.cfg.ballsPerOver);
+    expect(card.live!.thisOver).toEqual([]);
+    // …and the bowler for the over to come is not yet named, which is the
+    // reducer's own answer at an over boundary.
+    expect(card.live!.bowler).toBeNull();
+  });
+
+  it("the live block's people, stand, last wicket and projection are all the reducer's own numbers", () => {
+    const live = firstInningsInPlay();
+    const card = deriveCricketScorecard({ events: live.events, cfg: live.cfg, lineups: live.lineups });
+    const inn = card.innings.at(-1)!;
+    const st = live.state.innings.at(-1)!;
+    const l = card.live!;
+
+    expect(l.battingSide).toBe(live.state.entrants[st.battingSide]);
+    expect(l.nonStriker).toBe(st.fine!.nonStriker);
+    expect(l.nonStriker).not.toBe(l.striker);
+    expect(l.bowler).toBe(st.fine!.currentBowler);
+    expect(l.bowler).not.toBeNull(); // mid-over ⇒ a real name, not a vacuous null-null match
+
+    // The stand still in, exactly as the card reports it.
+    const open = inn.partnerships.at(-1)!;
+    expect(open.wicket).toBe("unbroken");
+    expect(l.partnership).toEqual({ runs: open.runs, balls: open.balls });
+
+    // The last wicket, joined to its own fall-of-wickets row and batting line.
+    const fall = inn.fallOfWickets.at(-1)!;
+    const line = inn.batting.find((b) => b.person === fall.batter)!;
+    expect(l.lastWicket).toEqual({
+      batter: fall.batter,
+      runs: line.runs,
+      balls: line.balls,
+      scoreAt: `${fall.runs}/${fall.wicket}`,
+    });
+
+    // Projected: this run rate carried out to the innings' full quota.
+    expect(l.projected).toBe(Math.round((inn.total.runs * live.cfg.ballsPerInnings!) / inn.total.legalBalls));
+    expect(l.projected).not.toBe(inn.total.runs); // else "echo the score" would pass
+  });
+
+  it("a stand's balls count LEGAL deliveries — a wide inside it is not one", () => {
+    // The first four deliveries of `TWO_INNINGS`'s opening innings include a
+    // wide, and no wicket, so the whole innings is still the opening stand.
+    const scripted = TWO_INNINGS.innings[0]!.deliveries.slice(0, 4);
+    const notBalls = scripted.filter((d) => "extra" in d && (d.extra === "wide" || d.extra === "noball")).length;
+    expect(notBalls).toBeGreaterThan(0); // the case is genuinely exercised
+
+    const prefix = scriptPrefix(TWO_INNINGS, 0, scripted.length);
+    expect(prefix.scorecard.live!.partnership).toEqual({
+      runs: prefix.card.total.runs,
+      balls: scripted.length - notBalls,
+    });
+  });
+
+  // ---- finding 6 minors ----------------------------------------------------
+
+  it("the opening stand's pair is the crease pair of the innings' first ball, in that order", () => {
+    const live = firstInningsInPlay();
+    const card = deriveCricketScorecard({ events: live.events, cfg: live.cfg, lineups: live.lineups });
+    const firstBall = live.events.find((ev) => ev.type === "cricket.ball")!.payload as {
+      striker: string;
+      nonStriker: string;
+    };
+    expect(firstBall.striker).not.toBe(firstBall.nonStriker); // else the order is unobservable
+    expect(card.innings[0]!.partnerships[0]!.batters).toEqual([firstBall.striker, firstBall.nonStriker]);
+  });
+
+  it("at summary fidelity the live block is the totals alone — no people, no stand, no strip", () => {
+    const legalBalls = 6;
+    const { events, cfg, lineups } = summaryOnlyLedger({ runs: 42, wickets: 3, legalBalls, partial: true });
+    const card = deriveCricketScorecard({ events, cfg, lineups });
+    // Below ball fidelity, and read from the pad spec itself rather than a
+    // typed band: the fold reports the MAX band any event in the ledger
+    // carries, so that is what the expectation computes.
+    const fidelity = padSpec(cfg).fidelity;
+    expect(card.band).toBe(Math.max(0, ...events.map((ev) => fidelity[ev.type] ?? 0)));
+    expect(card.band).toBeLessThan(3);
+
+    const inn = card.innings[0]!;
+    const l = card.live!;
+    expect(l.striker).toBeNull();
+    expect(l.nonStriker).toBeNull();
+    expect(l.bowler).toBeNull();
+    expect(l.thisOver).toEqual([]);
+    expect(l.partnership).toBeNull();
+    expect(l.lastWicket).toBeNull();
+    // …but the numbers a coarse ledger CAN answer are still answered.
+    expect(l.crr).toBe((inn.total.runs * cfg.ballsPerOver) / inn.total.legalBalls);
+    expect(l.ballsLeft).toBe(cfg.ballsPerInnings! - legalBalls);
+    expect(l.projected).toBe(Math.round((inn.total.runs * cfg.ballsPerInnings!) / legalBalls));
+  });
+
+  it("a rain revision moves both the balls left and the target", () => {
+    const REVISED_OVERS = 1;
+    const REVISED_TARGET = 5;
+    const RAIN: Script = {
+      cfg: { ballsPerInnings: 12, playersPerSide: 8, minOversForResult: 1 },
+      home: HOME,
+      away: AWAY,
+      tossWonBy: "home",
+      elected: "bat",
+      innings: [
+        { batting: "home", bowlers: ["a7", "a8"], deliveries: [{ bat: 1 }, { bat: 1 }], close: "other" },
+        {
+          batting: "away",
+          bowlers: ["h7", "h8"],
+          deliveries: [
+            { bat: 1 },
+            { revise: { oversPerSide: REVISED_OVERS, target: REVISED_TARGET } },
+            { bat: 1 },
+          ],
+          leaveOpen: true,
+        },
+      ],
+    };
+    const s = scriptLedger(RAIN);
+    const card = deriveCricketScorecard({ events: s.events, cfg: s.cfg, lineups: s.lineups });
+    const inn1 = card.innings[0]!;
+    const inn2 = card.innings[1]!;
+
+    // Both numbers genuinely MOVED — otherwise reading the config instead of
+    // the revision would pass this test unchanged.
+    expect(REVISED_TARGET).not.toBe(inn1.total.runs + 1);
+    expect(REVISED_OVERS * s.cfg.ballsPerOver).not.toBe(s.cfg.ballsPerInnings);
+
+    expect(card.live!.target).toBe(chaseTarget(s.state)); // still the one authority
+    expect(card.live!.target).toBe(REVISED_TARGET);
+    expect(card.live!.ballsLeft).toBe(REVISED_OVERS * s.cfg.ballsPerOver - inn2.total.legalBalls);
+    expect(card.live!.needRuns).toBe(REVISED_TARGET - inn2.total.runs);
+  });
+
+  it("a bowler named on a ball he does not own is NOT the bowler the card credits", () => {
+    // The reducer keeps the over's own bowler and charges the runs to him
+    // (`applyDelivery`: the mid-over swap is a strict-only refusal, so on a
+    // READ the ledger's own name loses to the over in progress). A card that
+    // tallied `payload.bowler` itself would credit the name on the ball —
+    // this is the case that makes reading `fine.bowlerRuns` observable.
+    const MID_OVER_SWAP: Script = {
+      cfg: { ballsPerInnings: 12, playersPerSide: 8, minOversForResult: 2 },
+      home: HOME,
+      away: AWAY,
+      tossWonBy: "home",
+      elected: "bat",
+      innings: [
+        {
+          batting: "home",
+          bowlers: ["a7"],
+          deliveries: [{ bat: 1 }, { bat: 2, bowler: "a8" }],
+          leaveOpen: true,
+        },
+      ],
+    };
+    const s = scriptLedger(MID_OVER_SWAP);
+    const [inn1] = deriveCricketScorecard({ events: s.events, cfg: s.cfg, lineups: s.lineups }).innings;
+    const fine = s.state.innings[0]!.fine!;
+    const scriptedRuns = MID_OVER_SWAP.innings[0]!.deliveries.reduce(
+      (sum, d) => sum + ("bat" in d ? (d.bat ?? 0) : 0),
+      0,
+    );
+
+    // The premise: the ledger really does name a8, and the reducer really
+    // does ignore him.
+    expect(s.events.some((ev) => (ev.payload as { bowler?: string }).bowler === "a8")).toBe(true);
+    expect(fine.currentBowler).toBe("a7");
+    expect(fine.bowlerRuns["a8"]).toBeUndefined();
+
+    const a7 = inn1!.bowling.find((b) => b.person === "a7")!;
+    expect(a7.runs).toBe(fine.bowlerRuns["a7"]);
+    expect(a7.runs).toBe(scriptedRuns);
+    expect(inn1!.bowling.find((b) => b.person === "a8")?.runs ?? 0).toBe(0);
   });
 });

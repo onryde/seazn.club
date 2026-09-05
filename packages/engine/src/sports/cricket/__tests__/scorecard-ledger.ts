@@ -23,7 +23,16 @@ export type Delivery =
   // fours/sixes off `boundary` alone (cricket.ts:2448), so this is the
   // NEGATIVE case that flag needs: a stroke run to 4 without the ball
   // crossing the rope.
-  | { bat: 0 | 1 | 2 | 3 | 4 | 6; allRun?: boolean }
+  // `bowler` (Task 3 fix round 1, addendum): names a bowler OTHER than the one
+  // whose over this is. `applyDelivery` refuses that on a strict append
+  // ("over in progress belongs to …" — one of cricket.ts's §3.3 strict-only
+  // seams, since where an over ENDS is cfg-derived and can move under a
+  // recorded ledger), so this one delivery is recorded with `strict: false`,
+  // which is exactly what the READ path passes. On replay the reducer keeps
+  // the over's own bowler and charges the runs to them — so a card that
+  // reported the payload's name instead would be crediting a bowler the
+  // reducer did not.
+  | { bat: 0 | 1 | 2 | 3 | 4 | 6; allRun?: boolean; bowler?: string }
   | { extra: "wide" | "noball" | "bye" | "legbye" | "penalty"; runs: number; bat?: number }
   | {
       out: "bowled" | "caught" | "lbw" | "runout" | "stumped" | "hitwicket" | "obstructed" | "timedout" | "hitballtwice";
@@ -35,7 +44,21 @@ export type Delivery =
   // the previous, only behaviour) so every existing caller is unaffected;
   // "out" is Law 25.4.3's retired-out, a genuine dismissal credited to no
   // bowler.
-  | { retire: true; reason?: "hurt" | "out" | "other" };
+  | { retire: true; reason?: "hurt" | "out" | "other" }
+  // NOT deliveries — match events placed IN SEQUENCE among them, the same
+  // posture `retire` already had (Task 3 fix round 1, findings 2 and 6).
+  // `revise` is spec §2.5's umpire-confirmed rain revision: `oversPerSide`
+  // moves the OPEN innings' `ballsLimit`, `target` sets `revisedTarget`,
+  // which is what `chaseTarget` then answers with. `matchClose` is
+  // `cricket.match.close`, the two-innings time-expiry draw — the one
+  // decision that leaves its innings OPEN, which is exactly why the live
+  // block needs it.
+  | { revise: { oversPerSide?: number; target?: number } }
+  | { matchClose: true };
+
+/** The `Delivery` members that actually produce a `cricket.ball` — everything
+ *  the three match-event variants above are not. */
+type BallDelivery = Exclude<Delivery, { retire: true } | { revise: object } | { matchClose: true }>;
 
 export interface Script {
   cfg: Partial<CricketCfg>;
@@ -91,6 +114,11 @@ const BOWLER_CREDITED_KINDS = new Set(["bowled", "caught", "lbw", "stumped", "hi
 // opposite (`strict: false`), matching what `foldFixture`'s read path passes.
 const WRITE_CTX: FoldContext = { strict: true };
 
+// …except for the one delivery kind that models a §3.3 strict-only refusal:
+// see `Delivery`'s `bowler` field. This is what `scorecard.ts`'s fold — and
+// `foldFixture`'s read path — pass for every event.
+const READ_CTX: FoldContext = { strict: false };
+
 function buildLineup(entrantId: string, personIds: readonly string[]): Lineup {
   return {
     entrantId,
@@ -112,7 +140,7 @@ function boundaryOf(bat: number | undefined): 4 | 6 | undefined {
 }
 
 function buildBallPayload(
-  delivery: Exclude<Delivery, { retire: true }>,
+  delivery: BallDelivery,
   base: { over: number; ballInOver: number; striker: string; nonStriker: string; bowler: string },
 ): CricketBallEv {
   if ("extra" in delivery) {
@@ -164,11 +192,11 @@ export function scriptLedger(script: Script): ScriptLedger {
   let state = cricket.init(cfg, lineups);
   let seq = 0;
 
-  function record(type: string, payload: unknown): void {
+  function record(type: string, payload: unknown, ctx: FoldContext = WRITE_CTX): void {
     const env = makeEnvelope(seq, { type, payload });
     seq += 1;
     events.push(env);
-    state = cricket.apply(state, env as EventEnvelope<CricketEv | CoreEv>, WRITE_CTX);
+    state = cricket.apply(state, env as EventEnvelope<CricketEv | CoreEv>, ctx);
   }
 
   // Toss BEFORE start — see the file header.
@@ -185,8 +213,8 @@ export function scriptLedger(script: Script): ScriptLedger {
       const soBattingOrder = inningsSpec.batting === "home" ? script.home : script.away;
       const soAt = state.superOver?.innings.length ?? 0;
       for (const delivery of inningsSpec.deliveries) {
-        if ("retire" in delivery) {
-          throw new Error("scriptLedger: retire is not supported in a super-over entry");
+        if ("retire" in delivery || "revise" in delivery || "matchClose" in delivery) {
+          throw new Error("scriptLedger: only deliveries are supported in a super-over entry");
         }
         const soInnings = state.superOver?.innings[soAt];
         const soFine = soInnings?.fine;
@@ -220,6 +248,14 @@ export function scriptLedger(script: Script): ScriptLedger {
         record("cricket.retire", { person: striker, reason: delivery.reason ?? "hurt" });
         continue;
       }
+      if ("revise" in delivery) {
+        record("cricket.revise", delivery.revise);
+        continue;
+      }
+      if ("matchClose" in delivery) {
+        record("cricket.match.close", {});
+        continue;
+      }
       const legalBalls = innings?.legalBalls ?? 0;
       const striker = fine?.striker ?? battingOrder[0];
       const nonStriker = fine?.nonStriker ?? battingOrder[1];
@@ -228,10 +264,13 @@ export function scriptLedger(script: Script): ScriptLedger {
       }
       const over = Math.floor(legalBalls / bpo);
       const ballInOver = (legalBalls % bpo) + 1;
-      const bowler = inningsSpec.bowlers[over % inningsSpec.bowlers.length];
+      const named = "bowler" in delivery ? delivery.bowler : undefined;
+      const bowler = named ?? inningsSpec.bowlers[over % inningsSpec.bowlers.length];
       if (bowler === undefined) throw new Error("scriptLedger: no bowlers given");
       const payload = buildBallPayload(delivery, { over, ballInOver, striker, nonStriker, bowler });
-      record("cricket.ball", payload);
+      // A named bowler who does not own this over is a strict-only refusal —
+      // see `Delivery`'s own doc. Record it the way the READ path folds it.
+      record("cricket.ball", payload, named === undefined ? WRITE_CTX : READ_CTX);
     }
 
     // Close explicitly unless the reducer's own auto-close rules (all-out,
