@@ -40,6 +40,9 @@
 //      → RED: "fr has every derived …" naming
 //        `matchCentre.dismissal.stumped` in its `missing` list. The other
 //        three locale tests stayed green — the gate is genuinely per-locale.
+//      Re-applied in review fix round 1 against `"matchCentre.result.regulation"`
+//      in `fr/public.json` (the key `RESULT_KINDS` renamed to) — same shape
+//      of red, naming that key. See the report for the raw run.
 //
 //  (b) Renamed `{value}` to `{amount}` in nl's
 //      `matchCentre.result.runs` template only.
@@ -53,6 +56,27 @@
 //        from ~119 to ~49 once the ~73-key scan contribution is gone) — so
 //        an empty scan cannot read as coverage by starving the union below
 //        its floor, not just by an assertion on the scan in isolation.
+//
+// ---------------------------------------------------------------------------
+// Review fix round 1
+// ---------------------------------------------------------------------------
+// 1. CRITICAL — `RESULT_KINDS` was pinned against a MISREAD of the engine: it
+//    had "runs"/"wickets" as members, but those are never values of
+//    `outcome.method` — they only ever appear inside the free-text `margin`
+//    string. Corrected below to the engine's real method vocabulary plus the
+//    three non-win outcomes, with `{winner}`/`{margin}` as the templates'
+//    params (`margin` passed through verbatim — see the constant's own
+//    comment for the full citation trail).
+// 2. IMPORTANT — `GLYPH_KINDS` (`glyphs.tsx`) is now mechanically derived from
+//    the SAME table `classesFor` reads (`GLYPH_CLASSES`), not a hand-typed
+//    array beside it — 5 entries, matching `classesFor`'s 5 real branches,
+//    not the 9 the hand-typed version invented. `BALL_GLYPH_KINDS` below is
+//    relabelled to make explicit that, like `BUILDER_ONLY_KEYS`, no renderer
+//    reads this family today.
+// 3. MINOR — the params-parity test no longer skips a key just because
+//    English has zero `{param}`s; it asserts SET equality in both directions
+//    for every key, so a stray param introduced only in one non-English
+//    locale now reds too.
 import { readFileSync, readdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -127,48 +151,75 @@ const ENGINE_WICKET_KINDS: readonly string[] = CricketWicket.shape.kind.options;
 const DISMISSAL_KINDS: readonly string[] = [...ENGINE_WICKET_KINDS, "not_out", "out_unknown"];
 
 /**
- * No runtime enum exists for a cricket "how was this decided" margin kind —
- * pinned here per the task-8 ruling's own escape hatch ("if only a TS union
- * exists with no runtime list, pin the kinds in ONE constant with the
- * file:line comment"). `MatchOutcome.kind`
- * (`packages/engine/src/core/types.ts:115-132`) is a five-member
- * discriminated union (`win`/`draw`/`tie`/`no_result`/`award`) that is
- * SPORT-AGNOSTIC and does not split a `win` by margin; the margin unit
- * ("runs" vs "wickets" vs "an innings and N runs") and the deciding METHOD
- * ("regulation"/"dls"/"innings"/"super_over"/"boundary_count") are composed
- * as a plain `z.string()` (`core/types.ts:122`, comment: "sport modules may
- * extend, so plain string") at each `decideWin(...)` call site in
- * `packages/engine/src/sports/cricket/cricket.ts`: lines 894-895 (wickets,
- * regulation/dls chase), 902-904 (runs, regulation/dls chase), 921 (wickets,
- * two-innings), 925 (runs, two-innings), 936 (innings victory), 1112 & 1118
- * (runs, DLS par), 1750 & 1753 (Super Over), 1764 (boundary count) — plus the
- * bare-outcome branches at lines 876 (tie), 1120 (no_result) and 3330 (draw,
- * `cricket.match.close` time-expiry).
+ * No runtime enum exists for `outcome.method` — pinned here per the task-8
+ * ruling's own escape hatch ("if only a TS union exists with no runtime
+ * list, pin the kinds in ONE constant with the file:line comment").
  *
- * The nine kinds below are read off that vocabulary: "runs" and "wickets"
- * are the two margin units a REGULATION win prints; "innings" is the
- * innings-victory margin; "dls" overrides the unit label when the target was
- * DLS-revised; "superover" and "boundarycount" are the two Super-Over
- * deciding methods; "tie"/"draw"/"no_result" are the three non-win outcomes
- * cricket actually reaches. Task 6's `buildMatchCentre` may spell these
- * differently once it exists — flagged in the task-8 report as a risk for
+ * REVIEW FIX ROUND 1 (Critical #1) — the FIRST version of this pin read
+ * "runs"/"wickets" off the free-text `margin` STRING (e.g.
+ * `` `by ${runs} run${…}` `` vs `` `by ${wicketsLeft} wicket${…}` ``,
+ * `cricket.ts:891-925`) and treated them as members of the same field the
+ * comment cited for `method` — they are not. `outcome.method`
+ * (`packages/engine/src/core/types.ts:122`, `z.string().min(1).optional()`
+ * on the `win` branch of the `MatchOutcome` discriminated union, lines
+ * 115-132) only ever takes the FIVE values actually passed at each
+ * `decideWin(state, side, method, margin)` call site in
+ * `packages/engine/src/sports/cricket/cricket.ts`:
+ *   - `"regulation"` — lines 894 (one-innings chase, wickets margin), 903
+ *     (one-innings chase, runs margin), 921 (two-innings, wickets margin),
+ *     925 (two-innings, runs margin);
+ *   - `"innings"` — line 936 (innings victory; the MARGIN string itself
+ *     already reads "by an innings and N runs" — see the template comment);
+ *   - `"dls"` — lines 1112, 1118 (DLS-revised target, runs margin only);
+ *   - `"super_over"` — lines 1750, 1753;
+ *   - `"boundary_count"` — line 1764.
+ * Plus the three bare (non-`win`) outcomes cricket actually reaches: `"tie"`
+ * (lines 876, 1115, 1762, 1767 — `{ kind: "tie" }`, no `decideWin` call),
+ * `"no_result"` (line 1120) and `"draw"` (line 3330, `cricket.match.close`
+ * time-expiry). The margin UNIT ("runs" vs "wickets") is never a separate
+ * field a key could branch on — a builder that needs to show a bare number
+ * of runs/wickets has to parse or independently derive that from `margin`
+ * or the innings state, not from `outcome.method`/`outcome.kind`.
+ *
+ * These eight are read straight off that call-site list — no invented
+ * categories, no assumption about what a "margin kind" would be beyond what
+ * the engine actually emits. Task 6's `buildMatchCentre` may still spell
+ * `super_over`/`boundary_count` without the underscore, or choose not to
+ * expose `regulation` as a visible template distinction from a bare
+ * runs/wickets sentence — flagged in the task-8 report as a risk for
  * whichever task writes that builder's own dictionary parity test.
  */
 const RESULT_KINDS: readonly string[] = [
-  "runs",
-  "wickets",
-  "innings",
+  "regulation",
   "dls",
-  "superover",
-  "boundarycount",
+  "innings",
+  "super_over",
+  "boundary_count",
   "tie",
-  "draw",
   "no_result",
+  "draw",
 ];
 
-/** The ball-outcome categories `glyphs.tsx`'s own `classesFor` distinguishes
- *  — exported from there so the two cannot drift apart (see its header
- *  comment, added as this task's one sanctioned renderer edit). */
+/**
+ * The ball-outcome categories `glyphs.tsx`'s own `GLYPH_CLASSES` table
+ * declares — `GLYPH_KINDS` is `Object.keys(GLYPH_CLASSES)`, so a branch
+ * cannot exist there without a key here (review fix round 1, Important #2:
+ * the first version was a HAND-TYPED 9-entry array that had already expanded
+ * `classesFor`'s 5 real branches by eye).
+ *
+ * UNLIKE the other five families above, no renderer reads
+ * `matchCentre.ball.<k>` today — `Glyph` (`glyphs.tsx`) renders the raw
+ * glyph string with no dictionary lookup and no `aria-label` at all. This
+ * family is in the SAME risk category as `BUILDER_ONLY_KEYS` below: added
+ * speculatively, ahead of a consumer. Kept as its own derived family rather
+ * than folded into the flat `BUILDER_ONLY_KEYS` list because it genuinely
+ * has a real, mechanical SOURCE today (`GLYPH_CLASSES`) — what it lacks is a
+ * reader, not a producer. Whichever task first wires an accessible label to
+ * the ball-glyph strip (Task 6's own `BALL_GLYPH_KINDS`, per that task's
+ * dispatch, is the expected producer) owns reconciling spelling here against
+ * what it actually emits, the same way `BUILDER_ONLY_KEYS`' own comment
+ * describes for the header/chase keys.
+ */
 const BALL_GLYPH_KINDS: readonly string[] = GLYPH_KINDS;
 
 /** The header status enum (`match-centre-schema.ts`) — `scheduled` and
@@ -238,8 +289,13 @@ describe("match-centre dictionary coverage (derived, never a typed list)", () =>
 
   it("the dynamic families themselves are non-trivial", () => {
     expect(DISMISSAL_KINDS.length).toBe(12);
-    expect(RESULT_KINDS.length).toBeGreaterThanOrEqual(9);
-    expect(BALL_GLYPH_KINDS.length).toBeGreaterThanOrEqual(9);
+    // 5 engine methods (regulation/dls/innings/super_over/boundary_count) +
+    // 3 non-win outcomes (tie/no_result/draw) — see RESULT_KINDS's own
+    // comment for the call-site citations.
+    expect(RESULT_KINDS.length).toBe(8);
+    // `classesFor`'s 5 real branches (boundary/wicket/dot/extras/run) — see
+    // `GLYPH_CLASSES` in `glyphs.tsx`.
+    expect(BALL_GLYPH_KINDS.length).toBe(5);
     expect(HEADER_STATUS_KINDS).toEqual(
       expect.arrayContaining(["scheduled", "in_play", "decided", "other"]),
     );
@@ -260,15 +316,20 @@ describe("match-centre dictionary coverage (derived, never a typed list)", () =>
     });
   }
 
-  it("every {param} the English template names is present in every other locale's template for the same key", () => {
+  it("every locale's template names EXACTLY the same {param} set as English, for every key", () => {
+    // Review fix round 1 (Minor #3) — the first version skipped a key
+    // entirely when English had zero params (`if (enParams.length === 0)
+    // continue`), so a stray `{param}` introduced only in one non-English
+    // locale for a param-less English key would have passed silently. Set
+    // equality is now asserted in BOTH directions for EVERY key, en included
+    // in no params.
     const paramsOf = (s: string): string[] =>
-      [...s.matchAll(/\{(\w+)\}/g)].map((m) => m[1]!).sort();
+      [...new Set([...s.matchAll(/\{(\w+)\}/g)].map((m) => m[1]!))].sort();
     const mismatches: string[] = [];
     for (const key of DERIVED_KEYS) {
       const enValue = DICTS.en[key];
       if (typeof enValue !== "string") continue; // reported by the existence test above
       const enParams = paramsOf(enValue);
-      if (enParams.length === 0) continue;
       for (const locale of LOCALES) {
         if (locale === "en") continue;
         const value = DICTS[locale][key];
