@@ -288,12 +288,37 @@ export default async function SettingsPage({
               <section className="card p-6">
                 <SectionHeader icon={Building2}>{t(dict, "settings.nav.organization")}</SectionHeader>
 
-                <div className="flex items-center gap-3">
+                {/* The identity row exists to say WHICH organisation you are in,
+                    and below `md` it did not. Measured at 320 on 2026-09-05: the
+                    row's inner width is 238px and its four children took
+                    44 (avatar) + 6 (the NAME) + 57 (badge) + 95 (switcher) + 3×12
+                    gaps — the org name rendered SIX pixels wide against a 107px
+                    natural width. `min-w-0` was already present, so the usual
+                    `truncate` diagnosis is not the cause: the avatar and the
+                    switcher are both `shrink-0` and the badge sat at its own
+                    min-content, so the `flex-1` name block — `flex: 1 1 0%`,
+                    whose 0% basis makes it infinitely willing to yield — was the
+                    only child that could give, and gave everything.
+                    `grow basis-40` gives it a 10rem basis instead, which is too
+                    wide to share a line with the badge and the switcher, so those
+                    two wrap onto their own row. ONE DOM branched, per the phone
+                    composition design of record: `md:flex-nowrap` and `md:basis-0`
+                    restore `flex-1`'s exact behaviour at 768 and up, which must
+                    not change. Gated by "settings identity row: the org name keeps
+                    a readable share, and the chrome wraps below md" in
+                    e2e/mobile.spec.ts — nothing in apps/web vitest can see this,
+                    that suite is `environment: "node"` and has no layout at all. */}
+                <div className="flex flex-wrap items-center gap-3 md:flex-nowrap">
                   <span className="grid h-11 w-11 shrink-0 place-items-center rounded-xl bg-gradient-to-br from-purple-500 to-fuchsia-500 text-lg font-bold text-white">
                     {active.name.charAt(0).toUpperCase()}
                   </span>
-                  <div className="min-w-0 flex-1">
-                    <p className="truncate text-sm font-semibold text-slate-800">{active.name}</p>
+                  <div className="min-w-0 grow basis-40 md:basis-0">
+                    <p
+                      data-testid="org-identity-name"
+                      className="truncate text-sm font-semibold text-slate-800"
+                    >
+                      {active.name}
+                    </p>
                     <p className="truncate font-mono text-xs text-purple-600">{active.slug}</p>
                   </div>
                   <span className={`badge ${ROLE_BADGE[active.role]}`}>{roleLabel(dict, active.role)}</span>

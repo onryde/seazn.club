@@ -657,6 +657,93 @@ test("console routes: no horizontal scroll", async ({ page, request }) => {
 });
 
 /**
+ * Settings W2 task 4 — the org identity row at `/settings?tab=organization`.
+ *
+ * The row exists to say WHICH organisation you are in, and at phone widths it
+ * did not. The name block was `flex-1`, i.e. `flex: 1 1 0%`, so it was the
+ * only child of that row that could yield: the 44px avatar is `shrink-0`, and
+ * the role badge and the org switcher both size to their content. At 320 the
+ * card's inner width is ~240px, those three take nearly all of it, and the
+ * one thing the row is for was left a sliver. `min-w-0` was already present,
+ * so the usual `truncate` diagnosis is NOT the cause here.
+ *
+ * Nothing in `apps/web` vitest can see any of this — that suite is
+ * `environment: "node"`, so it has no layout at all — and the page-level
+ * no-horizontal-scroll audit above passes either way, because a squeezed
+ * `truncate` box produces no page overflow. This is the gate.
+ *
+ * Two assertions, because either alone is satisfiable the wrong way:
+ *
+ *  - the name's RENDERED box is wide enough to read. A reachability check
+ *    ("the name is visible") passes at 38px, which is the defect.
+ *  - the row's COMPOSITION, in both directions: below `md` the chrome sits on
+ *    its own line, at `md` and up it stays on the name's line. That second
+ *    branch is the "≥768 must not change" guard, and the pair together is
+ *    what stops the fix being "make the badge smaller" — a phone view showing
+ *    the same controls at smaller sizes is a groomed shrink.
+ */
+test("settings identity row: the org name keeps a readable share, and the chrome wraps below md", async ({
+  page,
+}) => {
+  const width = projectViewport()?.width ?? 0;
+  const isPhone = width < 768;
+
+  await page.goto("/settings?tab=organization", { waitUntil: "load" });
+  const name = page.getByTestId("org-identity-name");
+  await expect(name).toBeVisible();
+  // A row that renders an empty name would satisfy every box assertion below.
+  await expect(name).not.toHaveText("");
+
+  // Both halves are SOFT so neither can hide behind the other. A hard first
+  // expectation aborts the test, which is how one half of a two-part gate ends
+  // up never having been watched to fail — failure class 3, an assertion only
+  // ever seen to pass is decoration. Measured 2026-09-05 on the pre-fix bundle:
+  // the width half reported red at all five phone projects (6/46/61/76/116 px)
+  // and the composition half never ran at all, because this expectation stopped
+  // the test first. Soft, they both report on every red, at every width.
+  const box = await name.boundingBox();
+  expect(box, "identity name has no box").not.toBeNull();
+  expect
+    .soft(
+      Math.round(box!.width),
+      `org name box at viewport ${width}px, text ${JSON.stringify(await name.textContent())}`,
+    )
+    .toBeGreaterThan(140);
+
+  // Composition, measured as "do the first and last children of the identity
+  // row share a line" — NOT as a comparison of box sizes. With `items-center`
+  // two children on one flex line always overlap vertically; two children on
+  // different lines never do.
+  const geom = await page.evaluate(() => {
+    const el = document.querySelector<HTMLElement>('[data-testid="org-identity-name"]');
+    const row = el?.parentElement?.parentElement ?? null;
+    if (!row) return null;
+    const kids = Array.from(row.children) as HTMLElement[];
+    const rects = kids.map((k) => k.getBoundingClientRect());
+    const first = rects[0];
+    const last = rects[rects.length - 1];
+    if (!first || !last) return null;
+    return {
+      children: kids.length,
+      sameLine: first.top < last.bottom - 1 && last.top < first.bottom - 1,
+      tops: rects.map((r) => Math.round(r.top)),
+      bottoms: rects.map((r) => Math.round(r.bottom)),
+    };
+  });
+  expect(geom, "identity row not found from the name testid").not.toBeNull();
+  // Pin the shape this measurement assumes: avatar, name block, badge,
+  // switcher. If the row gains or loses a child, `first`/`last` stop meaning
+  // what this test thinks they mean, and it should red rather than drift.
+  expect(geom!.children, "identity row child count").toBe(4);
+  const seen = `tops ${geom!.tops.join(",")} bottoms ${geom!.bottoms.join(",")}`;
+  if (isPhone) {
+    expect.soft(geom!.sameLine, `${width}px: chrome must wrap BELOW the name — ${seen}`).toBe(false);
+  } else {
+    expect.soft(geom!.sameLine, `${width}px: the row must stay on ONE line — ${seen}`).toBe(true);
+  }
+});
+
+/**
  * Minor 2 (fix round H): the COMPETITION DESK had zero automated width
  * coverage. This file carried no `desk-ledger-row` / `desk-needs-you` /
  * `desk-masthead` selector at all, and the desk branch never touched it —
