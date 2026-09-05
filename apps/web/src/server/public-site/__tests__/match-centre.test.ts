@@ -499,6 +499,28 @@ describe("buildMatchCentre — cricket", () => {
       expect(scoredAs?.value.key).toBe(`matchCentre.band.${expectedBand}`);
     });
 
+    it("a football ledger with a HIGHER-band event (football.card) yields that band, not the band-0 fallback", () => {
+      // Fix round 3 — the round-2 football.goal case declares band 0, the
+      // SAME value the degenerate/fallback path (a wrong module, a dead
+      // lookup) also produces, so it could not tell "correctly resolved
+      // band 0" from "silently fell back to 0" apart. football.card declares
+      // a real, non-zero band (`football.ts:2379`), so this case can only
+      // pass if the non-cricket branch is genuinely reading the RESOLVED
+      // module's own `padSpec(cfg).fidelity`.
+      const footballCfg = FootballCfg.parse({});
+      const events: EventEnvelope[] = [
+        makeEnvelope(0, { type: "core.start", payload: {} }),
+        makeEnvelope(1, { type: "football.card", payload: { by: "home", color: "yellow" } }),
+      ];
+      const doc = buildMatchCentre(
+        input({ sportKey: "football", cfg: footballCfg, events, fixture: F({ status: "in_play" }) }),
+      );
+      const expectedBand = declaredBand(football, footballCfg, events);
+      expect(expectedBand).toBeGreaterThan(0); // the case is meaningless otherwise
+      const scoredAs = doc.info.rows.find((r) => r.label.key === "matchCentre.info.scoredAs");
+      expect(scoredAs?.value.key).toBe(`matchCentre.band.${expectedBand}`);
+    });
+
     it("a kernel-only ledger (no sport-specific event types) yields band 0", () => {
       const footballCfg = FootballCfg.parse({});
       const events: EventEnvelope[] = [makeEnvelope(0, { type: "core.start", payload: {} })];
