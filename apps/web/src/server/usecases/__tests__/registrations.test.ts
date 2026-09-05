@@ -213,9 +213,39 @@ describe("fee math (pure)", () => {
     expect(applicationFeeCents(0, 5)).toBe(0);
   });
 
-  it("never exceeds the fee itself", () => {
-    expect(applicationFeeCents(100, 100)).toBe(100);
-    expect(applicationFeeCents(1, 100)).toBe(1);
+  it("never exceeds the fee itself, at a rate that would take more than all of it", () => {
+    // The clamp, with the clamp actually DOING something. Both cases here used
+    // to pass `percent = 100`, where `Math.min(fee, fee)` is an IDENTITY: the
+    // whole `Math.min` could be deleted from `applicationFeeCents` and this
+    // test stayed green, so the one guard between a bad rate and an
+    // `application_fee_amount` larger than the entry fee itself was untested
+    // (entitlements v18 W2, pass-4 review finding 1; the mutant was run).
+    //
+    // A rate above 100 is not reachable through `feePercentFor` today —
+    // `setPlatformFeeDefault` bounds the platform default to 0-100 and every
+    // plan row is a single digit — and that is precisely why the clamp is a
+    // last line of defence rather than dead code: the rate arrives from a
+    // `plan_entitlements.int_value` that no constraint bounds, so a
+    // fat-fingered migration is the shape it exists to survive. Stripe rejects
+    // an application fee above the charge amount, so without the clamp the
+    // failure is a REFUSED payment, not an overcharge.
+    expect(applicationFeeCents(1000, 150)).toBe(1000);
+    // Rounding still runs on the way to the clamp: 999 x 101% is 1008.99,
+    // rounds to 1009, and is only then cut back to 999 — so this line dies if
+    // either half of the expression is removed.
+    expect(applicationFeeCents(999, 101)).toBe(999);
+  });
+
+  it("rounds a charm-priced entry fee half-up, a cent either side", () => {
+    // Today's V397 rates against a live charm price, chosen so the cent is
+    // decided by the ROUNDING RULE and not by the arithmetic: 4% (both pass
+    // rungs) of GBP 12.49 is 49.96 and goes UP to 50, 5% (Free) of the same
+    // fee is 62.45 and goes DOWN to 62. One case each way, so neither
+    // `Math.floor` nor `Math.ceil` can wear `Math.round`'s clothes — a floor
+    // would under-bill every pass organiser by a cent on the commonest price
+    // point in the catalogue, a ceil would over-bill every free one.
+    expect(applicationFeeCents(1249, 4)).toBe(50);
+    expect(applicationFeeCents(1249, 5)).toBe(62);
   });
 });
 
