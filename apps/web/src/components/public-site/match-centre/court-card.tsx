@@ -8,47 +8,62 @@
 // live poll/realtime push that changes which sentence applies re-resolves it
 // in the viewer's own locale on the same tick, the same reasoning
 // `renderDecidedOutcome` already established for the legacy scoreboard.
+//
+// Review fix round 1 (IMPORTANT 4, 5):
+// - The freshness line now derives from `header.updatedAt` (the document's
+//   OWN timestamp) ticked every second by `useNow()`, not the hook's
+//   `updatedAt` (which resets to `Date.now()` on every render-causing event
+//   and so could only ever read "0s ago"). This also means no `Date.now()`
+//   call happens during render any more (it moves into `useNow`'s effect and
+//   one-time lazy `useState` initializer), which incidentally clears the
+//   `react-hooks/purity` warning this file used to carry and document.
+// - The status chip switches EXHAUSTIVELY on `header.status` — `in_play` →
+//   the LIVE pill, `decided` → the result chip, `scheduled` → the same chip
+//   with different text, `other` (postponed/abandoned/walkover/cancelled) →
+//   NO chip at all (the server's own `header.statusLine` Msg is expected to
+//   name the reason — a later task's copy, not this component's job to
+//   guess at). `header.live` no longer selects which chip renders; it is
+//   read ONLY to decide whether the live pill's dot pulses (a fixture can be
+//   `in_play` with play temporarily stopped — a rain delay, a drinks break —
+//   without that meaning "not live" in the status-enum sense).
 import type { Dict as PublicDict } from "@/lib/i18n-constants";
 import { t } from "@/lib/i18n-runtime";
 import type { MatchCentreHeaderT } from "@/server/public-site/match-centre-schema";
+import { useNow } from "./use-now";
 
 export interface CourtCardProps {
   header: MatchCentreHeaderT;
   dict: PublicDict;
-  updatedAt: number;
 }
 
-export function CourtCard({ header, dict, updatedAt }: CourtCardProps) {
-  // `Date.now()` at render time trips the (warn-only, per eslint.config.mjs)
-  // react-hooks/purity rule — the "updated Xs ago" line is inherently a
-  // function of wall-clock time, and re-renders only on `updatedAt` changing
-  // (a fresh poll/realtime push) or a parent re-render, same accepted
-  // pattern as every other React-Compiler-era warning this repo defers
-  // (development/DEFERRED.md); a ticking clock is out of this task's scope.
-  const seconds = Math.max(0, Math.floor((Date.now() - updatedAt) / 1000));
-  const statusKey = header.status === "decided" ? "matchCentre.status.decided" : "matchCentre.status.scheduled";
+export function CourtCard({ header, dict }: CourtCardProps) {
+  const now = useNow();
+  const seconds = Math.max(0, Math.floor((now - Date.parse(header.updatedAt)) / 1000));
+  const inPlay = header.status === "in_play";
   return (
     <div
       data-testid="mc-court-card"
       className="overflow-hidden rounded-2xl bg-court text-court-ink shadow-lg"
     >
       <div className="p-5 sm:p-6">
-        {header.live ? (
+        {inPlay ? (
           <p
             data-testid="mc-live-pill"
             className="mb-3 flex items-center gap-2 text-[11px] font-bold uppercase tracking-[0.22em] text-emerald-300"
           >
-            <span className="animate-live-pulse h-2 w-2 rounded-full bg-emerald-400" />
+            <span
+              className={`h-2 w-2 rounded-full bg-emerald-400 ${header.live ? "animate-live-pulse" : ""}`}
+            />
             {t(dict, "matchCentre.status.live")}
           </p>
-        ) : (
+        ) : header.status === "decided" || header.status === "scheduled" ? (
           <p
             data-testid="mc-result-chip"
             className="mb-3 text-[11px] font-semibold uppercase tracking-[0.22em] text-court-muted"
           >
-            {t(dict, statusKey)}
+            {t(dict, header.status === "decided" ? "matchCentre.status.decided" : "matchCentre.status.scheduled")}
           </p>
-        )}
+        ) : null /* "other" — no chip; header.statusLine below names the reason */}
         <div className="space-y-2">
           {header.sides.map((side, i) => {
             const idx = i as 0 | 1;
@@ -90,7 +105,7 @@ export function CourtCard({ header, dict, updatedAt }: CourtCardProps) {
           {t(dict, "matchCentre.updatedAgo", { seconds })}
         </p>
       </div>
-      <div aria-hidden className={`h-1 ${header.live ? "bg-emerald-400" : "bg-accent"}`} />
+      <div aria-hidden className={`h-1 ${inPlay ? "bg-emerald-400" : "bg-accent"}`} />
     </div>
   );
 }

@@ -4,7 +4,7 @@
 // entitled, 250 ms debounce on a realtime broadcast) so `MatchCentre` and the
 // legacy `LiveScore` scoreboard share ONE transport instead of two copies of
 // the same wiring. `LiveScore` now delegates here (see `../live-score.tsx`).
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { fetchLiveFixture, fetchPublicRealtimeToken, type LiveFixtureData } from "../live-score-data";
 
 export const POLL_MS = 15_000;
@@ -25,9 +25,22 @@ export function useLiveFixture(
   // moment as the first `updatedAt` is correct; every later success moves it.
   const [updatedAt, setUpdatedAt] = useState<number>(() => Date.now());
 
+  // Review fix round 1 (MINOR 10) — a poll/debounced refresh in flight when
+  // the component unmounts must not call `setState` on its way back; the
+  // fetch itself is not cancelled (no AbortController plumbed through
+  // `fetchLiveFixture`), only its EFFECT on state.
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+
   const refresh = useCallback(async () => {
     try {
       const next = await fetchLiveFixture(fixtureId);
+      if (!mountedRef.current) return;
       setData(next);
       setUpdatedAt(Date.now());
     } catch {

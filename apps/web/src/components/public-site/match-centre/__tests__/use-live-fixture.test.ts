@@ -93,4 +93,24 @@ describe("useLiveFixture", () => {
     await vi.advanceTimersByTimeAsync(POLL_MS * 2);
     expect(fetchLiveFixture).not.toHaveBeenCalled();
   });
+
+  // Review fix round 1 (MINOR 10) — a poll in flight when the component
+  // unmounts must not apply its result once it lands.
+  it("a poll fetch that resolves AFTER unmount does not update state (no crash, no stale write)", async () => {
+    let resolveFetch!: (v: LiveFixtureData) => void;
+    vi.mocked(fetchLiveFixture).mockImplementationOnce(
+      () =>
+        new Promise<LiveFixtureData>((resolve) => {
+          resolveFetch = resolve;
+        }),
+    );
+    const hook = mount("fx-1", scheduled, false);
+    await vi.advanceTimersByTimeAsync(POLL_MS); // arms the tick; fetch now in flight
+    hook.unmount();
+
+    const late: LiveFixtureData = { status: "in_play", summary: null, outcome: null } as LiveFixtureData;
+    expect(() => resolveFetch(late)).not.toThrow();
+    await vi.advanceTimersByTimeAsync(0); // flush the now-resolved promise's continuation
+    expect(hook.current.data).toBe(scheduled); // unchanged — the guarded setState never applied
+  });
 });

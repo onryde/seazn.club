@@ -106,4 +106,37 @@ describe("MatchCentre", () => {
     expect(html).toContain("HOM"); // CourtCard prefers the side's short label
     expect(html).toContain("AWY");
   });
+
+  it("each tab's panel is wrapped in role=tabpanel with the id/aria-labelledby pairing its tab button controls", () => {
+    const html = renderToStaticMarkup(<MatchCentre {...props(fullDoc, "sets")} />);
+    expect(html).toContain('role="tabpanel"');
+    expect(html).toContain('id="mc-tab-panel-sets"');
+    expect(html).toContain('aria-labelledby="mc-tab-sets"');
+    // The rail's own button carries the id this aria-labelledby points at.
+    expect(html).toContain('id="mc-tab-sets"');
+  });
+});
+
+// Review fix round 1 (IMPORTANT 6, MINOR 8) — MatchCentre never renders a
+// silent blank page: an absent or empty-tabs document falls back to
+// LiveScoreBody (today's page, degraded but present) inside a
+// `data-testid="mc-fallback"` wrapper.
+describe("MatchCentre — graceful fallback (no document, or an empty tabs list)", () => {
+  it("an `initial` with NO match_centre document renders the mc-fallback LiveScoreBody, not a blank page", () => {
+    const initial: LiveFixtureData = { status: "scheduled", summary: null, outcome: null }; // no match_centre at all
+    const html = renderToStaticMarkup(
+      <MatchCentre fixtureId="fx-none" initial={initial} realtime={false} dict={dict} locale="en" tabParam={null} />,
+    );
+    expect(html).toContain('data-testid="mc-fallback"');
+    expect(html).toContain("Not started"); // LiveScoreBody's own headline fallback
+    expect(html).not.toContain('data-testid="mc-root"');
+    expect(html).not.toContain('data-testid="mc-court-card"');
+  });
+
+  it("a document with an EMPTY tabs array also falls back, rather than crashing on tabs[0]", () => {
+    const emptyTabsDoc = buildDoc({ tabs: [] as unknown as MatchCentreTabIdT[] });
+    expect(() => renderToStaticMarkup(<MatchCentre {...props(emptyTabsDoc)} />)).not.toThrow();
+    const html = renderToStaticMarkup(<MatchCentre {...props(emptyTabsDoc)} />);
+    expect(html).toContain('data-testid="mc-fallback"');
+  });
 });
