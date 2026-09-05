@@ -504,3 +504,26 @@ describe("submit — designed failure states, never a raw server string", () => 
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// Bench hook (B03r) — a selector-free way to find the submit control and the
+// consent-grant checkbox. Asserted on the PROP value itself (propsOf reads
+// the real element, no renderToStaticMarkup string here, so no "$undefined"
+// ambiguity), so a testid typo still reds, not just an "is present" check.
+// ---------------------------------------------------------------------------
+
+describe("bench hooks", () => {
+  it("the submit button carries data-testid=\"reg-join-submit\"", () => {
+    const m = mount({ initialPlayerId: "p1" });
+    const btn = m.island.tree().find((e) => e.type === "button" && textOf(e).includes("Confirm my spot"));
+    expect(btn, "submit button not found").toBeTruthy();
+    expect(propsOf(btn!)["data-testid"]).toBe("reg-join-submit");
+  });
+
+  it("the reused StepConsent's privacy checkbox (the consent GRANT control) carries data-testid=\"reg-consent-grant\"", () => {
+    const m = mount({ initialPlayerId: "p1" });
+    const privacyBox = m.island.tree().find((e) => propsOf(e).id === "reg-consent-privacy");
+    expect(privacyBox, "privacy consent checkbox not found").toBeTruthy();
+    expect(propsOf(privacyBox!)["data-testid"]).toBe("reg-consent-grant");
+  });
+});

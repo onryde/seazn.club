@@ -66,7 +66,19 @@ import { roundRoleFor, roundRoleLabel } from "@/lib/round-role-label";
 // #14: `courtNamesById` is the venue-qualified label map (via
 // `buildCourtDirectory`) — a bare joined `courts.name` can't tell apart two
 // venues that legally share one court name.
-import { validateSchedule, courtNamesById, courtVenueIds } from "./schedule";
+import { validateSchedule, courtNamesById, courtVenueIds, divisionLockState } from "./schedule";
+// The division freeze (`divisions.schedule_locked`), said the same way here as
+// at every other refusing site. IMPORT the constants, never retype the
+// sentence: `lib/schedule-lock.ts`'s own comment makes the import graph the
+// live enumeration of which paths refuse, so a hand-copied literal here would
+// be invisible to `grep -rn SCHEDULE_LOCKED_MESSAGE apps/web/src`.
+//
+// NOT to be confused with either of the two other "frozen"s this file already
+// carries: `assertNotFrozen`/`frozenCompetitionIds` above is the BILLING
+// freeze on a competition, and every `schedule_locked` in the select lists and
+// row types below is `fixtures.schedule_locked`, the per-FIXTURE pin. Three
+// unrelated meanings, one word.
+import { SCHEDULE_LOCKED_CODE, SCHEDULE_LOCKED_MESSAGE } from "@/lib/schedule-lock";
 // #8 sibling fix: reuse the SAME not-found codes `venues.ts` already
 // throws for a bad court_id/venue_id, instead of minting new ones, so
 // addFixture's error is indistinguishable from every other "not a real
@@ -396,6 +408,23 @@ export async function deleteStage(auth: AuthCtx, stageId: string): Promise<{ del
     if (!stage) throw new HttpError(404, "stage not found");
     assertNotFrozen(frozen, stage.competition_id);
     await tx`select pg_advisory_xact_lock(hashtext(${"division:" + stage.division_id}))`;
+    // Deleting a stage is the widest board write in this file: pools, fixtures
+    // and snapshots go with it via ON DELETE CASCADE. A frozen division
+    // refuses it, on the same terms and with the same code as every other
+    // board write (applySchedule, moveFixture, clearScheduleScoped, …).
+    //
+    // AFTER the existence check, deliberately: `divisionLockState` returns
+    // `frozen: row?.schedule_locked ?? false`, so a missing row reads as
+    // UNFROZEN — a guard placed above the 404 would not refuse an unknown
+    // stage, it would merely turn its 404 into a 422 on the divisions this
+    // one happens to belong to. AFTER the advisory lock too, matching
+    // `applySchedule`/`moveFixture`: the freeze is read under the same lock
+    // the delete below runs under, so a concurrent unfreeze cannot land
+    // between the read and the write.
+    const lockState = await divisionLockState(tx, stage.division_id);
+    if (lockState.frozen) {
+      throw new HttpError(422, SCHEDULE_LOCKED_MESSAGE, SCHEDULE_LOCKED_CODE);
+    }
 
     const [later] = await tx`
       select 1 from stages where division_id = ${stage.division_id} and seq > ${stage.seq} limit 1`;
@@ -1078,6 +1107,33 @@ export async function generateStageFixtures(auth: AuthCtx, stageId: string): Pro
       const [stage] = await tx<StageRow[]>`
         select ${tx(STAGE_COLS)} from stages where id = ${stageId}`;
       if (!stage) throw new HttpError(404, "stage not found");
+      // Generating a stage's fixtures IS writing the timetable — the widest
+      // schedule write there is — so a frozen division refuses it.
+      //
+      // `startDivision` (schedule.ts) already refuses on this exact predicate
+      // immediately before its own call to this function, and history.ts's
+      // undo/redo refuses far earlier in the same call, so neither of them can
+      // reach this guard and neither changes behaviour. What could not refuse
+      // was the ROUTE — `POST /api/v1/stages/{id}/generate` calls this
+      // directly, at the same `requireResourceAuth(..., "write")`, bypassing
+      // `startDivision` entirely. An organiser who could not Start a frozen
+      // empty board could simply press Generate instead, which is the same
+      // walk-around shape #230 item 2 found on the publish gate.
+      //
+      // HERE, in the pre-flight block, rather than in the write transaction
+      // below: two of this function's paths never reach that transaction —
+      // a `timing: "setup"` progression short-circuits into
+      // `generateProgressionSetupFixtures`, and an `on_complete` one runs
+      // `seedNextStage` first. Both write fixtures. A guard in the main
+      // transaction would leave both unrefused.
+      //
+      // AFTER the existence check: `divisionLockState` reads a missing row as
+      // `frozen: false`, so an unknown stage id must still 404 here rather
+      // than depend on a lock state there is no row to read.
+      const lockState = await divisionLockState(tx, stage.division_id);
+      if (lockState.frozen) {
+        throw new HttpError(422, SCHEDULE_LOCKED_MESSAGE, SCHEDULE_LOCKED_CODE);
+      }
       if (!stage.progression) return null;
       const progression = stage.progression as unknown as ProgressionSpec & { timing: "setup" | "on_complete" };
       if (progression.timing === "setup") return { seeded: true as const };
@@ -1642,6 +1698,25 @@ export async function rebuildStageFixtures(auth: AuthCtx, stageId: string): Prom
       );
     }
     await tx`select pg_advisory_xact_lock(hashtext(${"division:" + stage.division_id}))`;
+    // A frozen division refuses the rebuild. Strictly wider than the
+    // `clearScheduleScoped` the freeze already refuses: this HARD-DELETES
+    // every fixture on the stage, cascading into score_events, match_states,
+    // match_reports, lineups, official_marks, fixture_officials and
+    // device_links (see the guard's own comment below).
+    //
+    // AND IT HAS TO BE HERE, not merely on `generateStageFixtures`. This
+    // delete commits in its OWN transaction, and the regenerate runs after it
+    // returns — so a rebuild that relied on the generator's guard would let
+    // the delete land and only then refuse, handing the organiser an EMPTY
+    // frozen board. That is the case
+    // `stages-schedule-lock.test.ts`'s `fixtureCount` assertion pins, and it
+    // is what separates this guard from the generator's: remove this one and
+    // the refusal still arrives with the right status and code, from the
+    // wrong side of the delete.
+    const lockState = await divisionLockState(tx, stage.division_id);
+    if (lockState.frozen) {
+      throw new HttpError(422, SCHEDULE_LOCKED_MESSAGE, SCHEDULE_LOCKED_CODE);
+    }
 
     // Never destroy a real result (hard constraint 1). Mirrors deleteStage's
     // guard above (same three statuses), with one refinement: 'forfeited'
@@ -2384,11 +2459,49 @@ export async function completeStage(auth: AuthCtx, stageId: string): Promise<Com
     });
     return divisionCompleted ? { ...result, division_completed: true } : result;
   }
-  // Best-effort: completion stands even if generation trips (e.g. paywall).
+  // Best-effort: completion stands even if generation trips (e.g. paywall, or
+  // — since the freeze guard at the top of `generateStageFixtures` — a frozen
+  // division refusing the write). The completion above has ALREADY committed;
+  // undoing it because the next stage could not be drawn would be worse than
+  // leaving that stage empty, and refusing the completion itself would make
+  // the freeze bind a lifecycle TRANSITION, which is exactly the line
+  // `startDivision` was built to hold (see schedule-start-gate.test.ts).
+  //
+  // WHY THIS STILL SWALLOWS EVERYTHING. Narrowing it to re-throw non-freeze
+  // faults is not a free change: the paywall case this comment has always
+  // named reaches here as a `PaymentRequiredError` (402), and an incomplete
+  // multi-source progression reaches it as `STAGE_NOT_READY` — both are
+  // legitimate, expected trips that must not fail a committed completion.
+  // Deciding which of the remaining causes SHOULD fail it is a product call,
+  // not a guard's to make, so the shape is deliberately unchanged.
+  //
+  // WHAT DID CHANGE: it no longer swallows SILENTLY. This was a bare
+  // `catch { generated = undefined; }` that logged nothing at all, so a real
+  // generator fault — a bad bracket, a DB error — was exactly as invisible as
+  // a freeze refusal, and an organiser's next stage stayed empty with no
+  // record anywhere of why. The freeze did not create that hole; it revealed
+  // it. So the record NAMES the error, and flags the freeze case specifically
+  // (`locked`) so the two can be told apart without parsing prose.
   let generated: number | undefined;
   try {
     generated = (await generateStageFixtures(auth, qualified.stage_id)).created;
-  } catch {
+  } catch (err) {
+    const code = err instanceof HttpError ? err.code : undefined;
+    const locked = code === SCHEDULE_LOCKED_CODE;
+    log.warn(
+      {
+        event: "next_stage_generate_skipped",
+        stageId,
+        nextStageId: qualified.stage_id,
+        locked,
+        code,
+        status: err instanceof HttpError ? err.status : undefined,
+        err: String(err),
+      },
+      locked
+        ? "next stage not generated: the division schedule is locked"
+        : "next stage not generated: the generator failed",
+    );
     generated = undefined;
   }
   return { ...result, qualified, ...(generated !== undefined ? { next_stage_fixtures: generated } : {}) };
@@ -3174,6 +3287,20 @@ export async function issueChallenge(
     if (!stage) throw new HttpError(404, "stage not found");
     if (stage.kind !== "ladder") throw new HttpError(422, "challenges only exist on ladder stages");
     await tx`select pg_advisory_xact_lock(hashtext(${"division:" + stage.division_id}))`;
+    // A frozen division refuses a challenge. A ladder has no pre-generated
+    // timetable — its fixtures are created on demand, one per challenge — but
+    // a challenge still INSERTS a fixture onto the division's board, and on
+    // first use also writes `stage.config.ladder_order`. Both happen below,
+    // under this lock; both are board writes, and the freeze binds board
+    // writes wherever they come from.
+    //
+    // AFTER the 404 and the ladder-kind 422 (an unknown stage still 404s —
+    // `divisionLockState` reads a missing row as UNFROZEN), and after the
+    // advisory lock, matching every other refusing site.
+    const lockState = await divisionLockState(tx, stage.division_id);
+    if (lockState.frozen) {
+      throw new HttpError(422, SCHEDULE_LOCKED_MESSAGE, SCHEDULE_LOCKED_CODE);
+    }
 
     // ladder order initialises from seed order on first use
     let order = stage.config.ladder_order as string[] | undefined;
@@ -3251,6 +3378,17 @@ export async function addFixture(
       throw new HttpError(422, "an entrant cannot play itself");
     }
     await tx`select pg_advisory_xact_lock(hashtext(${"division:" + stage.division_id}))`;
+    // An ad-hoc fixture carries client-supplied `scheduled_at` and `court_id`
+    // straight into the board — a timetable write by another name, and one a
+    // frozen division refuses on the same terms as `moveFixture`, which is the
+    // path the board's own drag uses to write those two columns.
+    //
+    // AFTER the existence check and the advisory lock, matching every other
+    // site; an unknown stage id still 404s.
+    const lockState = await divisionLockState(tx, stage.division_id);
+    if (lockState.frozen) {
+      throw new HttpError(422, SCHEDULE_LOCKED_MESSAGE, SCHEDULE_LOCKED_CODE);
+    }
     const entrants = await tx<{ id: string }[]>`
       select id from entrants
       where division_id = ${stage.division_id}

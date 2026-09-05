@@ -7,6 +7,7 @@ import "server-only";
 import type postgres from "postgres";
 import { withTenant } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
+import { SCHEDULE_LOCKED_CODE, SCHEDULE_LOCKED_MESSAGE } from "@/lib/schedule-lock";
 import { requireFeature } from "@/lib/entitlements";
 import { cacheDelPattern } from "@/lib/cache";
 import { rateLimit, type RateLimitConfig } from "@/lib/rate-limit";
@@ -239,6 +240,24 @@ export async function putScheduleSettings(
     // Everything still `scheduled` and unlocked is deliberately NOT blocked:
     // AUTO relocates those correctly today and refusing them would be a
     // regression, not a fix.
+    //
+    // THAT PREMISE DOES NOT HOLD ON A FROZEN DIVISION, and this arm does not
+    // yet account for it. Once `divisions.schedule_locked` is set, every path
+    // that could relocate a `scheduled` fixture refuses: `applySchedule` and
+    // `moveFixture` (below), and `shiftDivisionSchedule`
+    // (`schedule-plus.ts`). So removing a court from a frozen division strands
+    // its fixtures on a court the settings no longer list, with no in-product
+    // way to move them until someone unfreezes.
+    //
+    // Deliberately left as-is rather than guarded, and the reasons are
+    // recorded so the next reader can weigh them rather than re-derive them:
+    // this is a SETTINGS write, and the freeze as ruled binds board writes;
+    // the damage is bounded, because `boardCourtColumns`
+    // (`schedule-board.tsx`) back-fills a column for a court the settings
+    // dropped, so the cards do not vanish; and unfreezing restores every
+    // relocation path. If that trade is ever revisited, the fix is a
+    // `divisionLockState` guard on the courts-removal arm only — not on the
+    // whole save, which would refuse edits that touch no court at all.
     //
     // Placed BEFORE the upsert on purpose. Everything below this point writes,
     // so a rejection here leaves the stored config completely unchanged — the
@@ -2523,7 +2542,7 @@ export async function applySchedule(
     const courtVenues = await courtVenueIds(tx);
     const lockState = await divisionLockState(tx, stage.division_id);
     if (lockState.frozen) {
-      throw new HttpError(422, "the division schedule is locked — unlock it to edit");
+      throw new HttpError(422, SCHEDULE_LOCKED_MESSAGE, SCHEDULE_LOCKED_CODE);
     }
     // C1 (2026-08-12 round-order design). This IS the write gate — the one
     // place a disordered board actually gets refused rather than merely
@@ -2900,7 +2919,7 @@ export async function moveFixture(
     // enforces them; a targeted move is the escape hatch).
     const lockState = await divisionLockState(tx, fixture.division_id);
     if (lockState.frozen) {
-      throw new HttpError(422, "the division schedule is locked — unlock it to edit");
+      throw new HttpError(422, SCHEDULE_LOCKED_MESSAGE, SCHEDULE_LOCKED_CODE);
     }
 
     const movesTimetable = patch.scheduled_at !== undefined || patch.court_id !== undefined;
@@ -3639,7 +3658,14 @@ export async function startDivision(
       from stages s where s.division_id = ${divisionId}
       order by s.seq limit 1`;
     if (!firstStage) throw new HttpError(422, "division has no stages to start");
-    return { ...division, firstStage };
+    // Read here, ACTED ON below — see the two guards further down. The freeze
+    // does not bind the start TRANSITION (that is deliberate: the design's own
+    // customer story is freeze-then-publish, and `schedule-board.tsx` gates its
+    // publish/start block on status while the freeze toggle fifteen lines above
+    // reads `single.schedule_locked` — same component, same variable in scope,
+    // different condition). It binds the two SCHEDULE WRITES this function can
+    // make on the way through.
+    return { ...division, firstStage, scheduleFrozen: (await divisionLockState(tx, divisionId)).frozen };
   });
   if (pre.status === "active") {
     return { division_id: divisionId, status: "active", started: false, generated: 0 };
@@ -3649,6 +3675,15 @@ export async function startDivision(
   // its own division lock).
   let generated = 0;
   if (pre.firstStage.n === 0) {
+    // A start that GENERATES a stage's fixtures is creating the timetable, not
+    // merely opening scoring on one — the widest schedule write in this
+    // function. Refused on a frozen board, and refused HERE rather than at the
+    // top of the function, so a start that generates nothing is untouched: the
+    // freeze binds edits, and starting an already-built frozen board is the
+    // intended path (see the pre-flight read above).
+    if (pre.scheduleFrozen) {
+      throw new HttpError(422, SCHEDULE_LOCKED_MESSAGE, SCHEDULE_LOCKED_CODE);
+    }
     const outcome = await generateStageFixtures(auth, pre.firstStage.id);
     generated = outcome.created;
   }
@@ -3671,6 +3706,16 @@ export async function startDivision(
         select distinct round_no from fixtures
         where stage_id = ${pre.firstStage.id} and scheduled_at is null
         order by round_no`;
+      // The sweep below writes `scheduled_at` across the first stage, which is
+      // a schedule edit whatever door it came through — so a frozen board
+      // refuses it. Gated on `rounds.length`, not on reaching this branch: a
+      // frozen division whose fixtures are already slotted has NOTHING for
+      // this loop to write, and refusing it would break freeze-then-start for
+      // no gain. Re-read inside THIS transaction rather than trusting the
+      // pre-flight value, because this is where the write happens.
+      if (rounds.length > 0 && (await divisionLockState(tx, divisionId)).frozen) {
+        throw new HttpError(422, SCHEDULE_LOCKED_MESSAGE, SCHEDULE_LOCKED_CODE);
+      }
       for (const [i, r] of rounds.entries()) {
         await tx`
           update fixtures set scheduled_at = ${iso(startAt + i * step)}, schedule_source = 'auto'

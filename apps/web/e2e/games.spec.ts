@@ -44,6 +44,44 @@ test("a lesson launches its mini-game", async ({ page }) => {
   await expect(page.getByRole("heading", { name: "Square Race" })).toBeVisible();
 });
 
+// Piece Detective used to share ONE global case pool and ONE progress array
+// across lessons 17, 21, 33 and 46: solve the cases in lesson 17 and the other
+// three opened already complete, on the same eight positions (the same defect
+// PR #690 fixed for Mate in 1 / Mate in 2 and skipped here). Each lesson now
+// gets its own slice of HUNTS with its own progress (HangingHunt `range`).
+// Proven end to end rather than by a unit test because the slice is wired
+// through the lesson card → index.tsx → component, and a unit test on the
+// component alone cannot see a dropped prop on that path.
+test("Piece Detective lessons do not share cases or progress", async ({ page }) => {
+  await page.goto("/games/chess-quest");
+  await page.evaluate(() => localStorage.removeItem("seazn-games:chess-quest:v1"));
+  await page.reload();
+  const boardHtml = () =>
+    page.locator("[data-square]").evaluateAll((els) => els.map((e) => e.innerHTML).join("|"));
+
+  // Lesson 17 (Day 33): solve case 1 — HUNTS[0], the loose knight on d7.
+  await page.getByRole("button", { name: "Day 33: The Free-Stuff Detector" }).click();
+  await page.getByRole("button", { name: /Play Piece Detective/ }).click();
+  await expect(page.getByText("0 / 8 cases")).toBeVisible();
+  const lesson17Case1 = await boardHtml();
+  await page.locator('[data-square="d7"]').click();
+  await expect(page.getByText(/Found it/)).toBeVisible();
+  await expect(page.getByText("1 / 8 cases")).toBeVisible();
+
+  // Lesson 21 (Day 41) opens fresh, on a different position.
+  await page.getByRole("button", { name: /Back to quest/ }).click();
+  await page.getByRole("button", { name: "Day 41: Winning the Won Game" }).click();
+  await page.getByRole("button", { name: /Play Piece Detective/ }).click();
+  await expect(page.getByText("0 / 8 cases")).toBeVisible();
+  expect(await boardHtml()).not.toBe(lesson17Case1);
+
+  // And lesson 17 still remembers its own solve.
+  await page.getByRole("button", { name: /Back to quest/ }).click();
+  await page.getByRole("button", { name: "Day 33: The Free-Stuff Detector" }).click();
+  await page.getByRole("button", { name: /Play Piece Detective/ }).click();
+  await expect(page.getByText("1 / 8 cases")).toBeVisible();
+});
+
 test("free-play arcade lists the eight games and one solves", async ({ page }) => {
   await page.goto("/games/chess-quest");
   await page.getByRole("button", { name: "Free play" }).click();

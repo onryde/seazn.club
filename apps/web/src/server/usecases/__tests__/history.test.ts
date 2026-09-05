@@ -5,6 +5,12 @@ import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 import { EngineError } from "@seazn/engine/core";
 import { sql } from "@/lib/db";
+import { HttpError } from "@/lib/errors";
+import {
+  SCHEDULE_LOCKED_CODE,
+  SCHEDULE_LOCKED_MESSAGE,
+  scheduleLockedMessageFor,
+} from "@/lib/schedule-lock";
 import { log } from "@/server/logger";
 import { invalidateOrgEntitlements } from "@/lib/entitlements";
 import type { AuthCtx } from "@/server/api-v1/auth";
@@ -12,7 +18,8 @@ import { createCompetition } from "../competitions";
 import { createDivision } from "../divisions";
 import { createEntrants } from "../entrants";
 import { createStages, generateStageFixtures } from "../stages";
-import { startDivision } from "../schedule";
+import { startDivision, applySchedule, moveFixture } from "../schedule";
+import { shiftDivisionSchedule } from "../schedule-plus";
 import { scoreEvent } from "../scoring";
 import { patchFixture } from "../fixtures";
 import { createVenue, createCourt } from "../venues";
@@ -391,6 +398,226 @@ describe.skipIf(!HAS_DB)("schedule undo & versioning (Jul3/03)", () => {
       select count(*) filter (where pool_id = ${poolA} and scheduled_at is not null)::int as a_scheduled
       from fixtures where division_id = ${division.id}`;
     expect(after!.a_scheduled).toBeGreaterThan(1);
+  });
+
+  it("scoped clear refuses a frozen division, and still clears an unfrozen one", async () => {
+    const { auth } = await seedOrg();
+    const { division, fixtures } = await seedDivision(auth, { kind: "group", pools: { count: 2 } });
+    const { courtA } = await seedCourts(auth);
+    for (let i = 0; i < fixtures.length; i++) {
+      await patchFixture(auth, fixtures[i]!.id, { scheduled_at: at(9 + i), court_id: courtA });
+    }
+
+    // The unfrozen control case runs FIRST, so a guard that refuses everything
+    // cannot pass this test by refusing both halves.
+    const before = await clearScheduleScoped(auth, {
+      division_id: division.id,
+      scope: { excludeLocked: true },
+      confirm: true,
+    });
+    expect(before.cleared).toBeGreaterThan(0);
+    await undoDivision(auth, division.id);
+
+    await setDivisionLocks(auth, division.id, { schedule_locked: true });
+
+    await expect(
+      clearScheduleScoped(auth, {
+        division_id: division.id,
+        scope: { excludeLocked: true },
+        confirm: true,
+      }),
+    ).rejects.toMatchObject({ status: 422 });
+
+    // The refusal must not have wiped anything on its way out.
+    const [after] = await sql<{ scheduled: number }[]>`
+      select count(*) filter (where scheduled_at is not null)::int as scheduled
+      from fixtures where division_id = ${division.id}`;
+    expect(after!.scheduled).toBeGreaterThan(0);
+  });
+
+
+  // Restore is the SECOND destructive control the Danger zone's neighbour
+  // offers, and it has the larger blast radius of the two: clear empties
+  // unlocked slots, a restore rewrites every fixture's time and court back to
+  // the save point. The freeze stopped clear (above) and did not stop this, so
+  // an organiser who froze a board could still have the whole timetable
+  // rewritten from a control sitting a few hundred pixels up the same panel.
+  //
+  // `restoreCheckpoint` rewinds by calling `undoDivision` in a loop, and undo
+  // itself is deliberately NOT guarded — see the guard's own comment for why.
+  // The refusal therefore has to live in `restoreCheckpoint`, ahead of the
+  // loop, or the first undo lands before anything says no.
+  it("restoring a save point refuses a frozen division, and still restores an unfrozen one", async () => {
+    const { auth } = await seedOrg();
+    const { courtA, courtB } = await seedCourts(auth);
+
+    /** Schedule one fixture, bookmark it, then move it away. Restoring the
+     *  returned checkpoint rewinds that single move — one step, one visible
+     *  column. */
+    async function divisionWithARewindWaiting() {
+      const { division, fixtures } = await seedDivision(auth);
+      const f = fixtures[0]!.id;
+      await patchFixture(auth, f, { scheduled_at: at(9), court_id: courtA });
+      const cp = await createCheckpoint(auth, division.id, "before reshuffle");
+      await patchFixture(auth, f, { scheduled_at: at(15), court_id: courtB });
+      return { divisionId: division.id, fixtureId: f, checkpointId: cp.id };
+    }
+
+    // Two divisions rather than one, because a restore does not re-arm itself:
+    // `patchFixture` appends its event without clearing `edit_watermark`, so a
+    // second restore of the same checkpoint on the same division short-circuits
+    // to `steps: 0` and would witness nothing whether the guard fired or not.
+    //
+    // The unfrozen control runs FIRST, so a guard that refused every restore —
+    // or one placed so early it never reaches the rewind — cannot pass this
+    // test by refusing both halves.
+    const open = await divisionWithARewindWaiting();
+    const control = await restoreCheckpoint(auth, open.divisionId, open.checkpointId, true);
+    expect(control.steps).toBe(1);
+    const [rewound] = await sql<{ court_id: string | null }[]>`
+      select court_id from fixtures where id = ${open.fixtureId}`;
+    expect(rewound!.court_id).toBe(courtA);
+
+    const frozen = await divisionWithARewindWaiting();
+    const [before] = await sql<{ at: string | null; court_id: string | null }[]>`
+      select scheduled_at::text as at, court_id from fixtures where id = ${frozen.fixtureId}`;
+    expect(before!.court_id).toBe(courtB); // the rewind really is available
+
+    await setDivisionLocks(auth, frozen.divisionId, { schedule_locked: true });
+
+    await expect(
+      restoreCheckpoint(auth, frozen.divisionId, frozen.checkpointId, true),
+    ).rejects.toMatchObject({ status: 422 });
+    // The sentence is a contract three sibling write paths already share and
+    // the panel's own copy echoes, so it is pinned as well as the status.
+    // `message` is not an own enumerable property, so the `toMatchObject`
+    // above cannot see it — it needs its own matcher.
+    await expect(
+      restoreCheckpoint(auth, frozen.divisionId, frozen.checkpointId, true),
+    ).rejects.toThrow("the division schedule is locked — unlock it to edit");
+
+    // The refusal must not have rewritten the board on its way out: the guard
+    // sits ahead of the rewind loop, not inside it.
+    const [after] = await sql<{ at: string | null; court_id: string | null }[]>`
+      select scheduled_at::text as at, court_id from fixtures where id = ${frozen.fixtureId}`;
+    expect(after).toEqual(before);
+    // ...and the division it did not name is untouched by the freeze.
+    const openStill = await restoreCheckpoint(auth, open.divisionId, open.checkpointId, true);
+    expect(openStill.steps).toBe(0);
+
+    // `restoreCheckpoint` keeps its OWN guard now that `undoDivision` carries
+    // one too, and this is the case that tells the two apart: `open` has
+    // already been rewound, so `wm <= target` short-circuits to `{ steps: 0 }`
+    // before the loop ever calls undo. Only the guard inside
+    // `restoreCheckpoint` can refuse this call — delete it and a frozen
+    // division answers 200 here — so neither guard is covering for the other.
+    await setDivisionLocks(auth, open.divisionId, { schedule_locked: true });
+    await expect(
+      restoreCheckpoint(auth, open.divisionId, open.checkpointId, true),
+    ).rejects.toThrow("the division schedule is locked — unlock it to edit");
+  });
+
+  // Undo and Redo are the LAST two division write paths a freeze did not stop,
+  // and `restoreCheckpoint` is a loop of `undoDivision` — so the freeze that
+  // stopped the restore left the primitive it is built out of live, on two
+  // buttons a few hundred pixels up the same panel. Same blast radius, one
+  // layer down.
+  //
+  // Guarding the rewind strands nobody: `divisions.schedule_locked` moves only
+  // through `setDivisionLocks`, which appends no ledger event, so no undo or
+  // redo could ever have handed the division freeze back. (The
+  // `schedule_locked` that undo DOES replay is `fixtures.schedule_locked`, the
+  // per-fixture pin — a different column on a different table with the same
+  // name, and the reason undo was exempted in the first place.)
+  it("undo and redo refuse a frozen division, and still step an unfrozen one", async () => {
+    const { auth } = await seedOrg();
+    const { division, fixtures } = await seedDivision(auth);
+    const { courtA, courtB } = await seedCourts(auth);
+    const f = fixtures[0]!.id;
+    await patchFixture(auth, f, { scheduled_at: at(9), court_id: courtA });
+    await patchFixture(auth, f, { scheduled_at: at(15), court_id: courtB });
+
+    const courtOf = async (): Promise<string | null> => {
+      const [row] = await sql<{ court_id: string | null }[]>`
+        select court_id from fixtures where id = ${f}`;
+      return row!.court_id;
+    };
+
+    // The unfrozen CONTROL runs first for both directions, so a guard that
+    // threw unconditionally cannot pass this test by refusing everything.
+    //
+    // It says nothing about placement relative to the existence check, and no
+    // test here can: `divisionLockState` (`usecases/schedule.ts:537`) returns
+    // `frozen: row?.schedule_locked ?? false`, so a MISSING division reads as
+    // UNFROZEN, falls through the guard wherever it sits, and 404s later
+    // either way. There is no mutant to kill, so the claim is withdrawn
+    // rather than pinned with a case that would pass vacuously.
+    await undoDivision(auth, division.id);
+    expect(await courtOf()).toBe(courtA);
+    await redoDivision(auth, division.id);
+    expect(await courtOf()).toBe(courtB);
+
+    // Leave a redo genuinely PENDING before freezing. Without this the frozen
+    // redo would be refused by the engine ("nothing to redo") whether the
+    // freeze guard existed or not, and the assertion would witness nothing.
+    await undoDivision(auth, division.id);
+    expect(await courtOf()).toBe(courtA);
+
+    await setDivisionLocks(auth, division.id, { schedule_locked: true });
+    const [before] = await sql<{ at: string | null; court_id: string | null }[]>`
+      select scheduled_at::text as at, court_id from fixtures where id = ${f}`;
+    /** The LEDGER's own state, not the board's — and read honestly about what it
+     *  can and cannot catch.
+     *
+     *  It does NOT pin the guard's PLACEMENT inside `step`. The whole body runs
+     *  in one `withTenant` transaction, so a throw anywhere in it rolls the
+     *  append, the `seq` bump and the watermark back together: moving the guard
+     *  to after `appendEvent` leaves this assertion green (verified by
+     *  mutation, 2026-09-04 — that mutant SURVIVES). Placement is protected by
+     *  the transaction, not by this test.
+     *
+     *  What it does pin is that the rewind stays ONE transaction. That is a
+     *  live regression class here rather than a hypothetical:
+     *  `restoreCheckpoint` right beside it is N separate transactions, and a
+     *  refusal partway through leaves earlier events committed. If `step` ever
+     *  splits the same way, this goes red where the board snapshot alone would
+     *  not. */
+    const ledgerState = async (): Promise<{ events: number; seq: number; watermark: number | null }> => {
+      const [row] = await sql<{ events: number; seq: number; watermark: number | null }[]>`
+        select (select count(*)::int from division_events where division_id = ${division.id}) as events,
+               seq::int as seq,
+               edit_watermark::int as watermark
+        from divisions where id = ${division.id}`;
+      return row!;
+    };
+    const ledgerBefore = await ledgerState();
+
+    await expect(undoDivision(auth, division.id)).rejects.toMatchObject({ status: 422 });
+    // `message` is not an own enumerable property, so `toMatchObject` above
+    // cannot see it. The sentence is the contract four sibling write paths
+    // already share and the panel's frozen note is written against.
+    await expect(undoDivision(auth, division.id)).rejects.toThrow(
+      "the division schedule is locked — unlock it to edit",
+    );
+    await expect(redoDivision(auth, division.id)).rejects.toMatchObject({ status: 422 });
+    await expect(redoDivision(auth, division.id)).rejects.toThrow(
+      "the division schedule is locked — unlock it to edit",
+    );
+
+    // Neither refusal moved a fixture on its way out...
+    const [after] = await sql<{ at: string | null; court_id: string | null }[]>`
+      select scheduled_at::text as at, court_id from fixtures where id = ${f}`;
+    expect(after).toEqual(before);
+    // ...nor left an event, a seq bump or a watermark move behind it. Asserted
+    // rather than inferred from the unchanged board — with the caveat in the
+    // helper's own comment about exactly which failure this can witness.
+    expect(await ledgerState()).toEqual(ledgerBefore);
+
+    // ...and the redo really was still there: it is the FREEZE that refused it,
+    // not an empty redo stack.
+    await setDivisionLocks(auth, division.id, { schedule_locked: false });
+    await redoDivision(auth, division.id);
+    expect(await courtOf()).toBe(courtB);
   });
 
   it("clear-entrants keeps the pool, blocks after a result; two-site scope lock blocks edits", async () => {
@@ -911,5 +1138,306 @@ describe.skipIf(!HAS_DB)("schedule undo & versioning (Jul3/03)", () => {
     await expect(undoDivision(auth, division.id, 1)).rejects.toSatisfy((err: unknown) =>
       EngineError.is(err, "SEQ_CONFLICT"),
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// One schedule-lock refusal, said once and readable by a machine
+// ---------------------------------------------------------------------------
+//
+// The freeze contract used to be a SENTENCE hand-typed at five call sites,
+// with a sixth carrying a machine-readable code none of the others did — so a
+// client wanting to branch on "frozen" had to match prose, and a reword meant
+// grepping a literal. Worse, the enumeration was asserted in a comment and was
+// false: `clearPoolEntrants`, `shiftDivisionSchedule` and `deleteCheckpoint`
+// ignored the freeze entirely while that comment claimed completeness.
+//
+// This table is the enumeration now. It drives every division write path that
+// is supposed to refuse a frozen board, in ONE assertion, so a site that
+// refuses with the wrong code, the wrong sentence, the wrong status — or does
+// not refuse at all — is NAMED in the diff rather than hidden behind the first
+// failure. Each site gets its OWN frozen division, so a site that fails to
+// refuse mutates only its own board and cannot cascade into the next row.
+describe.skipIf(!HAS_DB)("the schedule-lock refusal is one constant (task 10)", () => {
+  /** A frozen division with everything each write path needs to get as far as
+   *  its guard: a placed fixture, a pending undo AND a pending redo, a save
+   *  point, and two pools. Frozen LAST, so every fact above is established
+   *  against an open board. */
+  async function frozenBoard(auth: AuthCtx) {
+    const { division, stage, fixtures } = await seedDivision(auth, {
+      kind: "group",
+      pools: { count: 2 },
+    });
+    const { courtA, courtB } = await seedCourts(auth);
+    const fixtureId = fixtures[0]!.id;
+    await patchFixture(auth, fixtureId, { scheduled_at: at(9), court_id: courtA });
+    await patchFixture(auth, fixtureId, { scheduled_at: at(15), court_id: courtB });
+    const cp = await createCheckpoint(auth, division.id, "before the freeze");
+    // One rewind, so REDO has something genuinely pending: without it a frozen
+    // redo would be refused by the engine ("nothing to redo") whether the
+    // freeze guard existed or not, and that row would witness nothing.
+    await undoDivision(auth, division.id);
+    const pools = await sql<{ id: string }[]>`
+      select id from pools where stage_id = ${stage.id} order by key`;
+    await setDivisionLocks(auth, division.id, { schedule_locked: true });
+    return {
+      divisionId: division.id,
+      stageId: stage.id,
+      fixtureId,
+      courtA,
+      checkpointId: cp.id,
+      poolId: pools[0]!.id,
+    };
+  }
+
+  it("every division write path refuses a frozen board with the SAME code and sentence", async () => {
+    // The constant has to be a real, non-empty string BEFORE anything below
+    // compares against it. A site that carries no message at all would other-
+    // wise match an `undefined` constant and the whole table would pass
+    // vacuously — the failure mode this suite has already shipped twice.
+    expect(typeof SCHEDULE_LOCKED_MESSAGE).toBe("string");
+    expect(SCHEDULE_LOCKED_MESSAGE.length).toBeGreaterThan(0);
+    expect(typeof SCHEDULE_LOCKED_CODE).toBe("string");
+    expect(SCHEDULE_LOCKED_CODE.length).toBeGreaterThan(0);
+
+    const { auth } = await seedOrg();
+    const sites: { name: string; run: (b: Awaited<ReturnType<typeof frozenBoard>>) => Promise<unknown> }[] = [
+      { name: "undoDivision", run: (b) => undoDivision(auth, b.divisionId) },
+      { name: "redoDivision", run: (b) => redoDivision(auth, b.divisionId) },
+      {
+        name: "restoreCheckpoint",
+        run: (b) => restoreCheckpoint(auth, b.divisionId, b.checkpointId, true),
+      },
+      {
+        name: "deleteCheckpoint",
+        run: (b) => deleteCheckpoint(auth, b.divisionId, b.checkpointId),
+      },
+      {
+        name: "clearScheduleScoped",
+        run: (b) =>
+          clearScheduleScoped(auth, {
+            division_id: b.divisionId,
+            scope: { excludeLocked: true },
+            confirm: true,
+          }),
+      },
+      { name: "clearPoolEntrants", run: (b) => clearPoolEntrants(auth, b.poolId, true) },
+      {
+        name: "shiftDivisionSchedule",
+        run: (b) =>
+          shiftDivisionSchedule(auth, {
+            division_id: b.divisionId,
+            scope: { excludeLocked: true },
+            delta_minutes: 15,
+          }),
+      },
+      {
+        name: "moveFixture",
+        run: (b) => moveFixture(auth, b.fixtureId, { scheduled_at: at(11) }),
+      },
+      {
+        name: "applySchedule",
+        run: (b) =>
+          applySchedule(auth, b.stageId, {
+            assignments: [{ fixture_id: b.fixtureId, scheduled_at: at(11), court_id: b.courtA }],
+            source: "manual",
+          }),
+      },
+    ];
+
+    const seen: Record<string, unknown> = {};
+    const want: Record<string, unknown> = {};
+    for (const site of sites) {
+      const board = await frozenBoard(auth);
+      want[site.name] = {
+        status: 422,
+        code: SCHEDULE_LOCKED_CODE,
+        message: SCHEDULE_LOCKED_MESSAGE,
+      };
+      try {
+        await site.run(board);
+        seen[site.name] = "DID NOT REFUSE a frozen division";
+      } catch (err) {
+        seen[site.name] =
+          err instanceof HttpError
+            ? { status: err.status, code: err.code, message: err.message }
+            : `threw ${(err as Error)?.constructor?.name}: ${(err as Error)?.message}`;
+      }
+    }
+    // One assertion, every site named.
+    expect(seen).toEqual(want);
+  });
+
+  // The joint apply is the site the other nine were brought UP to: it already
+  // carried the code, and it interpolates the frozen division's name because
+  // the caller named a COMPETITION and needs to know which division stopped
+  // the run. It shares the code and the formatter, not the sentence — pinned
+  // here so the formatter cannot drift from the message it formats.
+  it("the joint apply's per-division sentence comes from the shared formatter", () => {
+    expect(scheduleLockedMessageFor("Open")).toContain("locked — unlock it to edit");
+    expect(scheduleLockedMessageFor("Open")).toContain('"Open"');
+    // ...and it is NOT the single-division sentence, so a site that used the
+    // wrong one of the two would be caught rather than pass by looking similar.
+    expect(scheduleLockedMessageFor("Open")).not.toBe(SCHEDULE_LOCKED_MESSAGE);
+  });
+});
+
+// The three write paths the freeze never bound. Each was found by a review
+// sweep AFTER this wave shipped a comment claiming the enumeration was
+// complete, so each gets its own behavioural test rather than only a row in
+// the table above: the table proves the refusal's SHAPE, these prove the guard
+// refuses the right thing, does no work on its way out, and — the assertion
+// that stops a guard from passing by refusing everything — that an UNFROZEN
+// division still gets the operation.
+describe.skipIf(!HAS_DB)("the three paths a freeze used to let through (task 10)", () => {
+  it("clear-entrants refuses a frozen division, and still empties a pool on an open one", async () => {
+    const { auth } = await seedOrg();
+    const { division, stage } = await seedDivision(auth, { kind: "group", pools: { count: 2 } });
+    const pools = await sql<{ id: string }[]>`
+      select id from pools where stage_id = ${stage.id} order by key`;
+    const [poolA, poolB] = [pools[0]!.id, pools[1]!.id];
+
+    const fixturesIn = async (poolId: string): Promise<number> => {
+      const [row] = await sql<{ n: number }[]>`
+        select count(*)::int as n from fixtures where pool_id = ${poolId}`;
+      return row!.n;
+    };
+    // Both pools start with fixtures, so "empty afterwards" means something.
+    expect(await fixturesIn(poolA)).toBeGreaterThan(0);
+    expect(await fixturesIn(poolB)).toBeGreaterThan(0);
+
+    // The unfrozen CONTROL runs FIRST, so a guard that refused unconditionally
+    // — or one placed so early it refuses every call — cannot pass this test.
+    const cleared = await clearPoolEntrants(auth, poolA, true);
+    expect(cleared.removed).toBeGreaterThan(0);
+    expect(await fixturesIn(poolA)).toBe(0);
+
+    await setDivisionLocks(auth, division.id, { schedule_locked: true });
+    const before = await fixturesIn(poolB);
+    await expect(clearPoolEntrants(auth, poolB, true)).rejects.toMatchObject({
+      status: 422,
+      code: SCHEDULE_LOCKED_CODE,
+    });
+    // `message` is not an own enumerable property, so `toMatchObject` cannot
+    // see it — it needs its own matcher.
+    await expect(clearPoolEntrants(auth, poolB, true)).rejects.toThrow(SCHEDULE_LOCKED_MESSAGE);
+    // The refusal removed nothing on its way out: the guard sits ahead of the
+    // fixture read and the engine call, not after them.
+    expect(await fixturesIn(poolB)).toBe(before);
+
+    // ...and it really was the FREEZE that refused, not an already-empty pool.
+    await setDivisionLocks(auth, division.id, { schedule_locked: false });
+    const after = await clearPoolEntrants(auth, poolB, true);
+    expect(after.removed).toBe(before);
+  });
+
+  it("a bulk shift refuses a frozen division — and leaves the watermark alone — while still shifting an open one", async () => {
+    const { auth } = await seedOrg();
+    const { division, fixtures } = await seedDivision(auth);
+    const { courtA } = await seedCourts(auth);
+    const f = fixtures[0]!.id;
+    await patchFixture(auth, f, { scheduled_at: at(9), court_id: courtA });
+
+    const startOf = async (): Promise<string | null> => {
+      const [row] = await sql<{ at: string | null }[]>`
+        select scheduled_at::text as at from fixtures where id = ${f}`;
+      return row!.at;
+    };
+
+    // Unfrozen CONTROL first.
+    const shifted = await shiftDivisionSchedule(auth, {
+      division_id: division.id,
+      scope: { excludeLocked: true },
+      delta_minutes: 60,
+    });
+    expect(shifted.shifted).toBeGreaterThan(0);
+    expect(new Date((await startOf())!).toISOString()).toBe(at(10));
+
+    // Leave a REWIND genuinely standing before freezing. A shift is what nulls
+    // `edit_watermark`, so after the control above there is nothing left to
+    // lose and the watermark assertion below would witness nothing; one undo
+    // puts the division back behind its head, which is the state a freeze is
+    // protecting and the state a second shift would silently throw away.
+    await undoDivision(auth, division.id);
+    expect(new Date((await startOf())!).toISOString()).toBe(at(9));
+
+    await setDivisionLocks(auth, division.id, { schedule_locked: true });
+    /** Board AND ledger. The watermark is the point of this one: a shift that
+     *  gets through nulls `edit_watermark`, which does not merely move
+     *  fixtures — it destroys the rewind the freeze exists to protect. A
+     *  board-only assertion would pass on a guard that refused after the
+     *  `update divisions set … edit_watermark = null`. */
+    const state = async (): Promise<{ at: string | null; seq: number; watermark: number | null }> => {
+      const [row] = await sql<{ at: string | null; seq: number; watermark: number | null }[]>`
+        select (select scheduled_at::text from fixtures where id = ${f}) as at,
+               seq::int as seq, edit_watermark::int as watermark
+        from divisions where id = ${division.id}`;
+      return row!;
+    };
+    const before = await state();
+    expect(before.watermark).not.toBeNull(); // there really is a rewind to lose
+
+    await expect(
+      shiftDivisionSchedule(auth, {
+        division_id: division.id,
+        scope: { excludeLocked: true },
+        delta_minutes: 60,
+      }),
+    ).rejects.toMatchObject({ status: 422, code: SCHEDULE_LOCKED_CODE });
+    await expect(
+      shiftDivisionSchedule(auth, {
+        division_id: division.id,
+        scope: { excludeLocked: true },
+        delta_minutes: 60,
+      }),
+    ).rejects.toThrow(SCHEDULE_LOCKED_MESSAGE);
+    expect(await state()).toEqual(before);
+  });
+
+  it("deleting a save point refuses a frozen division, 404s an unknown checkpoint ahead of the freeze, and still deletes on an open one", async () => {
+    const { auth } = await seedOrg();
+    const { division, fixtures } = await seedDivision(auth);
+    const { courtA } = await seedCourts(auth);
+    await patchFixture(auth, fixtures[0]!.id, { scheduled_at: at(9), court_id: courtA });
+
+    const saved = async (id: string): Promise<number> => {
+      const [row] = await sql<{ n: number }[]>`
+        select count(*)::int as n from division_checkpoints where id = ${id}`;
+      return row!.n;
+    };
+
+    // Unfrozen CONTROL first: Delete works on an open division.
+    const open = await createCheckpoint(auth, division.id, "deletable");
+    await deleteCheckpoint(auth, division.id, open.id);
+    expect(await saved(open.id)).toBe(0);
+
+    const kept = await createCheckpoint(auth, division.id, "must survive the freeze");
+    await setDivisionLocks(auth, division.id, { schedule_locked: true });
+
+    await expect(deleteCheckpoint(auth, division.id, kept.id)).rejects.toMatchObject({
+      status: 422,
+      code: SCHEDULE_LOCKED_CODE,
+    });
+    await expect(deleteCheckpoint(auth, division.id, kept.id)).rejects.toThrow(
+      SCHEDULE_LOCKED_MESSAGE,
+    );
+    // The refusal is not a 422 that also deleted the row. This is the whole
+    // point: the deletion is irreversible, unlike every other refusal here.
+    expect(await saved(kept.id)).toBe(1);
+
+    // Placement, and this site really can witness it — unlike the division
+    // guards, whose existence check reads a MISSING row as unfrozen and falls
+    // through wherever the guard sits. Here the checkpoint lookup is a genuine
+    // existence check independent of the division's freeze, so a guard hoisted
+    // above it turns this 404 into a 422 and this assertion goes red.
+    await expect(deleteCheckpoint(auth, division.id, randomUUID())).rejects.toMatchObject({
+      status: 404,
+    });
+
+    // ...and the save point was refused by the FREEZE, not by anything about
+    // the row itself.
+    await setDivisionLocks(auth, division.id, { schedule_locked: false });
+    await deleteCheckpoint(auth, division.id, kept.id);
+    expect(await saved(kept.id)).toBe(0);
   });
 });

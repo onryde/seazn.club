@@ -35,6 +35,17 @@ const nextConfig = {
   typescript: {
     ignoreBuildErrors: process.env.SKIP_TYPECHECK === "1",
   },
+  // Turbopack's on-disk build cache (.next/cache/turbopack). Off by default
+  // and "experimental for production builds" (next docs:
+  // config/turbopackFileSystemCache), so it is env-gated rather than on:
+  // local seazn-env builds set NEXT_BUILD_FS_CACHE=1 and a one-file rebuild
+  // becomes incremental instead of a from-zero compile; CI, Docker and the
+  // deploy workflows leave it unset and stay cold. turbo.json lists the var
+  // in build.env, so a cached-with and a cached-without build never share a
+  // hash. toolchain.test.ts pins both halves.
+  experimental: {
+    turbopackFileSystemCacheForBuild: process.env.NEXT_BUILD_FS_CACHE === "1",
+  },
   // Monorepo: trace from the workspace root so hoisted node_modules land in
   // .next/standalone (Next docs: config/output caveats).
   outputFileTracingRoot: path.join(import.meta.dirname, "../.."),

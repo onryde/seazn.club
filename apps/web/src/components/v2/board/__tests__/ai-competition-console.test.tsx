@@ -899,7 +899,11 @@ describe("the applied state", () => {
     // The headline is what a scanning reader takes away. "Reverted to before
     // the AI changes." above an amber line saying otherwise actively
     // misinforms — the remaining divisions are still carrying the AI board.
-    const partial = review({ outcome: applied, undone: "partial", undoFailed: ["d2"] });
+    const partial = review({
+      outcome: applied,
+      undone: "partial",
+      undoFailed: [{ divisionId: "d2", reason: "checkpoint not found" }],
+    });
     expect(partial).not.toContain(enText["board.ai.apply.reverted"]);
     expect(review({ outcome: applied, undone: "full" })).toContain(
       enText["board.ai.apply.reverted"],
@@ -911,11 +915,23 @@ describe("the applied state", () => {
     // out which. The anchors are still valid and a restore failure is often
     // transient, so the retry is the remedy — the copy pointing at the division
     // pages is the fallback, not the first answer.
-    const partial = review({ outcome: applied, undone: "partial", undoFailed: ["d2"] });
+    const LOCKED = "the division schedule is locked — unlock it to edit";
+    const partial = review({
+      outcome: applied,
+      undone: "partial",
+      undoFailed: [{ divisionId: "d2", reason: LOCKED }],
+    });
     expect(partial).toContain(
       tEn("board.ai.joint.undonePartial", { divisions: "Under 14s" }),
     );
     expect(partial).toContain(enText["board.ai.joint.undoRetry"]);
+    // ...and WHY, which is the half the organiser can act on. The joint path
+    // used to drop `reason` between the endpoint and this card, so a frozen
+    // division was named and never explained.
+    expect(partial).toContain(enText["board.ai.joint.undoneWhy"]);
+    expect(partial).toContain(
+      tEn("board.ai.joint.undoneReason", { divisions: "Under 14s", reason: LOCKED }),
+    );
     // A full revert has nothing to retry.
     expect(review({ outcome: applied, undone: "full" })).not.toContain(
       enText["board.ai.joint.undoRetry"],

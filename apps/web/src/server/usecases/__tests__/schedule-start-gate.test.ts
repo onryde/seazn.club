@@ -35,6 +35,8 @@ import { createDivision } from "../divisions";
 import { createEntrants } from "../entrants";
 import { createStages } from "../stages";
 import { publishSchedule, startDivision, validateSchedule } from "../schedule";
+import { setDivisionLocks } from "../history";
+import { SCHEDULE_LOCKED_CODE, SCHEDULE_LOCKED_MESSAGE } from "@/lib/schedule-lock";
 import { createVenue, createCourt } from "../venues";
 import { GENERIC_CONFIG, seedOrg } from "./_seed";
 
@@ -432,5 +434,119 @@ describe.skipIf(!HAS_DB)("starting a division publishes it, under the publish ga
       expect(thrown).toBeDefined();
       expect(thrownConflicts(thrown)).toEqual(panel.conflicts);
     }
+  }, 120_000);
+});
+
+// ---------------------------------------------------------------------------
+// A freeze binds start's schedule WRITES, not the transition (task 10)
+// ---------------------------------------------------------------------------
+//
+// Starting a frozen division is INTENDED and has to keep working. The freeze's
+// own copy scopes it — "block all schedule EDITS until unfrozen" — the design's
+// customer story for it is freeze-then-publish, and `schedule-board.tsx` makes
+// the same call in the UI: the freeze toggle reads `single.schedule_locked`
+// while the publish/start block fifteen lines below gates on STATUS only, same
+// component, same variable in scope, different condition. A walkthrough step
+// pins `schedule_locked === true` on both sides of publish and of start.
+//
+// But `startDivision` can WRITE the schedule on the way through, in two places:
+// it GENERATES the first stage's fixtures when that stage is empty, and it
+// sweeps rolling `scheduled_at` values across every round that has none. Both
+// are schedule edits whatever door they came through, and both went through a
+// frozen board unrefused.
+//
+// So the guard is on the WRITE, not on the transition — and it takes THREE
+// cases to say so. Frozen-refuses plus unfrozen-succeeds cannot tell a correct
+// guard from one gated on merely REACHING the quick-start branch; only the
+// third case (frozen, branch entered, nothing left to write) can.
+describe.skipIf(!HAS_DB)("a freeze binds start's schedule writes, not the transition (task 10)", () => {
+  const lock = (auth: AuthCtx, divisionId: string, on: boolean): Promise<unknown> =>
+    setDivisionLocks(auth, divisionId, { schedule_locked: on });
+
+  async function fixtureCount(divisionId: string): Promise<number> {
+    const [row] = await sql<{ n: number }[]>`
+      select count(*)::int as n from fixtures where division_id = ${divisionId}`;
+    return row!.n;
+  }
+
+  async function scheduleLocked(divisionId: string): Promise<boolean> {
+    const [row] = await sql<{ schedule_locked: boolean }[]>`
+      select schedule_locked from divisions where id = ${divisionId}`;
+    return row!.schedule_locked;
+  }
+
+  it("frozen + an empty first stage → refuses rather than generating a whole timetable", async () => {
+    // No slots at all, so `startDivision`'s quick-start would GENERATE the
+    // stage — the widest schedule write it can make.
+    const board = await seedBoard([], { roundMinutes: 60 });
+    expect(await fixtureCount(board.divisionId)).toBe(0);
+    await lock(board.auth, board.divisionId, true);
+
+    await expect(startDivision(board.auth, board.divisionId)).rejects.toMatchObject({
+      status: 422,
+      code: SCHEDULE_LOCKED_CODE,
+    });
+    // `message` is not an own enumerable property, so `toMatchObject` above
+    // cannot see it — it needs its own matcher.
+    await expect(startDivision(board.auth, board.divisionId)).rejects.toThrow(
+      SCHEDULE_LOCKED_MESSAGE,
+    );
+    // The refusal generated nothing and started nothing on its way out.
+    expect(await fixtureCount(board.divisionId)).toBe(0);
+    expect(await divisionStatus(board.divisionId)).toBe("setup");
+
+    // UNFROZEN, same board, same would-write: still generates and still
+    // starts. Without this the guard could be refusing every empty-stage
+    // start and the test above could not tell.
+    await lock(board.auth, board.divisionId, false);
+    const out = await startDivision(board.auth, board.divisionId);
+    expect(out.generated).toBeGreaterThan(0);
+    expect(await divisionStatus(board.divisionId)).toBe("active");
+  }, 120_000);
+
+  it("frozen + rounds with no times → refuses the rolling-times sweep, and writes none of them", async () => {
+    const board = await seedBoard(UNSCHEDULED, { roundMinutes: 60 });
+    expect(await scheduledCount(board.divisionId)).toBe(0);
+    await lock(board.auth, board.divisionId, true);
+
+    await expect(startDivision(board.auth, board.divisionId)).rejects.toMatchObject({
+      status: 422,
+      code: SCHEDULE_LOCKED_CODE,
+    });
+    await expect(startDivision(board.auth, board.divisionId)).rejects.toThrow(
+      SCHEDULE_LOCKED_MESSAGE,
+    );
+    // Not one round slotted, and the division did not go active. The sweep and
+    // the status move share a transaction, so a guard placed after the writes
+    // would still roll them back — what this pins is that the board a frozen
+    // organiser comes back to is the one they left.
+    expect(await scheduledCount(board.divisionId)).toBe(0);
+    expect(await divisionStatus(board.divisionId)).toBe("setup");
+
+    // UNFROZEN control: the sweep really was available to be refused.
+    await lock(board.auth, board.divisionId, false);
+    await startDivision(board.auth, board.divisionId);
+    expect(await scheduledCount(board.divisionId)).toBe(2);
+    expect(await divisionStatus(board.divisionId)).toBe("active");
+  }, 120_000);
+
+  it("frozen + an already-slotted board → STARTS, because the quick-start has nothing to write", async () => {
+    // `roundMinutes` is deliberately SET here, so the quick-start branch IS
+    // entered — every fixture already has a time, so the sweep would update no
+    // rows. This is the case that separates a guard on the WRITE from a guard
+    // on the BRANCH: move the refusal up to `if (status === "setup" &&
+    // roundMinutes)` and this test reds, along with the walkthrough step that
+    // starts a frozen division on purpose.
+    const board = await seedBoard(CLEAN, { roundMinutes: 60 });
+    expect(await scheduledCount(board.divisionId)).toBe(2);
+    await lock(board.auth, board.divisionId, true);
+
+    const out = await startDivision(board.auth, board.divisionId);
+    expect(out.started).toBe(true);
+    expect(await divisionStatus(board.divisionId)).toBe("active");
+    // The board is untouched and the freeze is still in force — starting must
+    // not quietly lift it, which would be the defect wearing a green test.
+    expect(await scheduledCount(board.divisionId)).toBe(2);
+    expect(await scheduleLocked(board.divisionId)).toBe(true);
   }, 120_000);
 });

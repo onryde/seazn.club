@@ -1,13 +1,13 @@
 // Integration tests for PROMPT-21 (Jul3/01): import plan → commit → re-plan
 // no-op, entitlement caps, clubs CRUD + display fallback. Real Postgres
 // required (RLS, triggers, hash chains); skipped without DATABASE_URL.
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { randomUUID } from "node:crypto";
 import ExcelJS from "exceljs";
 import { football } from "@seazn/engine/sports/football";
 import { sql } from "@/lib/db";
 import { PaymentRequiredError } from "@/lib/errors";
-import { invalidateOrgEntitlements } from "@/lib/entitlements";
+import { getLimit, invalidateOrgEntitlements } from "@/lib/entitlements";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { createCompetition } from "../competitions";
 import { createDivision } from "../divisions";
@@ -17,7 +17,9 @@ import { listClubs, participantRows } from "../clubs";
 import { setOrgPlan } from "@/lib/__tests__/_billing-group";
 const HAS_DB = !!process.env.DATABASE_URL;
 
-async function seedOrg(plan: "community" | "pro" = "pro"): Promise<{ auth: AuthCtx }> {
+async function seedOrg(
+  plan: "community" | "pro" = "pro",
+): Promise<{ auth: AuthCtx }> {
   const suffix = randomUUID().slice(0, 8);
   const [{ id: orgId }] = await sql<{ id: string }[]>`
     insert into organizations (name, slug) values (${"Imp " + suffix}, ${"imp-" + suffix})
@@ -111,8 +113,14 @@ describe.skipIf(!HAS_DB)("bulk import (Jul3/01)", () => {
 
     // committed rows all present, with club parentage
     const clubs = await listClubs(auth);
-    expect(clubs.map((c) => c.name).sort()).toEqual(["Acme SC", "Borough FC", "City Rovers"]);
-    const [counts] = await sql<{ teams: number; persons: number; members: number }[]>`
+    expect(clubs.map((c) => c.name).sort()).toEqual([
+      "Acme SC",
+      "Borough FC",
+      "City Rovers",
+    ]);
+    const [counts] = await sql<
+      { teams: number; persons: number; members: number }[]
+    >`
       select (select count(*)::int from teams where org_id = ${auth.orgId} and club_id is not null) as teams,
              (select count(*)::int from persons where org_id = ${auth.orgId}) as persons,
              (select count(*)::int from entrant_members em join entrants e on e.id = em.entrant_id
@@ -150,7 +158,9 @@ describe.skipIf(!HAS_DB)("bulk import (Jul3/01)", () => {
     expect(preview.plan.issues).toEqual([
       expect.objectContaining({ code: "BAD_POSITION", severity: "error" }),
     ]);
-    await expect(commitImport(auth, preview.importId, null)).rejects.toThrow(/BAD_POSITION/);
+    await expect(commitImport(auth, preview.importId, null)).rejects.toThrow(
+      /BAD_POSITION/,
+    );
 
     const fixed = bad.replace("striker", GK);
     const preview2 = await createImport(auth, csvUpload(fixed));
@@ -162,7 +172,10 @@ describe.skipIf(!HAS_DB)("bulk import (Jul3/01)", () => {
   it("unknown division stays an error through the API surface", async () => {
     const { auth } = await seedOrg();
     await seedDivision(auth);
-    const preview = await createImport(auth, csvUpload("Team,Division\nGhosts,not-a-division"));
+    const preview = await createImport(
+      auth,
+      csvUpload("Team,Division\nGhosts,not-a-division"),
+    );
     expect(preview.plan.issues).toEqual([
       expect.objectContaining({
         code: "DIVISION_NOT_FOUND",
@@ -176,25 +189,230 @@ describe.skipIf(!HAS_DB)("bulk import (Jul3/01)", () => {
     await seedDivision(auth);
     const rows = Array.from({ length: 51 }, (_, i) => `Team ${i}`);
     const csv = ["Team", ...rows].join("\n");
-    await expect(createImport(auth, csvUpload(csv))).rejects.toThrow(PaymentRequiredError);
+    await expect(createImport(auth, csvUpload(csv))).rejects.toThrow(
+      PaymentRequiredError,
+    );
     await expect(createImport(auth, csvUpload(csv))).rejects.toMatchObject({
       featureKey: "import.bulk",
     });
     // 50 rows fit (V319 raised import.bulk 20 → 50), but clubs stay Pro-only at commit
-    const under = await createImport(auth, csvUpload(["Team", ...rows.slice(0, 50)].join("\n")));
+    const under = await createImport(
+      auth,
+      csvUpload(["Team", ...rows.slice(0, 50)].join("\n")),
+    );
     expect(under.rowCount).toBe(50);
   });
 
-  it("Community commit with club columns succeeds under the clubs cap (hierarchy opened, V291)", async () => {
+  it("Community commit with club columns succeeds under the clubs cap (hierarchy opened, V292)", async () => {
     const { auth } = await seedOrg("community");
     await seedDivision(auth);
-    const preview = await createImport(auth, csvUpload("Club,Team,Division\nAcme SC,Acme U12,u12"));
-    // clubs.hierarchy is granted to community/event_pass (V291); the cap is the
+    const preview = await createImport(
+      auth,
+      csvUpload("Club,Team,Division\nAcme SC,Acme U12,u12"),
+    );
+    // clubs.hierarchy is granted to community/event_pass (V292); the cap is the
     // brake now, and 1 club/1 team is under the community 5/8 limits (V319).
     const result = await commitImport(auth, preview.importId, null);
     expect(result.stats.clubs).toBe(1);
     const clubs = await listClubs(auth);
     expect(clubs.map((c) => c.name)).toEqual(["Acme SC"]);
+  });
+
+  /**
+   * The cap sweep: which key refuses, across sizes, and in what ORDER.
+   *
+   * Every other cap test in this file sits on ONE boundary: one cap, one
+   * sample. A single sample cannot see a precedence bug — when two caps bind
+   * at once, only the ORDER of the gates decides which key the organiser is
+   * shown, and that order is load-bearing product behaviour (an organiser told
+   * "clubs" buys clubs; told "rows" they split the file).
+   *
+   * No cap VALUES appear in this comment on purpose. `imports.ts` carries a
+   * note recording that a hand-typed cap in a comment ("Community capped at 20
+   * rows/file") outlived the fact and was later quoted back as truth; V319 is
+   * the authority, and every number below is read from the catalog at run time.
+   *
+   * `commitImport` gates in this order:
+   *   the `assertWithinLimit(bulkCap, …)` gate, before anything is planned
+   *     -> the `clubs.hierarchy` gate
+   *     -> the `plannedClubs` gate
+   *     -> the `plannedTeams` gate
+   *
+   * These rows pin TWO of those orderings: bulk before clubs (F), and clubs
+   * before teams (E). `clubs.hierarchy` is named for POSITION only and is
+   * exercised by no row, because no plan denies it — every plan carries it
+   * true, so that gate is currently unreachable through the product and only
+   * an entitlement override could bind it.
+   *
+   * Caps are READ from the live catalog rather than typed, so a re-valuation
+   * moves these tests with it instead of leaving them asserting yesterday's
+   * numbers. Row A is the control: without a case that COMMITS, an
+   * all-refusing mutant satisfies every other row.
+   *
+   * One `it()` per row, so a red in one row cannot hide the other five.
+   */
+  describe("the cap sweep: which key refuses at each size, and which wins when two bind", () => {
+    let clubCap: number;
+    let teamCap: number;
+    let bulkCap: number;
+
+    beforeAll(async () => {
+      const { auth } = await seedOrg("community");
+      const clubs = await getLimit(auth.orgId, "clubs.max");
+      const teams = await getLimit(auth.orgId, "teams.max");
+      const bulk = await getLimit(auth.orgId, "import.bulk");
+      // Derived, not assumed: a null (unlimited) cap would make every row
+      // below vacuous, and the sweep would pass by refusing nothing.
+      expect(
+        clubs,
+        "community clubs.max is unlimited — the sweep cannot bind",
+      ).not.toBeNull();
+      expect(
+        teams,
+        "community teams.max is unlimited — the sweep cannot bind",
+      ).not.toBeNull();
+      expect(
+        bulk,
+        "community import.bulk is unlimited — the sweep cannot bind",
+      ).not.toBeNull();
+      clubCap = clubs!;
+      teamCap = teams!;
+      bulkCap = bulk!;
+    });
+
+    /** Seed `n` existing clubs so the NEXT import crosses `clubs.max`. */
+    const fillClubs = async (orgId: string, n: number) => {
+      for (let i = 0; i < n; i++) {
+        await sql`insert into clubs (org_id, name) values (${orgId}, ${`Fill C${i} ${randomUUID().slice(0, 6)}`})`;
+      }
+    };
+    const fillTeams = async (orgId: string, n: number) => {
+      for (let i = 0; i < n; i++) {
+        await sql`insert into teams (org_id, name) values (${orgId}, ${`Fill T${i} ${randomUUID().slice(0, 6)}`})`;
+      }
+    };
+    /** One club + one team per row, so club count == team count == row count. */
+    const clubCsv = (n: number, prefix: string) =>
+      [
+        "Club,Team",
+        ...Array.from(
+          { length: n },
+          (_, i) => `${prefix} C${i},${prefix} T${i}`,
+        ),
+      ].join("\n");
+
+    it("A. under every cap: it COMMITS (the control)", async () => {
+      const { auth: a } = await seedOrg("community");
+      await seedDivision(a);
+      const preview = await createImport(a, csvUpload(clubCsv(1, "A")));
+      const result = await commitImport(a, preview.importId, null);
+      expect(result.stats.clubs, "a file under every cap must commit").toBe(1);
+    });
+
+    it("B. rows over import.bulk: refused at CREATE, before a plan exists", async () => {
+      const { auth: b } = await seedOrg("community");
+      await seedDivision(b);
+      await expect(
+        createImport(b, csvUpload(clubCsv(bulkCap + 1, "B"))),
+        "a file over the row cap must be refused at upload",
+      ).rejects.toMatchObject({ featureKey: "import.bulk" });
+    });
+
+    it("C. clubs over clubs.max, rows fine: clubs.max at COMMIT", async () => {
+      const { auth: c } = await seedOrg("community");
+      await seedDivision(c);
+      await fillClubs(c.orgId, clubCap);
+      const preview = await createImport(c, csvUpload(clubCsv(1, "C")));
+      await expect(
+        commitImport(c, preview.importId, null),
+        "clubs alone over their cap must be refused for CLUBS",
+      ).rejects.toMatchObject({ featureKey: "clubs.max" });
+    });
+
+    // Clubs deliberately left well under their cap, so the ONLY thing this row
+    // can be refused for is teams — otherwise it would pass on C's answer.
+    it("D. teams over teams.max, clubs fine: teams.max at COMMIT", async () => {
+      const { auth: d } = await seedOrg("community");
+      await seedDivision(d);
+      await fillTeams(d.orgId, teamCap);
+      const preview = await createImport(d, csvUpload(clubCsv(1, "D")));
+      await expect(
+        commitImport(d, preview.importId, null),
+        "teams alone over their cap must be refused for TEAMS",
+      ).rejects.toMatchObject({ featureKey: "teams.max" });
+    });
+
+    // The order-differential case. Swap the `plannedClubs` and `plannedTeams`
+    // gates and this row reports teams.max while C and D both stay green —
+    // exactly the bug a one-sample-per-cap suite cannot see.
+    it("E. BOTH clubs and teams over: clubs.max wins, it is gated first", async () => {
+      const { auth: e } = await seedOrg("community");
+      await seedDivision(e);
+      await fillClubs(e.orgId, clubCap);
+      await fillTeams(e.orgId, teamCap);
+      const preview = await createImport(e, csvUpload(clubCsv(1, "E")));
+      await expect(
+        commitImport(e, preview.importId, null),
+        "with both caps breached the organiser must be told CLUBS — clubs.max is gated first",
+      ).rejects.toMatchObject({ featureKey: "clubs.max" });
+    });
+
+    // Reached only by planning under a bigger allowance and lapsing, since the
+    // row cap would otherwise refuse at upload. Pins that the row gate sits
+    // ahead of the club gate: the file is refused for its SIZE before anything
+    // is planned, so the organiser is told to split rather than to buy clubs.
+    it("F. rows AND clubs both over at commit: import.bulk wins", async () => {
+      const { auth: f } = await seedOrg("pro");
+      await seedDivision(f);
+      const preview = await createImport(
+        f,
+        csvUpload(clubCsv(bulkCap + 1, "F")),
+      );
+      await fillClubs(f.orgId, clubCap);
+      await setOrgPlan(f.orgId, "community");
+      await invalidateOrgEntitlements(f.orgId);
+      await expect(
+        commitImport(f, preview.importId, null),
+        "with rows and clubs both over, the refusal must name the row cap — it is gated first",
+      ).rejects.toMatchObject({ featureKey: "import.bulk" });
+    });
+  });
+
+  it("a plan made under a bigger allowance is re-gated on import.bulk at COMMIT", async () => {
+    // `imports` rows carry only planned/committed and have no expiry, so a plan
+    // built while the org could afford it stays committable indefinitely. The
+    // client cannot be the control here: a second tab, a bfcache restore, or a
+    // single request carrying the importId bypasses it entirely.
+    const { auth } = await seedOrg("pro");
+    await seedDivision(auth);
+    const rows = Array.from({ length: 51 }, (_, i) => `Team ${i}`);
+    const preview = await createImport(
+      auth,
+      csvUpload(["Team", ...rows].join("\n")),
+    );
+    // Accepted on Pro: `import.bulk` is dual-valued and Pro's row carries a null
+    // int_value, which `getLimit` resolves to null = unlimited.
+    expect(preview.rowCount).toBe(51);
+
+    // ...and then the subscription lapses, between plan and commit.
+    await setOrgPlan(auth.orgId, "community");
+    await invalidateOrgEntitlements(auth.orgId);
+
+    // `import.bulk`, NOT `teams.max`. That distinction is the whole test: 51
+    // team rows also breach community's teams.max of 8, so without the
+    // commit-time row gate this commit still fails — just later, for a
+    // different reason, after the plan has been built. Asserting the KEY pins
+    // that the file is refused for its SIZE, before anything is planned.
+    await expect(
+      commitImport(auth, preview.importId, null),
+    ).rejects.toMatchObject({
+      featureKey: "import.bulk",
+    });
+
+    // Refused before a single write.
+    const [{ n }] = await sql<{ n: number }[]>`
+      select count(*)::int as n from teams where org_id = ${auth.orgId}`;
+    expect(n).toBe(0);
   });
 
   it("Community import over clubs.max is rejected with featureKey clubs.max at commit", async () => {
@@ -208,7 +426,9 @@ describe.skipIf(!HAS_DB)("bulk import (Jul3/01)", () => {
     const preview = await createImport(auth, csvUpload("Club\nDelta SC"));
     expect(preview.plan.issues).toEqual([]);
     expect(preview.plan.stats.clubs).toBe(1);
-    await expect(commitImport(auth, preview.importId, null)).rejects.toMatchObject({
+    await expect(
+      commitImport(auth, preview.importId, null),
+    ).rejects.toMatchObject({
       featureKey: "clubs.max",
     });
     // rejected before any write — still exactly 5 clubs
@@ -229,7 +449,9 @@ describe.skipIf(!HAS_DB)("bulk import (Jul3/01)", () => {
     const preview = await createImport(auth, csvUpload("Team\nDelta United"));
     expect(preview.plan.issues).toEqual([]);
     expect(preview.plan.stats.teams).toBe(1);
-    await expect(commitImport(auth, preview.importId, null)).rejects.toMatchObject({
+    await expect(
+      commitImport(auth, preview.importId, null),
+    ).rejects.toMatchObject({
       featureKey: "teams.max",
     });
   });
@@ -240,12 +462,20 @@ describe.skipIf(!HAS_DB)("bulk import (Jul3/01)", () => {
     const workbook = new ExcelJS.Workbook();
     const sheet = workbook.addWorksheet("Roster");
     sheet.addRow(["Club", "Team", "Player", "DOB", "Number", "Division"]);
-    sheet.addRow(["Acme SC", "Acme U12", "Ada One", new Date(Date.UTC(2014, 0, 1)), 1, "u12"]);
+    sheet.addRow([
+      "Acme SC",
+      "Acme U12",
+      "Ada One",
+      new Date(Date.UTC(2014, 0, 1)),
+      1,
+      "u12",
+    ]);
     sheet.addRow(["Acme SC", "Acme U12", "Bo Two", "2014-01-02", 2, "u12"]);
     const buffer = Buffer.from(await workbook.xlsx.writeBuffer());
     const preview = await createImport(auth, {
       filename: "roster.xlsx",
-      contentType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      contentType:
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
       buffer,
     });
     expect(preview.plan.issues).toEqual([]);
@@ -302,11 +532,17 @@ describe.skipIf(!HAS_DB)("bulk import (Jul3/01)", () => {
   it("re-previews a stored import against current state", async () => {
     const { auth } = await seedOrg();
     await seedDivision(auth);
-    const preview = await createImport(auth, csvUpload("Team,Division\nGhosts,u12"));
+    const preview = await createImport(
+      auth,
+      csvUpload("Team,Division\nGhosts,u12"),
+    );
     expect(preview.plan.stats.teams).toBe(1);
     await commitImport(auth, preview.importId, null);
     // a fresh upload of the same content now diffs to nothing
-    const preview2 = await createImport(auth, csvUpload("Team,Division\nGhosts,u12"));
+    const preview2 = await createImport(
+      auth,
+      csvUpload("Team,Division\nGhosts,u12"),
+    );
     const re = await getImport(auth, preview2.importId);
     expect(re.plan.ops).toEqual([]);
   });

@@ -11,9 +11,18 @@
 // optional polish — it is how the unit/regression suite stays DB-free and
 // CI-safe (B01 brief).
 import { execFile } from "node:child_process";
+import { existsSync } from "node:fs";
+import { access } from "node:fs/promises";
 import { promisify } from "node:util";
 import postgres from "postgres";
 import * as grpc from "@grpc/grpc-js";
+// Plain `playwright`, NEVER `@playwright/test` — this script runs under
+// `node --experimental-strip-types` (matching scripts/smoke.ts), and
+// `@playwright/test` is a test-runner export that does not exist under
+// plain `playwright` (B03r brief §pre-flight, docs/superpowers/specs/
+// bench-product-value/bench-prompts/B03r-registration-layer.md:88).
+// `chromium.executablePath()` is synchronous and does not launch anything.
+import { chromium } from "playwright";
 
 const execFileAsync = promisify(execFile);
 
@@ -36,7 +45,19 @@ export type RefusalReason =
   | "own_port_unbound"
   | "sports_catalog_unsynced"
   | "app_health_unreachable"
-  | "app_health_not_ok";
+  | "app_health_not_ok"
+  // ---- B03r task 7: registration-layer additions ----
+  // Every reason below is escalated to a refusal ONLY when the resolved
+  // selection needs it (a `pay:true` division for the Stripe reasons, a
+  // `registration-ui` division for the Chromium one) — otherwise the exact
+  // same finding lands in `PreflightResult.warnings` instead. The one
+  // exception is `stripe_live_key_detected`, which is always a refusal
+  // (see `runPreflight`'s doc comment on that branch).
+  | "stripe_live_key_detected"
+  | "stripe_secret_key_missing_or_invalid"
+  | "stripe_connect_test_account_missing"
+  | "stripe_webhook_not_confirmed"
+  | "registration_ui_chromium_missing";
 
 export interface Refusal {
   reason: RefusalReason;
@@ -78,6 +99,47 @@ export interface AppHealthResult {
   detail: string;
 }
 
+/** The two registration-shaped facts pre-flight needs about ONE division
+ *  selected for this bench run — deliberately NOT the full `PackDivision` /
+ *  `PackRegistrationBlock` shape (`lib/pack-schema.ts`). A concurrent agent
+ *  is building the `--entry` resolver (`lib/register.ts`) that will produce
+ *  this list; this file never imports from it and never builds it — the
+ *  caller (`bench.ts` / `register.ts`, both out of this task's scope)
+ *  reduces its resolved run down to this shape before calling
+ *  `runPreflight` (B03r task 7 brief: "take the resolved division list as
+ *  a PARAMETER... that keeps you decoupled"). */
+export interface SelectedDivisionExposure {
+  /** `divisions[].entry` from the pack (default `"admin"`, `pack-schema.ts:464`). */
+  entry: "admin" | "registration-api" | "registration-ui";
+  /** true when ANY entry in this division's registration block
+   *  (`registration.byDivision[ref].entries[].pay`, `pack-schema.ts:1218`)
+   *  is `true` — i.e. this division needs a real Stripe charge. */
+  pay: boolean;
+}
+
+/** Raw Stripe-readiness facts. Never carries any part of a secret's VALUE —
+ *  only booleans derived from it (B03r brief: "Never do this" — no prefix,
+ *  suffix, or length beyond the fixed `sk_test_`/`sk_live_` discriminator).
+ *  `webhookListenerLive` is intentionally three-valued: `true`/`false` are
+ *  confirmed outcomes, `null` is the honest "could not be determined either
+ *  way" state the brief asks for instead of passing by default. */
+export interface StripeConfigResult {
+  testModeKeyPresent: boolean;
+  /** Present but shaped like a LIVE secret key — checked independently of
+   *  `testModeKeyPresent` so this can be reported as its own, more severe
+   *  finding rather than folded into "missing/invalid". */
+  liveKeyDetected: boolean;
+  connectTestAccountPresent: boolean;
+  webhookSecretPresent: boolean;
+  webhookListenerLive: boolean | null;
+  webhookListenerDetail: string;
+}
+
+export interface ChromiumInstalledResult {
+  ok: boolean;
+  detail: string;
+}
+
 /** One async probe per pre-flight fact. Real implementations do real I/O
  *  (see `createRealPreflightProbes`); tests inject fakes — see
  *  `lib/__tests__/env.test.ts`. */
@@ -87,11 +149,18 @@ export interface PreflightProbes {
   checkPlacementHealth(): Promise<PlacementHealthResult>;
   checkSportsCatalogSynced(): Promise<SportsCatalogResult>;
   checkAppHealth(base: string): Promise<AppHealthResult>;
+  checkStripeConfig(): Promise<StripeConfigResult>;
+  checkChromiumInstalled(): Promise<ChromiumInstalledResult>;
 }
 
 export interface PreflightResult {
   ok: boolean;
   refusals: Refusal[];
+  /** Same shape as `refusals`, for a finding that does not gate this run —
+   *  e.g. Stripe/Chromium missing when no selected division needs them.
+   *  Report-only, exactly like `placement`, but keyed by `RefusalReason` so
+   *  a warning and its escalated-to-refusal twin share one vocabulary. */
+  warnings: Refusal[];
   placement: PlacementHealthResult;
   base: string;
   port: number;
@@ -113,8 +182,21 @@ function resolvePort(url: URL): number {
  * without a parseable URL (there is no port to bind, no host to fetch), so
  * that alone short-circuits straight to a named refusal instead of a raw
  * `TypeError` escaping this function's own "never throws itself" contract.
+ *
+ * `selectedDivisions` (B03r task 7) is this run's RESOLVED selection,
+ * reduced to `SelectedDivisionExposure` by the caller — see that type's doc
+ * comment for why this file takes it as a plain parameter instead of
+ * resolving `--entry` itself. It defaults to `[]` so an existing caller
+ * (`bench.ts`, out of this task's scope) that has not yet been updated to
+ * pass it keeps compiling and keeps behaving like "nothing selected needs
+ * Stripe or Chromium" — i.e. every registration finding below only warns,
+ * never aborts, until that caller is updated to pass the real selection.
  */
-export async function runPreflight(base: string, probes: PreflightProbes): Promise<PreflightResult> {
+export async function runPreflight(
+  base: string,
+  probes: PreflightProbes,
+  selectedDivisions: SelectedDivisionExposure[] = [],
+): Promise<PreflightResult> {
   let url: URL;
   try {
     url = new URL(base);
@@ -127,6 +209,7 @@ export async function runPreflight(base: string, probes: PreflightProbes): Promi
           detail: `--base "${base}" is not a parseable URL: ${err instanceof Error ? err.message : String(err)}`,
         },
       ],
+      warnings: [],
       placement: await probes.checkPlacementHealth(),
       base,
       port: NaN,
@@ -158,19 +241,122 @@ export async function runPreflight(base: string, probes: PreflightProbes): Promi
     });
   }
 
-  const [db, ownPort, catalog, health, placement] = await Promise.all([
+  const [db, ownPort, catalog, health, placement, stripe, chromiumInstalled] = await Promise.all([
     probes.checkOwnDatabase(),
     probes.checkOwnPort(port),
     probes.checkSportsCatalogSynced(),
     probes.checkAppHealth(base),
     probes.checkPlacementHealth(),
+    probes.checkStripeConfig(),
+    probes.checkChromiumInstalled(),
   ]);
 
   for (const result of [db, ownPort, catalog, health]) {
     if (!result.ok && result.reason) refusals.push({ reason: result.reason, detail: result.detail });
   }
 
-  return { ok: refusals.length === 0, refusals, placement, base, port };
+  const warnings: Refusal[] = [];
+
+  // The escalation rule (design §6 / B03r-repins §2, quoting the brief
+  // verbatim): "Abort only if a SELECTED division has pay:true or
+  // entry:registration-ui. Otherwise warn." So every Stripe/Chromium probe
+  // runs unconditionally (same "every probe runs regardless" discipline as
+  // the checks above) but its finding is graded by what THIS run's resolved
+  // selection actually needs, never by "is Stripe configured" in general.
+  const needsStripe = selectedDivisions.some((d) => d.pay);
+  const needsChromium = selectedDivisions.some((d) => d.entry === "registration-ui");
+  const escalate = (needed: boolean, finding: Refusal) => (needed ? refusals : warnings).push(finding);
+
+  // A LIVE Stripe key is a hard failure ALWAYS, independent of `needsStripe`
+  // — the brief is explicit this one is "never a warning": the bench must
+  // never hold live Stripe credentials, needed for this run's selection or
+  // not. Checked before, and instead of, the plain "missing/invalid" finding
+  // below so the two stay distinguishable (a live key must not read as
+  // merely "absent").
+  if (stripe.liveKeyDetected) {
+    refusals.push({
+      reason: "stripe_live_key_detected",
+      detail:
+        "STRIPE_SECRET_KEY is shaped like a LIVE-mode key (sk_live_ prefix) — refusing outright " +
+        "regardless of this run's selection; the bench must never hold live Stripe credentials.",
+    });
+  } else if (!stripe.testModeKeyPresent) {
+    escalate(needsStripe, {
+      reason: "stripe_secret_key_missing_or_invalid",
+      detail: "STRIPE_SECRET_KEY is not set, or is not shaped like a test-mode key (sk_test_ prefix).",
+    });
+  }
+
+  if (!stripe.connectTestAccountPresent) {
+    escalate(needsStripe, {
+      reason: "stripe_connect_test_account_missing",
+      detail: "STRIPE_CONNECT_TEST_ACCOUNT is not set — needed for the destination-charge test fixture.",
+    });
+  }
+
+  if (!stripe.webhookSecretPresent || stripe.webhookListenerLive !== true) {
+    // Never passes by default on an indeterminate probe (brief: "say so
+    // honestly ... rather than passing by default") — only `=== true` counts
+    // as confirmed; `false` and `null` both land here, worded differently.
+    const detail = !stripe.webhookSecretPresent
+      ? "no webhook secret is configured — a paid entry's checkout.session.completed would have nowhere to verify against."
+      : stripe.webhookListenerLive === false
+        ? `webhook secret is present but no live \`stripe listen\` forwarder to /api/webhooks/stripe was confirmed: ${stripe.webhookListenerDetail}`
+        : `webhook secret is present but whether a \`stripe listen\` forwarder is live could not be determined: ${stripe.webhookListenerDetail}`;
+    escalate(needsStripe, { reason: "stripe_webhook_not_confirmed", detail });
+  }
+
+  if (!chromiumInstalled.ok) {
+    escalate(needsChromium, { reason: "registration_ui_chromium_missing", detail: chromiumInstalled.detail });
+  }
+
+  return { ok: refusals.length === 0, refusals, warnings, placement, base, port };
+}
+
+/**
+ * Probes whether a `stripe listen` forwarder to /api/webhooks/stripe is
+ * actually live (B03r brief item 3). There is no repo-wide convention for a
+ * `stripe listen` status file — the CLI does not write one on its own — so
+ * this checks, in order: an explicit `STRIPE_LISTEN_STATUS_FILE` (a file the
+ * runner that launched `stripe listen` may write itself); then `lsof` on the
+ * PID named by `STRIPE_LISTEN_PID`, per the brief. If NEITHER env var is set,
+ * this honestly returns `live: null` ("could not be determined either way")
+ * rather than defaulting to a pass — the brief's own instruction.
+ */
+async function probeStripeListenLiveness(): Promise<{ live: boolean | null; detail: string }> {
+  const statusFile = process.env.STRIPE_LISTEN_STATUS_FILE;
+  if (statusFile) {
+    try {
+      await access(statusFile);
+      return { live: true, detail: `STRIPE_LISTEN_STATUS_FILE "${statusFile}" exists.` };
+    } catch {
+      return { live: false, detail: `STRIPE_LISTEN_STATUS_FILE is set to "${statusFile}", but no file exists there.` };
+    }
+  }
+
+  const pidEnv = process.env.STRIPE_LISTEN_PID;
+  if (pidEnv) {
+    const pid = Number(pidEnv);
+    if (!Number.isFinite(pid) || pid <= 0) {
+      return { live: false, detail: `STRIPE_LISTEN_PID="${pidEnv}" is not a usable PID.` };
+    }
+    try {
+      await execFileAsync("lsof", ["-p", String(pid)]);
+      return { live: true, detail: `PID ${pid} (from STRIPE_LISTEN_PID) is a live process.` };
+    } catch (err) {
+      return {
+        live: false,
+        detail: `lsof -p ${pid} (STRIPE_LISTEN_PID) found no live process: ${err instanceof Error ? err.message : String(err)}`,
+      };
+    }
+  }
+
+  return {
+    live: null,
+    detail:
+      "neither STRIPE_LISTEN_STATUS_FILE nor STRIPE_LISTEN_PID is set — whether a `stripe listen` " +
+      "forwarder is live could not be determined either way.",
+  };
 }
 
 /* -------------------------------------------------------------------------
@@ -184,8 +370,13 @@ export async function runPreflight(base: string, probes: PreflightProbes): Promi
 export interface RealProbesHandle {
   probes: PreflightProbes;
   /** Closes the DB connection this factory opened. Call once, after the
-   *  pre-flight (and any other DB-touching check) is done with it. */
-  dispose(): Promise<void>;
+   *  pre-flight (and any other DB-touching check) is done with it.
+   *
+   *  A property with a function type, NOT a method shorthand: callers
+   *  destructure it (`const { probes, dispose } = ...`), and a method
+   *  separated from its object loses `this` — which `unbound-method` flags and
+   *  which would be a real bug the day this stops being a closure. */
+  dispose: () => Promise<void>;
 }
 
 /**
@@ -405,6 +596,49 @@ export function createRealPreflightProbes(): RealProbesHandle {
           reason: "app_health_unreachable",
           detail: `no server answering at ${base}/api/health: ${err instanceof Error ? err.message : String(err)}`,
         };
+      }
+    },
+
+    async checkStripeConfig(): Promise<StripeConfigResult> {
+      // Booleans derived from the secret ONLY via a fixed-prefix check —
+      // never logged or returned as a substring of the key itself (B03r
+      // brief: "Never do this" — no prefix beyond the sk_test_/sk_live_
+      // discriminator, no suffix, no length).
+      const secretKey = process.env.STRIPE_SECRET_KEY;
+      const testModeKeyPresent = !!secretKey && secretKey.startsWith("sk_test_");
+      const liveKeyDetected = !!secretKey && secretKey.startsWith("sk_live_");
+      const connectTestAccountPresent = !!process.env.STRIPE_CONNECT_TEST_ACCOUNT;
+      const webhookSecretPresent = !!process.env.STRIPE_WEBHOOK_SECRET;
+      const { live: webhookListenerLive, detail: webhookListenerDetail } = await probeStripeListenLiveness();
+      return {
+        testModeKeyPresent,
+        liveKeyDetected,
+        connectTestAccountPresent,
+        webhookSecretPresent,
+        webhookListenerLive,
+        webhookListenerDetail,
+      };
+    },
+
+    // Not `async` — `chromium.executablePath()` and `existsSync` are both
+    // synchronous, and an `async` function with no `await` inside is an
+    // eslint `require-await` error. Still satisfies `PreflightProbes`
+    // (`Promise<ChromiumInstalledResult>`) via the explicit `Promise.resolve`.
+    checkChromiumInstalled(): Promise<ChromiumInstalledResult> {
+      try {
+        const execPath = chromium.executablePath();
+        if (!existsSync(execPath)) {
+          return Promise.resolve({
+            ok: false,
+            detail: `chromium.executablePath() resolved to "${execPath}", but no file exists there — run \`npx playwright install chromium\`.`,
+          });
+        }
+        return Promise.resolve({ ok: true, detail: `Chromium found at ${execPath}.` });
+      } catch (err) {
+        return Promise.resolve({
+          ok: false,
+          detail: `could not resolve a Chromium executable via playwright: ${err instanceof Error ? err.message : String(err)}`,
+        });
       }
     },
   };

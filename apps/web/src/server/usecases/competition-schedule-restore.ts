@@ -1,5 +1,6 @@
 import { withTenant } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
+import { JOINT_UNDO_SUPERSEDED_CODE } from "@/lib/joint-undo";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { JOINT_APPLY_EVENT } from "./competition-schedule-ai";
 import { restoreCheckpoint } from "./history";
@@ -7,14 +8,36 @@ import { restoreCheckpoint } from "./history";
 /** Reported for every division the rewind did NOT attempt because a NEWER joint
  *  apply landed on the competition part-way through (the anchor check below).
  *  Phrased as what the organiser needs to know: nothing changed here, and the
- *  anchors they are holding no longer describe the board. */
+ *  anchors they are holding no longer describe the board.
+ *
+ *  ENGLISH PROSE, and it rides in `failed[].reason` — which the AI console
+ *  interpolates into a translated card. It therefore travels with
+ *  `JOINT_UNDO_SUPERSEDED_CODE` so a client can say it in the reader's own
+ *  language; this sentence is what a client that does not recognise the code
+ *  falls back to. Same treatment the freeze refusal already gets. */
 const SUPERSEDED_REASON =
   "a newer joint apply landed on this competition while the undo was running — " +
   "nothing was changed here, and this undo's save points no longer match the board";
 
 export interface CompetitionRestoreOut {
   restored: { division_id: string; watermark: number; steps: number }[];
-  failed: { division_id: string; reason: string }[];
+  /** `reason` is the refusal's own sentence; `code` is `HttpError.code` where
+   *  the refusal carried one — the same machine-readable code the /api/v1
+   *  envelope would have carried had this refusal escaped as the response's
+   *  status, rather than being caught per division and reported here.
+   *
+   *  The code is what lets a client SAY the refusal in the reader's language.
+   *  Without it the console had only the sentence, and interpolating
+   *  `SCHEDULE_LOCKED_MESSAGE` — English prose — into a dictionary placeholder
+   *  put a raw English clause mid-sentence inside a fully translated card, on
+   *  the ordinary first request. Matching the sentence instead would be the
+   *  same defect wearing a different hat: it breaks the moment the sentence is
+   *  reworded, which is exactly what `@/lib/schedule-lock` exists to make cheap.
+   *
+   *  Optional because not every refusal has one: a bare `HttpError(404,
+   *  "checkpoint not found")` carries no code, and neither does a thrown
+   *  `Error`. A client that does not recognise the code shows the sentence. */
+  failed: { division_id: string; reason: string; code?: string }[];
   ok: boolean;
 }
 
@@ -165,7 +188,15 @@ export async function restoreCompetitionSchedule(
       if (current?.id !== anchor.id) superseded = true;
     }
     if (superseded) {
-      failed.push({ division_id: c.division_id, reason: SUPERSEDED_REASON });
+      // The code, not just the sentence: this is the ONE refusal on this
+      // envelope that never passes through an `HttpError`, so the spread in
+      // the catch below cannot supply it. Without it the console has only
+      // English prose to render, and only English prose to group on.
+      failed.push({
+        division_id: c.division_id,
+        reason: SUPERSEDED_REASON,
+        code: JOINT_UNDO_SUPERSEDED_CODE,
+      });
       continue;
     }
     try {
@@ -182,6 +213,10 @@ export async function restoreCompetitionSchedule(
       failed.push({
         division_id: c.division_id,
         reason: err instanceof Error ? err.message : "restore failed",
+        // Spread, not `code: …` with an undefined value: the wire shape stays
+        // exactly as it was for every refusal that has no code, so a caller
+        // reading `failed` sees a new key only where there is one to read.
+        ...(err instanceof HttpError && err.code ? { code: err.code } : {}),
       });
     }
   }

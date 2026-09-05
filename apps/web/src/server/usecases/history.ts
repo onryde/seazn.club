@@ -24,11 +24,13 @@ import { withTenant } from "@/lib/db";
 // PaymentRequiredError survives here for one case only: a quota that resolves
 // below 1, where there is no window to roll (see `createCheckpoint`).
 import { HttpError, PaymentRequiredError } from "@/lib/errors";
+import { SCHEDULE_LOCKED_CODE, SCHEDULE_LOCKED_MESSAGE } from "@/lib/schedule-lock";
 import { getLimit, requireFeature } from "@/lib/entitlements";
 import { log } from "@/server/logger";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { CourtId, VenueId } from "@/server/api-v1/schemas";
 import { generateStageFixtures } from "./stages";
+import { divisionLockState } from "./schedule";
 
 type Tx = postgres.TransactionSql;
 
@@ -250,6 +252,43 @@ async function step(
       throw new EngineError("SEQ_CONFLICT", "division changed since you loaded it", {
         actualSeq: meta.seq,
       });
+    }
+    // A freeze binds the REWIND as well as every forward edit, and
+    // `restoreCheckpoint` is a LOOP OF THIS FUNCTION — so a freeze that stopped
+    // the restore left the primitive it is built out of live, on two buttons a
+    // few hundred pixels above the Restore it had just disabled. Same blast
+    // radius, one layer down.
+    //
+    // Guarding it strands nobody, which is the objection this was exempted for.
+    // `divisions.schedule_locked` has exactly ONE writer — `setDivisionLocks`,
+    // which appends no ledger event — so there is no replay of the division
+    // freeze and no rewind could ever have handed it back. The `schedule_locked`
+    // undo DOES replay is `fixtures.schedule_locked`, the per-fixture pin: a
+    // different column on a different table with the same name, and the whole
+    // of the original exemption's reasoning.
+    //
+    // WHICH OTHER PATHS REFUSE: do not read a list here, and do not trust a
+    // count — the sentence that used to sit in this comment named four
+    // siblings, called the enumeration finished, and was false at three sites
+    // (`clearPoolEntrants` and `deleteCheckpoint` below, `shiftDivisionSchedule`
+    // in schedule-plus.ts) on the day it was written. The enumeration is now
+    // the IMPORT GRAPH of `@/lib/schedule-lock`: every board-write refusal
+    // throws `SCHEDULE_LOCKED_MESSAGE` with `SCHEDULE_LOCKED_CODE` at 422, so
+    // `grep -rn SCHEDULE_LOCKED_MESSAGE apps/web/src` is the live answer and a
+    // freeze refusal that does NOT import the constant is the bug. (The joint
+    // apply, competition-schedule-apply.ts, shares the CODE but formats its own
+    // sentence through `scheduleLockedMessageFor` because it must name which
+    // division of a competition stopped the run. The AI-plan gates answer 409
+    // with the same code.)
+    //
+    // AFTER the existence check in `divisionMeta` (a missing division still
+    // 404s) and after the optimistic token, matching `applySchedule`, which
+    // runs `assertFreshSeq` ahead of its own freeze check. BEFORE the ledger
+    // read, so a frozen division refuses without engine work and without a
+    // chance of appending.
+    const lockState = await divisionLockState(tx, divisionId);
+    if (lockState.frozen) {
+      throw new HttpError(422, SCHEDULE_LOCKED_MESSAGE, SCHEDULE_LOCKED_CODE);
     }
     const ledger = await loadLedger(tx, divisionId);
     const decided = await decidedFixtureIds(tx, divisionId);
@@ -578,11 +617,31 @@ export async function deleteCheckpoint(
   await withTenant(auth.orgId, async (tx) => {
     // Scoped by division as well as id, so a checkpoint id belonging to another
     // division cannot be deleted by guessing it.
+    //
+    // The lookup used to BE the delete (`delete … returning id`, 404 on no
+    // row). It is split in two now so the freeze guard has somewhere to stand
+    // that keeps 404 ahead of 422: a checkpoint that does not exist must still
+    // answer "checkpoint not found" on a frozen division, which a guard placed
+    // before a combined delete-and-check could not do. Both halves run in the
+    // same transaction, so nothing can delete the row between them.
     const [row] = await tx<{ id: string }[]>`
-      delete from division_checkpoints
-      where id = ${checkpointId} and division_id = ${divisionId}
-      returning id`;
+      select id from division_checkpoints
+      where id = ${checkpointId} and division_id = ${divisionId}`;
     if (!row) throw new HttpError(404, "checkpoint not found");
+    // Deleting a save point is destroying a REWIND, which is precisely what the
+    // freeze exists to protect — and it is irreversible, unlike every other
+    // refusal in this file. The panel had already reached this conclusion for
+    // the safer half of the same row: Restore got `disabled={busy ||
+    // scheduleLocked}` while Delete beside it kept `disabled={busy}`, so a
+    // frozen division's only save point could be destroyed from a console that
+    // had visibly greyed out the button that would merely have USED it.
+    const lockState = await divisionLockState(tx, divisionId);
+    if (lockState.frozen) {
+      throw new HttpError(422, SCHEDULE_LOCKED_MESSAGE, SCHEDULE_LOCKED_CODE);
+    }
+    await tx`
+      delete from division_checkpoints
+      where id = ${checkpointId} and division_id = ${divisionId}`;
   });
 }
 
@@ -600,6 +659,34 @@ export async function restoreCheckpoint(
       select seq from division_checkpoints
       where id = ${checkpointId} and division_id = ${divisionId}`;
     if (!cp) throw new HttpError(404, "checkpoint not found");
+    // A freeze has to stop the REWIND as well as the clear. Restore is the
+    // wider of the two: `clearScheduleScoped` empties unlocked slots, this
+    // rewrites every fixture's time and court back to the save point — and the
+    // two controls sit in the same console a few hundred pixels apart, so a
+    // freeze that only bound one of them refused the smaller edit and allowed
+    // the larger.
+    //
+    // Same 422, same code, same sentence as every other board-write refusal:
+    // all of them now throw `SCHEDULE_LOCKED_MESSAGE`/`SCHEDULE_LOCKED_CODE`
+    // out of `@/lib/schedule-lock`, so a reword is one edit and the set of
+    // refusing paths is that constant's import graph rather than a list typed
+    // into a comment. See `step` above for why a typed list is not kept here.
+    //
+    // `step` (undo/redo) now carries the same guard, and this one is still
+    // load-bearing rather than redundant: a restore whose watermark has already
+    // reached the checkpoint short-circuits to `{ steps: 0 }` in the loop below
+    // WITHOUT ever calling undo, so only this guard can refuse that call. The
+    // two are pinned by separate cases in history.test.ts for exactly that
+    // reason. It also has to be ahead of the loop regardless: inside it, the
+    // first undo would already have landed.
+    //
+    // After the checkpoint lookup, so a checkpoint that does not exist (or
+    // belongs to another division) still answers 404 rather than 422 — the
+    // ordering `clearScheduleScoped` uses for its own existence check.
+    const lockState = await divisionLockState(tx, divisionId);
+    if (lockState.frozen) {
+      throw new HttpError(422, SCHEDULE_LOCKED_MESSAGE, SCHEDULE_LOCKED_CODE);
+    }
     return Number(cp.seq);
   });
   let steps = 0;
@@ -665,6 +752,26 @@ export async function clearScheduleScoped(
     await tx`select pg_advisory_xact_lock(hashtext(${"division:" + divisionId}))`;
     const [division] = await tx`select 1 from divisions where id = ${divisionId}`;
     if (!division) throw new HttpError(404, "division not found");
+    // Clear is the control whose whole point is that it is destructive, so a
+    // frozen board refusing it is the least surprising guard in the file.
+    //
+    // Same 422, code and sentence as every other board-write refusal — see
+    // `step` above for why the list of sibling sites is NOT restated here (it
+    // was restated three times in this file, and every copy was wrong). One
+    // note that IS worth keeping because it is a trap rather than a list:
+    // `moveFixture` (schedule.ts) refuses unconditionally, ahead of its own
+    // `movesTimetable` test, so a freeze refuses every patch and not just a
+    // reslot — while `patchFixture` (fixtures.ts) is a DIFFERENT function that
+    // carries no freeze guard at all.
+    //
+    // The AI-plan refusals are the same code at a different status: 409, not
+    // 422, and `schedule-ai.ts` reads `divisions.schedule_locked` directly
+    // rather than through `divisionLockState` (its `divisionLockState` call
+    // destructures `scopes` only and never consults `frozen`).
+    const lockState = await divisionLockState(tx, divisionId);
+    if (lockState.frozen) {
+      throw new HttpError(422, SCHEDULE_LOCKED_MESSAGE, SCHEDULE_LOCKED_CODE);
+    }
     const fixtures = await clearableFixtures(tx, divisionId);
     const { event, cleared, skipped } = engineClearSchedule(fixtures, input.scope);
     if (cleared.length === 0) {
@@ -692,6 +799,19 @@ export async function clearPoolEntrants(
     if (!pool) throw new HttpError(404, "pool not found");
     const divisionId = pool.division_id;
     await tx`select pg_advisory_xact_lock(hashtext(${"division:" + divisionId}))`;
+    // Removing a pool's entrants deletes that pool's fixtures — a board edit
+    // as destructive as `clearScheduleScoped` a few lines up, which a freeze
+    // has always refused. This one never did: it was the widest hole in the
+    // freeze, reachable live from POST /api/v1/pools/{id}/clear-entrants.
+    //
+    // AFTER the pool lookup, so a pool that does not exist (or belongs to
+    // another org) still answers 404 rather than 422 — the ordering every
+    // sibling in this file uses. BEFORE the fixture read and the engine call,
+    // so a frozen division refuses without doing the work.
+    const lockState = await divisionLockState(tx, divisionId);
+    if (lockState.frozen) {
+      throw new HttpError(422, SCHEDULE_LOCKED_MESSAGE, SCHEDULE_LOCKED_CODE);
+    }
     const rows = await tx<{
       id: string; stage_id: string; pool_id: string | null; round_no: number | null;
       seq_in_round: number | null; home_entrant_id: string | null; away_entrant_id: string | null;

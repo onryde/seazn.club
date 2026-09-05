@@ -384,6 +384,28 @@ export const PackOrg = z.strictObject({
    *  silently shifts by hours. A `.default("UTC")` here would have been that
    *  assumption wearing the comment that forbids it (review round 1, I3). */
   timezone: z.string().min(1).max(60),
+  /** ISO-4217, lower-case — matches what `organizations.currency` actually
+   *  stores: `db/migration/deltas/V365__org_currency.sql:70-71` adds it as
+   *  `text not null default 'gbp'` with an allowlist CHECK
+   *  (`usd|eur|gbp|inr|aud`, = `SUPPORTED_CURRENCIES`,
+   *  `apps/web/src/lib/currency.ts:6`). Lives on the ORG, not the division —
+   *  see `PackRegistrationBlock`'s doc comment for why (V365, "RS001b": one
+   *  Stripe checkout session per cart, one currency per session).
+   *
+   *  OPTIONAL, deliberately with NO `.default()` — the same reasoning as
+   *  `timezone` above, whose own comment calls a hidden default "an
+   *  assumption wearing the comment that forbids it": the DB column defaults
+   *  to 'gbp' for orgs that never set one, but a pack records a REAL
+   *  tournament's real org, and silently assuming every unstated org is
+   *  British is exactly that wrong-assumption shape. Required only where it
+   *  actually matters — any division pricing a fee — and that conditional
+   *  requirement is a stage-0 funnel rule (`validate-pack.ts`,
+   *  `registration.currency_required`), not a shape rule, the same split
+   *  `dob`/`gender` use above `PackPerson`. */
+  currency: z
+    .string()
+    .regex(/^[a-z]{3}$/, "currency is a lower-case ISO-4217 code, matching organizations.currency")
+    .optional(),
 });
 export type PackOrg = z.infer<typeof PackOrg>;
 
@@ -504,8 +526,22 @@ export const PackPerson = z.strictObject({
   // owns (design §4's five checks), not a shape rule, so both stay optional
   // here. Declared now because PackSchema freezes at the end of B06 and an
   // additive change after that is an owner escalation.
+  //
+  // Gap 2 (B03r-repins-2026-09-03.md, owner ruling 2026-09-04, closed ahead
+  // of the B06 freeze): `"x"` added to the union. The product's
+  // `categoryEligibilityIssues` (apps/web/src/lib/registration-rules.ts
+  // ~:177-178) reads "`x` never blocks: a person whose gender is `x` is
+  // eligible for every category (owner ruling, RS002)" — a null gender is
+  // still `MISSING_GENDER`, but a declared `"x"` is never a
+  // `CATEGORY_MISMATCH`. `mixedCompositionTally` (same file, ~:357) treats
+  // `x`/null identically: neither counts toward either side of a `mixed`
+  // roster's m/f tally. Without this member a pack could not express a
+  // non-binary person at all, and therefore could not represent the one
+  // case those predicates treat specially — see `validate-pack.ts`'s
+  // `categoryViolation`/`mixedCompositionViolation`, the stage-0 mirrors
+  // that now honour it.
   dob: z.iso.date().optional(),
-  gender: z.enum(["m", "f"]).optional(),
+  gender: z.enum(["m", "f", "x"]).optional(),
 });
 export type PackPerson = z.infer<typeof PackPerson>;
 
@@ -1196,6 +1232,7 @@ export const PackRegistrationEntry = z.strictObject({
   pay: z.boolean().default(false),
   expect: z.enum(["entrant", "rejected_eligibility", "waitlisted", "rejected_manual"]),
 });
+export type PackRegistrationEntry = z.infer<typeof PackRegistrationEntry>;
 
 export const PackRegistrationJoin = z.strictObject({
   /** `extKey` of the entry being joined. */
@@ -1210,13 +1247,66 @@ export const PackRegistrationOrganiserAction = z.strictObject({
   target: z.string().min(1).max(200),
 });
 
+/** NO `currency` field here — moved to `PackOrg.currency` (see its doc
+ *  comment). Design §4's sketch
+ *  (`designs/2026-08-27-bench-customer-journey-design.md`) lists
+ *  `divisions[].registration.currency: string` per division; that line is
+ *  now STALE and needs the same correction, because
+ *  `db/migration/deltas/V365__org_currency.sql:70-71` DROPPED
+ *  `registration_settings.currency` outright — the redesign mints one
+ *  Stripe checkout session per CART, a session has ONE currency, and a cart
+ *  can span divisions, so currency became a single ORG-level fact
+ *  (V365 header, "RS001b"). A pack field that maps onto a column the
+ *  product no longer has is exactly the "field that later reads as a real
+ *  capability" failure class this repo keeps shipping — corrected here
+ *  ahead of the B06 freeze rather than left for a later session to
+ *  discover the hard way. */
 export const PackRegistrationBlock = z.strictObject({
   category: z.enum(["open", "mens", "womens", "mixed"]),
   ageMin: z.number().int().min(0).max(120).optional(),
   ageMax: z.number().int().min(0).max(120).optional(),
+  /** Gap 1 (B03r-repins-2026-09-03.md, owner ruling 2026-09-04, closed
+   *  ahead of the B06 freeze): the product evaluates an age band at
+   *  `age_cutoff_month`/`age_cutoff_day` of the season-start year, NOT
+   *  always 1 January — `divisions.age_cutoff_month`/`age_cutoff_day`
+   *  (V364/V380), `ageBandEligibilityIssues`
+   *  (apps/web/src/lib/registration-rules.ts:252-326). Both independently
+   *  optional and independently defaultable to 1, exactly like the product
+   *  (`cutoffMonth ?? 1; cutoffDay ?? 1`, registration-rules.ts:271-272) —
+   *  a pack that never sets either keeps meaning what it always meant.
+   *  Range-checked only (1-12 / 1-31): the DB CHECK constraint itself does
+   *  not cross-check day-per-month either (B03r-repins-2026-09-03.md FP7),
+   *  so this matches the product's own laxness at the schema layer — the
+   *  stage-0 mirror (`validate-pack.ts`'s `ageBandViolation`) is where an
+   *  impossible combination is handled, the same split the product uses
+   *  (`isValidCutoffDay` is a read-side backstop, not a parse-time
+   *  rejection). */
+  ageCutoffMonth: z.number().int().min(1).max(12).optional(),
+  ageCutoffDay: z.number().int().min(1).max(31).optional(),
   entrantKind: PackEntrantKind,
   feeCents: z.number().int().nonnegative(),
-  currency: z.string().length(3),
+  /** How the division COLLECTS its fee — `registration_settings.payment_method`
+   *  (`RegistrationPaymentMethod`, api-v1/schemas.ts:2292). Defaulted to
+   *  "offline" to match the product's own PUT default
+   *  (schemas.ts:2334), so every pack written before this field existed keeps
+   *  meaning exactly what it meant.
+   *
+   *  This is not cosmetic and it is not inferrable. `resumeRegistrationCheckout`
+   *  refuses to mint a Checkout session unless the division's method is
+   *  "stripe" (usecases/registrations.ts:4365), so a pack that declares
+   *  `feeCents > 0` and `pay: true` but leaves this at "offline" configures a
+   *  division that takes money by bank transfer and then asks Stripe to charge
+   *  a card for it. Before this field existed the bench had no way to say
+   *  "stripe" at all — the driver's PUT omitted the key, the product defaulted
+   *  it to "offline", and `payViaCheckout` was therefore unreachable from any
+   *  pack: written, typed, unit-green, and never once executed. Stage-0 rule 7
+   *  (`validate-pack.ts`) is what keeps it from going quiet again.
+   *
+   *  Deliberately NOT derived from `feeCents > 0`: a paid division collecting
+   *  offline is a real, shipped product configuration (`payment_instructions`
+   *  exists for exactly that), so inferring the method would make that case
+   *  unrepresentable. The pack says which one it means. */
+  paymentMethod: z.enum(["offline", "stripe"]).default("offline"),
   approval: z.enum(["auto", "manual"]),
   capacity: z.number().int().positive().optional(),
   entries: z.array(PackRegistrationEntry).default([]),

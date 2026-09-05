@@ -1,16 +1,40 @@
 "use client";
 
 // Platform-wide knobs (spec §5). One card per setting; today that's the
-// entry-fee default. Writes /api/admin/settings, superadmin-only server-side.
+// entry-fee default. Writes /api/admin/settings, superadmin-only server-side —
+// and `canWrite` is the form expressing that same split, because the page is
+// only gated on requireStaff() and a support user handed a live Save can only
+// ever collect a 401.
 import { useState } from "react";
 
-export function AdminPlatformSettings({ initialFeePercent }: { initialFeePercent: number }) {
+export function AdminPlatformSettings({
+  initialFeePercent,
+  canWrite,
+}: {
+  initialFeePercent: number;
+  canWrite: boolean;
+}) {
   const [fee, setFee] = useState(String(initialFeePercent));
   const [busy, setBusy] = useState(false);
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const parsed = Number(fee);
-  const valid = Number.isFinite(parsed) && parsed >= 0 && parsed <= 100;
+  const trimmed = fee.trim();
+  const parsed = Number(trimmed);
+  // `Number("")` is 0 — and so is `Number("   ")`. Without the emptiness clause
+  // an empty box reads as a perfectly valid 0%: the button stays live, and one
+  // click zeroes the platform's entire cut on entry fees. The route cannot
+  // catch it (0 IS a legal fee, `z.number().min(0)`), so the form is the only
+  // place that can tell "the admin meant zero" from "the admin cleared the box".
+  // A `type="number"` input also reports "" for unparseable input, so this same
+  // clause is what stops a typo'd "abc" from being saved as 0.
+  // Split from `valid`, not folded into it, because the note beside the button
+  // has to name the ACTUAL reason the Save is dead. An empty box is not an
+  // out-of-range value, and telling an admin `0–100 only` over an empty field
+  // points them at a bound they have not crossed. A `type="number"` input also
+  // reports "" for unparseable input, so a typo'd "abc" lands here too — "the
+  // field has no number in it" is the honest reading of both.
+  const empty = trimmed === "";
+  const valid = !empty && Number.isFinite(parsed) && parsed >= 0 && parsed <= 100;
 
   async function save() {
     setBusy(true);
@@ -56,12 +80,13 @@ export function AdminPlatformSettings({ initialFeePercent }: { initialFeePercent
             setSaved(false);
           }}
           aria-label="Platform fee percent"
-          className="w-24 rounded bg-slate-900 border border-slate-700 px-2 py-1.5 text-sm text-white"
+          disabled={!canWrite}
+          className="w-24 rounded bg-slate-900 border border-slate-700 px-2 py-1.5 text-sm text-white disabled:opacity-50"
         />
         <span className="text-sm text-slate-400">%</span>
         <button
           type="button"
-          disabled={busy || !valid}
+          disabled={!canWrite || busy || !valid}
           onClick={save}
           className="rounded bg-purple-700 px-3 py-1.5 text-sm font-medium text-white hover:bg-purple-600 disabled:opacity-50"
         >
@@ -69,7 +94,12 @@ export function AdminPlatformSettings({ initialFeePercent }: { initialFeePercent
         </button>
         {saved && <span className="text-xs text-emerald-400">Saved.</span>}
         {error && <span className="text-xs text-red-400">{error}</span>}
-        {!valid && <span className="text-xs text-amber-400">0–100 only</span>}
+        {!valid && (
+          <span className="text-xs text-amber-400">
+            {empty ? "Enter a percentage" : "0–100 only"}
+          </span>
+        )}
+        {!canWrite && <span className="text-xs text-slate-400">Superadmin only.</span>}
       </div>
     </div>
   );

@@ -152,7 +152,13 @@ export default async function CompetitionSchedulePage({
     ]),
   );
 
-  const frozen = competition.frozen ?? false;
+  // `billingFrozen`, never `frozen`: this repo has THREE unrelated freezes and
+  // two of them meet on this page. This one is the org's BILLING freeze
+  // (`assertCompetitionNotFrozen`, competitions.ts:320) — an over-quota org is
+  // read-only. It is NOT `divisions.schedule_locked`, the schedule freeze that
+  // stops a board being edited, which is passed separately as `scheduleLocked`.
+  // Gating a schedule control on this one silently never fires.
+  const billingFrozen = competition.frozen ?? false;
 
   return (
     <>
@@ -209,9 +215,9 @@ export default async function CompetitionSchedulePage({
             tz: settings.tz,
             orgTz,
           }}
-          canEdit={canEdit && !frozen && boardEditable}
+          canEdit={canEdit && !billingFrozen && boardEditable}
           constraintsAllowed={constraints}
-          canManage={canEdit && !frozen}
+          canManage={canEdit && !billingFrozen}
           // P9 review wave 3, finding #4.
           venues={boardVenues}
           aiAllowed={aiAllowed}

@@ -56,11 +56,16 @@ import { runJointPlan, runJointPreview } from "./ai-joint-run";
 import {
   applyJointPlan,
   undoJointApply,
+  type JointUndoFailure,
   type JointApplyDivision,
   type JointApplyOutcome,
   type JointUndoRefusal,
 } from "./ai-joint-apply";
 import { blockingConflictKey, type AiConsoleFixture } from "./ai-diff";
+// A leaf with ZERO imports, so a client component may hold it: the CODE is the
+// contract between the refusal and this card, and the sentence is not.
+import { JOINT_UNDO_SUPERSEDED_CODE } from "@/lib/joint-undo";
+import { SCHEDULE_LOCKED_CODE } from "@/lib/schedule-lock";
 import { AiReviewPanel } from "./ai-review-panel";
 import { buildReviewRows } from "./ai-review";
 import { formatConflictDetail } from "./conflict-detail-format";
@@ -524,10 +529,13 @@ export function JointReviewStep({
   outcome: JointApplyOutcome | null;
   undoing: boolean;
   undone: "no" | "full" | "partial";
-  /** Division ids a partial undo could not revert — they are still carrying the
+  /** Divisions a partial undo could not revert — they are still carrying the
    *  AI board, and their anchors are still valid, so they are both what the
-   *  copy must name and what the retry sends. */
-  undoFailed: string[];
+   *  copy must name and what the retry sends. Each carries the SERVER's own
+   *  reason: a frozen division answers "unlock it to edit", which is the only
+   *  half of that refusal an organiser can act on, and it used to be dropped
+   *  between the endpoint and this prop. */
+  undoFailed: JointUndoFailure[];
   /** An undo that never RAN, as opposed to one that ran and left divisions
    *  behind. Nothing was written either way, so the applied confirmation still
    *  stands — but only `retry` is worth pressing the button for, and the other
@@ -583,6 +591,56 @@ export function JointReviewStep({
     // anchors stay valid, so the first remedy offered is another attempt at
     // exactly those divisions, not a trip to each division's own page.
     if (undone === "partial") {
+      // The server answers PER DIVISION, so the copy does too. Divisions that
+      // share a reason share a line — an organiser reading the same sentence
+      // three times learns nothing the first did not tell them — but distinct
+      // reasons stay distinct: collapsing "the division schedule is locked"
+      // and "checkpoint not found" into one banner would send them to unfreeze
+      // a division that is not frozen and hide the one that is.
+      //
+      // First-appearance order, which is the server's own (it sorts the
+      // divisions it walks), so the list does not reshuffle between attempts.
+      // An EMPTY reason is dropped rather than printed blank: the catch branch
+      // in `undoJointApply` reports every division with no reason at all,
+      // because the call failed as a whole and a per-division reason there
+      // would be a guess.
+      //
+      // A refusal this client RECOGNISES is said in the reader's own language.
+      // The server's `reason` is English prose — `SCHEDULE_LOCKED_MESSAGE` and
+      // its siblings — so painting it into `{reason}` put a raw English clause
+      // mid-sentence inside a fully translated card, on the FIRST request. The
+      // branch is on the CODE, never on the sentence: matching English text to
+      // decide how to render it is the same defect wearing a different hat, and
+      // it breaks the moment the sentence is reworded (which is precisely what
+      // `@/lib/schedule-lock` exists to make a one-line edit).
+      //
+      // Everything else keeps the server's own message. A refusal nobody
+      // anticipated is the one an organiser most needs to be able to quote, and
+      // replacing it with a generic "something went wrong" would trade an
+      // untranslated known refusal for an unreportable unknown failure.
+      const named = (id: string): string => nameOf.get(id) ?? id;
+      // One branch per refusal this card can RECOGNISE, keyed on the code.
+      // `JOINT_UNDO_SUPERSEDED` is the second: the usecase's own English
+      // sentence for a rewind a newer apply overtook, which landed in
+      // `{reason}` exactly as the freeze sentence used to.
+      const localReason = (f: JointUndoFailure): string => {
+        if (f.code === SCHEDULE_LOCKED_CODE) return msg("board.ai.joint.reasonLocked");
+        if (f.code === JOINT_UNDO_SUPERSEDED_CODE) return msg("board.ai.joint.reasonSuperseded");
+        return f.reason;
+      };
+      // Grouped on the CODE where there is one, so two divisions frozen for the
+      // same reason stay ONE line even if the server worded their two messages
+      // differently — the sentence they are given is identical either way.
+      const groupKey = (f: JointUndoFailure): string => f.code || f.reason;
+      const grouped: { key: string; reason: string; divisions: string[] }[] = [];
+      for (const f of undoFailed) {
+        const reason = localReason(f);
+        if (!reason) continue;
+        const key = groupKey(f);
+        const row = grouped.find((g) => g.key === key);
+        if (row) row.divisions.push(named(f.divisionId));
+        else grouped.push({ key, reason, divisions: [named(f.divisionId)] });
+      }
       return (
         <div className="space-y-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2.5">
           <p className="flex items-center gap-1.5 text-sm font-semibold text-amber-900">
@@ -591,9 +649,24 @@ export function JointReviewStep({
           </p>
           <p className="text-[11px] text-amber-900">
             {msg("board.ai.joint.undonePartial", {
-              divisions: undoFailed.map((id) => nameOf.get(id) ?? id).join(", "),
+              divisions: undoFailed.map((f) => named(f.divisionId)).join(", "),
             })}
           </p>
+          {grouped.length > 0 && (
+            <div className="text-[11px] text-amber-900">
+              <p className="font-semibold">{msg("board.ai.joint.undoneWhy")}</p>
+              <ul className="mt-0.5 list-disc pl-4">
+                {grouped.map((g) => (
+                  <li key={g.key}>
+                    {msg("board.ai.joint.undoneReason", {
+                      divisions: g.divisions.join(", "),
+                      reason: g.reason,
+                    })}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
           <button
             type="button"
             disabled={undoing}
@@ -982,7 +1055,7 @@ export function AiCompetitionConsole({
   const [outcome, setOutcome] = useState<JointApplyOutcome | null>(null);
   const [undoing, setUndoing] = useState(false);
   const [undone, setUndone] = useState<"no" | "full" | "partial">("no");
-  const [undoFailed, setUndoFailed] = useState<string[]>([]);
+  const [undoFailed, setUndoFailed] = useState<JointUndoFailure[]>([]);
   const [undoRefusal, setUndoRefusal] = useState<JointUndoRefusal | null>(null);
   // The undo's own double-submit guard, and a REF for the same reason as the
   // one below: `undoing` is state, read through a closure a second click within

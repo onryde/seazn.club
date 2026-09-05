@@ -196,6 +196,7 @@ const RULES: RouteRule[] = [
   { method: "GET", path: "/officials/:id", scope: "read" },
   { method: "PATCH", path: "/officials/:id", scope: "manage" },
   { method: "DELETE", path: "/officials/:id", scope: "manage" },
+  { method: "GET", path: "/officials/:id/availability", scope: "read" },
   { method: "POST", path: "/officials/:id/availability", scope: "manage" },
   { method: "DELETE", path: "/officials/:id/availability", scope: "manage" },
   { method: "POST", path: "/officials/import", scope: "manage" },

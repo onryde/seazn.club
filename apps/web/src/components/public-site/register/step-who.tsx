@@ -109,6 +109,7 @@ export function StepWho({
         <label className="mt-5 flex cursor-pointer items-start gap-3 rounded-lg border border-zinc-200 bg-canvas px-3.5 py-3">
           <input
             type="checkbox"
+            data-testid="reg-who-playing"
             className="mt-0.5 h-4 w-4 shrink-0 accent-accent"
             checked={imPlaying}
             onChange={(e) => onImPlayingChange(e.target.checked)}

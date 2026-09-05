@@ -1,4 +1,5 @@
-// Star formulas — ported 1:1 from the original games (chess-quest js/games.js).
+// Star formulas — ported 1:1 from the original games (chess-quest js/games.js),
+// except packStars, which is now scaled to the pack it scores (see below).
 // Pure so thresholds stay pinned by lib/__tests__/stars.test.ts.
 
 export const STAR_RULES = {
@@ -15,20 +16,19 @@ export const STAR_RULES = {
   pawnWars(whiteWon: boolean): number {
     return whiteWon ? 3 : 1;
   },
-  // Mate-in-1, Mate-in-2 and tier-2/tier-3 tactics all award on solved count.
-  packStars(solved: number): number {
-    return solved >= 12 ? 3 : solved >= 8 ? 2 : solved >= 4 ? 1 : 0;
-  },
-  // Mate-in-3: same shape as packStars, scaled to the pack's 9 puzzles.
-  mateInThree(solved: number): number {
-    return solved >= 9 ? 3 : solved >= 6 ? 2 : solved >= 3 ? 1 : 0;
-  },
-  hangingHunt(solved: number): number {
-    return solved >= 8 ? 3 : solved >= 5 ? 2 : solved >= 3 ? 1 : 0;
-  },
-  // Tier-1 tactics: total across fork+pin+skewer+disco (13 cases).
-  tacticTier1(total: number): number {
-    return total >= 13 ? 3 : total >= 8 ? 2 : total >= 4 ? 1 : 0;
+  // Every solve-the-pack game (mate packs, Piece Detective, all Trick Shots
+  // tiers) awards on solved count, scaled to the size of the pack being
+  // scored: a third solved = 1 star, two thirds = 2, the whole pack = 3.
+  // The original fixed thresholds (12 / 8 / 4 for a 12-pack, 9 / 6 / 3 for
+  // mate-in-3) are exactly this formula at those sizes; scaling it lets a
+  // lesson-scoped slice of five puzzles earn stars at all — under the fixed
+  // numbers a five-puzzle lesson could never reach even one star.
+  packStars(solved: number, total: number): number {
+    if (total <= 0) return 0;
+    if (solved >= total) return 3;
+    if (solved >= Math.ceil((2 * total) / 3)) return 2;
+    if (solved >= Math.ceil(total / 3)) return 1;
+    return 0;
   },
   rookMaze(moves: number, par: number): number {
     return moves <= par ? 3 : moves <= par + 1 ? 2 : 1;

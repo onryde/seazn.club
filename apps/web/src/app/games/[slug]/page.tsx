@@ -51,25 +51,31 @@ export default async function GamePage({ params }: { params: Promise<Params> }) 
 
   return (
     <div className="flex min-h-dvh flex-col bg-white">
-      <header className="flex flex-wrap items-center justify-center gap-3 border-b border-slate-200 px-4 py-2">
+      {/* Phone composition (design of record: "Game page header"): at 320 the
+          three-item row wrapped into two or three lines with orphaned
+          dividers. Below 768 it is "← Games" + the title on ONE row — the
+          dividers fold, the title truncates — and the attribution moves to
+          the footer line under <main>. One DOM: the two attribution copies
+          hide at each other's width, so exactly one is ever visible. */}
+      <header className="flex flex-wrap items-center justify-center gap-3 border-b border-slate-200 px-4 py-2 max-md:flex-nowrap max-md:justify-start">
         <Link
           href="/games"
-          className="text-sm font-medium text-[color:var(--cq-accent,oklch(55.8%_0.288_302.321))] hover:text-[color:var(--cq-accent-strong,oklch(43.8%_0.218_303.724))]"
+          className="shrink-0 text-sm font-medium text-[color:var(--cq-accent,oklch(55.8%_0.288_302.321))] hover:text-[color:var(--cq-accent-strong,oklch(43.8%_0.218_303.724))] max-md:flex max-md:min-h-11 max-md:items-center"
         >
           ← Games
         </Link>
-        <span className="text-sm text-slate-300">|</span>
-        <h1 className="mk-display text-base font-bold text-[color:var(--cq-ink,oklch(29.1%_0.149_302.717))]">
+        <span className="text-sm text-slate-300 max-md:hidden">|</span>
+        <h1 className="mk-display text-base font-bold text-[color:var(--cq-ink,oklch(29.1%_0.149_302.717))] max-md:min-w-0 max-md:truncate">
           {game.title}
         </h1>
-        <span className="text-sm text-slate-300">|</span>
+        <span className="text-sm text-slate-300 max-md:hidden">|</span>
         {/* Absolute, not "/" — on the games.* subdomain the proxy rewrites "/"
             straight back to "/games" (see gamesHostRewrite in proxy.ts), so a
             relative href here would be a dead loop back into this game
             instead of reaching the marketing home (found in review 2026-08-27). */}
         <Link
           href={`${siteOrigin()}/`}
-          className="text-xs text-slate-400 hover:text-[color:var(--cq-accent,oklch(55.8%_0.288_302.321))]"
+          className="text-xs text-slate-400 hover:text-[color:var(--cq-accent,oklch(55.8%_0.288_302.321))] max-md:hidden"
         >
           Powered by <span className="font-semibold">Seazn Club</span>
         </Link>
@@ -90,6 +96,17 @@ export default async function GamePage({ params }: { params: Promise<Params> }) 
           </div>
         )}
       </main>
+      {/* The phone half of the attribution pair above — same href, same
+          classes (the token-fallback test reads both), md:hidden so it never
+          doubles the header copy. */}
+      <footer className="border-t border-slate-200 px-4 py-3 text-center md:hidden">
+        <Link
+          href={`${siteOrigin()}/`}
+          className="text-xs text-slate-400 hover:text-[color:var(--cq-accent,oklch(55.8%_0.288_302.321))]"
+        >
+          Powered by <span className="font-semibold">Seazn Club</span>
+        </Link>
+      </footer>
     </div>
   );
 }

@@ -23,26 +23,129 @@
       "cfgOverrides": {
         "resultMode": "score",
         "allowDraws": true,
-        "points": { "w": 3, "d": 1, "l": 0 },
+        "points": {
+          "w": 3,
+          "d": 1,
+          "l": 0
+        },
         "progressScore": false
       },
-      "tiebreakers": ["points", "diff"],
+      "tiebreakers": [
+        "points",
+        "diff"
+      ],
       "stages": [
         {
           "ref": "s-league",
           "seq": 1,
           "kind": "league",
           "name": "League",
-          "config": { "legs": 3 },
-          "seeding": ["e-alpha", "e-bravo"]
+          "config": {
+            "legs": 3
+          },
+          "seeding": [
+            "e-alpha",
+            "e-bravo"
+          ]
         }
       ]
+    },
+    {
+      "ref": "d-badminton",
+      "name": "Badminton",
+      "sportKey": "badminton",
+      "variantKey": "bwf",
+      "moduleVersion": "1.0.0",
+      "cfgOverrides": {},
+      "tiebreakers": [
+        "points",
+        "wins",
+        "set_ratio",
+        "point_ratio",
+        "h2h_points"
+      ],
+      "stages": [
+        {
+          "ref": "s-badminton-league",
+          "seq": 1,
+          "kind": "league",
+          "name": "Badminton League",
+          "config": {
+            "legs": 1
+          },
+          "seeding": [
+            "e-cho",
+            "e-dahl"
+          ]
+        }
+      ]
+    },
+    {
+      "ref": "d-registration",
+      "name": "Registration UI Proof",
+      "sportKey": "generic",
+      "variantKey": "score",
+      "moduleVersion": "1.0.0",
+      "cfgOverrides": {},
+      "stages": [
+        {
+          "ref": "s-registration",
+          "seq": 1,
+          "kind": "knockout",
+          "name": "Registration proof (never created over HTTP this session)",
+          "config": {}
+        }
+      ],
+      "entry": "registration-ui"
     }
   ],
   "persons": [
-    { "ref": "p-ana", "fullName": "Ana Alvarez", "lane": "player", "shortName": "A. Alvarez" },
-    { "ref": "p-bo", "fullName": "Bo Baptiste", "lane": "player", "shortName": "B. Baptiste" },
-    { "ref": "p-dee", "fullName": "Dee Duarte", "lane": "official" }
+    {
+      "ref": "p-ana",
+      "fullName": "Ana Alvarez",
+      "lane": "player",
+      "shortName": "A. Alvarez"
+    },
+    {
+      "ref": "p-bo",
+      "fullName": "Bo Baptiste",
+      "lane": "player",
+      "shortName": "B. Baptiste"
+    },
+    {
+      "ref": "p-dee",
+      "fullName": "Dee Duarte",
+      "lane": "official"
+    },
+    {
+      "ref": "p-eli",
+      "fullName": "Eli Ostrander",
+      "lane": "official"
+    },
+    {
+      "ref": "p-cho",
+      "fullName": "Cho Min-jun",
+      "lane": "player",
+      "shortName": "C. Min-jun"
+    },
+    {
+      "ref": "p-dahl",
+      "fullName": "Dahl Erik",
+      "lane": "player",
+      "shortName": "D. Erik"
+    },
+    {
+      "ref": "p-reg-priya",
+      "fullName": "Priya Kapoor",
+      "lane": "player",
+      "dob": "1990-03-14"
+    },
+    {
+      "ref": "p-reg-sami",
+      "fullName": "Sami Okafor",
+      "lane": "player",
+      "dob": "1988-11-02"
+    }
   ],
   "entrants": [
     {
@@ -51,7 +154,13 @@
       "kind": "individual",
       "displayName": "Ana Alvarez",
       "seed": 1,
-      "roster": [{ "person": "p-ana", "captain": true, "squadNumber": 1 }]
+      "roster": [
+        {
+          "person": "p-ana",
+          "captain": true,
+          "squadNumber": 1
+        }
+      ]
     },
     {
       "ref": "e-bravo",
@@ -59,7 +168,65 @@
       "kind": "individual",
       "displayName": "Bo Baptiste",
       "seed": 2,
-      "roster": [{ "person": "p-bo", "captain": true, "squadNumber": 2 }]
+      "roster": [
+        {
+          "person": "p-bo",
+          "captain": true,
+          "squadNumber": 2
+        }
+      ]
+    },
+    {
+      "ref": "e-cho",
+      "divisionRef": "d-badminton",
+      "kind": "individual",
+      "displayName": "Cho Min-jun",
+      "seed": 1,
+      "roster": [
+        {
+          "person": "p-cho",
+          "captain": true,
+          "squadNumber": 1
+        }
+      ]
+    },
+    {
+      "ref": "e-dahl",
+      "divisionRef": "d-badminton",
+      "kind": "individual",
+      "displayName": "Dahl Erik",
+      "seed": 2,
+      "roster": [
+        {
+          "person": "p-dahl",
+          "captain": true,
+          "squadNumber": 1
+        }
+      ]
+    },
+    {
+      "ref": "e-reg-priya",
+      "divisionRef": "d-registration",
+      "kind": "individual",
+      "displayName": "Priya Kapoor",
+      "roster": [
+        {
+          "person": "p-reg-priya",
+          "captain": true
+        }
+      ]
+    },
+    {
+      "ref": "e-reg-sami",
+      "divisionRef": "d-registration",
+      "kind": "individual",
+      "displayName": "Sami Okafor",
+      "roster": [
+        {
+          "person": "p-reg-sami",
+          "captain": true
+        }
+      ]
     }
   ],
   "streams": [
@@ -70,8 +237,16 @@
       "away": "e-bravo",
       "provenance": "real",
       "events": [
-        { "type": "core.start" },
-        { "type": "generic.result", "payload": { "p1Score": 3, "p2Score": 1 } }
+        {
+          "type": "core.start"
+        },
+        {
+          "type": "generic.result",
+          "payload": {
+            "p1Score": 3,
+            "p2Score": 1
+          }
+        }
       ]
     },
     {
@@ -81,11 +256,36 @@
       "away": "e-alpha",
       "provenance": "reconstructed",
       "events": [
-        { "type": "core.start" },
-        { "type": "generic.score", "payload": { "by": "@e-bravo", "points": 2, "person": "@p-bo" } },
-        { "type": "generic.score", "payload": { "by": "@e-alpha", "points": 1, "person": "@p-ana" } },
-        { "type": "generic.score", "payload": { "by": "@e-alpha", "points": 1, "person": "@p-ana" } },
-        { "type": "generic.result" }
+        {
+          "type": "core.start"
+        },
+        {
+          "type": "generic.score",
+          "payload": {
+            "by": "@e-bravo",
+            "points": 2,
+            "person": "@p-bo"
+          }
+        },
+        {
+          "type": "generic.score",
+          "payload": {
+            "by": "@e-alpha",
+            "points": 1,
+            "person": "@p-ana"
+          }
+        },
+        {
+          "type": "generic.score",
+          "payload": {
+            "by": "@e-alpha",
+            "points": 1,
+            "person": "@p-ana"
+          }
+        },
+        {
+          "type": "generic.result"
+        }
       ]
     },
     {
@@ -95,9 +295,528 @@
       "away": "e-bravo",
       "provenance": "real",
       "events": [
-        { "type": "core.start" },
-        { "type": "core.forfeit", "payload": { "by": "@e-bravo", "reason": "retired hurt" } }
+        {
+          "type": "core.start"
+        },
+        {
+          "type": "core.forfeit",
+          "payload": {
+            "by": "@e-bravo",
+            "reason": "retired hurt"
+          }
+        }
       ]
+    },
+    {
+      "divisionRef": "d-badminton",
+      "stageRef": "s-badminton-league",
+      "fixtureExtKey": "rr-r1-c1",
+      "home": "e-cho",
+      "away": "e-dahl",
+      "provenance": "reconstructed",
+      "reconstruction": {
+        "seed": 11,
+        "note": "reconstructed to fold to 21–15, 21–18"
+      },
+      "events": [
+        {
+          "type": "core.start",
+          "payload": {}
+        },
+        {
+          "type": "badminton.rally",
+          "payload": {
+            "wonBy": "@e-dahl"
+          }
+        },
+        {
+          "type": "badminton.rally",
+          "payload": {
+            "wonBy": "@e-dahl"
+          }
+        },
+        {
+          "type": "badminton.rally",
+          "payload": {
+            "wonBy": "@e-dahl"
+          }
+        },
+        {
+          "type": "badminton.rally",
+          "payload": {
+            "wonBy": "@e-dahl"
+          }
+        },
+        {
+          "type": "badminton.rally",
+          "payload": {
+            "wonBy": "@e-dahl"
+          }
+        },
+        {
+          "type": "badminton.rally",
+          "payload": {
+            "wonBy": "@e-dahl"
+          }
+        },
+        {
+          "type": "badminton.rally",
+          "payload": {
+            "wonBy": "@e-cho"
+          }
+        },
+        {
+          "type": "badminton.rally",
+          "payload": {
+            "wonBy": "@e-dahl"
+          }
+        },
+        {
+          "type": "badminton.rally",
+          "payload": {
+            "wonBy": "@e-dahl"
+          }
+        },
+        {
+          "type": "badminton.rally",
+          "payload": {
+            "wonBy": "@e-cho"
+          }
+        },
+        {
+          "type": "badminton.rally",
+          "payload": {
+            "wonBy": "@e-cho"
+          }
+        },
+        {
+          "type": "badminton.rally",
+          "payload": {
+            "wonBy": "@e-dahl"
+          }
+        },
+        {
+          "type": "badminton.rally",
+          "payload": {
+            "wonBy": "@e-cho"
+          }
+        },
+        {
+          "type": "badminton.rally",
+          "payload": {
+            "wonBy": "@e-dahl"
+          }
+        },
+        {
+          "type": "badminton.rally",
+          "payload": {
+            "wonBy": "@e-dahl"
+          }
+        },
+        {
+          "type": "badminton.rally",
+          "payload": {
+            "wonBy": "@e-cho"
+          }
+        },
+        {
+          "type": "badminton.rally",
+          "payload": {
+            "wonBy": "@e-cho"
+          }
+        },
+        {
+          "type": "badminton.rally",
+          "payload": {
+            "wonBy": "@e-cho"
+          }
+        },
+        {
+          "type": "badminton.rally",
+          "payload": {
+            "wonBy": "@e-cho"
+          }
+        },
+        {
+          "type": "badminton.rally",
+          "payload": {
+            "wonBy": "@e-cho"
+          }
+        },
+        {
+          "type": "badminton.rally",
+          "payload": {
+            "wonBy": "@e-dahl"
+          }
+        },
+        {
+          "type": "badminton.rally",
+          "payload": {
+            "wonBy": "@e-cho"
+          }
+        },
+        {
+          "type": "badminton.rally",
+          "payload": {
+            "wonBy": "@e-dahl"
+          }
+        },
+        {
+          "type": "badminton.rally",
+          "payload": {
+            "wonBy": "@e-dahl"
+          }
+        },
+        {
+          "type": "badminton.rally",
+          "payload": {
+            "wonBy": "@e-cho"
+          }
+        },
+        {
+          "type": "badminton.rally",
+          "payload": {
+            "wonBy": "@e-dahl"
+          }
+        },
+        {
+          "type": "badminton.rally",
+          "payload": {
+            "wonBy": "@e-cho"
+          }
+        },
+        {
+          "type": "badminton.rally",
+          "payload": {
+            "wonBy": "@e-cho"
+          }
+        },
+        {
+          "type": "badminton.rally",
+          "payload": {
+            "wonBy": "@e-cho"
+          }
+        },
+        {
+          "type": "badminton.rally",
+          "payload": {
+            "wonBy": "@e-cho"
+          }
+        },
+        {
+          "type": "badminton.rally",
+          "payload": {
+            "wonBy": "@e-cho"
+          }
+        },
+        {
+          "type": "badminton.rally",
+          "payload": {
+            "wonBy": "@e-cho"
+          }
+        },
+        {
+          "type": "badminton.rally",
+          "payload": {
+            "wonBy": "@e-cho"
+          }
+        },
+        {
+          "type": "badminton.rally",
+          "payload": {
+            "wonBy": "@e-cho"
+          }
+        },
+        {
+          "type": "badminton.rally",
+          "payload": {
+            "wonBy": "@e-cho"
+          }
+        },
+        {
+          "type": "badminton.rally",
+          "payload": {
+            "wonBy": "@e-cho"
+          }
+        },
+        {
+          "type": "badminton.rally",
+          "payload": {
+            "wonBy": "@e-dahl"
+          }
+        },
+        {
+          "type": "badminton.rally",
+          "payload": {
+            "wonBy": "@e-dahl"
+          }
+        },
+        {
+          "type": "badminton.rally",
+          "payload": {
+            "wonBy": "@e-cho"
+          }
+        },
+        {
+          "type": "badminton.rally",
+          "payload": {
+            "wonBy": "@e-dahl"
+          }
+        },
+        {
+          "type": "badminton.rally",
+          "payload": {
+            "wonBy": "@e-cho"
+          }
+        },
+        {
+          "type": "badminton.rally",
+          "payload": {
+            "wonBy": "@e-cho"
+          }
+        },
+        {
+          "type": "badminton.rally",
+          "payload": {
+            "wonBy": "@e-dahl"
+          }
+        },
+        {
+          "type": "badminton.rally",
+          "payload": {
+            "wonBy": "@e-dahl"
+          }
+        },
+        {
+          "type": "badminton.rally",
+          "payload": {
+            "wonBy": "@e-cho"
+          }
+        },
+        {
+          "type": "badminton.rally",
+          "payload": {
+            "wonBy": "@e-cho"
+          }
+        },
+        {
+          "type": "badminton.rally",
+          "payload": {
+            "wonBy": "@e-dahl"
+          }
+        },
+        {
+          "type": "badminton.rally",
+          "payload": {
+            "wonBy": "@e-cho"
+          }
+        },
+        {
+          "type": "badminton.rally",
+          "payload": {
+            "wonBy": "@e-dahl"
+          }
+        },
+        {
+          "type": "badminton.rally",
+          "payload": {
+            "wonBy": "@e-dahl"
+          }
+        },
+        {
+          "type": "badminton.rally",
+          "payload": {
+            "wonBy": "@e-dahl"
+          }
+        },
+        {
+          "type": "badminton.rally",
+          "payload": {
+            "wonBy": "@e-cho"
+          }
+        },
+        {
+          "type": "badminton.rally",
+          "payload": {
+            "wonBy": "@e-dahl"
+          }
+        },
+        {
+          "type": "badminton.rally",
+          "payload": {
+            "wonBy": "@e-dahl"
+          }
+        },
+        {
+          "type": "badminton.rally",
+          "payload": {
+            "wonBy": "@e-cho"
+          }
+        },
+        {
+          "type": "badminton.rally",
+          "payload": {
+            "wonBy": "@e-cho"
+          }
+        },
+        {
+          "type": "badminton.rally",
+          "payload": {
+            "wonBy": "@e-cho"
+          }
+        },
+        {
+          "type": "badminton.rally",
+          "payload": {
+            "wonBy": "@e-dahl"
+          }
+        },
+        {
+          "type": "badminton.rally",
+          "payload": {
+            "wonBy": "@e-cho"
+          }
+        },
+        {
+          "type": "badminton.rally",
+          "payload": {
+            "wonBy": "@e-dahl"
+          }
+        },
+        {
+          "type": "badminton.rally",
+          "payload": {
+            "wonBy": "@e-cho"
+          }
+        },
+        {
+          "type": "badminton.rally",
+          "payload": {
+            "wonBy": "@e-dahl"
+          }
+        },
+        {
+          "type": "badminton.rally",
+          "payload": {
+            "wonBy": "@e-dahl"
+          }
+        },
+        {
+          "type": "badminton.rally",
+          "payload": {
+            "wonBy": "@e-cho"
+          }
+        },
+        {
+          "type": "badminton.rally",
+          "payload": {
+            "wonBy": "@e-dahl"
+          }
+        },
+        {
+          "type": "badminton.rally",
+          "payload": {
+            "wonBy": "@e-cho"
+          }
+        },
+        {
+          "type": "badminton.rally",
+          "payload": {
+            "wonBy": "@e-cho"
+          }
+        },
+        {
+          "type": "badminton.rally",
+          "payload": {
+            "wonBy": "@e-dahl"
+          }
+        },
+        {
+          "type": "badminton.rally",
+          "payload": {
+            "wonBy": "@e-dahl"
+          }
+        },
+        {
+          "type": "badminton.rally",
+          "payload": {
+            "wonBy": "@e-cho"
+          }
+        },
+        {
+          "type": "badminton.rally",
+          "payload": {
+            "wonBy": "@e-cho"
+          }
+        },
+        {
+          "type": "badminton.rally",
+          "payload": {
+            "wonBy": "@e-cho"
+          }
+        },
+        {
+          "type": "badminton.rally",
+          "payload": {
+            "wonBy": "@e-cho"
+          }
+        },
+        {
+          "type": "badminton.rally",
+          "payload": {
+            "wonBy": "@e-cho"
+          }
+        },
+        {
+          "type": "badminton.rally",
+          "payload": {
+            "wonBy": "@e-cho"
+          }
+        }
+      ]
+    }
+  ],
+  "officials": [
+    {
+      "ref": "off-dee",
+      "person": "p-dee",
+      "displayName": "Dee Duarte",
+      "roleKeys": [
+        "referee"
+      ],
+      "unavailable": [
+        {
+          "date": "2099-01-02",
+          "note": "family commitment"
+        }
+      ],
+      "assignments": [
+        {
+          "divisionRef": "d-tiny",
+          "fixtureExtKey": "rr-r1-c1",
+          "roleKey": "referee"
+        }
+      ]
+    },
+    {
+      "ref": "off-eli",
+      "person": "p-eli",
+      "displayName": "Eli Ostrander",
+      "roleKeys": [
+        "referee"
+      ],
+      "unavailable": [],
+      "assignments": []
+    }
+  ],
+  "claimInvites": [
+    {
+      "person": "p-ana",
+      "email": "ana.alvarez.claim@example.com"
+    },
+    {
+      "person": "p-cho",
+      "email": "cho.minjun.claim@example.com"
     }
   ],
   "expected": {
@@ -105,28 +824,76 @@
       {
         "divisionRef": "d-tiny",
         "fixtureExtKey": "rr-r1-c1",
-        "outcome": { "kind": "win", "winner": "e-alpha", "loser": "e-bravo", "method": "regulation" },
+        "outcome": {
+          "kind": "win",
+          "winner": "e-alpha",
+          "loser": "e-bravo",
+          "method": "regulation"
+        },
         "perSide": [
-          { "entrant": "e-alpha", "line": "3" },
-          { "entrant": "e-bravo", "line": "1" }
+          {
+            "entrant": "e-alpha",
+            "line": "3"
+          },
+          {
+            "entrant": "e-bravo",
+            "line": "1"
+          }
         ]
       },
       {
         "divisionRef": "d-tiny",
         "fixtureExtKey": "rr-r2-c1",
-        "outcome": { "kind": "draw" },
+        "outcome": {
+          "kind": "draw"
+        },
         "perSide": [
-          { "entrant": "e-bravo", "line": "2" },
-          { "entrant": "e-alpha", "line": "2" }
+          {
+            "entrant": "e-bravo",
+            "line": "2"
+          },
+          {
+            "entrant": "e-alpha",
+            "line": "2"
+          }
         ]
       },
       {
         "divisionRef": "d-tiny",
         "fixtureExtKey": "rr-r3-c1",
-        "outcome": { "kind": "award", "winner": "e-alpha" },
+        "outcome": {
+          "kind": "award",
+          "winner": "e-alpha"
+        },
         "perSide": [
-          { "entrant": "e-alpha", "line": "W/O" },
-          { "entrant": "e-bravo", "line": "L" }
+          {
+            "entrant": "e-alpha",
+            "line": "W/O"
+          },
+          {
+            "entrant": "e-bravo",
+            "line": "L"
+          }
+        ]
+      },
+      {
+        "divisionRef": "d-badminton",
+        "fixtureExtKey": "rr-r1-c1",
+        "outcome": {
+          "kind": "win",
+          "winner": "e-cho",
+          "loser": "e-dahl",
+          "method": "regulation"
+        },
+        "perSide": [
+          {
+            "entrant": "e-cho",
+            "line": "2"
+          },
+          {
+            "entrant": "e-dahl",
+            "line": "0"
+          }
         ]
       }
     ],
@@ -135,27 +902,88 @@
         "divisionRef": "d-tiny",
         "stageRef": "s-league",
         "rows": [
-          { "entrant": "e-alpha", "rank": 1, "played": 3, "won": 2, "drawn": 1, "lost": 0, "points": 7 },
-          { "entrant": "e-bravo", "rank": 2, "played": 3, "won": 0, "drawn": 1, "lost": 2, "points": 1 }
+          {
+            "entrant": "e-alpha",
+            "rank": 1,
+            "played": 3,
+            "won": 2,
+            "drawn": 1,
+            "lost": 0,
+            "points": 7
+          },
+          {
+            "entrant": "e-bravo",
+            "rank": 2,
+            "played": 3,
+            "won": 0,
+            "drawn": 1,
+            "lost": 2,
+            "points": 1
+          }
+        ]
+      },
+      {
+        "divisionRef": "d-badminton",
+        "stageRef": "s-badminton-league",
+        "rows": [
+          {
+            "entrant": "e-cho",
+            "rank": 1,
+            "played": 1,
+            "won": 1,
+            "drawn": 0,
+            "lost": 0,
+            "points": 2
+          },
+          {
+            "entrant": "e-dahl",
+            "rank": 2,
+            "played": 1,
+            "won": 0,
+            "drawn": 0,
+            "lost": 1,
+            "points": 0
+          }
         ]
       }
     ],
-    "champions": [{ "divisionRef": "d-tiny", "entrant": "e-alpha" }],
+    "champions": [
+      {
+        "divisionRef": "d-tiny",
+        "entrant": "e-alpha"
+      }
+    ],
     "leaderboards": [
       {
         "divisionRef": "d-tiny",
         "metricKey": "scores",
         "entries": [
-          { "person": "p-ana", "name": "Ana Alvarez", "count": 2 },
-          { "person": "p-bo", "name": "Bo Baptiste", "count": 1 }
+          {
+            "person": "p-ana",
+            "name": "Ana Alvarez",
+            "count": 2
+          },
+          {
+            "person": "p-bo",
+            "name": "Bo Baptiste",
+            "count": 1
+          }
         ]
       },
       {
         "divisionRef": "d-tiny",
         "metricKey": "points",
         "entries": [
-          { "person": "p-ana", "name": "Ana Alvarez", "count": 2 },
-          { "person": "p-bo", "name": "Bo Baptiste", "count": 2 }
+          {
+            "person": "p-ana",
+            "name": "Ana Alvarez",
+            "count": 2
+          },
+          {
+            "person": "p-bo",
+            "name": "Bo Baptiste",
+            "count": 2
+          }
         ]
       }
     ],
@@ -167,13 +995,71 @@
         "fixtureExtKey": "rr-r3-c1",
         "note": "Bravo retires hurt; the match is awarded to Alpha. Asserted against the FOLDED outcome, because a retirement has no event type of its own — it is the CORE type core.forfeit.",
         "claims": [
-          { "on": "outcome", "kind": "award", "winner": "e-alpha" },
-          { "on": "state", "path": "phase", "equals": "done" },
-          { "on": "standings", "entrant": "e-alpha", "field": "won", "equals": 1 },
-          { "on": "standings", "entrant": "e-bravo", "field": "lost", "equals": 1 }
+          {
+            "on": "outcome",
+            "kind": "award",
+            "winner": "e-alpha"
+          },
+          {
+            "on": "state",
+            "path": "phase",
+            "equals": "done"
+          },
+          {
+            "on": "standings",
+            "entrant": "e-alpha",
+            "field": "won",
+            "equals": 1
+          },
+          {
+            "on": "standings",
+            "entrant": "e-bravo",
+            "field": "lost",
+            "equals": 1
+          }
         ]
       }
     ]
+  },
+  "registration": {
+    "byDivision": {
+      "d-registration": {
+        "category": "open",
+        "entrantKind": "individual",
+        "feeCents": 0,
+        "paymentMethod": "offline",
+        "approval": "manual",
+        "entries": [
+          {
+            "extKey": "reg-cap1",
+            "captain": "p-reg-priya",
+            "roster": [],
+            "pay": false,
+            "expect": "entrant"
+          },
+          {
+            "extKey": "reg-cap2",
+            "captain": "p-reg-sami",
+            "roster": [],
+            "pay": false,
+            "expect": "entrant"
+          }
+        ],
+        "joins": [],
+        "organiser": [
+          {
+            "action": "approve",
+            "target": "reg-cap1"
+          }
+        ],
+        "expect": {
+          "entrants": 2,
+          "waitlisted": 0,
+          "rejected": 0,
+          "paidCents": 0
+        }
+      }
+    }
   },
   "meta": {
     "synthetic": true,
@@ -190,8 +1076,8 @@
         "where": "streams[1]"
       },
       {
-        "what": "The reconstructed stream (rr-r2-c1) is hand-written and therefore carries no reconstruction.seed.",
-        "why": "Task 3 owns the deterministic generators; this file must not wait on them. A generated stream carries its seed so the same bytes come out on every machine.",
+        "what": "The reconstructed d-tiny stream (rr-r2-c1) is hand-written and therefore carries no reconstruction.seed.",
+        "why": "Task 3 owns the deterministic generators; this file must not wait on them. A generated stream carries its seed so the same bytes come out on every machine. (B03 T5 adds the SECOND division, d-badminton, whose stream IS generated and DOES carry a seed — see streams[3].)",
         "where": "streams[1].reconstruction"
       },
       {
@@ -203,6 +1089,41 @@
         "what": "The expected table omits per-entrant metrics (for/against/diff).",
         "why": "How the competition layer AGGREGATES a StandingsDelta's metrics across fixtures is verified by the stage-0 validator (task 2), not authored blind here. Points, played, won, drawn and lost are derivable from the module's own standingsDelta and are asserted.",
         "where": "expected.tables[0].rows"
+      },
+      {
+        "what": "d-badminton is a SECOND division, added by B03 T5 to exercise the two-division generalisation `buildSeedPlan` unlocked once `tinyPlan`'s divisions.length !== 1 refusal was deleted (T4).",
+        "why": "A synthetic fixture proves nothing about the real generalisation; a second real division in the shared pack does. badminton.rally is the only one of badminton's six declared eventSchemas that any shipped preset's padSpec actually exposes to a scorer — the other five (game.summary, timeout, sanction, sub, expedite.start) are either coarse-tier-only or unreachable, so it is the only legal choice for a reconstructed rally stream (see `assertDeclaresEventType`, lib/reconstruct.ts:172-180).",
+        "where": "divisions[1], streams[3], expected.matches[3], expected.tables[1]"
+      },
+      {
+        "what": "This whole file is now a GENERATED artefact — see build-packs/_tiny.ts. It is committed anyway (as openapi/v1.json is) so a pack consumer never needs to run the generator to read it, and so drift between the generator and the committed bytes is a mechanical, testable fact rather than an assertion.",
+        "why": "build-packs/_tiny.ts is modelled on scripts/openapi-gen.ts's generator/committed-output/drift-test pattern. B03's charter does not include a CI step for it (unlike the OpenAPI gate at .github/workflows/ci.yml:94-98); the determinism test under build-packs/__tests__ is the gate for now.",
+        "where": "the whole file"
+      },
+      {
+        "what": "officials[] declares TWO officials against d-tiny only: off-dee (a named assignment onto rr-r1-c1 — MANUAL) and off-eli (no assignments at all — left to autoAssignOfficials). p-eli is a NEW official-lane person added alongside the already-declared, previously-unused p-dee — B03 T6 closes that dangling ref by giving it an official row at last.",
+        "why": "pack-schema.ts's own comment on PackOfficial (\"an official with named assignments is manual, one without is left to autoAssignOfficials\") names both paths; one official can only ever prove one of them. d-badminton was deliberately left out — this addition is orthogonal to T5's, and mixing the two would make a failure here harder to attribute.",
+        "where": "officials[]"
+      },
+      {
+        "what": "claimInvites[] carries two entries, one per division's own star (p-ana from d-tiny, p-cho from d-badminton) — minted, never accepted (B03 §5: \"the accept flow is B05's, seeding only mints invites\").",
+        "why": "Bench design §9 P2: \"pc_ claim invites for ~3 stars/suite\". Two is enough for _tiny to prove the mapping generalises across divisions without inflating a fixture whose whole point is staying small.",
+        "where": "claimInvites[]"
+      },
+      {
+        "what": "d-registration declares two ordinary-shaped entrants[] rows (e-reg-priya, e-reg-sami) that a live run NEVER creates over HTTP — they exist only to satisfy PackSchema's checkEntrantDivisions minimum (every division needs >=2 declared entrants, with no carve-out for a registration-only division).",
+        "why": "This division's REAL entrants only exist once the registration funnel completes (register.ts), which runs long after PackSchema parses. There is no PackSchema field meaning \"this division's entrant minimum is satisfied by its registration block instead\", and adding one is a schema change outside this task's file set (pack-schema.ts is frozen pre-B06 and owned by a completed task). suites/tiny.ts filters divisionRef === \"d-registration\" out of the SeedPlan it hands to seedSuite, so these two rows never reach /entrants.",
+        "where": "entrants[] (e-reg-priya, e-reg-sami), divisions[2]"
+      },
+      {
+        "what": "d-registration's one stage (s-registration) is never created over HTTP this session.",
+        "why": "usecases/stages.ts:1141 refuses to /generate a stage with fewer than two entrants, and this division's real entrant count is only known after the registration funnel runs — after seedSuite's create-then-generate walk would already have tried and failed. suites/tiny.ts excludes this division from seedSuite's plan entirely and creates + configures it directly via register.ts's own driver flow instead. The stage exists only because PackDivision.stages requires at least one; kind:\"knockout\" keeps it out of buildSeedPlan's expectedFixtureCounts (league-only), so it changes nothing about the existing fixture-count arithmetic the other two divisions already prove.",
+        "where": "divisions[2].stages[0]"
+      },
+      {
+        "what": "registration.byDivision[\"d-registration\"] declares exactly one organiser action (approve) though both entries expect:\"entrant\".",
+        "why": "The task brief's own acceptance line is \"2 entries, approval: manual, 1 approve\" — the unapproved entry stays \"pending\", which register.ts's classifyFunnelOutcome counts as an entrant exactly like an approved one (manual approval only produces a different classification via an explicit reject). The single approve action proves the organiser-action leg of the driver runs; it is not needed to make the funnel oracle's arithmetic balance.",
+        "where": "registration.byDivision[\"d-registration\"].organiser"
       }
     ]
   }

@@ -4,6 +4,12 @@ import { expect, type APIRequestContext, type Locator, type Page, type TestInfo 
 // rather than re-declaring it is what keeps a new rung from needing a sixth
 // hand-maintained list.
 import type { PassKey } from "../src/lib/currency";
+// The one VALUE import from the app, and deliberately so: lib/platform-fee.ts
+// has zero imports of its own (no server-only, no db, no Redis), so nothing of
+// the app's runtime follows it in. Sharing the decoder is the point — the
+// fixture and production must agree on what a fee row says, or the restore
+// hook writes a value production would have refused.
+import { decodeFeePercent } from "../src/lib/platform-fee";
 
 /**
  * v3/02 §4 viewport gate: the page-level rule is "no horizontal scroll,
@@ -1114,6 +1120,39 @@ export async function splitOrgIntoOwnGroupSql(orgId: string): Promise<string> {
 }
 
 /**
+ * Return an org-creation SLOT to `ownerUserId`, and take the org out of the
+ * lists the UI reads.
+ *
+ * A soft delete is NOT enough. `assertMayOwnAnotherOrg` (src/lib/auth.ts)
+ * counts `org_members` rows with `role = 'owner'` for the user and applies no
+ * `deleted_at` filter at all, so an org that is soft-deleted still spends one
+ * of the five slots a Pro user gets (`orgs.max_owned`, src/lib/billing-group.ts).
+ * Dropping the owner membership row is what actually frees it.
+ *
+ * Both statements, because either alone leaves a visible wrong state: without
+ * the membership drop the slot leaks and the sixth seed in a leg 402s; without
+ * the soft delete the org keeps appearing in public listings with no owner.
+ *
+ * `ownerUserId` is optional and the `role = 'owner'` fallback is the path
+ * `releaseSettingsOrg` actually takes — `withDb` is module-private here, so a
+ * caller outside this file cannot look the owner up first. Pass it when you
+ * already know it (an org with two owner rows would otherwise lose both).
+ *
+ * Idempotent: a second call matches zero rows in both statements.
+ */
+export async function releaseSeededOrgSql(orgId: string, ownerUserId?: string): Promise<void> {
+  await withDb(async (sql) => {
+    if (ownerUserId) {
+      await sql`delete from org_members where org_id = ${orgId} and user_id = ${ownerUserId}`;
+    } else {
+      await sql`delete from org_members where org_id = ${orgId} and role = 'owner'`;
+    }
+    await sql`update organizations set deleted_at = now()
+               where id = ${orgId} and deleted_at is null`;
+  });
+}
+
+/**
  * Force `quantity_paid` — the seats Stripe has already been billed for.
  *
  * Deliberately settable independently of the org count, because the two
@@ -1168,6 +1207,71 @@ export async function setOwnerStaffSql(orgId: string, on: boolean): Promise<void
       : sql`update users set is_staff = false, staff_role = null
           where id in (select user_id from org_members where org_id = ${orgId} and role = 'owner')`,
   );
+}
+
+/** Set the org owner's staff role precisely — `setOwnerStaffSql` can only
+ *  express superadmin, so it cannot reach the staff-but-not-superadmin case
+ *  that separates requireStaff() from requireSuperadmin(). Pass null to clear.
+ *  ALWAYS restore in a finally: the shared Pro user outlives the borrower. */
+export async function setOwnerStaffRoleSql(
+  orgId: string,
+  role: "support" | "superadmin" | null,
+): Promise<void> {
+  await withDb((sql) =>
+    role
+      ? sql`update users set is_staff = true, staff_role = ${role}
+              where id in (select user_id from org_members
+                            where org_id = ${orgId} and role = 'owner')`
+      : sql`update users set is_staff = false, staff_role = null
+              where id in (select user_id from org_members
+                            where org_id = ${orgId} and role = 'owner')`,
+  );
+}
+
+/**
+ * The global platform fee default, read straight off `platform_settings`.
+ *
+ * SQL rather than `GET /api/admin/settings` on purpose: the route is
+ * superadmin-only, and the one caller that needs this value needs it BEFORE any
+ * privilege has been borrowed — a `beforeEach` capturing the row so a hook can
+ * put it back after a test that timed out mid-write. Returns `null` when the
+ * row is absent, when its `value` is not a jsonb NUMBER (a jsonb `null`, string
+ * or boolean all decode to something `Number()` reads as a finite 0 — see
+ * below), AND — since it adopted the shared decoder — when the number is
+ * outside 0..100. That last case is a narrowing worth stating: this helper used
+ * to accept any finite number, so a row holding 150 was captured and restored
+ * (loudly, via the route's own 422). It now reads as `null`, the caller's
+ * `if (fee !== null)` guard is false, and NOTHING is restored — including the
+ * `console.warn` in that branch, which is unreachable in exactly the case it
+ * would be most wanted. Acceptable because the only writer is bounds-checked,
+ * so an out-of-band row means someone wrote raw SQL; recorded because a silent
+ * skip is a bad failure mode to discover later.
+ *
+ * A caller can therefore decline to "restore" a value that never existed (with
+ * no row, `platformFeeDefault()` falls through to the PLATFORM_FEE_PERCENT env
+ * and then to 5 — writing one would not be a restore, it would be a new
+ * setting).
+ *
+ * READS ONLY. There is deliberately no SQL writer beside it: `value` is cached
+ * in Redis for 300s (`lib/platform-settings.ts`, cache-aside), and
+ * `setPlatformFeeDefault` is the ONLY writer that invalidates that cache. A raw
+ * UPDATE would fix the row and leave every later reader — the settings page,
+ * and every checkout resolving a fee — served the stale value for five minutes.
+ * Restore through `PUT /api/admin/settings`.
+ */
+export async function platformFeePercentSql(): Promise<number | null> {
+  return withDb(async (sql) => {
+    const [row] = await sql<{ value: unknown }[]>`
+      select value from platform_settings where key = 'platform_fee_percent'`;
+    // The SAME decoder production reads this row with (lib/platform-fee.ts),
+    // imported rather than restated. A bare `Number(value)` reads a jsonb
+    // `null`/`false`/`""` row as a finite 0, the afterEach hook PUTs that 0
+    // back as a "restore", and the platform's entire cut on entry fees is
+    // zeroed through the route with the cache invalidated — this wave's own
+    // headline defect, reproduced inside the fixture built to prevent it. A
+    // second copy of the rule here is how the two drift apart.
+    return decodeFeePercent(row?.value);
+  });
 }
 
 export interface OrgInfo {

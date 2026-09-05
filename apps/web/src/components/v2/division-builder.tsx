@@ -651,12 +651,22 @@ export function DivisionBuilder({
             />
           </label>
         </div>
-        <fieldset>
+        <fieldset data-testid="division-builder-category">
           <legend className="label">{msg("reg.hub.config.category")}</legend>
           <div className="flex flex-wrap gap-2">
             {CATEGORIES.map((c) => (
               <label
                 key={c.key}
+                /* The bench's organiser driver clicks THIS, not the input.
+                 * The radio below is `sr-only` — clipped to a 1px box — so a
+                 * real Playwright click on it is either "not visible" or
+                 * intercepted by this label, and no node-env test can see
+                 * either failure (apps/web vitest has no DOM). The hook lives
+                 * on exactly one element per value so the selector stays
+                 * strict-mode safe. Note the enclosing fieldset is closed on
+                 * mount (`tab` defaults to "basics", :276) — a driver must
+                 * open the eligibility tab before this exists. */
+                data-category={c.key}
                 className={`cursor-pointer rounded-full border px-3 py-1 text-xs transition ${
                   category === c.key
                     ? "border-purple-500 bg-purple-50 text-purple-700"
@@ -666,6 +676,7 @@ export function DivisionBuilder({
                 <input
                   type="radio"
                   name="division-category"
+                  value={c.key}
                   checked={category === c.key}
                   onChange={() => setCategory(c.key)}
                   className="sr-only"

@@ -155,7 +155,7 @@ export const LESSONS: Lesson[] = [
     land: 2,
     title: "Checkmate vs. the Sneaky Tie",
     game: "mateInOne",
-    gameOpts: { range: [0, 3] },
+    gameOpts: { range: [0, 5] },
     learn:
       "Checkmate: the king is attacked and has no escape — game over. Stalemate: not in check but no legal moves — a draw that steals wins.",
     play: "Her first mate-in-1 puzzles right here on this page, plus a “mate or stalemate?” quiz on the real board.",
@@ -190,7 +190,7 @@ export const LESSONS: Lesson[] = [
     land: 3,
     title: "The Lawnmower",
     game: "mateInOne",
-    gameOpts: { range: [3, 6] },
+    gameOpts: { range: [5, 10] },
     learn:
       "The two-rook ladder mate: rooks take turns pushing the lonely king back, row by row, to the edge.",
     play: "King + two rooks vs. king on the real board until it’s easy, then race a two-minute timer. Ladder puzzles here too.",
@@ -211,7 +211,7 @@ export const LESSONS: Lesson[] = [
     land: 3,
     title: "The Queen’s Box",
     game: "mateInOne",
-    gameOpts: { range: [6, 9] },
+    gameOpts: { range: [10, 15] },
     learn:
       "King + queen vs. king: the queen shrinks the box around the enemy king, her king walks over to help finish. Watch out for stalemate!",
     play: "Repetitions from different corners. Bonus point every time she pauses to ask “is this stalemate?” before moving.",
@@ -229,7 +229,7 @@ export const LESSONS: Lesson[] = [
     land: 3,
     title: "Puzzle Storm",
     game: "mateInOne",
-    gameOpts: { range: [9, 12] },
+    gameOpts: { range: [15, 20] },
     learn: "Mate-in-1 with every piece — queen, rook, bishop, knight, even a pawn.",
     play: "Five to ten puzzles a day: the pack here, plus ChessKid or Lichess. Start a puzzle sticker chart.",
     spark: "Beat-your-own-record days: how many puzzles solved by Sunday?",
@@ -336,6 +336,7 @@ export const LESSONS: Lesson[] = [
     land: 4,
     title: "The Free-Stuff Detector",
     game: "hangingHunt",
+    gameOpts: { range: [0, 8] },
     learn:
       "Before every move, two questions: “Is my piece safe there?” and “Is anything free to take?” This habit beats everything else at this age.",
     play: "Games with a slow-move rule: hand hovers, both questions out loud, then move.",
@@ -409,6 +410,7 @@ export const LESSONS: Lesson[] = [
     land: 5,
     title: "Winning the Won Game",
     game: "hangingHunt",
+    gameOpts: { range: [8, 16] },
     learn:
       "When ahead in points: trade pieces, keep pawns, push the passed pawn. Simpler board = safer win.",
     play: "Start positions where she’s up a rook and must convert the win. Being winning and actually winning are different skills.",
@@ -426,7 +428,7 @@ export const LESSONS: Lesson[] = [
     land: 5,
     title: "Think Like a Champ",
     game: "mateInOne",
-    gameOpts: { range: [12, 14] },
+    gameOpts: { range: [20, 25] },
     learn:
       "The champion’s checklist before every move: Checks, Captures, Threats — mine and theirs. Plus simple notation, so she can write “e4!” like the pros.",
     play: "One slow game with the checklist said out loud both ways. She writes her first scoresheet.",
@@ -460,7 +462,7 @@ export const LESSONS: Lesson[] = [
     land: 5,
     title: "Boss Battle & Crown",
     game: "mateInOne",
-    gameOpts: { range: [14, 16] },
+    gameOpts: { range: [25, 30] },
     learn: "Review her favorite tricks from the whole quest — she picks the highlights.",
     play: "A best-of-three match against you, playing honestly (spot her a piece if needed). Then celebrate, whatever the score.",
     spark:
@@ -480,7 +482,7 @@ export const LESSONS: Lesson[] = [
     land: 6,
     title: "Forcing Moves: Mate in 2",
     game: "mateInTwo",
-    gameOpts: { range: [0, 3] },
+    gameOpts: { range: [0, 6] },
     learn:
       "A forcing move leaves the enemy almost no answers: checks first, captures second, big threats third. Mate-in-2 is forcing moves in a chain: your check, their only reply, your mate.",
     play: "The new Mate in 2 pack. Say the whole plan out loud BEFORE touching a piece: “I check here, the king must go there, then I mate.”",
@@ -499,7 +501,7 @@ export const LESSONS: Lesson[] = [
     land: 6,
     title: "The Back-Rank Story",
     game: "mateInTwo",
-    gameOpts: { range: [3, 6] },
+    gameOpts: { range: [6, 12] },
     learn:
       "A castled king behind his own pawns is safe from everything — except a rook or queen crashing through the back door. Cut the row, then slam it.",
     play: "Back-rank mates in the Mate in 2 pack, then real-board setups: when does the king need a “window” (a pawn moved to let him breathe)?",
@@ -634,6 +636,7 @@ export const LESSONS: Lesson[] = [
     land: 7,
     title: "Guard the Gate: Trap Defense",
     game: "hangingHunt",
+    gameOpts: { range: [16, 24] },
     learn:
       "Every kid-beating trap aims at f7/f2: Scholar’s Mate, the Fried Liver raid. The cures are calm: develop, castle, don’t grab poisoned pawns.",
     play: "Piece Detective to sharpen your threat-scanning, then a grown-up plays trap openings at you until none of them land.",
@@ -686,7 +689,7 @@ export const LESSONS: Lesson[] = [
     land: 7,
     title: "Punish Opening Mistakes",
     game: "mateInOne",
-    gameOpts: { range: [16, 18] },
+    gameOpts: { range: [30, 35] },
     learn:
       "When the enemy breaks the golden rules — queen too early, king stuck in the middle, greedy pawn grabs — there’s usually a punishment. Open lines at the uncastled king!",
     play: "Mate in 1 pack for finishing instincts, then real games where a grown-up deliberately breaks one opening rule — find the punishment.",
@@ -803,7 +806,7 @@ export const LESSONS: Lesson[] = [
     land: 8,
     title: "Endgame Habits",
     game: "mateInTwo",
-    gameOpts: { range: [6, 9] },
+    gameOpts: { range: [12, 18] },
     learn:
       "The endgame rulebook: activate the king (he’s a fighter now!), rooks BEHIND passed pawns, cut the enemy king off, and never rush.",
     play: "Mate in 2 pack to keep the finishing sharp, then a full endgame from a real game replayed with the habit list next to the board.",
@@ -883,6 +886,7 @@ export const LESSONS: Lesson[] = [
     land: 9,
     title: "Candidate Moves",
     game: "hangingHunt",
+    gameOpts: { range: [24, 32] },
     learn:
       "Champions don’t look at one move — they list THREE candidates (checks, captures, threats first), peek one move deep into each, THEN choose.",
     play: "Piece Detective for the scanning habit, then a slow game with the rule: say three candidate moves out loud before every single move.",
@@ -915,10 +919,10 @@ export const LESSONS: Lesson[] = [
     land: 9,
     title: "Boss Battle: Rising Player",
     game: "mateInTwo",
-    gameOpts: { range: [9, 12] },
+    gameOpts: { range: [18, 24] },
     learn:
       "Everything, together: opening plan, candidate moves, tactics from safe squares, a real endgame finish. This is the whole mountain in one game.",
-    play: "The final challenge: a best-of-three match, slow, notated, analyzed after. Then the Mate in 2 pack one last time — all twelve, no hints.",
+    play: "The final challenge: a best-of-three match, slow, notated, analyzed after. Then the Mate in 2 pack one last time — all six, no hints.",
     spark:
       "Print the Rising Player certificate. Then look up — club ladders, rated tournaments, the whole chess world is open now.",
     classic: {

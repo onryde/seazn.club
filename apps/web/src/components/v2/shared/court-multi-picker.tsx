@@ -286,7 +286,7 @@ export function CourtMultiPicker({
   }
 
   return (
-    <div>
+    <div data-testid="court-picker">
       <span className="label">{label}</span>
       {description && <p className="mb-2 text-xs text-slate-400">{description}</p>}
 
@@ -373,6 +373,8 @@ export function CourtMultiPicker({
                     >
                       <input
                         type="checkbox"
+                        data-testid="court-option"
+                        data-court-id={court.id}
                         checked={checked}
                         disabled={rowDisabled}
                         onChange={() => onChange(toggleCourtSelection(value, court.id, maxSelected))}

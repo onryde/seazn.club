@@ -50,7 +50,7 @@ function renderGame(game: GameId, opts: Opts) {
     case "mateInThree":
       return <MateInTwo depth={3} />;
     case "hangingHunt":
-      return <HangingHunt />;
+      return <HangingHunt range={range} />;
     case "tacticTrainer":
       return <TacticTrainer pack={pack ?? "fork"} />;
     case "rookMaze":
@@ -104,41 +104,67 @@ function QuestApp() {
   }
 
   return (
-    <div className="mx-auto w-full max-w-4xl px-4 py-6">
-      <div className="mb-4 inline-flex rounded-full border border-purple-200 bg-white p-1">
-        {(["quest", "arcade"] as const).map((v) => (
-          <button
-            key={v}
-            type="button"
-            onClick={() => setView(v)}
-            className={`rounded-full px-4 py-1 text-sm font-medium ${
-              view === v ? "bg-purple-600 text-white" : "text-purple-700 hover:bg-purple-50"
-            }`}
-          >
-            {v === "quest" ? "Quest" : "Free play"}
-          </button>
-        ))}
+    // A flex column so the phone order can be stated explicitly (design of
+    // record: "Quest hub on a phone"). ONE DOM: the wrappers below carry
+    // `max-md:order-*` only, so ≥768 falls back to source order — switch,
+    // header, then the lesson/map grid — exactly as before. Vertical rhythm
+    // stays on the children's own margins rather than a parent `gap`, since
+    // `order` reorders boxes but margins travel with the box they belong to.
+    <div className="mx-auto flex w-full max-w-4xl flex-col px-4 py-6">
+      <div data-cq-slot="switch" className="mb-4 max-md:order-2">
+        <div className="inline-flex rounded-full border border-(color:--cq-line-soft) bg-white p-1">
+          {(["quest", "arcade"] as const).map((v) => (
+            <button
+              key={v}
+              type="button"
+              onClick={() => setView(v)}
+              className={`rounded-full px-4 py-1 text-sm font-medium max-md:min-h-11 ${
+                view === v
+                  ? "bg-(color:--cq-accent) text-white"
+                  : "text-(color:--cq-label) hover:bg-(color:--cq-accent-wash)"
+              }`}
+            >
+              {v === "quest" ? "Quest" : "Free play"}
+            </button>
+          ))}
+        </div>
       </div>
 
       {view === "quest" ? (
-        <div className="flex flex-col gap-5">
-          <QuestHeader
-            onOpenProfiles={() => setProfilesOpen(true)}
-            onOpenProgress={() => setProgressOpen(true)}
-          />
-          <div className="grid gap-5 lg:grid-cols-2">
-            <QuestMap selected={selected} onSelect={setSelected} />
-            <div className="flex flex-col gap-4">
-              <LessonCard
-                n={selected}
-                onPlay={(g, opts) => setGame({ game: g, opts, back: "quest" })}
-              />
-              <GrownUpsDrawer />
+        // A fragment, not a wrapper: the header and the grid must be flex
+        // items of the column above to sort around the switch on phones.
+        <>
+          <div data-cq-slot="header" className="mb-5 max-md:order-1">
+            <QuestHeader
+              onOpenProfiles={() => setProfilesOpen(true)}
+              onOpenProgress={() => setProgressOpen(true)}
+            />
+          </div>
+          <div data-cq-slot="grid" className="grid gap-5 lg:grid-cols-2 max-md:order-3">
+            <div data-cq-slot="map" className="max-md:order-2">
+              <QuestMap selected={selected} onSelect={setSelected} />
+            </div>
+            {/* `contents` on phones dissolves this column so the lesson card
+                can outrank the map; at ≥768 it is the right-hand column. */}
+            <div data-cq-slot="lesson-column" className="flex flex-col gap-4 max-md:contents">
+              <div data-cq-slot="lesson" className="max-md:order-1">
+                <LessonCard
+                  n={selected}
+                  onPlay={(g, opts) => setGame({ game: g, opts, back: "quest" })}
+                />
+              </div>
+              <div data-cq-slot="grownups" className="max-md:order-3">
+                <GrownUpsDrawer />
+              </div>
             </div>
           </div>
-        </div>
+        </>
       ) : (
-        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+        // order-3 like the quest grid, NOT the default 0: the switch above
+        // carries max-md:order-2, so an unordered arcade grid would sort
+        // ABOVE it on phones and bury the Quest/Free play control under ten
+        // game cards.
+        <div className="grid gap-3 max-md:order-3 sm:grid-cols-2 lg:grid-cols-3">
           {ARCADE.map((a) => (
             <button
               key={a.id}

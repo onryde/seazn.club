@@ -68,7 +68,16 @@ export const FEATURE_REASONS: Record<string, string> = {
   exports: "CSV/PDF exports are a Pro feature.",
   "exports.branded": "Branded print templates (club colours, sponsor logos) are a Pro feature.",
   // Clubs & bulk import (Jul3/01 §7)
-  "import.bulk": "Files over 20 rows need a Pro plan — split the file or upgrade.",
+  // STATES NO NUMBER AND NO PLAN, deliberately. This sentence used to read
+  // "Files over 20 rows need a Pro plan"; the live catalog has since moved
+  // community to 50 (V319), so a community organiser refused at 51 rows was
+  // told the limit was 20 and would split into two 26-row files — each of
+  // which would have imported whole. `import.bulk` is also a DUAL-VALUED key
+  // (bool on Pro, an int cap on community), so "needs a Pro plan" was wrong in
+  // kind as well as in value: a community org has a real, usable allowance.
+  // The cap lives in `plan_entitlements` and nowhere else; copy that restates
+  // it goes stale silently and is then quoted back as truth.
+  "import.bulk": "This file has more rows than your plan allows — split it into smaller files, or upgrade for a higher limit.",
   "logos.bulk": "Multi-file logo upload is a Pro feature — you can still set logos one at a time.",
   "clubs.hierarchy": "Club hierarchies (parent clubs, group-by-club) — your plan's limits apply.",
   "clubs.max": "You've reached your plan's club limit.",

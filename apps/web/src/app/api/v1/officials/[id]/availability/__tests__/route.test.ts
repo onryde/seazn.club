@@ -35,7 +35,7 @@ vi.mock("next/headers", () => ({
 import { sql } from "@/lib/db";
 import { seedOrg } from "@/server/usecases/__tests__/_seed";
 import { createOfficial, listOfficialBlackouts } from "@/server/usecases/officials";
-import { POST, DELETE } from "../route";
+import { GET, POST, DELETE } from "../route";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
@@ -61,6 +61,10 @@ function deleteReq(date?: string | null): Request {
   const url = new URL("https://test.local/api/v1/officials/x/availability");
   if (date !== undefined && date !== null) url.searchParams.set("date", date);
   return new Request(url, { method: "DELETE" });
+}
+
+function getReq(): Request {
+  return new Request("https://test.local/api/v1/officials/x/availability", { method: "GET" });
 }
 
 afterAll(async () => {
@@ -138,5 +142,53 @@ describe.skipIf(!HAS_DB)("POST/DELETE /officials/{id}/availability (G2)", () => 
     const rows = await sql<{ id: string }[]>`
       select id from official_availability where official_id = ${officialA.id}`;
     expect(rows.length).toBe(0);
+  });
+});
+
+describe.skipIf(!HAS_DB)("GET /officials/{id}/availability (G9)", () => {
+  beforeEach(() => {
+    authState.userId = "";
+  });
+
+  it("reads back exactly what POST wrote — scoped to this official, not the org-wide console list", async () => {
+    const { auth } = await seedOrg();
+    authState.userId = auth.userId!;
+    const official = await createOfficial(auth, { display_name: "Ref Four", role_keys: ["referee"] });
+    const other = await createOfficial(auth, { display_name: "Ref Five", role_keys: ["referee"] });
+
+    await POST(postReq({ date: "2030-09-01", note: "wedding" }), { params: Promise.resolve({ id: official.id }) });
+    await POST(postReq({ date: "2030-09-10", note: null }), { params: Promise.resolve({ id: official.id }) });
+    // A second official's blackout must never leak into the first's read.
+    await POST(postReq({ date: "2030-09-01", note: "other person's date" }), {
+      params: Promise.resolve({ id: other.id }),
+    });
+
+    const { status, body } = await read(await GET(getReq(), { params: Promise.resolve({ id: official.id }) }));
+    expect(status).toBe(200);
+    expect(body.data).toEqual([
+      { date: "2030-09-01", note: "wedding" },
+      { date: "2030-09-10", note: null },
+    ]);
+  });
+
+  it("returns an empty list, not a 404, for an official with no blackouts", async () => {
+    const { auth } = await seedOrg();
+    authState.userId = auth.userId!;
+    const official = await createOfficial(auth, { display_name: "Ref Six", role_keys: ["referee"] });
+
+    const { status, body } = await read(await GET(getReq(), { params: Promise.resolve({ id: official.id }) }));
+    expect(status).toBe(200);
+    expect(body.data).toEqual([]);
+  });
+
+  it("blocks org B from reading org A's official's blackouts", async () => {
+    const { auth: authA } = await seedOrg();
+    const { auth: authB } = await seedOrg();
+    const officialA = await createOfficial(authA, { display_name: "Org A Ref 2", role_keys: ["referee"] });
+    await POST(postReq({ date: "2030-10-01", note: "secret" }), { params: Promise.resolve({ id: officialA.id }) });
+
+    authState.userId = authB.userId!;
+    const res = await GET(getReq(), { params: Promise.resolve({ id: officialA.id }) });
+    expect([401, 403, 404]).toContain(res.status);
   });
 });

@@ -1,5 +1,4 @@
 import { cookies } from "next/headers";
-import { NextResponse } from "next/server";
 import { sql } from "@/lib/db";
 import { createSession, postAuthLanding, invalidateUser } from "@/lib/auth";
 import { stampTermsAcceptance } from "@/lib/legal";
@@ -7,17 +6,22 @@ import {
   GOOGLE_TOKEN_URL,
   GOOGLE_USERINFO_URL,
   OAUTH_STATE_COOKIE,
-  baseUrl,
   googleConfigured,
   googleRedirectUri,
   type GoogleProfile,
 } from "@/lib/oauth";
+import { redirectLocal } from "@/lib/http";
 
-// Redirect against the external base URL, not req.url — behind Fly's proxy
-// req.url is the internal binding (http://0.0.0.0:3000), which would send the
-// browser to an unreachable address.
-function fail(req: Request, reason: string) {
-  return NextResponse.redirect(new URL(`/login?error=${reason}`, baseUrl(req)));
+// RELATIVE, so there is no origin to get wrong. This comment used to say
+// "redirect against the external base URL, not req.url", and its diagnosis was
+// right — req.url is the internal binding (http://0.0.0.0:3000), which sends
+// the browser to an unreachable address — but `baseUrl(req)` only escapes that
+// behind a proxy that actually sets x-forwarded-host; otherwise it falls back
+// to `new URL(req.url).origin` and lands on the binding again. `req` is kept
+// in the signature so every call site reads the same; it is deliberately
+// unused now.
+function fail(_req: Request, reason: string) {
+  return redirectLocal(`/login?error=${reason}`);
 }
 
 /** Handle Google's redirect: verify state, exchange code, upsert user, sign in. */
@@ -75,7 +79,7 @@ export async function GET(req: Request) {
   const next = jar.get("seazn_oauth_next")?.value;
   jar.delete("seazn_oauth_next");
   const landing = await postAuthLanding(userId, next);
-  return NextResponse.redirect(new URL(landing.redirect, baseUrl(req)));
+  return redirectLocal(landing.redirect);
 }
 
 async function upsertGoogleUser(p: GoogleProfile): Promise<string> {
