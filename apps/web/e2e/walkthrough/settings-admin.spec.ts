@@ -914,4 +914,49 @@ test.describe("legacy settings redirects", () => {
       "the address changed but the request was left unconfirmed — the same link would work twice",
     ).toBe(true);
   });
+
+  /**
+   * THE ORIGIN OF THE REDIRECT, which the two banner tests above cannot see.
+   *
+   * They compare `pathname + search` only, so an absolute Location pointing at
+   * a DIFFERENT HOST satisfies them whenever the browser happens to be on that
+   * host — which it is, locally, because the dev server binds `localhost`. CI
+   * binds `0.0.0.0` (e2e.yml:527 starts `server.js` with no HOSTNAME, and Next
+   * standalone defaults to 0.0.0.0), `req.url` is that INTERNAL BINDING, and
+   * `new URL(path, req.url)` therefore emitted
+   * `http://0.0.0.0:3000/settings?…` while the user sat on
+   * `http://localhost:3000`. The browser withholds the session cookie across
+   * that origin hop, `/settings` sees no session, and every confirmation —
+   * including the successful one that had already committed the new address —
+   * landed on `/login`. Green on this machine, red in CI, and broken for real
+   * behind any reverse proxy.
+   *
+   * So this asserts the property the pathname comparison structurally cannot:
+   * the Location is RELATIVE. Asserted as an exact string rather than a
+   * "starts with /" predicate, because `/` alone is satisfied by a redirect to
+   * the wrong tab or the wrong outcome, and `not.toContain("://")` alone is
+   * satisfied by an empty header.
+   *
+   * `maxRedirects: 0` is load-bearing: following the redirect is precisely
+   * what erases the evidence, since the landing URL is identical either way.
+   */
+  test("every confirm outcome redirects RELATIVE, never at the server's own binding", async ({
+    request,
+  }) => {
+    const res = await request.get(
+      `/api/auth/change-email/confirm?token=e2e-no-such-token-${Date.now().toString(36)}`,
+      { maxRedirects: 0 },
+    );
+    expect(res.status(), "the confirm route must answer with a redirect").toBe(307);
+
+    const location = res.headers()["location"];
+    expect(
+      location,
+      "the confirm route sent no Location header at all",
+    ).toBeTruthy();
+    expect(
+      location,
+      "the Location is ABSOLUTE — it carries the server's own binding, so any deployment whose public origin differs from its bind address sends the user cross-origin and drops their session cookie",
+    ).toBe("/settings?tab=account&email_change=invalid");
+  });
 });
