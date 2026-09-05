@@ -95,10 +95,14 @@ describe("LiveScore — the decided sentence updates on a live poll, not only on
     // transition and not a component that never rendered. `LiveScore` is
     // called here with NO `dict` (this file's whole point, per its own
     // header comment, is proving WIRING without one) — `LiveScoreBody`
-    // falls back to the English `public.json` import, so the headline
-    // reads "Scheduled" (matchCentre.status.scheduled), not the old
-    // hardcoded "Not started" literal (review round 2 minor).
-    expect(island.text()).toContain("Scheduled");
+    // falls back to the English `public.json` import. Round 2 briefly
+    // routed this headline through `matchCentre.status.scheduled`
+    // ("Scheduled"), which silently changed the copy a live Playwright spec
+    // (apps/web/e2e/scorepad-v3-football.spec.ts) asserts on the legacy
+    // fixture page; round 3's product-owner ruling keeps the ORIGINAL copy
+    // verbatim on its own key, `matchCentre.status.notStarted` — English
+    // value is, not coincidentally, "Not started" again.
+    expect(island.text()).toContain("Not started");
     expect(island.text()).not.toContain("WON");
 
     stubFetch({

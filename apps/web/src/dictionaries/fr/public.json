@@ -34,6 +34,7 @@
   "matchCentre.status.live": "En direct",
   "matchCentre.status.decided": "Terminé",
   "matchCentre.status.scheduled": "Programmé",
+  "matchCentre.status.notStarted": "Pas commencé",
   "matchCentre.status.other": "Non joué",
   "matchCentre.status.abandoned": "Abandonné",
   "matchCentre.status.cancelled": "Annulé",

@@ -2493,6 +2493,7 @@ export type DictionaryKey =
   | "matchCentre.status.decided"
   | "matchCentre.status.forfeited"
   | "matchCentre.status.live"
+  | "matchCentre.status.notStarted"
   | "matchCentre.status.other"
   | "matchCentre.status.postponed"
   | "matchCentre.status.scheduled"

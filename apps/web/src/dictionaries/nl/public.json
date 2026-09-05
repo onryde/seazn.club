@@ -34,6 +34,7 @@
   "matchCentre.status.live": "Live",
   "matchCentre.status.decided": "Afgelopen",
   "matchCentre.status.scheduled": "Gepland",
+  "matchCentre.status.notStarted": "Niet gestart",
   "matchCentre.status.other": "Niet gespeeld",
   "matchCentre.status.abandoned": "Gestaakt",
   "matchCentre.status.cancelled": "Geannuleerd",

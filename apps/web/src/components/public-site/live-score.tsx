@@ -179,12 +179,23 @@ export function LiveScoreBody({
               {statusWord}
             </p>
           )}
+          {/* Task 11 fix round 3 — PRODUCT OWNER RULING: this headline
+              fallback keeps its existing copy verbatim ("Not started"),
+              on its OWN key (`matchCentre.status.notStarted`), never
+              `matchCentre.status.scheduled` ("Scheduled") — round 2 briefly
+              routed it through the chip's word instead, which silently
+              changed what `apps/web/e2e/scorepad-v3-football.spec.ts`
+              (a live, non-skipped Playwright spec) asserts a spectator
+              sees on the legacy public fixture page. The status PILL/chip
+              above and this HEADLINE are two different pieces of copy that
+              happen to describe the same moment; they keep two different
+              keys on purpose now. */}
           <p className="font-display text-5xl font-bold tabular-nums leading-none tracking-tight sm:text-6xl">
             {data.summary?.headline
               ? showBreakdown
                 ? stripLiveSetPoints(data.summary.headline)
                 : data.summary.headline
-              : t(activeDict, "matchCentre.status.scheduled")}
+              : t(activeDict, "matchCentre.status.notStarted")}
           </p>
           {!showBreakdown && data.summary?.perSide ? (
             <ul className="mt-5 space-y-2">

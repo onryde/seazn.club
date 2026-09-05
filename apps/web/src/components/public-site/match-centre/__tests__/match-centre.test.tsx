@@ -135,10 +135,14 @@ describe("MatchCentre — graceful fallback (no document, or an empty tabs list)
       <MatchCentre fixtureId="fx-none" initial={initial} realtime={false} dict={dict} locale="en" tabParam={null} />,
     );
     expect(html).toContain('data-testid="mc-fallback"');
-    // Review round 2 minor — LiveScoreBody's headline fallback is now
-    // localised through matchCentre.status.scheduled ("Scheduled"), not the
-    // English literal "Not started" — anchor on the dict VALUE.
-    expect(html).toContain(dict["matchCentre.status.scheduled"] as string);
+    // Review round 3 — LiveScoreBody's headline fallback keeps its ORIGINAL
+    // copy verbatim, on its own key `matchCentre.status.notStarted` ("Not
+    // started"), per the product owner's ruling — round 2 briefly routed it
+    // through matchCentre.status.scheduled ("Scheduled") instead, which
+    // silently changed the copy a live Playwright spec
+    // (e2e/scorepad-v3-football.spec.ts) asserts on the legacy fixture
+    // page. Anchor on the dict VALUE, not the literal, either way.
+    expect(html).toContain(dict["matchCentre.status.notStarted"] as string);
     expect(html).not.toContain('data-testid="mc-root"');
     expect(html).not.toContain('data-testid="mc-court-card"');
   });

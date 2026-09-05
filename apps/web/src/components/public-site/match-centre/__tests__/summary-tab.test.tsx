@@ -221,9 +221,13 @@ beforeAll(() => {
 describe("SummaryTab — cricket", () => {
   it("PRE-PLAY cricket (no live block, no performers, no innings) renders the scorebug, not a blank tab, and no mc-* cricket blocks", () => {
     const html = renderToStaticMarkup(<SummaryTab doc={emptyDoc} dict={dict} data={liveFixtureFor(emptyDoc)} />);
-    // Positive: the scorebug (LiveScoreBody's fallback headline, now
-    // localised through matchCentre.status.scheduled) is present.
-    expect(html).toContain(dict["matchCentre.status.scheduled"] as string);
+    // Positive: the scorebug (LiveScoreBody's fallback headline) is
+    // present — round 3: keeps its ORIGINAL copy on its own key,
+    // `matchCentre.status.notStarted` ("Not started"), per the product
+    // owner's ruling (round 2 briefly routed it through
+    // matchCentre.status.scheduled instead, changing the copy a live
+    // Playwright spec asserts on the legacy fixture page).
+    expect(html).toContain(dict["matchCentre.status.notStarted"] as string);
     // Negative: none of the cricket-specific blocks a "blank tab" would lack anyway.
     expect(html).not.toContain('data-testid="mc-live-block"');
     expect(html).not.toContain('data-testid="mc-top-performers"');
@@ -338,9 +342,10 @@ describe("SummaryTab — non-cricket", () => {
     const html = renderToStaticMarkup(
       <SummaryTab doc={nonCricketDoc} dict={dict} data={liveFixtureFor(nonCricketDoc)} />,
     );
-    // LiveScoreBody's own headline fallback (live-score.tsx), localised
-    // through matchCentre.status.scheduled.
-    expect(html).toContain(dict["matchCentre.status.scheduled"] as string);
+    // LiveScoreBody's own headline fallback (live-score.tsx) — round 3:
+    // its own key, matchCentre.status.notStarted ("Not started"), per the
+    // product owner's ruling (see match-centre.test.tsx for the full why).
+    expect(html).toContain(dict["matchCentre.status.notStarted"] as string);
     expect(html).not.toContain('data-testid="mc-live-block"');
     expect(html).not.toContain('data-testid="mc-top-performers"');
     expect(html).not.toContain('data-testid="mc-fow-');
