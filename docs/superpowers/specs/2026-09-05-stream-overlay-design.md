@@ -117,6 +117,15 @@ CricHeroes sells a per-match "Score Ticker" for OBS or vMix, cricket only.
   `robots: { index: false }` in the page metadata. Mounts Barlow Condensed on
   its wrapper `div` exactly as `(public)/shared/[orgSlug]/layout.tsx:19-23,60`
   does; Geist comes from the root layout.
+- **No cookie consent banner** (owner, 2026-09-06, on Q2: *"we can remove"*).
+  OBS composites whatever is painted, so the site's banner would be burned into
+  a club's broadcast until someone dismissed it in the capture browser. The
+  overlay segment renders none — and there is nothing to consent to, because it
+  sets no cookies, which W1 asserts on the segment rather than assumes. The
+  banner is mounted once in the ROOT layout as a sibling of `children`, so a
+  nested layout cannot unmount it; the condition lives in `cookie-consent.tsx`
+  itself, keyed on the route, exactly as `AnalyticsBootstrap` already reads the
+  pathname from that same position.
 - Page (server component): resolves the fixture with the same call the public
   fixture page uses (`getPublicFixture`, `server/public-site/data.ts`), so
   visibility rules hold; resolves the fixture's org entitlement
@@ -191,6 +200,23 @@ Validation lives in one zod schema `streamUrlSchema` (`lib/stream-url.ts`):
 `facebook.com`, `fb.watch`, `www.twitch.tv`, `twitch.tv`, `kick.com`,
 `www.kick.com`. Exact hostname comparison, never a prefix or substring test
 (memory: prefix check is not origin validation). Empty string clears the link.
+
+**The public payload also gains the three fields a scorebug needs** (owner,
+2026-09-06, on Q1: *"we can add it as required"*), as the first task of W1
+rather than a follow-up. The venue's IANA time zone rides on the server-rendered
+fixture payload, resolved through the existing `resolveVenueTz` (`lib/tz.ts`, the
+venue lane the competition-desk programme's "one zone per fixture" ruling
+names) — so a pre-match overlay prints the start time in the venue's own zone
+instead of UTC, which is simply the wrong time for an Indian or Dutch club
+audience. Cricket's `ScoreSummary.detail.innings[]` gains `ballsLimit`, the
+denominator of the `legalBalls` already beside it, so the chase line reads "Need
+45 off 45" as the theme sheet draws it. The football family's summary gains
+`detail.clock`, lifted from the module's own position axis (`footballPosition` /
+`periodPosition`, which already drop a stamp naming a phase the match has left)
+so the bar and the bug can fill the clock cell both themes specify. The two
+score fields ride on `ScoreSummary` because the live transport carries
+`{ status, summary, outcome }` and nothing else; the zone does not change during
+a match, so it does not.
 
 Write path: `PUT /api/v1/fixtures/[id]/stream` (organiser or admin of the
 fixture's org, same role gate the schedule-edit uses; the plan pins the

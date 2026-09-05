@@ -32,18 +32,29 @@
 - Motion is `transform`/`opacity` only, exactly three motions in W1, nothing animates on mount, `prefers-reduced-motion` disables tick and breath (R13, `_THEMES.md` §6).
 - Every subagent dispatch passes `model: opus` explicitly (`_RULES.md` §Agents, owner ruling 2026-09-05).
 - JSON reports go to `/tmp/ovl-w1/` — `mkdir -p /tmp/ovl-w1` once. A second concurrent session must vary the directory (a bare `/tmp` path collides across sessions).
-- Do NOT touch: `components/v2/scorepad/**` (read `sport-theme.ts`, import from it, never edit), the engine, `components/v2/fixture-console.tsx`, `ENTITLEMENT_DOMAINS`, other keys' matrix rows, any pricing surface, `LiveScore`'s render and `Props`, `proxy.ts` CSP, `app/embed/**`, `app/slideshow/**`, `.github/workflows/e2e.yml`, and anything in `stages-panel.tsx` beyond one import plus one conditional line (R11).
+- **Task numbering (owner answers, 2026-09-06).** The four answers folded in below added ONE task, and it is numbered **Task 0** deliberately: Tasks 1–8 keep the numbers that `_INDEX.md`, `_STATE.md`, the W1 prompt's scopes and the W2 plan already cite, so no cross-reference anywhere moved. Execution order is 0, 1, 2, 3, 4, 5, 6, 7, 8.
+- **Transport (owner answer 14 / Q3): "we are using supabase realtime."** The overlay subscribes to the SAME Supabase private channel the public match page uses — no second transport, no overlay-only poll interval. `/api/v1/public/fixtures/[id]/realtime-token` 403s without the `realtime` entitlement and the client then falls back to the 15 s poll, which on a live broadcast is a score that lags the picture. So the test org's override row grants **both** `streaming.overlay` and `realtime` (Task 4), and Task 4's test asserts both. Whether every plan that eventually grants one must grant the other is a PRICING-time decision, deferred alongside Q4 — do not encode that coupling in code.
+- **The hiding gate is the per-organisation entitlement override row (owner answer 17 / Q14)** — not a request header (a browser cannot set one on a navigation and OBS sends none), not a preview cookie, not an environment flag. A viewer whose org does not hold `streaming.overlay` gets exactly three things: `notFound()` (404) on `/overlay/fixtures/[id]`, no panel on the division page, and nothing on `/pricing`. No task in this plan may invent a second gate.
+- Do NOT touch: `components/v2/scorepad/**` (read `sport-theme.ts`, import from it, never edit), the engine **except the four additions Task 0 makes and nothing else** (`cricket.ts`'s `summary().detail.innings[].ballsLimit`; `football.ts`'s and `sports/period/kernel.ts`'s `summary().detail.clock`; `core/position.ts`'s `clockValue` reader; football's `coarsen` carrying `at` through, which §9.6 requires once the clock is a summary fact) — every other engine file, and every other field of those summaries, stays off-limits, `components/v2/fixture-console.tsx`, `ENTITLEMENT_DOMAINS`, other keys' matrix rows, any pricing surface, `LiveScore`'s render and `Props`, `proxy.ts` CSP, `app/embed/**`, `app/slideshow/**`, `.github/workflows/e2e.yml`, and anything in `stages-panel.tsx` beyond one import plus one conditional line (R11).
 
 ## File Structure
 
 | File | Create / Modify | Responsibility |
 |---|---|---|
+| `packages/engine/src/core/position.ts` | Modify (append after `formatPosition`, `:278`) | `clockValue(position)` — the ONE reader for the clock segment `clockSegment` (`:164`) writes. |
+| `packages/engine/src/sports/cricket/cricket.ts` | Modify (`summary()`, `:3306-3317`) | `ballsLimit` on each `detail.innings[]` entry — the chase's denominator. |
+| `packages/engine/src/sports/cricket/cricket.test.ts` | Modify | The summary case that pins `ballsLimit`, and its revised-target case. |
+| `packages/engine/src/sports/football/football.ts` | Modify (`summary()` `:2551-2560`, `coarsen()` `:3029-3040`) | `detail.clock` from `footballPosition(state)`; `coarsen` carries `at` so §9.6 still holds. |
+| `packages/engine/src/sports/football/football.time.test.ts` | Modify | Clock in the summary; coarse ≡ fine with a stamped goal. |
+| `packages/engine/src/sports/period/kernel.ts` | Modify (`summary()`, `:2513`) | `detail.clock` from `periodPosition(state)` — hockey and ice hockey. This kernel declares no `coarsen`, so §9.6 does not gate it. |
+| `apps/web/src/server/public-site/data.ts` | Modify (`getPublicFixture`, `:689-747`) | `venueTz` on the return — `resolveVenueTz(divisionTz, orgTz)`, one zone per fixture. |
+| `apps/web/src/server/public-site/__tests__/public-fixture-venue-tz.test.ts` | Create | DB-backed: division override wins, org fallback, UTC default. |
 | `apps/web/src/components/public-site/use-live-fixture.ts` | Create | The ONE public live transport: subscribe-or-poll, lifted verbatim from `live-score.tsx:60-117`. |
 | `apps/web/src/components/public-site/__tests__/use-live-fixture.test.tsx` | Create | Hook branches via `renderIsland` + captured `setInterval`. |
 | `apps/web/src/components/public-site/live-score.tsx` | Modify (`:8`, `:29`, `:59-117`, `:148`) | Repointed to the hook; render and `Props` unchanged. |
-| `apps/web/src/lib/public-site.ts` | Modify (append after `:378`) | `battingEntrantId`, `chaseNeed` — the two summary readers the overlay needs and nothing else owns. |
+| `apps/web/src/lib/public-site.ts` | Modify (append after `:378`) | `battingEntrantId`, `chaseNeed`, `chaseBalls`, `matchClock` — the summary readers the overlay needs and nothing else owns. |
 | `apps/web/src/lib/__tests__/public-site-overlay-derive.test.ts` | Create | Unit cover for the two new readers. |
-| `apps/web/src/lib/overlay-model.ts` | Create | Pure projection `overlayModel(input): OverlayModel`; type-only `OverlayMoment` slot for W2. |
+| `apps/web/src/lib/overlay-model.ts` | Create | Pure projection `overlayModel(input): OverlayModel`; `overlayStartLabel(iso, locale, tz)`; type-only `OverlayMoment` slot for W2. |
 | `apps/web/src/lib/__tests__/overlay-model.test.ts` | Create | Eleven sports folded through real modules; empty / decided / led truth table. |
 | `apps/web/src/lib/stream-url.ts` | Create | `streamUrlSchema` — https + exact-hostname allowlist, `""` → `null`. |
 | `apps/web/src/lib/__tests__/stream-url.test.ts` | Create | Ten accepted hosts; the six rejections named in the prompt. |
@@ -65,7 +76,8 @@
 | `apps/web/src/components/overlay/overlay-bar.tsx` | Create | Theme A per `_THEMES.md` §3. |
 | `apps/web/src/components/overlay/overlay-bug.tsx` | Create | Theme B per `_THEMES.md` §4. |
 | `apps/web/src/app/globals.css` | Modify (append after `:1022`) | `.ovl-*` rules + the three keyframes + the reduced-motion block. |
-| `apps/web/src/components/cookie-consent.tsx` | Modify (`:84`) | One `data-testid="cookie-consent"` attribute so the overlay layout can suppress it. |
+| `apps/web/src/components/cookie-consent.tsx` | Modify (`:84` + a `usePathname` guard) | `data-testid="cookie-consent"`, and RENDERS NOTHING under `/overlay/` (owner answer 13). |
+| `apps/web/src/components/__tests__/cookie-consent-overlay-segment.test.tsx` | Create | The guard, driven through the component — plus its positive pair. |
 | `apps/web/src/components/v2/fixture-stream-panel.tsx` | Create | The organiser panel per `_THEMES.md` §8. |
 | `apps/web/src/components/v2/stages-panel.tsx` | Modify (`:144-146`, `:399`, `:1072-1085`, `:1115-1128`, `:1167-1180`, `:1579-1604`, `:1747`) | Two new props threaded; one import + one conditional line in `FixtureLine`. |
 | `apps/web/src/app/o/[orgSlug]/c/[compSlug]/d/[divSlug]/page.tsx` | Modify (`:124-138`, `:596`) | `hasFeature(auth.orgId, "streaming.overlay")` into the `Promise.all`; both props passed. |
@@ -78,6 +90,427 @@
 | `apps/web/e2e/walkthrough/stream-overlay-capture.spec.ts` | Create | Visual gate, gated on `OVL_DIR`. |
 | `scripts/smoke.ts` | Modify (after `:790`) | `streamOverlaySuite` — overlay 200/404 and the `stream_url` seam end to end. |
 | `docs/superpowers/specs/2026-09-05-stream-overlay-prompts/_INDEX.md` | Modify | Status rows, landed migration numbers, findings. |
+
+---
+
+### Task 0: The public payload carries what a scorebug needs
+
+> **Why this task exists, and why it is numbered 0.** Owner answer 12 (2026-09-06),
+> *"we can add it as required"*, on Q1. Three facts a broadcast scorebug shows are
+> not on the public payload today: the fixture's venue time zone, cricket's balls
+> remaining in the chase, and the football match clock. It is numbered **Task 0**
+> rather than inserted as a new "Task 1" so every existing cross-reference to
+> Tasks 1–8 — in this file, `_INDEX.md`, `_STATE.md`, the W1 prompt and the W2
+> plan — stays valid. It runs FIRST: Task 2's projection reads all three.
+>
+> **This is the one task that edits `packages/engine`,** which the Global
+> Constraints otherwise forbid. Recorded as a conflict the owner's answer
+> creates: the live transport carries `{ status, summary, outcome }` and nothing
+> else (`components/public-site/live-score-data.ts:7-23`), so a number that must
+> change DURING a match can only ride on `ScoreSummary`. The venue zone does not
+> change during a match, so it rides on the server-rendered payload instead and
+> touches no engine file.
+
+**Files:**
+- Create (Test): `apps/web/src/server/public-site/__tests__/public-fixture-venue-tz.test.ts`
+- Modify: `apps/web/src/server/public-site/data.ts` — `getPublicFixture`'s return type and its cached block (`:689-747`)
+- Modify: `packages/engine/src/core/position.ts` — append after `formatPosition` (`:278`)
+- Modify: `packages/engine/src/sports/cricket/cricket.ts` — `summary()`'s `detail.innings` map (`:3306-3317`)
+- Modify (Test): `packages/engine/src/sports/cricket/cricket.test.ts`
+- Modify: `packages/engine/src/sports/football/football.ts` — `summary()` (`:2551-2560`) and `coarsen()` (`:3029-3040`)
+- Modify (Test): `packages/engine/src/sports/football/football.time.test.ts`
+- Modify: `packages/engine/src/sports/period/kernel.ts` — `summary()` (`:2513`)
+- Regenerated: `packages/engine/src/sports/{cricket,football,hockey,icehockey}/*.golden.json`
+
+**Interfaces:**
+- Consumes: `resolveVenueTz(divisionTz, orgTz): string` (`apps/web/src/lib/tz.ts:43`) — the VENUE lane, division override then org then UTC; `clockSegment(elapsed): PositionSegment` (`core/position.ts:164`, key `"clock"`, value `formatElapsed(elapsed)`); `periodClockPosition({ phaseOrder, evidence, asOf })` (`core/position.ts:247`), which already applies the staleness guard `asOf.period === phase`; `footballPosition(state)` (`football.ts:730`); `periodPosition(state)` (`sports/period/kernel.ts:702`); `InningsState.ballsLimit` (`cricket.ts:440`, set from `state.quota` at `:770`, revised by DLS at `:1006`).
+- Produces:
+  - `export function clockValue(position: MatchPosition): string | undefined` (`core/position.ts`)
+  - `ScoreSummary.detail.innings[].ballsLimit: number | null` (cricket)
+  - `ScoreSummary.detail.clock?: string` (football, hockey, ice hockey)
+  - `getPublicFixture(...)` gains `venueTz: string` on its resolved object
+
+> **Shape decision — the venue zone rides as a raw IANA string, and the LABEL is
+> formatted by the server component that already holds the locale.** Not both, and
+> not a pre-formatted label alone. Reasons: Task 2's deviation 3 (kept) puts
+> `Intl` formatting outside the pure model, and the only consumer that needs the
+> zone is the overlay page, which is a server component holding `locale` already;
+> a pre-formatted label alone would fix the format for every future consumer and
+> could not be re-rendered in another locale from `?lang=`. `overlayStartLabel`
+> (Task 2) is where the two meet.
+>
+> **`resolveVenueTz` rather than a second answer.** `getPublicDivision` (`data.ts:665-670`)
+> splices the SQL mirror `coalesce(ss.tz, o.timezone, 'UTC')` inline because a
+> string helper cannot go into a postgres.js tagged template. This query has both
+> columns in hand, so it folds them through the TS authority instead. **Trap,
+> asserted below:** `schedule_settings.tz` is `text not null default 'UTC'`
+> (`V219__schedule_settings.sql:8`), so a division row that exists with the
+> default SHADOWS the org's zone — in both the SQL mirror and `resolveVenueTz`.
+> "Org fallback" therefore means NO `schedule_settings` row, and the test seeds
+> it that way rather than writing `'UTC'` and expecting inheritance.
+
+- [ ] **Step 1: Write the failing venue-zone test.** Create `apps/web/src/server/public-site/__tests__/public-fixture-venue-tz.test.ts`:
+
+```ts
+// Owner answer 12 (Q1): the public fixture payload carries the VENUE zone, so
+// a pre-match overlay prints a start time an Indian or Dutch club audience
+// recognises instead of UTC.
+//
+// The competition-desk programme's ruling is "one zone per fixture" and its
+// resolver is `resolveVenueTz` (lib/tz.ts:43) — the VENUE lane, never the
+// personal lane. This test pins the three branches THROUGH getPublicFixture,
+// not through the helper (the helper already has its own unit cover): the
+// claim is about what the payload carries, and a helper test cannot see a
+// query that forgot to select `organizations.timezone`.
+//
+// unstable_cache is a Next server-runtime API — passthrough under vitest, the
+// same double this directory's data-court-venue-names.test.ts uses. Real
+// Postgres required; skipped without DATABASE_URL.
+import { afterAll, describe, expect, it, vi } from "vitest";
+import { randomUUID } from "node:crypto";
+
+vi.mock("next/cache", () => ({
+  unstable_cache: (fn: (...args: unknown[]) => unknown) => fn,
+  revalidateTag: vi.fn(),
+}));
+
+import { sql } from "@/lib/db";
+import { getPublicFixture } from "../data";
+
+const HAS_DB = !!process.env.DATABASE_URL;
+const uniq = () => randomUUID().slice(0, 8);
+
+interface Seeded {
+  orgId: string;
+  orgSlug: string;
+  compSlug: string;
+  divSlug: string;
+  divisionId: string;
+  fixtureId: string;
+}
+
+/**
+ * A public org / competition / division / fixture, seeded by direct insert.
+ *
+ * LIFT `seed()` from `data-court-venue-names.test.ts` in this same directory
+ * rather than re-deriving the column list — that file already seeds exactly
+ * this shape (public competition, live division, one fixture) and is the
+ * working reference for which columns are NOT NULL. Drop its venue/court
+ * inserts, which this test does not need, and return the ids below.
+ */
+async function seedPublicFixture(orgTz: string | null): Promise<Seeded> {
+  /* … lifted seed … */
+  throw new Error("lift from data-court-venue-names.test.ts");
+}
+
+const seeded: string[] = [];
+afterAll(async () => {
+  for (const orgId of seeded) await sql`delete from organizations where id = ${orgId}`;
+});
+
+describe.skipIf(!HAS_DB)("getPublicFixture carries the venue zone", () => {
+  it("falls back to the organisation's zone when the division has no schedule_settings row", async () => {
+    const s = await seedPublicFixture("Asia/Kolkata");
+    seeded.push(s.orgId);
+    // Deliberately NO schedule_settings row: `tz` is `not null default 'UTC'`
+    // (V219:8), so a row that merely exists would SHADOW the org zone, and a
+    // test that wrote 'UTC' here would be asserting the wrong branch.
+    const data = await getPublicFixture(s.orgSlug, s.compSlug, s.divSlug, s.fixtureId);
+    expect(data, "the seeded fixture must be publicly visible").not.toBeNull();
+    expect(
+      data!.venueTz,
+      "a UTC label is the wrong time for this club — that is the whole point of the field",
+    ).toBe("Asia/Kolkata");
+    expect(data!.venueTz).not.toBe("UTC");
+  });
+
+  it("the division's own override wins over the organisation's zone", async () => {
+    const s = await seedPublicFixture("Asia/Kolkata");
+    seeded.push(s.orgId);
+    await sql`
+      insert into schedule_settings (division_id, org_id, tz)
+      values (${s.divisionId}, ${s.orgId}, 'Europe/Amsterdam')
+      on conflict (division_id) do update set tz = excluded.tz`;
+    const data = await getPublicFixture(s.orgSlug, s.compSlug, s.divSlug, s.fixtureId);
+    expect(
+      data!.venueTz,
+      "a London organiser running an event in Malaga — the venue lane's whole reason to exist",
+    ).toBe("Europe/Amsterdam");
+  });
+
+  it("is UTC when neither is set, and never a personal or browser zone", async () => {
+    const s = await seedPublicFixture(null);
+    seeded.push(s.orgId);
+    const data = await getPublicFixture(s.orgSlug, s.compSlug, s.divSlug, s.fixtureId);
+    expect(data!.venueTz).toBe("UTC");
+  });
+
+  it("rejects a stored zone Intl does not accept rather than passing it through", async () => {
+    // `resolveVenueTz` validates with Intl.DateTimeFormat construction, so a
+    // legacy/typo'd zone degrades to the next lane instead of reaching
+    // Intl.DateTimeFormat({ timeZone }) in the page and throwing a RangeError
+    // that would 500 the overlay mid-broadcast.
+    const s = await seedPublicFixture("Mars/Olympus_Mons");
+    seeded.push(s.orgId);
+    const data = await getPublicFixture(s.orgSlug, s.compSlug, s.divSlug, s.fixtureId);
+    expect(data!.venueTz).toBe("UTC");
+  });
+});
+```
+
+- [ ] **Step 2: Run it — expect red.** `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/stream-overlay/apps/web && DATABASE_URL=postgresql://postgres@127.0.0.1:54405/seazn_ovl DATABASE_SSL=disable npx vitest run src/server/public-site/__tests__/public-fixture-venue-tz.test.ts --reporter=json --outputFile=/tmp/ovl-w1/t0a-red.json`
+  Expected: a COLLECTION failure first — `Property 'venueTz' does not exist on type` is a tsc error, not a vitest one, so what vitest actually reports is four failures of the form `expected undefined to be 'Asia/Kolkata'`. `numTotalTests: 4`, `numFailedTests: 4`. Read the JSON; do not judge from a wrapper summary.
+
+- [ ] **Step 3: Add `venueTz` to `getPublicFixture`.** In `apps/web/src/server/public-site/data.ts`: add `import { resolveVenueTz } from "@/lib/tz";` beside the existing imports, widen the function's declared return object with `venueTz: string;`, and inside the `unstable_cache` block, after the `realtime` query:
+
+```ts
+      // Venue lane (V305), "one zone per fixture" — the division's own
+      // `schedule_settings.tz` override, else the ORGANISATION's zone, else
+      // UTC. Resolved through `resolveVenueTz` (lib/tz.ts:43) rather than the
+      // `coalesce(ss.tz, o.timezone, 'UTC')` mirror `getPublicDivision` above
+      // splices inline: that mirror exists because a string helper cannot be
+      // spliced into a postgres.js tagged template, and this query has both
+      // columns in hand, so the TS authority applies directly.
+      //
+      // NEVER `pickTimezone` and never the `seazn_tz` cookie: a London-based
+      // organiser can run an event in Malaga, and the overlay is watched by an
+      // audience in neither.
+      const [zone] = await sql<{ division_tz: string | null; org_tz: string | null }[]>`
+        select ss.tz as division_tz, o.timezone as org_tz
+        from divisions d
+        left join schedule_settings ss on ss.division_id = d.id
+        left join organizations o on o.id = d.org_id
+        where d.id = ${division.id}`;
+```
+
+  and add `venueTz: resolveVenueTz(zone?.division_tz, zone?.org_tz),` to the object the cached block returns, and to the final `return { org: shell.org, competition: shell.competition, division, ...detail };` spread (it rides in `detail`, so no edit is needed there — confirm by reading, not by assuming).
+
+- [ ] **Step 4: Run — expect PASS.** `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/stream-overlay/apps/web && DATABASE_URL=postgresql://postgres@127.0.0.1:54405/seazn_ovl DATABASE_SSL=disable npx vitest run src/server/public-site --reporter=json --outputFile=/tmp/ovl-w1/t0a-green.json`
+  Expected: `numFailedTests: 0`; the new file contributes 4; `data-court-venue-names.test.ts`, `pass-scope-public-realtime.test.ts` and `player-stats-public.test.ts` pass with ZERO edits. Confirm every `.testResults[].name` resolves under the worktree.
+
+- [ ] **Step 5: Write the failing cricket test.** In `packages/engine/src/sports/cricket/cricket.test.ts`, add to the summary describe block:
+
+```ts
+  it("the summary carries each innings' ballsLimit, so a chase line can read 'off N balls'", () => {
+    // `_THEMES.md` §3 draws the chase line as "Need 45 off 45". `legalBalls`
+    // has always been on the summary; its DENOMINATOR has not, so the public
+    // payload could only ever say "Need 45". `ballsLimit` is already on
+    // InningsState (cricket.ts:440, seeded from state.quota at :770) — this
+    // exposes it, it does not compute it. A second derivation in the web app
+    // would be a second authority for the number a chase turns on.
+    const state = foldCricket(t20Cfg(), [
+      ["core.start"],
+      ...overOf(0, "e-home"),
+      ["cricket.innings.close", { reason: "overs" }],
+      ...overOf(0, "e-away"),
+    ]) as CricketState;
+    const detail = cricket.summary(state).detail as {
+      innings: { ballsLimit: number | null; legalBalls: number }[];
+    };
+    expect(detail.innings).toHaveLength(2);
+    // T20 = 120 legal balls per innings; derived from the CFG this test built,
+    // never a constant typed here, so changing the format moves the expectation.
+    const quota = t20Cfg().ballsPerInnings;
+    expect(detail.innings[0]!.ballsLimit).toBe(quota);
+    expect(detail.innings[1]!.ballsLimit).toBe(quota);
+    // The number the overlay actually renders — and it must differ from the
+    // runs figure, so a transposed pair cannot pass.
+    expect(detail.innings[1]!.ballsLimit! - detail.innings[1]!.legalBalls).toBe(quota - 6);
+  });
+
+  it("a DLS revision moves ballsLimit with the target, not just the runs", () => {
+    // The revise path (cricket.ts:991-1006) is the one that makes ballsLimit a
+    // live number rather than a constant restatement of the config. Without
+    // this case a "return cfg.ballsPerInnings" implementation would pass.
+    const state = foldCricket(t20Cfg(), [
+      ["core.start"],
+      ...overOf(0, "e-home"),
+      ["cricket.innings.close", { reason: "overs" }],
+      ...overOf(0, "e-away"),
+      ["cricket.revise", { target: 91, ballsLimit: 60, source: "dls" }],
+    ]) as CricketState;
+    const detail = cricket.summary(state).detail as { innings: { ballsLimit: number | null }[] };
+    expect(detail.innings[1]!.ballsLimit).toBe(60);
+    expect(detail.innings[1]!.ballsLimit).not.toBe(t20Cfg().ballsPerInnings);
+  });
+```
+
+  RE-PIN before writing: the fold helper, the cfg builder and the over helper in this file are named by the file's own existing cases (`cricket.test.ts` is 72 KB and predates this plan) — read three neighbouring summary tests and use THEIR helpers and THEIR `cricket.revise` payload shape. A hand-invented event name folds to `UNKNOWN_TYPE` and proves nothing.
+
+- [ ] **Step 6: Run it — expect red.** `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/stream-overlay/packages/engine && npx vitest run src/sports/cricket/cricket.test.ts --reporter=json --outputFile=/tmp/ovl-w1/t0b-red.json`
+  Expected: both new cases fail with `expected undefined to be 120` — the field is on state, not on the summary. `numFailedTests: 2`.
+
+- [ ] **Step 7: Expose `ballsLimit` on the cricket summary.** In `packages/engine/src/sports/cricket/cricket.ts`, inside `summary()`'s `detail.innings` map (`:3306-3317`), beside `legalBalls`:
+
+```ts
+        innings: state.innings.map((innings) => ({
+          entrantId: state.entrants[innings.battingSide],
+          runs: innings.runs,
+          wickets: innings.wickets,
+          legalBalls: innings.legalBalls,
+          // The DENOMINATOR of the number already above it. `legalBalls` alone
+          // cannot express "off 45 balls", which is what a chase turns on
+          // (_THEMES.md §3). Survives coarsening: the quota is fixed at innings
+          // creation (:770) and only `cricket.revise` moves it, and `coarsen`
+          // passes revise through — so §9.6's coarse ≡ fine still holds, which
+          // the conformance property in Step 8 proves rather than assumes.
+          // `null` where the format declares no quota (timed / unlimited).
+          ballsLimit: innings.ballsLimit,
+          declared: innings.declared,
+          closed: innings.closed,
+          ...(innings.closeReason === undefined ? {} : { closeReason: innings.closeReason }),
+        })),
+```
+
+- [ ] **Step 8: Run cricket AND the §9.6 property — expect PASS.** `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/stream-overlay/packages/engine && npx vitest run src/sports/cricket src/testkit/conformance.test.ts --reporter=json --outputFile=/tmp/ovl-w1/t0b-green.json`
+  Expected: `numFailedTests: 0`. The case that matters is `§9.6 dual-fidelity: coarse fold ≡ fine fold` (`testkit/conformance.ts:244`) — it compares whole summaries over generated streams, so it is the ONLY thing that can tell us the new field is fold-invariant. If it reds, the field is NOT safe on the summary: stop and record, do not weaken the property.
+
+- [ ] **Step 9: Write the failing clock test.** In `packages/engine/src/sports/football/football.time.test.ts`, add:
+
+```ts
+  it("the summary carries the match clock, and drops it once the stamp names a phase the match has left", () => {
+    // Owner answer 12 (Q1). `_THEMES.md` §3 and §4 both draw a clock cell for
+    // the football family, and `lib/public-site.ts:319-373` was the complete
+    // reader set — none of them carried one, because the summary did not.
+    //
+    // The value is NOT derived here: it is `footballPosition(state)`'s own
+    // clock segment (core/position.ts:164/247), which already applies the
+    // staleness guard `asOf.period === phase` and already formats through
+    // `formatElapsed`. Same authority as the pad's strip; one format, one
+    // guard, one place to change them.
+    const stamped = foldFootball(cfg, [
+      ["core.start"],
+      ["football.goal", { by: "home", at: { period: "H1", elapsed: 761 } }],
+    ]) as FootballState;
+    expect((football.summary(stamped).detail as { clock?: string }).clock).toBe("12:41");
+
+    // A stamp from a phase the match has LEFT must not read as "now" — the
+    // guard footballPosition already owns. H1's closing whistle carries an H1
+    // stamp; once H2 is running, the clock is absent rather than wrong.
+    const nextPeriod = foldFootball(cfg, [
+      ["core.start"],
+      ["football.goal", { by: "home", at: { period: "H1", elapsed: 761 } }],
+      ["football.period", { to: "H2", at: { period: "H1", elapsed: 2700 } }],
+    ]) as FootballState;
+    expect(
+      (football.summary(nextPeriod).detail as { clock?: string }).clock,
+      "a stale clock on air is worse than no clock",
+    ).toBeUndefined();
+
+    // And absent entirely for a stream nothing stamped, which is every match
+    // scored through the v3 pad before R6 (clock.ts's own doc).
+    const unstamped = foldFootball(cfg, [["core.start"], ["football.goal", { by: "home" }]]) as FootballState;
+    expect((football.summary(unstamped).detail as { clock?: string }).clock).toBeUndefined();
+  });
+
+  it("a coarsened stream keeps the stamp, so coarse and fine agree about the clock", () => {
+    // §9.6 in miniature, written here as well as in the property because the
+    // property's failure message names a generated stream nobody can read.
+    // `coarsen` strips ATTRIBUTION (scorer, kick taker, the deprecated
+    // `minute`); `at` is not attribution, it is the event's own game time, and
+    // once the clock is a summary fact the two fidelities must agree on it.
+    const events: FootballEventTuple[] = [
+      ["core.start"],
+      ["football.goal", { by: "home", person: "e-home-p1", at: { period: "H1", elapsed: 761 } }],
+    ];
+    const fine = foldFootball(cfg, events) as FootballState;
+    const coarse = foldFootball(cfg, coarsenTuples(events)) as FootballState;
+    expect(football.summary(coarse)).toEqual(football.summary(fine));
+    expect((football.summary(coarse).detail as { clock?: string }).clock).toBe("12:41");
+  });
+```
+
+  RE-PIN before writing: `cfg`, `foldFootball`, the tuple type and a coarsen helper are this file's own (`football.time.test.ts` is 54 KB and already exercises `at`/`asOf` — `clock.test.ts:426-435` in `apps/web` shows the same fold shape). Use the file's helpers; if it has no coarsen helper, build the coarse stream with `football.coarsen(...)` and the file's own envelope maker.
+
+- [ ] **Step 10: Run it — expect red, TWICE over.** `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/stream-overlay/packages/engine && npx vitest run src/sports/football src/testkit/conformance.test.ts --reporter=json --outputFile=/tmp/ovl-w1/t0c-red.json`
+  Expected: the first new case fails `expected undefined to be "12:41"`. **The second failure is the one that matters:** once Step 11's summary change lands without the `coarsen` change, `§9.6 dual-fidelity: coarse fold ≡ fine fold` reds, because `coarsen` (`football.ts:3029-3040`) rebuilds `football.goal` as `{ by, ownGoal }` and drops `at` — so the coarse fold's `state.asOf` never advances past the last period marker. Record both; a plan that only expected the first would have discovered this from CI.
+
+- [ ] **Step 11: Add the clock, its reader, and the coarsen fix.**
+
+  (a) `packages/engine/src/core/position.ts`, appended after `formatPosition` (`:278`):
+
+```ts
+/**
+ * The clock a period sport is at, or `undefined`.
+ *
+ * The ONE reader for the segment `clockSegment` writes, so "which key is the
+ * clock" is spelled once. `periodClockPosition` has already applied the
+ * staleness guard (`asOf.period === phase`) before this can see the segment —
+ * this function must never re-implement or relax that guard.
+ */
+export function clockValue(position: MatchPosition): string | undefined {
+  return position.segments.find((segment) => segment.key === "clock")?.value;
+}
+```
+
+  (b) `packages/engine/src/sports/football/football.ts`, in `summary()`'s `detail`:
+
+```ts
+      detail: {
+        periods: state.periods,
+        // W1 stream overlay (owner answer 12): the match clock the bar and the
+        // bug both draw. `footballPosition` (:730) is the SAME derivation the
+        // module's `position` axis publishes and the pad's strip reads — never
+        // a second one — and it drops the value itself when the last stamp
+        // names a phase the match has left. Absent (not `null`) when there is
+        // no current stamp, so the renderer's `clock ? … : null` cell is the
+        // only branch anyone writes.
+        ...(clockValue(footballPosition(state)) === undefined
+          ? {}
+          : { clock: clockValue(footballPosition(state)) as string }),
+        ...(shootout === null ? {} : { shootout }),
+        ...(state.replayFlagged ? { abandoned: true } : {}),
+      },
+```
+
+  (compute `footballPosition(state)` once into a local `const position` above the return rather than calling it twice — written out twice here only to keep the spread readable.)
+
+  (c) `packages/engine/src/sports/football/football.ts`, in `coarsen()`'s `football.goal` arm — and the `football.shootout.kick` arm if it carries `at` (read it; do not assume):
+
+```ts
+        case "football.goal": {
+          const payload = event.payload as z.infer<typeof FootballGoal>;
+          out.push({
+            type: "football.goal",
+            payload: {
+              by: payload.by,
+              ...(payload.ownGoal === undefined ? {} : { ownGoal: payload.ownGoal }),
+              // `at` is NOT attribution. The scorer, the deprecated `minute`
+              // and the assist are attribution and stay stripped; `at` is the
+              // event's own position in game time, and §9.6 requires coarse and
+              // fine to agree on `state.asOf` now that the clock is a summary
+              // fact. Dropping it is what made the property red in Step 10.
+              ...(payload.at === undefined ? {} : { at: payload.at }),
+            },
+          });
+          break;
+        }
+```
+
+  (d) `packages/engine/src/sports/period/kernel.ts`, in `summary()` (`:2513`): the same one-line spread, from `periodPosition(state)` (`:702`) and the same `clockValue` import. This kernel declares **no `coarsen`** (`:2530-2533`), so `testkit/conformance.ts:243`'s `if (module.coarsen)` guard skips §9.6 for hockey and ice hockey entirely — there is nothing to fix on their side, and nothing to claim credit for either.
+
+- [ ] **Step 12: Run the football family AND the property — expect PASS.** `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/stream-overlay/packages/engine && npx vitest run src/sports/football src/sports/hockey src/sports/icehockey src/sports/period src/core/position.test.ts src/testkit/conformance.test.ts --reporter=json --outputFile=/tmp/ovl-w1/t0c-green.json`
+  Expected: `numFailedTests: 0`, and `§9.6 dual-fidelity: coarse fold ≡ fine fold` GREEN for football. If `core/position.test.ts` does not exist under that name, drop it from the command rather than inventing a file.
+
+- [ ] **Step 13: Regenerate the goldens the new summary fields move.** The corpora are single-line JSON that embed folded summaries (`cricket.golden.json` is 551 KB), so three summary fields change every affected snapshot.
+  `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/stream-overlay/packages/engine && UPDATE_GOLDEN=1 npx vitest run src/testkit/golden.test.ts --reporter=json --outputFile=/tmp/ovl-w1/t0-golden.json`
+  then re-run WITHOUT the flag and confirm green. Read `testkit/golden.ts:1300`'s own guard before running this — `UPDATE_GOLDEN` is documented as reserved, and `REBASELINE_GOLDEN` is a different, wider flag that must NOT be used here. Then `/usr/bin/git diff --stat packages/engine/src/sports` and confirm the ONLY corpora that moved are cricket, football, hockey and ice hockey. A moved tennis or badminton corpus means something else changed and the run is not clean.
+
+- [ ] **Step 14: Mutation checks — three, each named.**
+  1. Delete the venue-zone query and hardcode `venueTz: "UTC"` in `data.ts`. Re-run Step 4's command. Expected red: `falls back to the organisation's zone when the division has no schedule_settings row` — `expected 'UTC' to be 'Asia/Kolkata'`. Restore.
+  2. Drop `ballsLimit: innings.ballsLimit,` from the cricket summary map. Re-run Step 8's command. Expected red: `the summary carries each innings' ballsLimit…` — `expected undefined to be 120`. Restore.
+  3. Drop the `clock` spread from football's summary. Re-run Step 12's command. Expected red: `the summary carries the match clock…` — `expected undefined to be "12:41"`. Restore and re-run each to green.
+  A surviving mutant is a missing test, not a note. Record all three in the PR inventory.
+
+- [ ] **Step 15: Gate the whole of both workspaces against the baseline.**
+  `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/stream-overlay/packages/engine && npx vitest run --reporter=json --outputFile=/tmp/ovl-w1/t0-engine-full.json`
+  then `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/stream-overlay/apps/web && DATABASE_URL=postgresql://postgres@127.0.0.1:54405/seazn_ovl DATABASE_SSL=disable npx vitest run --reporter=json --outputFile=/tmp/ovl-w1/t0-web-full.json`
+  Expected: engine `numFailedTests: 0`; web at the **13962 / 14041, 5 red** baseline in Global Constraints and no more — the engine change reaches `apps/web` through the pad shim and the public readers, so a web-side red here is this task's, not a pre-existing one. Also `cd .../packages/engine && npm run typecheck` and `cd .../apps/web && npm run typecheck`: the local build skips typechecking, so a green build proves nothing about types.
+
+- [ ] **Step 16: Commit.**
+  `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/stream-overlay && /usr/bin/git add packages/engine/src/core/position.ts packages/engine/src/sports/cricket/cricket.ts packages/engine/src/sports/cricket/cricket.test.ts packages/engine/src/sports/football/football.ts packages/engine/src/sports/football/football.time.test.ts packages/engine/src/sports/period/kernel.ts packages/engine/src/sports/cricket/cricket.golden.json packages/engine/src/sports/football/football.golden.json packages/engine/src/sports/hockey/hockey.golden.json packages/engine/src/sports/icehockey/icehockey.golden.json apps/web/src/server/public-site/data.ts apps/web/src/server/public-site/__tests__/public-fixture-venue-tz.test.ts`
+  then
+  `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/stream-overlay && /usr/bin/git commit -m "overlay(payload): venue zone, cricket balls remaining, football clock" -m "Owner answer 12 (Q1). The public payload could not say when a fixture starts in the venue's own zone, how many balls a chase has left, or what the match clock reads. The zone rides on the server-rendered payload via resolveVenueTz (one zone per fixture); the two live numbers ride on ScoreSummary, because the live transport carries summary and nothing else. football.coarsen now keeps 'at' — not attribution, and s9.6 requires coarse and fine to agree on state.asOf once the clock is a summary fact." -m "Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>" -m "Claude-Session: https://claude.ai/code/session_01UdUR7dcxassJ4FExpVfRRr"`
 
 ---
 
@@ -418,9 +851,12 @@ export function LiveScore({
 
 **Interfaces:**
 - Consumes: `setBreakdown(summary: unknown, sportKey: string): SetBreakdown | null` (`public-site.ts:290`), `periodBreakdown(summary: unknown): PeriodScoreRow[] | null` (`:319`), `matchStrength(summary: unknown): string | null` (`:338`), `disciplineList(summary: unknown): DisciplineEntry[] | null` (`:352`), `servingSide(summary: unknown): "home" | "away" | null` (`:373`), `disciplineLabel(classKey: string): string` (`:377`); `renderDecidedOutcome(outcome, entrantNames: Record<string,string>, templates: DecidedOutcomeTemplates, shootoutScore?): string | null` (`scoring-vocab.ts:1345`), `shootoutScoreFromDetail(detail: unknown)` (`:1410`), `type DecidedOutcomeTemplates` (`:1296`); `type LiveFixtureData` (`live-score-data.ts:7`).
+- Also consumes, from **Task 0**: `ScoreSummary.detail.innings[].ballsLimit` (cricket), `ScoreSummary.detail.clock` (football, hockey, ice hockey), and `getPublicFixture(...).venueTz`.
 - Produces (in `public-site.ts`):
   - `export function battingEntrantId(summary: unknown): string | null`
   - `export function chaseNeed(summary: unknown): number | null`
+  - `export function chaseBalls(summary: unknown): number | null`
+  - `export function matchClock(summary: unknown): string | null`
 - Produces (in `overlay-model.ts`):
   - `export type OverlayMsg = (key: string, vars?: Record<string, string | number>) => string`
   - `export interface OverlaySideInput { id: string; name: string; short?: string | null }`
@@ -431,33 +867,37 @@ export function LiveScore({
   - `export interface OverlayModelInput { sportKey: string; data: LiveFixtureData; sides: [OverlaySideInput, OverlaySideInput]; startLabel: string | null; msg: OverlayMsg; decidedTemplates: DecidedOutcomeTemplates }`
   - `export function shortCode(side: OverlaySideInput): string`
   - `export function splitLine(line: string): { big: string; sub?: string }`
+  - `export function overlayStartLabel(iso: string | null, locale: string, tz: string): string | null`
   - `export function overlayModel(input: OverlayModelInput): OverlayModel`
 
 > **Three deviations from the wave prompt's scope 2, each recorded as a finding:**
 > 1. `msg` is typed `OverlayMsg` (a plain `string` key), not `MsgFn` (`scoring-vocab.ts:1147`). `MsgFn`'s key type is `MessageKey = keyof typeof messages` (`lib/messages.ts:12`), and `messages` is `dictionaries/en/ui.json` — the overlay's copy is the `public` namespace, so every `overlay.*` key would fail to type-check against `MsgFn`. `OverlayMsg` is structurally a supertype, so a real `MsgFn` is still assignable.
 > 2. `overlayModel` also takes `decidedTemplates`. The decided sentence's one authority is `renderDecidedOutcome` (`scoring-vocab.ts:1345`), whose templates are built from **ui** keys (`fixture.decidedBy.*`) — exactly what `LiveScore` already receives as a prop. Re-implementing that sentence off `summary.headline` would be a second authority for a fact this repo already owns.
-> 3. `startLabel: string | null` replaces "the localised start time in the venue zone" being computed inside the model. Timezone + locale formatting belongs to the server component that already holds both; putting `Intl.DateTimeFormat` in the model would make it a second tz authority and would make the model impure across locales.
+> 3. `startLabel: string | null` stays a formatted string on the input rather than the model computing it: `overlayModel` takes no zone and no `Intl`, so it stays pure and locale-free. What CHANGED with owner answer 12 is where the string comes from — `overlayStartLabel(iso, locale, venueTz)` in this same file, called by the overlay page with the `venueTz` Task 0 puts on the payload. One formatter, tested here, instead of an `Intl.DateTimeFormat` literal inlined in `page.tsx`.
 >
-> **Two open pins recorded here rather than guessed:**
-> - `header.clock` stays `undefined` in W1. `_THEMES.md` §3 gives football a clock cell, but no elapsed-time field exists on the public `ScoreSummary.detail` — the readers in `lib/public-site.ts:319-373` (`periodBreakdown`, `matchStrength`) are the complete set of what that payload exposes, and neither carries a clock. The bar renders the cell only when `clock` is set, so the slot is live and empty.
+> **Owner answer 12 (2026-09-06) closed the two W1 deviations and the unpinned clock that used to sit here.** Deviation 4 ("start time formats in UTC") and deviation 6 ("chase reads 'Need 45', not 'Need 45 off 45'") are both closed by Task 0, and so is "football's clock is unpinned". Their replacements: the start label formats in `venueTz`, the chase line renders `overlay.chase.needBalls`, and `header.clock` is populated from `matchClock(summary)`. Nothing in this task may fall back to UTC, to a runs-only chase line, or to an empty clock slot.
+>
+> **One open pin recorded here rather than guessed:**
 > - `short` has no source. `public_entrants_v` (`db/migration/deltas/V350__person_tombstone_views.sql:18-47`) exposes `display_name` and a `team_display` jsonb of `club_id/club_name/logo_path/colors` — **no `short_name`**; `teams.short_name` exists (`V206:5`) but does not reach the public payload. Watch-list 6 therefore resolves to **the three-letter fallback**, and the panel copy says so (`ui.stream.codeNote`, Task 6).
 
-- [ ] **Step 1: Write the failing test for the two new summary readers.** Create `apps/web/src/lib/__tests__/public-site-overlay-derive.test.ts`:
+- [ ] **Step 1: Write the failing test for the four new summary readers.** Create `apps/web/src/lib/__tests__/public-site-overlay-derive.test.ts`:
 
 ```ts
-// The two ScoreSummary readers the stream overlay needs and nothing else owned
+// The four ScoreSummary readers the stream overlay needs and nothing else owned
 // (W1 scope 2). They live beside `servingSide`/`setBreakdown` in
 // `lib/public-site.ts` for the reason R5 states: one home for every "read the
 // public summary without an engine import" derivation.
 //
 // Driven off the REAL cricket summary shape (`packages/engine/src/sports/
 // cricket/cricket.ts:3285-3325`: `detail.innings[] = { entrantId, runs,
-// wickets, legalBalls, declared, closed }`), not an invented one.
+// wickets, legalBalls, ballsLimit, declared, closed }` — `ballsLimit` added by
+// Task 0), not an invented one. `detail.clock` is Task 0's football/period
+// field, a `mm:ss` string the engine has already formatted and guarded.
 import { describe, expect, it } from "vitest";
-import { battingEntrantId, chaseNeed } from "@/lib/public-site";
+import { battingEntrantId, chaseBalls, chaseNeed, matchClock } from "@/lib/public-site";
 
 const innings = (entrantId: string, runs: number, closed: boolean) => ({
-  entrantId, runs, wickets: 2, legalBalls: 60, declared: false, closed,
+  entrantId, runs, wickets: 2, legalBalls: 60, ballsLimit: 120, declared: false, closed,
 });
 
 describe("battingEntrantId", () => {
@@ -500,6 +940,52 @@ describe("chaseNeed", () => {
     expect(chaseNeed({ detail: { periods: [{ phase: "H1", home: 1, away: 0 }] } })).toBeNull();
   });
 });
+
+describe("chaseBalls", () => {
+  // The denominator `_THEMES.md` §3 draws: "Need 45 off 45". Task 0 put
+  // `ballsLimit` on the payload; this is the only place that subtracts.
+  it("is the chasing innings' quota less the legal balls it has faced", () => {
+    const summary = { detail: { innings: [innings("e-home", 180, true), innings("e-away", 91, false)] } };
+    expect(chaseBalls(summary), "120 quota less 60 bowled").toBe(60);
+  });
+
+  it("follows a DLS-revised quota rather than the format's original", () => {
+    const revised = { ...innings("e-away", 91, false), ballsLimit: 90 };
+    const summary = { detail: { target: 160, innings: [innings("e-home", 180, true), revised] } };
+    expect(chaseBalls(summary)).toBe(30);
+  });
+
+  it("is null where the format declares no quota, and null with no chase", () => {
+    // A timed/unlimited format carries `ballsLimit: null` (cricket.ts:440) —
+    // "off null balls" must never render, so the line falls back to runs only.
+    const unlimited = { ...innings("e-away", 91, false), ballsLimit: null };
+    expect(chaseBalls({ detail: { innings: [innings("e-home", 180, true), unlimited] } })).toBeNull();
+    expect(chaseBalls({ detail: { innings: [innings("e-home", 91, false)] } })).toBeNull();
+    expect(chaseBalls({ detail: { periods: [{ phase: "H1", home: 1, away: 0 }] } })).toBeNull();
+  });
+
+  it("never goes negative when the quota has been overshot", () => {
+    const over = { ...innings("e-away", 91, false), legalBalls: 130 };
+    expect(chaseBalls({ detail: { innings: [innings("e-home", 180, true), over] } })).toBe(0);
+  });
+});
+
+describe("matchClock", () => {
+  it("reads the clock the engine already formatted and guarded", () => {
+    // NOT re-derived here. Task 0's `detail.clock` comes from
+    // `footballPosition`/`periodPosition`, which drop the value themselves when
+    // the last stamp names a phase the match has left — so this reader must be
+    // a read, never a second guard.
+    expect(matchClock({ detail: { periods: [{ phase: "H2", home: 1, away: 0 }], clock: "12:41" } })).toBe("12:41");
+  });
+
+  it("is null for a stream nothing stamped, and for a sport with no clock", () => {
+    expect(matchClock({ detail: { periods: [{ phase: "H1", home: 0, away: 0 }] } })).toBeNull();
+    expect(matchClock({ detail: { sets: [{ home: 21, away: 15, closed: true }] } })).toBeNull();
+    expect(matchClock({ detail: { clock: "" } }), "an empty string is not a clock").toBeNull();
+    expect(matchClock(null)).toBeNull();
+  });
+});
 ```
 
 - [ ] **Step 2: Run it — expect red.** `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/stream-overlay/apps/web && npx vitest run src/lib/__tests__/public-site-overlay-derive.test.ts --reporter=json --outputFile=/tmp/ovl-w1/t2a-red.json`
@@ -536,10 +1022,8 @@ export function battingEntrantId(summary: unknown): string | null {
  * in progress. A revised target (DLS, `detail.target`) REPLACES the first
  * innings' total; without one the target is that total plus one.
  *
- * Runs only, never "off N balls": the public summary carries `legalBalls` but
- * not the innings' `ballsLimit`, so balls remaining cannot be computed from
- * this payload. The spec's example line ("Need 45 off 45") is therefore
- * rendered as "Need 45" in W1 — recorded rather than approximated.
+ * The BALLS half of "Need 45 off 45" is `chaseBalls` below, kept separate so a
+ * format with no quota still gets its runs line.
  */
 export function chaseNeed(summary: unknown): number | null {
   if (typeof summary !== "object" || summary === null) return null;
@@ -560,10 +1044,57 @@ export function chaseNeed(summary: unknown): number | null {
   if (typeof set !== "number") return null;
   return Math.max(0, set + 1 - chased);
 }
+
+/**
+ * Balls still available to the side batting second, or null.
+ *
+ * The denominator of the line `_THEMES.md` §3 draws — "Need 45 off 45". Both
+ * numbers come from the SAME innings entry the engine publishes (Task 0 put
+ * `ballsLimit` beside the `legalBalls` that was already there), so a DLS
+ * revision moves them together and nothing here re-derives a quota from a
+ * format name.
+ *
+ * `null`, never a guess, where the format declares no quota (`ballsLimit:
+ * null` — timed and unlimited formats, cricket.ts:440): the bar then renders
+ * the runs-only line, which is correct rather than short.
+ */
+export function chaseBalls(summary: unknown): number | null {
+  if (typeof summary !== "object" || summary === null) return null;
+  const detail = (summary as { detail?: unknown }).detail;
+  if (typeof detail !== "object" || detail === null) return null;
+  const raw = (detail as { innings?: unknown }).innings;
+  if (!Array.isArray(raw) || raw.length < 2) return null;
+  const current = raw[raw.length - 1];
+  if (typeof current !== "object" || current === null) return null;
+  const row = current as Record<string, unknown>;
+  if (row.closed === true) return null;
+  const limit = row.ballsLimit;
+  const bowled = row.legalBalls;
+  if (typeof limit !== "number" || typeof bowled !== "number") return null;
+  return Math.max(0, limit - bowled);
+}
+
+/**
+ * The match clock ("12:41") for the period family, or null.
+ *
+ * A READ, not a derivation. `detail.clock` is written by the engine's own
+ * `footballPosition` / `periodPosition` (Task 0), which already apply the
+ * staleness guard — a stamp naming a phase the match has left yields no clock
+ * at all — and already format through `formatElapsed`. Re-implementing either
+ * here would be a second authority for a number that goes out on air, and the
+ * two would drift the first time a period label changed.
+ */
+export function matchClock(summary: unknown): string | null {
+  if (typeof summary !== "object" || summary === null) return null;
+  const detail = (summary as { detail?: unknown }).detail;
+  if (typeof detail !== "object" || detail === null) return null;
+  const clock = (detail as { clock?: unknown }).clock;
+  return typeof clock === "string" && clock !== "" ? clock : null;
+}
 ```
 
 - [ ] **Step 4: Run — expect PASS.** `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/stream-overlay/apps/web && npx vitest run src/lib/__tests__/public-site-overlay-derive.test.ts --reporter=json --outputFile=/tmp/ovl-w1/t2a-green.json`
-  Expected: `numTotalTests: 7`, `numFailedTests: 0`.
+  Expected: `numTotalTests: 13`, `numFailedTests: 0`.
 
 - [ ] **Step 5: Write the failing projection test.** Create `apps/web/src/lib/__tests__/overlay-model.test.ts`:
 
@@ -581,7 +1112,7 @@ import { foldMatch, type EventEnvelope } from "@seazn/engine/core";
 import { defaultLineupPair, makeEnvelope } from "@seazn/engine/testkit";
 import { builtinModules } from "@seazn/engine/sports";
 import { V3_SKINS } from "@/components/v2/scorepad/v3/registry";
-import { overlayModel, shortCode, splitLine, type OverlayMsg } from "@/lib/overlay-model";
+import { overlayModel, overlayStartLabel, shortCode, splitLine, type OverlayMsg } from "@/lib/overlay-model";
 import type { DecidedOutcomeTemplates } from "@/lib/scoring-vocab";
 import type { LiveFixtureData } from "@/components/public-site/live-score-data";
 
@@ -781,7 +1312,7 @@ describe("overlayModel — decided", () => {
 });
 
 describe("overlayModel — cricket chase line", () => {
-  it("renders the chase through msg, never as a typed literal", () => {
+  it("renders 'Need 45 off 45' through msg, never as a typed literal", () => {
     const data: LiveFixtureData = {
       status: "in_play",
       summary: {
@@ -789,18 +1320,109 @@ describe("overlayModel — cricket chase line", () => {
         perSide: [{ entrantId: "H", line: "180/8 (20)" }, { entrantId: "A", line: "91/3 (12)" }],
         detail: {
           innings: [
-            { entrantId: "H", runs: 180, wickets: 8, legalBalls: 120, declared: false, closed: true },
-            { entrantId: "A", runs: 91, wickets: 3, legalBalls: 72, declared: false, closed: false },
+            { entrantId: "H", runs: 180, wickets: 8, legalBalls: 120, ballsLimit: 120, declared: false, closed: true },
+            { entrantId: "A", runs: 91, wickets: 3, legalBalls: 72, ballsLimit: 120, declared: false, closed: false },
           ],
         },
       },
       outcome: null,
     };
     const model = project("cricket", data);
-    expect(model.chase).toBe("overlay.chase.need(runs=90)");
+    // Owner answer 12 closed deviation 6: both numbers, the shape `_THEMES.md`
+    // §3 draws. The runs and the balls DIFFER here (90 vs 48) on purpose — with
+    // equal numbers a transposed pair would pass.
+    expect(model.chase).toBe("overlay.chase.needBalls(runs=90,balls=48)");
     expect(model.sides[1].big).toBe("91/3");
     expect(model.sides[1].sub).toBe("(12)");
     expect(model.detail, "W2 fills cricket's detail band; W1 leaves it empty (spec §2)").toEqual([]);
+  });
+
+  it("falls back to the runs-only line where the format declares no quota", () => {
+    // Timed / unlimited cricket carries `ballsLimit: null` — "off null balls"
+    // must never reach air, so the shorter key is the CORRECT render here, not
+    // a degraded one.
+    const data: LiveFixtureData = {
+      status: "in_play",
+      summary: {
+        headline: "180/8 — 91/3",
+        perSide: [{ entrantId: "H", line: "180/8" }, { entrantId: "A", line: "91/3" }],
+        detail: {
+          innings: [
+            { entrantId: "H", runs: 180, wickets: 8, legalBalls: 300, ballsLimit: null, declared: true, closed: true },
+            { entrantId: "A", runs: 91, wickets: 3, legalBalls: 130, ballsLimit: null, declared: false, closed: false },
+          ],
+        },
+      },
+      outcome: null,
+    };
+    expect(project("cricket", data).chase).toBe("overlay.chase.need(runs=90)");
+  });
+});
+
+describe("overlayModel — the football family's clock", () => {
+  it("populates header.clock from the summary the engine publishes", () => {
+    // Owner answer 12 closed the "clock stays undefined" pin. The value is
+    // read (`matchClock`), never derived here — the bar and the bug both render
+    // the cell only when it is set, so an empty slot is invisible and a wrong
+    // one is on air for ninety minutes.
+    const data: LiveFixtureData = {
+      status: "in_play",
+      summary: {
+        headline: "2 — 1",
+        perSide: [{ entrantId: "H", line: "2" }, { entrantId: "A", line: "1" }],
+        detail: { periods: [{ phase: "H1", home: 1, away: 1 }, { phase: "H2", home: 1, away: 0 }], clock: "12:41" },
+      },
+      outcome: null,
+    };
+    const model = project("football", data);
+    expect(model.header.clock).toBe("12:41");
+    expect(model.header.context, "the phase is the context; the clock is its own cell").toBe("H2");
+  });
+
+  it("leaves the clock absent for a stream nothing stamped, and for a sport with none", () => {
+    const unstamped: LiveFixtureData = {
+      status: "in_play",
+      summary: {
+        headline: "0 — 0",
+        perSide: [{ entrantId: "H", line: "0" }, { entrantId: "A", line: "0" }],
+        detail: { periods: [{ phase: "H1", home: 0, away: 0 }] },
+      },
+      outcome: null,
+    };
+    expect(project("football", unstamped).header.clock).toBeUndefined();
+    const badminton = payload("badminton", [["core.start", {}], ["badminton.rally", { wonBy: "home" }]], "in_play");
+    expect(project("badminton", badminton).header.clock).toBeUndefined();
+  });
+});
+
+describe("overlayStartLabel", () => {
+  // The formatter the overlay page calls with the `venueTz` Task 0 puts on the
+  // payload. It lives here, beside the model, so the model itself stays pure
+  // and free of `Intl` (deviation 3) while the format has ONE home and a test.
+  const KICKOFF = "2026-09-05T14:30:00.000Z";
+
+  it("formats in the VENUE zone — a UTC fallback would fail this case", () => {
+    const label = overlayStartLabel(KICKOFF, "en-GB", "Asia/Kolkata");
+    // 14:30 UTC is 20:00 in Kolkata. Asserted against the zone-shifted value
+    // computed the same way, so the case moves if the format does but still
+    // cannot pass on a UTC fallback.
+    expect(label).toContain("20:00");
+    expect(label, "this is the whole point of owner answer 12").not.toContain("14:30");
+    expect(overlayStartLabel(KICKOFF, "en-GB", "UTC")).toContain("14:30");
+  });
+
+  it("honours the locale as well as the zone", () => {
+    const nl = overlayStartLabel(KICKOFF, "nl", "Europe/Amsterdam");
+    const en = overlayStartLabel(KICKOFF, "en-GB", "Europe/Amsterdam");
+    expect(nl).toContain("16:30");
+    expect(nl, "the weekday is localised, so the two labels differ").not.toBe(en);
+  });
+
+  it("is null with no scheduled time, and degrades rather than throwing on a bad zone", () => {
+    expect(overlayStartLabel(null, "en-GB", "Europe/Amsterdam")).toBeNull();
+    // `resolveVenueTz` should never hand this on, but a RangeError from
+    // `Intl.DateTimeFormat` here would 500 the overlay mid-broadcast.
+    expect(overlayStartLabel(KICKOFF, "en-GB", "Mars/Olympus_Mons")).toContain("14:30");
   });
 });
 
@@ -834,9 +1456,11 @@ describe("overlayModel — no literal escapes the dictionary", () => {
 // out with `cells: []` and `detail: []` — a designed state, not an error.
 import {
   battingEntrantId,
+  chaseBalls,
   chaseNeed,
   disciplineLabel,
   disciplineList,
+  matchClock,
   matchStrength,
   periodBreakdown,
   servingSide,
@@ -1030,6 +1654,11 @@ export function overlayModel(input: OverlayModelInput): OverlayModel {
   }) as [OverlaySide, OverlaySide];
 
   const need = decided ? null : chaseNeed(data.summary);
+  // Owner answer 12: both halves of `_THEMES.md` §3's line when the format
+  // declares a quota, the runs-only key when it does not. Two keys rather than
+  // one with an empty `{balls}` — a dangling "off" is worse than a short line.
+  const balls = need === null ? null : chaseBalls(data.summary);
+  const clock = decided ? null : matchClock(data.summary);
   const result = renderDecidedOutcome(
     data.outcome,
     { [sides[0].id]: sides[0].name, [sides[1].id]: sides[1].name },
@@ -1040,18 +1669,60 @@ export function overlayModel(input: OverlayModelInput): OverlayModel {
   return {
     live,
     decided,
-    header: { context: headerContext(input, decided) },
+    header: {
+      context: headerContext(input, decided),
+      ...(clock === null ? {} : { clock }),
+    },
     sides: overlaySides,
     cells: cellsOf(input),
     detail: input.sportKey === "cricket" ? [] : detailOf(input, codes, live),
-    ...(need === null ? {} : { chase: msg("overlay.chase.need", { runs: need }) }),
+    ...(need === null
+      ? {}
+      : {
+          chase:
+            balls === null
+              ? msg("overlay.chase.need", { runs: need })
+              : msg("overlay.chase.needBalls", { runs: need, balls }),
+        }),
     ...(result === null ? {} : { result }),
   };
+}
+
+/**
+ * The start time a pre-match overlay prints, in the VENUE's zone.
+ *
+ * Owner answer 12 (2026-09-06) closed deviation 4: this used to be an
+ * `Intl.DateTimeFormat` literal inlined in the overlay page with
+ * `timeZone: "UTC"`, which is simply the wrong time for an Indian or Dutch club
+ * audience. `tz` comes from `getPublicFixture(...).venueTz` — the VENUE lane
+ * (`resolveVenueTz`, "one zone per fixture"), never the viewer's cookie and
+ * never the organiser's personal zone: a London club can run an event in
+ * Malaga, and the stream is watched in neither.
+ *
+ * Lives here rather than in the page so the format has one home and a test;
+ * `overlayModel` itself still takes the finished string and stays pure
+ * (deviation 3). An unusable zone degrades to UTC rather than throwing — a
+ * `RangeError` here would 500 the overlay mid-broadcast.
+ */
+export function overlayStartLabel(iso: string | null, locale: string, tz: string): string | null {
+  if (!iso) return null;
+  const when = new Date(iso);
+  if (Number.isNaN(when.getTime())) return null;
+  const options: Intl.DateTimeFormatOptions = {
+    weekday: "short",
+    hour: "2-digit",
+    minute: "2-digit",
+  };
+  try {
+    return new Intl.DateTimeFormat(locale, { ...options, timeZone: tz }).format(when);
+  } catch {
+    return new Intl.DateTimeFormat(locale, { ...options, timeZone: "UTC" }).format(when);
+  }
 }
 ```
 
 - [ ] **Step 8: Run — expect PASS.** `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/stream-overlay/apps/web && npx vitest run src/lib/__tests__/overlay-model.test.ts --reporter=json --outputFile=/tmp/ovl-w1/t2b-green.json`
-  Expected: `numFailedTests: 0`, `numTotalTests: 13`. If a sport's event name in `CRICKET_BALL` / `["tennis.point", …]` / `["volleyball.rally", …]` is rejected by the fold (`WRONG_PHASE`, `UNKNOWN_TYPE`), fix the STREAM against the module's `eventSchemas`, never the assertion — a stream the engine refuses is a test that proves nothing.
+  Expected: `numFailedTests: 0`, `numTotalTests: 19` (13 as first planned, plus the six owner answer 12 added: one runs-only chase fallback, two clock cases, three `overlayStartLabel` cases). If a sport's event name in `CRICKET_BALL` / `["tennis.point", …]` / `["volleyball.rally", …]` is rejected by the fold (`WRONG_PHASE`, `UNKNOWN_TYPE`), fix the STREAM against the module's `eventSchemas`, never the assertion — a stream the engine refuses is a test that proves nothing.
 
 - [ ] **Step 9: Mutation check (b) — swap `led` to the other side.** Change the return in `ledEntrantId` from `input.sides[0].id : input.sides[1].id` to `input.sides[1].id : input.sides[0].id`, re-run Step 8. Expected red: `tennis: the LED and the serve dot follow the server` — `expected false to be true`. Restore.
 
@@ -1517,6 +2188,9 @@ import { seedOrg } from "@/server/usecases/__tests__/_rig";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 const KEY = "streaming.overlay";
+/** What the test org's override row grants — owner answer 14 (Q3). Both, always:
+ *  the overlay's whole promise is a score that keeps up with the picture. */
+const GRANTED = [KEY, "realtime"] as const;
 
 describe("streaming.overlay is unadvertised", () => {
   it("is in NO ENTITLEMENT_DOMAINS section — that omission is what keeps it off /pricing", () => {
@@ -1546,12 +2220,26 @@ describe.skipIf(!HAS_DB)("streaming.overlay resolves", () => {
     const { auth } = await seedOrg();
     expect(await hasFeature(auth.orgId, KEY), "no plan grants it").toBe(false);
 
-    await sql`
-      insert into org_entitlement_overrides (org_id, feature_key, bool_value, reason)
-      values (${auth.orgId}, ${KEY}, true, 'unit: stream overlay W1')
-      on conflict (org_id, feature_key) do update set bool_value = true, expires_at = null`;
+    // Owner answer 14 (Q3), "we are using supabase realtime": the test org's
+    // override grants BOTH keys. `/api/v1/public/fixtures/[id]/realtime-token`
+    // 403s without `realtime`, and the client then falls back to a 15 s poll —
+    // a score that lags the picture by up to fifteen seconds on a live
+    // broadcast, which viewers read as our bug. Granting only `streaming.overlay`
+    // ships the feature in its broken form. Whether every PLAN that grants one
+    // must grant the other is deferred to pricing (Q4) and is deliberately not
+    // encoded anywhere in code.
+    for (const key of GRANTED) {
+      await sql`
+        insert into org_entitlement_overrides (org_id, feature_key, bool_value, reason)
+        values (${auth.orgId}, ${key}, true, 'unit: stream overlay W1')
+        on conflict (org_id, feature_key) do update set bool_value = true, expires_at = null`;
+    }
     await invalidateOrgEntitlements(auth.orgId);
     expect(await hasFeature(auth.orgId, KEY), "the resolver ranks the override first").toBe(true);
+    expect(
+      await hasFeature(auth.orgId, "realtime"),
+      "without this the overlay polls, and a 15 s-stale score goes out on air",
+    ).toBe(true);
 
     await sql`
       update org_entitlement_overrides set bool_value = false
@@ -1634,7 +2322,8 @@ on conflict (plan_key, feature_key) do update
 - Create: `apps/web/src/components/overlay/overlay-bar.tsx`
 - Create: `apps/web/src/components/overlay/overlay-bug.tsx`
 - Modify: `apps/web/src/app/globals.css` — append after the `:root { --sport-* }` block (`:1022`)
-- Modify: `apps/web/src/components/cookie-consent.tsx` (`:84`) — one `data-testid`
+- Modify: `apps/web/src/components/cookie-consent.tsx` — one `data-testid` (`:84`) and the `/overlay/` guard (owner answer 13)
+- Create (Test): `apps/web/src/components/__tests__/cookie-consent-overlay-segment.test.tsx`
 - Modify: `apps/web/src/dictionaries/{en,fr,es,nl}/public.json`
 - Modify (generated): `apps/web/src/lib/i18n-keys.ts`
 - Create (Test): `apps/web/src/lib/__tests__/overlay-dict-coverage.test.ts`
@@ -1760,6 +2449,7 @@ describe("overlay + panel copy is complete in every locale", () => {
   "overlay.detail.serving": "{side} serving",
   "overlay.detail.card": "{side} {card}",
   "overlay.chase.need": "Need {runs}",
+  "overlay.chase.needBalls": "Need {runs} off {balls}",
   "overlay.brand": "seazn",
   "overlay.watchLive": "Watch live",
   "overlay.replay": "Replay"
@@ -1776,6 +2466,7 @@ describe("overlay + panel copy is complete in every locale", () => {
   "overlay.detail.serving": "{side} au service",
   "overlay.detail.card": "{side} {card}",
   "overlay.chase.need": "Besoin de {runs}",
+  "overlay.chase.needBalls": "Besoin de {runs} en {balls} balles",
   "overlay.brand": "seazn",
   "overlay.watchLive": "Regarder en direct",
   "overlay.replay": "Revoir"
@@ -1792,6 +2483,7 @@ describe("overlay + panel copy is complete in every locale", () => {
   "overlay.detail.serving": "Saca {side}",
   "overlay.detail.card": "{side} {card}",
   "overlay.chase.need": "Faltan {runs}",
+  "overlay.chase.needBalls": "Faltan {runs} en {balls} bolas",
   "overlay.brand": "seazn",
   "overlay.watchLive": "Ver en directo",
   "overlay.replay": "Repetición"
@@ -1808,12 +2500,13 @@ describe("overlay + panel copy is complete in every locale", () => {
   "overlay.detail.serving": "{side} serveert",
   "overlay.detail.card": "{side} {card}",
   "overlay.chase.need": "Nog {runs} nodig",
+  "overlay.chase.needBalls": "Nog {runs} nodig uit {balls} ballen",
   "overlay.brand": "seazn",
   "overlay.watchLive": "Live kijken",
   "overlay.replay": "Herhaling"
 ```
 
-  Then `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/stream-overlay && pnpm i18n:gen-keys` and confirm `apps/web/src/lib/i18n-keys.ts` gained the eleven keys (it is GENERATED — never hand-edit it).
+  Then `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/stream-overlay && pnpm i18n:gen-keys` and confirm `apps/web/src/lib/i18n-keys.ts` gained the twelve keys — eleven as first planned plus `overlay.chase.needBalls` (owner answer 12). It is GENERATED — never hand-edit it.
 
 - [ ] **Step 4: Add the `.ovl-*` CSS.** Append to `apps/web/src/app/globals.css`, immediately after the `:root { --sport-* }` block (`:1014-1022`). Every value below is `_THEMES.md` §1–§4 and §6 at native 1920×1080 — do not round, do not invent:
 
@@ -1923,13 +2616,98 @@ describe("overlay + panel copy is complete in every locale", () => {
   .ovl-led { transition: none; }
 }
 
-/* The overlay segment is a chrome-less page inside the root layout, which
-   mounts the consent banner after `children`. OBS composites whatever is
-   painted, so the banner would go out on air. */
-body:has(.ovl-canvas) [data-testid="cookie-consent"] { display: none !important; }
 ```
 
-  and add the testid the last rule needs — in `apps/web/src/components/cookie-consent.tsx:84`, the wrapper `<div>` gains `data-testid="cookie-consent"` beside its `className` (attribute only; no other change to that file).
+> **Deleted by owner answer 13, deliberately.** This block used to end with
+> `body:has(.ovl-canvas) [data-testid="cookie-consent"] { display: none }`. The
+> owner's answer is *"we can remove"* — the banner must not RENDER on the
+> overlay segment, not merely not paint. A `display: none` still mounts the
+> component, still runs its effect, and leaves an e2e asserting absence unable
+> to tell "hidden" from "gone" (`toBeAttached` would still pass). Steps 4a and
+> 4b below replace it with one guard, in one place. Do NOT keep both: two
+> guards covering for each other are each untested.
+
+- [ ] **Step 4a: Keep the consent banner off the overlay segment.** In `apps/web/src/components/cookie-consent.tsx`, add `import { usePathname } from "next/navigation";` and, immediately before the existing `if (!visible) return null;`:
+
+```tsx
+  // The overlay segment renders no banner (owner answer 13, Q2). OBS
+  // composites whatever is painted, so a consent banner burned into a club's
+  // broadcast goes out to every viewer until someone dismisses it in the
+  // capture browser — and there is nothing to consent to: the segment sets no
+  // cookies (Step 4b proves it, rather than asserting it).
+  //
+  // WHY HERE, and not in the overlay layout. `CookieConsent` is mounted ONCE,
+  // in the ROOT layout (`app/layout.tsx:68`), as a SIBLING of `children` — a
+  // nested segment layout cannot unmount it. Next's only other route to a
+  // banner-free segment is deleting `app/layout.tsx` and giving every route
+  // group its own root layout with its own `<html>`, which is a repo-wide
+  // restructure for one page. One condition, in the component that owns the
+  // decision, is the smallest correct change; `AnalyticsBootstrap`
+  // (`analytics-bootstrap.tsx:44`) already reads `usePathname` from this same
+  // root-layout position, so the pattern is the tree's, not this wave's.
+  if (pathname?.startsWith(OVERLAY_SEGMENT)) return null;
+```
+
+  with `const pathname = usePathname();` beside the component's other hooks (hooks before any early return), and, at module scope beside the imports:
+
+```tsx
+/** The one route prefix that renders no chrome at all. Named rather than
+ *  inlined so a future overlay route cannot forget it. */
+const OVERLAY_SEGMENT = "/overlay/";
+```
+
+  Keep the `data-testid="cookie-consent"` this task's file list already adds to the wrapper `<div>` (`:84`) — the e2e now asserts the banner is ABSENT on the overlay, and an assertion needs a selector to be absent by.
+
+  Add the unit that fails without the guard — `apps/web/src/components/__tests__/cookie-consent-overlay-segment.test.tsx`:
+
+```tsx
+// vitest runs `environment: "node"` here, so this drives the component through
+// `renderIsland` with `next/navigation` mocked — a source-scan test (the
+// convention the two existing cookie-consent tests use) could not tell a
+// rendered banner from a suppressed one, which is the whole claim.
+import { describe, expect, it, vi } from "vitest";
+
+const pathname = { current: "/" };
+vi.mock("next/navigation", () => ({ usePathname: () => pathname.current }));
+
+import { renderIsland } from "@/components/__tests__/_hook-harness";
+import { CookieConsent } from "../cookie-consent";
+
+describe("CookieConsent on the overlay segment", () => {
+  it("renders nothing under /overlay/, so OBS cannot composite it into a broadcast", () => {
+    pathname.current = "/overlay/fixtures/11111111-1111-1111-1111-111111111111";
+    expect(renderIsland(CookieConsent, {})).toBeNull();
+  });
+
+  it("still renders on the public match page — the positive pair", () => {
+    // Without this case the assertion above passes on a component that renders
+    // nothing anywhere, which is a different (and much worse) bug.
+    pathname.current = "/shared/acme/summer-cup/div-a/fixtures/1";
+    expect(renderIsland(CookieConsent, {})).not.toBeNull();
+  });
+});
+```
+
+  RE-PIN at execution: `renderIsland`'s signature and whether it returns the rendered element or a handle (`components/__tests__/_hook-harness`, the same helper Task 1 uses). The banner only becomes visible after `needsConsentPrompt()` passes, so the second case may need `localStorage`/consent stubbing — read `cookie-consent-below-dialogs.test.ts` first and use whatever it already does.
+
+- [ ] **Step 4b: Prove the claim the answer rests on — nothing on that segment sets a cookie.** "No consent needed" must be TRUE, not convenient. Two checks, both in `apps/web/e2e/walkthrough/stream-overlay.spec.ts` (Task 8), inside the existing `the page is transparent, carries the seeded score, and is themed` test, which already opens a **fresh anonymous context** (`storageState: { cookies: [], origins: [] }`) — the only starting point from which the assertion means anything:
+
+```ts
+    // Owner answer 13 rests on "the overlay sets no cookies". Assert it, in
+    // both directions: `document.cookie` cannot see HttpOnly cookies and
+    // `context.cookies()` can, so neither check alone is sufficient. PostHog
+    // boots from the root layout on every route and is configured
+    // `opt_out_persistence_by_default: true` (instrumentation-client.ts:47) —
+    // this is what proves that setting still holds on this segment.
+    expect(await page.evaluate(() => document.cookie), "the overlay must set no readable cookie").toBe("");
+    expect((await anon.cookies()).map((c) => c.name), "nor an HttpOnly one").toEqual([]);
+
+    // And the banner is GONE, not hidden — `toBeAttached`, because a
+    // `display: none` rule would satisfy `not.toBeVisible()`.
+    await expect(page.getByTestId("cookie-consent")).not.toBeAttached();
+```
+
+  If either cookie assertion fails, the answer's premise is false: STOP and record which script set the cookie rather than deleting the assertion — the correct fix is then keeping that script off the segment too, not accepting the banner.
 
 - [ ] **Step 5: Add the slug helper.** In `apps/web/src/server/public-site/data.ts`, after `getPublicFixture` (`:747`):
 
@@ -2012,6 +2790,7 @@ import { getDictionary } from "@/lib/i18n";
 import { toLocale } from "@/lib/i18n-constants";
 import { msgFor } from "@/lib/messages-i18n";
 import { decidedOutcomeTemplates } from "@/lib/scoring-vocab";
+import { overlayStartLabel } from "@/lib/overlay-model";
 import { OverlayStage, overlayStyleFor } from "@/components/overlay/overlay-stage";
 
 export const metadata: Metadata = { robots: { index: false, follow: false } };
@@ -2040,7 +2819,7 @@ export default async function OverlayPage({
   if (!slugs) notFound();
   const data = await getPublicFixture(slugs.orgSlug, slugs.compSlug, slugs.divSlug, fixtureId);
   if (!data) notFound();
-  const { org, competition, division, fixture, entrantNames, realtime } = data;
+  const { org, competition, division, fixture, entrantNames, realtime, venueTz } = data;
 
   // Competition-scoped, like every other spectator-side entitlement read here:
   // an Event Pass grants for the competition it was bought for.
@@ -2066,16 +2845,10 @@ export default async function OverlayPage({
     },
   ];
 
-  // Formatted HERE, where the locale and the venue zone both are; the model
-  // stays pure and free of Intl (see overlay-model.ts's own note).
-  const startLabel = fixture.scheduled_at
-    ? new Intl.DateTimeFormat(locale, {
-        weekday: "short",
-        hour: "2-digit",
-        minute: "2-digit",
-        timeZone: "UTC",
-      }).format(new Date(fixture.scheduled_at))
-    : null;
+  // Formatted HERE, where the locale is, through the ONE formatter
+  // (`overlayStartLabel`, Task 2) and the VENUE zone Task 0 puts on the payload
+  // — never UTC, and never `Intl` inlined at this call site.
+  const startLabel = overlayStartLabel(fixture.scheduled_at, locale, venueTz);
 
   return (
     <OverlayStage
@@ -2094,7 +2867,7 @@ export default async function OverlayPage({
 }
 ```
 
-> **Recorded gap:** `startLabel` formats in `UTC`, not the venue zone. `PublicFixture` carries `venue_name`/`court_name` but no IANA zone, and `getScheduleSettings` (the competition tz) is an ORG-console read behind `AuthCtx` — an unauthenticated overlay cannot call it. Threading a public tz is a data change outside this wave's scope. Recorded in `_INDEX.md` as an owner question; the scheduled state is the only one affected.
+> **Closed, not a gap (owner answer 12, 2026-09-06).** `startLabel` used to format in `UTC` here, recorded as deviation 4 and as an owner question, because no IANA zone reached the public payload. Task 0 puts one there — `venueTz`, the VENUE lane (`resolveVenueTz`, "one zone per fixture"), resolved server-side where the division and org rows already are — and this page now formats through `overlayStartLabel`. Do not reintroduce a `timeZone: "UTC"` literal on this route.
 
 - [ ] **Step 8: Write the stage.** Create `apps/web/src/components/overlay/overlay-stage.tsx`:
 
@@ -2424,7 +3197,7 @@ describe("overlay contrast", () => {
 - [ ] **Step 12: Drive the product, not the test.** `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/stream-overlay && ~/.claude/skills/seazn-local-env/scripts/seazn-env.sh rebuild --label ovl`, re-read the port from `_buildManifest.js`, seed a cricket fixture and set the override row, then open `/overlay/fixtures/<id>?style=bar` in a real browser at 1920×1080. Write down, beside a pass/fail: the body is see-through over a light AND a dark frame; the score numerals are aligned; a 43-character entrant name does not wrap; the LED sits on the batting side; the live dot breathes; nothing slid in on load. Then check watch-list 7: `curl -s <base>/_next/static/css/*.css | grep -ac "Barlow"` and the browser network tab — record whether a second `@font-face` and a second woff2 download appear.
 
 - [ ] **Step 13: Commit.**
-  `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/stream-overlay && /usr/bin/git add apps/web/src/app/overlay apps/web/src/components/overlay apps/web/src/app/globals.css apps/web/src/components/cookie-consent.tsx apps/web/src/server/public-site/data.ts apps/web/src/dictionaries apps/web/src/lib/i18n-keys.ts apps/web/src/lib/__tests__/overlay-dict-coverage.test.ts`
+  `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/stream-overlay && /usr/bin/git add apps/web/src/app/overlay apps/web/src/components/overlay apps/web/src/app/globals.css apps/web/src/components/cookie-consent.tsx apps/web/src/components/__tests__/cookie-consent-overlay-segment.test.tsx apps/web/src/server/public-site/data.ts apps/web/src/dictionaries apps/web/src/lib/i18n-keys.ts apps/web/src/lib/__tests__/overlay-dict-coverage.test.ts`
   then
   `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/stream-overlay && /usr/bin/git commit -m "overlay(route): the transparent per-fixture page, in the sport's own colours" -m "Nested layout for the transparent ground, two server gates that both 404, one client stage scaling a native 1920x1080 canvas, and the three motions from _THEMES.md 6. Copy in four locales." -m "Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>" -m "Claude-Session: https://claude.ai/code/session_01UdUR7dcxassJ4FExpVfRRr"`
 
@@ -3425,17 +4198,24 @@ test("captures the organiser panel at 320, 768 and 1280", async ({ page }) => {
 
 | Source section | Task |
 |---|---|
+| Owner answer 12 (Q1) — venue zone on the public payload | 0 (payload), 2 (`overlayStartLabel`), 5 (page) |
+| Owner answer 12 (Q1) — cricket balls remaining, "Need 45 off 45" (`_THEMES.md` §3/§4) | 0 (`ballsLimit`), 2 (`chaseBalls`, `overlay.chase.needBalls`), 5 (dictionaries) |
+| Owner answer 12 (Q1) — football match clock, `header.clock` (`_THEMES.md` §3/§4) | 0 (`detail.clock` + §9.6), 2 (`matchClock`), 5 (the bar/bug clock cells) |
+| Owner answer 13 (Q2) — no consent banner on the overlay segment | 5 (Steps 4a, 4b), 8 (the e2e absence + cookie assertions) |
+| Owner answer 14 (Q3) — Supabase realtime, override grants both keys | Global Constraints, 4 |
+| Owner answer 17 (Q14) — the override row IS the hiding gate | Global Constraints, 4, 5 (the `notFound()` gate) |
 | Spec §1 Overlay route (layout, page, canvas, stage) / prompt scope 5 | 5 |
 | Spec §2 Projection (`OverlayModel`, `overlayModel`) / prompt scope 2 | 2 |
 | Spec §3 Theme (`sportThemeStyle`, seven tokens, `.ovl-*`) / `_THEMES.md` §1–§4 | 5 |
 | Spec §4 Data (V392, view, `PublicFixture`, `PUT /stream`, OpenAPI) / prompt scope 3 | 3 |
+| Spec §4 Data — the three payload fields a scorebug needs (owner answer 12) | 0 |
 | Spec §5 Entitlement (`streaming.overlay`, no plan, override row) / prompt scope 4 | 4 |
 | Spec §6 Organiser panel / prompt scope 6 / `_THEMES.md` §8 | 6 |
 | Spec §7 Public match page link / prompt scope 7 | 7 |
 | Spec §8 Sequencing with in-flight programmes (R11) | 8 (Step 13) |
 | Spec §9 Motion — the three W1 motions / `_THEMES.md` §6 / R13 | 5 (CSS + stage), proven in 8 |
 | Spec "Error and empty states" (404 both causes, scheduled "—", decided, no-detail sports) | 2 (unit), 5 (render), 8 (e2e) |
-| Spec "Tests" — Unit | 1, 2, 3, 4, 5 |
+| Spec "Tests" — Unit | 0, 1, 2, 3, 4, 5 |
 | Spec "Tests" — E2E | 8 (with 7's block) |
 | Spec "Tests" — Smoke | 8 |
 | Spec "Tests" — Regression (`LiveScore` unchanged, `mobile.spec.ts`, gen diffs) | 1, 8 (Steps 5, 11) |
@@ -3451,6 +4231,11 @@ test("captures the organiser panel at 320, 768 and 1280", async ({ page }) => {
 
 | # | Mutation | Test that must go red |
 |---|---|---|
+| g | `data.ts`: delete the venue-zone query and hardcode `venueTz: "UTC"` | `public-fixture-venue-tz.test.ts` › `falls back to the organisation's zone when the division has no schedule_settings row` — `expected 'UTC' to be 'Asia/Kolkata'` (Task 0 Step 14.1) |
+| h | `cricket.ts`: drop `ballsLimit: innings.ballsLimit,` from the summary map | `cricket.test.ts` › `the summary carries each innings' ballsLimit…` — `expected undefined to be 120`; and `overlay-model.test.ts` › `renders 'Need 45 off 45'…`, which falls back to the runs-only key (Task 0 Step 14.2) |
+| i | `football.ts`: drop the `clock` spread from `summary().detail` | `football.time.test.ts` › `the summary carries the match clock…` — `expected undefined to be "12:41"`; and `overlay-model.test.ts` › `populates header.clock…` (Task 0 Step 14.3) |
+| j | `football.ts`: revert `coarsen`'s goal arm to drop `at` | `testkit/conformance.ts` › `§9.6 dual-fidelity: coarse fold ≡ fine fold` (football), and `football.time.test.ts` › `a coarsened stream keeps the stamp…`. This is the mutant that proves the clock is fold-invariant rather than merely present. |
+| k | `cookie-consent.tsx`: delete the `pathname?.startsWith(OVERLAY_SEGMENT)` guard, so the banner renders on the overlay segment | `cookie-consent-overlay-segment.test.tsx` › `renders nothing under /overlay/…`, and `stream-overlay.spec.ts` › `the page is transparent…` on `not.toBeAttached()`. Run the e2e as well as the unit: the unit alone cannot see the root layout that mounts it. |
 | a | `stream-url.ts`: `return ALLOWED.has(url.hostname)` → `return true` | `stream-url.test.ts` › `rejects https://evil.example/www.youtube.com — an allowed host in the PATH is not the host` (and the other nine rejections) |
 | b | `overlay-model.ts` `ledEntrantId`: swap the serving branch's two side ids | `overlay-model.test.ts` › `tennis: the LED and the serve dot follow the server` |
 | c | `overlay-model.ts` `cellsOf`: `if (breakdown) return [];` | `overlay-model.test.ts` › `badminton renders one cell per game, in order, home–away` |
@@ -3465,11 +4250,12 @@ A surviving mutant is a missing test, not a note. Run each one, restore, and re-
 ### Open pins — carried into `_INDEX.md`, not silently resolved
 
 1. **Entrant short name (watch-list 6) — RESOLVED to the fallback.** `public_entrants_v` (`V350__person_tombstone_views.sql:18-47`) exposes `display_name` and a `team_display` blob of `club_id/club_name/logo_path/colors`; `teams.short_name` (`V206:5`) never reaches it. `shortCode` therefore always takes the three-letter branch, and `ui.stream.codeNote` tells the organiser so.
-2. **Venue timezone for `startLabel`.** Formatted in `UTC`. No IANA zone is on `PublicFixture`, and the competition's zone lives behind `getScheduleSettings(auth, …)`, which an unauthenticated overlay cannot call. Owner question: is a UTC start label acceptable on the scheduled state, or is a public tz column owed?
-3. **`header.clock` (football family).** `_THEMES.md` §3 gives the bar a clock cell; no elapsed-time field exists on the public `ScoreSummary.detail` (`lib/public-site.ts:319-373` is the complete reader set). The slot renders only when set, so it is live and empty in W1.
+2. **CLOSED by owner answer 12 (2026-09-06) — venue timezone for `startLabel`.** Was: "formatted in UTC, no IANA zone on `PublicFixture`". Now Task 0 puts `venueTz` on `getPublicFixture` via `resolveVenueTz`, and `overlayStartLabel` formats with it. W1 **deviation 4 is closed**; nothing is owed here.
+3. **CLOSED by owner answer 12 (2026-09-06) — `header.clock` (football family), and the cricket chase line.** Was: "no elapsed-time field exists on the public `ScoreSummary.detail`" and "the chase reads 'Need 45', not 'Need 45 off 45'". Task 0 adds `detail.clock` (from the engine's own `footballPosition`/`periodPosition`) and `detail.innings[].ballsLimit`. W1 **deviations 4 and 6, and the unpinned football clock, are all closed by the owner's answers** — the only thing this wave still owes on them is the §9.6 obligation Task 0 Steps 10–12 carry. `_STATE.md`'s copy of the eight-deviation list is a SEPARATE file and is not edited by this plan; whoever updates `_INDEX.md` at PR time strikes 4 and 6 there.
 4. **`m.youtube.com`.** Not on R16's ten. The unit test asserts it is REJECTED and says so; if the owner wants mobile share links accepted, it is a one-line addition to `STREAM_HOSTS` plus a test row.
 5. **Barlow double-mount (watch-list 7).** Verified in Task 5 Step 12 by reading the built CSS and the network tab, not by assumption.
 6. **`V3_SKINS` = every `sport_key` a division can carry (watch-list 8).** Task 2's sweep asserts eleven keys; run `select distinct sport_key from divisions` on the ovl DB and diff before the PR — a division on a twelfth key would render the generic composition, which is a designed state but should be a KNOWN one.
 7. **`WALKTHROUGH_SPECS` after the rebase (R9).** Absent at base `997ad225b`; present on `main` since PR #723 (`01ea4a455`). Task 8 Step 13 re-greps and registers both specs in the same commit rather than assuming either way.
-8. **Conflicts with the wave prompt, listed for `_INDEX.md`:** the hook's return type (object, not bare `LiveFixtureData` — `LiveScore` renders `subscribed`); `OverlayMsg` instead of `MsgFn` (`MessageKey` is the `ui` catalog, the overlay's copy is `public`); `decidedTemplates` as a fourth model input (one authority for the decided sentence); `startLabel` formatted by the server; W2's plan names `apps/web/e2e/stream-overlay.spec.ts` while the W1 prompt's R9 puts it under `e2e/walkthrough/` — the W1 prompt wins and W2 re-pins.
+8. **The one conflict the owner's answers CREATE, recorded rather than quietly resolved:** Global Constraints say "do NOT touch the engine", and Task 0 does — `cricket.ts`, `football.ts`, `sports/period/kernel.ts` and `core/position.ts`. It is unavoidable: the live transport carries `{ status, summary, outcome }` and nothing else (`live-score-data.ts:7-23`), so a number that must change DURING a match can only ride on `ScoreSummary`. The alternative considered and rejected was reading `match_states.state` server-side and grafting the two numbers onto the payload outside the engine — no engine edit and no §9.6 exposure, but a SECOND authority for the chase denominator and for the clock's staleness guard, which this repo's standing rules punish harder. The carve-out is written into the constraint itself so it cannot widen.
+9. **Conflicts with the wave prompt, listed for `_INDEX.md`:** the hook's return type (object, not bare `LiveFixtureData` — `LiveScore` renders `subscribed`); `OverlayMsg` instead of `MsgFn` (`MessageKey` is the `ui` catalog, the overlay's copy is `public`); `decidedTemplates` as a fourth model input (one authority for the decided sentence); `startLabel` formatted by the server; W2's plan names `apps/web/e2e/stream-overlay.spec.ts` while the W1 prompt's R9 puts it under `e2e/walkthrough/` — the W1 prompt wins and W2 re-pins.
 
