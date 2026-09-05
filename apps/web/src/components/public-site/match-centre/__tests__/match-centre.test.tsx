@@ -135,7 +135,10 @@ describe("MatchCentre — graceful fallback (no document, or an empty tabs list)
       <MatchCentre fixtureId="fx-none" initial={initial} realtime={false} dict={dict} locale="en" tabParam={null} />,
     );
     expect(html).toContain('data-testid="mc-fallback"');
-    expect(html).toContain("Not started"); // LiveScoreBody's own headline fallback
+    // Review round 2 minor — LiveScoreBody's headline fallback is now
+    // localised through matchCentre.status.scheduled ("Scheduled"), not the
+    // English literal "Not started" — anchor on the dict VALUE.
+    expect(html).toContain(dict["matchCentre.status.scheduled"] as string);
     expect(html).not.toContain('data-testid="mc-root"');
     expect(html).not.toContain('data-testid="mc-court-card"');
   });

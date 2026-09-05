@@ -221,8 +221,9 @@ beforeAll(() => {
 describe("SummaryTab — cricket", () => {
   it("PRE-PLAY cricket (no live block, no performers, no innings) renders the scorebug, not a blank tab, and no mc-* cricket blocks", () => {
     const html = renderToStaticMarkup(<SummaryTab doc={emptyDoc} dict={dict} data={liveFixtureFor(emptyDoc)} />);
-    // Positive: the scorebug (LiveScoreBody's fallback headline) is present.
-    expect(html).toContain("Not started");
+    // Positive: the scorebug (LiveScoreBody's fallback headline, now
+    // localised through matchCentre.status.scheduled) is present.
+    expect(html).toContain(dict["matchCentre.status.scheduled"] as string);
     // Negative: none of the cricket-specific blocks a "blank tab" would lack anyway.
     expect(html).not.toContain('data-testid="mc-live-block"');
     expect(html).not.toContain('data-testid="mc-top-performers"');
@@ -278,6 +279,39 @@ describe("SummaryTab — cricket", () => {
     expect(nameSpanMatch?.[1]).toBe("block truncate");
   });
 
+  // Review round 2 minor — the NAME column's header needed the SAME
+  // scope="col" + sr-only-text treatment as the numeric headers; a `title`
+  // attribute alone is not reliably announced by a screen reader.
+  it("the NAME column's header also carries scope=col and an sr-only span with real text", () => {
+    const html = renderToStaticMarkup(<SummaryTab doc={cricketDoc} dict={dict} data={liveFixtureFor(cricketDoc)} />);
+    const nameHeaderMatch = html.match(/<th scope="col" title="([^"]*)" class="[^"]*"><span class="sr-only">([^<]*)<\/span><\/th>/);
+    expect(nameHeaderMatch).not.toBeNull();
+    expect(nameHeaderMatch?.[1]).toBe(dict["matchCentre.col.batter"] as string);
+    expect(nameHeaderMatch?.[2]).toBe(dict["matchCentre.col.batter"] as string);
+  });
+
+  // Review round 2 minor — the batting StatTable's `batters.length > 0`
+  // guard (matching the pre-existing bowling guard) had no test proving it
+  // actually suppresses the table when empty.
+  it("an empty batters array renders NO batting table at all (the length>0 guard)", () => {
+    // The visible "At the crease" <p> LABEL is unconditional (shared with
+    // the StatTable's own sr-only caption text), so counting occurrences of
+    // that string can't tell "label only" apart from "label + table" — the
+    // StatTable's OWN `<caption>`/`<table>` elements are the unambiguous
+    // signal: normally 2 (batting + bowling), 1 with batters empty.
+    const fullHtml = renderToStaticMarkup(<SummaryTab doc={cricketDoc} dict={dict} data={liveFixtureFor(cricketDoc)} />);
+    expect(fullHtml.match(/<table class="[^"]*"/g)?.length).toBe(2); // positive pair: normally batting + bowling
+
+    const noBattersDoc: MatchCentreDocT = {
+      ...cricketDoc,
+      cricket: { ...cricketDoc.cricket!, live: { ...cricketDoc.cricket!.live!, batters: [] } },
+    };
+    const html = renderToStaticMarkup(<SummaryTab doc={noBattersDoc} dict={dict} data={liveFixtureFor(noBattersDoc)} />);
+    expect(html).toContain('data-testid="mc-live-block"'); // the block itself still renders (bowling, this-over, etc.)
+    expect(html.match(/<table class="[^"]*"/g)?.length).toBe(1); // bowling only — the batting table is gone
+    expect(html.match(/data-testid="mc-stat-name-cell"/g)?.length).toBe(1); // one row left: the bowler
+  });
+
   it("a partnership bar's inline width equals Math.round(runs/total*100)%, and a 0-total-runs innings renders 0% (never NaN)", () => {
     const html = renderToStaticMarkup(<SummaryTab doc={cricketDoc} dict={dict} data={liveFixtureFor(cricketDoc)} />);
     const innings1 = cricketDoc.cricket!.innings[0]!;
@@ -304,7 +338,9 @@ describe("SummaryTab — non-cricket", () => {
     const html = renderToStaticMarkup(
       <SummaryTab doc={nonCricketDoc} dict={dict} data={liveFixtureFor(nonCricketDoc)} />,
     );
-    expect(html).toContain("Not started"); // LiveScoreBody's own headline fallback (live-score.tsx)
+    // LiveScoreBody's own headline fallback (live-score.tsx), localised
+    // through matchCentre.status.scheduled.
+    expect(html).toContain(dict["matchCentre.status.scheduled"] as string);
     expect(html).not.toContain('data-testid="mc-live-block"');
     expect(html).not.toContain('data-testid="mc-top-performers"');
     expect(html).not.toContain('data-testid="mc-fow-');

@@ -15,15 +15,28 @@
 // `truncate` sets) just overflows instead of clipping. Fixed with
 // `table-fixed` on the `<table>` and an EXPLICIT width on every NUMERIC
 // column's `<th>` (only honoured under fixed layout) — the name column
-// carries NO width at all, so it takes whatever's left over (about 120px at
-// a 320px viewport, which is where a long name actually starts truncating).
-// A first attempt gave the name cell its own `w-full max-w-0` — WRONG:
-// `max-w-0` on the inner `block truncate` span gives it a used width of
-// zero, clipping every name to nothing, and `max-w-0` on the `<td>` is
-// inert under fixed layout regardless (a fixed-layout column's width comes
-// from the explicit widths in the row, never from `max-width`). The name
-// cell needs no width utility of its own; only `block truncate` on the
-// inner span, nothing else.
+// carries NO width at all, so it takes whatever's left over. A first
+// attempt gave the name cell its own `w-full max-w-0` — WRONG: `max-w-0` on
+// the inner `block truncate` span gives it a used width of zero, clipping
+// every name to nothing, and `max-w-0` on the `<td>` is inert under fixed
+// layout regardless (a fixed-layout column's width comes from the explicit
+// widths in the row, never from `max-width`). The name cell needs no width
+// utility of its own; only `block truncate` on the inner span, nothing else.
+//
+// Review round 2 (NEW IMPORTANT A) — Tailwind is border-box, so a numeric
+// column's CONTENT width is its `w-*` MINUS its horizontal padding: `w-7`
+// (28px) with the original `pl-2` (8px) left only 20px for the digits
+// themselves — a century "104" or a ball count "127" painted over its
+// neighbour, with no scroll to relieve it (this is a table, not a rail).
+// Numeric header/cells now use `px-0.5` (2px) instead, so the ruled widths
+// actually fit what they're sized for: `w-7` (28px, ~24px content) fits
+// three digits; `w-8` (32px, ~28px) fits "19.4"; `w-11` (44px, ~40px) fits
+// "142.9". The view model is expected to format `strikeRate`/`economy` to
+// ONE decimal and `crr`/`rrr` to TWO (Task 6's job — asserted nothing about
+// it here, only that the COLUMN can hold what a formatted value looks
+// like). With the container's own padding accounted for, the name
+// column's remainder is ≈100px at a 320px viewport — narrow, but enough
+// for `block truncate` to do its job rather than clipping to nothing.
 //
 // Also: `scope="col"` on every header (screen readers announce which column
 // a data cell belongs to without one), and an `sr-only` span carrying real
@@ -86,7 +99,7 @@ export function StatTable<Row>({
               key={col.abbr}
               scope="col"
               title={t(dict, col.titleKey)}
-              className={`${col.width} pb-1 pl-2 text-right text-xs font-medium uppercase tracking-wide text-ink-muted`}
+              className={`${col.width} pb-1 px-0.5 text-right text-xs font-medium uppercase tracking-wide text-ink-muted`}
             >
               {col.abbr}
             </th>
@@ -100,7 +113,7 @@ export function StatTable<Row>({
               <span className="block truncate">{nameCell(row)}</span>
             </td>
             {columns.map((col) => (
-              <td key={col.abbr} className="pl-2 text-right text-sm tabular-nums text-zinc-700">
+              <td key={col.abbr} className="px-0.5 text-right text-sm tabular-nums text-zinc-700">
                 {col.cell(row)}
               </td>
             ))}

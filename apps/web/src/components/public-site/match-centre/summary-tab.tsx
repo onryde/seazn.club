@@ -160,10 +160,15 @@ function TopPerformers({ performers, dict }: { performers: TopPerformerT[]; dict
         <div key={i} className="rounded-2xl border border-zinc-200/80 bg-surface p-4 shadow-sm">
           <div className="flex items-center gap-2">
             {/* Review fix round 2 (minor) — the side's own short label, so
-                "Top batter" names its TEAM, not just the person. */}
+                "Top batter" names its TEAM, not just the person. `overflow-
+                hidden` guards a `short` longer than the tile expects — the
+                BUILDER is ruled to clamp `short` to 3 characters (note for
+                Task 6, the view-model task; not enforced here, since this
+                component never re-derives/truncates data the document
+                already carries). */}
             <span
               data-testid="mc-performer-side"
-              className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-accent-soft text-[9px] font-bold uppercase text-accent-strong"
+              className="inline-flex h-5 w-5 shrink-0 items-center justify-center overflow-hidden rounded-full bg-accent-soft text-[9px] font-bold uppercase text-accent-strong"
             >
               {p.side.short}
             </span>

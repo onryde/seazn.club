@@ -69,8 +69,15 @@ function statusChip(status: MatchCentreHeaderT["status"], dict: PublicDict): { t
       // (postponed/abandoned/walkover/cancelled), a later task's copy.
       return null;
     default: {
+      // Review round 2 minor — the `never` check stays for its COMPILE-time
+      // exhaustiveness guarantee, but must never itself become the runtime
+      // return value: `_exhaustive` is a `string` at runtime (whatever
+      // unrecognised status arrived), and returning it as if it were a
+      // `{ testId, text }` chip would render a `<p data-testid={undefined}>`
+      // with no visible text — a broken chip, not "no chip".
       const _exhaustive: never = status;
-      return _exhaustive;
+      void _exhaustive;
+      return null;
     }
   }
 }

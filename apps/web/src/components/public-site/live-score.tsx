@@ -101,6 +101,33 @@ interface LiveScoreBodyProps {
   subscribed?: boolean;
 }
 
+// Task 11 review round 2 (NEW IMPORTANT B) — the DB's `fixtures.status`
+// vocabulary (apps/web/src/server/usecases/stages.ts:2142-2156) carries
+// several values beyond in_play/decided/finalized/scheduled: abandoned,
+// cancelled, forfeited, postponed, walkover. Round 1's fallback collapsed
+// every one of these into the generic `matchCentre.status.other` ("Not
+// played") on the legacy fixture page — each now gets its OWN word instead.
+// Anything STILL unrecognised falls back to the RAW status word, never a
+// dictionary lookup at all: `matchCentre.status.other` is reserved for
+// `CourtCard`'s own "no chip" bucket (a status-ENUM concept,
+// `MatchCentreHeaderT["status"]`'s `"other"` literal), not this
+// loosely-typed `string` field's catch-all.
+const OTHER_STATUS_KEY: Record<string, string> = {
+  abandoned: "matchCentre.status.abandoned",
+  cancelled: "matchCentre.status.cancelled",
+  forfeited: "matchCentre.status.forfeited",
+  postponed: "matchCentre.status.postponed",
+  walkover: "matchCentre.status.walkover",
+};
+
+function statusText(dict: Dict, status: string, inPlay: boolean, decided: boolean): string {
+  if (inPlay) return t(dict, "matchCentre.status.live");
+  if (decided) return t(dict, "matchCentre.status.decided");
+  if (status === "scheduled") return t(dict, "matchCentre.status.scheduled");
+  const key = OTHER_STATUS_KEY[status];
+  return key ? t(dict, key) : status;
+}
+
 export function LiveScoreBody({
   data,
   entrantNames,
@@ -112,21 +139,7 @@ export function LiveScoreBody({
   const activeDict = dict ?? (en as Dict);
   const inPlay = data.status === "in_play";
   const decided = data.status === "decided" || data.status === "finalized";
-  // Task 11 review fix round 1 (IMPORTANT 3) — maps every status this field
-  // can carry onto the SAME three-plus-one keys CourtCard uses
-  // (matchCentre.status.{live,decided,scheduled}), so the two surfaces never
-  // drift onto separate vocabularies for the same concept. "finalized"
-  // folds into "decided" (matches the `decided` boolean above, unchanged
-  // from before this fix); anything else this loosely-typed `string` field
-  // could carry gets `matchCentre.status.other` ("Not played") rather than
-  // a raw, untranslated `data.status.replace("_", " ")`.
-  const statusKey = inPlay
-    ? "matchCentre.status.live"
-    : decided
-      ? "matchCentre.status.decided"
-      : data.status === "scheduled"
-        ? "matchCentre.status.scheduled"
-        : "matchCentre.status.other";
+  const statusWord = statusText(activeDict, data.status, inPlay, decided);
   const breakdown = setBreakdown(data.summary, sportKey);
   // Kernel perSide order is [home, away]; row labels come from it.
   const sideIds = data.summary?.perSide?.map((s) => s.entrantId) ?? [];
@@ -154,7 +167,7 @@ export function LiveScoreBody({
           {inPlay ? (
             <p className="mb-3 flex items-center gap-2 text-[11px] font-bold uppercase tracking-[0.22em] text-emerald-300">
               <span className="animate-live-pulse h-2 w-2 rounded-full bg-emerald-400" />
-              {t(activeDict, statusKey)}{subscribed ? " · realtime" : ""}
+              {statusWord}{subscribed ? " · realtime" : ""}
               {strength ? (
                 <span className="rounded-full bg-amber-400/20 px-2 py-0.5 font-mono text-[11px] font-bold tracking-normal text-amber-300">
                   {strength}
@@ -163,7 +176,7 @@ export function LiveScoreBody({
             </p>
           ) : (
             <p className="mb-3 text-[11px] font-semibold uppercase tracking-[0.22em] text-court-muted">
-              {t(activeDict, statusKey)}
+              {statusWord}
             </p>
           )}
           <p className="font-display text-5xl font-bold tabular-nums leading-none tracking-tight sm:text-6xl">
@@ -171,7 +184,7 @@ export function LiveScoreBody({
               ? showBreakdown
                 ? stripLiveSetPoints(data.summary.headline)
                 : data.summary.headline
-              : "Not started"}
+              : t(activeDict, "matchCentre.status.scheduled")}
           </p>
           {!showBreakdown && data.summary?.perSide ? (
             <ul className="mt-5 space-y-2">
