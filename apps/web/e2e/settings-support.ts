@@ -183,9 +183,24 @@ export async function seedMemberIdentity(
     userId,
     // The community user outlives this test. Remove the membership so the next
     // run's accept is a fresh join rather than a no-op on an existing row.
+    //
+    // Both steps are independently `.catch`-guarded so one failing can never
+    // block the other from running, and `release()` itself never rejects and
+    // short-circuits a caller's `finally` chain (a caller typically runs
+    // `await member.release(); await releaseSettingsOrg(request, org);` in
+    // sequence — an unguarded throw here would leak the seeded org too).
+    //
+    // Known gap, not fixed here: if `owner.delete(...)` fails for a reason
+    // OTHER than "already removed", it is swallowed silently and nothing else
+    // cleans up that membership row. `releaseSeededOrgSql`
+    // (`e2e/helpers.ts:1143-1153`) soft-deletes the org (`deleted_at = now()`,
+    // not a real `DELETE`), so the `org_members` row's `ON DELETE CASCADE` FK
+    // never fires as a backstop — the row can permanently pollute the shared
+    // `e2e/.auth/community.json` fixture's visible org list. Flagged for
+    // whoever writes the Task 5 mutation sweep.
     release: async () => {
       await owner.delete(`/api/orgs/${orgId}/members/${userId}`).catch(() => {});
-      await ctx.close();
+      await ctx.close().catch(() => {});
     },
   };
 }
