@@ -408,6 +408,80 @@ describe("encodeConstraints", () => {
     expect(out.pins).toEqual(pins);
   });
 
+  // ---- the refusals T4 is told to build on --------------------------------
+  // Report §5 hands T4 the decision of whether these throws become a
+  // `scheduleErrors[]` entry or abort the run. That decision was being taken
+  // against an untested guarantee: a mutant returning `NaN` instead of throwing
+  // survived the whole suite, because nothing supplied an unreadable value.
+  // Each refusal below also asserts the FIELD PATH, because the message is what
+  // a pack author gets — "board: something is wrong" is not actionable.
+
+  it("refuses a non-string where an ISO instant belongs", () => {
+    expect(() =>
+      encodeConstraints({
+        divisionRef: "d-tiny",
+        // Epoch NUMBERS, the most plausible slip for a field this file
+        // converts TO epoch ms.
+        scheduleConfig: { blackouts: [{ from: 1811851200000, to: 1811854800000 }] },
+        courtIdByRef: courts,
+        isRoundRobin: true,
+        pins: [],
+      }),
+    ).toThrow(/scheduleConfig\.blackouts\[0\]\.from must be an ISO instant string/);
+  });
+
+  it("refuses a well-suffixed string that is not a real instant", () => {
+    // Carries a `Z`, so it clears the offset gate added for I1 and reaches the
+    // parse guard behind it. Without an input shaped like this that guard is
+    // UNREACHABLE and the offset check silently covers for it.
+    expect(() =>
+      encodeConstraints({
+        divisionRef: "d-tiny",
+        scheduleConfig: { startAt: "2027-06-31T25:00:00Z" },
+        courtIdByRef: courts,
+        isRoundRobin: true,
+        pins: [],
+      }),
+    ).toThrow(/scheduleConfig\.startAt is not a parseable ISO instant/);
+  });
+
+  it("refuses a constraints block that is not an object — an array included", () => {
+    const call = (constraints: unknown) => () =>
+      encodeConstraints({
+        divisionRef: "d-tiny",
+        scheduleConfig: { constraints },
+        courtIdByRef: courts,
+        isRoundRobin: true,
+        pins: [],
+      });
+    expect(call("noBackToBack")).toThrow(/scheduleConfig\.constraints must be an object/);
+    // `typeof [] === "object"`, so the array exclusion is its own guard and
+    // needs its own case.
+    expect(call([])).toThrow(/scheduleConfig\.constraints must be an object/);
+  });
+
+  it("refuses a list-shaped knob that is not a list, at either nesting level", () => {
+    expect(() =>
+      encodeConstraints({
+        divisionRef: "d-tiny",
+        // A bare ref where a list of them belongs.
+        scheduleConfig: { courts: "@c-one" },
+        courtIdByRef: courts,
+        isRoundRobin: true,
+        pins: [],
+      }),
+    ).toThrow(/scheduleConfig\.courts must be an array/);
+    expect(() =>
+      encodeConstraints({
+        divisionRef: "d-tiny",
+        scheduleConfig: { constraints: { hard: { type: "not_before", time: "09:30" } } },
+        courtIdByRef: courts,
+        isRoundRobin: true,
+        pins: [],
+      }),
+    ).toThrow(/scheduleConfig\.constraints\.hard must be an array/);
+  });
+
   // ---- the drift guard ---------------------------------------------------
   // `board.ts` restates `ScheduleConfig`'s three defaults because it reads an
   // OPAQUE record and therefore never runs that zod schema. The briefed test
