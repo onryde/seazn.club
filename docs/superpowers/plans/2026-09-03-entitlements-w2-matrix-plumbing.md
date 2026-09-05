@@ -16,6 +16,13 @@ surface work — that is W3.
 
 ## Current state — 2026-09-04, written for a session that has none of this in context
 
+**2026-09-05: rebased onto `origin/main` cleanly — 44 commits in, no conflicts, now
+134 ahead / 0 behind, tsc 0, and PR #716 is in the branch so builds get the Turbopack
+cache.** Deferred on machine load (peaks of 252 on 12 cores, five labels resident):
+the full vitest boundary gate, the prod rebuild, and the driven walkthrough. All three
+are still OWED before this wave can be called done — a red produced at that load is not
+evidence of anything, and a build started beside a live agent already died at exit 137.
+
 Branch `feat/entitlements-w2-matrix-plumbing` in worktree
 `.claude/worktrees/entw2`. **90 commits ahead of `origin/main`, 20 behind** — a rebase
 is owed and has not been done. Local env label `entw2` (Postgres :54788, placement

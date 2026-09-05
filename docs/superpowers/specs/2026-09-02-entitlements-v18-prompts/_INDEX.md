@@ -187,6 +187,44 @@ against the tree or the `entw2` database. Full write-up with the arithmetic:
    is 10.
 
 
+### Owner ruling 2026-09-05 — the Event Pass L rung comes OFF SALE
+
+**The reasoning, which is the part that will not be re-derivable from the code.**
+L is priced 4499 against Pro's 1499/mo and carries the SAME 4% platform fee as M,
+so **Pro is cheaper than L in money at every volume for a one-month competition**.
+L's only genuine edge is 512 entrants per division against Pro's 256. It therefore
+reads as a savings product while being a capacity product, and a buyer comparing on
+price is misled. The owner chose to take the rung off sale rather than ship copy
+explaining the distinction.
+
+**Hidden, not deleted — the R13 precedent** (which hid the extra-seat add-on the same
+way: backend and Stripe price kept, no purchase UI, code dormant).
+
+- **KEPT**: `event_pass_l` rows in `plan_entitlements`, its `stripe-plans.json` entry,
+  its Stripe price, `PASS_CREDIT_GRANT.event_pass_l`, every resolution path. **An org
+  already holding an L pass must keep working exactly as before** — that is the
+  dormancy requirement, and it carries its own test.
+- **REMOVED**: L from every surface a customer can buy or choose from, and from every
+  shipped string that names it.
+- **No migration, and nothing archived in Stripe** — W4 owns the Stripe sync.
+
+**One authority, not six conditionals:** `SELLABLE_PASS_KEYS` beside `PASS_KEYS` in
+`lib/currency.ts`. Selling surfaces read the sellable list; resolution keeps reading
+the full one. Same shape as `PUBLICLY_READABLE_VISIBILITIES`, introduced days earlier
+for the identical reason. A scattered `key !== "event_pass_l"` across six files is the
+"two implementations that agree today" defect this wave has already fixed three times.
+
+**The guards split deliberately**, and this is the rule for anyone touching them later:
+a ladder rule over the SEED keeps validating L, because the rung still exists and must
+stay coherent if it is ever put back on sale — a rule that stops examining it lets the
+dormant price rot. A guard over SHIPPED COPY stops expecting it, because the copy no
+longer names it.
+
+**If L is ever put back on sale**, the honest version of the card says it is a capacity
+product: "L is for size, not saving — 512 entrants per division. If cost is the
+question, compare M against Pro." That sentence is the one this ruling avoided having
+to write.
+
 ## W3 scope added 2026-09-05 — owner-approved, with the evidence
 
 Two changes, both about selling better rather than gating harder. Written here
