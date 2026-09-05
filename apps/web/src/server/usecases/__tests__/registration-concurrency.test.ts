@@ -245,6 +245,7 @@ describe.skipIf(!HAS_DB)("confirmPaidRegistration — concurrent confirmations o
       staged();
       await held;
     });
+    holder.catch(() => {});
     await isStaged;
 
     // Both racers are the REAL exported entry point.
@@ -258,6 +259,7 @@ describe.skipIf(!HAS_DB)("confirmPaidRegistration — concurrent confirmations o
       handleRegistrationCheckoutCompleted(session),
       handleRegistrationCheckoutCompleted(session),
     ]);
+    racing.catch(() => {});
     await waitForBlockedLocks(2);
     release();
     await holder;
@@ -315,9 +317,11 @@ describe.skipIf(!HAS_DB)("sweepRegistrations vs a racing webhook — both orders
       await held;
       await tx`update registrations set status = 'confirmed', updated_at = now() where id = ${regId}`;
     });
+    holder.catch(() => {});
     await isStaged;
 
     const sweepPromise = sweepRegistrations("http://test.local");
+    sweepPromise.catch(() => {});
     await waitForBlockedLocks(1);
     release();
     await holder;
@@ -349,9 +353,11 @@ describe.skipIf(!HAS_DB)("sweepRegistrations vs a racing webhook — both orders
       await held;
       await tx`update registrations set status = 'expired', updated_at = now() where id = ${regId}`;
     });
+    holder.catch(() => {});
     await isStaged;
 
     const webhookPromise = handleRegistrationCheckoutCompleted(session);
+    webhookPromise.catch(() => {});
     await waitForBlockedLocks(1);
     release();
     await holder;
@@ -594,6 +600,7 @@ describe.skipIf(!HAS_DB)("joinTeamEntry — closing two unguarded windows (genui
       await held;
       await tx`update registrations set status = 'withdrawn', withdrawn_at = now(), updated_at = now() where id = ${regId}`;
     });
+    holder.catch(() => {});
     await isStaged;
 
     // The REAL joinTeamEntry, issued while the holder's lock is still open —
@@ -613,6 +620,7 @@ describe.skipIf(!HAS_DB)("joinTeamEntry — closing two unguarded windows (genui
         privacy_consent: true,
       },
     );
+    joinPromise.catch(() => {});
     await waitForBlockedLocks(1);
     release();
     await holder;
@@ -664,6 +672,7 @@ describe.skipIf(!HAS_DB)("joinTeamEntry — closing two unguarded windows (genui
       staged();
       await held;
     });
+    holder.catch(() => {});
     await isStaged;
 
     const racing = Promise.allSettled([
