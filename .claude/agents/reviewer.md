@@ -1,7 +1,7 @@
 ---
 name: reviewer
 description: Reviews code changes for correctness, security, and team conventions. Use proactively after the implementer finishes, before committing.
-model: fable
+model: opus
 effort: xhigh
 memory: project
 ---

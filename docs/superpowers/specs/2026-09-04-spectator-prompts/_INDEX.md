@@ -179,3 +179,9 @@ isolated-worktree agent branches from origin/main, never from the feature branch
 subagent?" — accepted as a ruling: Implementer and Reviewer agents run on Fable for
 this programme's remaining waves (`.claude/agents/*.md` frontmatter; RULES.md). The four
 agents resumed at 18:01 finish on Opus (a resume keeps the model).
+
+**Ruling 14 corrected (2026-09-05 18:2x):** the owner's question meant PLANNING —
+"only now use Fable Agent to write implementation plan for remaining waves". Agent
+frontmatter reverted to `model: opus`; the W3 (poster) and W4 (gallery) plans are
+drafted by Fable agents (docs only, DRAFT status, re-pinned before execution); the W2
+draft already came from a Fable-model agent.
