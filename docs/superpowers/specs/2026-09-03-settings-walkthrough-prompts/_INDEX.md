@@ -268,6 +268,40 @@ content, so the org name is the only child that yields and gets ~38px of a
 ~240px row. `min-w-0` is already present — the usual `truncate` diagnosis is
 NOT the cause here.
 
+**D, MEASURED 2026-09-05** off the live DOM at BUILD_ID `jWQtwrLaBn_2DBZk49Lnf`.
+Both halves settled, and the defect is worse than the estimate above.
+
+Org name "My organization", natural width 107px. Row inner width / name box /
+name scrollWidth:
+
+| width | row | name box | scrollWidth | |
+|---|---|---|---|---|
+| 320 | 238 | **6px** | 107 | clipped |
+| 360 | 278 | 46px | 107 | clipped |
+| 375 | 293 | 61px | 107 | clipped |
+| 390 | 308 | 76px | 107 | clipped |
+| 430 | 348 | 116px | 116 | not clipped, still below a readable floor |
+| 768 | 478 | 246px | 246 | |
+| 834 | 544 | 312px | 312 | |
+| 1280 | 734 | 502px | 502 | |
+
+**6px, not the ~38px estimated above** — the org name is a two-character
+sliver. The arithmetic closes exactly and names the mechanism: at 320 the four
+children measure avatar 44 + name 6 + badge 57 + switcher 95, plus three 12px
+gaps = 238, the row's entire inner width. Avatar and switcher are both
+`shrink-0`; the badge sits at its own min-content (57 — "Owner" is one word);
+the `flex-1` name block is the only child that can yield, exactly as
+`flex: 1 1 0%` requires.
+
+**The tab rail is CONFIRMED already-correct.** Computed `overflow-x` on the
+settings `<nav>` is `auto` at every phone width, scrollWidth 1300 against
+clientWidth 320-430 — the reachable kind under AGENTS.md failure class 23,
+i.e. the feature the owner's capture shows. At 768/834 it is 176/176 and not
+overflowing at all, the rail having become the desktop column. And
+`documentElement.scrollWidth <= innerWidth` at all seven widths, so the
+cut-off rail costs the page no horizontal scroll. **Recorded as a case that
+turned out already-correct; the markup is not to be touched.**
+
 **E. `org-switcher.tsx` is hardcoded English on a surface this wave drives.**
 Found while reading the identity row, not by looking for it:
 `aria-label="Switch organisation"` (`:103`), the button label `Switch`
