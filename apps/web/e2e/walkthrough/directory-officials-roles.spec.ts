@@ -65,6 +65,27 @@ import { ALL_OFFICIAL_ROLES } from "../../src/lib/official-roles";
  */
 test.use({ storageState: { cookies: [], origins: [] } });
 
+/**
+ * 120s, matching every other walkthrough spec in this folder (`venues.spec.ts`
+ * takes 120s for a strictly smaller journey; others go to 600s). These five
+ * shipped on the project's flat 60s default, which was a deliberate speed
+ * constraint in the design — and it was wrong.
+ *
+ * Measured 2026-09-05 on a loaded box: these specs run 7-35s idle and went
+ * 26.7s / 57.5s / 1.1m under load, with one crossing 60s on a plain
+ * `page.goto`. CI is worse, not better: `e2e.yml` runs `--workers=3` on a
+ * 4-vcpu runner shared with Postgres and the Next server.
+ *
+ * The cost of being wrong here is asymmetric. On overrun Playwright prints
+ * whichever poll was in flight ABOVE the timeout line, so a blown clock reads
+ * as a data defect — in the same run, two scorepad specs reported
+ * "Expected: 9 / Received: 8" over "Test timeout of 240000ms exceeded". A red
+ * that lies about its own cause costs more than a slower budget. 120s still
+ * catches a real regression against a 35s ceiling.
+ */
+test.setTimeout(120_000);
+
+
 test("roles_multi is free on community, swaps under a deny, and sticks once allowed", async ({
   page,
 }) => {

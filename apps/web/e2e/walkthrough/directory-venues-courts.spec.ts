@@ -61,6 +61,27 @@ import {
  */
 test.use({ storageState: { cookies: [], origins: [] } });
 
+/**
+ * 120s, matching every other walkthrough spec in this folder (`venues.spec.ts`
+ * takes 120s for a strictly smaller journey; others go to 600s). These five
+ * shipped on the project's flat 60s default, which was a deliberate speed
+ * constraint in the design — and it was wrong.
+ *
+ * Measured 2026-09-05 on a loaded box: these specs run 7-35s idle and went
+ * 26.7s / 57.5s / 1.1m under load, with one crossing 60s on a plain
+ * `page.goto`. CI is worse, not better: `e2e.yml` runs `--workers=3` on a
+ * 4-vcpu runner shared with Postgres and the Next server.
+ *
+ * The cost of being wrong here is asymmetric. On overrun Playwright prints
+ * whichever poll was in flight ABOVE the timeout line, so a blown clock reads
+ * as a data defect — in the same run, two scorepad specs reported
+ * "Expected: 9 / Received: 8" over "Test timeout of 240000ms exceeded". A red
+ * that lies about its own cause costs more than a slower budget. 120s still
+ * catches a real regression against a 35s ceiling.
+ */
+test.setTimeout(120_000);
+
+
 /** 2026-11-04 is a Wednesday. 10:00 with the default `matchMinutes: 30`
  *  (ScheduleConfig) puts the fixture at 10:00-10:30, comfortably outside the
  *  18:00-20:00 window typed in below — the narrowing is what strands it, not
@@ -140,7 +161,7 @@ test("three courts, restricted hours on the middle one, and the count the schedu
   // Setup again: the fixture is the state this journey needs to REACH, not the
   // thing under test. `skipLineups` because nothing here scores — the two
   // lineup PUTs would be two round trips bought for nothing, and this test has
-  // a 60s budget it must fit inside without `test.setTimeout`.
+  // the 120s budget set at the top of this file (see its note).
   const seeded = await seedRosteredFixture(page.request, {
     label: `Riverside ${s}`,
     sportKey: "badminton",
