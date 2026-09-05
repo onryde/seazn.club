@@ -24,7 +24,7 @@ import { assessHealth } from "@seazn/engine/scheduling/health";
 
 import type { Board, BoardFixture, EncodedConstraints } from "../board.ts";
 import type { PackHistoricalAssignment } from "../pack-schema.ts";
-import type { ActualEngine, EngineSnapshot } from "../schedule.ts";
+import type { ActualEngine, EngineSnapshot, EngineSnapshotDivision, RequestedEngine } from "../schedule.ts";
 import {
   assessBelievability,
   assessEngineDelta,
@@ -123,14 +123,24 @@ function historyRow(
   return { divisionRef, fixtureExtKey, venue: "Somewhere Real", startsAt: `${ymd}T${hhmm}:00+01:00` };
 }
 
+/** One leg's artifact.
+ *
+ *  `requestedEngine` is a PARAMETER, not a constant, and it defaults to
+ *  `"both"` only so the cases that do not care keep reading as before. The
+ *  two values a real run actually writes are `"greedy"` and `"optimized"` —
+ *  `tiny.ts` puts the CLI's own `--engine` into the artifact, and a two-leg
+ *  comparison is assembled from two SEPARATE single-engine runs
+ *  (`assessEngineDelta`'s doc comment). A suite that only ever fed `"both"`
+ *  left the only two arms production uses unwitnessed. */
 function snapshot(
   engine: ActualEngine,
   divisions: readonly { ref: string; makespan?: number; imbalance?: number }[],
   runId = "sha-aaaa",
+  requestedEngine: RequestedEngine = "both",
 ): EngineSnapshot {
   return {
     runId,
-    requestedEngine: "both",
+    requestedEngine,
     engine,
     divisions: divisions.map((d) => ({
       divisionRef: d.ref,
@@ -150,6 +160,36 @@ function snapshot(
       wallMs: 1,
     })),
   };
+}
+
+/** A well-formed division row as JSON, not as `EngineSnapshotDivision`.
+ *
+ *  Deliberately typed `Record<string, unknown>`: `readEngineArtifacts` makes
+ *  no shape claim about what it parsed, so a test that could only express a
+ *  VALID snapshot cannot reach the arms that reject an invalid one. A stale
+ *  `engine-*.json` written by an older bench build is exactly this — valid
+ *  JSON, invalid snapshot. */
+function rawDivision(over: Readonly<Record<string, unknown>> = {}): Record<string, unknown> {
+  return { divisionRef: "d-1", blockingCount: 0, unplacedCount: 0, wallMs: 1, ...over };
+}
+
+/** `rawDivision()` with one key DELETED. Spreading `undefined` over a key is
+ *  not the same state — `"blockingCount" in row` stays true — and the missing
+ *  case is the one an older writer actually produces. */
+function rawDivisionWithout(field: string): Record<string, unknown> {
+  const row = rawDivision();
+  delete row[field];
+  return row;
+}
+
+/** One leg's artifact with division rows that need not be well formed. */
+function rawArtifact(engine: ActualEngine, divisions: readonly unknown[], runId = "sha-aaaa"): unknown {
+  return { runId, requestedEngine: "both", engine, divisions };
+}
+
+/** The five numbers `ScheduleMetricsOut` declares, well formed. */
+function rawMetrics(over: Readonly<Record<string, unknown>> = {}): Record<string, unknown> {
+  return { makespanMinutes: 300, worstIdleGapMinutes: 0, courtImbalanceMinutes: 90, placed: 1, total: 1, ...over };
 }
 
 // ---------------------------------------------------------------------------
@@ -583,6 +623,82 @@ describe("assessEngineDelta — the comparison comes from two RUNS, and is RUN-l
     expect(report.note).toBeUndefined();
   });
 
+  // -------------------------------------------------------------------------
+  // `requestedEngine` — the closed set, one arm at a time
+  //
+  // `asSnapshot` accepts three values and every fixture above supplies the one
+  // a real run never writes. `tiny.ts` puts the CLI's `--engine` into the
+  // artifact, and a two-leg comparison is two SEPARATE single-engine runs, so
+  // the artifacts a live delta reads carry `"greedy"` and `"optimized"`. A
+  // whole-guard mutant is killed by the `"both"` fixtures alone, which is how
+  // both production arms rode along untested.
+  //
+  // Each case below moves exactly ONE leg off `"both"` and asserts BOTH legs'
+  // values, so the assertion distinguishes the arms instead of accepting
+  // either: a mutant that drops only `"greedy"` reds only the greedy case.
+  // -------------------------------------------------------------------------
+
+  it("accepts the requestedEngine \"greedy\" that a real `--engine greedy` leg writes", () => {
+    const report = assessEngineDelta({
+      [GREEDY_ARTIFACT_KEY]: snapshot("greedy", [{ ref: "d-1", makespan: 300, imbalance: 90 }], "sha-aaaa", "greedy"),
+      [OPTIMIZED_ARTIFACT_KEY]: snapshot("optimized", [{ ref: "d-1", makespan: 240, imbalance: 30 }]),
+    });
+    expect(report.note).toBeUndefined();
+    expect(report.delta).toBeDefined();
+    expect(report.delta?.greedy.requestedEngine).toBe("greedy");
+    expect(report.delta?.optimized.requestedEngine).toBe("both");
+    expect(report.delta?.makespanDeltaMinutes).toBe(60);
+  });
+
+  it("accepts the requestedEngine \"optimized\" that a real `--engine optimized` leg writes", () => {
+    const report = assessEngineDelta({
+      [GREEDY_ARTIFACT_KEY]: snapshot("greedy", [{ ref: "d-1", makespan: 300, imbalance: 90 }]),
+      [OPTIMIZED_ARTIFACT_KEY]: snapshot(
+        "optimized",
+        [{ ref: "d-1", makespan: 240, imbalance: 30 }],
+        "sha-aaaa",
+        "optimized",
+      ),
+    });
+    expect(report.note).toBeUndefined();
+    expect(report.delta).toBeDefined();
+    expect(report.delta?.greedy.requestedEngine).toBe("both");
+    expect(report.delta?.optimized.requestedEngine).toBe("optimized");
+    expect(report.delta?.makespanDeltaMinutes).toBe(60);
+  });
+
+  it("reads BOTH legs' own requestedEngine back — the pair a real two-leg run writes", () => {
+    // The production shape: two runs, each with its own `--engine`, compared.
+    // The two values must come back DIFFERENT, so a guard that collapsed them
+    // (or a snapshot that echoed one leg twice) cannot pass.
+    const report = assessEngineDelta({
+      [GREEDY_ARTIFACT_KEY]: snapshot("greedy", [{ ref: "d-1", makespan: 300, imbalance: 90 }], "sha-aaaa", "greedy"),
+      [OPTIMIZED_ARTIFACT_KEY]: snapshot(
+        "optimized",
+        [{ ref: "d-1", makespan: 240, imbalance: 30 }],
+        "sha-aaaa",
+        "optimized",
+      ),
+    });
+    expect(report.note).toBeUndefined();
+    expect(report.delta?.greedy.requestedEngine).toBe("greedy");
+    expect(report.delta?.optimized.requestedEngine).toBe("optimized");
+    expect(report.delta?.greedy.requestedEngine).not.toBe(report.delta?.optimized.requestedEngine);
+    expect(report.delta?.courtImbalanceDeltaMinutes).toBe(60);
+  });
+
+  it("omits the delta when an artifact's requestedEngine is outside the closed set", () => {
+    // The negative pair for the three arms above: without it, deleting the
+    // `requestedEngine` guard outright survives — every other rejection case
+    // in this block is already rejected by a different field.
+    const report = assessEngineDelta({
+      [GREEDY_ARTIFACT_KEY]: { runId: "sha-aaaa", requestedEngine: "turbo", engine: "greedy", divisions: [] },
+      [OPTIMIZED_ARTIFACT_KEY]: snapshot("optimized", [{ ref: "d-1", makespan: 240, imbalance: 30 }]),
+    });
+    expect(report.delta).toBeUndefined();
+    expect(report.note).toContain(`the ${GREEDY_ARTIFACT_KEY} artifact is not a readable`);
+  });
+
   it("is NOT part of the per-division believability report", () => {
     // T6 calls `assessBelievability` once per division. A delta carried there
     // would be emitted N times, each copy listing every OTHER division's refs.
@@ -730,6 +846,235 @@ describe("assessEngineDelta — the comparison comes from two RUNS, and is RUN-l
     expect(() =>
       assessEngineDelta({ [GREEDY_ARTIFACT_KEY]: null, [OPTIMIZED_ARTIFACT_KEY]: 42, "engine-x": "nope" }),
     ).not.toThrow();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The division rows inside an artifact
+//
+// This block exists for one failure mode, and it is the worst one this module
+// has: `asSnapshot` used to check `divisionRef` and then CAST the rest, so a
+// stale or partial `engine-*.json` satisfied this module's "never throws"
+// contract, flowed into `SuiteReport.engineDelta.delta`, and then threw out of
+// `writeReport`'s `BenchReport.parse` — at the very END of a run, taking
+// report.json and report.md with it. The run did the work and lost the
+// evidence, including every finding it had already collected.
+//
+// So the guarantee this block pins is not "asSnapshot is picky". It is: a
+// division row the report's schema would REJECT never reaches the report, and
+// the run degrades the way this module degrades everywhere else — the delta is
+// reported as unavailable, with the reason naming the artifact.
+//
+// Required vs optional is the whole design here, and the two behave
+// DIFFERENTLY on purpose:
+//
+//   * A missing REQUIRED number (`blockingCount`, `unplacedCount`, `wallMs` —
+//     non-optional in `EngineSnapshotDivision` and non-optional in report.ts's
+//     `EngineSnapshotReport`) cannot be repaired or omitted, so the artifact is
+//     rejected and the note says so.
+//   * A malformed OPTIONAL field is DROPPED and the delta still computed.
+//     Refusing the whole comparison over a bad `solverStatus` would be the
+//     over-refusing guard that silently deletes a wave's headline stat —
+//     report-only means report what you can.
+// ---------------------------------------------------------------------------
+
+describe("assessEngineDelta — a division row the report's schema would REJECT never reaches it", () => {
+  const REQUIRED_NUMBER_ROWS: readonly { readonly what: string; readonly row: Record<string, unknown> }[] = [
+    { what: "blockingCount is missing", row: rawDivisionWithout("blockingCount") },
+    { what: "unplacedCount is missing", row: rawDivisionWithout("unplacedCount") },
+    { what: "wallMs is missing", row: rawDivisionWithout("wallMs") },
+    { what: "blockingCount is a string", row: rawDivision({ blockingCount: "0" }) },
+    { what: "unplacedCount is null", row: rawDivision({ unplacedCount: null }) },
+    { what: "wallMs is NaN", row: rawDivision({ wallMs: Number.NaN }) },
+  ];
+
+  it.each(REQUIRED_NUMBER_ROWS)(
+    "omits the delta, without throwing, when a greedy division row's $what",
+    ({ row }) => {
+      const call = (): EngineDeltaReport =>
+        assessEngineDelta({
+          [GREEDY_ARTIFACT_KEY]: rawArtifact("greedy", [row]),
+          [OPTIMIZED_ARTIFACT_KEY]: snapshot("optimized", [{ ref: "d-1", makespan: 240, imbalance: 30 }]),
+        });
+      expect(call).not.toThrow();
+      const report = call();
+      expect(report.delta).toBeUndefined();
+      expect(report.note).toContain(`the ${GREEDY_ARTIFACT_KEY} artifact is not a readable`);
+    },
+  );
+
+  it("names the OPTIMIZED artifact when the bad row is on that side — the mirror", () => {
+    // Without this, a check reached from only one of the two call sites passes
+    // on the strength of the other's tests. Same reason :698 exists.
+    const report = assessEngineDelta({
+      [GREEDY_ARTIFACT_KEY]: snapshot("greedy", [{ ref: "d-1", makespan: 300, imbalance: 90 }]),
+      [OPTIMIZED_ARTIFACT_KEY]: rawArtifact("optimized", [rawDivisionWithout("wallMs")]),
+    });
+    expect(report.delta).toBeUndefined();
+    expect(report.note).toContain(`the ${OPTIMIZED_ARTIFACT_KEY} artifact is not a readable`);
+  });
+
+  it("never throws on a hostile division row", () => {
+    // The existing hostile-artifact case is hostile at the TOP level only
+    // (`null`, `42`, `"nope"`). These are well-formed artifacts carrying
+    // rubbish one level down, which is the shape a stale file actually has.
+    for (const row of [null, 42, "nope", [], { divisionRef: "" }, { divisionRef: "d-1" }]) {
+      expect(() =>
+        assessEngineDelta({
+          [GREEDY_ARTIFACT_KEY]: rawArtifact("greedy", [row]),
+          [OPTIMIZED_ARTIFACT_KEY]: rawArtifact("optimized", [row]),
+        }),
+      ).not.toThrow();
+    }
+  });
+
+  const METRIC_FIELDS = ["makespanMinutes", "worstIdleGapMinutes", "courtImbalanceMinutes", "placed", "total"] as const;
+
+  it.each(METRIC_FIELDS)(
+    "drops a metrics object whose %s is not a finite number, and still emits the delta",
+    (field) => {
+      // `metricMinutes` re-checks only the two fields it subtracts, so a bad
+      // `placed` or `total` used to sail through into the report and throw
+      // there. Dropping `metrics` is what keeps the delta computable: the
+      // division falls out of `comparedDivisionRefs`, which is the field whose
+      // whole job is saying which divisions the sums cover.
+      const report = assessEngineDelta({
+        [GREEDY_ARTIFACT_KEY]: rawArtifact("greedy", [rawDivision({ metrics: rawMetrics({ [field]: "300" }) })]),
+        [OPTIMIZED_ARTIFACT_KEY]: snapshot("optimized", [{ ref: "d-1", makespan: 240, imbalance: 30 }]),
+      });
+      expect(report.note).toBeUndefined();
+      expect(report.delta).toBeDefined();
+      expect(report.delta?.greedy.divisions[0]).not.toHaveProperty("metrics");
+      expect(report.delta?.comparedDivisionRefs).toEqual([]);
+      expect(report.delta?.makespanDeltaMinutes).toBe(0);
+    },
+  );
+
+  it("keeps a metrics object whose five numbers are all finite — the positive pair", () => {
+    const report = assessEngineDelta({
+      [GREEDY_ARTIFACT_KEY]: rawArtifact("greedy", [rawDivision({ metrics: rawMetrics() })]),
+      [OPTIMIZED_ARTIFACT_KEY]: snapshot("optimized", [{ ref: "d-1", makespan: 240, imbalance: 30 }]),
+    });
+    expect(report.delta?.greedy.divisions[0]?.metrics).toEqual({
+      makespanMinutes: 300,
+      worstIdleGapMinutes: 0,
+      courtImbalanceMinutes: 90,
+      placed: 1,
+      total: 1,
+    });
+    expect(report.delta?.comparedDivisionRefs).toEqual(["d-1"]);
+    expect(report.delta?.makespanDeltaMinutes).toBe(60);
+  });
+
+  // `what` is separate from `field` because two rows can drop the SAME field
+  // for different reasons, and two `it.each` rows sharing a name make a
+  // mutation sweep unreadable — "one test red" cannot then be attributed to
+  // the arm that caused it.
+  const BAD_OPTIONAL_ROWS: readonly {
+    readonly what: string;
+    readonly field: string;
+    readonly over: Record<string, unknown>;
+  }[] = [
+    { what: "a solverStatus that is not a string", field: "solverStatus", over: { solverStatus: 5 } },
+    {
+      what: "a notSearchedReason that is not a string",
+      field: "notSearchedReason",
+      over: { notSearchedReason: { why: "no" } },
+    },
+    { what: "a mode outside the declared three", field: "mode", over: { mode: "sideways" } },
+    { what: "a budgetExpired that is not a boolean", field: "budgetExpired", over: { budgetExpired: 1 } },
+    { what: "a tiersCompleted that is not a number", field: "tiersCompleted", over: { tiersCompleted: "3" } },
+    {
+      what: "a tiersTotal that is not finite",
+      field: "tiersTotal",
+      over: { tiersTotal: Number.POSITIVE_INFINITY },
+    },
+    {
+      what: "a verdict whose red is not a boolean",
+      field: "verdict",
+      over: { verdict: { red: "yes", reasons: [] } },
+    },
+    {
+      what: "a verdict whose reasons hold a non-string",
+      field: "verdict",
+      over: { verdict: { red: true, reasons: [7] } },
+    },
+  ];
+
+  it.each(BAD_OPTIONAL_ROWS)("drops $what rather than refusing the whole comparison", ({ field, over }) => {
+    const report = assessEngineDelta({
+      [GREEDY_ARTIFACT_KEY]: rawArtifact("greedy", [rawDivision({ metrics: rawMetrics(), ...over })]),
+      [OPTIMIZED_ARTIFACT_KEY]: snapshot("optimized", [{ ref: "d-1", makespan: 240, imbalance: 30 }]),
+    });
+    expect(report.note).toBeUndefined();
+    expect(report.delta).toBeDefined();
+    expect(report.delta?.greedy.divisions[0]).not.toHaveProperty(field);
+    // The delta itself survives the drop — that is the point of dropping.
+    expect(report.delta?.comparedDivisionRefs).toEqual(["d-1"]);
+    expect(report.delta?.makespanDeltaMinutes).toBe(60);
+  });
+
+  it("carries every optional field the writer declares, unchanged, when they are all well formed", () => {
+    // The positive pair for the drop table above. Without it, a mutant that
+    // dropped a field UNCONDITIONALLY would pass every `not.toHaveProperty`
+    // case and the report would quietly lose the field on every real run.
+    const verdict = { red: true, reasons: ["overlap"] };
+    const report = assessEngineDelta({
+      [GREEDY_ARTIFACT_KEY]: rawArtifact("greedy", [
+        rawDivision({
+          metrics: rawMetrics(),
+          solverStatus: "OPTIMAL",
+          notSearchedReason: "budget",
+          mode: "build",
+          budgetExpired: false,
+          tiersCompleted: 2,
+          tiersTotal: 5,
+          verdict,
+        }),
+      ]),
+      [OPTIMIZED_ARTIFACT_KEY]: snapshot("optimized", [{ ref: "d-1", makespan: 240, imbalance: 30 }]),
+    });
+    const expected: EngineSnapshotDivision = {
+      divisionRef: "d-1",
+      blockingCount: 0,
+      unplacedCount: 0,
+      wallMs: 1,
+      metrics: { makespanMinutes: 300, worstIdleGapMinutes: 0, courtImbalanceMinutes: 90, placed: 1, total: 1 },
+      solverStatus: "OPTIMAL",
+      notSearchedReason: "budget",
+      mode: "build",
+      budgetExpired: false,
+      tiersCompleted: 2,
+      tiersTotal: 5,
+      verdict: { red: true, reasons: ["overlap"] },
+    };
+    expect(report.delta?.greedy.divisions[0]).toEqual(expected);
+  });
+
+  it.each(["build", "reflow", "polish"] as const)("keeps the declared solver mode %s", (mode) => {
+    // `mode` is a closed set of three and the bench only ever issues a build,
+    // so the other two are reachable only from a server that answered them.
+    // Pinning all three here is what stops the drop above from becoming
+    // "anything that is not `build` disappears".
+    const report = assessEngineDelta({
+      [GREEDY_ARTIFACT_KEY]: rawArtifact("greedy", [rawDivision({ metrics: rawMetrics(), mode })]),
+      [OPTIMIZED_ARTIFACT_KEY]: snapshot("optimized", [{ ref: "d-1", makespan: 240, imbalance: 30 }]),
+    });
+    expect(report.delta?.greedy.divisions[0]?.mode).toBe(mode);
+  });
+
+  it("strips a key the snapshot type does not declare", () => {
+    // Proof the rows are REBUILT field by field rather than cast: an artifact
+    // from a future or foreign writer cannot smuggle an unvalidated value into
+    // `report.json` through this module.
+    const report = assessEngineDelta({
+      [GREEDY_ARTIFACT_KEY]: rawArtifact("greedy", [
+        rawDivision({ metrics: rawMetrics(), bogusExtra: { anything: [1, 2, 3] } }),
+      ]),
+      [OPTIMIZED_ARTIFACT_KEY]: snapshot("optimized", [{ ref: "d-1", makespan: 240, imbalance: 30 }]),
+    });
+    expect(report.delta?.greedy.divisions[0]).not.toHaveProperty("bogusExtra");
+    expect(report.delta?.comparedDivisionRefs).toEqual(["d-1"]);
   });
 });
 

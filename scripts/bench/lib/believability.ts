@@ -16,6 +16,15 @@
 // computations that can throw are each wrapped, and each reports its own
 // reason. See `metricsNote` and `similarityNote`.
 //
+// It also has to hold ONE INDIRECTION AWAY, and that is where it was first
+// broken. A value this module returns is a value `writeReport` will hand to
+// `BenchReport.parse`, so a shape this module merely CASTS is a shape that
+// throws from someone else's stack frame — at the end of a run, taking
+// report.json and report.md with it, including every finding the run had
+// already collected. "Never reds a run" therefore means: nothing leaves here
+// that the report schema would refuse. `divisionOf` is where that is enforced;
+// see its own note for why required and optional fields degrade differently.
+//
 // -------------------------------------------------------------------------
 // Why `assessHealth` is imported as a VALUE, and why the checker may not
 // -------------------------------------------------------------------------
@@ -345,6 +354,116 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+/** A number this snapshot can carry all the way into `report.json`.
+ *
+ *  `NaN` and the infinities are `typeof "number"` and `JSON.stringify`s them
+ *  to `null`, so a snapshot holding one is not round-trippable even when it
+ *  type-checks. The same test `metricMinutes` applies, for the same reason. */
+function finiteNumber(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value);
+}
+
+type SolverMode = NonNullable<EngineSnapshotDivision["mode"]>;
+type SnapshotMetrics = NonNullable<EngineSnapshotDivision["metrics"]>;
+type SnapshotVerdict = NonNullable<EngineSnapshotDivision["verdict"]>;
+
+/** The solver modes `schedule.ts` declares, as a lookup.
+ *
+ *  A `Record<SolverMode, true>` rather than an array of the same three
+ *  strings, because the object literal is checked BOTH ways: a mode added to
+ *  `EngineSnapshotDivision` reds this line as a missing property, and one
+ *  removed there reds it as an excess one. An array would silently drift, and
+ *  a drifted list here does not throw — it makes a legitimate mode vanish from
+ *  the report, which is the harder failure to notice. */
+const SOLVER_MODES: Readonly<Record<SolverMode, true>> = { build: true, reflow: true, polish: true };
+
+function modeOf(value: unknown): SolverMode | undefined {
+  // `Object.hasOwn`, not `in`: `"toString" in SOLVER_MODES` is true.
+  return typeof value === "string" && Object.hasOwn(SOLVER_MODES, value) ? (value as SolverMode) : undefined;
+}
+
+/** The five numbers `ScheduleMetricsOut` declares, rebuilt rather than cast.
+ *
+ *  Destructured on purpose: `tsc` reds here if the metrics type gains a
+ *  required field, which is the only mechanism that keeps this narrowing in
+ *  step with the type it claims to produce. */
+function metricsOf(value: unknown): SnapshotMetrics | undefined {
+  if (!isRecord(value)) return undefined;
+  const { makespanMinutes, worstIdleGapMinutes, courtImbalanceMinutes, placed, total } = value;
+  if (!finiteNumber(makespanMinutes)) return undefined;
+  if (!finiteNumber(worstIdleGapMinutes)) return undefined;
+  if (!finiteNumber(courtImbalanceMinutes)) return undefined;
+  if (!finiteNumber(placed)) return undefined;
+  if (!finiteNumber(total)) return undefined;
+  return { makespanMinutes, worstIdleGapMinutes, courtImbalanceMinutes, placed, total };
+}
+
+function verdictOf(value: unknown): SnapshotVerdict | undefined {
+  if (!isRecord(value)) return undefined;
+  const { red, reasons } = value;
+  if (typeof red !== "boolean") return undefined;
+  if (!Array.isArray(reasons)) return undefined;
+  const out: string[] = [];
+  for (const reason of reasons) {
+    if (typeof reason !== "string") return undefined;
+    out.push(reason);
+  }
+  return { red, reasons: out };
+}
+
+/** Narrows ONE division row off an artifact, rebuilding it field by field.
+ *
+ *  This function is the whole of Finding 2's fix, and the reason it is worth a
+ *  function of its own is that the two kinds of field must degrade
+ *  DIFFERENTLY:
+ *
+ *   * A REQUIRED number that is missing or is not finite (`blockingCount`,
+ *     `unplacedCount`, `wallMs` — non-optional both here and in `report.ts`'s
+ *     `EngineSnapshotReport`) cannot be supplied or omitted, so the row is
+ *     rejected, which rejects the artifact, which the caller REPORTS. That is
+ *     the only honest answer: the report schema would refuse it downstream,
+ *     and refusing it downstream means throwing out of `writeReport` at the
+ *     end of a run and losing report.json and report.md for the whole bench —
+ *     every finding already collected, destroyed by one stale file.
+ *   * A malformed OPTIONAL field is DROPPED and the row kept. Refusing a whole
+ *     two-leg comparison because one `solverStatus` came back as a number
+ *     would be the over-refusing guard that silently deletes the run's
+ *     headline measurement. Report-only means report what can be reported.
+ *
+ *  Nothing is cast through: an unknown key is not carried, so no unvalidated
+ *  value can reach the report by riding along inside a row. The cost is that a
+ *  field ADDED to `EngineSnapshotDivision` as optional would be dropped here
+ *  until it is added below — a required one reds `tsc` on the return
+ *  statement, an optional one is caught by the round-trip test in the suite. */
+function divisionOf(value: unknown): EngineSnapshotDivision | undefined {
+  if (!isRecord(value)) return undefined;
+  const { divisionRef, blockingCount, unplacedCount, wallMs } = value;
+  if (typeof divisionRef !== "string" || divisionRef.length === 0) return undefined;
+  if (!finiteNumber(blockingCount)) return undefined;
+  if (!finiteNumber(unplacedCount)) return undefined;
+  if (!finiteNumber(wallMs)) return undefined;
+
+  const metrics = metricsOf(value.metrics);
+  const mode = modeOf(value.mode);
+  const verdict = verdictOf(value.verdict);
+  const { solverStatus, notSearchedReason, budgetExpired, tiersCompleted, tiersTotal } = value;
+
+  return {
+    divisionRef,
+    blockingCount,
+    unplacedCount,
+    wallMs,
+    ...(metrics === undefined ? {} : { metrics }),
+    ...(typeof solverStatus === "string" ? { solverStatus } : {}),
+    ...(typeof notSearchedReason === "string" ? { notSearchedReason } : {}),
+    ...(mode === undefined ? {} : { mode }),
+    ...(typeof budgetExpired === "boolean" ? { budgetExpired } : {}),
+    ...(finiteNumber(tiersCompleted) ? { tiersCompleted } : {}),
+    ...(finiteNumber(tiersTotal) ? { tiersTotal } : {}),
+    ...(verdict === undefined ? {} : { verdict }),
+  };
+}
+
 /** Narrows one artifact read off disk.
  *
  *  `readEngineArtifacts` returns `unknown` per file — it parses JSON and makes
@@ -352,7 +471,16 @@ function isRecord(value: unknown): value is Record<string, unknown> {
  *  asserted with a cast, because the two numbers this module subtracts decide
  *  what the report says the optimizer bought. Returns `undefined` rather than
  *  throwing: an unreadable artifact is a thing to REPORT, not a thing to fail
- *  the run over. */
+ *  the run over.
+ *
+ *  `requestedEngine` is a THREE-member set and `"both"` is the member a real
+ *  run never writes: `tiny.ts` puts the CLI's own `--engine` into the artifact
+ *  and a comparison is assembled from two separate single-engine runs, so a
+ *  live delta reads `"greedy"` and `"optimized"`. Narrowing this guard would
+ *  turn every real two-leg run's delta into "not a readable EngineSnapshot" —
+ *  silently deleting design §2.1's headline run-level measurement — which is
+ *  why the suite reads all three members back rather than only the one the
+ *  fixtures found convenient. */
 function asSnapshot(value: unknown): EngineSnapshot | undefined {
   if (!isRecord(value)) return undefined;
   const { runId, requestedEngine, engine, divisions } = value;
@@ -362,9 +490,9 @@ function asSnapshot(value: unknown): EngineSnapshot | undefined {
   if (!Array.isArray(divisions)) return undefined;
   const out: EngineSnapshotDivision[] = [];
   for (const d of divisions) {
-    if (!isRecord(d)) return undefined;
-    if (typeof d.divisionRef !== "string" || d.divisionRef.length === 0) return undefined;
-    out.push(d as unknown as EngineSnapshotDivision);
+    const division = divisionOf(d);
+    if (division === undefined) return undefined;
+    out.push(division);
   }
   return { runId, requestedEngine, engine, divisions: out };
 }
