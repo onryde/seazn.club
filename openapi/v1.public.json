@@ -731,7 +731,10 @@
                             },
                             "requested_visibility": {
                               "type": "string",
-                              "const": "public"
+                              "enum": [
+                                "public",
+                                "unlisted"
+                              ]
                             },
                             "applied_visibility": {
                               "type": "string",
@@ -1122,7 +1125,10 @@
                             },
                             "requested_visibility": {
                               "type": "string",
-                              "const": "public"
+                              "enum": [
+                                "public",
+                                "unlisted"
+                              ]
                             },
                             "applied_visibility": {
                               "type": "string",

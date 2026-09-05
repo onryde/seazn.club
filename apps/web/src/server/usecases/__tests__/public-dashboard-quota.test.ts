@@ -21,12 +21,26 @@
 // to be edited each time (and would have been wrong in between).
 //
 // Real Postgres required; skipped without DATABASE_URL.
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
+
+// `unstable_cache` is a Next server-runtime API with no incrementalCache
+// outside a real request, so the public readers below throw an Invariant under
+// vitest. Passthrough only — everything else in `next/cache` stays REAL, so the
+// revalidation `createCompetition` fires still runs its own try/catch rather
+// than being silently stubbed out. Same double as
+// server/__tests__/entitlements-v18-theme.test.ts and
+// public-site/__tests__/consent.test.ts, for the identical reason.
+vi.mock("next/cache", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("next/cache")>()),
+  unstable_cache: (fn: (...args: unknown[]) => unknown) => fn,
+}));
 import { sql } from "@/lib/db";
 import { getLimit, invalidateOrgEntitlements } from "@/lib/entitlements";
 import { publicDashboardsReason } from "@/lib/feature-copy";
 import type { AuthCtx } from "@/server/api-v1/auth";
+import { getPublicCompetition, getPublicOrg } from "@/server/public-site/data";
+import { publicCompetition } from "../public";
 import { createCompetition, patchCompetition } from "../competitions";
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -61,8 +75,17 @@ async function seedOrg(plan: "community" | "pro"): Promise<AuthCtx> {
   return { orgId, via: "session", userId: null, role: "owner", keyId: null };
 }
 
-const make = (auth: AuthCtx, name: string, visibility: "public" | "private" = "public") =>
-  createCompetition(auth, { ends_on: "2030-12-31", name, visibility, branding: {} });
+const make = (
+  auth: AuthCtx,
+  name: string,
+  visibility: "public" | "unlisted" | "private" = "public",
+) => createCompetition(auth, { ends_on: "2030-12-31", name, visibility, branding: {} });
+
+const orgSlugOf = async (auth: AuthCtx): Promise<string> => {
+  const [row] = await sql<{ slug: string }[]>`
+    select slug from organizations where id = ${auth.orgId}`;
+  return row!.slug;
+};
 
 /** The cap the plan actually resolves — never a literal. */
 const publicCap = async (auth: AuthCtx): Promise<number> => {
@@ -211,5 +234,161 @@ describe.skipIf(!HAS_DB)("assertPublicQuota counts LIVE public dashboards", () =
     const freeCap = await publicCap(free);
     const proCap = await publicCap(pro);
     expect(proCap).toBeGreaterThan(freeCap);
+  });
+});
+
+// ── WHAT `unlisted` ACTUALLY EXPOSES ────────────────────────────────────────
+//
+// The premise the cap change rests on, established against the real anonymous
+// read path rather than asserted. `public_competitions_v` — the ONLY relation
+// the unauthenticated readers select from — is
+//
+//     ... from competitions where visibility = any (array['public','unlisted'])
+//
+// (pg_get_viewdef, 2026-09-05), and neither `getPublicCompetition` (the RSC
+// dashboard) nor `publicCompetition` (/api/v1/public) adds a visibility filter
+// of its own. The one reader that does is `getPublicOrg`, the org LANDING
+// LIST. So `unlisted` withholds discoverability and nothing else: the dashboard
+// itself is served, in full, to anyone holding the link.
+//
+// That is why the cap counts it — see PUBLICLY_READABLE_VISIBILITIES in
+// ../competitions.ts. This test is the evidence for that comment, and it is
+// deliberately independent of the cap: it would still hold if the cap were
+// deleted tomorrow.
+describe.skipIf(!HAS_DB)("`unlisted` is the public dashboard, minus the listing", () => {
+  it("serves an anonymous reader the SAME dashboard it serves for a public one", async () => {
+    const auth = await seedOrg("community");
+    const listed = await make(auth, "Listed season");
+    const linkOnly = await make(auth, "Link-only season", "unlisted");
+    const orgSlug = await orgSlugOf(auth);
+
+    // No AuthCtx, no withTenant, no session: this is the call the public page
+    // and the public API make for a visitor who was handed a URL.
+    const listedPage = await getPublicCompetition(orgSlug, listed.slug);
+    const linkOnlyPage = await getPublicCompetition(orgSlug, linkOnly.slug);
+    expect(listedPage, "the public competition renders").not.toBeNull();
+    expect(linkOnlyPage, "so does the unlisted one").not.toBeNull();
+    expect(linkOnlyPage!.competition.name).toBe("Link-only season");
+    // Not merely "it renders": the reader is handed the same FIELDS. A
+    // non-null assertion alone would pass against a stub that returned a name
+    // and nothing else.
+    expect(Object.keys(linkOnlyPage!.competition).sort()).toEqual(
+      Object.keys(listedPage!.competition).sort(),
+    );
+    // …and the JSON API serves it too, so this is not one route's oversight.
+    await expect(publicCompetition(orgSlug, linkOnly.slug)).resolves.toBeTruthy();
+
+    // THE ONLY DIFFERENCE. `getPublicOrg` filters `visibility = 'public'`, so
+    // the unlisted competition is absent from the org landing page — which is
+    // discoverability, not readability.
+    const landing = await getPublicOrg(orgSlug);
+    const onLanding = landing!.competitions.map((c) => c.slug);
+    expect(onLanding).toContain(listed.slug);
+    expect(onLanding).not.toContain(linkOnly.slug);
+  });
+
+  it("still withholds a PRIVATE competition from the same anonymous reader", async () => {
+    // The negative pair. Without it the assertion above is satisfied by a read
+    // path that serves everything, and "unlisted is readable" would say nothing
+    // about where the line actually falls.
+    const auth = await seedOrg("community");
+    const hidden = await make(auth, "Nobody's business", "private");
+    const orgSlug = await orgSlugOf(auth);
+    expect(await getPublicCompetition(orgSlug, hidden.slug)).toBeNull();
+    await expect(publicCompetition(orgSlug, hidden.slug)).rejects.toMatchObject({ status: 404 });
+  });
+});
+
+// ── THE CAP COUNTS WHAT IS PUBLICLY READABLE ────────────────────────────────
+//
+// Owner ruling 2026-09-05. The thing `dashboard.public.max` sells is a public
+// dashboard — a URL an organiser hands to entrants and parents. Discoverability
+// in the org listing is a nice-to-have on top of it. So a cap that counted only
+// `visibility = 'public'` had a one-word bypass beside it, and Free carried
+// unlimited public dashboards; a cap with a bypass is not a cap.
+describe.skipIf(!HAS_DB)("`unlisted` counts against dashboard.public.max", () => {
+  it("unlisted dashboards FILL the cap — the public create that follows degrades", async () => {
+    // THE BYPASS, CLOSED. Before this the whole cap could be sidestepped by
+    // typing one different word into the create form.
+    const auth = await seedOrg("community");
+    const cap = await publicCap(auth);
+    for (let i = 1; i <= cap; i += 1) await make(auth, `Link-only ${i}`, "unlisted");
+    const degraded = await make(auth, "One over the cap");
+    expect(degraded.visibility).toBe("private");
+    expect(degraded.public_quota_degraded?.limit).toBe(cap);
+  });
+
+  it("a create that ASKS for unlisted at the cap degrades too, and names what it asked for", async () => {
+    // The other half of the same bypass: asking for `unlisted` directly must
+    // not be a way past the cap either. The note pins the REQUESTED value, not
+    // just that a note exists — a note that always said "public" would tell the
+    // caller something untrue about their own request.
+    const auth = await seedOrg("community");
+    const cap = await publicCap(auth);
+    for (let i = 1; i <= cap; i += 1) await make(auth, `Live ${i}`);
+    const degraded = await make(auth, "Link-only over the cap", "unlisted");
+    expect(degraded.visibility).toBe("private");
+    expect(degraded.public_quota_degraded).toEqual({
+      feature_key: "dashboard.public.max",
+      requested_visibility: "unlisted",
+      applied_visibility: "private",
+      limit: cap,
+      reason: publicDashboardsReason(cap),
+    });
+  });
+
+  it("an unlisted create INSIDE the cap is created UNLISTED — never promoted to public", async () => {
+    // The trap in the fix itself. `resolveCreateVisibility` returned a hardcoded
+    // "public" on the happy path, which was harmless while only `public` ever
+    // reached it; routing `unlisted` through the same branch would have
+    // published a competition the organiser asked to keep off the listing.
+    const auth = await seedOrg("community");
+    const inside = await make(auth, "Room to spare, link-only", "unlisted");
+    expect(inside.visibility).toBe("unlisted");
+    expect(inside.public_quota_degraded).toBeUndefined();
+  });
+
+  it("a PRIVATE competition still holds no slot", async () => {
+    // The negative pair for the clause above: the cap meters what is READABLE,
+    // not what exists. Without this, `visibility in ('public','unlisted')` is
+    // indistinguishable from dropping the filter altogether.
+    const auth = await seedOrg("community");
+    const cap = await publicCap(auth);
+    for (let i = 1; i <= cap; i += 1) await make(auth, `Hidden ${i}`, "private");
+    const next = await make(auth, "Still room");
+    expect(next.visibility).toBe("public");
+  });
+
+  it("switching an existing competition to unlisted at the cap is REFUSED", async () => {
+    // The later transition. The PATCH path still 402s (only creates degrade),
+    // and it guarded `=== "public"` alone — so a competition could be moved
+    // into a publicly readable state over the cap with no answer at all.
+    const auth = await seedOrg("community");
+    const cap = await publicCap(auth);
+    for (let i = 1; i <= cap; i += 1) await make(auth, `Live ${i}`);
+    const extra = await make(auth, "Private for now", "private");
+    await expect(
+      patchCompetition(auth, extra.id, { visibility: "unlisted" } as never),
+    ).rejects.toMatchObject({ status: 402, featureKey: "dashboard.public.max" });
+  });
+
+  it("public -> unlisted -> public neither frees a slot nor double-counts one", async () => {
+    // BOTH DIRECTIONS. An idempotency-shaped guard that skips a legitimate
+    // arrival is a failure this repo has shipped, so the lateral move must stay
+    // possible (the org's readable count is unchanged by it) while not handing
+    // the org a slot it can refill.
+    const auth = await seedOrg("community");
+    const cap = await publicCap(auth);
+    const first = await make(auth, "Live 1");
+    for (let i = 2; i <= cap; i += 1) await make(auth, `Live ${i}`);
+
+    const sideways = await patchCompetition(auth, first.id, { visibility: "unlisted" } as never);
+    expect(sideways.visibility, "a lateral move is not a new dashboard").toBe("unlisted");
+
+    const filler = await make(auth, "Trying to take the freed slot");
+    expect(filler.visibility, "the slot was never freed").toBe("private");
+
+    const back = await patchCompetition(auth, first.id, { visibility: "public" } as never);
+    expect(back.visibility, "and it can come back — excludeId, not a double count").toBe("public");
   });
 });

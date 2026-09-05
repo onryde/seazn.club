@@ -14,6 +14,53 @@ type Tx = postgres.TransactionSql;
 export const ACTIVE_COMPETITION_STATUSES = ["draft", "published", "live"] as const;
 
 /**
+ * THE VISIBILITIES `dashboard.public.max` METERS.
+ *
+ * `unlisted` is in the set, and that is the whole point of it. The cap sells a
+ * PUBLIC DASHBOARD — a URL an organiser hands to entrants and parents — and
+ * `unlisted` serves exactly that. `public_competitions_v`, the only relation the
+ * anonymous read path ever selects from, is
+ *
+ *     ... from competitions where visibility = any (array['public','unlisted'])
+ *
+ * and neither `getPublicCompetition` (the RSC dashboard) nor `publicCompetition`
+ * (/api/v1/public) adds a visibility filter of its own. The one reader that
+ * does is `getPublicOrg` — the org LANDING LIST. So `unlisted` withholds
+ * discoverability and nothing else: the same page, the same divisions, the same
+ * standings, to anyone holding the link.
+ *
+ * Counting only `visibility = 'public'` therefore put a one-word bypass beside
+ * the cap: Community's 2 was unlimited to anyone who typed "unlisted", which is
+ * not a cap. Owner ruling 2026-09-05 — the cap counts what is publicly
+ * READABLE, not what is LISTED. `public-dashboard-quota.test.ts` establishes the
+ * readability half against the real anonymous readers rather than asserting it,
+ * so this comment has a witness and not just an author.
+ *
+ * `private` is genuinely outside the set: the view does not admit it, and the
+ * `/shared/...` page 404s for it (V230, see usecases/exports.ts).
+ */
+export const PUBLICLY_READABLE_VISIBILITIES = ["public", "unlisted"] as const;
+export type PubliclyReadableVisibility = (typeof PUBLICLY_READABLE_VISIBILITIES)[number];
+
+/**
+ * Does this visibility consume a `dashboard.public.max` slot?
+ *
+ * ONE predicate, read by all three sites the ruling names — the COUNT below,
+ * the create-time degrade in `resolveCreateVisibility`, and the PATCH guard in
+ * `patchCompetition`. Three spellings of one rule is how the template path
+ * grew a hole the last time this function was touched (see
+ * `resolveCreateVisibility`), so there is one.
+ *
+ * NOT the same question as "is this a public launch": the activation funnel's
+ * `shouldFireMadePublic` still means `public` strictly, because an unlisted
+ * competition is not a launch. The two ideas were one word until this ruling
+ * split them.
+ */
+export function countsTowardPublicQuota(visibility: string): visibility is PubliclyReadableVisibility {
+  return (PUBLICLY_READABLE_VISIBILITIES as readonly string[]).includes(visibility);
+}
+
+/**
  * THE predicate: "this competition is live AND is not bought out by an Event
  * Pass". A SQL fragment rather than four hand-written copies, because it has
  * two halves that are each easy to omit and each fail silently.

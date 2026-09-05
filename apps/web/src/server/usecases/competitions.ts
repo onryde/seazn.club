@@ -23,8 +23,10 @@ import { ONBOARDING_EARN, REFERRAL_WELCOME_EARN, tryEarnGrant } from "@/lib/cred
 import { invalidateSlugCache } from "@/server/slug-resolve";
 import {
   assertCompetitionNotFrozen,
+  countsTowardPublicQuota,
   frozenCompetitionIds,
   liveUnpassedCompetition,
+  PUBLICLY_READABLE_VISIBILITIES,
 } from "./entitlement-freeze";
 
 export interface CompetitionRow {
@@ -135,6 +137,13 @@ export async function assertActiveQuota(auth: AuthCtx): Promise<void> {
  * Doc 10 §1: `dashboard.public.max` — how many public dashboards the org may
  * have LIVE at once. Enforced at the write (doc 10 §2 rule 1), not in the UI.
  *
+ * WHICH visibilities that is, and why `unlisted` is one of them, lives with the
+ * set itself: `PUBLICLY_READABLE_VISIBILITIES` in ./entitlement-freeze, beside
+ * the status/pass predicate below. Counting only `visibility = 'public'` left a
+ * one-word bypass beside the cap until 2026-09-05 — an unlisted competition is
+ * served the same dashboard by `public_competitions_v`, so it was the paid
+ * thing under a different name.
+ *
  * The count is the same `liveUnpassedCompetition` predicate `assertActiveQuota`
  * uses, and until V395 it was neither half of it: a flat
  * `count(*) where visibility = 'public'` with no status filter and no pass
@@ -159,7 +168,7 @@ export async function withinPublicQuota(
   const count = await withTenant(auth.orgId, async (tx) => {
     const [{ n }] = await tx<{ n: number }[]>`
       select count(*)::int as n from competitions c
-      where c.visibility = 'public'
+      where c.visibility in ${tx([...PUBLICLY_READABLE_VISIBILITIES])}
         ${excludeId ? tx`and c.id <> ${excludeId}` : tx``}
         and ${liveUnpassedCompetition(tx)}`;
     return n;
@@ -223,14 +232,21 @@ export async function resolveCreateVisibility(
   // "what an omitted visibility means" is answered in exactly one place for
   // both create paths and for every direct usecase caller.
   const wanted = requested ?? "public";
-  if (wanted !== "public") return { visibility: wanted, degraded: null };
+  if (!countsTowardPublicQuota(wanted)) return { visibility: wanted, degraded: null };
   const { ok, limit } = await withinPublicQuota(auth);
-  if (ok) return { visibility: "public", degraded: null };
+  // `wanted`, NOT a hardcoded "public". The literal was harmless while only
+  // `public` could reach this line; now that `unlisted` does, returning
+  // "public" here would publish a competition the organiser asked to keep off
+  // the listing — a silent promotion, which is worse than the refusal this
+  // function exists to avoid.
+  if (ok) return { visibility: wanted, degraded: null };
   return {
     visibility: "private",
     degraded: {
       feature_key: "dashboard.public.max",
-      requested_visibility: "public",
+      // What the CALLER asked for. A note that always said "public" would tell
+      // a consumer something untrue about its own request.
+      requested_visibility: wanted,
       applied_visibility: "private",
       limit,
       // The SAME sentence `assertPublicQuota`'s 402 carries, from the same
@@ -460,7 +476,13 @@ export async function patchCompetition(
   patch: PatchCompetition,
 ): Promise<CompetitionRow> {
   if (!isRetirePatch(patch)) await assertCompetitionNotFrozen(auth.orgId, id);
-  if (patch.visibility === "public") await assertPublicQuota(auth, id);
+  // Any transition INTO a publicly readable state, not just into `public`
+  // (owner ruling 2026-09-05). `excludeId` is what keeps a LATERAL move
+  // possible: public -> unlisted does not add a readable dashboard, so counting
+  // the row against itself would refuse a change that costs the org nothing.
+  if (patch.visibility && countsTowardPublicQuota(patch.visibility)) {
+    await assertPublicQuota(auth, id);
+  }
   // Doc 15 §5: listing is free on every tier, but the gate stays server-side
   // so a plan without the key (or a staff override) can switch it off.
   if (patch.discoverable === true) await requireFeature(auth.orgId, "discovery.listed");

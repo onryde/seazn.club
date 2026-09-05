@@ -1,5 +1,6 @@
 import { sql } from "@/lib/db";
 import { requireOrgRole } from "@/lib/auth";
+import { PUBLICLY_READABLE_VISIBILITIES } from "@/server/usecases/entitlement-freeze";
 import { getLimit, hasFeature } from "@/lib/entitlements";
 import { handler } from "@/lib/http";
 import { ORG_ROLES } from "@/lib/types";
@@ -48,14 +49,18 @@ export async function GET(
       order by feature_key`;
 
     // v2 usage (PROMPT-13): what the UI compares against the v2 quota keys.
-    // Statuses counted mirror competitions.max_active enforcement.
+    // Statuses counted mirror competitions.max_active enforcement, and the
+    // visibilities mirror dashboard.public.max's — `unlisted` consumes a slot
+    // because it serves the same dashboard to anyone with the link (owner
+    // ruling 2026-09-05). A meter that read 0/2 while the create path degraded
+    // is a support ticket, not a rounding difference.
     const [v2] = await sql<
       { competitions_active_count: number; dashboards_public_count: number }[]
     >`
       select
         count(*) filter (where status in ('draft','published','live'))::int
           as competitions_active_count,
-        count(*) filter (where visibility = 'public')::int
+        count(*) filter (where visibility in ${sql([...PUBLICLY_READABLE_VISIBILITIES])})::int
           as dashboards_public_count
       from competitions where org_id = ${orgId}`;
 

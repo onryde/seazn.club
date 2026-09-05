@@ -188,7 +188,13 @@ export const Competition = z.object({
  */
 export const PublicQuotaDegraded = z.object({
   feature_key: z.literal("dashboard.public.max"),
-  requested_visibility: z.literal("public"),
+  /** What the caller asked for. `unlisted` is here because it consumes a slot
+   *  too — `public_competitions_v` serves an unlisted competition the same
+   *  dashboard it serves a public one, so the cap counts both (owner ruling
+   *  2026-09-05, see PUBLICLY_READABLE_VISIBILITIES in usecases/competitions.ts).
+   *  A note that could only ever say "public" would misreport an unlisted
+   *  request back to the client that made it. */
+  requested_visibility: z.enum(["public", "unlisted"]),
   applied_visibility: z.literal("private"),
   /** The resolved cap, null when unlimited. */
   limit: z.number().int().nullable(),

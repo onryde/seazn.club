@@ -22,6 +22,7 @@ import {
 } from "@/server/usecases/billing-manage";
 import { InvoiceList } from "@/components/billing-invoice-list";
 import { getCreditsTab } from "@/server/usecases/credits-tab";
+import { PUBLICLY_READABLE_VISIBILITIES } from "@/server/usecases/entitlement-freeze";
 import { type Subscription } from "@/lib/types";
 import { getLimit, isPaidPlan, isPlanLapsed, orgPlanKey } from "@/lib/entitlements";
 import { TrackOnMount } from "@/components/analytics-track-mount";
@@ -171,6 +172,12 @@ export default async function BillingPage({
   // v3/07 §3: a pass buys its competition out of the quota). Without the same
   // `not exists` clause this meter read 6/5 — over quota, in red — for an org
   // that enforcement was still happily letting create another competition.
+  //
+  // The public-dashboard count carries the same obligation on its own axis:
+  // `unlisted` consumes a `dashboard.public.max` slot because it serves the
+  // same dashboard to anyone holding the link (owner ruling 2026-09-05, see
+  // PUBLICLY_READABLE_VISIBILITIES). Counting only `public` here would show an
+  // organiser 0/2 in the moment the create path refused to publish for them.
   const [counts] = await sql<
     { competitions_active: number; dashboards_public: number; members: number }[]
   >`
@@ -181,7 +188,9 @@ export default async function BillingPage({
             select 1 from competition_passes cp where cp.competition_id = c.id))
         as competitions_active,
       (select count(*)::int from competitions
-        where org_id = ${orgId} and visibility = 'public') as dashboards_public,
+        where org_id = ${orgId}
+          and visibility in ${sql([...PUBLICLY_READABLE_VISIBILITIES])})
+        as dashboards_public,
       (select count(*)::int from org_members m
         where m.org_id = ${orgId} and m.role != 'scorer') as members`;
   const [competitionsLimit, dashboardsLimit, membersLimit] = await Promise.all([
