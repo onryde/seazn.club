@@ -397,10 +397,11 @@ describe("/pricing names where Pro overtakes the Event Pass", () => {
  * English on a Spanish page. That is the leak this catches.
  *
  * Scoped to the CARD BULLETS. `ProPriceCard`'s own chrome ("Annual billing",
- * "Billed monthly · switch to yearly any time", the "/month" suffix) is still
- * hardcoded English in every locale — a REAL, pre-existing defect on this page,
- * out of this task's scope and recorded rather than swept into an assertion
- * that would red on it here.
+ * "Billed monthly · switch to yearly any time", the "/month" suffix and the
+ * emerald "save 30%") was hardcoded English in every locale when this comment
+ * was first written; it was fixed on 2026-09-05, and the guard that holds it is
+ * the SOURCE SCAN, not this file. What this file adds for it is the one thing a
+ * source scan cannot do at all — see the raw-key rule below.
  */
 describe("the plan cards speak the visitor's language", () => {
   const DICTS: Record<string, Dict> = {
@@ -426,6 +427,54 @@ describe("the plan cards speak the visitor's language", () => {
     ...cardBullets(DICTS[locale]!, PASS_CARD_BULLETS, FIXTURE),
     ...cardBullets(DICTS[locale]!, PRO_CARD_BULLETS, FIXTURE),
   ];
+
+  /**
+   * ── THE RAW KEY, WHICH ONLY A RENDER CAN SEE ─────────────────────────────
+   *
+   * `t(dict, key)` RETURNS THE KEY when the key is missing. Not an empty
+   * string, not a throw — the dotted key itself, painted onto the page.
+   *
+   * This rule exists because it happened, in the commit that localised the Pro
+   * card. The page asked for `pricing.pro.name`, which reads like the sibling
+   * of `pricing.community.name` and `pricing.pass.name` and does not exist (the
+   * Pro column's label has only ever lived on `pricing.table.pro`). So the card
+   * painted the literal string "pricing.pro.name" as its tier eyebrow, in all
+   * four locales, past 175 green tests — including the source scan, which saw a
+   * `t()` call and was satisfied, and `i18n:check`, which compares locales to
+   * each other and cannot know what the code asks for.
+   *
+   * It was found by opening /fr/pricing. This is the assertion that means the
+   * next one is found by CI instead: a source scan proves the copy came from a
+   * dictionary, and only a render proves the dictionary answered.
+   */
+  it.each(["en", "es", "fr", "nl"])(
+    "paints no raw dictionary key on /%s/pricing",
+    async (locale) => {
+      const { plain } = await render(LIVE, locale);
+      const raw = [...plain.matchAll(/\b[a-z][a-zA-Z0-9]*(?:\.[a-zA-Z0-9]+){2,}\b/g)]
+        .map((m) => m[0])
+        // A version-shaped or file-shaped token is not a key. Nothing on this
+        // page has one today; the exclusion keeps the rule affordable rather
+        // than tuned down later by someone it inconveniences.
+        .filter((tok) => !/^\d|\.(?:tsx?|json|com|club|io)$/.test(tok));
+      expect(raw, `${locale}: a dictionary lookup missed and rendered its key`).toEqual([]);
+    },
+  );
+
+  // ANTI-VACUITY: the matcher above must actually recognise a key when one is
+  // on the page, or "no raw keys" is a sentence about a regex that matches
+  // nothing. Both real shapes — the one that shipped, and a deeper one.
+  it("would have caught the key that shipped", () => {
+    const probe = /\b[a-z][a-zA-Z0-9]*(?:\.[a-zA-Z0-9]+){2,}\b/g;
+    for (const key of ["pricing.pro.name", "pricing.faq.annual.a", "billing.intervalChange.toYearly"]) {
+      expect([...`Pro ${key} $10.75`.matchAll(probe)].map((m) => m[0]), key).toEqual([key]);
+    }
+    // …and it must not fire on the prices, glyphs and sentences that legitimately
+    // share the page, or the rule is unaffordable.
+    for (const notAKey of ["$128.99 billed yearly", "more than two months free", "2%", "u.s. only"]) {
+      expect([...notAKey.matchAll(probe)].map((m) => m[0]), notAKey).toEqual([]);
+    }
+  });
 
   it("renders every card bullet in English on /en/pricing", async () => {
     const { plain } = await render(LIVE, "en");

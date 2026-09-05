@@ -461,7 +461,15 @@ export default async function PricingPage({
                 // components/pro-price-card.tsx and the source scan in
                 // lib/__tests__/pricing-card-i18n.test.ts.
                 labels={{
-                  tier: t(d, "pricing.pro.name"),
+                  // `pricing.table.pro`, NOT a `pricing.pro.name` — there is
+                  // no such key. Community and the pass have `.name`; the Pro
+                  // column's label has only ever lived on the comparison
+                  // table's key, which is what `ticketTiers` reads for the home
+                  // stub too (lib/pricing-cards.ts). One authority for one
+                  // fact. Caught by driving /fr/pricing after 175 green tests:
+                  // `t()` returns the KEY when it misses, so the card painted
+                  // the literal string "pricing.pro.name" in every locale.
+                  tier: t(d, "pricing.table.pro"),
                   perMonth: t(d, "pricing.pro.per"),
                   // The yearly TOTAL, in the visitor's currency, interpolated
                   // rather than typed into four locale files.
