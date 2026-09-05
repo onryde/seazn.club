@@ -2,22 +2,35 @@
 // "The shared model"; standing rule R5 — "never re-implement a cricket
 // rule"). `deriveCricketScorecard` is a pure fold that replays `cricket.init`
 // + `cricket.apply` event by event and reads every total off the reducer's
-// own state; it never re-derives a cricket rule of its own. Task 1 wires the
-// fold, the fidelity band and the totals/extras; the batting/bowling lines,
-// fall of wickets, partnerships, overs log and live block are left as the
-// correct EMPTY value the type declares, for later tasks to fill in without
-// reshaping this file.
+// own state; it never re-derives a cricket rule of its own. Task 1 wired the
+// fold, the fidelity band and the totals/extras; Task 2 the batting and
+// bowling lines; Task 3 the fall of wickets, partnerships, over log and live
+// block (including the chase maths, whose target comes from the reducer's own
+// exported `chaseTarget` and never from a second copy of the rule).
 import type { CoreEv, EventEnvelope, FoldContext } from "../../core/events.ts";
 import type { LineupPair } from "../../core/types.ts";
 import type { FidelityBand } from "../../sport/module.ts";
-import { cricket, padSpec, type CricketCfg, type CricketEv, type CricketState } from "./cricket.ts";
+import {
+  activeInnings,
+  chaseTarget,
+  cricket,
+  padSpec,
+  type CricketCfg,
+  type CricketEv,
+  type CricketState,
+  type InningsState,
+} from "./cricket.ts";
 import type {
+  BallGlyph,
   BattingLine,
   BowlingLine,
   CricketInningsCard,
   CricketLive,
   CricketScorecard,
   DismissalKind,
+  FallOfWicket,
+  OverLog,
+  Partnership,
 } from "./scorecard-types.ts";
 
 export interface ScorecardInput {
@@ -74,13 +87,50 @@ function isCricketBallPayload(payload: unknown): payload is CricketBallLikePaylo
 }
 
 /**
+ * One delivery as the ball-by-ball strip shows it. A wicket ball is a wicket
+ * glyph whatever else happened on it (that is what a scorebook prints, and
+ * `BallGlyph` has no combined variant); an extra carries the WHOLE delivery's
+ * runs — a no-ball hit for two reads "3", which is what came off the ball —
+ * while the over's own `runs` total is diffed off state, so the two can never
+ * disagree about the innings.
+ */
+function glyphOf(payload: CricketBallLikePayload): BallGlyph {
+  if (payload.wicket !== undefined) return { kind: "wicket", dismissal: payload.wicket.kind };
+  const extras = payload.runs.extras;
+  if (extras === undefined) return { kind: "runs", runs: payload.runs.bat };
+  const runs = extras.runs + payload.runs.bat;
+  switch (extras.kind) {
+    case "wide":
+      return { kind: "wide", runs };
+    case "noball":
+      return { kind: "noball", runs };
+    default:
+      return { kind: extras.kind, runs };
+  }
+}
+
+/** A partnership still at the crease: the pair, and the innings' running
+ *  totals at the moment it opened. Runs and balls are read out as DIFFS
+ *  against state (`innings.runs - runsAt`), never tallied here — which is
+ *  what makes the partnerships of an innings sum to its total exactly,
+ *  extras and all, with no second copy of "what counts as a team run". */
+interface OpenPartnership {
+  batters: [string, string];
+  runsAt: number;
+  ballsAt: number;
+}
+
+/**
  * Per-innings running tallies built from ball payloads and state diffs as the
- * ledger replays. Every field `CricketInningsCard` declares is present from
- * `cards()`'s first call — the skeleton this task promises later tasks — but
- * only `total`, `extras`, `batting`, `bowling` and `didNotBat` are populated
- * with real logic here; the rest are the type's correct empty value (Task 3
- * adds fall of wickets, partnerships and the overs log without reshaping
- * this class).
+ * ledger replays. Every field `CricketInningsCard` and `CricketLive` declare
+ * is populated from here.
+ *
+ * ONE KNOWN GAP, deliberately left: `cards()` maps `state.innings` only, so a
+ * super over's innings are not rendered as cards and `isSuperOver` is always
+ * false — no task in this wave owns that. Its BALLS are still folded, into
+ * match-wide innings slots above the main innings (see `onBall`), so they can
+ * never be appended to a main innings that had already finished, and `live()`
+ * reads them while the super over is in progress.
  *
  * Discipline (R5 — never re-derive a cricket rule): runs and balls per
  * batter, and balls/runs/wickets per bowler, come from `FineInnings` itself
@@ -116,7 +166,20 @@ class InningsAccumulator {
   // tracked at two granularities in one pass so they can never drift apart.
   private chargedRunsByIndex: Record<string, number>[] = [];
   private overRunsByIndex: number[] = [];
+
+  // The innings' own totals BEFORE the ball being folded — the other half of
+  // every diff this class takes (`innings.runs - prevRuns` is the runs off
+  // this delivery, extras and all, without a second copy of the scoring
+  // rules). Kept per innings index, so a new innings starts from 0.
   private prevLegalBallsByIndex: number[] = [];
+  private prevRunsByIndex: number[] = [];
+  private prevWicketsByIndex: number[] = [];
+
+  // Task 3 — fall of wickets, partnerships and the over log.
+  private fowByIndex: FallOfWicket[][] = [];
+  private partnershipsByIndex: Partnership[][] = [];
+  private openPartnershipByIndex: Array<OpenPartnership | null> = [];
+  private oversByIndex: OverLog[][] = [];
 
   private ensure(index: number): void {
     while (this.extrasByIndex.length <= index) {
@@ -125,18 +188,48 @@ class InningsAccumulator {
     }
   }
 
-  /** `after.innings.length - 1` is always the innings this ball just touched
-   *  — a ball can only ever create or extend the currently open innings
-   *  (`cricket.ts`'s `apply()` for `cricket.ball`), so there is no separate
-   *  index to track by hand. */
+  /**
+   * A ball can only ever create or extend the currently open innings of the
+   * container the reducer routes it to, so the innings it touched is always
+   * the LAST one in that container. Which container that is comes from the
+   * EVENT TYPE, mirroring `cricket.ts`'s own `apply()` dispatch: a
+   * `cricket.ball` goes through `applyDelivery` into `state.innings`, a
+   * `cricket.superover.ball` through `applySuperOverBall` into
+   * `state.superOver.innings`.
+   *
+   * The index this class keys everything by is the MATCH-WIDE innings number
+   * — `state.innings.length` offsets the super over, exactly as
+   * `activeInnings` does, because THE SUPER OVER CONTINUES THE INNINGS COUNT.
+   * Without the offset a super over's balls land in the last main innings'
+   * slot and its over log, fall of wickets and partnerships are appended to
+   * an innings that was already over. (`cards()` still maps `state.innings`
+   * alone, so those higher slots are read only by `live()` — the scorecard
+   * does not yet render super-over innings as cards; see the file header.)
+   *
+   * Reading `activeInnings(after)` instead would be wrong here for one case:
+   * a tie creates an EMPTY `superOver` container, which is immediately the
+   * active list, so the very ball that tied the match would be filed against
+   * a container it never entered.
+   */
   onBall(after: CricketState, ev: EventEnvelope): void {
-    const index = after.innings.length - 1;
-    if (index < 0) return;
+    const inSuperOver = ev.type === "cricket.superover.ball";
+    const list: readonly InningsState[] = inSuperOver ? (after.superOver?.innings ?? []) : after.innings;
+    const local = list.length - 1;
+    const innings = list[local];
+    if (innings === undefined) return;
+    const index = (inSuperOver ? after.innings.length : 0) + local;
     this.ensure(index);
     this.hasBallEventByIndex[index] = true;
     if (!isCricketBallPayload(ev.payload)) return;
     const payload = ev.payload;
     const extras = payload.runs.extras;
+    const bpo = after.cfg.ballsPerOver;
+
+    // The innings as it stood BEFORE this delivery. Every "what happened on
+    // this ball" figure below is a diff against these three.
+    const prevRuns = this.prevRunsByIndex[index] ?? 0;
+    const prevWickets = this.prevWicketsByIndex[index] ?? 0;
+    const prevLegalBalls = this.prevLegalBallsByIndex[index] ?? 0;
 
     if (extras !== undefined) {
       const tally = this.extrasByIndex[index];
@@ -222,16 +315,90 @@ class InningsAccumulator {
     chargedRuns[payload.bowler] = (chargedRuns[payload.bowler] ?? 0) + charged;
     this.overRunsByIndex[index] = (this.overRunsByIndex[index] ?? 0) + charged;
 
+    // Over log. Which over a delivery belongs to is decided by the legal
+    // balls BEFORE it, so a wide or a no-ball joins the over in progress
+    // rather than opening a new one, and an over that ends on its sixth
+    // legal ball closes with every extra bowled inside it. `runs` is the
+    // team's own runs off the ball (state diff, so byes and penalties are in
+    // it and the over totals sum to the innings total); `scoreAfter` is the
+    // reducer's score once the ball is folded.
+    const overs = this.oversByIndex[index] ?? (this.oversByIndex[index] = []);
+    const overIndex = Math.floor(prevLegalBalls / bpo);
+    const over: OverLog = overs[overIndex] ?? {
+      number: overIndex + 1,
+      bowler: payload.bowler,
+      balls: [],
+      runs: 0,
+      wickets: 0,
+      scoreAfter: { runs: prevRuns, wickets: prevWickets },
+    };
+    overs[overIndex] = over;
+    over.balls.push(glyphOf(payload));
+    over.runs += innings.runs - prevRuns;
+    over.wickets += innings.wickets - prevWickets;
+    over.scoreAfter = { runs: innings.runs, wickets: innings.wickets };
+
+    // Partnerships. The first one of an innings opens on its first ball with
+    // the pair the LEDGER recorded at the crease for that ball — the same
+    // field the batting order is built from, and the reducer's own answer to
+    // "who was in before this delivery".
+    if ((this.openPartnershipByIndex[index] ?? null) === null) {
+      this.openPartnershipByIndex[index] = {
+        batters: [payload.striker, payload.nonStriker],
+        runsAt: prevRuns,
+        ballsAt: prevLegalBalls,
+      };
+    }
+
+    if (payload.wicket !== undefined) {
+      // Fall of wicket — every figure is the reducer's own state AFTER the
+      // ball: its wicket NUMBER, the team score at the fall, and the over in
+      // the same notation `total.overs` uses. The batter is the one the
+      // ledger says was dismissed.
+      const fow = this.fowByIndex[index] ?? (this.fowByIndex[index] = []);
+      fow.push({
+        wicket: innings.wickets,
+        runs: innings.runs,
+        over: fmtOvers(innings.legalBalls, bpo),
+        batter: payload.wicket.out,
+      });
+
+      // The stand ends here and keeps this wicket's number; runs and balls
+      // are diffs, so the runs off the wicket ball itself belong to the
+      // partnership it broke.
+      const ending = this.openPartnershipByIndex[index];
+      if (ending != null) {
+        const partnerships = this.partnershipsByIndex[index] ?? (this.partnershipsByIndex[index] = []);
+        partnerships.push({
+          batters: ending.batters,
+          runs: innings.runs - ending.runsAt,
+          balls: innings.legalBalls - ending.ballsAt,
+          wicket: innings.wickets,
+        });
+      }
+
+      // The next stand opens with the pair `cricket.apply` itself leaves at
+      // the crease — never a guess at who walks in, and never the ball's own
+      // striker/non-striker (one of them just got out). Nothing opens if that
+      // wicket ended the innings (all out, or a close the reducer ran on this
+      // ball), or if an end is still awaiting a replacement.
+      const fine = innings.fine;
+      const striker = fine?.striker ?? null;
+      const nonStriker = fine?.nonStriker ?? null;
+      this.openPartnershipByIndex[index] =
+        !innings.closed && striker !== null && nonStriker !== null
+          ? { batters: [striker, nonStriker], runsAt: innings.runs, ballsAt: innings.legalBalls }
+          : null;
+    }
+
     // Maidens: an over just closed exactly when `legalBalls` crosses a NEW
     // multiple of `ballsPerOver` — the identical boundary `finishDelivery`
     // uses to swap ends and hand the ball to a new bowler. `prevOverBowler`
     // (state, set by that same boundary) names who just bowled it, so the
     // credit is read off state rather than assumed from `payload.bowler`.
-    const innings = after.innings[index];
-    const legalBallsNow = innings?.legalBalls ?? 0;
-    const prevLegalBalls = this.prevLegalBallsByIndex[index] ?? 0;
-    if (legalBallsNow !== prevLegalBalls && legalBallsNow % after.cfg.ballsPerOver === 0) {
-      const overBowler = innings?.fine?.prevOverBowler ?? null;
+    const legalBallsNow = innings.legalBalls;
+    if (legalBallsNow !== prevLegalBalls && legalBallsNow % bpo === 0) {
+      const overBowler = innings.fine?.prevOverBowler ?? null;
       if (overBowler !== null && this.overRunsByIndex[index] === 0) {
         const maidens = this.maidensByIndex[index] ?? (this.maidensByIndex[index] = {});
         maidens[overBowler] = (maidens[overBowler] ?? 0) + 1;
@@ -239,6 +406,29 @@ class InningsAccumulator {
       this.overRunsByIndex[index] = 0;
     }
     this.prevLegalBallsByIndex[index] = legalBallsNow;
+    this.prevRunsByIndex[index] = innings.runs;
+    this.prevWicketsByIndex[index] = innings.wickets;
+  }
+
+  /** The stands of an innings, with the one still at the crease (if any)
+   *  appended as `"unbroken"`. That one rule covers all three cases the
+   *  scorebook has: an innings in progress, an innings closed on overs, a
+   *  target or a declaration — both unbroken — and an innings that ended on
+   *  a wicket, where the last stand was already pushed with that wicket's
+   *  number and nothing re-opened behind it. */
+  private partnershipsFor(index: number, innings: InningsState): Partnership[] {
+    const closed = this.partnershipsByIndex[index] ?? [];
+    const open = this.openPartnershipByIndex[index] ?? null;
+    if (open === null) return [...closed];
+    return [
+      ...closed,
+      {
+        batters: open.batters,
+        runs: innings.runs - open.runsAt,
+        balls: innings.legalBalls - open.ballsAt,
+        wicket: "unbroken",
+      },
+    ];
   }
 
   cards(state: CricketState): CricketInningsCard[] {
@@ -317,16 +507,86 @@ class InningsAccumulator {
         batting,
         didNotBat,
         bowling,
-        fallOfWickets: [],
-        partnerships: [],
-        overs: [],
+        fallOfWickets: [...(this.fowByIndex[index] ?? [])],
+        partnerships: this.partnershipsFor(index, innings),
+        overs: [...(this.oversByIndex[index] ?? [])],
       };
     });
   }
 
-  // Task 3 — filled once the ball log exists.
-  live(_state: CricketState): CricketLive | null {
-    return null;
+  /**
+   * The live block — everything a scoreboard shows while a ball is still to
+   * be bowled, and `null` the moment none is.
+   *
+   * WHICH innings is in progress is `activeInnings`'s question, not
+   * `state.innings`': a super over continues the innings count in its own
+   * container, and its own doc records the live bug that reading
+   * `state.innings` there caused (the pad told a mid-super-over fixture the
+   * match was over). Between a tie and the first super-over ball the
+   * container is empty and no innings is open, which is `null` by the same
+   * rule.
+   *
+   * Every number here is the reducer's: the target from `chaseTarget` (the
+   * one authority — DLS revisions and two-innings aggregates included), the
+   * balls remaining from the innings' OWN `ballsLimit` (`cfg.ballsPerInnings`
+   * at the start, and whatever a `cricket.revise` cut it to since), the rates
+   * from `cfg.ballsPerOver` rather than a hard six.
+   */
+  live(state: CricketState): CricketLive | null {
+    const { list, offset, inSuperOver } = activeInnings<InningsState>(state);
+    const local = list.length - 1;
+    const innings = list[local];
+    if (innings === undefined || innings.closed) return null;
+    const index = offset + local;
+    const bpo = state.cfg.ballsPerOver;
+    const fine = innings.fine;
+
+    const overs = this.oversByIndex[index] ?? [];
+    const open = this.openPartnershipByIndex[index] ?? null;
+    const falls = this.fowByIndex[index] ?? [];
+    const lastFall = falls[falls.length - 1];
+
+    // A super over's target is its OWN first innings' score, not the match
+    // chase `chaseTarget` answers — and nothing in this fold models super
+    // overs yet (see `cards()`), so the honest answer there is "no target"
+    // rather than the main match's, which would be a wrong number on screen.
+    const target = !inSuperOver && state.innings.length >= 2 ? chaseTarget(state) : null;
+    const needRuns = target === null ? null : target - innings.runs;
+    const ballsLeft = innings.ballsLimit === null ? null : innings.ballsLimit - innings.legalBalls;
+
+    return {
+      battingSide: state.entrants[innings.battingSide],
+      striker: fine?.striker ?? null,
+      nonStriker: fine?.nonStriker ?? null,
+      // `null` between overs — `finishDelivery` clears the bowler at every
+      // over boundary and the next ball names the replacement.
+      bowler: fine?.currentBowler ?? null,
+      // The over in progress; between overs, the one just bowled — which is
+      // what a scoreboard keeps showing until the next ball is delivered.
+      thisOver: [...(overs[overs.length - 1]?.balls ?? [])],
+      partnership:
+        open === null ? null : { runs: innings.runs - open.runsAt, balls: innings.legalBalls - open.ballsAt },
+      lastWicket:
+        lastFall === undefined
+          ? null
+          : {
+              batter: lastFall.batter,
+              runs: fine?.batterRuns[lastFall.batter] ?? 0,
+              balls: fine?.batterBalls[lastFall.batter] ?? 0,
+              scoreAt: `${lastFall.runs}/${lastFall.wicket}`,
+            },
+      crr: innings.legalBalls > 0 ? (innings.runs * bpo) / innings.legalBalls : null,
+      target,
+      rrr: needRuns !== null && ballsLeft !== null && ballsLeft > 0 ? (needRuns * bpo) / ballsLeft : null,
+      needRuns,
+      ballsLeft,
+      // A projection only means anything in the innings that sets the target,
+      // and only when the innings has a length to project onto.
+      projected:
+        !inSuperOver && state.innings.length === 1 && innings.ballsLimit !== null && innings.legalBalls > 0
+          ? Math.round((innings.runs * innings.ballsLimit) / innings.legalBalls)
+          : null,
+    };
   }
 }
 

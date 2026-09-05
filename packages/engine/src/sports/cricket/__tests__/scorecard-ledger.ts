@@ -39,6 +39,14 @@ export interface Script {
     bowlers: readonly string[];
     deliveries: readonly Delivery[];
     close?: "all_out" | "overs_complete" | "target_reached" | "time" | "other";
+    // Leave the innings OPEN — no `cricket.innings.close` after its
+    // deliveries. Task 3: a live block, an unbroken partnership and chase
+    // maths all only exist while an innings is in progress, and this builder
+    // otherwise always closes what it opened (see the close block below), so
+    // there was no way to script a match in play. Only meaningful on the LAST
+    // innings of a script: the reducer opens the next innings on its first
+    // ball, and a ball cannot reach an innings that is not the open one.
+    leaveOpen?: boolean;
   }>;
 }
 
@@ -171,7 +179,7 @@ export function scriptLedger(script: Script): ScriptLedger {
     // closed it. Re-closing an already-closed innings throws ("no innings in
     // progress"), so this is checked from state, never assumed from the script.
     const stillOpen = state.innings[at] !== undefined && !state.innings[at].closed;
-    if (stillOpen) {
+    if (stillOpen && inningsSpec.leaveOpen !== true) {
       record("cricket.innings.close", inningsSpec.close === undefined ? {} : { reason: inningsSpec.close });
     }
   }
