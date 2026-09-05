@@ -9,6 +9,40 @@ import * as Sentry from "@sentry/nextjs";
 
 export { HttpError, PaymentRequiredError } from "@/lib/errors";
 
+/**
+ * Redirect to a path on THIS site, with a RELATIVE `Location`.
+ *
+ * Use this for every redirect whose destination is a path we own. The two
+ * spellings it replaces both bake an origin into the header, and both get that
+ * origin wrong in exactly the environments we do not test on:
+ *
+ *   NextResponse.redirect(new URL(path, req.url))       // the bind address
+ *   NextResponse.redirect(new URL(path, baseUrl(req)))  // ditto, one hop later
+ *
+ * `req.url` is the server's INTERNAL BINDING, not the address the browser is
+ * on — `lib/oauth.ts:25-26` says so — and `baseUrl(req)` only escapes it when
+ * a proxy actually sets `x-forwarded-host` or an env override is present;
+ * otherwise it falls through to `new URL(req.url).origin` and reproduces it.
+ *
+ * A standalone server started without HOSTNAME binds 0.0.0.0, so the header
+ * read `http://0.0.0.0:3000/settings?…` while the user was on
+ * `http://localhost:3000`. The browser withholds the session cookie across
+ * that origin hop, so the destination sees a signed-OUT visitor. That is how
+ * an email-change confirmation ended up on `/login` AFTER committing the new
+ * address (CI run 33968571673).
+ *
+ * A relative Location has no origin to get wrong: the browser resolves it
+ * against the URL it requested. Correct behind a proxy, in a container, and on
+ * a laptop alike, with no env configuration to keep in sync.
+ *
+ * The one thing that must stay ABSOLUTE is a URL a third party resolves rather
+ * than the browser — `googleRedirectUri()` is registered with Google and has
+ * to name a real origin. This helper is for our own paths only.
+ */
+export function redirectLocal(path: string, status: 307 | 308 = 307): NextResponse {
+  return new NextResponse(null, { status, headers: { location: path } });
+}
+
 /** Wraps a route handler with consistent JSON error handling. Runs inside a
  *  request-context ALS scope (server/request-context.ts) so every log line
  *  for this request carries the same requestId, same as /api/v1's v1(). */

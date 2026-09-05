@@ -1,5 +1,5 @@
-import { NextResponse } from "next/server";
 import { sql } from "@/lib/db";
+import { redirectLocal } from "@/lib/http";
 import { invalidateUser } from "@/lib/auth";
 
 /**
@@ -27,10 +27,6 @@ import { invalidateUser } from "@/lib/auth";
  * get wrong — the browser resolves it against the URL IT requested — so this
  * is correct behind a proxy, in a container, and on a laptop alike.
  */
-function redirectTo(path: string): NextResponse {
-  return new NextResponse(null, { status: 307, headers: { location: path } });
-}
-
 /**
  * Confirm an email-address change via the token link sent to the new address.
  * Redirects to /settings?tab=account on success or failure.
@@ -51,10 +47,10 @@ export async function GET(req: Request) {
       from email_change_requests where token = ${token} limit 1`;
 
     if (!row) {
-      return redirectTo("/settings?tab=account&email_change=invalid");
+      return redirectLocal("/settings?tab=account&email_change=invalid");
     }
     if (row.confirmed || new Date(row.expires_at) < new Date()) {
-      return redirectTo("/settings?tab=account&email_change=expired");
+      return redirectLocal("/settings?tab=account&email_change=expired");
     }
 
     // Check the new address is still unclaimed (race protection)
@@ -63,7 +59,7 @@ export async function GET(req: Request) {
       and id <> ${row.user_id} limit 1`;
     if (taken) {
       await sql`delete from email_change_requests where id = ${row.id}`;
-      return redirectTo("/settings?tab=account&email_change=taken");
+      return redirectLocal("/settings?tab=account&email_change=taken");
     }
 
     await sql.begin(async (tx) => {
@@ -72,8 +68,8 @@ export async function GET(req: Request) {
     });
     await invalidateUser(row.user_id);
 
-    return redirectTo("/settings?tab=account&email_change=success");
+    return redirectLocal("/settings?tab=account&email_change=success");
   } catch {
-    return redirectTo("/settings?tab=account&email_change=error");
+    return redirectLocal("/settings?tab=account&email_change=error");
   }
 }

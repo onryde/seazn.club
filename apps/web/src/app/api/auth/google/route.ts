@@ -4,17 +4,15 @@ import { NextResponse } from "next/server";
 import {
   GOOGLE_AUTH_URL,
   OAUTH_STATE_COOKIE,
-  baseUrl,
   googleConfigured,
   googleRedirectUri,
 } from "@/lib/oauth";
+import { redirectLocal } from "@/lib/http";
 
 /** Start the Google OAuth2 sign-in flow (redirects to Google's consent page). */
 export async function GET(req: Request) {
   if (!googleConfigured()) {
-    return NextResponse.redirect(
-      new URL("/login?error=google_not_configured", baseUrl(req)),
-    );
+    return redirectLocal("/login?error=google_not_configured");
   }
 
   const state = crypto.randomUUID();
