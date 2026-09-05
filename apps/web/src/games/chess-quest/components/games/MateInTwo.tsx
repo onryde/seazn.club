@@ -116,7 +116,7 @@ export function MateInTwo({ depth = 2, range }: { depth?: 2 | 3; range?: [number
   function solved(i: number, msg: string) {
     markSolved(i);
     const n = solvedCount();
-    progress.setGameStars(gameId, depth === 3 ? STAR_RULES.mateInThree(n) : STAR_RULES.packStars(n));
+    progress.setGameStars(gameId, STAR_RULES.packStars(n, PACK.length));
     setStatus(msg);
     voice.say(msg);
     celebrate();
@@ -294,6 +294,19 @@ export function MateInTwo({ depth = 2, range }: { depth?: 2 | 3; range?: [number
       score={`🧩 ${solvedCount()} / ${PACK.length} solved`}
       status={status}
       chips={chips}
+      subtitle={<span className="min-w-0 truncate font-bold">{PACK[cur].name}</span>}
+      picker={{
+        label: "Puzzles",
+        children: (
+          <PuzzleDots
+            count={PACK.length}
+            current={cur}
+            isSolved={isSolved}
+            onPick={load}
+            variant="grid"
+          />
+        ),
+      }}
       extra={<PuzzleDots count={PACK.length} current={cur} isSolved={isSolved} onPick={load} />}
       controls={
         <>

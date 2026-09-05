@@ -102,31 +102,85 @@ export function defendersOf(board: Board, sq: number): number[] {
 // a merely-large capture when comparing candidate first moves.
 const MATE_GAIN = 1000;
 
-// Best immediate result for the side to move on `board`: a forced mate
-// (MATE_GAIN) if one exists, else the most valuable capture on offer, else 0.
+// How far the capture-only search below looks. Four plies is enough for
+// "I take, you take back, I take back, you take back" — the shape that
+// separates winning a piece from swapping one.
+const SWING_PLIES = 4;
+
+const isKing = (p: Piece): boolean => p !== "" && p.toUpperCase() === "K";
+
+// Quiescence: the material `side` can win from `board` by CAPTURES alone,
+// `plies` deep, with either side free to stop capturing at any point (so it
+// is never negative — nobody is obliged to walk into a losing exchange).
+// This is the piece that gives the judge teeth: a "won" bishop whose
+// capturer is taken straight back scores 3 - 3 = 0, not 3.
+function captureSwing(board: Board, side: boolean, plies: number): number {
+  if (plies <= 0) return 0;
+  let best = 0; // stand pat: stop capturing here
+  for (const m of allLegalMoves(board, side)) {
+    const prey = board[m.to];
+    if (prey === "" || isKing(prey)) continue;
+    const net =
+      pieceValue(prey) - captureSwing(applyMove(board, m.from, m.to), !side, plies - 1);
+    if (net > best) best = net;
+  }
+  return best;
+}
+
+// Best result for `white` to move on `board`: a forced mate (MATE_GAIN), the
+// sentinel's negative if white is already mated, else the capture swing.
 //
-// KNOWN GAP (found in review 2026-08-27, not fixed here): this counts the
-// captured piece's raw value without checking the capturing piece survives
-// the reply — a one-ply "is the capture square then attacked" guard makes
-// the pawnFork trio in TACTICS4 fail their own >=3 bar (their real forced
-// net is +2: the retreating knight can hop to the square the forking pawn
-// just vacated, e.g. d6-e4 after e4-e5, which defends the OTHER forked
-// knight's square too). That is a real content gap in those 3 puzzles, not
-// just a heuristic imprecision — but fixing it needs new positions (the
-// vacated-pawn-square defense is structural to a same-rank two-knight pawn
-// fork), not a one-line change here, and reverting the safety check found
-// zero effect on the other 21 TACTICS3/4 puzzles (hand-verified 5 of them
-// in review; sound only because material was too sparse to exploit this).
-// Left as designed pending a pawnFork redesign.
+// KNOWN GAP (state as of 2026-09-05, replacing the 2026-08-27 note).
+//
+// What the judge now SEES, and did not before: whether the capturing piece
+// survives — captureSwing plays the recapture, and the re-recapture, four
+// plies deep, so a bishop traded for the knight it took scores 0 rather than
+// 3; and that a defence arriving WITH CHECK buys white no tempo, because
+// forcedAnswer below plays out every legal answer and then hands black the
+// move again. Between them these red five puzzles that shipped through a
+// green suite (review 2026-09-05) and the pre-existing pawnFork trio, all of
+// which the old raw-capture-value follow-up scored at exactly 3.
+//
+// What it still does NOT see, in both directions:
+//   - Too generous: any QUIET refutation. Black's defence is one ply, so a
+//     mate threat, a counter-pin, or a piece that simply walks away next move
+//     is invisible; and after a non-checking defence white is assumed to have
+//     a free tempo to guard whatever black threatens.
+//   - Too harsh: a defence that checks and cannot be met by a capture zeroes
+//     the whole follow-up, because forcedAnswer stops after black's reply to
+//     the forced answer. A sound puzzle whose refutation attempt is a safe
+//     spite check will therefore under-score. That is the safe direction for
+//     a judge, but it is why some genuinely winning positions are unusable.
+//
+// The residue is a ceiling on gain-judged content, not a licence: positions
+// still have to be played out by hand, or against an independent engine,
+// before they ship. Every replacement in this wave was cross-checked against
+// a separate negamax + quiescence search at five plies, and that check caught
+// two candidates this judge had already passed.
 function bestFollowUp(board: Board, white: boolean): number {
-  for (const m of allLegalMoves(board, white)) {
+  const moves = allLegalMoves(board, white);
+  if (moves.length === 0) return isMate(board, white) ? -MATE_GAIN : 0;
+  for (const m of moves) {
     if (isMate(applyMove(board, m.from, m.to), !white)) return MATE_GAIN;
   }
-  let best = 0;
-  for (const m of allLegalMoves(board, white)) {
-    if (board[m.to] === "") continue;
-    const v = pieceValue(board[m.to]);
-    if (v > best) best = v;
+  return captureSwing(board, white, SWING_PLIES);
+}
+
+// Same question, for the case where the defence arrived with CHECK: white's
+// answer is forced, so it buys no time to defend anything else. Every legal
+// answer is played out and the opponent is handed the move again — this is
+// what catches the zwischenzug ("check first, recapture second").
+function forcedAnswer(board: Board, white: boolean): number {
+  const moves = allLegalMoves(board, white);
+  if (moves.length === 0) return isMate(board, white) ? -MATE_GAIN : 0;
+  let best = -MATE_GAIN;
+  for (const m of moves) {
+    const prey = board[m.to];
+    const won = prey === "" || isKing(prey) ? 0 : pieceValue(prey);
+    const after = applyMove(board, m.from, m.to);
+    if (isMate(after, !white)) return MATE_GAIN;
+    const net = won - captureSwing(after, !white, SWING_PLIES - 1);
+    if (net > best) best = net;
   }
   return best;
 }
@@ -135,10 +189,10 @@ function bestFollowUp(board: Board, white: boolean): number {
 // interference — motifs with no single structural detector like fork/pin's).
 // Plays from -> to, then black's best defense (the reply that minimizes
 // white's net result), and returns white's material swing: what this move
-// itself captures, minus what black's reply recaptures, plus white's best
-// follow-up next move — or MATE_GAIN if mate is forced. A puzzle is sound
-// when this is >= 3 for the solution and strictly less for every other
-// legal first move (content/__tests__/puzzles.test.ts enforces both).
+// itself captures, minus what black's reply recaptures, plus what white can
+// still win once the dust settles — or MATE_GAIN if mate is forced. A puzzle
+// is sound when this is >= 3 for the solution and strictly less for every
+// other legal first move (content/__tests__/puzzles.test.ts enforces both).
 export function tacticGainAfter(board: Board, from: number, to: number): number {
   const white = isWhitePiece(board[from]);
   const wins1 = board[to] !== "" ? pieceValue(board[to]) : 0;
@@ -150,8 +204,14 @@ export function tacticGainAfter(board: Board, from: number, to: number): number 
   for (const r of replies) {
     const losesToReply = b1[r.to] !== "" ? pieceValue(b1[r.to]) : 0;
     const after = applyMove(b1, r.from, r.to);
-    const followUp = bestFollowUp(after, white);
-    const net = followUp >= MATE_GAIN ? MATE_GAIN : wins1 - losesToReply + followUp;
+    // A defence that gives check leaves white no free move to spend.
+    const followUp = inCheck(after, white)
+      ? forcedAnswer(after, white)
+      : bestFollowUp(after, white);
+    let net: number;
+    if (followUp >= MATE_GAIN) net = MATE_GAIN;
+    else if (followUp <= -MATE_GAIN) net = -MATE_GAIN;
+    else net = wins1 - losesToReply + followUp;
     if (net < worst) worst = net;
   }
   return worst;

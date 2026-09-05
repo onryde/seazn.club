@@ -129,28 +129,34 @@ export function RookMaze({ pieces = ["R"] }: { pieces?: string[] }) {
       title="Rook Maze"
       score={`👣 ${moves} moves · 🎯 best possible: ${maze.par}`}
       status={status}
-      extra={
-        pieces.length > 1 ? (
-          <div className="flex flex-wrap justify-center gap-2">
-            {pieces.map((p) => (
-              <button
-                key={p}
-                type="button"
-                onClick={() => {
-                  setPiece(p);
-                  gen(p);
-                }}
-                className={`rounded-full border px-3 py-1 text-sm font-medium ${
-                  p === piece
-                    ? "border-(color:--cq-accent) bg-(color:--cq-accent) text-white"
-                    : "border-(color:--cq-accent-line) bg-white text-(color:--cq-accent-strong) hover:bg-(color:--cq-accent-wash)"
-                }`}
-              >
-                {GLYPH[p]} {NAMES[p]}
-              </button>
-            ))}
-          </div>
-        ) : null
+      picker={
+        pieces.length > 1
+          ? {
+              label: "Pieces",
+              children: (
+                <div className="flex flex-wrap justify-center gap-2">
+                  {pieces.map((p) => (
+                    <button
+                      key={p}
+                      type="button"
+                      aria-current={p === piece ? "true" : undefined}
+                      onClick={() => {
+                        setPiece(p);
+                        gen(p);
+                      }}
+                      className={`inline-flex h-11 items-center gap-1.5 rounded-full border px-4 text-sm font-medium ${
+                        p === piece
+                          ? "border-(color:--cq-accent) bg-(color:--cq-accent) text-white"
+                          : "border-(color:--cq-accent-line) bg-white text-(color:--cq-accent-strong) hover:bg-(color:--cq-accent-wash)"
+                      }`}
+                    >
+                      <span aria-hidden>{GLYPH[p]}</span> {NAMES[p]}
+                    </button>
+                  ))}
+                </div>
+              ),
+            }
+          : undefined
       }
       controls={
         <button type="button" className="btn btn-ghost" onClick={() => gen(piece)}>

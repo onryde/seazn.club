@@ -20,7 +20,7 @@ import {
   sqIdx,
   tacticGainAfter,
 } from "../../engine";
-import { TACTICS, TACTICS2, TACTICS3, TACTICS4 } from "../../content/puzzles";
+import { TACTICS, TACTICS2, TACTICS3, TACTICS4, TACTICS5 } from "../../content/puzzles";
 import { useCopy } from "../../lib/copy";
 import { celebrate } from "../../lib/celebrate";
 import { sfx } from "../../lib/sfx";
@@ -50,6 +50,10 @@ const PACK_INFO: Record<string, { name: string; ask: string }> = {
   backRank: { name: "The Back-Rank Trap", ask: "His own pawns are a wall — slide down the open rank!" },
   trappedPiece: { name: "The Trapped Piece", ask: "It looks like it can run — count its escape squares first." },
   pawnFork: { name: "The Pawn Fork", ask: "Push the little guy — one move, two targets!" },
+  winPiece: {
+    name: "Win a Piece",
+    ask: "Some trick wins material here — work out WHICH one, then play it!",
+  },
 };
 
 const DETECTOR: Record<string, (b: BoardType, to: number) => boolean> = {
@@ -67,6 +71,9 @@ const TIER1 = ["fork", "pin", "skewer", "disco"];
 const TIER2 = ["fork2", "pin2", "skewer2", "disco2"];
 const TIER3 = ["deflection", "decoy", "removeDefender", "interference"];
 const TIER4 = ["doubleCheck", "backRank", "trappedPiece", "pawnFork"];
+// Tier 5 is the mixed "Win a Piece" pack: the motif is not named, the
+// learner has to find it. Free-play only — no lesson points here.
+const TIER5 = ["winPiece"];
 const PACK_GLYPH: Record<string, string> = {
   fork: "🍴",
   pin: "📌",
@@ -84,6 +91,7 @@ const PACK_GLYPH: Record<string, string> = {
   backRank: "🏰",
   trappedPiece: "🕸",
   pawnFork: "♟",
+  winPiece: "🏆",
 };
 
 function casesOf(pack: string) {
@@ -92,29 +100,69 @@ function casesOf(pack: string) {
     (TACTICS as Record<string, Cases>)[pack] ??
     (TACTICS2 as Record<string, Cases>)[pack] ??
     (TACTICS3 as Record<string, Cases>)[pack] ??
-    (TACTICS4 as Record<string, Cases>)[pack]
+    (TACTICS4 as Record<string, Cases>)[pack] ??
+    (TACTICS5 as Record<string, Cases>)[pack]
   );
 }
 
-function tierOf(pack: string): 1 | 2 | 3 | 4 {
+function tierOf(pack: string): 1 | 2 | 3 | 4 | 5 {
+  if (TIER5.includes(pack)) return 5;
   if (TIER4.includes(pack)) return 4;
   if (TIER3.includes(pack)) return 3;
   if (pack.endsWith("2")) return 2;
   return 1;
 }
-const TIER_KEYS = { 1: TIER1, 2: TIER2, 3: TIER3, 4: TIER4 } as const;
+const TIER_KEYS = { 1: TIER1, 2: TIER2, 3: TIER3, 4: TIER4, 5: TIER5 } as const;
+// Tier labels, kid-facing. The 17-pack chip wall is gone (phone composition
+// design of record 2026-09-05): desktop gets these as tabs above ONE short
+// chip row, phones get them as sections inside the shell's Packs sheet.
+const TIERS = [1, 2, 3, 4, 5] as const;
+type Tier = (typeof TIERS)[number];
+const TIER_NAMES: Record<Tier, string> = {
+  1: "First tricks",
+  2: "Master",
+  3: "Set-ups",
+  4: "Finishers",
+  5: "Win a Piece",
+};
+// The tier tablist's ids. One TacticTrainer mounts per screen, but GameShell
+// renders `picker.children` TWICE (inline for desktop, again inside the phone
+// sheet), so these ids appear twice in the document. Only one copy is ever in
+// the accessibility tree — the other is `display:none` — and the tabs' own
+// copy is the FIRST, so `aria-controls` resolves to the panel beside them.
+const TIER_PANEL_ID = "cq-tier-panel";
+const TIER_TAB_ID = (t: Tier) => `cq-tier-tab-${t}`;
+// Roving-focus arithmetic for that tablist, exported so the wrap-around and
+// Home/End cases are pinned without a DOM (this workspace has no jsdom).
+// Returns null for a key the browser should keep handling itself.
+export function nextTier(current: Tier, key: string): Tier | null {
+  const i = TIERS.indexOf(current);
+  if (key === "ArrowRight") return TIERS[(i + 1) % TIERS.length];
+  if (key === "ArrowLeft") return TIERS[(i - 1 + TIERS.length) % TIERS.length];
+  if (key === "Home") return TIERS[0];
+  if (key === "End") return TIERS[TIERS.length - 1];
+  return null;
+}
 const TIER_GAME_ID = {
   1: "tacticTrainer",
   2: "tacticTrainer2",
   3: "tacticTrainer3",
   4: "tacticTrainer4",
+  5: "tacticTrainer5",
 } as const;
+// Tiers 3-5 have no structural detector; they are judged by material
+// outcome (tacticGainAfter), the same way their packs are verified.
+const GAIN_JUDGED = [...TIER3, ...TIER4, ...TIER5];
 
 export function TacticTrainer({ pack: initialPack = "fork" }: { pack?: string }) {
   const progress = useProgress();
   const { isStory } = useCopy();
   const { later, clearPending } = useLater();
   const [pack, setPack] = useState(initialPack);
+  // Which tier's chip row the desktop picker is showing. Follows the pack
+  // whenever one is chosen, so opening the picker always lands on the tier
+  // you are actually playing.
+  const [tier, setTier] = useState<Tier>(() => tierOf(initialPack));
   const cases = useMemo(() => casesOf(pack), [pack]);
   const info = PACK_INFO[pack];
 
@@ -122,6 +170,15 @@ export function TacticTrainer({ pack: initialPack = "fork" }: { pack?: string })
     for (let i = 0; i < cases.length; i++) if (!progress.isTacticSolved(pack, i)) return i;
     return 0;
   }, [cases.length, pack, progress]);
+  // Switching packs lands on THAT pack's first unsolved case (case 1 again
+  // once it is complete), so coming back to a half-done pack resumes it
+  // instead of replaying case 1 — product call 2026-09-05; the original
+  // always opened case 1.
+  const firstUnsolvedOf = (p: string) => {
+    const cs = casesOf(p);
+    for (let i = 0; i < cs.length; i++) if (!progress.isTacticSolved(p, i)) return i;
+    return 0;
+  };
 
   const [cur, setCur] = useState(() => firstUnsolved());
   const [position, setPosition] = useState<string[]>(() => parseFEN(cases[cur].fen).board);
@@ -147,6 +204,7 @@ export function TacticTrainer({ pack: initialPack = "fork" }: { pack?: string })
       clearPending();
       const cs = casesOf(p);
       setPack(p);
+      setTier(tierOf(p));
       setCur(i);
       setPosition(parseFEN(cs[i].fen).board);
       setHighlights({});
@@ -163,12 +221,13 @@ export function TacticTrainer({ pack: initialPack = "fork" }: { pack?: string })
 
   function solved() {
     progress.setTacticSolved(pack, cur);
-    const tier = tierOf(pack);
-    const total = TIER_KEYS[tier].reduce((s, p) => s + progress.tacticCount(p), 0);
-    progress.setGameStars(
-      TIER_GAME_ID[tier],
-      tier === 1 ? STAR_RULES.tacticTier1(total) : STAR_RULES.packStars(total),
-    );
+    // The tier of the pack just solved — NOT the `tier` state above, which is
+    // only which tab the picker is showing. Same value today (load() keeps the
+    // tab on the pack in play), different meanings.
+    const packTier = tierOf(pack);
+    const total = TIER_KEYS[packTier].reduce((s, p) => s + progress.tacticCount(p), 0);
+    const tierSize = TIER_KEYS[packTier].reduce((s, p) => s + casesOf(p).length, 0);
+    progress.setGameStars(TIER_GAME_ID[packTier], STAR_RULES.packStars(total, tierSize));
     setStatus(`<strong>${info.name}!</strong> 🎯 Beautifully done.`);
     voice.say(`${info.name}! Beautifully done!`);
     celebrate();
@@ -182,7 +241,7 @@ export function TacticTrainer({ pack: initialPack = "fork" }: { pack?: string })
             return;
           }
       } else {
-        setStatus(`<strong>${info.name} mastered!</strong> Try the other tricks with the chips above.`);
+        setStatus(`<strong>${info.name} mastered!</strong> Pick another trick pack to keep going.`);
       }
     }, 1400);
   }
@@ -213,7 +272,7 @@ export function TacticTrainer({ pack: initialPack = "fork" }: { pack?: string })
     const next = applyMove(pos, selIdx, idx);
     const from = selIdx;
     setSelIdx(-1);
-    const gainJudged = TIER3.includes(pack) || TIER4.includes(pack);
+    const gainJudged = GAIN_JUDGED.includes(pack);
     const passed = gainJudged ? tacticGainAfter(pos, from, idx) >= 3 : DETECTOR[pack](next, idx);
     if (passed) {
       setPosition(next);
@@ -285,7 +344,11 @@ export function TacticTrainer({ pack: initialPack = "fork" }: { pack?: string })
       backSoon(
         "A skewer pokes the <strong>big one in front</strong> so it must run. What treasure stands behind it? Find that line!",
       );
-    } else if (TIER3.includes(pack) || TIER4.includes(pack)) {
+    } else if (TIER5.includes(pack)) {
+      backSoon(
+        "Not quite — which trick is hiding here? Fork, pin, skewer, a guard to pull away, a piece with no escape… count what the move really wins after black's best answer.",
+      );
+    } else if (GAIN_JUDGED.includes(pack)) {
       backSoon(
         "Not quite — count it out: after black's best answer, does that move really win three points or more? Look for the move that sets up a bigger prize.",
       );
@@ -300,39 +363,143 @@ export function TacticTrainer({ pack: initialPack = "fork" }: { pack?: string })
     setHighlights({ [sqIdx(cases[cur].solution.slice(0, 2))]: "hint" });
   }
 
-  const allPacks = [...TIER1, ...TIER2, ...TIER3, ...TIER4];
+  const done = (pk: string) => progress.tacticCount(pk);
+  const size = (pk: string) => casesOf(pk).length;
 
-  return (
-    <GameShell
-      title={`Trick Shots — ${info.name}`}
-      score={`🎯 ${progress.tacticCount(pack)} / ${cases.length}`}
-      status={status}
-      chips={chips}
-      extra={
-        <div className="flex flex-col gap-2">
-          <div className="flex flex-wrap justify-center gap-1.5">
-            {allPacks.map((pk) => (
+  // ONE picker node, branched. GameShell renders it inline at >=768 (where the
+  // `md:hidden` half is dark) and inside the phone Packs sheet below 768
+  // (where the `max-md:hidden` half is dark). Never a second phone tree.
+  const packPicker = (
+    <div className="flex flex-col gap-2">
+      {/* Desktop — tier tabs above the active tier's four or five packs. */}
+      <div data-cq="pack-tabs" className="max-md:hidden flex flex-col gap-2">
+        <div
+          role="tablist"
+          aria-label="Trick tiers"
+          onKeyDown={(e) => {
+            const next = nextTier(tier, e.key);
+            if (next === null) return;
+            // Selection FOLLOWS focus here (the panel is one short chip row,
+            // so there is nothing to preload), and focus has to move with it:
+            // the tab the user arrows onto carries tabIndex 0 only after the
+            // re-render, so grab it by id rather than by ref bookkeeping.
+            e.preventDefault();
+            setTier(next);
+            const el = e.currentTarget.querySelector<HTMLElement>(`#${TIER_TAB_ID(next)}`);
+            el?.focus();
+          }}
+          className="flex flex-wrap justify-center gap-1"
+        >
+          {TIERS.map((t) => (
+            <button
+              key={t}
+              type="button"
+              role="tab"
+              id={TIER_TAB_ID(t)}
+              aria-selected={t === tier}
+              aria-controls={TIER_PANEL_ID}
+              tabIndex={t === tier ? 0 : -1}
+              onClick={() => setTier(t)}
+              className={`h-11 rounded-lg px-3 text-xs font-bold ${
+                t === tier
+                  ? "bg-(color:--cq-accent-soft) text-(color:--cq-accent-strong)"
+                  : "text-(color:--cq-label) hover:bg-(color:--cq-accent-wash)"
+              }`}
+            >
+              {TIER_NAMES[t]}
+            </button>
+          ))}
+        </div>
+        <div
+          role="tabpanel"
+          id={TIER_PANEL_ID}
+          aria-label={`${TIER_NAMES[tier]} packs`}
+          className="flex flex-wrap justify-center gap-1.5"
+        >
+          {TIER_KEYS[tier].map((pk) => (
+            <button
+              key={pk}
+              type="button"
+              aria-current={pk === pack ? "true" : undefined}
+              onClick={() => load(pk, firstUnsolvedOf(pk))}
+              className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium ${
+                pk === pack
+                  ? "border-(color:--cq-accent) bg-(color:--cq-accent) text-white"
+                  : "border-(color:--cq-accent-line) bg-white text-(color:--cq-accent-strong) hover:bg-(color:--cq-accent-wash)"
+              }`}
+            >
+              <span aria-hidden>{PACK_GLYPH[pk]}</span>
+              {PACK_INFO[pk].name}
+              <span className="tabular-nums opacity-70">
+                {done(pk)}/{size(pk)}
+              </span>
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Phone — every tier as a section, one 44px row per pack. */}
+      <div data-cq="pack-sections" className="md:hidden flex flex-col">
+        {TIERS.map((t) => (
+          <section key={t}>
+            <h4 className="mt-3 mb-1 text-xs font-bold tracking-wide text-(color:--cq-label) uppercase">
+              {TIER_NAMES[t]}
+            </h4>
+            {TIER_KEYS[t].map((pk) => (
               <button
                 key={pk}
                 type="button"
-                onClick={() => load(pk, 0)}
-                className={`rounded-full border px-2.5 py-1 text-xs font-medium ${
-                  pk === pack
-                    ? "border-(color:--cq-accent) bg-(color:--cq-accent) text-white"
-                    : "border-(color:--cq-accent-line) bg-white text-(color:--cq-accent-strong) hover:bg-(color:--cq-accent-wash)"
+                aria-current={pk === pack ? "true" : undefined}
+                onClick={() => load(pk, firstUnsolvedOf(pk))}
+                className={`flex h-11 w-full min-w-0 items-center gap-3 border-b border-(color:--cq-accent-wash) text-left text-sm ${
+                  pk === pack ? "font-bold text-(color:--cq-accent)" : "text-(color:--cq-ink)"
                 }`}
               >
-                {PACK_GLYPH[pk]} {PACK_INFO[pk].name}
+                <span aria-hidden className="w-6 shrink-0 text-center">
+                  {PACK_GLYPH[pk]}
+                </span>
+                <span className="min-w-0 flex-1 truncate font-semibold">{PACK_INFO[pk].name}</span>
+                <span
+                  aria-hidden
+                  className="h-1.5 w-14 shrink-0 overflow-hidden rounded-full bg-(color:--cq-accent-soft)"
+                >
+                  <span
+                    className="block h-full rounded-full bg-emerald-500"
+                    style={{ width: `${(done(pk) / size(pk)) * 100}%` }}
+                  />
+                </span>
+                <span className="w-8 shrink-0 text-right text-xs tabular-nums text-slate-500">
+                  {done(pk)}/{size(pk)}
+                </span>
               </button>
             ))}
-          </div>
-          <PuzzleDots
-            count={cases.length}
-            current={cur}
-            isSolved={(i) => progress.isTacticSolved(pack, i)}
-            onPick={(i) => load(pack, i)}
-          />
-        </div>
+          </section>
+        ))}
+      </div>
+    </div>
+  );
+
+  return (
+    <GameShell
+      title="Trick Shots"
+      score={`🎯 ${progress.tacticCount(pack)} / ${cases.length}`}
+      status={status}
+      chips={chips}
+      subtitle={
+        <>
+          <span aria-hidden>{PACK_GLYPH[pack]}</span>
+          <span className="min-w-0 truncate font-bold">{info.name}</span>
+          <span className="shrink-0 text-xs text-slate-500">{TIER_NAMES[tierOf(pack)]}</span>
+        </>
+      }
+      picker={{ label: "Packs", children: packPicker }}
+      extra={
+        <PuzzleDots
+          count={cases.length}
+          current={cur}
+          isSolved={(i) => progress.isTacticSolved(pack, i)}
+          onPick={(i) => load(pack, i)}
+        />
       }
       controls={
         <>

@@ -51,3 +51,87 @@ describe("QuestHeader — button row wraps instead of overflowing (W1 regression
     expect(html).not.toContain("Purple");
   });
 });
+
+// Phone composition — design of record: scratchpad games-phone-options.html,
+// "Quest hub on a phone" ("Header"). Title on its own row, then the four
+// device controls as 44px icon buttons on one row; the lede and the land-badge
+// shelf are desktop-only. One DOM: every phone rule is `max-md:*`, so ≥768
+// renders today's header.
+describe("QuestHeader — phone composition (title row + icon row, no lede or badges)", () => {
+  const html = renderToStaticMarkup(
+    <ProgressProvider>
+      <CopyProvider>
+        <QuestHeader onOpenProfiles={() => {}} onOpenProgress={() => {}} />
+      </CopyProvider>
+    </ProgressProvider>,
+  );
+
+  // Anchored on the quote/space before the token: a bare /\bmd:hidden\b/
+  // also matches inside "max-md:hidden" and would pass on its inversion.
+  const cls = (name: string) =>
+    new RegExp(`["\\s]${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}[\\s"]`);
+
+  const tagWith = (attr: string) => {
+    const at = html.indexOf(attr);
+    expect(at, `no element carries ${attr}`).toBeGreaterThan(-1);
+    return html.slice(html.lastIndexOf("<", at), html.indexOf(">", at) + 1);
+  };
+
+  const DEVICE_BUTTONS = ["Players", "Progress", "Mute sounds", "Turn coach voice off"];
+
+  it("stacks the title above the controls on phones only", () => {
+    const row = tagWith('data-cq-slot="header-row"');
+    expect(row).toMatch(cls("max-md:flex-col"));
+    // Still the wrapping row at ≥768 (see this file's first regression).
+    expect(row).toMatch(cls("flex-wrap"));
+  });
+
+  it("gives all four device controls a 44px phone tap target and a stable accessible name", () => {
+    for (const label of DEVICE_BUTTONS) {
+      const tag = tagWith(`aria-label="${label}"`);
+      expect(tag, `${label} is not 44px on phones`).toMatch(cls("max-md:h-11"));
+      expect(tag, `${label} is not 44px on phones`).toMatch(cls("max-md:w-11"));
+      expect(tag, `${label} is hidden at every width`).not.toMatch(cls("hidden"));
+    }
+  });
+
+  it("drops the button labels to icons on phones without dropping them from the DOM", () => {
+    // The visible text stays for ≥768; only its own span folds away, so the
+    // accessible name (the aria-label above) is identical at every width.
+    for (const text of ["Players", "Progress"]) {
+      const at = html.indexOf(`>${text}`);
+      expect(at, `no visible "${text}" label`).toBeGreaterThan(-1);
+      const span = html.slice(html.lastIndexOf("<span", at), at + 1);
+      expect(span, `the "${text}" label is not folded on phones`).toMatch(cls("max-md:hidden"));
+    }
+  });
+
+  it("renders the lede once, desktop-only — phones get no lede and no About fold", () => {
+    // The first phone build folded the lede behind a <details>; driven live at
+    // 320 that fold plus the badge shelf pushed today's Play button to 824px.
+    // The lede is now a single ≥768 paragraph: one copy, hidden on phones.
+    expect(html).not.toContain("About the quest");
+    expect(html).not.toContain("<details");
+    const lede = "One focused lesson every other day";
+    const copies = html.split(lede).length - 1;
+    expect(copies, "the lede should render exactly once").toBe(1);
+    const paraAt = html.lastIndexOf(lede);
+    const para = html.slice(html.lastIndexOf("<p", paraAt), paraAt);
+    expect(para).toMatch(cls("max-md:hidden"));
+    expect(para).not.toMatch(cls("md:hidden"));
+  });
+
+  it("keeps the progress bar at every width and the land-badge shelf on desktop only", () => {
+    expect(html).toContain("Quest progress");
+    const badges = tagWith('data-cq-slot="land-badges"');
+    expect(badges).toMatch(cls("max-md:hidden"));
+    expect(badges).not.toMatch(cls("md:hidden"));
+  });
+
+  it("tightens the title on phones without changing the desktop size", () => {
+    const at = html.indexOf("Chess Quest");
+    const h2 = html.slice(html.lastIndexOf("<h2", at), at);
+    expect(h2).toMatch(cls("max-md:text-xl"));
+    expect(h2).toMatch(cls("text-2xl"));
+  });
+});
