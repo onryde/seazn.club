@@ -428,6 +428,44 @@ describe("encodeConstraints", () => {
     ).toThrow(/matchMinutes/);
   });
 
+  // Ruling R14 — the numeric twin of the null-blackout-court fix. None of the
+  // three knobs is `.nullish()` in the product (`schemas.ts:1287`/`:1288`/
+  // `:1303` are all `z.number().int()...default(n)`), so a `null` is invalid
+  // product-side and the bench must not launder it into a valid default. A
+  // present-but-wrong value is strictly MORE dangerous than an absent one: the
+  // absent knob falls through to the right number, while the null one measures
+  // the whole checker against a duration the pack never declared.
+  //
+  // Both directions in each case, absent asserted FIRST. A throw-on-everything
+  // mutant passes the null half alone, and it is the absent half that catches
+  // it — so the pair has to travel together, per knob.
+  //
+  // The expected default is read from `ScheduleConfig.parse({})`, never
+  // retyped: the drift guard below stays the single authority on those numbers,
+  // and three more hand-copies here would be the exact drift it exists to stop.
+  it.each([
+    ["matchMinutes", "matchMinutes"],
+    ["gapMinutes", "gapMinutes"],
+    ["perEntrantMinRest", "perEntrantMinRest"],
+  ] as const)("refuses a present-but-null %s but still defaults an absent one", (key) => {
+    const encode = (scheduleConfig: Record<string, unknown>) =>
+      encodeConstraints({
+        divisionRef: "d-tiny",
+        scheduleConfig,
+        courtIdByRef: courts,
+        isRoundRobin: true,
+        pins: [],
+      });
+    const product = ScheduleConfig.parse({});
+
+    // ABSENT -> the product's own default, unchanged by this ruling.
+    expect(encode({})[key]).toBe(product[key]);
+    // PRESENT-BUT-NULL -> refused, naming the field.
+    expect(() => encode({ [key]: null })).toThrow(
+      new RegExp(`scheduleConfig\\.${key}`),
+    );
+  });
+
   it("defaults every knob the pack omits and carries pins and isRoundRobin verbatim", () => {
     const pins = [{ fixtureId: "f-7", start: 1811836800000, courtId: COURT_ONE }];
     const out = encodeConstraints({

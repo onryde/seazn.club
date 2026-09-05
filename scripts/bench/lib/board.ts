@@ -523,9 +523,24 @@ function arrayField(cfg: Record<string, unknown>, key: string, where: string): r
   return raw;
 }
 
-/** Present-but-unreadable THROWS; only an absent key takes the default. A
- *  fallback that also caught `"45"` would silently schedule 30-minute
- *  matches for a pack that declared 45. */
+/** Present-but-unreadable THROWS; only an ABSENT key takes the default. A
+ *  fallback that also caught `"45"` would silently schedule 30-minute matches
+ *  for a pack that declared 45.
+ *
+ *  `isMissing`, deliberately not `isAbsent` (ruling R14). None of the three
+ *  knobs this serves is `.nullish()` in the product — `matchMinutes`
+ *  (`schemas.ts:1287`), `gapMinutes` (`:1288`) and `perEntrantMinRest`
+ *  (`:1303`) are all `z.number().int()...default(n)` — so an explicit `null`
+ *  is invalid product-side and laundering it into a valid default is the same
+ *  defect as reading a null blackout `court` as "no court".
+ *
+ *  It is in fact the more dangerous half of that pair, and the direction is
+ *  worth stating: an ABSENT knob falls through to the correct default, while a
+ *  PRESENT-but-wrong one OVERRIDES it — so making the field readable is worse
+ *  than leaving it out, and every overlap rule in `checker.ts` would then
+ *  measure against a duration the pack never declared. Which default an absent
+ *  key takes is settled by `ScheduleConfig` and pinned by the drift guard in
+ *  `board.test.ts`, not here. */
 function intField(
   cfg: Record<string, unknown>,
   key: string,
@@ -533,7 +548,7 @@ function intField(
   fallback: number,
 ): number {
   const raw = cfg[key];
-  if (isAbsent(raw)) return fallback;
+  if (isMissing(raw)) return fallback;
   if (typeof raw !== "number" || !Number.isInteger(raw) || raw < min) {
     throw new Error(`board: scheduleConfig.${key} must be an integer >= ${min}, got ${show(raw)}`);
   }
