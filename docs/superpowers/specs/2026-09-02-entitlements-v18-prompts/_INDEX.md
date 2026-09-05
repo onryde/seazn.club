@@ -38,7 +38,7 @@ dictionaries, help and `copy-truth.ts`, so there are no parallel lanes.
 |---|---|---|
 | W1 | R9 "scoring goes free" — gate removal, `fidelityTiers` retirement, recording chip, three keys deleted, pinned tests moved | **MERGED** — PR #704, squashed onto `main` as `ae0751682` (2026-09-03). W2 is cut from that commit. |
 | W2 | Matrix & plumbing — migration, inert-key deletion, `featurePlan`, labels, add-on sets, credits math, per-rung pass grant, `stripe-plans.json`, copy-truth guards. **R12 prices and R13 hidden add-on land here.** | **IN PROGRESS** — branch `feat/entitlements-w2-matrix-plumbing`, 90 commits, migrations V392–V397, no PR. Scope grew well past the brief on owner rulings taken during execution (AUD removed, the whole catalogue re-priced to charm `.99`, the share loops made paid, competitions public by default, the platform fee made additive). **The state block and the remaining-work list live in `../../plans/2026-09-03-entitlements-w2-matrix-plumbing.md` — read it before touching this branch.** Not yet gated as a whole; five items owed. |
-| W3 | Surfaces — pricing page redesign (R14), billing settings, gates, dictionaries ×4, emails, help, e2e replacements | not started |
+| W3 | Surfaces — pricing page redesign (R14), billing settings, gates, dictionaries ×4, emails, help, e2e replacements. **Plus W3-A (`stats.player`: free the record, keep the career rollup — and fix the public-beats-owner inversion) and W3-B (paywalls offer the pass as well as Pro), both owner-approved 2026-09-05 — scope and evidence in the section above.** | not started |
 | W4 | Proofs & walkthrough — pass and Free proof e2es, full product walkthrough on a prod build, Stripe archive ops step | not started |
 
 ### W1 as shipped
@@ -185,6 +185,88 @@ against the tree or the `entw2` database. Full write-up with the arithmetic:
 5. **The degrade card names its numbers.** The client dropped `limit` from the 201, so
    the best-timed upgrade moment in the product could not say the org is at 2 and Pro
    is 10.
+
+
+## W3 scope added 2026-09-05 — owner-approved, with the evidence
+
+Two changes, both about selling better rather than gating harder. Written here
+rather than executed in W2 because each is copy plus an entitlement row, and this
+programme's own rule is that a row change and the copy quoting it are ONE unit of
+work — W2 is closing and its pricing copy has already churned four times.
+
+### W3-A — `stats.player`: free the record, keep the analysis
+
+**Why, and it is not generosity.** The paywall does not currently work.
+`publicDivisionStats` (`usecases/player-stats.ts:638`, served by
+`/api/v1/public/orgs/…/divisions/…/stats`) has **no entitlement gate at all**,
+while every authenticated reader has one. Combined with V395 making competitions
+public by default, the live behaviour for a default Free org is:
+
+| Who | Sees the player stats |
+|---|---|
+| The whole internet, via the public dashboard | **Yes** |
+| The org that entered the data, signed in | **402 — upgrade to Pro** |
+
+The gate stops the customer and not the public. Worse, `recomputePlayerStats`
+runs regardless of plan — it fires for every org in the weekly digest sweep — so
+we pay the compute and withhold the result from the only person who earned it.
+W1 already settled the principle this offends: **charge for leverage, never for
+correctness.** A player's own record is correctness.
+
+**The split, which maps onto the existing function boundaries with no new
+seams:**
+
+| | Function | Route | Plan |
+|---|---|---|---|
+| The record | `divisionPlayerStats` | `/api/v1/divisions/[id]/stats/players` | **Free** |
+| The record, per person | `personStats` (division-scoped) | `/api/v1/persons/[id]/stats` | **Free** |
+| The rollup | `personCareerStats` | same route, career shape | **Pro + pass** |
+
+`personCareerStats` is the leverage half and already reasons about pass scoping
+in its own comment: *"A career rollup spans competitions, so an Event Pass covers
+the part of the career played inside the competition it was bought for, and no
+more."* That sentence is the split, already written; W3 makes the matrix agree
+with it.
+
+**Owner value.** Player stats are the most shareable artefact in amateur sport —
+the thing a parent screenshots and a player links. Freeing the record feeds the
+badge network the growth-reversal ruling was protecting, while the career rollup
+stays a real Pro/pass differentiator. It costs one `plan_entitlements` row and
+the copy that quotes it.
+
+**Counter-argument, stated so it is not rediscovered as an objection.**
+`pass-features.ts:46` lists `stats.player` as a pass grant, so freeing it
+wholesale would shrink the pass story — which is exactly why the split exists
+rather than a blanket free. Do NOT free `personCareerStats` with it.
+
+**Owed with it:** fix the public/authenticated inversion in the same change,
+whichever way the split lands. Serving the public more than the owner is
+incoherent under any pricing.
+
+### W3-B — the paywall should offer the cheaper route, not just the dearer one
+
+W2 fixed twelve reasons that read "is a Pro feature" for keys the Event Pass also
+grants (`3c0463dec`); they now name both plans. That corrects the falsehood and
+leaves the commercial gap open: the sentence names two plans, and the CTA still
+sells one.
+
+Twelve times, at the moment a customer is blocked and most ready to buy, we
+should be offering **both routes with their prices** — the pass at its rung price
+for THIS competition, and Pro for the whole org — and letting them pick. Today
+`featurePlan()` is three-valued (`community` / `pro` / `enterprise`) and knows
+nothing about the pass, so `UpgradeGate` cannot express it.
+
+**Owner value.** The pass is the cheaper entry and the lower-commitment yes; for
+a single-competition organiser it is often the right product, and we currently
+hide it at the exact instant it is most relevant. The crossover work already
+landed the arithmetic (`lib/pricing-crossover.ts`) — this is putting it where the
+decision is actually made rather than only on `/pricing`.
+
+**Guard obligation for both.** `freeClaimFaults` grew a fourth rule in W2 because
+its first three reasoned about community, pro and enterprise and never asked the
+pass — twelve sentences drifted behind that blind spot. Any W3 change to how a
+paywall names a plan must extend that rule set in the same commit, and must be
+mutation-proved: restore the old wording and confirm it reds.
 
 ## Findings that changed the work
 
