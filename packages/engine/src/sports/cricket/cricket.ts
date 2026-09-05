@@ -407,7 +407,7 @@ export interface ReviewLedger {
   lost: number;
 }
 
-interface FineInnings {
+export interface FineInnings {
   striker: string | null; // null = awaiting replacement (super over only)
   nonStriker: string | null;
   nextBatterIndex: number; // cursor into the batting order (main innings)
@@ -702,7 +702,7 @@ function isChaseIndex(state: CricketState, index: number): boolean {
 }
 
 // Runs the batting side of the final innings needs to win (spec §2.3).
-function chaseTarget(state: CricketState): number {
+export function chaseTarget(state: CricketState): number {
   if (state.cfg.inningsPerSide === 1) {
     if (state.revisedTarget !== null) return state.revisedTarget;
     const first = state.innings[0];
