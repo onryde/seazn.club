@@ -179,3 +179,48 @@ another wave — a concurrent wave is rewriting that file, and a unilateral edit
 there makes the merge worse, not better. `schedule-ai.ts`'s 409 refusal shares
 the concept but not the string; changing a status code is a contract change
 nobody asked for.
+
+
+## SHIPPED TO REVIEW — 2026-09-05
+
+**PR #723** — https://github.com/onryde/seazn.club/pull/723
+Branch `feat/scheduling-walkthrough`, 59 commits, rebased onto `origin/main`,
+pushed, tree clean. Nothing outstanding in the worktree.
+
+CI in flight: the PR's own checks (smoke, lint, typecheck, engine matrix,
+security, proto drift, Docker) plus an e2e run dispatched manually —
+**e2e does NOT run on PRs in this repo**, only on push to `main` or via
+`workflow_dispatch` with a `pr` input. That dispatch is run
+[33969980134](https://github.com/onryde/seazn.club/actions/runs/33969980134).
+A fresh session must re-dispatch it after any new push; nothing does it
+automatically.
+
+### If you are picking this up cold
+
+The full record is the SDD ledger at
+`.superpowers/sdd/2026-09-03-scheduling-walkthroughs/progress.md` — git-ignored
+and machine-local, so on another checkout this file plus the PR body is all
+there is.
+
+What the PR body already says, and is not repeated here: the nine unguarded
+write paths found across five rounds, the verification numbers with their
+caveats, and the three things left deliberately unfixed.
+
+What it does NOT say, and matters if a check goes red:
+- `rs012-solo-signup-pool` fails locally for want of `CRON_SECRET`, which
+  `seazn-env` does not export. Pre-existing, identical on `main`. If CI reds
+  there, it is not this branch.
+- Three `credits-*` suites fail under parallel load and pass in isolation. Two
+  independent sessions reproduced that.
+- Three money specs skip without `CONNECT_WALKTHROUGH=1`; a "green" walkthrough
+  project that includes those skips proves nothing about the money path.
+
+### Owed, none blocking
+
+`putScheduleSettings` can remove a court from a frozen division (comment
+corrected in `e2b6452c2`, guard deliberately not added); `stages-panel.tsx`
+renders four controls enabled on a frozen division so they hit an unanticipated
+422 — untouched because a concurrent wave is rewriting that file; the three AI
+gates hand-type `"SCHEDULE_LOCKED"` rather than importing it; the translated
+error frame `history.error.unexpected`; S13; and the suite's skip-vs-throw
+inconsistency on missing env.
