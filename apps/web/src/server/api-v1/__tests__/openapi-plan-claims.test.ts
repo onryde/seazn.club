@@ -13,10 +13,15 @@
 //
 // The catalog is the authority, never a table typed in here: the assertions
 // below read `plan_entitlements` at run time, so a re-valuation moves this
-// test with it. That matters imminently — entitlements v18 grants
-// `officials.auto` to `pro` and DELETES the `pro_plus` plan outright, which
-// will red the Pro Plus claims here and force the summaries to be rewritten.
-// That red is the point, not a defect in this test.
+// test with it. That happened immediately — entitlements v18 (migration
+// V392) granted `officials.auto` to `pro`, deleted the `pro_plus` plan
+// outright, and made `tiebreakers.custom` free on `community` too. That red
+// the Pro/Pro Plus claims here and forced three summaries to be rewritten
+// (`officials/auto`, `officials/apply`, `officials/source` now say Pro; the
+// standings-override summary drops its plan name entirely since the feature
+// has none). The Pro Plus test below no longer compares against `pro_plus`
+// at all — the plan has no rows to compare against — and instead asserts no
+// published summary may use the wording again.
 import { describe, expect, it } from "vitest";
 import { sql } from "@/lib/db";
 import { buildOpenApiDocument } from "../openapi";
@@ -94,19 +99,18 @@ describe.skipIf(!HAS_DB)(
       }
     });
 
-    it("a 'Pro Plus' claim means pro does NOT have it and pro_plus DOES", async () => {
-      for (const { where, plan, key } of claims) {
-        if (plan !== "Pro Plus") continue;
-        const granted = await grantedOn(key);
-        expect(
-          granted.has("pro"),
-          `${where} bills \`${key}\` as Pro Plus, but pro grants it too — say Pro`,
-        ).toBe(false);
-        expect(
-          granted.has("pro_plus"),
-          `${where} bills \`${key}\` as Pro Plus, but pro_plus does NOT grant it`,
-        ).toBe(true);
-      }
+    // entitlements v18 deleted `pro_plus` outright — there are no rows for
+    // it in `plans` or `plan_entitlements`, so no rule comparing against it
+    // can ever pass. Rather than leave a loop that vacuously passes once the
+    // last "Pro Plus" wording is gone (an empty claims list satisfies any
+    // per-claim check silently), assert the retirement directly: a summary
+    // is never allowed to say "Pro Plus" again, full stop.
+    it("no published summary claims 'Pro Plus' — the plan was deleted", () => {
+      const proPlusClaims = claims.filter((c) => c.plan === "Pro Plus");
+      expect(
+        proPlusClaims.map((c) => `${c.where} bills \`${c.key}\` as Pro Plus`),
+        "`pro_plus` has no rows left in plan_entitlements — name the plan that actually grants it (or drop the plan name) instead of Pro Plus",
+      ).toEqual([]);
     });
   },
 );

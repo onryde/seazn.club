@@ -56467,7 +56467,7 @@
     },
     "/api/v1/divisions/{id}/officials/auto": {
       "post": {
-        "summary": "Propose assignments — pure engine pass with locked rows as obstacles; writes nothing (Pro Plus `officials.auto`)",
+        "summary": "Propose assignments — pure engine pass with locked rows as obstacles; writes nothing (Pro `officials.auto`)",
         "tags": [
           "officials"
         ],
@@ -57828,7 +57828,7 @@
     },
     "/api/v1/divisions/{id}/officials/apply": {
       "post": {
-        "summary": "Persist a proposal transactionally; emits `officials_assigned` (Pro Plus `officials.auto`)",
+        "summary": "Persist a proposal transactionally; emits `officials_assigned` (Pro `officials.auto`)",
         "tags": [
           "officials"
         ],
@@ -58489,7 +58489,7 @@
     },
     "/api/v1/stages/{id}/officials/source": {
       "post": {
-        "summary": "Resolve rank/result sourcing → officiating entrants; pending until the source decides (Pro Plus `officials.auto`)",
+        "summary": "Resolve rank/result sourcing → officiating entrants; pending until the source decides (Pro `officials.auto`)",
         "tags": [
           "officials"
         ],
@@ -70165,7 +70165,7 @@
     },
     "/api/v1/stages/{id}/standings/override": {
       "post": {
-        "summary": "Pin final ranks (placement games decide 3rd/4th); cascade orders the unlocked remainder; audited rank_overridden (Pro `tiebreakers.custom`)",
+        "summary": "Pin final ranks (placement games decide 3rd/4th); cascade orders the unlocked remainder; audited rank_overridden; free on every plan (`tiebreakers.custom`)",
         "tags": [
           "stages"
         ],
