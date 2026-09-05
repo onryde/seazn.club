@@ -7,6 +7,7 @@ import "server-only";
 import type postgres from "postgres";
 import { withTenant } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
+import { SCHEDULE_LOCKED_CODE, SCHEDULE_LOCKED_MESSAGE } from "@/lib/schedule-lock";
 import { requireFeature } from "@/lib/entitlements";
 import { cacheDelPattern } from "@/lib/cache";
 import { rateLimit, type RateLimitConfig } from "@/lib/rate-limit";
@@ -2523,7 +2524,7 @@ export async function applySchedule(
     const courtVenues = await courtVenueIds(tx);
     const lockState = await divisionLockState(tx, stage.division_id);
     if (lockState.frozen) {
-      throw new HttpError(422, "the division schedule is locked — unlock it to edit");
+      throw new HttpError(422, SCHEDULE_LOCKED_MESSAGE, SCHEDULE_LOCKED_CODE);
     }
     // C1 (2026-08-12 round-order design). This IS the write gate — the one
     // place a disordered board actually gets refused rather than merely
@@ -2900,7 +2901,7 @@ export async function moveFixture(
     // enforces them; a targeted move is the escape hatch).
     const lockState = await divisionLockState(tx, fixture.division_id);
     if (lockState.frozen) {
-      throw new HttpError(422, "the division schedule is locked — unlock it to edit");
+      throw new HttpError(422, SCHEDULE_LOCKED_MESSAGE, SCHEDULE_LOCKED_CODE);
     }
 
     const movesTimetable = patch.scheduled_at !== undefined || patch.court_id !== undefined;
