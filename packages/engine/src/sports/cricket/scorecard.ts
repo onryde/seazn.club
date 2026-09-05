@@ -6,7 +6,9 @@
 // fold, the fidelity band and the totals/extras; Task 2 the batting and
 // bowling lines; Task 3 the fall of wickets, partnerships, over log and live
 // block (including the chase maths, whose target comes from the reducer's own
-// exported `chaseTarget` and never from a second copy of the rule).
+// exported `chaseTarget` and never from a second copy of the rule); Task 4
+// the two COARSER bands (`cricket.player.line` at band 2, and a ledger of
+// `cricket.innings.summary` alone at band 0) and the super over as cards.
 import type { CoreEv, EventEnvelope, FoldContext } from "../../core/events.ts";
 import type { LineupPair } from "../../core/types.ts";
 import type { FidelityBand } from "../../sport/module.ts";
@@ -125,12 +127,10 @@ interface OpenPartnership {
  * ledger replays. Every field `CricketInningsCard` and `CricketLive` declare
  * is populated from here.
  *
- * ONE KNOWN GAP, deliberately left: `cards()` maps `state.innings` only, so a
- * super over's innings are not rendered as cards and `isSuperOver` is always
- * false — no task in this wave owns that. Its BALLS are still folded, into
- * match-wide innings slots above the main innings (see `onBall`), so they can
- * never be appended to a main innings that had already finished, and `live()`
- * reads them while the super over is in progress.
+ * Task 4 closed the gap this doc used to record: `cards()` now renders the
+ * super over's own innings too, from `state.superOver.innings`, at the SAME
+ * match-wide slots `onBall` files their balls into — so a super over's over
+ * log, extras and lines are read from the container they were bowled in.
  *
  * Discipline (R5 — never re-derive a cricket rule): runs and balls per
  * batter, and balls/runs/WICKETS per bowler, come from `FineInnings` itself
@@ -180,6 +180,17 @@ class InningsAccumulator {
   private prevLegalBallsByIndex: number[] = [];
   private prevRunsByIndex: number[] = [];
   private prevWicketsByIndex: number[] = [];
+
+  // Task 4 — band 2. A `cricket.player.line` is the ONLY record of who did
+  // what in an innings recorded as totals: there is no delivery to read and
+  // `InningsState.fine` is null, so `FineInnings` cannot be asked. Read off
+  // the event's own payload as the fold replays it, exactly the way `onBall`
+  // reads a delivery's. (`state.playerLines` holds the same records, but
+  // reading the payload keeps every accumulator input one shape.)
+  private battingLinesByIndex: Array<Array<{ person: string; runs: number; balls: number; out: boolean }>> = [];
+  private bowlingLinesByIndex: Array<
+    Array<{ person: string; legalBalls: number; runs: number; wickets: number }>
+  > = [];
 
   // Task 3 — fall of wickets, partnerships and the over log.
   private fowByIndex: FallOfWicket[][] = [];
@@ -500,6 +511,87 @@ class InningsAccumulator {
     }
   }
 
+  /**
+   * `cricket.player.line` (band 2) — the middle fidelity, between an innings
+   * recorded as bare totals and one recorded ball by ball. A line says what
+   * one person did across a whole innings: runs and balls faced, or balls
+   * bowled, runs conceded and wickets taken. Nothing else. There is no
+   * delivery behind it, so the fold has no boundary flag, no dismissal
+   * detail, no over boundary and no extras split to read — which is why
+   * every one of those fields comes back `null` rather than `0` on a line's
+   * card (see `lineBatting`/`lineBowling`).
+   *
+   * `payload.innings` is 1-based and addresses `state.innings` — that is
+   * literally what `applyPlayerLine` indexes (`state.innings[payload.innings
+   * - 1]`), and it also REFUSES an innings that is not closed. So a line can
+   * never belong to a super over, and `payload.innings - 1` is the same
+   * match-wide slot `cards()` keys a main innings by.
+   */
+  onLine(ev: EventEnvelope): void {
+    const payload = ev.payload as {
+      innings: number;
+      person: string;
+      batting?: { runs: number; balls: number; out?: boolean };
+      bowling?: { legalBalls: number; runs: number; wickets: number };
+    };
+    const index = payload.innings - 1;
+    if (index < 0) return;
+    const batting = payload.batting;
+    if (batting !== undefined) {
+      const lines = this.battingLinesByIndex[index] ?? (this.battingLinesByIndex[index] = []);
+      lines.push({ person: payload.person, runs: batting.runs, balls: batting.balls, out: batting.out === true });
+    }
+    const bowling = payload.bowling;
+    if (bowling !== undefined) {
+      const lines = this.bowlingLinesByIndex[index] ?? (this.bowlingLinesByIndex[index] = []);
+      lines.push({
+        person: payload.person,
+        legalBalls: bowling.legalBalls,
+        runs: bowling.runs,
+        wickets: bowling.wickets,
+      });
+    }
+  }
+
+  /** Batting lines at band 2. `order` is the order the lines were FILED —
+   *  the only ordering a line ledger carries; a batting position it never
+   *  recorded would be an invention. `fours`/`sixes` are `null` because no
+   *  delivery exists to have carried a boundary flag, and the dismissal is
+   *  `out_unknown` — the shape `scorecard-types.ts` reserves for "the line
+   *  said out, nothing more" — never a kind, bowler or fielder this ledger
+   *  cannot name. */
+  private lineBatting(index: number): BattingLine[] {
+    return (this.battingLinesByIndex[index] ?? []).map((line, i) => ({
+      order: i + 1,
+      person: line.person,
+      runs: line.runs,
+      balls: line.balls,
+      fours: null,
+      sixes: null,
+      strikeRate: line.balls > 0 ? Math.round(((line.runs * 100) / line.balls) * 10) / 10 : null,
+      dismissal: line.out ? { kind: "out_unknown" } : { kind: "not_out" },
+    }));
+  }
+
+  /** Bowling lines at band 2. `maidens`/`wides`/`noBalls` are `null` for the
+   *  same reason: a maiden is a property of an OVER and wides/no-balls of a
+   *  DELIVERY, and a line ledger holds neither. `overs` and `economy` are
+   *  derived from the line's own legal balls with the same notation and the
+   *  same rounding a ball-fidelity card uses, so the two bands print alike. */
+  private lineBowling(index: number, bpo: number): BowlingLine[] {
+    return (this.bowlingLinesByIndex[index] ?? []).map((line) => ({
+      person: line.person,
+      legalBalls: line.legalBalls,
+      overs: fmtOvers(line.legalBalls, bpo),
+      maidens: null,
+      runs: line.runs,
+      wickets: line.wickets,
+      economy: line.legalBalls > 0 ? Math.round(((line.runs * bpo) / line.legalBalls) * 10) / 10 : null,
+      wides: null,
+      noBalls: null,
+    }));
+  }
+
   /** The stands of an innings, with the one still at the crease (if any)
    *  appended as `"unbroken"`. That one rule covers all three cases the
    *  scorebook has: an innings in progress, an innings closed on overs, a
@@ -521,106 +613,143 @@ class InningsAccumulator {
     ];
   }
 
+  /**
+   * Every innings of the match, in the order it was played: the main innings
+   * first, then the super over's (Task 4).
+   *
+   * The super over's cards are addressed at `state.innings.length + i` — the
+   * SAME match-wide slot `onBall` files their balls into, and the same
+   * offset `activeInnings` uses, because THE SUPER OVER CONTINUES THE
+   * INNINGS COUNT. Reading them at their own container-local index instead
+   * would hand a super-over card the extras, over log and fall of wickets of
+   * a main innings that had already finished.
+   */
   cards(state: CricketState): CricketInningsCard[] {
+    const main = state.innings.map((innings, index) => this.card(state, innings, index, false));
+    const superOver = (state.superOver?.innings ?? []).map((innings, i) =>
+      this.card(state, innings, state.innings.length + i, true),
+    );
+    return [...main, ...superOver];
+  }
+
+  private card(
+    state: CricketState,
+    innings: InningsState,
+    index: number,
+    isSuperOver: boolean,
+  ): CricketInningsCard {
     const bpo = state.cfg.ballsPerOver;
-    return state.innings.map((innings, index) => {
-      this.ensure(index);
-      const tally = this.extrasByIndex[index] ?? emptyExtras();
-      const total = tally.wides + tally.noBalls + tally.byes + tally.legByes + tally.penalties;
-      const fine = innings.fine;
+    this.ensure(index);
+    const tally = this.extrasByIndex[index] ?? emptyExtras();
+    const total = tally.wides + tally.noBalls + tally.byes + tally.legByes + tally.penalties;
+    const fine = innings.fine;
 
-      // Fix round 1, finding 5: a batter seated by the LAST ball's wicket
-      // (the reducer resolves a replacement synchronously with that ball —
-      // `applyDelivery`'s `resolveIncoming`), with no FOLLOWING ball to name
-      // them, never appears in any payload's striker/nonStriker field, so
-      // `onBall` alone can never see them. State — `fine.striker`/
-      // `fine.nonStriker` — is the authority for who is AT the crease right
-      // now; append either name if `onBall` hasn't already recorded it,
-      // rather than mutate the stored array (this copy is rebuilt fresh
-      // every `cards()` call).
-      const order = [...(this.orderByIndex[index] ?? [])];
-      for (const person of [fine?.striker, fine?.nonStriker]) {
-        if (person != null && !order.includes(person)) order.push(person);
-      }
-      const bowlerOrder = this.bowlerOrderByIndex[index] ?? [];
-      const fours = this.foursByIndex[index] ?? {};
-      const sixes = this.sixesByIndex[index] ?? {};
-      const dismissals = this.dismissalByIndex[index] ?? {};
-      const wides = this.widesByIndex[index] ?? {};
-      const noBalls = this.noBallsByIndex[index] ?? {};
-      const maidens = this.maidensByIndex[index] ?? {};
+    // Fix round 1, finding 5: a batter seated by the LAST ball's wicket
+    // (the reducer resolves a replacement synchronously with that ball —
+    // `applyDelivery`'s `resolveIncoming`), with no FOLLOWING ball to name
+    // them, never appears in any payload's striker/nonStriker field, so
+    // `onBall` alone can never see them. State — `fine.striker`/
+    // `fine.nonStriker` — is the authority for who is AT the crease right
+    // now; append either name if `onBall` hasn't already recorded it,
+    // rather than mutate the stored array (this copy is rebuilt fresh
+    // every `cards()` call).
+    const order = [...(this.orderByIndex[index] ?? [])];
+    for (const person of [fine?.striker, fine?.nonStriker]) {
+      if (person != null && !order.includes(person)) order.push(person);
+    }
+    const bowlerOrder = this.bowlerOrderByIndex[index] ?? [];
+    const fours = this.foursByIndex[index] ?? {};
+    const sixes = this.sixesByIndex[index] ?? {};
+    const dismissals = this.dismissalByIndex[index] ?? {};
+    const wides = this.widesByIndex[index] ?? {};
+    const noBalls = this.noBallsByIndex[index] ?? {};
+    const maidens = this.maidensByIndex[index] ?? {};
 
-      const batting: BattingLine[] =
-        fine === null
-          ? []
-          : order.map((person, i) => {
-              const runs = fine.batterRuns[person] ?? 0;
-              const balls = fine.batterBalls[person] ?? 0;
-              return {
-                order: i + 1,
-                person,
-                runs,
-                balls,
-                fours: fours[person] ?? 0,
-                sixes: sixes[person] ?? 0,
-                strikeRate: balls > 0 ? Math.round(((runs * 100) / balls) * 10) / 10 : null,
-                dismissal: dismissals[person] ?? { kind: "not_out" },
-              };
-            });
+    // `fine === null` is the innings recorded WITHOUT deliveries. At band 0
+    // there is nothing further to say and both lists stay empty; at band 2
+    // the player lines are the whole record (Task 4). A fine innings never
+    // reads the lines even when it carries some: `applyPlayerLine` makes a
+    // line over a fine innings agree with `FineInnings` EXACTLY, so the
+    // ball-derived rows say everything the lines do and more.
+    const batting: BattingLine[] =
+      fine === null
+        ? this.lineBatting(index)
+        : order.map((person, i) => {
+            const runs = fine.batterRuns[person] ?? 0;
+            const balls = fine.batterBalls[person] ?? 0;
+            return {
+              order: i + 1,
+              person,
+              runs,
+              balls,
+              fours: fours[person] ?? 0,
+              sixes: sixes[person] ?? 0,
+              strikeRate: balls > 0 ? Math.round(((runs * 100) / balls) * 10) / 10 : null,
+              dismissal: dismissals[person] ?? { kind: "not_out" },
+            };
+          });
 
-      const bowling: BowlingLine[] =
-        fine === null
-          ? []
-          : bowlerOrder.map((person) => {
-              const legalBalls = fine.bowlerBalls[person] ?? 0;
-              // Fix round 1, finding 1: read straight off `fine.bowlerRuns`
-              // — see the class doc above for why a second, hand-rolled
-              // tally here was a bug, not just a duplication.
-              const runs = fine.bowlerRuns[person] ?? 0;
-              return {
-                person,
-                legalBalls,
-                overs: fmtOvers(legalBalls, bpo),
-                maidens: maidens[person] ?? 0,
-                runs,
-                wickets: fine.bowlerWickets[person] ?? 0,
-                economy: legalBalls > 0 ? Math.round(((runs * bpo) / legalBalls) * 10) / 10 : null,
-                wides: wides[person] ?? 0,
-                noBalls: noBalls[person] ?? 0,
-              };
-            });
+    const bowling: BowlingLine[] =
+      fine === null
+        ? this.lineBowling(index, bpo)
+        : bowlerOrder.map((person) => {
+            const legalBalls = fine.bowlerBalls[person] ?? 0;
+            // Fix round 1, finding 1: read straight off `fine.bowlerRuns`
+            // — see the class doc above for why a second, hand-rolled
+            // tally here was a bug, not just a duplication.
+            const runs = fine.bowlerRuns[person] ?? 0;
+            return {
+              person,
+              legalBalls,
+              overs: fmtOvers(legalBalls, bpo),
+              maidens: maidens[person] ?? 0,
+              runs,
+              wickets: fine.bowlerWickets[person] ?? 0,
+              economy: legalBalls > 0 ? Math.round(((runs * bpo) / legalBalls) * 10) / 10 : null,
+              wides: wides[person] ?? 0,
+              noBalls: noBalls[person] ?? 0,
+            };
+          });
 
-      // Fix round 1, finding 3: `fine === null` (summary/coarse fidelity)
-      // means no ball ever named a crease occupant — `order` is empty, so
-      // an unguarded filter here would report the WHOLE lineup as
-      // did-not-bat, which is a wrong, overconfident claim at a fidelity
-      // that cannot say who batted at all. `[]` matches `batting`/`bowling`.
-      const battingOrderFull = state.orders[innings.battingSide];
-      const atCrease = new Set(order);
-      const didNotBat = fine === null ? [] : battingOrderFull.filter((person) => !atCrease.has(person));
+    // Fix round 1, finding 3: `fine === null` (summary/coarse fidelity)
+    // means no ball ever named a crease occupant — `order` is empty, so
+    // an unguarded filter here would report the WHOLE lineup as
+    // did-not-bat, which is a wrong, overconfident claim at a fidelity
+    // that cannot say who batted at all. `[]` matches `batting`/`bowling`.
+    // At band 2 the same holds for a different reason: a player line exists
+    // for whoever someone chose to file one for, so a MISSING line is not
+    // evidence that a person did not bat.
+    //
+    // A SUPER OVER is the third case (Task 4). Each side nominates three
+    // batters and the ledger records no nomination anywhere, so the team's
+    // batting order is not the list of people who were available — reporting
+    // the other eight as "did not bat" would be the same overconfident claim.
+    const battingOrderFull = state.orders[innings.battingSide];
+    const atCrease = new Set(order);
+    const didNotBat =
+      fine === null || isSuperOver ? [] : battingOrderFull.filter((person) => !atCrease.has(person));
 
-      return {
-        number: index + 1,
-        side: state.entrants[innings.battingSide],
-        isSuperOver: false,
-        declared: innings.declared,
-        closed: innings.closed,
-        total: {
-          runs: innings.runs,
-          wickets: innings.wickets,
-          legalBalls: innings.legalBalls,
-          overs: fmtOvers(innings.legalBalls, bpo),
-          runRate: innings.legalBalls > 0 ? (innings.runs * bpo) / innings.legalBalls : null,
-        },
-        extras: this.hasBallEventByIndex[index] === true ? { ...tally, total } : null,
-        batting,
-        didNotBat,
-        bowling,
-        fallOfWickets: [...(this.fowByIndex[index] ?? [])],
-        partnerships: this.partnershipsFor(index, innings),
-        overs: [...(this.oversByIndex[index] ?? [])],
-      };
-    });
+    return {
+      number: index + 1,
+      side: state.entrants[innings.battingSide],
+      isSuperOver,
+      declared: innings.declared,
+      closed: innings.closed,
+      total: {
+        runs: innings.runs,
+        wickets: innings.wickets,
+        legalBalls: innings.legalBalls,
+        overs: fmtOvers(innings.legalBalls, bpo),
+        runRate: innings.legalBalls > 0 ? (innings.runs * bpo) / innings.legalBalls : null,
+      },
+      extras: this.hasBallEventByIndex[index] === true ? { ...tally, total } : null,
+      batting,
+      didNotBat,
+      bowling,
+      fallOfWickets: [...(this.fowByIndex[index] ?? [])],
+      partnerships: this.partnershipsFor(index, innings),
+      overs: [...(this.oversByIndex[index] ?? [])],
+    };
   }
 
   /**
@@ -639,10 +768,22 @@ class InningsAccumulator {
    * finding 2): `cricket.match.close` — the two-innings time-expiry draw —
    * sets `phase: "done"` and an `outcome`, and leaves the innings it
    * interrupted OPEN. So a decided match is live-less whether or not its
-   * innings closed. The `!inSuperOver` half of that gate is load-bearing in
-   * the other direction: a tie sets `outcome` BEFORE the super over is
-   * bowled, so a bare `outcome !== null` would blank the scoreboard for the
-   * whole of the thing that decides the match.
+   * innings closed, and `state.outcome !== null` is that gate, unqualified.
+   *
+   * IT IS NOT QUALIFIED BY `!inSuperOver`, and that is a correction (Task 4,
+   * on Task 3's re-review). The half that used to be there rested on "a tie
+   * sets `outcome` BEFORE the super over is bowled", which is false:
+   * `decideTie` (cricket.ts) returns `{ phase: "super_over", superOver: … }`
+   * with `outcome` UNTOUCHED whenever `cfg.superOver` is on — only the
+   * non-super-over branch settles `{ kind: "tie" }`. So a super over in
+   * progress is never blanked by the unqualified gate; the fold's own
+   * "super over in progress" test proves that, and it stayed green when the
+   * half came out. What the half DID do was let `live` survive a super over
+   * that had been ABANDONED: `applyAbandon` in phase `super_over` sets
+   * `{ phase: "done", outcome: { kind: "tie" } }` and leaves the innings it
+   * interrupted OPEN, exactly as `cricket.match.close` does — so the
+   * `closed` check cannot see it either, and the scoreboard kept a live
+   * block for a match that was over.
    *
    * Every number here is the reducer's: the target from `chaseTarget` (the
    * one authority — DLS revisions and two-innings aggregates included), the
@@ -654,7 +795,7 @@ class InningsAccumulator {
     const local = list.length - 1;
     const innings = list[local];
     if (innings === undefined || innings.closed) return null;
-    if (!inSuperOver && state.outcome !== null) return null;
+    if (state.outcome !== null) return null;
     const index = offset + local;
     const bpo = state.cfg.ballsPerOver;
     const fine = innings.fine;
@@ -753,6 +894,22 @@ export function deriveCricketScorecard({ events, cfg, lineups }: ScorecardInput)
     if (ev.type === "cricket.retire") {
       acc.onRetire(state, ev);
     }
+    if (ev.type === "cricket.player.line") {
+      acc.onLine(ev);
+    }
+    // `cricket.innings.summary` (band 0) deliberately has NO accumulator
+    // hook. Everything a summary carries that a card shows — runs, wickets,
+    // legal balls, `declared`, and whether the innings is closed — is on
+    // `state.innings` the moment `applySummary` has folded it, and `cards()`
+    // already reads all five from there. A hook would be a second copy of
+    // numbers the reducer already holds, which is exactly what this fold
+    // exists not to do. What band 0 needed was a LEDGER that could express
+    // it (`summaryOnlyLedger`, in the test builder) and the coverage to
+    // prove the coarse path answers — including the target, which comes from
+    // the reducer's own `chaseTarget` (see `live()`); the `innings[0].runs +
+    // 1` fallback the brief offered is never taken, because `chaseTarget`
+    // answers exactly that for a one-innings-a-side match and owns the DLS
+    // and two-innings cases besides.
   }
 
   const summary = cricket.summary(state);
