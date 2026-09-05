@@ -61,6 +61,14 @@ carries the brand to the next organiser.
    19:00 Europe/London, with Opus subagents dying on arrival (429) until then — any agent
    dispatched in that window gets the settling check (`git log`, `git status
    --porcelain`, report path) before its final message is believed.
+10. **"Apply your recommendation"** (owner, 2026-09-05, on the two product-owner calls
+    made when asked what tier 1/2 scoring leaves on the public page). Both are now
+    rulings: (a) the Info tab names the scoring band in one line and empty tabs never
+    render; (b) **the band-2 player line is enriched at the source, in W1** — optional
+    `fours`, `sixes`, `dismissal {kind, bowler?, fielder?}` on `batting` and `maidens`,
+    `wides`, `noBalls` on `bowling` (additive, band unchanged), the fold reads them, and
+    the pad's line-entry form collects them. This is the one deliberate touch of the
+    scorepad in this programme; it is recorded in the scoringpad v3 index as well.
 9. **"Option A is OK in both — but not only for cricket"** (owner, 2026-09-05, on
    the W0 canvas). Match centre A and poster A are confirmed, and **every sport gets
    its depth in W1**, not a shell: cricket gets Scorecard + Commentary; every other
@@ -267,11 +275,11 @@ balls, runs, wickets) — `fours`, `sixes`, `maidens`, `wides`, `noBalls` and
 `dismissal.kind` are absent for such a match and the view model renders "out" / "not
 out" and omits the empty columns; band 0/1 (`cricket.innings.summary` plus the card
 events) fills `total`, `toss`, DLS target and `result` only. `dismissal.kind` is the
-engine's wicket enum, not a string. **Recommendation recorded for the scorepad
-programme, not built here:** optional `fours`, `sixes`, `dismissal {kind, bowler?,
-fielder?}` on the line's `batting` and `maidens`, `wides`, `noBalls` on its `bowling` —
-additive, band unchanged — would let a scorecard-line match read like a ball-by-ball one;
-the W1 reader accepts those fields from day one if they arrive.
+engine's wicket enum, not a string. **Built in W1 (decision 10):** optional `fours`,
+`sixes`, `dismissal {kind, bowler?, fielder?}` on the line's `batting` and `maidens`,
+`wides`, `noBalls` on its `bowling` — additive, band unchanged — so a scorecard-line match
+reads like a ball-by-ball one; the fold reads them from the line payload during replay,
+and the pad's line-entry form collects them (plan Tasks 17–18).
 
 **Tests derive expectations from the engine's own declarations.** Ledger fixtures are
 built through the engine's event schemas; totals are asserted equal to the reducer's

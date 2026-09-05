@@ -992,8 +992,75 @@ it("MatchCentre renders only the tabs the document lists — a band-2 doc has no
 
 ---
 
+### Task 17: Engine — richer band-2 player lines (owner ruling 12), read by the fold
+
+**Runs right after Task 4, before Task 6.** Owner ruling 2026-09-05: the band-2 gap is closed at the source. Additive optional fields, band unchanged.
+
+**Files:**
+- Modify: `packages/engine/src/sports/cricket/cricket.ts` — `CricketPlayerLine` (~304-327), `applyPlayerLine` (~1724-1804, storage into `state.playerLines: PlayerLineRec[]` at ~1797), `PlayerLineRec` type, and the pad declaration `playerLineAction: PadAction` (~2860-2871, `fields` + `attribution`).
+- Modify: `packages/engine/src/sports/cricket/scorecard.ts` (`onLine` reads the new payload fields), `scorecard-types.ts` (no change expected — the nullable fields already exist).
+- Test: `packages/engine/src/sports/cricket/__tests__/player-line.test.ts` (new), `__tests__/scorecard.test.ts` (extend Task 4's band-2 test).
+
+**Interfaces:**
+- Produces, on `CricketPlayerLine`:
+  ```ts
+  batting: { runs, balls, out?, fours?: int≥0, sixes?: int≥0, dismissal?: { kind: <CricketWicket.kind enum>, bowler?: PersonId, fielder?: PersonId } }
+  bowling: { legalBalls, runs, wickets, maidens?: int≥0, wides?: int≥0, noBalls?: int≥0 }
+  ```
+  Schema refinements (no cfg needed): `fours*4 + sixes*6 <= runs`; `dismissal` requires `out === true`. Reducer check (needs cfg): `maidens <= floor(legalBalls / cfg.ballsPerOver)` in `applyPlayerLine`, rejected with the same `reject(...)` shape the sum checks use.
+- Produces, on `playerLineAction.fields`: `batting.fours` (number), `batting.sixes` (number), `batting.dismissal.kind` (a CHOICE field over the wicket enum — see Task 18 if the `PadAction` field kinds have no choice kind: then this task adds `{ kind: "choice"; options: readonly string[] }` to the `PadAction` field type in `sport/module.ts` and the pad's renderer/builder learn it in Task 18), `bowling.maidens`, `bowling.wides`, `bowling.noBalls` (numbers); `attribution` gains `{ kind: "person", path: "batting.dismissal.bowler", optional: true }` and `{ kind: "person", path: "batting.dismissal.fielder", optional: true }` (add `optional?: boolean` to the attribution type if absent — the person picker today treats every attribution as required, `scorepad.attribution.required`).
+- The fold's band-2 output: `fours/sixes/maidens/wides/noBalls` are the numbers when present (null otherwise); `dismissal` is `{ kind, bowler: bowler ?? null, fielder: fielder ?? null, fielderAssist: null }` when present, `out_unknown` when `out` without `dismissal`, `not_out` otherwise.
+
+- [ ] **Step 1: Failing tests**
+
+```ts
+describe("CricketPlayerLine — enriched band-2 lines", () => {
+  it("accepts the seven legacy fields unchanged (byte-identical legacy payload still parses)", () => { /* the exact 7-field object from view-model.ts's comment */ });
+  it("accepts fours/sixes/dismissal on batting and maidens/wides/noBalls on bowling", () => { /* parse succeeds; values round-trip */ });
+  it("rejects fours*4 + sixes*6 > runs", () => { /* safeParse false, issue path batting */ });
+  it("rejects a dismissal without out: true", () => { /* safeParse false */ });
+  it("applyPlayerLine rejects maidens > floor(legalBalls / ballsPerOver)", () => { /* 13 legal balls, 3 maidens → reject */ });
+  it("padSpec(cfg) declares the new fields and the two optional person attributions for cricket.player.line", () => {
+    const action = padSpec(cfg).panels.flatMap((p) => p.actions ?? []).find((a) => a.type === "cricket.player.line")!;   // pin the PadSpec shape
+    expect(action.fields.map((f) => f.path)).toEqual(expect.arrayContaining(["batting.fours", "batting.sixes", "batting.dismissal.kind", "bowling.maidens", "bowling.wides", "bowling.noBalls"]));
+    expect(action.attribution.filter((a) => a.optional).map((a) => a.path)).toEqual(["batting.dismissal.bowler", "batting.dismissal.fielder"]);
+  });
+  it("fidelity of cricket.player.line stays 2", () => expect(padSpec(cfg).fidelity["cricket.player.line"]).toBe(2));
+});
+describe("deriveCricketScorecard — enriched band-2 lines", () => {
+  it("reads fours/sixes/dismissal/maidens/wides/noBalls from the line payload", () => {
+    const card = deriveCricketScorecard(lineLedger({ batting: { runs: 30, balls: 20, out: true, fours: 3, sixes: 1, dismissal: { kind: "caught", bowler: "a7", fielder: "a3" } }, bowling: { legalBalls: 12, runs: 20, wickets: 2, maidens: 1, wides: 2, noBalls: 0 } }));
+    expect(card.innings[0]!.batting[0]).toMatchObject({ fours: 3, sixes: 1, dismissal: { kind: "caught", bowler: "a7", fielder: "a3", fielderAssist: null } });
+    expect(card.innings[0]!.bowling[0]).toMatchObject({ maidens: 1, wides: 2, noBalls: 0 });
+  });
+});
+```
+
+- [ ] **Step 2: Run — failures.** **Step 3: Implement** (schema, reducer check, storage of the new optional fields on `PlayerLineRec`, pad declaration, fold). **Step 4: Run — green; run the cricket folder suite and compare totals with Task 4's; the golden corpus must be untouched (no re-baseline — the fields are optional and additive). `npm run openapi:gen && /usr/bin/git status --porcelain openapi` prints nothing (event payloads are not in the spec — confirm rather than assume).** **Step 5: Commit** — "engine(cricket): player lines carry 4s, 6s, how-out, maidens, wides and no-balls (optional, band 2 unchanged); the fold reads them; the pad declaration exposes them".
+
+---
+
+### Task 18: Pad — the "More" sheet collects the enriched line; first e2e ever to drive a player line through the UI
+
+**Runs after Task 14 (needs Task 17 and the public match centre to read the result back).** The only deliberate scorepad touch of this programme (owner ruling 12). Read `docs/superpowers/specs/2026-08-15-scoringpad-v3-prompts/_RULES.md` and `_INDEX.md` first, and add one line to that `_INDEX.md` recording this change.
+
+**Files (pinned 2026-09-05):**
+- `apps/web/src/components/v2/scorepad/v3/action-form.tsx` — the generic sheet form (`ActionFormList` / `renderActionRow` / `renderField` / `renderAttributionRow`); person chips at :246-296 (`data-attribution-path`, `data-value`).
+- `apps/web/src/components/v2/scorepad/view-model.ts:250-267` — `buildActionPayload(action, values)` (dotted paths → payload object).
+- `apps/web/src/components/v2/scorepad/v3/pad-host.tsx:417, 2479-2487` — `moreActions` and the submit wiring (`send(event.type, event.payload)`).
+- `packages/engine/src/sport/module.ts` — `PadAction` field kinds (if Task 17 added `choice`, the renderer and builder learn it here).
+- Dictionaries `apps/web/src/dictionaries/{en,es,fr,nl}/ui.json` — labels for the six new fields and the dismissal kinds under the existing `pad.cricket.*` / `scorepad.*` prefixes; `npm run i18n:gen-keys`.
+- Tests: `apps/web/src/components/v2/scorepad/v3/__tests__/action-form.test.ts` (extend: a `choice` field renders chips as data; an `optional` attribution is not required for submit; the legacy 7-field payload is byte-identical when no new field is touched — snapshot), `apps/web/src/components/v2/scorepad/__tests__/view-model*.test.ts` (builder emits nested `batting.dismissal.{kind,bowler,fielder}` only when set).
+- E2E: new `apps/web/e2e/scorepad-v3-cricket-lines.spec.ts` (walkthrough-style, `parallel` project is fine — no decider involved): seed a cricket fixture via API (`seedRosteredFixture`), post `core.start` and `cricket.innings.summary {runs, wickets, legalBalls}` for innings 1 (final totals), then IN THE PAD: open "More" → the player-line action → innings `1`, tap the person chip, toggle out, type runs/balls/fours/sixes, tap the dismissal-kind chip and the bowler chip, submit; `expect.poll` the ledger for a `cricket.player.line` event whose payload carries exactly the tapped values; then in an ANONYMOUS context open the public match centre and assert the batter's row shows the dismissal text and the 4s count (Task 12's `mc-bat-<personId>`), and that Commentary is absent. Also the negative-with-positive pair: a second line entered WITHOUT touching the new fields posts the legacy 7-field payload (deep-equal against the snapshot).
+- Screens: the More sheet with the new fields at 320 and 768 (no horizontal scroll; every chip ≥ 44 px measured by `elementFromPoint`, per the pad programme's rule).
+
+- [ ] **Step 1: Failing unit tests** (builder-level, per the pad's "builders as data, thin renderers" rule). **Step 2: Run — failures.** **Step 3: Implement.** **Step 4: Run — green; then the e2e above against a fresh `spx` env (down after); full `mobile.spec.ts` untouched by this task — state that explicitly in the report rather than running it.** **Step 5: Commit** — "pad(cricket): the More sheet collects 4s, 6s, how-out (+bowler/fielder), maidens, wides, no-balls on a player line; first e2e through the line form".
+
+---
+
 ## Self-review (done while writing)
 
-- **Spec coverage**: shared model → Tasks 1–4; view model + transport → 5–9; composition A, tabs, live in place → 10–14; i18n → 8 + 14; consent → 5, 6, 11; fidelity by presence → 4, 6, 10, 12; every other sport (ruling 10) → 7, 13, 15; R10 → 9, 10, 15; four test types → unit (1–14), e2e (15), smoke (15), regression (14, 15); screens and control-set diff → 15–16; `_INDEX.md` → 16. Gap: none found; the OG card is deliberately untouched (spec).
+- **Execution order** (not numeric): 1 → 2 → 3 → 4 → 17 → 6 → 7 → 8 → 9 → 10 → 11 → 12 → 13 → 14 → 18 → 15 → 16, with Task 5 (and, after it, 7 and 10's hook) eligible for a parallel lane in an isolated worktree because their file sets are disjoint from the engine tasks — merged back before Task 6.
+- **Spec coverage**: shared model → Tasks 1–4 + 17; band-2 enrichment (ruling 12) → 17–18; view model + transport → 5–9; composition A, tabs, live in place → 10–14; i18n → 8 + 14; consent → 5, 6, 11; fidelity by presence → 4, 6, 10, 12; every other sport (ruling 10) → 7, 13, 15; R10 → 9, 10, 15; four test types → unit (1–14), e2e (15), smoke (15), regression (14, 15); screens and control-set diff → 15–16; `_INDEX.md` → 16. Gap: none found; the OG card is deliberately untouched (spec).
 - **Placeholders**: the only algorithm described in prose is the ledger builder in Task 1 Step 2 (an explicit numbered algorithm with the exact derivations) — acceptable; every other step names the code.
 - **Type consistency**: `MatchCentreDocT` / `CricketViewT` / `TimelineLineT` / `SetsViewT` / `InfoViewT` / `PersonT` / `SideT` / `MsgT` (Task 5) are the names used by Tasks 6–14; `deriveCricketScorecard(input: { events, cfg, lineups })` (Task 1) is what Task 6 calls; `useLiveFixture(fixtureId, initial, realtime)` (Task 10) is what Task 14 wires; `match_centre` is the API field, `matchCentre` the server-render field (Task 9).

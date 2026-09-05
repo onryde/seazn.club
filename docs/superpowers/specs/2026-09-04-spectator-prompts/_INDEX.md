@@ -53,6 +53,10 @@ peer session as the other.
     W1 — a ledger-driven Timeline tab and a Sets / Periods tab beside cricket's
     Scorecard and Commentary. The "other sports' Timeline" wave is gone; W5's
     slot holds the public team page candidate (not yet ruled).
+12. **"Two product-owner calls, recorded: apply your recommendation."**
+    (2026-09-05.) The band line on the Info tab, and the band-2 player-line
+    enrichment (engine schema + fold + the pad's line-entry form) are pulled
+    into W1 as plan Tasks 17–18 — the programme's one deliberate scorepad touch.
 11. **"Make sure that all live pages are live update without reload."**
     (2026-09-05.) Standing rule R10 in the spec and `_RULES.md`: every public
     surface showing a match in play updates in place over the existing
@@ -81,8 +85,8 @@ peer session as the other.
   reads the difference between two matches as the scorer's choice, not a broken
   page. The W1 reader accepts optional `fours/sixes/dismissal` and
   `maidens/wides/noBalls` on a band-2 line from day one; adding them to the
-  engine schema and the pad's tier-2 form is a scorepad-programme
-  recommendation (owner may pull it into W1).
+  engine schema and the pad's tier-2 form was recommended — and the owner
+  pulled it into W1 (ruling 12; plan Tasks 17–18).
 - Public team page queued as a W5 candidate ahead of the other sports' Timeline
   (recommended to the owner 2026-09-05, not yet ruled on) — captains share their
   team page to the whole squad; cheap once W2's match card, standings row and
