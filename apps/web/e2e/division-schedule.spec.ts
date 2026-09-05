@@ -110,7 +110,14 @@ test("the run sheet groups fixtures by day and prints them in the competition tz
   // Unscheduled section pinned with count + CTA (item 3) — this header stays
   // in `stages-panel.tsx` through Task 4 on purpose (Task 5 moves it to the
   // stage rail), so `capacity-precheck.spec.ts` keeps its anchor too.
-  await expect(page.getByText("Not scheduled yet")).toBeVisible();
+  //
+  // The copy is "To schedule in this stage" since max-effort review finding 11:
+  // it used to read "Not scheduled yet" beside the run sheet's own "Not yet
+  // scheduled" — a word-for-word transposition on one screen, over two
+  // different numbers. Naming the scope is what makes the two reconcilable.
+  await expect(page.getByText("To schedule in this stage")).toBeVisible();
+  // ...and the sheet's own division-wide heading is still there, distinct.
+  await expect(page.getByText("Not yet scheduled")).toBeVisible();
   await expect(page.getByRole("button", { name: "Auto-schedule remaining" })).toBeVisible();
 
   // Inline "Set time" (item 5, re-aimed — fix round 1) -> notice grows an
@@ -212,6 +219,7 @@ test("a division with an END date and no start date still renders its fixtures t
   await page.goto(`/o/${org.slug}/c/${comp.data!.slug}/d/${div.data!.slug}?tab=fixtures`);
 
   // The page rendered its own content — not a boundary, not a blank shell.
-  await expect(page.getByText("Not scheduled yet")).toBeVisible();
+  // Copy changed by max-effort review finding 11 (see the note above).
+  await expect(page.getByText("To schedule in this stage")).toBeVisible();
   await expect(page.getByRole("button", { name: "Auto-schedule remaining" })).toBeVisible();
 });

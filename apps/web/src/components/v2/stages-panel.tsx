@@ -17,7 +17,12 @@ import { useLocaleOrDefault, useMsg } from "@/components/i18n/dict-provider";
 import { seedingErrorMessage } from "@/lib/seeding-error";
 import type { Locale } from "@/lib/i18n-constants";
 import type { MessageKey } from "@/lib/messages";
-import { DEFAULT_MATCH_MINUTES, hasPlayedFixture, type DivisionPhase } from "@/lib/division-phase";
+import {
+  DEFAULT_MATCH_MINUTES,
+  hasPlayedFixture,
+  isUnscheduledFixture,
+  type DivisionPhase,
+} from "@/lib/division-phase";
 import { resolveSlotLabel } from "@/lib/slot-label";
 import { roundRoleFor, roundRoleLabel } from "@/lib/round-role-label";
 import { parseRoundRoleKey } from "@seazn/engine/competition";
@@ -886,8 +891,18 @@ export function StagesPanel({ divisionId, divisionSeq, competitionId, orgSlug, c
         // Pinned unscheduled section (v3/04 §3 item 3): count + CTA stay here
         // until Task 5 moves them to the rail; the row LIST itself now
         // renders once, division-wide, in the `<RunSheet>` mounted below.
+        //
+        // `isUnscheduledFixture`, never a fourth hand-written copy of the same
+        // two clauses (max-effort review, finding 11 — "three numbers describe
+        // the same fact"). It is the W1 ledger's own predicate, and it is what
+        // the run sheet's chip a few centimetres below this badge already asks,
+        // so the two cannot answer differently. The stage badge stays a
+        // DIFFERENT number from the chip — per-stage against division-wide —
+        // which is exactly why the heading beside it now names its scope.
         const unscheduled = stageFixtures.filter(
-          (f) => f.scheduled_at === null && f.status === "scheduled" && !isBye(toRunSheetFixture(f)),
+          (f) =>
+            isUnscheduledFixture({ status: f.status, scheduledAt: f.scheduled_at }) &&
+            !isBye(toRunSheetFixture(f)),
         );
         // Mirrors the server guard (deleteStage) EXACTLY: only the last stage
         // in the graph, and only when it owns no played fixtures. No "keep one
@@ -1064,9 +1079,19 @@ export function StagesPanel({ divisionId, divisionSeq, competitionId, orgSlug, c
             {unscheduled.length > 0 && (
               <div className="border-b border-dashed border-slate-200 bg-slate-50/60 px-4 py-3">
                 <div className="flex flex-wrap items-center gap-2">
+                  {/* Finding 11: this heading and the run sheet's own
+                      "Not yet scheduled" sat on the same screen as a word-for-
+                      word transposition — and in fr/es/nl they were the SAME
+                      words in the same order. It now names its SCOPE ("in this
+                      stage"), which is the one thing that made the two numbers
+                      reconcilable; the sheet's heading is unchanged. Both go
+                      when Task 5 moves this CTA to the rail. */}
                   <p className="text-xs font-semibold text-slate-700">
                     {msg("schedule.unscheduled.title")}
-                    <span className="ml-1.5 rounded-full bg-slate-200 px-1.5 text-[11px] font-medium text-slate-700">
+                    <span
+                      data-testid="stage-unscheduled-count"
+                      className="ml-1.5 rounded-full bg-slate-200 px-1.5 text-[11px] font-medium text-slate-700"
+                    >
                       {unscheduled.length}
                     </span>
                   </p>

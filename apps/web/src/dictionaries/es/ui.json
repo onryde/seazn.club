@@ -370,7 +370,7 @@
   "board.stale": "Otra persona cambió el calendario — tablero actualizado.",
   "schedule.tz.caption": "Horas mostradas en {tz}",
   "schedule.nowPlaying": "En juego ahora",
-  "schedule.unscheduled.title": "Aún sin programar",
+  "schedule.unscheduled.title": "Por programar en esta fase",
   "schedule.unscheduled.cta": "Programar automáticamente los restantes",
   "schedule.bye": "{name} tiene un descanso",
   "schedule.undo": "Deshacer",

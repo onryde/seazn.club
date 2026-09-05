@@ -370,7 +370,7 @@
   "board.stale": "Schema door iemand anders gewijzigd — bord ververst.",
   "schedule.tz.caption": "Tijden weergegeven in {tz}",
   "schedule.nowPlaying": "Nu bezig",
-  "schedule.unscheduled.title": "Nog niet ingepland",
+  "schedule.unscheduled.title": "In te plannen in deze fase",
   "schedule.unscheduled.cta": "Resterende automatisch inplannen",
   "schedule.bye": "{name} heeft een bye",
   "schedule.undo": "Ongedaan maken",

@@ -370,7 +370,7 @@
   "board.stale": "Schedule changed by someone else — board refreshed.",
   "schedule.tz.caption": "Times shown in {tz}",
   "schedule.nowPlaying": "Now playing",
-  "schedule.unscheduled.title": "Not scheduled yet",
+  "schedule.unscheduled.title": "To schedule in this stage",
   "schedule.unscheduled.cta": "Auto-schedule remaining",
   "schedule.bye": "{name} has a bye",
   "schedule.undo": "Undo",

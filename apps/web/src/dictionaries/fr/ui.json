@@ -370,7 +370,7 @@
   "board.stale": "Calendrier modifié par quelqu'un d'autre — tableau actualisé.",
   "schedule.tz.caption": "Heures affichées en {tz}",
   "schedule.nowPlaying": "En cours",
-  "schedule.unscheduled.title": "Pas encore programmé",
+  "schedule.unscheduled.title": "À programmer dans cette phase",
   "schedule.unscheduled.cta": "Programmer automatiquement le reste",
   "schedule.bye": "{name} est exempté",
   "schedule.undo": "Annuler",
