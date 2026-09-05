@@ -13,7 +13,7 @@ import {
   type MatrixData,
   type PricingPlanKey,
 } from "@/lib/pricing-matrix";
-import { passLadderOptions, PASS_RUNG_MARKETING_KEY } from "@/lib/pass-ladder";
+import { lowestPricedRung, passLadderOptions, PASS_RUNG_MARKETING_KEY } from "@/lib/pass-ladder";
 import {
   FREE_FEATURES,
   PASS_FEATURES,
@@ -23,6 +23,7 @@ import {
 import {
   formatMinor,
   lowestCreditPackAmount,
+  PASS_KEYS,
   passPrice,
   proPrice,
   type Currency,
@@ -222,10 +223,22 @@ export default async function PricingPage({
   // M/L ladder above follows for a cap it does not have.
   const feePercent = (plan: string): number | null | undefined =>
     matrix["registration.fee_percent"]?.[plan]?.int_value;
-  const passFeePercent = feePercent("event_pass");
   const proFeePercent = feePercent("pro");
+  // WHICH RUNG the sentence is about is the SAME value as the rung the number
+  // is derived from, because it is read once. The line used to solve for
+  // `event_pass` and then say "this is the cheaper option" on a card that sells
+  // BOTH rungs — and it is not true of L: at 4499 against a month of Pro at
+  // 1499, L is dearer up front AND dearer per pound of entry fees, so there is
+  // no volume at which the two cross. `feeCrossoverMinor` says so itself
+  // (`null` for that shape); the sentence was simply printed beside it anyway.
+  // The entry rung is the honest subject: it is the cheapest, it is what the
+  // in-app picker pre-selects, and it is the only one the crossing exists for.
+  const crossoverRung = lowestPricedRung(
+    PASS_KEYS.map((key) => ({ key, amountMinor: passPrice(currency, key) })),
+  );
+  const passFeePercent = feePercent(crossoverRung.key);
   const crossoverMinor = feeCrossoverMinor({
-    passMinor: passPrice(currency, "event_pass"),
+    passMinor: crossoverRung.amountMinor,
     proMonthlyMinor: proPrice("monthly", currency),
     passFeePercent,
     proFeePercent,
@@ -236,6 +249,10 @@ export default async function PricingPage({
       ? t(d, "pricing.pass.crossover", {
           amount: formatMinor(crossoverReadable, currency),
           pro: proMonthly,
+          // The rung the claim is scoped to — its ladder label and its price,
+          // the two things the list directly above the line shows it by.
+          rung: t(d, PASS_RUNG_MARKETING_KEY[crossoverRung.key]),
+          pass: formatMinor(crossoverRung.amountMinor, currency),
           // Non-null wherever `crossoverMinor` is: `feeCrossoverMinor` returns
           // null unless both rates are numbers. Narrowed rather than defaulted,
           // so a rate that went missing can never render as a rate of 0.

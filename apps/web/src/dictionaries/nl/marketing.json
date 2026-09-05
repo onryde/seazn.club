@@ -83,7 +83,7 @@
   "pricing.pass.rung.l": "L",
   "pricing.pass.ladder.caps": "Tot {divisions} divisies, {entrants} deelnemers per divisie",
   "pricing.pass.ladder.capsUnlimited": "Tot {divisions} divisies, onbeperkt deelnemers",
-  "pricing.pass.crossover": "Voor een competitie van ongeveer een maand is dit tot ongeveer {amount} aan inschrijfgelden de goedkoopste keuze; daarboven is dat Pro voor {pro}/mnd — {proFee}% platformkosten tegen {passFee}%. De pass is eenmalig, dus bij een langere competitie ligt die grens hoger.",
+  "pricing.pass.crossover": "Bij een competitie van ongeveer een maand is de {rung}-pass ({pass}) de goedkoopste keuze tot ongeveer {amount} aan inschrijfgelden; daarboven is dat Pro voor {pro}/mnd — {proFee}% platformkosten tegen {passFee}%. De pass is eenmalig, dus bij een langere competitie ligt die grens hoger.",
   "pricing.pass.ladderNote": "Dezelfde platformkosten in beide gevallen; de credit-bijboeking hoort bij de maat van de pass. Kies je maat bij het afrekenen.",
   "pricing.pass.cta": "Begin gratis, upgrade in de app",
   "pricing.pass.ctaSignedIn": "Kies een competitie",

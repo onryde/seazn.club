@@ -14,7 +14,8 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { feeCrossoverMinor, readableMinor } from "../pricing-crossover";
-import { SUPPORTED_CURRENCIES, formatMinor, passPrice, proPrice } from "../currency";
+import { PASS_KEYS, SUPPORTED_CURRENCIES, formatMinor, passPrice, proPrice } from "../currency";
+import { lowestPricedRung } from "../pass-ladder";
 import { sql } from "@/lib/db";
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -244,6 +245,21 @@ describe("the /pricing crossover line states its own assumption, in every locale
         : [`${locale}: ${subject} and ${period} are ${closest} chars apart — not one claim`];
     });
 
+  /**
+   * A locale FAULTS unless the sentence names a rung. `{rung}` alone is not
+   * enough — a token can be interpolated with anything — so the price of that
+   * rung has to travel with it, which is how the ladder directly above the
+   * line identifies each rung too.
+   */
+  const rungFaults = (values: Record<Locale, string>): string[] =>
+    LOCALES.flatMap((locale) => {
+      const value = values[locale];
+      const missing = ["{rung}", "{pass}"].filter((token) => !value.includes(token));
+      return missing.length === 0
+        ? []
+        : [`${locale}: the claim names no rung — missing ${missing.join(" and ")}`];
+    });
+
   const live = (): Record<Locale, string> =>
     Object.fromEntries(
       LOCALES.map((locale) => {
@@ -279,9 +295,77 @@ describe("the /pricing crossover line states its own assumption, in every locale
     // alone, so a lost `{passFee}` would render as literal braces on the card
     // rather than failing anything.
     for (const [locale, value] of Object.entries(live())) {
-      for (const token of ["{amount}", "{pro}", "{proFee}", "{passFee}"]) {
+      for (const token of ["{amount}", "{pro}", "{proFee}", "{passFee}", "{rung}", "{pass}"]) {
         expect(value, `${locale} lost ${token}`).toContain(token);
       }
+    }
+  });
+
+  // ── …and WHICH OFFER it is true of ────────────────────────────────────────
+  //
+  // The second half of the same class of defect as the duration clause above.
+  // The crossing is solved for ONE rung; the card sells TWO. Read without a
+  // rung the line says "this is the cheaper option" of the whole Event Pass
+  // column — and it is false of L, which never crosses Pro at any volume
+  // (4499 up front against a month of Pro at 1499, and the dearer rate per
+  // pound as well, so `feeCrossoverMinor` returns null for it). Naming the
+  // rung is what makes the sentence true of the thing it sits beside.
+  it("names the rung the crossing is true of", () => {
+    expect(rungFaults(live())).toEqual([]);
+  });
+
+  it("would have caught the wording that shipped without it", () => {
+    // The strings as they shipped, verbatim — every figure live, every one of
+    // them silent about which rung. Same shape as the retired registry above:
+    // a scan nobody has ever seen fail is not a scan.
+    const RETIRED: Record<Locale, string> = {
+      en: "For a competition running about a month, up to about {amount} of entry fees this is the cheaper option; above that it is Pro at {pro}/mo — a {proFee}% platform fee against {passFee}%. The pass is one-time, so a longer competition puts that threshold higher.",
+      es: "Para una competición de aproximadamente un mes, hasta unos {amount} de cuotas de inscripción esta es la opción más barata; por encima de eso lo es Pro a {pro}/mes: una comisión de plataforma del {proFee}% frente al {passFee}%. El pase es de pago único, así que una competición más larga sitúa ese umbral más alto.",
+      fr: "Pour une compétition d’environ un mois, jusqu’à environ {amount} de frais d’inscription, c’est l’option la moins chère ; au-delà, c’est Pro à {pro}/mois — {proFee} % de frais de plateforme contre {passFee} %. Le pass est ponctuel : une compétition plus longue place ce seuil plus haut.",
+      nl: "Voor een competitie van ongeveer een maand is dit tot ongeveer {amount} aan inschrijfgelden de goedkoopste keuze; daarboven is dat Pro voor {pro}/mnd — {proFee}% platformkosten tegen {passFee}%. De pass is eenmalig, dus bij een langere competitie ligt die grens hoger.",
+    };
+    expect(rungFaults(RETIRED)).toHaveLength(LOCALES.length);
+    const now = live();
+    for (const locale of LOCALES) expect(now[locale]).not.toBe(RETIRED[locale]);
+  });
+});
+
+// The claim the scoping exists for, measured against the live catalogue rather
+// than asserted: the rung the sentence does NOT name has no crossing to name.
+describe("the L rung is why the line has to say which rung it means", () => {
+  it("never crosses Pro in any currency we sell in", () => {
+    for (const currency of SUPPORTED_CURRENCIES) {
+      // Same fee rate on both rungs (V397), so the ONLY thing separating them
+      // is the sticker price — which is what makes L dominated on cost.
+      expect(
+        feeCrossoverMinor({
+          passMinor: passPrice(currency, "event_pass_l"),
+          proMonthlyMinor: proPrice("monthly", currency),
+          passFeePercent: 4,
+          proFeePercent: 2,
+        }),
+        `${currency}: L crosses Pro, so the scoping premise has changed`,
+      ).toBeNull();
+    }
+  });
+
+  it("and the rung the line IS about is the entry rung, in every currency", () => {
+    // What `page.tsx` derives the sentence's subject from. If a reprice ever
+    // makes L the cheapest rung, the line follows it rather than going stale.
+    for (const currency of SUPPORTED_CURRENCIES) {
+      const chosen = lowestPricedRung(
+        PASS_KEYS.map((key) => ({ key, amountMinor: passPrice(currency, key) })),
+      );
+      expect(chosen.key, `${currency}`).toBe("event_pass");
+      expect(
+        feeCrossoverMinor({
+          passMinor: chosen.amountMinor,
+          proMonthlyMinor: proPrice("monthly", currency),
+          passFeePercent: 4,
+          proFeePercent: 2,
+        }),
+        `${currency}: the rung the line names must actually have a crossing`,
+      ).not.toBeNull();
     }
   });
 });

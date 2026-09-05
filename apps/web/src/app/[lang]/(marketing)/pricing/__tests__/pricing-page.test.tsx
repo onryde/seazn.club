@@ -49,12 +49,16 @@ vi.mock("next/navigation", () => ({
 import PricingPage from "../page";
 import { formatMinor, passPrice, proPrice } from "@/lib/currency";
 import { feeCrossoverMinor, readableMinor } from "@/lib/pricing-crossover";
+import { PASS_RUNG_MARKETING_KEY } from "@/lib/pass-ladder";
+import enMarketing from "@/dictionaries/en/marketing.json";
 
 /** Each rung's usd price AS THE PAGE RENDERS IT — derived, never typed. W3
  *  repriced both rungs onto charm points ("$15" became "$11.99"), and a typed
  *  string would have turned a legitimate reprice into a page regression. */
 const M_PRICE = formatMinor(passPrice("usd", "event_pass"), "usd");
 const L_PRICE = formatMinor(passPrice("usd", "event_pass_l"), "usd");
+/** The entry rung's ladder label, from the dictionary the page renders it from. */
+const M_RUNG = (enMarketing as Record<string, string>)[PASS_RUNG_MARKETING_KEY.event_pass];
 
 /**
  * The keys this page's Event Pass card renders from: the two V341 makes the
@@ -204,6 +208,35 @@ describe("/pricing names where Pro overtakes the Event Pass", () => {
     // "contains a currency amount" assertion.
     expect(CROSSING).not.toBe(M_PRICE);
     expect(CROSSING).not.toBe(formatMinor(proPrice("monthly", "usd"), "usd"));
+  });
+
+  it("says WHICH RUNG it is true of — the card sells two and the crossing is one rung's", async () => {
+    // The line is solved for ONE rung. Read without naming it, "this is the
+    // cheaper option" is a claim about the whole Event Pass column, and it is
+    // false of L: at L's price against a month of Pro, Pro is cheaper up front
+    // AND per pound, so the two never cross. Scope, not suppression — the
+    // suppression rule stays for the shapes that genuinely have no crossing.
+    const { markup } = await render();
+    const para = /<p[^>]*data-pass-crossover[^>]*>([\s\S]*?)<\/p>/.exec(markup);
+    expect(para, "the comparator paragraph").not.toBeNull();
+    const line = para![1].replace(/<[^>]*>/g, " ").replace(/\s+/g, " ");
+
+    // The rung's own ladder label and its own price, TOGETHER — the two things
+    // the list directly above it identifies each rung by. Both derived, neither
+    // typed, and adjacency is what carries the meaning: a bare "M" would be
+    // satisfied by any capital M on the line, and a bare price by the sticker
+    // price the card already quotes twice.
+    const escape = (v: string) => v.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    expect(
+      line,
+      `the line must name the ${M_RUNG} rung beside its own price`,
+    ).toMatch(new RegExp(`\\b${escape(M_RUNG)}\\b[^.;]{0,20}${escape(M_PRICE)}`));
+    // …and NOT the other rung, which this sentence is not true of.
+    expect(M_PRICE).not.toBe(L_PRICE);
+    expect(line, "the line must not read as a claim about L").not.toContain(L_PRICE);
+    // The claim itself is still intact around the scoping.
+    expect(line).toContain(CROSSING);
+    expect(line).toContain("2% platform fee against 4%");
   });
 
   it("says nothing at all when a fee rate could not be read", async () => {
