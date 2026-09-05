@@ -744,7 +744,7 @@ change silently voids the cookie-consent flag and the banner then intercepts
 clicks. **Never `--no-deps`**: it is what stops the state re-minting.
 
 ### W3 finding 1 — the W2 merge reddened the walkthrough leg on `main`, and the
-### cause was a live product defect, not a test artifact. FIXED `ad2fe615d`.
+### cause was a live product defect, not a test artifact. FIXED, merged, e2e GREEN.
 
 E2E run `33968571673` on `997ad225b` (W2's merge commit) failed:
 `settings-admin.spec.ts:661` and `:834` both landed on
@@ -803,6 +803,21 @@ Three rules follow, and the third is the one that let this ship green:
 
 Witnessed both ways: the new guard **fails** against the pre-fix server
 (1 failed / 9 passed) and passes after the rebuild.
+
+**Landed as PR #724, squashed to `a6c467ccb` on `main`, 11/11 CI checks green.**
+Two more things surfaced by review before merge, both fixed in the same PR:
+`redirectLocal` originally did not percent-encode, so a `next` path containing
+any character above U+00FF (reachable — `safeNextPath` accepts non-Latin-1)
+turned a 500 into a redirect-turned-crash; and nothing enforced "a path we
+own", so `redirectLocal("//evil.com")` emitted that header verbatim. Both
+fixed; `redirectLocal` now parses against an opaque base and rejects anything
+that isn't a same-site path. **The e2e run on the merged commit is GREEN**
+(`a6c467ccb`), which is the actual proof — CI on a PR branch is not the same
+signal as CI on the push that triggers e2e.
+
+The four more sites with the same defect (`refer/[code]/route.ts`,
+`google/route.ts`, `google/callback/route.ts` ×2) shipped in the same PR,
+found by a peer session and one more by re-reading its list.
 
 ### W3 finding 2 — `_RULES.md` §2's premise is FALSE against current `main`
 
