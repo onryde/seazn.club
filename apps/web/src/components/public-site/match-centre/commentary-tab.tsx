@@ -72,12 +72,41 @@ export interface CommentaryTabProps {
  *  each press reveals. */
 export const OVER_WINDOW = 5;
 
+/**
+ * The over's heading, at whichever level the document's own structure puts it.
+ *
+ * A heading walk must not SKIP a level, and this panel's outline depends on
+ * something outside this component: the sr-only `<h2>` names the tab, an
+ * innings separator `<h3>` appears only when there is more than one innings,
+ * and the over headings sit under whichever of those is last. Hard-coding `h4`
+ * was right for a two-innings scorecard and wrong for the commonest case there
+ * is — a single innings in progress — where it jumped h2 straight to h4.
+ */
+function OverHeading({
+  level,
+  children,
+}: {
+  level: 3 | 4;
+  children: ReactNode;
+}): ReactNode {
+  const Tag = level === 3 ? "h3" : "h4";
+  return (
+    <Tag className="border-b border-zinc-200/80 px-3 py-2 text-[13px] font-semibold tabular-nums">
+      {children}
+    </Tag>
+  );
+}
+
 function OverGroup({
   over,
   inningsIndex,
+  headingLevel,
   dict,
 }: {
   over: OverT;
+  /** See `overHeadingLevel` — 3 when nothing sits between this and the panel's
+   *  own h2, 4 when an innings separator does. */
+  headingLevel: 3 | 4;
   inningsIndex: number;
   dict: PublicDict;
 }): ReactNode {
@@ -102,11 +131,8 @@ function OverGroup({
       data-testid={`mc-over-${inningsIndex}.${over.number}`}
       className="rounded-xl border border-zinc-200/80 bg-surface"
     >
-      {/* h4 under the separator's h3, under the panel's sr-only h2 — the
-          outline a screen reader walks has to nest, not jump. */}
-      <h4 className="border-b border-zinc-200/80 px-3 py-2 text-[13px] font-semibold tabular-nums">
-        {header}
-      </h4>
+      {/* The level is DERIVED, never fixed — see `overHeadingLevel`. */}
+      <OverHeading level={headingLevel}>{header}</OverHeading>
       <ol className="divide-y divide-zinc-200/60">
         {over.lines.map((line, i) => {
           const ball = i + 1;
@@ -147,7 +173,11 @@ export function CommentaryTab({ doc, dict }: CommentaryTabProps): ReactNode {
   const [visible, setVisible] = useState(OVER_WINDOW);
   const shown = newestFirst.slice(0, visible);
   const more = newestFirst.length > shown.length;
+  // ONE derivation, from the document's own shape. `multipleInnings` decides
+  // BOTH whether a separator renders and how deep the over headings sit, so the
+  // two can never disagree — which is exactly how the h2 -> h4 jump got in.
   const multipleInnings = innings.length > 1;
+  const overHeadingLevel: 3 | 4 = multipleInnings ? 4 : 3;
 
   return (
     <TabPanel id="commentary" className="grid gap-2">
@@ -172,7 +202,12 @@ export function CommentaryTab({ doc, dict }: CommentaryTabProps): ReactNode {
                 </span>
               </h3>
             ) : null}
-            <OverGroup over={entry.over} inningsIndex={entry.index} dict={dict} />
+            <OverGroup
+              over={entry.over}
+              inningsIndex={entry.index}
+              headingLevel={overHeadingLevel}
+              dict={dict}
+            />
           </Fragment>
         );
       })}

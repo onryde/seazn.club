@@ -162,13 +162,42 @@ describe("CommentaryTab", () => {
     expect(html).toContain('data-testid="mc-over-2.1"');
   });
 
-  it("headings nest — sr-only h2, innings h3, over h4", () => {
-    // A screen reader walks the outline; it must nest rather than jump.
-    const html = render(TWO_INNINGS);
-    expect(html).toMatch(/<h2 class="sr-only">/);
-    expect(html).toMatch(/<h3[^>]*data-testid="mc-commentary-innings-/);
-    expect(html).toMatch(/<h4/);
-    expect(html).not.toMatch(/<h1/);
+  it("headings never SKIP a level, single innings or many", () => {
+    // A generic walk, not a spot-check: collect every heading in document
+    // order and assert each is at most one level deeper than the one before.
+    // This is the assertion that catches the case the level-per-file version
+    // missed — a single-innings document renders no separator, so a fixed `h4`
+    // for the overs jumped h2 straight to h4.
+    const levels = (html: string): number[] =>
+      [...html.matchAll(/<h([1-6])\b/g)].map((m) => Number(m[1]));
+
+    for (const [label, doc] of [
+      ["single innings", THREE],
+      ["two innings", TWO_INNINGS],
+    ] as const) {
+      const walk = levels(render(doc));
+      expect(walk.length, label).toBeGreaterThan(1);
+      for (let i = 1; i < walk.length; i++) {
+        expect(walk[i]! - walk[i - 1]!, `${label}: ${walk.join(",")}`).toBeLessThanOrEqual(1);
+      }
+      expect(walk[0], label).toBe(2);
+      expect(Math.max(...walk), label).toBeLessThanOrEqual(4);
+    }
+
+    // …and the CONCRETE levels, so "never skips" cannot be satisfied by
+    // flattening everything to one level.
+    const single = render(THREE);
+    expect(single).toMatch(/<h2 class="sr-only">/);
+    expect(single).toMatch(/<h3/);
+    expect(single).not.toMatch(/<h4/);
+    expect(single).not.toContain('data-testid="mc-commentary-innings-');
+
+    const multi = render(TWO_INNINGS);
+    expect(multi).toMatch(/<h2 class="sr-only">/);
+    expect(multi).toMatch(/<h3[^>]*data-testid="mc-commentary-innings-/);
+    expect(multi).toMatch(/<h4/);
+
+    for (const html of [single, multi]) expect(html).not.toMatch(/<h1/);
   });
 
   it("the NEWEST innings comes first, and each is announced by a separator", () => {
