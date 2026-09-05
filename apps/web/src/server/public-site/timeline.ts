@@ -4,15 +4,22 @@
 // `docs/superpowers/specs/2026-09-04-spectator-surface-design.md` §W1,
 // "Every other sport in W1".
 //
-// NO `server-only` here on purpose: this file is a pure builder over an event
-// ledger and a `ScoreSummary`, so the live block can re-run it client-side from
-// a pushed payload if a later wave wants to (R10, "every tab re-renders in
-// place"). It reaches for `@/lib/public-site`'s `setBreakdown` / `periodBreakdown`
+// A pure builder over an event ledger and a `ScoreSummary` — no I/O, no DB.
+// It reaches for `@/lib/public-site`'s `setBreakdown` / `periodBreakdown`
 // rather than re-reading `summary.detail` for itself: those two are the repo's
 // existing readers of that shape and `live-score.tsx` already renders from them.
 //
+// It is nonetheless a SERVER module, and the one thing that makes it one is the
+// logger. `eslint.config.mjs` scopes `no-console: error` to `src/server/**`
+// with the reason spelled out — "pino (server/logger.ts) is the logger, not
+// console" — so the degrade below reports through pino, and this file inherits
+// pino's server-only-ness. An earlier draft claimed client-safety here so a
+// later wave could re-run the builder from a pushed payload; that was an
+// aspiration nothing consumed, and carving a lint exemption to protect it
+// would have been the wrong trade.
+//
 // ---------------------------------------------------------------------------
-// Three things about this file that are NOT derivable from reading it
+// Four things about this file that are NOT derivable from reading it
 // ---------------------------------------------------------------------------
 //
 // 1. TEMPLATES ARE KEYED BY THE RECORDED EVENT TYPE STRING, not by a module's
@@ -38,15 +45,16 @@
 //    so the empty case is a clean trailing space the renderer trims rather than
 //    a hole in the middle of a sentence.
 //
-// KNOWN GAP, recorded rather than half-fixed: a few templates interpolate an
-// engine enum token verbatim — `{colour}` (yellow/red/second_yellow),
-// `{outcome}`, `{level}`, `{class}`, `{kind}`, `{method}`. Those tokens are not
-// translated, so a Dutch reader sees "yellow kaart". Closing it needs a term
-// table the RENDERER resolves (`ui.json` already has `cardColor.second_yellow`
-// for the console), which is Task 8's surface, not this builder's — adding one
-// here that nothing consumes would be an inert seam. The brief names these
-// fields as params (`football.card -> { side, person, colour, minute }`), so
-// this file supplies them and the gap is reported.
+// 4. ENGINE ENUM TOKENS RIDE IN PARAMS VERBATIM, AND THAT IS DELIBERATE.
+//    `{colour}` is "yellow", `{kind}` is "double_fault", and so on for
+//    `{outcome}`, `{level}`, `{class}` and `{method}` — the templates are one
+//    per event TYPE (the football test pins that), so they cannot branch per
+//    enum member. Left alone a Dutch reader would get "yellow kaart"; the fix
+//    is in the RENDERER, where a dictionary is in hand: `localiseParams` in
+//    `components/public-site/match-centre/timeline-tab.tsx` swaps any param
+//    value with a `term.<token>` key for that key's text and passes everything
+//    else through. Do not "fix" it here — this builder has no dictionary, and
+//    a term table it could not consume would be an inert seam.
 import {
   REPLAY_LINEUP_POLICY,
   initSquads,
@@ -60,6 +68,7 @@ import {
 } from "@seazn/engine/core";
 import type { AnySportModule } from "@seazn/engine/sport";
 import { periodBreakdown, setBreakdown, type PeriodScoreRow, type SetScore } from "@/lib/public-site";
+import { log } from "@/server/logger";
 import type { MsgT, PersonT, SetsViewT, SideT, TimelineLineT } from "./match-centre-schema";
 
 export interface TimelineArgs {
@@ -107,6 +116,27 @@ export const TIMELINE_KEY_FOR: Readonly<Record<string, string>> = {
   "core.start": "timeline.core.start",
   "core.forfeit": "timeline.core.forfeit",
   "core.abandon": "timeline.core.abandon",
+  // The rest of the KERNEL's own vocabulary. The golden corpora record only
+  // start / forfeit / abandon, so a table built from the corpora alone would
+  // have left the other nine to the neutral line — and one of them,
+  // `core.note`, is an OFFICIAL'S OWN ANNOTATION: rendering that as "Match
+  // event" throws away the only free text in the ledger.
+  "core.note": "timeline.core.note",
+  "core.finalize": "timeline.core.finalize",
+  "core.award": "timeline.core.award",
+  "core.suspend": "timeline.core.suspend",
+  "core.resume": "timeline.core.resume",
+  // The five lineup siblings share ONE sentence: which side changed its
+  // line-up. Naming the person would need the squad state this builder
+  // deliberately does not fold for itself.
+  "core.lineup.substitution": "timeline.core.lineup",
+  "core.lineup.replacement": "timeline.core.lineup",
+  "core.lineup.position": "timeline.core.lineup",
+  "core.lineup.retirement": "timeline.core.lineup",
+  "core.lineup.entry": "timeline.core.lineup",
+  // `core.void` is deliberately ABSENT: `resolveVoids` removes it and its
+  // target before pass 1, so it can never reach a line. The neutral key covers
+  // it if that ever changes.
 
   "football.goal": `${FOOTBALL}goal`,
   "football.card": `${FOOTBALL}card`,
@@ -183,7 +213,8 @@ const N = (value: unknown): string | number =>
   typeof value === "number" && Number.isFinite(value) ? value : "";
 
 /** The entrant fields a payload can carry a side in, in precedence order. */
-const SIDE_FIELDS = ["by", "wonBy", "winner", "winnerId", "entrantId", "firstBreak", "white"];
+// `side` is the kernel lineup family's spelling; the rest are the sports'.
+const SIDE_FIELDS = ["by", "side", "wonBy", "winner", "winnerId", "entrantId", "firstBreak", "white"];
 
 function sideIndexOf(payload: Payload, sides: readonly [SideT, SideT]): 0 | 1 | null {
   for (const field of SIDE_FIELDS) {
@@ -196,7 +227,14 @@ function sideIndexOf(payload: Payload, sides: readonly [SideT, SideT]): 0 | 1 | 
 }
 
 /** Sport notation, never prose: "23'" from a deprecated `minute`, else the
- *  `GameTime` stamp as "H1 4:00", else the phase label the event names. */
+ *  `GameTime` stamp as "H1 4:00".
+ *
+ *  NOT the phase a `football.period` / `*.period.advance` event names, though
+ *  it used to be: those two put the phase in their SENTENCE, so a marker would
+ *  print "HT" twice on one line — once as the marker and once inside "Period
+ *  marker — HT". The marker column is for WHEN a line happened, and a phase
+ *  boundary's answer to that is the phase itself, which the sentence already
+ *  gives. */
 function markerOf(payload: Payload): string | null {
   const minute = payload.minute;
   if (typeof minute === "number" && Number.isFinite(minute)) return `${minute}'`;
@@ -210,8 +248,7 @@ function markerOf(payload: Payload): string | null {
     return `${period} ${mins}:${String(secs).padStart(2, "0")}`;
   }
 
-  const phase = payload.phase ?? payload.to;
-  return typeof phase === "string" && phase !== "" ? phase : null;
+  return null;
 }
 
 const SCORE_EMPHASIS = new Set([
@@ -297,6 +334,16 @@ const PARAMS_FOR: Record<string, (ctx: ParamCtx) => Params> = {
   "core.start": () => ({}),
   "core.forfeit": (c) => ({ side: sideNameOf(c) }),
   "core.abandon": () => ({}),
+  // `CoreNote` is `{ text }` — free text an official typed, so it passes
+  // through verbatim; there is nothing to localise about it.
+  "core.note": (c) => ({ text: S(c.payload.text) }),
+  "core.finalize": () => ({}),
+  // `CoreAward` is `{ person, key }` — a PERSON and an award key, with no
+  // entrant on it at all (`core/events.ts`). The review brief said `{side}`;
+  // the schema says otherwise, so the line names the person.
+  "core.award": (c) => ({ person: nameOf(c, "person") }),
+  "core.suspend": () => ({}),
+  "core.resume": () => ({}),
 
   "football.goal": (c) => {
     const assist = nameOf(c, "assist");
@@ -366,7 +413,19 @@ const PARAMS_FOR: Record<string, (ctx: ParamCtx) => Params> = {
   "carrom.game.adjust": (c) => ({ side: sideNameOf(c), delta: N(c.payload.delta) }),
 
   "boardgame.pairing": (c) => ({ side: sideNameOf(c), board: N(c.payload.board) }),
-  "boardgame.result": (c) => ({ side: sideNameOf(c), method: S(c.payload.method) }),
+  // A DRAW carries no winner, and the `timeline.boardgame.draw` template
+  // KEY_OVERRIDE swaps in names no `{side}` — so `side` is omitted rather than
+  // supplied empty. An unused empty param is harmless today and is exactly the
+  // kind of thing a later template change turns into a dangling dash.
+  "boardgame.result": (c) => {
+    const method = S(c.payload.method);
+    return c.sideIndex === null ? { method } : { side: sideNameOf(c), method };
+  },
+  "core.lineup.substitution": (c) => ({ side: sideNameOf(c) }),
+  "core.lineup.replacement": (c) => ({ side: sideNameOf(c) }),
+  "core.lineup.position": (c) => ({ side: sideNameOf(c) }),
+  "core.lineup.retirement": (c) => ({ side: sideNameOf(c) }),
+  "core.lineup.entry": (c) => ({ side: sideNameOf(c) }),
 
   "generic.score": (c) => ({
     side: sideNameOf(c),
@@ -441,6 +500,23 @@ for (const sport of ["hockey", "icehockey"] as const) {
 
 // -------------------------------------------------------------- the builder
 
+/**
+ * The few types whose SENTENCE depends on the payload, not only on the type.
+ *
+ * `TIMELINE_KEY_FOR` stays the coverage table — every recorded type maps to a
+ * key there, and that is what the dictionary gate reads. This is the narrow
+ * escape hatch beside it, for a case where one type genuinely says two things:
+ * `boardgame.result` with no winner is a DRAW, and rendering it through the
+ * decisive template printed "Result (agreement) — " with an empty side, which
+ * is worse than saying nothing.
+ */
+const KEY_OVERRIDE: Readonly<Record<string, (payload: Payload) => string | null>> = {
+  "boardgame.result": (payload) =>
+    typeof payload.winner === "string" && payload.winner !== ""
+      ? null
+      : "timeline.boardgame.draw",
+};
+
 /** Internal only: the ledger order a line was produced in. Two lines can share
  *  a `seq` (a derived line carries the seq of the event that caused it), so the
  *  sort tie-break has to be something monotone that `seq` is not. */
@@ -456,7 +532,8 @@ function recordedLine(
 ): TimelineLineT {
   const payload = asPayload(event.payload);
   const sideIndex = sideIndexOf(payload, sides);
-  const key = TIMELINE_KEY_FOR[event.type] ?? TIMELINE_NEUTRAL_KEY;
+  const key =
+    KEY_OVERRIDE[event.type]?.(payload) ?? TIMELINE_KEY_FOR[event.type] ?? TIMELINE_NEUTRAL_KEY;
   const build = PARAMS_FOR[event.type];
   const params = build ? build({ payload, sides, sideIndex, personOf }) : {};
   const text: MsgT = Object.keys(params).length === 0 ? { key } : { key, params };
@@ -518,7 +595,8 @@ function derivedLines(
       out.push({
         seq: event.seq,
         at: event.recordedAt,
-        marker: closed.phase,
+        // No marker: the sentence already names the phase — see `markerOf`.
+        marker: null,
         sideIndex: null,
         text: {
           key: TIMELINE_PERIOD_END_KEY,
@@ -545,17 +623,33 @@ function derivedLines(
  *    stops the derivation THERE and keeps whatever it had — a spectator page
  *    must not 500 because the eleventh event of a hundred is unfoldable, and
  *    the recorded lines are all still rendered.
+ *
+ * `derivedComplete` is how the caller finds out that happened. The degrade used
+ * to be an empty `catch {}`, which is the shape a whole class of defect hides
+ * in: a fixture whose fold breaks on event two loses EVERY set-won and
+ * period-end line, and the page renders a plausible timeline with nothing
+ * obviously missing. It is reported rather than swallowed — logged here, and
+ * returned so the document can carry it.
  */
-export function buildTimeline(args: TimelineArgs): TimelineLineT[] {
+export interface TimelineResult {
+  lines: TimelineLineT[];
+  /** False when the replay stopped early: derived lines beyond that point are
+   *  ABSENT, not proven not to exist. */
+  derivedComplete: boolean;
+}
+
+export function buildTimeline(args: TimelineArgs): TimelineResult {
   const { events, module, cfg, lineups, sides, personOf, sportKey } = args;
   const active = resolveVoids(events);
-  if (active.length === 0) return [];
+  if (active.length === 0) return { lines: [], derivedComplete: true };
 
   // Pass 1 — recorded.
   const recorded = active.map((event) => recordedLine(event, sides, personOf));
   const derivedAfter = new Map<number, TimelineLineT[]>();
 
   // Pass 2 — derived.
+  let derivedComplete = true;
+  let failedAt: number | null = null;
   try {
     let state = module.init(cfg, lineups);
     let squads: SquadState = initSquads(lineups);
@@ -564,6 +658,7 @@ export function buildTimeline(args: TimelineArgs): TimelineLineT[] {
 
     for (let i = 0; i < active.length; i++) {
       const event = active[i]!;
+      failedAt = event.seq;
       // The three event families `foldMatch` never hands to a module.
       if (event.type === "core.suspend" || event.type === "core.resume") continue;
       if (isLineupEventType(event.type)) {
@@ -580,8 +675,20 @@ export function buildTimeline(args: TimelineArgs): TimelineLineT[] {
       if (extra.length > 0) derivedAfter.set(i, extra);
       previous = summary;
     }
-  } catch {
-    // Degrade to the recorded lines derived so far. See the doc comment.
+    failedAt = null;
+  } catch (err) {
+    // Degrade to the recorded lines, and SAY SO — both here and in the return
+    // value. An empty `catch` made a fixture that loses every derived line
+    // indistinguishable from one that had none to lose.
+    derivedComplete = false;
+    log.warn(
+      {
+        sportKey,
+        seq: failedAt,
+        err: err instanceof Error ? err.message : String(err),
+      },
+      "match-centre timeline replay stopped; derived set/period lines beyond this seq are absent",
+    );
   }
 
   // Assemble in LEDGER order, stamping the ordinal as we go — a derived line
@@ -598,7 +705,7 @@ export function buildTimeline(args: TimelineArgs): TimelineLineT[] {
   }
 
   lines.sort((a, b) => b.ordinal - a.ordinal);
-  return lines.map((entry) => entry.line);
+  return { lines: lines.map((entry) => entry.line), derivedComplete };
 }
 
 /** The phase the period kernel says is in play, when its summary carries one.
@@ -620,10 +727,16 @@ function currentPhaseOf(summary: ScoreSummary): string | null {
 export function buildSets(args: SetsArgs): SetsViewT | null {
   const { summary, sportKey } = args;
 
-  const sets = setsOf(summary, sportKey);
+  const breakdown = setBreakdown(summary, sportKey);
+  const sets = breakdown?.sets ?? [];
   if (sets.length > 0) {
     return {
       kind: "sets",
+      // `setBreakdown` already owns the badminton/table-tennis "Game" vs
+      // "Set" split (`GAME_UNIT_SPORTS` in `lib/public-site.ts`); lower-casing
+      // its answer reuses that list instead of forking a second copy that can
+      // disagree with the one `live-score.tsx` renders from.
+      unit: breakdown?.unit.toLowerCase() === "game" ? "game" : "set",
       columns: sets.map((_, i) => String(i + 1)),
       rows: [sets.map((s) => String(s.home)), sets.map((s) => String(s.away))],
       // The engine's own flag — never inferred from position.
@@ -636,7 +749,13 @@ export function buildSets(args: SetsArgs): SetsViewT | null {
     const phase = currentPhaseOf(summary);
     return {
       kind: "periods",
-      columns: periods.map((p) => p.phase),
+      unit: "period",
+      // Plain ordinals; the renderer labels them "Period {n}" in the viewer's
+      // own locale (controller ruling). NOTE, and it is a real loss worth
+      // saying out loud: the engine's own phase labels — "H1", "ET_H2", "OT",
+      // "P3" — no longer reach the column head, so extra time and overtime now
+      // read as "Period 3" / "Period 4". See the report.
+      columns: periods.map((_, i) => String(i + 1)),
       rows: [periods.map((p) => String(p.home)), periods.map((p) => String(p.away))],
       // `detail.periods` carries no `closed` flag: a period is closed once a
       // later one exists, and the last one is closed too when the kernel says

@@ -147,5 +147,12 @@
   "term.ET_HT": "VL rust",
   "term.ET_FT": "VL einde",
   "term.QT": "QT",
-  "term.3QT": "3QT"
+  "term.3QT": "3QT",
+  "timeline.core.note": "Notitie — {text}",
+  "timeline.core.finalize": "Uitslag definitief",
+  "timeline.core.award": "Onderscheiding — {person}",
+  "timeline.core.suspend": "Spel onderbroken",
+  "timeline.core.resume": "Spel hervat",
+  "timeline.core.lineup": "Opstellingswijziging — {side}",
+  "timeline.boardgame.draw": "Remise ({method})"
 }

@@ -48,19 +48,49 @@
 //        tries the literal flat key first, so nothing about rendering would
 //        have caught it.
 //
-// All five compile and collect (`numTotalTests` unchanged in every run — 21
-// before the convention test was added, 22 after), so none is the
+//  (o) THE DERIVED PASS EMITS NOTHING — `derivedLines` returns `[]` before its
+//      body runs, the exact shape a total failure of the replay would produce.
+//      Added in fix round 1, because the sweep it replaces COULD NOT SEE THIS:
+//      it asserted only `lines.length >= events.length`, schema validity and a
+//      total count, every one of which holds with zero derived lines.
+//      → RED (7), the golden sweep among them, now that the sweep counts
+//        `timeline.set.won` against the closed sets in the engine's own frozen
+//        `stream.summary` and `timeline.period.end` against its periods.
+//
+// All six compile and collect (`numTotalTests` unchanged in every run — 21
+// before the bare-keys test, 22 after, 28 after fix round 1), so none is the
 // collection-break shape that reads as a survivor.
 import { readFileSync, readdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { EngineError, type EventEnvelope, type ScoreSummary } from "@seazn/engine/core";
+import {
+  CORE_EVENT_SCHEMAS,
+  EngineError,
+  LINEUP_EVENT_SCHEMAS,
+  type EventEnvelope,
+  type LineupPair,
+  type ScoreSummary,
+} from "@seazn/engine/core";
 import { registry, resolvePositions, type AnySportModule } from "@seazn/engine/sport";
 import { registerBuiltins } from "@seazn/engine/sports";
 import { defaultLineupPair } from "@seazn/engine/testkit";
-import { SetsView, TimelineLine, type PersonT, type SideT } from "../match-centre-schema";
-import { TIMELINE_KEY_FOR, buildSets, buildTimeline, type TimelineArgs } from "../timeline";
+import {
+  SetsView,
+  TimelineLine,
+  type PersonT,
+  type SideT,
+  type TimelineLineT,
+} from "../match-centre-schema";
+import {
+  TIMELINE_KEY_FOR,
+  TIMELINE_NEUTRAL_KEY,
+  TIMELINE_PERIOD_END_KEY,
+  TIMELINE_SET_WON_KEY,
+  buildSets,
+  buildTimeline,
+  type TimelineArgs,
+} from "../timeline";
 
 // --------------------------------------------------------------------- setup
 
@@ -82,6 +112,10 @@ const LOCALES = ["en", "es", "fr", "nl"] as const;
  *  by a pinned list, so a twelfth module's corpus is picked up automatically. */
 interface GoldenStream {
   config: string;
+  /** Present only on streams recorded against NON-default lineups (a football
+   *  coverage stream needs a bench). Omitting it from this local type made
+   *  every such stream replay against the wrong squads. */
+  lineups?: LineupPair;
   events: { type: string; payload: unknown }[];
   summary: string;
 }
@@ -184,6 +218,29 @@ function streamWhere(key: string, pred: (s: GoldenStream) => boolean): GoldenStr
   return found;
 }
 
+/** The lines alone. `buildTimeline` also reports whether the derived pass ran
+ *  to completion; the tests that care about that read the whole result. */
+const linesOf = (a: TimelineArgs): TimelineLineT[] => buildTimeline(a).lines;
+
+const countKey = (lines: readonly TimelineLineT[], key: string): number =>
+  lines.filter((l) => l.text.key === key).length;
+
+/** Everything a ledger can carry: the sport types the corpora record PLUS the
+ *  kernel's own registry. The corpora record only `core.start`/`forfeit`/
+ *  `abandon`, so a set built from them alone silently excused the other nine
+ *  kernel types and all five lineup types — including `core.note`, whose whole
+ *  content is an official's free text. */
+const RECORDED_TYPES = [
+  ...new Set(CORPORA.flatMap((c) => c.streams.flatMap((s) => s.events.map((e) => e.type)))),
+].sort();
+// Deduplicated: `CORE_EVENT_SCHEMAS` already REGISTERS the five lineup types
+// (its own comment says so — "this map is the registration"), so the two maps
+// overlap and a bare concat counts them twice. 14 distinct, not 19.
+const KERNEL_TYPES = [
+  ...new Set([...Object.keys(CORE_EVENT_SCHEMAS), ...Object.keys(LINEUP_EVENT_SCHEMAS)]),
+].sort();
+const ALL_TYPES = [...new Set([...RECORDED_TYPES, ...KERNEL_TYPES])].sort();
+
 // A football ledger written by hand: the corpus records coarse goals with no
 // `minute`, and the marker is exactly what this asserts.
 const footballLedger: EventEnvelope[] = [
@@ -203,10 +260,10 @@ const tennisSetLedger: EventEnvelope[] = [
 // ------------------------------------------------------------ buildTimeline
 
 describe("buildTimeline", () => {
-  it("EMPTY ledger → []", () => expect(buildTimeline(args({ events: [] }))).toEqual([]));
+  it("EMPTY ledger → []", () => expect(linesOf(args({ events: [] }))).toEqual([]));
 
   it("football: goal, card, period and shoot-out kick each render their own key with side, minute and person", () => {
-    const lines = buildTimeline(args({ sportKey: "football", events: footballLedger }));
+    const lines = linesOf(args({ sportKey: "football", events: footballLedger }));
     expect(lines.map((l) => l.text.key)).toEqual(
       expect.arrayContaining([
         "timeline.football.goal",
@@ -229,9 +286,9 @@ describe("buildTimeline", () => {
     expect(card.text.params?.colour).toBe("yellow");
   });
 
-  it("EVERY recorded event produces exactly one line — a type with no template is never dropped", () => {
+  it("every recorded event produces AT LEAST one line — a type with no template is never dropped", () => {
     const ledger = [...footballLedger, env(5, "some.future.type", {})];
-    const lines = buildTimeline(args({ sportKey: "football", events: ledger }));
+    const lines = linesOf(args({ sportKey: "football", events: ledger }));
     // Derived lines may add more, never fewer: every recorded seq is present.
     for (const e of ledger) {
       expect(lines.filter((l) => l.seq === e.seq).length).toBeGreaterThanOrEqual(1);
@@ -240,7 +297,7 @@ describe("buildTimeline", () => {
   });
 
   it("newest first: seq descending", () => {
-    const lines = buildTimeline(args({ sportKey: "football", events: footballLedger }));
+    const lines = linesOf(args({ sportKey: "football", events: footballLedger }));
     expect(lines.length).toBeGreaterThan(1);
     expect(lines[0]!.seq).toBe(4);
     expect(lines[0]!.seq).toBeGreaterThan(lines[1]!.seq);
@@ -249,13 +306,13 @@ describe("buildTimeline", () => {
   });
 
   it("an event type with no template renders the neutral line, never nothing", () => {
-    const lines = buildTimeline(args({ events: [env(0, "some.future.type", {})] }));
+    const lines = linesOf(args({ events: [env(0, "some.future.type", {})] }));
     expect(lines).toHaveLength(1);
     expect(lines[0]!.text.key).toBe("timeline.generic.event");
   });
 
   it("racket sports: a set transition line is derived by replaying the module and diffing summary.detail.sets", () => {
-    const lines = buildTimeline(args({ sportKey: "tennis", events: tennisSetLedger }));
+    const lines = linesOf(args({ sportKey: "tennis", events: tennisSetLedger }));
     expect(lines.some((l) => l.text.key === "timeline.set.won")).toBe(true);
     const won = lines.filter((l) => l.text.key === "timeline.set.won");
     // One per closed set, and the params carry NUMBERS and a SIDE NAME.
@@ -274,7 +331,7 @@ describe("buildTimeline", () => {
   });
 
   it("period sports: a period-end line is derived when summary.detail.periods grows", () => {
-    const lines = buildTimeline(args({ sportKey: "football", events: footballLedger }));
+    const lines = linesOf(args({ sportKey: "football", events: footballLedger }));
     const end = lines.filter((l) => l.text.key === "timeline.period.end");
     expect(end).toHaveLength(1);
     // H1 closed 1–0 at the half-time marker (seq 3).
@@ -283,7 +340,7 @@ describe("buildTimeline", () => {
   });
 
   it("a derived line sorts ABOVE the event that caused it", () => {
-    const lines = buildTimeline(args({ sportKey: "football", events: footballLedger }));
+    const lines = linesOf(args({ sportKey: "football", events: footballLedger }));
     const derived = lines.findIndex((l) => l.text.key === "timeline.period.end");
     const recorded = lines.findIndex((l) => l.text.key === "timeline.football.period");
     expect(derived).toBeGreaterThanOrEqual(0);
@@ -291,39 +348,148 @@ describe("buildTimeline", () => {
     expect(derived).toBeLessThan(recorded);
   });
 
-  it("a ledger the module refuses still renders every recorded line (the replay degrades, it does not throw)", () => {
+  it("a ledger the module refuses still renders the line for the event it refused", () => {
     // `football.shootout.kick` in the first half is WRONG_PHASE — the derived
     // pass stops there and the recorded pass is unaffected.
-    const lines = buildTimeline(args({ sportKey: "football", events: footballLedger }));
+    const lines = linesOf(args({ sportKey: "football", events: footballLedger }));
     expect(lines.filter((l) => l.text.key === "timeline.football.shootout.kick")).toHaveLength(1);
   });
 
-  it("replays a real golden stream of every non-cricket sport, one line per recorded event, every line schema-valid", () => {
+  it("replays EVERY golden stream of every non-cricket sport, and the DERIVED lines match the engine's own frozen summary", () => {
+    // The sweep this replaces asserted only `lines.length >= events.length`,
+    // schema validity and a total count — all of which hold with ZERO derived
+    // lines, so a total failure of the derived pass was invisible to it. These
+    // two counts come from the engine's FROZEN summary (`stream.summary`),
+    // never from a table typed here, so the assertion moves with the kernel.
     const keys = CORPORA.map((c) => c.key).filter((k) => k !== "cricket");
     expect(keys.length).toBeGreaterThanOrEqual(9);
+
     let validated = 0;
+    let streamsWithSets = 0;
+    let streamsWithPeriods = 0;
+    let incomplete = 0;
+
     for (const key of keys) {
       const mod = moduleFor(key);
-      for (const stream of corpusFor(key).streams.slice(0, 3)) {
-        const cfg = mod.configSchema.parse(corpusFor(key).configs[stream.config]);
-        const lines = buildTimeline({
+      const corpus = corpusFor(key);
+      for (const stream of corpus.streams) {
+        const cfg = mod.configSchema.parse(corpus.configs[stream.config]);
+        const result = buildTimeline({
           sportKey: key,
           events: envelopesOf(stream),
           module: mod,
           cfg,
-          lineups: defaultLineupPair(resolvePositions(mod, cfg)),
+          lineups: stream.lineups ?? defaultLineupPair(resolvePositions(mod, cfg)),
           sides: SIDES,
           personOf,
         });
-        expect(lines.length).toBeGreaterThanOrEqual(stream.events.length);
-        // The zod schema is the contract Task 6 consumes — parse, don't assume.
+        const { lines } = result;
+        expect(lines.length, key).toBeGreaterThanOrEqual(stream.events.length);
         for (const line of lines) {
           expect(TimelineLine.safeParse(line).success).toBe(true);
           validated++;
         }
+        if (!result.derivedComplete) {
+          incomplete++;
+          continue; // a stopped replay owes no counts — but see the guard below
+        }
+
+        const detail = summaryOf(stream).detail as
+          | { sets?: { closed?: boolean }[]; periods?: unknown[] }
+          | undefined;
+
+        const sets = detail?.sets;
+        if (Array.isArray(sets) && sets.length > 0) {
+          streamsWithSets++;
+          const closed = sets.filter((s) => s.closed === true).length;
+          expect(countKey(lines, TIMELINE_SET_WON_KEY), `${key} set.won`).toBe(closed);
+        }
+
+        const periods = detail?.periods;
+        if (Array.isArray(periods) && periods.length > 0) {
+          streamsWithPeriods++;
+          // A period closes when the NEXT one opens, so a finished stream has
+          // one fewer ending than it has periods.
+          expect(countKey(lines, TIMELINE_PERIOD_END_KEY), `${key} period.end`).toBe(
+            periods.length - 1,
+          );
+        }
       }
     }
+
+    // The gate says what it looked at: a sweep that matched no stream with
+    // sets, or none with periods, would pass every assertion above vacuously.
     expect(validated).toBeGreaterThan(200);
+    expect(streamsWithSets).toBeGreaterThan(50);
+    expect(streamsWithPeriods).toBeGreaterThan(50);
+    // And no golden stream may need the degrade at all: these are the streams
+    // the engine itself folds cleanly, so a single incomplete replay here is a
+    // real defect in this builder, not a tolerated edge.
+    expect(incomplete).toBe(0);
+  });
+
+  it("a refused ledger reports the degrade instead of hiding it", () => {
+    // `football.shootout.kick` in the first half is WRONG_PHASE. The recorded
+    // lines all survive; `derivedComplete` is how a caller finds out that the
+    // derived ones stopped — the empty `catch` this replaces made a fixture
+    // that lost every set-won line look exactly like one that had none.
+    const refused = buildTimeline(args({ sportKey: "football", events: footballLedger }));
+    expect(refused.derivedComplete).toBe(false);
+    expect(refused.lines.length).toBe(footballLedger.length + 1); // + the period end
+
+    // The positive pair, and the reason this is not a tautology: a ledger the
+    // module accepts reports TRUE.
+    const clean = buildTimeline(args({ sportKey: "tennis", events: tennisSetLedger }));
+    expect(clean.derivedComplete).toBe(true);
+  });
+
+  it("emphasis is not decoration: a point line is `score`, a derived set line is `strong`", () => {
+    const tennis = linesOf(args({ sportKey: "tennis", events: tennisSetLedger }));
+    const setWon = tennis.find((l) => l.text.key === TIMELINE_SET_WON_KEY)!;
+    expect(setWon.emphasis).toBe("strong");
+
+    const football = linesOf(args({ sportKey: "football", events: footballLedger }));
+    expect(football.find((l) => l.text.key === "timeline.football.goal")!.emphasis).toBe("score");
+    expect(football.find((l) => l.text.key === "timeline.football.card")!.emphasis).toBe("strong");
+    expect(football.find((l) => l.text.key === "timeline.core.start")!.emphasis).toBe("strong");
+    // …and something really is plain, or "emphasis" would mean nothing.
+    const neutral = linesOf(args({ events: [env(0, "some.future.type", {})] }));
+    expect(neutral[0]!.emphasis).toBe("normal");
+  });
+
+  it("a phase is named ONCE — in the sentence, not also in the marker", () => {
+    const lines = linesOf(args({ sportKey: "football", events: footballLedger }));
+    const marker = lines.find((l) => l.text.key === "timeline.football.period")!;
+    expect(marker.text.params?.phase).toBe("HT");
+    expect(marker.marker).toBeNull();
+    const end = lines.find((l) => l.text.key === TIMELINE_PERIOD_END_KEY)!;
+    expect(end.text.params?.phase).toBe("H1");
+    expect(end.marker).toBeNull();
+    // The positive pair: a minute-stamped event still HAS a marker.
+    expect(lines.find((l) => l.text.key === "timeline.football.goal")!.marker).toBe("23'");
+  });
+
+  it("a drawn board game does not render an empty winner", () => {
+    // `boardgame.result` says two different things: `{ winner, method }` is a
+    // decisive result, `{ method }` alone is a draw. Through the decisive
+    // template the draw read "Result (agreement) — " with a dangling dash.
+    const drawn = linesOf(
+      args({
+        sportKey: "boardgame",
+        events: [env(0, "boardgame.result", { method: "agreement" })],
+      }),
+    );
+    expect(drawn[0]!.text.key).toBe("timeline.boardgame.draw");
+    expect(drawn[0]!.text.params?.side).toBeUndefined();
+
+    const decisive = linesOf(
+      args({
+        sportKey: "boardgame",
+        events: [env(0, "boardgame.result", { winner: "H", method: "resign" })],
+      }),
+    );
+    expect(decisive[0]!.text.key).toBe("timeline.boardgame.result");
+    expect(decisive[0]!.text.params?.side).toBe(SIDES[0].name);
   });
 });
 
@@ -350,7 +516,7 @@ describe("buildSets", () => {
     expect(view.closedMask).toContain(true);
   });
 
-  it("badminton and volleyball ride the same set shape", () => {
+  it("badminton, volleyball and table tennis ride the same set shape", () => {
     for (const key of ["badminton", "volleyball", "tabletennis"]) {
       const stream = streamWhere(key, (s) => {
         const sets = (summaryOf(s).detail as { sets?: unknown[] } | undefined)?.sets;
@@ -366,7 +532,7 @@ describe("buildSets", () => {
     }
   });
 
-  it("football: kind periods, columns from detail.periods[].phase", () => {
+  it("football: kind periods, one ordinal column per recorded period", () => {
     const stream = streamWhere("football", (s) => {
       const periods = (summaryOf(s).detail as { periods?: unknown[] } | undefined)?.periods;
       return Array.isArray(periods) && periods.length >= 2;
@@ -378,10 +544,48 @@ describe("buildSets", () => {
 
     const view = buildSets({ sportKey: "football", summary, sides: SIDES })!;
     expect(view.kind).toBe("periods");
-    expect(view.columns).toEqual(periods.map((p) => p.phase));
+    expect(view.unit).toBe("period");
+    // Ordinals, not the engine's phase labels (controller ruling): the RENDERER
+    // labels them "Period {n}" in the viewer's own locale. The phase strings
+    // are consequently no longer reachable from the column head — recorded as
+    // a known loss for extra time / overtime.
+    expect(view.columns).toEqual(periods.map((_, i) => String(i + 1)));
+    expect(view.columns).not.toEqual(periods.map((p) => p.phase));
     expect(view.rows[0]).toEqual(periods.map((p) => String(p.home)));
     expect(view.rows[1]).toEqual(periods.map((p) => String(p.away)));
     expect(view.closedMask).toHaveLength(periods.length);
+  });
+
+  it("`unit` names what ONE column is in the sport's own vocabulary", () => {
+    // Badminton and table tennis score GAMES inside a table whose `kind` is
+    // still "sets" — which is exactly why `kind` cannot double as the label,
+    // and why this asserts a sport where the two answers DIFFER.
+    const gameSports = ["badminton", "tabletennis"] as const;
+    for (const key of gameSports) {
+      const stream = streamWhere(key, (s) => {
+        const sets = (summaryOf(s).detail as { sets?: unknown[] } | undefined)?.sets;
+        return Array.isArray(sets) && sets.length >= 2;
+      });
+      const view = buildSets({ sportKey: key, summary: summaryOf(stream), sides: SIDES })!;
+      expect(view.kind, key).toBe("sets");
+      expect(view.unit, key).toBe("game");
+    }
+    for (const key of ["tennis", "volleyball"] as const) {
+      const stream = streamWhere(key, (s) => {
+        const sets = (summaryOf(s).detail as { sets?: unknown[] } | undefined)?.sets;
+        return Array.isArray(sets) && sets.length >= 2;
+      });
+      const view = buildSets({ sportKey: key, summary: summaryOf(stream), sides: SIDES })!;
+      expect(view.unit, key).toBe("set");
+    }
+    for (const key of ["football", "hockey", "icehockey"] as const) {
+      const stream = streamWhere(key, (s) => {
+        const periods = (summaryOf(s).detail as { periods?: unknown[] } | undefined)?.periods;
+        return Array.isArray(periods) && periods.length >= 2;
+      });
+      const view = buildSets({ sportKey: key, summary: summaryOf(stream), sides: SIDES })!;
+      expect(view.unit, key).toBe("period");
+    }
   });
 
   it("ice hockey: the period kernel's own detail.phase says which column is still open", () => {
@@ -446,19 +650,25 @@ describe("buildSets", () => {
 // ------------------------------------------------------ dictionary coverage
 
 describe("timeline dictionary coverage (derived from the engine's own golden corpora)", () => {
-  it("reads all eleven golden corpora and a non-trivial set of recorded event types", () => {
+  it("sweeps all eleven golden corpora PLUS the kernel's own registry", () => {
+    // Eleven is the count GOLDEN-POLICY.md states, and it is asserted because a
+    // glob that silently matched nothing would make every claim below vacuous.
     expect(CORPORA).toHaveLength(11);
-    const types = new Set(CORPORA.flatMap((c) => c.streams.flatMap((s) => s.events.map((e) => e.type))));
-    expect(types.size).toBeGreaterThanOrEqual(60);
+    expect(RECORDED_TYPES.length).toBeGreaterThanOrEqual(60);
+    // …and the corpora are NOT the whole ledger vocabulary. They record three
+    // kernel types; the kernel registers fourteen.
+    expect(KERNEL_TYPES.length).toBe(14);
+    for (const type of ["core.note", "core.finalize", "core.award", "core.lineup.entry"]) {
+      expect(RECORDED_TYPES, type).not.toContain(type);
+      expect(ALL_TYPES, type).toContain(type);
+    }
+    expect(ALL_TYPES.length).toBeGreaterThan(RECORDED_TYPES.length);
   });
 
-  it("every event type recorded in any sport's golden corpus has a template key in all four locales", () => {
-    const types = [
-      ...new Set(CORPORA.flatMap((c) => c.streams.flatMap((s) => s.events.map((e) => e.type)))),
-    ].sort();
+  it("every type a ledger can carry — corpus-recorded AND kernel-registered — has a template key in all four locales", () => {
     const missing: string[] = [];
-    for (const type of types) {
-      const key = TIMELINE_KEY_FOR[type] ?? "timeline.generic.event";
+    for (const type of ALL_TYPES) {
+      const key = TIMELINE_KEY_FOR[type] ?? TIMELINE_NEUTRAL_KEY;
       for (const locale of LOCALES) {
         if (typeof DICTS[locale][key] !== "string") missing.push(`${locale}:${type} -> ${key}`);
       }
@@ -472,9 +682,9 @@ describe("timeline dictionary coverage (derived from the engine's own golden cor
     // flat key first), so nothing else in the suite can catch the slip.
     const emitted = [
       ...Object.values(TIMELINE_KEY_FOR),
-      "timeline.generic.event",
-      "timeline.set.won",
-      "timeline.period.end",
+      TIMELINE_NEUTRAL_KEY,
+      TIMELINE_SET_WON_KEY,
+      TIMELINE_PERIOD_END_KEY,
     ];
     expect(emitted.length).toBeGreaterThanOrEqual(20);
     expect(emitted.filter((k) => k.startsWith("public."))).toEqual([]);
@@ -483,9 +693,9 @@ describe("timeline dictionary coverage (derived from the engine's own golden cor
     // …and the same for what the builder actually puts on a line, not just the
     // table — a derived key could be spelled at its emission site.
     const lines = [
-      ...buildTimeline(args({ sportKey: "football", events: footballLedger })),
-      ...buildTimeline(args({ sportKey: "tennis", events: tennisSetLedger })),
-      ...buildTimeline(args({ events: [env(0, "some.future.type", {})] })),
+      ...linesOf(args({ sportKey: "football", events: footballLedger })),
+      ...linesOf(args({ sportKey: "tennis", events: tennisSetLedger })),
+      ...linesOf(args({ events: [env(0, "some.future.type", {})] })),
     ];
     expect(lines.length).toBeGreaterThan(8);
     expect(lines.map((l) => l.text.key).filter((k) => k.startsWith("public."))).toEqual([]);
@@ -500,9 +710,9 @@ describe("timeline dictionary coverage (derived from the engine's own golden cor
     const keys = [
       ...new Set([
         ...Object.values(TIMELINE_KEY_FOR),
-        "timeline.generic.event",
-        "timeline.set.won",
-        "timeline.period.end",
+        TIMELINE_NEUTRAL_KEY,
+        TIMELINE_SET_WON_KEY,
+        TIMELINE_PERIOD_END_KEY,
       ]),
     ].sort();
     expect(keys.length).toBeGreaterThanOrEqual(20);
@@ -515,7 +725,38 @@ describe("timeline dictionary coverage (derived from the engine's own golden cor
     expect(missing).toEqual([]);
   });
 
-  it("no locale carries a public.timeline key the others lack", () => {
+  it("the kernel types a ledger can carry render their OWN sentence, not the neutral line", () => {
+    // `core.note` is the case that matters: its payload is free text an
+    // official typed, and the neutral line would throw it away.
+    for (const type of [
+      "core.note",
+      "core.finalize",
+      "core.award",
+      "core.suspend",
+      "core.resume",
+      "core.lineup.substitution",
+      "core.lineup.entry",
+    ]) {
+      expect(TIMELINE_KEY_FOR[type], type).toBeDefined();
+      expect(TIMELINE_KEY_FOR[type], type).not.toBe(TIMELINE_NEUTRAL_KEY);
+    }
+    // The note's text actually reaches the line.
+    const noted = linesOf(args({ events: [env(0, "core.note", { text: "Rain stopped play" })] }));
+    expect(noted[0]!.text.key).toBe("timeline.core.note");
+    expect(noted[0]!.text.params?.text).toBe("Rain stopped play");
+    // A lineup change names its side, which is why `side` had to join the
+    // entrant-field list — the kernel family spells it differently.
+    const swapped = linesOf(
+      args({ events: [env(0, "core.lineup.entry", { side: "H", on: { personId: "H-p9" } })] }),
+    );
+    expect(swapped[0]!.text.key).toBe("timeline.core.lineup");
+    expect(swapped[0]!.text.params?.side).toBe(SIDES[0].name);
+    expect(swapped[0]!.sideIndex).toBe(0);
+    // …and `core.void` deliberately has none: it never survives resolveVoids.
+    expect(TIMELINE_KEY_FOR["core.void"]).toBeUndefined();
+  });
+
+  it("no locale carries a timeline key the others lack", () => {
     const timelineKeys = (locale: (typeof LOCALES)[number]) =>
       Object.keys(DICTS[locale]).filter((k) => k.startsWith("timeline.")).sort();
     const en = timelineKeys("en");
@@ -534,9 +775,9 @@ describe("timeline dictionary coverage (derived from the engine's own golden cor
     for (const corpus of CORPORA) {
       if (corpus.key === "cricket") continue;
       const mod = moduleFor(corpus.key);
-      for (const stream of corpus.streams.slice(0, 4)) {
+      for (const stream of corpus.streams) {
         const cfg = mod.configSchema.parse(corpus.configs[stream.config]);
-        const lines = buildTimeline({
+        const lines = linesOf({
           sportKey: corpus.key,
           events: envelopesOf(stream),
           module: mod,

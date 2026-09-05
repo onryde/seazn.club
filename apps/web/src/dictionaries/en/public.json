@@ -147,5 +147,12 @@
   "term.ET_HT": "ET HT",
   "term.ET_FT": "ET FT",
   "term.QT": "QT",
-  "term.3QT": "3QT"
+  "term.3QT": "3QT",
+  "timeline.core.note": "Note — {text}",
+  "timeline.core.finalize": "Result finalised",
+  "timeline.core.award": "Award — {person}",
+  "timeline.core.suspend": "Play suspended",
+  "timeline.core.resume": "Play resumed",
+  "timeline.core.lineup": "Line-up change — {side}",
+  "timeline.boardgame.draw": "Draw ({method})"
 }

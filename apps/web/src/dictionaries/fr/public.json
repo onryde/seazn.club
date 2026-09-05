@@ -147,5 +147,12 @@
   "term.ET_HT": "MT prol.",
   "term.ET_FT": "FT prol.",
   "term.QT": "QT",
-  "term.3QT": "3QT"
+  "term.3QT": "3QT",
+  "timeline.core.note": "Note — {text}",
+  "timeline.core.finalize": "Résultat finalisé",
+  "timeline.core.award": "Récompense — {person}",
+  "timeline.core.suspend": "Jeu suspendu",
+  "timeline.core.resume": "Reprise du jeu",
+  "timeline.core.lineup": "Changement de composition — {side}",
+  "timeline.boardgame.draw": "Nulle ({method})"
 }
