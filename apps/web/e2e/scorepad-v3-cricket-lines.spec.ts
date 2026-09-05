@@ -6,9 +6,10 @@ import { apiJson, fixturePath, seedRosteredFixture, TAG } from "./helpers";
 // `cricket.player.line` carry six optional band-2 fields on top of the seven
 // it always had (`batting.fours`/`.sixes`/`.dismissal{kind,bowler,fielder}`,
 // `bowling.maidens`/`.wides`/`.noBalls`); this wave wired the pad's generic
-// "More" sheet to collect them. This is the FIRST e2e ever to drive a
+// "More" sheet to collect them. This is meant to be the FIRST e2e to drive a
 // `cricket.player.line` through the pad UI (previously only reachable via
-// direct API posts in scorecard.test.ts's engine-level fixtures).
+// direct API posts in scorecard.test.ts's engine-level fixtures) — see the
+// FIXME below for why the line-entry test itself is not runnable yet.
 //
 // SCOPE SPLIT (controller ruling, task 18 dispatch): the brief's own e2e
 // description also asserts the PUBLIC match centre reads the posted line
@@ -17,6 +18,36 @@ import { apiJson, fixturePath, seedRosteredFixture, TAG } from "./helpers";
 // list back through the same `/api/v1/fixtures/:id/events` endpoint the
 // existing cricket walkthroughs already use. The public-page assertion is
 // owed to Task 15's own e2e coverage; see this task's report.
+//
+// FIXME (review round 1, task-18-review.md, confirmed independently by two
+// sessions — implementer's report + reviewer's own re-derivation) —
+// `cricket.player.line`'s only panel is `phase: "post"`
+// (`packages/engine/src/sports/cricket/cricket.ts:3090-3096`), and the
+// cricket skin's `resolvePhase` (`apps/web/src/components/v2/scorepad/v3/
+// skins/cricket.tsx:1163-1167`) maps PadPhase `"post"` 1:1 from the engine's
+// `state.phase === "done" | "final"` — the ONLY way in. But BOTH real
+// consumers of the pad unmount it entirely the instant a fixture is decided
+// (`apps/web/src/components/v2/fixture-console.tsx:484,801` and
+// `apps/web/src/components/v2/device-score-pad.tsx:207,318`,
+// `decided = live.outcome !== null || live.status === "abandoned"`), and
+// every terminal `state.phase` sets a non-null outcome in the same return
+// (`cricket.ts`'s `decideWin`/tie/draw/no-result branches). So the instant
+// PadPhase resolves to `"post"` is the instant the pad disappears — there is
+// no window where the "Scorecard" panel this test needs is both declared
+// AND mounted. This is PRE-EXISTING and predates Task 18:
+// `apps/web/e2e/scorepad-v3-football.spec.ts:1236-1239` already documents
+// the identical gap ("once a fixture is decided BOTH the console and the
+// device-link route replace the pad with a read-only summary — an
+// unrelated, pre-existing product gap").
+//
+// THE FIX THE OWNER MAY APPROVE (not this task's to make —
+// `fixture-console.tsx`/`device-score-pad.tsx` are both on the global
+// "do not touch" list): carve an explicit exception into the `decided` gate
+// on both files so a decided-but-still-"post"-phase fixture keeps the pad
+// mounted for exactly the Scorecard panel (e.g. `!decided || livePhase ===
+// "post"` on the mount condition at `fixture-console.tsx:801` and
+// `device-score-pad.tsx:318`). Once that ships, remove the `test.fixme(...)`
+// wrapper below and this spec should just pass as written.
 //
 // Deliberately NOT serial: this spec seeds its own fixture, so there is no
 // shared-fixture race to serialise for (matches scorepad-v3-cricket.spec.ts's
@@ -90,6 +121,21 @@ test(
   "cricket v3: the More sheet's Scorecard line collects 4s/6s/how-out/bowler credit, and a " +
     "legacy-only line stays byte-identical to the pre-ruling-12 7-field payload",
   async ({ page }) => {
+    // Review round 1 (task-18-review.md) — see the file header FIXME above
+    // for the full chain. Short version: `cricket.player.line`'s only panel
+    // is phase "post", which the pad reaches ONLY once the fixture is
+    // decided, and being decided unmounts the whole pad on both
+    // fixture-console.tsx and device-score-pad.tsx. There is no window to
+    // drive this test in a real browser today. SKIPPED, not deleted or
+    // weakened — remove this line once the owner approves the mount-gate
+    // carve-out named in the file header.
+    test.fixme(
+      true,
+      "cricket.player.line's post-phase panel is unreachable: the pad unmounts on `decided`, the " +
+        "same instant PadPhase resolves to \"post\" (cricket.ts:3090-3096, skins/cricket.tsx:1163-1167, " +
+        "fixture-console.tsx:484,801, device-score-pad.tsx:207,318 — see the file header for the full chain).",
+    );
+
     // Two held dispatches (one per player-line submission), each flushed via
     // "Send now" rather than waited out — see sendHeldNow's own doc — plus
     // fixture setup and two innings-summary posts.

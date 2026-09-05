@@ -21,6 +21,10 @@
 import { describe, it, expect } from "vitest";
 import { propsOf, renderIsland, textOf, walk } from "@/components/__tests__/_hook-harness";
 import type { LineupPair, SquadState } from "@seazn/engine/core";
+import { cricket } from "@seazn/engine/sports/cricket";
+import { t as translate } from "@/lib/i18n-runtime";
+import type { Dict } from "@/lib/i18n-constants";
+import fr from "@/dictionaries/fr/ui.json";
 import type { PadActionView } from "../../view-model";
 import { ActionFormList, initialActionValues, type ActionFormListProps } from "../action-form";
 
@@ -896,5 +900,100 @@ describe("ActionFormList — the legacy 7-field player-line payload stays byte-i
         },
       },
     ]);
+  });
+});
+
+// Review round 1 (task-18-review.md, Important #1) — the six new fields
+// plus the two dismissal-credit attributions now carry real `labelKey`s
+// (cricket.ts), registered in `PAD_LABEL_KEYS` (scoring-vocab.ts) and
+// translated in all four `ui.json` dictionaries. This proves the FULL
+// chain end to end against the REAL engine padSpec and the REAL French
+// dictionary (never a fixture `t = (k) => k` stub, and never the real
+// engine padSpec elsewhere in this file per its own header note — this is
+// the one test in this file for which reading the real translated string
+// IS the point): every label renders the French dictionary value, and the
+// English fallback (`field.labelKey.label`, e.g. "Fours") never leaks
+// through for a viewer with no English at all.
+describe("ActionFormList — cricket.player.line's new labels render the REAL French dictionary, not the English fallback (owner ruling 12, review round 1)", () => {
+  const frDict = fr as unknown as Dict;
+  const tFr: ActionFormListProps["t"] = (key, vars) => translate(frDict, key, vars);
+
+  const cfg = cricket.configSchema.parse({});
+  const lineAction = cricket
+    .padSpec!(cfg)
+    .panels.flatMap((p) => p.actions)
+    .find((a) => a.type === "cricket.player.line")!;
+
+  const SQUADS: SquadState = {
+    home: {
+      entrantId: "home-1",
+      members: [
+        { personId: "p-home", role: "player", provenance: "named", orderNo: 1, onField: true, started: true, timesOff: 0, timesOn: 0 },
+      ],
+      subsUsed: 0,
+      exemptUsed: {},
+    },
+    away: {
+      entrantId: "away-1",
+      members: [
+        { personId: "p-away", role: "player", provenance: "named", orderNo: 1, onField: true, started: true, timesOff: 0, timesOn: 0 },
+      ],
+      subsUsed: 0,
+      exemptUsed: {},
+    },
+  };
+  const LINEUPS: LineupPair = {
+    home: { entrantId: "home-1", slots: [{ personId: "p-home", slot: "starting", orderNo: 1 }] },
+    away: { entrantId: "away-1", slots: [{ personId: "p-away", slot: "starting", orderNo: 1 }] },
+  };
+  const NAMES = { "p-home": "Home Player", "p-away": "Away Player" };
+
+  function renderFrenchLine() {
+    const island = renderIsland(ActionFormList, {
+      actions: [lineAction],
+      t: tFr,
+      submittingType: null,
+      onSubmit: () => {},
+      squads: SQUADS,
+      lineups: LINEUPS,
+      personNames: NAMES,
+    });
+    click(buttonsOf(island.tree())[0]!); // expand
+    return island;
+  }
+
+  // The six new FIELD captions the review named explicitly.
+  it.each([
+    ["batting.fours", "Quatres", "Fours"],
+    ["batting.sixes", "Six", "Sixes"],
+    ["batting.dismissal.kind", "Comment éliminé", "How out"],
+    ["bowling.maidens", "Maidens", "Maidens"],
+    ["bowling.wides", "Wides", "Wides"],
+    ["bowling.noBalls", "No-balls", "No-balls"],
+  ])("field %s renders the French dict value %j, never the English fallback %j", (path, frText, enFallback) => {
+    const island = renderFrenchLine();
+    const text = island.text();
+    expect(text).toContain(frText);
+    // "Maidens"/"No-balls"/"Wides" are deliberately IDENTICAL in French and
+    // English (cricket notation, matching the pre-existing `extra.wide`/
+    // `extra.noball` precedent of staying unstranslated in every locale) —
+    // for those, containment alone cannot distinguish "real French lookup"
+    // from "coincidentally the same word", so this only asserts the
+    // stronger negative check (fallback absent) where the two strings
+    // actually differ.
+    if (frText !== enFallback) expect(text).not.toContain(enFallback);
+    void path; // documents which field this row covers; not queried directly
+  });
+
+  // The two dismissal-credit ATTRIBUTION captions (added alongside the six
+  // fields in this same fix round).
+  it("the bowler/fielder attribution captions render the French dict value, never the English fallback", () => {
+    const island = renderFrenchLine();
+    const bowlerGroup = island.tree().find((el) => propsOf(el)["data-attribution-path"] === "batting.dismissal.bowler")!;
+    const fielderGroup = island.tree().find((el) => propsOf(el)["data-attribution-path"] === "batting.dismissal.fielder")!;
+    expect(textOf(bowlerGroup)).toContain("Lanceur");
+    expect(textOf(bowlerGroup)).not.toContain("Bowler");
+    expect(textOf(fielderGroup)).toContain("Joueur de champ");
+    expect(textOf(fielderGroup)).not.toContain("Fielder");
   });
 });
