@@ -110,9 +110,13 @@ CricHeroes sells a per-match "Score Ticker" for OBS or vMix, cricket only.
 `layout.tsx`. Query: `style=bar|bug` (default per sport, decision 1),
 `lang=<locale>` (default: the org's locale as the public page resolves it).
 
-- Layout: `<html>` and `<body>` with `background: transparent`, no header, no
-  footer, no attribution script, `<meta name="robots" content="noindex">`.
-  Mounts Barlow Condensed and Geist the way the public layout does.
+- Layout: a nested segment layout (the root layout owns the only `<html>`
+  and `<body>`; nested layouts here return a `<div>`), which renders a
+  `<style>` element scoped to this segment setting `html, body { background:
+  transparent; margin: 0 }`, no header, no footer, no attribution script, and
+  `robots: { index: false }` in the page metadata. Mounts Barlow Condensed on
+  its wrapper `div` exactly as `(public)/shared/[orgSlug]/layout.tsx:19-23,60`
+  does; Geist comes from the root layout.
 - Page (server component): resolves the fixture with the same call the public
   fixture page uses (`getPublicFixture`, `server/public-site/data.ts`), so
   visibility rules hold; resolves the fixture's org entitlement
@@ -208,8 +212,15 @@ same resolved feature; neither hardcodes a plan.
 ### 6. Organiser panel
 
 `apps/web/src/components/v2/fixture-stream-panel.tsx` (client), mounted from
-`FixtureRow` behind an inline "Stream" toggle beside the schedule-edit
-toggle, rendered only when the server passes `streamingEntitled: true`.
+the row component `FixtureLine` (`stages-panel.tsx:1578`; `FixtureRow` at
+`:73` is the row's DATA type) behind an inline "Stream" toggle beside the
+schedule-edit toggle (`:1745`), rendered only when `streamingEntitled` is
+true. The panel's `Props` carry `orgSlug, compSlug, divSlug` and neither a
+sport key nor any entitlement, so the division page
+(`app/**/d/[divSlug]/page.tsx:124-138`) threads two new props,
+`sportKey` and `streamingEntitled={await hasFeature(auth.orgId,
+"streaming.overlay")}`, the same way it already passes
+`entitled={await hasFeature(auth.orgId, "embeds.enabled")}` at `:785`.
 Content, per the "Organiser console" artboards:
 
 - Style tabs "Broadcast bar" / "Corner bug" (default per sport), with a live
