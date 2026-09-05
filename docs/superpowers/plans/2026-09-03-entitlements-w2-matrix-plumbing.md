@@ -27,6 +27,20 @@ not draft status (marking it ready changed nothing, and `ready_for_review` is no
 in `pull_request`'s default event set) and not workflow gating. **Rebase onto main and
 CI starts working.**
 
+**TWO REBASE TRAPS, both live for this branch specifically:**
+
+1. **`apps/web/src/lib/i18n-keys.ts` is GENERATED, so a clean textual merge proves
+   nothing.** Two waves both adding dictionary keys merge cleanly into a file the
+   generator would never emit — git resolves the text, not the invariant. This branch
+   regenerated it (the pricing-card i18n work adds 22 keys, plus `nav.dashboard` and the
+   Pro card's), and main has been adding keys too. **After rebasing, re-run the
+   `gen-keys` step and require a ZERO diff.** A non-empty diff means the merged file was
+   wrong, however clean the merge looked.
+2. **`apps/web/e2e/mobile.spec.ts` is `describe.configure({ mode: "serial" })`, so a
+   failure COUNT there is a floor, not a total** — the first red aborts the rest of the
+   file. Re-run after each fix until a full pass completes. CI's "2 failed" has already
+   concealed a third failure in that file once.
+
 **Do NOT rebase while an agent is mid-task** — one file was still dirty when this was
 written.
 
