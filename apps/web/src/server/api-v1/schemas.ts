@@ -1192,7 +1192,17 @@ export const EventImportRequest = z.object({
       ]),
       events: z.array(
         z.object({
-          type: z.string().min(1).refine((t) => t !== "core.void", {
+          // `.max(100)` mirrors `AppendEventRequest.type` above, and is not
+          // decoration. It was the one unbounded string in this request, in
+          // the shape that carries up to `IMPORT_CAPS.eventsPerCall` (10,000)
+          // of them per body — so the BATCH door stood wider than the
+          // single-append door it batches. Nothing downstream narrows it
+          // either: `score_events.type` is `text`, and a type the engine does
+          // not know is refused by VALUE, at the fold, after the whole string
+          // has travelled through resolution and into the report. The two
+          // bounds are pinned equal by `schemas.test.ts`, so a change to one
+          // that forgets the other is a red rather than a silent re-widening.
+          type: z.string().min(1).max(100).refine((t) => t !== "core.void", {
             message: "core.void cannot be imported",
           }),
           payload: z.record(z.string(), z.unknown()).default({}),
