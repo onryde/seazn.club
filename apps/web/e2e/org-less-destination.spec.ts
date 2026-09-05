@@ -107,16 +107,25 @@ test.describe("the org-less bounce keeps where you were going", () => {
     const page = await ctx.newPage();
     try {
       const email = `e2e-orgless-plain-${TAG}-${Math.random().toString(36).slice(2, 7)}@example.com`;
-      // No `next` at all — so `postAuthLanding` takes its OTHER arm and
-      // provisions a default org (`ensureActiveOrg`, lib/auth.ts:472). This
-      // account is therefore NOT org-less, which is fine: what is under test
-      // here is the form's fallback, not the bounce. It is the positive pair
-      // the refusal assertions need — without it, a change that always
-      // appended `?next=`, or one that always sent people to the settings
-      // page, would read as a pass everywhere. The `router.push(next ??
-      // "/dashboard")` default is invisible to the unit suite (no DOM, no
-      // router), so this is the only place it is pinned.
-      await loginUi(page, email);
+      // Sign in carrying a SAFE, non-settings destination. That matters for a
+      // reason this test originally got wrong and which no unit test can see:
+      //
+      // logging in with NO `next` makes `postAuthLanding` take its other arm
+      // and provision a default org (`ensureActiveOrg`). The account then owns
+      // one org — and community `orgs.max_owned` is **1**
+      // (`db/migration/deltas/V112__entitlements_v2.sql:23`, unchanged by
+      // V314). So the create below became this user's SECOND org,
+      // `assertMayOwnAnotherOrg` computed `1 + 1 > 1` and threw
+      // PaymentRequiredError, `CreateOrgForm` caught it and called `setError`
+      // instead of `router.push`, and the URL assertion timed out at 30s. The
+      // test could never have passed; it was written and never run.
+      //
+      // A safe `next` is honoured WITHOUT provisioning (`postAuthLanding`), so
+      // the account stays org-less and the create below is its FIRST org,
+      // inside the community cap. `/dashboard` deliberately, not `/settings`:
+      // the settings shim is what test 1 exercises, and reusing it here would
+      // make this test pass for the other test's reason.
+      await loginUi(page, email, "/dashboard");
 
       await page.goto("/orgs/new");
       expect(new URL(page.url()).searchParams.get("next")).toBeNull();
