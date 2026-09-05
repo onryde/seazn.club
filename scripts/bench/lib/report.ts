@@ -243,6 +243,18 @@ export const DivisionScheduleReport = z.object({
   wallMs: z.number(),
   scheduleErrors: z.array(z.string()).readonly(),
   checker: CheckerVerdictReport.optional(),
+  /**
+   * F-T6-2 — the SAME checker, re-run after officials auto-assign landed.
+   *
+   * `/officials/auto` only considers fixtures whose `scheduled_at` is already
+   * set, so it cannot run before apply — which means `checker` above judged a
+   * board that predates it. BOTH verdicts are carried, never one: a single
+   * post-officials verdict would hide which stage introduced a finding, and
+   * "clean when scheduled, dirty once the officials landed" is precisely the
+   * fact a reader needs. Absent when auto-assign applied nothing, which is the
+   * ordinary case.
+   */
+  checkerAfterOfficials: CheckerVerdictReport.optional(),
   certificate: CertificateVerdictReport.optional(),
   believability: BelievabilityDivisionReport.optional(),
   /** `judgeDivision`'s composition, carried so the report never re-derives a
@@ -251,6 +263,35 @@ export const DivisionScheduleReport = z.object({
   reasons: z.array(z.string()).readonly(),
 });
 export type DivisionScheduleReport = z.infer<typeof DivisionScheduleReport>;
+
+/**
+ * F-T6-3 — one court held by two overlapping fixtures from DIFFERENT
+ * divisions. A RUN-level fact, so it hangs off the suite and not off a
+ * division: no per-division layer can see it, which is the whole reason it
+ * exists. `checkBoard` is handed one division's `Board`, `certify` one
+ * division's encoding, and `POST /divisions/{id}/schedule/validate` is
+ * addressed by a division id.
+ *
+ * Both sides are always named, for the same reason `CheckerFinding.fixtureIds`
+ * carries both: a clash naming one fixture cannot be acted on.
+ */
+export const CrossDivisionCourtClashReport = z.object({
+  courtId: z.string(),
+  a: z.object({
+    divisionRef: z.string(),
+    fixtureId: z.string(),
+    /** Epoch ms, the unit every occupancy rule in this bench measures in. */
+    start: z.number(),
+    end: z.number(),
+  }),
+  b: z.object({
+    divisionRef: z.string(),
+    fixtureId: z.string(),
+    start: z.number(),
+    end: z.number(),
+  }),
+});
+export type CrossDivisionCourtClashReport = z.infer<typeof CrossDivisionCourtClashReport>;
 
 /** `EngineSnapshot` (`schedule.ts`) as it comes back off disk. */
 export const EngineSnapshotReport = z.object({
@@ -353,6 +394,9 @@ export const SuiteReport = z.object({
    *  per division, or every copy would list every other division's refs in
    *  `comparedDivisionRefs`. */
   engineDelta: EngineDeltaSection.optional(),
+  /** F-T6-3 — the run-level cross-division court gate's findings. RUN-level,
+   *  so exactly one list per suite. Absent when it found nothing. */
+  crossDivisionCourtClashes: z.array(CrossDivisionCourtClashReport).readonly().optional(),
 });
 export type SuiteReport = z.infer<typeof SuiteReport>;
 
@@ -673,16 +717,73 @@ function renderCheckerSection(report: BenchReport): string {
       );
       for (const u of checker.unchecked) lines.push(`  - \`${u.type}\`: ${u.reason}`);
     }
-    for (const f of checker.findings) {
-      const measured =
-        f.measured !== undefined && f.required !== undefined
-          ? ` (measured ${f.measured}, required ${f.required})`
-          : "";
-      lines.push(`- \`${f.kind}\` [${f.fixtureIds.join(", ")}]: ${f.detail}${measured}`);
+    for (const f of checker.findings) lines.push(`- ${renderFinding(f)}`);
+
+    // F-T6-2 — the SECOND verdict, on the board as it stands after officials
+    // auto-assign. Rendered beside the first, never instead of it: which of
+    // the two stages introduced a finding is the actionable half, and a lone
+    // post-officials verdict throws it away.
+    const after = d.checkerAfterOfficials;
+    if (after !== undefined) {
+      lines.push(
+        "",
+        `After officials auto-assign — ${after.clean ? "CLEAN" : `${after.findings.length} FINDING(S)`}` +
+          (after.clean === checker.clean
+            ? " (unchanged)"
+            : ` (CHANGED from ${checker.clean ? "clean" : "dirty"} — officials auto-assign is what moved it)`),
+      );
+      for (const f of after.findings) lines.push(`- ${renderFinding(f)}`);
     }
     lines.push("");
   }
   return lines.join("\n").trimEnd();
+}
+
+/** One finding, rendered once — both sides of a pairwise breach named, and the
+ *  measured/required pair only when the kind actually has a scalar. */
+function renderFinding(f: CheckerFindingReport): string {
+  const measured =
+    f.measured !== undefined && f.required !== undefined
+      ? ` (measured ${f.measured}, required ${f.required})`
+      : "";
+  return `\`${f.kind}\` [${f.fixtureIds.join(", ")}]: ${f.detail}${measured}`;
+}
+
+/**
+ * F-T6-3 — the run-level cross-division court gate.
+ *
+ * Its own section rather than a line inside "Checker", because it is the one
+ * verdict in this report that is NOT per-division — and because its absence is
+ * the interesting state. A reader who finds no such section on a multi-division
+ * run should be able to conclude the check ran and found nothing, so the
+ * section renders whenever any division was scheduled, not only when it fired.
+ */
+function renderCrossDivisionSection(report: BenchReport): string {
+  const suites = report.suites.filter((s) => (s.scheduling ?? []).length > 0);
+  if (suites.length === 0) return "";
+  const lines = [
+    "## Cross-division court occupancy (run-level gate)",
+    "",
+    "One court cannot hold two fixtures at once whichever division each belongs to.",
+    "Every OTHER layer in this report is division-scoped and blind to this by construction.",
+  ];
+  for (const suite of suites) {
+    const clashes = suite.crossDivisionCourtClashes ?? [];
+    if (clashes.length === 0) {
+      lines.push("", `- \`${suite.suite}\`: none — checked across ${(suite.scheduling ?? []).length} division(s).`);
+      continue;
+    }
+    lines.push("", `- \`${suite.suite}\`: **${clashes.length} clash(es)**`);
+    for (const c of clashes) {
+      lines.push(
+        `  - court \`${c.courtId}\`: ${c.a.divisionRef}/${c.a.fixtureId} ` +
+          `[${new Date(c.a.start).toISOString()} .. ${new Date(c.a.end).toISOString()}) overlaps ` +
+          `${c.b.divisionRef}/${c.b.fixtureId} ` +
+          `[${new Date(c.b.start).toISOString()} .. ${new Date(c.b.end).toISOString()})`,
+      );
+    }
+  }
+  return lines.join("\n");
 }
 
 function renderCertificateSection(report: BenchReport): string {
@@ -783,6 +884,7 @@ export function renderMarkdown(report: BenchReport): string {
     // B04 (design §10's own convention: append, never edit the existing).
     renderSchedulingSection(report),
     renderCheckerSection(report),
+    renderCrossDivisionSection(report),
     renderCertificateSection(report),
     renderBelievabilitySection(report),
     renderEngineDeltaSection(report),

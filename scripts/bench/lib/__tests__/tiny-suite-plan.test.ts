@@ -27,7 +27,11 @@ import { runTinySuite, TINY_PACK_PATH } from "../suites/tiny.ts";
 // directory. This file keeps its own generic seeding fake (see the header)
 // and delegates only the scheduling half, so the two cannot disagree about
 // which court a fixture landed on or whether a lock survived.
-import { makeScheduleWorld } from "./_schedule-routes.ts";
+import {
+  makeScheduleWorld,
+  type FakeScheduleOptions,
+  type FakeScheduleWorld,
+} from "./_schedule-routes.ts";
 
 const silent = pino({ level: "silent" });
 
@@ -47,13 +51,31 @@ function slug(s: string): string {
  *  controls what the fake POST /entitlement-override "provisions" — the SQL
  *  seam below reports back the SAME thing, so a caller can drive both
  *  directions of the wiring from one factory. */
-function fakeServer(opts: { officialsAutoGranted: boolean }): {
+function fakeServer(opts: {
+  officialsAutoGranted: boolean;
+  /** B04 — knobs for the shared scheduling world (`_schedule-routes.ts`). */
+  schedule?: FakeScheduleOptions;
+  /**
+   * B04 F-T6-2 — make `/officials/auto` propose the SAME official on the first
+   * TWO placed fixtures of the requested division, resolved from the board
+   * rather than from a hardcoded id.
+   *
+   * Resolved from the board on purpose: this file's fixture ids are minted
+   * from a global counter that the DLS-gate probe's own throwaway divisions
+   * consume first, so a literal id here would name whatever happened to be
+   * created third. And the pair has to be REAL and OVERLAPPING for the
+   * post-officials re-check to have anything to find — an official on two
+   * fixtures that never overlap is not a double-booking.
+   */
+  autoAssignSameOfficialTwice?: boolean;
+}): {
   transport: ProbeTransport;
   sql: PlanSql;
   calls: RecordedCall[];
+  schedule: FakeScheduleWorld;
 } {
   const calls: RecordedCall[] = [];
-  const schedule = makeScheduleWorld({ solverEngine: "optimized" });
+  const schedule = makeScheduleWorld({ solverEngine: "optimized", ...(opts.schedule ?? {}) });
   const orgBySession = new WeakMap<Session, string>();
   const dlsByDivisionId = new Map<string, boolean>();
   const legsByStageId = new Map<string, number>();
@@ -142,6 +164,21 @@ function fakeServer(opts: { officialsAutoGranted: boolean }): {
       // each other.
       const scheduled = schedule.handle(method, routePath, body);
       if (scheduled !== undefined) return scheduled as T;
+      const autoOfficialsMatch = /^\/api\/v1\/divisions\/([^/]+)\/officials\/auto$/.exec(routePath);
+      if (method === "POST" && autoOfficialsMatch !== null && opts.autoAssignSameOfficialTwice === true) {
+        const divisionId = autoOfficialsMatch[1]!;
+        const placed = [...schedule.fixtures.values()]
+          .filter((f) => f.division_id === divisionId && f.scheduled_at !== null)
+          .sort((a, b) => a.round_no - b.round_no || a.id.localeCompare(b.id))
+          .slice(0, 2);
+        return {
+          assignments: placed.map((f) => ({
+            fixtureId: f.id,
+            officialId: "official-eli-ostrander",
+            roleKey: "linesman",
+          })),
+        } as unknown as T;
+      }
       if (method === "POST" && /^\/api\/v1\/divisions\/[^/]+\/officials\/auto$/.test(routePath)) {
         // Non-empty when the caller actually wants a proposal — `_tiny.json`'s
         // "off-eli" (role_keys ["linesman"]) is the one auto-needing official
@@ -263,7 +300,7 @@ function fakeServer(opts: { officialsAutoGranted: boolean }): {
     },
   };
 
-  return { transport, sql, calls };
+  return { transport, sql, calls, schedule };
 }
 
 describe("runTinySuite — B03 T7 plan/entitlement-gate wiring", () => {
@@ -420,5 +457,93 @@ describe("runTinySuite — B03 T7 plan/entitlement-gate wiring", () => {
     expect((report.oracles ?? []).some((o) => o.name.startsWith("entitlement-gate:"))).toBe(false);
     expect(calls.some((c) => c.path.includes("entitlement-override"))).toBe(false);
     expect(calls.some((c) => c.method === "POST" && /\/officials\/auto$/.test(c.path))).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// B04 F-T6-2 — the board is RE-CHECKED after officials auto-assign
+//
+// `/officials/auto`'s own `engineInput` only considers fixtures whose
+// `scheduled_at` is set (`usecases/officials.ts:386`), so auto-assign cannot
+// run before apply — B03 review F1(b) established that, and it is not
+// negotiable. The consequence is that the board `runScheduleLayer` fetched,
+// and every verdict taken on it, PREDATES whatever auto-assign puts on it: an
+// official double-booking introduced there is seen by neither layer 1 nor
+// design §3.3's officials rule.
+//
+// So the checker runs a second time, and BOTH verdicts are reported. Not one:
+// a single post-officials verdict would hide which stage introduced a finding.
+// ---------------------------------------------------------------------------
+describe("runTinySuite — the post-officials re-check (B04 F-T6-2)", () => {
+  async function runWith(opts: Parameters<typeof fakeServer>[0]) {
+    const server = fakeServer(opts);
+    const report = await runTinySuite({
+      base: "http://bench.example",
+      engine: "optimized",
+      keep: false,
+      log: silent,
+      cliEntry: "admin",
+      packPath: TINY_PACK_PATH,
+      transport: server.transport,
+      sql: server.sql,
+      probeTransport: server.transport,
+    });
+    return { report, server };
+  }
+
+  it("catches an official double-booking that NEITHER the first checker pass nor layer 1 could see", async () => {
+    // `doubleBookCourt` makes a division's own fixtures overlap in time, which
+    // is what an official double-booking needs to exist at all. The first pass
+    // sees the court clash; only the SECOND pass can see the official on both,
+    // because the official was not on the board when the first pass ran.
+    const { report } = await runWith({
+      officialsAutoGranted: true,
+      autoAssignSameOfficialTwice: true,
+      schedule: { doubleBookCourt: true },
+    });
+
+    const rows = report.scheduling ?? [];
+    const withAfter = rows.filter((r) => r.checkerAfterOfficials !== undefined);
+    expect(withAfter.length, "auto-assign applied, so every division is re-checked").toBeGreaterThan(0);
+
+    const touched = rows.find((r) =>
+      (r.checkerAfterOfficials?.findings ?? []).some((f) => f.kind === "official_double_booking"),
+    );
+    expect(touched, "the re-check must find the official on two overlapping fixtures").toBeDefined();
+
+    // THE DIFFERENTIAL, which is the whole point of keeping both verdicts:
+    // the finding is present AFTER and absent BEFORE. A single post-officials
+    // verdict would report it without saying which stage introduced it.
+    expect(touched?.checker?.findings.map((f) => f.kind) ?? []).not.toContain(
+      "official_double_booking",
+    );
+    expect(touched?.red).toBe(true);
+    expect(report.gate).toBe("red");
+    expect((report.errors ?? []).join(" | ")).toContain(
+      "checker findings AFTER officials auto-assign",
+    );
+  });
+
+  it("re-checks even when the second pass is CLEAN, so 'unchanged' is a stated result and not a silence", async () => {
+    // A re-check that only appeared on failure would be indistinguishable from
+    // one that never ran.
+    const { report } = await runWith({
+      officialsAutoGranted: true,
+      autoAssignSameOfficialTwice: true,
+    });
+    const rows = report.scheduling ?? [];
+    expect(rows.every((r) => r.checkerAfterOfficials !== undefined)).toBe(true);
+    expect(rows.every((r) => r.checkerAfterOfficials?.clean === true)).toBe(true);
+    expect(report.gate).toBe("green");
+  });
+
+  it("is ABSENT when auto-assign applied nothing — there is no second board to judge", async () => {
+    // The complement. `officialsAutoGranted: false` means `/officials/auto` is
+    // never called at all, so the board never changed and a second verdict
+    // would be the first one copied.
+    const { report } = await runWith({ officialsAutoGranted: false });
+    const rows = report.scheduling ?? [];
+    expect(rows.length).toBeGreaterThan(0);
+    expect(rows.every((r) => r.checkerAfterOfficials === undefined)).toBe(true);
   });
 });

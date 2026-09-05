@@ -135,6 +135,7 @@ import { assessBelievability, assessEngineDelta, type BelievabilityReport } from
 import {
   judgeDivision,
   type Board,
+  type BoardFixture,
   type CertificateVerdict,
   type CheckerReport,
   type EncodedConstraints,
@@ -148,6 +149,7 @@ import {
   defaultTransport,
   runOfficialsAutoAssign,
   seedSuite,
+  type FixtureOfficialRow,
   type SeededSuite,
   type SeedTransport,
 } from "../seed.ts";
@@ -774,6 +776,126 @@ function degradedVerdict(
   };
 }
 
+
+// ---------------------------------------------------------------------------
+// F-T6-3 — the RUN-LEVEL cross-division court check
+//
+// Every layer above this one is DIVISION-scoped, and that is structural rather
+// than an oversight: `checkBoard` is handed one division's `Board`, `certify`
+// is handed one division's encoding, and `POST /divisions/{id}/schedule/validate`
+// is addressed by a division id. So two divisions sharing a venue can put two
+// fixtures on ONE court at ONE instant and every per-division verdict is clean.
+//
+// A court holding two overlapping fixtures is a physical impossibility no
+// matter which division each belongs to, so this GATES.
+//
+// SCOPED TO DIFFERENT DIVISIONS ON PURPOSE. A same-division overlap is
+// `checkBoard`'s `court_double_booking`, and reporting it here as well would be
+// two authorities on one fact — the pair would red twice, with two different
+// wordings, and a reader could not tell whether that was one clash or two.
+// ---------------------------------------------------------------------------
+
+/** One court held by two fixtures from DIFFERENT divisions at overlapping
+ *  times. Both sides are always named: a clash naming one fixture cannot be
+ *  acted on, which is the same rule `CheckerFinding.fixtureIds` follows. */
+export interface CrossDivisionCourtClash {
+  courtId: string;
+  a: { divisionRef: string; fixtureId: string; start: number; end: number };
+  b: { divisionRef: string; fixtureId: string; start: number; end: number };
+}
+
+/** `checker.ts`'s own placed predicate, restated rather than approximated.
+ *
+ *  The `Number.isFinite` half is NOT redundant with the `typeof`: a NaN start
+ *  compares false against every bound, so a fixture carrying one would be
+ *  silently exempt from every overlap test here exactly as it is there. A
+ *  fixture with no court occupies no court and cannot clash on one. */
+function placedOnCourt(
+  fixture: BoardFixture,
+): { fixtureId: string; courtId: string; start: number; end: number } | undefined {
+  const { start, end, courtId } = fixture;
+  if (typeof start !== "number" || !Number.isFinite(start)) return undefined;
+  if (typeof end !== "number" || !Number.isFinite(end)) return undefined;
+  if (typeof courtId !== "string" || courtId.length === 0) return undefined;
+  return { fixtureId: fixture.fixtureId, courtId, start, end };
+}
+
+/**
+ * Every court held by two overlapping fixtures from two DIFFERENT divisions,
+ * across the whole run.
+ *
+ * Pure, and exported so a test drives it on a hand-built pair rather than only
+ * through a whole fake-server run.
+ *
+ * `[start, end)` — the same half-open interval every occupancy rule in this
+ * bench measures on, so two fixtures that merely touch (one ends exactly as
+ * the next begins) do NOT clash. A closed interval here would red every
+ * back-to-back pair the product legitimately produces.
+ */
+export function crossDivisionCourtClashes(
+  boards: readonly Board[],
+): readonly CrossDivisionCourtClash[] {
+  const placed = boards.flatMap((board) =>
+    board.fixtures.flatMap((fixture) => {
+      const slot = placedOnCourt(fixture);
+      return slot === undefined ? [] : [{ divisionRef: board.divisionRef, ...slot }];
+    }),
+  );
+  const out: CrossDivisionCourtClash[] = [];
+  for (let i = 0; i < placed.length; i += 1) {
+    for (let j = i + 1; j < placed.length; j += 1) {
+      const a = placed[i]!;
+      const b = placed[j]!;
+      // SAME DIVISION IS NOT THIS RULE'S BUSINESS — see the block comment.
+      if (a.divisionRef === b.divisionRef) continue;
+      if (a.courtId !== b.courtId) continue;
+      if (!(a.start < b.end && b.start < a.end)) continue;
+      out.push({
+        courtId: a.courtId,
+        a: { divisionRef: a.divisionRef, fixtureId: a.fixtureId, start: a.start, end: a.end },
+        b: { divisionRef: b.divisionRef, fixtureId: b.fixtureId, start: b.start, end: b.end },
+      });
+    }
+  }
+  return out;
+}
+
+/** The BOARD as it stands after officials auto-assign, built from the
+ *  product's own post-apply READ.
+ *
+ *  F-T6-2: `/officials/auto` only considers fixtures whose `scheduled_at` is
+ *  set, so it must follow apply — which means the board `runScheduleLayer`
+ *  fetched, and every verdict taken on it, predates whatever it assigns.
+ *  Re-running `checkBoard` needs a board that includes those assignments.
+ *
+ *  DEVIATION, stated rather than hidden: this is not a second full fetch.
+ *  `schedule.ts` owns the wire->`Board` builder and is a closed module, so a
+ *  second one here would be two readers of one wire shape — the drift class
+ *  this wave has already paid for twice. Every field still comes from a
+ *  product read: the slots are the FETCHED board's, and the officials are
+ *  `runOfficialsAutoAssign`'s own `GET /api/v1/fixtures/{id}` AFTER the apply
+ *  (`seed.ts:1092-1098` — a distinct GET, never the apply's echoed body). No
+ *  field on this board comes from a request this bench sent. */
+function boardWithOfficials(
+  board: Board,
+  officialsByFixtureId: ReadonlyMap<string, readonly FixtureOfficialRow[]>,
+): Board {
+  if (officialsByFixtureId.size === 0) return board;
+  return {
+    ...board,
+    fixtures: board.fixtures.map((fixture) => {
+      const rows = officialsByFixtureId.get(fixture.fixtureId);
+      if (rows === undefined) return fixture;
+      return {
+        ...fixture,
+        officialIds: rows
+          .map((row) => row.official_id)
+          .filter((id) => typeof id === "string" && id.length > 0),
+      };
+    }),
+  };
+}
+
 /** One `@`-sigilled or bare court reference from a pack's `scheduleConfig`,
  *  resolved against the ids `seedSuite` actually created.
  *
@@ -971,6 +1093,14 @@ export async function runTinySuite(
    *  entirely rather than rendered as a suite that scheduled zero divisions
    *  cleanly. */
   const scheduling: DivisionScheduleReport[] = [];
+  /** F-T6-3 — the run-level gate's own findings. Empty on a clean run and
+   *  omitted from the report then; NEVER omitted when non-empty, because every
+   *  per-division layer is blind to this by construction. */
+  let crossDivisionClashes: readonly CrossDivisionCourtClash[] = [];
+  /** F-T6-2 — what the product reported back on each fixture officials
+   *  auto-assign touched. Read AFTER the apply, per fixture, by
+   *  `runOfficialsAutoAssign`. */
+  let officialsByFixtureId: ReadonlyMap<string, readonly FixtureOfficialRow[]> = new Map();
   let engineDelta: EngineDeltaSection | undefined;
   let conflictCount: number | undefined;
   let solver: Omit<SolverResult, "requestedEngine"> | undefined;
@@ -1434,16 +1564,32 @@ export async function runTinySuite(
       }
 
       if (constraints !== undefined) {
-        // THE TWO DENOMINATORS, and which one answers which question.
+        // THE TWO DENOMINATORS, and which one is AUTHORITATIVE.
         //
-        // `certify`'s `placed`/`total` are the SOLVER'S PROPOSAL — parent spec
-        // §6.3's unplaced gate names exactly those, and `certificate.ts`'s own
-        // doc says so. `judgeDivision`'s `unplacedCount` is the FETCHED
-        // board's. They are different measurements of different objects and
-        // neither is derived from the other here: each gates its own question,
-        // both are printed side by side in the report, and a disagreement
-        // between them is reported as its own warning below rather than
-        // silently resolved in favour of one.
+        // RULING (T6 review): **`judgeDivision.unplacedCount` — the FETCHED
+        // board's count — is the authoritative unplaced gate. The
+        // certificate's `placed`/`total` are a SECONDARY, HISTORY-ONLY path.**
+        // Written here as a decision rather than left as an accident of
+        // ordering, because the ordering is what makes it true and the
+        // ordering is easy to read past:
+        //
+        //   `certify` evaluates SKIPPED_NO_HISTORY FIRST and returns
+        //   (`certificate.ts`, design §3.4's table, ruling R27). So on a pack
+        //   that declares no `historicalAssignment` — every pack the bench
+        //   runs today, `_tiny` included — the UNPLACED branch beneath it is
+        //   UNREACHABLE, whatever the solver claims. Feeding this call site a
+        //   proposal of 2-of-3 changes nothing about the verdict.
+        //
+        // That is correct behaviour, not a gap: the certificate is a claim
+        // about HISTORY versus our encoding, and it has nothing to say about a
+        // pack with no history. But it means a reader must not take the
+        // certificate as cover for the proposal side. The board is what gates;
+        // the proposal is reported, compared, and warned about when the two
+        // disagree.
+        //
+        // Both numbers are still passed and still printed, in their own report
+        // columns, and neither is derived from the other — a single merged
+        // "unplaced" would lose whichever one it did not pick.
         const metrics = outcome.metrics;
         if (metrics === undefined) {
           // `ScheduleOutcome.metrics` is optional, so this decision has to be
@@ -1603,6 +1749,125 @@ export async function runTinySuite(
         : { status: soleValue(layer.outcomes.map((o) => o.solverStatus)) }),
     };
 
+
+    // B03 review F1(b): officials auto-assign runs HERE, strictly AFTER the
+    // whole scheduling layer — never inside `seedSuite`, which completes before
+    // this suite's own scheduling walk even starts. B04 moved it from between
+    // `schedule/apply` and `/validate` (where the old hand-rolled walk had it)
+    // to after `runScheduleLayer` returns, because that driver owns apply,
+    // validate AND the board fetch as one sequence. It CANNOT move earlier
+    // (see the re-check below, and B03 review F1(b)), so the board every layer
+    // judged above predates whatever this assigns — which is why the checker
+    // runs a second time immediately after it. `officials/auto`'s own
+    // `engineInput` only considers fixtures whose `scheduled_at` is set
+    // (`usecases/officials.ts:386`), so calling it any earlier always
+    // proposes zero regardless of what the pack declares. `plan.officials`
+    // with EMPTY `assignments` are the auto-needing ones (pack-schema.ts:
+    // 768-769's own rule) — `_tiny.json`'s "off-eli" is exactly one, and
+    // this is the only place a live run can actually reach it. Gated on
+    // `autoAssign` (derived above from the DLS-gate probe's own plan
+    // choice) — calling `/officials/auto` without the entitlement 402s.
+    const autoOfficials = plan.officials.filter(
+      (o) => o.assignments.length === 0,
+    );
+    let officialsAutoApplied = 0;
+    if (autoAssign === true && autoOfficials.length > 0) {
+      log.info(
+        { autoOfficials: autoOfficials.length },
+        "tiny: running officials auto-assign (B03 review F1(b) — after schedule/apply)",
+      );
+      const autoResult = await runOfficialsAutoAssign({
+        base,
+        email,
+        primaryDivisionId: divisionId,
+        autoOfficials,
+        transport: t,
+      });
+      officialsAutoApplied = autoResult.appliedCount;
+      // The product's OWN post-apply read (`seed.ts:1092-1098` — a distinct
+      // GET per touched fixture, never the apply's echoed body). Kept so the
+      // re-check below judges what the product says is on the board.
+      officialsByFixtureId = autoResult.fixtureOfficialsById;
+      const autoPassed = autoResult.appliedCount > 0;
+      oracles.push({
+        name: "officials: auto-assign reaches the auto-needing official(s) after scheduling",
+        passed: autoPassed,
+        detail: autoPassed
+          ? `${autoResult.proposedCount} proposed, ${autoResult.appliedCount} applied across ` +
+            `${autoResult.fixtureOfficialsById.size} fixture(s)`
+          : `officials/auto proposed 0 assignments for ${autoOfficials.length} auto-needing official(s) ` +
+            `(e.g. "${autoOfficials[0].ref}") even after scheduling`,
+      });
+      if (!autoPassed) {
+        errors.push(
+          `officials auto-assign: 0 assignment(s) applied for ${autoOfficials.length} auto-needing official(s)`,
+        );
+      }
+    }
+
+    // F-T6-2 — RE-CHECK the board after officials auto-assign.
+    //
+    // `/officials/auto`'s own `engineInput` only considers fixtures whose
+    // `scheduled_at` is set (`usecases/officials.ts:386`), so auto-assign
+    // CANNOT move earlier than apply — B03 review F1(b) established that, and
+    // it is why the whole block sits here. The consequence is that the board
+    // `runScheduleLayer` fetched, and every verdict taken on it above,
+    // predates whatever auto-assign puts on it: an official double-booking
+    // INTRODUCED here would be seen by neither layer 1 nor design §3.3's
+    // officials rule.
+    //
+    // So the checker runs a SECOND time, and BOTH verdicts are reported.
+    // Not one: a single post-officials verdict would hide which stage
+    // introduced a finding, and "the board was clean when it was scheduled and
+    // dirty once the officials landed" is exactly the fact a reader needs.
+    // The after-verdict GATES like the before-verdict does — it describes a
+    // board that really exists.
+    if (officialsAutoApplied > 0 && officialsByFixtureId.size > 0) {
+      for (let i = 0; i < scheduling.length; i += 1) {
+        const row = scheduling[i]!;
+        const board = boardByRef.get(row.divisionRef);
+        const constraints = constraintsByRef.get(row.divisionRef);
+        if (board === undefined || constraints === undefined) continue;
+        const after = checkBoard(boardWithOfficials(board, officialsByFixtureId), constraints);
+        const reasons = [...row.reasons];
+        if (!after.clean) {
+          const kinds = [...new Set(after.findings.map((f) => f.kind))];
+          const reason =
+            `${row.divisionRef}: checker findings AFTER officials auto-assign = ` +
+            `${after.findings.length} (${kinds.length > 0 ? kinds.join(", ") : "none named"})`;
+          reasons.push(reason);
+          errors.push(reason);
+        }
+        scheduling[i] = {
+          ...row,
+          checkerAfterOfficials: {
+            clean: after.clean,
+            findings: after.findings,
+            unchecked: after.unchecked,
+          },
+          red: row.red || !after.clean,
+          reasons,
+        };
+      }
+    }
+
+    // F-T6-3 — the RUN-LEVEL cross-division court gate.
+    //
+    // Runs AFTER the officials re-check so the report's ordering matches the
+    // order the board was actually judged in, and over the boards
+    // `runScheduleLayer` FETCHED — officials do not move a fixture, so the
+    // slots are the same either way.
+    crossDivisionClashes = crossDivisionCourtClashes(layer.boards);
+    for (const clash of crossDivisionClashes) {
+      errors.push(
+        `cross-division court double-booking on ${clash.courtId}: ` +
+          `${clash.a.divisionRef}/${clash.a.fixtureId} [${new Date(clash.a.start).toISOString()}..${new Date(clash.a.end).toISOString()}) ` +
+          `overlaps ${clash.b.divisionRef}/${clash.b.fixtureId} [${new Date(clash.b.start).toISOString()}..${new Date(clash.b.end).toISOString()}). ` +
+          "One court cannot hold two fixtures at once whichever division each belongs to, and every per-division " +
+          "layer is blind to this by construction",
+      );
+    }
+
     // The engine artifact — one file per LEG (ruling R3). Written only when
     // the caller resolved a report directory AND a run id: `bench.ts` always
     // does, and a unit test that supplies neither gets no disk write at all
@@ -1635,70 +1900,6 @@ export async function runTinySuite(
 
     timings.scheduleMs = Math.round(performance.now() - scheduleStart);
 
-
-    // B03 review F1(b): officials auto-assign runs HERE, strictly AFTER the
-    // whole scheduling layer — never inside `seedSuite`, which completes before
-    // this suite's own scheduling walk even starts. B04 moved it from between
-    // `schedule/apply` and `/validate` (where the old hand-rolled walk had it)
-    // to after `runScheduleLayer` returns, because that driver owns apply,
-    // validate AND the board fetch as one sequence. The consequence is stated
-    // rather than hidden: layer 1 and the independent checker both judged a
-    // board that predates whatever this assigns, so an officials clash
-    // INTRODUCED here is not seen by either this run — warned about below
-    // whenever it actually applies anything. `officials/auto`'s own
-    // `engineInput` only considers fixtures whose `scheduled_at` is set
-    // (`usecases/officials.ts:386`), so calling it any earlier always
-    // proposes zero regardless of what the pack declares. `plan.officials`
-    // with EMPTY `assignments` are the auto-needing ones (pack-schema.ts:
-    // 768-769's own rule) — `_tiny.json`'s "off-eli" is exactly one, and
-    // this is the only place a live run can actually reach it. Gated on
-    // `autoAssign` (derived above from the DLS-gate probe's own plan
-    // choice) — calling `/officials/auto` without the entitlement 402s.
-    const autoOfficials = plan.officials.filter(
-      (o) => o.assignments.length === 0,
-    );
-    let officialsAutoApplied = 0;
-    if (autoAssign === true && autoOfficials.length > 0) {
-      log.info(
-        { autoOfficials: autoOfficials.length },
-        "tiny: running officials auto-assign (B03 review F1(b) — after schedule/apply)",
-      );
-      const autoResult = await runOfficialsAutoAssign({
-        base,
-        email,
-        primaryDivisionId: divisionId,
-        autoOfficials,
-        transport: t,
-      });
-      officialsAutoApplied = autoResult.appliedCount;
-      const autoPassed = autoResult.appliedCount > 0;
-      oracles.push({
-        name: "officials: auto-assign reaches the auto-needing official(s) after scheduling",
-        passed: autoPassed,
-        detail: autoPassed
-          ? `${autoResult.proposedCount} proposed, ${autoResult.appliedCount} applied across ` +
-            `${autoResult.fixtureOfficialsById.size} fixture(s)`
-          : `officials/auto proposed 0 assignments for ${autoOfficials.length} auto-needing official(s) ` +
-            `(e.g. "${autoOfficials[0].ref}") even after scheduling`,
-      });
-      if (!autoPassed) {
-        errors.push(
-          `officials auto-assign: 0 assignment(s) applied for ${autoOfficials.length} auto-needing official(s)`,
-        );
-      }
-    }
-
-    // See the block above: the board every layer judged was fetched BEFORE
-    // this ran, so an official double-booking introduced here is invisible to
-    // both `/validate` and design §3.3's officials rule this run. Said out
-    // loud only when something was actually applied — a warning that fires on
-    // a no-op is a warning nobody reads.
-    if (officialsAutoApplied > 0) {
-      warnings.push(
-        `tiny: officials auto-assign applied ${officialsAutoApplied} assignment(s) AFTER the scheduling layer ` +
-          "fetched and judged the board, so neither layer 1 nor the independent checker has seen them",
-      );
-    }
 
 
     // B03 T6b: the player-stats baseline. Gated on `input.sql` — it needs
@@ -2099,5 +2300,9 @@ export async function runTinySuite(
     // `engineDelta` follows the same rule and is set only inside the layer.
     ...(scheduling.length > 0 ? { scheduling } : {}),
     ...(engineDelta === undefined ? {} : { engineDelta }),
+    // F-T6-3. Omitted when empty — a rendered "cross-division clashes: none"
+    // on every pre-B04 report would be noise — but never omitted when it
+    // fired, because nothing else in the run can see it.
+    ...(crossDivisionClashes.length > 0 ? { crossDivisionCourtClashes: crossDivisionClashes } : {}),
   };
 }

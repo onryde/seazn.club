@@ -94,6 +94,18 @@ export interface FakeScheduleOptions {
   /** Move a pinned fixture during `apply`, so pin integrity has something to
    *  catch. Keyed by fixture id. */
   movePinnedTo?: { fixtureId: string; scheduledAt: string; courtId: string };
+  /** Place this stage as though no OTHER division had booked the courts —
+   *  i.e. exactly what this fake did before it modelled `siblingAssignments`.
+   *
+   *  The product does NOT behave this way: `siblingAssignments`
+   *  (`usecases/schedule.ts:839-884`) selects every already-placed fixture of
+   *  the same COMPETITION and hands it to the placer and the verifier as fixed
+   *  occupancy, so a real `auto` cannot land on a court another division is
+   *  already using. This knob restores the blind behaviour on purpose, and for
+   *  one purpose: it is the only way to produce a board where each division is
+   *  internally clean and the run-level cross-division court check is the ONLY
+   *  thing that can fire. */
+  ignoreSiblingOccupancy?: boolean;
 }
 
 export interface FakeScheduleWorld {
@@ -285,10 +297,41 @@ export function makeScheduleWorld(options: FakeScheduleOptions = {}): FakeSchedu
       ? (cfg.courts as readonly unknown[]).filter((c): c is string => typeof c === "string")
       : [];
 
+    // WHAT ANOTHER DIVISION HAS ALREADY BOOKED.
+    //
+    // Modelled because the product models it: `siblingAssignments`
+    // (`usecases/schedule.ts:839-884`) selects every placed fixture of the same
+    // COMPETITION outside this division and feeds it to the placer AND to
+    // `validateAssignments` as `existing` — where the court-clash rule runs
+    // over `board = [...existing, ...assignments]` (`calendar.ts:1719`). So a
+    // real `auto` cannot put this stage on a court another division of the same
+    // competition is already using, and a fake that could would be accepting
+    // what the product refuses.
+    //
+    // Keyed by `courtId` + start instant, which is enough here because every
+    // slot this fake emits is exactly `matchMinutes` long and aligned to
+    // `startAt`.
+    const occupied = new Set<string>();
+    if (options.ignoreSiblingOccupancy !== true) {
+      for (const other of fixtures.values()) {
+        if (other.stage_id === stageId) continue;
+        if (other.scheduled_at === null || other.court_id === null) continue;
+        occupied.add(`${other.court_id}@${Date.parse(other.scheduled_at)}`);
+      }
+    }
+    const slotAt = (slot: number): { at: number; court: string } => ({
+      at: options.doubleBookCourt === true ? startMs : startMs + slot * matchMinutes * MINUTE_MS,
+      court:
+        courts.length === 0
+          ? "court-unset"
+          : courts[options.doubleBookCourt === true ? 0 : slot % courts.length]!,
+    });
+
     const assignments: { fixture_id: string; scheduled_at: string; court_id: string }[] = [];
     if (!(options.proposeNothing === true)) {
       const placeable = rows.slice(0, rows.length - (options.leaveUnplaced ?? 0));
-      placeable.forEach((row, slot) => {
+      let slot = 0;
+      for (const row of placeable) {
         // A LOCKED fixture keeps the slot it already holds — a lock is
         // honoured on every mode, unconditionally.
         if (row.schedule_locked && row.scheduled_at !== null && row.court_id !== null) {
@@ -297,16 +340,29 @@ export function makeScheduleWorld(options: FakeScheduleOptions = {}): FakeSchedu
             scheduled_at: row.scheduled_at,
             court_id: row.court_id,
           });
-          return;
+          slot += 1;
+          continue;
         }
-        const court = courts.length === 0 ? "court-unset" : courts[options.doubleBookCourt === true ? 0 : slot % courts.length]!;
-        const at = options.doubleBookCourt === true ? startMs : startMs + slot * matchMinutes * MINUTE_MS;
+        // Walk past anything a sibling division already holds. Bounded, so a
+        // fully-booked venue proposes fewer assignments rather than looping —
+        // which is the honest answer and reaches the driver's own
+        // "auto proposed 0 assignments" refusal.
+        let chosen = slotAt(slot);
+        let guard = 0;
+        while (occupied.has(`${chosen.court}@${chosen.at}`) && guard < 200) {
+          slot += 1;
+          guard += 1;
+          chosen = slotAt(slot);
+        }
+        if (occupied.has(`${chosen.court}@${chosen.at}`)) continue;
+        occupied.add(`${chosen.court}@${chosen.at}`);
         assignments.push({
           fixture_id: row.id,
-          scheduled_at: new Date(at).toISOString(),
-          court_id: court,
+          scheduled_at: new Date(chosen.at).toISOString(),
+          court_id: chosen.court,
         });
-      });
+        slot += 1;
+      }
     }
 
     const starts = assignments.map((a) => Date.parse(a.scheduled_at));

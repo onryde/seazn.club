@@ -22,6 +22,7 @@ import { describe, expect, it } from "vitest";
 import pino from "pino";
 import { fixtureKey, PackSchema } from "../pack-schema.ts";
 import {
+  crossDivisionCourtClashes,
   divisionDeclaresOfficials,
   isRoundRobinStage,
   resolveScheduleLocks,
@@ -29,6 +30,7 @@ import {
   TINY_PACK_PATH,
   type ScheduleLockResolution,
 } from "../suites/tiny.ts";
+import type { Board } from "../board.ts";
 import { buildSeedPlan } from "../seed-plan.ts";
 import { BenchReport, writeReport, type SuiteReport } from "../report.ts";
 import { makeFakeServer } from "./tiny-suite.test.ts";
@@ -784,5 +786,165 @@ describe("writeReport — a real _tiny run's own report reaches disk intact", ()
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// F-T6-3 — the run-level cross-division court gate
+// ---------------------------------------------------------------------------
+
+/** A one-fixture board, so a clash can be built out of exactly two of them and
+ *  nothing else can be responsible for the verdict. Sizes are asymmetric
+ *  (30 vs 45 minutes) so a transposed index cannot pass. */
+function oneFixtureBoard(input: {
+  divisionRef: string;
+  fixtureId: string;
+  courtId?: string;
+  start?: number;
+  minutes?: number;
+}): Board {
+  const start = input.start ?? Date.parse("2099-01-01T09:00:00.000Z");
+  const minutes = input.minutes ?? 30;
+  return {
+    divisionId: `id-${input.divisionRef}`,
+    divisionRef: input.divisionRef,
+    tz: "UTC",
+    fixtures: [
+      {
+        fixtureId: input.fixtureId,
+        divisionId: `id-${input.divisionRef}`,
+        divisionRef: input.divisionRef,
+        ...(input.courtId === undefined ? {} : { courtId: input.courtId }),
+        ...(input.courtId === undefined ? {} : { start, end: start + minutes * 60_000 }),
+        entrantIds: [],
+        personIds: [],
+        officialIds: [],
+        locked: false,
+      },
+    ],
+    courts: [],
+  };
+}
+
+const AT_9 = Date.parse("2099-01-01T09:00:00.000Z");
+
+describe("crossDivisionCourtClashes", () => {
+  it("finds a court held by two overlapping fixtures from DIFFERENT divisions", () => {
+    const clashes = crossDivisionCourtClashes([
+      oneFixtureBoard({ divisionRef: "d-a", fixtureId: "fx-a", courtId: "c1", start: AT_9, minutes: 45 }),
+      oneFixtureBoard({ divisionRef: "d-b", fixtureId: "fx-b", courtId: "c1", start: AT_9 + 30 * 60_000 }),
+    ]);
+    expect(clashes).toHaveLength(1);
+    // BOTH sides named — a clash naming one fixture cannot be acted on.
+    expect(clashes[0]?.courtId).toBe("c1");
+    expect([clashes[0]?.a.fixtureId, clashes[0]?.b.fixtureId].sort()).toEqual(["fx-a", "fx-b"]);
+    expect([clashes[0]?.a.divisionRef, clashes[0]?.b.divisionRef].sort()).toEqual(["d-a", "d-b"]);
+  });
+
+  it("does NOT report a SAME-division overlap — that is checkBoard's finding, not this one", () => {
+    // Two authorities on one fact would red the same pair twice, with two
+    // wordings, and a reader could not tell one clash from two.
+    const board = oneFixtureBoard({ divisionRef: "d-a", fixtureId: "fx-a", courtId: "c1" });
+    const twin: Board = {
+      ...board,
+      fixtures: [...board.fixtures, { ...board.fixtures[0]!, fixtureId: "fx-a2" }],
+    };
+    expect(crossDivisionCourtClashes([twin])).toEqual([]);
+  });
+
+  it("does not fire on a DIFFERENT court, or on a non-overlapping time", () => {
+    expect(
+      crossDivisionCourtClashes([
+        oneFixtureBoard({ divisionRef: "d-a", fixtureId: "fx-a", courtId: "c1" }),
+        oneFixtureBoard({ divisionRef: "d-b", fixtureId: "fx-b", courtId: "c2" }),
+      ]),
+    ).toEqual([]);
+    expect(
+      crossDivisionCourtClashes([
+        oneFixtureBoard({ divisionRef: "d-a", fixtureId: "fx-a", courtId: "c1", start: AT_9 }),
+        oneFixtureBoard({ divisionRef: "d-b", fixtureId: "fx-b", courtId: "c1", start: AT_9 + 60 * 60_000 }),
+      ]),
+    ).toEqual([]);
+  });
+
+  it("treats the interval as HALF-OPEN — back to back is not a clash", () => {
+    // A closed interval here would red every back-to-back pair the product
+    // legitimately produces, and the check would be deleted within a day.
+    expect(
+      crossDivisionCourtClashes([
+        oneFixtureBoard({ divisionRef: "d-a", fixtureId: "fx-a", courtId: "c1", start: AT_9, minutes: 30 }),
+        oneFixtureBoard({ divisionRef: "d-b", fixtureId: "fx-b", courtId: "c1", start: AT_9 + 30 * 60_000 }),
+      ]),
+    ).toEqual([]);
+    // One minute earlier and it IS a clash — the boundary is asserted from
+    // both sides, so an off-by-one in either direction is witnessed.
+    expect(
+      crossDivisionCourtClashes([
+        oneFixtureBoard({ divisionRef: "d-a", fixtureId: "fx-a", courtId: "c1", start: AT_9, minutes: 31 }),
+        oneFixtureBoard({ divisionRef: "d-b", fixtureId: "fx-b", courtId: "c1", start: AT_9 + 30 * 60_000 }),
+      ]),
+    ).toHaveLength(1);
+  });
+
+  it("ignores a fixture with no court — it occupies no court and cannot clash on one", () => {
+    expect(
+      crossDivisionCourtClashes([
+        oneFixtureBoard({ divisionRef: "d-a", fixtureId: "fx-a" }),
+        oneFixtureBoard({ divisionRef: "d-b", fixtureId: "fx-b" }),
+      ]),
+    ).toEqual([]);
+  });
+});
+
+describe("runTinySuite — the cross-division gate, end to end", () => {
+  it("is CLEAN on _tiny, because the fake models what the product models", async () => {
+    // Not clean by luck. `siblingAssignments` (`usecases/schedule.ts:839-884`)
+    // is COMPETITION-scoped: it selects every placed fixture of the same
+    // competition outside this division and hands it to the placer and to
+    // `validateAssignments` as `existing`, where the court-clash rule runs over
+    // `board = [...existing, ...assignments]` (`calendar.ts:1719`). `_tiny`'s
+    // two divisions share one competition, so a real `auto` cannot put the
+    // second on a court the first already holds — and the fake now does the
+    // same. This test pins the RESULT of that: the badminton fixture avoids
+    // all three of d-tiny's slots.
+    const { report, server } = await run();
+    expect(report.crossDivisionCourtClashes).toBeUndefined();
+    expect(report.gate).toBe("green");
+
+    const slot = (f: { court_id: string | null; scheduled_at: string | null }) =>
+      `${f.court_id}@${f.scheduled_at}`;
+    const rows = [...server.schedule.fixtures.values()].filter((f) => f.scheduled_at !== null);
+    expect(rows.length).toBeGreaterThan(1);
+    expect(new Set(rows.map(slot)).size).toBe(rows.length);
+  });
+
+  it("REDS when two divisions land on one court — and NOTHING else can catch it", async () => {
+    // The differential the gate exists for. `ignoreSiblingOccupancy` restores
+    // the blind placement this fake had before it modelled
+    // `siblingAssignments`: the second division is laid out as though the first
+    // had booked nothing, so both land on the same court at the same instant.
+    //
+    // Every per-division layer stays CLEAN — that is the point, and it is
+    // asserted rather than assumed. `checkBoard` sees one division's fixtures,
+    // `/validate` is addressed by a division id, and the certificate is
+    // per-division. Only the run-level gate can speak.
+    const { report } = await run({ schedule: { ignoreSiblingOccupancy: true } });
+
+    for (const row of report.scheduling ?? []) {
+      expect(row.checker?.clean, `${row.divisionRef}'s own checker`).toBe(true);
+      expect(row.blockingCount, `${row.divisionRef}'s layer 1`).toBe(0);
+      expect(row.certificate?.red, `${row.divisionRef}'s certificate`).toBe(false);
+      expect(row.unplacedCount).toBe(0);
+    }
+
+    const clashes = report.crossDivisionCourtClashes ?? [];
+    expect(clashes.length).toBeGreaterThan(0);
+    expect([clashes[0]?.a.divisionRef, clashes[0]?.b.divisionRef].sort()).toEqual(
+      [...SCHEDULED_REFS].sort(),
+    );
+    // It GATES. A report-only finding here would be a physical impossibility
+    // printed in a green run.
+    expect(report.gate).toBe("red");
+    expect((report.errors ?? []).join(" | ")).toContain("cross-division court double-booking");
   });
 });

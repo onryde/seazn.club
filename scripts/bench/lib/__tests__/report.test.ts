@@ -633,3 +633,107 @@ describe("report schema round-trip — B04", () => {
     expect(row?.metrics?.placed).toBe(5);
   });
 });
+
+// ---------------------------------------------------------------------------
+// B04 review round — the post-officials re-check and the cross-division gate
+// ---------------------------------------------------------------------------
+
+describe("renderMarkdown — the post-officials checker verdict (F-T6-2)", () => {
+  it("renders BOTH verdicts, and says which stage moved it", () => {
+    // Both, never one: a single post-officials verdict would report a finding
+    // without saying whether scheduling or officials introduced it.
+    const md = renderMarkdown(
+      scheduledReport([
+        divisionSchedule({
+          checkerAfterOfficials: {
+            clean: false,
+            findings: [
+              {
+                kind: "official_double_booking",
+                divisionRef: "d-tiny",
+                fixtureIds: ["fx-1", "fx-2"],
+                detail: "official o-1 is on fx-1 and fx-2, which overlap",
+              },
+            ],
+            unchecked: [],
+          },
+          red: true,
+          reasons: ["d-tiny: checker findings AFTER officials auto-assign = 1"],
+        }),
+      ]),
+    );
+    const section = md.slice(md.indexOf("## Checker"));
+    // The first verdict is still there…
+    expect(section).toContain("CLEAN");
+    // …and the second is beside it, labelled as a CHANGE.
+    expect(section).toContain("After officials auto-assign — 1 FINDING(S)");
+    expect(section).toContain("CHANGED from clean");
+    expect(section).toContain("`official_double_booking` [fx-1, fx-2]");
+  });
+
+  it("says '(unchanged)' when the second pass agrees — a silent second pass is one nobody can tell ran", () => {
+    const md = renderMarkdown(
+      scheduledReport([
+        divisionSchedule({
+          checkerAfterOfficials: { clean: true, findings: [], unchecked: [] },
+        }),
+      ]),
+    );
+    expect(md).toContain("After officials auto-assign — CLEAN (unchanged)");
+  });
+
+  it("renders no second verdict at all when auto-assign applied nothing", () => {
+    const md = renderMarkdown(scheduledReport([divisionSchedule()]));
+    expect(md).not.toContain("After officials auto-assign");
+  });
+});
+
+describe("renderMarkdown — the cross-division court gate (F-T6-3)", () => {
+  it("renders the section on ANY scheduled run, and says 'none' when it found nothing", () => {
+    // Absence is the interesting state here: a reader who finds no section
+    // cannot tell "checked, nothing found" from "never ran". So it renders
+    // whenever a division was scheduled, not only when it fired.
+    const md = renderMarkdown(scheduledReport([divisionSchedule()]));
+    expect(md).toContain("## Cross-division court occupancy (run-level gate)");
+    expect(md).toContain("none — checked across 1 division(s)");
+  });
+
+  it("names the court and BOTH sides of every clash", () => {
+    const base = fullReport();
+    const md = renderMarkdown({
+      ...base,
+      suites: base.suites.map((s) => ({
+        ...s,
+        scheduling: [divisionSchedule(), divisionSchedule({ divisionRef: "d-badminton" })],
+        crossDivisionCourtClashes: [
+          {
+            courtId: "court-1",
+            a: {
+              divisionRef: "d-tiny",
+              fixtureId: "fx-1",
+              start: Date.parse("2099-01-01T09:00:00.000Z"),
+              end: Date.parse("2099-01-01T09:30:00.000Z"),
+            },
+            b: {
+              divisionRef: "d-badminton",
+              fixtureId: "fx-bm-1",
+              start: Date.parse("2099-01-01T09:15:00.000Z"),
+              end: Date.parse("2099-01-01T09:45:00.000Z"),
+            },
+          },
+        ],
+      })),
+    });
+    expect(md).toContain("**1 clash(es)**");
+    expect(md).toContain("court `court-1`");
+    expect(md).toContain("d-tiny/fx-1");
+    expect(md).toContain("d-badminton/fx-bm-1");
+    // The instants, not merely the ids — a clash a reader cannot locate in
+    // time is one they cannot act on.
+    expect(md).toContain("2099-01-01T09:00:00.000Z .. 2099-01-01T09:30:00.000Z");
+  });
+
+  it("renders NOTHING for a report that scheduled nothing", () => {
+    expect(renderMarkdown(fullReport())).not.toContain("Cross-division court occupancy");
+  });
+});
