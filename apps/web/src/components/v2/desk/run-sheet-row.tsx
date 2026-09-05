@@ -85,7 +85,7 @@ export function RunSheetRow({
   // `tz` read would look right on screen while round-tripping an instant
   // fourteen hours from the one shown. Pinned by a value test on a
   // `tz !== orgTz` division, mutation-proven.
-  const [when, setWhen] = useState(fixture.scheduled_at ? zonedDateTimeInput(fixture.scheduled_at, orgTz) : "");
+  const [when, setWhen] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -165,9 +165,21 @@ export function RunSheetRow({
    * covers every other way the editor can close (a successful save, a future
    * Escape handler) and picks up a `scheduled_at` that changed underneath
    * since the last open. `orgTz`, never `tz`: see the Save handler.
+   *
+   * The seed is UNCONDITIONAL — `scheduled_at === null` seeds "" rather than
+   * leaving the last typed value in place. A reseed that fires only on a
+   * non-empty stored value passes the "typed then cancelled" case and fails
+   * its inverse (clear the date, cancel, reopen: the field must show the
+   * stored time again, not the blank the organiser abandoned), which is why
+   * the e2e asserts both directions.
    */
   function toggleEditor(): void {
-    setEditing(!editing);
+    const opening = !editing;
+    if (opening) {
+      setWhen(fixture.scheduled_at ? zonedDateTimeInput(fixture.scheduled_at, orgTz) : "");
+      setError(null);
+    }
+    setEditing(opening);
   }
 
   /** Returns whether the write landed, so a caller can reset local state
