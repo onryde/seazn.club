@@ -77,7 +77,11 @@
 //
 // Both are "never drop it silently". The split is about blast radius, not
 // about severity.
-import type { CourtExceptionRow, CourtHoursRow } from "@seazn/engine/scheduling";
+import type {
+  ConstraintScope,
+  CourtExceptionRow,
+  CourtHoursRow,
+} from "@seazn/engine/scheduling";
 
 // ---------------------------------------------------------------------------
 // The board — one division as the PRODUCT reports it, after apply
@@ -150,16 +154,36 @@ export interface Board {
  *
  *  `restScope` is camelCase where the engine's own field is `rest_scope`
  *  (`constraints.ts:88`): every other field in this file is camelCase, and
- *  the rename happens exactly once, here, where the wire shape is read. */
+ *  the rename happens exactly once, here, where the wire shape is read.
+ *
+ *  `scope` IS NOT OPTIONAL, and it is the engine's own `ConstraintScope`
+ *  (`import type`, `constraints.ts:30`) rather than a bench restatement, so the
+ *  seven kinds cannot drift. Every `HardConstraint` member carries a required
+ *  `scope` (`constraints.ts:86-113`), and an encoding that dropped it would
+ *  leave the checker no choice but to apply every rule universally. That is not
+ *  under-checking, it is OVER-checking: a day cap scoped
+ *  `{ kind: "entrant", entrantId: X }` or a rest rule scoped `{ kind: "pool" }`
+ *  would red fixtures the rule never covered, and the bench would file a FALSE
+ *  product defect — the worst possible output for a harness whose only product
+ *  is "the product is wrong here".
+ *
+ *  `constraints.ts:36-50` documents this in the other direction and is worth
+ *  reading before writing a rule against this field: the universal kinds
+ *  (`every_entrant` / `every_person`) are NOT competition-scoped rules with a
+ *  wider net, `scopeCoversFixture` answers `true` for both and cannot tell them
+ *  apart, and the distinction lives in the TALLY KEY. A checker that treats
+ *  that `true` as sufficient writes the same bug the engine's own comment was
+ *  written to prevent. */
 export type EncodedHardRule =
   | {
       type: "min_rest_minutes";
       minutes: number;
       restScope: "per_person" | "feeder_to_dependent" | "both";
+      scope: ConstraintScope;
     }
-  | { type: "max_fixtures_per_day"; count: number }
-  | { type: "not_before"; minutesIntoDay: number }
-  | { type: "not_after"; minutesIntoDay: number };
+  | { type: "max_fixtures_per_day"; count: number; scope: ConstraintScope }
+  | { type: "not_before"; minutesIntoDay: number; scope: ConstraintScope }
+  | { type: "not_after"; minutesIntoDay: number; scope: ConstraintScope };
 
 /** What the pack declared for one division, normalised to epoch ms — the
  *  checker's oracle, and the certificate's. */
@@ -364,6 +388,58 @@ function isRestScope(value: unknown): value is RestScope {
   return typeof value === "string" && (REST_SCOPES as readonly string[]).includes(value);
 }
 
+function nonEmptyString(value: unknown): string | undefined {
+  return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+/** Reads the engine's `ConstraintScope` (`constraints.ts:30`) out of an opaque
+ *  record, structurally — this module never runs that zod schema, for the same
+ *  reason it never runs `ScheduleConfig`'s.
+ *
+ *  Returns `undefined` on anything the product's own discriminated union would
+ *  reject, so the caller can report the rule as unmodelled. There is
+ *  deliberately no tolerant fallback: a scope that cannot be read has no safe
+ *  default, because the universal reading is the one that over-applies the
+ *  rule and files a false defect.
+ *
+ *  Rebuilds the object from the fields it recognises rather than passing the
+ *  input through, mirroring zod's strip: a `{ kind: "competition", entrantId }`
+ *  parses to a bare competition scope at the product, and the bench must agree
+ *  with what the product STORED, not with what the pack typed. */
+function readScope(raw: unknown): ConstraintScope | undefined {
+  const rec = asRecord(raw);
+  if (rec === undefined) return undefined;
+  switch (rec.kind) {
+    case "competition":
+      return { kind: "competition" };
+    case "every_entrant":
+      return { kind: "every_entrant" };
+    case "every_person":
+      return { kind: "every_person" };
+    case "division": {
+      const divisionId = nonEmptyString(rec.divisionId);
+      return divisionId === undefined ? undefined : { kind: "division", divisionId };
+    }
+    case "entrant": {
+      const entrantId = nonEmptyString(rec.entrantId);
+      return entrantId === undefined ? undefined : { kind: "entrant", entrantId };
+    }
+    case "person": {
+      const personKey = nonEmptyString(rec.personKey);
+      return personKey === undefined ? undefined : { kind: "person", personKey };
+    }
+    case "pool": {
+      const divisionId = nonEmptyString(rec.divisionId);
+      const pool = nonEmptyString(rec.pool);
+      return divisionId === undefined || pool === undefined
+        ? undefined
+        : { kind: "pool", divisionId, pool };
+    }
+    default:
+      return undefined;
+  }
+}
+
 function asRecord(value: unknown): Record<string, unknown> | undefined {
   return typeof value === "object" && value !== null && !Array.isArray(value)
     ? (value as Record<string, unknown>)
@@ -508,6 +584,25 @@ function show(value: unknown): string {
   return Object.prototype.toString.call(value);
 }
 
+/** The scope gate every modellable member passes through, checked BEFORE its
+ *  own operand so the two guards are killable one at a time: a rule with a good
+ *  operand and a bad scope witnesses this one, a rule with a good scope and a
+ *  bad operand witnesses the other. Two guards covering for each other are each
+ *  untested. */
+function scopeOr(
+  type: string,
+  rule: Record<string, unknown>,
+  unmodelled: { type: string; reason: string }[],
+): ConstraintScope | undefined {
+  const scope = readScope(rule.scope);
+  if (scope !== undefined) return scope;
+  unmodelled.push({
+    type,
+    reason: `${NOT_MODELLED} — ${type} carries no readable ConstraintScope (constraints.ts:30), and there is no safe default: applying it universally would red fixtures the rule never covers`,
+  });
+  return undefined;
+}
+
 /** Maps ONE `constraints.hard[]` entry onto `hard` or onto `unmodelled`.
  *
  *  Never onto neither: an entry that reaches here and lands nowhere is a
@@ -531,19 +626,23 @@ function encodeHardRule(
 
   switch (type) {
     case "min_rest_minutes": {
+      const scope = scopeOr(type, rule, unmodelled);
+      if (scope === undefined) return;
       const minutes = positiveInt(rule.minutes);
-      const scope = rule.rest_scope;
-      if (minutes === undefined || !isRestScope(scope)) {
+      const restScope = rule.rest_scope;
+      if (minutes === undefined || !isRestScope(restScope)) {
         unmodelled.push({
           type,
           reason: `${NOT_MODELLED} — min_rest_minutes needs a positive integer "minutes" and a "rest_scope" of ${REST_SCOPES.join("/")}`,
         });
         return;
       }
-      hard.push({ type: "min_rest_minutes", minutes, restScope: scope });
+      hard.push({ type: "min_rest_minutes", minutes, restScope, scope });
       return;
     }
     case "max_fixtures_per_day": {
+      const scope = scopeOr(type, rule, unmodelled);
+      if (scope === undefined) return;
       const count = positiveInt(rule.count);
       if (count === undefined) {
         unmodelled.push({
@@ -552,11 +651,13 @@ function encodeHardRule(
         });
         return;
       }
-      hard.push({ type: "max_fixtures_per_day", count });
+      hard.push({ type: "max_fixtures_per_day", count, scope });
       return;
     }
     case "not_before":
     case "not_after": {
+      const scope = scopeOr(type, rule, unmodelled);
+      if (scope === undefined) return;
       const mins = minutesIntoDay(rule.time);
       if (mins === undefined) {
         unmodelled.push({
@@ -565,7 +666,7 @@ function encodeHardRule(
         });
         return;
       }
-      hard.push({ type, minutesIntoDay: mins });
+      hard.push({ type, minutesIntoDay: mins, scope });
       return;
     }
     case "fixture_on_weekday":
