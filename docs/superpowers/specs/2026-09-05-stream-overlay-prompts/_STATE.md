@@ -20,11 +20,13 @@ Last updated: 2026-09-05 18:35 BST (session "overlay", branch
 
 Three Fable subagents, dispatched 2026-09-05 ~18:10–18:20 BST, owner
 deadline 18:58 BST ("try to complete all subagent in 25 mins, otherwise
-commit and record everything"):
+commit and record everything"). Two finished inside the clock; the third
+(W1 plan) hit the account's Fable session limit. Commit trailers from that
+point on read `Claude Opus 5 (1M context)`:
 
 | Deliverable | Path | State at last update |
 |---|---|---|
-| Wave 1 plan | `docs/superpowers/plans/2026-09-05-stream-overlay-w1.md` | not yet on disk |
+| Wave 1 plan | `docs/superpowers/plans/2026-09-05-stream-overlay-w1.md` | not yet on disk. The Fable writer died at 18:5x BST on a session rate limit (resets 23:00 Europe/London) having written nothing. The owner then switched the session model to Opus 5 and ruled "Use Opus as a SubAgent to write the implementation plan where it left instead of starting from beginning", so the EARLIER Opus planner (which had finished pinning and was about to write when it was stopped) was RESUMED with its context intact, re-pointed at this path and at `_THEMES.md` / `_RULES.md` / `W1-step-one.md`. If it is gone when you resume, dispatch one Opus planner from those three files plus `_INDEX.md`'s symbol tables — never re-scout what is already pinned. |
 | Wave 2 plan (moments) | `docs/superpowers/plans/2026-09-05-stream-overlay-w2-moments.md` | landed 18:44 BST, 1083 lines, 6 tasks, committed; carries a "NOT executable yet" status note: Task 1 test bodies are comment-sketched pending the RE-PIN table (task zero rewrites them); blocked on spectator W1 merge |
 | Prompt dir: `_RULES.md`, `W1-step-one.md`, `W2-moments.md` | same dir as this file | on disk, uncommitted at 18:33; committed if a later row below says so |
 | Prompt dir: reshaped `_INDEX.md` | same dir | not yet rewritten (18:16 version is the committed one) |
