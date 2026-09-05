@@ -288,6 +288,55 @@ nothing. No proxy branch, no cookie, no environment variable.
 If a demo on production without granting any club the feature is ever wanted,
 option (a) below is the build to revisit.
 
+## Q15. The football clock costs an engine change and a golden re-baseline — NEW, blocks Task 0
+
+**This corrects a cost I gave the owner.** When Q1 was put to the owner I
+said the three payload fields were "one additive payload extension plus its
+tests, well under a day, and nothing existing changes". That was wrong for
+one of the three, and the owner answered "we can add it as required" on that
+estimate. The correction, verified in the tree rather than inferred:
+
+- **The venue time zone is free**, as estimated: it rides on
+  `getPublicFixture`'s return, resolved by the existing `resolveVenueTz`. No
+  migration, no view change, no engine change.
+- **The two in-match numbers cannot be added cheaply.** The live transport
+  carries only `{ status, summary, outcome }`
+  (`live-score-data.ts:7-23`), so a number that changes during play can only
+  ride on the engine's `ScoreSummary`. That means editing `packages/engine`,
+  which every other constraint in this programme was written to avoid.
+- **The football clock additionally breaks a correctness property.** Football's
+  `coarsen` deliberately strips `at` from a goal
+  (`packages/engine/src/sports/football/football.ts:3029-3040`, verified), and
+  the conformance suite asserts "coarse fold ≡ fine fold" for any module that
+  declares `coarsen` (`packages/engine/src/testkit/conformance.ts:243-252`,
+  verified). Carrying a clock derived from `at` changes the coarse stream, so
+  the property fails until `coarsen` carries `at`, and four golden corpora
+  need regenerating under `REBASELINE_GOLDEN=1` — which the repo's golden
+  policy allows only as a deliberate, non-silent fold change, shipped as a red
+  code commit plus an isolated re-baseline commit.
+
+**Options.**
+
+(a) **All three, as the folded plan now reads.** Accept the engine edit and
+the golden re-baseline. Honest cost: days rather than hours, and it touches
+the scoring core to serve a cosmetic feature.
+
+(b) **Venue zone and cricket balls now, football clock deferred.** The
+football bar ships without a clock until a later wave. Cheapest correct
+answer; football is one sport of eleven, and `_THEMES.md` §3 would need a
+note that the clock cell is empty for now.
+
+(c) **Spend an hour first checking a cheaper route for the clock.** `coarsen`
+passes `football.period` payloads through untouched (same function, the case
+below the goal case), so a clock derived from the period's own start rather
+than from a goal's `at` may need no `coarsen` change and no re-baseline at
+all. If that holds, (a) becomes nearly as cheap as originally quoted.
+
+**Recommendation: (c), then (a) if it holds and (b) if it does not.** An hour
+of investigation is cheap against a multi-day engine change, and the answer
+is binary. Argument against: it delays Task 0 by an hour and the answer may
+be no, in which case (b) was reachable immediately.
+
 ## Q14 (original text, kept for the record — ANSWERED above). What exactly is the "header" that reveals the feature?
 
 **Owner, 2026-09-06: "now we can plan to load only if header appears."**
