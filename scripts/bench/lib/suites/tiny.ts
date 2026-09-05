@@ -114,7 +114,31 @@ import type pino from "pino";
 import { newSession, signIn, type Session } from "../http.ts";
 import { formatFinding, loadPackFile } from "../pack-io.ts";
 import { hashPack } from "../pack-hash.ts";
-import type { Pack, PackDivision } from "../pack-schema.ts";
+import { fixtureKey, type Pack, type PackDivision } from "../pack-schema.ts";
+// B04 — the five modules this suite wires together. Each is CLOSED and owns
+// one layer: `schedule.ts` drives the seven steps, `checker.ts` recomputes the
+// rules independently of the product, `certificate.ts` runs §6.3's protocol,
+// `believability.ts` scores what nobody gates on, and `board.ts` declares the
+// seam plus `judgeDivision`, the one place a division's verdict is composed.
+import {
+  readEngineArtifacts,
+  runScheduleLayer,
+  writeEngineArtifact,
+  type EngineSnapshot,
+  type EngineSnapshotDivision,
+  type ScheduleDivision,
+  type ScheduleLock,
+} from "../schedule.ts";
+import { checkBoard } from "../checker.ts";
+import { certify } from "../certificate.ts";
+import { assessBelievability, assessEngineDelta, type BelievabilityReport } from "../believability.ts";
+import {
+  judgeDivision,
+  type Board,
+  type CertificateVerdict,
+  type CheckerReport,
+  type EncodedConstraints,
+} from "../board.ts";
 import {
   buildSeedPlan,
   type SeedPlan,
@@ -135,8 +159,11 @@ import {
   type RosterMemberRef,
 } from "../stats.ts";
 import type {
+  DivisionScheduleReport,
+  EngineDeltaSection,
   OracleResult,
   RegistrationDivisionReport,
+  SolverResult,
   SuiteReport,
 } from "../report.ts";
 import type { SelectedDivisionExposure } from "../env.ts";
@@ -476,6 +503,25 @@ export interface TinySuiteInput {
   /** Overridable for the same reason `connectAccount` is — the unit suite has
    *  no live Postgres. A live run passes neither and gets `PlanSql`. */
   setOrgCurrency?: (orgId: string, currency: string) => Promise<void>;
+  /**
+   * B04 — where `engine-<engine>.json` is written and read back
+   * (`schedule.ts`'s `writeEngineArtifact`/`readEngineArtifacts`, ruling R3).
+   *
+   * BOTH of these or neither: without a run id there is no directory to write
+   * into, and without a directory there is nowhere to put it. `bench.ts`
+   * always supplies both — `reportDir` off `--report-dir` and `runId` off
+   * `resolveRunId(--run-id, gitSha)`, i.e. the SAME identity `writeReport`
+   * uses, resolved ONCE by that caller. Two resolution points for one identity
+   * is how a leg lands in a directory its sibling never looks in.
+   *
+   * Absent (every unit test, which has no business writing to disk) means no
+   * artifact is written and `assessEngineDelta` is called with `undefined`,
+   * which reports "nothing to compare" rather than an engine tie.
+   */
+  reportDir?: string;
+  /** See `reportDir`. Already RESOLVED — never a raw `--run-id` that may be
+   *  undefined. */
+  runId?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -629,6 +675,200 @@ interface CompetitionListPage {
   readonly nextCursor: string | null;
 }
 
+
+// ---------------------------------------------------------------------------
+// B04 — the small pack-derived facts the scheduling layer needs
+//
+// Exported so a unit test drives each one directly rather than only through a
+// whole fake-server run: every one of them decides something a live run cannot
+// be asked about twice.
+// ---------------------------------------------------------------------------
+
+/**
+ * Is this stage kind generated as a round robin?
+ *
+ * `league` and `group` are the two, and they are read off the product's own
+ * generator switch (`apps/web/src/server/usecases/stages.ts:752-753` — both
+ * cases fall into `roundRobinGen`; `group` differs only by splitting into
+ * pools that each play their own). Every other kind is a bracket or a ladder.
+ *
+ * Load-bearing because `EncodedConstraints.isRoundRobin` gates design §3.3's
+ * round-order rule, and that rule compares round numbers by day and by start.
+ * Answering `true` for a knockout would red a bracket for playing its rounds
+ * in bracket order, which is the only order it can play them in; answering
+ * `false` for a league silently deletes the rule. Nothing on a `Board` can
+ * tell the two apart, which is why the pack's own declaration is forwarded
+ * rather than derived downstream.
+ */
+export function isRoundRobinStage(stageKind: string): boolean {
+  return stageKind === "league" || stageKind === "group";
+}
+
+/**
+ * Did the PACK declare an official FOR THIS DIVISION?
+ *
+ * `EncodedConstraints.declaresOfficials` is the ONLY thing that can tell "this
+ * division has no officials" from "this division's officials did not come
+ * back" — `Fixture.officials` is `z.array(z.unknown())` on the wire, so a
+ * division that fetched none arrives as an empty array and every "no official
+ * is double-booked" check passes forever (design §4.3). The checker reds on
+ * the mismatch; this function is where the fact comes from.
+ *
+ * A NAMED ASSIGNMENT is the test, not "the pack declares any official at all".
+ * `_tiny` declares two: `off-dee` with an assignment onto d-tiny's rr-r1-c1
+ * (seeded by `seedOfficialsAndClaims`, i.e. on the board before scheduling
+ * ever runs) and `off-eli` with none at all, which is the pack's way of saying
+ * "leave this one to auto-assign". Counting `off-eli` toward d-tiny would make
+ * the rule red whenever `/officials/auto` proposed nothing — a claim about an
+ * entitlement, not about the board — and would make it red for d-badminton,
+ * which the pack never mentions officials for.
+ */
+export function divisionDeclaresOfficials(pack: Pack, divisionRef: string): boolean {
+  return (pack.officials ?? []).some((official) =>
+    official.assignments.some((a) => a.divisionRef === divisionRef),
+  );
+}
+
+/** The one distinct defined value in a list, or `undefined` when the list has
+ *  none — or more than one. Used where a run-level field has to answer for N
+ *  divisions: "they all said greedy" is a fact, "the first one said greedy" is
+ *  a coin toss recorded as one. */
+function soleValue<T>(values: readonly (T | undefined)[]): T | undefined {
+  const distinct = [...new Set(values.filter((v): v is T => v !== undefined))];
+  return distinct.length === 1 ? distinct[0] : undefined;
+}
+
+/**
+ * The verdict for a division whose three layers could not all run.
+ *
+ * Deliberately NOT `judgeDivision` with a stand-in checker: `checkBoard` on an
+ * absent (or empty) board returns `clean: true` having measured nothing, and
+ * recording that as a clean checker is design §1.4's false clean with a type
+ * annotation on it. `runScheduleLayer` only omits a board/encoding after a
+ * throw it has already recorded, so the errors below are the real verdict —
+ * and if they are somehow empty, that emptiness is itself reported rather than
+ * allowed to render as a division with nothing wrong.
+ *
+ * The `<ref>: ` prefix matches `judgeDivision`'s own, so a multi-division
+ * report still reads flat.
+ */
+function degradedVerdict(
+  divisionRef: string,
+  scheduleErrors: readonly string[],
+  board: Board | undefined,
+  constraints: EncodedConstraints | undefined,
+): { red: boolean; reasons: readonly string[] } {
+  const missing = [
+    board === undefined ? "no board was fetched" : undefined,
+    constraints === undefined ? "the scheduleConfig never encoded" : undefined,
+  ].filter((part): part is string => part !== undefined);
+  const cause =
+    scheduleErrors.length > 0
+      ? scheduleErrors.join("; ")
+      : "and the driver recorded no error for it, which is itself a bench wiring fault";
+  return {
+    red: true,
+    reasons: [
+      `${divisionRef}: the verification layers did not run (${missing.join(", ")}) — ${cause}`,
+    ],
+  };
+}
+
+/** One `@`-sigilled or bare court reference from a pack's `scheduleConfig`,
+ *  resolved against the ids `seedSuite` actually created.
+ *
+ *  The SAME convention `board.ts`'s own `resolveCourt` implements, and the
+ *  same map — so the two cannot name different courts. It is a second READER
+ *  rather than a second authority, and the distinction matters: the value here
+ *  only ever goes into a `PATCH /fixtures/{id}` body, and the pin the checker
+ *  later judges is snapshotted back from the PRODUCT's own state at design
+ *  §3.2 step 3, never from what this asked for. */
+function resolveCourtRef(raw: unknown, courtIdByRef: ReadonlyMap<string, string>): string | undefined {
+  if (typeof raw !== "string" || raw.length === 0) return undefined;
+  if (!raw.startsWith("@")) return raw;
+  return courtIdByRef.get(raw.slice(1));
+}
+
+/** What `resolveScheduleLocks` decided, and why, when it decided nothing. */
+export interface ScheduleLockResolution {
+  /** Keyed by `divisionRef`. At most ONE entry — design §4.4 locks one
+   *  fixture, and locking every division's only fixture would leave `auto`
+   *  with nothing to propose. */
+  readonly locks: ReadonlyMap<string, ScheduleLock>;
+  /** Why no lock was declared, when none was. Reported as a warning, never
+   *  dropped: design §4.4 is explicit that an unreachable lock route is a
+   *  named deferral and not a rule left passing because it never ran. */
+  readonly notes: readonly string[];
+}
+
+/**
+ * The one pin design §4.4 asks for, resolved from the pack.
+ *
+ * RULING R22, and it is the whole reason this returns a SLOT and not just an
+ * id: a bare-id lock issued before `auto` leaves the fixture `schedule_locked`
+ * with no `scheduled_at` and no `court_id`, because nothing is placed yet — so
+ * `snapshotPins` carries no pin, design §3.3's pin-integrity rule has nothing
+ * to check, and it reports clean forever. `PatchFixture` takes `scheduled_at`,
+ * `court_id` and `schedule_locked` in one body (`schemas.ts:964-979`), so the
+ * slot and the lock are one call. `expected_seq` is never sent: the schema is
+ * `.partial()` so omitting it is legal, and a stale value 409s SEQ_CONFLICT.
+ *
+ * The FIRST scheduled division's FIRST declared stream, at the division's own
+ * declared `startAt` on its first declared court. Three deliberate choices:
+ *
+ *  * The first division, not every one. `_tiny`'s second division has exactly
+ *    one fixture, and locking a stage's only fixture leaves `auto` nothing to
+ *    propose — which the driver correctly reports as a refusal.
+ *  * The first stream, because `_tiny` declares d-tiny's in round order
+ *    (rr-r1-c1, rr-r2-c1, rr-r3-c1) and this pins round 1. Pinning a LATER
+ *    round at the earliest slot would force the round-order rule to fire on a
+ *    board the solver had no way to lay out legally — a bench-authored red.
+ *    The test beside this pins the chosen fixture and slot, so a reordering of
+ *    the pack's streams reds there rather than surfacing as a mystery
+ *    round-order finding on a live run.
+ *  * `startAt` and `courts[0]` from the division's OWN config, so the pin sits
+ *    inside the window the settings PUT declares rather than at an instant the
+ *    product would refuse.
+ */
+export function resolveScheduleLocks(
+  pack: Pack,
+  seedPlan: SeedPlan,
+  seeded: Pick<SeededSuite, "fixtureIdByKey" | "courtIdByRef">,
+): ScheduleLockResolution {
+  const locks = new Map<string, ScheduleLock>();
+  const notes: string[] = [];
+  const first = seedPlan.divisions[0];
+  if (first === undefined) {
+    notes.push("tiny: no division was seeded, so no fixture could be pinned and pin integrity is unchecked");
+    return { locks, notes };
+  }
+  const ref = first.ref;
+  const cfg = pack.divisions.find((d) => d.ref === ref)?.scheduleConfig;
+  const stream = pack.streams.find((s) => s.divisionRef === ref);
+  const startAt = cfg?.startAt;
+  const courtId = resolveCourtRef(
+    Array.isArray(cfg?.courts) ? cfg.courts[0] : undefined,
+    seeded.courtIdByRef,
+  );
+  const fixtureId =
+    stream === undefined
+      ? undefined
+      : seeded.fixtureIdByKey.get(fixtureKey(ref, stream.fixtureExtKey));
+
+  if (fixtureId === undefined || typeof startAt !== "string" || courtId === undefined) {
+    notes.push(
+      `tiny: no fixture was pinned in "${ref}" — ` +
+        `fixture=${fixtureId ?? `unresolved (stream ${stream?.fixtureExtKey ?? "none declared"})`}, ` +
+        `startAt=${typeof startAt === "string" ? startAt : "not declared"}, ` +
+        `court=${courtId ?? "unresolved"}. Design §3.3's pin-integrity rule has nothing to check this run, ` +
+        "which is a named deferral rather than a rule that passed.",
+    );
+    return { locks, notes };
+  }
+  locks.set(ref, { fixtureId, scheduledAt: startAt, courtId });
+  return { locks, notes };
+}
+
 export interface ExistingSeed {
   readonly orgId: string;
   readonly competitionId: string;
@@ -714,19 +954,6 @@ export async function findExistingSeed(
 interface IdOut {
   id: string;
 }
-interface AutoScheduleOut {
-  assignments: {
-    fixture_id: string;
-    scheduled_at: string;
-    ends_at?: string;
-    court_id: string;
-  }[];
-  conflicts: { fixture_id: string; code: string; blocking: boolean }[];
-  solver?: { engine?: "optimized" | "greedy"; status?: string; mode?: string };
-}
-interface ValidateOut {
-  conflicts: { fixture_id: string; code: string; blocking: boolean }[];
-}
 
 export async function runTinySuite(
   input: TinySuiteInput,
@@ -738,8 +965,15 @@ export async function runTinySuite(
   const oracles: OracleResult[] = [];
   const timings: { seedMs?: number; scheduleMs?: number } = {};
   const registrationReports: RegistrationDivisionReport[] = [];
+  /** B04 — one row per division actually driven through the scheduling layer.
+   *  Empty for a run that never reached it (stage 0 refused, `--keep` short
+   *  circuit, a throw before seeding), and then omitted from the report
+   *  entirely rather than rendered as a suite that scheduled zero divisions
+   *  cleanly. */
+  const scheduling: DivisionScheduleReport[] = [];
+  let engineDelta: EngineDeltaSection | undefined;
   let conflictCount: number | undefined;
-  let solver: AutoScheduleOut["solver"];
+  let solver: Omit<SolverResult, "requestedEngine"> | undefined;
 
   // Stage 0 FIRST, and nothing is created if it refuses: a pack the offline
   // gate rejects would otherwise be seeded over HTTP and report a product
@@ -945,15 +1179,21 @@ export async function runTinySuite(
             ),
           };
 
-    // Two independent chains, run concurrently on separate sessions: this
-    // suite's OWN venue/court (never part of `SeedPlan` — `_tiny.json`
-    // declares no `venues[]`), and the entire org/competition/division/
-    // entrants/stage/generate tree via `seedSuite`. `seedSuite` signs in
-    // AGAIN internally with the SAME email — a second magic-link round trip,
-    // accepted as the cost of keeping `seedSuite` self-contained (it does not
-    // accept an external session) rather than exposing one just for this
-    // caller.
-    const seedPromise = seedSuite({
+    // ONE chain now. This suite used to create its own venue and its own
+    // single court over HTTP, concurrently with `seedSuite`, because
+    // `_tiny.json` declared no `venues[]` — so the pack could not name a
+    // court, `scheduleConfig.courts` had nothing to `@`-reference, and design
+    // §3.3's court-double-booking rule had exactly one court to look for a
+    // clash on. B04 T6 moves the venue and TWO courts into the pack (design
+    // §7) and deletes that chain: `seedSuite` already seeds `pack.venues`
+    // (`seed.ts:332-378`) and hands back `venueIdByRef`/`courtIdByRef`, which
+    // is the ONE resolution of every court ref this run makes.
+    //
+    // `seedSuite` signs in AGAIN internally with the SAME email — a second
+    // magic-link round trip, accepted as the cost of keeping `seedSuite`
+    // self-contained (it does not accept an external session) rather than
+    // exposing one just for this caller.
+    const seeded: SeededSuite = await seedSuite({
       base,
       plan: seedPlan,
       streams: pack.streams,
@@ -971,30 +1211,6 @@ export async function runTinySuite(
         ? {}
         : { competitionVisibility: "unlisted" as const }),
     });
-    const venuePromise = (async () => {
-      const venue = await t.request<IdOut>(
-        base,
-        s,
-        `/api/v1/orgs/${orgId}/venues`,
-        {
-          method: "POST",
-          body: { name: `Bench Tiny Venue ${runTag}` },
-        },
-      );
-      return t.request<IdOut>(
-        base,
-        s,
-        `/api/v1/orgs/${orgId}/venues/${venue.id}/courts`,
-        {
-          method: "POST",
-          body: { name: "Court 1" },
-        },
-      );
-    })();
-    const [seeded, court]: [SeededSuite, IdOut] = await Promise.all([
-      seedPromise,
-      venuePromise,
-    ]);
 
     if (seeded.orgId !== orgId) {
       throw new Error(
@@ -1062,89 +1278,374 @@ export async function runTinySuite(
       "suite_seeded",
     );
 
+    // -----------------------------------------------------------------------
+    // B04 — the scheduling layer, over EVERY division this run seeded
+    // -----------------------------------------------------------------------
+    //
+    // What this replaces: a hand-rolled walk that PUT a hardcoded
+    // `scheduleConfig` (30-minute matches on the one court this file created
+    // itself), POSTed `schedule/auto` with an EMPTY body, applied whatever came
+    // back, and asserted `/validate`'s blocking count — for `divisions[0]` and
+    // `stages[0]` ONLY. `_INDEX.md` recorded both halves of that as B04's to
+    // close, and this is where they close: the pack now declares the venue, the
+    // courts and each division's own `scheduleConfig`, and the loop below drives
+    // every seeded division rather than the first.
+    //
+    // Three things the old walk could not do, and why they are not optional:
+    //
+    //  * `body: {}` on `schedule/auto` silently asked for a REFLOW.
+    //    `AutoScheduleRequest` (`apps/web/src/server/api-v1/schemas.ts:1643-1688`
+    //    — 1643 is the `z.preprocess` WRAPPER, and the derivation itself is at
+    //    :1651) reads `only_unlocked === false ? "build" : "reflow"`, with the
+    //    strict `=== false` there precisely because an absent flag defaults to
+    //    `true`. So a first-time build was being reported for a call that asked
+    //    to re-flow a stage nothing had ever scheduled. `schedule.ts` sends the
+    //    flag. (This comment also replaces a stale `schemas.ts:1496-1542` pin —
+    //    design finding F5; the type has moved twice, so it is cited by NAME
+    //    with the line range beside it rather than by line alone.)
+    //  * `--engine` was logged as "not honoured" and nothing asserted it.
+    //    Nothing in the product selects an engine (design §1.1/F3), so the flag
+    //    is an ASSERTION about what actually ran, and `schedule.ts`'s
+    //    `readSolver` makes it — `both` asserts nothing, and nothing else is
+    //    relaxed.
+    //  * The board was never fetched back, so layer 1's `blocking` count was
+    //    the only thing judging it — and design §1.2 shows how little that
+    //    gates (a blackout violation is not `blocking`). The board is FETCHED
+    //    now and judged independently.
+    //
+    // `AutoScheduleOut`/`ValidateOut` are gone from this file rather than
+    // widened (design finding F4 asked for a widening). `schedule.ts` declares
+    // the widened copy, with its own hand-maintained note; keeping a second,
+    // narrower copy here would be the exact drift F4 names, one file over.
     const scheduleStart = performance.now();
-    // Derived from the PACK's own competition window, not from the wall clock.
-    //
-    // This was `Date.now() + 24h`, justified as "a real future calendar slot",
-    // and it 422'd on the first live run this suite ever had:
-    // `SCHEDULE_OUTSIDE_COMPETITION` — "this division's schedule starts before
-    // the competition opens on 2099-01-01". `usecases/schedule.ts:305-319`
-    // requires a division's schedule to sit INSIDE its competition's dates, and
-    // `_tiny` declares 2099-01-01..2099-01-03, so tomorrow is years too early.
-    //
-    // Nothing offline could catch it: the unit suite's fake transport accepts
-    // any `schedule-settings` PUT, which is the fourth time in this wave a
-    // fixture has accepted what the product refuses. The rule the rest of this
-    // module already follows — derive every value from the pack rather than
-    // inventing one — is exactly what was missing here.
-    //
-    // A pack that declares no `startsOn` has no window to respect, so the
-    // wall-clock slot remains correct for it.
-    const startAt =
-      plan.competition.startsOn === undefined
-        ? new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString()
-        : `${plan.competition.startsOn}T09:00:00.000Z`;
-    await t.request(
-      base,
-      s,
-      `/api/v1/divisions/${divisionId}/schedule-settings`,
-      {
-        method: "PUT",
-        body: {
-          config: {
-            startAt,
-            matchMinutes: 30,
-            gapMinutes: 0,
-            courts: [court.id],
-            perEntrantMinRest: 0,
-            blackouts: [],
-            sessionWindows: [],
-          },
-          tz: "UTC",
-        },
-      },
-    );
 
-    // There is no request-level "engine" field on AutoScheduleRequest
-    // (schemas.ts:1496-1542) — engine selection is entirely
-    // server-environment-determined by whether the placement service
-    // answers (`_RULES.md` §2's "run gates both with and without a live
-    // placement container" is exactly this fact, from the operator's
-    // side). So `--engine` cannot be honoured by this call regardless of
-    // what the operator asked for; `requestedEngine` in the report below
-    // still records the CLI's actual value (`input.engine`), and the
-    // ACTUAL engine the response reports is recorded honestly alongside it
-    // rather than either one overwriting the other. Flagged in the PR body
-    // as a brief/API-shape finding.
-    log.info(
-      { requestedEngine: engine },
-      "tiny: --engine is not honoured — AutoScheduleRequest has no per-request engine field",
-    );
-    const auto = await t.request<AutoScheduleOut>(
-      base,
-      s,
-      `/api/v1/stages/${stageId}/schedule/auto`,
-      {
-        method: "POST",
-        body: {},
-      },
-    );
-    solver = auto.solver;
+    // Design §4.4's one pin, resolved from the pack BEFORE the loop so it is
+    // one decision rather than one per division — and so the "no pin this run"
+    // deferral is reported once, in full, rather than N times.
+    const lockResolution = resolveScheduleLocks(pack, seedPlan, seeded);
+    warnings.push(...lockResolution.notes);
 
-    await t.request(base, s, `/api/v1/stages/${stageId}/schedule/apply`, {
-      method: "POST",
-      body: {
-        assignments: auto.assignments.map((a) => ({
-          fixture_id: a.fixture_id,
-          scheduled_at: a.scheduled_at,
-          court_id: a.court_id,
-        })),
-      },
+    const scheduleDivisions: ScheduleDivision[] = [];
+    for (const planned of seedPlan.divisions) {
+      const plannedDivisionId = seeded.divisionIdByRef.get(planned.ref);
+      const stage = planned.stages[0];
+      const plannedStageId = stage === undefined ? undefined : seeded.stageIdByRef.get(stage.ref);
+      if (plannedDivisionId === undefined || stage === undefined || plannedStageId === undefined) {
+        // Never silent: a division that was seeded and then not scheduled is
+        // indistinguishable in a report from one that was scheduled cleanly.
+        errors.push(
+          `tiny: division "${planned.ref}" was seeded but cannot be scheduled — ` +
+            `divisionId=${plannedDivisionId ?? "unresolved"}, stage=${stage?.ref ?? "none declared"}, ` +
+            `stageId=${plannedStageId ?? "unresolved"}`,
+        );
+        continue;
+      }
+      if (planned.stages.length > 1) {
+        // One `ScheduleDivision` carries ONE stage, and steps 4/5 are
+        // per-stage while steps 6/7 are per-division — so a second stage would
+        // need its own auto/apply against a division whose board the first
+        // pass already fetched. Out of B04's scope, and said out loud rather
+        // than dropped: `_tiny` declares one stage per division.
+        warnings.push(
+          `tiny: division "${planned.ref}" declares ${planned.stages.length} stages and only "${stage.ref}" is scheduled — ` +
+            "B04 drives one stage per division",
+        );
+      }
+      const packDivision = pack.divisions.find((d) => d.ref === planned.ref);
+      const scheduleConfig = packDivision?.scheduleConfig;
+      if (scheduleConfig === undefined) {
+        // Legal (the encoding falls through to the product's own defaults) and
+        // worth saying: a division with no declared config is judged against
+        // defaults nobody wrote down.
+        warnings.push(
+          `tiny: division "${planned.ref}" declares no scheduleConfig — nothing is PUT and the checker's oracle ` +
+            "falls back to ScheduleConfig's own defaults",
+        );
+      }
+      scheduleDivisions.push({
+        divisionRef: planned.ref,
+        divisionId: plannedDivisionId,
+        stageId: plannedStageId,
+        ...(scheduleConfig === undefined ? {} : { scheduleConfig }),
+        // The PACK's declared zone, not the host's. Every wall clock in the
+        // config is read against it, and `Board.tz` buckets calendar days by
+        // it — a host-local default would make the same pack answer
+        // differently on a BST dev box and a UTC CI runner.
+        tz: pack.org.timezone,
+        isRoundRobin: isRoundRobinStage(stage.kind),
+        declaresOfficials: divisionDeclaresOfficials(pack, planned.ref),
+        ...(lockResolution.locks.has(planned.ref)
+          ? { locks: [lockResolution.locks.get(planned.ref)!] }
+          : {}),
+      });
+    }
+
+    const layer = await runScheduleLayer({
+      base,
+      session: s,
+      orgId,
+      divisions: scheduleDivisions,
+      // `seedSuite`'s own map — the ONE resolution of every `@`-sigilled court
+      // ref in the run. `schedule.ts` builds the config it PUTs from
+      // `encodeConstraints`' output, so the product and the checker's oracle
+      // are handed the same courts by construction.
+      courtIdByRef: seeded.courtIdByRef,
+      engine,
+      transport: t,
     });
 
-    // B03 review F1(b): officials auto-assign runs HERE, strictly AFTER
-    // schedule/apply — never inside `seedSuite`, which completes before this
-    // suite's own scheduling walk even starts. `officials/auto`'s own
+    // Keyed by `divisionRef`, NEVER by index: a division that failed before
+    // its board was fetched contributes an outcome and no board, so the three
+    // arrays `runScheduleLayer` returns are not index-aligned.
+    const boardByRef = new Map(layer.boards.map((b) => [b.divisionRef, b]));
+    const constraintsByRef = new Map(layer.constraints.map((c) => [c.divisionRef, c]));
+    const engineSnapshotDivisions: EngineSnapshotDivision[] = [];
+
+    for (const outcome of layer.outcomes) {
+      const ref = outcome.divisionRef;
+      const board = boardByRef.get(ref);
+      const constraints = constraintsByRef.get(ref);
+      // A COPY: the two throws this task must route (`encodeConstraints`',
+      // caught inside the driver, and `certify`'s, caught below) are the same
+      // channel, and appending to the driver's own frozen list is not an
+      // option. Ruling R13 and T3's guards both say the same thing — catch and
+      // ROUTE, never swallow, and never add a fallback that lets either
+      // continue, because a fallback is how a throw stops being loud.
+      const scheduleErrors: string[] = [...outcome.errors];
+
+      let checker: CheckerReport | undefined;
+      let certificate: CertificateVerdict | undefined;
+      let believability: BelievabilityReport | undefined;
+      let metricsNote: string | undefined;
+
+      if (board !== undefined && constraints !== undefined) {
+        checker = checkBoard(board, constraints);
+        believability = assessBelievability({
+          board,
+          constraints,
+          // UNFILTERED, deliberately: `assessBelievability` scopes the rows to
+          // this board's own division itself (its `historicalAssignment` doc
+          // comment says so), and pre-filtering here would be a second scoping
+          // authority that can disagree with the one inside.
+          ...(pack.historicalAssignment === undefined
+            ? {}
+            : { historicalAssignment: pack.historicalAssignment }),
+        });
+      }
+
+      if (constraints !== undefined) {
+        // THE TWO DENOMINATORS, and which one answers which question.
+        //
+        // `certify`'s `placed`/`total` are the SOLVER'S PROPOSAL — parent spec
+        // §6.3's unplaced gate names exactly those, and `certificate.ts`'s own
+        // doc says so. `judgeDivision`'s `unplacedCount` is the FETCHED
+        // board's. They are different measurements of different objects and
+        // neither is derived from the other here: each gates its own question,
+        // both are printed side by side in the report, and a disagreement
+        // between them is reported as its own warning below rather than
+        // silently resolved in favour of one.
+        const metrics = outcome.metrics;
+        if (metrics === undefined) {
+          // `ScheduleOutcome.metrics` is optional, so this decision has to be
+          // made explicitly rather than let `undefined` fall through into a
+          // verdict. An absent `metrics` means the proposal is UNKNOWN, not
+          // empty — and `(0, 0)` cannot satisfy `placed < total`, so the
+          // certificate's UNPLACED branch has nothing to fire on. That is
+          // exactly why this is an ERROR rather than a substitution: the
+          // division reds through `judgeDivision`'s fifth trigger, and the
+          // report prints this note beside the certificate so a branch that
+          // had nothing to measure can never be read as one that measured a
+          // complete board.
+          metricsNote =
+            `auto returned no metrics for ${ref}, so the solver's own placed/total are UNKNOWN — ` +
+            "the certificate's UNPLACED branch could not be evaluated (it is fed (0, 0), which asserts nothing) " +
+            "and the fetched board's unplaced count is the only placement evidence this division has";
+          scheduleErrors.push(metricsNote);
+        }
+        try {
+          certificate = certify({
+            historical: pack.historicalAssignment,
+            // NO PACK THE BENCH RUNS TODAY DECLARES HISTORY — `_tiny` has no
+            // real-world timetable (design §7), so this is `undefined` and
+            // `certify` answers SKIPPED_NO_HISTORY. The first pack that DOES
+            // declare rows makes `certify` throw here, loudly, and that throw
+            // is routed into `scheduleErrors` below rather than smoothed over:
+            // rendering history into a `Board` is a real piece of work, and a
+            // fallback that let the run continue would certify a timetable
+            // against nothing and report FEASIBLE.
+            historyBoard: undefined,
+            constraints,
+            solverStatus: outcome.solverStatus,
+            placed: metrics?.placed ?? 0,
+            total: metrics?.total ?? 0,
+          });
+        } catch (err) {
+          scheduleErrors.push(
+            `certificate: ${err instanceof Error ? err.message : String(err)}`,
+          );
+        }
+        if (metrics !== undefined) {
+          const proposalUnplaced = metrics.total - metrics.placed;
+          if (proposalUnplaced !== outcome.unplacedCount) {
+            warnings.push(
+              `tiny: "${ref}" — the solver's PROPOSAL reports ${proposalUnplaced} unplaced ` +
+                `(${metrics.placed}/${metrics.total}) while the FETCHED board shows ${outcome.unplacedCount}. ` +
+                "Both are reported; neither is derived from the other. The board's count is the run's own " +
+                "gate, the proposal's is the feasibility certificate's, and a disagreement means apply and " +
+                "auto did not end up describing the same board.",
+            );
+          }
+        }
+      }
+
+      const verdict =
+        checker !== undefined && certificate !== undefined
+          ? judgeDivision({
+              divisionRef: ref,
+              blockingCount: outcome.blockingCount,
+              checker,
+              certificate,
+              unplacedCount: outcome.unplacedCount,
+              scheduleErrors,
+            })
+          : degradedVerdict(ref, scheduleErrors, board, constraints);
+
+      for (const reason of verdict.reasons) errors.push(reason);
+
+      scheduling.push({
+        divisionRef: ref,
+        requestedEngine: outcome.requestedEngine,
+        ...(outcome.actualEngine === undefined ? {} : { actualEngine: outcome.actualEngine }),
+        ...(outcome.solverStatus === undefined ? {} : { solverStatus: outcome.solverStatus }),
+        ...(outcome.notSearchedReason === undefined
+          ? {}
+          : { notSearchedReason: outcome.notSearchedReason }),
+        ...(outcome.mode === undefined ? {} : { mode: outcome.mode }),
+        ...(outcome.budgetExpired === undefined ? {} : { budgetExpired: outcome.budgetExpired }),
+        ...(outcome.tiersCompleted === undefined ? {} : { tiersCompleted: outcome.tiersCompleted }),
+        ...(outcome.tiersTotal === undefined ? {} : { tiersTotal: outcome.tiersTotal }),
+        ...(outcome.metrics === undefined ? {} : { metrics: outcome.metrics }),
+        ...(metricsNote === undefined ? {} : { metricsNote }),
+        blockingCount: outcome.blockingCount,
+        warnKindTally: outcome.warnKindTally,
+        unplacedCount: outcome.unplacedCount,
+        wallMs: outcome.wallMs,
+        scheduleErrors,
+        ...(checker === undefined
+          ? {}
+          : {
+              checker: {
+                clean: checker.clean,
+                findings: checker.findings,
+                unchecked: checker.unchecked,
+              },
+            }),
+        ...(certificate === undefined
+          ? {}
+          : {
+              certificate: {
+                branch: certificate.branch,
+                reason: certificate.reason,
+                red: certificate.red,
+                violations: certificate.violations,
+              },
+            }),
+        ...(believability === undefined ? {} : { believability }),
+        red: verdict.red,
+        reasons: verdict.reasons,
+      });
+
+      engineSnapshotDivisions.push({
+        divisionRef: ref,
+        ...(outcome.metrics === undefined ? {} : { metrics: outcome.metrics }),
+        ...(outcome.solverStatus === undefined ? {} : { solverStatus: outcome.solverStatus }),
+        ...(outcome.notSearchedReason === undefined
+          ? {}
+          : { notSearchedReason: outcome.notSearchedReason }),
+        ...(outcome.mode === undefined ? {} : { mode: outcome.mode }),
+        ...(outcome.budgetExpired === undefined ? {} : { budgetExpired: outcome.budgetExpired }),
+        ...(outcome.tiersCompleted === undefined ? {} : { tiersCompleted: outcome.tiersCompleted }),
+        ...(outcome.tiersTotal === undefined ? {} : { tiersTotal: outcome.tiersTotal }),
+        blockingCount: outcome.blockingCount,
+        unplacedCount: outcome.unplacedCount,
+        wallMs: outcome.wallMs,
+        verdict: { red: verdict.red, reasons: verdict.reasons },
+      });
+
+      // The prompt's acceptance line, one event per division. `division` is
+      // the one field beyond that list, and it is not optional: without it a
+      // multi-division run emits N identical-looking rows nothing can
+      // attribute.
+      log.info(
+        {
+          division: ref,
+          engine: outcome.actualEngine,
+          status: outcome.solverStatus,
+          ms: outcome.wallMs,
+          conflicts: outcome.blockingCount,
+          checker: checker === undefined ? "not run" : checker.clean ? "clean" : `${checker.findings.length} finding(s)`,
+          certificate: certificate === undefined ? "not run" : certificate.branch,
+        },
+        "suite_scheduled",
+      );
+    }
+
+    conflictCount = layer.outcomes.reduce((sum, o) => sum + o.blockingCount, 0);
+    // ONE value for N divisions, so it is reported only when it is
+    // unambiguous. A run whose divisions disagree about which engine answered
+    // has no single engine, and picking the first would be a coin toss
+    // recorded as a fact — the per-division truth is in `scheduling[]`.
+    const legEngine = soleValue(layer.outcomes.map((o) => o.actualEngine));
+    solver = {
+      ...(legEngine === undefined ? {} : { engine: legEngine }),
+      ...(soleValue(layer.outcomes.map((o) => o.solverStatus)) === undefined
+        ? {}
+        : { status: soleValue(layer.outcomes.map((o) => o.solverStatus)) }),
+    };
+
+    // The engine artifact — one file per LEG (ruling R3). Written only when
+    // the caller resolved a report directory AND a run id: `bench.ts` always
+    // does, and a unit test that supplies neither gets no disk write at all
+    // rather than a file under a guessed path.
+    if (input.reportDir !== undefined && input.runId !== undefined) {
+      if (legEngine === undefined) {
+        warnings.push(
+          "tiny: no engine artifact written — this run's divisions did not report ONE actual engine between them, " +
+            "and `engine-<engine>.json` cannot be named for a leg that ran two",
+        );
+      } else {
+        const snapshot: EngineSnapshot = {
+          runId: input.runId,
+          requestedEngine: engine,
+          engine: legEngine,
+          divisions: engineSnapshotDivisions,
+        };
+        const file = await writeEngineArtifact(input.reportDir, input.runId, legEngine, snapshot);
+        log.info({ file, engine: legEngine }, "tiny: engine artifact written");
+      }
+      // ONCE, after the division loop — `assessEngineDelta` is a RUN-level
+      // fact (its own doc comment says so). Called per division it would be
+      // emitted N times, each copy listing every OTHER division's refs in
+      // `comparedDivisionRefs`; scoped to one division it would destroy the
+      // run-level total design §2.1 asks for.
+      engineDelta = assessEngineDelta(await readEngineArtifacts(input.reportDir, input.runId));
+    } else {
+      engineDelta = assessEngineDelta(undefined);
+    }
+
+    timings.scheduleMs = Math.round(performance.now() - scheduleStart);
+
+
+    // B03 review F1(b): officials auto-assign runs HERE, strictly AFTER the
+    // whole scheduling layer — never inside `seedSuite`, which completes before
+    // this suite's own scheduling walk even starts. B04 moved it from between
+    // `schedule/apply` and `/validate` (where the old hand-rolled walk had it)
+    // to after `runScheduleLayer` returns, because that driver owns apply,
+    // validate AND the board fetch as one sequence. The consequence is stated
+    // rather than hidden: layer 1 and the independent checker both judged a
+    // board that predates whatever this assigns, so an officials clash
+    // INTRODUCED here is not seen by either this run — warned about below
+    // whenever it actually applies anything. `officials/auto`'s own
     // `engineInput` only considers fixtures whose `scheduled_at` is set
     // (`usecases/officials.ts:386`), so calling it any earlier always
     // proposes zero regardless of what the pack declares. `plan.officials`
@@ -1156,6 +1657,7 @@ export async function runTinySuite(
     const autoOfficials = plan.officials.filter(
       (o) => o.assignments.length === 0,
     );
+    let officialsAutoApplied = 0;
     if (autoAssign === true && autoOfficials.length > 0) {
       log.info(
         { autoOfficials: autoOfficials.length },
@@ -1168,6 +1670,7 @@ export async function runTinySuite(
         autoOfficials,
         transport: t,
       });
+      officialsAutoApplied = autoResult.appliedCount;
       const autoPassed = autoResult.appliedCount > 0;
       oracles.push({
         name: "officials: auto-assign reaches the auto-needing official(s) after scheduling",
@@ -1185,22 +1688,18 @@ export async function runTinySuite(
       }
     }
 
-    const validated = await t.request<ValidateOut>(
-      base,
-      s,
-      `/api/v1/divisions/${divisionId}/schedule/validate`,
-      {
-        method: "POST",
-      },
-    );
-    const blocking = validated.conflicts.filter((c) => c.blocking);
-    conflictCount = blocking.length;
-    if (blocking.length > 0) {
-      errors.push(
-        `${blocking.length} blocking conflict(s) after schedule/apply: ${blocking.map((c) => c.code).join(", ")}`,
+    // See the block above: the board every layer judged was fetched BEFORE
+    // this ran, so an official double-booking introduced here is invisible to
+    // both `/validate` and design §3.3's officials rule this run. Said out
+    // loud only when something was actually applied — a warning that fires on
+    // a no-op is a warning nobody reads.
+    if (officialsAutoApplied > 0) {
+      warnings.push(
+        `tiny: officials auto-assign applied ${officialsAutoApplied} assignment(s) AFTER the scheduling layer ` +
+          "fetched and judged the board, so neither layer 1 nor the independent checker has seen them",
       );
     }
-    timings.scheduleMs = Math.round(performance.now() - scheduleStart);
+
 
     // B03 T6b: the player-stats baseline. Gated on `input.sql` — it needs
     // the org-authenticated routes' `stats.player` entitlement (derived
@@ -1594,5 +2093,11 @@ export async function runTinySuite(
     ...(registrationReports.length > 0
       ? { registration: registrationReports }
       : {}),
+    // B04. `scheduling` is OMITTED rather than sent empty for a run that never
+    // reached the layer: an empty array renders a "Scheduling" section with no
+    // rows, which reads as "this suite scheduled nothing and that was fine".
+    // `engineDelta` follows the same rule and is set only inside the layer.
+    ...(scheduling.length > 0 ? { scheduling } : {}),
+    ...(engineDelta === undefined ? {} : { engineDelta }),
   };
 }
