@@ -33,14 +33,33 @@
 //
 // `plan_entitlements` (V101__billing.sql:46-52): `(plan_key, feature_key)`
 // primary key, `bool_value`/`int_value` both nullable. A plan with NO row for
-// a feature (every pass tier, for `cricket.dls` and `officials.auto` alike —
-// checked: no `('event_pass', ...)` or `('event_pass_l', ...)` insert for
-// either key in db/migration/deltas) is excluded from a query scoped to that
-// feature_key — never confused with a plan whose row explicitly says
+// a feature is excluded from a query scoped to that feature_key — never confused with a plan whose row explicitly says
 // `bool_value = false` (community). Reaching for a pass tier via `bool_value
 // IS NOT false` (or any query that treats "absent" and "false" alike) would
 // "refuse" for the wrong reason — a missing row, not a denied one — which is
 // exactly the false differential the T7 brief calls out.
+// FALSIFIED 2026-09-05 by the entitlements v18 W2 wave, and left here as a
+// warning rather than deleted. This comment used to assert, as *checked*, that
+// no pass tier had a row for `cricket.dls` or `officials.auto`:
+//
+//   "every pass tier, for `cricket.dls` and `officials.auto` alike — checked:
+//    no ('event_pass', ...) or ('event_pass_l', ...) insert for either key in
+//    db/migration/deltas"
+//
+// `V392__entitlements_v18.sql:108-109` inserts `officials.auto` for BOTH rungs.
+// The claim was true when written and the file has no way to notice it stopped
+// being true — which is the whole hazard of recording a matrix fact in prose
+// next to code that deliberately reads the matrix at call time.
+//
+// There is a behavioural consequence for whoever owns this bench, and it is NOT
+// fixed here because the chooser and its fixtures belong to that programme:
+// `chooseGrantingPlanForCapabilities` iterates `[...primaryGrantors].sort()`,
+// so with `cricket.dls` granted by {community, enterprise, pro}, `enterprise`
+// sorts before `pro` and satisfies every desired capability — and `enterprise`
+// is `is_public = false`, the Contact-us plan, with unlimited caps. The bench
+// baseline moved onto it silently when `pro_plus` was deleted. Written up with
+// the evidence in `docs/superpowers/specs/bench-product-value/_MASTER.md`.
+
 import postgres from "postgres";
 import { defaultTransport, type SeedTransport } from "./seed.ts";
 import type { Session } from "./http.ts";
