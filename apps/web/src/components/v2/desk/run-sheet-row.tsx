@@ -518,7 +518,11 @@ export function RunSheetRow({
                 {msg("schedule.unschedule")}
               </button>
             )}
-            {error && <span className="text-xs text-red-600">{error}</span>}
+            {error && (
+              <span data-testid="run-sheet-editor-error" className="text-xs text-red-600">
+                {error}
+              </span>
+            )}
           </div>
         </div>
       )}
