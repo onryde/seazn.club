@@ -1171,6 +1171,10 @@ export function StagesPanel({ divisionId, divisionSeq, competitionId, orgSlug, c
         matchMinutes={matchMinutes}
         entrantNames={entrantNames}
         courtNames={courtNamesById}
+        // R35 — the panel already holds these for `StageCourtTagsEditor` and
+        // the (retired) FixtureLine picker; they now reach each row's inline
+        // editor instead of a second venues fetch.
+        venues={venues}
         canEdit={canEdit}
         hrefFor={(f) => routes.fixture(orgSlug, compSlug, divSlug, f.fixture_no)}
         filter={filter}

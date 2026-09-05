@@ -16,6 +16,7 @@ import {
   CourtMultiPicker,
   type CourtMultiPickerProps,
   courtGroups,
+  courtOptionsFor,
   flattenCourts,
   reorderSelection,
   resolveCourtNames,
@@ -97,6 +98,53 @@ describe("reorderSelection", () => {
 
   it("is a no-op moving the last entry further down", () => {
     expect(reorderSelection(["a", "b", "c"], 2, 1)).toEqual(["a", "b", "c"]);
+  });
+});
+
+// Competition Desk W2, ruling R35 — per-fixture court assignment returns to the
+// fixtures tab, INSIDE the inline editor the time cell opens. The option list
+// it renders is the logic worth pinning; the `<select>` itself is a DOM control
+// this node-environment suite cannot exercise (file header above).
+//
+// It is `courtGroups` plus ONE case that a multi-select never has: a fixture
+// already sitting on an ARCHIVED court. `courtGroups` correctly refuses to
+// OFFER such a court — you cannot newly pick one — but a single-select whose
+// `value` matches no `<option>` silently displays the FIRST option instead, so
+// the row would read "Unassigned" for a fixture that has a court. The current
+// court is therefore carried as an extra, clearly-labelled option.
+describe("courtOptionsFor — the per-fixture single-select's options", () => {
+  const active = makeCourt({ id: "c-1", name: "Court 1" });
+  const archived = makeCourt({ id: "c-9", name: "Old Court", archived_at: "2026-01-01T00:00:00.000Z" });
+  const venues = [makeVenue({ id: "v-1", courts: [active, archived] })];
+
+  it("with nothing assigned it is exactly courtGroups, and no orphan", () => {
+    expect(courtOptionsFor(venues, null, null)).toEqual({ groups: courtGroups(venues), current: null });
+  });
+
+  it("an assigned ACTIVE court needs no extra option — it is already offered", () => {
+    expect(courtOptionsFor(venues, "c-1", "Court 1").current).toBeNull();
+  });
+
+  // The witness. Without this, the select shows "Unassigned" on a fixture that
+  // is in fact on a court, which is the "two contradicting facts in one row"
+  // class this whole wave exists to remove.
+  it("an assigned ARCHIVED court is carried as its own option", () => {
+    const { groups, current } = courtOptionsFor(venues, "c-9", "Old Court");
+    expect(current).toEqual({ id: "c-9", name: "Old Court" });
+    // ...and it is NOT smuggled into the selectable groups: it must stay
+    // un-pickable for any OTHER fixture.
+    expect(groups.flatMap((g) => g.courts.map((c) => c.id))).toEqual(["c-1"]);
+  });
+
+  it("falls back to the id when the archived court has no resolved name", () => {
+    expect(courtOptionsFor(venues, "c-9", null).current).toEqual({ id: "c-9", name: "c-9" });
+  });
+
+  it("a court id that resolves nowhere at all is still carried", () => {
+    // A court deleted outright, or one belonging to another org's venue the
+    // caller never loaded. Dropping it here would silently clear the fixture's
+    // court on the next save.
+    expect(courtOptionsFor(venues, "c-gone", "Ghost").current).toEqual({ id: "c-gone", name: "Ghost" });
   });
 });
 

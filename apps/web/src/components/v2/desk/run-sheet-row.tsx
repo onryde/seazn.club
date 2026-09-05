@@ -18,6 +18,7 @@ import { useMsg } from "@/components/i18n/dict-provider";
 import { DateTimeField } from "../shared/datetime-field";
 import { resolveSlotLabel } from "@/lib/slot-label";
 import { courtDisplayName } from "@/components/v2/board/types";
+import { courtOptionsFor, type Venue } from "@/components/v2/shared/court-multi-picker";
 import { canEditFixtureTime, fixtureRowAction, hasAssignedScorer, type RowAction } from "@/lib/fixture-row-action";
 import { isBye, type RunSheetFixture } from "@/lib/run-sheet-groups";
 import { fixtureStatusLabel, outcomeText, VOID_STATUSES } from "@/components/v2/stages-panel";
@@ -36,6 +37,7 @@ export function RunSheetRow({
   canEdit,
   entrantNames,
   courtNames,
+  venues,
   boardSlotOptions,
   onRescheduled,
 }: {
@@ -57,6 +59,12 @@ export function RunSheetRow({
   canEdit: boolean;
   entrantNames: Record<string, string>;
   courtNames?: Record<string, string>;
+  /** Org venues with nested courts (`listVenues` shape), for the inline
+   *  editor's court picker (ruling R35). Defaults to `[]`, which renders the
+   *  picker with only "Unassigned" — the same posture `StagesPanel`'s own
+   *  `venues` prop already takes, so a caller that never carried venues keeps
+   *  working unchanged. */
+  venues?: readonly Venue[];
   /** Board slots for the inline "Set time" field — `undefined` lets
    *  `DateTimeField` fall back to quarter hours, same as everywhere else. */
   boardSlotOptions?: string[];
@@ -86,6 +94,17 @@ export function RunSheetRow({
   // fourteen hours from the one shown. Pinned by a value test on a
   // `tz !== orgTz` division, mutation-proven.
   const [when, setWhen] = useState("");
+  // The selected court, "" for unassigned. Ruling R35 restores per-fixture
+  // court assignment, which `FixtureLine` carried (`main:stages-panel.tsx:1619`)
+  // and the W2 rewrite dropped without a ruling, leaving the schedule board as
+  // the only way to correct a court.
+  //
+  // Seeded EMPTY here and re-seeded from the STORED court every time the editor
+  // opens — exactly like `when` above, and for exactly the same adjudicated
+  // reason: mount happens once while `editing` toggles many times, so a
+  // mount-time seed shows a court the organiser picked and then cancelled.
+  // `toggleEditor` is the one authority for both.
+  const [courtId, setCourtId] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -127,6 +146,10 @@ export function RunSheetRow({
     : resolveSlotLabel(fixture.away_slot_label ?? null, msg, "schedule.tbd");
   const decided = outcomeText(msg, fixture.outcome, entrantNames);
   const courtLabel = courtDisplayName(fixture, courtNames) ?? fixture.venue_name;
+  // R35: the inline editor's court options. `courtLabel` is the resolved,
+  // venue-qualified name this row already prints, so an archived court carried
+  // as its own option reads exactly as it does in the row above it.
+  const courtOptions = courtOptionsFor(venues ?? [], fixture.court_id, courtLabel);
 
   // C4/R12: voided fixtures keep FixtureLine's strike-through — the ACTION
   // (routed to "result" by Task 2's ladder) is right, but a cancelled match
@@ -202,6 +225,10 @@ export function RunSheetRow({
     const opening = !editing;
     if (opening) {
       setWhen(fixture.scheduled_at ? zonedDateTimeInput(fixture.scheduled_at, orgTz) : "");
+      // R35: the court is reseeded on the same door, unconditionally, for the
+      // same reason the time is — "picked Court 3, cancelled, reopened" must
+      // show the STORED court, not the abandoned choice.
+      setCourtId(fixture.court_id ?? "");
       setError(null);
     }
     setEditing(opening);
@@ -383,6 +410,49 @@ export function RunSheetRow({
               onChange={setWhen}
               options={boardSlotOptions}
             />
+            {/* R35 (owner ruling) — per-fixture court assignment, restored
+                INSIDE this editor rather than as a second row-level control,
+                which is what keeps the one-action rule intact. Same shape
+                `FixtureLine` carried (`main:stages-panel.tsx:1677`): a plain
+                single-select with one `<optgroup>` per venue, built from the
+                SAME `courtGroups` piece `CourtMultiPicker` uses rather than a
+                second court-picker implementation. One fixture has exactly one
+                court, so the multi-select's ordering machinery has nothing to
+                do; and because each optgroup names its venue, the option text
+                needs no venue qualifier of its own.
+
+                Offers every ACTIVE org court, not just the division's
+                configured subset — a manual per-fixture override is not the
+                auto-scheduler — plus, when it applies, the court this fixture
+                already sits on even if that court has since been archived
+                (`courtOptionsFor`, whose doc carries that argument). */}
+            <label className="block">
+              <span className="label">{msg("schedule.field.court")}</span>
+              <select
+                data-testid="fixture-court-select"
+                value={courtId}
+                onChange={(e) => setCourtId(e.target.value)}
+                disabled={busy}
+                // `.input`'s own padding loses to `px-2 py-1 text-xs` under
+                // Tailwind's utilities layer (S13/#422 W11). `min-h-11` survives
+                // it, and is the tap-target floor.
+                className="input min-h-11 w-48 px-2 py-1 text-xs"
+              >
+                <option value="">{msg("board.unassigned")}</option>
+                {courtOptions.current !== null && (
+                  <option value={courtOptions.current.id}>{courtOptions.current.name}</option>
+                )}
+                {courtOptions.groups.map(({ venue, courts }) => (
+                  <optgroup key={venue.id} label={venue.name}>
+                    {courts.map((c) => (
+                      <option key={c.id} value={c.id}>
+                        {c.name}
+                      </option>
+                    ))}
+                  </optgroup>
+                ))}
+              </select>
+            </label>
             <button
               type="button"
               disabled={busy || when === ""}
@@ -397,7 +467,18 @@ export function RunSheetRow({
                   setError(msg("schedule.error.failed"));
                   return;
                 }
-                void patchSchedule({ scheduled_at: iso });
+                // R35: time AND court in ONE patch, which is what the design
+                // says this tab keeps PATCHing ("time/court", §W2) and what
+                // `FixtureLine`'s own Save did.
+                //
+                // `venue_id` is deliberately NOT sent, unlike FixtureLine's
+                // version. `moveFixture` DERIVES it from `courts.venue_id` and
+                // never reads `patch.venue_id` (schedule.ts:3069 — "intentionally
+                // never read"), so sending it is a second authority for a fact
+                // the server owns, and FixtureLine only sent it to keep an
+                // optimistic local row in step. This row has no optimistic
+                // update: it calls `router.refresh()`.
+                void patchSchedule({ scheduled_at: iso, court_id: courtId === "" ? null : courtId });
               }}
               className="btn btn-primary min-h-11 px-3 py-1.5 text-xs"
             >

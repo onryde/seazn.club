@@ -17,6 +17,7 @@ import { useLocaleOrDefault, useMsg, useMsgPlural } from "@/components/i18n/dict
 import { dayLabel, dayLabelLong } from "@/lib/day-label";
 import { isResultMissing, isUnscheduledFixture } from "@/lib/division-phase";
 import { isBye, type RunSheetBlock, type RunSheetFixture } from "@/lib/run-sheet-groups";
+import type { Venue } from "@/components/v2/shared/court-multi-picker";
 import { bracketRoundLabel } from "@/components/v2/stages-panel";
 import type { MessageKey } from "@/lib/messages";
 import { RunSheetRow } from "./run-sheet-row";
@@ -41,6 +42,7 @@ export function RunSheet({
   matchMinutes,
   entrantNames,
   courtNames,
+  venues,
   canEdit,
   hrefFor,
   filter,
@@ -71,6 +73,10 @@ export function RunSheet({
   matchMinutes: number;
   entrantNames: Record<string, string>;
   courtNames?: Record<string, string>;
+  /** Org venues with nested courts — threaded straight through to each row's
+   *  inline editor for R35's per-fixture court picker. This component never
+   *  reads them itself. */
+  venues?: readonly Venue[];
   canEdit: boolean;
   hrefFor: (fixture: RunSheetFixture) => string;
   filter: RunSheetFilter;
@@ -195,6 +201,7 @@ export function RunSheet({
                 canEdit={canEdit}
                 entrantNames={entrantNames}
                 courtNames={courtNames}
+                venues={venues}
                 boardSlotOptions={boardSlotOptions}
                 onRescheduled={onRescheduled}
               />
@@ -244,6 +251,7 @@ export function RunSheet({
                     canEdit={canEdit}
                     entrantNames={entrantNames}
                     courtNames={courtNames}
+                    venues={venues}
                     boardSlotOptions={boardSlotOptions}
                     onRescheduled={onRescheduled}
                   />
@@ -278,6 +286,7 @@ export function RunSheet({
                 canEdit={canEdit}
                 entrantNames={entrantNames}
                 courtNames={courtNames}
+                venues={venues}
                 boardSlotOptions={boardSlotOptions}
                 onRescheduled={onRescheduled}
               />
@@ -314,6 +323,7 @@ export function RunSheet({
                 canEdit={canEdit}
                 entrantNames={entrantNames}
                 courtNames={courtNames}
+                venues={venues}
                 boardSlotOptions={boardSlotOptions}
                 onRescheduled={onRescheduled}
               />
@@ -441,6 +451,7 @@ function RowWithNow({
   canEdit: boolean;
   entrantNames: Record<string, string>;
   courtNames?: Record<string, string>;
+  venues?: readonly Venue[];
   boardSlotOptions?: string[];
   onRescheduled?: () => void;
 }) {
