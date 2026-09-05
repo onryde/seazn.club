@@ -2,8 +2,8 @@
 
 Read `_RULES.md` → `_INDEX.md` → spec §"The shared model" and §W1:
 `../2026-09-04-spectator-surface-design.md`. Plan:
-`../../plans/2026-09-04-spectator-w1.md`. Worktree; one PR (may split at the
-engine-fold boundary — see "PR shape").
+`../../plans/2026-09-04-spectator-w1-match-centre.md`. Worktree; one PR (may split
+at the engine-fold boundary — see "PR shape").
 
 ## Why the wave exists
 
