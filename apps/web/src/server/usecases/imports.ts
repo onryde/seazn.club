@@ -304,6 +304,19 @@ export async function commitImport(
   const clubsHierarchy = await hasFeature(auth.orgId, "clubs.hierarchy");
   const clubCap = await getLimit(auth.orgId, "clubs.max");
   const teamCap = await getLimit(auth.orgId, "teams.max");
+  // The per-file row cap, re-resolved for the COMMIT and not merely trusted
+  // from `createImport`. An `imports` row carries only planned/committed and
+  // no expiry, so a plan made under a bigger allowance stays committable
+  // indefinitely: plan 500 rows on Pro, lapse to community, commit — and
+  // without this the rows land. No UI is involved in that, so the client's
+  // own guard is not a control at all; a second tab or one request carrying
+  // the importId defeats it.
+  //
+  // Safe on plans where the key is a BOOL: `import.bulk` is dual-valued, and a
+  // present row with a null `int_value` (Pro, V242:121) resolves through
+  // `getLimit` to null = UNLIMITED, which `assertWithinLimit` treats as no
+  // limit at all. Only the int-valued plans (community, 50 at V319:18) bind.
+  const bulkCap = await getLimit(auth.orgId, "import.bulk");
 
   const result = await withTenant(auth.orgId, async (tx) => {
     // One import commit at a time per org — serialises the club/team upsert
@@ -321,6 +334,9 @@ export async function commitImport(
       return { importId: id, stats: plan.stats, divisionIds: touched.map((r) => r.division_id) };
     }
     const rows = ImportRow.array().parse(imp.rows);
+    // Before anything is planned or written. Mirrors the clubs/teams gates
+    // below, and rejects the whole commit rather than truncating the file.
+    assertWithinLimit(bulkCap, "import.bulk", rows.length);
     const config = ImportConfig.parse(imp.config);
     const snapshot = pinSnapshot(await fetchSnapshot(tx), imp.pin_division_id);
     const plan = planImport(rows, snapshot, config);

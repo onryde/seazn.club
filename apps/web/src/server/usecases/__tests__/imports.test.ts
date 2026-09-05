@@ -197,6 +197,38 @@ describe.skipIf(!HAS_DB)("bulk import (Jul3/01)", () => {
     expect(clubs.map((c) => c.name)).toEqual(["Acme SC"]);
   });
 
+  it("a plan made under a bigger allowance is re-gated on import.bulk at COMMIT", async () => {
+    // `imports` rows carry only planned/committed and have no expiry, so a plan
+    // built while the org could afford it stays committable indefinitely. The
+    // client cannot be the control here: a second tab, a bfcache restore, or a
+    // single request carrying the importId bypasses it entirely.
+    const { auth } = await seedOrg("pro");
+    await seedDivision(auth);
+    const rows = Array.from({ length: 51 }, (_, i) => `Team ${i}`);
+    const preview = await createImport(auth, csvUpload(["Team", ...rows].join("\n")));
+    // Accepted on Pro: `import.bulk` is dual-valued and Pro's row carries a null
+    // int_value, which `getLimit` resolves to null = unlimited.
+    expect(preview.rowCount).toBe(51);
+
+    // ...and then the subscription lapses, between plan and commit.
+    await setOrgPlan(auth.orgId, "community");
+    await invalidateOrgEntitlements(auth.orgId);
+
+    // `import.bulk`, NOT `teams.max`. That distinction is the whole test: 51
+    // team rows also breach community's teams.max of 8, so without the
+    // commit-time row gate this commit still fails — just later, for a
+    // different reason, after the plan has been built. Asserting the KEY pins
+    // that the file is refused for its SIZE, before anything is planned.
+    await expect(commitImport(auth, preview.importId, null)).rejects.toMatchObject({
+      featureKey: "import.bulk",
+    });
+
+    // Refused before a single write.
+    const [{ n }] = await sql<{ n: number }[]>`
+      select count(*)::int as n from teams where org_id = ${auth.orgId}`;
+    expect(n).toBe(0);
+  });
+
   it("Community import over clubs.max is rejected with featureKey clubs.max at commit", async () => {
     const { auth } = await seedOrg("community");
     await seedDivision(auth);
