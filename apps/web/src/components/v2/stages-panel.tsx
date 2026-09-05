@@ -1462,6 +1462,29 @@ export function generatePreconditionMessage(err: unknown, msg: Msg): string | nu
  *  SAME set for the run sheet's rows rather than a second copy. */
 export const VOID_STATUSES = new Set(["cancelled", "abandoned", "forfeited"]);
 
+/**
+ * Localized played-fixture status; unknown values fall back to the raw token.
+ *
+ * RESTORED (max-effort review, finding 6). This function was deleted with
+ * `FixtureLine`, and the run sheet shipped with no replacement — so a
+ * cancelled, abandoned or forfeited row rendered struck through with NO reason
+ * given, indistinguishable from each other and, for a screen-reader user, from
+ * an ordinary played match (CSS `line-through` is not announced). The design of
+ * record names it explicitly: "Status is carried by the dot colour + sub-line
+ * copy (`fixtureStatusLabel` stays as the sub-line source)"
+ * (competition-desk-design.md:232-234).
+ *
+ * The `schedule.fstatus.*` keys it reads never left the four dictionaries —
+ * they retain other readers on the board — so this restores a live string
+ * rather than adding one. EXPORTED for `run-sheet-row.tsx`, the same way
+ * `outcomeText` and `VOID_STATUSES` above are: one authority, no second copy.
+ */
+export function fixtureStatusLabel(msg: Msg, status: string): string {
+  const key = `schedule.fstatus.${status}` as MessageKey;
+  const label = msg(key);
+  return label === key ? status.replace("_", " ") : label;
+}
+
 // F1 Task 4: named bracket rounds by POSITION (roundRole), never by match
 // count or a stage-wide max — a double-elim's losers bracket has more
 // rounds than its winners bracket, so ranking round_no across the whole

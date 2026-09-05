@@ -39,6 +39,14 @@ export type RunSheetFixture = Pick<
   | "scheduled_at"
   | "status"
   | "court_name"
+  // `court_id`, added by max-effort review finding 10 / ruling R35. It was
+  // ALREADY being read at runtime — `courtDisplayName(fixture, courtNames)`'s
+  // venue-qualifying branch keys off it, and only worked because
+  // `toRunSheetFixture` spreads the whole wire row, which `tsc` cannot see. Any
+  // caller that constructed a `RunSheetFixture` explicitly (the grouping tests
+  // already do) silently dropped to the bare, possibly-colliding court name.
+  // R35's per-fixture court picker also seeds its selection from it.
+  | "court_id"
   | "venue_name"
   | "officials"
   | "outcome"

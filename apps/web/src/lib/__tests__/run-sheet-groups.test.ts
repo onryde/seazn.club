@@ -22,6 +22,11 @@ function fx(over: Partial<RunSheetInput["fixtures"][number]> = {}) {
     scheduled_at: "2026-09-03T14:00:00.000Z",
     status: "scheduled",
     court_name: null,
+    // Required since review finding 10 widened the `Pick` — `court_id` was
+    // always being READ (courtDisplayName's venue-qualifying branch) and only
+    // ever arrived because `toRunSheetFixture` spreads the wire row. An
+    // explicitly-constructed fixture like this one dropped it silently.
+    court_id: null,
     venue_name: null,
     officials: [],
     outcome: null,

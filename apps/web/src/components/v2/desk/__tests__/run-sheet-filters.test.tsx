@@ -46,6 +46,7 @@ function fx(no: number, o: Partial<RunSheetFixture> = {}): RunSheetFixture {
     scheduled_at: null,
     status: "scheduled",
     court_name: null,
+    court_id: null,
     venue_name: null,
     officials: [],
     outcome: null,

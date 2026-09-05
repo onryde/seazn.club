@@ -18,9 +18,9 @@ import { useMsg } from "@/components/i18n/dict-provider";
 import { DateTimeField } from "../shared/datetime-field";
 import { resolveSlotLabel } from "@/lib/slot-label";
 import { courtDisplayName } from "@/components/v2/board/types";
-import { canEditFixtureTime, fixtureRowAction, type RowAction } from "@/lib/fixture-row-action";
+import { canEditFixtureTime, fixtureRowAction, hasAssignedScorer, type RowAction } from "@/lib/fixture-row-action";
 import { isBye, type RunSheetFixture } from "@/lib/run-sheet-groups";
-import { outcomeText, VOID_STATUSES } from "@/components/v2/stages-panel";
+import { fixtureStatusLabel, outcomeText, VOID_STATUSES } from "@/components/v2/stages-panel";
 import type { PatchFixture } from "@/server/api-v1/schemas";
 // Both halves of the round trip resolve in `orgTz` (#448): `zonedDateTimeInput`
 // seeds the field from an existing instant, `isoFromZonedDateTime` turns the
@@ -103,7 +103,12 @@ export function RunSheetRow({
 
   // C3: `hasOfficials` derived here, at fixtureRowAction's own call site —
   // the function takes it as a boolean input, it does not derive it itself.
-  const hasOfficials = fixture.officials.length > 0;
+  //
+  // `hasAssignedScorer`, never `officials.length > 0` (max-effort review,
+  // finding 8): the `fixtures.officials` cache keeps DECLINED appointments,
+  // so a length test reads "fully staffed" on the exact fixture whose scorer
+  // has just said no. The whole argument lives on that function.
+  const hasOfficials = hasAssignedScorer(fixture.officials);
   const action: RowAction = fixtureRowAction({
     status: fixture.status,
     scheduledAt: fixture.scheduled_at,
@@ -129,14 +134,34 @@ export function RunSheetRow({
   // contradicting facts in one row" class this wave exists to remove.
   const voided = VOID_STATUSES.has(fixture.status);
 
-  // Sub-line priority: a settled result IS the fact worth showing (no extra
-  // line); otherwise an unresolved entrant ("Awaiting draw") is the more
-  // fundamental blocker than "no scorer yet" — an organiser cannot assign a
-  // scorer to a match that doesn't know who is playing yet.
+  // The sub-line: ONE computed string, ONE guard below.
+  //
+  // Max-effort review, finding 6. The precedence rule used to be encoded three
+  // times — here, in the render guard, and again inside it — and the voided arm
+  // was UNSATISFIABLE: the guard read `(decided && !voided) || subLine`, whose
+  // first disjunct is false by construction for a voided fixture, while
+  // `subLine` could only be truthy for `awaitingDraw` or `assign_scorer`,
+  // neither of which a settled fixture reaches. So a cancelled, abandoned or
+  // forfeited row rendered struck through with no reason and no result: three
+  // outcomes collapsed into one indistinguishable row, and nothing at all for a
+  // screen reader, since `line-through` is not announced. Collapsing the rule to
+  // a single value that already IS the string to print removes the dead branch
+  // by construction.
+  //
+  // Priority:
+  //  - VOIDED: the reason first (`fixtureStatusLabel`, the sub-line source the
+  //    design of record names), then the outcome if one was recorded — a
+  //    forfeit has a winner and it was being computed and discarded.
+  //  - a settled result IS the fact worth showing, on its own (a status word
+  //    beside "Alpha won" is the row noise this wave exists to cut).
+  //  - otherwise an unresolved entrant ("Awaiting draw") is the more
+  //    fundamental blocker than "no scorer yet" — an organiser cannot assign a
+  //    scorer to a match that doesn't know who is playing yet.
   const awaitingDraw = fixture.home_entrant_id === null || fixture.away_entrant_id === null;
-  const subLine =
-    decided !== null && !voided
-      ? null
+  const subLine: string | null = voided
+    ? [fixtureStatusLabel(msg, fixture.status), decided].filter((p): p is string => Boolean(p)).join(" · ")
+    : decided !== null
+      ? decided
       : awaitingDraw
         ? msg("runsheet.sub.awaitingDraw")
         : action.kind === "assign_scorer"
@@ -294,8 +319,8 @@ export function RunSheetRow({
               <span className="mx-1.5 text-slate-500">{msg("schedule.vs")}</span>
               {away}
             </Link>
-            {((decided && !voided) || subLine) && (
-              <p className="min-w-0 truncate text-xs text-slate-500">{voided ? subLine : (decided ?? subLine)}</p>
+            {subLine !== null && subLine !== "" && (
+              <p className="min-w-0 truncate text-xs text-slate-500">{subLine}</p>
             )}
           </div>
         </div>

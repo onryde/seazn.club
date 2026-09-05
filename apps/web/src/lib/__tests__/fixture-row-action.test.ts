@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import {
   canEditFixtureTime,
   fixtureRowAction,
+  hasAssignedScorer,
   TIMETABLE_MOVABLE_STATUS,
   type RowActionInput,
 } from "../fixture-row-action";
@@ -161,4 +162,88 @@ describe("canEditFixtureTime — is the displayed time an affordance?", () => {
       expect(canEditFixtureTime({ status, scheduledAt: AT, canEdit: true })).toBe(false);
     },
   );
+});
+
+// ---------------------------------------------------------------------------
+// Max-effort review, finding 8 — a DECLINED appointment counted as a scorer.
+//
+// `fixtures.officials` is a READ CACHE rebuilt by `refreshOfficialsCache`
+// (usecases/officials.ts) with NO response filter — a declined row stays in the
+// aggregate carrying `response: 'declined'`. `officials.length > 0` therefore
+// reads TRUE precisely when the person invited has said no, so ladder rule 5
+// stops offering "Assign scorer" on the morning it matters most. The codebase
+// already knows the difference: `officials.ts:170` joins
+// `and fo.response <> 'declined'`.
+//
+// NOT covered by the ledger, which was the review's own open question:
+// `division-phase`'s `hasScorer` is resolved from `scorer_assignments`
+// (competition-desk.ts:293-298), a DIFFERENT table from `fixture_officials`, so
+// the "Needs you" panel cannot cover for this row.
+//
+// The wire shape is `unknown[]`, so this reader is TOTAL: a malformed element
+// must not throw a match-day render.
+describe("hasAssignedScorer — the officials cache is response-bearing", () => {
+  it("no appointments at all is no scorer", () => {
+    expect(hasAssignedScorer([])).toBe(false);
+  });
+
+  it("an ACCEPTED appointment is a scorer", () => {
+    expect(hasAssignedScorer([{ official_id: "o1", role: "scorer", response: "accepted" }])).toBe(true);
+  });
+
+  // The witness row. A fixture with one ACCEPTED official cannot see this bug.
+  it("a DECLINED appointment is NOT a scorer — the row must keep nudging", () => {
+    expect(hasAssignedScorer([{ official_id: "o1", role: "scorer", response: "declined" }])).toBe(false);
+  });
+
+  it("declined alongside accepted still counts — somebody is coming", () => {
+    expect(
+      hasAssignedScorer([
+        { official_id: "o1", response: "declined" },
+        { official_id: "o2", response: "accepted" },
+      ]),
+    ).toBe(true);
+  });
+
+  // `response` is nullable in `fixture_officials` (invited, not yet answered).
+  // Absence of a refusal is not a refusal: an unanswered invite still means
+  // somebody has been asked, which is what rule 5 is testing for.
+  it.each([[{ official_id: "o1" }], [{ official_id: "o1", response: null }]])(
+    "an appointment with no recorded response counts (%o)",
+    (row) => {
+      expect(hasAssignedScorer([row])).toBe(true);
+    },
+  );
+
+  it.each([[null], [undefined], ["declined"], [42]])("a malformed element (%o) never throws", (row) => {
+    expect(() => hasAssignedScorer([row])).not.toThrow();
+  });
+
+  // The seam: the derived boolean must flip the LADDER's answer, not just a
+  // helper's return value. A fixture scheduled TODAY whose only official
+  // declined is exactly the failure scenario.
+  it("a fixture scheduled today whose only official declined still offers Assign scorer", () => {
+    expect(
+      fixtureRowAction({
+        status: "scheduled",
+        scheduledAt: TODAY_1500,
+        hasOfficials: hasAssignedScorer([{ official_id: "o1", role: "scorer", response: "declined" }]),
+        canEdit: true,
+        tz: TZ,
+        nowMs: NOW,
+      }),
+    ).toEqual({ kind: "assign_scorer" });
+    // ...and the same row with an accepted official does NOT — the pair is what
+    // proves the input is consulted rather than constant.
+    expect(
+      fixtureRowAction({
+        status: "scheduled",
+        scheduledAt: TODAY_1500,
+        hasOfficials: hasAssignedScorer([{ official_id: "o1", response: "accepted" }]),
+        canEdit: true,
+        tz: TZ,
+        nowMs: NOW,
+      }),
+    ).toEqual({ kind: "score" });
+  });
 });

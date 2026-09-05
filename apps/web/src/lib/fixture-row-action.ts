@@ -29,10 +29,10 @@ export type RowAction =
 export type RowActionInput = {
   status: FixtureRow["status"];
   scheduledAt: FixtureRow["scheduled_at"];
-  /** Any officials recorded on the fixture — the "no scorer" signal. Callers
-   *  derive this as `fixture.officials.length > 0` (`FixtureRow.officials` is
-   *  `unknown[]` in `@/server/usecases/stages`); this function takes the
-   *  boolean as an input and does not derive it itself. */
+  /** Somebody is actually coming to score this fixture — the "no scorer"
+   *  signal. Callers derive it with `hasAssignedScorer(fixture.officials)`
+   *  below, never `officials.length > 0`; this function takes the boolean as
+   *  an input and does not derive it itself. */
   hasOfficials: boolean;
   canEdit: boolean;
   /** The VENUE zone (`scheduleSettings.tz`), for both bucketing and printing.
@@ -60,6 +60,36 @@ export type RowActionInput = {
  * whole wave exists to remove.
  */
 export const TIMETABLE_MOVABLE_STATUS = "scheduled";
+
+/**
+ * The ONE reader of the `fixtures.officials` cache's `response` field, and the
+ * only correct derivation of `RowActionInput.hasOfficials`.
+ *
+ * Max-effort review, finding 8. The cache is rebuilt by `refreshOfficialsCache`
+ * (server/usecases/officials.ts) with NO response filter, so a DECLINED
+ * appointment stays in the aggregate. `officials.length > 0` therefore answers
+ * "somebody was asked", not "somebody is coming" — and it reads TRUE precisely
+ * when the invited scorer has said no, which is the one morning the row most
+ * needs to keep nudging. The server already draws this distinction where it
+ * matters (`officials.ts:170`: `and fo.response <> 'declined'`); this is the
+ * client's half of the same fact.
+ *
+ * Deliberately NOT fixed by adding the filter to `refreshOfficialsCache`: that
+ * column has other readers (the fixture console's officials list, which must
+ * still show a decline and its reason), so narrowing the cache would hide data
+ * those surfaces need. The narrowing belongs at the question, not the store.
+ *
+ * A missing or null `response` is an invitation nobody has answered yet — that
+ * still means somebody has been asked, so it counts. Only an explicit
+ * "declined" is a refusal. Total by construction: the wire type is `unknown[]`
+ * and a malformed element must never throw a match-day render.
+ */
+export function hasAssignedScorer(officials: readonly unknown[]): boolean {
+  return officials.some((o) => {
+    if (typeof o !== "object" || o === null) return false;
+    return (o as { response?: unknown }).response !== "declined";
+  });
+}
 
 /**
  * Is this row's DISPLAYED TIME an affordance — does clicking it open the
