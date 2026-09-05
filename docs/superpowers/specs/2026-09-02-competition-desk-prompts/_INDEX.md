@@ -401,3 +401,30 @@ moves as you schedule it. Fix F2 first — the key change may be a no-op afterwa
 unscheduled pile (rows carry results and a `Result` action, never `Set time`).
 But "Played, not scheduled" is false for the cancelled/abandoned/forfeited rows
 it exists to hold; a cancelled one was photographed under that heading.
+
+
+## F1 — FIXED, PR #728 (2026-09-05), not W3's to carry any more
+
+Owner ruled "fix the F1" directly. Fixed in a separate worktree/branch off
+post-merge `main` (`fix/bracket-bye-outcome-encoding`), not bundled into W2:
+
+- `stages.ts:1349` — `tx.json({ kind: "award", winner })` replacing
+  `JSON.stringify(...)`, matching every other outcome writer in the codebase
+- `V392__fix_double_encoded_bracket_bye_outcome.sql` — repairs existing rows
+  via `(outcome #>> '{}')::jsonb`
+- New regression test in `bracket-round-role.test.ts` drives the REAL
+  generator and reads the REAL column back; verified by reverting the fix
+  locally and confirming the new test (and only the new test) goes red —
+  every pre-existing bye test in that file stayed green throughout, proving
+  they could never have caught this
+
+Independently verified beyond unit tests: applied the migration against 6
+rows produced by the real unfixed generator in a scratch DB (`UPDATE 6`, all
+repaired byte-for-byte), full stages/bracket suite 26/26, public bracket
+component suite 16/16 unaffected, typecheck clean, gate 2/2.
+
+**The remaining open item for W3/future work is NOT F1 itself any more** —
+it is the general caution in the standing policy about `outcome` shape: any
+NEW writer of that column must use `tx.json()`, never `JSON.stringify`. The
+generalizable trap is saved to memory:
+`reference_json_stringify_into_jsonb_column_reads_as_undefined.md`.
