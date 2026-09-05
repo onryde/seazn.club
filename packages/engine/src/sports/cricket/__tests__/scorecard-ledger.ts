@@ -341,12 +341,24 @@ export interface SummaryTotals {
  *  `CricketPlayerLine`). `applyPlayerLine` REFUSES a line whose innings is
  *  not CLOSED, and cross-checks it against the innings totals (a coarse
  *  innings caps each aspect at its own total; a fine one demands exact
- *  agreement with `FineInnings`), so these numbers are never free. */
+ *  agreement with `FineInnings`), so these numbers are never free.
+ *
+ *  Task 17/owner ruling 12 — `fours`/`sixes`/`dismissal` and
+ *  `maidens`/`wides`/`noBalls` are OPTIONAL, mirroring `CricketPlayerLine`
+ *  exactly: a test posting a line without them still exercises the same
+ *  null-fallback path Task 4's band-2 test pins. */
 export interface PlayerLine {
   innings: number;
   person: string;
-  batting?: { runs: number; balls: number; out?: boolean };
-  bowling?: { legalBalls: number; runs: number; wickets: number };
+  batting?: {
+    runs: number;
+    balls: number;
+    out?: boolean;
+    fours?: number;
+    sixes?: number;
+    dismissal?: { kind: string; bowler?: string; fielder?: string };
+  };
+  bowling?: { legalBalls: number; runs: number; wickets: number; maidens?: number; wides?: number; noBalls?: number };
 }
 
 interface CoarseSpec {

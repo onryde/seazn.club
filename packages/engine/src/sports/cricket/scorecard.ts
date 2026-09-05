@@ -187,9 +187,33 @@ class InningsAccumulator {
   // the event's own payload as the fold replays it, exactly the way `onBall`
   // reads a delivery's. (`state.playerLines` holds the same records, but
   // reading the payload keeps every accumulator input one shape.)
-  private battingLinesByIndex: Array<Array<{ person: string; runs: number; balls: number; out: boolean }>> = [];
+  //
+  // Task 17/owner ruling 12 — a line's `fours`/`sixes`/`dismissal` and
+  // `maidens`/`wides`/`noBalls` are OPTIONAL on the payload (a scorer filing
+  // a coarse line may not know them), so each is stored exactly as it
+  // arrived — `undefined` when absent — and `null`-ed only when the card is
+  // actually built (`lineBatting`/`lineBowling` below).
+  private battingLinesByIndex: Array<
+    Array<{
+      person: string;
+      runs: number;
+      balls: number;
+      out: boolean;
+      fours: number | undefined;
+      sixes: number | undefined;
+      dismissal: { kind: DismissalKind; bowler: string | undefined; fielder: string | undefined } | undefined;
+    }>
+  > = [];
   private bowlingLinesByIndex: Array<
-    Array<{ person: string; legalBalls: number; runs: number; wickets: number }>
+    Array<{
+      person: string;
+      legalBalls: number;
+      runs: number;
+      wickets: number;
+      maidens: number | undefined;
+      wides: number | undefined;
+      noBalls: number | undefined;
+    }>
   > = [];
 
   // Task 3 — fall of wickets, partnerships and the over log.
@@ -515,11 +539,13 @@ class InningsAccumulator {
    * `cricket.player.line` (band 2) — the middle fidelity, between an innings
    * recorded as bare totals and one recorded ball by ball. A line says what
    * one person did across a whole innings: runs and balls faced, or balls
-   * bowled, runs conceded and wickets taken. Nothing else. There is no
-   * delivery behind it, so the fold has no boundary flag, no dismissal
-   * detail, no over boundary and no extras split to read — which is why
-   * every one of those fields comes back `null` rather than `0` on a line's
-   * card (see `lineBatting`/`lineBowling`).
+   * bowled, runs conceded and wickets taken — plus, since owner ruling 12
+   * (Task 17), OPTIONALLY 4s/6s/how-out on a batting aspect and maidens/
+   * wides/no-balls on a bowling one, exactly when the scorer filing the line
+   * chose to carry them. There is still no delivery behind any of it, so a
+   * line NEVER carries an over boundary or an extras split — those two stay
+   * `null` on every band-2 card unconditionally (see `lineBatting`/
+   * `lineBowling`).
    *
    * `payload.innings` is 1-based and addresses `state.innings` — that is
    * literally what `applyPlayerLine` indexes (`state.innings[payload.innings
@@ -531,15 +557,40 @@ class InningsAccumulator {
     const payload = ev.payload as {
       innings: number;
       person: string;
-      batting?: { runs: number; balls: number; out?: boolean };
-      bowling?: { legalBalls: number; runs: number; wickets: number };
+      batting?: {
+        runs: number;
+        balls: number;
+        out?: boolean;
+        fours?: number;
+        sixes?: number;
+        dismissal?: { kind: DismissalKind; bowler?: string; fielder?: string };
+      };
+      bowling?: {
+        legalBalls: number;
+        runs: number;
+        wickets: number;
+        maidens?: number;
+        wides?: number;
+        noBalls?: number;
+      };
     };
     const index = payload.innings - 1;
     if (index < 0) return;
     const batting = payload.batting;
     if (batting !== undefined) {
       const lines = this.battingLinesByIndex[index] ?? (this.battingLinesByIndex[index] = []);
-      lines.push({ person: payload.person, runs: batting.runs, balls: batting.balls, out: batting.out === true });
+      lines.push({
+        person: payload.person,
+        runs: batting.runs,
+        balls: batting.balls,
+        out: batting.out === true,
+        fours: batting.fours,
+        sixes: batting.sixes,
+        dismissal:
+          batting.dismissal === undefined
+            ? undefined
+            : { kind: batting.dismissal.kind, bowler: batting.dismissal.bowler, fielder: batting.dismissal.fielder },
+      });
     }
     const bowling = payload.bowling;
     if (bowling !== undefined) {
@@ -549,46 +600,65 @@ class InningsAccumulator {
         legalBalls: bowling.legalBalls,
         runs: bowling.runs,
         wickets: bowling.wickets,
+        maidens: bowling.maidens,
+        wides: bowling.wides,
+        noBalls: bowling.noBalls,
       });
     }
   }
 
   /** Batting lines at band 2. `order` is the order the lines were FILED —
    *  the only ordering a line ledger carries; a batting position it never
-   *  recorded would be an invention. `fours`/`sixes` are `null` because no
-   *  delivery exists to have carried a boundary flag, and the dismissal is
-   *  `out_unknown` — the shape `scorecard-types.ts` reserves for "the line
-   *  said out, nothing more" — never a kind, bowler or fielder this ledger
-   *  cannot name. */
+   *  recorded would be an invention. `fours`/`sixes` are the line's own
+   *  numbers when the scorer filed them (Task 17), `null` otherwise — no
+   *  delivery exists here to have carried a boundary flag, so absent is the
+   *  only other state. `dismissal` is the line's own `{kind, bowler,
+   *  fielder}` (`fielderAssist` stays `null` — no line ever carries one:
+   *  owner ruling 12 named only bowler/fielder credit) when the line
+   *  supplied one, `out_unknown` — the shape `scorecard-types.ts` reserves
+   *  for "the line said out, nothing more" — when it said `out` without a
+   *  dismissal, and `not_out` otherwise. */
   private lineBatting(index: number): BattingLine[] {
     return (this.battingLinesByIndex[index] ?? []).map((line, i) => ({
       order: i + 1,
       person: line.person,
       runs: line.runs,
       balls: line.balls,
-      fours: null,
-      sixes: null,
+      fours: line.fours ?? null,
+      sixes: line.sixes ?? null,
       strikeRate: line.balls > 0 ? Math.round(((line.runs * 100) / line.balls) * 10) / 10 : null,
-      dismissal: line.out ? { kind: "out_unknown" } : { kind: "not_out" },
+      dismissal:
+        line.dismissal !== undefined
+          ? {
+              kind: line.dismissal.kind,
+              bowler: line.dismissal.bowler ?? null,
+              fielder: line.dismissal.fielder ?? null,
+              fielderAssist: null,
+            }
+          : line.out
+            ? { kind: "out_unknown" }
+            : { kind: "not_out" },
     }));
   }
 
-  /** Bowling lines at band 2. `maidens`/`wides`/`noBalls` are `null` for the
-   *  same reason: a maiden is a property of an OVER and wides/no-balls of a
-   *  DELIVERY, and a line ledger holds neither. `overs` and `economy` are
-   *  derived from the line's own legal balls with the same notation and the
-   *  same rounding a ball-fidelity card uses, so the two bands print alike. */
+  /** Bowling lines at band 2. `maidens`/`wides`/`noBalls` are the line's own
+   *  numbers when the scorer filed them (Task 17), `null` otherwise — a
+   *  maiden is a property of an OVER and wides/no-balls of a DELIVERY, and a
+   *  line ledger has neither to derive them FROM; they can only ever be what
+   *  the line itself said. `overs` and `economy` are derived from the
+   *  line's own legal balls with the same notation and the same rounding a
+   *  ball-fidelity card uses, so the two bands print alike. */
   private lineBowling(index: number, bpo: number): BowlingLine[] {
     return (this.bowlingLinesByIndex[index] ?? []).map((line) => ({
       person: line.person,
       legalBalls: line.legalBalls,
       overs: fmtOvers(line.legalBalls, bpo),
-      maidens: null,
+      maidens: line.maidens ?? null,
       runs: line.runs,
       wickets: line.wickets,
       economy: line.legalBalls > 0 ? Math.round(((line.runs * bpo) / line.legalBalls) * 10) / 10 : null,
-      wides: null,
-      noBalls: null,
+      wides: line.wides ?? null,
+      noBalls: line.noBalls ?? null,
     }));
   }
 
@@ -813,8 +883,9 @@ class InningsAccumulator {
     // target on screen, which is a wrong number, not a missing one.
     //
     // A super over is out for the same reason from the other direction: its
-    // target is its own first innings' score, not the match chase, and
-    // nothing in this fold models super overs yet (see `cards()`).
+    // target is its own first innings' score, not the match chase — even
+    // though `cards()` renders a super over's own card (Task 4), chase
+    // maths never applies to one.
     const isChase = !inSuperOver && index === state.cfg.inningsPerSide * 2 - 1;
     const target = isChase ? chaseTarget(state) : null;
     const needRuns = target === null ? null : target - innings.runs;

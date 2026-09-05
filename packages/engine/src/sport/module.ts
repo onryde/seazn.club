@@ -243,10 +243,22 @@ export type PadField = PadFieldEnum | PadFieldNumber | PadFieldToggle;
  * own payload schema (`isPathRequired`/`stampAttributionRequired`), never
  * hand-typed per sport — memory rule #19: a value typed into a table
  * drifts from the source of truth the moment the schema changes under it.
+ *
+ * `optional` (owner ruling 12, S17) is a DIFFERENT, hand-authored flag: a
+ * sport declares it directly (never derived, never stamped) to mark an
+ * attribution item the picker may skip even though the underlying payload
+ * key happens to be optional in the schema too. It is not a restatement of
+ * `!required` — a module could in principle attach `optional: true` to an
+ * item whose path resolves required (the picker would then be wrong to
+ * skip it; that is a sport-authoring bug, not something this type prevents)
+ * — but every item the pad declares `optional` on today also resolves
+ * `required: false`, e.g. cricket's `batting.dismissal.bowler`/`.fielder`.
+ * Absent means "required, same as before this flag existed" — no existing
+ * item changes behaviour.
  */
 export type PadAttributionItem =
-  | { kind: "side"; path: string; labelKey?: PadLabel; required?: boolean }
-  | { kind: "person"; path: string; role?: string; labelKey?: PadLabel; required?: boolean };
+  | { kind: "side"; path: string; labelKey?: PadLabel; required?: boolean; optional?: boolean }
+  | { kind: "person"; path: string; role?: string; labelKey?: PadLabel; required?: boolean; optional?: boolean };
 
 /**
  * A LIST of attribution requirements, not a single discriminated choice —

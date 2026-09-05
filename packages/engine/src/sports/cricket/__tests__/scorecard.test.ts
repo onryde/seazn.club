@@ -1303,6 +1303,39 @@ describe("deriveCricketScorecard — coarser bands, result, super over", () => {
     expect(inn1.didNotBat).toEqual([]);
   });
 
+  // Task 17 — owner ruling 12: band-2 lines can now carry 4s/6s/how-out and
+  // maidens/wides/no-balls, and the fold must read every one of them off the
+  // line payload (the null case above is already covered by the test right
+  // above this one — this is its positive pair).
+  it("band 2: enriched lines carry fours/sixes/dismissal/maidens/wides/noBalls", () => {
+    const { events, cfg, lineups } = lineLedger(undefined, [
+      {
+        innings: 1,
+        person: "h1",
+        batting: {
+          runs: 30,
+          balls: 20,
+          out: true,
+          fours: 3,
+          sixes: 1,
+          dismissal: { kind: "caught", bowler: "a7", fielder: "a3" },
+        },
+      },
+      {
+        innings: 1,
+        person: "a7",
+        bowling: { legalBalls: 12, runs: 20, wickets: 2, maidens: 1, wides: 2, noBalls: 0 },
+      },
+    ]);
+    const card = deriveCricketScorecard({ events, cfg, lineups });
+    expect(card.innings[0]!.batting[0]).toMatchObject({
+      fours: 3,
+      sixes: 1,
+      dismissal: { kind: "caught", bowler: "a7", fielder: "a3", fielderAssist: null },
+    });
+    expect(card.innings[0]!.bowling[0]).toMatchObject({ maidens: 1, wides: 2, noBalls: 0 });
+  });
+
   it("band 0: innings summaries alone give totals and (with a second innings) a target — no players", () => {
     const { events, state, cfg, lineups } = summaryOnlyLedger();
     const card = deriveCricketScorecard({ events, cfg, lineups });
