@@ -1530,17 +1530,26 @@ describe.skipIf(!HAS_DB)("plan-card copy quotes the numbers the matrix enforces"
   // live matrix has said 128 since V319 — a PRE-EXISTING content bug, wrong by
   // half, independent of the L rung. Pinning it against the matrix is what
   // stops it recurring; naming L is what this wave adds.
-  it("the Event Pass tip quotes the live M entrant cap and L's ceiling", async () => {
-    const mEntrants = await capFor("entrants.per_division.max", "event_pass");
-    const lDivisions = await capFor("divisions.per_competition.max", "event_pass_l");
+  it("the Event Pass tip quotes the live caps of the rung on sale, and no other's", async () => {
     const communityEntrants = await capFor("entrants.per_division.max", "community");
-    expect(mEntrants).toBe(128);
     for (const locale of LOCALES) {
       const body = dict(locale)["tips.billing.event-pass.body"];
       expect(body, `${locale}: no tip body`).toBeTruthy();
-      // Whole tokens: `toContain("128")` was satisfied by "1280 entrants".
-      quotesCap(body, mEntrants, `${locale}: M entrant cap`);
-      quotesCap(body, lDivisions, `${locale}: L division cap`);
+      for (const rung of SELLABLE_PASS_KEYS) {
+        // Whole tokens: `toContain("128")` was satisfied by "1280 entrants".
+        quotesCap(body, await capFor("entrants.per_division.max", rung), `${locale}: ${rung} entrants`);
+        quotesCap(body, await capFor("divisions.per_competition.max", rung), `${locale}: ${rung} divisions`);
+      }
+      // The tip sits directly beside the buy link, so a withdrawn rung's
+      // figures in it are an offer (owner decision 2026-09-05).
+      for (const rung of HIDDEN_PASS_KEYS) {
+        expect(body, `${locale}: ${rung}'s entrant cap is off sale`).not.toMatch(
+          wholeNumber((await capFor("entrants.per_division.max", rung))!),
+        );
+        expect(body, `${locale}: ${rung}'s division cap is off sale`).not.toMatch(
+          wholeNumber((await capFor("divisions.per_competition.max", rung))!),
+        );
+      }
       // The bug itself: the tip must never quote COMMUNITY's cap as the
       // pass's. The tip describes only what the pass grants, so this figure
       // has no legitimate reason to appear in it.
@@ -1550,25 +1559,31 @@ describe.skipIf(!HAS_DB)("plan-card copy quotes the numbers the matrix enforces"
     }
   });
 
-  it("the Event Pass help article presents both rungs with their live caps", async () => {
+  it("the Event Pass help article presents the rung on sale with its live caps", async () => {
     const article = readFileSync("content/help/billing/event-pass.md", "utf8");
-    const mEntrants = await capFor("entrants.per_division.max", "event_pass");
-    const mDivisions = await capFor("divisions.per_competition.max", "event_pass");
-    const lDivisions = await capFor("divisions.per_competition.max", "event_pass_l");
-    // V392 gave L a real 512-entrant cap where it had been null. The article
-    // said "unlimited entrants" for as long as the row was null, and that
-    // sentence is now a live overclaim of 512 — so the assertion inverts: the
-    // number must be quoted, and the word must be GONE. Keeping only the
-    // positive half would let a page say both.
-    const lEntrants = await capFor("entrants.per_division.max", "event_pass_l");
-    expect(lEntrants, "L's entrant cap is a number now, not null").not.toBeNull();
-    expect(article).toContain(`**${mEntrants} entrants**`);
-    expect(article).toContain(`**${mDivisions} divisions**`);
-    expect(article).toContain(`**${lDivisions} divisions**`);
-    expect(article).toContain(`**${lEntrants} entrants**`);
-    expect(article.toLowerCase(), "L's cap is 512, not unlimited").not.toContain(
-      "unlimited entrants",
-    );
+    for (const rung of SELLABLE_PASS_KEYS) {
+      expect(article).toContain(`**${await capFor("entrants.per_division.max", rung)} entrants**`);
+      expect(article).toContain(
+        `**${await capFor("divisions.per_competition.max", rung)} divisions**`,
+      );
+    }
+    // The flagship M-vs-L comparison table went with the L rung's sale
+    // (2026-09-05): this article is the loudest place the withdrawn size was
+    // described, and its 512-entrant row is the whole reason a reader would ask
+    // for it. So the negative is checked at the same strength as the positive.
+    for (const rung of HIDDEN_PASS_KEYS) {
+      expect(article, `${rung}'s entrant cap`).not.toContain(
+        `${await capFor("entrants.per_division.max", rung)} entrants`,
+      );
+      expect(article, `${rung}'s division cap`).not.toContain(
+        `${await capFor("divisions.per_competition.max", rung)} divisions`,
+      );
+    }
+    // V392 gave L a real 512-entrant cap where it had been null, and the
+    // article said "unlimited entrants" for as long as the row was null. That
+    // word must not come back for ANY rung — an uncapped claim over a numeric
+    // cap is the same defect whichever size it is made about.
+    expect(article.toLowerCase(), "no rung is uncapped").not.toContain("unlimited entrants");
     // Same 64-for-128 defect as the tip, in the "Can I buy a pass on top of
     // Pro?" answer, which compared Pro's 256 against "the pass's 64".
     expect(article).not.toMatch(/pass(?:'s|es)?\s+64\b/i);
@@ -1583,7 +1598,7 @@ describe.skipIf(!HAS_DB)("plan-card copy quotes the numbers the matrix enforces"
   // Pinned the same way as its billing-section siblings: against the live
   // matrix, and against the shape of the defect (a ceiling attributed to "a
   // pass" with no rung beside it).
-  it("the add-a-division article gives BOTH rungs, at their live caps", async () => {
+  it("the add-a-division article gives the rung on sale, at its live caps", async () => {
     const md = readFileSync("content/help/getting-started/add-a-division.md", "utf8");
     /** One `**Question?**` line — the answers are scoped so a figure that
      *  belongs to the divisions answer cannot satisfy the entrants one. */
@@ -1593,36 +1608,68 @@ describe.skipIf(!HAS_DB)("plan-card copy quotes the numbers the matrix enforces"
     const entrants = answer("How many entrants");
     expect(entrants, "no entrants answer").toBeTruthy();
     expect(entrants).toContain(`**${await capFor("entrants.per_division.max", "community")}**`);
-    expect(entrants).toContain(`**${await capFor("entrants.per_division.max", "event_pass")}**`);
     expect(entrants).toContain(`**${await capFor("entrants.per_division.max", "pro")}**`);
-    // L's cap was NULL and the answer said so in words ("no limit at all").
-    // V392 made it 512, so the words are the defect now and the number is the
-    // claim — asserted in both directions so a page cannot carry both.
-    const lEntrants = await capFor("entrants.per_division.max", "event_pass_l");
-    expect(lEntrants, "L's entrant cap is a number now").not.toBeNull();
-    expect(entrants).toContain(`**${lEntrants}**`);
-    expect(entrants.toLowerCase(), "L is capped at 512").not.toContain("no limit at all");
 
     const divisions = answer("How many divisions");
     expect(divisions, "no divisions answer").toBeTruthy();
     expect(divisions).toContain(`**${await capFor("divisions.per_competition.max", "community")}**`);
-    expect(divisions).toContain(
-      `**${await capFor("divisions.per_competition.max", "event_pass")}**`,
-    );
-    expect(divisions).toContain(
-      `**${await capFor("divisions.per_competition.max", "event_pass_l")}**`,
-    );
+    // Pro's own division cap, and it is not decoration: this answer said "as
+    // many as you like on Pro" until 2026-09-05, which V392 had made false when
+    // it capped Pro at 20 — a pre-existing overclaim, found while sweeping the
+    // L rung out of this line and fixed in the same edit.
+    expect(divisions).toContain(`**${await capFor("divisions.per_competition.max", "pro")}**`);
 
-    // THE defect, in both answers: a ceiling handed to "an Event Pass" / "a
-    // pass" with no size beside it states one rung's limit as the product's.
-    // Requiring both size letters in each answer is what the pre-fix text
-    // fails — it named neither.
+    for (const rung of SELLABLE_PASS_KEYS) {
+      expect(entrants).toContain(`**${await capFor("entrants.per_division.max", rung)}**`);
+      expect(divisions).toContain(`**${await capFor("divisions.per_competition.max", rung)}**`);
+    }
+    // The withdrawn rung's ceilings are what a reader would come here to find,
+    // so they are exactly what must be gone (owner decision 2026-09-05). L's
+    // entrant cap was NULL and this answer said so in words ("no limit at
+    // all"); V392 made it 512, and the words stayed wrong for a wave — so the
+    // uncapped phrasing is still banned as well as the number.
+    //
+    // The NUMBER can only be asserted absent where it belongs to the hidden
+    // rung ALONE. L's division cap is 20 and so is Pro's, which this answer
+    // legitimately quotes — a bare `not.toMatch(20)` would fail on the correct
+    // text and the obvious repair would be to delete the check. So the figure
+    // is skipped where it collides, and the rung's own NAME carries the
+    // assertion instead: naming a size is how this answer attributed a ceiling
+    // to a rung in the first place.
+    for (const rung of HIDDEN_PASS_KEYS) {
+      for (const [feature, line, what] of [
+        ["entrants.per_division.max", entrants, "entrant"],
+        ["divisions.per_competition.max", divisions, "division"],
+      ] as const) {
+        const cap = await capFor(feature, rung);
+        const shared = (
+          await Promise.all(
+            ["community", "pro", ...SELLABLE_PASS_KEYS].map((p) => capFor(feature, p)),
+          )
+        ).includes(cap);
+        if (!shared) expect(line, `${rung}'s ${what} cap`).not.toMatch(wholeNumber(cap!));
+      }
+      // Unconditional, and it is what makes the skip above safe.
+      expect(divisions, `${rung} must not be named`).not.toMatch(/\*\*L\*\*/);
+      expect(entrants, `${rung} must not be named`).not.toMatch(/\*\*L\*\*/);
+    }
+    // Anti-vacuity: at least one hidden cap really was unique, so the loop
+    // above is not skipping every case it has.
+    expect(await capFor("entrants.per_division.max", "event_pass_l")).not.toBe(
+      await capFor("entrants.per_division.max", "pro"),
+    );
+    expect(entrants.toLowerCase(), "no rung is uncapped").not.toContain("no limit at all");
+
+    // THE defect this pair was written for: a ceiling handed to "an Event
+    // Pass" / "a pass" with no plan beside it states one offer's limit as the
+    // product's. Each answer must therefore attribute its pass figure — it is
+    // the link to the pass article that carries that here, since there is one
+    // size to name.
     for (const [name, line] of [
       ["entrants", entrants],
       ["divisions", divisions],
     ] as const) {
-      expect(line, `${name}: names the M rung`).toMatch(/\*\*M\*\*/);
-      expect(line, `${name}: names the L rung`).toMatch(/\*\*L\*\*/);
+      expect(line, `${name}: attributes its pass figure`).toContain("/help/billing/event-pass");
     }
   });
 
@@ -1648,21 +1695,31 @@ describe.skipIf(!HAS_DB)("plan-card copy quotes the numbers the matrix enforces"
       return end === -1 ? rest : rest.slice(0, end);
     };
 
-    it("gives each Event Pass rung its own live caps, and neither the other's", async () => {
-      const mEntrants = await capFor("entrants.per_division.max", "event_pass");
-      const mDivisions = await capFor("divisions.per_competition.max", "event_pass");
-      const lDivisions = await capFor("divisions.per_competition.max", "event_pass_l");
-      const lEntrants = await capFor("entrants.per_division.max", "event_pass_l");
-      expect(lEntrants, "L's entrant cap is a number since V392").not.toBeNull();
-
+    it("gives the Event Pass section the live caps of the rung on sale, and no other's", async () => {
       const pass = section("Event Pass");
-      expect(pass, "M's entrant cap").toContain(`**${mEntrants} entrants**`);
-      expect(pass, "M's division cap").toContain(`**${mDivisions} divisions**`);
-      expect(pass, "L's division cap").toContain(`**${lDivisions} divisions**`);
-      expect(pass, "L's entrant cap").toContain(`**${lEntrants} entrants**`);
-      expect(pass.toLowerCase(), "L is capped at 512, not unlimited").not.toContain(
-        "unlimited entrants",
-      );
+      for (const rung of SELLABLE_PASS_KEYS) {
+        expect(pass, `${rung}'s entrant cap`).toContain(
+          `**${await capFor("entrants.per_division.max", rung)} entrants**`,
+        );
+        expect(pass, `${rung}'s division cap`).toContain(
+          `**${await capFor("divisions.per_competition.max", rung)} divisions**`,
+        );
+      }
+      // The section is scoped to the pass, so a withdrawn rung's ceilings can
+      // only be there because the article is still selling it — Pro's own
+      // numbers live in the Pro section (owner decision 2026-09-05).
+      for (const rung of HIDDEN_PASS_KEYS) {
+        expect(pass, `${rung}'s entrant cap`).not.toContain(
+          `${await capFor("entrants.per_division.max", rung)} entrants`,
+        );
+        expect(pass, `${rung}'s division cap`).not.toContain(
+          `${await capFor("divisions.per_competition.max", rung)} divisions`,
+        );
+      }
+      // V392 gave L a real 512-entrant cap where it had been null; the word
+      // must not come back for any rung.
+      expect(pass.toLowerCase(), "no rung is uncapped").not.toContain("unlimited entrants");
+      expect(HIDDEN_PASS_KEYS.length).toBeGreaterThan(0);
     });
 
     it("never describes the pass with Community's entrant cap — the bug that lived here", async () => {

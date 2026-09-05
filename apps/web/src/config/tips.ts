@@ -113,10 +113,14 @@ export const TIPS = {
   "billing.event-pass": {
     title: "What an Event Pass covers",
     // The entrant figure here said 64 until v17 #294 — Community's cap, not
-    // the pass's, and wrong by half since V319 raised the pass to 128. Both
-    // rungs' numbers are pinned against plan_entitlements by
+    // the pass's, and wrong by half since V319 raised the pass to 128. The
+    // numbers are pinned against plan_entitlements by
     // lib/__tests__/pricing-cards.test.ts, in all four locales.
-    body: "For this competition only: an M pass gives it 128 entrants per division and up to 10 divisions; an L pass gives it 512 entrants per division and up to 20 divisions. Both sizes add branded exports, public player cards, player stats, auto officials assignment, discipline tracking, embeds, sponsor packages, the realtime scoreboard and a 4% platform fee instead of 5%; the one-time AI credit top-up is sized with the pass — more on L than on M. It is not Pro — your brand colour on public pages, API access and your organisation's own limits all stay Pro. A passed competition stops counting against your active-competition limit; the pass doesn't carry to next season's edition.",
+    //
+    // The L rung's half of this sentence went on 2026-09-05 with the rung's
+    // sale (owner decision): a tip that describes a size the checkout will not
+    // sell is an offer, and this one sits directly beside the buy link.
+    body: "For this competition only: the pass gives it 128 entrants per division and up to 10 divisions. It adds branded exports, public player cards, player stats, auto officials assignment, discipline tracking, embeds, sponsor packages, the realtime scoreboard, a one-time AI credit top-up and a 4% platform fee instead of 5%. It is not Pro — your brand colour on public pages, API access and your organisation's own limits all stay Pro. A passed competition stops counting against your active-competition limit; the pass doesn't carry to next season's edition.",
     helpSlug: "billing/event-pass",
   },
   "registration.platform-fee": {

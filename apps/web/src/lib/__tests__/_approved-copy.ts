@@ -60,8 +60,8 @@ export const APPROVED_PLANS_PASS: ApprovedParagraph[] = [
   {
     id: "plans.md#event-pass-opening",
     find: /^One-time upgrade for a single competition/,
-    why: "the pass's scope again, on the page most readers meet first. It said 'for that event's lifetime' until this wave, which V328/V334 contradict. Source of truth: lib/entitlements.ts.",
-    text: "One-time upgrade for a single competition, while that competition is still running, without a subscription. It comes in two sizes, and the only difference between them is how big that one event may get:",
+    why: "the pass's scope again, on the page most readers meet first. It said 'for that event's lifetime' until this wave, which V328/V334 contradict. Source of truth: lib/entitlements.ts. RE-APPROVED 2026-09-05 (owner decision: the L rung off sale): the trailing 'it comes in two sizes, and the only difference between them is how big that one event may get' went with the size ladder it introduced. The load-bearing half — 'while that competition is still running' — is untouched, which is the clause this fixture exists to hold.",
+    text: "One-time upgrade for a single competition, while that competition is still running, without a subscription:",
   },
 ];
 
@@ -84,32 +84,54 @@ export const APPROVED_PLANS_PASS: ApprovedParagraph[] = [
  *
  * See `inventoryFaults` for why this is a digest list and not prose, and the
  * header of this file for what to do when it fails.
+ *
+ * REGENERATED 2026-09-05 — the L rung came off sale (owner decision). Both
+ * articles described a size the checkout will no longer sell, and `event-pass.md`
+ * led with a two-column M-vs-L comparison table, which was the loudest instance
+ * of it in the product. What changed, and what each change was read against
+ * before it was re-pinned:
+ *
+ *   event-pass.md — 21 surfaces gone, 19 back: the "Two sizes: M and L" heading
+ *   and its table became a one-column "The pass" table; the "pick the size
+ *   before you buy" paragraph became "a competition holds one pass", with the
+ *   over-128-entrant reader pointed at Pro; the entrants/divisions bullet, the
+ *   AI-credit bullet, the ended-marker sentence, the closed-competition
+ *   sentence, the on-Pro paragraph and the last three FAQ answers each lost
+ *   their L clause. Every figure re-read against `plan_entitlements`
+ *   (event_pass: 128 entrants, 10 divisions, 4% against community's 5%) and
+ *   `PASS_CREDIT_GRANT.event_pass` (25).
+ *
+ *   plans.md — 6 surfaces gone, 5 back: the Event Pass section lost its
+ *   two-bullet size ladder and its "sized with the pass" credit sentence.
+ *   Same sources, same figures.
+ *
+ * Nothing about a pass a customer already HOLDS changed: the "Event Pass M
+ * active" marker, the receipt, and the pass's own grants are untouched, and the
+ * rung is dormant in `plan_entitlements` rather than deleted.
  */
 export const APPROVED_EVENT_PASS_INVENTORY: string[] = [
   "7af62a47607d7223",
   "74fb0e84d81cf750",
   "7b44a9ceda103f3a",
-  "2b5ae63b6b4f7fef",
-  "c265587d5f9e7989",
-  "4776a83e3ec825a2",
-  "57618eb0b22ecf4c",
-  "5d9e354126a4c3ed",
-  "ca5e9f43ca10e67f",
-  "0bd529e8836c444c",
-  "20a234eadd484ec6",
-  "293db3d817dc1664",
-  "d30d9ef9b7e39dcd",
-  "d245f2a2cbe8b0d6",
+  "0f6590c1fd0b70ad",
+  "3d07b637e0fcd0db",
+  "9906a08781bbfbc3",
+  "c8038bc5e87faf21",
+  "d0495741c4edb2b5",
+  "0db7160badf812ff",
+  "976beed391d0884f",
+  "0ba86d238db064af",
+  "e6cf2a38bc6c024c",
   "dd3d5b5673e222ca",
-  "6b72dd9495e4af80",
-  "b17e27068c52392a",
+  "b2cd535f2424c883",
+  "a1fbda470105d463",
   "1f4d0c836719b26f",
   "193ac3fc3eb05678",
   "1b57ba96756ac962",
   "fcd1bcb9b15230dd",
   "9cdc77f8e4467e2c",
   "4ebceeab83e6a5bf",
-  "abbb6aa9b961bdbd",
+  "adede976a539f9fa",
   "219ccaea5a3878ae",
   "6feca5577c55cf2b",
   "170d10914abdbfe5",
@@ -119,16 +141,16 @@ export const APPROVED_EVENT_PASS_INVENTORY: string[] = [
   "f39d96b7fbbbfc13",
   "665584fd0671d579",
   "3f3be96ac6e6be4e",
-  "d3494f085c5710ec",
+  "79e1623c03c1f2a8",
   "3b3bc011debe7da5",
   "9a68888ef2d9aa1a",
   "4901d7ce5eea800a",
   "e83c931a71f7d62e",
-  "f7d474e47cbd8920",
+  "81e902865f77d84a",
   "69fbd1e0e9c144ec",
   "8c072be7bd782c73",
   "51f349d614c306b2",
-  "f9b1a27fa6f9d0ab",
+  "774d4d6b3246dd97",
   "c42978cab6965d56",
   "331525dbff809017",
   "32654b5a563aabb6",
@@ -151,12 +173,12 @@ export const APPROVED_EVENT_PASS_INVENTORY: string[] = [
   "09c784bdca897d29",
   "10c39c76a97d3772",
   "15be1bf424e38ba0",
-  "1bb443d58b849161",
+  "d6294f4ea7c1dbb2",
   "2508d8869fe2a54a",
   "c503ebdc56e74a10",
-  "0428df4de9237a89",
-  "c2f89b4cb48e1710",
-  "4fd38a76c19ca08a"
+  "3f08a1036ddefbd7",
+  "3ad16eeee6e0b482",
+  "02427d5e988e6afa",
 ];
 
 /**
@@ -179,12 +201,11 @@ export const APPROVED_PLANS_INVENTORY: string[] = [
   "6b5d30ec51106068",
   "5ef78cfff635a513",
   "1e9a3c2b4d3941d7",
-  "3df62318749536dc",
-  "4d5875384bf155e4",
-  "f60f4cc425894550",
-  "2a5118655cada7f9",
-  "9d7adb1fe91962a3",
-  "6e856342deb34abe",
+  "e5ac72886c19cefc",
+  "8ee85036b1264382",
+  "249e25ab9983cc87",
+  "cde930076d641e8b",
+  "f7c7084faf0e9fab",
   "d5a0df90dfe35a6c",
   "01b10f014d674ec5",
   "4dfe30f3187b4fef",
@@ -216,7 +237,7 @@ export const APPROVED_PLANS_INVENTORY: string[] = [
   "b6e5cea0e6333bb4",
   "7ddb02c1405c7f9d",
   "36cda4bf12f7677b",
-  "c75ef841931dc4cd"
+  "c75ef841931dc4cd",
 ];
 
 /**

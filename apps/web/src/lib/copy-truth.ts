@@ -38,7 +38,7 @@
  * cannot be satisfied by a guard that silently scanned nothing.
  */
 import { PASS_CREDIT_GRANT } from "@/lib/pricing-cards";
-import { ALL_PLAN_KEYS } from "@/lib/currency";
+import { ALL_PLAN_KEYS, SELLABLE_PASS_KEYS } from "@/lib/currency";
 import { planLabel } from "@/lib/plan-label";
 
 // ── Surfaces ─────────────────────────────────────────────────────────────────
@@ -490,7 +490,22 @@ const grantForRung = (key: string): number | undefined =>
 
 /** Every grant this product declares, for the surfaces that describe BOTH rungs
  *  in one body of copy and so cannot be judged against a single number. */
-const DECLARED_GRANTS: readonly number[] = Object.values(PASS_CREDIT_GRANT);
+/**
+ * The credit grants the pass copy may quote — the grants of the rungs ON SALE.
+ *
+ * Not `Object.values(PASS_CREDIT_GRANT)`, which is every rung's grant including
+ * the withdrawn ones (owner decision 2026-09-05 took the L rung off sale). It
+ * feeds BOTH directions of the scan below, and each needs the sellable set for
+ * its own reason: the positive half would demand a figure for a size no reader
+ * can buy, and the negative half would then WAIVE that same figure — so an
+ * article still advertising the withdrawn rung's top-up would read as correct.
+ * Narrowing it makes a leftover +35 a fault, which is what it is.
+ *
+ * The full declaration is still checked, in the place where it is a claim about
+ * the SEED rather than about copy: `pass-credit-grant.test.ts` pins every
+ * rung's grant and keeps the two distinct.
+ */
+const DECLARED_GRANTS: readonly number[] = SELLABLE_PASS_KEYS.map((k) => PASS_CREDIT_GRANT[k]);
 
 /**
  * The pass's CREDIT claim, PER RUNG. This is also the POSITIVE PAIRING for the
@@ -3445,8 +3460,15 @@ export function passFeeRowFaults(
   if (!line) return [`${label}: no transposed "Platform fee" row found — the table's shape changed`];
   const quoted = [...line.matchAll(/(\d+(?:\.\d+)?)\s*%/g)].map((m) => Number(m[1]));
   const faults: string[] = [];
-  if (quoted.length < 2) {
-    faults.push(`${label}: the fee row quotes ${quoted.length} rate(s), but the table sells two rungs`);
+  // One rate per rung the table sells, DERIVED from what the caller supplied —
+  // it was a hardcoded 2 while the article sold two rungs, and a literal beside
+  // a derived quantity is a latent red: the L rung came off sale on 2026-09-05,
+  // the table lost its second column, and the guard failed on an article that
+  // had just been made correct.
+  if (quoted.length < keys.length) {
+    faults.push(
+      `${label}: the fee row quotes ${quoted.length} rate(s), but the table sells ${keys.length} rung(s)`,
+    );
   }
   if (rates.size > 1) {
     faults.push(

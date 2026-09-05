@@ -66,7 +66,12 @@ import {
   unmeteredAiRunProseFaults,
   unqualifiedFeeReversionFaults,
 } from "@/lib/copy-truth";
-import { ALL_PLAN_KEYS } from "@/lib/currency";
+import {
+  ALL_PLAN_KEYS,
+  HIDDEN_PASS_KEYS,
+  PASS_KEYS,
+  SELLABLE_PASS_KEYS,
+} from "@/lib/currency";
 import { HELP_ARTICLE_SLUGS, helpUrl } from "@/lib/help";
 import { allHelpArticles } from "@/server/help-content";
 import { TIPS } from "@/config/tips";
@@ -844,20 +849,32 @@ describe.skipIf(!HAS_DB)("billing help articles quote the numbers the matrix enf
     }
   });
 
-  it("the transposed pass fee row quotes the rate both rungs enforce", async () => {
-    // `event-pass.md` sells the two rungs side by side, so its fee claim is a
-    // ROW of rates rather than a column of plans and the sweep above cannot
-    // read it. It is the fourth published copy of this fact and went unscanned
-    // for the same reason the other two did — a different shape, so nobody
-    // looked.
-    const passRates = {
-      event_pass: await capFor("registration.fee_percent", "event_pass"),
-      event_pass_l: await capFor("registration.fee_percent", "event_pass_l"),
-    };
+  it("the transposed pass fee row quotes the rate every rung on sale enforces", async () => {
+    // `event-pass.md` states its fee as a ROW of rates rather than a column of
+    // plans, so the sweep above cannot read it. It is the fourth published copy
+    // of this fact and went unscanned for the same reason the other two did — a
+    // different shape, so nobody looked.
+    //
+    // The rungs it covers are the SELLABLE ones (owner decision 2026-09-05):
+    // the article's table sold M and L side by side and now sells one, so a
+    // rate demanded here for a withdrawn rung would fault an article that
+    // correctly no longer mentions it. L's own 4% is still pinned against the
+    // matrix — `pricing-matrix.test.ts`'s fee ladder, and the plan-column fee
+    // table in this same article via `FEE_LADDER_PLAN_KEYS["Event Pass"]`,
+    // which deliberately still names both rungs.
+    const passRates = Object.fromEntries(
+      await Promise.all(
+        SELLABLE_PASS_KEYS.map(
+          async (k) => [k, await capFor("registration.fee_percent", k)] as const,
+        ),
+      ),
+    );
+    expect(Object.keys(passRates).length, "no rung on sale — this rule examined nothing")
+      .toBeGreaterThan(0);
     expect(passFeeRowFaults("event-pass.md", eventPass, passRates)).toEqual([]);
   });
 
-  it("the Event Pass articles quote each rung's own live caps", async () => {
+  it("the Event Pass articles quote the live caps of the rungs on sale, and no others", async () => {
     const m = {
       entrants: await capFor("entrants.per_division.max", "event_pass"),
       divisions: await capFor("divisions.per_competition.max", "event_pass"),
@@ -869,8 +886,15 @@ describe.skipIf(!HAS_DB)("billing help articles quote the numbers the matrix enf
     // INVERTED by V392, which gave L a real 512-entrant cap where it had been
     // null. The word was the claim for as long as the row was null; now the
     // NUMBER is, and the word is the defect — asserted in both directions so a
-    // page cannot carry "512 entrants" and "unlimited entrants" together.
+    // page cannot carry "512 entrants" and "unlimited entrants" together. Kept
+    // even though L is off sale: it is a claim about the SEED, and the rung is
+    // dormant rather than deleted.
     expect(l.entrants, "L's entrant cap is a number since V392").not.toBeNull();
+    // Anti-vacuity for the negatives below: the two rungs' figures differ, so
+    // "the article does not quote L's numbers" cannot be satisfied by L and M
+    // sharing a cap.
+    expect(l.entrants).not.toBe(m.entrants);
+    expect(l.divisions).not.toBe(m.divisions);
 
     for (const [label, text] of [
       ["event-pass.md", eventPass],
@@ -878,9 +902,12 @@ describe.skipIf(!HAS_DB)("billing help articles quote the numbers the matrix enf
     ] as const) {
       expect(text, `${label}: M's entrant cap`).toContain(`${m.entrants} entrants`);
       expect(text, `${label}: M's division cap`).toContain(`${m.divisions} divisions`);
-      expect(text, `${label}: L's division cap`).toContain(`${l.divisions} divisions`);
-      expect(text, `${label}: L's entrant cap`).toContain(`${l.entrants} entrants`);
-      expect(text, `${label}: L is capped, not unlimited`).not.toMatch(/\bunlimited\s+entrants\b/i);
+      // …and NOT the withdrawn rung's, which are the only reason a reader would
+      // want it. An article that still lists 512 entrants is still selling L,
+      // whatever the checkout does (owner decision 2026-09-05).
+      expect(text, `${label}: L's division cap is off sale`).not.toContain(`${l.divisions} divisions`);
+      expect(text, `${label}: L's entrant cap is off sale`).not.toContain(`${l.entrants} entrants`);
+      expect(text, `${label}: no rung is described as uncapped`).not.toMatch(/\bunlimited\s+entrants\b/i);
       // ...and the same claim again, for the shape the regex above CANNOT see.
       // A prose sentence puts the two words together; a TABLE puts the noun in
       // the row label and the value in a cell, so "Entrants per division | 128 |
@@ -930,16 +957,25 @@ describe.skipIf(!HAS_DB)("billing help articles quote the numbers the matrix enf
       const live = await capFor("ai.credits.monthly", key);
       expect(plans, `${key}'s monthly grant`).toContain(`${live} AI credits a month`);
     }
-    // …and each rung's grant is its own one-time constant, not a monthly row.
-    // The article must quote BOTH, because the two are no longer the same
-    // number (entitlements v18 W2 T5) and it describes both sizes.
-    for (const key of ["event_pass", "event_pass_l"] as const) {
+    // …and NO rung has a monthly row at all: the pass grant is a one-time
+    // top-up. Asked of EVERY rung, hidden ones included — it is a fact about
+    // the matrix, and a dormant rung that quietly grew a monthly credit row
+    // would start paying a held pass a salary.
+    for (const key of PASS_KEYS) {
       const [row] = await sql<{ int_value: number | null }[]>`
         select int_value from plan_entitlements
         where plan_key = ${key} and feature_key = 'ai.credits.monthly'`;
       expect(row, `${key} must have no monthly credit row`).toBeUndefined();
+    }
+    // The ARTICLE, though, quotes the grant of the rung it sells and no other.
+    for (const key of SELLABLE_PASS_KEYS) {
       expect(plans, `${key}'s one-time grant`).toContain(`+${PASS_CREDIT_GRANT[key]} AI credits`);
     }
+    for (const key of HIDDEN_PASS_KEYS) {
+      expect(plans, `${key} is off sale`).not.toContain(`+${PASS_CREDIT_GRANT[key]} AI credits`);
+    }
+    // The declaration keeps them distinct whether or not the copy says so, or
+    // the negative above is satisfied by the two grants being one number.
     expect(PASS_CREDIT_GRANT.event_pass_l).not.toBe(PASS_CREDIT_GRANT.event_pass);
   });
 });
@@ -1246,37 +1282,43 @@ describe("the help-prose guards survive a rewording, not just a revert", () => {
   });
 
   it("catches a drifted, missing or recurring credit grant in prose", () => {
-    // Entitlements v18 W2 T5 (design R9): the grant is per rung — M grants
-    // `mGrant`, L grants `lGrant` — and this article describes both rungs in one
-    // body of prose, so the rule reads the declared SET. Every figure below is
-    // derived from the declaration; a repricing moves these proofs with it.
+    // Entitlements v18 W2 T5 (design R9): the grant is per rung. The rule reads
+    // the grants of the rungs ON SALE (owner decision 2026-09-05 took the L
+    // rung off sale), so a withdrawn rung's top-up is drift here rather than a
+    // required figure — which is what stops the copy going on advertising it.
+    // Every figure below is derived from the declaration; a repricing moves
+    // these proofs with it.
+    const grants = SELLABLE_PASS_KEYS.map((k) => PASS_CREDIT_GRANT[k]);
     const mGrant = PASS_CREDIT_GRANT.event_pass;
     const lGrant = PASS_CREDIT_GRANT.event_pass_l;
     expect(lGrant, "the two rungs must differ or none of this witnesses anything").not.toBe(mGrant);
+    expect(grants, "the sellable set must be a real, smaller subset").toEqual([mGrant]);
 
-    const honest =
-      `- A one-time top-up of ${mGrant} AI credits on M, and ${lGrant} AI credits on L, ` +
-      "added to your wallet when you buy.";
+    const honest = `- A one-time top-up of ${mGrant} AI credits, added to your wallet when you buy.`;
     expect(passCreditProseFaults("x", honest)).toEqual([]);
-    // The table form, where the number sits on the other side of the noun — and
-    // it is the two-column table, so each rung's own figure is in its own cell.
-    expect(
-      passCreditProseFaults("x", `| AI credits | +${mGrant}, one-time | +${lGrant}, one-time |`),
-    ).toEqual([]);
+    // The table form, where the number sits on the other side of the noun.
+    expect(passCreditProseFaults("x", `| AI credits | +${mGrant}, one-time |`)).toEqual([]);
 
-    // THE HALF UPDATE — the defect this wave makes possible, and the one a flat
-    // rule could not express: an editor moves M's figure and leaves L's, or
-    // states only one of them. Each rung's absence is now its own fault.
+    // THE MULTI-COLUMN READ, and it is the reason this case survives the ladder
+    // shrinking. The rule's first matcher stops at the FIRST cell after the
+    // label, which was harmless while both rungs granted the same number and is
+    // a hole the moment they do not — measured: a two-rung table passed with
+    // the second cell still saying M's figure. A second column with a wrong
+    // number must fault, whatever the article happens to publish today.
     expect(
-      passCreditProseFaults("x", `| AI credits | +${mGrant}, one-time | +${mGrant}, one-time |`),
-    ).toEqual([`x: never states the one-time +${lGrant} AI credit grant`]);
-    expect(passCreditProseFaults("x", `- A one-time top-up of ${lGrant} AI credits.`)).toEqual([
-      `x: never states the one-time +${mGrant} AI credit grant`,
-    ]);
+      passCreditProseFaults("x", `| AI credits | +${mGrant}, one-time | +40, one-time |`).join(" "),
+    ).toContain(`quotes 40 AI credits, but the pass grants ${mGrant}`);
 
-    // A figure that is NEITHER rung's is still drift.
+    // THE WITHDRAWN RUNG'S GRANT, left behind in the copy. It is now drift and
+    // not a requirement: an article still promising the L top-up is still
+    // selling L. This is the assertion that inverted on 2026-09-05.
+    expect(
+      passCreditProseFaults("x", `- A one-time top-up of ${lGrant} AI credits.`).join(" "),
+    ).toContain(`quotes ${lGrant} AI credits, but the pass grants ${mGrant}`);
+
+    // A figure that is no rung's at all is still drift.
     expect(passCreditProseFaults("x", "- A one-time top-up of 40 AI credits.").join(" ")).toContain(
-      `quotes 40 AI credits, but the pass grants ${mGrant} / ${lGrant}`,
+      `quotes 40 AI credits, but the pass grants ${mGrant}`,
     );
     // The inverse claim: right number, wrong cadence.
     expect(
@@ -1286,11 +1328,10 @@ describe("the help-prose guards survive a rewording, not just a revert", () => {
     expect(passCreditProseFaults("x", `- The pass adds ${mGrant} AI credits.`).join(" ")).toContain(
       "without saying it is one-time",
     );
-    // Deletion — BOTH grants go unstated, so both are named.
-    expect(passCreditProseFaults("x", "- Branded exports and sponsor tiers.")).toEqual([
-      `x: never states the one-time +${mGrant} AI credit grant`,
-      `x: never states the one-time +${lGrant} AI credit grant`,
-    ]);
+    // Deletion — every grant that must be stated is named.
+    expect(passCreditProseFaults("x", "- Branded exports and sponsor tiers.")).toEqual(
+      grants.map((g) => `x: never states the one-time +${g} AI credit grant`),
+    );
   });
 
   it("catches a fee-ladder row that drifts from the matrix, and one that vanishes", () => {
@@ -1413,9 +1454,12 @@ describe("the help-prose guards survive a rewording, not just a revert", () => {
     expect(passFeeRowFaults("x", table.replace("| 4% | 4% |", "| 5% | 4% |"), rates).join(" ")).toContain(
       "quotes 5%, but every pass rung enforces 4%",
     );
-    // One rate where the table sells two rungs.
+    // Fewer rates than the table sells rungs. The expected COUNT is derived
+    // from the rates supplied, not typed: it was a hardcoded 2 in the rule
+    // itself, and when the L rung came off sale on 2026-09-05 that literal
+    // failed an article which had just been made correct.
     expect(passFeeRowFaults("x", table.replace("| 4% | 4% |", "| 4% | |"), rates).join(" ")).toContain(
-      "quotes 1 rate(s), but the table sells two rungs",
+      `quotes 1 rate(s), but the table sells ${Object.keys(rates).length} rung(s)`,
     );
     // Rungs that stop sharing a rate: the rule REFUSES rather than guessing
     // which column is which, and says what is needed instead.
