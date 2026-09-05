@@ -12,9 +12,9 @@
 // panel is built from) for the FACT, permission-blind, instead of reading a
 // row's offered action. See the block above `keep` for the two defects that
 // coupling produced.
-import { useEffect, useState } from "react";
 import { dayKeyInTz } from "@seazn/engine/scheduling/tz";
-import { useMsg, useMsgPlural } from "@/components/i18n/dict-provider";
+import { useLocaleOrDefault, useMsg, useMsgPlural } from "@/components/i18n/dict-provider";
+import { dayLabel, dayLabelLong } from "@/lib/day-label";
 import { isResultMissing, isUnscheduledFixture } from "@/lib/division-phase";
 import { isBye, type RunSheetBlock, type RunSheetFixture } from "@/lib/run-sheet-groups";
 import { bracketRoundLabel } from "@/components/v2/stages-panel";
@@ -80,6 +80,11 @@ export function RunSheet({
 }) {
   const msg = useMsg();
   const msgPlural = useMsgPlural();
+  // The APP's active locale, for every date this sheet formats (finding 13).
+  // `useLocaleOrDefault` rather than `useLocale` for the same reason `useMsg` is
+  // used above: these islands are rendered bare, with no provider, in this
+  // repo's component tests, and the throwing hook reddens them.
+  const locale = useLocaleOrDefault();
 
   // Empty division (spec, "Error and empty states"): no header, nothing —
   // the stage rail (Task 5) is the whole story until then.
@@ -168,7 +173,13 @@ export function RunSheet({
             data-run-sheet-day={block.dayKey}
             className="sticky top-0 z-10 border-y border-slate-300 bg-slate-200 px-4 py-1.5 text-xs font-semibold uppercase tracking-wide text-slate-600"
           >
-            <DayHeading dayKey={block.dayKey} venueLabel={venueLabel} count={rows.length} msgPlural={msgPlural} />
+            <DayHeading
+              dayKey={block.dayKey}
+              venueLabel={venueLabel}
+              count={rows.length}
+              locale={locale}
+              msgPlural={msgPlural}
+            />
           </h3>
           <ul className="divide-y divide-slate-100">
             {rows.map((f, i) => (
@@ -203,12 +214,22 @@ export function RunSheet({
       if (roundsWithRows.length === 0) return null;
       return (
         <section key={block.stageId} data-run-sheet-block="bracket" className="card overflow-hidden">
-          {roundsWithRows.map((r) => (
+          {roundsWithRows.map((r) => {
+            // R34 — the round's calendar date, the one thing a bracket row's
+            // `HH:mm`-only time cell cannot say. `null` on an untimed round, so
+            // the header simply reads as it did before.
+            const dates = roundDateLabel(r.fixtures, tz, locale);
+            return (
             <div key={r.round}>
               <header className="sticky top-0 z-10 border-b border-slate-100 bg-slate-50 px-4 py-2">
                 <h4 className="text-xs font-medium uppercase tracking-wide text-slate-500">
                   {stage ? `${stage.name} — ` : ""}
                   {bracketRoundLabel(msg, stage?.kind ?? "knockout", r.round, allStageFixtures)}
+                  {dates !== null && (
+                    <span data-run-sheet-round-dates className="ml-1.5 font-normal normal-case text-slate-500">
+                      · {dates}
+                    </span>
+                  )}
                 </h4>
               </header>
               <ul className="divide-y divide-slate-50">
@@ -229,7 +250,8 @@ export function RunSheet({
                 ))}
               </ul>
             </div>
-          ))}
+            );
+          })}
         </section>
       );
     }
@@ -445,35 +467,81 @@ function NowRule({ msg }: { msg: Msg }) {
   );
 }
 
-/** Hydration-safe day heading: blank until mount (locale-formatted date, same
- *  posture as `ClientTime`/`ClientDateRange`), built from the day KEY
- *  directly (already the resolved venue-zone calendar day — formatting it
- *  with `timeZone: "UTC"` off a UTC-midday instant avoids a second,
- *  redundant zone conversion at display time). */
+/**
+ * The sticky day heading, built from the day KEY directly (already the
+ * resolved venue-zone calendar day, so no second zone conversion at display
+ * time).
+ *
+ * Max-effort review, finding 13. This used to call
+ * `toLocaleDateString([], …)` inside a `useEffect`, and BOTH halves of that
+ * were wrong:
+ *
+ *  - `[]` means "the runtime's default locale" — the viewer's own browser, not
+ *    the application's active one. The largest string on a fully French console
+ *    read "Saturday 5 September" for an en-US viewer and "9月5日土曜日" for a
+ *    ja-JP one. `lib/day-label.ts` exists to prevent exactly this and its
+ *    header records the previous instance ("Fri 10 Jul" inside a French page).
+ *  - the effect existed only because an implicit locale is NOT hydration-safe.
+ *    An EXPLICIT one is, which is why `schedule-board.tsx` renders the same
+ *    call inline with no client gate — so the date is now in the first paint
+ *    instead of appearing after mount, and the `react-hooks/set-state-in-effect`
+ *    warning goes with it.
+ *
+ * `dayLabelLong` keeps the long form this header was designed at; `dayLabel`
+ * (short) is what the bracket round headers use, where space is tighter.
+ */
 function DayHeading({
   dayKey,
   venueLabel,
   count,
+  locale,
   msgPlural,
 }: {
   dayKey: string;
   venueLabel: string | null;
   count: number;
+  /** The APP's active locale (`useLocaleOrDefault`), threaded from `RunSheet` —
+   *  never the runtime default, and never re-read here. */
+  locale: string;
   msgPlural: (key: string, count: number, vars?: Record<string, string | number>) => string;
 }) {
-  const [weekday, setWeekday] = useState("");
-  useEffect(() => {
-    const [y, m, d] = dayKey.split("-").map(Number);
-    if (y === undefined || m === undefined || d === undefined) return;
-    const date = new Date(Date.UTC(y, m - 1, d, 12));
-    try {
-      setWeekday(date.toLocaleDateString([], { weekday: "long", day: "numeric", month: "long", timeZone: "UTC" }));
-    } catch {
-      setWeekday(dayKey);
-    }
-  }, [dayKey]);
+  let weekday = dayKey;
+  try {
+    weekday = dayLabelLong(dayKey, locale);
+  } catch {
+    /* a malformed key falls back to the key itself, as before */
+  }
   const parts = [weekday || dayKey, venueLabel, msgPlural("runsheet.day.fixtures", count)].filter(
     (p): p is string => Boolean(p),
   );
   return <>{parts.join(" · ")}</>;
+}
+
+/**
+ * The calendar date a bracket round is played on — "Sun 6 Sep", or a range when
+ * the round spans days. Ruling R34.
+ *
+ * A bracket fixture's date was NOWHERE on the tab: rows print `HH:mm` only, and
+ * only `kind: "day"` blocks carry a date header, which bracket stages never
+ * produce. So a knockout Final three weeks out showed a clock time and nothing
+ * else, on precisely the formats where a single fixture's date matters most.
+ * The retired `round-dates` bar carried this fact and owner ruling A2 kept the
+ * round sections, so this is a restoration into a container that already exists.
+ *
+ * Derived from the rows this header actually sits above (post-filter), so it can
+ * never describe a day the organiser cannot see. Bucketed with `dayKeyInTz` in
+ * the VENUE zone — the same clock the rest of the sheet groups and prints by
+ * (amendment 4), never a second one. `null` when the round has no timed fixture
+ * at all: a header that fires with nothing to say is the "an empty cell is not
+ * information" defect wearing a date's clothes.
+ */
+function roundDateLabel(fixtures: readonly RunSheetFixture[], tz: string, locale: string): string | null {
+  const keys = fixtures
+    .filter((f) => f.scheduled_at !== null)
+    .map((f) => dayKeyInTz(Date.parse(f.scheduled_at!), tz))
+    .sort();
+  const first = keys[0];
+  const last = keys[keys.length - 1];
+  if (first === undefined || last === undefined) return null;
+  return first === last ? dayLabel(first, locale) : `${dayLabel(first, locale)} – ${dayLabel(last, locale)}`;
 }
