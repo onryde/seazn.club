@@ -20,13 +20,42 @@ function pad(page: Page) {
   return page.locator('[data-testid="score-pad"]');
 }
 
-test("every fixture row has a Score entry point", async ({ page, request }) => {
+test("every fixture row carries its own action entry point", async ({ page, request }) => {
+  // Re-aimed, max-effort review finding 5. This test asserted
+  // `getByRole("link", { name: /^(Score|View)/ }).first()` PAGE-WIDE. Competition
+  // Desk W2 retired both labels for this shape — `fixtureRowAction`'s SETTLED
+  // branch labels a decided fixture "Result" — so it should have gone red, and
+  // instead it went QUIET: `seedScoredDivision` seeds `visibility: "public"`, the
+  // masthead therefore renders `aria-label="View this division's public page
+  // (opens in a new tab)"`, and `.first()` resolved to THAT. A test named "every
+  // fixture row has a Score entry point" would have stayed green with the run
+  // sheet rendering no action control at all. Its sibling, `knockout.spec.ts`,
+  // was re-pinned in the same diff and this one was missed — AGENTS.md class 16,
+  // "sweep by behaviour, never by filename".
+  //
+  // Re-aimed to the run sheet's own rows, and pinned exactly (`/^Result/`, not a
+  // widened `/^(Score|Result|View)/`) for the reason `knockout.spec.ts` gives:
+  // the widened form survives a regression that sends every settled row back to
+  // "Score".
   const { divisionId } = await seedScoredDivision(request);
+  // The expected row count comes from the server's own list, not from a number
+  // typed here — a change to what the seed generates moves this with it.
+  const seeded = await apiJson<{ id: string }[]>(request, `/api/v1/divisions/${divisionId}/fixtures`);
+  expect(seeded.status, `seeded fixture list failed: ${JSON.stringify(seeded.error)}`).toBe(200);
+  const expected = seeded.data!.length;
+  expect(expected).toBeGreaterThan(0);
+
   await page.goto(await divisionPath(page.request, divisionId, "?tab=fixtures"));
-  // decided fixtures show "View", live/scheduled show "Score"
-  await expect(page.getByRole("link", { name: /^(Score|View)/ }).first()).toBeVisible({
-    timeout: 20_000,
-  });
+  const rows = page.getByTestId("run-sheet").locator("[data-fixture-no]");
+  // The POSITIVE half, first: the sheet actually rendered every seeded fixture.
+  // Without it, every assertion below is satisfied by a blank page or a 500 —
+  // which is exactly how the version this replaces stayed green.
+  await expect(rows).toHaveCount(expected, { timeout: 20_000 });
+  // …and every one of those rows offers its ONE action. `seedScoredDivision`
+  // decides every fixture and leaves it untimed (helpers.ts: scored callers get
+  // no schedule events), so all of them land on `fixtureRowAction`'s SETTLED
+  // branch and read "Result".
+  await expect(rows.getByRole("link", { name: /^Result/ })).toHaveCount(expected);
 });
 
 /** The fixture's own event ledger — the authority on what a click actually
