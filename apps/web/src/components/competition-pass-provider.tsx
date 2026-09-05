@@ -21,7 +21,7 @@
 // `competition_passes.stripe_payment_intent` is nullable — a staff-granted pass
 // carries no intent and is fully active. Nothing downstream may filter on it.
 import { createContext, useContext, useMemo, type ReactNode } from "react";
-import { PASS_KEYS, type Currency, type PassKey } from "@/lib/currency";
+import { SELLABLE_PASS_KEYS, type Currency, type PassKey } from "@/lib/currency";
 import type { PassLockReason } from "@/lib/entitlements";
 
 interface PassContext {
@@ -75,7 +75,7 @@ const CompetitionPassContext = createContext<PassContext>({
   paidPlan: false,
   currency: "usd",
   lockReason: null,
-  sellableRungs: PASS_KEYS,
+  sellableRungs: SELLABLE_PASS_KEYS,
 });
 
 /**
@@ -132,7 +132,7 @@ export function CompetitionPassProvider({
   // Defaults to the WHOLE ladder for the same reason `currency` defaults to usd:
   // an omission has to degrade to the behaviour that shipped before #327, which
   // is "every rung is for sale", never to "nothing is".
-  sellableRungs = PASS_KEYS,
+  sellableRungs = SELLABLE_PASS_KEYS,
   children,
 }: {
   passKey: PassKey | null;

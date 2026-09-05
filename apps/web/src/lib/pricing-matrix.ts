@@ -4,7 +4,13 @@
 // them through here, grouped by ENTITLEMENT_DOMAINS so /pricing and
 // /admin/entitlements tell the same story.
 import { ENTITLEMENT_DOMAINS } from "@/lib/entitlement-domains";
-import { ALL_PLAN_KEYS, type AnyPlanKey } from "@/lib/currency";
+import {
+  ALL_PLAN_KEYS,
+  HIDDEN_PASS_KEYS,
+  PASS_KEYS,
+  type AnyPlanKey,
+  type HiddenPassKey,
+} from "@/lib/currency";
 
 export interface MatrixCell {
   bool_value: boolean | null;
@@ -28,14 +34,26 @@ export type MatrixData = Record<string, Record<string, MatrixCell>>;
  * that class of gap a type error instead.
  *
  * Entitlements v18: derived from `lib/currency.ts`'s `ALL_PLAN_KEYS` — every
- * plan in the database — filtered down to the four PURCHASABLE columns.
+ * plan in the database — filtered down to the PURCHASABLE columns.
  * `enterprise` is never a `/pricing` column (design §4: it's the Contact-us
  * strip below the table, not a priced offer); `lib/entitlement-admin.ts`'s
  * `ADMIN_PLAN_KEYS` derives from the same list unfiltered, so a plan added to
  * one can't be forgotten on the other.
+ *
+ * Nor is a pass rung that is OFF SALE (owner decision 2026-09-05 — see
+ * `SELLABLE_PASS_KEYS` in lib/currency.ts). Same reason as `enterprise`, one
+ * step further: this table exists to help a reader CHOOSE between the offers,
+ * and a column for an offer with no checkout behind it is a choice that cannot
+ * be taken. It is not a courtesy either — the hidden rung's column is the one
+ * that beats Pro on entrants, so leaving it in would keep making the exact
+ * comparison the rung was withdrawn for.
+ *
+ * `/admin/entitlements` keeps every plan, hidden rungs included: staff need to
+ * see what the resolver enforces, not what the shop sells.
  */
 export const PRICING_PLAN_KEYS = ALL_PLAN_KEYS.filter(
-  (k): k is Exclude<AnyPlanKey, "enterprise"> => k !== "enterprise",
+  (k): k is Exclude<AnyPlanKey, "enterprise" | HiddenPassKey> =>
+    k !== "enterprise" && !(HIDDEN_PASS_KEYS as readonly string[]).includes(k),
 );
 
 export type PricingPlanKey = (typeof PRICING_PLAN_KEYS)[number];
@@ -45,13 +63,20 @@ export type PricingPlanKey = (typeof PRICING_PLAN_KEYS)[number];
 export const PRICING_COLUMN_LABEL_KEY: Record<PricingPlanKey, string> = {
   community: "pricing.table.community",
   event_pass: "pricing.table.pass",
-  event_pass_l: "pricing.table.passL",
   pro: "pricing.table.pro",
 };
 
 /** The rungs of the Event Pass ladder — the columns that fall through to
- *  community, because a pass grants only what it explicitly lifts. */
-const PASS_PLANS: ReadonlySet<string> = new Set<PricingPlanKey>(["event_pass", "event_pass_l"]);
+ *  community, because a pass grants only what it explicitly lifts.
+ *
+ *  Derived from `PASS_KEYS`, the FULL rung set, and deliberately not from the
+ *  sellable one: this set answers "does this column fall through to community",
+ *  which is a fact about how the resolver treats a pass and is true of a rung
+ *  whether or not it is on sale. Filtering it by sellability would make the
+ *  question accidentally right today and wrong the moment a hidden rung is
+ *  rendered anywhere — the membership check below already only ever sees
+ *  columns `PRICING_PLAN_KEYS` produced. */
+const PASS_PLANS: ReadonlySet<string> = new Set<string>(PASS_KEYS);
 
 export interface PricingRow {
   labelKey: string;

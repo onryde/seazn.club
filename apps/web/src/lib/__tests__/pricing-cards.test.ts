@@ -8,7 +8,9 @@ import {
   ticketTiers,
 } from "../pricing-cards";
 import {
+  HIDDEN_PASS_KEYS,
   PASS_KEYS,
+  SELLABLE_PASS_KEYS,
   SUPPORTED_CURRENCIES,
   formatMinor,
   lowestCreditPackAmount,
@@ -237,10 +239,10 @@ const APPROVED_CARD_BULLETS: ApprovedBullets[] = [
   },
   {
     array: "PASS_FEATURES",
-    why: "the Event Pass card on /pricing (and, sliced, the home ticket stub). Bullet 1 is the pass's DURATION — V328/V334 `org_has_feature` drop the pass arm once the competition is archived/completed or 7 days past ends_on, so it is bounded, not permanent; that is asserted by passBulletDurationFaults. Bullet 2 carries BOTH rungs' caps and bullet 4 the fee, all pinned to the live matrix by CARD_SURFACES below: divisions.per_competition.max and entrants.per_division.max on event_pass AND event_pass_l (L's entrant cap became 512 in V392, where it had been null — so the copy quotes the number, and capClaimFaults now faults any surface that still calls it unlimited), registration.fee_percent on event_pass, and community's registration.fee_percent for the 'not 5%' comparison (both re-approved for W3/V397, which cut the ladder to 5/4/2/1 for the additive fee model — read against `plan_entitlements` and the §2 table, not from memory). Bullets 3 and 5-7 name boolean grants (formats.advanced, exports.branded, dashboard.player_profiles, sponsors.*, realtime) that the pass lifts off community.",
+    why: "the Event Pass card on /pricing (and, sliced, the home ticket stub). Bullet 1 is the pass's DURATION — V328/V334 `org_has_feature` drop the pass arm once the competition is archived/completed or 7 days past ends_on, so it is bounded, not permanent; that is asserted by passBulletDurationFaults. BULLET 2 CHANGED 2026-09-05 (owner decision: the L rung comes off sale): it read '10 divisions, 128 entrants each — 20 divisions & 512 entrants on L' and now reads M's ceilings alone, because the second half advertised a size with no checkout behind it. Re-read against the code before re-pinning: plan_entitlements gives event_pass 10 divisions and 128 entrants per division, and registration.fee_percent is 4 on event_pass against 5 on community (V397's additive ladder 5/4/2/1) — both still pinned to the live matrix by CARD_SURFACES below, which now names only the rungs in SELLABLE_PASS_KEYS. The withdrawn rung's own numbers are still checked where that is a claim about the SEED rather than about copy (pricing-matrix.test.ts, entitlements-sql-parity.test.ts), so the dormant matrix cannot rot; capClaimFaults still faults any surface that calls a numeric cap unlimited, which is the rule L's own cap needed after V392 gave it a real 512. Bullets 3 and 5-7 name boolean grants (formats.advanced, exports.branded, dashboard.player_profiles, sponsors.*, realtime) that the pass lifts off community.",
     bullets: [
       "Upgrades ONE competition while it runs",
-      "10 divisions, 128 entrants each — 20 divisions & 512 entrants on L",
+      "10 divisions, 128 entrants each",
       "Advanced formats — double elim, ladders",
       "4% platform fee on entry fees, not 5%",
       "Branded exports & public player cards",
@@ -481,7 +483,17 @@ interface CardSurface {
 }
 
 /** Every rung the Event Pass card sells out of ONE bullet list. */
-const PASS_RUNGS = ["event_pass", "event_pass_l"];
+/** The rungs the Event Pass CARD sells — the sellable set, not every rung
+ *  (owner decision 2026-09-05 took the L rung off sale).
+ *
+ *  These entries judge SHIPPED COPY, so their subject is what the card offers.
+ *  Keeping a withdrawn rung here would red the card for a rung it no longer
+ *  mentions, which is a false alarm about a real page. The dormant rung's own
+ *  matrix is still checked, in the two places where that is a claim about the
+ *  SEED rather than about copy: `entitlements-sql-parity.test.ts`'s
+ *  full-outer-join diff (every key must exist on both rungs, with exactly two
+ *  documented overrides) and `pricing-matrix.test.ts`'s live-ladder cases. */
+const PASS_RUNGS = [...SELLABLE_PASS_KEYS];
 
 const CARD_SURFACES: CardSurface[] = [
   {
@@ -518,33 +530,40 @@ const CARD_SURFACES: CardSurface[] = [
       { feature: "divisions.per_competition.max", plan: "event_pass", says: (n) => new RegExp(`\\b${n}\\s+divisions\\b`, "i") },
       { feature: "entrants.per_division.max", plan: "event_pass", says: (n) => new RegExp(`\\b${n}\\s+entrants\\s+each\\b`, "i") },
       { feature: "registration.fee_percent", plan: "event_pass", betterWhen: "lower", says: (n) => new RegExp(`\\b${n}%\\s+platform\\s+fee\\b`, "i") },
-      // BOTH RUNGS share this one bullet, so both must charge what it quotes.
-      // Fix round 2: L's fee was card-guarded by nothing — moving it 5 -> 8 red
-      // only the help article, never the card selling it.
-      { feature: "registration.fee_percent", plan: "event_pass_l", betterWhen: "lower", says: (n) => new RegExp(`\\b${n}%\\s+platform\\s+fee\\b`, "i") },
+      // The `event_pass_l` twin of the line above was DROPPED on 2026-09-05
+      // with the rung's sale. It existed because one bullet sold both rungs, so
+      // both had to charge what it quoted (fix round 2: L's fee was card-guarded
+      // by nothing — moving it 5 -> 8 red only the help article, never the card
+      // selling it). The card no longer sells L, so the claim is no longer a
+      // claim about L; L's own 4% is pinned against the matrix by
+      // `pricing-matrix.test.ts`'s fee-ladder case and by the help article's
+      // fee table, whose `FEE_LADDER_PLAN_KEYS["Event Pass"]` still names both
+      // rungs.
       // The comparator the same bullet makes: "…not 5%". It is a claim about
       // COMMUNITY's rate sitting on the pass card, and it goes stale the moment
       // community's fee moves — which is exactly what F5 of the battery did.
       { feature: "registration.fee_percent", plan: "community", says: (n) => new RegExp(`\\bnot\\s+${n}%`, "i") },
-      // Both rungs. The L rung's entrant cap is NULL, so the copy has to say so
-      // in words — a null cap with a number beside it is M's ceiling sold to an
-      // L buyer, the defect v17 #294 was filed for.
-      // V392 gave L a real 512-entrant cap where it had been null. The
-      // divisions half used to be pinned by `20 & unlimited` — a regex that
-      // read BOTH rungs' claims out of one phrase and so could not survive the
-      // word going away. Each rung's number is now matched on its own, scoped
-      // to "on L" so M's figures cannot satisfy it.
-      { feature: "divisions.per_competition.max", plan: "event_pass_l", says: (n) => new RegExp(`\\b${n}\\s+divisions\\b[^.]{0,30}\\bon\\s+L\\b`, "i") },
-      {
-        feature: "entrants.per_division.max",
-        plan: "event_pass_l",
-        says: (n) => new RegExp(`\\b${n}\\s+entrants\\b[^.]{0,20}\\bon\\s+L\\b`, "i"),
-        unlimited: /\bunlimited\s+on\s+L\b/i,
-      },
+      // The two `event_pass_l` CAP claims went with the rung's sale on
+      // 2026-09-05. They pinned the "— 20 divisions & 512 entrants on L" half
+      // of bullet 2, and that half is gone from the copy: the card would
+      // otherwise advertise, in figures, a size no checkout will sell.
+      //
+      // Worth keeping the history, because it is the shape to restore if the
+      // rung goes back on sale rather than one to reinvent: L's entrant cap was
+      // NULL, so the copy said so in words (a null cap with a number beside it
+      // is M's ceiling sold to an L buyer, the defect v17 #294 was filed for);
+      // V392 then gave L a real 512, and the divisions half — pinned until then
+      // by a single `20 & unlimited` regex reading BOTH rungs out of one phrase
+      // — could not survive the word going away. Each rung's number ended up
+      // matched on its own, scoped to "on L" so M's figures could not satisfy
+      // it. `capClaimFaults` still faults any surface that calls a numeric cap
+      // unlimited, whichever rung it is about.
     ],
-    // BOTH RUNGS. This card sells M and L out of one bullet list, so a
-    // capability that goes false on `event_pass_l` alone still misleads an L
-    // buyer — fresh probe G1, missed when these named `event_pass` only.
+    // Every rung the card SELLS — `PASS_RUNGS` above, which is the sellable
+    // set. A capability that went false on a rung this list sells still
+    // misleads a buyer (fresh probe G1, missed when these named `event_pass`
+    // only); one that goes false on a withdrawn rung misleads nobody, because
+    // nothing on this card is offering it.
     booleans: [
       { feature: "formats.advanced", plans: PASS_RUNGS, says: /\badvanced formats\b/i },
       { feature: "formats.double_elim", plans: PASS_RUNGS, says: /\bdouble elim\b/i },
@@ -1477,20 +1496,34 @@ describe.skipIf(!HAS_DB)("plan-card copy quotes the numbers the matrix enforces"
   // across en/fr/es/nl, so the digits are checkable without reading the prose
   // around them — the same reasoning the four-locale tests above rely on.
 
-  it("the /pricing FAQ answer names the L rung's live caps and its price", async () => {
-    const divisions = await capFor("divisions.per_competition.max", "event_pass_l");
-    expect(divisions).toBe(20);
-    for (const locale of LOCALES) {
-      const answer = marketing(locale)["pricing.faq.eventPass.a"];
-      expect(answer, `${locale}: no answer`).toBeTruthy();
-      // Whole token: `toContain("20")` was satisfied by "200 divisions".
-      quotesCap(answer, divisions, `${locale}: L's division cap`);
-      // The price must be INTERPOLATED, never written down: `{passL}` is
-      // substituted with the switched currency at render time, so a hardcoded
-      // "$59" here would show dollars to a GBP visitor — the exact bug #191
-      // was filed for on the M rung's copy.
-      expect(answer, `${locale}: interpolated L price`).toContain("{passL}");
+  it("the /pricing FAQ answer names the live caps and price of the rung ON SALE", async () => {
+    // Was "…names the L rung's live caps and its price". Owner decision
+    // 2026-09-05 took L off sale, so the answer describes the rung a reader can
+    // actually buy — and this asks the same question of that rung, plus the
+    // negative that stops the narrowing from being a way to stop looking.
+    for (const rung of SELLABLE_PASS_KEYS) {
+      const divisions = await capFor("divisions.per_competition.max", rung);
+      const entrants = await capFor("entrants.per_division.max", rung);
+      for (const locale of LOCALES) {
+        const answer = marketing(locale)["pricing.faq.eventPass.a"];
+        expect(answer, `${locale}: no answer`).toBeTruthy();
+        // Whole token: `toContain("20")` was satisfied by "200 divisions".
+        quotesCap(answer, divisions, `${locale}: ${rung}'s division cap`);
+        quotesCap(answer, entrants, `${locale}: ${rung}'s entrant cap`);
+        // The price must be INTERPOLATED, never written down: `{pass}` is
+        // substituted with the switched currency at render time, so a hardcoded
+        // "$11.99" here would show dollars to a GBP visitor — the exact bug
+        // #191 was filed for on this rung's copy.
+        expect(answer, `${locale}: interpolated price`).toContain("{pass}");
+      }
     }
+    // The withdrawn rung's price token must be GONE, or the page would still
+    // interpolate a price for a size it does not sell. `{passL}` no longer
+    // exists in `faqVars` either, so a leftover token would render literally.
+    for (const locale of LOCALES) {
+      expect(marketing(locale)["pricing.faq.eventPass.a"], locale).not.toContain("{passL}");
+    }
+    expect(HIDDEN_PASS_KEYS.length).toBeGreaterThan(0);
   });
 
   // GAP B from T3's sweep: this tip said "64 entrants per division" while the
@@ -1781,11 +1814,14 @@ describe.skipIf(!HAS_DB)("plan-card copy quotes the numbers the matrix enforces"
       ["community entrants 64 -> 16", moved("entrants.per_division.max", "community", 16), "does not quote the live community/entrants.per_division.max (16)"],
       ["pro entrants 256 -> 64", moved("entrants.per_division.max", "pro", 64), "does not quote the live pro/entrants.per_division.max (64)"],
       ["pro divisions 20 -> 6", moved("divisions.per_competition.max", "pro", 6), "does not quote the live pro/divisions.per_competition.max (6)"],
-      // W2 replaced the old "L's entrant cap stops being unlimited" probe: V392
-      // gave L a real 512 cap, so the direction that can still bite is the
-      // number MOVING, not the word arriving.
-      ["L's entrant cap 512 -> 300", moved("entrants.per_division.max", "event_pass_l", 300), "does not quote the live event_pass_l/entrants.per_division.max (300)"],
-      ["L's division cap 20 -> 12", moved("divisions.per_competition.max", "event_pass_l", 12), "does not quote the live event_pass_l/divisions.per_competition.max (12)"],
+      // The two `event_pass_l` probes here died with the rung's sale
+      // (2026-09-05): the card no longer claims L's caps, so moving them can
+      // no longer make the card false and a probe expecting a fault would be
+      // asserting the opposite of the truth. Both directions the pass card can
+      // still be wrong in are covered by the two rows above — the entry rung's
+      // fee, and the caps it quotes — plus the entrant/division probes below.
+      ["pass entrants 128 -> 300", moved("entrants.per_division.max", "event_pass", 300), "does not quote the live event_pass/entrants.per_division.max (300)"],
+      ["pass divisions 10 -> 12", moved("divisions.per_competition.max", "event_pass", 12), "does not quote the live event_pass/divisions.per_competition.max (12)"],
       // …and the UNLIMITED direction, which the deleted Pro Plus probes used to
       // carry alone. Pro's competition cap is the only null a card still calls
       // unlimited, so it is the one that keeps that branch exercised.
@@ -1879,9 +1915,14 @@ describe.skipIf(!HAS_DB)("plan-card copy quotes the numbers the matrix enforces"
       ["dashboard.theme", "pro", { bool: false }, "PRO_FEATURES: promises dashboard.theme, but pro does not grant it"],
       ["realtime", "event_pass", { bool: false }, "PASS_FEATURES: promises realtime, but event_pass does not grant it"],
       // THE L RUNG — fresh probe G1. The card sells both rungs from one list, so
-      // a capability lost on L alone still misleads an L buyer.
-      ["formats.advanced", "event_pass_l", { bool: false }, "PASS_FEATURES: promises formats.advanced, but event_pass_l does not grant it"],
-      ["sponsors.monetize", "event_pass_l", { bool: false }, "PASS_FEATURES: promises sponsors.monetize, but event_pass_l does not grant it"],
+      // These two probed `event_pass_l` while the card sold both rungs — a
+      // capability lost on L alone misled an L buyer. With the rung off sale
+      // (2026-09-05) the card makes no claim about it, so they are repointed at
+      // the rung the card DOES sell rather than deleted: the failure they exist
+      // for — a bullet promising a boolean the plan behind it does not grant —
+      // is unchanged, only its subject moved.
+      ["formats.advanced", "event_pass", { bool: false }, "PASS_FEATURES: promises formats.advanced, but event_pass does not grant it"],
+      ["sponsors.monetize", "event_pass", { bool: false }, "PASS_FEATURES: promises sponsors.monetize, but event_pass does not grant it"],
       ["api.access", "pro", { bool: false }, "PRO_FEATURES: promises api.access, but pro does not grant it"],
       // Fresh probes G2 / G4 / G5 — bullets that were simply not enumerated.
       ["exports", "pro", { bool: false }, "PRO_FEATURES: promises exports, but pro does not grant it"],
@@ -2073,15 +2114,34 @@ describe.skipIf(!HAS_DB)("plan-card copy quotes the numbers the matrix enforces"
     ).toEqual(["no card matched any differentiator vocabulary — this rule examined nothing"]);
   });
 
-  it("the shared pass bullet names both rungs' division caps", async () => {
-    const mDivisions = await capFor("divisions.per_competition.max", "event_pass");
-    const lDivisions = await capFor("divisions.per_competition.max", "event_pass_l");
+  it("the pass bullet names the division cap of every rung on sale, and no other", async () => {
+    // Was "…names both rungs' division caps": the bullet read
+    // "10 divisions, 128 entrants each — 20 divisions & 512 entrants on L".
+    // With L off sale (2026-09-05) that second half advertised a size with no
+    // checkout behind it, so it went.
     const bullets = PASS_FEATURES.join(" | ");
-    // Both whole tokens. "10 divisions" is also a substring of "110 divisions",
-    // so the unit noun does not save the left boundary.
-    expect(bullets, "M's division cap, as a whole number").toMatch(
-      new RegExp(`${wholeNumber(mDivisions!).source}\\s+divisions`),
-    );
-    quotesCap(bullets, lDivisions, "L's ceiling is what the second rung sells");
+    for (const rung of SELLABLE_PASS_KEYS) {
+      const divisions = await capFor("divisions.per_competition.max", rung);
+      // A whole token. "10 divisions" is also a substring of "110 divisions",
+      // so the unit noun does not save the left boundary.
+      expect(bullets, `${rung}'s division cap, as a whole number`).toMatch(
+        new RegExp(`${wholeNumber(divisions!).source}\\s+divisions`),
+      );
+    }
+    // …and the withdrawn rung's ceiling is not still being sold. Its numbers
+    // are the whole reason someone would want it, so they are exactly what must
+    // not survive on the card.
+    for (const rung of HIDDEN_PASS_KEYS) {
+      const divisions = await capFor("divisions.per_competition.max", rung);
+      const entrants = await capFor("entrants.per_division.max", rung);
+      expect(bullets, `${rung}'s division cap is off sale`).not.toMatch(
+        new RegExp(`${wholeNumber(divisions!).source}\\s+divisions`),
+      );
+      expect(bullets, `${rung}'s entrant cap is off sale`).not.toMatch(wholeNumber(entrants!));
+      // Anti-vacuity: the two rungs' caps really differ, so "does not quote L"
+      // is not satisfied by L and M holding the same number.
+      expect(divisions).not.toBe(await capFor("divisions.per_competition.max", "event_pass"));
+    }
+    expect(HIDDEN_PASS_KEYS.length).toBeGreaterThan(0);
   });
 });

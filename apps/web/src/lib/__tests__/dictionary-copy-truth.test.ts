@@ -34,7 +34,13 @@ import stripePlans from "@/config/stripe-plans.json";
 import { sql } from "@/lib/db";
 import { PASS_CREDIT_GRANT } from "@/lib/pricing-cards";
 import { FEATURE_REASONS } from "@/lib/feature-copy";
-import { passPrice, proPrice } from "@/lib/currency";
+import {
+  HIDDEN_PASS_KEYS,
+  PASS_KEYS,
+  SELLABLE_PASS_KEYS,
+  passPrice,
+  proPrice,
+} from "@/lib/currency";
 import { TIPS } from "@/config/tips";
 import * as copyTruth from "@/lib/copy-truth";
 import { APPROVED_DICTIONARY_COPY } from "./_approved-dictionary-copy";
@@ -187,6 +193,12 @@ const PASS_CREDIT_VALUES = across("marketing", "pricing.faq.eventPass.a");
 const M_GRANT = PASS_CREDIT_GRANT.event_pass;
 const L_GRANT = PASS_CREDIT_GRANT.event_pass_l;
 const GRANTS: readonly number[] = Object.values(PASS_CREDIT_GRANT);
+// …and the subset the SHIPPED answer is a claim about. The FAQ describes what a
+// reader can buy, so it quotes the grants of the rungs on sale and no others
+// (owner decision 2026-09-05 took the L rung off sale). `GRANTS` above stays the
+// FULL declared set and is what the guard's own unit cases below exercise, so
+// the rule keeps its two-grant teeth while the corpus check narrows.
+const SELLABLE_GRANTS: readonly number[] = SELLABLE_PASS_KEYS.map((k) => PASS_CREDIT_GRANT[k]);
 
 // `PLUS_VALUES` — `pricing.faq.proPlus.a`, the /pricing FAQ answer to "What's
 // in Pro Plus?" — is DELETED here with the key itself (retired-plan copy sweep).
@@ -2101,7 +2113,13 @@ describe.skipIf(!HAS_DB)("the four-locale dictionaries say what the resolver enf
   });
 
   it("quotes the one-time credit grant at its live size, not as a recurring one", () => {
-    expect(localeCreditGrantFaults(PASS_CREDIT_VALUES, GRANTS)).toEqual([]);
+    expect(localeCreditGrantFaults(PASS_CREDIT_VALUES, SELLABLE_GRANTS)).toEqual([]);
+    // Anti-vacuity: the narrowed set is a real, non-empty subset. An empty one
+    // makes `localeCreditGrantFaults` fault by design, but a set that had
+    // silently grown back to every rung would make this line assert the old
+    // claim under a new name.
+    expect(SELLABLE_GRANTS.length).toBeGreaterThan(0);
+    expect(SELLABLE_GRANTS.length).toBeLessThan(GRANTS.length);
   });
 
   // The extra-organisation rate. The CLAIM comes from four dictionaries and the
@@ -2382,14 +2400,15 @@ describe.skipIf(!HAS_DB)("the four-locale dictionaries match plan_entitlements",
     return out;
   };
 
-  it("the Event Pass answer quotes each rung's live entrant and division caps", async () => {
+  it("the Event Pass answer quotes the live caps of every rung on sale, and only those", async () => {
     const caps = await rungCaps();
-    // The premise, read from the seed rather than asserted from memory: BOTH
-    // rungs are finite on both axes. If a rung is ever uncapped again the
-    // sentence has to say so in words, and this test must be rewritten rather
-    // than relaxed — an unlimited cap quoted as a number is the same defect
-    // pointing the other way.
-    for (const plan of ["event_pass", "event_pass_l"]) {
+    // The premise, read from the seed rather than asserted from memory: EVERY
+    // rung is finite on both axes — hidden ones included, because the seed is
+    // still a live thing that a later migration can move. If a rung is ever
+    // uncapped again the sentence has to say so in words, and this test must be
+    // rewritten rather than relaxed: an unlimited cap quoted as a number is the
+    // same defect pointing the other way.
+    for (const plan of PASS_KEYS) {
       expect(typeof caps[plan]?.entrants, `${plan} entrant cap`).toBe("number");
       expect(typeof caps[plan]?.divisions, `${plan} division cap`).toBe("number");
     }
@@ -2399,7 +2418,8 @@ describe.skipIf(!HAS_DB)("the four-locale dictionaries match plan_entitlements",
       const answer = load(locale, "marketing")["pricing.faq.eventPass.a"];
       expect(answer, `${locale} has no pricing.faq.eventPass.a`).toBeDefined();
       const words = RUNG_CAP_COPY[locale];
-      for (const plan of ["event_pass", "event_pass_l"]) {
+      // The POSITIVE half: every rung on sale states both of its live caps.
+      for (const plan of SELLABLE_PASS_KEYS) {
         for (const [n, noun] of [
           [caps[plan]!.entrants, words.entrants],
           [caps[plan]!.divisions, words.divisions],
@@ -2410,11 +2430,31 @@ describe.skipIf(!HAS_DB)("the four-locale dictionaries match plan_entitlements",
           ).toMatch(claim(String.raw`\b` + n + String.raw`\s+` + noun + String.raw`\b`));
         }
       }
+      // …and the NEGATIVE half, which is what stops narrowing the loop above
+      // from being a way to stop looking. A withdrawn rung's caps left in this
+      // answer would advertise, in figures, a size the checkout will not sell —
+      // and they are the very figures that make the rung look worth buying.
+      for (const plan of HIDDEN_PASS_KEYS) {
+        for (const [n, noun] of [
+          [caps[plan]!.entrants, words.entrants],
+          [caps[plan]!.divisions, words.divisions],
+        ] as const) {
+          expect(
+            answer!,
+            `${locale} still quotes ${plan}'s ${n} ${noun}, and ${plan} is off sale`,
+          ).not.toMatch(claim(String.raw`\b` + n + String.raw`\s+` + noun + String.raw`\b`));
+        }
+      }
       expect(
         answer!,
         `${locale} describes a capped rung as uncapped (${copyTruth.describeClaim(words.uncapped)})`,
       ).not.toMatch(words.uncapped);
     }
+    // Anti-vacuity for the negative loop: something is genuinely hidden, and
+    // the two rungs' caps really do differ, so "does not quote L's numbers" is
+    // not accidentally satisfied by them being M's numbers.
+    expect(HIDDEN_PASS_KEYS.length).toBeGreaterThan(0);
+    expect(caps.event_pass!.divisions).not.toBe(caps.event_pass_l!.divisions);
   });
 
   // ── #382 review, finding 1: the Pro card on the UPGRADE page ──────────────

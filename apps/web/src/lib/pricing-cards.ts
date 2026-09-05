@@ -41,16 +41,18 @@ export const PASS_FEATURES = [
   // English (the pass/Community/Pro cards render these arrays directly), so the
   // sentence has to be corrected HERE as well as there.
   "Upgrades ONE competition while it runs",
-  // v17 #294: two rungs, so this line names both ceilings. It led with M's
-  // alone while L existed, which reads as "an Event Pass caps at 128" — the
-  // exact limit an L buyer is paying to remove.
+  // v17 #294 made this line name BOTH rungs' ceilings, because leading with
+  // M's alone read as "an Event Pass caps at 128" — the exact limit an L buyer
+  // was paying to remove. Owner decision 2026-09-05 took the L rung off sale,
+  // so the second half now names an offer with no checkout behind it: the card
+  // would be advertising 512 entrants that nothing on the site will sell. It
+  // goes, and the line is M's ceilings again — which is the whole ladder now.
   //
-  // W2 (entitlements v18, V392): L's entrant cap is 512, NOT unlimited. It was
-  // null, and this line said so in words; a null cap that becomes a number is
-  // the one direction "unlimited" copy cannot survive, because the word is
-  // still readable as true. `capClaimFaults` now faults a numeric cap that is
-  // also called unlimited, so the two cannot both be said.
-  "10 divisions, 128 entrants each — 20 divisions & 512 entrants on L",
+  // The figures stay written out rather than derived because this array is the
+  // card's hardcoded English (see the header above); `capClaimFaults`
+  // (lib/copy-truth.ts) is what holds them to `plan_entitlements`, including
+  // the rule that a numeric cap may not also be called unlimited.
+  "10 divisions, 128 entrants each",
   "Advanced formats — double elim, ladders",
   "4% platform fee on entry fees, not 5%",
   "Branded exports & public player cards",

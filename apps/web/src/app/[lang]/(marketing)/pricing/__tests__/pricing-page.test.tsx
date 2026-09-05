@@ -47,7 +47,13 @@ vi.mock("next/navigation", () => ({
 }));
 
 import PricingPage from "../page";
-import { formatMinor, passPrice, proPrice } from "@/lib/currency";
+import {
+  HIDDEN_PASS_KEYS,
+  SELLABLE_PASS_KEYS,
+  formatMinor,
+  passPrice,
+  proPrice,
+} from "@/lib/currency";
 import { feeCrossoverMinor, readableMinor } from "@/lib/pricing-crossover";
 import { PASS_RUNG_MARKETING_KEY } from "@/lib/pass-ladder";
 import enMarketing from "@/dictionaries/en/marketing.json";
@@ -57,6 +63,10 @@ import enMarketing from "@/dictionaries/en/marketing.json";
  *  string would have turned a legitimate reprice into a page regression. */
 const M_PRICE = formatMinor(passPrice("usd", "event_pass"), "usd");
 const L_PRICE = formatMinor(passPrice("usd", "event_pass_l"), "usd");
+/** Every rung's ladder label as the LIVE page would render it, keyed by rung.
+ *  Read from the dictionary, so the sweep below enumerates what the page can
+ *  say rather than a list typed here. */
+const RUNG_LABEL: Record<string, string> = { event_pass: "M", event_pass_l: "L" };
 /** The entry rung's ladder label, from the dictionary the page renders it from. */
 const M_RUNG = (enMarketing as Record<string, string>)[PASS_RUNG_MARKETING_KEY.event_pass];
 
@@ -98,20 +108,51 @@ const render = async (rows = LIVE) => {
   return { markup, text: markup.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ") };
 };
 
-describe("/pricing renders the Event Pass M/L ladder", () => {
-  it("shows BOTH rungs, each with its own price and its own caps", async () => {
+describe("/pricing renders only the Event Pass rungs that are on sale", () => {
+  /** Every rung the ladder actually rendered, read out of the markup rather
+   *  than inferred — `data-pass-rung` is written per row by the page. */
+  const laddered = (markup: string): string[] =>
+    [...markup.matchAll(/data-pass-rung="([^"]+)"/g)].map((m) => m[1]!);
+
+  it("enumerates the ladder and finds exactly the sellable rungs", async () => {
     const { markup, text } = await render();
     expect(markup, "the ladder block itself").toContain("data-pass-ladder");
-    // Both prices. M's alone was always on this page; L's is the new claim.
-    // They must also DIFFER, or "each with its own price" is unwitnessable.
-    expect(M_PRICE).not.toBe(L_PRICE);
+    // ENUMERATED, not asserted-absent. A `not.toContain("Event Pass L")` passes
+    // on a page that renders nothing at all; this compares the rendered SET to
+    // the authority, so a ladder that lost its only row fails just as loudly as
+    // one that grew a row it should not have.
+    expect(laddered(markup)).toEqual([...SELLABLE_PASS_KEYS]);
+
+    // The positive half, in full: the rung that IS on sale, with its own price
+    // and its own caps read from the matrix rather than written in copy.
     expect(text).toContain(M_PRICE);
-    expect(text).toContain(L_PRICE);
-    // Both rungs' caps, read from the matrix rather than written in copy.
     expect(text).toContain("Up to 10 divisions, 128 entrants each");
-    expect(text).toContain("Up to 20 divisions, unlimited entrants");
-    // The price is a FLOOR, not the price — the card must say so.
-    expect(text.toLowerCase()).toContain("from");
+
+    // …and the negative half, stated against the hidden list rather than a
+    // literal, and about the CAPS and the LABEL as well as the price — L's
+    // price alone could plausibly appear in unrelated FAQ prose.
+    for (const hidden of HIDDEN_PASS_KEYS) {
+      expect(laddered(markup), `${hidden} is off sale`).not.toContain(hidden);
+    }
+    expect(text, "L's caps are its whole sales pitch").not.toContain("Up to 20 divisions");
+    expect(text).not.toContain("unlimited entrants");
+    expect(text, "the L price point").not.toContain(L_PRICE);
+    // Anti-vacuity for all three: L's price is a real, DIFFERENT number, and
+    // something really is hidden.
+    expect(M_PRICE).not.toBe(L_PRICE);
+    expect(HIDDEN_PASS_KEYS.length).toBeGreaterThan(0);
+  });
+
+  it("drops the ladder's two-size framing when only one size is on sale", async () => {
+    // "from" reads as a floor and the note says "either way … Choose your size
+    // when you check out" — both are statements about a CHOICE. Suppressed by
+    // the rung count rather than deleted, so putting L back on sale restores
+    // them without a copy change or a re-translation.
+    const { text } = await render();
+    const note = (enMarketing as Record<string, string>)["pricing.pass.ladderNote"]!;
+    expect(SELLABLE_PASS_KEYS.length).toBe(1);
+    expect(text).not.toContain(note);
+    expect(text).not.toContain("Choose your size");
   });
 
   it("never claims a multiplier — the L/M ratio is not uniform across currencies", async () => {
@@ -145,7 +186,17 @@ describe("/pricing renders the Event Pass M/L ladder", () => {
   // behaviour is a documented choice rather than an accident.
 
   it("honours a null ENTRANT cap as unlimited rather than suppressing the ladder", async () => {
-    const { markup, text } = await render();
+    // Asserted on the SELLABLE rung, because that is the only one the ladder
+    // renders. It used to ride on L's live null cap; with L off sale the rule
+    // needs a fixture that exercises it on the rung that is still quoted, or it
+    // stops being tested at all.
+    const { markup, text } = await render(
+      LIVE.map((r) =>
+        r.plan_key === "event_pass" && r.feature_key === "entrants.per_division.max"
+          ? { ...r, int_value: null }
+          : r,
+      ),
+    );
     expect(markup).toContain("data-pass-ladder");
     expect(text).toContain("unlimited entrants");
   });
@@ -154,22 +205,60 @@ describe("/pricing renders the Event Pass M/L ladder", () => {
     // A DB unreachable at build makes `loadMatrix` fail soft to `{}`; a missing
     // row read through `?? null` would advertise an UNLIMITED pass for M's price.
     // Absence must suppress, never embellish.
-    const { markup, text } = await render(LIVE.filter((r) => r.plan_key !== "event_pass_l"));
+    //
+    // The dropped rows are the SELLABLE rung's now. Dropping L's would prove
+    // nothing: the guard only looks at rungs it is going to quote, which is
+    // correct — a hidden rung's missing row must not take the live offer down.
+    const { markup, text } = await render(LIVE.filter((r) => r.plan_key !== "event_pass"));
     expect(markup, "no rung may be priced from a row that isn't there").not.toContain(
       "data-pass-ladder",
     );
-    // No cap is quoted for a rung whose row is gone.
-    expect(text).not.toContain("Up to 20 divisions");
-    expect(text).not.toContain("unlimited entrants");
+    // No cap is quoted for a rung whose row is gone. Anchored on the LADDER's
+    // own phrasing ("Up to …"), because the card's static feature bullet also
+    // says "128 entrants each" and is not what this rule is about.
+    expect(text).not.toContain("Up to 10 divisions, 128 entrants each");
+    expect(text).not.toContain("Up to 10 divisions");
     // …and the card still renders. Suppressing the ladder must not take the
     // Event Pass offer down with it.
     expect(text).toContain(M_PRICE);
-    // Deliberately NOT a page-wide L-price negative. The FAQ answer interpolates
-    // {passL} from stripe-plans.json, a STATIC file that is never unavailable —
-    // so it keeps naming both rungs' prices even when the matrix read fails.
-    // That is correct: the suppression rule guards against quoting a CAP we do
-    // not have, not against quoting a price we always do.
-    expect(text).toContain(L_PRICE);
+  });
+
+  it("keeps selling when a HIDDEN rung's matrix rows are missing entirely", async () => {
+    // The other direction, and it is the dormancy half: the ladder must not
+    // consult a rung it does not render. Before the sellable list existed this
+    // fixture took the whole ladder down, because the guard demanded caps for
+    // every rung in PASS_KEYS.
+    const { markup, text } = await render(LIVE.filter((r) => r.plan_key !== "event_pass_l"));
+    expect(markup).toContain("data-pass-ladder");
+    expect(text).toContain(M_PRICE);
+    expect(text).toContain("Up to 10 divisions, 128 entrants each");
+  });
+});
+
+describe("/pricing's comparison table has no column for a rung nobody can buy", () => {
+  const columns = (markup: string): string[] =>
+    [...markup.matchAll(/data-pricing-column="([^"]+)"/g)].map((m) => m[1]!);
+
+  it("enumerates the column set and finds no hidden rung in it", async () => {
+    const { markup, text } = await render();
+    const rendered = columns(markup);
+    // The positive: the table is really there, with the free plan, the rung on
+    // sale, and Pro. A negative-only assertion passes on a table that lost its
+    // <thead> altogether.
+    expect(markup).toContain("data-pricing-matrix");
+    expect(rendered).toContain("community");
+    expect(rendered).toContain("pro");
+    for (const sellable of SELLABLE_PASS_KEYS) expect(rendered).toContain(sellable);
+    // …and the negative.
+    for (const hidden of HIDDEN_PASS_KEYS) {
+      expect(rendered, `${hidden} has no column`).not.toContain(hidden);
+      const label = (enMarketing as Record<string, string>)["pricing.table.pass"]!;
+      expect(text, "no heading names the hidden rung").not.toContain(
+        `${label} ${RUNG_LABEL[hidden]}`,
+      );
+    }
+    // `enterprise` is the Contact-us strip, never a priced column (design §4).
+    expect(rendered).not.toContain("enterprise");
   });
 });
 

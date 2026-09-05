@@ -3,10 +3,13 @@
 // fall-through), and the folded entry-fee cell, across every PRICING_PLAN_KEYS
 // column + the ENTITLEMENT_DOMAINS sections.
 //
-// Entitlements v18 (V392): the `pro_plus` column is GONE. `PRICING_PLAN_KEYS`
-// is four wide now (community / event_pass / event_pass_l / pro) — `enterprise`
-// is deliberately not a column (design §4: it is the Contact-us strip below the
-// table, not a priced offer), so nothing here should grow a fifth.
+// Entitlements v18 (V392): the `pro_plus` column is GONE, and owner decision
+// 2026-09-05 took `event_pass_l` off sale, so `PRICING_PLAN_KEYS` is three wide
+// (community / event_pass / pro). `enterprise` is deliberately not a column
+// (design §4: it is the Contact-us strip below the table, not a priced offer),
+// and neither is a rung nobody can buy — this table's whole job is to help a
+// reader CHOOSE, and a column for an offer that has no checkout is a choice
+// that cannot be taken.
 import { afterAll, describe, expect, it } from "vitest";
 import {
   buildPricingSections,
@@ -14,6 +17,7 @@ import {
   PRICING_COLUMN_LABEL_KEY,
   type MatrixData,
 } from "@/lib/pricing-matrix";
+import { ALL_PLAN_KEYS, HIDDEN_PASS_KEYS, SELLABLE_PASS_KEYS } from "@/lib/currency";
 import { ENTITLEMENT_DOMAINS } from "@/lib/entitlement-domains";
 import { sql } from "@/lib/db";
 
@@ -191,6 +195,30 @@ describe("buildPricingSections — the /pricing pivot", () => {
     }
   });
 
+  // The columns are the PURCHASABLE offers, and nothing else. Enumerated
+  // against the authority in lib/currency.ts rather than typed here, so this
+  // asks the same question the page does instead of restating today's answer.
+  it("is every purchasable plan — no enterprise, and no rung that is off sale", () => {
+    // The positive half first: this table must not quietly lose a column.
+    expect([...PRICING_PLAN_KEYS]).toEqual(
+      ALL_PLAN_KEYS.filter(
+        (k) => k !== "enterprise" && !(HIDDEN_PASS_KEYS as readonly string[]).includes(k),
+      ),
+    );
+    expect(PRICING_PLAN_KEYS).toContain("community");
+    expect(PRICING_PLAN_KEYS).toContain("pro");
+    for (const sellable of SELLABLE_PASS_KEYS) expect(PRICING_PLAN_KEYS).toContain(sellable);
+    // …then the negative, which is what the change is for.
+    for (const hidden of HIDDEN_PASS_KEYS) {
+      expect(PRICING_PLAN_KEYS, `${hidden} is off sale`).not.toContain(hidden);
+    }
+    expect(PRICING_PLAN_KEYS).not.toContain("enterprise");
+    // Anti-vacuity: the hidden rung is a REAL plan row, so the exclusion above
+    // is a filter and not a statement about a key that never existed.
+    expect(HIDDEN_PASS_KEYS.length).toBeGreaterThan(0);
+    for (const hidden of HIDDEN_PASS_KEYS) expect(ALL_PLAN_KEYS).toContain(hidden);
+  });
+
   // Every column needs a heading, and each must be its own — two plans sharing
   // a label is how a reader ends up comparing "Event Pass" against
   // "Event Pass" and concluding the rungs are the same product.
@@ -206,7 +234,6 @@ describe("buildPricingSections — the /pricing pivot", () => {
     expect(cells("pricing.matrix.competitions.max_active")).toMatchObject({
       community: "3",
       event_pass: "pricing.matrix.passedEvent",
-      event_pass_l: "pricing.matrix.passedEvent",
       pro: "∞",
     });
   });
@@ -231,13 +258,11 @@ describe("buildPricingSections — the /pricing pivot", () => {
     expect(cells("pricing.matrix.divisions.per_competition.max")).toMatchObject({
       community: "4",
       event_pass: "10",
-      event_pass_l: "20",
       pro: "20",
     });
     expect(cells("pricing.matrix.entrants.per_division.max")).toMatchObject({
       community: "64",
       event_pass: "128",
-      event_pass_l: "512",
       pro: "256",
     });
   });
@@ -248,19 +273,16 @@ describe("buildPricingSections — the /pricing pivot", () => {
     expect(cells("pricing.matrix.clubs.max")).toMatchObject({
       community: "5",
       event_pass: "5",
-      event_pass_l: "5",
       pro: "25",
     });
     expect(cells("pricing.matrix.teams.max")).toMatchObject({
       community: "8",
       event_pass: "8",
-      event_pass_l: "8",
       pro: "100",
     });
     expect(cells("pricing.matrix.teams.squad_max")).toMatchObject({
       community: "23",
       event_pass: "23",
-      event_pass_l: "23",
       pro: "40",
     });
   });
@@ -278,9 +300,14 @@ describe("buildPricingSections — the /pricing pivot", () => {
     expect(DATA[KEY]!.community, `${KEY} must differ from pro, or "falls through" is unobservable`)
       .not.toEqual(DATA[KEY]!.pro);
 
+    // Only the columns the table actually renders — the L rung is off sale
+    // (2026-09-05) and has no column any more, so asserting on its cell here
+    // would assert on `undefined` and pass for the wrong reason. The rule it
+    // used to witness — a pass rung with no row falls through to community —
+    // is a fact about the RESOLVER, and `entitlements-sql-parity.test.ts`
+    // holds it for both rungs against the live matrix.
     const c = cells(`pricing.matrix.${KEY}`);
     expect(c.event_pass).toBe(c.community);
-    expect(c.event_pass_l).toBe(c.community);
     expect(c.pro).not.toBe(c.community);
   });
 
@@ -295,7 +322,7 @@ describe("buildPricingSections — the /pricing pivot", () => {
   // must not read as a paywall — roles_multi and marks tick across all four
   // columns; only officials.auto (AI officials) is a Pro/Pro-Plus differentiator.
   it("shows officials as included on every plan, not a paywalled row", () => {
-    const tick = { community: "✓", event_pass: "✓", event_pass_l: "✓", pro: "✓" };
+    const tick = { community: "✓", event_pass: "✓", pro: "✓" };
     expect(cells("pricing.matrix.officials.roles_multi")).toMatchObject(tick);
     expect(cells("pricing.matrix.officials.marks")).toMatchObject(tick);
     // V392 REVERSED this row. AI officials used to be the one officials line a
@@ -307,7 +334,6 @@ describe("buildPricingSections — the /pricing pivot", () => {
     expect(cells("pricing.matrix.officials.auto")).toMatchObject({
       community: "—",
       event_pass: "✓",
-      event_pass_l: "✓",
       pro: "✓",
     });
   });
@@ -328,7 +354,6 @@ describe("buildPricingSections — the /pricing pivot", () => {
     expect(cells("pricing.matrix.fees")).toMatchObject({
       community: "✓ 5%",
       event_pass: "✓ 4%",
-      event_pass_l: "✓ 4%",
       pro: "✓ 2%",
     });
     // The 1% rung did not disappear with pro_plus — it moved to `enterprise`,
@@ -358,13 +383,11 @@ describe("buildPricingSections — the /pricing pivot", () => {
     expect(cells("pricing.matrix.dashboard.player_profiles")).toMatchObject({
       community: "—",
       event_pass: "✓",
-      event_pass_l: "✓",
       pro: "✓",
     });
     expect(cells("pricing.matrix.stats.player")).toMatchObject({
       community: "—",
       event_pass: "✓",
-      event_pass_l: "✓",
       pro: "✓",
     });
   });
@@ -543,14 +566,21 @@ describe.skipIf(!HAS_DB)("scale caps: community 64 entrants, 3 competitions (V31
   });
 });
 
-// V341 (v17 #294) — the L rung, rendered. The fixture above proves the pivot
-// handles a fifth column; this proves /pricing's actual query and the LIVE
-// matrix produce the column a buyer sees. Built by replaying the exact read
-// `pricing/page.tsx` performs, so a plan key dropped from PRICING_PLAN_KEYS
-// takes this test down with the page.
+// V341 (v17 #294) — the L rung, now HIDDEN (owner decision 2026-09-05). This
+// describe used to prove /pricing rendered a column for it. It has been split
+// along the line the decision draws, because the two halves are different kinds
+// of claim and only one of them changed:
+//
+//   • the TABLE is a shipped selling surface, so it stops expecting L;
+//   • the MATRIX is the seed, so it keeps validating L exactly as before. The
+//     rung is dormant, not deleted, and a dormant rung whose numbers nobody
+//     checks any more is a rung that cannot be put back on sale safely.
+//
+// Built by replaying the exact read `pricing/page.tsx` performs, so a plan key
+// dropped from PRICING_PLAN_KEYS takes this test down with the page.
 //
 // Real Postgres required; skipped without DATABASE_URL (CI sets it).
-describe.skipIf(!HAS_DB)("V341 L rung: /pricing renders a fifth column from live rows", () => {
+describe.skipIf(!HAS_DB)("the hidden L rung: out of the table, intact in the matrix", () => {
   const liveRows = async () => {
     const rows = await sql<
       { plan_key: string; feature_key: string; bool_value: boolean | null; int_value: number | null }[]
@@ -567,39 +597,66 @@ describe.skipIf(!HAS_DB)("V341 L rung: /pricing renders a fifth column from live
     return buildPricingSections(data).flatMap((s) => s.rows);
   };
 
-  it("selects the L rung at all — the column cannot render without the row", () => {
-    expect([...PRICING_PLAN_KEYS]).toContain("event_pass_l");
+  it("does not even SELECT the hidden rung — no column can render without the row", async () => {
+    expect([...PRICING_PLAN_KEYS]).not.toContain("event_pass_l");
+    // Enumerated from the rendered rows, not inferred: every row's cell set is
+    // the column set, so a stray column would show up here whatever the tuple
+    // said.
+    const rows = await liveRows();
+    expect(rows.length, "no rows rendered — the check below proves nothing").toBeGreaterThan(5);
+    for (const r of rows) {
+      expect(Object.keys(r.cells).sort().join(","), r.labelKey).toBe(
+        [...PRICING_PLAN_KEYS].sort().join(","),
+      );
+    }
   });
 
-  it("quotes L's own caps: 20 divisions and 512 entrants", async () => {
+  it("still renders M's own caps — the offer that IS on sale", async () => {
     const rows = await liveRows();
     const cells = (k: string) => rows.find((r) => r.labelKey === k)!.cells;
-    expect(cells("pricing.matrix.divisions.per_competition.max").event_pass_l).toBe("20");
-    // V392: 512, not ∞. Rendered as a number, so a buyer reading this column
-    // sees the ceiling they are actually buying.
-    expect(cells("pricing.matrix.entrants.per_division.max").event_pass_l).toBe("512");
-    // …and M keeps its own, so the two columns are genuinely different offers.
     expect(cells("pricing.matrix.divisions.per_competition.max").event_pass).toBe("10");
     expect(cells("pricing.matrix.entrants.per_division.max").event_pass).toBe("128");
   });
 
-  // The two failure modes this table can have, caught by one comparison:
-  //   • L column falls back to M (the pre-#294 shape) -> the list comes back
-  //     EMPTY and the assertion prints the two keys it expected;
-  //   • L column falls through to COMMUNITY on keys M lifts -> extra rows join
-  //     the list and it prints exactly which ones.
+  // THE DORMANCY GUARD, moved off the rendered table and onto the matrix.
+  //
+  // The two failure modes it has always caught, unchanged:
+  //   • L's rows fall back to M's values (the pre-#294 shape) -> the list comes
+  //     back EMPTY and the assertion prints the two keys it expected;
+  //   • L falls through to COMMUNITY on keys M lifts -> extra rows join the
+  //     list and it prints exactly which ones.
   // Compared as a joined STRING because the JSON reporter elides array
   // elements and would name neither side.
-  it("differs from M on exactly the two keys V341 overrides, and nowhere else", async () => {
-    const rows = await liveRows();
-    const differing = rows
-      .filter((r) => r.cells.event_pass !== r.cells.event_pass_l)
-      .map((r) => r.labelKey)
+  //
+  // Read straight from `plan_entitlements` now, because the rung has no
+  // rendered cells to compare. That is the point: hiding the rung must not
+  // stop anyone checking that its matrix is still coherent, or the day it goes
+  // back on sale it sells whatever the last unrelated migration left behind.
+  it("keeps L's matrix differing from M on exactly the two keys V341 overrides", async () => {
+    const rows = await sql<
+      { plan_key: string; feature_key: string; bool_value: boolean | null; int_value: number | null }[]
+    >`
+      select plan_key, feature_key, bool_value, int_value
+      from plan_entitlements where plan_key in ('event_pass', 'event_pass_l')`;
+    const by = (plan: string) =>
+      new Map(rows.filter((r) => r.plan_key === plan).map((r) => [r.feature_key, r]));
+    const m = by("event_pass");
+    const l = by("event_pass_l");
+    expect(m.size, "no M rows — the diff below proves nothing").toBeGreaterThan(5);
+    expect(l.size, "no L rows — the rung has lost its matrix").toBeGreaterThan(5);
+    const differing = [...new Set([...m.keys(), ...l.keys()])]
+      .filter((key) => {
+        const a = m.get(key);
+        const b = l.get(key);
+        return (
+          a?.bool_value !== b?.bool_value ||
+          a?.int_value !== b?.int_value ||
+          !a !== !b
+        );
+      })
       .sort()
       .join(", ");
-    expect(differing).toBe(
-      "pricing.matrix.divisions.per_competition.max, pricing.matrix.entrants.per_division.max",
-    );
+    expect(differing).toBe("divisions.per_competition.max, entrants.per_division.max");
   });
 });
 

@@ -23,7 +23,7 @@ import {
 import {
   formatMinor,
   lowestCreditPackAmount,
-  PASS_KEYS,
+  SELLABLE_PASS_KEYS,
   passPrice,
   proPrice,
   type Currency,
@@ -43,12 +43,11 @@ import { hasLocale } from "@/lib/i18n-constants";
 export const dynamic = "force-dynamic";
 
 /** Per-column cell styling. A `Record` so a plan added to PRICING_PLAN_KEYS
- *  without a tone is a compile error, not an unstyled column. Both pass rungs
- *  share the lime the Event Pass card uses — they are one offer, two sizes. */
+ *  without a tone is a compile error, not an unstyled column. Every pass rung
+ *  takes the lime the Event Pass card uses — one offer, however many sizes. */
 const CELL_TONE: Record<PricingPlanKey, string> = {
   community: "text-slate-500",
   event_pass: "text-[#4d7c0f]",
-  event_pass_l: "text-[#4d7c0f]",
   pro: "font-medium text-purple-700",
 };
 
@@ -157,21 +156,28 @@ export default async function PricingPage({
   const proCredits = creditsMonthly("pro");
   const communityCreditsLine =
     communityCredits != null ? t(d, "pricing.credits.perMonth", { count: communityCredits }) : null;
-  // W2 T5 (design R9): the top-up is sized by rung, so this chip names both.
-  // It is rendered UNCONDITIONALLY — unlike the ladder below it, which is
-  // suppressed when `loadMatrix` fails soft — so a single `{count}` here would
-  // be the one credit figure a buyer sees, and it advertised M's 25 beside L's
-  // price. Both numbers are interpolated from `PASS_CREDIT_GRANT`, so a
-  // repricing moves the copy with the declaration.
+  // W2 T5 (design R9): the top-up is sized by rung. The chip used to name both
+  // rungs' grants because the card sold both; with the L rung off sale
+  // (2026-09-05) it names the grant of the rung actually being offered — the
+  // cheapest one on sale, the same rung the headline price quotes, so the two
+  // figures on this card are about the same product.
+  //
+  // Rendered UNCONDITIONALLY, unlike the ladder below it, which is suppressed
+  // when `loadMatrix` fails soft. So this is the one credit figure a buyer is
+  // guaranteed to see, and it must be the offered rung's own — the defect it
+  // was rewritten for was M's 25 sitting beside L's price. Interpolated from
+  // `PASS_CREDIT_GRANT` rather than typed, so a repricing moves the copy with
+  // the declaration.
+  const offeredRung = lowestPricedRung(
+    SELLABLE_PASS_KEYS.map((key) => ({ key, amountMinor: passPrice(currency, key) })),
+  );
   const passCreditsLine = t(d, "pricing.credits.passGrant", {
-    m: PASS_CREDIT_GRANT.event_pass,
-    l: PASS_CREDIT_GRANT.event_pass_l,
+    count: PASS_CREDIT_GRANT[offeredRung.key],
   });
   const proCreditsLine =
     proCredits != null ? t(d, "pricing.credits.perMonth", { count: proCredits }) : null;
 
   const passLabel = formatMinor(passPrice(currency, "event_pass"), currency);
-  const passLLabel = formatMinor(passPrice(currency, "event_pass_l"), currency);
 
   // The M/L ladder on the Event Pass card. Prices come from stripe-plans.json;
   // the CAPS come from the same `matrix` the comparison table below renders
@@ -182,9 +188,16 @@ export default async function PricingPage({
   // when the DB is unreachable at build, and a null `int_value` legitimately
   // means UNLIMITED — so a missing row read through `?? null` would advertise
   // an unlimited pass. Absence must suppress the block, not embellish it.
+  //
+  // `SELLABLE_PASS_KEYS`, never `PASS_KEYS` (lib/currency.ts — owner decision
+  // 2026-09-05, the L rung off sale). Both halves matter: a rung that is off
+  // sale must not be quoted here, AND its absent matrix rows must not suppress
+  // the offer that IS on sale. Demanding caps for every rung in `PASS_KEYS`
+  // would do the second — a hidden rung losing its rows would take the live
+  // ladder down with it.
   const rungCap = (feature: string, plan: string): number | null | undefined =>
     matrix[feature]?.[plan]?.int_value;
-  const passLadder = (["event_pass", "event_pass_l"] as const).every(
+  const passLadder = SELLABLE_PASS_KEYS.every(
     (k) =>
       matrix["entrants.per_division.max"]?.[k] !== undefined &&
       typeof rungCap("divisions.per_competition.max", k) === "number",
@@ -193,10 +206,6 @@ export default async function PricingPage({
         event_pass: {
           entrants: rungCap("entrants.per_division.max", "event_pass") ?? null,
           divisions: rungCap("divisions.per_competition.max", "event_pass") ?? null,
-        },
-        event_pass_l: {
-          entrants: rungCap("entrants.per_division.max", "event_pass_l") ?? null,
-          divisions: rungCap("divisions.per_competition.max", "event_pass_l") ?? null,
         },
       })
     : null;
@@ -233,9 +242,11 @@ export default async function PricingPage({
   // (`null` for that shape); the sentence was simply printed beside it anyway.
   // The entry rung is the honest subject: it is the cheapest, it is what the
   // in-app picker pre-selects, and it is the only one the crossing exists for.
-  const crossoverRung = lowestPricedRung(
-    PASS_KEYS.map((key) => ({ key, amountMinor: passPrice(currency, key) })),
-  );
+  //
+  // Derived from `SELLABLE_PASS_KEYS` for a second reason on top of that one:
+  // a crossing solved for a rung nobody can buy is a threshold quoted against a
+  // price the checkout would refuse.
+  const crossoverRung = offeredRung;
   const passFeePercent = feePercent(crossoverRung.key);
   const crossoverMinor = feeCrossoverMinor({
     passMinor: crossoverRung.amountMinor,
@@ -266,9 +277,10 @@ export default async function PricingPage({
   // interpolated with the same switched amounts instead; `t()` leaves an answer
   // without placeholders untouched, so only the ones that quote a price change.
   // `plus`/`plusAnnual` dropped with the Pro Plus card (entitlements v18).
+  // `passL` dropped with the L rung's copy (2026-09-05): the Event Pass answer
+  // no longer describes two sizes, so nothing interpolates it.
   const faqVars = {
     pass: passLabel,
-    passL: passLLabel,
     pro: proMonthly,
     proAnnual: formatMinor(proPrice("annual", currency), currency),
   };
@@ -338,13 +350,20 @@ export default async function PricingPage({
                 <p className="mk-display mb-1 text-xs font-semibold tracking-[0.18em] text-[#4d7c0f]">
                   {t(d, "pricing.pass.name")}
                 </p>
-                {/* "from", because the pass is a ladder: $29 is the floor, not
-                    the price. The two rungs are laid out below so a buyer sees
-                    the difference without clicking through to a competition. */}
+                {/* "from" is a claim about a LADDER — the floor of several
+                    prices, not the price. It renders only while more than one
+                    rung is on sale (owner decision 2026-09-05 took the L rung
+                    off sale). Derived from the authority rather than deleted,
+                    so putting L back restores the word with no copy change and
+                    no re-translation; and a single price introduced beside a
+                    "from" would tell a buyer there is a bigger, dearer size
+                    they cannot actually reach. */}
                 <p className="mb-1 text-4xl font-bold text-slate-900">
-                  <span className="mr-1.5 align-middle text-sm font-semibold uppercase tracking-wider text-slate-400">
-                    {t(d, "pricing.pass.from")}
-                  </span>
+                  {SELLABLE_PASS_KEYS.length > 1 && (
+                    <span className="mr-1.5 align-middle text-sm font-semibold uppercase tracking-wider text-slate-400">
+                      {t(d, "pricing.pass.from")}
+                    </span>
+                  )}
                   {passLabel}
                   <span className="text-lg font-normal text-slate-500">
                     {t(d, "pricing.pass.per")}
@@ -362,6 +381,11 @@ export default async function PricingPage({
                     {passLadder.map((o) => (
                       <li
                         key={o.key}
+                        // The rung this row is FOR, so a test can enumerate what
+                        // the ladder rendered instead of asserting a name is
+                        // absent — an absence assertion passes just as well on a
+                        // ladder that rendered nothing at all.
+                        data-pass-rung={o.key}
                         className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5 rounded-lg bg-white/70 px-3 py-2"
                       >
                         <span className="min-w-4 text-sm font-bold text-[#4d7c0f]">
@@ -392,7 +416,13 @@ export default async function PricingPage({
                   <span aria-hidden>⚡</span>
                   {passCreditsLine}
                 </p>
-                {passLadder && (
+                {/* "the same platform fee EITHER WAY … CHOOSE YOUR SIZE when
+                    you check out" — every clause is about a choice between two
+                    sizes, and there is one size on sale. Suppressed by the rung
+                    count for the same reason the "from" prefix above is: the
+                    sentence is correct again the moment a second rung is, with
+                    no copy edit in any of the four locales. */}
+                {passLadder && SELLABLE_PASS_KEYS.length > 1 && (
                   <p className="mb-4 text-xs text-slate-500">{t(d, "pricing.pass.ladderNote")}</p>
                 )}
                 {/* The comparator, on the pass card rather than beside Pro:
@@ -495,7 +525,16 @@ export default async function PricingPage({
                     <tr>
                       <th className="py-3 text-left">{t(d, "pricing.table.feature")}</th>
                       {PRICING_PLAN_KEYS.map((plan) => (
-                        <th key={plan} className="py-3 text-center whitespace-nowrap">
+                        <th
+                          key={plan}
+                          // The plan this column is FOR. `PRICING_PLAN_KEYS`
+                          // decides the set, and this is what lets a test read
+                          // the rendered set back rather than infer it from
+                          // headings — the headings are translated, the keys
+                          // are not.
+                          data-pricing-column={plan}
+                          className="py-3 text-center whitespace-nowrap"
+                        >
                           {t(d, PRICING_COLUMN_LABEL_KEY[plan])}
                         </th>
                       ))}
