@@ -26,6 +26,7 @@ import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { checkBoard } from "../checker.ts";
 import type { RequestOptions, Session } from "../http.ts";
 import type { SeedTransport } from "../seed.ts";
 import {
@@ -1215,24 +1216,6 @@ describe("runScheduleLayer — officials", () => {
     expect(r.outcomes[0].errors.join(" ")).toMatch(/officials_unreadable/);
   });
 
-  it("reds when a division whose pack declared officials fetches none of them", async () => {
-    const { transport } = fakeTransport({
-      divisions: {
-        "div-a": {
-          fixturesAfter: [
-            fx({ id: "f1", scheduled_at: "2099-01-01T09:00:00.000Z", court_id: "court-1", officials: [] }),
-          ],
-        },
-      },
-    });
-
-    const r = await runScheduleLayer(layer({ transport, divisions: [divA({ declaresOfficials: true })] }));
-
-    // An empty array makes every officials rule vacuously green — failure
-    // class 3 with a type annotation for cover.
-    expect(r.outcomes[0].errors.join(" ")).toMatch(/declared officials/i);
-  });
-
   it("stays quiet about zero officials when the pack declared none", async () => {
     const { transport } = fakeTransport({
       divisions: {
@@ -1515,8 +1498,74 @@ describe("runScheduleLayer — the schedule-settings round trip", () => {
   });
 });
 
-describe("runScheduleLayer — the officials red is not vacuous", () => {
-  it("stays silent on a board with nothing placed, which is the unplaced gate's business", async () => {
+// ---------------------------------------------------------------------------
+// The pack fact reaches the checker's oracle — B04 T2/T4 merge reconciliation
+// ---------------------------------------------------------------------------
+
+describe("declaresOfficials is carried from the PACK onto EncodedConstraints", () => {
+  // `EncodedConstraints.declaresOfficials` is the checker's ONLY officials
+  // signal (board.ts's note on the field): `checkBoard` cannot tell "this
+  // division has no officials" from "this division's officials did not come
+  // back", and an empty `officialIds` array reads identically in both. So the
+  // value has to come from `ScheduleDivision`, which the caller resolves from
+  // the PACK — never from the board this driver just fetched, which would
+  // compare the fetch against itself and make design §4.3's rule vacuous
+  // again, which is the defect the field was added to close.
+  //
+  // BOTH DIRECTIONS, deliberately. Either alone is satisfied by a constant: a
+  // hard-coded `true` passes the first, and the encoder's
+  // `input.declaresOfficials === true` turns an UNPASSED field into `false`,
+  // which passes the second. Only the pair witnesses the derivation.
+  it("encodes true for a division whose pack declared officials", async () => {
+    const { transport } = fakeTransport({ divisions: { "div-a": { fixturesAfter: PLACED() } } });
+
+    const r = await runScheduleLayer(layer({ transport, divisions: [divA({ declaresOfficials: true })] }));
+
+    expect(r.constraints[0].declaresOfficials).toBe(true);
+  });
+
+  it("encodes false for a division whose pack declared none", async () => {
+    const { transport } = fakeTransport({ divisions: { "div-a": { fixturesAfter: PLACED() } } });
+
+    const r = await runScheduleLayer(layer({ transport, divisions: [divA({ declaresOfficials: false })] }));
+
+    expect(r.constraints[0].declaresOfficials).toBe(false);
+  });
+
+  // The seam, driven through its REAL consumer rather than a fixture on both
+  // ends (failure class 1). `runScheduleLayer` returns the board it FETCHED
+  // and the constraints it ENCODED; folding that exact pair through the real
+  // `checkBoard` is what proves the pack fact survives the trip. Ruling R21
+  // put this red in `checker.ts` and removed the driver's duplicate, so this
+  // is now the only test that can witness the driver feeding it.
+  it("drives checkBoard's declared-but-none red from the driver's own output", async () => {
+    const { transport } = fakeTransport({ divisions: { "div-a": { fixturesAfter: PLACED() } } });
+
+    const r = await runScheduleLayer(layer({ transport, divisions: [divA({ declaresOfficials: true })] }));
+    const report = checkBoard(r.boards[0], r.constraints[0]);
+
+    expect(report.findings.map((f) => f.kind)).toContain("officials_unreadable");
+    expect(report.clean).toBe(false);
+  });
+
+  it("leaves checkBoard quiet on the same board when the pack declared none", async () => {
+    const { transport } = fakeTransport({ divisions: { "div-a": { fixturesAfter: PLACED() } } });
+
+    const r = await runScheduleLayer(layer({ transport, divisions: [divA({ declaresOfficials: false })] }));
+    const report = checkBoard(r.boards[0], r.constraints[0]);
+
+    // Same board, same empty officials — only the PACK fact differs, so this
+    // pair fails if the driver ever derives the flag from the fetch.
+    expect(report.findings.map((f) => f.kind)).not.toContain("officials_unreadable");
+  });
+
+  // The gate's other half, kept here because it lives nowhere else: the driver
+  // used to own this case, R21 moved the red to `checker.ts`, and
+  // checker.test.ts covers the red and its negative but NOT the
+  // `placed.length > 0` gate. A board with nothing placed is the unplaced
+  // gate's business, and reding it here as well says "no officials came back"
+  // about a board that came back empty for an entirely different reason.
+  it("leaves checkBoard quiet when the pack declared officials but nothing was placed", async () => {
     const { transport } = fakeTransport({
       divisions: {
         "div-a": {
@@ -1527,20 +1576,9 @@ describe("runScheduleLayer — the officials red is not vacuous", () => {
     });
 
     const r = await runScheduleLayer(layer({ transport, divisions: [divA({ declaresOfficials: true })] }));
+    const report = checkBoard(r.boards[0], r.constraints[0]);
 
-    // The refusal above is reported; the officials rule must NOT pile a second,
-    // misleading reason ("no officials came back") onto a board that came back
-    // empty for an entirely different reason.
-    expect(r.outcomes[0].errors.join(" ")).not.toMatch(/declared officials/);
-  });
-
-  it("still reds when a PLACED fixture came back with no officials", async () => {
-    const { transport } = fakeTransport({
-      divisions: { "div-a": { fixturesAfter: PLACED() } },
-    });
-
-    const r = await runScheduleLayer(layer({ transport, divisions: [divA({ declaresOfficials: true })] }));
-
-    expect(r.outcomes[0].errors.join(" ")).toMatch(/declared officials/);
+    expect(r.constraints[0].declaresOfficials).toBe(true);
+    expect(report.findings.map((f) => f.kind)).not.toContain("officials_unreadable");
   });
 });

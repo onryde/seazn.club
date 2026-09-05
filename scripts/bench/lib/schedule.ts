@@ -238,13 +238,19 @@ export interface ScheduleDivision {
   tz: string;
   isRoundRobin: boolean;
   locks?: readonly ScheduleLock[];
-  /** REQUIRED, not optional, and that is the point: only the driver knows both
-   *  what the pack declared and what the fetch returned, so only the driver can
-   *  tell an officials rule that found nothing from one that had nothing to
-   *  find (design §4.3). A caller that could omit this would default it to
-   *  `false` and make the check inert — failure class 3, wearing a type
-   *  annotation. `Board` and `EncodedConstraints` carry no officials signal, so
-   *  `checker.ts` cannot make this call at all. */
+  /** Did the PACK declare officials for this division? Resolved by the caller,
+   *  who holds the pack, and forwarded verbatim onto `EncodedConstraints` at
+   *  both `encodeConstraints` call sites — this module never derives it from
+   *  the board it fetched, which would compare the fetch against itself.
+   *
+   *  REQUIRED, not optional, and that is the point: a caller that could omit
+   *  this would default it to `false` and ship design §4.3's rule inert —
+   *  failure class 3, wearing a type annotation.
+   *
+   *  `Board` carries no officials signal, and `EncodedConstraints` carries
+   *  exactly one — this field, put there by this driver. So the checker's red
+   *  is only as live as this forwarding is: nothing else in the run can tell
+   *  an officials rule that found nothing from one that had nothing to find. */
   declaresOfficials: boolean;
 }
 
@@ -715,6 +721,13 @@ async function runDivision(
       courtIdByRef: input.courtIdByRef,
       isRoundRobin: division.isRoundRobin,
       pins: [],
+      // FROM THE PACK, never from the board. This is the whole point of the
+      // field: `checkBoard`'s officials rule has to tell "this division has no
+      // officials" from "this division's officials did not come back", and an
+      // empty `officialIds` array is both. Deriving it from the fetch would
+      // compare the board against itself and leave design §4.3's rule as
+      // vacuous as it was before the field existed.
+      declaresOfficials: division.declaresOfficials,
     });
 
     // --- Step 2: PUT the resolved schedule settings ------------------------
@@ -754,6 +767,7 @@ async function runDivision(
       courtIdByRef: input.courtIdByRef,
       isRoundRobin: division.isRoundRobin,
       pins,
+      declaresOfficials: division.declaresOfficials,
     });
 
     // --- Step 4: propose ----------------------------------------------------
@@ -844,24 +858,19 @@ async function runDivision(
     };
     outcome.unplacedCount = board.fixtures.filter((f) => f.start === undefined).length;
 
-    // Design §4.3 — an officials rule that runs against an empty array is
-    // permanently green. Only this driver knows both halves: `Board` and
-    // `EncodedConstraints` carry no officials signal, so `checker.ts` cannot
-    // tell "found none" from "had none to find".
-    // Gated on a PLACED fixture existing: a division with nothing placed is the
-    // unplaced gate's business, and reding it here as well says "no officials
-    // came back" about a board that came back empty for a different reason.
-    const placedFixtures = board.fixtures.filter((f) => f.start !== undefined);
-    if (
-      division.declaresOfficials &&
-      placedFixtures.length > 0 &&
-      placedFixtures.every((f) => f.officialIds.length === 0)
-    ) {
-      sink.error(
-        `the pack declared officials for this division and not one of the ${placedFixtures.length} ` +
-          "placed fixtures came back with any — every officials rule below is vacuous until one does",
-      );
-    }
+    // NO DECLARED-BUT-NONE RED HERE, deliberately (ruling R21). This driver
+    // carried one, and so does `checker.ts`'s officials rule; two reds for one
+    // fact is one authority too many, and the checker's is the better of the
+    // pair — it is gated on the same `placed` set every other officials rule
+    // judges, so it cannot disagree with its own neighbours about which
+    // fixtures counted. What this module owes that rule is the FACT, not a
+    // second opinion: `declaresOfficials` goes onto `EncodedConstraints` at
+    // both `encodeConstraints` call sites above, and `checkBoard` reds on it.
+    //
+    // The per-element WIRE guard in `readOfficialIds` stays. That one sits
+    // where `z.array(z.unknown())` actually is and can fire on a real board;
+    // by the time a `BoardFixture` reaches the checker the field is
+    // `readonly string[]` and there is nothing left to shape-guard.
   } catch (err) {
     sink.error(messageOf(err));
   }
