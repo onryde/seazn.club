@@ -18,7 +18,12 @@ import { makeEnvelope } from "../../../testkit/helpers.ts";
 import { cricket, type CricketBallEv, type CricketCfg, type CricketEv, type CricketState } from "../cricket.ts";
 
 export type Delivery =
-  | { bat: 0 | 1 | 2 | 3 | 4 | 6 }
+  // `allRun` (fix round 1, finding 7): runs completed by RUNNING never carry
+  // a `boundary` flag even at 4 — the engine's own player-stats fold keys
+  // fours/sixes off `boundary` alone (cricket.ts:2448), so this is the
+  // NEGATIVE case that flag needs: a stroke run to 4 without the ball
+  // crossing the rope.
+  | { bat: 0 | 1 | 2 | 3 | 4 | 6; allRun?: boolean }
   | { extra: "wide" | "noball" | "bye" | "legbye" | "penalty"; runs: number; bat?: number }
   | {
       out: "bowled" | "caught" | "lbw" | "runout" | "stumped" | "hitwicket" | "obstructed" | "timedout" | "hitballtwice";
@@ -26,7 +31,11 @@ export type Delivery =
       assist?: string;
       bat?: number;
     }
-  | { retire: true };
+  // `reason` (fix round 1, finding 4): defaults to "hurt" (retired NOT out —
+  // the previous, only behaviour) so every existing caller is unaffected;
+  // "out" is Law 25.4.3's retired-out, a genuine dismissal credited to no
+  // bowler.
+  | { retire: true; reason?: "hurt" | "out" | "other" };
 
 export interface Script {
   cfg: Partial<CricketCfg>;
@@ -47,6 +56,21 @@ export interface Script {
     // innings of a script: the reducer opens the next innings on its first
     // ball, and a ball cannot reach an innings that is not the open one.
     leaveOpen?: boolean;
+    // Fix round 1, finding 6: routes this WHOLE entry's deliveries through
+    // `cricket.superover.ball` into `state.superOver.innings` instead of the
+    // match's own `state.innings`. This builder does not (yet) express the
+    // tie/phase-transition sequence that gets a match INTO a super over —
+    // the entries before this one must already tie the match through the
+    // ordinary path (`applySuperOverBall` requires `state.phase ===
+    // "super_over"`, which only `decideTie` sets). `batting` still selects
+    // which side's lineup feeds the striker/non-striker/bowler defaults —
+    // pass whichever side the reducer's OWN `soBattingSideAt` (ICC
+    // alternation) says bats first in this super over: `applySuperOverBall`
+    // derives `battingSide` itself and refuses a payload whose striker
+    // isn't in that side's order, so this can never be assumed wrong and
+    // silently accepted. A minimal escape hatch for one regression test —
+    // Task 4 may build a fuller super-over ledger surface later.
+    superOver?: boolean;
   }>;
 }
 
@@ -100,6 +124,11 @@ function buildBallPayload(
     };
   }
   if ("out" in delivery) {
+    // Fix round 1, finding 8 (Task 1 re-review): a wicket ball can still
+    // clear the boundary (e.g. hit wicket playing a shot for four) — this
+    // branch had never called `boundaryOf` at all, so no wicket ball could
+    // ever carry the flag regardless of `bat`.
+    const boundary = boundaryOf(delivery.bat);
     return {
       ...base,
       runs: { bat: delivery.bat ?? 0 },
@@ -110,10 +139,12 @@ function buildBallPayload(
         ...(delivery.assist !== undefined ? { fielderAssist: delivery.assist } : {}),
         bowlerCredited: BOWLER_CREDITED_KINDS.has(delivery.out),
       },
+      ...(boundary !== undefined ? { boundary } : {}),
     };
   }
-  // Plain bat delivery.
-  const boundary = boundaryOf(delivery.bat);
+  // Plain bat delivery. `allRun` (finding 7's negative case) suppresses the
+  // flag even at 4/6 — see `Delivery`'s own doc above.
+  const boundary = delivery.allRun === true ? undefined : boundaryOf(delivery.bat);
   return {
     ...base,
     runs: { bat: delivery.bat },
@@ -145,9 +176,38 @@ export function scriptLedger(script: Script): ScriptLedger {
   record("core.start", {});
 
   for (const inningsSpec of script.innings) {
+    const bpo = cfg.ballsPerOver;
+
+    // Fix round 1, finding 6 — a super-over entry, routed into
+    // `state.superOver.innings` via `cricket.superover.ball` instead of the
+    // ordinary path below. See `Script.innings`'s own doc on this field.
+    if (inningsSpec.superOver === true) {
+      const soBattingOrder = inningsSpec.batting === "home" ? script.home : script.away;
+      const soAt = state.superOver?.innings.length ?? 0;
+      for (const delivery of inningsSpec.deliveries) {
+        if ("retire" in delivery) {
+          throw new Error("scriptLedger: retire is not supported in a super-over entry");
+        }
+        const soInnings = state.superOver?.innings[soAt];
+        const soFine = soInnings?.fine;
+        const soLegalBalls = soInnings?.legalBalls ?? 0;
+        const striker = soFine?.striker ?? soBattingOrder[0];
+        const nonStriker = soFine?.nonStriker ?? soBattingOrder[1];
+        if (striker === undefined || nonStriker === undefined) {
+          throw new Error("scriptLedger: super-over innings needs at least 2 batters");
+        }
+        const over = Math.floor(soLegalBalls / bpo);
+        const ballInOver = (soLegalBalls % bpo) + 1;
+        const bowler = inningsSpec.bowlers[over % inningsSpec.bowlers.length];
+        if (bowler === undefined) throw new Error("scriptLedger: no bowlers given");
+        const payload = buildBallPayload(delivery, { over, ballInOver, striker, nonStriker, bowler });
+        record("cricket.superover.ball", payload);
+      }
+      continue;
+    }
+
     const at = state.innings.length;
     const battingOrder = inningsSpec.batting === "home" ? script.home : script.away;
-    const bpo = cfg.ballsPerOver;
 
     for (const delivery of inningsSpec.deliveries) {
       // `legalBalls` lives on `InningsState`; the crease (striker/non-striker,
@@ -157,7 +217,7 @@ export function scriptLedger(script: Script): ScriptLedger {
       if ("retire" in delivery) {
         const striker = fine?.striker ?? battingOrder[0];
         if (striker === undefined) throw new Error("scriptLedger: no striker to retire");
-        record("cricket.retire", { person: striker, reason: "hurt" });
+        record("cricket.retire", { person: striker, reason: delivery.reason ?? "hurt" });
         continue;
       }
       const legalBalls = innings?.legalBalls ?? 0;

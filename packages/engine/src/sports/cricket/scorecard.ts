@@ -133,16 +133,23 @@ interface OpenPartnership {
  * reads them while the super over is in progress.
  *
  * Discipline (R5 — never re-derive a cricket rule): runs and balls per
- * batter, and balls/runs/wickets per bowler, come from `FineInnings` itself
+ * batter, and balls/runs/WICKETS per bowler, come from `FineInnings` itself
  * (`batterRuns`/`batterBalls`/`bowlerBalls`/`bowlerWickets` — read in
- * `cards()`, never re-tallied here). What THIS class tracks from the ball
- * payload is only what `FineInnings` does not carry at all: who was at the
- * crease for a given ball (batting/bowling ORDER), fours/sixes, the
- * dismissal's kind/bowler/fielder/assist, wides/no-balls split by bowler,
- * and the running "runs charged to the current bowler" total the maiden
- * check needs (mirroring `finishDelivery`'s own `bowlerCharged` rule — bat
- * runs plus wide/no-ball extras; byes, leg-byes and penalties are never the
- * bowler's — because `FineInnings.bowlerRuns` has no per-over breakdown).
+ * `cards()`, never re-tallied here). `BowlingLine.runs` ALSO reads
+ * `fine.bowlerRuns[person]` directly (fix round 1, finding 1) — this class
+ * used to keep its own `chargedRuns` tally keyed by `payload.bowler` and
+ * report THAT, which is a second authority: on the non-strict read path
+ * `finishDelivery` credits whichever bowler STATE says is current, which
+ * can disagree with a stale/replayed `payload.bowler`, so a row's `runs`
+ * could disagree with its own `balls`/`wickets` (both state-sourced). What
+ * THIS class tracks from the ball payload is only what `FineInnings` does
+ * not carry at all: who was at the crease for a given ball (batting/bowling
+ * ORDER), fours/sixes, the dismissal's kind/bowler/fielder/assist,
+ * wides/no-balls split by bowler, and a running "runs charged to the
+ * CURRENT over" total — used ONLY to decide maidens, since `FineInnings`
+ * has no per-over breakdown at all — mirroring `finishDelivery`'s own
+ * `bowlerCharged` rule (bat runs plus wide/no-ball extras; byes, leg-byes
+ * and penalties are never the bowler's).
  */
 class InningsAccumulator {
   private extrasByIndex: ExtrasTally[] = [];
@@ -160,11 +167,10 @@ class InningsAccumulator {
   private noBallsByIndex: Record<string, number>[] = [];
   private maidensByIndex: Record<string, number>[] = [];
 
-  // Runs charged to the CURRENT bowler, per innings (whole-innings running
-  // total, used as `BowlingLine.runs`) and per OVER (reset at every over
-  // close, used only to decide a maiden) — the same `bowlerCharged` figure,
-  // tracked at two granularities in one pass so they can never drift apart.
-  private chargedRunsByIndex: Record<string, number>[] = [];
+  // Runs charged to the bowler bowling the CURRENT over — reset at every
+  // over close, read only to decide a maiden (`BowlingLine.runs` itself
+  // reads `fine.bowlerRuns` directly; see the class doc above, fix round 1
+  // finding 1).
   private overRunsByIndex: number[] = [];
 
   // The innings' own totals BEFORE the ball being folded — the other half of
@@ -303,16 +309,16 @@ class InningsAccumulator {
       noBalls[payload.bowler] = (noBalls[payload.bowler] ?? 0) + extras.runs;
     }
 
-    // Runs charged to the bowler — the SAME rule `finishDelivery` uses to
-    // build `fine.bowlerRuns` (cricket.ts): bat runs, plus a wide or
+    // Runs charged to the bowler THIS OVER — the SAME rule `finishDelivery`
+    // uses to build `fine.bowlerRuns` (cricket.ts): bat runs, plus a wide or
     // no-ball's extra runs; byes, leg-byes and penalties are the team's,
-    // never the bowler's. Tracked here (not read off `fine.bowlerRuns` at
-    // the end) because the maiden check right below needs this same figure
-    // scoped to a single OVER, and computing both in one pass is what keeps
-    // them from drifting apart.
+    // never the bowler's. Scoped to one over and used ONLY by the maiden
+    // check right below — `BowlingLine.runs` itself reads `fine.bowlerRuns`
+    // in `cards()` (fix round 1, finding 1: a second, hand-rolled
+    // whole-innings tally here could disagree with state on WHO gets a
+    // given ball's runs; this one only ever answers "was this over a
+    // maiden", never "how many runs does this row show").
     const charged = payload.runs.bat + (extras?.kind === "wide" || extras?.kind === "noball" ? extras.runs : 0);
-    const chargedRuns = this.chargedRunsByIndex[index] ?? (this.chargedRunsByIndex[index] = {});
-    chargedRuns[payload.bowler] = (chargedRuns[payload.bowler] ?? 0) + charged;
     this.overRunsByIndex[index] = (this.overRunsByIndex[index] ?? 0) + charged;
 
     // Over log. Which over a delivery belongs to is decided by the legal
@@ -410,6 +416,44 @@ class InningsAccumulator {
     this.prevWicketsByIndex[index] = innings.wickets;
   }
 
+  /**
+   * `cricket.retire` (fix round 1, finding 4) — the ONE dismissal-adjacent
+   * event that carries no ball at all, so `onBall` never sees it.
+   * `applyRetire` (cricket.ts) adds the person to `fine.dismissed` only
+   * when `reason === "out"` (Law 25.4.3: retired out, credited to no
+   * bowler); any other reason leaves them not out, in
+   * `fine.retiredNotOut` instead — which is already `BattingLine.dismissal`'s
+   * default (`{ kind: "not_out" }`), so nothing needs recording for that
+   * case. The reason is read off THIS event's own payload — pinned, never
+   * inferred from a state diff — because `fine.dismissed` alone can't say
+   * which of two possible causes added a name to it.
+   *
+   * Retirement also moves the open partnership's pair (Task 3's own report
+   * flagged this): who is at the crease changes exactly the way a wicket
+   * changes it, but `onBall` has no ball to see it happen on. Law 25 lets
+   * the innings continue straight through a retirement (out or not) — it is
+   * the SAME stand with a substitute at one end, not a new one, so only the
+   * pair moves; `runsAt`/`ballsAt` stay put. Left untouched when the
+   * retirement leaves no one to replace the retiree (state has already
+   * nulled that end) — an all-out autoClose settles the innings anyway.
+   */
+  onRetire(after: CricketState, ev: EventEnvelope): void {
+    const index = after.innings.length - 1;
+    if (index < 0) return;
+    const payload = ev.payload as { person: string; reason: "hurt" | "out" | "other" };
+
+    if (payload.reason === "out") {
+      const dismissals = this.dismissalByIndex[index] ?? (this.dismissalByIndex[index] = {});
+      dismissals[payload.person] = { kind: "retired", bowler: null, fielder: null, fielderAssist: null };
+    }
+
+    const open = this.openPartnershipByIndex[index] ?? null;
+    const fine = after.innings[index]?.fine;
+    if (open !== null && fine?.striker != null && fine.nonStriker != null) {
+      this.openPartnershipByIndex[index] = { ...open, batters: [fine.striker, fine.nonStriker] };
+    }
+  }
+
   /** The stands of an innings, with the one still at the crease (if any)
    *  appended as `"unbroken"`. That one rule covers all three cases the
    *  scorebook has: an innings in progress, an innings closed on overs, a
@@ -439,7 +483,19 @@ class InningsAccumulator {
       const total = tally.wides + tally.noBalls + tally.byes + tally.legByes + tally.penalties;
       const fine = innings.fine;
 
-      const order = this.orderByIndex[index] ?? [];
+      // Fix round 1, finding 5: a batter seated by the LAST ball's wicket
+      // (the reducer resolves a replacement synchronously with that ball —
+      // `applyDelivery`'s `resolveIncoming`), with no FOLLOWING ball to name
+      // them, never appears in any payload's striker/nonStriker field, so
+      // `onBall` alone can never see them. State — `fine.striker`/
+      // `fine.nonStriker` — is the authority for who is AT the crease right
+      // now; append either name if `onBall` hasn't already recorded it,
+      // rather than mutate the stored array (this copy is rebuilt fresh
+      // every `cards()` call).
+      const order = [...(this.orderByIndex[index] ?? [])];
+      for (const person of [fine?.striker, fine?.nonStriker]) {
+        if (person != null && !order.includes(person)) order.push(person);
+      }
       const bowlerOrder = this.bowlerOrderByIndex[index] ?? [];
       const fours = this.foursByIndex[index] ?? {};
       const sixes = this.sixesByIndex[index] ?? {};
@@ -447,7 +503,6 @@ class InningsAccumulator {
       const wides = this.widesByIndex[index] ?? {};
       const noBalls = this.noBallsByIndex[index] ?? {};
       const maidens = this.maidensByIndex[index] ?? {};
-      const chargedRuns = this.chargedRunsByIndex[index] ?? {};
 
       const batting: BattingLine[] =
         fine === null
@@ -472,7 +527,10 @@ class InningsAccumulator {
           ? []
           : bowlerOrder.map((person) => {
               const legalBalls = fine.bowlerBalls[person] ?? 0;
-              const runs = chargedRuns[person] ?? 0;
+              // Fix round 1, finding 1: read straight off `fine.bowlerRuns`
+              // — see the class doc above for why a second, hand-rolled
+              // tally here was a bug, not just a duplication.
+              const runs = fine.bowlerRuns[person] ?? 0;
               return {
                 person,
                 legalBalls,
@@ -486,9 +544,14 @@ class InningsAccumulator {
               };
             });
 
+      // Fix round 1, finding 3: `fine === null` (summary/coarse fidelity)
+      // means no ball ever named a crease occupant — `order` is empty, so
+      // an unguarded filter here would report the WHOLE lineup as
+      // did-not-bat, which is a wrong, overconfident claim at a fidelity
+      // that cannot say who batted at all. `[]` matches `batting`/`bowling`.
       const battingOrderFull = state.orders[innings.battingSide];
       const atCrease = new Set(order);
-      const didNotBat = battingOrderFull.filter((person) => !atCrease.has(person));
+      const didNotBat = fine === null ? [] : battingOrderFull.filter((person) => !atCrease.has(person));
 
       return {
         number: index + 1,
@@ -616,6 +679,9 @@ export function deriveCricketScorecard({ events, cfg, lineups }: ScorecardInput)
     }
     if (ev.type === "cricket.ball" || ev.type === "cricket.superover.ball") {
       acc.onBall(state, ev);
+    }
+    if (ev.type === "cricket.retire") {
+      acc.onRetire(state, ev);
     }
   }
 
