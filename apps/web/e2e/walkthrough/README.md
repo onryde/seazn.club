@@ -133,19 +133,36 @@ Ceiling: **90s per spec.**
 | Spec | Measured | Budget derives to | How |
 |---|---|---|---|
 | `scheduling-organiser-day` | **31.08s**, three consecutive clean runs, warm `:3313` | 81s | `14 × 4_000 + 2 × solverWall() + 5_000`, where `solverWall()` mirrors `autoSolverWallMs()` (env-tunable, 10s default) |
-| `scheduling-officials-handoff` | **~25s** for the file (2 tests, one of them the §S4 `test.fail()` pin) | 82.5s | `25 × 2_500 + 20_000`, the 20s citing `loginUi`'s own wait |
+| `scheduling-officials-handoff` | **~25s** solo for the file (2 tests; the second drives propose → apply → read-back, and PASSES — the §S4 `test.fail()` pin it replaced is gone) | 82.5s | `25 × 2_500 + 20_000`, the 20s citing `loginUi`'s own wait |
 
-**The leg-level number is NOT measured yet — do not infer it from the two rows
-above.** What is still owed, and what it has to be measured with:
+**Leg-level number, measured 2026-09-05** on a quiet machine against a server
+rebuilt from this tree:
 
-- `time npx playwright test --project=walkthrough --workers=3` on a quiet
-  machine, warm server, against the **pre-wave** wall clock for the same
-  invocation. The pass condition is that the leg is not materially above it —
-  these two files should hide under the `scorepad-v3-tennis-mtb` tail, which is
-  one ~174s test that cannot be split and is the leg's real floor.
-- Per-spec durations read out of the JSON reporter for that same run, not from
-  a single-file run: at `--workers=3` these two contend with the scorepad
-  specs and with each other, and a solo run cannot show that.
+| | |
+|---|---|
+| whole `walkthrough` project | **593s** (9.9 min) at `workers=4` |
+| its floor | `scorepad-v3-tennis-mtb`, **307s** in ONE unsplittable test |
+| `scheduling-organiser-day` | **43.7s** under contention (27.2s solo), budget 81s |
+| `scheduling-officials-handoff` | **34.9s** for its two tests under contention (38s solo for the file), budget 82.5s |
+
+So the two scheduling specs do hide under the tennis tail, as the pass condition
+required — together they are about an eighth of a leg whose floor is one test
+they cannot influence.
+
+The numbers that matter are the CONTENTION ones, not the solo ones. Both
+budgets are derived, and both hold at `workers=4` where the specs compete with
+the scorepad files and with each other. A budget that only holds in a quiet run
+is a budget that reds in CI.
+
+Two caveats on this measurement, so nobody over-reads it:
+
+- It was taken at `workers=4`, not the `workers=3` this note originally
+  specified. Compare like with like before drawing a trend.
+- There is still no **pre-wave** figure for the same invocation, so "not
+  materially above its pre-task value" is argued from the marginal cost of the
+  two specs rather than from a before-and-after. That is weaker evidence, and
+  it is the honest description of what was measured.
+
 - The measurement must confirm `suites > 0` and `expected > 0`. A walkthrough
   run that aborts at preflight reports `suites: 0, expected: 0, unexpected: 0`
   — a pass to any gate reading `unexpected === 0` alone.
