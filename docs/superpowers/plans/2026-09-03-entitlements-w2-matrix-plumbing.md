@@ -58,6 +58,30 @@ landed; its findings were recovered from the commit message and its uncommitted 
 the dirty tree. Until the reset, dispatch on Sonnet, and verify a completed agent's
 commits exist rather than trusting the notice.
 
+### Closing sequence — these do NOT commute (2026-09-05)
+
+Learned the hard way this wave; a later session that reorders them pays twice.
+
+1. **Let every agent finish first.** A rebase rewrites history under an agent that
+   is still committing, and the git index is shared across the worktree — so a
+   rebase mid-flight corrupts work that reported success.
+2. **Then rebase.** `origin/main` moves fast (it went 0 → 41 behind inside a day,
+   and other sessions' fetches update the shared ref under you). The last rebase
+   surfaced a real conflict where main had independently fixed one of our own
+   findings, better than we had.
+3. **Then the boundary gate**, judged from `--reporter=json` with
+   `.testResults[].name` confirmed inside this worktree.
+4. **Only then drive the product.** A prod build wants ~2.8GB; run it beside live
+   agents and the build dies with **exit 137 AFTER printing "Compiled
+   successfully"**, which reads like a code failure and is not one. Take the
+   environment down to just Postgres first.
+
+**Flyway note for anyone with an existing local DB:** V395 and V397 were edited
+after applying (comments, and V397's guard). Their checksums changed, so
+`db:apply` will refuse to validate until `bash scripts/flyway.sh repair` — or use
+a fresh schema. Repaired on the `entw2` label already; 237 migrations validate at
+version 397.
+
 ### What is left before this wave can be reviewed for merge
 
 1. **~~The payment rail~~ — RESOLVED as a launch gate, not W2 work.** See the correction
