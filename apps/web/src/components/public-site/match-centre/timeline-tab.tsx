@@ -18,9 +18,11 @@
 //    "yellow kaart". Here each param value that has a `term.<token>` key is
 //    swapped for that key's text, and everything else passes through UNCHANGED:
 //    side names, person names and free text must never be mangled by a term
-//    lookup. The guard is deliberately narrow — a bare token shape, and the key
-//    must actually exist — because the alternative failure (a club called "Red"
-//    printing as "red") is worse than an untranslated token.
+//    lookup. The guard is deliberately narrow — the param NAME must be one the
+//    builder fills from an enum, the value must be a bare token, and the key
+//    must actually exist — because the alternative failure (a club called
+//    "Red" printing as "red", or an official's note saying "HT" becoming
+//    "Half-time") is worse than an untranslated token.
 import type { ReactNode } from "react";
 import type { Dict as PublicDict } from "@/lib/i18n-constants";
 import { lookup, t } from "@/lib/i18n-runtime";
@@ -37,8 +39,21 @@ export interface TimelineTabProps {
   data: LiveFixtureData;
 }
 
-/** Bare engine tokens only: letters, digits and underscores. A side name with
- *  a space, a dot or an accent can never reach the lookup. */
+/**
+ * The param NAMES whose values are engine enum members.
+ *
+ * Narrowed from "any value that looks like a token": sniffing the value swept
+ * up free text too, so an official's note reading "HT" — or any single
+ * uppercase word in `{detail}` or `{text}` — was silently replaced with
+ * "Half-time". The producer decides what a param MEANS, and these six are the
+ * ones `buildTimeline` fills from an enum (`colour`, `kind`, `phase`, `key`,
+ * `method`, `to`). Everything else passes through untouched, which is what
+ * protects side names, person names and free text.
+ */
+const ENUM_PARAMS = new Set(["colour", "kind", "phase", "key", "method", "to"]);
+
+/** Bare engine tokens only: letters, digits and underscores. Belt and braces
+ *  beside the name check — an enum member never contains a space. */
 const TOKEN = /^[A-Za-z0-9_]+$/;
 
 /**
@@ -52,7 +67,7 @@ export function localiseParams(dict: PublicDict, params: Params | undefined): Pa
   if (params === undefined) return undefined;
   const out: Params = {};
   for (const [name, value] of Object.entries(params)) {
-    if (typeof value === "string" && TOKEN.test(value)) {
+    if (ENUM_PARAMS.has(name) && typeof value === "string" && TOKEN.test(value)) {
       // `lookup`, not `t` — `t` RETURNS THE KEY on a miss, so asking it whether
       // a term exists would answer "yes, it is `term.Red`" for every value.
       const term = lookup(dict, `term.${value}`);

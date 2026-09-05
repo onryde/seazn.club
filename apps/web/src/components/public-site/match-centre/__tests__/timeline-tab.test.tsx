@@ -114,6 +114,22 @@ describe("localiseParams", () => {
     expect(localiseParams(dict, undefined)).toBeUndefined();
   });
 
+  it("only ENUM-VALUED param names are looked up — free text is never swapped", () => {
+    // Narrowed from "any value that looks like a token": an official's note
+    // reading "HT", or any single uppercase word in `{detail}`, was being
+    // replaced with "Half-time". The PRODUCER decides what a param means, so
+    // the name is the gate.
+    expect(localiseParams(dict, { phase: "HT" })).toEqual({ phase: en["term.HT"] });
+    expect(localiseParams(dict, { text: "HT" })).toEqual({ text: "HT" });
+    expect(localiseParams(dict, { detail: "OT" })).toEqual({ detail: "OT" });
+    expect(localiseParams(dict, { side: "HT" })).toEqual({ side: "HT" });
+    // …and every name the builder DOES fill from an enum is covered.
+    expect(localiseParams(dict, { colour: "yellow" })?.colour).toBe(en["term.yellow"]);
+    expect(localiseParams(dict, { kind: "ace" })?.kind).toBe(en["term.ace"]);
+    expect(localiseParams(dict, { to: "P2" })?.to).toBe(en["term.P2"]);
+    expect(localiseParams(dict, { key: "motm" })?.key).toBe(en["term.motm"]);
+  });
+
   it("does not mangle a side name that merely LOOKS like a token", () => {
     // `term.red` exists; a club called "Red" must still print as "Red". The
     // lookup is case-sensitive and the dictionary tokens are lower case, which

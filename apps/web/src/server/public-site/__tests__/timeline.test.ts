@@ -507,11 +507,14 @@ describe("buildTimeline", () => {
     expect(orphan[0]!.text.params?.side).toBeUndefined();
   });
 
-  it("a lineup event whose side resolves to nothing omits {side} rather than emptying it", () => {
+  it("a lineup event whose side resolves to nothing takes its own sentence", () => {
     const orphan = linesOf(
       args({ events: [env(0, "core.lineup.entry", { side: "GONE", on: { personId: "x" } })] }),
     );
-    expect(orphan[0]!.text.key).toBe("timeline.core.lineup");
+    // Not the side-naming template with an omitted param — a template that
+    // names a side it cannot fill would render "Line-up change — " with a
+    // dangling dash. A different sentence, which is what an override is for.
+    expect(orphan[0]!.text.key).toBe("timeline.core.lineup.unknownSide");
     expect(orphan[0]!.text.params?.side).toBeUndefined();
     // Positive pair: a side that DOES resolve is named.
     const known = linesOf(
@@ -760,6 +763,47 @@ describe("timeline dictionary coverage (derived from the engine's own golden cor
       }
     }
     expect(missing).toEqual([]);
+  });
+
+  it("every KEY_OVERRIDE branch returns a key the gates know about", () => {
+    // The override map is reachable at runtime and its keys are NOT in
+    // `TIMELINE_KEY_FOR`, so nothing else in the suite would notice one that no
+    // locale carries. Both branches of every override are invoked here, and the
+    // non-null results must be a subset of the set the dictionary gates union
+    // in — which is what keeps that union honest as overrides are added.
+    const withSide = [
+      env(0, "boardgame.result", { winner: "H", method: "resign" }),
+      env(1, "core.lineup.entry", { side: "H", on: { personId: "x" } }),
+    ];
+    const withoutSide = [
+      env(0, "boardgame.result", { method: "agreement" }),
+      env(1, "core.lineup.entry", { side: "GONE", on: { personId: "x" } }),
+    ];
+    const emitted = new Set<string>();
+    let overridden = 0;
+    for (const events of [withSide, withoutSide]) {
+      for (const line of linesOf(args({ sportKey: "boardgame", events }))) {
+        emitted.add(line.text.key);
+        if (TIMELINE_OVERRIDE_KEYS.includes(line.text.key)) overridden++;
+      }
+    }
+    // The gate says what it saw: both no-side branches fired.
+    expect(overridden).toBe(2);
+    const overrides = [...emitted].filter((k) => !Object.values(TIMELINE_KEY_FOR).includes(k));
+    expect(overrides.sort()).toEqual([...TIMELINE_OVERRIDE_KEYS].sort());
+  });
+
+  it("the client-safe key module imports nothing from the server", () => {
+    // `timeline.ts` imports pino, and a client component importing `@/server/**`
+    // is a BUILD FAILURE here — which is the whole reason the table was split
+    // out. A stray import would only surface as a broken production build, so
+    // it is asserted on the SOURCE.
+    const src = readFileSync(join(HERE, "../../../lib/timeline-keys.ts"), "utf8");
+    expect(src).not.toMatch(/from\s+"@\/server\//);
+    expect(src).not.toMatch(/from\s+"pino"/);
+    expect(src).not.toMatch(/require\(/);
+    // …and it really is the module under test, not an empty read.
+    expect(src).toContain("TIMELINE_KEY_FOR");
   });
 
   it("keys are BARE — nothing this module emits re-states the `public` namespace", () => {

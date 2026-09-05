@@ -241,8 +241,11 @@ function personListOf(ctx: ParamCtx, field: string): string {
   return names.length === 0 ? "" : `(${names.join(", ")})`;
 }
 
-const lineupParams = (c: ParamCtx): Params =>
-  c.sideIndex === null ? {} : { side: sideNameOf(c) };
+const lineupParams = (c: ParamCtx): Params => {
+  const params: Params = {};
+  if (c.sideIndex !== null) params.side = sideNameOf(c);
+  return params;
+};
 
 /** Per-type params. Keyed by RECORDED TYPE (not by dictionary key) so two
  *  sports sharing one template can still read their own payload field names. */
@@ -334,8 +337,12 @@ const PARAMS_FOR: Record<string, (ctx: ParamCtx) => Params> = {
   // supplied empty. An unused empty param is harmless today and is exactly the
   // kind of thing a later template change turns into a dangling dash.
   "boardgame.result": (c) => {
-    const method = S(c.payload.method);
-    return c.sideIndex === null ? { method } : { side: sideNameOf(c), method };
+    // ONE object shape, not a ternary over two: a union of
+    // `{ method } | { side; method }` is not assignable to `Params`, and the
+    // conditional spread says the same thing in a shape TS can widen.
+    const params: Params = { method: S(c.payload.method) };
+    if (c.sideIndex !== null) params.side = sideNameOf(c);
+    return params;
   },
   // `side` only when it RESOLVED. An unrecognised entrant id would otherwise
   // supply the empty string and render "Line-up change — " with a dangling
@@ -430,6 +437,9 @@ for (const sport of ["hockey", "icehockey"] as const) {
  * decisive template printed "Result (agreement) — " with an empty side, which
  * is worse than saying nothing.
  */
+const lineupOverride = (_payload: Payload, sideIndex: 0 | 1 | null): string | null =>
+  sideIndex === null ? "timeline.core.lineup.unknownSide" : null;
+
 const KEY_OVERRIDE: Readonly<
   Record<string, (payload: Payload, sideIndex: 0 | 1 | null) => string | null>
 > = {
@@ -441,6 +451,14 @@ const KEY_OVERRIDE: Readonly<
   // name a winner" and "there is no winner" take the same, safe branch.
   "boardgame.result": (_payload, sideIndex) =>
     sideIndex === null ? "timeline.boardgame.draw" : null,
+  // Same shape for the lineup family: with no side to name, the template that
+  // names one would render "Line-up change — " with a dangling dash. Five
+  // types, one override, because they share one sentence.
+  "core.lineup.substitution": lineupOverride,
+  "core.lineup.replacement": lineupOverride,
+  "core.lineup.position": lineupOverride,
+  "core.lineup.retirement": lineupOverride,
+  "core.lineup.entry": lineupOverride,
 };
 
 /** Internal only: the ledger order a line was produced in. Two lines can share

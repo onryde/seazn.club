@@ -144,6 +144,33 @@ describe("CommentaryTab", () => {
     expect(html).toContain('data-testid="mc-ball-2.3.1"');
   });
 
+  it("two innings SHARING a number still get distinct testids", () => {
+    // `innings.number` is not a safe scope: a super over can reuse a number.
+    // The 1-based ARRAY position cannot collide by construction, which is why
+    // the testids are keyed on it.
+    const clash = makeDoc({
+      overs: [over(1, ["1"], "A")],
+      secondInningsOvers: [over(1, ["4"], "B")],
+      sameInningsNumber: true,
+    });
+    expect(MatchCentreDoc.safeParse(clash).success).toBe(true);
+    const html = render(clash);
+    const ids = [...html.matchAll(/data-testid="([^"]+)"/g)].map((m) => m[1]);
+    expect(ids.length).toBeGreaterThan(4);
+    expect(new Set(ids).size).toBe(ids.length);
+    expect(html).toContain('data-testid="mc-over-1.1"');
+    expect(html).toContain('data-testid="mc-over-2.1"');
+  });
+
+  it("headings nest — sr-only h2, innings h3, over h4", () => {
+    // A screen reader walks the outline; it must nest rather than jump.
+    const html = render(TWO_INNINGS);
+    expect(html).toMatch(/<h2 class="sr-only">/);
+    expect(html).toMatch(/<h3[^>]*data-testid="mc-commentary-innings-/);
+    expect(html).toMatch(/<h4/);
+    expect(html).not.toMatch(/<h1/);
+  });
+
   it("the NEWEST innings comes first, and each is announced by a separator", () => {
     const html = render(TWO_INNINGS);
     const at = (sel: string) => html.indexOf(sel);

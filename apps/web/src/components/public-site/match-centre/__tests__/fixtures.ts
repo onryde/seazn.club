@@ -80,6 +80,9 @@ export interface DocOver {
   /** A SECOND innings, so a test can prove that over numbers restarting does
    *  not put two identical testids in the document. */
   secondInningsOvers?: OverT[];
+  /** Give BOTH innings the same `number` — the super-over case, where the
+   *  innings number itself is not unique. */
+  sameInningsNumber?: boolean;
   timeline?: TimelineLineT[] | null;
   sets?: SetsViewT | null;
   info?: InfoViewT;
@@ -111,7 +114,12 @@ export function makeDoc(o: DocOver = {}): MatchCentreDocT {
               inningsWith(1, o.overs),
               ...(o.secondInningsOvers === undefined
                 ? []
-                : [inningsWith(2, o.secondInningsOvers)]),
+                : [
+                    inningsWith(
+                      o.sameInningsNumber === true ? 1 : 2,
+                      o.secondInningsOvers,
+                    ),
+                  ]),
             ],
             live: null,
             topPerformers: [],
@@ -124,6 +132,12 @@ export function makeDoc(o: DocOver = {}): MatchCentreDocT {
       divisionHref: "/o/acme/c/summer/d/a",
       competitionHref: "/o/acme/c/summer",
     },
+    // REQUIRED, not optional: `derivedComplete` has a zod `.default(true)`, and
+    // a defaulted field is required on the schema's OUTPUT type — which is what
+    // `MatchCentreDocT` is. Spelling it here rather than weakening the schema is
+    // the point: the document ALWAYS carries the flag once parsed, so a
+    // consumer never has to ask whether it was present.
+    derivedComplete: true,
   };
 }
 

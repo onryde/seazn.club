@@ -256,6 +256,12 @@ function doc(over: {
     timeline: null,
     sets: null,
     info: { rows: [], calendarHref: null, divisionHref: "/d", competitionHref: "/c" },
+    // REQUIRED, not optional: `derivedComplete` has a zod `.default(true)`, and
+    // a defaulted field is required on the schema's OUTPUT type — which is what
+    // `MatchCentreDocT` is. Spelling it here rather than weakening the schema is
+    // the point: the document ALWAYS carries the flag once parsed, so a
+    // consumer never has to ask whether it was present.
+    derivedComplete: true,
   };
 }
 

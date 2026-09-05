@@ -40,6 +40,12 @@ function buildDoc(overrides: Partial<MatchCentreDocT> = {}): MatchCentreDocT {
     timeline: null,
     sets: null,
     info: { rows: [], calendarHref: null, divisionHref: "/d", competitionHref: "/c" },
+    // REQUIRED, not optional: `derivedComplete` has a zod `.default(true)`, and
+    // a defaulted field is required on the schema's OUTPUT type — which is what
+    // `MatchCentreDocT` is. Spelled out rather than weakening the schema: a
+    // parsed document ALWAYS carries the flag, so a consumer never has to ask
+    // whether it was present.
+    derivedComplete: true,
     ...overrides,
   };
 }

@@ -191,24 +191,35 @@ describe("SetsTab", () => {
     expect(render(FOOTBALL)).not.toContain("Game 1");
   });
 
-  it("the engine's phase token WINS over the ordinal, and falls back when unknown", () => {
+  it("period headers use SHORT notation; the prose rides in title and sr-only", () => {
     const et = render(EXTRA_TIME);
-    // Extra time is named, not numbered.
-    expect(et).toContain(en["term.ET_H1"]);
-    expect(et).toContain(en["term.ET_H2"]);
-    expect(et).toContain(en["term.H1"]);
-    // …and specifically NOT the ordinal fallback for those columns. This is the
-    // differential: "Period 3"/"Period 4" is what the ordinal path would print.
+    // The VISIBLE header is notation. A period column is 32px of a fixed-layout
+    // table and the prose form is "Extra time — first half"; a fixed table never
+    // grows to fit, so the header would have spilled over its neighbour.
+    expect(et).toContain(`<span aria-hidden="true">${en["term.short.ET_H1"]}</span>`);
+    expect(et).toContain(`<span aria-hidden="true">${en["term.short.H1"]}</span>`);
+    expect(en["term.short.ET_H1"]).toBe("ET1");
+    // The FULL name is still reachable — hover and screen reader both.
+    expect(et).toContain(`title="${en["term.ET_H1"]}"`);
+    expect(et).toContain(`<span class="sr-only">${en["term.ET_H1"]}</span>`);
+    // …and specifically NOT the ordinal fallback. This is the differential:
+    // "Period 3"/"Period 4" is what the ordinal path would print.
     expect(et).not.toContain("Period 3");
     expect(et).not.toContain("Period 4");
+
+    // Nothing longer than four characters renders in a period header — the
+    // budget the column was sized for.
+    const visible = [...et.matchAll(/<span aria-hidden="true">([^<]*)<\/span>/g)].map((m) => m[1]);
+    expect(visible.length).toBeGreaterThanOrEqual(4);
+    for (const label of visible) expect(label.length, label).toBeLessThanOrEqual(4);
 
     // An unbounded label the dictionary cannot carry falls through to the
     // ordinal rather than printing the key — `lookup`, not `t`, is what makes
     // that possible.
     const deep = render(DEEP_OVERTIME);
-    expect(deep).toContain(en["term.P1"]);
+    expect(deep).toContain(`<span aria-hidden="true">${en["term.short.P1"]}</span>`);
     expect(deep).toContain("Period 2");
-    expect(deep).not.toContain("term.OT9");
+    expect(deep).not.toContain("term.short.OT9");
     expect(deep).not.toContain("OT9");
   });
 
@@ -216,7 +227,6 @@ describe("SetsTab", () => {
     const html = render(TENNIS);
     expect(html).toContain("Set 1");
     expect(html).toContain("Set 3");
-    expect(TENNIS.columnLabels).toBeUndefined();
   });
 
   it("without `unit` the raw column strings are used — a pre-`unit` document still reads", () => {

@@ -19,12 +19,14 @@
 //    reversed array every other consumer would have to undo. The five-over
 //    window is therefore anchored at the NEWEST over and grows backwards.
 //
-// 1b. TESTIDS ARE SCOPED BY INNINGS. Over numbers RESTART each innings, so
-//    `mc-over-3` named two different overs in a two-innings match — a duplicate
-//    id in the DOM and an e2e selector that silently matched the wrong one.
-//    They are `mc-over-<innings>.<over>` and `mc-ball-<innings>.<over>.<ball>`,
-//    and a separator row announces each innings as the reader scrolls back into
-//    it.
+// 1b. TESTIDS ARE SCOPED BY THE INNINGS' ARRAY INDEX, NOT ITS `number`. Over
+//    numbers restart each innings, so `mc-over-3` named two different overs in
+//    a two-innings match — a duplicate id and an e2e selector that silently
+//    matched the wrong one. `innings.number` is not a safe scope either: a
+//    super over can REUSE a number, which would put the collision straight
+//    back. The 1-based array position cannot collide by construction. They are
+//    `mc-over-<i>.<over>` and `mc-ball-<i>.<over>.<ball>`, and a separator row
+//    announces each innings as the reader scrolls back into it.
 //
 // 2. THE WINDOW IS FIVE OVERS, ANCHORED AT THE NEWEST ONE, AND GROWS BY FIVE
 //    BACKWARDS. Not a paginator: there is no page to be on, the top of the list
@@ -53,6 +55,9 @@ type OverT = InningsT["overs"][number];
 interface OverInInnings {
   over: OverT;
   innings: InningsT;
+  /** 1-based ARRAY position — see note 1b. Unique by construction, which
+   *  `innings.number` is not. */
+  index: number;
 }
 
 export interface CommentaryTabProps {
@@ -69,11 +74,11 @@ export const OVER_WINDOW = 5;
 
 function OverGroup({
   over,
-  inningsNumber,
+  inningsIndex,
   dict,
 }: {
   over: OverT;
-  inningsNumber: number;
+  inningsIndex: number;
   dict: PublicDict;
 }): ReactNode {
   const bowler = over.bowler?.name ?? null;
@@ -94,25 +99,27 @@ function OverGroup({
         });
   return (
     <section
-      data-testid={`mc-over-${inningsNumber}.${over.number}`}
+      data-testid={`mc-over-${inningsIndex}.${over.number}`}
       className="rounded-xl border border-zinc-200/80 bg-surface"
     >
-      <h3 className="border-b border-zinc-200/80 px-3 py-2 text-[13px] font-semibold tabular-nums">
+      {/* h4 under the separator's h3, under the panel's sr-only h2 — the
+          outline a screen reader walks has to nest, not jump. */}
+      <h4 className="border-b border-zinc-200/80 px-3 py-2 text-[13px] font-semibold tabular-nums">
         {header}
-      </h3>
+      </h4>
       <ol className="divide-y divide-zinc-200/60">
         {over.lines.map((line, i) => {
           const ball = i + 1;
           const glyph = over.glyphs[i] ?? null;
           return (
             <li
-              key={`${inningsNumber}.${over.number}.${ball}`}
-              data-testid={`mc-ball-${inningsNumber}.${over.number}.${ball}`}
+              key={`${inningsIndex}.${over.number}.${ball}`}
+              data-testid={`mc-ball-${inningsIndex}.${over.number}.${ball}`}
               className="flex items-start gap-2 px-3 py-1.5 text-[13px]"
             >
               {glyph === null ? null : (
                 <span
-                  data-testid={`mc-glyph-${inningsNumber}.${over.number}.${ball}`}
+                  data-testid={`mc-glyph-${inningsIndex}.${over.number}.${ball}`}
                   className="mt-px inline-flex h-5 min-w-5 shrink-0 items-center justify-center rounded-full bg-accent/15 px-1 text-[11px] font-semibold tabular-nums"
                 >
                   {glyph}
@@ -130,9 +137,12 @@ function OverGroup({
 export function CommentaryTab({ doc, dict }: CommentaryTabProps): ReactNode {
   const innings = doc.cricket?.innings ?? [];
   // See note 1: playing order in, newest first out — innings AND overs.
-  const newestFirst: OverInInnings[] = [...innings]
+  const newestFirst: OverInInnings[] = innings
+    .map((entry, i) => ({ entry, index: i + 1 }))
     .reverse()
-    .flatMap((entry) => [...entry.overs].reverse().map((over) => ({ over, innings: entry })));
+    .flatMap(({ entry, index }) =>
+      [...entry.overs].reverse().map((over) => ({ over, innings: entry, index })),
+    );
 
   const [visible, setVisible] = useState(OVER_WINDOW);
   const shown = newestFirst.slice(0, visible);
@@ -147,22 +157,22 @@ export function CommentaryTab({ doc, dict }: CommentaryTabProps): ReactNode {
         // INCLUDING the first group — otherwise the newest innings is the only
         // one that is never named. Suppressed entirely for a one-innings match,
         // where there is nothing to distinguish.
-        const previous = shown[i - 1]?.innings.number;
-        const showSeparator = multipleInnings && entry.innings.number !== previous;
+        const previous = shown[i - 1]?.index;
+        const showSeparator = multipleInnings && entry.index !== previous;
         return (
-          <Fragment key={`${entry.innings.number}.${entry.over.number}-${entry.over.scoreAfter}`}>
+          <Fragment key={`${entry.index}.${entry.over.number}-${entry.over.scoreAfter}`}>
             {showSeparator ? (
-              <p
-                data-testid={`mc-commentary-innings-${entry.innings.number}`}
+              <h3
+                data-testid={`mc-commentary-innings-${entry.index}`}
                 className="flex items-baseline justify-between gap-2 px-1 pt-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-ink-muted"
               >
                 <span className="min-w-0 truncate">{entry.innings.side.name}</span>
                 <span className="shrink-0 tabular-nums">
                   {entry.innings.total.runs}/{entry.innings.total.wickets}
                 </span>
-              </p>
+              </h3>
             ) : null}
-            <OverGroup over={entry.over} inningsNumber={entry.innings.number} dict={dict} />
+            <OverGroup over={entry.over} inningsIndex={entry.index} dict={dict} />
           </Fragment>
         );
       })}

@@ -29,8 +29,17 @@
 //    between regulation, extra time and overtime is most of what a spectator
 //    opens this tab to see. The tokens are unbounded by construction
 //    (`periodLabels` in the period kernel builds `P1..Pn`, `otLabels` builds
-//    `OT1..OTk`), so a missing `term.<label>` is EXPECTED rather than a defect
-//    — it falls through to the ordinal, which still reads correctly.
+//    `OT1..OTk`), so a missing key is EXPECTED rather than a defect — it falls
+//    through to the ordinal, which still reads correctly.
+//
+// 5. THE HEADER TAKES THE SHORT FORM, THE `title` TAKES THE PROSE. A period
+//    column is 32px of a fixed-layout table, and the prose `term.ET_H1` is
+//    "Extra time — first half" — it cannot fit, and a fixed-layout table never
+//    grows to make it. So headers resolve `term.short.<phase>` ("ET1"),
+//    identical in all four locales because it is notation, and the full name
+//    rides in `title` plus an `sr-only` span so a screen reader and a hover
+//    still get it. The prose keys are not redundant: the Timeline's sentences
+//    use them.
 import type { ReactNode } from "react";
 import type { Dict as PublicDict } from "@/lib/i18n-constants";
 import { lookup, t } from "@/lib/i18n-runtime";
@@ -51,20 +60,33 @@ export function SetsTab({ doc, dict }: SetsTabProps): ReactNode {
 
   const caption = t(dict, sets.kind === "periods" ? "matchCentre.periods" : "matchCentre.sets");
 
-  // See notes 1, 2 and 4. Three tiers, in order:
-  //   1. the engine's own phase token localised — "ET 2nd half", "Overtime";
+  // `lookup`, not `t`, throughout — `t` RETURNS THE KEY on a miss, so it would
+  // answer "yes, `term.short.OT9`" for every phase and print the key.
+  const term = (key: string): string | null => {
+    const value = lookup(dict, key);
+    return typeof value === "string" ? value : null;
+  };
+
+  // See notes 1, 2, 4 and 5. What a header SHOWS, in order:
+  //   1. the short phase notation — "ET1", "Q3", "SO";
   //   2. the sport's unit and the ordinal — "Period 4", "Game 2", "Set 3";
   //   3. the raw `columns` string, for a document built before `unit` existed.
   const labelFor = (i: number): string => {
     const phase = sets.columnLabels?.[i];
     if (phase !== undefined && phase !== "") {
-      // `lookup`, not `t` — `t` RETURNS THE KEY on a miss, so it would answer
-      // "yes, `term.OT3`" for every phase and print the key to a spectator.
-      const term = lookup(dict, `term.${phase}`);
-      if (typeof term === "string") return term;
+      const short = term(`term.short.${phase}`);
+      if (short !== null) return short;
     }
     if (sets.unit !== undefined) return t(dict, `matchCentre.col.${sets.unit}`, { n: i + 1 });
     return sets.columns[i] ?? String(i + 1);
+  };
+
+  /** The full name, for `title` and the sr-only span — never for the visible
+   *  header. Falls back to the visible label so neither is ever empty. */
+  const longLabelFor = (i: number): string => {
+    const phase = sets.columnLabels?.[i];
+    const prose = phase === undefined || phase === "" ? null : term(`term.${phase}`);
+    return prose ?? labelFor(i);
   };
 
   return (
@@ -97,11 +119,13 @@ export function SetsTab({ doc, dict }: SetsTabProps): ReactNode {
                     // See note 3 — only when the engine says so, and `undefined`
                     // rather than "false" so the attribute is simply absent.
                     data-open={open ? "true" : undefined}
-                    className={`w-10 px-1 text-right font-medium tabular-nums ${
+                    title={longLabelFor(i)}
+                    className={`w-10 px-0.5 text-right font-medium tabular-nums ${
                       open ? "text-accent" : "text-ink-muted"
                     }`}
                   >
-                    {labelFor(i)}
+                    <span className="sr-only">{longLabelFor(i)}</span>
+                    <span aria-hidden>{labelFor(i)}</span>
                   </th>
                 );
               })}
@@ -127,7 +151,9 @@ export function SetsTab({ doc, dict }: SetsTabProps): ReactNode {
                   <td
                     key={i}
                     data-testid={`mc-sets-cell-${rowIndex}-${i}`}
-                    className="px-1 text-right tabular-nums"
+                    // `px-0.5`: `box-sizing: border-box` puts padding INSIDE
+                    // the `w-10`, and `px-1` left only 32px for the digits.
+                    className="px-0.5 text-right tabular-nums"
                   >
                     {/* An en dash, never blank: a missing cell and a zero must
                         not look the same. */}

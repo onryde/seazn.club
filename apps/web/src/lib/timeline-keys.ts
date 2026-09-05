@@ -43,13 +43,18 @@ const PERIODSPORT = "timeline.periodsport.";
 /**
  * Keys a per-payload override can emit INSTEAD of the type's table entry.
  *
- * `boardgame.result` is the only one today: with a winner it is a decisive
- * result, without one it is a draw, and the two are different sentences. These
+ * Two today, and both are the same shape: a sentence that names a side, and
+ * the one it falls back to when no side could be resolved. `boardgame.result`
+ * with a winner is a decisive result and without one a draw; a `core.lineup.*`
+ * whose entrant matches neither side has no side to name. These
  * are unioned into the dictionary coverage gates exactly like `TIMELINE_KEY_FOR`
  * — a key reachable at runtime that no locale carries is the same defect
  * whether it comes from the table or from an override.
  */
-export const TIMELINE_OVERRIDE_KEYS: readonly string[] = ["timeline.boardgame.draw"];
+export const TIMELINE_OVERRIDE_KEYS: readonly string[] = [
+  "timeline.boardgame.draw",
+  "timeline.core.lineup.unknownSide",
+];
 
 /** The template table: recorded event type -> dictionary key. */
 export const TIMELINE_KEY_FOR: Readonly<Record<string, string>> = {
