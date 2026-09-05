@@ -50,6 +50,7 @@ const bowlerPerson = { personId: "p-bowler", name: "C. Bowler", masked: false };
 const emptyDoc: MatchCentreDocT = {
   fixtureId: "fx-empty",
   sportKey: "cricket",
+  derivedComplete: true,
   header: baseHeader("scheduled"),
   tabs: ["summary", "info"],
   cricket: { band: 1, toss: null, innings: [], live: null, topPerformers: [] },
@@ -61,6 +62,7 @@ const emptyDoc: MatchCentreDocT = {
 const cricketDoc: MatchCentreDocT = {
   fixtureId: "fx-live",
   sportKey: "cricket",
+  derivedComplete: true,
   header: baseHeader("in_play"),
   tabs: ["summary", "scorecard", "info"],
   cricket: {
@@ -198,6 +200,7 @@ const finalDoc: MatchCentreDocT = {
 const nonCricketDoc: MatchCentreDocT = {
   fixtureId: "fx-noncricket",
   sportKey: "football",
+  derivedComplete: true,
   header: baseHeader("scheduled"),
   tabs: ["summary", "info"],
   cricket: null,
