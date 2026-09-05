@@ -56,3 +56,8 @@ export {
   dlsTarget,
   dlsPar,
 } from "./dls.ts";
+// Spectator match centre (spectator-surface design, "The shared model") — the
+// public-fold seam `@seazn/engine/sports/cricket` exposes so a caller outside
+// this package never re-implements a cricket rule of its own.
+export { deriveCricketScorecard } from "./scorecard.ts";
+export type * from "./scorecard-types.ts";

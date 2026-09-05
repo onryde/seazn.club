@@ -70,14 +70,25 @@ function buildLineup(entrantId: string, personIds: readonly string[]): Lineup {
   };
 }
 
+// A boundary is about the BAT RUNS on the ball, independent of whether the
+// same ball also carried a no-ball/bye/legbye/penalty extra — a no-ball hit
+// for four is still a four. Only `wide` can never carry one: the reducer
+// itself rejects `runs.bat > 0` off a wide (cricket.ts's `applyDelivery`), so
+// `bat` is always 0 there and this never fires for that kind.
+function boundaryOf(bat: number | undefined): 4 | 6 | undefined {
+  return bat === 4 || bat === 6 ? bat : undefined;
+}
+
 function buildBallPayload(
   delivery: Exclude<Delivery, { retire: true }>,
   base: { over: number; ballInOver: number; striker: string; nonStriker: string; bowler: string },
 ): CricketBallEv {
   if ("extra" in delivery) {
+    const boundary = boundaryOf(delivery.bat);
     return {
       ...base,
       runs: { bat: delivery.bat ?? 0, extras: { kind: delivery.extra, runs: delivery.runs } },
+      ...(boundary !== undefined ? { boundary } : {}),
     };
   }
   if ("out" in delivery) {
@@ -94,7 +105,7 @@ function buildBallPayload(
     };
   }
   // Plain bat delivery.
-  const boundary = delivery.bat === 4 || delivery.bat === 6 ? delivery.bat : undefined;
+  const boundary = boundaryOf(delivery.bat);
   return {
     ...base,
     runs: { bat: delivery.bat },

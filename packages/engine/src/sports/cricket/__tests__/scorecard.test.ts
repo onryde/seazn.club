@@ -134,6 +134,29 @@ describe("deriveCricketScorecard — totals", () => {
   });
 });
 
+describe("deriveCricketScorecard — result", () => {
+  it("result carries the reducer's own headline, winner and margin on a decided match", () => {
+    const { events, state, cfg, lineups } = scriptLedger(TWO_INNINGS);
+    const card = deriveCricketScorecard({ events, cfg, lineups });
+    const summary = cricket.summary(state) as { headline: string; detail: { margin?: unknown } };
+    const outcome = cricket.outcome(state);
+    // TWO_INNINGS decides (home's second innings closes on target passed —
+    // see the reducer's own `decideAfterClose`), so `outcome` is non-null here.
+    expect(outcome).not.toBeNull();
+    const expectedWinner = outcome !== null && "winner" in outcome ? outcome.winner : null;
+    expect(card.result).not.toBeNull();
+    expect(card.result?.headline).toBe(summary.headline);
+    expect(card.result?.winner).toBe(expectedWinner);
+    expect(card.result?.margin).toBe(summary.detail.margin ?? null);
+  });
+
+  it("result is null while a match is still in play (one innings only)", () => {
+    const { events, cfg, lineups } = scriptLedger({ ...TWO_INNINGS, innings: [TWO_INNINGS.innings[0]!] });
+    const card = deriveCricketScorecard({ events, cfg, lineups });
+    expect(card.result).toBeNull();
+  });
+});
+
 describe("deriveCricketScorecard — batting and bowling", () => {
   it("batting lines carry runs, balls, 4s, 6s, SR and the dismissal with credit", () => {
     const { events, cfg, lineups } = scriptLedger(TWO_INNINGS);
@@ -176,5 +199,30 @@ describe("deriveCricketScorecard — batting and bowling", () => {
     const [inn1] = deriveCricketScorecard({ events, cfg, lineups }).innings;
     expect(inn1!.batting[0]!.strikeRate).toBeNull();
     expect(inn1!.bowling[0]!.economy).toBeNull(); // 0 legal balls
+  });
+
+  // Fix round 1, finding 3 — `buildBallPayload` (scorecard-ledger.ts) only set
+  // `boundary` on a plain-bat delivery; a no-ball hit for four never got the
+  // flag, so BOTH the accumulator (which reads `payload.boundary`) and
+  // `scriptFours` (which reads the very same envelopes) agreed at 0 — a
+  // `toBe(scriptFours(...))` comparison alone cannot witness this class of
+  // bug, since both sides are downstream of the same ledger-builder function.
+  // The literal `.toBe(1)` is what actually reds when the fix is reverted;
+  // `scriptFours` is kept alongside it because the review asked for it and it
+  // remains a real (if weaker) cross-check.
+  it("a no-ball hit for four still counts as a boundary", () => {
+    const NOBALL_FOUR: Script = {
+      cfg: { ballsPerInnings: 12, playersPerSide: 8, minOversForResult: 2 },
+      home: HOME,
+      away: AWAY,
+      tossWonBy: "home",
+      elected: "bat",
+      innings: [{ batting: "home", bowlers: ["a7"], deliveries: [{ extra: "noball", runs: 1, bat: 4 }], close: "other" }],
+    };
+    const { events, cfg, lineups } = scriptLedger(NOBALL_FOUR);
+    const [inn1] = deriveCricketScorecard({ events, cfg, lineups }).innings;
+    const h1 = inn1!.batting.find((b) => b.person === "h1")!;
+    expect(h1.fours).toBe(1);
+    expect(h1.fours).toBe(scriptFours(NOBALL_FOUR, "h1"));
   });
 });
