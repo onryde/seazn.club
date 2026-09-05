@@ -103,7 +103,9 @@ export function isPaidPlan(planKey: string): boolean {
   return planKey !== "community";
 }
 
-/** A subscription whose row still claims a paid plan (`pro`/`pro_plus`) while
+/** A subscription whose row still claims a paid plan (`pro`, or `enterprise`
+ *  from a staff comp — `pro_plus` was dropped by V392 and no row can name it
+ *  any more) while
  *  the resolver has degraded it to community — a lapsed trial, an expired staff
  *  comp, or exhausted dunning. The billing page uses this to show the RESOLVED
  *  plan plus a resubscribe path for such an org, instead of the stale

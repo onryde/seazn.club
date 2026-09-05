@@ -382,7 +382,18 @@ export async function createCompetition(
   // The degrade note rides ALONGSIDE the row rather than replacing anything in
   // it: a consumer that never looks at it still reads the truthful
   // `visibility` off the resource itself (T20).
-  return degraded ? { ...row, public_quota_degraded: degraded } : row;
+  // The degrade note carries BOTH substitutions or it under-reports. `degraded`
+  // is built by `resolveCreateVisibility`, which never sees `input.discoverable`
+  // — so the showcase half is attached here, where both facts are in scope.
+  return degraded
+    ? {
+        ...row,
+        public_quota_degraded: {
+          ...degraded,
+          ...(input.discoverable === true ? { discoverable_dropped: true as const } : {}),
+        },
+      }
+    : row;
 }
 
 // Two phases on purpose, and the boundary is load-bearing (see

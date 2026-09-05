@@ -200,6 +200,21 @@ export const PublicQuotaDegraded = z.object({
   limit: z.number().int().nullable(),
   /** Same sentence the 402 carries — `publicDashboardsReason(limit)`. */
   reason: z.string(),
+  /** TRUE when the caller also asked to be listed on the seazn.club showcase
+   *  and that opt-in was dropped with the visibility.
+   *
+   *  Two substitutions happen on a degraded create and only one used to be
+   *  reported. Showcase rides visibility — a private competition cannot be
+   *  showcased, so `discoverable` is forced false — and a caller who asked for
+   *  `{visibility: "public", discoverable: true}`, PASSED the `discovery.listed`
+   *  entitlement check, and got a 201 had no way to learn the second half did
+   *  not happen. They would reasonably believe their competition is on the
+   *  showcase.
+   *
+   *  Optional and only ever present as `true`, matching this object's own
+   *  rule about absent-not-false: a consumer must not be trained to ignore a
+   *  field that is usually there. */
+  discoverable_dropped: z.literal(true).optional(),
 });
 export type PublicQuotaDegraded = z.infer<typeof PublicQuotaDegraded>;
 

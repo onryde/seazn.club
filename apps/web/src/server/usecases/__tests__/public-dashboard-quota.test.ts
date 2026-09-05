@@ -224,6 +224,27 @@ describe.skipIf(!HAS_DB)("assertPublicQuota counts LIVE public dashboards", () =
     });
     expect(degraded.visibility).toBe("private");
     expect(degraded.discoverable).toBe(false);
+    // …and the caller is TOLD. Two substitutions happen here and only the
+    // visibility one used to be reported, so an organiser who asked for the
+    // showcase, passed `discovery.listed`, and got a 201 would reasonably
+    // believe their competition was listed. It is not.
+    expect(degraded.public_quota_degraded?.discoverable_dropped).toBe(true);
+  });
+
+  it("…and says nothing about the showcase when the caller never asked for it", async () => {
+    // The positive assertion above is only worth what this one makes it worth.
+    // A note that always carried `discoverable_dropped: true` would satisfy it
+    // while telling every caller their showcase opt-in was dropped, including
+    // the ones who never made it — and this object's own contract is
+    // absent-not-false, so that a consumer is never trained to ignore a field
+    // that is always there.
+    const auth = await seedOrg("community");
+    const cap = await publicCap(auth);
+    for (let i = 1; i <= cap; i += 1) await make(auth, `Live ${i}`);
+    const degraded = await make(auth, "Degraded, no showcase asked");
+    expect(degraded.visibility).toBe("private");
+    expect(degraded.public_quota_degraded).toBeDefined();
+    expect(degraded.public_quota_degraded?.discoverable_dropped).toBeUndefined();
   });
 
   it("Pro's cap is finite and larger than Free's (V395 retired 'unlimited public dashboards')", async () => {

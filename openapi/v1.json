@@ -772,6 +772,10 @@
                             },
                             "reason": {
                               "type": "string"
+                            },
+                            "discoverable_dropped": {
+                              "type": "boolean",
+                              "const": true
                             }
                           },
                           "required": [
@@ -1166,6 +1170,10 @@
                             },
                             "reason": {
                               "type": "string"
+                            },
+                            "discoverable_dropped": {
+                              "type": "boolean",
+                              "const": true
                             }
                           },
                           "required": [
