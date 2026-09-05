@@ -237,3 +237,38 @@ origin/main HEAD` after an explicit fetch reports zero conflicts, with
 `origin/main` 84 commits ahead of this branch's point. That command checks
 mergeability without touching the working tree or index, so it is safe to run
 mid-wave with agents live — worth knowing generally.
+
+### W2 status update — 2026-09-05, second handoff
+
+Supersedes the status paragraph above. 29 commits, zero amends, tree clean.
+
+**All 15 max-review findings are RESOLVED** — 14 closed, 1 parked as latent (the
+verbatim `@container` copy in `registration-hub-config-panel.tsx`, whose four call
+sites are currently safe). Separately, the run-sheet editor no longer renders raw
+server errors: it branches on `ApiV1Error.code` and falls back to translated copy,
+so an organiser who double-books a court reads their own language instead of
+`"schedule change hits a blocking conflict"`.
+
+**Task 4 is functionally complete and still NOT signed off.** The walkthrough gate
+is the last thing between it and a completion line, and it deliberately has none
+until that returns.
+
+**Three defects in this wave were introduced by the wave itself** and found only
+by driving the product or by mutation — a 0-pixel-wide "When" field whose tap
+point resolved to the Save button, a blank match-day screen when the default
+filter matched nothing, and a commit of the controller's own that was INERT (a
+pure rename) while its message asserted the behaviour in the past tense. None was
+visible to ~6,500 green unit tests, a 949-check smoke suite, or a seven-width
+mobile sweep.
+
+**Owed next, in order:** rebase onto `origin/main` for PR #716 — **re-measure
+first**, the recorded zero-conflict `merge-tree` reading is stale by 130+ commits —
+then repair the commit shas that rebase invalidates in the ledger, in this file,
+and in the max review's provenance section, which pins the exact HEAD it reviewed
+and states it was unchanged throughout. Then Tasks 5-10.
+
+**Task 5's supplement carries a correction that overturns a controller ruling:**
+the "Now playing" strip must NOT be retired as duplication. It is the only surface
+that floats a live BRACKET fixture or a live UNTIMED fixture, neither of which
+reaches the run sheet's day spine. Retiring it would hide a live match on finals
+day.
