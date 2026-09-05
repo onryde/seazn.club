@@ -43,10 +43,19 @@ export interface FakeFixtureRow {
   schedule_locked: boolean;
 }
 
+/** T7a: a court's weekly hours and dated exceptions, snake_case exactly as
+ *  the real `PUT .../calendar` body and the real `GET .../venues` response
+ *  both spell them (`usecases/venues.ts`) — this row is what both routes
+ *  below read and write, so there is one shape and one rename site, same as
+ *  the product's. Empty by default: a court `POST /courts` creates has no
+ *  calendar rows at all, which `checker.ts`'s own note 1 reads as "open all
+ *  day, every day". */
 interface FakeCourtRow {
   id: string;
   name: string;
   venue_id: string;
+  hours: { weekday: number; open_min: number; close_min: number }[];
+  exceptions: { date: string; closed: boolean; open_min: number | null; close_min: number | null }[];
 }
 
 interface FakeVenueRow {
@@ -119,6 +128,14 @@ export interface FakeScheduleWorld {
   /** Called from the fake's own `/generate` handler with what it returned. */
   addFixtures(stageId: string, rows: readonly { id: string; ext_key: string }[]): void;
   setOfficials(fixtureId: string, set: unknown[]): void;
+  /** T7a: `PUT /orgs/{id}/courts/{courtId}/calendar` — a FULL replace, same
+   *  as the product's. Exposed so a test can populate a court's calendar
+   *  directly (bypassing HTTP) as well as through the route below. */
+  setCourtCalendar(
+    courtId: string,
+    hours: readonly { weekday: number; open_min: number; close_min: number }[],
+    exceptions: readonly { date: string; closed: boolean; open_min: number | null; close_min: number | null }[],
+  ): void;
   /** `undefined` means "not one of my routes" — the caller falls through to
    *  its own handlers. */
   handle(method: string, routePath: string, body: unknown): unknown | undefined;
@@ -158,7 +175,7 @@ export function makeScheduleWorld(options: FakeScheduleOptions = {}): FakeSchedu
     addCourt(venueId, id, name) {
       const venue = venues.get(venueId);
       if (venue === undefined) throw new Error(`fake schedule world: no venue ${venueId}`);
-      venue.courts.push({ id, name, venue_id: venueId });
+      venue.courts.push({ id, name, venue_id: venueId, hours: [], exceptions: [] });
     },
     addStage(stageId, divisionId) {
       divisionIdByStageId.set(stageId, divisionId);
@@ -198,17 +215,52 @@ export function makeScheduleWorld(options: FakeScheduleOptions = {}): FakeSchedu
       const row = fixtures.get(fixtureId);
       if (row !== undefined) row.officials = set;
     },
+    setCourtCalendar(courtId, hours, exceptions) {
+      for (const venue of venues.values()) {
+        const court = venue.courts.find((c) => c.id === courtId);
+        if (court === undefined) continue;
+        court.hours = [...hours];
+        court.exceptions = [...exceptions];
+        return;
+      }
+      throw new Error(`fake schedule world: calendar PUT for unknown court ${courtId}`);
+    },
 
     handle(method, routePath, body) {
       // ---- GET /api/v1/orgs/{id}/venues ---------------------------------
       if (method === "GET" && /^\/api\/v1\/orgs\/[^/]+\/venues$/.test(routePath)) {
         return [...venues.values()].map((v) => ({
           id: v.id,
-          // NO `hours`, NO `exceptions`: a court with no declared calendar is
-          // "open all day" (checker.ts's own note 1), which is what a bench
-          // court created through `POST /courts` genuinely is.
-          courts: v.courts.map((c) => ({ id: c.id, name: c.name, venue_id: c.venue_id })),
+          // A court that never took a calendar PUT still carries its
+          // `addCourt`-time `hours: []`/`exceptions: []` — "open all day"
+          // (checker.ts's own note 1), same as a real freshly-`POST`ed court.
+          // T7a: a court `setCourtCalendar` DID touch echoes what was PUT,
+          // because `board.ts`'s `toBoardCourt` reads hours/exceptions off
+          // exactly this response — a fake that kept accepting the PUT but
+          // never fed it back here would leave the checker's oracle believing
+          // every court is open all day regardless of what the pack declared.
+          courts: v.courts.map((c) => ({
+            id: c.id,
+            name: c.name,
+            venue_id: c.venue_id,
+            hours: c.hours,
+            exceptions: c.exceptions,
+          })),
         }));
+      }
+
+      // ---- PUT /api/v1/orgs/{id}/courts/{courtId}/calendar --------------
+      const calendarMatch = /^\/api\/v1\/orgs\/[^/]+\/courts\/([^/]+)\/calendar$/.exec(routePath);
+      if (method === "PUT" && calendarMatch !== null) {
+        const courtId = calendarMatch[1]!;
+        const hours = isRecord(body) && Array.isArray(body.hours) ? body.hours : [];
+        const exceptions = isRecord(body) && Array.isArray(body.exceptions) ? body.exceptions : [];
+        world.setCourtCalendar(
+          courtId,
+          hours as { weekday: number; open_min: number; close_min: number }[],
+          exceptions as { date: string; closed: boolean; open_min: number | null; close_min: number | null }[],
+        );
+        return { hours, exceptions };
       }
 
       // ---- PUT /api/v1/divisions/{id}/schedule-settings -----------------
@@ -297,6 +349,22 @@ export function makeScheduleWorld(options: FakeScheduleOptions = {}): FakeSchedu
       ? (cfg.courts as readonly unknown[]).filter((c): c is string => typeof c === "string")
       : [];
 
+    // T7a: a declared `perEntrantMinRest` is baked into the SLOT PITCH, not
+    // just recorded. This fake has no solver — it cannot re-plan around a
+    // rest floor the way the real placer does — so the only way its output
+    // can satisfy a floor the pack actually declares is to space every
+    // consecutive slot by at least it. That is not a general fix (a stage
+    // with several INDEPENDENT entrant pairs would not need every slot
+    // spaced, only same-entrant ones), but it is exact for every stage this
+    // bench schedules today: every fixture in a `_tiny` stage shares the
+    // same one or two entrants, so spacing consecutive slots by the floor
+    // spaces each entrant's own series by it too. `restFloor` is 0 on every
+    // config that does not declare one, so the pitch is `matchMinutes`
+    // unchanged wherever nothing asked for rest — this cannot move a slot
+    // for a caller that predates T7a.
+    const restFloor = typeof cfg.perEntrantMinRest === "number" ? cfg.perEntrantMinRest : 0;
+    const pitchMinutes = matchMinutes + restFloor;
+
     // WHAT ANOTHER DIVISION HAS ALREADY BOOKED.
     //
     // Modelled because the product models it: `siblingAssignments`
@@ -320,7 +388,7 @@ export function makeScheduleWorld(options: FakeScheduleOptions = {}): FakeSchedu
       }
     }
     const slotAt = (slot: number): { at: number; court: string } => ({
-      at: options.doubleBookCourt === true ? startMs : startMs + slot * matchMinutes * MINUTE_MS,
+      at: options.doubleBookCourt === true ? startMs : startMs + slot * pitchMinutes * MINUTE_MS,
       court:
         courts.length === 0
           ? "court-unset"
