@@ -18,6 +18,35 @@ surface work — that is W3.
 
 **STATE AT 2026-09-05 (late) — read this first.**
 
+**PR #719 has ZERO CI, and the reason is not obvious.** `mergeable=CONFLICTING`,
+`mergeStateStatus=DIRTY` — GitHub cannot compute a merge ref for a conflicting PR, so
+no `pull_request` workflow runs AT ALL. `gh pr checks` says "no checks reported",
+which looks like nothing is wrong rather than like a problem. **The absence of a red is
+not a green.** I wasted two wrong explanations before reading the merge state: it is
+not draft status (marking it ready changed nothing, and `ready_for_review` is not even
+in `pull_request`'s default event set) and not workflow gating. **Rebase onto main and
+CI starts working.**
+
+**Do NOT rebase while an agent is mid-task** — one file was still dirty when this was
+written.
+
+**And when you do rebase, expect an INHERITED e2e red.** Main's walkthrough leg is
+currently red from a redirect built with `new URL("/path", req.url)`, which emits the
+server's internal bind address in CI (no `HOSTNAME` set there) so the session cookie is
+withheld and the browser lands on `/login`. It passes locally only because `seazn-env`
+pins `HOSTNAME=127.0.0.1`. The commit is `997ad225b` and **it is not in this branch
+yet** — my own dispatch (run 33966576108, verified against `refs/pull/719/head`) was
+green on the walkthrough leg without it. Rebasing pulls it in. So a walkthrough red on
+the next run is almost certainly that, not the rebase: check it BEFORE bisecting 148
+commits of your own.
+
+**e2e result on this branch so far: 6 of 8 jobs green**, including all seven width
+projects and the walkthrough. Of the two reds, one is genuinely ours —
+`open-scheduling.spec.ts:241` asserts a Community scheduling paywall that V392
+deliberately removed, so the test encodes pre-v18 packaging and would go red on `main`
+after merge. The other shard reports `Billing is not yet configured` (503), untriaged.
+
+
 **Draft PR #719 is open**, branch pushed, 146 commits ahead of `origin/main` and 3
 behind (main moves fast; rebase before merging). CI is the venue now, not this
 machine: `ci.yml` triggers on `pull_request:` ONLY — typecheck, lint, sharded unit and
