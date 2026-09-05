@@ -568,7 +568,13 @@ upcoming, table position — captains share it to their squad), recommended to t
 
 ## Copy and i18n
 
-Keys under `public.matchCentre.*`, `public.matchesHub.*`, `public.poster.*`. Dismissal
+Keys live in the `public` dictionary namespace (`apps/web/src/dictionaries/<locale>/public.json`,
+flat dotted keys, four locales) and are written BARE inside it — `matchCentre.*`,
+`timeline.*`, `matchesHub.*`, `poster.*` — exactly like the existing `org.competitionsBy`;
+the namespace is the file, never a prefix on the key (a W1 slip wrote `public.matchCentre.*`
+into the file for two tasks and was corrected the same day). Engine tokens that reach a
+template as parameters (a card colour, a dismissal kind, a point kind) are localised by the
+renderer through `term.<token>` keys in the same file, never interpolated raw. Dismissal
 templates are keyed by the engine's wicket enum — `caught` "c {fielder} b {bowler}",
 `bowled` "b {bowler}", `lbw` "lbw b {bowler}", `runOut` "run out ({fielder})", `stumped`
 "st {fielder} b {bowler}", and the rest of the enum as declared — and a unit test asserts

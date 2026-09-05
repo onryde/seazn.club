@@ -50,7 +50,7 @@ read from the ledger the pad already writes.
    ruling 10 (2026-09-05): every sport gets its depth in THIS wave, not a
    shell. A tab whose ledger has nothing for it is not rendered (R4). Keep the
    shipped dark header bar and tagline strip exactly as they are.
-5. **i18n** — every string into `public.matchCentre.*`, four locales, `gen-keys`
+5. **i18n** — every string into `matchCentre.*`, four locales, `gen-keys`
    regenerated; a unit test asserts every engine dismissal-enum member has a
    key in every locale.
 6. **Meta** — `<title>`/description carry the score when final. OG card unchanged.

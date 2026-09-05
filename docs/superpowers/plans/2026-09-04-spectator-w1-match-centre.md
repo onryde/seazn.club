@@ -676,13 +676,13 @@ describe("buildMatchCentre — cricket", () => {
     const doc = buildMatchCentre(input({ events: liveChaseEvents }));
     expect(doc.tabs).toEqual(["summary", "scorecard", "commentary", "info"]);
     expect(doc.header.live).toBe(true);
-    expect(doc.header.statusLine).toEqual({ key: "public.matchCentre.chase.need", params: { side: "Southend Queens", runs: 34, balls: 21 } });
+    expect(doc.header.statusLine).toEqual({ key: "matchCentre.chase.need", params: { side: "Southend Queens", runs: 34, balls: 21 } });
     expect(doc.header.rateLine).toMatch(/^CRR \d+\.\d\d · RRR \d+\.\d\d$/);
   });
   it("band 2: no commentary tab; dismissal is out_unknown key; 4s/6s null", () => {
     const doc = buildMatchCentre(input({ events: lineEvents }));
     expect(doc.tabs).toEqual(["summary", "scorecard", "info"]);
-    expect(doc.cricket!.innings[0]!.batting[0]!.dismissal).toEqual({ key: "public.matchCentre.dismissal.out_unknown" });
+    expect(doc.cricket!.innings[0]!.batting[0]!.dismissal).toEqual({ key: "matchCentre.dismissal.out_unknown" });
   });
   it("a masked person is masked EVERYWHERE the name appears: batting, bowling, fall of wickets, partnerships, commentary, top performers", () => {
     const doc = buildMatchCentre(input({ events: finalEvents, lineups: lineupsWithOneMasked("h1") }));
@@ -692,7 +692,7 @@ describe("buildMatchCentre — cricket", () => {
   });
   it("every dismissal kind the engine declares maps to a dictionary key", () => {
     for (const kind of ["bowled","caught","lbw","runout","stumped","hitwicket","retired","obstructed","timedout","hitballtwice"] as const) {
-      expect(dismissalMsg({ kind, bowler: "b", fielder: "f", fielderAssist: null }, names).key).toBe(`public.matchCentre.dismissal.${kind}`);
+      expect(dismissalMsg({ kind, bowler: "b", fielder: "f", fielderAssist: null }, names).key).toBe(`matchCentre.dismissal.${kind}`);
     }
   });
   it("top performers: best batter by runs then strike rate; best bowler by wickets then economy — with an ORDER-differential case", () => {
@@ -709,7 +709,7 @@ describe("buildMatchCentre — cricket", () => {
 
 - [ ] **Step 2: Run — expect failures.**
 
-- [ ] **Step 3: Implement** `buildMatchCentre`: `sport === "cricket"` → `card = deriveCricketScorecard({ events, cfg: parsedCfg, lineups: toLineupPair(lineups) })`; `personOf(id)` looks up `lineups` (both sides) → `PersonT`, falling back to `{ personId: id, name: "?", masked: true }` never a blank; formatting helpers `fmt1(n)` (one decimal, `"161.9"`), `fmt2(n)`; `dismissalMsg(d, personOf)` → `{ key: "public.matchCentre.dismissal.<kind>", params: { bowler, fielder, assist } }`; `tabs` = `["summary", ...(card.innings.some(i => i.batting.length) ? ["scorecard"] : []), ...(card.innings.some(i => i.overs.length) ? ["commentary"] : []), "info"]`; header from `card` + `fixture` (`statusLine` for scheduled = `{ key: "public.matchCentre.status.startsAt", params: { when: formatted in venueTz + locale } }`); `topPerformers` computed per innings; `overs[].lines` = per-ball `Msg` with keys `public.matchCentre.ball.<glyphKind>` and params `{ over: "12.3", bowler, batter, runs }`; the result `Msg` mapped from the engine's margin shape (pin `summary.detail.margin` fields at `cricket.ts:3300-3325`: `{ kind: "runs" | "wickets" | "tie" | "superover" | "dls" | "no_result" | ... , value? }` → keys `public.matchCentre.result.<kind>`).
+- [ ] **Step 3: Implement** `buildMatchCentre`: `sport === "cricket"` → `card = deriveCricketScorecard({ events, cfg: parsedCfg, lineups: toLineupPair(lineups) })`; `personOf(id)` looks up `lineups` (both sides) → `PersonT`, falling back to `{ personId: id, name: "?", masked: true }` never a blank; formatting helpers `fmt1(n)` (one decimal, `"161.9"`), `fmt2(n)`; `dismissalMsg(d, personOf)` → `{ key: "matchCentre.dismissal.<kind>", params: { bowler, fielder, assist } }`; `tabs` = `["summary", ...(card.innings.some(i => i.batting.length) ? ["scorecard"] : []), ...(card.innings.some(i => i.overs.length) ? ["commentary"] : []), "info"]`; header from `card` + `fixture` (`statusLine` for scheduled = `{ key: "matchCentre.status.startsAt", params: { when: formatted in venueTz + locale } }`); `topPerformers` computed per innings; `overs[].lines` = per-ball `Msg` with keys `matchCentre.ball.<glyphKind>` and params `{ over: "12.3", bowler, batter, runs }`; the result `Msg` mapped from the engine's margin shape (pin `summary.detail.margin` fields at `cricket.ts:3300-3325`: `{ kind: "runs" | "wickets" | "tie" | "superover" | "dls" | "no_result" | ... , value? }` → keys `matchCentre.result.<kind>`).
 
 - [ ] **Step 4: Run — green.** Mutants: (g) drop the `masked` name substitution in `personOf` → the everywhere-masked test reds; (h) swap the top-performer tie-break → the order-differential case reds.
 
@@ -721,7 +721,7 @@ describe("buildMatchCentre — cricket", () => {
 
 **Files:**
 - Create: `apps/web/src/server/public-site/timeline.ts`
-- Create/modify: the four `public.json` dictionaries — the `public.timeline.*` keys this module emits (Task 8 fills everything else)
+- Create/modify: the four `public.json` dictionaries — the `timeline.*` keys this module emits (Task 8 fills everything else)
 - Test: `apps/web/src/server/public-site/__tests__/timeline.test.ts`
 - NOT `match-centre.ts`: Task 6 wires the non-cricket branch (`tabs`, `timeline`, `sets`) by importing from `timeline.ts` — this keeps Task 7's file set disjoint so it can run on a parallel lane.
 
@@ -742,20 +742,20 @@ describe("buildTimeline", () => {
   it("football: goal, card, period and shoot-out kick each render their own key with side, minute and person", () => {
     const lines = buildTimeline(args({ sportKey: "football", events: footballLedger }));
     expect(lines.map((l) => l.text.key)).toEqual(expect.arrayContaining([
-      "public.timeline.football.goal", "public.timeline.football.card", "public.timeline.football.period", "public.timeline.football.shootout.kick",
+      "timeline.football.goal", "timeline.football.card", "timeline.football.period", "timeline.football.shootout.kick",
     ]));
-    const goal = lines.find((l) => l.text.key === "public.timeline.football.goal")!;
+    const goal = lines.find((l) => l.text.key === "timeline.football.goal")!;
     expect(goal.sideIndex).toBe(0);
     expect(goal.marker).toBe("23'");
   });
   it("newest first: seq descending", () => { /* assert lines[0].seq > lines[1].seq */ });
   it("an event type with no template renders the neutral line, never nothing", () => {
     const lines = buildTimeline(args({ events: [envelope("some.future.type", {})] }));
-    expect(lines[0]!.text.key).toBe("public.timeline.generic.event");
+    expect(lines[0]!.text.key).toBe("timeline.generic.event");
   });
   it("racket sports: a set transition line is derived by replaying the module and diffing summary.detail.sets", () => {
     const lines = buildTimeline(args({ sportKey: "tennis", events: tennisSetLedger }));
-    expect(lines.some((l) => l.text.key === "public.timeline.set.won")).toBe(true);
+    expect(lines.some((l) => l.text.key === "timeline.set.won")).toBe(true);
   });
 });
 describe("buildSets", () => {
@@ -766,14 +766,14 @@ describe("buildSets", () => {
 describe("timeline dictionary coverage (derived from the engine's own golden corpora)", () => {
   it("every event type recorded in any sport's golden corpus has a template key in all four locales", () => {
     // glob packages/engine/src/testkit/**/golden corpora (pin the path + file shape: `GOLDEN-POLICY.md`), collect event types,
-    // for each type: TIMELINE_KEY_FOR[type] ?? "public.timeline.generic.event" must exist in en/es/fr/nl public.json
+    // for each type: TIMELINE_KEY_FOR[type] ?? "timeline.generic.event" must exist in en/es/fr/nl public.json
   });
 });
 ```
 
 - [ ] **Step 2: Run — failures.**
 
-- [ ] **Step 3: Implement**: `buildTimeline` replays `module.init/apply` per event (like the cricket fold), emits one `TimelineLine` per recorded event using `TIMELINE_KEY_FOR[ev.type]` with params built by a small per-type param mapper (`football.goal` → `{ side, scorer, assist, minute, flags }`; `football.card` → `{ side, person, colour, minute }`; period → `{ phase }`; kick → `{ side, person, scored }`; `*.point` → `{ side, scorer, kind }`; `core.start`/`core.*` → `{}`), and after each event diffs `summary.detail.sets`/`periods` length or `closed` flags to emit derived `public.timeline.set.won` / `public.timeline.period.end` lines with the score. `buildSets` maps `detail.sets`/`periods` to the view. Wire the non-cricket branch of `buildMatchCentre`: `tabs = ["summary", ...(timeline.length ? ["timeline"] : []), ...(sets ? ["sets"] : []), "info"]`; header `scoreLines` from `summary.perSide[].line`.
+- [ ] **Step 3: Implement**: `buildTimeline` replays `module.init/apply` per event (like the cricket fold), emits one `TimelineLine` per recorded event using `TIMELINE_KEY_FOR[ev.type]` with params built by a small per-type param mapper (`football.goal` → `{ side, scorer, assist, minute, flags }`; `football.card` → `{ side, person, colour, minute }`; period → `{ phase }`; kick → `{ side, person, scored }`; `*.point` → `{ side, scorer, kind }`; `core.start`/`core.*` → `{}`), and after each event diffs `summary.detail.sets`/`periods` length or `closed` flags to emit derived `timeline.set.won` / `timeline.period.end` lines with the score. `buildSets` maps `detail.sets`/`periods` to the view. Wire the non-cricket branch of `buildMatchCentre`: `tabs = ["summary", ...(timeline.length ? ["timeline"] : []), ...(sets ? ["sets"] : []), "info"]`; header `scoreLines` from `summary.perSide[].line`.
 
 - [ ] **Step 4: Run — green.** Mutant (i): drop the neutral fallback → the unknown-type test reds; (j): sort ascending → the newest-first test reds.
 
@@ -793,13 +793,13 @@ describe("timeline dictionary coverage (derived from the engine's own golden cor
 ```ts
 import en from "@/dictionaries/en/public.json"; // …es, fr, nl
 const KEYS = [
-  ...Object.values(TIMELINE_KEY_FOR), "public.timeline.generic.event", "public.timeline.set.won", "public.timeline.period.end",
-  ...DISMISSAL_KINDS.map((k) => `public.matchCentre.dismissal.${k}`), "public.matchCentre.dismissal.not_out", "public.matchCentre.dismissal.out_unknown",
-  ...RESULT_KINDS.map((k) => `public.matchCentre.result.${k}`),
-  ...BALL_GLYPH_KINDS.map((k) => `public.matchCentre.ball.${k}`),
-  "public.matchCentre.chase.need", "public.matchCentre.status.startsAt", "public.matchCentre.status.live", "public.matchCentre.status.decided",
-  "public.matchCentre.tab.summary", "public.matchCentre.tab.scorecard", "public.matchCentre.tab.commentary", "public.matchCentre.tab.timeline", "public.matchCentre.tab.sets", "public.matchCentre.tab.info",
-  "public.matchCentre.band.3", "public.matchCentre.band.2", "public.matchCentre.band.1", "public.matchCentre.band.0",
+  ...Object.values(TIMELINE_KEY_FOR), "timeline.generic.event", "timeline.set.won", "timeline.period.end",
+  ...DISMISSAL_KINDS.map((k) => `matchCentre.dismissal.${k}`), "matchCentre.dismissal.not_out", "matchCentre.dismissal.out_unknown",
+  ...RESULT_KINDS.map((k) => `matchCentre.result.${k}`),
+  ...BALL_GLYPH_KINDS.map((k) => `matchCentre.ball.${k}`),
+  "matchCentre.chase.need", "matchCentre.status.startsAt", "matchCentre.status.live", "matchCentre.status.decided",
+  "matchCentre.tab.summary", "matchCentre.tab.scorecard", "matchCentre.tab.commentary", "matchCentre.tab.timeline", "matchCentre.tab.sets", "matchCentre.tab.info",
+  "matchCentre.band.3", "matchCentre.band.2", "matchCentre.band.1", "matchCentre.band.0",
   // …every UI label used by Tasks 9–13: atTheCrease, thisOver, partnership, lastWicket, topBatter, topBowler, fallOfWickets, partnerships,
   // extras, total, didNotBat, endOfOver, loadEarlier, info.toss, info.format, info.venue, info.start, info.stage, info.calendar, info.scoredAs,
   // col.batter, col.bowler, col.runs, col.balls, col.fours, col.sixes, col.strikeRate, col.overs, col.maidens, col.wickets, col.economy, col.wides, col.noBalls,
@@ -883,7 +883,7 @@ it("MatchCentre renders only the tabs the document lists — a band-2 doc has no
 
 - [ ] **Step 2: Run — failures.**
 
-- [ ] **Step 3: Implement**: `useLiveFixture` = the exact logic lifted from `live-score.tsx:61-117` (poll every `POLL_MS`, Realtime subscribe when `realtime`, debounce 250 ms, both call `refresh()` → `setData(await fetchLiveFixture(fixtureId))`, `updatedAt = Date.now()` on each success; never throw to the UI — on a fetch error keep the last data). `MatchCentre`: `const { data, updatedAt } = useLiveFixture(...)`; `doc = data.match_centre`; active tab state initialised from `tabParam` if it is in `doc.tabs`, else `doc.tabs[0]`; on change, `history.replaceState` with `?tab=`; renders `<CourtCard>`, `<TabRail>`, then the active tab's component (Tasks 11–13) — all from `doc`, so a refresh re-renders everything. Composition and classes per W0 option A and the token sheet: court card `overflow-hidden rounded-2xl bg-court text-court-ink shadow-lg` (as `live-score.tsx:143`), scores `font-display text-2xl font-bold tabular-nums` phone / `text-4xl` ≥ `md`, LIVE pill emerald as today; rail `flex gap-2 overflow-x-auto max-md:-mx-4 max-md:px-4` with `role="tablist" tabIndex={0} aria-label={t(dict,"public.matchCentre.tabs.label")}`; tab pill classes from `tabs.tsx:31/33` (`rounded-full px-2.5 py-0.5`, accent bg when active, accent-soft otherwise). `LiveScoreBody` = today's `LiveScore` JSX minus transport, taking `data` as a prop.
+- [ ] **Step 3: Implement**: `useLiveFixture` = the exact logic lifted from `live-score.tsx:61-117` (poll every `POLL_MS`, Realtime subscribe when `realtime`, debounce 250 ms, both call `refresh()` → `setData(await fetchLiveFixture(fixtureId))`, `updatedAt = Date.now()` on each success; never throw to the UI — on a fetch error keep the last data). `MatchCentre`: `const { data, updatedAt } = useLiveFixture(...)`; `doc = data.match_centre`; active tab state initialised from `tabParam` if it is in `doc.tabs`, else `doc.tabs[0]`; on change, `history.replaceState` with `?tab=`; renders `<CourtCard>`, `<TabRail>`, then the active tab's component (Tasks 11–13) — all from `doc`, so a refresh re-renders everything. Composition and classes per W0 option A and the token sheet: court card `overflow-hidden rounded-2xl bg-court text-court-ink shadow-lg` (as `live-score.tsx:143`), scores `font-display text-2xl font-bold tabular-nums` phone / `text-4xl` ≥ `md`, LIVE pill emerald as today; rail `flex gap-2 overflow-x-auto max-md:-mx-4 max-md:px-4` with `role="tablist" tabIndex={0} aria-label={t(dict,"matchCentre.tabs.label")}`; tab pill classes from `tabs.tsx:31/33` (`rounded-full px-2.5 py-0.5`, accent bg when active, accent-soft otherwise). `LiveScoreBody` = today's `LiveScore` JSX minus transport, taking `data` as a prop.
 
 - [ ] **Step 4: Run — green.** Mutant (k): render every tab regardless of `doc.tabs` → the band-2 test reds.
 
@@ -917,7 +917,7 @@ it("MatchCentre renders only the tabs the document lists — a band-2 doc has no
 - Create: `apps/web/src/components/public-site/match-centre/scorecard-tab.tsx`
 - Test: `apps/web/src/components/public-site/match-centre/__tests__/scorecard-tab.test.tsx`
 
-- [ ] **Step 1: Failing tests**: one `mc-innings-<n>` section per innings; the innings in play (or the last) is `open` (`<details open>` or `aria-expanded="true"` — use native `<details>` so it works without JS and in static markup); batting rows carry `data-testid="mc-bat-<personId>"` with the dismissal line as a second-line `<span>`; extras line and total line present; `mc-dnb-<n>` lists did-not-bat; bowling table present; at band 2 the 4s/6s/Maidens/wd/nb columns are ABSENT (`not.toContain('title="' + en["public.matchCentre.col.fours"]')`) and at band 3 present (positive pair).
+- [ ] **Step 1: Failing tests**: one `mc-innings-<n>` section per innings; the innings in play (or the last) is `open` (`<details open>` or `aria-expanded="true"` — use native `<details>` so it works without JS and in static markup); batting rows carry `data-testid="mc-bat-<personId>"` with the dismissal line as a second-line `<span>`; extras line and total line present; `mc-dnb-<n>` lists did-not-bat; bowling table present; at band 2 the 4s/6s/Maidens/wd/nb columns are ABSENT (`not.toContain('title="' + en["matchCentre.col.fours"]')`) and at band 3 present (positive pair).
 
 - [ ] **Step 2: Run — failures.** **Step 3: Implement** (columns chosen by whether every row's value is `null`; name cell `min-w-0 truncate` with the dismissal `Msg` resolved via `t(dict, key, params)`; tables inside `overflow-x-auto` containers carrying `tabindex="0"`, `role="region"`, `aria-label` as the last resort — the target is no scroll at 320 with the six numeric columns at `text-[13px]` and `px-1`; verify in Task 15's screenshots and, if 320 still scrolls inside the box, fold 4s/6s into the R(B) cell as the spec allows and RECORD it in `_INDEX.md`).
 
