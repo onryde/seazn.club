@@ -143,3 +143,34 @@ writing `manifest.json` (h-scroll + control set per width) and `seed.json`.
 `W0_SEED=<seed.json>` reuses a seed instead of posting it again. Run from
 `apps/web` with `PLAYWRIGHT_BASE`, `E2E_PROD_TARGET`, `DATABASE_URL`,
 `DATABASE_SSL=disable` from `seazn-env env --label spx`, `--project=walkthrough`.
+
+## Session status — 2026-09-05 (W1 execution, handoff)
+
+W1 runs under `superpowers:subagent-driven-development`; the ledger is
+`.superpowers/sdd/2026-09-04-spectator-w1-match-centre/progress.md` (git-ignored, in
+the spectator worktree) — its "RESUME HERE" block is the recovery map. State at
+handoff: Tasks 1–5, 7, 10–13 complete and integrated on `feat/spectator-surface`
+(HEAD b8ed8fa31: lane B's 7 and lane C's 14 commits cherry-picked, dictionaries
+resolved by key union, keys regenerated; public-site suites 537/0, tsc clean); Task 17
+(engine band-2 lines) merged with a fix round in flight (regenerate
+`cricket.schema.json`, extend the golden corpus — both reds were REAL, mis-triaged as
+environmental); Tasks 6, 8, 18 in flight in isolated worktrees; 9, 14, 15, 16 not
+started. The W2 plan exists only as an unreviewed DRAFT
+(`plans/2026-09-05-spectator-w2-competition-landing.md`).
+
+Rulings made this session (details in the ledger): the scorebug keeps "Not started"
+through its own key `matchCentre.status.notStarted` (a localisation is a copy change —
+grep the e2e suite for the literal first); `matchCentre.status.<status>` per real
+status, raw fallback, never "Not played" for abandoned/cancelled; numeric table cells
+`px-0.5` inside `w-7/w-8/w-11`; strike rate / economy one decimal, run rates two;
+commentary heading level derives from `innings.length`; every apps/web round ends with
+`tsc --noEmit -p tsconfig.json` (a zod `.default()` makes the field REQUIRED on the
+output type — three fixtures broke silently under a green suite); Task 8 proves
+dictionary coverage by DERIVATION (source scan + engine enums), not a typed list.
+
+False premises found in W1 (do not re-derive): engine corpora live under `sports/**`;
+`generic.configSchema.parse({})` throws; the kernel declares 14 event types;
+`core.award` carries no side; a "missing `SetsView.unit`" finding was a mis-attribution
+(the pre-image had it); `decideTie` does NOT leave `outcome` null under super-over
+config; `applyPlayerLine` refuses an unclosed innings; `cricket.toss` is band 1; an
+isolated-worktree agent branches from origin/main, never from the feature branch.
