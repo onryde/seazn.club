@@ -99,6 +99,14 @@ export function RunSheet({
   const stageById = new Map(stages.map((s) => [s.id, s] as const));
   const today = dayKeyInTz(nowMs, tz);
 
+  // F3 (W2 walkthrough gate 1): only the unscheduled/settled groups need a
+  // stage name — day and bracket blocks already identify their own stage in
+  // their header. Gated on more than one stage per the finding's own
+  // counter-argument ("show it only when the division has more than one
+  // stage... single-stage divisions gain no noise").
+  const stageNameFor = (f: RunSheetFixture): string | null =>
+    stages.length > 1 ? (stageById.get(f.stage_id)?.name ?? null) : null;
+
   // The two counted filters are FACTS about a fixture, asked of the one
   // module that owns them (`division-phase.ts`, W1's ledger) rather than
   // re-derived here. Both used to come off `fixtureRowAction`'s ladder, and
@@ -289,6 +297,7 @@ export function RunSheet({
                 venues={venues}
                 boardSlotOptions={boardSlotOptions}
                 onRescheduled={onRescheduled}
+                stageName={stageNameFor(f)}
               />
             ))}
           </ul>
@@ -326,6 +335,7 @@ export function RunSheet({
                 venues={venues}
                 boardSlotOptions={boardSlotOptions}
                 onRescheduled={onRescheduled}
+                stageName={stageNameFor(f)}
               />
             ))}
           </ul>

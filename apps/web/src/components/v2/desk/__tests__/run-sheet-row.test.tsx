@@ -60,7 +60,7 @@ function fx(o: Partial<RunSheetFixture> = {}): RunSheetFixture {
   };
 }
 
-function rowHtml(fixture: RunSheetFixture, canEdit = true): string {
+function rowHtml(fixture: RunSheetFixture, canEdit = true, stageName?: string | null): string {
   return renderToStaticMarkup(
     <RunSheetRow
       fixture={fixture}
@@ -70,6 +70,7 @@ function rowHtml(fixture: RunSheetFixture, canEdit = true): string {
       nowMs={NOW_MS}
       canEdit={canEdit}
       entrantNames={ENTRANTS}
+      stageName={stageName}
     />,
   );
 }
@@ -98,6 +99,26 @@ function rowAction(html: string): string | null {
 // announced). Design of record, `competition-desk-design.md:232-234`: "Status
 // is carried by the dot colour + sub-line copy (`fixtureStatusLabel` stays as
 // the sub-line source)."
+// F3 (W2 walkthrough gate 1): the unscheduled/settled groups merge every
+// stage into one list with nothing identifying which stage a row belongs
+// to — two same-named "Round 1 · Bravo vs Echo" rows from different stages
+// were indistinguishable. `RunSheet` passes `stageName` only for those two
+// blocks and only when the division has more than one stage; this proves
+// the ROW half of that contract: rendered when given, absent when not.
+describe("stageName (F3 — unscheduled/settled rows identify their stage)", () => {
+  it("prints the stage name ahead of the court/round meta line when provided", () => {
+    const html = rowHtml(fx(), true, "Cup");
+    expectRowRendered(html);
+    expect(html).toContain("Cup ·");
+  });
+
+  it("omits the stage name entirely when not provided (single-stage division)", () => {
+    const html = rowHtml(fx());
+    expectRowRendered(html);
+    expect(html).not.toContain("Cup ·");
+  });
+});
+
 describe("a voided row says WHY it is struck through", () => {
   // Enumerated, not sampled: the three void statuses must be distinguishable
   // from each other, which one lucky sample cannot show.

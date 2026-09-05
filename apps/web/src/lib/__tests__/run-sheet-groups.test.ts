@@ -212,6 +212,32 @@ describe("buildRunSheet — bracket stages keep round sections (owner ruling A2)
     expect(bracket?.kind === "bracket" && bracket.rounds[0].fixtures.map((f) => f.id)).toEqual(["qf1", "qf2"]);
   });
 
+  // F2 (W2 walkthrough gate 1): an untimed OPEN bracket fixture (status
+  // scheduled/in_play, no scheduled_at yet — an entirely ordinary shape for a
+  // round that has not been slotted onto a court) was tested against
+  // `OPEN.has(status)` BEFORE the bracket-membership check, so it fell into
+  // the unscheduled pile — exactly like a non-bracket fixture — instead of
+  // staying in its stage's round section. The bracket's own header then
+  // derived `lastRoundInLane` from a truncated fixture list and reported the
+  // wrong round.
+  it("an untimed bracket fixture with an OPEN status stays in its round section, not the unscheduled pile (F2)", () => {
+    const out = buildRunSheet(
+      input({
+        stages: [CUP],
+        fixtures: [
+          fx({ id: "qf1", stage_id: "s2", round_no: 1, status: "scheduled", scheduled_at: null }),
+          fx({ id: "final", stage_id: "s2", round_no: 2, status: "scheduled", scheduled_at: null }),
+        ],
+      }),
+    );
+    expect(out.some((b) => b.kind === "unscheduled")).toBe(false);
+    const bracket = out.find((b) => b.kind === "bracket");
+    expect(bracket?.kind === "bracket" && bracket.rounds.map((r) => r.round)).toEqual([1, 2]);
+    expect(
+      bracket?.kind === "bracket" && bracket.rounds.flatMap((r) => r.fixtures.map((f) => f.id)),
+    ).toEqual(["qf1", "final"]);
+  });
+
   it("two bracket stages produce two blocks, in stage seq order", () => {
     const out = buildRunSheet(
       input({
@@ -334,7 +360,11 @@ describe("buildRunSheet — the unscheduled group", () => {
     expect(out[out.length - 1].kind).toBe("unscheduled");
   });
 
-  it("collects unscheduled rows from EVERY stage, brackets included, into one group", () => {
+  // F2 fix flips this test's own premise: an untimed OPEN bracket fixture no
+  // longer reaches the unscheduled pile at all — it stays in its stage's
+  // round section (see "buildRunSheet — bracket stages keep round sections"
+  // above). This collects unscheduled rows from every NON-bracket stage.
+  it("collects unscheduled rows from every NON-bracket stage into one group; a bracket's untimed row goes to its own block instead", () => {
     const out = buildRunSheet(
       input({
         stages: [LEAGUE, CUP],
@@ -346,15 +376,19 @@ describe("buildRunSheet — the unscheduled group", () => {
     );
     const tail = out.filter((b) => b.kind === "unscheduled");
     expect(tail).toHaveLength(1);
-    expect(tail[0].kind === "unscheduled" && tail[0].fixtures.map((f) => f.id)).toEqual(["lg", "cup"]);
+    expect(tail[0].kind === "unscheduled" && tail[0].fixtures.map((f) => f.id)).toEqual(["lg"]);
+    const bracket = out.find((b) => b.kind === "bracket");
+    expect(bracket?.kind === "bracket" && bracket.rounds.flatMap((r) => r.fixtures.map((f) => f.id))).toEqual([
+      "cup",
+    ]);
   });
 
   it("orders by stage seq, then round, then seq_in_round", () => {
     const out = buildRunSheet(
       input({
-        stages: [LEAGUE, CUP],
+        stages: [LEAGUE, { id: "s3", seq: 2, kind: "league" }],
         fixtures: [
-          fx({ id: "d", stage_id: "s2", round_no: 1, seq_in_round: 1, scheduled_at: null }),
+          fx({ id: "d", stage_id: "s3", round_no: 1, seq_in_round: 1, scheduled_at: null }),
           fx({ id: "c", stage_id: "s1", round_no: 2, seq_in_round: 1, scheduled_at: null }),
           fx({ id: "b", stage_id: "s1", round_no: 1, seq_in_round: 2, scheduled_at: null }),
           fx({ id: "a", stage_id: "s1", round_no: 1, seq_in_round: 1, scheduled_at: null }),

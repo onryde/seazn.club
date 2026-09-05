@@ -189,3 +189,47 @@ describe("a bracket round section carries its calendar date", () => {
     expect(dayLabel(DAY_KEY, "fr")).not.toBe(dayLabel(DAY_KEY, "en"));
   });
 });
+
+// --- F3 (W2 walkthrough gate 1) ---------------------------------------------
+//
+// Bracket blocks carry their stage; day blocks carry a date; the unscheduled
+// and settled groups carry neither — and they are the two that merge every
+// stage. With 20 of 31 rows in the unscheduled queue in the reported
+// division, "Round 1 · Bravo vs Echo" appeared twice, two rows apart, one
+// live and one never scheduled, with nothing on screen resolving them.
+describe("the unscheduled and settled groups name their stage in a multi-stage division (F3)", () => {
+  const ALPHA = { id: "s1", seq: 1, kind: "league", name: "Alpha" };
+  const BETA = { id: "s2", seq: 2, kind: "league", name: "Beta" };
+
+  it("an unscheduled row from each stage prints that stage's name", () => {
+    const html = sheetHtml(
+      [
+        fx(1, { stage_id: "s1", scheduled_at: null, status: "scheduled" }),
+        fx(2, { stage_id: "s2", scheduled_at: null, status: "scheduled" }),
+      ],
+      [ALPHA, BETA],
+    );
+    expect(html).toContain("data-run-sheet-block=\"unscheduled\"");
+    expect(html).toContain("Alpha ·");
+    expect(html).toContain("Beta ·");
+  });
+
+  it("a settled row from each stage prints that stage's name", () => {
+    const html = sheetHtml(
+      [
+        fx(1, { stage_id: "s1", scheduled_at: null, status: "decided", outcome: { kind: "win", winner: "e1" } }),
+        fx(2, { stage_id: "s2", scheduled_at: null, status: "decided", outcome: { kind: "win", winner: "e1" } }),
+      ],
+      [ALPHA, BETA],
+    );
+    expect(html).toContain("data-run-sheet-block=\"settled\"");
+    expect(html).toContain("Alpha ·");
+    expect(html).toContain("Beta ·");
+  });
+
+  it("a SINGLE-stage division's unscheduled row names no stage at all", () => {
+    const html = sheetHtml([fx(1, { scheduled_at: null, status: "scheduled" })], LEAGUE);
+    expect(html).toContain("data-run-sheet-block=\"unscheduled\"");
+    expect(html).not.toContain("League ·");
+  });
+});

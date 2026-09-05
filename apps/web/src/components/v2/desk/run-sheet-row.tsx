@@ -95,6 +95,7 @@ export function RunSheetRow({
   venues,
   boardSlotOptions,
   onRescheduled,
+  stageName,
 }: {
   fixture: RunSheetFixture;
   href: string;
@@ -126,6 +127,15 @@ export function RunSheetRow({
   /** Fired after a "Set time" save lands, so the sheet can offer the same
    *  notice+undo affordance the rest of the panel already does. */
   onRescheduled?: () => void;
+  /** F3 (W2 walkthrough gate 1): the unscheduled and settled groups merge
+   *  every stage into one list with nothing on the row identifying which
+   *  stage a fixture belongs to — two same-named "Round 1 · Bravo vs Echo"
+   *  rows from different stages were indistinguishable. `RunSheet` passes
+   *  this only for those two blocks, and only when the division has more
+   *  than one stage (single-stage divisions gain no noise); day and bracket
+   *  blocks never pass it — a day header/bracket section already identifies
+   *  its stage. */
+  stageName?: string | null;
 }) {
   const msg = useMsg();
   const router = useRouter();
@@ -377,6 +387,7 @@ export function RunSheetRow({
           )}
           <div className="min-w-0 flex-1">
             <p className="min-w-0 truncate text-xs text-slate-500">
+              {stageName ? `${stageName} · ` : ""}
               {courtLabel ? `${courtLabel} · ` : ""}
               {msg("schedule.round", { n: fixture.round_no })}
             </p>
