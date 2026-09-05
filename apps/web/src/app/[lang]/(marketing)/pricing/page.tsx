@@ -2,7 +2,6 @@ import type { Metadata } from "next";
 import { Fragment } from "react";
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { sql } from "@/lib/db";
 import { MarketingShell } from "@/components/marketing/marketing-shell";
 import { TrackOnMount } from "@/components/analytics-track-mount";
 import { EVENTS } from "@/lib/analytics-events";
@@ -15,11 +14,13 @@ import {
 } from "@/lib/pricing-matrix";
 import { lowestPricedRung, passLadderOptions, PASS_RUNG_MARKETING_KEY } from "@/lib/pass-ladder";
 import {
-  FREE_FEATURES,
-  PASS_FEATURES,
-  PRO_FEATURES,
+  FREE_CARD_BULLETS,
+  PASS_CARD_BULLETS,
+  PRO_CARD_BULLETS,
   PASS_CREDIT_GRANT,
+  cardBullets,
 } from "@/lib/pricing-cards";
+import { loadPricingMatrix } from "@/lib/pricing-matrix-server";
 import {
   formatMinor,
   lowestCreditPackAmount,
@@ -112,23 +113,6 @@ async function passColumnCta(): Promise<ReturnType<typeof passCtaVariant>> {
   return passCtaVariant({ signedIn: true, paidPlan });
 }
 
-async function loadMatrix(): Promise<MatrixData> {
-  const rows = await sql<
-    { plan_key: string; feature_key: string; bool_value: boolean | null; int_value: number | null }[]
-  >`
-    select plan_key, feature_key, bool_value, int_value
-    from plan_entitlements
-    where plan_key = any(${[...PRICING_PLAN_KEYS]})`;
-  const data: MatrixData = {};
-  for (const r of rows) {
-    (data[r.feature_key] ??= {})[r.plan_key] = {
-      bool_value: r.bool_value,
-      int_value: r.int_value,
-    };
-  }
-  return data;
-}
-
 export default async function PricingPage({
   params,
 }: {
@@ -143,7 +127,7 @@ export default async function PricingPage({
   // plan_entitlements so marketing can never drift from what the resolver
   // enforces (spec 2026-07-18 pro-plus-tier §5; v17 SPEC-6 A1 for credits). DB
   // may be unreachable at build: fail soft to an empty table.
-  const matrix: MatrixData = await loadMatrix().catch(() => ({}));
+  const matrix: MatrixData = await loadPricingMatrix().catch(() => ({}));
   const sections = buildPricingSections(matrix);
 
   // v17 AI credit wallet (SPEC-6 A1): each plan's monthly grant is the live
@@ -333,7 +317,7 @@ export default async function PricingPage({
                   </p>
                 )}
                 <ul className="mb-8 flex-1 space-y-2.5 text-sm text-slate-600">
-                  {FREE_FEATURES.map((f) => (
+                  {cardBullets(d, FREE_CARD_BULLETS, matrix).map((f) => (
                     <li key={f} className="flex items-start gap-2">
                       <span className="mt-0.5 text-emerald-500">✓</span>
                       {f}
@@ -435,7 +419,7 @@ export default async function PricingPage({
                   </p>
                 )}
                 <ul className="mb-8 flex-1 space-y-2.5 text-sm text-slate-600">
-                  {PASS_FEATURES.map((f) => (
+                  {cardBullets(d, PASS_CARD_BULLETS, matrix).map((f) => (
                     <li key={f} className="flex items-start gap-2">
                       <span className="mt-0.5 text-[#4d7c0f]">✓</span>
                       {f}
@@ -471,7 +455,7 @@ export default async function PricingPage({
                 monthly={proMonthly}
                 annualPerMonth={formatMinor(Math.round(proPrice("annual", currency) / 12), currency)}
                 annualTotal={formatMinor(proPrice("annual", currency), currency)}
-                features={PRO_FEATURES}
+                features={cardBullets(d, PRO_CARD_BULLETS, matrix)}
                 creditsLine={proCreditsLine ?? undefined}
                 ctaLabel={t(d, "pricing.plus.cta")}
               />
@@ -513,10 +497,10 @@ export default async function PricingPage({
 
             {/* Feature comparison table — rendered from plan_entitlements,
                 grouped into ENTITLEMENT_DOMAINS sections. Columns come from
-                PRICING_PLAN_KEYS, the same tuple `loadMatrix` selects on, so a
-                plan can never be read from the database and then have nowhere
-                to render. Wider than the card grid on purpose: the Event Pass
-                is one card and two columns, because the rungs differ in the
+                PRICING_PLAN_KEYS, the same tuple `loadPricingMatrix` selects on,
+                so a plan can never be read from the database and then have
+                nowhere to render. Wider than the card grid on purpose: the Event
+                Pass is one card and two columns, because the rungs differ in the
                 only two rows a buyer chooses between. */}
             {sections.length > 0 && (
               <div className="scroll-x scroll-x-fade mt-12 rounded-2xl border border-purple-100 bg-white">

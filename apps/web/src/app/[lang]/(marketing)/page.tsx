@@ -14,6 +14,7 @@ import { MotifDivider } from "@/components/marketing/motif-divider";
 import { TicketStubs } from "@/components/marketing/ticket-stubs";
 import { marketingPreview } from "@/lib/marketing/format-preview";
 import { preferredCurrency } from "@/lib/currency-server";
+import { loadPricingMatrix } from "@/lib/pricing-matrix-server";
 import { getDictionary, t } from "@/lib/i18n";
 import { hasLocale } from "@/lib/i18n-constants";
 
@@ -70,10 +71,18 @@ export default async function HomePage({ params }: { params: Promise<{ lang: str
   ] as const;
 
   // Fail-soft: DB may be unreachable at build (same contract as before).
-  const [liveNow, thisWeek, currency] = await Promise.all([
+  //
+  // `planMatrix` joined this list when the ticket stubs' bullets became
+  // dictionary copy: the caps and fee rates they quote are interpolated from
+  // `plan_entitlements`, through the SAME loader /pricing reads, so the stub
+  // and the full card can never quote different numbers for the same plan.
+  // Empty on failure — `cardBullets` then drops the bullets it cannot fill
+  // rather than rendering "{entrants} entrants per division".
+  const [liveNow, thisWeek, currency, planMatrix] = await Promise.all([
     getDiscoveryLive().catch(() => []),
     getDiscoveryThisWeek().catch(() => []),
     preferredCurrency(null).catch(() => "usd" as const),
+    loadPricingMatrix().catch(() => ({})),
   ]);
   // SSR default draw = the configurator's no-JS fallback (design/v3/12 §4.4).
   const defaultDraw = marketingPreview("groups-knockout", 8);
@@ -197,7 +206,7 @@ export default async function HomePage({ params }: { params: Promise<{ lang: str
               {t(d, "home.finale.title")}
             </h2>
             <p className="mb-10 text-sm text-[#b7aede]">{t(d, "home.finale.subhead")}</p>
-            <TicketStubs currency={currency} />
+            <TicketStubs currency={currency} dict={d} matrix={planMatrix} />
             {/* "Create free account" is the wrong ask of someone who already
                 has one, so the signed-in pair leads with the console instead.
                 Starting a tournament stays available — an existing organiser is

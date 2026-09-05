@@ -1030,8 +1030,12 @@ describe.skipIf(!HAS_DB)("the four-locale dictionaries say what the resolver enf
     // 248 -> 252: `pricing.pass.crossover`, the pass-vs-Pro comparator W2 added
     // to the Event Pass card — the page priced both offers and never said which
     // one was cheaper, or from what volume of entry fees that changes.
+    // 252 -> 340: the 22 plan-card bullets W2 moved out of `pricing-cards.ts`'s
+    // hardcoded English arrays and into the four dictionaries. They are the
+    // cards' claims about what each plan grants, and until this wave they were
+    // not dictionary copy at all — /es/pricing rendered them in English.
     // A count, not a floor, so a DELETED pin reds too.
-    expect(APPROVED_DICTIONARY_COPY.length * DICTIONARY_LOCALES.length).toBe(252);
+    expect(APPROVED_DICTIONARY_COPY.length * DICTIONARY_LOCALES.length).toBe(340);
     // Every entry must say what it claims and what decides it — a pin with no
     // `why` is a snapshot, and a snapshot teaches the next editor to re-record
     // rather than to re-check.
@@ -1076,6 +1080,18 @@ describe.skipIf(!HAS_DB)("the four-locale dictionaries say what the resolver enf
       match: /^pricing\.pass\.crossover$/,
       pinned: true,
       why: "names the point where a month of Pro overtakes the Event Pass, and the two platform-fee rates that put it there. Every figure is live (lib/pricing-crossover.ts over stripe-plans.json + registration.fee_percent); the words are what say which side is which, and swapping them mis-sells the one-time sku",
+    },
+    {
+      // W2 (entitlements v18): the three plan cards' bullets. They were
+      // hardcoded English arrays in lib/pricing-cards.ts until this wave and
+      // had no dictionary keys at all, which is exactly why nothing here
+      // classified them — the most claim-bearing copy on the page was outside
+      // the rule that exists to make every pricing string a decision, because
+      // the rule can only see keys. Every figure they quote is now interpolated
+      // from plan_entitlements, so what is pinned is the wording.
+      match: /^pricing\.(community|pass|pro)\.f\d+$/,
+      pinned: true,
+      why: "the Community / Event Pass / Pro card bullets. Each names the plan_entitlements rows its card claims; the caps and fee rates inside them are interpolated live by cardBullets in lib/pricing-cards.ts, and the English rendering is judged against the matrix by CARD_SURFACES in lib/__tests__/pricing-cards.test.ts. Pinned here for the WORDS, in four locales side by side",
     },
     {
       match: /^pricing\.faq\./,

@@ -57,6 +57,17 @@ import {
 import { feeCrossoverMinor, readableMinor } from "@/lib/pricing-crossover";
 import { PASS_RUNG_MARKETING_KEY } from "@/lib/pass-ladder";
 import enMarketing from "@/dictionaries/en/marketing.json";
+import esMarketing from "@/dictionaries/es/marketing.json";
+import frMarketing from "@/dictionaries/fr/marketing.json";
+import nlMarketing from "@/dictionaries/nl/marketing.json";
+import {
+  FREE_CARD_BULLETS,
+  PASS_CARD_BULLETS,
+  PRO_CARD_BULLETS,
+  cardBullets,
+} from "@/lib/pricing-cards";
+import type { MatrixData } from "@/lib/pricing-matrix";
+import type { Dict } from "@/lib/i18n-constants";
 
 /** Each rung's usd price AS THE PAGE RENDERS IT — derived, never typed. W3
  *  repriced both rungs onto charm points ("$15" became "$11.99"), and a typed
@@ -98,14 +109,32 @@ const LIVE = [
   { plan_key: "event_pass", feature_key: "registration.fee_percent", bool_value: null, int_value: 4 },
   { plan_key: "event_pass_l", feature_key: "registration.fee_percent", bool_value: null, int_value: 4 },
   { plan_key: "pro", feature_key: "registration.fee_percent", bool_value: null, int_value: 2 },
+  // W2: the CARD BULLETS interpolate their figures from this same matrix, so
+  // the rows they read joined the fixture. `competitions.max_active` is NULL on
+  // pro on purpose — that is the "Unlimited competitions" branch, and a row
+  // that is merely ABSENT would drop the bullet instead of rendering the word.
+  { plan_key: "community", feature_key: "competitions.max_active", bool_value: null, int_value: 3 },
+  { plan_key: "pro", feature_key: "competitions.max_active", bool_value: null, int_value: null },
+  { plan_key: "pro", feature_key: "divisions.per_competition.max", bool_value: null, int_value: 20 },
+  { plan_key: "pro", feature_key: "entrants.per_division.max", bool_value: null, int_value: 256 },
 ];
 
-const render = async (rows = LIVE) => {
+const render = async (rows = LIVE, lang = "en") => {
   h.rows = rows;
-  const markup = renderToStaticMarkup(await PricingPage({ params: Promise.resolve({ lang: "en" }) }));
+  const markup = renderToStaticMarkup(await PricingPage({ params: Promise.resolve({ lang }) }));
   // Tailwind ships class names like `text-2xl` and `basis-full` in every class
   // list, so copy guards must run on stripped text, not on HTML.
-  return { markup, text: markup.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ") };
+  const text = markup.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ");
+  // React escapes `& < > " '` in a text node, so a bullet reading "Online
+  // registration & entry fees" arrives as "&amp;" and every `toContain` on a
+  // dictionary value silently misses. `plain` is the text a reader sees.
+  const plain = text
+    .replace(/&amp;/g, "&")
+    .replace(/&#x27;|&#39;/g, "'")
+    .replace(/&quot;/g, '"')
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">");
+  return { markup, text, plain };
 };
 
 describe("/pricing renders only the Event Pass rungs that are on sale", () => {
@@ -348,4 +377,95 @@ describe("/pricing names where Pro overtakes the Event Pass", () => {
   // level they are unkillable. `readableMinor`'s own "nothing to render" floor
   // catches the ±Infinity and NaN those shapes produce, so a page test for them
   // stays green with the helper's guard deleted, and would be decoration.
+});
+
+/**
+ * ── THE SECONDARY, WEAKER GUARD: what a Spanish visitor actually reads ──────
+ *
+ * The PRIMARY guard for the plan-card bullets is the source scan in
+ * `lib/__tests__/pricing-card-i18n.test.ts`. It has to be, because this test
+ * CANNOT tell a dictionary lookup from a hardcoded Spanish literal — both
+ * render the same bytes, so it would go on passing the moment someone pastes
+ * translated prose back into the component and lets the other three locales
+ * rot. Say that out loud rather than leave the next reader to assume the
+ * rendered assertion is the one doing the work.
+ *
+ * What it DOES add, and the source scan cannot: it drives the real page
+ * component, in the real locale, through `getDictionary`'s en-merge — so a key
+ * that exists in `en` and is simply MISSING from `es` (parity-green if the key
+ * were absent everywhere, and invisible to a per-file read) shows up here as
+ * English on a Spanish page. That is the leak this catches.
+ *
+ * Scoped to the CARD BULLETS. `ProPriceCard`'s own chrome ("Annual billing",
+ * "Billed monthly · switch to yearly any time", the "/month" suffix) is still
+ * hardcoded English in every locale — a REAL, pre-existing defect on this page,
+ * out of this task's scope and recorded rather than swept into an assertion
+ * that would red on it here.
+ */
+describe("the plan cards speak the visitor's language", () => {
+  const DICTS: Record<string, Dict> = {
+    en: enMarketing as Dict,
+    es: esMarketing as Dict,
+    fr: frMarketing as Dict,
+    nl: nlMarketing as Dict,
+  };
+
+  /** The fixture rows, in the shape `cardBullets` reads — so the expectations
+   *  are what the page's own resolver produces for that locale, never a table
+   *  of sentences typed into this file. */
+  const FIXTURE: MatrixData = LIVE.reduce<MatrixData>((acc, r) => {
+    (acc[r.feature_key] ??= {})[r.plan_key] = {
+      bool_value: r.bool_value,
+      int_value: r.int_value,
+    };
+    return acc;
+  }, {});
+
+  const bulletsIn = (locale: string): string[] => [
+    ...cardBullets(DICTS[locale]!, FREE_CARD_BULLETS, FIXTURE),
+    ...cardBullets(DICTS[locale]!, PASS_CARD_BULLETS, FIXTURE),
+    ...cardBullets(DICTS[locale]!, PRO_CARD_BULLETS, FIXTURE),
+  ];
+
+  it("renders every card bullet in English on /en/pricing", async () => {
+    const { plain } = await render(LIVE, "en");
+    const expected = bulletsIn("en");
+    expect(expected.length, "no bullets to check — the cards render nothing").toBe(22);
+    for (const bullet of expected) expect(plain, bullet).toContain(bullet);
+  });
+
+  it.each(["es", "fr", "nl"])(
+    "renders every card bullet in %s, and no English one, on that locale's page",
+    async (locale) => {
+      const { plain } = await render(LIVE, locale);
+      const translated = bulletsIn(locale);
+      const english = bulletsIn("en");
+      expect(translated.length).toBe(22);
+
+      for (const bullet of translated) {
+        expect(plain, `${locale}: missing "${bullet}"`).toContain(bullet);
+      }
+      // The leak, stated as the ABSENCE of the English the page used to ship.
+      // Every one of these is a full bullet, so it cannot collide with a
+      // matrix row label or an FAQ clause by accident.
+      for (const bullet of english) {
+        expect(plain, `${locale}: English leaked — "${bullet}"`).not.toContain(bullet);
+      }
+      // Anti-vacuity: the two sets really are different, so "no English" is not
+      // satisfied by the locale happening to equal en.
+      expect(translated.filter((b) => english.includes(b)), `${locale} is not translated`).toEqual([]);
+    },
+  );
+
+  it("still quotes the live caps and fee rates in a non-English locale", async () => {
+    // The FIGURES are locale-free data and must survive translation — a
+    // translator dropping "{entrants}" produces a grammatical Spanish sentence
+    // that no longer names the cap, and only the numbers can witness it.
+    const { plain } = await render(LIVE, "es");
+    for (const figure of ["3", "4", "64", "5%", "10", "128", "256", "20", "2%"]) {
+      expect(plain, `es: the ${figure} figure`).toContain(figure);
+    }
+    // …and nothing shipped a raw placeholder.
+    expect(plain, "an unfilled placeholder reached the page").not.toMatch(/\{[a-z]\w*\}/i);
+  });
 });

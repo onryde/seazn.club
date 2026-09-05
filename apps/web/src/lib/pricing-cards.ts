@@ -5,26 +5,77 @@ import { formatMinor, proPrice, type Currency, type PassKey } from "@/lib/curren
 // in which either binding is unset. Both modules are pure, with no `server-only`
 // and no module-scope `sql`.
 import { lowestPassRung } from "@/lib/pass-ladder";
+import { t, type TKey } from "@/lib/i18n-runtime";
+import type { Dict } from "@/lib/i18n-constants";
+import type { MatrixData } from "@/lib/pricing-matrix";
 
 // Single source for plan-card bullets — shared by /pricing and the home
 // ticket stubs so the two can never drift (design/v3/12 §4.8).
-// V311 (D22): these numbers are pinned against the live matrix by
-// lib/__tests__/pricing-cards.test.ts. Moving a cap means moving the copy here
-// AND in billing.community.* / billing.pro.* across all four dictionaries.
-export const FREE_FEATURES = [
+//
+// ── THESE ARE KEYS, NOT SENTENCES (entitlements v18 W2) ─────────────────────
+// Until this wave the three arrays below held plain ENGLISH STRINGS and both
+// surfaces rendered them verbatim, in every locale. A Spanish visitor to
+// /es/pricing read a localised crossover sentence, a localised FAQ and a
+// localised comparison matrix, and then three cards of English bullets. It was
+// deliberate once — the deleted Pro Plus card's own comment said its text "is
+// fully localized, unlike the other three cards' hardcoded-English arrays" —
+// and this wave changing five of those bullets' values is what made the debt
+// due: "any new or CHANGED user-facing string → all four locale dictionaries".
+//
+// ── AND THE NUMBERS ARE INTERPOLATED, NOT WRITTEN ───────────────────────────
+// Every figure a bullet quotes is a matrix claim, so each one names the
+// `plan_entitlements` row it comes from and `cardBullets` fills it at render
+// time. Copy that quotes a number goes stale under the row it describes — this
+// programme has fixed exactly that four times (V392 re-cut community's
+// active-competition cap to 3 against a card still promising 10; V395 took
+// badge removal off Pro; V397 re-cut the fee ladder to 5/4/2/1; the withdrawn
+// L rung's caps outlived its sale) — and a number typed into FOUR locale files
+// goes stale four times and is corrected once. `pricing-card-i18n.test.ts`
+// forbids a digit anywhere in these keys' copy, in any locale.
+//
+// What the copy still ASSERTS in words — that Pro's competitions are
+// "unlimited", that a bullet's capability exists on its plan at all — is judged
+// against the live matrix by `CARD_SURFACES` in `lib/__tests__/pricing-cards.test.ts`.
+
+/** One bullet: the dictionary key it renders from, and the `plan_entitlements`
+ *  rows its placeholders read.
+ *
+ *  `vars` maps a `{placeholder}` name to a `[feature_key, plan_key]` pair. The
+ *  plan is NOT always the card's own — the Event Pass card quotes community's
+ *  rate as the comparator its own rate is cheaper than. */
+export interface CardBullet {
+  key: TKey;
+  vars?: Readonly<Record<string, readonly [feature: string, plan: string]>>;
+}
+
+// The pass card sells the rungs in `SELLABLE_PASS_KEYS`, which is `event_pass`
+// alone since the owner took the L rung off sale (2026-09-05). Named literally
+// rather than derived: the copy says "N divisions, M entrants each" in the
+// singular, so a second rung coming back on sale is a COPY change, not a
+// silently-picked plan key. `pricing-cards.test.ts`'s "the pass bullet names
+// the division cap of every rung on sale, and no other" is what reds the day
+// that happens, and it reads SELLABLE_PASS_KEYS rather than this file.
+const PASS_RUNG = "event_pass";
+
+export const FREE_CARD_BULLETS: readonly CardBullet[] = [
   // 3, not 10: V392 (entitlements v18 W2 T1) re-cut community's active
-  // competition cap. The number is quoted here and in billing.community.f1
-  // across four dictionaries; `cardMatrixFaults` pins this one and
-  // pricing-cards.test.ts pins those.
-  "3 active competitions, 4 divisions",
-  "64 entrants per division",
-  "League, groups + knockout & swiss formats",
+  // competition cap. Both figures are read from the matrix now, so this
+  // sentence cannot be wrong about either of them again.
+  {
+    key: "pricing.community.f1",
+    vars: {
+      competitions: ["competitions.max_active", "community"],
+      divisions: ["divisions.per_competition.max", "community"],
+    },
+  },
+  { key: "pricing.community.f2", vars: { entrants: ["entrants.per_division.max", "community"] } },
+  { key: "pricing.community.f3" },
   // V310: charging entry fees is free on every plan — only the platform cut
-  // differs (5 / 4 / 2 / 1% since V397). "Free-event" undersold Community and made the
-  // pass look like it unlocked payment rather than a cheaper rate.
-  "Online registration & entry fees (5% fee)",
-  "Live standings & public dashboard",
-  "Listed on the seazn.club showcase",
+  // differs (5 / 4 / 2 / 1% since V397). "Free-event" undersold Community and
+  // made the pass look like it unlocked payment rather than a cheaper rate.
+  { key: "pricing.community.f4", vars: { fee: ["registration.fee_percent", "community"] } },
+  { key: "pricing.community.f5" },
+  { key: "pricing.community.f6" },
 ];
 
 // Every bullet here must be something the event_pass column actually LIFTS off
@@ -32,32 +83,42 @@ export const FREE_FEATURES = [
 // `exports` are true for Community (V310) and `dashboard.branding` — the org
 // theme colour — stays denied to the pass. The real grant is `exports.branded`.
 // The first four are also the home-page stub (ticketTiers slices them).
-export const PASS_FEATURES = [
+export const PASS_CARD_BULLETS: readonly CardBullet[] = [
   // v17 gap wave 7 (#298): "forever" was false. V328/V334 (`org_has_feature`)
   // bind the pass to the competition's OWN lifecycle — the pass arm drops out
   // once the competition is archived or completed, or more than 7 days past its
   // end date. This is the same bound `pricing.pass.note` and `upgrade.intro`
-  // state in all four dictionaries; the bullets on this card are hardcoded
-  // English (the pass/Community/Pro cards render these arrays directly), so the
-  // sentence has to be corrected HERE as well as there.
-  "Upgrades ONE competition while it runs",
+  // state in all four dictionaries, and now this bullet states it in the same
+  // four rather than in English alone.
+  { key: "pricing.pass.f1" },
   // v17 #294 made this line name BOTH rungs' ceilings, because leading with
   // M's alone read as "an Event Pass caps at 128" — the exact limit an L buyer
   // was paying to remove. Owner decision 2026-09-05 took the L rung off sale,
-  // so the second half now names an offer with no checkout behind it: the card
+  // so the second half named an offer with no checkout behind it: the card
   // would be advertising 512 entrants that nothing on the site will sell. It
-  // goes, and the line is M's ceilings again — which is the whole ladder now.
-  //
-  // The figures stay written out rather than derived because this array is the
-  // card's hardcoded English (see the header above); `capClaimFaults`
-  // (lib/copy-truth.ts) is what holds them to `plan_entitlements`, including
-  // the rule that a numeric cap may not also be called unlimited.
-  "10 divisions, 128 entrants each",
-  "Advanced formats — double elim, ladders",
-  "4% platform fee on entry fees, not 5%",
-  "Branded exports & public player cards",
-  "Sponsor tiers & paid sponsorship packages",
-  "Realtime scoreboard & slideshow",
+  // went, and the line is the sellable rung's ceilings — which is the whole
+  // ladder now.
+  {
+    key: "pricing.pass.f2",
+    vars: {
+      divisions: ["divisions.per_competition.max", PASS_RUNG],
+      entrants: ["entrants.per_division.max", PASS_RUNG],
+    },
+  },
+  { key: "pricing.pass.f3" },
+  // BOTH rates, because the claim is a comparison: the pass is cheaper per
+  // pound of entry fees THAN COMMUNITY. Quoting only the pass's own rate would
+  // survive a change to community's and stop being a saving at all.
+  {
+    key: "pricing.pass.f4",
+    vars: {
+      fee: ["registration.fee_percent", PASS_RUNG],
+      communityFee: ["registration.fee_percent", "community"],
+    },
+  },
+  { key: "pricing.pass.f5" },
+  { key: "pricing.pass.f6" },
+  { key: "pricing.pass.f7" },
   // v17 (SPEC-6 A1): the retired "10 AI schedule runs per division" line is
   // gone — the graded run cap became the credit wallet (V322). The pass's
   // credit story is the dedicated credits line on the card (PASS_CREDIT_GRANT),
@@ -99,22 +160,28 @@ export const PASS_CREDIT_GRANT: Record<PassKey, number> = {
   event_pass_l: 35,
 };
 
-export const PRO_FEATURES = [
+export const PRO_CARD_BULLETS: readonly CardBullet[] = [
   // HALF of this was true and half was not. `competitions.max_active` is still
   // null on pro; `divisions.per_competition.max` is 20 since V392. One bullet
   // covering two rows outlives a change to either, which is exactly how it
   // came to promise a cap the resolver enforces at 20.
-  "Unlimited competitions, 20 divisions each",
-  "256 entrants per division",
-  "Entry fees at a 2% platform fee",
+  //
+  // Only the division cap is interpolated: "Unlimited" is a claim about a NULL
+  // row, which has no number to render. `CARD_SURFACES`'s `unlimited` regex is
+  // what holds it — move `competitions.max_active` off null on pro and
+  // `cardMatrixFaults` reds with "card claims UNLIMITED … but the matrix caps
+  // pro at N".
+  { key: "pricing.pro.f1", vars: { divisions: ["divisions.per_competition.max", "pro"] } },
+  { key: "pricing.pro.f2", vars: { entrants: ["entrants.per_division.max", "pro"] } },
+  { key: "pricing.pro.f3", vars: { fee: ["registration.fee_percent", "pro"] } },
   // W1 (entitlements v18, owner ruling 2026-08-30): was "Ball-by-ball & rally
   // scoring, player stats". V390 deleted `scoring.ball_by_ball` and
   // `scoring.rally_by_rally` from `plan_entitlements`, so two thirds of that
   // bullet promised rows that no longer exist — and, worse, sold a capability
   // Community now has in full. `stats.player` is the third of the three and is
   // still Pro-only, so the bullet keeps its row and loses its falsehood.
-  "Player stats & scorecards",
-  "Officials, exports, API keys, device links",
+  { key: "pricing.pro.f4" },
+  { key: "pricing.pro.f5" },
   // WAS "Remove the “Powered by Seazn” badge". V395 (W2 T15, owner ruling
   // 2026-09-03) made badge removal ENTERPRISE-only — every self-serve plan
   // carries the badge now, Pro included — so this bullet promised a row Pro no
@@ -122,16 +189,16 @@ export const PRO_FEATURES = [
   // which IS a Pro grant and is the visual differentiator the badge line used
   // to stand in for. Replaced rather than dropped: the card keeps a claim about
   // how a Pro org's public pages look, and it is one the matrix backs.
-  "Your club colours on public pages & slideshow",
+  { key: "pricing.pro.f6" },
   // v16 league-ops (T84): suspensions/discipline, official ratings and
   // auto-drafted news posts all seed true on Pro (V293/V294/V295).
-  "Suspensions & discipline tracking",
+  { key: "pricing.pro.f7" },
   // V392 brought `officials.auto` down from the deleted Pro Plus to Pro, so the
   // Pro card can make this claim for the first time. Folded into the ratings
   // bullet rather than added as a tenth: one bullet, two rows
   // (`officials.auto` + `officials.marks`), both pinned in CARD_SURFACES.
-  "Auto officials assignment & ratings",
-  "Auto-drafted result posts",
+  { key: "pricing.pro.f8" },
+  { key: "pricing.pro.f9" },
 ];
 
 // The Pro Plus CARD ARRAYS were deleted here in W2 (entitlements v18, V392 +
@@ -154,6 +221,48 @@ export const PRO_FEATURES = [
 // unrendered ARRAY costs a guard's attention. Enterprise is a Contact-us strip
 // (design §4), not a priced column, so nothing replaces this here.
 
+/**
+ * Render a card's bullets in one locale, filling every figure from the live
+ * matrix.
+ *
+ * A bullet whose numbers are not all readable is DROPPED, not rendered with a
+ * hole. Two reasons, and the first is the page's own standing rule for this
+ * data: `loadPricingMatrix` fails soft to `{}` when the DB is unreachable at
+ * build, and "absence must suppress the block, not embellish it" is exactly how
+ * the M/L ladder above the bullets already behaves. The second is mechanical —
+ * `interpolate` leaves an unknown `{name}` in the output VERBATIM, so a missing
+ * row would otherwise ship a literal "{entrants} entrants per division" onto a
+ * buyer's screen.
+ *
+ * A null `int_value` is a legitimate value meaning UNLIMITED, and it is not a
+ * number a cap sentence can render, so it suppresses the bullet too. Nothing on
+ * these three cards quotes an unlimited row through a placeholder — Pro's
+ * "Unlimited competitions" says the word instead — so that branch costs no
+ * copy today and cannot silently print "null divisions" tomorrow.
+ */
+export function cardBullets(
+  d: Dict,
+  bullets: readonly CardBullet[],
+  matrix: MatrixData,
+): string[] {
+  const out: string[] = [];
+  for (const bullet of bullets) {
+    const vars: Record<string, number> = {};
+    let readable = true;
+    for (const [name, [feature, plan]] of Object.entries(bullet.vars ?? {})) {
+      const value = matrix[feature]?.[plan]?.int_value;
+      if (typeof value !== "number") {
+        readable = false;
+        break;
+      }
+      vars[name] = value;
+    }
+    if (!readable) continue;
+    out.push(t(d, bullet.key, vars));
+  }
+  return out;
+}
+
 export interface TicketTier {
   tier: string;
   price: string;
@@ -169,13 +278,21 @@ export interface TicketTier {
 
 /** The three home-page ticket stubs (design/v3/12 §4.8): headline bullets
  *  only — the full matrix lives on /pricing. Home STAYS 3 stubs (Community /
- *  Event Pass / Pro) even after Pro Plus ships — /pricing carries the full
- *  4-offer ladder via PlusReveal's progressive disclosure. */
-export function ticketTiers(currency: Currency): TicketTier[] {
+ *  Event Pass / Pro).
+ *
+ *  Takes the dictionary and the matrix rather than reading either itself: the
+ *  home page is a Server Component that already has both in hand, and this
+ *  module must stay pure (no `server-only`) because `lib/billing.ts` and
+ *  `lib/pass-ladder.ts` import `PASS_CREDIT_GRANT` from it. */
+export function ticketTiers(currency: Currency, d: Dict, matrix: MatrixData): TicketTier[] {
   return [
-    { tier: "Community", price: "Free", bullets: FREE_FEATURES.slice(0, 4) },
     {
-      tier: "Event Pass",
+      tier: t(d, "pricing.community.name"),
+      price: t(d, "pricing.community.price"),
+      bullets: cardBullets(d, FREE_CARD_BULLETS, matrix).slice(0, 4),
+    },
+    {
+      tier: t(d, "pricing.pass.name"),
       // The LOWEST rung, marked as a floor — the stub has no room to compare
       // two, and "from" hands the reader to /pricing for the difference.
       //
@@ -183,17 +300,17 @@ export function ticketTiers(currency: Currency): TicketTier[] {
       // only while M is the cheapest rung — precisely the assumption
       // `lowestPassRung` exists to delete. A discount on L, or a rung added
       // underneath, now moves this number with it.
-      prefix: "from",
+      prefix: t(d, "pricing.pass.from"),
       price: formatMinor(lowestPassRung(currency).amountMinor, currency),
-      period: " once",
-      bullets: PASS_FEATURES.slice(0, 4),
+      period: t(d, "home.stub.once"),
+      bullets: cardBullets(d, PASS_CARD_BULLETS, matrix).slice(0, 4),
       glow: true,
     },
     {
-      tier: "Pro",
+      tier: t(d, "pricing.table.pro"),
       price: formatMinor(proPrice("monthly", currency), currency),
-      period: "/mo",
-      bullets: PRO_FEATURES.slice(0, 4),
+      period: t(d, "home.stub.perMonth"),
+      bullets: cardBullets(d, PRO_CARD_BULLETS, matrix).slice(0, 4),
     },
   ];
 }
