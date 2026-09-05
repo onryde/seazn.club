@@ -120,12 +120,18 @@ const ymd = (ms: number) => new Date(ms).toISOString().slice(0, 10);
  *  officials or this feature, and out of this task's scope to fix (worth a
  *  separate finding) — worked around here by simply not typing a long org
  *  name into the walkthrough this task is supposed to be testing. */
-async function freshProPlusOrg(request: APIRequestContext, label: string): Promise<string> {
+// RENAMED from `freshProPlusOrg` when entitlements v18 landed: V392 deleted the
+// `pro_plus` plan outright, so `setOrgPlanBySql` no longer accepts that key and
+// this file stopped compiling the moment the two branches met. `pro` is the top
+// SELF-SERVE plan now — `enterprise` exists but is `is_public = false`, the
+// Contact-us tier, and is not what a walkthrough should be exercising. Pro grants
+// `officials.auto`, which is what this spec is actually about.
+async function freshProOrg(request: APIRequestContext, label: string): Promise<string> {
   const org = await apiJson<{ id: string }>(request, "/api/orgs", "POST", {
     name: `${label} ${TAG}`,
   });
   if (!org.data) throw new Error(`org create → ${org.status} ${JSON.stringify(org.error)}`);
-  await setOrgPlanBySql({ orgId: org.data.id }, "pro_plus");
+  await setOrgPlanBySql({ orgId: org.data.id }, "pro");
   const activated = await apiJson(request, "/api/orgs/active", "POST", { org_id: org.data.id });
   if (activated.status >= 300) throw new Error(`org activate → ${activated.status}`);
   return org.data.id;
@@ -328,7 +334,7 @@ test.describe("the officials handoff, both people driven", () => {
     officialCtx = await browser.newContext({ storageState: undefined });
     officialPage = await officialCtx.newPage();
 
-    orgId = await freshProPlusOrg(request, "OH");
+    orgId = await freshProOrg(request, "OH");
 
     const comp = await apiJson<{ id: string }>(request, "/api/v1/competitions", "POST", {
       name: `Officials Handoff ${TAG}`,
@@ -838,7 +844,7 @@ test.describe("the officials auto-draft applies, and the assignments persist", (
   let officialWritten = false;
 
   test.beforeAll(async ({ request }) => {
-    orgId = await freshProPlusOrg(request, "S4P");
+    orgId = await freshProOrg(request, "S4P");
     const comp = await apiJson<{ id: string }>(request, "/api/v1/competitions", "POST", {
       name: `S4 Pin ${TAG}`,
       visibility: "public",
