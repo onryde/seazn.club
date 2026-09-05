@@ -142,6 +142,49 @@ The e2e also still hand-types the URL the producer should emit. Driving
 `GET /api/auth/change-email/confirm?token=<garbage>` yields the `invalid`
 outcome with no seeding and would prove producer -> shim -> banner in one hop.
 
+## W2 — IN PLANNING (2026-09-05)
+
+Worktree `.claude/worktrees/settings-w2`, branch `feat/settings-w2-tabs`, based
+on `18afdf5c5` — main WITH W1.5 merged (PR #715, all 11 CI checks green).
+
+**W1 and W1.5 are CLOSED.** Everything the earlier sections list as open is
+either fixed or explicitly recorded as residual below. Do not re-derive them.
+
+Scope, unchanged from the design doc: `/o/{org}/settings`, the seven
+`?tab=` panels, drive-and-persist. **Sponsors CRUD half only** — the monetize
+half (packages, invoice, refund) needs `sponsors.monetize` plus a live Connect
+account and belongs to W4, serial, because smoke's sponsor-checkout suite
+claims the Connect fixture with no release path. Two specs, parallel.
+
+### Carried in from W1.5 — do these here, not later
+
+1. **F7's residual.** `requirePageAuth` still drops the query on
+   `orgs.length === 0` -> `/orgs/new` (`page-auth.ts:39`) and `role === "scorer"`
+   -> `/my-matches` (`:42`). W1.5's fix made the FIRST more reachable, not less:
+   `postAuthLanding` returns a safe `next` without provisioning an org
+   (`auth.ts:413-419`), so a first-time signup arriving via
+   `/login?next=/settings?...` lands org-less and is bounced with the outcome
+   gone. `/orgs/new` has no `next` handling at all — closing this means giving
+   that page a destination contract. W2 drives the account tab, so it owns this.
+
+2. **Drive the PRODUCER, not the URL.** `settings-admin.spec.ts`'s two
+   email-change tests hand-type `/settings?tab=account&email_change=...`, which
+   is the URL `/api/auth/change-email/confirm` is supposed to emit. Rename the
+   param or drop `tab=account` (which gates the banner,
+   `o/[orgSlug]/settings/page.tsx:559`) and they stay green while every real
+   confirmation breaks. `GET /api/auth/change-email/confirm?token=<garbage>`
+   yields the `invalid` outcome with no seeding and drives
+   producer -> shim -> banner in one hop.
+
+### Machine note
+
+The box was carrying seven seazn-env labels at load 269 and OOM-killed a
+production build (exit 137) on 2026-09-05. Six were other sessions'. A wave
+that needs builds should check `seazn-env status` and the load first — and
+`up --all`, never `up --server` then `up --placement`, or the server starts
+without `PLACEMENT_SERVICE_HOST` and ten scheduling tests fail as
+`solver_unavailable`.
+
 ## False premises found
 
 Recorded so the next session does not re-derive them.
