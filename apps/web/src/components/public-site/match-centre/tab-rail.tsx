@@ -24,7 +24,7 @@ export function TabRail({ tabs, active, onChange, dict }: TabRailProps) {
     <div
       role="tablist"
       tabIndex={0}
-      aria-label={t(dict, "public.matchCentre.tabs.label")}
+      aria-label={t(dict, "matchCentre.tabs.label")}
       className="flex gap-2 overflow-x-auto max-md:-mx-4 max-md:px-4"
     >
       {tabs.map((tab) => {
@@ -39,7 +39,7 @@ export function TabRail({ tabs, active, onChange, dict }: TabRailProps) {
             onClick={() => onChange(tab)}
             className={isActive ? ACTIVE_CLASS : INACTIVE_CLASS}
           >
-            {t(dict, `public.matchCentre.tab.${tab}`)}
+            {t(dict, `matchCentre.tab.${tab}`)}
           </button>
         );
       })}

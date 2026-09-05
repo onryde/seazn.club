@@ -26,8 +26,7 @@ export function CourtCard({ header, dict, updatedAt }: CourtCardProps) {
   // pattern as every other React-Compiler-era warning this repo defers
   // (development/DEFERRED.md); a ticking clock is out of this task's scope.
   const seconds = Math.max(0, Math.floor((Date.now() - updatedAt) / 1000));
-  const statusKey =
-    header.status === "decided" ? "public.matchCentre.status.decided" : "public.matchCentre.status.scheduled";
+  const statusKey = header.status === "decided" ? "matchCentre.status.decided" : "matchCentre.status.scheduled";
   return (
     <div
       data-testid="mc-court-card"
@@ -40,7 +39,7 @@ export function CourtCard({ header, dict, updatedAt }: CourtCardProps) {
             className="mb-3 flex items-center gap-2 text-[11px] font-bold uppercase tracking-[0.22em] text-emerald-300"
           >
             <span className="animate-live-pulse h-2 w-2 rounded-full bg-emerald-400" />
-            {t(dict, "public.matchCentre.status.live")}
+            {t(dict, "matchCentre.status.live")}
           </p>
         ) : (
           <p
@@ -88,7 +87,7 @@ export function CourtCard({ header, dict, updatedAt }: CourtCardProps) {
           </p>
         ) : null}
         <p data-testid="mc-updated-at" className="mt-3 text-[11px] text-court-muted/70">
-          {t(dict, "public.matchCentre.updatedAgo", { seconds })}
+          {t(dict, "matchCentre.updatedAgo", { seconds })}
         </p>
       </div>
       <div aria-hidden className={`h-1 ${header.live ? "bg-emerald-400" : "bg-accent"}`} />
