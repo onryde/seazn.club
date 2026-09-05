@@ -112,10 +112,24 @@ export function RunSheet({
     isResultMissing({ status: f.status, scheduledAt: f.scheduled_at, matchMinutes }, nowMs);
 
   // Filter semantics (spec): "Today" / "Needs result" / "Unscheduled" / "All".
-  // A bye is never actionable (R7a) and is always kept — it is context for
-  // its round, not the "work" any filter is trying to isolate.
+  //
+  // A bye is never actionable (R7a) and is never work, so it survives only the
+  // unfiltered view. Max-effort review, finding 14: the bye short-circuit used
+  // to be `filter === "all" || isBye(f)`, i.e. it ran BEFORE any filter test, so
+  // a bye was retained under EVERY filter — `buildRunSheet` enforced R7(a) on
+  // the grouping side and this predicate undid it on the rendering side. A
+  // knockout with four round-1 byes, filtered to "Unscheduled", rendered a
+  // "Round 1" header and four italic ghost rows under a chip reading 0, because
+  // the COUNTS at `:131` already skip byes. Ruling R7(a), quoted at
+  // run-sheet-groups.ts:11-12: byes "never enter the unscheduled group and never
+  // carry an action" — taken literally here, which is also the only reading
+  // under which the chip and the rows beneath it can agree.
+  //
+  // ORDER is the whole fix: `all` still wins, so a bracket round never hides the
+  // bye that explains its missing fourth fixture; every work filter now drops it.
   const keep = (f: RunSheetFixture): boolean => {
-    if (filter === "all" || isBye(f)) return true;
+    if (filter === "all") return true;
+    if (isBye(f)) return false;
     if (filter === "needs_result") return needsResult(f);
     if (filter === "unscheduled") return isUnscheduled(f);
     // "today": only a TIMED fixture landing on today's venue-zone day counts.
