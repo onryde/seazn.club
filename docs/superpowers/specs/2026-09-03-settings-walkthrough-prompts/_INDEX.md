@@ -176,6 +176,51 @@ claims the Connect fixture with no release path. Two specs, parallel.
    yields the `invalid` outcome with no seeding and drives
    producer -> shim -> banner in one hop.
 
+### OWNER INSTRUCTION 2026-09-05 — fix the phone view in this wave
+
+Owner sent a 320px capture of `/o/{org}/settings?tab=organization` and said
+"fix the mobile view in this wave2". This is now W2 scope, not a follow-up.
+
+**Observed in that capture — to be re-verified in a browser at 320 before
+building, because a screenshot shows symptoms and not causes:**
+
+1. **The org identity row loses its name.** The row packs avatar + org name +
+   `Owner` badge + `Switch` button onto one line. At 320 the name is squeezed
+   to almost nothing between the avatar and the badge — the one piece of
+   information the row exists to show is the piece that disappears. Suspect the
+   usual cause: a `truncate` without `min-w-0` on the whole ancestor chain, or a
+   flex row that should wrap the controls onto their own line below the name.
+   This is the same defect class the phone-composition programme documents for
+   `detail-dock.tsx` (a name in a one-column cell inflating into a blob).
+
+2. **The tab rail runs off the right edge** — "Organisation | News | Spons…" is
+   cut. **Do NOT "fix" this before establishing which kind it is.** AGENTS.md
+   failure class 23: an overflow whose content is REACHABLE by swiping is a
+   feature; one inside an `overflow-hidden` box is a defect, and a
+   `scrollWidth > clientWidth` scan cannot tell them apart. Split on computed
+   `overflow-x` (`auto`/`scroll` vs `hidden`/`visible`) — `overflowingIn` in
+   `mobile.spec.ts` already does exactly this. If it IS a rail, it owes
+   `tabindex="0"` plus a role and an accessible name or axe reds at SERIOUS
+   (`scrollable-region-focusable`), and `tabindex` cannot be varied by media
+   query, so it is unconditional.
+
+3. **General cramping** — the cards run close to the viewport edges.
+
+**Rules that bind this work, from the phone-composition design of record**
+(`docs/superpowers/specs/2026-09-02-scorepad-v3-phone-composition-design.md`):
+ONE DOM, branched — everything below `md` (768) is `max-md:*`, everything
+phone-only is `md:hidden`; never a second phone tree. **>=768 must not change.**
+And `/\bmd:hidden\b/` also matches inside `max-md:hidden`, so an assertion
+written that way passes on its own inversion.
+
+**Verification bar:** screenshots at 1280, 768 and 320 with no horizontal page
+scroll at any of them, and a control-set diff from the live DOM at 320 against
+1280 — membership, order and repeats — NOT a comparison of box sizes. A phone
+view showing the same control set at smaller sizes is a groomed shrink, which
+is the thing that bar exists to catch. The seven-width `mobile.spec.ts` matrix
+is the backstop; a change here can redden all five phone projects while every
+unit test stays green, because `apps/web` vitest is `environment: "node"`.
+
 ### Machine note
 
 The box was carrying seven seazn-env labels at load 269 and OOM-killed a
