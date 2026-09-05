@@ -295,9 +295,23 @@ The brief's own corrections 1 (per-currency prices are not new plumbing) and 2
 - **INT key:** only `int_value` is read (`getLimit`, `entitlements.ts:613-614`).
   `bool_value` on an int row is ignored noise, and the table has plenty of it
   (`clubs.max`/pro is `(t,20)`, `teams.max`/pro is `(t,40)`).
-- **`int_value = NULL` means unlimited. A key with NO ROW resolves to 0** —
-  `const base = row ? row.int_value : 0`. Deleting an int key DENIES it; it does not
-  free it. Safe here only because nothing reads the four deleted keys.
+- **`int_value = NULL` means unlimited. A key that resolves to NO ROW AT ALL gives 0** —
+  `const base = row ? row.int_value : 0`. Deleting an int key from every plan DENIES it;
+  it does not free it. Safe here only because nothing reads the four deleted keys.
+
+  **Say "resolves to no row", never "has no row" — the distinction is load-bearing and
+  I got it wrong once in writing.** `resolveFromDb` fetches the PLAN row first and
+  unconditionally as the base; the pass matrix is an overlay applied field by field,
+  and keys missing from it fall through to the plan row. So an ABSENT pass row is not a
+  zero: a passed community org with no `clubs.max` pass row still resolves community's
+  5. Read as "absent row ⇒ 0", the rule invites someone to "fix" a non-defect by
+  re-inserting rows V319 deliberately deleted — which was a peer's exact objection when
+  I stated it the sloppy way to them. The 0 arises only when NO plan row exists either.
+
+  Stronger still for the org-wide int keys (`clubs.max`, `teams.max`, `import.bulk`):
+  the pass branch is inside `if (competitionId)` and their call sites pass none, so the
+  pass matrix is never consulted for them on any path. Those absent rows are
+  unreachable, not zeroing.
 - **BOOL key:** `bool_value === true`, strictly (`:460`). NULL or no row denies.
 - **Pass overlay** (`resolveFromDb`, the `if (competitionId)` branch): bool can only
   GRANT; int is `betterInt` = max(), or min() for the single `LOWER_IS_BETTER` key
