@@ -793,16 +793,62 @@ test("the organiser sets up, schedules, saves, clears, restores, freezes and pub
   expect(await scheduledSlots(request, divisionId)).toEqual(placed);
 
   // ---------------------------------------------------------------- 14
-  // Publish, then start. Run to the terminal state, and read the status the
-  // product actually moved the division to — `board-start-division` renders on
-  // any division that is neither active nor completed, so its mere presence
-  // after a publish proves nothing.
+  // Publish, then start — WITH THE DIVISION STILL FROZEN, deliberately, and
+  // said out loud here because the step reads like an oversight otherwise.
+  //
+  // Step 13 froze this division and nothing thaws it. Neither
+  // `publishSchedule` (usecases/schedule.ts:3552) nor `startDivision` (:3621)
+  // consults `divisions.schedule_locked`; both check only `assertNotFrozen`,
+  // which is the BILLING freeze on an over-quota org and an unrelated thing
+  // wearing the same word (the design doc names all three senses of "frozen"
+  // for exactly this reason). So the question this step has to answer
+  // honestly is whether that is a hole like F1/S2/S3 — clear and restore
+  // editing a frozen board — or the intended behaviour.
+  //
+  // IT IS INTENDED, and the assertions below pin it as such rather than
+  // pinning "these two clicks happened to work":
+  //
+  //  - The freeze's own copy scopes it: "Freeze — block ALL schedule EDITS
+  //    (yours included) until unfrozen" (`board.freezeTitle.freeze`). On this
+  //    path neither call writes a fixture row. Publish moves `setup →
+  //    scheduled` and appends a ledger event; start moves `scheduled →
+  //    active` (its quick-start rolling-times write is gated on
+  //    `status === "setup"`, and its generate on the stage being empty —
+  //    neither holds here).
+  //  - The design document's own customer story for the freeze is "an
+  //    organiser freezes a PUBLISHED timetable precisely so it cannot move".
+  //    Refusing publish would make freeze-then-publish impossible and force
+  //    an unfreeze/publish/refreeze dance that reopens the board to every
+  //    other write path in between — the opposite of what the freeze is for.
+  //  - `schedule-board.tsx` makes the same call in the UI: the freeze toggle
+  //    at :1388 reads `single.schedule_locked`, and the publish/start block
+  //    fifteen lines below it at :1411 deliberately gates on STATUS only.
+  //    Same component, same variable in scope, different condition.
+  //
+  // So the honest assertion is not "publish succeeded" but "publish and start
+  // succeed WHILE THE FREEZE IS IN FORCE, and neither of them quietly lifts
+  // it" — read from the division row on both sides. Without the second read a
+  // publish that silently cleared `schedule_locked` would pass here, and that
+  // WOULD be the F1/S2/S3 defect.
   await goTab(page, base, "board");
+  expect(
+    (await divisionRow(request, divisionId)).schedule_locked,
+    "step 13's freeze must still be in force, or step 14 proves nothing about a frozen board",
+  ).toBe(true);
   await page.getByTestId("board-publish-schedule").click();
   await expect.poll(async () => (await divisionRow(request, divisionId)).status).toBe("scheduled");
   await page.getByTestId("board-start-division").click();
   await expect.poll(async () => (await divisionRow(request, divisionId)).status).toBe("active");
   await expect(page.getByTestId("board-start-division")).toHaveCount(0);
+  expect(
+    (await divisionRow(request, divisionId)).schedule_locked,
+    "publishing and starting must not silently unfreeze the schedule",
+  ).toBe(true);
+  // The board itself is untouched by either: every slot step 12 restored is
+  // still at the same time and the same court. `toEqual(placed)` rather than a
+  // count, for the same reason step 12 uses it — a publish that reflowed the
+  // board would keep the count and change the timetable.
+  expect(await scheduledSlots(request, divisionId)).toEqual(placed);
 
   // The standing bar is 1280, 768 and 320 with no horizontal page scroll at
   // ANY of them. `screenshotAtWidths` (helpers.ts:240-252) only captures — it
