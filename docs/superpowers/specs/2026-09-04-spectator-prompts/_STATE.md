@@ -78,7 +78,7 @@ Verification on b8ed8fa31: public-site suites 537/0 (26 pending = DB suites on e
 - W3: DRAFT plan written (`…-w3-poster.md`, 10 tasks) + prompt section; owner questions Q1 fonts (static TTFs), Q2 title sponsor on free orgs (keep rule), Q3 `describeFormat`/`division.config` ownership vs W2 (W3 builds to W2's contract if W2 unmerged).
 - W4: DRAFT plan written (`…-w4-gallery.md`, 12 tasks) + prompt section; 6 owner questions (consent gate — neither consent source can express "declined"; `assets` bucket + prefix; new table not a post kind; ride W1/W2 documents for liveness; testids `gl-*`; plan-tiered quota recorded not built).
 - W5: CANDIDATE DRAFT plan (9 tasks, option A) + prompt `W5-team-page.md` committed (56c0cd1ca). NOT ruled in scope.
-- `_DESIGN.md` verified + corrected (team colours EXIST: `team_display_v.colors` reaches the public payload unread) and committed (481f510a5); theme sheet published: https://claude.ai/code/artifact/45c81708-095d-458c-b49f-b471e2901415. Phase 2 (per-wave "Design theme" sections in prompts and plans) IN FLIGHT.
+- `_DESIGN.md` verified + corrected (team colours EXIST: `team_display_v.colors` reaches the public payload unread) and committed (481f510a5); theme sheet published: https://claude.ai/code/artifact/45c81708-095d-458c-b49f-b471e2901415. Phase 2 DONE: `## Design theme` sections in W1–W5 prompts + a Design bullet in each draft plan. Ruling recorded: team colour = `colors.home_primary` (not `colors.primary`, a key nobody writes) through the contrast guard, then the division-hue wheel, then neutral — one resolver in W2.
 - `_INDEX.md` single-pass update DONE (plans list, waves line, status rows, design + state pointers).
 
 ## Open owner questions (recommendations recorded in `_INDEX.md` / the ledger)

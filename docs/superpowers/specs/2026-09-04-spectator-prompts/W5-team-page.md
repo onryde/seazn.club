@@ -188,3 +188,92 @@ as RULINGS and never as recommendations.
   (the walkthrough file and its seed helpers) and P14 (how W2 reads `?tab=` on
   the client) will all move. A false premise found then is a finding for
   `_INDEX.md`, not a blocker.
+
+---
+
+## Design theme (from _DESIGN.md, 2026-09-05)
+
+Build to `_DESIGN.md` §5 W5 — **the whole section is PROPOSED (P12)**, because W5 itself is
+not ruled in scope. It recomposes W2's rows under a W3-style tile and introduces no new
+colour, family, radius or shadow. Theme sheet:
+<https://claude.ai/code/artifact/45c81708-095d-458c-b49f-b471e2901415> — the "W5 — public
+team page" board at 320 px draws the header slab, record tiles, form strip and the rows
+below. No W0 canvas board exists for W5.
+
+**The memorable thing:** the **form strip** under the crest — five coloured squares that
+tell the season's story before a word is read.
+
+**Rules:**
+
+1. **Header on the slab.** A 64 px crest tile (team colour, P1) beside the team name in
+   Barlow `text-3xl` uppercase `truncate`, division chip and competition link beneath. The
+   record sits INSIDE the slab as small tiles — Played, Won, Lost, Pts — each a
+   `tabular-nums` Barlow figure over an 11 px label. Accent keel closes the slab. This is
+   the page's only `bg-court` and only `shadow-lg` object.
+2. **Form strip**: the last five results as 24 px squares in a row — W `emerald-500`
+   filled, L `bg-white/12` outlined, D/T `bg-court-muted` — inside a `role="list"` with an
+   accessible name, so a screen reader gets the sequence and not five loose letters. Same
+   tile grammar as the poster; no gradients, no icons.
+3. **Fixtures** reuse W2's `MatchCard` unchanged (no division chip), in a `rounded-xl` row
+   group with `divide-y` and **no shadow** (P7); this entrant's side always bold. Grouped
+   Upcoming then Completed, empty case stated first.
+4. **Table tab** = W2's `StandingsTableView` with the two additive props, this row
+   highlighted, every row linking to its own team page. Numeric widths and `px-0.5` per W1
+   rule 5; podium colours stay fixed and are not org-themeable.
+5. **Squad** is a row group of person chips. **A chip whose label is a person's name gets
+   its own row on phones** (`max-md:col-span-2` in a two-column grid) — a name in a
+   one-column cell inflates into a circular blob, which is the exact defect the owner
+   rejected a build for on the pad. Masked names render the masked label, never blank;
+   shirt number en dash when none.
+6. **`truncate` needs `min-w-0` on the whole ancestor chain** — the 43-character entrant
+   name appears in the header, in every match card and in the highlighted table row on this
+   page; it is the truncation test at 320.
+7. **One DOM, one control set.** At ≥768 the header tiles move inline right of the name and
+   fixtures/squad go two-up — a fold and a grid change, never a control the phone lacks.
+   Verify with a control-set diff from the live DOM at 320 vs 1280, per tab.
+8. **Live in place (R10)** from the one `useLiveCompetition` document: the fixture cards,
+   the header record and the table move on the same tick with one highlight (P6), no
+   navigation, no scroll jump. `prefers-reduced-motion` disables the highlight.
+9. **Copy and controls.** Sentence case, plain verbs; "No results yet" as the empty
+   standing; the `.ics` control says what it does; no "→"; every control ≥ 44 px by
+   `elementFromPoint`; scrolling regions carry `tabindex="0"`, a role and a name.
+
+**Proposed items this wave depends on:** **P12** the W5 theme as a whole (and the wave's own
+scope ruling Q1) · **P1** the team colour ladder — rule 1's crest tile and scope §2's
+"monogram in the team colour" both resolve to it · **P7** row groups with no shadow ·
+**P6** the live-change highlight · **P10** 13 px table cells · **P2** the tab rail's 44 px
+hit area · **P3** section titles · **P5** the focus ring on the header slab · **P11**
+`min-h-11` on controls.
+
+### Conflicts for the owner
+
+1. **The team-colour KEY.** The plan pins it as `primary` — premise P6
+   (`…-w5-public-team-page.md:195`) and the data table at `:33,89`, sourcing it from
+   `usecases/exports.ts:261-262` and reusing W2's `primaryColour`. That plan line is
+   candid that `exports.ts` is "the only reader of the key"; it is also the only *wrong*
+   reader. The writer is the club hub, which writes `home_primary` /`home_secondary` /
+   `away_primary` / `away_secondary` (`components/v2/club-hub/overview-tab.tsx:38-52`);
+   `_DESIGN.md` §2.2 has the chain. Same root as W2 conflict 1 and W3 conflict 1 — **one
+   ruling settles all three**, and it should be made before W2 builds `primaryColour`,
+   because W3 and W5 both consume it.
+2. **The fallback when contrast fails.** The plan falls back to `var(--ps-accent)`
+   (`…-w5-public-team-page.md:1715`); `_DESIGN.md` P1's ladder falls back to the entrant
+   hue and then to neutral initials, reserving the accent for the organiser's brand. On
+   this page the tile sits on `bg-court`, where the accent violet is also the weakest ring
+   colour (P5) — two reasons the ladder differs. Owner picks one.
+3. **The section heading.** The plan uses
+   `font-display text-sm font-semibold uppercase tracking-[0.18em] text-ink-muted`
+   (`…-w5-public-team-page.md:1244`); P3 specifies `font-display text-base font-semibold
+   uppercase tracking-wide text-ink` — 16 px, normal tracking, full ink. Both are Barlow,
+   so neither breaks the uppercase rule; they are simply two different section titles, and
+   W5 would ship the only page that does not match its siblings.
+
+**Correction (product-owner ruling, 2026-09-06 — apply at re-pin):** the team colour is
+NOT `colors.primary`. The only writer (`club-hub/overview-tab.tsx:38-52`) stores
+`home_primary` / `home_secondary` / `away_primary` / `away_secondary` on
+`clubs.colors` / `teams.colors`, resolved by `team_display_v.colors` and already present in
+the public entrant payload (`public-site/data.ts:316-323`). `exports.ts:261-262` reads
+`colors->>'primary'` and is the broken reader this plan copied. Ruling: public tiles use
+`colors.home_primary` through `public-theme.ts`'s 3:1 `contrast()` guard, else the
+`division-hue.ts` wheel keyed on the entrant, else neutral initials (`_DESIGN.md` P1);
+one shared resolver in W2 (`primaryColour`) consumed by W3 and W5 — no second palette.

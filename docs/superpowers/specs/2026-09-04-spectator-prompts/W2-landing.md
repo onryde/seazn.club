@@ -100,3 +100,89 @@ As W1. `_INDEX.md` status updated in the same PR.
   OpenAPI routes carry no `response` schema (P12); reschedules bypass
   `invalidatePublicCache` (P13); `getPublicCompetition` selects no `config` (P15); the
   mobile.spec seed has no fixtures (P17).
+
+---
+
+## Design theme (from _DESIGN.md, 2026-09-05)
+
+Build to `_DESIGN.md` §5 W2, on W1's vocabulary (`W1-match-centre.md` §"Design theme").
+Theme sheet: <https://claude.ai/code/artifact/45c81708-095d-458c-b49f-b471e2901415> — the
+"W2 — competition landing" board at 320 px shows the composition; the component section
+above it draws the score strip, match card and composed standings at phone width. W0
+board `CurrentCompetitionPhone.dc.html` is the BEFORE (the headline-only rail this wave
+replaces).
+
+**The memorable thing:** the **Live-now rail** — every live match in the competition as a
+swipeable row of miniature court cards carrying real team names and scores, updating in
+place. It sits directly under the hero and is the reason a spectator opens the link.
+
+**Rules:**
+
+1. **Keep the hero exactly.** The existing court slab (`[competitionSlug]/page.tsx:95-179`)
+   — org eyebrow, `font-display text-4xl sm:text-5xl` uppercase name, date line, share bar,
+   register CTA, `bg-white/12` count chips, accent keel. Its two accent radial washes are
+   the page's ONE atmosphere device; do not add a second.
+2. **Live-now card = a miniature court card**, not a new component:
+   `rounded-xl bg-court p-3.5 ring-1 ring-emerald-400/40`, two side rows with crest tile +
+   short name + `tabular-nums` score, emerald keel. The `<ul>` becomes a real rail —
+   `role="list" tabIndex={0} aria-label` — which it lacks today
+   (`[competitionSlug]/page.tsx:187`). **No `hover:-translate-y-0.5 hover:shadow-md`**
+   (inherited at `:194,232`; do not propagate).
+3. **Match card = the schedule row grammar**
+   (`grid-cols-[3.25rem_minmax(0,1fr)_auto]`, time/LIVE rail left, stacked sides,
+   right-aligned Barlow `text-lg` `tabular-nums` scores, winner bold / loser muted, live
+   edge `w-0.5 bg-emerald-400`) plus a crest tile before each name. Meta as **separate
+   elements** — division chip, stage/round, venue — never one `·`-joined string.
+4. **Standings composed for 320, not shrunk:** rank chip · crest · team (`truncate`) · P ·
+   W · L · **Pts** in `font-display text-base font-bold text-accent-strong`; the long tail
+   (D, T, NR, NRR, tiebreaks) behind a `<details>` "More columns" or unfolding at `md`.
+   Podium colours stay fixed and are **not** org-themeable
+   (`standings-table.tsx:39-45,81`). Numeric widths and `px-0.5` per W1 rule 5.
+5. **Rails and radii by role.** Tab rail = W1's `TabRail` component with `mh-` testids;
+   the division page keeps its sticky segmented shell. Row groups `rounded-xl` +
+   `border-zinc-200/80` + `divide-y`, **no shadow** (P7). Chips `rounded-full`; the
+   division chip may key its wash on `divisionTint`/`divisionInk`.
+6. **Every scrolling region** (Live-now rail, tab rail, any wide table) carries
+   `tabindex="0"`, a role and an accessible name; no horizontal PAGE scroll at
+   320/360/375/390/430/768/834. Controls ≥ 44 px by `elementFromPoint`, not `boundingBox`.
+7. **Live in place (R10) with one highlight, not a re-layout.** A changed cell gets the
+   single `accent-soft` fade (P6) and nothing else moves; no toast, no scroll jump.
+   `prefers-reduced-motion` disables it.
+8. **Copy.** Filter labels and empty states in sentence case with the empty case FIRST
+   ("No fixtures yet — the schedule appears once the draw is made."); no "coming soon", no
+   emoji, no apology; no "→" on links; standings abbreviations stay notation with a
+   localised `title` and `sr-only`.
+
+**Proposed items this wave depends on** (owner ruling before W2 executes): **P1** the team
+colour ladder — scope item 6's "monogram in team colour" resolves to it · **P7** row groups
+drop `shadow-sm` (this wave writes the row groups) · **P2** 44 px tab hit area · **P3**
+section titles in Barlow 16 px · **P6** the live-change highlight · **P10** 13 px table
+cells · **P11** `min-h-11` on controls · **P5** focus ring on the slab.
+
+### Conflicts for the owner
+
+1. **The team-colour KEY.** This plan's `primaryColour(e.team_display?.colors)`
+   (plan Task 4, `…-w2-competition-landing.md:959`) reads `colors.primary`. **`primary` is
+   a key nothing in the product writes.** The only writer is the club hub's four kit
+   pickers, which write `home_primary` / `home_secondary` / `away_primary` /
+   `away_secondary` (`components/v2/club-hub/overview-tab.tsx:38-52`); `_DESIGN.md` §2.2
+   has the full chain. `primary` was taken from `usecases/exports.ts:261-262`, which is the
+   only reader and is itself wrong. Shipped as planned, every real club colour is missed
+   and every tile silently falls to the fallback — a green suite over an inert seam. Not
+   resolved here: the owner decides whether W2 reads `home_primary` (and W3/W5 follow), or
+   the key question is deferred and all three waves ship fallback-only.
+2. **Where the fallback comes from.** `_DESIGN.md` P1 rung 2 specifies the existing
+   `lib/division-hue.ts` wheel keyed on the entrant id (twelve stops, skips the brand
+   violet's 260–290° band). W3's plan defines its own `BRAND_PALETTE`
+   (`…-w3-poster.md:955-962`). Two authorities for one fact; the owner picks one before
+   either wave builds it.
+
+**Correction (product-owner ruling, 2026-09-06 — apply at re-pin):** the team colour is
+NOT `colors.primary`. The only writer (`club-hub/overview-tab.tsx:38-52`) stores
+`home_primary` / `home_secondary` / `away_primary` / `away_secondary` on
+`clubs.colors` / `teams.colors`, resolved by `team_display_v.colors` and already present in
+the public entrant payload (`public-site/data.ts:316-323`). `exports.ts:261-262` reads
+`colors->>'primary'` and is the broken reader this plan copied. Ruling: public tiles use
+`colors.home_primary` through `public-theme.ts`'s 3:1 `contrast()` guard, else the
+`division-hue.ts` wheel keyed on the entrant, else neutral initials (`_DESIGN.md` P1);
+one shared resolver in W2 (`primaryColour`) consumed by W3 and W5 — no second palette.

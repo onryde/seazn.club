@@ -173,3 +173,60 @@ on lane branches; W2 and W3 are unreviewed drafts). The plan's "Premises to
 re-pin" table carries 20 numbered premises with what each is pinned at and what
 moves it — re-check every one after W1/W2 merge before executing. A false premise
 is a finding to record in `_INDEX.md`, not a blocker.
+
+---
+
+## Design theme (from _DESIGN.md, 2026-09-05)
+
+Build to `_DESIGN.md` §5 W4, on W1's vocabulary and W2's rows. Theme sheet:
+<https://claude.ai/code/artifact/45c81708-095d-458c-b49f-b471e2901415> — the "W4 — gallery"
+board at 320 px shows the 3-up grid, the lightbox caption bar and the consent gate. No W0
+canvas board exists for W4; the board on the theme sheet is the reference.
+
+**The memorable thing:** the **lightbox captioned by the score strip** — the photo sits on
+the competition's court colour with the match it belongs to underneath it, so a shared
+photo carries the result.
+
+**Rules:**
+
+1. **The grid IS the object.** Square thumbs `grid-cols-3 gap-1` at 320 (≈95 px each),
+   `md:grid-cols-6`; **no rounded corners on the thumbs** — 18 rounded tiles read as a card
+   kit. The group takes `rounded-xl overflow-hidden`. Thumb = the 400 px derivative; `alt`
+   from the caption, else the match name.
+2. **A photo set is captioned by its match, not by a timestamp.** Day/match headers use the
+   section-title style (P3, Barlow 16 px) with the match's score strip as the sub-line.
+3. **Lightbox on `bg-court`**, full-bleed, image `object-contain`. The caption bar carries
+   the tagged match's score strip, the caption in Geist 14 px `text-court-ink`, and three
+   actions — Share, Download, Request removal — as `rounded-lg` court-ink outlined buttons
+   at `min-h-11`. Close target 44 × 44 top-right, hit-tested with `elementFromPoint`. The
+   URL hash is the photo id; no per-photo pages; `noindex`.
+4. **Photos strip** on the match centre: six thumbs in a `role="list" tabIndex={0}` rail
+   with an accessible name, plus an "All photos" link. Hidden when empty (R4/R9) — an empty
+   tab is not rendered at all.
+5. **The upload sheet is the one place the platform's own chrome is correct** — it is a
+   tool for the organiser's staff, not a spectator surface. Use the platform bottom sheet
+   (`.modal-overlay`/`.modal`, full-width under `sm`, drag handle, safe-area padding), not
+   a new pattern.
+6. **The consent gate is a plain sentence, not a warning colour.** "3 players in Men's T8
+   have declined media consent. Check that none of them is pictured." — then the tick
+   "I have checked that everyone pictured has media consent". The count is a fact: no red,
+   no icon, no exclamation. Upload stays disabled until the tick. (Where the count cannot
+   be computed, Q1's "not recorded" sentence — never a "0 declined" all-clear.)
+7. **Copy.** Sentence case, plain verbs, an action keeps its name through the flow
+   (Download → Downloaded). Empty gallery: "No photos yet — staff can add match-day photos
+   here." Never "coming soon", never an emoji, never an apology. Caption meta is a `<time>`
+   in the venue zone at 12 px muted — **not** a `·`-joined string.
+8. **Motion.** The lightbox opens with ONE fade (150 ms), nothing under
+   `prefers-reduced-motion`; no per-thumb hover effect, no stagger on the grid.
+9. **Radii and shadows unchanged**: row groups and disclosures `rounded-xl` with no shadow;
+   the lightbox is a surface, not a lifted card. No new colour, family or radius.
+
+**Proposed items touching W4:** **P3** the Barlow section title used by the day/match
+headers · **P5** the focus ring flipping to `--ps-court-ink` — it matters most here,
+because the lightbox is a full-screen `bg-court` surface with keyboard controls on it ·
+**P11** `min-h-11` on the lightbox actions · **P2** if the Gallery tab reuses W2's tab pill.
+**P1 is not needed by this wave.**
+
+**Conflicts for the owner:** none found. The W4 plan is schema, storage, consent and API
+work and specifies no colour, radius or type token; every hex in it (`#123456`) is a test
+fixture.

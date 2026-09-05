@@ -116,3 +116,68 @@ The `LiveScore` poll URL; the consent resolver symbol; `next/og` is untouched
 here; whether `cricket.player.line` (tier 2) carries 4s/6s; how `fixtures`
 exposes officials and the toss; `resolveVenueTz`'s signature (competition-desk
 programme owns it — import, do not copy).
+
+---
+
+## Design theme (from _DESIGN.md, 2026-09-05)
+
+W1 is the wave that FIXES the vocabulary. W2–W5 compose from what is written here and
+introduce no new colour, family, radius or shadow value. Full system:
+`_DESIGN.md`; §5 W1 is this wave's section. Theme sheet (open in a browser):
+<https://claude.ai/code/artifact/45c81708-095d-458c-b49f-b471e2901415> — the "W1 — match
+centre" board at 320 px, plus the hero specimen and the whole component vocabulary. W0
+boards: `Main.dc.html` (phone, owner pick "A"), `DesktopA.dc.html` (1280),
+`FootballPhone.dc.html` / `TennisPhone.dc.html` (the same card, other sports).
+
+**The memorable thing:** the **chase line on the slab** — "Queens need 34 from 21", one
+sentence in Barlow Condensed under the two score rows, the thing a spectator came for.
+
+**Rules as built (the inheritance):**
+
+1. **One dark object.** The court card is the only `bg-court`, the only `shadow-lg` and the
+   only display-size type on the page (`court-card.tsx:94,96`, `p-5 sm:p-6`). Everything
+   below it is `bg-surface` + `border-zinc-200/80` hairlines or bare rows. **There is no
+   `--color-line` token** — the hairline is the zinc utility, the only tinted rule is
+   `border-accent-line`.
+2. **Radii by role, one shadow ladder.** Slab/card `rounded-2xl` › row group and
+   `<details>` `rounded-xl` › control `rounded-lg` › crest `rounded-md` › chip/tab/glyph
+   `rounded-full`. Shadows: slab `shadow-lg` › content card `shadow-sm` › rows and
+   disclosures **none**. Count the shadows on the screen at R11: exactly one `shadow-lg`.
+3. **Type.** `font-display` (Barlow Condensed, `--ps-font-display`, mounted
+   `(public)/shared/[orgSlug]/layout.tsx:19-23`) for scores, team names and headings;
+   Geist for everything else. Score `text-2xl md:text-4xl font-bold`; team name `text-xl
+   sm:text-2xl` uppercase `tracking-wide` + `truncate`; tab label `text-sm`; table cell
+   `text-[13px]`; sub-lines `text-[11px] text-ink-muted`.
+4. **`tabular-nums` on every score column** — court card (`:119,127`), both stat tables,
+   sets, timeline markers, glyphs, standings. A score column without it is a defect.
+5. **Table rules.** `w-full table-fixed border-separate border-spacing-0 tabular-nums`;
+   every numeric column an explicit width + `px-0.5` (`w-6` M/W · `w-7` R/B/4s/6s/wd/nb ·
+   `w-8` O · `w-10` set/period · `w-11` SR/Econ), the name column no width, `block
+   truncate` on the inner span — never `max-w-0`, and never `min-w-0` on a `<td>` (inert).
+   Header `border-b border-zinc-200/80`, rows `/60`, totals `border-t`.
+6. **`truncate` needs `min-w-0` on the whole ancestor chain.** The 43-character entrant
+   name is the test, in a browser, not in a unit test.
+7. **Every scrolling region carries `tabindex="0"`, a role and an accessible name** — tab
+   rail, fall-of-wickets rail, both table regions. An overflow whose content is reachable
+   is a rail; one inside `overflow-hidden` is a defect.
+8. **44 px, hit-tested.** `document.elementFromPoint(cx, cy)` must resolve to the control;
+   `boundingBox()` measures paint, not tap. Three shipped controls miss the floor — see P2
+   and P11 below.
+9. **One motion moment.** The LIVE dot's pulse, gated on `header.live`; everything
+   neutralised under `prefers-reduced-motion` (`globals.css:187-197`). No hover lift on
+   cards, no per-card transition beyond `colors`.
+10. **Copy.** Plain verbs, sentence case ("Load earlier overs"); no ALL-CAPS label in Geist
+    below 14 px except the status chip and table notation; **no middle-dot string between
+    unlike facts** (a `·` may only join repeated same-kind items inside one notation
+    string); no "→" glued to link text; an empty tab is not rendered at all.
+
+**Proposed items touching W1** (owner ruling before the R11 sign-off, not before the
+build): **P2** 44 px tab hit area via a pseudo-element, look unchanged · **P3** section
+titles in Barlow 16 px instead of the shipped Geist 12 px tracked eyebrows · **P4** the
+chase line in `font-display text-lg font-semibold text-court-ink` · **P5** focus ring flips
+to `--ps-court-ink` inside `bg-court` (the violet measures ≈2.97:1 there) · **P6** one
+600 ms `accent-soft` fade on a changed cell · **P8** card swatches on Timeline from the
+daylight set, never the pad's per-sport palettes · **P10** tables converge on 13 px cells ·
+**P11** `min-h-11` on Info links, "Load earlier overs" and `ShareBar`.
+
+**Conflicts for the owner:** none found between `_DESIGN.md` and the W1 plan.
