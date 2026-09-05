@@ -35,15 +35,18 @@ backwards-compatible one; don't contort a design to dodge a migration.
 
 ## Agent topology
 
-- **Scout — Sonnet, xHigh effort** (raised from High by the owner
+- **Scout — Opus at minimum, xHigh effort** (model raised from Sonnet to
+  Opus-minimum by the owner 2026-09-04; effort raised from High by the owner
   2026-08-30; set in `.claude/agents/scout.md` frontmatter, which is where
   effort actually lives — the Agent tool cannot set it per-dispatch). All
   read-only exploration, file discovery, codebase Q&A.
-- **Implementer — Sonnet, xHigh effort** (MAX from 2026-08-10, returned to
+- **Implementer — Opus at minimum, xHigh effort** (model Opus-minimum by the
+  owner 2026-09-04; effort MAX from 2026-08-10, returned to
   xHigh by the owner 2026-08-30; set in `.claude/agents/implementer.md`
   frontmatter, which is where effort actually lives — the Agent tool cannot
   set it per-dispatch). Writes code. Full access to all skills and tools.
-- **Reviewer — Sonnet, xHigh effort** (same change, same date, same place).
+- **Reviewer — Opus at minimum, xHigh effort** (same changes, same dates, same
+  place). "At minimum" means Opus or above; never Sonnet for any of the three.
   Reviews the implementer's diff, reports gaps as a list, not prose.
 
 **Loop**: Implementer → Reviewer → gap list → Implementer → Reviewer → …

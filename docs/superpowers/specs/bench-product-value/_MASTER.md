@@ -3,7 +3,7 @@
 One page to sequence ACROSS programmes. Session content lives in each
 programme's own `_INDEX.md` + prompts — never duplicated here. Update
 this file whenever a programme's status or a cross-gate changes.
-Last updated: 2026-09-06.
+Last updated: 2026-09-06 (spectator surface row).
 
 ## The four active programmes
 
@@ -15,6 +15,7 @@ Last updated: 2026-09-06.
 | Scheduler bench | `bench-prompts/_INDEX.md` | B00–B18 (+B03r, B16) | gate open; **B00–B04 all merged** (B04 = #731 `6e70c7270`, 2026-09-06); **B05 next**, ungated but needs an owner green-light; B16 still gated (B03r, B05, B06) |
 | Registration redesign | `../2026-08-16-registration-redesign-prompts/_INDEX.md` | RS001–RS011 | RS001–RS006 merged; RS007–RS011 + RS010 open |
 | Format progression | `../2026-08-17-format-progression-prompts/_INDEX.md` | F1–F5 | F1 + F2 authored (F1 also planned); F3–F5 written after F2 **merges**. **F1 waits for L3/#414** (shared `stages.ts`) |
+| Spectator surface (`/shared`) | `../2026-09-04-spectator-prompts/_INDEX.md` | W0–W5 | owner-requested 2026-09-04 (green-lit by the request); W0 in flight; W1–W4 sequential, W5 designed after W4; no cross-programme gate — reads the engine, touches no organiser surface |
 
 ## Cross-programme gates
 
