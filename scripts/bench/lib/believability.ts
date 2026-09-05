@@ -352,7 +352,16 @@ function isRecord(value: unknown): value is Record<string, unknown> {
  *  asserted with a cast, because the two numbers this module subtracts decide
  *  what the report says the optimizer bought. Returns `undefined` rather than
  *  throwing: an unreadable artifact is a thing to REPORT, not a thing to fail
- *  the run over. */
+ *  the run over.
+ *
+ *  `requestedEngine` is a THREE-member set and `"both"` is the member a real
+ *  run never writes: `tiny.ts` puts the CLI's own `--engine` into the artifact
+ *  and a comparison is assembled from two separate single-engine runs, so a
+ *  live delta reads `"greedy"` and `"optimized"`. Narrowing this guard would
+ *  turn every real two-leg run's delta into "not a readable EngineSnapshot" —
+ *  silently deleting design §2.1's headline run-level measurement — which is
+ *  why the suite reads all three members back rather than only the one the
+ *  fixtures found convenient. */
 function asSnapshot(value: unknown): EngineSnapshot | undefined {
   if (!isRecord(value)) return undefined;
   const { runId, requestedEngine, engine, divisions } = value;

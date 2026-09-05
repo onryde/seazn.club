@@ -24,7 +24,7 @@ import { assessHealth } from "@seazn/engine/scheduling/health";
 
 import type { Board, BoardFixture, EncodedConstraints } from "../board.ts";
 import type { PackHistoricalAssignment } from "../pack-schema.ts";
-import type { ActualEngine, EngineSnapshot } from "../schedule.ts";
+import type { ActualEngine, EngineSnapshot, RequestedEngine } from "../schedule.ts";
 import {
   assessBelievability,
   assessEngineDelta,
@@ -123,14 +123,24 @@ function historyRow(
   return { divisionRef, fixtureExtKey, venue: "Somewhere Real", startsAt: `${ymd}T${hhmm}:00+01:00` };
 }
 
+/** One leg's artifact.
+ *
+ *  `requestedEngine` is a PARAMETER, not a constant, and it defaults to
+ *  `"both"` only so the cases that do not care keep reading as before. The
+ *  two values a real run actually writes are `"greedy"` and `"optimized"` —
+ *  `tiny.ts` puts the CLI's own `--engine` into the artifact, and a two-leg
+ *  comparison is assembled from two SEPARATE single-engine runs
+ *  (`assessEngineDelta`'s doc comment). A suite that only ever fed `"both"`
+ *  left the only two arms production uses unwitnessed. */
 function snapshot(
   engine: ActualEngine,
   divisions: readonly { ref: string; makespan?: number; imbalance?: number }[],
   runId = "sha-aaaa",
+  requestedEngine: RequestedEngine = "both",
 ): EngineSnapshot {
   return {
     runId,
-    requestedEngine: "both",
+    requestedEngine,
     engine,
     divisions: divisions.map((d) => ({
       divisionRef: d.ref,
@@ -581,6 +591,82 @@ describe("assessEngineDelta — the comparison comes from two RUNS, and is RUN-l
     expect(report.delta?.greedy.engine).toBe("greedy");
     expect(report.delta?.optimized.engine).toBe("optimized");
     expect(report.note).toBeUndefined();
+  });
+
+  // -------------------------------------------------------------------------
+  // `requestedEngine` — the closed set, one arm at a time
+  //
+  // `asSnapshot` accepts three values and every fixture above supplies the one
+  // a real run never writes. `tiny.ts` puts the CLI's `--engine` into the
+  // artifact, and a two-leg comparison is two SEPARATE single-engine runs, so
+  // the artifacts a live delta reads carry `"greedy"` and `"optimized"`. A
+  // whole-guard mutant is killed by the `"both"` fixtures alone, which is how
+  // both production arms rode along untested.
+  //
+  // Each case below moves exactly ONE leg off `"both"` and asserts BOTH legs'
+  // values, so the assertion distinguishes the arms instead of accepting
+  // either: a mutant that drops only `"greedy"` reds only the greedy case.
+  // -------------------------------------------------------------------------
+
+  it("accepts the requestedEngine \"greedy\" that a real `--engine greedy` leg writes", () => {
+    const report = assessEngineDelta({
+      [GREEDY_ARTIFACT_KEY]: snapshot("greedy", [{ ref: "d-1", makespan: 300, imbalance: 90 }], "sha-aaaa", "greedy"),
+      [OPTIMIZED_ARTIFACT_KEY]: snapshot("optimized", [{ ref: "d-1", makespan: 240, imbalance: 30 }]),
+    });
+    expect(report.note).toBeUndefined();
+    expect(report.delta).toBeDefined();
+    expect(report.delta?.greedy.requestedEngine).toBe("greedy");
+    expect(report.delta?.optimized.requestedEngine).toBe("both");
+    expect(report.delta?.makespanDeltaMinutes).toBe(60);
+  });
+
+  it("accepts the requestedEngine \"optimized\" that a real `--engine optimized` leg writes", () => {
+    const report = assessEngineDelta({
+      [GREEDY_ARTIFACT_KEY]: snapshot("greedy", [{ ref: "d-1", makespan: 300, imbalance: 90 }]),
+      [OPTIMIZED_ARTIFACT_KEY]: snapshot(
+        "optimized",
+        [{ ref: "d-1", makespan: 240, imbalance: 30 }],
+        "sha-aaaa",
+        "optimized",
+      ),
+    });
+    expect(report.note).toBeUndefined();
+    expect(report.delta).toBeDefined();
+    expect(report.delta?.greedy.requestedEngine).toBe("both");
+    expect(report.delta?.optimized.requestedEngine).toBe("optimized");
+    expect(report.delta?.makespanDeltaMinutes).toBe(60);
+  });
+
+  it("reads BOTH legs' own requestedEngine back — the pair a real two-leg run writes", () => {
+    // The production shape: two runs, each with its own `--engine`, compared.
+    // The two values must come back DIFFERENT, so a guard that collapsed them
+    // (or a snapshot that echoed one leg twice) cannot pass.
+    const report = assessEngineDelta({
+      [GREEDY_ARTIFACT_KEY]: snapshot("greedy", [{ ref: "d-1", makespan: 300, imbalance: 90 }], "sha-aaaa", "greedy"),
+      [OPTIMIZED_ARTIFACT_KEY]: snapshot(
+        "optimized",
+        [{ ref: "d-1", makespan: 240, imbalance: 30 }],
+        "sha-aaaa",
+        "optimized",
+      ),
+    });
+    expect(report.note).toBeUndefined();
+    expect(report.delta?.greedy.requestedEngine).toBe("greedy");
+    expect(report.delta?.optimized.requestedEngine).toBe("optimized");
+    expect(report.delta?.greedy.requestedEngine).not.toBe(report.delta?.optimized.requestedEngine);
+    expect(report.delta?.courtImbalanceDeltaMinutes).toBe(60);
+  });
+
+  it("omits the delta when an artifact's requestedEngine is outside the closed set", () => {
+    // The negative pair for the three arms above: without it, deleting the
+    // `requestedEngine` guard outright survives — every other rejection case
+    // in this block is already rejected by a different field.
+    const report = assessEngineDelta({
+      [GREEDY_ARTIFACT_KEY]: { runId: "sha-aaaa", requestedEngine: "turbo", engine: "greedy", divisions: [] },
+      [OPTIMIZED_ARTIFACT_KEY]: snapshot("optimized", [{ ref: "d-1", makespan: 240, imbalance: 30 }]),
+    });
+    expect(report.delta).toBeUndefined();
+    expect(report.note).toContain(`the ${GREEDY_ARTIFACT_KEY} artifact is not a readable`);
   });
 
   it("is NOT part of the per-division believability report", () => {
