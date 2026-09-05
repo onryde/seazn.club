@@ -19,8 +19,8 @@ check expressed as a client `disabled` prop, and `apps/web` vitest is
 | Wave | Scope | State |
 | --- | --- | --- |
 | W1 | `/admin/settings` + 4 legacy redirects; `setOwnerStaffRoleSql` ships with it | **DONE** — 6 tasks, 5 fix rounds, all reviews clean |
-| W2 | `/o/{org}/settings` 7 tabs — drive+persist (sponsors CRUD half) | Not started — W1's follow-ups were **closed in W1.5**, not carried here |
-| W3 | `/o/{org}/settings` 7 tabs — gating matrix + first mutation sweep | Not started |
+| W2 | `/o/{org}/settings` 7 tabs — drive+persist (sponsors CRUD half) | **MERGED** — PR #720, squashed to `997ad225b`, all 11 CI checks green |
+| W3 | `/o/{org}/settings` 7 tabs — gating matrix + first mutation sweep | **IN PLANNING** — see the W3 section below |
 | W4 | `settings/{connect,credits,add-ons}`, billing's uncovered panels, sponsor monetize half | Not started |
 | W5 | Competition settings — frozen, visibility, discoverable | Not started |
 | W6 | Division schedule + constraints — full bounds table | Not started |
@@ -674,6 +674,74 @@ that needs builds should check `seazn-env status` and the load first — and
 `up --all`, never `up --server` then `up --placement`, or the server starts
 without `PLACEMENT_SERVICE_HOST` and ten scheduling tests fail as
 `solver_unavailable`.
+
+## W3 — IN PLANNING (2026-09-05)
+
+Worktree `.claude/worktrees/settings-w3`, branch `feat/settings-w3-matrix`,
+based on `997ad225b` — main WITH W2 merged. Env label **`stw3`**.
+
+**W2 is CLOSED.** Everything above is either shipped or recorded as a
+follow-up below. Do not re-derive it.
+
+### Scope
+
+The gating matrix across all seven `?tab=` panels, plus the programme's first
+mutation sweep. Design-doc cases **5-9** (UI-only gating; entitlement
+transitions) and **11-14** (ownership and last-actor), the latter being the
+ones W2 deliberately excluded as irreversible against the shared Pro user.
+
+### The owner rulings that bind this wave
+
+1. **The ≤60s budget HOLDS; W3 restructures to fit it** (ruling 6 above).
+   The matrix runs on `APIRequestContext` with **no browser**; a browser round
+   trip has to earn its place. This is not a preference — W2 spent ~30s of the
+   60s programme ceiling and six waves remain.
+2. **Subagent dispatches use Opus 5** (ruling 5).
+
+### Three constraints carried in from W2 — read before seeding anything
+
+1. **The shared Pro user is at 5 of 5 org slots.** Pro base +
+   `org-management`'s second org + three W2 spec files. `assertMayOwnAnotherOrg`
+   bounds a PERSON, and `auth.setup.ts:96` lifts the cap to 50 via an
+   override — but that override is on the SETUP org, so read it rather than
+   assume it still applies to whatever W3 seeds. A worker restart after a red
+   re-runs `beforeAll` and seeds again.
+2. **`setEntitlementOverrideSql(orgId, featureKey, intValue)` is the matrix's
+   tool**, not `setOrgPlanBySql`. Org-scoped, parallel-safe, and the right
+   granularity per feature (`dashboard.branding`, `sponsors.tiers`,
+   `sponsors.monetize`, `api.access`, `news.auto`). A plan flip is only for
+   case 7's genuine Pro→Free transition, and needs the group split first.
+3. **A fresh org is COMMUNITY** (`createOrgForUser` opens its own
+   `plan_key='community'` subscription), so a "this is gated on Free"
+   assertion on a fresh org can pass vacuously. Every negative assertion in
+   the matrix must be shown to redden when its guard is mutated — that is what
+   `_RULES.md` §1 exists for and it is the whole point of a gating wave.
+
+### Follow-ups W2 recorded and did NOT fix — decide their wave
+
+- **F9: pre-auth cross-tenant existence oracle** (`requireResourceAuth`
+  resolves the resource before authenticating; 404 for an absent id, 401 for a
+  real one, across 120 route files). Severity LOW — UUIDv4 ids are not
+  enumerable. **Owner ruled it becomes its own work item, NOT a settings
+  fix.** Do not absorb it into W3.
+- `e2e/api-keys.spec.ts:41-46` creates a competition in the shared Pro org
+  every run and never deletes it — unbounded row growth.
+- `ROLE_BADGE` in `org-switcher.tsx` still has no `scorer` entry.
+
+### Environment note
+
+`pnpm install` and `seazn-env up --label stw3 --all` were kicked off at
+kickoff; check `/tmp/stw3-install.log` for `EXIT=0` and `/tmp/stw3-env.log`
+for `ENV_EXIT=0` before running anything. A fresh worktree has **no
+`node_modules`** — the first W2 build failed for exactly that reason.
+
+**The post-rebuild checklist is three items, and W2 paid for all three:**
+manifest probe against the new BUILD_ID (never `/api/health`, which answers
+200 for a DELETED bundle), `lsof` the old port for an orphan still serving
+pre-fix code, and **re-run `--project=setup` if the port moved** — Playwright
+stores localStorage origin-scoped and the origin includes the port, so a port
+change silently voids the cookie-consent flag and the banner then intercepts
+clicks. **Never `--no-deps`**: it is what stops the state re-minting.
 
 ## False premises found
 
