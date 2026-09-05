@@ -86,7 +86,9 @@ Two consequences, both load-bearing:
 - **`setOrgPlanBySql` on a freshly seeded org is now safe** — it can no longer
   drag the shared Pro org with it. Keep calling `splitOrgIntoOwnGroupSql`
   anyway (it is close to a no-op and costs one statement) so the spec stays
-  correct if the default flips back.
+  correct if the default flips back. Say "defensive", not "necessary": if a
+  later session believes that call is doing work today, it will not notice
+  when it silently starts to.
 - **A freshly seeded org is COMMUNITY, not Pro.** Every Pro-gated control on
   these tabs — `sponsors.tiers`, `sponsors.monetize`, `api.access`,
   `news.auto`, `dashboard.branding` — renders gated on it. A W2 spec that
@@ -355,9 +357,24 @@ export async function releaseSettingsOrg(
 }
 ```
 
-Check `setOrgPlanBySql`'s real signature at `e2e/helpers.ts:447` before
-writing the call — if it takes a group id rather than an org id, resolve the
-group first and say so in a comment.
+### Three corrections to the code above — found during Task 1, verified
+
+The plan's `settings-support.ts` sketch does not compile as written. All three
+were caught by reading the tree; the corrected forms are what shipped.
+
+1. **`setOrgPlanBySql(target: { orgId?, email? }, plan)`** (`helpers.ts:447`),
+   not `(orgId, plan)`. Given `orgId` it resolves `requireGroupId` and updates
+   `subscriptions` by GROUP id.
+2. **`withDb` is module-private** — `async function withDb` at
+   `helpers.ts:295`, no `export`. The sketch imports it to look the owner up,
+   which would not compile. Use `releaseSeededOrgSql`'s own `role = 'owner'`
+   branch, which runs the identical delete.
+3. **`POST /api/orgs/active` takes `{ org_id }`, snake_case**, and
+   `setActiveOrgSchema` (`src/lib/types.ts:182-184`) is `.strict()`. The
+   sketch's `{ orgId }` would 400 — and leave the active-org cookie pointing
+   at the org about to be deleted, which is the worst place for it.
+
+Tasks 2 and 3 consume this module; they inherit the corrected signatures.
 
 - [ ] **Step 5: Run the consumer spec and watch it pass**
 
