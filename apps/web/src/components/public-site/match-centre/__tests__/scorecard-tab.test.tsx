@@ -49,7 +49,7 @@
 // All five compile and collect (`numTotalTests` stayed 12 before fix round 1
 // and 20 after), so none is the collection-break shape that reads as a
 // survivor.
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { beforeAll, describe, expect, it } from "vitest";
@@ -103,7 +103,7 @@ const richInnings: CricketInningsViewT = {
       balls: 41,
       fours: 7,
       sixes: null,
-      strikeRate: "151.22",
+      strikeRate: "151.2",
       // Both params, so the assertion can prove BOTH are interpolated.
       dismissal: {
         key: "matchCentre.dismissal.caught",
@@ -121,7 +121,7 @@ const richInnings: CricketInningsViewT = {
       balls: 22,
       fours: null,
       sixes: 3,
-      strikeRate: "172.73",
+      strikeRate: "172.7",
       dismissal: { key: "matchCentre.dismissal.not_out" },
       notOut: true,
     },
@@ -134,7 +134,7 @@ const richInnings: CricketInningsViewT = {
       maidens: 1,
       runs: 28,
       wickets: 3,
-      economy: "7.00",
+      economy: "7.0",
       wides: 2,
       noBalls: 1,
     },
@@ -145,9 +145,21 @@ const richInnings: CricketInningsViewT = {
       maidens: null,
       runs: 34,
       wickets: 1,
-      economy: "11.33",
+      economy: "11.3",
       wides: 2,
       noBalls: null,
+    },
+    {
+      // RECORDED ZEROS — not nulls. The commonest bowling row there is, and the
+      // one that printed "wd 0 · nb 0" under its own name on every phone.
+      person: person("p-stokes", "B. Stokes"),
+      overs: "4.0",
+      maidens: 0,
+      runs: 30,
+      wickets: 0,
+      economy: "7.5",
+      wides: 0,
+      noBalls: 0,
     },
   ],
   fallOfWickets: [
@@ -499,7 +511,12 @@ describe("ScorecardTab", () => {
     expect(html).toContain("[&amp;::-webkit-details-marker]:hidden");
     expect(html).toContain("group-open:rotate-90");
     // …and its PAIR: `group-open:` is inert without `group` on the <details>.
-    expect(html).toMatch(/<details[^>]*class="[^"]*\bgroup\b[^"]*"/);
+    // Anchored on the class-list boundary: `\bgroup\b` matches inside
+    // `group-open:rotate-90`, so it would pass on a `<details>` that never
+    // declared the group at all. The boundary is the opening quote or a space —
+    // `^` cannot be used here, since it anchors to the start of the whole
+    // string rather than to the start of the attribute.
+    expect(html).toMatch(/<details[^>]*class="(?:[^"]*\s)?group(?:\s|")/);
     expect(html).toContain("<svg");
     // The chevron is decorative — <details> already announces expanded state.
     expect(html).toMatch(/<svg[^>]*aria-hidden/);
@@ -543,6 +560,11 @@ describe("ScorecardTab", () => {
     expect(html).not.toContain("w-[40%]");
     // Batting: R, B, 4s, 6s at w-7 and SR at w-11.
     expect(html).toMatch(/class="[^"]*w-7[^"]*"[^>]*title="Runs"/);
+    // …at `px-0.5`, because `box-sizing: border-box` puts the padding INSIDE
+    // the width and `px-1` left `w-7` a 20px content box that three digits
+    // overflow.
+    expect(html).toContain("px-0.5");
+    expect(html).not.toMatch(/class="[^"]*px-1 text-right tabular-nums/);
     expect(html).toMatch(/class="[^"]*w-11[^"]*"[^>]*title="Strike rate"/);
     // Bowling: O at w-8, W at w-6.
     expect(html).toMatch(/class="[^"]*w-8[^"]*"[^>]*title="Overs"/);
@@ -561,9 +583,21 @@ describe("ScorecardTab", () => {
     // exists is printed.
     expect(html).toContain('data-testid="mc-bowl-extras-p-archer"');
     expect(html).toContain("wd 2");
-    // Negative pair: a bowler with neither gets no sub-line at all.
+    // …and a bowler with recorded ZEROS gets NO sub-line: a zero is not a fact
+    // worth a line, and `!== null` put "wd 0 · nb 0" under nearly every name.
+    expect(html).not.toContain('data-testid="mc-bowl-extras-p-stokes"');
+    expect(html).not.toContain("wd 0");
+    expect(html).not.toContain("nb 0");
+    // Negative pair: a bowler with neither recorded gets no sub-line either.
     const coarse = render(COARSE_ONLY);
     expect(coarse).not.toContain('data-testid="mc-bowl-extras-p-boult"');
+
+    // The `<td>` half of the fold, not just the headers: two `<th>` plus two
+    // cells on each of three bowler rows.
+    expect((html.match(/max-md:hidden/g) ?? []).length).toBeGreaterThanOrEqual(4);
+    // The sub-line is md:hidden — anchored on the SPACE, because `\bmd:hidden\b`
+    // also matches inside `max-md:hidden` and would pass on its own inversion.
+    expect(html).toMatch(/\smd:hidden"/);
   });
 
   it("the summary row groups chevron and name so the name does not float mid-row", () => {
@@ -600,7 +634,11 @@ describe("ScorecardTab", () => {
     ];
     const offenders: string[] = [];
     for (const file of panels) {
-      const src = readFileSync(join(dir, "..", file), "utf8");
+      const path = join(dir, "..", file);
+      // A renamed or deleted panel must fail by NAME, not as an ENOENT stack
+      // that reads like a broken test rather than a missing component.
+      expect(existsSync(path), `missing panel source: ${file}`).toBe(true);
+      const src = readFileSync(path, "utf8");
       if (/\b(border|divide)-line\b/.test(src)) offenders.push(file);
       // …and each really does use the real token, so "no offenders" cannot
       // mean "no border classes at all".

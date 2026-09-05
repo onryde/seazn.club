@@ -38,9 +38,11 @@
 //    cannot be varied by media query, so it is unconditional. Scrolling is the
 //    LAST resort, and the width budget is what should mean it never happens at
 //    320: `table-fixed w-full`, every NUMERIC column sized explicitly (R/B/4s/6s
-//    w-7, SR w-11; O w-8, M/W w-6, Econ w-11) and the NAME column left unsized
-//    so it takes the remainder — roughly 120px on the batting table at 320,
-//    about fifteen characters. Sizing the name column instead, as a first
+//    w-7, SR w-11; O w-8, M/W w-6, Econ w-11) at `px-0.5`, and the NAME column
+//    left unsized so it takes the remainder — about 106px on the batting table
+//    and 110px on the bowling one at 320 once the grid's own `px-3` and the
+//    borders come off, so roughly 12-13 characters. Sizing the name column, as a
+//    first
 //    attempt did, starves the numerics to 16-24px each and is why they are
 //    sized and it is not. Below `md` the bowling table also folds `wd`/`nb`
 //    away and prints them as the bowler's sub-line (`PHONE_FOLD`).
@@ -90,8 +92,15 @@ function anyNonNull<T>(rows: readonly T[], pick: (row: T) => number | string | n
   return rows.some((row) => pick(row) !== null);
 }
 
-const NUM_CELL = "px-1 text-right tabular-nums";
-const HEAD_CELL = "px-1 text-right font-medium text-ink-muted";
+// `px-0.5`, NOT `px-1`, and the reason is `box-sizing: border-box` (Tailwind
+// preflight): padding sits INSIDE the `w-*` width, so `px-1` left `w-7` a 20px
+// content box. Three digits are ~22px and "10.2" ~26px, so the commonest values
+// overflowed — and under `table-fixed` an overflowing cell spills LEFT over its
+// neighbour's digits rather than widening the table, so the scroll region could
+// not rescue it either. `px-0.5` yields 24 / 28 / 40px content boxes for
+// w-7 / w-8 / w-11. The NAME cell keeps `px-1`: it has room, and it truncates.
+const NUM_CELL = "px-0.5 text-right tabular-nums";
+const HEAD_CELL = "px-0.5 text-right font-medium text-ink-muted";
 
 /** A numeric cell that reads as "not recorded" rather than as zero. */
 function Num({
@@ -116,12 +125,20 @@ function Num({
  */
 const PHONE_FOLD = "max-md:hidden";
 
-/** "wd 2 · nb 1" — notation, no words, so it needs no translation. Null when
- *  the scorer recorded neither. */
+/**
+ * "wd 2 · nb 1" — notation, no words, so it needs no translation.
+ *
+ * TRUTHINESS, not `!== null`, and the difference is most of the rows on the
+ * page: a bowler who conceded no wides has `wides: 0`, not `null`, so the
+ * null-check version printed "wd 0 · nb 0" under nearly every bowler's name on
+ * every phone. A zero here is not a fact worth a line — the COLUMN still shows
+ * it at ≥md, where there is room for a grid of zeros; the sub-line exists to
+ * carry the exceptions.
+ */
 function extrasSubLine(row: CricketBowlingRowT): string | null {
   const parts: string[] = [];
-  if (row.wides !== null) parts.push(`wd ${row.wides}`);
-  if (row.noBalls !== null) parts.push(`nb ${row.noBalls}`);
+  if (row.wides) parts.push(`wd ${row.wides}`);
+  if (row.noBalls) parts.push(`nb ${row.noBalls}`);
   return parts.length === 0 ? null : parts.join(" · ");
 }
 
