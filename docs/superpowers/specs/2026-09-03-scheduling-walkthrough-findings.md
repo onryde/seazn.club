@@ -1991,3 +1991,30 @@ Not findings; open items, so nothing here is mistaken for done.
    repair (`toHaveValue` then `toBeEnabled` before the click). **Do not raise
    the budget:** 82.5s is roughly three times the ~25s clean wall clock, so it
    is a stall, not accumulated slowness.
+9. **The CI wiring guard cannot witness the loss of a named spec.** This is
+   the guard that exists because "a project nothing dispatches is
+   indistinguishable from a passing one" — and it has two floors, both of them
+   global. `e2e-ci-wiring.test.ts:133` asserts
+   `specFiles().length > 50` against **129** spec files today, and `:188`
+   asserts the walkthrough project's `selected.length > 0` against **21**. So
+   deleting or moving *both* specs this wave added leaves 127 and 19 — the
+   guard stays green, `orphans` stays empty (the deleted files are no longer
+   enumerated, so nothing is orphaned), and the only signal is the
+   `walkthrough` Playwright leg, which runs **on push to `main` only**.
+
+   That is the same shape as the testid gap in item 5, one level up: the guard
+   proves the *project* is wired, never that a particular journey is still in
+   it. The cheap repair is a floor that moves with the tree — pin the
+   walkthrough count, or assert membership for the specs whose absence would be
+   silent. Verified by reading both assertions and counting the tree, not
+   inferred.
+
+   Related, and recorded so it is not lost with the review that found it:
+   `scheduling-organiser-day.spec.ts`'s budget is still a flat
+   `STEPS = 14` / `PER_STEP_MS = 4_000`, sitting beside costs that ARE derived
+   elsewhere in the same file (`useSavedPulse(ms = 2000)` imposes two mandatory
+   2s waits in step 5 alone, and the project's `expect: { timeout: 15_000 }`).
+   Its sibling was rewritten to a derived form only after the flat version
+   actually timed out mid-run — so this is a latent red of exactly the kind the
+   repo's own standing rules name, left in the one spec that has not yet paid
+   for it.
