@@ -26,6 +26,10 @@ import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+// The PRODUCT schema, imported so the fake's key set below is checked against
+// its source of truth instead of against a second hand-copy of the same list
+// (R05). Same import `board.test.ts` already uses for its own drift guards.
+import { ScheduleConfig } from "../../../../apps/web/src/server/api-v1/schemas.ts";
 import { checkBoard } from "../checker.ts";
 import type { RequestOptions, Session } from "../http.ts";
 import type { SeedTransport } from "../seed.ts";
@@ -1581,6 +1585,80 @@ describe("runScheduleLayer — the schedule-settings round trip", () => {
     expect(r.outcomes[0].errors.join(" ")).toMatch(/CHANGED "matchMinutes".*45.*30/);
   });
 
+  // --- SEVERE 2: the array and record arms of `sameConfigValue` -------------
+  //
+  // Until this round `configOverrides` only ever moved a SCALAR
+  // (`matchMinutes: 30`), so `sameConfigValue`'s array and record arms were
+  // only ever reached in the EQUAL direction. Both could be replaced with
+  // `return true` and the suite stayed green — which silently disabled
+  // `crossCheckSettings` for `courts`, `blackouts` and `sessionWindows`,
+  // exactly the fields a non-`.strict()` `ScheduleConfig` is most likely to
+  // drop or reshape, and exactly the defect this cross-check was added for.
+  //
+  // Each case below is chosen so that ONE arm is load-bearing for it: the
+  // `courts` cases are arrays of strings, so they never touch the record arm,
+  // and the `constraints` case is a bare record, so it never touches the array
+  // arm.
+
+  it("reports an array the product persisted with a DIFFERENT element", async () => {
+    const { transport } = fakeTransport({
+      divisions: { "div-a": { fixturesAfter: PLACED() } },
+      // The pack resolved `@c1`/`@c2` to court-1/court-2; the product kept a
+      // court that is not the one the checker will judge occupancy on.
+      configOverrides: { courts: ["court-1", "court-3"] },
+    });
+
+    const r = await runScheduleLayer(layer({ transport }));
+
+    expect(r.outcomes[0].errors.join(" ")).toMatch(/CHANGED "courts"/);
+  });
+
+  it("reports an array that differs only by ORDER — a reordered court list is not the same fact", async () => {
+    const { transport } = fakeTransport({
+      divisions: { "div-a": { fixturesAfter: PLACED() } },
+      configOverrides: { courts: ["court-2", "court-1"] },
+    });
+
+    const r = await runScheduleLayer(layer({ transport }));
+
+    // Order is significant BY DECISION, and it is free: `putScheduleSettings`
+    // stores the parsed config as jsonb verbatim, so a well-behaved product
+    // cannot produce a reorder and this can never be a false red. A comparison
+    // that sorted first would accept a product that had begun reshaping the
+    // array and report nothing.
+    expect(r.outcomes[0].errors.join(" ")).toMatch(/CHANGED "courts"/);
+  });
+
+  it("reports an array the product came back LONGER than the pack declared", async () => {
+    const { transport } = fakeTransport({
+      divisions: { "div-a": { fixturesAfter: PLACED() } },
+      configOverrides: { courts: ["court-1", "court-2", "court-3"] },
+    });
+
+    const r = await runScheduleLayer(layer({ transport }));
+
+    // The one direction the element-wise walk cannot see on its own: every
+    // index the pack declared matches, and the product is still holding a
+    // court the checker knows nothing about. Only the length test catches it.
+    expect(r.outcomes[0].errors.join(" ")).toMatch(/CHANGED "courts"/);
+  });
+
+  it("reports a record the product persisted with one key changed", async () => {
+    const withConstraints = { ...CONFIG, constraints: { noBackToBack: true, restMin: 30 } };
+    const { transport } = fakeTransport({
+      divisions: { "div-a": { fixturesAfter: PLACED() } },
+      // Same keys, same shape, one value moved — the shape a nested knob takes
+      // when a build has quietly changed its own default.
+      configOverrides: { constraints: { noBackToBack: true, restMin: 45 } },
+    });
+
+    const r = await runScheduleLayer(
+      layer({ transport, divisions: [divA({ scheduleConfig: withConstraints })] }),
+    );
+
+    expect(r.outcomes[0].errors.join(" ")).toMatch(/CHANGED "constraints"/);
+  });
+
   it("does NOT report a re-serialised instant as a divergence", async () => {
     const { transport } = fakeTransport({
       divisions: { "div-a": { fixturesAfter: PLACED() } },
@@ -1770,5 +1848,37 @@ describe("declaresOfficials is carried from the PACK onto EncodedConstraints", (
 
     expect(r.constraints[0].declaresOfficials).toBe(true);
     expect(report.findings.map((f) => f.kind)).not.toContain("officials_unreadable");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// R05 — the fake's key set is a HAND-COPY, and hand-copies drift
+// ---------------------------------------------------------------------------
+
+describe("SCHEDULE_CONFIG_KEYS — drift guard", () => {
+  // `SCHEDULE_CONFIG_KEYS` above is a hand-copy of `ScheduleConfig`'s own
+  // top-level key set, and the whole `stripConfigKeys` model rests on it: the
+  // fake PUT strips anything NOT in that set, because a plain `z.object` strips
+  // an unknown key rather than refusing it.
+  //
+  // So a knob ADDED to the product schema is the failure this guard exists for,
+  // and it is silent without it. The fake would strip the new key on every PUT,
+  // `crossCheckSettings` would report it DROPPED on every division that
+  // declared it, and the wrong half of the system would look broken — a bench
+  // that reds on a product which is behaving correctly. A knob REMOVED is the
+  // milder direction: the fake keeps echoing a key the product no longer has,
+  // and the round-trip check goes quiet where it should red.
+  //
+  // Third instance of this class in this wave, and the pattern is the one
+  // `board.test.ts` already uses: assert against the schema's OWN shape, never
+  // against a second copy of the same list.
+  it("stays equal to ScheduleConfig's own top-level shape, so a product schema change reds HERE", () => {
+    const declared = Object.keys(ScheduleConfig.shape);
+
+    // Sanity: a broken shape access must not pass by comparing two empty sets
+    // — the vacuous mode this guard would otherwise have.
+    expect(declared.length).toBeGreaterThan(5);
+
+    expect([...SCHEDULE_CONFIG_KEYS].sort()).toEqual([...declared].sort());
   });
 });

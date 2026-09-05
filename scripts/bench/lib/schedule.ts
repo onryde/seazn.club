@@ -562,7 +562,24 @@ function crossCheckSettings(
 
 /** Structural equality, with two instants that name the same moment treated as
  *  equal. Records compare only the keys the PACK declared — see
- *  `crossCheckSettings` on why an added default is not a divergence. */
+ *  `crossCheckSettings` on why an added default is not a divergence.
+ *
+ *  ARRAY ORDER IS SIGNIFICANT, and that is a decision rather than an accident
+ *  of writing the comparison positionally. A reordered court list is not the
+ *  same fact as an unchanged one: `ScheduleConfig.courts` is `z.array(CourtId)`
+ *  and `putScheduleSettings` stores the parsed config as jsonb VERBATIM
+ *  (`usecases/schedule.ts` — `tx.json(input.config)`), so zod preserves the
+ *  order and jsonb preserves it again. A well-behaved product therefore CANNOT
+ *  produce a reorder, which means treating one as a divergence costs no false
+ *  reds at all, while treating it as equality would silently accept a product
+ *  that had started reshaping the array. Sorting before comparing would buy
+ *  nothing and hide that.
+ *
+ *  The LENGTH test is likewise load-bearing in one direction only, and it is
+ *  the direction `every` cannot cover: a KEPT array LONGER than the sent one
+ *  passes every index the pack declared. That is the product holding courts,
+ *  blackouts or session windows the pack never asked for — capacity the
+ *  scheduler had and the checker will not know about. */
 function sameConfigValue(sent: unknown, kept: unknown): boolean {
   if (typeof sent === "string" && typeof kept === "string") {
     const a = instant(sent);
