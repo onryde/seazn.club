@@ -36,11 +36,17 @@
 //    new scrolling region owes `tabIndex=0` + `role` + an accessible name or
 //    axe reds `scrollable-region-focusable` at SERIOUS impact. `tabIndex`
 //    cannot be varied by media query, so it is unconditional. Scrolling is the
-//    LAST resort though: `text-[13px] px-1 tabular-nums` on the numeric cells
-//    and a `table-fixed` name column (`max-w-0 truncate`) are what should keep
-//    six columns inside 320 without it. PAINT IS NOT PROVABLE STATICALLY: no
-//    assertion on markup can measure a rendered width, so the 320 claim rests
-//    on Task 15's screenshots, not on this file's tests.
+//    LAST resort, and the width budget is what should mean it never happens at
+//    320: `table-fixed w-full`, every NUMERIC column sized explicitly (R/B/4s/6s
+//    w-7, SR w-11; O w-8, M/W w-6, Econ w-11) and the NAME column left unsized
+//    so it takes the remainder — roughly 120px on the batting table at 320,
+//    about fifteen characters. Sizing the name column instead, as a first
+//    attempt did, starves the numerics to 16-24px each and is why they are
+//    sized and it is not. Below `md` the bowling table also folds `wd`/`nb`
+//    away and prints them as the bowler's sub-line (`PHONE_FOLD`).
+//    PAINT IS NOT PROVABLE STATICALLY: no assertion on markup measures a
+//    rendered width, so the 320 claim rests on Task 15's screenshots, not on
+//    this file's tests.
 //
 // CONTRACT NOTES for the task that builds `doc.cricket` (recorded here because
 // nothing in this file can enforce them):
@@ -88,11 +94,50 @@ const NUM_CELL = "px-1 text-right tabular-nums";
 const HEAD_CELL = "px-1 text-right font-medium text-ink-muted";
 
 /** A numeric cell that reads as "not recorded" rather than as zero. */
-function Num({ value }: { value: number | string | null }): ReactNode {
-  return <td className={NUM_CELL}>{value === null ? "—" : value}</td>;
+function Num({
+  value,
+  className = "",
+}: {
+  value: number | string | null;
+  className?: string;
+}): ReactNode {
+  return <td className={`${NUM_CELL} ${className}`}>{value === null ? "—" : value}</td>;
 }
 
-function Th({ label, abbr }: { label: string; abbr: string }): ReactNode {
+/**
+ * The wides / no-balls columns are folded away below `md` and printed as the
+ * bowler's sub-line instead.
+ *
+ * Seven numeric columns do not fit beside a readable name at 320: something has
+ * to give, and two low-salience extras cost less as "wd 2 · nb 1" under the
+ * name than as two more 28px columns squeezing the name to nothing. ONE DOM,
+ * branched — this is a `max-md:hidden` on the existing cells, not a second
+ * phone table.
+ */
+const PHONE_FOLD = "max-md:hidden";
+
+/** "wd 2 · nb 1" — notation, no words, so it needs no translation. Null when
+ *  the scorer recorded neither. */
+function extrasSubLine(row: CricketBowlingRowT): string | null {
+  const parts: string[] = [];
+  if (row.wides !== null) parts.push(`wd ${row.wides}`);
+  if (row.noBalls !== null) parts.push(`nb ${row.noBalls}`);
+  return parts.length === 0 ? null : parts.join(" · ");
+}
+
+function Th({
+  label,
+  abbr,
+  width,
+  className = "",
+}: {
+  label: string;
+  abbr: string;
+  /** Explicit under `table-fixed`, or the browser divides the remaining space
+   *  evenly and the name column loses. */
+  width: string;
+  className?: string;
+}): ReactNode {
   // The header shows NOTATION (R, B, 4s, SR) because that is what a scorecard
   // prints and what fits six columns into 320px. `title` alone was not enough:
   // it is a hover affordance, and a phone has no hover — so the localised word
@@ -100,21 +145,29 @@ function Th({ label, abbr }: { label: string; abbr: string }): ReactNode {
   // accessibility tree so a screen reader reads "Strike rate" once rather than
   // "SR Strike rate".
   return (
-    <th scope="col" className={HEAD_CELL} title={label}>
+    <th scope="col" className={`${HEAD_CELL} ${width} ${className}`} title={label}>
       <span className="sr-only">{label}</span>
       <span aria-hidden>{abbr}</span>
     </th>
   );
 }
 
-/** The name column's width, and the `max-w-0` that makes truncation work.
+/**
+ * The name span. `block truncate` and NOTHING ELSE — in particular NOT
+ * `max-w-0`.
  *
- *  `min-w-0` does nothing on a `<td>`, and an auto-layout table simply grows to
- *  fit the longest name — so `truncate` could never fire and a 43-character
- *  entrant pushed the numeric columns off a 320px screen. `table-fixed` plus an
- *  explicit width is what bounds the cell; `max-w-0` on the inner block is the
- *  standard trick that makes a percentage-width table cell actually clip. */
-const NAME_CELL = "max-w-0 truncate";
+ * The first attempt at this put `max-w-0` here, reasoning from the trick that
+ * makes a percentage-width flex child clip. On a `display:block` span it does
+ * something else entirely: the used width IS zero, and `truncate`'s
+ * `overflow:hidden` then clips the text away completely — every batter name,
+ * every bowler name and every dismissal line rendered BLANK. The test covering
+ * it asserted only that the string `max-w-0` appeared in the markup, so it was
+ * green on a component that displayed nothing.
+ *
+ * Under `table-fixed` none of that is needed: the COLUMN width bounds the cell,
+ * and `truncate` on the block inside it does the rest.
+ */
+const NAME_CELL = "block truncate";
 
 /**
  * A dismissal, resolved — or the neutral "out" when the document could not
@@ -130,7 +183,12 @@ const NAME_CELL = "max-w-0 truncate";
  */
 function dismissalText(dict: PublicDict, dismissal: CricketBattingRowT["dismissal"]): string {
   const text = t(dict, dismissal.key, dismissal.params);
-  return text.includes("{") ? t(dict, "matchCentre.dismissal.out_unknown") : text;
+  // Two ways the document can fail to give us a sentence, and `t()` reports
+  // them differently: an unfilled `{fielder}` survives interpolation verbatim,
+  // and a key NO locale carries comes back AS THE KEY. Both would print
+  // machine text to a spectator.
+  const unusable = text === dismissal.key || text.includes("{");
+  return unusable ? t(dict, "matchCentre.dismissal.out_unknown") : text;
 }
 
 function ScrollRegion({ label, children }: { label: string; children: ReactNode }): ReactNode {
@@ -159,18 +217,21 @@ function BattingTable({
         <caption className="sr-only">{label}</caption>
         <thead>
           <tr className="border-b border-zinc-200/80">
+            {/* NO width: the name column takes whatever the sized numeric
+                columns leave (~120px at 320, about 15 characters). Sizing THIS
+                one instead starved the numerics to 16-24px each. */}
             <th
               scope="col"
-              className="w-[44%] px-1 text-left font-medium text-ink-muted"
+              className="px-1 text-left font-medium text-ink-muted"
               title={t(dict, "matchCentre.col.batter")}
             >
               {t(dict, "matchCentre.col.batter")}
             </th>
-            <Th label={t(dict, "matchCentre.col.runs")} abbr="R" />
-            <Th label={t(dict, "matchCentre.col.balls")} abbr="B" />
-            {showFours ? <Th label={t(dict, "matchCentre.col.fours")} abbr="4s" /> : null}
-            {showSixes ? <Th label={t(dict, "matchCentre.col.sixes")} abbr="6s" /> : null}
-            {showSr ? <Th label={t(dict, "matchCentre.col.strikeRate")} abbr="SR" /> : null}
+            <Th label={t(dict, "matchCentre.col.runs")} abbr="R" width="w-7" />
+            <Th label={t(dict, "matchCentre.col.balls")} abbr="B" width="w-7" />
+            {showFours ? <Th label={t(dict, "matchCentre.col.fours")} abbr="4s" width="w-7" /> : null}
+            {showSixes ? <Th label={t(dict, "matchCentre.col.sixes")} abbr="6s" width="w-7" /> : null}
+            {showSr ? <Th label={t(dict, "matchCentre.col.strikeRate")} abbr="SR" width="w-11" /> : null}
           </tr>
         </thead>
         <tbody>
@@ -181,10 +242,10 @@ function BattingTable({
               className="border-b border-zinc-200/60 align-top"
             >
               <td className="px-1 py-1">
-                <span className={`block ${NAME_CELL}`}>{row.person.name}</span>
+                <span className={NAME_CELL}>{row.person.name}</span>
                 {/* The dismissal is a Msg, resolved here in the viewer's own
                     locale — the document never carries pre-rendered copy. */}
-                <span className={`dis block text-[11px] text-ink-muted ${NAME_CELL}`}>
+                <span className={`dis text-[11px] text-ink-muted ${NAME_CELL}`}>
                   {dismissalText(dict, row.dismissal)}
                 </span>
               </td>
@@ -220,20 +281,25 @@ function BowlingTable({
         <caption className="sr-only">{label}</caption>
         <thead>
           <tr className="border-b border-zinc-200/80">
+            {/* NO width — see the batting table. */}
             <th
               scope="col"
-              className="w-[40%] px-1 text-left font-medium text-ink-muted"
+              className="px-1 text-left font-medium text-ink-muted"
               title={t(dict, "matchCentre.col.bowler")}
             >
               {t(dict, "matchCentre.col.bowler")}
             </th>
-            <Th label={t(dict, "matchCentre.col.overs")} abbr="O" />
-            {showMaidens ? <Th label={t(dict, "matchCentre.col.maidens")} abbr="M" /> : null}
-            <Th label={t(dict, "matchCentre.col.runs")} abbr="R" />
-            <Th label={t(dict, "matchCentre.col.wickets")} abbr="W" />
-            {showEcon ? <Th label={t(dict, "matchCentre.col.economy")} abbr="Econ" /> : null}
-            {showWides ? <Th label={t(dict, "matchCentre.col.wides")} abbr="wd" /> : null}
-            {showNoBalls ? <Th label={t(dict, "matchCentre.col.noBalls")} abbr="nb" /> : null}
+            <Th label={t(dict, "matchCentre.col.overs")} abbr="O" width="w-8" />
+            {showMaidens ? <Th label={t(dict, "matchCentre.col.maidens")} abbr="M" width="w-6" /> : null}
+            <Th label={t(dict, "matchCentre.col.runs")} abbr="R" width="w-7" />
+            <Th label={t(dict, "matchCentre.col.wickets")} abbr="W" width="w-6" />
+            {showEcon ? <Th label={t(dict, "matchCentre.col.economy")} abbr="Econ" width="w-11" /> : null}
+            {showWides ? (
+              <Th label={t(dict, "matchCentre.col.wides")} abbr="wd" width="w-7" className={PHONE_FOLD} />
+            ) : null}
+            {showNoBalls ? (
+              <Th label={t(dict, "matchCentre.col.noBalls")} abbr="nb" width="w-7" className={PHONE_FOLD} />
+            ) : null}
           </tr>
         </thead>
         <tbody>
@@ -244,15 +310,23 @@ function BowlingTable({
               className="border-b border-zinc-200/60"
             >
               <td className="px-1 py-1">
-                <span className={`block ${NAME_CELL}`}>{row.person.name}</span>
+                <span className={NAME_CELL}>{row.person.name}</span>
+                {extrasSubLine(row) === null ? null : (
+                  <span
+                    data-testid={`mc-bowl-extras-${row.person.personId}`}
+                    className={`block text-[11px] tabular-nums text-ink-muted md:hidden`}
+                  >
+                    {extrasSubLine(row)}
+                  </span>
+                )}
               </td>
               <Num value={row.overs} />
               {showMaidens ? <Num value={row.maidens} /> : null}
               <Num value={row.runs} />
               <td className={`${NUM_CELL} font-semibold`}>{row.wickets}</td>
               {showEcon ? <Num value={row.economy} /> : null}
-              {showWides ? <Num value={row.wides} /> : null}
-              {showNoBalls ? <Num value={row.noBalls} /> : null}
+              {showWides ? <Num value={row.wides} className={PHONE_FOLD} /> : null}
+              {showNoBalls ? <Num value={row.noBalls} className={PHONE_FOLD} /> : null}
             </tr>
           ))}
         </tbody>
@@ -291,19 +365,25 @@ function Innings({
           that explicit rather than accidental, and the chevron below is the
           replacement: `aria-hidden`, because <details> already announces its
           own expanded state, and rotated from the <details> group. */}
-      <summary className="flex list-none cursor-pointer items-baseline justify-between gap-2 px-3 py-2.5">
-        <svg
-          aria-hidden
-          viewBox="0 0 12 12"
-          className="mt-1 h-3 w-3 shrink-0 text-ink-muted transition-transform group-open:rotate-90"
-        >
-          <path d="M4 2l4 4-4 4" fill="none" stroke="currentColor" strokeWidth="1.75" />
-        </svg>
-        <span className="min-w-0">
-          <span className="block truncate font-semibold">{innings.side.name}</span>
-          <span className="block text-[11px] text-ink-muted">
-            {t(dict, "matchCentre.innings", { number: n })}
-            {innings.isSuperOver ? ` · ${t(dict, "matchCentre.superOver")}` : ""}
+      <summary className="flex cursor-pointer list-none items-center justify-between gap-2 px-3 py-2.5 [&::-webkit-details-marker]:hidden">
+        {/* Chevron and name are ONE flex item. As three siblings under
+            `justify-between` the name floated to the middle of the row with
+            gaps either side; grouped, the name block owns the left and the
+            score owns the right, which is what a scorecard looks like. */}
+        <span className="flex min-w-0 flex-1 items-center gap-2">
+          <svg
+            aria-hidden
+            viewBox="0 0 12 12"
+            className="h-3 w-3 shrink-0 text-ink-muted transition-transform group-open:rotate-90"
+          >
+            <path d="M4 2l4 4-4 4" fill="none" stroke="currentColor" strokeWidth="1.75" />
+          </svg>
+          <span className="min-w-0">
+            <span className="block truncate font-semibold">{innings.side.name}</span>
+            <span className="block text-[11px] text-ink-muted">
+              {t(dict, "matchCentre.innings", { number: n })}
+              {innings.isSuperOver ? ` · ${t(dict, "matchCentre.superOver")}` : ""}
+            </span>
           </span>
         </span>
         <span className="shrink-0 tabular-nums font-semibold">
@@ -319,7 +399,7 @@ function Innings({
           <BattingTable
             rows={innings.batting}
             dict={dict}
-            label={`${innings.side.name} — ${t(dict, "matchCentre.col.batter")}`}
+            label={t(dict, "matchCentre.battingFor", { side: innings.side.name })}
           />
           {innings.extrasLine === null ? null : (
             <p data-testid={`mc-extras-${n}`} className="flex justify-between gap-2 px-1 text-[13px]">

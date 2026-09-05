@@ -136,6 +136,7 @@
   "matchCentre.info.division": "Division",
   "matchCentre.info.competition": "Competition",
   "matchCentre.bowlingFor": "{side} — bowling",
+  "matchCentre.battingFor": "{side} — batting",
   "term.yellow": "yellow",
   "term.red": "red",
   "term.second_yellow": "second yellow",

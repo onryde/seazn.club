@@ -49,6 +49,9 @@
 // All five compile and collect (`numTotalTests` stayed 12 before fix round 1
 // and 20 after), so none is the collection-break shape that reads as a
 // survivor.
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { beforeAll, describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import { CricketWicket } from "@seazn/engine/sports/cricket";
@@ -421,6 +424,8 @@ describe("ScorecardTab", () => {
     ] as const) {
       expect(html, key).toContain(`title="${en[key]}"`);
     }
+    // `noBalls` too: one bowler recorded one, the other did not.
+    expect(html).toContain(`title="${en["matchCentre.col.noBalls"]}"`);
     // …and the negative half, from the innings where NO row has them: the rule
     // is "any row", not "always". (The band-2/band-3 test below is the fuller
     // pair; this is the one that proves the two halves come from the same rule.)
@@ -454,6 +459,24 @@ describe("ScorecardTab", () => {
     expect(html).toContain(en["matchCentre.dismissal.out_unknown"]);
     // Positive pair: a COMPLETE template still renders its own sentence.
     expect(render(RICH_ONLY)).toContain("c S. Patel b J. Bumrah");
+
+    // The OTHER way a document fails to give us a sentence: a key no locale
+    // carries. `t()` returns the key itself, so without the guard the markup
+    // would print "matchCentre.dismissal.someFutureMode" to a spectator.
+    const unknownKey: CricketInningsViewT = {
+      ...richInnings,
+      batting: [
+        {
+          ...richInnings.batting[0]!,
+          dismissal: { key: "matchCentre.dismissal.someFutureMode" },
+        },
+      ],
+    };
+    const html2 = renderToStaticMarkup(
+      <ScorecardTab doc={doc({ innings: [unknownKey] })} dict={dict} data={data} />,
+    );
+    expect(html2).not.toContain("matchCentre.dismissal.someFutureMode");
+    expect(html2).toContain(en["matchCentre.dismissal.out_unknown"]);
   });
 
   it("the bowling region is named for the FIELDING side, not the batting one", () => {
@@ -470,7 +493,13 @@ describe("ScorecardTab", () => {
   it("the summary keeps a disclosure affordance after `display:flex` removes the marker", () => {
     const html = render(DECIDED);
     expect(html).toContain("list-none");
+    // The WebKit marker is a separate pseudo-element and survives `list-none`.
+    // `&amp;` because React escapes the ampersand inside the class attribute —
+    // this is the class as SERIALISED, which is what the browser parses.
+    expect(html).toContain("[&amp;::-webkit-details-marker]:hidden");
     expect(html).toContain("group-open:rotate-90");
+    // …and its PAIR: `group-open:` is inert without `group` on the <details>.
+    expect(html).toMatch(/<details[^>]*class="[^"]*\bgroup\b[^"]*"/);
     expect(html).toContain("<svg");
     // The chevron is decorative — <details> already announces expanded state.
     expect(html).toMatch(/<svg[^>]*aria-hidden/);
@@ -485,16 +514,99 @@ describe("ScorecardTab", () => {
     expect(html).toContain(`<caption class="sr-only">`);
   });
 
-  it("the name column is bounded so `truncate` can actually fire", () => {
-    // `min-w-0` does nothing on a <td> and an auto-layout table grows to the
-    // longest name, so truncation needed `table-fixed` + an explicit width +
-    // `max-w-0`. Asserted on the classes because NO static assertion can
-    // measure paint — Task 15's screenshots are what close this.
+  it("the name span is `block truncate` and NOTHING else — `max-w-0` renders it blank", () => {
+    // The regression this exists for: `max-w-0` on a display:block span gives
+    // it a used width of ZERO, and `truncate`'s overflow:hidden then clips the
+    // text away entirely — every name and every dismissal rendered blank. The
+    // test that covered it asserted only that the STRING "max-w-0" appeared, so
+    // it was green on a component that displayed nothing.
+    const html = render(RICH_ONLY);
+    expect(html).not.toContain("max-w-0");
+    // The exact class list, not a substring: "contains block truncate" would
+    // pass with max-w-0 sitting beside them again.
+    expect(html).toContain('<span class="block truncate">R. Sharma</span>');
+    // …and the names are actually IN the markup, which is what was lost.
+    for (const name of ["R. Sharma", "S. Yadav", "S. Khan", "J. Archer"]) {
+      expect(html, name).toContain(name);
+    }
+    expect(html).toContain("c S. Patel b J. Bumrah");
+  });
+
+  it("the NUMERIC columns are sized and the name column takes the remainder", () => {
+    // Under `table-fixed w-full`, sizing only the name column starves the
+    // numerics to 16-24px each at 320. The name column is deliberately
+    // unsized. Asserted on classes because no static assertion measures paint
+    // — Task 15's screenshots are what close the 320 claim.
     const html = render(RICH_ONLY);
     expect(html).toContain("table-fixed");
-    expect(html).toContain("w-[44%]");
-    expect(html).toContain("w-[40%]");
-    expect(html).toContain("max-w-0");
+    expect(html).not.toContain("w-[44%]");
+    expect(html).not.toContain("w-[40%]");
+    // Batting: R, B, 4s, 6s at w-7 and SR at w-11.
+    expect(html).toMatch(/class="[^"]*w-7[^"]*"[^>]*title="Runs"/);
+    expect(html).toMatch(/class="[^"]*w-11[^"]*"[^>]*title="Strike rate"/);
+    // Bowling: O at w-8, W at w-6.
+    expect(html).toMatch(/class="[^"]*w-8[^"]*"[^>]*title="Overs"/);
+    expect(html).toMatch(/class="[^"]*w-6[^"]*"[^>]*title="Wickets"/);
+  });
+
+  it("below md the bowling table folds wd/nb into the bowler's sub-line", () => {
+    const html = render(RICH_ONLY);
+    // The columns still exist in ONE DOM — they are hidden, not removed.
+    expect(html).toMatch(/class="[^"]*max-md:hidden[^"]*"[^>]*title="Wides"/);
+    expect(html).toMatch(/class="[^"]*max-md:hidden[^"]*"[^>]*title="No-balls"/);
+    // …and the phone gets the same numbers as notation under the name.
+    expect(html).toContain('data-testid="mc-bowl-extras-p-khan"');
+    expect(html).toContain("wd 2 · nb 1");
+    // The second bowler recorded wides but no no-balls: only the half that
+    // exists is printed.
+    expect(html).toContain('data-testid="mc-bowl-extras-p-archer"');
+    expect(html).toContain("wd 2");
+    // Negative pair: a bowler with neither gets no sub-line at all.
+    const coarse = render(COARSE_ONLY);
+    expect(coarse).not.toContain('data-testid="mc-bowl-extras-p-boult"');
+  });
+
+  it("the summary row groups chevron and name so the name does not float mid-row", () => {
+    const html = render(DECIDED);
+    // Chevron + name are ONE flex item; the score is the other.
+    expect(html).toContain('<span class="flex min-w-0 flex-1 items-center gap-2">');
+    // `items-center`, not `items-baseline`: an svg has no baseline to align to.
+    expect(html).toContain("items-center");
+    expect(html).not.toContain("items-baseline");
+    expect(html).not.toContain("mt-1 h-3");
+  });
+
+  it("both region labels are localised templates, batting and bowling alike", () => {
+    const html = render(RICH_ONLY);
+    expect(html).toContain(`aria-label="${HOME.name} — batting"`);
+    expect(html).toContain(`aria-label="${AWAY.name} — bowling"`);
+    // No hardcoded em-dash concatenation left behind.
+    expect(html).not.toContain(`aria-label="${HOME.name} — Batter"`);
+  });
+
+  it("no panel in this directory uses the phantom `border-line` token", () => {
+    // Scanned across the SOURCE of all five panels, not just this one's
+    // markup: `--color-line` does not exist in globals.css, so Tailwind v4
+    // paints `currentColor` for `border-line` and drops `border-line/50`
+    // entirely — and the same phantom token had been copied into the four
+    // Task 13 panels. A per-component render test would have caught one.
+    const dir = dirname(fileURLToPath(import.meta.url));
+    const panels = [
+      "scorecard-tab.tsx",
+      "commentary-tab.tsx",
+      "timeline-tab.tsx",
+      "sets-tab.tsx",
+      "info-tab.tsx",
+    ];
+    const offenders: string[] = [];
+    for (const file of panels) {
+      const src = readFileSync(join(dir, "..", file), "utf8");
+      if (/\b(border|divide)-line\b/.test(src)) offenders.push(file);
+      // …and each really does use the real token, so "no offenders" cannot
+      // mean "no border classes at all".
+      expect(src, file).toMatch(/(border|divide)-zinc-200/);
+    }
+    expect(offenders).toEqual([]);
   });
 
   it("uses real colour tokens — `border-line` is not one", () => {
