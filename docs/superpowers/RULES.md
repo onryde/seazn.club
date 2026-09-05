@@ -47,6 +47,14 @@ backwards-compatible one; don't contort a design to dodge a migration.
   set it per-dispatch). Writes code. Full access to all skills and tools.
 - **Reviewer — Opus at minimum, xHigh effort** (same changes, same dates, same
   place). "At minimum" means Opus or above; never Sonnet for any of the three.
+- **Owner ruling 2026-09-05 — "write all wave implementation using fable
+  subagent": Implementer and Reviewer run on Fable** (`model: fable` in
+  `.claude/agents/implementer.md` and `reviewer.md`; Fable is "Opus or above",
+  so the minimum rule holds). Scout stays Opus — a read-only locator gains
+  nothing from the top tier. Agents already running keep the model they
+  started on; a resume does not switch models. Cost to watch: Fable draws the
+  same account budget faster — the session limit has already killed a wave
+  of agents twice on 2026-09-05.
   Reviews the implementer's diff, reports gaps as a list, not prose.
 
 **Loop**: Implementer → Reviewer → gap list → Implementer → Reviewer → …

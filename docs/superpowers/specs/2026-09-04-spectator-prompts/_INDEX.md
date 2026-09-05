@@ -174,3 +174,8 @@ False premises found in W1 (do not re-derive): engine corpora live under `sports
 (the pre-image had it); `decideTie` does NOT leave `outcome` null under super-over
 config; `applyPlayerLine` refuses an unclosed innings; `cricket.toss` is band 1; an
 isolated-worktree agent branches from origin/main, never from the feature branch.
+
+**Owner ruling 14 (2026-09-05 18:1x):** "write all wave implementation using fable
+subagent?" — accepted as a ruling: Implementer and Reviewer agents run on Fable for
+this programme's remaining waves (`.claude/agents/*.md` frontmatter; RULES.md). The four
+agents resumed at 18:01 finish on Opus (a resume keeps the model).
