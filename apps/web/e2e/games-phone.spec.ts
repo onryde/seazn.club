@@ -16,11 +16,23 @@ const PHONE = { width: 320, height: 568 };
 const DESKTOP = { width: 1280, height: 800 };
 const STORAGE_KEY = "seazn-games:chess-quest:v1";
 
+// The site-wide cookie banner is a fixed bottom panel: at phone widths it
+// sits exactly over the sticky thumb bar and intercepts every click there.
+// A fresh context has no consent stored, so dismiss it before driving.
+async function dismissConsent(page: Page) {
+  const reject = page.getByRole("button", { name: /^Reject$/ }).first();
+  if (await reject.isVisible().catch(() => false)) {
+    await reject.click();
+    await expect(reject).toBeHidden();
+  }
+}
+
 async function freshHub(page: Page) {
   await page.goto("/games/chess-quest");
   await page.evaluate((k) => localStorage.removeItem(k), STORAGE_KEY);
   await page.reload();
   await expect(page.getByText("First Steps").first()).toBeVisible();
+  await dismissConsent(page);
 }
 
 async function openArcadeGame(page: Page, name: RegExp) {
@@ -343,6 +355,7 @@ test("game page header on a phone: one row, attribution rendered once at every w
   for (const vp of [PHONE, DESKTOP]) {
     await page.setViewportSize(vp);
     await page.goto("/games/chess-quest");
+    await dismissConsent(page);
     await expect(page.getByRole("link", { name: /Powered by Seazn Club/ })).toHaveCount(1);
     await expect(page.getByRole("link", { name: /Powered by Seazn Club/ })).toBeVisible();
   }

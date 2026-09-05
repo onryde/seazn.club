@@ -7,10 +7,12 @@
 // title takes its own row, the four device controls become 44px icon buttons
 // on one row (their labels fold, their aria-labels do not, so the accessible
 // name is identical at every width), and the two-sentence lede folds behind a
-// native <details>. ONE DOM, branched: everything below 768 is `max-md:*`,
-// the fold itself is `md:hidden`, and its ≥768 twin — the only duplicated
-// node here — is `max-md:hidden`, so exactly one copy of the lede is ever
-// visible. ≥768 renders exactly what it rendered before.
+// title takes its own row, the four device controls become 44px icon buttons
+// on one row (their labels fold, their aria-labels do not, so the accessible
+// name is identical at every width), and the lede and the land-badge shelf
+// are desktop-only (`max-md:hidden`) so today's lesson lands on the first
+// screen. ONE DOM, branched: everything below 768 is `max-md:*`; ≥768
+// renders exactly what it rendered before.
 import { LANDS } from "../../content/lands";
 import { LESSONS } from "../../content/lessons";
 import { useCopy } from "../../lib/copy";
@@ -45,7 +47,7 @@ export function QuestHeader({
         data-cq-slot="header-row"
         className="flex flex-wrap items-center justify-between gap-3 max-md:flex-col max-md:items-start max-md:gap-2"
       >
-        <h2 className="mk-display text-2xl font-bold text-(color:--cq-ink)">
+        <h2 className="mk-display text-2xl font-bold text-(color:--cq-ink) max-md:text-xl">
           {name ? `${name}'s ` : ""}Chess Quest <span aria-hidden>♞</span>
         </h2>
         <div className="flex flex-wrap items-center gap-2">
@@ -99,13 +101,10 @@ export function QuestHeader({
         </div>
       </div>
 
-      {/* Phones: the lede folds. ≥768: the plain paragraph, as before. */}
-      <details className="rounded-xl border border-(color:--cq-accent-line) bg-white px-3 md:hidden">
-        <summary className="flex min-h-11 cursor-pointer items-center text-sm font-semibold text-(color:--cq-accent-strong)">
-          About the quest
-        </summary>
-        <p className="pb-3 text-sm text-slate-600">{lede}</p>
-      </details>
+      {/* Phones: no lede at all — the page header already names the quest,
+          and a folded "About" box cost 50px of the first screen that the
+          lesson card needs (the live 320 drive put the Play button at 824px
+          with it). ≥768: the plain paragraph, as before. */}
       <p className="max-w-2xl text-sm text-slate-600 max-md:hidden">{lede}</p>
 
       <div className="flex flex-wrap items-center gap-4">
@@ -123,7 +122,10 @@ export function QuestHeader({
         </div>
       </div>
 
-      <div data-cq-slot="land-badges" className="flex flex-wrap gap-1.5">
+      {/* Land badges are a desktop trophy shelf; on phones two rows of them
+          sat between the header and today's lesson. The same completion state
+          is in the map's land rows, so the shelf is desktop-only. */}
+      <div data-cq-slot="land-badges" className="flex flex-wrap gap-1.5 max-md:hidden">
         {LANDS.map((land) => {
           const won = progress.landDone(land);
           return (

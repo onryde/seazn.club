@@ -54,10 +54,10 @@ describe("QuestHeader — button row wraps instead of overflowing (W1 regression
 
 // Phone composition — design of record: scratchpad games-phone-options.html,
 // "Quest hub on a phone" ("Header"). Title on its own row, then the four
-// device controls as 44px icon buttons on one row, and the two-sentence lede
-// folded behind a native <details>. One DOM: every phone rule is `max-md:*`
-// and every phone-only node is `md:hidden`, so ≥768 renders today's header.
-describe("QuestHeader — phone composition (title row + icon row + folded lede)", () => {
+// device controls as 44px icon buttons on one row; the lede and the land-badge
+// shelf are desktop-only. One DOM: every phone rule is `max-md:*`, so ≥768
+// renders today's header.
+describe("QuestHeader — phone composition (title row + icon row, no lede or badges)", () => {
   const html = renderToStaticMarkup(
     <ProgressProvider>
       <CopyProvider>
@@ -106,27 +106,32 @@ describe("QuestHeader — phone composition (title row + icon row + folded lede)
     }
   });
 
-  it("folds the lede behind a phone-only <details>, with exactly one copy visible per width", () => {
-    const summaryAt = html.indexOf("About the quest");
-    expect(summaryAt, "no About the quest disclosure").toBeGreaterThan(-1);
-    const details = html.slice(html.lastIndexOf("<details", summaryAt), summaryAt);
-    expect(details).toMatch(cls("md:hidden"));
-    expect(details).not.toMatch(cls("max-md:hidden"));
-
-    // The same sentence renders twice — once inside the fold (phones), once
-    // as the plain paragraph (≥768) — and each copy hides at the other's
-    // width, so a reader never sees both and never sees none.
+  it("renders the lede once, desktop-only — phones get no lede and no About fold", () => {
+    // The first phone build folded the lede behind a <details>; driven live at
+    // 320 that fold plus the badge shelf pushed today's Play button to 824px.
+    // The lede is now a single ≥768 paragraph: one copy, hidden on phones.
+    expect(html).not.toContain("About the quest");
+    expect(html).not.toContain("<details");
     const lede = "One focused lesson every other day";
     const copies = html.split(lede).length - 1;
-    expect(copies, "the lede should render exactly twice, one per width branch").toBe(2);
+    expect(copies, "the lede should render exactly once").toBe(1);
     const paraAt = html.lastIndexOf(lede);
     const para = html.slice(html.lastIndexOf("<p", paraAt), paraAt);
     expect(para).toMatch(cls("max-md:hidden"));
+    expect(para).not.toMatch(cls("md:hidden"));
   });
 
-  it("keeps the progress bar and the land badges at every width", () => {
+  it("keeps the progress bar at every width and the land-badge shelf on desktop only", () => {
     expect(html).toContain("Quest progress");
     const badges = tagWith('data-cq-slot="land-badges"');
-    expect(badges).not.toMatch(cls("hidden"));
+    expect(badges).toMatch(cls("max-md:hidden"));
+    expect(badges).not.toMatch(cls("md:hidden"));
+  });
+
+  it("tightens the title on phones without changing the desktop size", () => {
+    const at = html.indexOf("Chess Quest");
+    const h2 = html.slice(html.lastIndexOf("<h2", at), at);
+    expect(h2).toMatch(cls("max-md:text-xl"));
+    expect(h2).toMatch(cls("text-2xl"));
   });
 });
