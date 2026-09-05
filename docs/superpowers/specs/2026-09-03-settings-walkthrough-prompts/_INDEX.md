@@ -578,6 +578,56 @@ concerns a LOWER layer and does not cover this one.
 work. It is not a settings-walkthrough defect and should not be absorbed
 silently into one.
 
+### The whole-branch review earned its keep — one live red, one false claim
+
+Run after every task was green and the wave gate had passed. Failure class 8
+("green and pushed is not done") again, and this time it caught a defect that
+would have reached `main`.
+
+**CRITICAL, fixed (`02900f979`): `e2e/org-less-destination.spec.ts` test 2
+could never have passed.** Logging in with no `next` makes `postAuthLanding`
+auto-provision an org via `ensureActiveOrg`. Community `orgs.max_owned` is
+**1** (`db/migration/deltas/V112__entitlements_v2.sql:23`, confirmed against
+the live catalog — unchanged by V314), so the create under test was that
+account's SECOND org: `assertMayOwnAnotherOrg` computed `1 + 1 > 1` and threw,
+`CreateOrgForm` called `setError` instead of `router.push`, and the URL
+assertion timed out at 30s. The spec's own comment — "this account is
+therefore NOT org-less, which is fine" — was the false premise. **The file
+lands in the `parallel` project, which runs on the merge to `main`**, so it
+would have reddened CI. It is the one spec this wave shipped without ever
+running; written, reasoned about, committed, and wrong.
+
+Now signs in with `next=/dashboard`, honoured WITHOUT provisioning, so the
+account stays org-less and the create is its first. First ever run: **4
+passed (9.1s)** — which also closes the gap Task 6 recorded, since the
+redirect chain is now proven end to end rather than merely plumbed.
+
+**A CLAIM IN THIS RECORD WAS WRONG.** Finding E was reported as keeping the
+English values byte-identical. It does not: the popover role badge moved from
+raw `{o.role}` to the catalog, so a user sees `Owner`/`Admin` where they saw
+`owner`/`admin`. Nothing selects on it — `org-switch.spec.ts:55` and
+`org-management.spec.ts:39` both use the aria-label — so nothing breaks, but
+the copy changed and it was not flagged. Recording it because an unflagged
+copy change is how the next session's selector assumption goes stale.
+
+**Confirmed by the review, against the tree:** the `next` contract is
+reachable and not an inert seam; `safeNextPath` is untouched and reused at
+both ends, reach exactly one new caller, **no widening and no security
+regression**; `grow basis-0` ≡ `flex-1` so ≥768 really is byte-identical and
+`org-identity-name` has no collision; every shared borrow restores in an
+`afterAll` and the profile restore is itself verified.
+
+**Recorded, not fixed** — both are follow-ups, neither is a W2 defect:
+
+- **The shared Pro user now sits at 5 of 5 org slots** (pro base +
+  `org-management` + three W2 files). A Playwright worker restart after a red
+  re-runs `beforeAll` and seeds again; the sixth create would 402. Plausible,
+  not observed. This is finding B's cap biting for real, and it is the
+  strongest argument for W3 moving to the API-only pattern.
+- `e2e/api-keys.spec.ts:41-46` creates a competition in the shared Pro org
+  every run and never deletes it — unbounded row growth in the account every
+  leg signs in as.
+
 ### W2 result — measured, not asserted
 
 All five tasks closed. Wave gate run by the controller, not by a task.
