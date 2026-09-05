@@ -243,6 +243,33 @@ action row (W1 owns the composition; this spec owns the link's existence).
   template model. Step two of this spec keys off both; step one touches the
   public page only for the link.
 
+### 9. Motion (owner asked 2026-09-05: "will we do animation when score?")
+
+Broadcast graphics move rarely and for a reason. Step one ships exactly three
+motions, all `transform` or `opacity` only, so OBS renders them at the stream's
+frame rate without layout work:
+
+- **Score tick.** When a side's `big` value changes, that value alone scales
+  from 1.0 to 1.12 and back over 300 ms, and that side's LED bar flashes to
+  full brightness for one frame. The other side does not move.
+- **Side change.** When `led` moves to the other side (innings change, serve
+  change), the LED bar slides to the other row over 200 ms instead of
+  jumping.
+- **Live dot.** Breathes between 0.55 and 1.0 opacity on a two-second cycle
+  while `live`; stops when decided.
+
+Step two adds the moment slab: slides out from the bug (or up under the bar)
+over 250 ms, holds four seconds, folds back over 250 ms; a second moment
+arriving during a hold queues behind it. Nothing else animates, ever: no
+entrance animation on load (OBS shows the page mid-stream, a slide-in on
+every reconnect would be visible), no continuous ticker, no per-frame timers.
+`prefers-reduced-motion` disables the tick and the breath and keeps the slab
+as an instant show and hide.
+
+Test: the e2e that posts an event asserts the tick class appears on the
+changed value only; with the tick removed the test goes red (recorded as a
+mutation check in the plan).
+
 ## Data flow
 
 ```
