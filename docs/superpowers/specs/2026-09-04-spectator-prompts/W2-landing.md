@@ -1,7 +1,7 @@
 # W2 — the competition landing, division and player pages, i18n sweep
 
 Read `_RULES.md` → `_INDEX.md` → spec §W2. Plan:
-`../../plans/2026-09-04-spectator-w2.md` (written after W1 merges). Worktree;
+`../../plans/2026-09-05-spectator-w2-competition-landing.md` (DRAFT, drafted 2026-09-05 by a Fable agent in parallel with W1; re-pin file:line references after W1 merges). Worktree;
 one PR. Depends on W1 (match cards link into the match centre; the player
 page's per-match lines come from W1's fold).
 
@@ -71,3 +71,32 @@ entitlement matrix/copy; the engine.
 ## Gates
 
 As W1. `_INDEX.md` status updated in the same PR.
+
+## Plan (DRAFT, 2026-09-05)
+
+- **Plan:** `../../plans/2026-09-05-spectator-w2-competition-landing.md` — 19 tasks
+  (1 schema + ladders · 2 standings view · 3 leaders · 4 hub builder + caches +
+  invalidation · 5 hub API + OpenAPI · 6 dictionaries ×4 · 7 hook + `PublicTabRail` +
+  `MatchCard` · 8–11 Matches / Table / Stats-Teams-Info / Overview + root · 12
+  competition page · 13 division page · 14 player per-match lines · 15 org-home chip +
+  island + layout · 16 English sweep · 17 walkthrough v2 + mobile + smoke · 18 gates /
+  R11 / index · 19 optional TabRail fold). Status DRAFT until W1 merges and premises
+  P1–P20 (listed in the plan) are re-pinned.
+- **Owner questions, with the product-owner recommendation:**
+  1. Testid prefix — spec R7 and this prompt say `mh-*`; an orchestrator dispatch said
+     `cl-*` in error. **Recommend `mh-*`** (the spec); no rename.
+  2. Leaders — scope item 5 says "minimum-balls floor read from the module's metric
+     spec": a **false premise** — `PlayerStatsModel` (`packages/engine` `stats.ts:106`)
+     declares no floor and no leaderboard. **Recommend:** ship count leaders (runs,
+     wickets, sixes; goals, assists) pinned to declared keys in W2, AND permit one
+     additive engine `leaderboards` declaration for ratio leaders (strike rate,
+     economy) — the leaders board is headline cricheroes-grade value; cost is one
+     engine task in the ruling-12 pattern.
+  3. Org-home liveness (R10) — the plan adds a small public `…/orgs/{slug}/live`
+     endpoint polled by an island; Realtime would need a channel per division for
+     every competition. **Recommend poll-only** for the org home.
+- **False premises found while drafting:** the module-spec floor (above);
+  `division:{id}` Realtime channels are token-less/public today (P10); the public
+  OpenAPI routes carry no `response` schema (P12); reschedules bypass
+  `invalidatePublicCache` (P13); `getPublicCompetition` selects no `config` (P15); the
+  mobile.spec seed has no fixtures (P17).
