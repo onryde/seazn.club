@@ -504,21 +504,43 @@ function isMissing(value: unknown): boolean {
   return value === undefined;
 }
 
+/** `isMissing`, not `isAbsent`. The only field this serves is `constraints`,
+ *  which is `.optional()` (`schemas.ts:1330`) and therefore NOT nullish — a
+ *  `null` is a present-but-invalid value.
+ *
+ *  Reading it as an absence was the worst-failing instance of this bug class:
+ *  a `{"constraints": null}` pack came back with an empty `hard[]` AND an empty
+ *  `unmodelled[]`, so the entire rule set vanished while the report said
+ *  nothing had been left unchecked. Every other null-laundering here yields a
+ *  wrong answer; this one yields a wrong answer that claims to be clean, which
+ *  is the single outcome design §1.4 exists to prevent. `PackJsonValue` admits
+ *  `null` explicitly (`pack-schema.ts:154-171`), so a pack can reach it. */
 function recordField(
   cfg: Record<string, unknown>,
   key: string,
   where: string,
 ): Record<string, unknown> | undefined {
   const raw = cfg[key];
-  if (isAbsent(raw)) return undefined;
+  if (isMissing(raw)) return undefined;
   const rec = asRecord(raw);
   if (rec === undefined) throw new Error(`board: ${where} must be an object, got ${show(raw)}`);
   return rec;
 }
 
+/** `isMissing`, not `isAbsent`, for the same reason as `recordField` — and it
+ *  is uniform across all four fields this serves, because not one of them is
+ *  `.nullish()`: `courts`, `blackouts` and `sessionWindows` are `.default([])`
+ *  (`schemas.ts:1302`, `:1318`, `:1322`) and `constraints.hard` is
+ *  `.optional()` (`:1357`).
+ *
+ *  `constraints.hard: null` is the §1.4 false-clean one level down — the rule
+ *  list emptied while `unmodelled[]` stayed empty, because a null never reaches
+ *  a per-rule reader that could report it. The other three drop a window or a
+ *  court list silently, which makes every containment rule that depended on it
+ *  pass vacuously. */
 function arrayField(cfg: Record<string, unknown>, key: string, where: string): readonly unknown[] {
   const raw = cfg[key];
-  if (isAbsent(raw)) return [];
+  if (isMissing(raw)) return [];
   if (!Array.isArray(raw)) throw new Error(`board: ${where} must be an array, got ${show(raw)}`);
   return raw;
 }
@@ -702,7 +724,29 @@ const UNMODELLED_CONSTRAINTS: readonly { key: string; why: string }[] = [
 
 /** Reports every declared-but-unmodelled knob, keyed on PRESENCE. Runs AFTER
  *  the `hard[]` scan so per-rule entries keep their own order ahead of the
- *  knobs. */
+ *  knobs.
+ *
+ *  KEEPS `isAbsent` — the two call sites below are the considered exception to
+ *  the `isMissing` sweep, not an oversight:
+ *
+ *   - This is a REPORTING pass, not a reader. It never converts a value into
+ *     the oracle, so the failure mode `isMissing` guards against — laundering a
+ *     null into a usable number or an empty container — cannot arise here. The
+ *     worst it can do is stay silent about a key.
+ *   - `roundMinutes` IS `.nullish()` (`schemas.ts:1327`), so a null there
+ *     genuinely means "not set", and reporting it as a declared-but-unmodelled
+ *     knob would be a FALSE claim about what the pack asked for — the opposite
+ *     error, and one this sweep exists to avoid making.
+ *   - `gapMinutes`, the only other top-level key swept, has its own reader:
+ *     `intField` refuses a null a few lines later (R14), so the refusal is not
+ *     lost by skipping it here.
+ *
+ *  The residue is a null in one of the seven `constraints.*` knobs, which
+ *  nothing reads: it is neither reported nor refused. That is a pack-authoring
+ *  bug the product's own `PUT /schedule-settings` 422s on, and it cannot reach
+ *  the oracle. Recorded rather than fixed, because widening this call to a
+ *  refusal would also have to decide the default-valued-knob question that is
+ *  still open. */
 function reportUnmodelledKnobs(
   cfg: Record<string, unknown>,
   constraints: Record<string, unknown> | undefined,

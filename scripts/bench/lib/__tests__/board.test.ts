@@ -607,6 +607,113 @@ describe("encodeConstraints", () => {
     expect(out.unmodelled.every((u) => u.reason.startsWith("not modelled"))).toBe(true);
   });
 
+  // ---- null must not silently empty a container (fix round 2, F1) ---------
+  // `PackJsonValue` admits `null` explicitly (`pack-schema.ts:154-171`), so a
+  // pack can reach every one of these. None of the containers below is
+  // `.nullish()` in the product — `constraints` and `constraints.hard` are
+  // `.optional()` (`schemas.ts:1330`, `:1357`), `courts` / `blackouts` /
+  // `sessionWindows` are `.default([])` (`:1302`, `:1318`, `:1322`) — so a null
+  // is a present-but-invalid value, not an absence.
+  //
+  // This is the same defect as the null blackout court and the null numeric
+  // knobs, but it fails in the WORST direction: a null container was read as
+  // "nothing declared", so the whole rule set vanished AND `unmodelled[]` stayed
+  // empty. The report then said every declared constraint was accounted for,
+  // which is the exact false-clean design §1.4 exists to prevent.
+
+  // The guard the ruling names, written so it cannot go vacuous: exactly one
+  // branch runs and both branches assert. It states the §1.4 INVARIANT rather
+  // than today's mechanism, so it keeps holding if the encoder is ever changed
+  // to report this instead of refusing it.
+  it("never answers a null constraints block with a silent all-clear", () => {
+    const outcome = ((): { kind: "returned"; value: ReturnType<typeof encodeConstraints> } | { kind: "refused"; message: string } => {
+      try {
+        return {
+          kind: "returned",
+          value: encodeConstraints({
+            divisionRef: "d-tiny",
+            scheduleConfig: { constraints: null },
+            courtIdByRef: courts,
+            isRoundRobin: true,
+            pins: [],
+          }),
+        };
+      } catch (error) {
+        return { kind: "refused", message: String(error) };
+      }
+    })();
+
+    if (outcome.kind === "returned") {
+      // Returning is allowed; returning "no rules AND nothing unchecked" is not.
+      expect({
+        hard: outcome.value.hard.length,
+        unmodelled: outcome.value.unmodelled.length,
+      }).not.toEqual({ hard: 0, unmodelled: 0 });
+    } else {
+      expect(outcome.message).toMatch(/scheduleConfig\.constraints/);
+    }
+  });
+
+  it("refuses a null constraints block, naming the field", () => {
+    expect(() =>
+      encodeConstraints({
+        divisionRef: "d-tiny",
+        scheduleConfig: { constraints: null },
+        courtIdByRef: courts,
+        isRoundRobin: true,
+        pins: [],
+      }),
+    ).toThrow(/scheduleConfig\.constraints must be an object, got null/);
+  });
+
+  // The same silent drop one level down: `constraints.hard: null` emptied the
+  // rule list while `unmodelled[]` stayed empty, because the null never reached
+  // a per-rule reader that could report it.
+  it("refuses a null constraints.hard rather than dropping the rule set in silence", () => {
+    expect(() =>
+      encodeConstraints({
+        divisionRef: "d-tiny",
+        scheduleConfig: { constraints: { hard: null } },
+        courtIdByRef: courts,
+        isRoundRobin: true,
+        pins: [],
+      }),
+    ).toThrow(/scheduleConfig\.constraints\.hard must be an array, got null/);
+  });
+
+  it.each(["courts", "blackouts", "sessionWindows"] as const)(
+    "refuses a null %s rather than reading it as an empty list",
+    (key) => {
+      expect(() =>
+        encodeConstraints({
+          divisionRef: "d-tiny",
+          scheduleConfig: { [key]: null },
+          courtIdByRef: courts,
+          isRoundRobin: true,
+          pins: [],
+        }),
+      ).toThrow(new RegExp(`scheduleConfig\\.${key} must be an array, got null`));
+    },
+  );
+
+  // The OTHER direction, and the reason this is not a blanket "null always
+  // throws": `startAt`/`endAt` really are `.nullish()`, and the knob sweep's
+  // `roundMinutes` is too. Those keep reading null as absent — already pinned
+  // by the startAt/endAt case above, and here for the sweep.
+  it("keeps null meaning ABSENT for roundMinutes, which the product declares nullish", () => {
+    const out = encodeConstraints({
+      divisionRef: "d-tiny",
+      scheduleConfig: { roundMinutes: null },
+      courtIdByRef: courts,
+      isRoundRobin: true,
+      pins: [],
+    });
+    // A null `roundMinutes` is genuinely "not set" (`schemas.ts:1327`), so
+    // reporting it as a declared-but-unmodelled knob would be a false claim
+    // about what the pack asked for.
+    expect(out.unmodelled).toEqual([]);
+  });
+
   // ---- the refusals T4 is told to build on --------------------------------
   // Report §5 hands T4 the decision of whether these throws become a
   // `scheduleErrors[]` entry or abort the run. That decision was being taken
