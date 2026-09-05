@@ -249,6 +249,35 @@ and `org-management.spec.ts:35` already spends one per run, so **the design's
 single spec file and 402s with `PaymentRequiredError`. Ruling: one org per
 spec FILE, released in `afterAll` by a new `releaseSeededOrgSql`.
 
+**B, CORRECTED once the mutants ran — the rule stands, the alarm does not.**
+Both mechanisms are mutation-confirmed: dropping the `delete from org_members`
+and keeping only the soft delete reddens the owned-count assertion
+(`Expected: 1 / Received: 2`), so a soft-deleted org really does keep its slot
+AND still appears in `GET /api/orgs`. But the SEVERITY written above is wrong.
+`auth.setup.ts:96` calls
+`setEntitlementOverrideSql(setupOrgId, "orgs.max_owned", 50)` on the shared
+Pro org, and `assertMayOwnAnotherOrg` takes the BEST limit across the orgs a
+user owns — so a normal e2e run has 50 slots, not 5, and nothing 402s inside
+one spec file. Keep one-org-per-file: the release is proven necessary and what
+it prevents is slow slot accumulation across a leg. Drop the alarm.
+
+**A is mutation-confirmed too:** deleting the plan flip reddens the `?tab=api`
+assertion, so a freshly seeded org really is community and the Pro surface is
+absent rather than merely different.
+
+**A second false premise of mine, found by Task 6.** The W2 plan told Task 6
+to "build the org-less redirect from the current URL" inside
+`requirePageAuth()`. That is not implementable in this Next: the helper is
+zero-arg, the repo has no middleware, `next-url` is set only on client-side
+RSC navigations, and `x-matched-path` is Vercel minimal-mode only. The
+destination must be PASSED IN — and the only caller where the residual is
+reachable is the legacy `/settings` shim, which already computes the target
+for its own `/login?next=` bounce. Honouring the plan literally would have
+shipped a `next` option no producer ever passes: an inert seam, on the day it
+landed. Also recorded: `page.tsx` files here cannot carry arbitrary named
+exports (`next-types-plugin` diffs the module against a fixed set), which is
+why both helpers live in `page-auth.ts`.
+
 **C. `POST /api/orgs` switches the active org.** `api/orgs/route.ts:29` calls
 `setActiveOrgId`, and an `APIRequestContext` shares the browser context's
 cookie jar — seeding moves `seazn_org` out from under the caller. Every seed
