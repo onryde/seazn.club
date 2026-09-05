@@ -55,6 +55,7 @@
 // flagged for whoever owns the scorecard fold (Tasks 1-4/17) as a possible
 // follow-up if per-ball striker identity is ever needed.
 import type { EventEnvelope, LineupPair, Lineup, ScoreSummary } from "@seazn/engine/core";
+import type { AnySportModule, FidelityBand } from "@seazn/engine/sport";
 import {
   deriveCricketScorecard,
   cricket,
@@ -630,14 +631,50 @@ function buildHeader(
   };
 }
 
+// ---------------------------------------------------------- fidelity band
+
+/**
+ * Fix round 2 (coordinator ruling, re-review of fix round 1) — the fidelity
+ * band is a UNIVERSAL `SportModule` concept, not a cricket one: every module
+ * declares `padSpec(cfg).fidelity` (e.g. `football.ts:2375`), and the owner
+ * ruling names the band line as one of the six standard Info-tab rows for
+ * EVERY sport. This is the ONE code path (round 1 had cricket reading
+ * `card.band` — the cricket fold's own copy of the identical computation —
+ * while no equivalent existed for any other sport; the ruling asked for one
+ * shared derivation, not two that happen to agree for cricket).
+ *
+ * `null` ONLY for a genuinely empty ledger (nothing was scored — the row is
+ * omitted, never a blank one). A "kernel-only" ledger (events exist, but
+ * none of their types appear in the module's own fidelity map — e.g. only
+ * `core.start`) still returns `0`, which IS a real answer (the coarsest
+ * band), not an absence — `band` starts at `0` and only ever rises, so a
+ * ledger with no recognised event types simply never rises off it.
+ */
+function effectiveBand(
+  events: readonly EventEnvelope[],
+  sportModule: AnySportModule,
+  cfg: unknown,
+): FidelityBand | null {
+  if (events.length === 0) return null;
+  const bands = sportModule.padSpec?.(cfg)?.fidelity ?? {};
+  let band: FidelityBand = 0;
+  for (const event of events) {
+    const eventBand = bands[event.type];
+    if (eventBand !== undefined && eventBand > band) band = eventBand;
+  }
+  return band;
+}
+
 // ---------------------------------------------------------------- the info
 
 /**
  * Fix round 1 (Important #3) — row order and set FIXED by `info-tab.tsx:8-13`'s
  * own "not derivable from reading this file" documented contract: toss ·
  * format · venue · start · stage · scored-as. Each row is OMITTED (never
- * rendered blank) when its own fact is absent — toss/scored-as only exist
- * for cricket (`card !== null`); format only when the caller supplies one.
+ * rendered blank) when its own fact is absent — toss only exists for cricket
+ * (`card !== null`); format only when the caller supplies one; scored-as
+ * (fix round 2) only when `effectiveBand` found a non-empty ledger, for
+ * every sport.
  */
 function buildInfoView(
   fixture: PublicFixture,
@@ -648,6 +685,7 @@ function buildInfoView(
   hrefs: { division: string; competition: string; calendar: string | null },
   venueTz: string,
   locale: string,
+  band: FidelityBand | null,
 ): InfoViewT {
   const rows: InfoViewT["rows"] = [];
 
@@ -706,16 +744,13 @@ function buildInfoView(
     });
   }
 
-  // 6. Scored as — cricket only. `card.band` IS "padSpec(cfg).fidelity's
-  //    effective band for the ledger" (`deriveCricketScorecard` already
-  //    computes exactly that maximum-band-seen value as `card.band` —
-  //    scorecard-types.ts:102 — so reading it here is the SAME "one
-  //    authority" posture as the rest of this file, not a second computation
-  //    of the fact). Closed 0-3 scale (standing rule) — four possible keys.
-  if (card !== null) {
+  // 6. Scored as — universal (fix round 2 ruling), from `effectiveBand`
+  //    above. Omitted only when the ledger is genuinely empty. Closed 0-3
+  //    scale (standing rule) — four possible keys.
+  if (band !== null) {
     rows.push({
       label: { key: "matchCentre.info.scoredAs" },
-      value: { key: `matchCentre.band.${card.band}` },
+      value: { key: `matchCentre.band.${band}` },
     });
   }
 
@@ -740,6 +775,7 @@ export function buildMatchCentre(input: MatchCentreInput): MatchCentreDocT {
   let timelineLines: TimelineLineT[] | null = null;
   let setsView: SetsViewT | null = null;
   let derivedComplete = true;
+  let band: FidelityBand | null = null;
   const extraTabs: MatchCentreTabIdT[] = [];
 
   if (sportKey === "cricket") {
@@ -753,6 +789,9 @@ export function buildMatchCentre(input: MatchCentreInput): MatchCentreDocT {
     // `derivedComplete` stays `true` unconditionally (contract notes: "true
     // for cricket unless the fold reports an inconsistency" — it has no
     // mechanism to).
+    // Fix round 2 — the SAME shared `effectiveBand`, never `card.band`
+    // (the fold's own copy of the identical computation): one code path.
+    band = effectiveBand(events, cricket, parsedCfg);
   } else {
     // Fix round 1 (Important #2) — a single division's own read resolves its
     // PINNED module version, never the latest (`engine-db/registry.ts:31-36`'s
@@ -771,10 +810,11 @@ export function buildMatchCentre(input: MatchCentreInput): MatchCentreDocT {
     setsView = buildSets({ sportKey, summary, sides });
     if (timelineLines.length > 0) extraTabs.push("timeline");
     if (setsView !== null && setsView.columns.length > 0) extraTabs.push("sets");
+    band = effectiveBand(events, sportModule, cfg);
   }
 
   const header = buildHeader(fixture, sides, card, venueTz, locale, now);
-  const info = buildInfoView(fixture, card, sides, formatLabel, stage, hrefs, venueTz, locale);
+  const info = buildInfoView(fixture, card, sides, formatLabel, stage, hrefs, venueTz, locale, band);
 
   return {
     fixtureId: fixture.id,

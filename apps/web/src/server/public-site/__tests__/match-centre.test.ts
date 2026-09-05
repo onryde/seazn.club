@@ -11,7 +11,7 @@
 import { describe, expect, it } from "vitest";
 import type { EventEnvelope } from "@seazn/engine/core";
 import { makeEnvelope } from "@seazn/engine/testkit";
-import { registry as engineRegistry } from "@seazn/engine/sport";
+import { registry as engineRegistry, type AnySportModule } from "@seazn/engine/sport";
 import { cricket, deriveCricketScorecard, type DismissalKind } from "@seazn/engine/sports/cricket";
 import { football, FootballCfg } from "@seazn/engine/sports/football";
 import {
@@ -113,6 +113,15 @@ function decidedFixture(ledger: ScriptLedger, extra: Partial<PublicFixture> = {}
     summary: cricket.summary(ledger.state),
     ...extra,
   });
+}
+
+/** Fix round 2 — the "scoredAs" expectation, derived from the SAME module
+ *  declaration `effectiveBand` (`match-centre.ts`) reads, never a hand-typed
+ *  number: the max fidelity band any event TYPE in the ledger declares,
+ *  per the module's own `padSpec(cfg).fidelity`. */
+function declaredBand(sportModule: AnySportModule, cfg: unknown, events: readonly EventEnvelope[]): number {
+  const bands = sportModule.padSpec?.(cfg)?.fidelity ?? {};
+  return events.reduce((max, ev) => Math.max(max, bands[ev.type] ?? 0), 0);
 }
 
 // ----------------------------------------------------------------- scripts
@@ -428,7 +437,6 @@ describe("buildMatchCentre — cricket", () => {
   describe("Info tab rows — order and omission (fix round 1 — Important #3)", () => {
     it("emits toss, format, venue, start, stage, scoredAs in that order when every fact is present", () => {
       const ledger = scriptLedger(DECIDED_BY_RUNS_SCRIPT);
-      const card = deriveCricketScorecard({ events: ledger.events, cfg: ledger.cfg, lineups: ledger.lineups });
       const doc = buildMatchCentre(
         input({
           events: ledger.events,
@@ -446,7 +454,10 @@ describe("buildMatchCentre — cricket", () => {
         "matchCentre.info.stage",
         "matchCentre.info.scoredAs",
       ]);
-      expect(doc.info.rows[5]!.value.key).toBe(`matchCentre.band.${card.band}`);
+      // Fix round 2 — derived from the module's OWN declaration
+      // (`cricket.padSpec(cfg).fidelity`), never a typed number or the
+      // fold's own `card.band` (the whole point of the unification).
+      expect(doc.info.rows[5]!.value.key).toBe(`matchCentre.band.${declaredBand(cricket, ledger.cfg, ledger.events)}`);
     });
 
     it("omits format/venue/stage when their facts are null — never a blank row", () => {
@@ -465,6 +476,44 @@ describe("buildMatchCentre — cricket", () => {
         "matchCentre.info.start",
         "matchCentre.info.scoredAs",
       ]);
+    });
+  });
+
+  describe("scoredAs / matchCentre.band.<n> — a universal SportModule concept (fix round 2)", () => {
+    it("a football ledger with football.goal events yields matchCentre.band.<its declared band>", () => {
+      const footballCfg = FootballCfg.parse({});
+      const events: EventEnvelope[] = [
+        makeEnvelope(0, { type: "core.start", payload: {} }),
+        makeEnvelope(1, { type: "football.goal", payload: { by: "home" } }),
+      ];
+      const doc = buildMatchCentre(
+        input({
+          sportKey: "football",
+          cfg: footballCfg,
+          events,
+          fixture: F({ status: "in_play" }),
+        }),
+      );
+      const expectedBand = declaredBand(football, footballCfg, events);
+      const scoredAs = doc.info.rows.find((r) => r.label.key === "matchCentre.info.scoredAs");
+      expect(scoredAs?.value.key).toBe(`matchCentre.band.${expectedBand}`);
+    });
+
+    it("a kernel-only ledger (no sport-specific event types) yields band 0", () => {
+      const footballCfg = FootballCfg.parse({});
+      const events: EventEnvelope[] = [makeEnvelope(0, { type: "core.start", payload: {} })];
+      const doc = buildMatchCentre(
+        input({ sportKey: "football", cfg: footballCfg, events, fixture: F({ status: "in_play" }) }),
+      );
+      const scoredAs = doc.info.rows.find((r) => r.label.key === "matchCentre.info.scoredAs");
+      expect(scoredAs?.value.key).toBe("matchCentre.band.0");
+    });
+
+    it("an empty ledger omits the scoredAs row entirely (nothing was scored)", () => {
+      const doc = buildMatchCentre(
+        input({ sportKey: "football", cfg: FootballCfg.parse({}), events: [], fixture: F({ status: "scheduled" }) }),
+      );
+      expect(doc.info.rows.find((r) => r.label.key === "matchCentre.info.scoredAs")).toBeUndefined();
     });
   });
 
