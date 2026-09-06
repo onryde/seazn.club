@@ -156,7 +156,61 @@ earlier.
 
 ---
 
-## Q5. Should `m.youtube.com` be on the host allowlist?
+## ~~Q5~~ ANSWERED 2026-09-06 — "Agree"
+
+`m.youtube.com` joins the host allowlist. One entry plus its unit test.
+
+## ~~Q6~~ ANSWERED 2026-09-06 — "Agree"
+
+The stream panel's toggle is available at every fixture status, so a club can
+attach the replay link after the final whistle. Gated on `canEdit &&
+streamingEntitled` only, deliberately NOT on the schedule toggle's
+`status === "scheduled"`.
+
+## ~~Q7~~ ANSWERED 2026-09-06 — "we will have multiple theme per sports so make it abstract and use can choose for now apply the default one"
+
+**Not the yes/no that was asked — a design change, and a good one.** Themes
+stop being a two-value union and become a REGISTRY, so a sport can grow more
+of them without touching a call site. What W1 must build:
+
+- `OVERLAY_THEMES`, a registry keyed by theme id, each entry carrying its id,
+  its dictionary label key, its component, and which sports it suits (all, or
+  a named set). It holds `bar` and `bug` on day one; a third theme is one
+  entry plus one component, never an edit to the route, the panel or the
+  model.
+- `defaultThemeFor(sportKey): ThemeId` — the per-sport default stays exactly
+  as decided (cricket `bar`, every other sport `bug`), but it now lives in one
+  function rather than being implied by a boolean.
+- The URL parameter becomes `?style=<themeId>`, validated against the
+  registry; an unknown or unsuitable id falls back to the sport's default
+  rather than erroring, because an OBS browser source cannot be asked to
+  correct a typo mid-match.
+- The panel's style tabs render FROM the registry, filtered to the fixture's
+  sport, so a new theme appears in the console the day it is registered. The
+  club's choice is what it already was: a link, not stored state.
+- `_THEMES.md` becomes the registry's content: §3 is theme `bar`, §4 is theme
+  `bug`, and a future theme is a new section in the same shape.
+
+**Owner's words are the ruling:** multiple themes per sport, abstract enough
+to choose from, with the default applied for now. Nothing else about the two
+shipped themes changes.
+
+## ~~Q8~~ ANSWERED 2026-09-06 — "Ok"
+
+Ship the three-letter fallback derived from the entrant's display name. No
+short-name column; revisit only if clubs complain.
+
+## ~~Q9~~ ANSWERED 2026-09-06 — "ok for own wave as put it last"
+
+Sponsor logos become their own wave, scheduled LAST in the programme, after
+W1 and W2. Not designed here.
+
+## ~~Q10~~ ANSWERED 2026-09-06 — "Ok"
+
+Volleyball gains set point and match point moments in W2, alongside its
+set-won moment. Same probe the racket sports use.
+
+## Q5 (original text, kept for the record — ANSWERED above). Should `m.youtube.com` be on the host allowlist?
 
 **What.** The stream link accepts exact hostnames only: `youtube.com`,
 `www.youtube.com`, `youtu.be`, Facebook's three, `twitch.tv`, `www.twitch.tv`,
