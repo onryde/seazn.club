@@ -672,6 +672,38 @@ describe("buildMatchCentre — cricket", () => {
       expect(doc.header.subLines).toEqual(["(6)", "(4)"]);
     });
 
+    // ...and the FIRST open one, not the last. Scanning from either end
+    // satisfies the test above, so on its own that test is also passed by a
+    // `findLastIndex`. Two open columns separate them. Same standing as the
+    // case above: the mask is constructed, because the reading is what is
+    // under test, not a scoreline anyone will play.
+    it("with more than one column marked open it reports the FIRST — a scan from the other end is a different function", () => {
+      const doc = buildMatchCentre(
+        input({
+          sportKey: "tennis",
+          cfg: tennis.configSchema.parse({}),
+          events: [],
+          fixture: F({
+            status: "in_play",
+            summary: {
+              headline: "0 — 0",
+              perSide: [
+                { entrantId: "home", line: "0" },
+                { entrantId: "away", line: "0" },
+              ],
+              detail: {
+                sets: [
+                  { home: 6, away: 4, closed: false },
+                  { home: 2, away: 1, closed: false },
+                ],
+              },
+            },
+          }),
+        }),
+      );
+      expect(doc.header.subLines).toEqual(["(6)", "(4)"]);
+    });
+
     it("cricket (a DIFFERENT `detail` shape entirely — no `sets` array) is UNAFFECTED — subLines stays [null, null]", () => {
       const doc = buildMatchCentre(input({ sportKey: "cricket", fixture: F({ status: "scheduled" }) }));
       expect(doc.header.subLines).toEqual([null, null]);

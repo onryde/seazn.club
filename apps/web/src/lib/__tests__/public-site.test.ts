@@ -12,6 +12,7 @@ import {
   teamShortOf,
   personShortCandidates,
   disambiguatedShorts,
+  BADGE_MAX_CHARS,
   type StandingsRowLike,
 } from "@/lib/public-site";
 
@@ -441,6 +442,21 @@ describe("teamShortOf / personShortCandidates / disambiguatedShorts (R11 fix rou
     expect([home, away]).toEqual(["SMI1", "SMI2"]);
   });
 
+  // The LAST rung — the whole compacted name, clamped — earns its place here
+  // and nowhere else. "Ann Smith" and "Anna Smith" agree on every rung above
+  // it (SMI, ASM, SMIT, ANSM, and even the three-letter joined form ANN) and
+  // first differ at the fourth character of the joined name. Without this rung
+  // the pair falls to a positional tie-break; with it they keep an
+  // abbreviation that still says something. Found by mutating the rung away
+  // and watching nothing fail.
+  it("disambiguatedShorts: a pair that differs only in the JOINED name keeps a real abbreviation, not a positional one", () => {
+    const [home, away] = disambiguatedShorts(
+      { name: "Ann Smith", isPerson: true },
+      { name: "Anna Smith", isPerson: true },
+    );
+    expect([home, away]).toEqual(["ANNS", "ANNA"]);
+  });
+
   // Two long surnames sharing their first four letters: every rung inside the
   // chip collides, so this lands on the tie-break rather than on an eight-
   // character surname. Pinned by value, because "short" and "different" were
@@ -455,11 +471,15 @@ describe("teamShortOf / personShortCandidates / disambiguatedShorts (R11 fix rou
     expect(personShortCandidates("John Andersen")).not.toContain("ANDERSEN");
   });
 
-  // The badge chips are `h-6 w-6` (24x24px) with `items-center justify-center`
-  // and no `truncate`, so EVERY resolved pair owes a short label, not just the
-  // pairs someone thought to name above. One case per rung of the ladder,
-  // including the degenerate ones that reach the tie-break.
-  it("disambiguatedShorts: every colliding shape resolves inside the badge chip's width, not just the named ones", () => {
+  // What this CAN prove: a resolved label is never wider than the ladder's own
+  // declared ceiling, for each of the shapes below. What it cannot: that the
+  // ceiling fits the chip — `apps/web` vitest is `environment: "node"`, so
+  // there is no layout here and a width claim made in this file would be
+  // decoration. The chip sizes itself to the label (`timeline-tab.tsx`'s
+  // `SideBadge`), and the e2e is where that is actually seen.
+  // The bound is read from the production constant, not typed in again, so
+  // moving the ceiling moves this test with it.
+  it(`disambiguatedShorts: every shape below resolves to at most BADGE_MAX_CHARS (${BADGE_MAX_CHARS}) characters`, () => {
     const pairs: Array<[string, string]> = [
       ["Player One", "Player Two"],
       ["Alice Smith", "Bob Smith"],
@@ -481,8 +501,8 @@ describe("teamShortOf / personShortCandidates / disambiguatedShorts (R11 fix rou
     for (const [nameA, nameB] of pairs) {
       const [home, away] = disambiguatedShorts({ name: nameA, isPerson: true }, { name: nameB, isPerson: true });
       expect(home).not.toBe(away);
-      expect(home.length, `${nameA} -> ${home}`).toBeLessThanOrEqual(4);
-      expect(away.length, `${nameB} -> ${away}`).toBeLessThanOrEqual(4);
+      expect(home.length, `${nameA} -> ${home}`).toBeLessThanOrEqual(BADGE_MAX_CHARS);
+      expect(away.length, `${nameB} -> ${away}`).toBeLessThanOrEqual(BADGE_MAX_CHARS);
     }
   });
 

@@ -148,7 +148,14 @@ export function SetsTab({ doc, dict }: SetsTabProps): ReactNode {
               >
                 <th scope="row" className="px-1 py-1.5 text-left font-normal">
                   <span className="flex items-center gap-2">
-                    <span className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-accent/15 text-[10px] font-bold uppercase">
+                    {/* The same chip as `timeline-tab.tsx`'s `SideBadge`, and
+                        sized the same way — `min-w-[24px] px-0.5`, so a four-letter
+                        code widens the box instead of spilling out of it. See
+                        that component's note. */}
+                    <span
+                      data-testid={`mc-sets-badge-${rowIndex}`}
+                      className="inline-flex h-6 min-w-[24px] shrink-0 items-center justify-center rounded-md bg-accent/15 px-0.5 text-[10px] font-bold uppercase"
+                    >
                       {side.short || side.name.slice(0, 3)}
                     </span>
                     {/* `block truncate`, not `min-w-0` — see the table comment. */}

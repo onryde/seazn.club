@@ -106,12 +106,24 @@ const EMPHASIS_CLASS: Record<string, string> = {
   strong: "font-semibold text-accent",
 };
 
+/**
+ * The entrant chip. `min-w-[24px] px-0.5`, never a fixed `w-6`: it stays square for
+ * the two- and three-character codes that are the common case, and GROWS for a
+ * four-character one rather than spilling its glyphs outside the box. A fixed
+ * 24px box is narrower than the widest label the abbreviation ladder can
+ * produce (`public-site.ts`'s `BADGE_MAX_CHARS`), and every screenshot this
+ * programme has taken happened to be cricket, whose team codes are three
+ * characters — so the overflow was real and invisible at the same time.
+ * Sizing to the CONTENT settles it without depending on anyone's measurement
+ * of a font at 10px. `sets-tab.tsx`'s row badge is the same chip and carries
+ * the same classes; they are two renderings of one object.
+ */
 function SideBadge({ side, seq }: { side: SideT; seq: number }): ReactNode {
   return (
     <span
       data-testid={`mc-side-badge-${seq}`}
       title={side.name}
-      className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-accent/15 text-[10px] font-bold uppercase"
+      className="inline-flex h-6 min-w-[24px] shrink-0 items-center justify-center rounded-md bg-accent/15 px-0.5 text-[10px] font-bold uppercase"
     >
       {side.short || side.name.slice(0, 3)}
     </span>

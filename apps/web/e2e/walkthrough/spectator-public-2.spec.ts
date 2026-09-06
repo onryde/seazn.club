@@ -70,6 +70,10 @@ let footballAway = "";
 // tennis
 let tennisDivSlug = "";
 let tennisFixture = "";
+// a second tennis division whose two entrants collide past every rung of the
+// abbreviation ladder — the only fixture in this file with a 4-character badge
+let namesDivSlug = "";
+let namesFixture = "";
 
 test.afterEach(closeOpenContexts);
 
@@ -322,8 +326,47 @@ test("setup: a public competition with a live cricket division, football, tennis
   for (let i = 0; i < 3; i++) await mustPost(request, tennisFixture, "tennis.point", { by: tsides.home });
   await mustPost(request, tennisFixture, "tennis.point", { by: tsides.away });
 
+  // === tennis division, colliding names — the badge chip's widest label ======
+  // Every entrant this file creates elsewhere abbreviates to three characters
+  // ("ONE", "TWO"), and every screenshot the programme has taken is cricket,
+  // whose team codes are three too. So the FOUR-character label — the widest
+  // the abbreviation ladder can produce, and the one the chip has to be able
+  // to hold — had no coverage anywhere: not in a unit test (no layout in
+  // `environment: "node"`), not in a screenshot, not in the width sweep. Two
+  // entrants whose surnames agree for longer than the badge is wide are the
+  // only way to see it in a browser: they exhaust every rung and land on the
+  // positional tie-break, "AND1"/"AND2".
+  const ndiv = await apiJson<{ id: string; slug: string }>(request, `/api/v1/competitions/${compId}/divisions`, "POST", {
+    name: `Tennis names ${TAG}`,
+    sport_key: "tennis",
+    variant_key: "tour",
+  });
+  if (!ndiv.data) throw new Error(`tennis names division -> ${ndiv.status} ${JSON.stringify(ndiv.error)}`);
+  namesDivSlug = ndiv.data.slug;
+  const nents = await apiJson<{ id: string }[]>(request, `/api/v1/divisions/${ndiv.data.id}/entrants`, "POST", [
+    { kind: "individual", display_name: "John Andersen", seed: 1 },
+    { kind: "individual", display_name: "John Anderson", seed: 2 },
+  ]);
+  if (!nents.data || nents.data.length !== 2) {
+    throw new Error(`tennis names entrants -> ${nents.status} ${JSON.stringify(nents.error)}`);
+  }
+  const { fixtureIds: namesFixtures } = await createStageAndGenerate(request, ndiv.data.id);
+  await apiJson(request, `/api/v1/divisions/${ndiv.data.id}/start`, "POST");
+  namesFixture = namesFixtures[0]!;
+  const nsides = await fixtureSides(request, namesFixture);
+  await mustPost(request, namesFixture, "core.start", {});
+  for (let i = 0; i < 3; i++) await mustPost(request, namesFixture, "tennis.point", { by: nsides.home });
+
   expect(
-    orgSlug && compSlug && liveDivSlug && matchA && consentDivSlug && matchC && footballFixture && tennisFixture,
+    orgSlug &&
+      compSlug &&
+      liveDivSlug &&
+      matchA &&
+      consentDivSlug &&
+      matchC &&
+      footballFixture &&
+      tennisFixture &&
+      namesFixture,
     "setup produced every id this file needs",
   ).toBeTruthy();
 });
@@ -380,6 +423,67 @@ test("tennis: the Sets tab is present with one column per set", async ({ browser
   await anon.getByTestId("mc-tab-sets").click();
   await expect(anon.getByTestId("mc-sets-col-0")).toBeVisible();
   await expect(anon.getByTestId(/^mc-sets-col-\d+$/)).toHaveCount(1);
+});
+
+// The chip that carries an entrant's abbreviation is a fixed-height box with
+// no `truncate`: a label wider than the box does not clip, it spills. Nothing
+// in the suite could see that. A unit test cannot — `apps/web` vitest is
+// `environment: "node"`, so there is no layout to measure — and every fixture
+// that had ever been screenshotted abbreviated to three characters, so the
+// four-character case was invisible in both directions at once.
+//
+// `scrollWidth > clientWidth` is the check, and it is only meaningful because
+// these two entrants force the widest label the ladder can produce. Run at 320
+// as well as 1280: the chip sits beside a truncating name at both, and the
+// phone width is where a two-pixel spill actually collides with something.
+test("badge chips hold the WIDEST abbreviation the ladder produces, at 320 and 1280", async ({ browser }) => {
+  const namesPath = publicFixturePath(orgSlug, compSlug, namesDivSlug, namesFixture);
+  for (const width of [320, 1280]) {
+    const anon = await anonPage(browser, { width, height: 900 });
+    await anon.goto(namesPath, { waitUntil: "load" });
+    await expect(anon.getByTestId("mc-court-card")).toBeVisible({ timeout: 20_000 });
+    await anon.getByTestId("mc-tab-sets").click();
+
+    const badge = anon.getByTestId("mc-sets-badge-0");
+    await expect(badge).toBeVisible();
+    // The label is what makes this test able to fail. Assert it before the
+    // geometry: a three-character code would fit any of these boxes, so a
+    // green geometry check on the wrong label proves nothing.
+    await expect(badge).toHaveText("AND1");
+    await expect(anon.getByTestId("mc-sets-badge-1")).toHaveText("AND2");
+
+    for (const seq of [0, 1]) {
+      const box = await anon.getByTestId(`mc-sets-badge-${seq}`).evaluate((el) => ({
+        scroll: el.scrollWidth,
+        client: el.clientWidth,
+        text: el.textContent,
+      }));
+      expect(box.scroll, `sets badge ${seq} at ${width}px: "${box.text}" needs ${box.scroll}px in ${box.client}px`).toBeLessThanOrEqual(box.client);
+    }
+
+    // Same chip, the other tab. `SideBadge` and the Sets row badge are two
+    // renderings of one object and have gone out of step before. The Timeline
+    // tab is present by CONTENT (`extraTabs`), so it is checked when it is
+    // there rather than assumed — but if it is there it owes the same box.
+    const hasTimeline = (await anon.getByTestId("mc-tab-timeline").count()) > 0;
+    if (!hasTimeline) {
+      await anon.close();
+      continue;
+    }
+    await anon.getByTestId("mc-tab-timeline").click();
+    const timelineBadges = anon.getByTestId(/^mc-side-badge-\d+$/);
+    const count = await timelineBadges.count();
+    expect(count, "the timeline rendered at least one entrant chip").toBeGreaterThan(0);
+    for (let i = 0; i < count; i++) {
+      const box = await timelineBadges.nth(i).evaluate((el) => ({
+        scroll: el.scrollWidth,
+        client: el.clientWidth,
+        text: el.textContent,
+      }));
+      expect(box.scroll, `timeline badge ${i} at ${width}px: "${box.text}" needs ${box.scroll}px in ${box.client}px`).toBeLessThanOrEqual(box.client);
+    }
+    await anon.close();
+  }
 });
 
 // ---------------------------------------------------------------------------

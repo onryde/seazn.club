@@ -458,7 +458,7 @@ function compactWord(word: string): string {
  * ceiling rather than an invented number. If those chips ever grow, this
  * constant and their classes move together.
  */
-const BADGE_MAX_CHARS = 4;
+export const BADGE_MAX_CHARS = 4;
 
 /** The existing team-style rule, unchanged by C9: first three compacted
  *  letters of the whole name ("Blazers" -> "BLA"). */
@@ -515,9 +515,15 @@ export function personShortCandidates(name: string): string[] {
   if (words.length > 1) add(`${first.slice(0, 2)}${surname.slice(0, 2)}`);
   if (middle.length > 0) add(middle.slice(0, 4));
   add(words.join("").slice(0, 3));
-  add(surname);
-  if (middle.length > 0) add(middle);
-  add(words.join(""));
+  // The ladder used to end with three unclamped rungs — the whole surname, the
+  // whole middle, the whole compacted name. Clamping `add` made the first two
+  // of those exact duplicates of `surname.slice(0, 4)` and `middle.slice(0, 4)`
+  // above, so they pushed nothing at all (0 pushes across 300k generated names
+  // when the re-review measured it); they are gone rather than left as rungs
+  // that read like they still widen something. The third is genuinely distinct
+  // — a compacted whole name is not a prefix of any single word — and is kept,
+  // written at its real width.
+  add(words.join("").slice(0, BADGE_MAX_CHARS));
   return out.length > 0 ? out : ["?"];
 }
 
