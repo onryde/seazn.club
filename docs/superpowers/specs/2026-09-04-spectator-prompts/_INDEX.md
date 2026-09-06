@@ -247,3 +247,35 @@ condition is fixed in this wave (plan Task 19): a decided fixture keeps the pad'
 panel when the sport module declares post-phase actions, so band-2 player lines can be entered
 after the result; the Task 18 walkthrough runs for real. Bands 1 and 2 stay offered. This is
 the programme's second deliberate console/pad touch (the first was ruling 12's Task 18).
+
+## False premises found in W1 execution, Tasks 6–20 (do not re-derive)
+
+- The engine's cricket result margin is a plain STRING and `outcome.method` is
+  `regulation | dls | innings | super_over | boundary_count`; "dls" is a method, never a margin
+  kind; "runs"/"wickets" live only inside the margin text. Result keys are by method + tie /
+  no_result / draw / forfeit (`forfeit` = an `award` outcome, keyed off `outcome.kind`).
+- `packages/engine-db` does not exist — the fold lives in `apps/web/src/server/engine-db`.
+- `colors.primary` is a key nothing writes; the club hub writes `home_primary` /
+  `home_secondary` / `away_primary` / `away_secondary` (ruling 15).
+- Splitting `cricket.player.line` into two pad actions is impossible: `pad-host.tsx`'s
+  `moreActions` de-duplicates the More sheet by `action.type` (so Task 20 went group-optional).
+- `CricketPlayerLine`'s `batting` / `bowling` were already optional and `applyPlayerLine`
+  already checks each aspect independently — the band-2 defect was pad-form-only.
+- The console's Scorecard (post-phase) panel was unreachable because `decided` and PadPhase
+  "post" resolve at the same instant (ruling 17 → Task 19).
+- The cricket skin's `buildDock` has no dock content for non-ball events — no "Send now"; a
+  player line waits out `HOLD_MS` (pad programme finding).
+- `config: '{}'` cannot exist in production (`GenericCfg` requires `resultMode`/`allowDraws`
+  and every writer validates); a test seed that bypassed validation was the only source.
+- `resolveLatestModule(sportKey)` must never serve a single division's read — use
+  `resolveModule(sportKey, moduleVersion)` (`registry.ts:31-36`); `divisions.module_version` is
+  NOT NULL.
+- The public fixture page's OpenAPI route had no `response` schema before Task 9.
+- `main`'s `public-isr-contract.test.ts` never asserts `dynamic` is absent — a page can export
+  `force-dynamic` beside the ISR exports and still pass it (one-line strengthening owed).
+- `next build` renders zero instances of the fixture route (empty `generateStaticParams`), so a
+  green build proves nothing about `DYNAMIC_SERVER_USAGE` at runtime — only a prod-server
+  request does (15b proved it).
+- A subagent tool call over ~10 minutes is killed as "stalled" regardless of progress; serial
+  walkthrough files must run under ~8 minutes each (Task 15 split into two files).
+- The Task 14 review accepted `force-dynamic`; main's recorded ISR contract overruled it (14d).
