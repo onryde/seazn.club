@@ -125,25 +125,31 @@ function historyRow(
 
 /** One leg's artifact.
  *
- *  `requestedEngine` is a PARAMETER, not a constant, and it defaults to
- *  `"both"` only so the cases that do not care keep reading as before. The
- *  two values a real run actually writes are `"greedy"` and `"optimized"` —
- *  `tiny.ts` puts the CLI's own `--engine` into the artifact, and a two-leg
- *  comparison is assembled from two SEPARATE single-engine runs
- *  (`assessEngineDelta`'s doc comment). A suite that only ever fed `"both"`
- *  left the only two arms production uses unwitnessed. */
+ *  `requestedEngine`, when not given explicitly, defaults to `engine` itself
+ *  — T7d fix round 1: a real leg written by `tiny.ts` always has
+ *  `requestedEngine` equal to its own filename (that is the writer's fix,
+ *  and `assessEngineDelta`'s self-consistency guard now checks exactly this
+ *  field against the filename), so a fixture that does not care about the
+ *  distinction should default to the realistic, guard-satisfying shape
+ *  rather than to `"both"`, which no real `engine-greedy.json`/
+ *  `engine-optimized.json` ever carries. `engine` (the LEG-LEVEL actual) is
+ *  itself optional now: `undefined` is the legitimate shape a leg's own
+ *  divisions disagreeing about the actual engine produces, and each
+ *  division can carry its OWN `actualEngine` to say what happened —
+ *  T7d's whole reason for adding that field. */
 function snapshot(
-  engine: ActualEngine,
-  divisions: readonly { ref: string; makespan?: number; imbalance?: number }[],
+  engine: ActualEngine | undefined,
+  divisions: readonly { ref: string; makespan?: number; imbalance?: number; actualEngine?: ActualEngine }[],
   runId = "sha-aaaa",
-  requestedEngine: RequestedEngine = "both",
+  requestedEngine?: RequestedEngine,
 ): EngineSnapshot {
   return {
     runId,
-    requestedEngine,
-    engine,
+    requestedEngine: requestedEngine ?? engine ?? "both",
+    ...(engine === undefined ? {} : { engine }),
     divisions: divisions.map((d) => ({
       divisionRef: d.ref,
+      ...(d.actualEngine === undefined ? {} : { actualEngine: d.actualEngine }),
       ...(d.makespan === undefined || d.imbalance === undefined
         ? {}
         : {
@@ -182,9 +188,19 @@ function rawDivisionWithout(field: string): Record<string, unknown> {
   return row;
 }
 
-/** One leg's artifact with division rows that need not be well formed. */
-function rawArtifact(engine: ActualEngine, divisions: readonly unknown[], runId = "sha-aaaa"): unknown {
-  return { runId, requestedEngine: "both", engine, divisions };
+/** One leg's artifact with division rows that need not be well formed.
+ *
+ *  `requestedEngine` defaults to `engine` itself, same reasoning as
+ *  `snapshot()` above (T7d fix round 1): the self-consistency guard now
+ *  checks `requestedEngine` against the filename, and a real leg always has
+ *  the two equal. */
+function rawArtifact(
+  engine: ActualEngine,
+  divisions: readonly unknown[],
+  runId = "sha-aaaa",
+  requestedEngine: RequestedEngine = engine,
+): unknown {
+  return { runId, requestedEngine, engine, divisions };
 }
 
 /** The five numbers `ScheduleMetricsOut` declares, well formed. */
@@ -624,47 +640,28 @@ describe("assessEngineDelta — the comparison comes from two RUNS, and is RUN-l
   });
 
   // -------------------------------------------------------------------------
-  // `requestedEngine` — the closed set, one arm at a time
+  // `requestedEngine` — the closed set `asSnapshot` accepts
   //
-  // `asSnapshot` accepts three values and every fixture above supplies the one
-  // a real run never writes. `tiny.ts` puts the CLI's `--engine` into the
-  // artifact, and a two-leg comparison is two SEPARATE single-engine runs, so
-  // the artifacts a live delta reads carry `"greedy"` and `"optimized"`. A
-  // whole-guard mutant is killed by the `"both"` fixtures alone, which is how
-  // both production arms rode along untested.
-  //
-  // Each case below moves exactly ONE leg off `"both"` and asserts BOTH legs'
-  // values, so the assertion distinguishes the arms instead of accepting
-  // either: a mutant that drops only `"greedy"` reds only the greedy case.
+  // `asSnapshot` accepts three values. T7d fix round 1 moved the
+  // self-consistency guard below onto this SAME field, so `"both"` — the one
+  // arm a real two-leg comparison never carries under either filename (a
+  // `--engine both` leg is written to its own `engine-both.json`, never
+  // `engine-greedy.json`/`engine-optimized.json` — `schedule.ts`'s
+  // `writeEngineArtifact` doc comment) — can now only be proven accepted by
+  // `asSnapshot` on a SINGLE leg, before the guard has a second leg to
+  // compare it against. Without this case, a union inside `asSnapshot` that
+  // quietly stopped accepting `"both"` would read as "not a readable
+  // EngineSnapshot" and nothing here would catch it.
   // -------------------------------------------------------------------------
 
-  it("accepts the requestedEngine \"greedy\" that a real `--engine greedy` leg writes", () => {
+  it("asSnapshot accepts requestedEngine \"both\" standing alone", () => {
     const report = assessEngineDelta({
-      [GREEDY_ARTIFACT_KEY]: snapshot("greedy", [{ ref: "d-1", makespan: 300, imbalance: 90 }], "sha-aaaa", "greedy"),
-      [OPTIMIZED_ARTIFACT_KEY]: snapshot("optimized", [{ ref: "d-1", makespan: 240, imbalance: 30 }]),
+      [GREEDY_ARTIFACT_KEY]: snapshot("greedy", [{ ref: "d-1", makespan: 300, imbalance: 90 }], "sha-aaaa", "both"),
     });
-    expect(report.note).toBeUndefined();
-    expect(report.delta).toBeDefined();
-    expect(report.delta?.greedy.requestedEngine).toBe("greedy");
-    expect(report.delta?.optimized.requestedEngine).toBe("both");
-    expect(report.delta?.makespanDeltaMinutes).toBe(60);
-  });
-
-  it("accepts the requestedEngine \"optimized\" that a real `--engine optimized` leg writes", () => {
-    const report = assessEngineDelta({
-      [GREEDY_ARTIFACT_KEY]: snapshot("greedy", [{ ref: "d-1", makespan: 300, imbalance: 90 }]),
-      [OPTIMIZED_ARTIFACT_KEY]: snapshot(
-        "optimized",
-        [{ ref: "d-1", makespan: 240, imbalance: 30 }],
-        "sha-aaaa",
-        "optimized",
-      ),
-    });
-    expect(report.note).toBeUndefined();
-    expect(report.delta).toBeDefined();
-    expect(report.delta?.greedy.requestedEngine).toBe("both");
-    expect(report.delta?.optimized.requestedEngine).toBe("optimized");
-    expect(report.delta?.makespanDeltaMinutes).toBe(60);
+    // If `asSnapshot` had rejected "both", this would read "not a readable
+    // EngineSnapshot" instead of the ordinary one-leg note.
+    expect(report.note).toContain(`only the ${GREEDY_ARTIFACT_KEY} leg`);
+    expect(report.delta).toBeUndefined();
   });
 
   it("reads BOTH legs' own requestedEngine back — the pair a real two-leg run writes", () => {
@@ -685,6 +682,78 @@ describe("assessEngineDelta — the comparison comes from two RUNS, and is RUN-l
     expect(report.delta?.optimized.requestedEngine).toBe("optimized");
     expect(report.delta?.greedy.requestedEngine).not.toBe(report.delta?.optimized.requestedEngine);
     expect(report.delta?.courtImbalanceDeltaMinutes).toBe(60);
+  });
+
+  // -------------------------------------------------------------------------
+  // T7d fix round 1 — a leg's own `engine` can be legitimately ABSENT
+  // -------------------------------------------------------------------------
+
+  it("accepts an artifact whose engine is absent because its divisions disagreed, when requestedEngine matches the filename", () => {
+    // `engine` (undefined here) is no longer what the guard checks —
+    // `requestedEngine` is, and a leg like this always has that regardless
+    // of whether its own divisions agreed about the actual engine.
+    const report = assessEngineDelta({
+      [GREEDY_ARTIFACT_KEY]: snapshot("greedy", [{ ref: "d-1", makespan: 300, imbalance: 90 }], "sha-aaaa", "greedy"),
+      [OPTIMIZED_ARTIFACT_KEY]: snapshot(
+        undefined,
+        [{ ref: "d-1", makespan: 240, imbalance: 30, actualEngine: "optimized" }],
+        "sha-aaaa",
+        "optimized",
+      ),
+    });
+    expect(report.note).toBeUndefined();
+    expect(report.delta).toBeDefined();
+    expect(report.delta?.optimized.engine).toBeUndefined();
+    expect(report.delta?.makespanDeltaMinutes).toBe(60);
+  });
+
+  it("renders the delta for a real leg whose divisions disagreed about the actual engine — T7d fix round 1", () => {
+    // The exact shape read off disk at
+    // bench-report/0867e5ab2442c6e8846a9c07261fb1cab067cc65/: `--engine
+    // optimized` scheduled d-tiny with the full solver (status `ok`) and
+    // d-badminton (one fixture) proved `already_optimal` and came back
+    // `greedy` — so `engine-optimized.json` has NO leg-level `engine` field
+    // at all, only `requestedEngine: "optimized"`. Before this fix the
+    // self-consistency guard read that legitimate absence as a mismatch
+    // ("... reports \"undefined\"") and omitted the delta outright.
+    const greedyLeg = snapshot(
+      "greedy",
+      [
+        { ref: "d-tiny", makespan: 1410, imbalance: 30, actualEngine: "greedy" },
+        { ref: "d-badminton", makespan: 30, imbalance: 30, actualEngine: "greedy" },
+      ],
+      "0867e5ab2442c6e8846a9c07261fb1cab067cc65",
+      "greedy",
+    );
+    const optimizedLeg = snapshot(
+      undefined,
+      [
+        { ref: "d-tiny", makespan: 1470, imbalance: 30, actualEngine: "optimized" },
+        { ref: "d-badminton", makespan: 30, imbalance: 30, actualEngine: "greedy" },
+      ],
+      "0867e5ab2442c6e8846a9c07261fb1cab067cc65",
+      "optimized",
+    );
+
+    const report = assessEngineDelta({
+      [GREEDY_ARTIFACT_KEY]: greedyLeg,
+      [OPTIMIZED_ARTIFACT_KEY]: optimizedLeg,
+    });
+
+    expect(report.note).toBeUndefined();
+    expect(report.delta).toBeDefined();
+    expect(report.delta?.optimized.engine).toBeUndefined();
+    expect(report.delta?.comparedDivisionRefs).toEqual(["d-tiny", "d-badminton"]);
+    // greedy MINUS optimized, real numbers off disk: d-tiny (1410-1470) +
+    // d-badminton (30-30) = -60. The court-imbalance numbers happen to be
+    // equal on both legs, so that delta is legitimately 0 — not a
+    // suppressed computation.
+    expect(report.delta?.makespanDeltaMinutes).toBe(-60);
+    expect(report.delta?.courtImbalanceDeltaMinutes).toBe(0);
+    // The per-division truth survives into the rendered comparison.
+    expect(
+      report.delta?.optimized.divisions.find((d) => d.divisionRef === "d-badminton")?.actualEngine,
+    ).toBe("greedy");
   });
 
   it("omits the delta when an artifact's requestedEngine is outside the closed set", () => {
@@ -831,15 +900,17 @@ describe("assessEngineDelta — the comparison comes from two RUNS, and is RUN-l
     expect(report.note).toContain("runId");
   });
 
-  it("omits the delta when an artifact's own engine field disagrees with the file it came from", () => {
+  it("omits the delta when an artifact's own requestedEngine disagrees with the file it came from", () => {
     // Two greedy legs filed as one of each would otherwise be subtracted from
-    // one another and reported as the optimizer's gain.
+    // one another and reported as the optimizer's gain — the second one here
+    // is a `--engine greedy` leg (both legs default `requestedEngine` to
+    // their own `engine`) misfiled under `engine-optimized.json`.
     const report = assessEngineDelta({
       [GREEDY_ARTIFACT_KEY]: snapshot("greedy", [{ ref: "d-1", makespan: 300, imbalance: 90 }]),
       [OPTIMIZED_ARTIFACT_KEY]: snapshot("greedy", [{ ref: "d-1", makespan: 240, imbalance: 30 }]),
     });
     expect(report.delta).toBeUndefined();
-    expect(report.note).toContain("engine field");
+    expect(report.note).toContain("requestedEngine");
   });
 
   it("never throws on hostile artifacts", () => {

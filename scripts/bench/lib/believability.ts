@@ -626,16 +626,37 @@ export function assessEngineDelta(artifacts: Readonly<Record<string, unknown>> |
   }
 
   // Which leg is which decides the SIGN of everything below, and the filename
-  // is the only thing that has claimed it so far. `AutoScheduleResult.solver
-  // .engine` is what actually ran, so if the two disagree the pairing is not
-  // trustworthy — two greedy legs filed one per name would be subtracted from
-  // each other and printed as the optimizer's gain.
-  if (greedy.engine !== GREEDY_ARTIFACT_KEY || optimized.engine !== OPTIMIZED_ARTIFACT_KEY) {
+  // is the only thing that has claimed it so far.
+  //
+  // T7d fix round 1: this used to compare `engine` — the LEG-LEVEL ACTUAL —
+  // against the filename, back from when the writer keyed the file by that
+  // same derived value. Once the writer moved to keying the file by
+  // `requestedEngine` (a leg's identity is what was ASKED for, never a
+  // per-division outcome — see `schedule.ts`'s `writeEngineArtifact` doc
+  // comment), `engine` became OPTIONAL, absent exactly when a leg's own
+  // divisions disagreed about which engine actually ran. Comparing THAT
+  // against the filename made this guard reject the exact shape it was
+  // supposed to let through: a real `--engine optimized` leg whose
+  // one-fixture division proved `already_optimal`
+  // (`bench-report/0867e5ab2442c6e8846a9c07261fb1cab067cc65/engine-optimized.json`
+  // — `engine` absent, `requestedEngine: "optimized"`) was omitted from the
+  // delta as "an artifact's own engine field disagrees with the file it was
+  // read from ... reports \"undefined\"".
+  //
+  // `requestedEngine` is the field that is ALWAYS singular for a leg and is
+  // exactly what the writer now names the file after, so it is what this
+  // guard has to check instead. It still catches the same real fault — an
+  // artifact written under the wrong filename (a stale pre-fix file, one
+  // leg's output copied into another leg's directory) — because a leg
+  // written by `tiny.ts` always has `requestedEngine` equal to its own
+  // filename by construction; only corruption or a hand-edited file can make
+  // them disagree.
+  if (greedy.requestedEngine !== GREEDY_ARTIFACT_KEY || optimized.requestedEngine !== OPTIMIZED_ARTIFACT_KEY) {
     return {
       note:
-        `engine delta omitted: an artifact's own engine field disagrees with the file it was read from ` +
-        `(engine-${GREEDY_ARTIFACT_KEY}.json reports "${greedy.engine}", ` +
-        `engine-${OPTIMIZED_ARTIFACT_KEY}.json reports "${optimized.engine}")`,
+        `engine delta omitted: an artifact's own requestedEngine disagrees with the file it was read from ` +
+        `(engine-${GREEDY_ARTIFACT_KEY}.json requested "${greedy.requestedEngine}", ` +
+        `engine-${OPTIMIZED_ARTIFACT_KEY}.json requested "${optimized.requestedEngine}")`,
     };
   }
 
