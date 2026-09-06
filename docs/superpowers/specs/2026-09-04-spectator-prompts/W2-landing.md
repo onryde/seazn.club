@@ -186,3 +186,8 @@ the public entrant payload (`public-site/data.ts:316-323`). `exports.ts:261-262`
 `colors.home_primary` through `public-theme.ts`'s 3:1 `contrast()` guard, else the
 `division-hue.ts` wheel keyed on the entrant, else neutral initials (`_DESIGN.md` P1);
 one shared resolver in W2 (`primaryColour`) consumed by W3 and W5 — no second palette.
+
+**Carried in from W1 (2026-09-06):** `components/public-site/schedule.tsx:256` renders spectator-facing
+text at ≈2.87:1 contrast (a `/70` opacity modifier on a muted token) — below the 4.5:1 floor and
+worse than the two W1 violations already fixed; W2's schedule/match-card work fixes it with a bare
+token (never an opacity modifier on text a spectator reads). Same rule applies wave-wide.
