@@ -34,10 +34,38 @@
 // which moves to the button since that's what needs to not shrink in the
 // scrolling flex row). The 32px pill still LOOKS the same, centred inside
 // the taller, transparent hit target.
-import { useRef } from "react";
+import { useEffect, useRef } from "react";
 import type { Dict as PublicDict } from "@/lib/i18n-constants";
 import { t } from "@/lib/i18n-runtime";
 import type { MatchCentreTabIdT } from "@/server/public-site/match-centre-schema";
+
+/**
+ * R11 fix round, C6 (Task 15 re-review) — the rail never scrolled the
+ * selected tab into view, so at 320 a tab picked via the `?tab=` deep link
+ * (or a keyboard Home/End jump past the fold) could render clipped at the
+ * viewport edge (`match-a-tab-commentary-320.png`). Extracted as a pure
+ * function, taking the element and the reduced-motion flag as plain
+ * arguments, so it is unit-testable WITHOUT jsdom (this workspace's vitest
+ * is `environment: "node"` — no real DOM at all, so a `HTMLElement` double
+ * with the method on its prototype stands in for the real element; see the
+ * test). `inline`/`block: "nearest"` only moves the rail when the tab is not
+ * already fully visible — it never re-centres a tab that was already in
+ * view. `smooth` is suppressed under `prefers-reduced-motion`, matching
+ * every other motion this surface ships (`globals.css`'s reduced-motion
+ * list).
+ */
+export function scrollActiveTabIntoView(
+  el: Pick<HTMLElement, "scrollIntoView"> | null | undefined,
+  prefersReducedMotion: boolean,
+): void {
+  el?.scrollIntoView({ inline: "nearest", block: "nearest", behavior: prefersReducedMotion ? "auto" : "smooth" });
+}
+
+function prefersReducedMotion(): boolean {
+  return typeof window !== "undefined" && typeof window.matchMedia === "function"
+    ? window.matchMedia("(prefers-reduced-motion: reduce)").matches
+    : false;
+}
 
 export interface TabRailProps {
   tabs: MatchCentreTabIdT[];
@@ -55,6 +83,31 @@ const INACTIVE_PILL_CLASS =
 
 export function TabRail({ tabs, active, onChange, dict }: TabRailProps) {
   const buttonRefs = useRef<Partial<Record<MatchCentreTabIdT, HTMLButtonElement | null>>>({});
+
+  // Runs on every `active` change AND on first mount — which is exactly
+  // "on selection, and on the `?tab=` deep link's initial selection": the
+  // deep link resolves to a starting `active` value the FIRST render already
+  // carries, so this effect's mount-time run covers it without a special
+  // case, the same way a click (`onChange`) or a keyboard Home/End jump
+  // (`handleKeyDown` below) covers those.
+  //
+  // ALSO re-runs on a window resize while the same tab stays active. Found
+  // by driving the real page, not by the unit test above: a click made while
+  // the rail is wide enough to show every pill needs no scroll at all
+  // (scrollLeft stays 0), and a later resize down to a phone width does not
+  // itself change `active` — so an effect keyed on `[active]` alone fires
+  // once, at the wrong width, and the tab can still render clipped after a
+  // resize (this is exactly how this walkthrough's own screenshot harness
+  // works: `screenshotAtWidths` clicks a tab once, then walks the SAME page
+  // through 320 → 768 → 1280 without re-clicking — `match-a-tab-commentary-
+  // 320.png` still showed the clip until this listener was added). A real
+  // phone rotation is the same shape of event.
+  useEffect(() => {
+    const run = () => scrollActiveTabIntoView(buttonRefs.current[active], prefersReducedMotion());
+    run();
+    window.addEventListener("resize", run);
+    return () => window.removeEventListener("resize", run);
+  }, [active]);
 
   function handleKeyDown(e: React.KeyboardEvent<HTMLDivElement>) {
     const idx = tabs.indexOf(active);

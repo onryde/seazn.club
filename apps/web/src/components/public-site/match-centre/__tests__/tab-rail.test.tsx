@@ -31,11 +31,11 @@
 // below is rewritten to pin BOTH: the button's 44px hit-area class (same for
 // both tabs) and the inner span's untouched pill class (still the one
 // difference between active/inactive).
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import en from "@/dictionaries/en/public.json";
 import type { Dict } from "@/lib/i18n-constants";
-import { TabRail } from "../tab-rail";
+import { TabRail, scrollActiveTabIntoView } from "../tab-rail";
 
 const dict = en as Dict;
 
@@ -127,5 +127,42 @@ describe("TabRail — accented/quiet pill classes (shipped vocabulary, tabs.tsx:
     // the exact thing P2 rules out ("the pill keeps its look").
     expect(activeButtonClass).not.toContain("bg-accent");
     expect(activeButtonClass).not.toContain("rounded-full");
+  });
+});
+
+// R11 fix round, C6 (Task 15 re-review) — the rail never scrolled the
+// selected tab into view, so a tab picked via the `?tab=` deep link could
+// render clipped at the viewport edge at 320 (`match-a-tab-commentary-320.png`).
+// The scroll call is extracted as a PURE function so it is testable at all in
+// this workspace: `apps/web` vitest is `environment: "node"` (no jsdom, no
+// `HTMLElement` global), so "mock it on the prototype" here means a plain
+// class of our own with `scrollIntoView` on ITS prototype — the same
+// contract (`{ scrollIntoView(options) }`) a real button element carries,
+// without needing jsdom to prove the call.
+describe("scrollActiveTabIntoView (R11 fix round, C6)", () => {
+  class FakeTabButton {
+    scrollIntoView(): void {}
+  }
+
+  it("scrolls the element into view with inline/block 'nearest' and a SMOOTH behaviour by default", () => {
+    FakeTabButton.prototype.scrollIntoView = vi.fn();
+    const el = new FakeTabButton();
+    scrollActiveTabIntoView(el, false);
+    expect(el.scrollIntoView).toHaveBeenCalledTimes(1);
+    expect(el.scrollIntoView).toHaveBeenCalledWith({ inline: "nearest", block: "nearest", behavior: "smooth" });
+  });
+
+  // Mutant: drop the `prefersReducedMotion ? "auto" : "smooth"` ternary
+  // (always "smooth") → this reds.
+  it("suppresses the smooth animation — behaviour 'auto' — when prefers-reduced-motion is set", () => {
+    FakeTabButton.prototype.scrollIntoView = vi.fn();
+    const el = new FakeTabButton();
+    scrollActiveTabIntoView(el, true);
+    expect(el.scrollIntoView).toHaveBeenCalledWith({ inline: "nearest", block: "nearest", behavior: "auto" });
+  });
+
+  it("does nothing (never throws) when the element is null or undefined — the ref before it attaches", () => {
+    expect(() => scrollActiveTabIntoView(null, false)).not.toThrow();
+    expect(() => scrollActiveTabIntoView(undefined, false)).not.toThrow();
   });
 });

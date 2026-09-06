@@ -6,21 +6,29 @@
  * scheduled_at (started ad hoc) should say so instead of implying it
  * hasn't started, which contradicts the LIVE scorebug right below it.
  *
- * Task 14 — `liveLabel` lets the page pass the localised
- * `matchCentre.status.live` word (the SAME key `CourtCard`'s own live pill
- * uses) instead of a bare English literal; defaulted to "Live" so this
- * function's own unit tests (which call it with two args, proving the
- * status/date branching alone) keep reading exactly as before.
+ * Task 14b — `timeTbdLabel` localises "Time TBD" (task-14-review.md OWED
+ * item 2: no dictionary key carried that exact phrase yet), via the
+ * `matchCentre.status.timeTbd` key (`page.tsx`'s own call site); defaulted
+ * to "Time TBD" so a caller with no locale in hand (or an existing test)
+ * keeps reading exactly as before.
  *
- * Task 14b — `timeTbdLabel` does the same for "Time TBD" (task-14-review.md
- * OWED item 2: no dictionary key carried that exact phrase yet), via the
- * new `matchCentre.status.timeTbd` key (`page.tsx`'s own call site). Same
- * default-so-existing-tests-keep-working convention as `liveLabel`.
+ * R11 fix round, C3 — this page ALWAYS renders `<MatchCentre>` directly
+ * below this subheading, and `CourtCard`'s own status chip already carries
+ * the word "Live" (`mc-live-pill`, `matchCentre.status.live`) for `in_play`
+ * — so an `in_play` fixture with no `scheduledAt` used to print the bare
+ * word "Live" here too, immediately above a court card already announcing
+ * it. The `in_play` branch now returns `""` (the caller drops the whole
+ * line rather than render a bullet-only fragment) — this is NOT "drop the
+ * status word for every status the card carries a chip for": `decided` and
+ * `scheduled` never returned their chip's word from this function in the
+ * first place (only `timeTbdLabel`, a different fact — no time has been
+ * announced — not a restatement of "Ended"/"Scheduled"), so nothing else
+ * here duplicates the card. Removed the `liveLabel` parameter entirely
+ * (it has no caller once the word it carried is never rendered).
  */
 export function fixtureSubheading(
   status: string,
   scheduledAt: string | null | undefined,
-  liveLabel: string = "Live",
   timeTbdLabel: string = "Time TBD",
 ): string {
   if (scheduledAt) {
@@ -32,5 +40,5 @@ export function fixtureSubheading(
       minute: "2-digit",
     });
   }
-  return status === "in_play" ? liveLabel : timeTbdLabel;
+  return status === "in_play" ? "" : timeTbdLabel;
 }

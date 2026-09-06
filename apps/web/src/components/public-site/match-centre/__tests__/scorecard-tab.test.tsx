@@ -584,6 +584,43 @@ describe("ScorecardTab", () => {
     expect(html).toMatch(/class="[^"]*w-6[^"]*"[^>]*title="Wickets"/);
   });
 
+  // R11 fix round, C4 — the W cell used to render `font-semibold`
+  // unconditionally, so a bowler with zero wickets (the common case) got a
+  // bold "0" reading as an achievement it isn't. The R cell gets the SAME
+  // rule, for consistency between the two "headline" numeric columns.
+  // Mutant: drop the `> 0` guard in `emphasisedNumCell` (bold always) → the
+  // "NOT bold" assertions below red.
+  it("the R (runs) and W (wickets) cells are bold only when their value is greater than zero", () => {
+    const html = render(RICH_ONLY);
+    const rowSlice = (html: string, testid: string): string => {
+      const start = html.indexOf(`data-testid="${testid}"`);
+      expect(start, testid).toBeGreaterThan(-1);
+      return html.slice(start, html.indexOf("</tr>", start));
+    };
+    // Stokes took 0 wickets: the W cell renders WITHOUT font-semibold.
+    const stokesRow = rowSlice(html, "mc-bowl-p-stokes");
+    expect(stokesRow).toMatch(/<td class="px-0\.5 text-right tabular-nums">0<\/td>/);
+    expect(stokesRow).not.toMatch(/<td class="[^"]*font-semibold[^"]*">0<\/td>/);
+    // Khan took 3 wickets: the W cell IS bold — the positive pair.
+    const khanRow = rowSlice(html, "mc-bowl-p-khan");
+    expect(khanRow).toMatch(/<td class="px-0\.5 text-right tabular-nums font-semibold">3<\/td>/);
+    // R. Sharma scored 62 runs: the R cell IS bold.
+    const rohitRow = rowSlice(html, "mc-bat-p-rohit");
+    expect(rohitRow).toMatch(/<td class="px-0\.5 text-right tabular-nums font-semibold">62<\/td>/);
+
+    // A duck (0 runs): the R cell renders WITHOUT font-semibold — the
+    // negative pair for the batting side.
+    const duckInnings: CricketInningsViewT = {
+      ...richInnings,
+      batting: [{ ...richInnings.batting[0]!, runs: 0 }],
+    };
+    const duckHtml = renderToStaticMarkup(
+      <ScorecardTab doc={doc({ innings: [duckInnings] })} dict={dict} data={data} />,
+    );
+    expect(duckHtml).toMatch(/<td class="px-0\.5 text-right tabular-nums">0<\/td>/);
+    expect(duckHtml).not.toMatch(/<td class="[^"]*font-semibold[^"]*">0<\/td>/);
+  });
+
   it("below md the bowling table folds wd/nb into the bowler's sub-line", () => {
     const html = render(RICH_ONLY);
     // The columns still exist in ONE DOM — they are hidden, not removed.

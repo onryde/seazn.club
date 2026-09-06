@@ -114,6 +114,19 @@ function Num({
 }
 
 /**
+ * R11 fix round, C4 — the batting "R" and bowling "W" cells used to render
+ * `font-semibold` unconditionally, so a bowler with zero wickets (the
+ * common case — most spells take none) got a bold "0" that reads as an
+ * achievement it isn't. Bold now marks "something happened": a positive
+ * value gets the emphasis, a zero renders plain — applied to BOTH the R and
+ * W columns identically, so the two headline numbers stay consistent with
+ * each other rather than one rule for runs and another for wickets.
+ */
+function emphasisedNumCell(value: number): string {
+  return value > 0 ? `${NUM_CELL} font-semibold` : NUM_CELL;
+}
+
+/**
  * The wides / no-balls columns are folded away below `md` and printed as the
  * bowler's sub-line instead.
  *
@@ -266,7 +279,7 @@ function BattingTable({
                   {dismissalText(dict, row.dismissal)}
                 </span>
               </td>
-              <td className={`${NUM_CELL} font-semibold`}>{row.runs}</td>
+              <td className={emphasisedNumCell(row.runs)}>{row.runs}</td>
               <Num value={row.balls} />
               {showFours ? <Num value={row.fours} /> : null}
               {showSixes ? <Num value={row.sixes} /> : null}
@@ -340,7 +353,7 @@ function BowlingTable({
               <Num value={row.overs} />
               {showMaidens ? <Num value={row.maidens} /> : null}
               <Num value={row.runs} />
-              <td className={`${NUM_CELL} font-semibold`}>{row.wickets}</td>
+              <td className={emphasisedNumCell(row.wickets)}>{row.wickets}</td>
               {showEcon ? <Num value={row.economy} /> : null}
               {showWides ? <Num value={row.wides} className={PHONE_FOLD} /> : null}
               {showNoBalls ? <Num value={row.noBalls} className={PHONE_FOLD} /> : null}

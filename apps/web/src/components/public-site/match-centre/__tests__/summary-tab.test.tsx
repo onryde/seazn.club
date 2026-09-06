@@ -14,6 +14,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import en from "@/dictionaries/en/public.json";
 import fr from "@/dictionaries/fr/public.json";
 import type { Dict } from "@/lib/i18n-constants";
+import { t } from "@/lib/i18n-runtime";
 import { MatchCentreDoc, type MatchCentreDocT } from "@/server/public-site/match-centre-schema";
 import type { LiveFixtureData } from "../../live-score-data";
 import { MatchCentre } from "../match-centre";
@@ -48,6 +49,7 @@ function baseInfo(): MatchCentreDocT["info"] {
 const strikerMasked = { personId: "p-striker", name: "A. Striker", masked: true };
 const nonStriker = { personId: "p-nonstriker", name: "B. Second", masked: false };
 const bowlerPerson = { personId: "p-bowler", name: "C. Bowler", masked: false };
+const homeBowler2 = { personId: "p-bowler2", name: "D. Second Bowler", masked: false };
 
 const emptyDoc: MatchCentreDocT = {
   fixtureId: "fx-empty",
@@ -199,6 +201,125 @@ const finalDoc: MatchCentreDocT = {
   cricket: { ...cricketDoc.cricket!, live: null, innings: [] },
 };
 
+// R11 fix round, C5 — a fixture built specifically to exercise the innings
+// grouping: TWO batter/bowler pairs, each performer's `personId` planted in
+// exactly ONE innings' own `batting`/`bowling` rows (the identity-matching
+// contract `inningsNumberForPerformer` relies on), so the test can assert
+// each pair renders under its OWN "Innings N" label rather than four
+// identical unlabelled cards.
+const groupedPerformersDoc: MatchCentreDocT = {
+  ...cricketDoc,
+  fixtureId: "fx-grouped-performers",
+  header: baseHeader("decided"),
+  cricket: {
+    band: 3,
+    toss: null,
+    live: null,
+    innings: [
+      {
+        number: 1,
+        side: { entrantId: "home", name: "Home XI", short: "HOM", colour: null, badgeUrl: null },
+        isSuperOver: false,
+        total: { runs: 120, wickets: 4, overs: "18.2", runRate: "6.54" },
+        extrasLine: null,
+        batting: [
+          {
+            person: strikerMasked,
+            runs: 82,
+            balls: 54,
+            fours: 6,
+            sixes: 3,
+            strikeRate: "151.8",
+            dismissal: { key: "matchCentre.dismissal.not_out" },
+            notOut: true,
+          },
+        ],
+        didNotBat: [],
+        bowling: [
+          {
+            person: bowlerPerson,
+            overs: "4.0",
+            maidens: 0,
+            runs: 24,
+            wickets: 3,
+            economy: "6.0",
+            wides: 0,
+            noBalls: 0,
+          },
+        ],
+        fallOfWickets: [],
+        partnerships: [],
+        overs: [],
+      },
+      {
+        number: 2,
+        side: { entrantId: "away", name: "Away XI", short: "AWY", colour: null, badgeUrl: null },
+        isSuperOver: false,
+        total: { runs: 90, wickets: 5, overs: "17.0", runRate: "5.29" },
+        extrasLine: null,
+        batting: [
+          {
+            person: nonStriker,
+            runs: 40,
+            balls: 30,
+            fours: 2,
+            sixes: 0,
+            strikeRate: "133.3",
+            dismissal: { key: "matchCentre.dismissal.not_out" },
+            notOut: true,
+          },
+        ],
+        didNotBat: [],
+        bowling: [
+          {
+            person: homeBowler2,
+            overs: "3.5",
+            maidens: 0,
+            runs: 18,
+            wickets: 2,
+            economy: "4.7",
+            wides: 0,
+            noBalls: 0,
+          },
+        ],
+        fallOfWickets: [],
+        partnerships: [],
+        overs: [],
+      },
+    ],
+    topPerformers: [
+      {
+        role: "batter",
+        person: strikerMasked,
+        side: { entrantId: "home", name: "Home XI", short: "HOM", colour: null, badgeUrl: null },
+        line: "82 (54)",
+        detail: "6 fours, 3 sixes",
+      },
+      {
+        role: "bowler",
+        person: bowlerPerson,
+        side: { entrantId: "away", name: "Away XI", short: "AWY", colour: null, badgeUrl: null },
+        line: "3/24",
+        detail: "4 overs",
+      },
+      {
+        role: "batter",
+        person: nonStriker,
+        side: { entrantId: "away", name: "Away XI", short: "AWY", colour: null, badgeUrl: null },
+        line: "40 (30)",
+        detail: "2 fours",
+      },
+      {
+        role: "bowler",
+        person: homeBowler2,
+        side: { entrantId: "home", name: "Home XI", short: "HOM", colour: null, badgeUrl: null },
+        line: "2/18",
+        detail: "3.5 overs",
+      },
+    ],
+  },
+};
+
 const nonCricketDoc: MatchCentreDocT = {
   fixtureId: "fx-noncricket",
   sportKey: "football",
@@ -216,7 +337,7 @@ function liveFixtureFor(doc: MatchCentreDocT): LiveFixtureData {
 }
 
 beforeAll(() => {
-  for (const doc of [emptyDoc, cricketDoc, finalDoc, nonCricketDoc]) {
+  for (const doc of [emptyDoc, cricketDoc, finalDoc, groupedPerformersDoc, nonCricketDoc]) {
     // Fails loudly (not silently) the moment the schema and these literal
     // fixtures drift apart.
     MatchCentreDoc.parse(doc);
@@ -359,6 +480,90 @@ describe("SummaryTab — cricket", () => {
     // satisfied by coincidence from an unrelated part of the page.
     const p2Start = html.indexOf('data-testid="mc-partnerships-2"');
     expect(html.slice(p2Start)).toMatch(/width:\s*0%/);
+  });
+
+  // R11 fix round, C1 — at 1280 the two "At the crease" tables used to
+  // stretch full width, one under the other, so the name column (which
+  // takes whatever the sized numeric columns leave) ate the whole card and
+  // the numbers sat far from the names. `md:grid-cols-2` halves each
+  // table's width instead. Mutant: delete the wrapping div's `md:grid-cols-2`
+  // class → this reds.
+  it("the batting and bowling 'at the crease' tables sit in a two-up grid at md", () => {
+    const html = renderToStaticMarkup(<SummaryTab doc={cricketDoc} dict={dict} data={liveFixtureFor(cricketDoc)} />);
+    const gridStart = html.indexOf('<div class="grid gap-3 md:grid-cols-2">');
+    expect(gridStart).toBeGreaterThan(-1);
+    // Both tables are inside it, not just the wrapper class existing somewhere.
+    const afterGrid = html.slice(gridStart);
+    const firstTableIdx = afterGrid.indexOf("<table");
+    const secondTableIdx = afterGrid.indexOf("<table", firstTableIdx + 1);
+    expect(firstTableIdx).toBeGreaterThan(-1);
+    expect(secondTableIdx).toBeGreaterThan(firstTableIdx);
+  });
+
+  // R11 fix round, C2 — two identical "PARTNERSHIPS" headings (one per
+  // innings) with nothing telling them apart; same defect for "FALL OF
+  // WICKETS". Each heading now nests the SAME "Innings {number}" text the
+  // Scorecard accordion's own sub-line renders. Mutant: revert to the bare
+  // `matchCentre.partnerships`/`matchCentre.fallOfWickets` keys → the two
+  // headings collapse back to identical text and this reds.
+  it("partnerships and fall-of-wickets headings carry a DIFFERENT innings label per innings, in English and French", () => {
+    for (const [locale, d] of [
+      ["en", dict],
+      ["fr", frDict],
+    ] as const) {
+      const html = renderToStaticMarkup(<SummaryTab doc={cricketDoc} dict={d} data={liveFixtureFor(cricketDoc)} />);
+      const innings1Label = t(d, "matchCentre.innings", { number: 1 });
+      const innings2Label = t(d, "matchCentre.innings", { number: 2 });
+      expect(innings1Label, locale).not.toBe(innings2Label);
+      expect(html, locale).toContain(t(d, "matchCentre.partnershipsFor", { innings: innings1Label }));
+      expect(html, locale).toContain(t(d, "matchCentre.partnershipsFor", { innings: innings2Label }));
+      expect(html, locale).toContain(t(d, "matchCentre.fallOfWicketsFor", { innings: innings1Label }));
+      // Positive pair — the two partnership headings are not the same string.
+      const p1 = html.indexOf(t(d, "matchCentre.partnershipsFor", { innings: innings1Label }));
+      const p2 = html.indexOf(t(d, "matchCentre.partnershipsFor", { innings: innings2Label }));
+      expect(p1, locale).toBeGreaterThan(-1);
+      expect(p2, locale).toBeGreaterThan(-1);
+      expect(p1, locale).not.toBe(p2);
+    }
+  });
+
+  // R11 fix round, C5 — four stacked top-performer cards (batter, bowler,
+  // batter, bowler — one pair per innings) with no innings label. Each
+  // group is now labelled the same "Innings {number}" way, derived by
+  // matching the performer's own personId against the innings' real
+  // batting/bowling rows (never a positional assumption). Mutant: replace
+  // `inningsNumberForPerformer` with a function that always returns `null`
+  // → both labels disappear and this reds.
+  it("top-performer pairs are grouped and labelled by innings, in English and French", () => {
+    for (const [locale, d] of [
+      ["en", dict],
+      ["fr", frDict],
+    ] as const) {
+      const html = renderToStaticMarkup(
+        <SummaryTab doc={groupedPerformersDoc} dict={d} data={liveFixtureFor(groupedPerformersDoc)} />,
+      );
+      const innings1Label = t(d, "matchCentre.innings", { number: 1 });
+      const innings2Label = t(d, "matchCentre.innings", { number: 2 });
+      const topStart = html.indexOf('data-testid="mc-top-performers"');
+      expect(topStart, locale).toBeGreaterThan(-1);
+      const topHtml = html.slice(topStart);
+      const idx1 = topHtml.indexOf(innings1Label);
+      const idx2 = topHtml.indexOf(innings2Label);
+      expect(idx1, locale).toBeGreaterThan(-1);
+      expect(idx2, locale).toBeGreaterThan(-1);
+      // Innings 1's pair (A. Striker, C. Bowler) sits before its label ends
+      // and before innings 2's label; innings 2's pair (B. Second, D. Second
+      // Bowler) sits after its own label.
+      const striker = topHtml.indexOf("A. Striker");
+      const bowler1 = topHtml.indexOf("C. Bowler");
+      const batter2 = topHtml.indexOf("B. Second");
+      const bowler2 = topHtml.indexOf("D. Second Bowler");
+      expect(idx1, locale).toBeLessThan(striker);
+      expect(idx1, locale).toBeLessThan(bowler1);
+      expect(idx2, locale).toBeLessThan(batter2);
+      expect(idx2, locale).toBeLessThan(bowler2);
+      expect(idx1, locale).toBeLessThan(idx2);
+    }
   });
 });
 

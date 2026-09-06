@@ -252,16 +252,23 @@ export default async function FixturePage({ params }: Props) {
             url={`${basePath}/fixtures/${fixture.id}`}
           />
         </div>
-        <p className="mb-4 text-sm text-ink-muted">
-          {fixtureSubheading(
-            fixture.status,
-            fixture.scheduled_at,
-            t(dict, "matchCentre.status.live"),
-            t(dict, "matchCentre.status.timeTbd"),
-          )}
-          {fixture.venue_name ? ` · ${fixture.venue_name}` : ""}
-          {fixture.court_name ? ` · ${fixture.court_name}` : ""}
-        </p>
+        {/* R11 fix round, C3 — `fixtureSubheading` returns "" for an in-play
+            fixture with no scheduled time (the court card right below
+            already carries the LIVE chip); joining through `filter(Boolean)`
+            rather than string concatenation means that empty case doesn't
+            leave a stray leading " · " in front of the venue/court name, and
+            the whole line disappears rather than rendering blank when there
+            is neither a subheading nor a venue/court to show. */}
+        {(() => {
+          const subheadingParts = [
+            fixtureSubheading(fixture.status, fixture.scheduled_at, t(dict, "matchCentre.status.timeTbd")),
+            fixture.venue_name,
+            fixture.court_name,
+          ].filter((part): part is string => Boolean(part));
+          return subheadingParts.length > 0 ? (
+            <p className="mb-4 text-sm text-ink-muted">{subheadingParts.join(" · ")}</p>
+          ) : null;
+        })()}
 
         {/* Task 14 — the match centre replaces the old bare scorebug
             (`<LiveScore>`, retired). `<MatchCentre>` drives its own live
