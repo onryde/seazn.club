@@ -7,7 +7,56 @@
 > spectator worktree; its "RESUME HERE" block carries per-task detail). Update this file at
 > every handoff; it is committed, the ledger is not.
 
-**Last updated:** 2026-09-06 07:xx London (post-rebase).
+**Last updated:** 2026-09-06, after the second cosmetic round (16c) and a second rebase.
+
+## Position at the last handoff (read this first)
+
+Branch `feat/spectator-surface` in the `spectator` worktree. Tip when this was written:
+`fa61b23a9`, rebased onto `origin/main ac85c705f` (105 commits replayed, one conflict — a
+"Last updated" line in the bench `_MASTER.md`). Tree clean.
+
+**Done, reviewed, on the branch:** Tasks 1–20, including 8b, 14b–14d, 15b, the 16a cosmetic
+round (C1–C6) and its fix round, and `ac3d49ca2` (an OpenAPI regen that 16a owed and skipped
+— a public schema field had been added without running `openapi:gen`, which CI checks).
+
+**In flight at the handoff:** the scoped review of 16c (cosmetics C7–C10), diff
+`review-ac3d49ca2..7681cb8b6.diff`, verdict due in `task-16c-review.md`. 16c's six commits sit
+in lane `agent-a4b308f799056d2c2` and are NOT yet on the branch — cherry-pick them after the
+review clears.
+
+**Then, in order:**
+1. Cherry-pick 16c, verify on the merged tree (scoped suites + tsc + `i18n:gen-keys` and
+   `openapi:gen` for zero drift — 16c touched a public schema, so the regen is owed again).
+2. Rule on 16c's found-not-fixed item: `sets-tab.tsx`'s panel caption carries the same
+   kind-vs-unit defect as C8 one level down (badminton and table tennis would show a "Sets"
+   heading over "Game" columns). Leaning fix-now — C8 exists because the vocabulary was wrong,
+   and the same defect one level down would ship knowingly.
+3. Task 16, the gate, in the spectator worktree with no other implementer active: contract
+   notes in `task-16-contract-notes.md`. Fresh `t16` env; `seazn-env gate`; full `apps/web` and
+   `packages/engine` vitest with the DB, judged on JSON totals; the WHOLE `mobile.spec.ts` per
+   project (a serial file's failure count is a floor); the walkthrough project; cricket-lines,
+   football and scorepad-skins e2e; smoke. Then R11: read ALL 50 screens against `_DESIGN.md`
+   §9 and write the per-screen verdict table into the design doc under "W1 sign-off — per-screen
+   verdicts". Strengthen `public-isr-contract.test.ts` to assert `dynamic` is absent (one line).
+4. Final whole-branch review — Opus, on the settled diff, slim package of
+   `origin/main..feat/spectator-surface` excluding generated JSON, goldens and PNGs. ONE fix
+   dispatch, one scoped re-review, residuals adjudicated.
+5. Report to the owner. **NO PR until the owner says so.**
+
+**Owed documentation before the PR:** the bench `_MASTER.md` spectator row still reads "W0 in
+flight; W1–W4 sequential" — stale since W1 began.
+
+**Findings to carry into the PR body:** band-2 player lines were never submittable through the
+product (two stacked defects, both fixed); the cricket skin's `buildDock` has no "Send now" for
+non-ball events; `usecases/exports.ts` reads `colors->>'primary'`, a key nothing writes, so the
+fixtures CSV colour columns are always empty; `schedule.tsx:256` is spectator-facing text at
+≈2.87:1 (queued for W2); `term.bat` / `term.bowl` want a native-speaker pass. Take the pre-merge
+e2e signal via `workflow_dispatch` with the `pr` input — `e2e.yml` triggers on push to `main`
+only, so a PR gets no automatic e2e signal, ever.
+
+**Design artifacts** are listed in `_INDEX.md` under "Design artifacts". All three now publish
+without the `downloads` capability (owner request 2026-09-06), so the W0 canvas's Export PNG/PDF
+buttons are inert by design — do not "fix" them.
 
 ## Where things live
 
