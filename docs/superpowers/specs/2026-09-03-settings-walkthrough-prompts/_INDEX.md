@@ -763,6 +763,155 @@ ones W2 deliberately excluded as irreversible against the shared Pro user.
   its own small fix (an `organizations` row lock mirroring `role/route.ts`)
   in a future wave.
 
+### W3 Task 5 — the mutation sweep: 7/7 killed, all restores byte-identical
+
+Every line number below was re-pinned against this tree on 2026-09-06, not
+taken from the brief or from Task 4's own comments. Every mutant was run
+against the WHOLE affected spec file (never a `-g` slice), through a real
+`seazn-env rebuild --label stw3`, with the post-rebuild checklist run after
+every rebuild (manifest probe against the new `BUILD_ID`, `lsof` the port for
+an orphan, `--project=setup` re-run if the port moved — it never did, stayed
+on 3329 for all 14 rebuilds this task ran). Every file was `cp -p`'d before
+mutating and `diff`'d byte-identical after restoring — all seven diffs below
+read empty.
+
+| # | File:line | Mutation | Killed by | Observed redden |
+| --- | --- | --- | --- | --- |
+| 1 | `api/orgs/[id]/route.ts:89` | `requireOrgRole(id, EDITOR_ROLES)` wrapped in `.catch(() => undefined)` — never throws | `settings-role-gates.spec.ts`: "a viewer is refused every write, by the route and not just the UI" | "rename the org" row: `PATCH /api/orgs/{id}` answered **200**, expected **401** |
+| 2 | `server/api-v1/auth.ts:218` | `if (!roles.includes(role))` → `if (roles.includes(role) && false)` — never throws | same test, v1 rows | "create a sponsor" row: `POST /api/v1/orgs/{id}/sponsors` answered **201**, expected **403** |
+| 3 | `server/usecases/api-keys.ts:42` | `await requireFeature(auth.orgId, "api.access");` deleted outright | `settings-entitlement-gates.spec.ts`: "Case 8: ?tab=api on a Free org…" | Still 402 (the `api.write` check one line down still fires for a non-read scope), but `feature_key` came back **"api.write"**, expected **"api.access"** — the guard-ORDER assertion the test's own header comment predicted for exactly this failure mode |
+| 4 | `api/orgs/[id]/members/me/route.ts:29` | `if (count === 0)` → `if (count === 0 && false)` | `settings-ownership.spec.ts`: "Case 11: the last owner cannot leave…" | `DELETE members/me` as the sole owner answered **200**, expected **409** |
+| 5 | `api/orgs/[id]/members/[userId]/role/route.ts:39` | `if (count === 0)` → `if (count === 0 && false)` | `settings-ownership.spec.ts`: "Case 14: demoting the sole owner…" | `POST …/role {role:"admin"}` on the sole owner answered **200**, expected **409** |
+| 6 | `api/users/me/route.ts:84-103` | the whole sole-owner `blockedOrgs` query + `if (blockedOrgs.length > 0)` guard deleted | disposable scratch spec, never committed (see below) | `DELETE /api/users/me` on a sole owner WITH another member answered **200**, expected **409** |
+| 7 | `o/[orgSlug]/settings/page.tsx:666` | `org.role !== "owner"` → `true` | `settings-ownership.spec.ts`: "Case 11: the last owner cannot leave…" | the sole owner's account card rendered a "Leave org" button: count **1**, expected **0** |
+
+**No survivors.** All 7/7 mutants reddened for the right reason and were
+confirmed restored byte-identical (`diff` against the pre-mutation `cp -p`
+backup, empty on all seven) before the next mutation began, and again at the
+end of the task (`git status`/`git diff --stat` against `HEAD` — clean, zero
+production files touched).
+
+**Mutants 5 and 6 redo Task 4's own review-time mutation proofs, for a clean
+itemized record with real command output rather than a citation of that
+report.** Task 4's implementer already drove mutant 5's exact shape
+(`if (false && count === 0)` at `role/route.ts:39`) to prove Case 14, and
+independently mutation-proved the `blockedOrgs.length > 0` guard mutant 6
+targets via its own disposable throwaway-vs-throwaway scratch scenario. Both
+are re-run here, from scratch, with fresh rebuild/redden/restore evidence.
+
+**Mutant 4 is NOT the same thing Task 4 already tested.** Task 4 mutation-
+proved the FIX ITSELF — reverting `members/me/route.ts` to reintroduce the
+illegal `for update` on the aggregate, which 500s before the count logic ever
+runs (Postgres `0A000`). This mutant instead disables the count LOGIC on the
+now-fixed route (`if (false)` on `count === 0`), a distinct failure mode: it
+proves Case 11 also catches a broken *guard*, not just a broken *query*.
+
+**Mutant 6's safety mechanism — read this before touching this file again.**
+`settings-ownership.spec.ts`'s own committed Case 12a test was never run
+against the mutated route: that test's `DELETE /api/users/me` call uses
+`request`, which is the shared Pro identity's own session (`_RULES.md` §1 —
+every project runs as one shared Pro org). With the sole-owner block deleted,
+that exact call would have deleted the shared Pro account for real, and
+nothing in this repo can undo a soft-deleted-and-anonymised user. Instead, a
+disposable spec (`e2e/walkthrough/__scratch-mutant6.spec.ts`, written, run
+green against the clean tree first as a positive control, run red against the
+mutant, then deleted before this file was committed — `git status` after
+confirms it is gone) mirrors Case 12b's mechanism for BOTH participants:
+`mintLoginPathBySql`, no `storageState`, one-off `@example.com` addresses,
+`next=/` to avoid `postAuthLanding` auto-provisioning an org before the seed
+runs. One throwaway account owns a throwaway org; a second throwaway account
+joins it as a real member via the same invite-mint-then-accept path
+`seedMemberIdentity` uses, so the org genuinely "has another member" — the
+exact shape `blockedOrgs` is checking for, which Case 12b's org (deliberately
+solo) does not exercise. The owning throwaway account is genuinely deleted
+when the mutant fires; that is correct and harmless — it is single-use and
+was never persisted to any `e2e/.auth/*.json` file. The shared Pro identity
+was never in the request path for this mutant at any point, confirmed by the
+closing full-suite re-run (Case 12a passes clean against the restored route,
+and a direct `GET /api/users/me` as the shared Pro identity still answers 200
+inside that same test).
+
+**Rebuild cost, for whoever plans the next sweep:** every one of the 7
+mutation rebuilds paid a full build, 1:39-2:29 wall each (real `time`, not
+estimated). Restoring back to a source tree the build cache had already seen
+was fast in 6 of 7 cases — 13.4-29.6s wall (mutants 1-5, 7). **Mutant 6's
+restore did NOT hit that fast path** — 1:42.98, indistinguishable from a cold
+mutation build. Not investigated further (out of this task's scope to chase),
+but worth flagging rather than smoothing over: mutant 6 was also the only one
+of the seven that DELETED a multi-line block outright rather than swapping a
+condition inline (`if (x)` → `if (x && false)`), so whatever the build cache
+keys on may be more sensitive to a structural deletion than to a same-shape
+edit. Same server port (3329) the whole task, all 14 rebuilds — no
+`--project=setup` re-run was ever needed.
+
+### W3 Task 5 — budget measurement (Step 4)
+
+**18 new walkthrough tests added across Tasks 1-4** — `test(` blocks counted
+directly, not estimated: `settings-role-gates.spec.ts` (3) +
+`settings-entitlement-gates.spec.ts` (6) + `settings-ownership.spec.ts` (5) +
+the smoke-spec addition, `settings-support-smoke.spec.ts` (4, Task 1's own
+support-module smoke test, `a3430539b`). No other file matching `*smoke*`
+changed in this wave (checked: `git log 997ad225b..HEAD --stat` against both
+`apps/web/e2e/**smoke**` and `apps/web/**/*smoke*`).
+
+Real numbers, `--reporter=json --outputFile`, all four confirmed resolving
+inside this worktree (`.testResults`/`suites[].file` all under
+`apps/web/e2e/walkthrough/`):
+
+| Measurement | Result |
+| --- | --- |
+| Serial (`--workers=1`), sum of the 18 tests' own durations | **10.976s** (excludes the 2 shared `auth.setup` deps, 2.343s) |
+| Wall clock, `--workers=1`, whole process (`time`) | **16.128s** |
+| Wall clock, `--workers=3`, whole process (`time`), run 1 | **12.511s** |
+| Wall clock, `--workers=3`, whole process (`time`), run 2 (final clean re-run) | **11.253s** |
+| All four runs' JSON stats | 20 expected (18 new + 2 setup), 0 unexpected, 0 flaky, 0 skipped every time |
+
+**Measured at "the 3 new files + smoke spec together," per the brief's stated
+minimum** — not the full `walkthrough` project (~721.7s wall per W1's own
+measurement; re-running the whole leg for a ~20-test delta was judged not
+worth the wall-clock cost this task would have spent on it). **This method
+has a known bias, stated rather than absorbed silently**: launching Playwright
+standalone for 4 files pays the same fixed process/browser-launch overhead
+(~5-8s of the ~11-16s above) that a full-leg run amortises across all ~40+
+walkthrough specs. The true marginal cost W3 adds to the leg is very likely
+LOWER than 11-12.5s, but no full-leg before/after delta was taken this task —
+same gap W1 recorded for itself and did not solve either.
+
+**Against the ≤10s share this dispatch names for W3** (owner ruling 6: the
+programme's ≤60s budget holds, W2 already spent ~30s, "restructure the later
+waves rather than raise the ceiling"): **11.0-12.5s is over it, and that is
+reported as measured, not rounded down to fit.** The serial-sum figure
+(10.976s) alone is within a rounding error of the line; both `--workers=3`
+wall-clock figures (11.253s, 12.511s) are past it outright. Cumulative
+programme cost on this trajectory: W1's 15.7s + W2's own "~30s of leg time"
+(`_INDEX.md`'s own figure — 12 tabs-drive-and-persist tests plus Task 5's
++3.3s on the existing `settings-admin` file) + W3's ~11.0-12.5s (this wave's
+gating matrix and mutation sweep) ≈ **57-58.5s of the 60s TOTAL ceiling**,
+with W4-W8 — competition settings, both division surfaces, and a fix wave —
+still ahead. This is the
+same finding W2 already flagged ("on this trajectory the budget will be
+exceeded, probably by W5") landing one wave sooner than predicted, and it is
+put here as a measurement for the owner, not absorbed into a rounded-down
+number to make W3 read as compliant. **W3 itself did do the restructuring the
+ruling asked for** — the whole matrix runs on `APIRequestContext`, and only 8
+of the 18 new tests use the `page` fixture at all (Findings A/B, Case 7-9's
+upsell checks, Case 11/13's UI assertions, support-smoke's first test), plus
+Case 12b, which drives one page manually via its own `browser.newContext()`
+rather than the fixture (it needs a session with no `storageState`). The 9
+tests with no `page` at all (role-gates' three, Finding C, Case 12a/14, and
+support-smoke's last three) never launch a browser page navigation, only
+`APIRequestContext` calls — the cost that remains is inherent to the page
+navigations that ARE load-bearing, not a browser round trip that failed to
+earn its place.
+
+**Closing verification, on the fully-restored tree:** the 4-file run above
+(20 expected, 0 unexpected, 0 flaky, 0 skipped) IS that closing check — run
+after mutant 7's restore, with no further edits after. `git status`/`git diff
+--stat` against `HEAD` are both clean. `seazn-env gate --label stw3` (turbo
+lint+typecheck, 0 cached — a real run): **0 errors, 141 warnings, none in any
+file this task touched** (all seven touched files ended the task byte-
+identical to `HEAD`, confirmed by `diff` against each `cp -p` backup).
+
 ### Environment note
 
 `pnpm install` and `seazn-env up --label stw3 --all` were kicked off at
