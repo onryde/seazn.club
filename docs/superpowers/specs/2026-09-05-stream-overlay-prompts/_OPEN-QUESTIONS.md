@@ -288,6 +288,31 @@ nothing. No proxy branch, no cookie, no environment variable.
 If a demo on production without granting any club the feature is ever wanted,
 option (a) below is the build to revisit.
 
+## ~~Q16~~ ANSWERED 2026-09-06 — one service, with an overlay data path of its own
+
+The owner asked whether the overlay should be its own service, feeding and
+serving its pages alone. Assessment given: **no separate deployment**. The
+overlay has one viewer per match, the club's capture browser, so the load
+argument that normally justifies a split does not exist; a standalone service
+would need its own copy of entitlement resolution, public visibility rules,
+realtime token minting, database credentials, the four dictionaries and the
+sport palettes, plus a second deploy target and its own secrets, to serve one
+page with no customers yet. Owner agreed.
+
+**What was taken from the idea:** the overlay gets its own DATA PATH inside
+the app. `foldFixture(tx, fixtureId)`
+(`apps/web/src/server/engine-db/fold.ts:58`) already folds a fixture's ledger
+server-side and is already called by
+`server/usecases/admin-fixture-config.ts`. An overlay endpoint calls the same
+function and projects an overlay-shaped payload, using the engine rather than
+changing it. This is **option (d) on Q15** and is expected to close it.
+
+**The one real argument for a separate service** — a deploy or restart
+mid-match blanking the overlay on a live broadcast — is answered by page
+resilience (hold the last known score, reconnect quietly, never a white
+frame), not by a second service that has the same deploy problem. Owed as a
+step in the W1 overlay-route task.
+
 ## Q15. The football clock costs an engine change and a golden re-baseline — NEW, blocks Task 0
 
 **This corrects a cost I gave the owner.** When Q1 was put to the owner I
