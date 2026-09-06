@@ -54,16 +54,28 @@ export async function MarketingNav({
               {t(d, l.key)}
             </Link>
           ))}
+          {/* Below `sm` the auth actions live in the mobile panel, not here.
+              At 320 the bar has to hold a 96px wordmark, a 36px menu button
+              and 32px of gutter, which leaves ~150px — and `nav.startFree` is
+              "Commencer gratuitement" in French, ~190px on its own. English
+              was merely the least-broken locale: both buttons were wrapping to
+              three lines and pushing the bar to 83px tall. `whitespace-nowrap`
+              alone would have traded the wrap for horizontal overflow, which
+              is worse. Every marketing page carries its own in-body CTAs, so
+              the header CTA is a convenience here, not the only route. */}
           {user ? (
-            <Link href="/dashboard" className="btn btn-primary text-sm">
+            <Link href="/dashboard" className="btn btn-primary max-sm:hidden text-sm whitespace-nowrap">
               {t(d, "nav.dashboard")} →
             </Link>
           ) : (
             <>
-              <Link href="/login" className="mk-nav-link btn btn-ghost text-sm">
+              <Link href="/login" className="mk-nav-link btn btn-ghost max-sm:hidden text-sm whitespace-nowrap">
                 {t(d, "nav.login")}
               </Link>
-              <Link href="/login?tab=signup" className="mk-nav-cta btn text-sm font-semibold">
+              <Link
+                href="/login?tab=signup"
+                className="mk-nav-cta btn max-sm:hidden text-sm font-semibold whitespace-nowrap"
+              >
                 {t(d, "nav.startFree")}
               </Link>
             </>
@@ -73,6 +85,14 @@ export async function MarketingNav({
             openLabel={t(d, "nav.openMenu")}
             closeLabel={t(d, "nav.closeMenu")}
             night={night}
+            auth={
+              user
+                ? [{ href: "/dashboard", label: `${t(d, "nav.dashboard")} →`, primary: true }]
+                : [
+                    { href: "/login", label: t(d, "nav.login"), primary: false },
+                    { href: "/login?tab=signup", label: t(d, "nav.startFree"), primary: true },
+                  ]
+            }
           />
         </nav>
       </div>
