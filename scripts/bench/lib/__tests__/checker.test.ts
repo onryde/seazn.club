@@ -1095,6 +1095,53 @@ describe("checkBoard — unexercised rules (T7b)", () => {
     expect(unexercisedRules(r)).not.toContain("Rule 2b — blackouts");
   });
 
+  // Fix round 1 — the MIDDLE case: a real, non-empty blackout list whose
+  // scope never matches any PLACED fixture's court. This is the one that
+  // survived unfound the first time, because `blackoutsExercised` was set
+  // before the scope-match check rather than after it.
+  it("rule 2b — unexercised when the declared blackout is scoped to a court no placed fixture occupies", () => {
+    // court-3 is not COURT_1 or COURT_2 — no fixture on `cleanBoard()` is
+    // ever placed there, so `applies` is false for every (fixture, blackout)
+    // pair regardless of the wide time range below. A checker that counted
+    // the loop merely RUNNING (rather than the scope actually matching)
+    // would report this exercised.
+    const r = checkBoard(cleanBoard(), {
+      ...cleanConstraints(),
+      blackouts: [{ courtId: "court-3", from: at(MON, "00:00"), to: at(MON, "23:59") }],
+    });
+    expect(r.clean).toBe(true);
+    expect(unexercisedRules(r)).toContain("Rule 2b — blackouts");
+  });
+
+  // The opposite direction of the same fix: a blackout scoped to a court
+  // that IS occupied, positioned so the fixture correctly avoids it in time.
+  // This is what stops the fix from over-correcting into "only count it when
+  // it fires", which would collapse `unexercised` back into `findings`.
+  it("rule 2b — exercised and clean when the declared blackout is scoped to an occupied court but the fixture avoids it in time", () => {
+    // court-1 is occupied by fx-0 (09:00-09:30) and fx-2 (11:00-11:30); this
+    // blackout (13:00-14:00, same court) never overlaps either in TIME, but
+    // its SCOPE does match — the case that must still read exercised.
+    const r = checkBoard(cleanBoard(), {
+      ...cleanConstraints(),
+      blackouts: [{ courtId: COURT_1, from: at(MON, "13:00"), to: at(MON, "14:00") }],
+    });
+    expect(r.clean).toBe(true);
+    expect(unexercisedRules(r)).not.toContain("Rule 2b — blackouts");
+  });
+
+  // The global case (no `courtId`) applies to every court, so it must read
+  // exercised against any placed fixture — kept as its own case per the fix
+  // brief rather than only inferred from the pre-existing "applies to every
+  // court" finding test above.
+  it("rule 2b — exercised when the blackout has no courtId (global) and a placed fixture is inside it", () => {
+    const r = checkBoard(cleanBoard(), {
+      ...cleanConstraints(),
+      blackouts: [{ from: at(MON, "09:00"), to: at(MON, "09:30") }],
+    });
+    expect(kinds(r.findings)).toContain("inside_blackout");
+    expect(unexercisedRules(r)).not.toContain("Rule 2b — blackouts");
+  });
+
   it("rule 2c — unexercised when every court declares no hours", () => {
     const b = cleanBoard();
     const board: Board = { ...b, courts: b.courts.map((c) => ({ ...c, hours: [], exceptions: [] })) };

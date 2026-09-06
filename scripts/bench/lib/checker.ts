@@ -397,13 +397,17 @@ function windowContainment(
     // `court-windows.ts` both state — so the court test is a MATCH, never a
     // requirement.
     for (const blackout of constraints.blackouts) {
-      // Reaching this line at all means `constraints.blackouts` is non-empty
-      // AND a fixture was placed to test it against — the genuine candidate,
-      // regardless of whether it turns out to apply to THIS fixture's court.
-      blackoutsExercised = true;
       const applies =
         blackout.courtId === undefined || blackout.courtId === p.fixture.courtId;
+      // Gated on SCOPE MATCH first, same as rule 2c and rule 5 in this same
+      // file — a blackout scoped to a court no placed fixture occupies is a
+      // declared constraint with no candidate to compare it against, and
+      // reporting it unexercised is the honest answer, not a missed check.
+      // (Fix round 1: this used to fire before `applies`, on the reasoning
+      // that a fixture existed to test it against — true of the FIXTURE, not
+      // of this BLACKOUT, which was never actually measured against it.)
       if (!applies) continue;
+      blackoutsExercised = true;
       if (!(p.start < blackout.to && blackout.from < p.end)) continue;
       out.push(
         finding(
