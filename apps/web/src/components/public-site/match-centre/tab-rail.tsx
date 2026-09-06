@@ -72,6 +72,33 @@ export interface TabRailProps {
   active: MatchCentreTabIdT;
   onChange: (tab: MatchCentreTabIdT) => void;
   dict: PublicDict;
+  /**
+   * R11 fix round, C8 — the "sets" tab's own vocabulary (`doc.sets?.unit`):
+   * "set" (tennis, volleyball, …), "game" (badminton/table tennis — their
+   * OWN table `kind` is still "sets", `lib/public-site.ts`'s
+   * `GAME_UNIT_SPORTS`) or "period" (football, hockey, …). `undefined` for a
+   * document built before this field existed — the load-bearing fallback to
+   * today's fixed "Sets" label (`sets-tab.tsx`'s own note 2 on `unit`).
+   * Ignored for every tab other than "sets".
+   */
+  setsUnit?: "set" | "game" | "period";
+}
+
+// R11 fix round, C8 — keyed by UNIT, never `kind`: a game-unit sport's own
+// `SetsView.kind` is still "sets" (`timeline.test.ts:615`), so `kind` cannot
+// tell "Sets" and "Games" apart. Reuses the SAME words `sets-tab.tsx`'s own
+// panel caption already renders for "sets"/"period" (`matchCentre.sets`/
+// `matchCentre.periods`) — one authority per word, not two dictionary keys
+// that happen to agree today.
+const SETS_TAB_LABEL_KEY: Record<"set" | "game" | "period", string> = {
+  set: "matchCentre.sets",
+  game: "matchCentre.games",
+  period: "matchCentre.periods",
+};
+
+function tabLabelKey(tab: MatchCentreTabIdT, setsUnit: "set" | "game" | "period" | undefined): string {
+  if (tab === "sets" && setsUnit !== undefined) return SETS_TAB_LABEL_KEY[setsUnit];
+  return `matchCentre.tab.${tab}`;
 }
 
 // The BUTTON is the 44px hit target (R11); the pill's visual look lives on
@@ -81,7 +108,7 @@ const ACTIVE_PILL_CLASS = "rounded-full bg-accent px-4 py-1.5 text-sm font-semib
 const INACTIVE_PILL_CLASS =
   "rounded-full px-4 py-1.5 text-sm font-medium text-ink-muted transition hover:bg-accent-soft hover:text-accent-strong";
 
-export function TabRail({ tabs, active, onChange, dict }: TabRailProps) {
+export function TabRail({ tabs, active, onChange, dict, setsUnit }: TabRailProps) {
   const buttonRefs = useRef<Partial<Record<MatchCentreTabIdT, HTMLButtonElement | null>>>({});
 
   // Runs on every `active` change AND on first mount — which is exactly
@@ -149,7 +176,7 @@ export function TabRail({ tabs, active, onChange, dict }: TabRailProps) {
             className={TAB_BUTTON_CLASS}
           >
             <span className={isActive ? ACTIVE_PILL_CLASS : INACTIVE_PILL_CLASS}>
-              {t(dict, `matchCentre.tab.${tab}`)}
+              {t(dict, tabLabelKey(tab, setsUnit))}
             </span>
           </button>
         );

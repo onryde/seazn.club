@@ -2534,6 +2534,7 @@ export type DictionaryKey =
   | "matchCentre.extras"
   | "matchCentre.fallOfWickets"
   | "matchCentre.fallOfWicketsFor"
+  | "matchCentre.games"
   | "matchCentre.goalsByPeriod"
   | "matchCentre.info.addToCalendar"
   | "matchCentre.info.competition"

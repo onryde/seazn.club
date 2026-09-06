@@ -107,7 +107,10 @@ export function MatchCentre({ fixtureId, initial, realtime, dict, tabParam }: Ma
   return (
     <div data-testid="mc-root" className="space-y-4">
       <CourtCard header={doc.header} dict={dict} />
-      <TabRail tabs={doc.tabs} active={active} onChange={onChange} dict={dict} />
+      {/* R11 fix round, C8 — the "sets" tab's label reads the sport's OWN
+          unit (`doc.sets?.unit`: "set"/"game"/"period"), never a fixed
+          word — see `tab-rail.tsx`'s own doc comment. */}
+      <TabRail tabs={doc.tabs} active={active} onChange={onChange} dict={dict} setsUnit={doc.sets?.unit} />
       <div
         role="tabpanel"
         id={`mc-tab-panel-${active}`}

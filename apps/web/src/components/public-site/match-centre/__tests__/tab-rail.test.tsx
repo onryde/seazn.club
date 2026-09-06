@@ -34,10 +34,12 @@
 import { describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import en from "@/dictionaries/en/public.json";
+import fr from "@/dictionaries/fr/public.json";
 import type { Dict } from "@/lib/i18n-constants";
 import { TabRail, scrollActiveTabIntoView } from "../tab-rail";
 
 const dict = en as Dict;
+const frDict = fr as Dict;
 
 it("TabRail renders one role=tab per tab with aria-selected on the active one, inside a focusable, labelled rail", () => {
   const html = renderToStaticMarkup(
@@ -127,6 +129,64 @@ describe("TabRail — accented/quiet pill classes (shipped vocabulary, tabs.tsx:
     // the exact thing P2 rules out ("the pill keeps its look").
     expect(activeButtonClass).not.toContain("bg-accent");
     expect(activeButtonClass).not.toContain("rounded-full");
+  });
+});
+
+// R11 fix round, C8 — `tab-rail.tsx:99` used to label every tab by its ID
+// (`matchCentre.tab.${tab}`), so the "sets" tab always read "Sets" — wrong
+// for a football fixture, whose OWN Sets-tab panel is headed "Goals by
+// period" (`buildSets`'s `kind: "periods"`) and for badminton/table tennis,
+// which score GAMES inside a "sets"-shaped table (`GAME_UNIT_SPORTS`,
+// `lib/public-site.ts`). The label now comes from `setsUnit` — "set" |
+// "game" | "period" — NEVER `kind` (`timeline.test.ts:615`'s own note: a
+// game-unit sport's `kind` is still "sets", so `kind` cannot double as the
+// label). Three cases, one per unit, so a single-branch fix cannot pass.
+describe("TabRail — the 'sets' tab label reads the sport's OWN unit, not a fixed word (R11 fix round, C8)", () => {
+  it("unit 'set' (tennis, volleyball, …) reads 'Sets'", () => {
+    const html = renderToStaticMarkup(
+      <TabRail tabs={["summary", "sets"]} active="sets" onChange={() => {}} dict={dict} setsUnit="set" />,
+    );
+    expect(html).toContain(">Sets<");
+  });
+
+  it("unit 'period' (football, hockey, …) reads 'Periods' — NOT 'Sets'", () => {
+    const html = renderToStaticMarkup(
+      <TabRail tabs={["summary", "sets"]} active="sets" onChange={() => {}} dict={dict} setsUnit="period" />,
+    );
+    expect(html).toContain(">Periods<");
+    expect(html).not.toContain(">Sets<");
+  });
+
+  it("unit 'game' (badminton, table tennis — kind is still 'sets') reads 'Games' — NOT 'Sets'", () => {
+    const html = renderToStaticMarkup(
+      <TabRail tabs={["summary", "sets"]} active="sets" onChange={() => {}} dict={dict} setsUnit="game" />,
+    );
+    expect(html).toContain(">Games<");
+    expect(html).not.toContain(">Sets<");
+  });
+
+  it("no setsUnit (a document built before the field existed) falls back to today's fixed 'Sets' label — the load-bearing fallback", () => {
+    const html = renderToStaticMarkup(
+      <TabRail tabs={["summary", "sets"]} active="sets" onChange={() => {}} dict={dict} />,
+    );
+    expect(html).toContain(">Sets<");
+  });
+
+  it("every OTHER tab's label is unaffected by setsUnit", () => {
+    const html = renderToStaticMarkup(
+      <TabRail tabs={["summary", "timeline", "sets", "info"]} active="summary" onChange={() => {}} dict={dict} setsUnit="period" />,
+    );
+    expect(html).toContain(">Summary<");
+    expect(html).toContain(">Timeline<");
+    expect(html).toContain(">Info<");
+  });
+
+  it("the accessible name (visible text content) localises through the FRENCH dict, not just English", () => {
+    const html = renderToStaticMarkup(
+      <TabRail tabs={["summary", "sets"]} active="sets" onChange={() => {}} dict={frDict} setsUnit="period" />,
+    );
+    expect(html).toContain(`>${frDict["matchCentre.periods"] as string}<`);
+    expect(html).not.toContain(">Periods<");
   });
 });
 
