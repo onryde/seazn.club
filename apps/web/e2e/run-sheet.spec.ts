@@ -1187,3 +1187,112 @@ test("fix round 5: an in-play or settled row's time is not an affordance, but a 
   // affordance is there.
   await expect(page.locator(`[data-fixture-no="${nos[2]}"]`).getByTestId("run-sheet-edit-time")).toHaveCount(1);
 });
+
+// Competition Desk W3 Task 5 — the two-column desktop layout. Owner ruling:
+// "all stage chrome leaves the fixtures sheet" — Tasks 2-4 moved every
+// stage-header action control (Generate/Pair next, Complete, Delete, Add
+// match, Auto-schedule + its blocked-reason line, the unscheduled-count
+// badge) onto `<StageRail>`, but it still rendered crammed into the stage
+// header's own flex row. This task gives it an actual desktop column,
+// `stages-panel.tsx`'s per-stage `<section className="card
+// overflow-hidden">` split into `[data-testid="stage-sheet"]` (information:
+// title/chip/badge, the roster-drift banner, the inline add-match form, the
+// no-fixtures message) and `[data-testid="stage-rail"]` (every action
+// control) via `lg:grid lg:grid-cols-[1fr_280px] lg:gap-6`.
+//
+// Controller ruling (this dispatch): geometry ALONE — "the rail sits to the
+// right of the sheet" — passes on a merely STACKED layout where the rail
+// happens to render last in DOM order and the assertion never runs at a
+// width that would reveal it is actually below, not beside. So this also
+// asserts the sheet subtree contains NONE of the six stage-chrome testids —
+// if a control ever leaked back next to the header (e.g. a future edit
+// re-adds an inline affordance) this reddens even while the two boxes still
+// measure as side by side. `roster-drift-banner`/`roster-drift-rebuild` are
+// DELIBERATELY excluded from the sweep (same ruling): they are per-stage
+// STATE about the fixtures below, not an action on the stage, and stay in
+// the sheet by design — sweeping them up would fail correctly for the wrong
+// reason.
+//
+// Run as an EDITING viewer (also this dispatch's ruling): for a
+// non-editing viewer `<StageRail>` returns `null` outright and two of the
+// six controls legitimately render INLINE in the sheet instead (see
+// stages-panel.tsx's own `!canEdit && unscheduledBadge` / `!canEdit &&
+// courtTagsEditor` fallbacks) — asserting "none in the sheet" for that
+// viewer would be asserting the wrong thing. Every spec in this file
+// already runs as the org owner who created the division through the API
+// under `AUTH_STATE` (`seedRunSheetDivision`'s own `apiJson` calls), so this
+// is already an editing viewer's page with no extra login step needed.
+const STAGE_CHROME_TESTIDS = [
+  "stage-generate",
+  "stage-complete",
+  "stage-delete",
+  "stage-add-match",
+  "stage-auto-schedule",
+  "stage-unscheduled-count",
+] as const;
+
+test("desktop (Task 5): the stage rail sits beside the fixtures sheet, and no stage-chrome control leaks into the sheet", async ({
+  page,
+  request,
+}) => {
+  // The default league stage from `seedRunSheetDivision`: unscheduled
+  // fixtures (nothing scheduled yet), the sole stage (deletable), status
+  // not complete, an adhoc kind (league) — the state that makes every one
+  // of the six testids actually render, so the "none in the sheet" sweep
+  // below witnesses a real move rather than a vacuous scan over controls
+  // nothing ever built.
+  const { divisionId, fixtureIds } = await seedRunSheetDivision(request);
+  expect(fixtureIds.length, "seed produced no fixtures — setup failed, not the layout").toBeGreaterThanOrEqual(1);
+
+  // Fixed viewport, deliberately, rather than trusting the project's own
+  // default: the geometry assertion below has to mean "at 1280", not
+  // "whatever this project happens to be sized at today".
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.goto(await divisionPath(request, divisionId, "?tab=fixtures"));
+
+  const sheet = page.getByTestId("stage-sheet").first();
+  const rail = page.getByTestId("stage-rail").first();
+  await expect(sheet, "stage-sheet did not render — nothing was measured").toBeVisible();
+  await expect(rail, "stage-rail did not render — nothing was measured").toBeVisible();
+
+  const sheetBox = await sheet.boundingBox();
+  const railBox = await rail.boundingBox();
+  console.log("Task 5 geometry — stage-sheet box:", sheetBox, "| stage-rail box:", railBox);
+  expect(sheetBox, "stage-sheet has no box — not laid out").not.toBeNull();
+  expect(railBox, "stage-rail has no box — not laid out").not.toBeNull();
+  expect(
+    railBox!.x,
+    `rail x=${railBox!.x} is not to the right of sheet x=${sheetBox!.x} + width=${sheetBox!.width} (stacked, not two-column)`,
+  ).toBeGreaterThan(sheetBox!.x + sheetBox!.width - 1);
+
+  // PRINT WHAT WAS SEEN beside the gate (_RULES.md): where each of the six
+  // stage-chrome testids actually landed, so a pass here is legible as
+  // "found in the rail, absent from the sheet" and not just a bare boolean.
+  const presence: Record<string, { onPage: number; inRail: number; inSheet: number }> = {};
+  for (const testid of STAGE_CHROME_TESTIDS) {
+    presence[testid] = {
+      onPage: await page.locator(`[data-testid="${testid}"]`).count(),
+      inRail: await rail.locator(`[data-testid="${testid}"]`).count(),
+      inSheet: await sheet.locator(`[data-testid="${testid}"]`).count(),
+    };
+  }
+  console.log("Task 5 stage-chrome testid placement:", JSON.stringify(presence));
+
+  // Non-vacuous sweep: at least one of the six really rendered somewhere on
+  // the page — otherwise "none of them are in the sheet" would be trivially
+  // true of a page that built none of them at all.
+  const totalOnPage = Object.values(presence).reduce((n, p) => n + p.onPage, 0);
+  expect(
+    totalOnPage,
+    "none of the six stage-chrome testids rendered at all — the sweep below would be vacuous",
+  ).toBeGreaterThan(0);
+
+  for (const testid of STAGE_CHROME_TESTIDS) {
+    expect(presence[testid]!.inSheet, `${testid} leaked into the sheet subtree`).toBe(0);
+    // Whatever DID render is fully accounted for inside the rail — never a
+    // third copy sitting somewhere else on the page.
+    expect(presence[testid]!.inRail, `${testid}: rail count does not match page-wide count`).toBe(
+      presence[testid]!.onPage,
+    );
+  }
+});

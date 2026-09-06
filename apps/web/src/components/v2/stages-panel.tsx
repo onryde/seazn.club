@@ -1000,145 +1000,164 @@ export function StagesPanel({ divisionId, divisionSeq, competitionId, orgSlug, c
         return (
           <div key={stage.id} className="space-y-6">
           <section className="card overflow-hidden">
-            <header className="flex flex-wrap items-center gap-3 border-b border-slate-100 px-4 py-3">
-              <h3 className="text-sm font-semibold text-slate-800">
-                {stage.seq}. {stage.name}
-              </h3>
-              <span className="chip">{stage.kind.replace(/_/g, " ")}</span>
-              <span className={`badge ${stageStatusStyle(stage.status)}`}>{stageStatusLabel(msg, stage.status)}</span>
-              <div className="flex-1" />
-              <StageRail
-                stage={stage}
-                canEdit={canEdit}
-                busy={busy}
-                fixtureCount={stageFixtures.length}
-                deletable={deletable}
-                onAct={(stageId, action) => {
-                  void act(stageId, action);
-                }}
-                onDelete={(s) => {
-                  void (async () => {
-                    const ok = await confirmDialog({
-                      title: msg("confirm.deleteStage.title"),
-                      body: msg("confirm.deleteStage.body", { name: s.name }),
-                      confirmLabel: msg("confirm.deleteStage.label"),
-                      tone: "danger",
-                    });
-                    if (ok) void act(s.id, "delete");
-                  })();
-                }}
-                addingTo={addingTo}
-                onToggleAddMatch={(stageId) => setAddingTo(addingTo === stageId ? null : stageId)}
-                adhoc={ADHOC_STAGE_KINDS.has(stage.kind)}
-                // #622 — court tags editor moves onto the rail (Task 3). Stays
-                // constructed HERE, not inside StageRail: it reads
-                // `courtTagSuggestions` off this panel's own `venues` prop, and
-                // the rail keeps owning no data of its own (see stage-rail.tsx's
-                // own comment on why). `StageRail` only actually renders this
-                // slot when `canEdit` is true (its own early-return guard) — the
-                // `!canEdit` inline placement below is what a non-editing viewer
-                // sees instead.
-                courtTagsSlot={courtTagsEditor}
-                unscheduledBadgeSlot={unscheduledBadge}
-                capacityBlocked={capacityBlocked}
-                onAutoSchedule={(stageId) => void autoScheduleStage(stageId)}
-              />
-            </header>
+            {/* Competition Desk W3 Task 5 — the two-column desktop layout,
+                owner ruling: "all stage chrome leaves the fixtures sheet".
+                `stage-sheet` (information: title/chip/badge, roster-drift
+                banner, the inline add-match form, the no-fixtures message,
+                and — for a non-editing viewer only — the read-only
+                unscheduled badge and court-tags view) sits in column one;
+                `stage-rail` (every action control StageRail renders) sits in
+                column two. Below `lg` this stacks, unstyled — no phone
+                treatment here, that is Task 10's job. `min-w-0` on both grid
+                items: a CSS grid item's default `min-width: auto` lets its
+                own content force the track wider than its share, which is
+                exactly the class of overflow AGENTS.md's `truncate`/`min-w-0`
+                note warns about. */}
+            <div className="lg:grid lg:grid-cols-[1fr_280px] lg:gap-6">
+              <div data-testid="stage-sheet" className="min-w-0">
+                <header className="flex flex-wrap items-center gap-3 border-b border-slate-100 px-4 py-3">
+                  <h3 className="text-sm font-semibold text-slate-800">
+                    {stage.seq}. {stage.name}
+                  </h3>
+                  <span className="chip">{stage.kind.replace(/_/g, " ")}</span>
+                  <span className={`badge ${stageStatusStyle(stage.status)}`}>{stageStatusLabel(msg, stage.status)}</span>
+                </header>
 
-            {/* F3 Task 5 (5a/5b) — the board no longer matches the roster:
-                a withdrawn entrant is still named on a fixture, an added
-                entrant has none yet, or both. Reuses the house "needs
-                attention" treatment (progression-panel.tsx's amber
-                border/background + data-* state hook), never auto-run —
-                the organiser presses Rebuild. Gated the same as Generate/
-                Complete just above: once the stage is complete the rebuild
-                would always refuse (every fixture has a result by then), so
-                there is nothing actionable left to show. */}
-            {canEdit && stage.status !== "complete" && hasDrift && drift && (
-              <div
-                className="border-b border-dashed border-amber-200 bg-amber-50 px-4 py-3"
-                data-testid="roster-drift-banner"
-                data-roster-drift-state={drift.ghosts.length > 0 ? "ghosts" : "unplaced"}
-              >
-                <p className="text-xs font-semibold text-amber-900">
-                  {msg("progression.rosterDrift.heading")}
-                </p>
-                {drift.ghosts.length > 0 && (
-                  <p className="mt-1 text-xs text-amber-800">
-                    {msg("progression.rosterDrift.ghostsLabel")}{" "}
-                    {drift.ghosts.map((e) => e.display_name).join(", ")}
+                {/* F3 Task 5 (5a/5b) — the board no longer matches the roster:
+                    a withdrawn entrant is still named on a fixture, an added
+                    entrant has none yet, or both. Reuses the house "needs
+                    attention" treatment (progression-panel.tsx's amber
+                    border/background + data-* state hook), never auto-run —
+                    the organiser presses Rebuild. Gated the same as Generate/
+                    Complete just above: once the stage is complete the rebuild
+                    would always refuse (every fixture has a result by then), so
+                    there is nothing actionable left to show. */}
+                {canEdit && stage.status !== "complete" && hasDrift && drift && (
+                  <div
+                    className="border-b border-dashed border-amber-200 bg-amber-50 px-4 py-3"
+                    data-testid="roster-drift-banner"
+                    data-roster-drift-state={drift.ghosts.length > 0 ? "ghosts" : "unplaced"}
+                  >
+                    <p className="text-xs font-semibold text-amber-900">
+                      {msg("progression.rosterDrift.heading")}
+                    </p>
+                    {drift.ghosts.length > 0 && (
+                      <p className="mt-1 text-xs text-amber-800">
+                        {msg("progression.rosterDrift.ghostsLabel")}{" "}
+                        {drift.ghosts.map((e) => e.display_name).join(", ")}
+                      </p>
+                    )}
+                    {drift.unplaced.length > 0 && (
+                      <p className="mt-1 text-xs text-amber-800">
+                        {msg("progression.rosterDrift.unplacedLabel")}{" "}
+                        {drift.unplaced.map((e) => e.display_name).join(", ")}
+                      </p>
+                    )}
+                    <button
+                      type="button"
+                      data-testid="roster-drift-rebuild"
+                      disabled={busy !== null}
+                      onClick={() => void rebuildStage(stage.id)}
+                      className="btn btn-danger mt-2 min-h-11 px-3 py-1.5 text-xs"
+                    >
+                      {busy === stage.id
+                        ? msg("progression.rosterDrift.rebuilding")
+                        : msg("progression.rosterDrift.rebuildCta")}
+                    </button>
+                  </div>
+                )}
+
+                {/* PROMPT-66: inline ad-hoc match form (replay / friendly / tie-breaker).
+                    Competition Desk W3 Task 3 — only the OPEN TRIGGER moved onto
+                    StageRail (data-testid="stage-add-match"); this form stays
+                    mounted here, deliberately, because it reads `boardSlotOptions`
+                    below, which also feeds `<RunSheet>` further down this file.
+                    Do not move this form to "finish" the rail move — that would
+                    fork `boardSlotOptions` into two derivations. */}
+                {addingTo === stage.id && (
+                  <AddMatchForm
+                    msg={msg}
+                    stageId={stage.id}
+                    entrantNames={entrantNames}
+                    boardSlotOptions={boardSlotOptions}
+                    onDone={() => {
+                      setAddingTo(null);
+                      router.refresh();
+                    }}
+                    onCancel={() => setAddingTo(null)}
+                  />
+                )}
+
+                {/* Fix round 2 (Ruling T4-B) — a non-editing viewer gets no
+                    StageRail at all (it returns null outright for !canEdit), so
+                    their read of "how many fixtures still need a time" has to
+                    live here instead, where it always did before this task
+                    moved the CTA onto the rail. Same `unscheduledBadge` element
+                    as the rail's slot above — never construct a second one.
+                    Same pattern Ruling T3-A already set for `courtTagsEditor`
+                    just below. */}
+                {!canEdit && unscheduledBadge}
+
+                {/* Every fixture list that used to render here — the round-
+                    grouped non-bracket list AND the bracket stage's own
+                    round-sectioned sibling sections — is gone. Both now render
+                    ONCE, division-wide, in the `<RunSheet>` mounted below the
+                    stage loop (Competition Desk W2, Task 4, steps 5+6). This
+                    card keeps only the "no fixtures generated yet" message. */}
+                {stageFixtures.length === 0 && (
+                  <p className="px-4 py-4 text-sm text-slate-500">
+                    {canEdit ? msg("schedule.noFixtures.can") : msg("schedule.noFixtures.view")}
                   </p>
                 )}
-                {drift.unplaced.length > 0 && (
-                  <p className="mt-1 text-xs text-amber-800">
-                    {msg("progression.rosterDrift.unplacedLabel")}{" "}
-                    {drift.unplaced.map((e) => e.display_name).join(", ")}
-                  </p>
-                )}
-                <button
-                  type="button"
-                  data-testid="roster-drift-rebuild"
-                  disabled={busy !== null}
-                  onClick={() => void rebuildStage(stage.id)}
-                  className="btn btn-danger mt-2 min-h-11 px-3 py-1.5 text-xs"
-                >
-                  {busy === stage.id
-                    ? msg("progression.rosterDrift.rebuilding")
-                    : msg("progression.rosterDrift.rebuildCta")}
-                </button>
+
+                {/* Fix round 1 — a non-editing viewer gets no StageRail at all
+                    (it returns null outright for !canEdit), so their read-only
+                    view of the court-tag requirements has to live here instead,
+                    where it always did before Task 3 moved the editing path onto
+                    the rail. Same `courtTagsEditor` element as the rail's slot
+                    above — never construct a second one. */}
+                {!canEdit && courtTagsEditor}
               </div>
-            )}
 
-            {/* PROMPT-66: inline ad-hoc match form (replay / friendly / tie-breaker).
-                Competition Desk W3 Task 3 — only the OPEN TRIGGER moved onto
-                StageRail (data-testid="stage-add-match"); this form stays
-                mounted here, deliberately, because it reads `boardSlotOptions`
-                below, which also feeds `<RunSheet>` further down this file.
-                Do not move this form to "finish" the rail move — that would
-                fork `boardSlotOptions` into two derivations. */}
-            {addingTo === stage.id && (
-              <AddMatchForm
-                msg={msg}
-                stageId={stage.id}
-                entrantNames={entrantNames}
-                boardSlotOptions={boardSlotOptions}
-                onDone={() => {
-                  setAddingTo(null);
-                  router.refresh();
-                }}
-                onCancel={() => setAddingTo(null)}
-              />
-            )}
-
-            {/* Fix round 2 (Ruling T4-B) — a non-editing viewer gets no
-                StageRail at all (it returns null outright for !canEdit), so
-                their read of "how many fixtures still need a time" has to
-                live here instead, where it always did before this task
-                moved the CTA onto the rail. Same `unscheduledBadge` element
-                as the rail's slot above — never construct a second one.
-                Same pattern Ruling T3-A already set for `courtTagsEditor`
-                just below. */}
-            {!canEdit && unscheduledBadge}
-
-            {/* Every fixture list that used to render here — the round-
-                grouped non-bracket list AND the bracket stage's own
-                round-sectioned sibling sections — is gone. Both now render
-                ONCE, division-wide, in the `<RunSheet>` mounted below the
-                stage loop (Competition Desk W2, Task 4, steps 5+6). This
-                card keeps only the "no fixtures generated yet" message. */}
-            {stageFixtures.length === 0 && (
-              <p className="px-4 py-4 text-sm text-slate-500">
-                {canEdit ? msg("schedule.noFixtures.can") : msg("schedule.noFixtures.view")}
-              </p>
-            )}
-
-            {/* Fix round 1 — a non-editing viewer gets no StageRail at all
-                (it returns null outright for !canEdit), so their read-only
-                view of the court-tag requirements has to live here instead,
-                where it always did before Task 3 moved the editing path onto
-                the rail. Same `courtTagsEditor` element as the rail's slot
-                above — never construct a second one. */}
-            {!canEdit && courtTagsEditor}
+              <div data-testid="stage-rail" className="min-w-0">
+                <StageRail
+                  stage={stage}
+                  canEdit={canEdit}
+                  busy={busy}
+                  fixtureCount={stageFixtures.length}
+                  deletable={deletable}
+                  onAct={(stageId, action) => {
+                    void act(stageId, action);
+                  }}
+                  onDelete={(s) => {
+                    void (async () => {
+                      const ok = await confirmDialog({
+                        title: msg("confirm.deleteStage.title"),
+                        body: msg("confirm.deleteStage.body", { name: s.name }),
+                        confirmLabel: msg("confirm.deleteStage.label"),
+                        tone: "danger",
+                      });
+                      if (ok) void act(s.id, "delete");
+                    })();
+                  }}
+                  addingTo={addingTo}
+                  onToggleAddMatch={(stageId) => setAddingTo(addingTo === stageId ? null : stageId)}
+                  adhoc={ADHOC_STAGE_KINDS.has(stage.kind)}
+                  // #622 — court tags editor moves onto the rail (Task 3). Stays
+                  // constructed HERE, not inside StageRail: it reads
+                  // `courtTagSuggestions` off this panel's own `venues` prop, and
+                  // the rail keeps owning no data of its own (see stage-rail.tsx's
+                  // own comment on why). `StageRail` only actually renders this
+                  // slot when `canEdit` is true (its own early-return guard) — the
+                  // `!canEdit` inline placement above is what a non-editing viewer
+                  // sees instead.
+                  courtTagsSlot={courtTagsEditor}
+                  unscheduledBadgeSlot={unscheduledBadge}
+                  capacityBlocked={capacityBlocked}
+                  onAutoSchedule={(stageId) => void autoScheduleStage(stageId)}
+                />
+              </div>
+            </div>
           </section>
           </div>
         );
