@@ -70,6 +70,10 @@ import {
 // this file's own former copies are deleted below.
 import { buildRunSheet, isBye, type RunSheetFixture } from "@/lib/run-sheet-groups";
 import { RunSheet, type RunSheetFilter } from "@/components/v2/desk/run-sheet";
+// Competition Desk W3 (Task 2) — the stage rail takes the three header
+// action controls (Generate/Complete/Delete). See stage-rail.tsx's own
+// header for why it stays presentational (props only, no data hook).
+import { StageRail } from "@/components/v2/desk/stage-rail";
 
 type Msg = (key: MessageKey, vars?: Record<string, string | number>) => string;
 
@@ -929,93 +933,40 @@ export function StagesPanel({ divisionId, divisionSeq, competitionId, orgSlug, c
               <span className="chip">{stage.kind.replace(/_/g, " ")}</span>
               <span className={`badge ${stageStatusStyle(stage.status)}`}>{stageStatusLabel(msg, stage.status)}</span>
               <div className="flex-1" />
-              {canEdit && stage.status !== "complete" && (
-                <>
-                  <button
-                    type="button"
-                    disabled={busy !== null}
-                    onClick={() => {
-                      // P6/D4b task B, scope item 2 — REVERSED (fix round 3,
-                      // Critical 1, whole-branch review): this click used to
-                      // be gated behind a "you'll lose N fixtures" confirm
-                      // dialog whenever stageFixtures.length > 0. That
-                      // premise was never checked against the code and is
-                      // false — generateStageFixtures (stages.ts) is
-                      // ADDITIVE ONLY. It builds `byKey` from the stage's
-                      // existing fixtures and inserts only the generated
-                      // rows missing from it (stages.ts:997-1031); any
-                      // existing fixture that no longer matches the current
-                      // rules is left in place, untouched, not discarded.
-                      // The repo's only `delete from fixtures` are
-                      // history.ts's checkpoint restore and a demo seed —
-                      // neither is this code path. So the dialog blocked a
-                      // routine, safe action (an organiser adding a late
-                      // entrant, then clicking Generate again) behind a
-                      // false data-loss warning.
-                      //
-                      // Deliberately NOT replaced with a truthful-but-vague
-                      // "this won't remove stale fixtures" disclaimer either:
-                      // there is no client-side way to tell whether any
-                      // existing fixture actually IS stale (that diff is
-                      // engine-only, server-side, out of this task's scope —
-                      // same reason the old dialog computed a client-side
-                      // "blast radius" instead of the real diff in the first
-                      // place). A disclaimer with no computed fact behind it
-                      // would just be new boilerplate to click through on
-                      // every regenerate, forever, in place of one that
-                      // named specific (if wrong) numbers. Regeneration is
-                      // simply a normal, unguarded action now, same as the
-                      // common first-generate case always was.
-                      void act(stage.id, "generate");
-                    }}
-                    className="btn btn-ghost px-3 py-1.5 text-xs"
-                  >
-                    {busy === stage.id
-                      ? msg("schedule.working")
-                      : stage.kind === "swiss"
-                        ? msg("schedule.pairNext")
-                        : msg("schedule.generate")}
-                  </button>
-                  {ADHOC_STAGE_KINDS.has(stage.kind) && stageFixtures.length > 0 && (
-                    <button
-                      type="button"
-                      disabled={busy !== null}
-                      onClick={() => setAddingTo(addingTo === stage.id ? null : stage.id)}
-                      className="btn btn-ghost px-3 py-1.5 text-xs"
-                    >
-                      {msg("stage.addMatch.button")}
-                    </button>
-                  )}
-                  {stageFixtures.length > 0 && (
-                    <button
-                      type="button"
-                      disabled={busy !== null}
-                      onClick={() => act(stage.id, "complete")}
-                      className="btn btn-primary px-3 py-1.5 text-xs"
-                    >
-                      {msg("schedule.complete")}
-                    </button>
-                  )}
-                </>
-              )}
-              {canEdit && deletable && (
-                <button
-                  type="button"
-                  disabled={busy !== null}
-                  onClick={async () => {
+              <StageRail
+                stage={stage}
+                canEdit={canEdit}
+                busy={busy}
+                fixtureCount={stageFixtures.length}
+                deletable={deletable}
+                onAct={(stageId, action) => {
+                  void act(stageId, action);
+                }}
+                onDelete={(s) => {
+                  void (async () => {
                     const ok = await confirmDialog({
                       title: msg("confirm.deleteStage.title"),
-                      body: msg("confirm.deleteStage.body", { name: stage.name }),
+                      body: msg("confirm.deleteStage.body", { name: s.name }),
                       confirmLabel: msg("confirm.deleteStage.label"),
                       tone: "danger",
                     });
-                    if (ok) void act(stage.id, "delete");
-                  }}
-                  className="btn btn-danger px-3 py-1.5 text-xs"
-                >
-                  {msg("schedule.delete")}
-                </button>
-              )}
+                    if (ok) void act(s.id, "delete");
+                  })();
+                }}
+              />
+              {canEdit &&
+                stage.status !== "complete" &&
+                ADHOC_STAGE_KINDS.has(stage.kind) &&
+                stageFixtures.length > 0 && (
+                  <button
+                    type="button"
+                    disabled={busy !== null}
+                    onClick={() => setAddingTo(addingTo === stage.id ? null : stage.id)}
+                    className="btn btn-ghost px-3 py-1.5 text-xs"
+                  >
+                    {msg("stage.addMatch.button")}
+                  </button>
+                )}
             </header>
 
             {/* F3 Task 5 (5a/5b) — the board no longer matches the roster:
