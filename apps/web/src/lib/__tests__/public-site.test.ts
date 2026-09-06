@@ -9,6 +9,9 @@ import {
   formatMetric,
   setBreakdown,
   stripLiveSetPoints,
+  teamShortOf,
+  personShortCandidates,
+  disambiguatedShorts,
   type StandingsRowLike,
 } from "@/lib/public-site";
 
@@ -337,5 +340,85 @@ describe("competitionChip (spectator status vocabulary)", () => {
     expect(competitionChip("live")).toBe("on-now");
     expect(competitionChip("draft")).toBe("upcoming");
     expect(competitionChip("published")).toBe("upcoming");
+  });
+});
+
+// R11 fix round, C9 — the match-centre court card abbreviates every entrant
+// to three letters. The TEAM rule (`teamShortOf`, unchanged: first three
+// compacted letters of the whole name) already disambiguates in practice
+// (cricket's BLA/COM), but it collided for PERSON entrants: "Player One" and
+// "Player Two" both read "PLA". `personShortCandidates` prefers the surname;
+// `disambiguatedShorts` resolves BOTH sides together, since a single side's
+// name never carries enough information on its own to know it needs to widen.
+describe("teamShortOf / personShortCandidates / disambiguatedShorts (R11 fix round, C9)", () => {
+  it("teamShortOf is unchanged — first three compacted, uppercased letters", () => {
+    expect(teamShortOf("Blazers")).toBe("BLA");
+    expect(teamShortOf("Comets FC")).toBe("COM");
+    expect(teamShortOf("")).toBe("?");
+  });
+
+  it("personShortCandidates prefers the surname first ('Player One' -> 'ONE', not 'PLA')", () => {
+    expect(personShortCandidates("Player One")[0]).toBe("ONE");
+    expect(personShortCandidates("Player Two")[0]).toBe("TWO");
+  });
+
+  it("a single-word name still yields a usable candidate list (no first/last split to draw on)", () => {
+    expect(personShortCandidates("Cher")[0]).toBe("CHE");
+  });
+
+  it("disambiguatedShorts: two PERSON entrants whose first names collide but surnames differ — 'Player One'/'Player Two' -> 'ONE'/'TWO', never both 'PLA'", () => {
+    const [home, away] = disambiguatedShorts(
+      { name: "Player One", isPerson: true },
+      { name: "Player Two", isPerson: true },
+    );
+    expect(home).not.toBe(away);
+    expect(home).toBe("ONE");
+    expect(away).toBe("TWO");
+  });
+
+  // The brief's OWN required case: "include the case where the surnames also
+  // collide, and pin what the code does then". Surname-first candidates
+  // ("SMI"/"SMI") collide too, so the widened rung (initial + 2 letters of
+  // surname) must be what breaks the tie.
+  it("disambiguatedShorts: surnames ALSO collide ('Alice Smith'/'Bob Smith') — widens to initial+surname, still 3 letters, still different", () => {
+    const [home, away] = disambiguatedShorts(
+      { name: "Alice Smith", isPerson: true },
+      { name: "Bob Smith", isPerson: true },
+    );
+    expect(home).not.toBe(away);
+    expect(home).toBe("ASM");
+    expect(away).toBe("BSM");
+    // Each abbreviation is still traceable to its OWN name, not a swap.
+    expect(home.startsWith("A")).toBe(true);
+    expect(away.startsWith("B")).toBe(true);
+  });
+
+  it("disambiguatedShorts: genuinely identical full names on both sides — every candidate exhausted, the positional tie-break still guarantees 'never equal'", () => {
+    const [home, away] = disambiguatedShorts(
+      { name: "John Smith", isPerson: true },
+      { name: "John Smith", isPerson: true },
+    );
+    expect(home).not.toBe(away);
+  });
+
+  it("disambiguatedShorts: TEAM entrants keep today's behaviour unconditionally (out of C9's scope) — no widening even if they collided", () => {
+    const [home, away] = disambiguatedShorts(
+      { name: "Blazers United", isPerson: false },
+      { name: "Blazers Town", isPerson: false },
+    );
+    // Both compact to "BLA" under the unchanged team rule — this is NOT
+    // fixed by C9 (team entrants "keep today's behaviour where it already
+    // disambiguates"); pinned here so a future change to the team rule is a
+    // deliberate decision, not an accidental side effect of this one.
+    expect(home).toBe("BLA");
+    expect(away).toBe("BLA");
+  });
+
+  it("disambiguatedShorts: a PERSON side against a TEAM side (mixed kinds, defensive — does not occur in practice) resolves each independently and still differs when they would otherwise collide", () => {
+    const [home, away] = disambiguatedShorts(
+      { name: "Ben Lane", isPerson: true },
+      { name: "Ben Lane FC", isPerson: false },
+    );
+    expect(home).not.toBe(away);
   });
 });

@@ -430,3 +430,86 @@ export function chipLabelKey(
       ? "chip.finished"
       : "chip.upcoming";
 }
+
+// ---------------------------------------------------------------------------
+// Match-centre entrant abbreviations (R11 fix round, C9). The court card and
+// the timeline/sets-tab chips abbreviate each side to a short label. TEAM
+// entrants keep the existing "first three compacted letters of the whole
+// name" rule unconditionally (it already disambiguates in practice —
+// cricket's BLA/COM — and C9 is scoped to person sports only). PERSON
+// entrants collided under that same rule ("Player One"/"Player Two" both
+// read "PLA"): `personShortCandidates` prefers the surname instead, and
+// `disambiguatedShorts` resolves both sides of a fixture TOGETHER, since a
+// single side's name never carries enough information on its own to know it
+// needs to widen past its first candidate.
+// ---------------------------------------------------------------------------
+
+function compactWord(word: string): string {
+  return word.replace(/[^\p{L}\p{N}]/gu, "").toUpperCase();
+}
+
+/** The existing team-style rule, unchanged by C9: first three compacted
+ *  letters of the whole name ("Blazers" -> "BLA"). */
+export function teamShortOf(name: string): string {
+  const compact = compactWord(name);
+  return compact.length > 0 ? compact.slice(0, 3) : "?";
+}
+
+/**
+ * Ordered, increasingly specific abbreviations for a PERSON's name — surname
+ * first (how a spectator actually tells two players apart), then initial +
+ * surname, widening only as far as needed to disambiguate two entrants that
+ * would otherwise render identically. Never empty.
+ */
+export function personShortCandidates(name: string): string[] {
+  const words = name
+    .trim()
+    .split(/\s+/)
+    .map(compactWord)
+    .filter((w) => w.length > 0);
+  if (words.length === 0) return ["?"];
+  const surname = words[words.length - 1]!;
+  const first = words[0]!;
+  const out: string[] = [];
+  const add = (s: string) => {
+    if (s.length > 0 && !out.includes(s)) out.push(s);
+  };
+  add(surname.slice(0, 3));
+  if (words.length > 1) add(`${first.slice(0, 1)}${surname.slice(0, 2)}`);
+  add(surname.slice(0, 4));
+  if (words.length > 1) add(`${first.slice(0, 2)}${surname.slice(0, 2)}`);
+  add(words.join("").slice(0, 3));
+  add(surname);
+  add(words.join(""));
+  return out.length > 0 ? out : ["?"];
+}
+
+/**
+ * The two sides' court-card abbreviations, resolved TOGETHER: a collision on
+ * one side can only be seen — and broken — by comparing both at once. Team
+ * sides keep today's fixed rule unconditionally (out of C9's scope: "team
+ * entrants keep today's behaviour where it already disambiguates"); a person
+ * side widens through its own candidate ladder until it differs from the
+ * other side. If every candidate is exhausted and the two sides are STILL
+ * equal — the two entrants share the exact same full name, letter for
+ * letter — a positional tie-break keeps the invariant "never equal" intact
+ * even then (still built from each side's own candidate, just no longer
+ * unique to it).
+ */
+export function disambiguatedShorts(
+  a: { name: string; isPerson: boolean },
+  b: { name: string; isPerson: boolean },
+): [string, string] {
+  if (!a.isPerson && !b.isPerson) return [teamShortOf(a.name), teamShortOf(b.name)];
+  const candsA = a.isPerson ? personShortCandidates(a.name) : [teamShortOf(a.name)];
+  const candsB = b.isPerson ? personShortCandidates(b.name) : [teamShortOf(b.name)];
+  const rungs = Math.max(candsA.length, candsB.length);
+  for (let i = 0; i < rungs; i++) {
+    const candA = candsA[Math.min(i, candsA.length - 1)]!;
+    const candB = candsB[Math.min(i, candsB.length - 1)]!;
+    if (candA !== candB) return [candA, candB];
+  }
+  const lastA = candsA[candsA.length - 1]!;
+  const lastB = candsB[candsB.length - 1]!;
+  return [`${lastA}1`, `${lastB}2`];
+}

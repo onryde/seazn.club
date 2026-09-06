@@ -19,6 +19,7 @@ import { resolveVoids, type EventEnvelope } from "@seazn/engine/core";
 import { resolveModule, resolveLatestModule } from "@/server/engine-db/registry";
 import { resolveFixtureCfg } from "@/server/engine-db/fixture-cfg";
 import { resolveVenueTz } from "@/lib/tz";
+import { disambiguatedShorts } from "@/lib/public-site";
 import { resolveEntrantBadge } from "@/lib/entrant-badge";
 import { resolvePersonDisplayName, anyOptedOut } from "@/lib/name-display";
 import { resolveSlotLabel, type SlotLabelLookup } from "@/lib/slot-label";
@@ -120,26 +121,37 @@ async function maskSideNames(
 }
 
 /**
- * A `Side.short` abbreviation — 3 characters, clamped (Task 6 contract note:
- * "Side.short is clamped to 3 characters by the BUILDER; the tile has
- * overflow-hidden"). No `short_name` reaches the public surface today:
- * `team_display_v` HAS one (`teams.short_name`/`clubs.short_name`), but
- * `public_entrants_v`'s `team_display` block (V350) selects only
+ * A `Side.short` abbreviation — 3 characters for a TEAM, clamped (Task 6
+ * contract note: "Side.short is clamped to 3 characters by the BUILDER; the
+ * tile has overflow-hidden"). No `short_name` reaches the public surface
+ * today: `team_display_v` HAS one (`teams.short_name`/`clubs.short_name`),
+ * but `public_entrants_v`'s `team_display` block (V350) selects only
  * `club_id`/`club_name`/`logo_path`/`colors` — never `short_name` — and
  * widening that view is a wider blast radius than this task owns. Derived
  * here from the (already masked) display name instead; re-pin for W2 if a
  * real club/team abbreviation is wanted on the wire.
+ *
+ * R11 fix round, C9 — a PERSON entrant no longer uses this rule alone: two
+ * players ("Player One"/"Player Two") both compacted to "PLA" under it, so
+ * both sides read identically on the court card. `disambiguatedShorts`
+ * (`@/lib/public-site`) resolves BOTH sides together instead, preferring the
+ * surname for a person and widening only as far as needed to differ; team
+ * entrants keep this exact rule, unconditionally, per the brief ("team
+ * entrants keep today's behaviour where it already disambiguates").
  */
-function shortNameOf(name: string): string {
-  const compact = name.replace(/[^\p{L}\p{N}]/gu, "").toUpperCase();
-  return compact.length > 0 ? compact.slice(0, 3) : "?";
+interface SidePre {
+  entrantId: string;
+  name: string;
+  colour: string | null;
+  badgeUrl: string | null;
+  isPerson: boolean;
 }
 
-/** Home/away `Side`s. Handles the bye/TBD case (an entrant id still null —
- *  the same state the fixture page already renders via `resolveSlotLabel`)
- *  without throwing: `buildMatchCentre`'s `MatchCentreHeader.sides` is a
- *  non-nullable tuple, so a scheduled-but-unfilled fixture still needs two
- *  real `Side` objects, never a null program crash. */
+/** Home/away `Side`s (minus `short`, resolved together below). Handles the
+ *  bye/TBD case (an entrant id still null — the same state the fixture page
+ *  already renders via `resolveSlotLabel`) without throwing: a bye/TBD slot
+ *  has no real entrant kind to disambiguate by, so it is treated as a team
+ *  for the abbreviation rule, same as before this fix. */
 async function loadSides(
   sql: Sql,
   fixture: Pick<PublicFixture, "home_entrant_id" | "away_entrant_id" | "home_slot_label" | "away_slot_label">,
@@ -166,32 +178,41 @@ async function loadSides(
   const maskedNames = rows.length > 0 ? await maskSideNames(sql, rows, division) : new Map<string, string>();
   const byId = new Map(rows.map((r) => [r.id, r]));
 
-  const sideOf = (entrantId: string | null, slotLabel: SlotLabel | null): SideT => {
+  const sideOf = (entrantId: string | null, slotLabel: SlotLabel | null): SidePre => {
     if (entrantId === null) {
       const name = resolveSlotLabel(slotLabel, slotLabelLookup, "schedule.tbd");
-      return { entrantId: "", name, short: shortNameOf(name), colour: null, badgeUrl: null };
+      return { entrantId: "", name, colour: null, badgeUrl: null, isPerson: false };
     }
     const row = byId.get(entrantId);
     // Defensive fallback (contract notes: "never a blank row") — an
     // entrant a stale ledger/lineup reference names but the view no longer
     // returns (deleted, or its division/competition dropped out of
     // public/unlisted visibility since the fixture was scored).
-    if (!row) return { entrantId, name: "?", short: "?", colour: null, badgeUrl: null };
+    if (!row) return { entrantId, name: "?", colour: null, badgeUrl: null, isPerson: false };
     const name = maskedNames.get(entrantId) ?? row.display_name;
     const colors = row.team_display?.colors as { home_primary?: string } | null | undefined;
     return {
       entrantId,
       name,
-      short: shortNameOf(name),
       // Ruling 15 — `team_display_v.colors.home_primary`, never `.primary`
       // (a key nothing writes). Passed through as data; the tile rendering
       // ladder belongs to W2.
       colour: colors?.home_primary ?? null,
       badgeUrl: resolveEntrantBadge({ badge_url: row.badge_url, team_logo_path: row.team_display?.logo_path ?? null }),
+      isPerson: row.kind !== "team",
     };
   };
 
-  return [sideOf(fixture.home_entrant_id, fixture.home_slot_label), sideOf(fixture.away_entrant_id, fixture.away_slot_label)];
+  const home = sideOf(fixture.home_entrant_id, fixture.home_slot_label);
+  const away = sideOf(fixture.away_entrant_id, fixture.away_slot_label);
+  // R11 fix round, C9 — resolved TOGETHER, not independently: a collision
+  // can only be seen — and broken — by comparing both sides at once.
+  const [homeShort, awayShort] = disambiguatedShorts(home, away);
+
+  return [
+    { entrantId: home.entrantId, name: home.name, short: homeShort, colour: home.colour, badgeUrl: home.badgeUrl },
+    { entrantId: away.entrantId, name: away.name, short: awayShort, colour: away.colour, badgeUrl: away.badgeUrl },
+  ];
 }
 
 /**
