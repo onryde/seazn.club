@@ -38,11 +38,11 @@
 | 8 dictionaries + coverage test | complete, reviewed; cherry-picked onto the branch as 45ed8c2e9 edd8de9d0 d1c333e5f (result keys by engine METHOD + tie/no_result/draw with `{winner}` `{margin}`; `GLYPH_CLASSES` single source; parity both ways). Branch verified: public-site 545/0, tsc 0, i18n parity OK | branch |
 | 18 pad More sheet + first line e2e | complete, reviewed; cherry-picked as 57793bf53 cab4536d3 c14c76e50 (eight labels ×4 locales; line-entry e2e `test.fixme` until the console mount fix — OWNER DECISION 1 open; public-page assertion owed to Task 15). Branch verified: scorepad 2556/0, engine 400/400, tsc 0 | branch |
 | 9 API + realtime | complete, reviewed; cherry-picked as e5a053034 (`match-centre-load.ts` loader for both call sites; parity test; OpenAPI response schema added). Branch verified: public-site 575/0, tsc 0, parity OK, zero regen drift | branch |
-| 14 page wiring | IN FLIGHT in an isolated lane (reset e5a053034); env t14 (server) for a real browser pass; notes `task-14-contract-notes.md` (toss line, dict threading, BUILDER_ONLY_KEYS) | lane |
+| 14 page wiring | implementer DONE (lane commit 1045e634a in `agent-a7065b4b665e77a7a`; browser pass on a prod build at 3 widths; R10 proven live; `force-dynamic` on the fixture page — ISR trade under review); review IN FLIGHT | lane |
 | 15 walkthrough e2e | not started (owes the public-page assertion of Task 18's enriched line; testids `mc-over-<innings>.<over>`, `mc-ball-<innings>.<over>.<ball>`) | — |
 | 16 gates + R11 visual sign-off + final review + `_INDEX.md` | not started | — |
 | 19 console mount fix (owner ruling 17) | complete, reviewed (approved with owed teardown — confirmed down); cherry-picked as 28d18cce8; mount fix live-proven; the line-entry e2e stays fixme'd until Task 20 | branch |
-| 20 single-aspect player lines (product-owner ruling, same goal as 17) | IN FLIGHT in an isolated lane (reset 28d18cce8); env t20 (server); preferred fix = split `playerLineAction` into batting-only + bowling-only actions; the e2e must pass for real | lane |
+| 20 single-aspect player lines (product-owner ruling, same goal as 17) | implementer DONE (lane commit b1392b06f in `agent-adb26fdffc5e2bfa2`; group-optional fields — the two-action split is blocked by the More sheet's de-dup by event type; e2e 3 passed — first player line ever submitted through the product); review IN FLIGHT | lane |
 
 Integration already done on the branch: lane B (7 commits) and lane C (14 commits) were
 CHERRY-PICKED (never merged — lane branches carry copies of each other's commits), the four
