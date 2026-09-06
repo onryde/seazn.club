@@ -19,7 +19,7 @@ import type { Metadata } from "next";
 import { getPublicFixture } from "@/server/public-site/data";
 import { sportsEventJsonLd } from "@/lib/public-site";
 import { publicThemeStyle } from "@/lib/public-theme";
-import { MatchCentre } from "@/components/public-site/match-centre/match-centre";
+import { MatchCentreWithTabParam } from "@/components/public-site/match-centre/match-centre-with-tab-param";
 import type { LiveFixtureData } from "@/components/public-site/live-score-data";
 import { ShareButton } from "@/components/share-button";
 import { DictProvider } from "@/components/i18n/dict-provider";
@@ -93,21 +93,22 @@ function scoreAndResultFor(matchCentre: MatchCentreDocT, dict: Dict): string | n
   return parts.length > 0 ? parts.join(" · ") : null;
 }
 
-// Task 14 — the page now reads `searchParams` (`?tab=`), which this Next
-// version's own docs (generate-static-params.md: "this allows [it] to
-// validate your route doesn't incorrectly access … searchParams at
-// runtime") flag as incompatible with the ISR shape this page used before
-// (`revalidate = 30` + an empty-array `generateStaticParams`, task-8) — a
-// route declared cacheable-at-build cannot ALSO read a per-request value.
-// Confirmed live: keeping both threw `DYNAMIC_SERVER_USAGE` on every
-// request once `searchParams` was read. `force-dynamic` is the same fix
-// `(public)/…/register/join/page.tsx` already uses for the identical
-// shape (a public page that reads its own `searchParams`); the underlying
-// DB reads stay cached regardless, since `getPublicFixture`'s own
-// `unstable_cache(.... { revalidate: REVALIDATE_FAST })` in `data.ts` is a
-// separate, data-layer cache untouched by this route's own rendering mode.
-export const dynamic = "force-dynamic";
+export const revalidate = 30;
 
+// ISR (task-8): empty-array generateStaticParams is required for on-demand
+// ISR on a dynamic segment in this Next version — see generate-static-params.md.
+export async function generateStaticParams() {
+  return [];
+}
+
+// Task 14d — this page briefly read `searchParams` (`?tab=`) directly and
+// shipped `export const dynamic = "force-dynamic"` to work around the
+// resulting `DYNAMIC_SERVER_USAGE` throw, which broke the ISR contract
+// (task-8) this route is audited against (public-isr-contract.test.ts). The
+// `?tab=` deep link now moves client-side instead — see
+// `match-centre-with-tab-param.tsx` (`useSearchParams` inside a `<Suspense>`
+// boundary) — so this page never touches `searchParams` at all, and stays
+// cacheable exactly like its sibling public pages.
 type Props = {
   params: Promise<{
     orgSlug: string;
@@ -115,7 +116,6 @@ type Props = {
     divisionSlug: string;
     fixtureId: string;
   }>;
-  searchParams: Promise<{ tab?: string }>;
 };
 
 export async function generateMetadata({ params }: Pick<Props, "params">): Promise<Metadata> {
@@ -157,9 +157,8 @@ export async function generateMetadata({ params }: Pick<Props, "params">): Promi
   };
 }
 
-export default async function FixturePage({ params, searchParams }: Props) {
+export default async function FixturePage({ params }: Props) {
   const { orgSlug, competitionSlug, divisionSlug, fixtureId } = await params;
-  const { tab } = await searchParams;
   const data = await getPublicFixture(orgSlug, competitionSlug, divisionSlug, fixtureId);
   if (!data) notFound();
   const { org, competition, division, fixture, entrantNames, realtime } = data;
@@ -272,13 +271,12 @@ export default async function FixturePage({ params, searchParams }: Props) {
             the document's own `header.statusLine` (`CourtCard`), resolved
             through the SAME `dict` every panel gets, so it updates live in
             the viewer's own locale without this page re-rendering. */}
-        <MatchCentre
+        <MatchCentreWithTabParam
           fixtureId={fixture.id}
           initial={initial}
           realtime={realtime}
           dict={dict}
           locale={locale}
-          tabParam={tab ?? null}
         />
       </div>
     </DictProvider>

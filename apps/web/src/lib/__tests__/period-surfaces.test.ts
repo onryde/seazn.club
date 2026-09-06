@@ -74,7 +74,25 @@ describe("nested-kernel public surfaces", () => {
       { home: 7, away: 6, closed: true },
       { home: 3, away: 2, closed: false },
     ]);
-    expect(breakdown?.unit).toBe("Set");
+    // Task 14d — `unit` is a dictionary-KEY suffix ("game"/"set"), not a
+    // display word (`public-site.ts:278-286`); the display word itself comes
+    // from `matchCentre.unit.<unit>`/`matchCentre.col.<unit>` in the
+    // dictionaries (see live-score.test.tsx's render-level assertions for
+    // the actual English/French copy this key resolves to).
+    expect(breakdown?.unit).toBe("set");
+  });
+
+  it("badminton games (a game-unit sport) also ride the shared set breakdown, with the 'game' enum", () => {
+    const badmintonSummary = {
+      headline: "1 — 0 (14–11)",
+      perSide: [{ entrantId: "h" }, { entrantId: "a" }],
+      detail: {
+        sets: [{ home: 21, away: 15, closed: true }],
+      },
+    };
+    const breakdown = setBreakdown(badmintonSummary, "badminton");
+    expect(breakdown?.sets).toEqual([{ home: 21, away: 15, closed: true }]);
+    expect(breakdown?.unit).toBe("game");
   });
 
   it("exposes the serving side for the serve dot", () => {

@@ -238,6 +238,28 @@ describe("LiveScoreBody — SetScoreboard's 'Score by {unit}' heading and column
     expect(html).toContain("Score by game");
     expect(html).toContain("Game 1");
   });
+
+  // Task 14d — the only existing English-locale coverage of the "set" unit
+  // was the negative assertions inside the FRENCH volleyball test above
+  // (`not.toContain("Score by set")`), which pins that French doesn't leak
+  // English but never pins what English itself renders. `setBreakdown`'s
+  // `unit` is now the enum `"set"` (period-surfaces.test.ts), resolved here
+  // through `matchCentre.unit.set` ("set", lower-case — mid-sentence in
+  // "Score by {unit}") and `matchCentre.col.set` ("Set {n}", sentence case —
+  // a column heading) — two separate dictionary keys rather than a runtime
+  // capitalise, mirroring the badminton/"game" test just above.
+  it("volleyball ('set' unit) with no dict prop (the English fallback): heading reads 'Score by set', column reads 'Set 1'", () => {
+    const html = renderToStaticMarkup(
+      <LiveScoreBody
+        data={dataWithSets(twoSets)}
+        entrantNames={twoSideNames}
+        sportKey="volleyball"
+        decidedTemplates={emptyTemplates}
+      />,
+    );
+    expect(html).toContain("Score by set");
+    expect(html).toContain("Set 1");
+  });
 });
 
 describe("LiveScoreBody — the full DB status vocabulary, not just the generic 'Not played'", () => {

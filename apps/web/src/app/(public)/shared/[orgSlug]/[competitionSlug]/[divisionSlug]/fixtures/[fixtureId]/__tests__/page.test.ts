@@ -35,6 +35,18 @@ vi.mock("@/server/public-site/data", () => ({
   getPublicFixture: (...a: unknown[]) => getPublicFixture(...a),
 }));
 
+// Task 14d — the page itself no longer reads `searchParams` (the ISR
+// contract, public-isr-contract.test.ts, forbids it); the `?tab=` deep link
+// is read client-side instead, inside `<MatchCentreWithTabParam>`
+// (`useSearchParams`, next/navigation). `notFound` stays REAL — nothing
+// here exercises the `!data` branch, and a full replacement would silently
+// swallow a future accidental use of it.
+const useSearchParams = vi.fn(() => new URLSearchParams());
+vi.mock("next/navigation", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("next/navigation")>();
+  return { ...actual, useSearchParams: () => useSearchParams() };
+});
+
 const baseData = (
   locale: string,
   fixtureOver: Record<string, unknown> = {},
@@ -225,12 +237,16 @@ function findScript(node: unknown): { props: Record<string, unknown> } | null {
   return findScript(children);
 }
 
-// Task 14 — `searchParams` is now part of `Props` (the `?tab=` param); every
-// existing caller below omits it (an empty object resolves the same
-// `tabParam: null` `MatchCentre` already defaulted to). `matchCentre`/
-// `entrantNamesOver`/`locale` are new, optional, and additive for the same
-// reason — every PRE-EXISTING call site (`render({...fixtureOver})`) keeps
+// Task 14 — `matchCentre`/`entrantNamesOver`/`locale` are new, optional, and
+// additive: every PRE-EXISTING call site (`render({...fixtureOver})`) keeps
 // its exact original behaviour (`baseData`, English, no document).
+//
+// Task 14d — `tab` no longer reaches `FixturePage` itself (it took a
+// `searchParams` prop pre-14d; the page component now takes only `params` —
+// see page.tsx's own history). It's threaded through the `useSearchParams`
+// MOCK instead, so this helper still proves the deep link end-to-end: page
+// → `<MatchCentreWithTabParam>` → `useSearchParams` → the real `<MatchCentre>`
+// tab selection, the same path a real browser takes once hydrated.
 const render = async (
   fixtureOver: Record<string, unknown> = {},
   matchCentre?: MatchCentreDocT,
@@ -243,10 +259,10 @@ const render = async (
       ? baseDataWithMC(locale, matchCentre, fixtureOver, entrantNamesOver)
       : baseData(locale, fixtureOver, entrantNamesOver),
   );
+  useSearchParams.mockReturnValue(new URLSearchParams(tab ? { tab } : {}));
   const { default: FixturePage } = await import("../page");
   return FixturePage({
     params: Promise.resolve({ orgSlug: "test-org", competitionSlug: "test-comp", divisionSlug: "open", fixtureId: "f1" }),
-    searchParams: Promise.resolve(tab ? { tab } : {}),
   });
 };
 
