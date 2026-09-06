@@ -339,6 +339,11 @@ let joinPath = "";
  *  formed team's own page and can never render the "waiting"/deadline
  *  copy this exists to give width coverage to. */
 let soloStatusPath = "";
+/** Task 15 (spectator W1) — the public match-centre fixture page had zero
+ *  width coverage in this file: a band-3 (real `cricket.ball`) fixture, so
+ *  the page renders its Scorecard/Commentary tabs rather than the two-tab
+ *  fallback a bare `core.start` alone would produce. */
+let publicCricketFixturePath = "";
 
 test("setup: public competition with an entrant-ready division", async ({ page, request }) => {
   const comp = await apiJson<{ id: string; slug: string }>(request, "/api/v1/competitions", "POST", { ends_on: "2030-12-31",
@@ -494,6 +499,55 @@ test("setup: public competition with an entrant-ready division", async ({ page, 
   // the real page, and a 404 has no overflow, i.e. exactly the vacuous pass
   // the #349 comment on that test already warns about for six other routes.
   await setBoolEntitlementOverrideSql(org.id, "import.events", true);
+
+  // Task 15 (spectator W1) — a real (band-3) cricket fixture for the public
+  // match-centre page's own width coverage below. `cricket.toss` BEFORE
+  // `core.start` (cricket.ts:3372, "toss must precede core.start" — a
+  // WRONG_PHASE 422 the other way round). One `cricket.ball` event is
+  // enough to give the fold real batting/over data, which is what puts the
+  // Scorecard and Commentary tabs on the page (buildMatchCentre only adds
+  // them once `card.innings[].batting`/`.overs` are non-empty) — a bare
+  // `core.start` alone would render only the two-tab (Summary/Info)
+  // fallback and this route would then cover nothing new.
+  const mcFx = await seedRosteredFixture(request, {
+    label: `Mobile Match Centre ${TAG}`,
+    sportKey: "cricket",
+    variantKey: "t20",
+    home: [{ fullName: `MC Home 1 ${TAG}` }, { fullName: `MC Home 2 ${TAG}` }],
+    away: [{ fullName: `MC Away 1 ${TAG}` }, { fullName: `MC Away 2 ${TAG}` }],
+  });
+  const mcTossState = await apiJson<{ last_seq: number }>(request, `/api/v1/fixtures/${mcFx.fixtureId}/state`);
+  const mcToss = await apiJson(request, `/api/v1/fixtures/${mcFx.fixtureId}/events`, "POST", {
+    expected_seq: mcTossState.data!.last_seq,
+    type: "cricket.toss",
+    payload: { wonBy: mcFx.homeEntrantId, elected: "bat" },
+  });
+  expect(mcToss.status, `cricket.toss -> ${mcToss.status} ${JSON.stringify(mcToss.error)}`).toBeLessThan(300);
+  const mcStartState = await apiJson<{ last_seq: number }>(request, `/api/v1/fixtures/${mcFx.fixtureId}/state`);
+  const mcStart = await apiJson(request, `/api/v1/fixtures/${mcFx.fixtureId}/events`, "POST", {
+    expected_seq: mcStartState.data!.last_seq,
+    type: "core.start",
+    payload: {},
+  });
+  expect(mcStart.status, `core.start -> ${mcStart.status} ${JSON.stringify(mcStart.error)}`).toBeLessThan(300);
+  const mcBallState = await apiJson<{ last_seq: number }>(request, `/api/v1/fixtures/${mcFx.fixtureId}/state`);
+  const mcBall = await apiJson(request, `/api/v1/fixtures/${mcFx.fixtureId}/events`, "POST", {
+    expected_seq: mcBallState.data!.last_seq,
+    type: "cricket.ball",
+    payload: {
+      over: 0,
+      ballInOver: 1,
+      striker: mcFx.personIds[`MC Home 1 ${TAG}`],
+      nonStriker: mcFx.personIds[`MC Home 2 ${TAG}`],
+      bowler: mcFx.personIds[`MC Away 1 ${TAG}`],
+      runs: { bat: 4 },
+      boundary: 4,
+    },
+  });
+  expect(mcBall.status, `cricket.ball -> ${mcBall.status} ${JSON.stringify(mcBall.error)}`).toBeLessThan(300);
+  const mcCompSlug = await apiJson<{ slug: string }>(request, `/api/v1/competitions/${mcFx.competitionId}`);
+  const mcDivSlug = await apiJson<{ slug: string }>(request, `/api/v1/divisions/${mcFx.divisionId}`);
+  publicCricketFixturePath = `/shared/${orgSlug}/${mcCompSlug.data!.slug}/${mcDivSlug.data!.slug}/fixtures/${mcFx.fixtureId}`;
 });
 
 // "load" + a short settle instead of networkidle — the dev server's HMR
@@ -1356,6 +1410,10 @@ test("public surfaces: no horizontal scroll (v3/11 gap 12)", async ({ browser })
       // until it appears here by name, same rule as RS007's two entries
       // just above.
       soloStatusPath,
+      // Task 15 (spectator W1) — the public match-centre fixture page, a
+      // band-3 cricket fixture so the Scorecard/Commentary tabs (not just
+      // the two-tab fallback) are on screen at every width.
+      publicCricketFixturePath,
     ];
     for (const path of routes) {
       // Guards the two RS007 entries: an unset module var would make `goto`
@@ -1385,6 +1443,10 @@ test("public surfaces: no horizontal scroll (v3/11 gap 12)", async ({ browser })
       anon.getByText(/automatically refunded/i),
       "a solo sign-up with a place_by_at set must show the RS012 deadline line",
     ).toBeVisible();
+    // Task 15 — the match centre must actually render (not a 404 or the
+    // no-document fallback, both of which also hold at every width).
+    await anon.goto(publicCricketFixturePath, { waitUntil: "load" });
+    await expect(anon.getByTestId("mc-court-card")).toBeVisible({ timeout: 20_000 });
   } finally {
     await anonCtx.close();
   }
