@@ -40,3 +40,23 @@ Found: Task 2 reviewer, while confirming F1.
 `add-ons-tab.ts:141-142` states "No plan grants unlimited `orgs.max_owned`, so `orgCap === null` means a staff override with a null `int_value`" and uses that to argue the `capReduced` second branch is unreachable. `V393__entitlements_v18.sql:25-26,46-48` falsified this when it added the `enterprise` plan with `orgs.max_owned` unlimited — which is the exact mechanism F1's contradictory copy runs through. The `capReduced` logic itself is still correct (the claim is about reachability, not behavior), so this is documentation-only, but a future session re-deriving F1's cause from this comment would derive it wrong.
 
 **Status:** open, same disposition as F3 — comment-only, fix whenever the file is next touched.
+
+### F5 (real, moderate) — a Stripe outage on `/settings/billing` is indistinguishable from "no customer", and silently drops Cancel's own preconditions
+
+Found: Task 3, `settings-billing-panels.spec.ts`.
+
+`server/usecases/billing-manage.ts:317-319` — `getBillingOverview` ends in a bare `catch { return null; }`, with no log and no distinction between "this group has no Stripe customer" and "Stripe just failed" (outage, rate limit, key rotation). `settings/billing/page.tsx:434` and the surrounding block render cards, invoices, billing address, tax IDs, the interval switcher and `PromoCodeBox` only when `overview` is truthy — but `Cancel subscription` does not need `overview` and stays visible.
+
+So during any Stripe failure, a paying customer opening `/o/{slug}/settings/billing` sees a page that says they have no card on file and no invoices, with nothing indicating anything went wrong, while still being offered Cancel subscription. AGENTS.md failure class 6 — an absent symptom that means suppressed, not safe.
+
+**Reproduction:** seed an org with `setOrgSubscriptionSql(orgId, { plan_key: "pro", status: "active", stripe_subscription_id: "sub_e2e_x" })`, leave `stripe_customer_id` null, open `/o/{slug}/settings/billing` as the payer. Observe: Cancel subscription visible, no promo box, no card section, no invoice list, no error message. The null-customer case (never subscribed to Stripe) is legitimate to show this way; the identical rendering for a genuine Stripe failure is the defect.
+
+**Status:** open, not fixed this wave. `getBillingOverview` should distinguish "no customer" from "fetch failed" (e.g. rethrow or return a tagged error the page can show), and the page should surface a visible error state rather than silently rendering the empty-customer UI. Worth a W8 fix given the money-adjacent surface; an owner call on whether it moves earlier per ruling 7's precedent.
+
+### F6 (real, pre-existing, low/medium) — the cancel dialog and promo box are hardcoded English
+
+Found: Task 3, same spec.
+
+On an otherwise fully-localised surface (everything around them goes through `t(dict, …)`), `billing-manage.tsx` hardcodes: the cancel confirmation dialog's title, body copy, the five `CANCEL_REASONS` options, and its buttons (`:462-537`); and the promo box's "Have a promo code?" trigger, its `aria-label`, button labels, and two error fallbacks (`:887-944`). A Spanish, French, or Dutch payer sees an English cancellation dialog and an English promo box.
+
+**Status:** open, pre-existing (not introduced by W4). Fix is four locale dictionaries plus a `CANCEL_REASONS` key per reason, then `gen-keys`. Flagged rather than fixed this wave — the scope and blast radius (a user-facing money dialog's full copy, ×4 locales) is larger than the small mechanical fixes ruling 7 moved up; better suited to a dedicated task.
