@@ -880,13 +880,17 @@ edit. Same server port (3329) the whole task, all 14 rebuilds — no
 
 ### W3 Task 5 — budget measurement (Step 4)
 
-**18 new walkthrough tests added across Tasks 1-4** — `test(` blocks counted
+**17 new walkthrough tests added across Tasks 1-4** — `test(` blocks counted
 directly, not estimated: `settings-role-gates.spec.ts` (3) +
 `settings-entitlement-gates.spec.ts` (6) + `settings-ownership.spec.ts` (5) +
-the smoke-spec addition, `settings-support-smoke.spec.ts` (4, Task 1's own
-support-module smoke test, `a3430539b`). No other file matching `*smoke*`
-changed in this wave (checked: `git log 997ad225b..HEAD --stat` against both
-`apps/web/e2e/**smoke**` and `apps/web/**/*smoke*`).
+the smoke-spec addition, `settings-support-smoke.spec.ts` (3 new, Task 1's own
+support-module smoke test, `a3430539b`) — **correction (final whole-branch
+review, 2026-09-06): this file's 4th test, "a seeded settings org is Pro,
+reachable, and returns its slot," predates W3 (added in W2's `997ad225b`) and
+was wrongly credited above as new, inflating the original count to 18.** No
+other file matching `*smoke*` changed in this wave (checked: `git log
+997ad225b..HEAD --stat` against both `apps/web/e2e/**smoke**` and
+`apps/web/**/*smoke*`).
 
 Real numbers, `--reporter=json --outputFile`, all four confirmed resolving
 inside this worktree (`.testResults`/`suites[].file` all under
@@ -894,11 +898,11 @@ inside this worktree (`.testResults`/`suites[].file` all under
 
 | Measurement | Result |
 | --- | --- |
-| Serial (`--workers=1`), sum of the 18 tests' own durations | **10.976s** (excludes the 2 shared `auth.setup` deps, 2.343s) |
+| Serial (`--workers=1`), sum of the 18 tests' own durations (17 new + the 1 pre-existing smoke test, see correction above) | **10.976s** (excludes the 2 shared `auth.setup` deps, 2.343s) |
 | Wall clock, `--workers=1`, whole process (`time`) | **16.128s** |
 | Wall clock, `--workers=3`, whole process (`time`), run 1 | **12.511s** |
 | Wall clock, `--workers=3`, whole process (`time`), run 2 (final clean re-run) | **11.253s** |
-| All four runs' JSON stats | 20 expected (18 new + 2 setup), 0 unexpected, 0 flaky, 0 skipped every time |
+| All four runs' JSON stats | 20 expected (17 new + 1 pre-existing + 2 setup), 0 unexpected, 0 flaky, 0 skipped every time |
 
 **Measured at "the 3 new files + smoke spec together," per the brief's stated
 minimum** — not the full `walkthrough` project (~721.7s wall per W1's own
@@ -927,12 +931,13 @@ same finding W2 already flagged ("on this trajectory the budget will be
 exceeded, probably by W5") landing one wave sooner than predicted, and it is
 put here as a measurement for the owner, not absorbed into a rounded-down
 number to make W3 read as compliant. **W3 itself did do the restructuring the
-ruling asked for** — the whole matrix runs on `APIRequestContext`, and only 8
-of the 18 new tests use the `page` fixture at all (Findings A/B, Case 7-9's
-upsell checks, Case 11/13's UI assertions, support-smoke's first test), plus
-Case 12b, which drives one page manually via its own `browser.newContext()`
-rather than the fixture (it needs a session with no `storageState`). The 9
-tests with no `page` at all (role-gates' three, Finding C, Case 12a/14, and
+ruling asked for** — the whole matrix runs on `APIRequestContext`, and only 7
+of the 17 new tests use the `page` fixture at all (Findings A/B, Case 7-9's
+upsell checks, Case 11/13's UI assertions — support-smoke's first test also
+uses `page`, but per the correction above it predates W3 and does not count
+toward this total), plus Case 12b, which drives one page manually via its own
+`browser.newContext()` rather than the fixture (it needs a session with no
+`storageState`). The 9 tests with no `page` at all (role-gates' three, Finding C, Case 12a/14, and
 support-smoke's last three) never launch a browser page navigation, only
 `APIRequestContext` calls — the cost that remains is inherent to the page
 navigations that ARE load-bearing, not a browser round trip that failed to

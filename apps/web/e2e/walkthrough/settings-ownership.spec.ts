@@ -158,6 +158,28 @@ test("Case 11: the last owner cannot leave (409), and the UI shows no Leave cont
   }
 });
 
+test("Case 11b: an ordinary member CAN leave — the negative case's positive pair", async ({
+  browser,
+  request,
+}) => {
+  const org = await seedSettingsOrg(request, { label: "w3-case11b" });
+  const member = await seedMemberIdentity(browser, request, org.orgId, "viewer");
+  try {
+    const leave = await member.request.delete(`/api/orgs/${org.orgId}/members/me`);
+    expect(leave.status(), "an ordinary member should be able to leave").toBe(200);
+
+    // Prove the membership genuinely changed, not just a 200 that changed nothing.
+    const seen = await apiJson<{ user_id: string }[]>(request, `/api/orgs/${org.orgId}/members`);
+    const stillThere = (seen.data ?? []).some((m) => m.user_id === member.userId);
+    expect(stillThere, "the member's row should be gone after leaving").toBe(false);
+  } finally {
+    // member.release() will attempt the same delete again — it's already gone,
+    // and release()'s own delete call is `.catch(() => {})`-guarded, so this is safe.
+    await member.release();
+    await releaseSettingsOrg(request, org);
+  }
+});
+
 // ---------------------------------------------------------------------------
 // Case 12a — delete account while owning an org WITH other members (safe)
 // ---------------------------------------------------------------------------
