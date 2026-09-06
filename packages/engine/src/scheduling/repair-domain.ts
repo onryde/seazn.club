@@ -10,6 +10,9 @@
 // the verifier's.
 import type { Assignment, RuleFixture, VerifyConfig } from "./calendar.ts";
 import { effectiveHard, resolveSelector, scopeCoversFixture, startWindowFor } from "./calendar.ts";
+// THE shared rest resolver (#459). A LEAF module — it imports nothing — so
+// asking it here costs no cycle and no bundle weight.
+import { restFloor } from "./rest-floor.ts";
 import { dayKeyInTz, weekdayOfYmd, ymdAddDays, zonedTimeToUtc } from "./tz.ts";
 
 const MS_PER_MIN = 60_000;
@@ -496,14 +499,28 @@ export function sharesParticipant(a: Assignment, b: Assignment): boolean {
  */
 export function maxSeparationMinutes(config: VerifyConfig): number {
   const c = config.constraints;
-  let minutes = Math.max(config.gapMinutes, config.perEntrantMinRest, c?.restMin ?? 0);
+  // THE shared resolver for every source that does NOT depend on a group —
+  // `perEntrantMinRest`, `restMin`, and `noBackToBack`'s derived
+  // `matchMinutes + gapMinutes` — asked rather than re-folded by hand. This
+  // used to be three separate lines of arithmetic restating `rest-floor.ts`,
+  // which is the second-implementation defect this subsystem keeps producing
+  // (`build.ts`'s `restByDivisionForWire` was the same duplication, and it
+  // silently dropped `restMin` from the CP-SAT wire for a month). A fifth
+  // source added to the resolver now widens this bound with it instead of
+  // quietly under-counting; an under-counting bound is the dangerous
+  // direction, because the pruner drops pairs it cannot reach.
+  //
+  // Called WITHOUT a group ON PURPOSE, and that is why the two loops below
+  // stay: this runs before any pair is resolved, so there is no group to look
+  // up, and `restFloor` skips `restByGroup` entirely when given none. The
+  // per-group entries are therefore UNIONED here — every value any pair could
+  // draw — which is the upper bound this function promises and not something
+  // the per-pair resolver can be asked for.
+  let minutes = Math.max(config.gapMinutes, restFloor(config).minutes);
   // Order-independent: these are maxima, so no Map/Object iteration order
   // reaches the answer.
   for (const v of Object.values(c?.restByGroup ?? {})) minutes = Math.max(minutes, v);
   for (const v of Object.values(config.restByDivision ?? {})) minutes = Math.max(minutes, v);
-  if (c?.noBackToBack === true && config.matchMinutes !== undefined) {
-    minutes = Math.max(minutes, config.matchMinutes + config.gapMinutes);
-  }
   for (const h of effectiveHard(config)) {
     if (h.type === "min_rest_minutes") minutes = Math.max(minutes, h.minutes);
   }

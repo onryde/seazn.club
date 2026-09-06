@@ -235,8 +235,14 @@ export default async function DivisionSchedulePage({
     });
   }
 
-  const frozen = competition.frozen ?? false;
-  const editable = canEdit && !frozen && boardEditable;
+  // `billingFrozen`, never `frozen`: this repo has THREE unrelated freezes and
+  // two of them meet on this page. This one is the org's BILLING freeze
+  // (`assertCompetitionNotFrozen`, competitions.ts:320) — an over-quota org is
+  // read-only. It is NOT `divisions.schedule_locked`, the schedule freeze that
+  // stops a board being edited, which is passed separately as `scheduleLocked`.
+  // Gating a schedule control on this one silently never fires.
+  const billingFrozen = competition.frozen ?? false;
+  const editable = canEdit && !billingFrozen && boardEditable;
 
   return (
     <>
@@ -275,7 +281,7 @@ export default async function DivisionSchedulePage({
 
         {tab === "board" && (
           <>
-            {!boardEditable && canEdit && !frozen && (
+            {!boardEditable && canEdit && !billingFrozen && (
               <div className="mb-4">
                 <UpgradeGate feature="scheduling.board" compact />
               </div>
@@ -303,7 +309,7 @@ export default async function DivisionSchedulePage({
               settings={{ division_id: id, config: settings.config, tz: settings.tz, orgTz }}
               canEdit={editable}
               constraintsAllowed={constraints}
-              canManage={canEdit && !frozen}
+              canManage={canEdit && !billingFrozen}
               aiAllowed={aiAllowed}
               currency={currency}
               competitionStart={competition.starts_on}
@@ -368,7 +374,7 @@ export default async function DivisionSchedulePage({
           })}
           stages={stages.map((s) => ({ id: s.id, name: s.name, seq: s.seq }))}
           hideNames={division.officials_hide_names}
-          canEdit={canEdit && !frozen}
+          canEdit={canEdit && !billingFrozen}
           blackouts={blackouts}
           busyElsewhere={busy}
           venueTz={settings.tz}
@@ -408,7 +414,7 @@ export default async function DivisionSchedulePage({
             division_id: id,
             config: settings.config as Record<string, unknown>,
           }}
-          canEdit={canEdit && !frozen && constraints}
+          canEdit={canEdit && !billingFrozen && constraints}
           orgTz={orgTz}
           // P9 review wave 3, finding #12: same `boardVenues` the board and
           // settings tabs already get above — resolves the blackout scope
@@ -421,7 +427,7 @@ export default async function DivisionSchedulePage({
         <HistoryPanel
           divisionId={id}
           scheduleLocked={division.schedule_locked}
-          canEdit={canEdit && !frozen}
+          canEdit={canEdit && !billingFrozen}
         />
         )}
       </main>

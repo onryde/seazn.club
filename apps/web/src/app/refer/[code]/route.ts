@@ -1,6 +1,5 @@
-import { NextResponse } from "next/server";
 import { REFERRAL_COOKIE, resolveReferralCode } from "@/lib/referral";
-import { baseUrl } from "@/lib/oauth";
+import { redirectLocal } from "@/lib/http";
 
 /**
  * Land a shared referral link (SPEC-5 §2). Always redirects to `/start` — a
@@ -11,11 +10,16 @@ import { baseUrl } from "@/lib/oauth";
  */
 export async function GET(req: Request, { params }: { params: Promise<{ code: string }> }) {
   const { code } = await params;
-  // Redirect against the external base URL, not req.url — behind Fly's proxy
-  // req.url is the internal binding (http://0.0.0.0:3000), which would send a
-  // real browser to an unreachable address. This is the one externally-clicked
-  // URL in the referral feature, so getting the public host right matters.
-  const res = NextResponse.redirect(new URL("/start", baseUrl(req)));
+  // RELATIVE, so there is no host to get right. This comment used to say
+  // "redirect against the external base URL, not req.url" and it had the
+  // diagnosis exactly right — req.url is the internal binding
+  // (http://0.0.0.0:3000), which would send a real browser to an unreachable
+  // address — but `baseUrl(req)` only escapes that when a proxy actually sets
+  // x-forwarded-host or an env override is present. Everywhere else it falls
+  // through to `new URL(req.url).origin` and lands back on the binding. This
+  // is the one externally-clicked URL in the referral feature, so it is
+  // exactly the one that must not depend on that. See redirectLocal.
+  const res = redirectLocal("/start");
 
   const ref = await resolveReferralCode(code);
   if (!ref) return res;

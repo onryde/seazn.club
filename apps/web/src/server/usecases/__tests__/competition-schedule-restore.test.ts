@@ -31,10 +31,12 @@ import { createDivision } from "../divisions";
 import { createEntrants } from "../entrants";
 import { createStages, generateStageFixtures } from "../stages";
 import { createVenue, createCourt } from "../venues";
-import { createCheckpoint } from "../history";
+import { createCheckpoint, setDivisionLocks } from "../history";
 import { applyCompetitionSchedule } from "../competition-schedule-apply";
 import { JOINT_APPLY_EVENT } from "../competition-schedule-ai";
 import { restoreCompetitionSchedule } from "../competition-schedule-restore";
+import { JOINT_UNDO_SUPERSEDED_CODE } from "@/lib/joint-undo";
+import { SCHEDULE_LOCKED_CODE, SCHEDULE_LOCKED_MESSAGE } from "@/lib/schedule-lock";
 import { seedOrg } from "./_seed";
 
 /**
@@ -495,6 +497,68 @@ describe.skipIf(!HAS_DB)("restoreCompetitionSchedule (#386)", () => {
     wireRoundTrip(out);
   }, 120_000);
 
+  it("inherits the frozen-division refusal as a per-division failure, not an abort", async () => {
+    // The joint restore has no freeze guard of its own: it calls
+    // `restoreCheckpoint` per division inside its own try/catch, so a frozen
+    // division arrives here as a `failed[]` entry carrying that usecase's 422
+    // MESSAGE at HTTP 200 with `ok: false`.
+    //
+    // This records the shape rather than deciding it. The sibling joint APPLY
+    // (`competition-schedule-apply.ts`) answers the same condition with a 422
+    // that aborts everything, and the two differ for a reason that is physical:
+    // an apply is ONE transaction over every division, so a refusal really does
+    // write nothing, while each division here rewinds in its own transaction
+    // and a partial outcome is already committed by the time the next division
+    // is refused. A 422 from this endpoint would claim nothing happened when
+    // something did.
+    //
+    // The `reason` is load-bearing on the wire, and the `code` is what is
+    // load-bearing ON SCREEN. The board's joint-undo card used to interpolate
+    // this English sentence into a dictionary placeholder, so a translated card
+    // carried a raw English clause mid-sentence; it now renders a LOCAL
+    // sentence chosen off `SCHEDULE_LOCKED_CODE`, and the reason is what an
+    // UNRECOGNISED refusal falls back to. Dropping the code here makes the
+    // card untranslatable again without any client test noticing, because the
+    // client can only branch on what this envelope carries.
+    //
+    // Both are asserted against `@/lib/schedule-lock`'s own exports rather than
+    // a literal typed here: that constant is the single authority, and a copy
+    // of its sentence in a test goes stale the first time it is reworded.
+    const { auth, competitionId, checkpoints } = await seedAppliedJoint(2);
+    const frozenId = checkpoints[1]!.divisionId;
+    await setDivisionLocks(auth, frozenId, { schedule_locked: true });
+
+    const out = await restoreCompetitionSchedule(auth, competitionId, {
+      checkpoints: checkpoints.map((c) => ({
+        division_id: c.divisionId,
+        checkpoint_id: c.checkpointId,
+      })),
+      confirm: true,
+    });
+
+    expect(out.ok).toBe(false);
+    expect(out.restored).toHaveLength(1);
+    expect(out.restored[0]!.division_id).toBe(checkpoints[0]!.divisionId);
+    expect(out.failed).toHaveLength(1);
+    expect(out.failed[0]!.division_id).toBe(frozenId);
+    expect(out.failed[0]!.reason).toBe(SCHEDULE_LOCKED_MESSAGE);
+    expect(out.failed[0]!.code, "the refusal's machine-readable half was dropped").toBe(
+      SCHEDULE_LOCKED_CODE,
+    );
+    // The unfrozen division really was rewound — the freeze is per division and
+    // did not abort its neighbour.
+    expect(unplaced(await slots(checkpoints[0]!.divisionId))).toBe(true);
+    // ...and the frozen one still carries the AI board it was refused from
+    // rewinding, so the console's "still on the AI schedule" copy is true.
+    expect(unplaced(await slots(frozenId))).toBe(false);
+    // `wireRoundTrip` also covers the PUBLISHED contract here, and only because
+    // the assertion above proves `code` is on the payload: it compares
+    // `parse(onWire)` against `onWire`, and zod strips an undeclared key from
+    // the parse alone, so a schema that forgot `code` fails this line rather
+    // than passing quietly.
+    wireRoundTrip(out);
+  }, 120_000);
+
   it("validates against the MOST RECENT apply when the competition has two", async () => {
     const { auth, competitionId, first, second, anchors } = await seedTwoJointApplies();
     // The earlier apply's pair is no longer the restorable set…
@@ -618,6 +682,15 @@ describe.skipIf(!HAS_DB)("restoreCompetitionSchedule (#386)", () => {
     // The reason NAMES what happened, so the organiser is not sent looking for a
     // failure in a division nothing touched.
     expect(out.failed[0]!.reason).toMatch(/newer joint apply/i);
+    // …and it carries the MACHINE-READABLE half beside the sentence. The
+    // sentence is English prose that lands in a translated card's `{reason}`
+    // placeholder; the code is the only thing a client can branch on to say it
+    // in the reader's own language. This refusal never passes through an
+    // `HttpError`, so nothing else on this path can supply it.
+    expect(
+      out.failed[0]!.code,
+      "the superseded refusal reaches the client as English prose and nothing else",
+    ).toBe(JOINT_UNDO_SUPERSEDED_CODE);
     // …and the report is TRUE of the board, asserted BOTH ways: the rewound
     // division really is off the AI schedule and must not be re-listed as
     // outstanding; the untouched one still carries it.
@@ -657,6 +730,12 @@ describe.skipIf(!HAS_DB)("restoreCompetitionSchedule (#386)", () => {
     expect(out.restored).toEqual([]);
     expect(out.failed.map((f) => f.division_id).sort()).toEqual(divisions.map((d) => d.id).sort());
     expect(out.failed.every((f) => /newer joint apply/i.test(f.reason))).toBe(true);
+    // EVERY division, not just the first: the code is pushed inside the loop,
+    // so a guard on one entry cannot see it going missing from the rest.
+    expect(
+      out.failed.map((f) => f.code),
+      "a superseded division reached the client with no code",
+    ).toEqual(out.failed.map(() => JOINT_UNDO_SUPERSEDED_CODE));
     // …and it really did stop before writing: both boards still carry the AI
     // schedule, so the report names exactly what is left.
     for (const d of divisions) expect(unplaced(await slots(d.id))).toBe(false);

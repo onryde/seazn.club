@@ -11,6 +11,8 @@ import { withTenant } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { appendDivisionEvent } from "@/server/engine-db";
+import { SCHEDULE_LOCKED_CODE, SCHEDULE_LOCKED_MESSAGE } from "@/lib/schedule-lock";
+import { divisionLockState } from "./schedule";
 
 const MS_PER_MIN = 60_000;
 
@@ -41,6 +43,20 @@ export async function shiftDivisionSchedule(
     const [division] = await tx<{ seq: number }[]>`
       select seq from divisions where id = ${divisionId}`;
     if (!division) throw new HttpError(404, "division not found");
+    // A bulk shift moves EVERY unlocked fixture on the board and then nulls
+    // `edit_watermark` — which is worse on a frozen division than the writes
+    // its siblings already refuse, because nulling the watermark damages the
+    // rewind the freeze exists to protect. It nonetheless had no freeze check
+    // of any kind, live on POST /api/v1/schedule/shift and behind the
+    // Constraints panel's "Shift whole timetable" button.
+    //
+    // AFTER the existence check, so a division that does not exist still
+    // answers 404 rather than 422 — the ordering every sibling uses. BEFORE
+    // the fixture read, so a frozen board refuses without doing the work.
+    const lockState = await divisionLockState(tx, divisionId);
+    if (lockState.frozen) {
+      throw new HttpError(422, SCHEDULE_LOCKED_MESSAGE, SCHEDULE_LOCKED_CODE);
+    }
     // P9 cutover: court_id, not the frozen court_label — `Assignment`/
     // `ShiftableFixture.court` is a `courts.id` identity throughout this
     // engine (toAssignment, schedule.ts), not a display value: history.ts's

@@ -4,6 +4,12 @@ import { expect, type APIRequestContext, type Locator, type Page, type TestInfo 
 // rather than re-declaring it is what keeps a new rung from needing a sixth
 // hand-maintained list.
 import type { PassKey } from "../src/lib/currency";
+// The one VALUE import from the app, and deliberately so: lib/platform-fee.ts
+// has zero imports of its own (no server-only, no db, no Redis), so nothing of
+// the app's runtime follows it in. Sharing the decoder is the point — the
+// fixture and production must agree on what a fee row says, or the restore
+// hook writes a value production would have refused.
+import { decodeFeePercent } from "../src/lib/platform-fee";
 
 /**
  * v3/02 §4 viewport gate: the page-level rule is "no horizontal scroll,
@@ -404,23 +410,45 @@ export async function eligibilityOverrideAuditRows(
  *  `fixtures` rows are scoped to the ONE division the caller just created —
  *  fine to leave mutated. `organizations.timezone` is not: on the shared Pro
  *  org every parallel spec runs against (auth.setup.ts:78-81) it is a
- *  cross-spec contamination risk. Returns a restore function — call it in a
- *  `finally` — that puts the org's timezone back to whatever it was before
- *  this call, rather than assuming any particular default. */
+ *  cross-spec contamination risk. Returns a restore function that puts the
+ *  org's timezone back to whatever it was before this call, rather than
+ *  assuming any particular default.
+ *
+ *  **Register that restore from a HOOK, never a `try`/`finally`.** A
+ *  Playwright TIMEOUT abandons the test body without running its `finally` —
+ *  only hooks run (measured: an `afterEach` fires, the body's `finally` does
+ *  not) — so a timed-out test would leave the shared org mutated for the rest
+ *  of the run, surfacing as timezone-shaped failures in unrelated spec files.
+ *
+ *  **And `registerRestore` closes the last window inside this helper.** The
+ *  returned closure only exists once this function RESOLVES, so a timeout
+ *  landing between the UPDATE below and that return used to leak with nothing
+ *  registered anywhere. `registerRestore` is called with the undo AFTER the
+ *  previous value is read and BEFORE anything is written, so from the first
+ *  moment the column can be dirty, the caller already holds its undo. The
+ *  return value is unchanged, so callers that do not pass it are unaffected
+ *  (they keep the narrower guarantee). */
 export async function setZoneSplitSql(opts: {
   divisionId: string;
   orgTz: string;
   divisionTz: string;
   fixtureNo: number;
   at: string;
+  /** Called with the restore closure BEFORE the first write — see above. */
+  registerRestore?: (restore: () => Promise<void>) => void;
 }): Promise<() => Promise<void>> {
-  const orgId = await withDb(async (sql) => {
+  const restore = await withDb(async (sql) => {
     const [row] = await sql<{ org_id: string; timezone: string | null }[]>`
       select c.org_id, o.timezone from competitions c
         join divisions d on d.competition_id = c.id
         join organizations o on o.id = c.org_id
        where d.id = ${opts.divisionId}`;
     if (!row) throw new Error(`setZoneSplitSql: no org for division ${opts.divisionId}`);
+    // Built and handed over BEFORE the UPDATE that makes it necessary.
+    const undo = async () => {
+      await withDb((sql2) => sql2`update organizations set timezone = ${row.timezone} where id = ${row.org_id}`);
+    };
+    opts.registerRestore?.(undo);
     await sql`update organizations set timezone = ${opts.orgTz} where id = ${row.org_id}`;
     await sql`insert into schedule_settings (division_id, tz, config)
               values (${opts.divisionId}, ${opts.divisionTz}, '{}'::jsonb)
@@ -429,13 +457,9 @@ export async function setZoneSplitSql(opts: {
                where division_id = ${opts.divisionId} and fixture_no = ${opts.fixtureNo}`;
     await sql`update fixtures set scheduled_at = null
                where division_id = ${opts.divisionId} and fixture_no <> ${opts.fixtureNo}`;
-    return { orgId: row.org_id, previousTimezone: row.timezone };
+    return undo;
   });
-  return async () => {
-    await withDb((sql) =>
-      sql`update organizations set timezone = ${orgId.previousTimezone} where id = ${orgId.orgId}`,
-    );
-  };
+  return restore;
 }
 
 export async function setOrgPlanBySql(
@@ -1096,6 +1120,39 @@ export async function splitOrgIntoOwnGroupSql(orgId: string): Promise<string> {
 }
 
 /**
+ * Return an org-creation SLOT to `ownerUserId`, and take the org out of the
+ * lists the UI reads.
+ *
+ * A soft delete is NOT enough. `assertMayOwnAnotherOrg` (src/lib/auth.ts)
+ * counts `org_members` rows with `role = 'owner'` for the user and applies no
+ * `deleted_at` filter at all, so an org that is soft-deleted still spends one
+ * of the five slots a Pro user gets (`orgs.max_owned`, src/lib/billing-group.ts).
+ * Dropping the owner membership row is what actually frees it.
+ *
+ * Both statements, because either alone leaves a visible wrong state: without
+ * the membership drop the slot leaks and the sixth seed in a leg 402s; without
+ * the soft delete the org keeps appearing in public listings with no owner.
+ *
+ * `ownerUserId` is optional and the `role = 'owner'` fallback is the path
+ * `releaseSettingsOrg` actually takes — `withDb` is module-private here, so a
+ * caller outside this file cannot look the owner up first. Pass it when you
+ * already know it (an org with two owner rows would otherwise lose both).
+ *
+ * Idempotent: a second call matches zero rows in both statements.
+ */
+export async function releaseSeededOrgSql(orgId: string, ownerUserId?: string): Promise<void> {
+  await withDb(async (sql) => {
+    if (ownerUserId) {
+      await sql`delete from org_members where org_id = ${orgId} and user_id = ${ownerUserId}`;
+    } else {
+      await sql`delete from org_members where org_id = ${orgId} and role = 'owner'`;
+    }
+    await sql`update organizations set deleted_at = now()
+               where id = ${orgId} and deleted_at is null`;
+  });
+}
+
+/**
  * Force `quantity_paid` — the seats Stripe has already been billed for.
  *
  * Deliberately settable independently of the org count, because the two
@@ -1178,12 +1235,22 @@ export async function setOwnerStaffRoleSql(
  * superadmin-only, and the one caller that needs this value needs it BEFORE any
  * privilege has been borrowed — a `beforeEach` capturing the row so a hook can
  * put it back after a test that timed out mid-write. Returns `null` when the
- * row is absent or its `value` is not a jsonb NUMBER (a jsonb `null`, string or
- * boolean all decode to something `Number()` reads as a finite 0 — see below),
- * so a caller can decline to "restore" a value
- * that never existed (with no row, `platformFeeDefault()` falls through to the
- * PLATFORM_FEE_PERCENT env and then to 5 — writing one would not be a restore,
- * it would be a new setting).
+ * row is absent, when its `value` is not a jsonb NUMBER (a jsonb `null`, string
+ * or boolean all decode to something `Number()` reads as a finite 0 — see
+ * below), AND — since it adopted the shared decoder — when the number is
+ * outside 0..100. That last case is a narrowing worth stating: this helper used
+ * to accept any finite number, so a row holding 150 was captured and restored
+ * (loudly, via the route's own 422). It now reads as `null`, the caller's
+ * `if (fee !== null)` guard is false, and NOTHING is restored — including the
+ * `console.warn` in that branch, which is unreachable in exactly the case it
+ * would be most wanted. Acceptable because the only writer is bounds-checked,
+ * so an out-of-band row means someone wrote raw SQL; recorded because a silent
+ * skip is a bad failure mode to discover later.
+ *
+ * A caller can therefore decline to "restore" a value that never existed (with
+ * no row, `platformFeeDefault()` falls through to the PLATFORM_FEE_PERCENT env
+ * and then to 5 — writing one would not be a restore, it would be a new
+ * setting).
  *
  * READS ONLY. There is deliberately no SQL writer beside it: `value` is cached
  * in Redis for 300s (`lib/platform-settings.ts`, cache-aside), and
@@ -1196,17 +1263,14 @@ export async function platformFeePercentSql(): Promise<number | null> {
   return withDb(async (sql) => {
     const [row] = await sql<{ value: unknown }[]>`
       select value from platform_settings where key = 'platform_fee_percent'`;
-    const value = row?.value;
-    // Narrowed to a real number BEFORE it is measured, and that is the whole
-    // point. `value` is jsonb, so postgres.js decodes it to whatever JSON says
-    // — `null` for a jsonb `null` row, a string or boolean for a hand-written
-    // one — and `Number(null)`, `Number("")` and `Number(false)` are each a
-    // FINITE `0`. A bare `Number(value)` therefore reads a valueless row as a
-    // perfectly good 0%, the afterEach hook PUTs that 0 back as a "restore",
-    // and the platform's entire cut on entry fees is zeroed through the route
-    // with the cache invalidated: this wave's own headline defect, reproduced
-    // inside the fixture built to prevent it.
-    return typeof value === "number" && Number.isFinite(value) ? value : null;
+    // The SAME decoder production reads this row with (lib/platform-fee.ts),
+    // imported rather than restated. A bare `Number(value)` reads a jsonb
+    // `null`/`false`/`""` row as a finite 0, the afterEach hook PUTs that 0
+    // back as a "restore", and the platform's entire cut on entry fees is
+    // zeroed through the route with the cache invalidated — this wave's own
+    // headline defect, reproduced inside the fixture built to prevent it. A
+    // second copy of the rule here is how the two drift apart.
+    return decodeFeePercent(row?.value);
   });
 }
 

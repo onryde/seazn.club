@@ -121,6 +121,89 @@ function specFiles(): string[] {
   return walk(E2E_DIR, "").sort();
 }
 
+/**
+ * THE WALKTHROUGH INVENTORY — deliberately manual, and deliberately brittle.
+ *
+ * Every other assertion in this file is a COUNT or a SHAPE: "more than 50 spec
+ * files exist", "the walkthrough project selects at least one", "nothing is
+ * orphaned". Not one of them can witness the loss of a NAMED spec. Delete the
+ * two scheduling walkthroughs and the floors read 127 and 20 — still green.
+ * `orphans` cannot see it either: a file that no longer exists cannot be
+ * orphaned. The only remaining signal would be a CI leg that runs on push to
+ * `main` alone, i.e. AFTER the merge that lost the coverage.
+ *
+ * So the walkthrough specs are listed here BY NAME. The brittleness is the
+ * feature, not a cost to be engineered away: deleting a spec reds this test
+ * until somebody consciously deletes its line, and adding one reds it until
+ * somebody consciously adds one. A count floor would buy the convenience back
+ * at the price of the only property worth having — the alternative to a
+ * brittle list is not a robust list, it is silence.
+ *
+ * These are the suite's product-level proofs, and each is expensive to lose
+ * quietly: the money specs are the only places in the suite that move real
+ * value through Stripe, and the rest each play a whole match or a whole
+ * organiser's day by hand.
+ *
+ * SCOPE: existence and SELECTION only. Whether a spec SKIPS at runtime (no
+ * Stripe key, no CONNECT_WALKTHROUGH, no Redis) is a different question and
+ * deliberately not this one's — a spec that skips was still dispatched; a spec
+ * that vanished was not.
+ *
+ * Grouped by programme, NOT alphabetically, so a whole programme going missing
+ * reads as a block. Bare filenames; `walkthrough/` is prefixed at the use site.
+ */
+const WALKTHROUGH_SPECS: string[] = [
+  // Scheduling — the organiser's day end to end, and the officials hand-off.
+  "scheduling-officials-handoff.spec.ts",
+  "scheduling-organiser-day.spec.ts",
+
+  // MONEY. The only specs in the suite that put real value through Stripe;
+  // each already degrades to a silent skip without its secrets, so losing the
+  // FILE would look exactly like the skip that CI already tolerates.
+  "registration-connect.spec.ts",
+  "rs007-invite-pay-cancel.spec.ts",
+  "rs007-money-matrix.spec.ts",
+
+  // Registration — the entrant-facing journeys.
+  "rs007-registration-journey.spec.ts",
+  "rs010-registration-cross-flow.spec.ts",
+  "rs011-eligibility-gates.spec.ts",
+  "rs012-solo-signup-pool.spec.ts",
+
+  // ScoringPad v3 — a whole match played by hand, per sport and per decider.
+  "scorepad-v3-badminton-match.spec.ts",
+  "scorepad-v3-boardgame-result.spec.ts",
+  "scorepad-v3-carrom-match.spec.ts",
+  "scorepad-v3-deciders-byhand.spec.ts",
+  "scorepad-v3-deciders-fullmatch.spec.ts",
+  "scorepad-v3-honest-recording.spec.ts",
+  "scorepad-v3-period-pair.spec.ts",
+  "scorepad-v3-r7-console-chrome.spec.ts",
+  "scorepad-v3-tabletennis-match.spec.ts",
+  "scorepad-v3-tennis-mtb.spec.ts",
+  "scorepad-v3-volleyball-match.spec.ts",
+
+  // The organiser desks.
+  "competition-desk-organiser.spec.ts",
+  "settings-admin.spec.ts",
+
+  // Settings W2 — the organisation and news panels, the four people-facing
+  // tabs (team, api, preferences, account), and the five-org support cap.
+  "settings-org-tabs.spec.ts",
+  "settings-people-tabs.spec.ts",
+  "settings-support-smoke.spec.ts",
+
+  // The directory — the organiser's own records, driven through the screens
+  // that own them: club import caps, the import paywall preview, officials'
+  // roles against the upgrade gate, player identity and its duplicate queue,
+  // and a venue carrying three courts.
+  "directory-clubs-import-limits.spec.ts",
+  "directory-import-paywall-preview.spec.ts",
+  "directory-officials-roles.spec.ts",
+  "directory-player-identity.spec.ts",
+  "directory-venues-courts.spec.ts",
+];
+
 afterEach(() => {
   vi.unstubAllEnvs();
   vi.resetModules();
@@ -190,6 +273,43 @@ describe("e2e CI wiring", () => {
       selected.every((f) => f.startsWith("walkthrough/")),
       "the walkthrough project selected something outside e2e/walkthrough/",
     ).toBe(true);
+  });
+
+  // The two assertions the floors above cannot make. See WALKTHROUGH_SPECS for
+  // why the list is manual. Both messages NAME the file: "expected 22, got 21"
+  // sends the reader hunting, which is most of the reason a count floor is not
+  // a substitute for an inventory.
+  it("still has every walkthrough spec the inventory names, and CI still selects it", async () => {
+    const walkthrough = projectNamed(await configFor(undefined), "walkthrough");
+    const present = new Set(specFiles());
+
+    const gone = WALKTHROUGH_SPECS.filter((name) => !present.has(`walkthrough/${name}`));
+    expect(
+      gone,
+      "these specs are named in WALKTHROUGH_SPECS and no longer exist under e2e/walkthrough/. If the deletion was deliberate, delete the line here too. If it was not, this is the coverage loss the inventory exists to announce — nothing else in this file can see it",
+    ).toEqual([]);
+
+    // Existence is not selection: the project is directory-anchored today, but
+    // an explicit per-file testMatch or a new testIgnore would leave these
+    // files on disk and running nowhere — failure mode 1 in this file's header,
+    // one level down.
+    const unselected = WALKTHROUGH_SPECS.filter((name) => !selects(walkthrough, `walkthrough/${name}`));
+    expect(
+      unselected,
+      "these walkthrough specs exist but the `walkthrough` project no longer selects them, so no CI leg runs them",
+    ).toEqual([]);
+  });
+
+  it("names every walkthrough spec on disk in the inventory", () => {
+    const listed = new Set(WALKTHROUGH_SPECS);
+    const unlisted = specFiles()
+      .filter((f) => f.startsWith("walkthrough/"))
+      .map((f) => f.slice("walkthrough/".length))
+      .filter((name) => !listed.has(name));
+    expect(
+      unlisted,
+      "these walkthrough specs are not named in WALKTHROUGH_SPECS. Add each one — a spec absent from the inventory can be deleted later without anything going red, which is the whole defect this list exists to close",
+    ).toEqual([]);
   });
 
   it("names only REAL files in the heavy carve-out", async () => {

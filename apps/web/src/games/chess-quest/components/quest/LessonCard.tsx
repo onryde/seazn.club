@@ -41,14 +41,18 @@ export function LessonCard({
     }
   }
 
+  // Phone order (design of record: "Quest hub on a phone" — Today first): the
+  // actions row moves up under the title with `max-md:order-*`, so Play is on
+  // the first screen before the Learn/Play/Tip copy, which is for the grown-up.
+  // Desktop keeps source order (no `order` applies there).
   return (
-    <div className="rounded-2xl border border-slate-200 bg-white p-5">
-      <span className="text-xs font-semibold uppercase tracking-wide text-(color:--cq-accent-muted)">
+    <div className="flex flex-col rounded-2xl border border-slate-200 bg-white p-5">
+      <span className="text-xs font-semibold uppercase tracking-wide text-(color:--cq-accent-muted) max-md:order-1">
         {land.glyph} {land.name} · Day {dayOf(wk.n)}
       </span>
-      <h2 className="mk-display mt-1 text-2xl font-bold text-(color:--cq-ink)">{wk.title}</h2>
+      <h2 className="mk-display mt-1 text-2xl font-bold text-(color:--cq-ink) max-md:order-2">{wk.title}</h2>
 
-      <dl className="mt-3 flex flex-col gap-2 text-sm">
+      <dl className="mt-3 flex flex-col gap-2 text-sm max-md:order-4">
         <div className="flex gap-3">
           <dt className="w-12 shrink-0 font-bold text-(color:--cq-label)">Learn</dt>
           <dd className="text-slate-600">
@@ -70,7 +74,7 @@ export function LessonCard({
       </dl>
 
       {wk.diagram && diagramPos ? (
-        <div className="mt-4">
+        <div className="mt-4 max-md:order-5">
           <div className="mx-auto max-w-64">
             <Board position={diagramPos} highlights={diagramHl} />
           </div>
@@ -78,11 +82,14 @@ export function LessonCard({
         </div>
       ) : null}
 
-      <div className="mt-4 flex flex-wrap gap-2">
+      {/* `.btn` is 36px tall; on phones this card is the first thing under
+          the thumb (design of record: "Quest hub on a phone" — Today first),
+          so both actions take the 44px minimum. */}
+      <div data-cq-slot="lesson-actions" className="mt-4 flex flex-wrap gap-2 max-md:order-3 max-md:mt-3">
         {wk.game ? (
           <button
             type="button"
-            className="btn btn-primary"
+            className="btn btn-primary max-md:min-h-11"
             onClick={() => onPlay(wk.game as GameId, wk.gameOpts ?? {})}
           >
             {GAME_LABEL[wk.game]}
@@ -90,7 +97,7 @@ export function LessonCard({
         ) : null}
         <button
           type="button"
-          className={isDone ? "btn btn-ghost" : "btn btn-primary"}
+          className={`max-md:min-h-11 ${isDone ? "btn btn-ghost" : "btn btn-primary"}`}
           onClick={(e) => {
             const was = isDone;
             progress.setWeekDone(wk.n, !was);
@@ -105,7 +112,7 @@ export function LessonCard({
       </div>
 
       {isLast ? (
-        <p className="mt-4 rounded-lg bg-(color:--cq-accent-wash) p-3 text-sm text-(color:--cq-ink-muted)">
+        <p className="mt-4 rounded-lg bg-(color:--cq-accent-wash) p-3 text-sm text-(color:--cq-ink-muted) max-md:order-6">
           <b>
             {land.glyph} Level-up check:
           </b>{" "}

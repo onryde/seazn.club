@@ -1,5 +1,50 @@
 import { test, expect, type APIRequestContext } from "@playwright/test";
 import { activeOrg, apiJson, platformFeePercentSql, setOwnerStaffRoleSql } from "../helpers";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+
+/** Banner copy read from the dictionary the page renders from, not retyped
+ *  here — a test carrying its own copy of a string asserts yesterday's wording
+ *  and goes red on a rewrite that broke nothing (this folder's idiom:
+ *  division-delete.spec.ts:19, board-v3.spec.ts:280). */
+const UI_EN: Record<string, string> = JSON.parse(
+  readFileSync(fileURLToPath(new URL("../../src/dictionaries/en/ui.json", import.meta.url)), "utf8"),
+);
+
+/**
+ * One-shot SQL client against the app's schema, for the ONE fixture this file
+ * seeds (a pending `email_change_requests` row) and its restore.
+ *
+ * A local copy of `helpers.ts`'s `withDb` (helpers.ts:295) rather than an
+ * import, because that one is module-private and helpers.ts is owned by
+ * another task in this wave — widening its exports from here would mean two
+ * agents editing one file. Same connection shape, including the two settings
+ * that are not defaults and that a fresh copy gets wrong: the app lives in a
+ * dedicated schema, so unqualified table names resolve only when
+ * `search_path` points there, and a pooled `:6543` URL cannot use prepared
+ * statements.
+ */
+async function withDb<T>(fn: (sql: import("postgres").Sql) => Promise<T>): Promise<T> {
+  const dbUrl = process.env.DATABASE_URL;
+  if (!dbUrl) throw new Error("DATABASE_URL required for direct DB setup in e2e");
+  const { default: postgres } = await import("postgres");
+  const sql = postgres(dbUrl, {
+    connection: { search_path: process.env.DB_SCHEMA ?? "seazn_club" },
+    ssl:
+      process.env.DATABASE_SSL === "disable"
+        ? false
+        : /@(localhost|127\.0\.0\.1)[:/]/.test(dbUrl)
+          ? false
+          : "require",
+    prepare: !dbUrl.includes(":6543"),
+    max: 1,
+  });
+  try {
+    return await fn(sql);
+  } finally {
+    await sql.end();
+  }
+}
 
 /**
  * W1 of the settings walkthrough programme. Complements nothing — this
@@ -409,7 +454,11 @@ test.describe("admin platform settings", () => {
         // platform-settings.ts:64), so a silent round to 3 shows up here.
         //
         // Its LIMIT, stated so nobody over-reads it: that reader is
-        // `Number(value)` plus a 0–100 clamp (platform-settings.ts:48-49). So
+        // `decodeFeePercent(row?.value) ?? envFallback()` (platform-settings.ts,
+        // `platformFeeDefault`). It WAS `Number(value)` plus a 0–100 clamp at
+        // :48-49 until the follow-up wave replaced those two lines, so the
+        // read-back is now type-gated as well as bounded — a pin at the old
+        // line numbers now lands on the comment explaining the change. So
         // this pins what every CONSUMER of the fee gets, which is the thing
         // that matters — not the literal jsonb bytes in the column.
         if (c.status === 200) {
@@ -570,5 +619,344 @@ test.describe("legacy settings redirects", () => {
         `${hop.from} reached ${hop.to} but the page returned HTTP ${landing?.status()} — the query arrived at a dead page`,
       ).toBeLessThan(400);
     }
+  });
+
+  /**
+   * THE PRODUCER, DRIVEN — not a URL this file typed for itself.
+   *
+   * What this replaces, and why the replacement is not cosmetic. Until this
+   * wave the outcome tests opened `/settings?tab=account&email_change=taken`
+   * by hand. That string is EXACTLY what `/api/auth/change-email/confirm`
+   * emits (confirm/route.ts:24-57, all five outcomes), so the test wrote the
+   * producer's output and then asserted the consumer read it — a fixture on
+   * both ends. Rename the param to `email_change_result`, or drop the
+   * `tab=account` half that gates the banner (settings/page.tsx:559 renders it
+   * only under `tab === "account"`), and both tests stayed green while every
+   * real confirmation link in production landed on a bannerless page. That is
+   * the same class of defect the tests were written to catch, one layer up.
+   *
+   * The `invalid` outcome is the one that needs no seeding at all: `if (!row)`
+   * (confirm/route.ts:24) fires for any token the table has never held, so a
+   * single `goto` drives producer -> `/settings` shim -> org-scoped banner and
+   * every hop between them is real.
+   *
+   * PATHNAME AND SEARCH COMPARED AS ONE STRING, deliberately. A regex on
+   * `email_change=invalid` alone survives the mutant that drops `tab=account`;
+   * a regex on `tab=account` alone survives the one that renames the outcome.
+   * The single equality kills both, and it also pins the ORG-SCOPED landing —
+   * i.e. that the legacy shim ran — rather than accepting the intermediate
+   * `/settings` hop.
+   *
+   * AND THE BANNER, because the URL is not the page. `page.goto` returns the
+   * final landing's response, so a 200 that rendered nothing would keep the
+   * URL assertion green; the copy check is what proves the value was USED.
+   *
+   * AND THE OTHER OUTCOME'S ABSENCE, because a banner that renders one fixed
+   * string regardless of the param satisfies any single-copy assertion. The
+   * pair pins that the VALUE arrived, not merely that a banner did. The
+   * `success` copy is the counterpart on purpose: it is the emerald branch
+   * (page.tsx:564) against this one's red, so a mutant that hardcoded either
+   * colour class cannot pass by luck.
+   */
+  test("a bad confirmation link reaches the account banner through the real route", async ({
+    page,
+  }) => {
+    const org = await activeOrg(page);
+    const mine = UI_EN["settings.emailChange.invalid"];
+    const other = UI_EN["settings.emailChange.success"];
+    // Guards the guard: a renamed dictionary key would otherwise make both
+    // copy assertions below compare `undefined` against the page and pass.
+    expect(mine, "settings.emailChange.invalid missing from en/ui.json").toBeTruthy();
+    expect(other, "settings.emailChange.success missing from en/ui.json").toBeTruthy();
+    expect(mine).not.toBe(other);
+
+    // A token the table has never held. Stamped so a rerun cannot collide with
+    // a row an earlier run left behind and turn `invalid` into `expired`.
+    const landing = await page.goto(
+      `/api/auth/change-email/confirm?token=e2e-no-such-token-${Date.now().toString(36)}`,
+      { waitUntil: "load" },
+    );
+    expect(
+      landing?.status(),
+      "the confirmation link landed on a page that returned an error status",
+    ).toBeLessThan(400);
+
+    const landed = new URL(page.url());
+    expect(
+      `${landed.pathname}${landed.search}`,
+      "the confirm route must EMIT the org-scoped account tab carrying its own outcome — this is the URL production sends, not one the test typed",
+    ).toBe(`/o/${org.slug}/settings?tab=account&email_change=invalid`);
+
+    await expect(
+      page.getByText(mine!, { exact: true }),
+      "the invalid banner must render — the route emitted the param but the page ignored it",
+      // The banner is server-rendered, but this is the first paint of a page
+      // reached through two redirects; the budget covers a cold route compile.
+    ).toBeVisible({ timeout: 20_000 });
+    await expect(
+      page.getByText(other!, { exact: true }),
+      "an invalid link is showing the SUCCESS banner",
+    ).toHaveCount(0);
+  });
+
+  /**
+   * THE CASE THE TEST ABOVE CANNOT SEE, and the one that actually happens.
+   *
+   * `/api/auth/change-email/confirm` needs NO session — it acts on the token
+   * alone — and its link is mailed to the user's NEW address, so it is
+   * normally opened in whatever browser the mail client hands it to, with no
+   * `seazn` cookie. The test above runs as the shared signed-in Pro org member
+   * and is structurally blind to that.
+   *
+   * Before this wave the address change COMMITTED and then
+   * `requirePageAuth()`'s bare `redirect("/login")` (page-auth.ts:37) threw the
+   * outcome away — so success, expired and "already in use" were identical
+   * blank pages for exactly the users most likely to see them.
+   *
+   * DRIVEN THROUGH THE PRODUCER, same as above and for the same reason: this
+   * test used to type `/settings?tab=account&email_change=taken` and then
+   * assert `next` came back carrying it, which is satisfied by any shim that
+   * round-trips a string the test invented. Starting at the route means the
+   * `next` asserted below is the producer's own emission, so the two mutants
+   * that this file exists to catch — a renamed outcome and a dropped
+   * `tab=account` — red here as well as in the signed-in test.
+   *
+   * `storageState: { cookies: [], origins: [] }` is load-bearing and NOT
+   * decoration: a bare `browser.newContext()` in this repo inherits the signed-
+   * in state from the `setup` project, which would send this test straight down
+   * the authenticated path and pass while proving nothing. Asserted below by
+   * landing on /login at all — a signed-in context would have been forwarded to
+   * the org-scoped page instead, failing the first expect.
+   */
+  test("an unauthenticated confirmation keeps its outcome across the login hop", async ({
+    browser,
+  }) => {
+    const anon = await browser.newContext({ storageState: { cookies: [], origins: [] } });
+    // Closes a context this test alone owns — no shared row is being restored
+    // here, so Global Constraint 6 (nothing that outlives the test may be
+    // restored in a `finally`) does not bite. The email restore, which IS
+    // shared, lives in the `afterAll` below.
+    try {
+      const page = await anon.newPage();
+      const landing = await page.goto(
+        `/api/auth/change-email/confirm?token=e2e-no-such-token-${Date.now().toString(36)}`,
+        { waitUntil: "load" },
+      );
+      expect(landing?.status()).toBeLessThan(400);
+
+      const landed = new URL(page.url());
+      expect(landed.pathname, "a signed-out visitor must reach the login page").toBe("/login");
+
+      // The whole point: the destination survived the bounce. `next` is
+      // percent-encoded, so decode before comparing rather than asserting on
+      // the encoding, which is not the contract.
+      const next = landed.searchParams.get("next");
+      expect(next, "login was reached but the destination was dropped").toBeTruthy();
+      expect(
+        next,
+        "the email-change outcome did not survive the login hop — the address change committed and the user still cannot be told which outcome it was",
+      ).toBe("/settings?tab=account&email_change=invalid");
+    } finally {
+      await anon.close();
+    }
+  });
+
+  /**
+   * Timeout-independent restore for the ONE test below that writes a row the
+   * whole leg shares.
+   *
+   * `users.email` for the shared Pro account is global state in exactly the way
+   * `platform_settings` is: every project in this run signs in as that account
+   * (`AUTH_STATE = e2e/.auth/pro.json`), and two other walkthrough specs are in
+   * flight beside this file at `--workers=3`. A `finally` inside the test
+   * cannot be the protection — VERIFIED on Playwright 1.61.1 and recorded at
+   * the top of this file: when a test TIMES OUT Playwright does not unwind the
+   * test function, so no `finally` in it runs. `afterAll` does run, and its
+   * awaits complete (Global Constraint 6).
+   *
+   * `afterAll` rather than `afterEach` because this describe's other tests
+   * borrow nothing, and the arming assignment happens inside the one test that
+   * does; a per-test hook would add a DB round trip to all three for no gain.
+   * The seeding test is declared LAST on purpose, so the window in which the
+   * shared account carries a synthetic address is one hook wide.
+   *
+   * Both writes are unconditional on the flags being set, never on what the
+   * test thinks it managed to do — a test killed between the insert and the
+   * redirect has still armed them.
+   *
+   * SQL alone is a COMPLETE restore here, which is worth stating because
+   * `getCurrentUser` memoises the row (`user:<uid>`, 300s TTL, auth.ts:100-108)
+   * and this hook cannot reach that cache. It does not have to: `cacheGet`
+   * fails open to `null` whenever `REDIS_URL` is unset (cache.ts:13-19), and
+   * the e2e leg runs without Redis deliberately (`e2e.yml`:222, "No Redis on
+   * purpose"), so every read of this account goes to the row below. If a Redis
+   * is ever wired into the leg, this hook owes a cache bust too.
+   */
+  let borrowedUserId: string | null = null;
+  let originalEmail: string | null = null;
+  let seededToken: string | null = null;
+
+  test.afterAll(async () => {
+    const userId = borrowedUserId;
+    const email = originalEmail;
+    const token = seededToken;
+    borrowedUserId = null;
+    originalEmail = null;
+    seededToken = null;
+    if (!userId) return;
+    await withDb(async (sql) => {
+      if (email) await sql`update users set email = ${email} where id = ${userId}`;
+      if (token) await sql`delete from email_change_requests where token = ${token}`;
+    });
+  });
+
+  /**
+   * THE OUTCOME THAT MATTERS MOST, and the only one with a side effect.
+   *
+   * `success`, `taken` and `expired` were indistinguishable to the user for as
+   * long as the banner had no producer, and they are the three a real person
+   * actually meets. This drives the happy path end to end: a real
+   * `email_change_requests` row, the real route, the real `/settings` shim, the
+   * real org-scoped banner.
+   *
+   * AND THE ADDRESS ITSELF, which is the assertion the banner cannot make. The
+   * copy check proves the page was TOLD it succeeded; `users.email` proves it
+   * DID. Those come apart in a way that is not hypothetical — the success
+   * branch commits the update and the confirmed flag inside one `sql.begin`
+   * (confirm/route.ts:46-49) and redirects after it, so a transaction that
+   * silently rolled back would still paint the emerald banner. Reading the row
+   * back is the only thing in this file that can see that.
+   *
+   * The new address is a value neither the route nor the fixture could produce
+   * by accident, so `toBe(newEmail)` cannot be satisfied by the row simply
+   * being left alone.
+   */
+  test("a confirmed link commits the new address and shows the success banner", async ({
+    page,
+  }) => {
+    const org = await activeOrg(page);
+    const mine = UI_EN["settings.emailChange.success"];
+    const other = UI_EN["settings.emailChange.invalid"];
+    expect(mine, "settings.emailChange.success missing from en/ui.json").toBeTruthy();
+    expect(other, "settings.emailChange.invalid missing from en/ui.json").toBeTruthy();
+    expect(mine).not.toBe(other);
+
+    // Ask the app who is signed in rather than rebuilding the address from
+    // TAG: TAG is evaluated per PROCESS, so this worker's `proEmail()` names an
+    // account `auth.setup.ts` never created — a `where email = …` seed would
+    // then insert against nobody, or restore nobody.
+    const whoami = await apiJson<{ id: string }>(page.request, "/api/users/me");
+    expect(whoami.status, "whoami failed — is the storageState session live?").toBe(200);
+    const userId = whoami.data?.id;
+    expect(userId, "GET /api/users/me carried no id").toBeTruthy();
+
+    const stamp = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+    const token = `e2e-emailchange-${stamp}`;
+    const newEmail = `e2e-emailchange-${stamp}@example.com`;
+
+    const currentEmail = await withDb(async (sql) => {
+      const [row] = await sql<{ email: string }[]>`
+        select email from users where id = ${userId!}`;
+      return row?.email ?? null;
+    });
+    expect(currentEmail, `no users row for the signed-in account ${userId}`).toBeTruthy();
+
+    // ARM THE RESTORE BEFORE THE WRITE. Nothing that can throw sits between
+    // these three assignments and the insert below, so the `afterAll` can
+    // always put the shared account back — including when this test times out
+    // mid-navigation.
+    borrowedUserId = userId!;
+    originalEmail = currentEmail!;
+    seededToken = token;
+
+    // Mirrors POST /api/auth/change-email (route.ts:31-33) column for column —
+    // the row production writes, not an invented shape.
+    await withDb(
+      (sql) => sql`
+        insert into email_change_requests (user_id, old_email, new_email, token, expires_at)
+        values (${userId!}, ${currentEmail!}, ${newEmail}, ${token},
+                ${new Date(Date.now() + 60 * 60 * 1000).toISOString()})`,
+    );
+
+    const landing = await page.goto(`/api/auth/change-email/confirm?token=${token}`, {
+      waitUntil: "load",
+    });
+    expect(landing?.status()).toBeLessThan(400);
+
+    const landed = new URL(page.url());
+    expect(
+      `${landed.pathname}${landed.search}`,
+      "a valid confirmation must emit the org-scoped account tab carrying email_change=success",
+    ).toBe(`/o/${org.slug}/settings?tab=account&email_change=success`);
+
+    await expect(
+      page.getByText(mine!, { exact: true }),
+      "the success banner must render — the route emitted the param but the page ignored it",
+    ).toBeVisible({ timeout: 20_000 });
+    await expect(
+      page.getByText(other!, { exact: true }),
+      "a confirmed link is showing the INVALID banner",
+    ).toHaveCount(0);
+
+    const committed = await withDb(async (sql) => {
+      const [row] = await sql<{ email: string; confirmed: boolean }[]>`
+        select u.email, r.confirmed
+        from users u join email_change_requests r on r.user_id = u.id
+        where u.id = ${userId!} and r.token = ${token}`;
+      return row ?? null;
+    });
+    expect(
+      committed?.email,
+      "the success banner rendered but users.email never moved — the transaction did not commit",
+    ).toBe(newEmail);
+    expect(
+      committed?.confirmed,
+      "the address changed but the request was left unconfirmed — the same link would work twice",
+    ).toBe(true);
+  });
+
+  /**
+   * THE ORIGIN OF THE REDIRECT, which the two banner tests above cannot see.
+   *
+   * They compare `pathname + search` only, so an absolute Location pointing at
+   * a DIFFERENT HOST satisfies them whenever the browser happens to be on that
+   * host — which it is, locally, because the dev server binds `localhost`. CI
+   * binds `0.0.0.0` (e2e.yml:527 starts `server.js` with no HOSTNAME, and Next
+   * standalone defaults to 0.0.0.0), `req.url` is that INTERNAL BINDING, and
+   * `new URL(path, req.url)` therefore emitted
+   * `http://0.0.0.0:3000/settings?…` while the user sat on
+   * `http://localhost:3000`. The browser withholds the session cookie across
+   * that origin hop, `/settings` sees no session, and every confirmation —
+   * including the successful one that had already committed the new address —
+   * landed on `/login`. Green on this machine, red in CI, and broken for real
+   * behind any reverse proxy.
+   *
+   * So this asserts the property the pathname comparison structurally cannot:
+   * the Location is RELATIVE. Asserted as an exact string rather than a
+   * "starts with /" predicate, because `/` alone is satisfied by a redirect to
+   * the wrong tab or the wrong outcome, and `not.toContain("://")` alone is
+   * satisfied by an empty header.
+   *
+   * `maxRedirects: 0` is load-bearing: following the redirect is precisely
+   * what erases the evidence, since the landing URL is identical either way.
+   */
+  test("every confirm outcome redirects RELATIVE, never at the server's own binding", async ({
+    request,
+  }) => {
+    const res = await request.get(
+      `/api/auth/change-email/confirm?token=e2e-no-such-token-${Date.now().toString(36)}`,
+      { maxRedirects: 0 },
+    );
+    expect(res.status(), "the confirm route must answer with a redirect").toBe(307);
+
+    const location = res.headers()["location"];
+    expect(
+      location,
+      "the confirm route sent no Location header at all",
+    ).toBeTruthy();
+    expect(
+      location,
+      "the Location is ABSOLUTE — it carries the server's own binding, so any deployment whose public origin differs from its bind address sends the user cross-origin and drops their session cookie",
+    ).toBe("/settings?tab=account&email_change=invalid");
   });
 });

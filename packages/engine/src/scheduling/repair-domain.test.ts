@@ -13,6 +13,7 @@ import {
   maxSeparationMinutes,
   type FixtureDomain,
 } from "./repair-domain.ts";
+import { restFloor } from "./rest-floor.ts";
 import { assign, at, BADMINTON, BASE_CONFIG, SOLO } from "./payload-fixtures.ts";
 
 const H = 3_600_000;
@@ -347,6 +348,94 @@ describe("maxSeparationMinutes", () => {
         },
       }),
     ).toBe(45);
+  });
+
+  // THE BOUND MAY NEVER FALL BELOW THE RESOLVER (Task 7). This function is an
+  // UPPER bound and the pruner drops every pair it cannot reach, so a source
+  // missing from the fold does not merely under-report a number — it deletes
+  // constraints from the model. `restFloor` is the single definition of the
+  // three group-independent sources, and this function now asks it instead of
+  // restating the arithmetic; the sweep below is what makes dropping any one
+  // of them red.
+  //
+  // ENUMERATED, one case per source, and in each the source under test is the
+  // BINDING one — a single sample would be satisfied by whichever source
+  // happened to dominate (failure class 7). Expectations come from `restFloor`
+  // itself, never a typed constant, so a change to the resolver moves this
+  // test with it rather than leaving it asserting yesterday's numbers.
+  it("never reports a bound below the shared resolver, for any source that sets it", () => {
+    const cons = (over: Partial<VerifyConfig["constraints"]>): VerifyConfig["constraints"] => ({
+      noBackToBack: false,
+      startWindows: [],
+      fieldFairness: "off",
+      parallelism: "mixed",
+      crossPersonClash: "warn",
+      ...over,
+    });
+    // `gapMinutes: 1` keeps the bound's own floor out of the way, so each row's
+    // answer is genuinely the source named in its label.
+    const base = { ...BASE_CONFIG, matchMinutes: 30, gapMinutes: 1 };
+    const cases: { source: string; config: VerifyConfig }[] = [
+      {
+        source: "perEntrantMinRest",
+        config: { ...base, perEntrantMinRest: 55, constraints: cons({ restMin: 10 }) },
+      },
+      {
+        source: "restMin",
+        config: { ...base, perEntrantMinRest: 10, constraints: cons({ restMin: 65 }) },
+      },
+      {
+        source: "noBackToBack",
+        config: { ...base, perEntrantMinRest: 10, constraints: cons({ noBackToBack: true }) },
+      },
+    ];
+    for (const { source, config } of cases) {
+      const resolved = restFloor(config);
+      // The row really does exercise the source it claims to.
+      expect({ source, winner: resolved.source }).toEqual({ source, winner: source });
+      // And nothing else in this config outranks it, so the bound is exactly
+      // the resolver's answer — an inequality alone would pass on a fold that
+      // over-counts for an unrelated reason.
+      expect({ source, bound: maxSeparationMinutes(config) }).toEqual({
+        source,
+        bound: resolved.minutes,
+      });
+    }
+  });
+
+  // THE TWO SOURCES THE RESOLVER CANNOT SUPPLY HERE, and the reason the loops
+  // over them survive the delegation above. `restFloor` reads `restByGroup`
+  // only through a group, and this bound is computed before any pair exists —
+  // so these unions ARE the only path either field has into it.
+  //
+  // Added because a mutation sweep found both of them unkilled: the case above
+  // this one names `restByGroup: { "pool-a": 35 }` and `restByDivision: { d1:
+  // 50 }`, but its answer is 75 from a typed `min_rest_minutes` rule, so
+  // deleting either loop outright left the whole file green. A guard nothing
+  // kills is not tested — here each field is the STRICTEST thing in its config,
+  // so removing its loop is immediately red.
+  it("unions restByGroup and restByDivision, which no group-less resolver call can reach", () => {
+    const cons = (over: Partial<VerifyConfig["constraints"]>): VerifyConfig["constraints"] => ({
+      noBackToBack: false,
+      startWindows: [],
+      fieldFairness: "off",
+      parallelism: "mixed",
+      crossPersonClash: "warn",
+      ...over,
+    });
+    const base = { ...BASE_CONFIG, matchMinutes: 30, gapMinutes: 1, perEntrantMinRest: 10 };
+
+    const byGroup: VerifyConfig = { ...base, constraints: cons({ restByGroup: { "pool-a": 80 } }) };
+    // The premise: asked WITHOUT a group the resolver cannot see this at all,
+    // so the 80 below can only have come from the union.
+    expect(restFloor(byGroup).minutes).toBe(10);
+    expect(maxSeparationMinutes(byGroup)).toBe(80);
+
+    const byDivision: VerifyConfig = { ...base, constraints: cons({}), restByDivision: { d1: 90 } };
+    // `restByDivision` is not a `restFloor` input at all — it is the verifier's
+    // own per-division map (`pairRestMinutesWith` reads it beside the resolver).
+    expect(restFloor(byDivision).minutes).toBe(10);
+    expect(maxSeparationMinutes(byDivision)).toBe(90);
   });
 });
 

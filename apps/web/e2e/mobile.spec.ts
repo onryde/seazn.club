@@ -657,6 +657,102 @@ test("console routes: no horizontal scroll", async ({ page, request }) => {
 });
 
 /**
+ * Settings W2 task 4 — the org identity row at `/settings?tab=organization`.
+ *
+ * The row exists to say WHICH organisation you are in, and at phone widths it
+ * did not. The name block was `flex-1`, i.e. `flex: 1 1 0%`, so it was the
+ * only child of that row that could yield: the 44px avatar is `shrink-0`, and
+ * the role badge and the org switcher both size to their content. At 320 the
+ * card's inner width is ~240px, those three take nearly all of it, and the
+ * one thing the row is for was left a sliver. `min-w-0` was already present,
+ * so the usual `truncate` diagnosis is NOT the cause here.
+ *
+ * Nothing in `apps/web` vitest can see any of this — that suite is
+ * `environment: "node"`, so it has no layout at all — and the page-level
+ * no-horizontal-scroll audit above passes either way, because a squeezed
+ * `truncate` box produces no page overflow. This is the gate.
+ *
+ * Two assertions, because either alone is satisfiable the wrong way:
+ *
+ *  - the name's RENDERED box is wide enough to read. A reachability check
+ *    ("the name is visible") passes at 38px, which is the defect.
+ *  - the row's COMPOSITION, in both directions: below `md` the chrome sits on
+ *    its own line, at `md` and up it stays on the name's line. That second
+ *    branch is the "≥768 must not change" guard, and the pair together is
+ *    what stops the fix being "make the badge smaller" — a phone view showing
+ *    the same controls at smaller sizes is a groomed shrink.
+ */
+test("settings identity row: the org name keeps a readable share, and the chrome wraps below md", async ({
+  page,
+}) => {
+  const width = projectViewport()?.width ?? 0;
+  const isPhone = width < 768;
+
+  await page.goto("/settings?tab=organization", { waitUntil: "load" });
+  const name = page.getByTestId("org-identity-name");
+  await expect(name).toBeVisible();
+  // A row that renders an empty name would satisfy every box assertion below.
+  await expect(name).not.toHaveText("");
+
+  // The 140px floor is NOT a soft margin, and it is not tightest at the
+  // narrowest width. Measured after the fix: 320→182, 360→222, 375→168,
+  // 390→183, 430→223. 375 sits LOWER than 320 because the badge's 57px still
+  // fits on the first line there and takes 57+12 out of the name's share,
+  // while at 320 it wraps away and gives that space back. So the width with
+  // the least headroom over this floor is 375, not 320 — a change that looks
+  // safe when eyeballed at 320 can breach it at 375 first. Check 375 whenever
+  // anything joins or leaves this row.
+  //
+  // Both halves are SOFT so neither can hide behind the other. A hard first
+  // expectation aborts the test, which is how one half of a two-part gate ends
+  // up never having been watched to fail — failure class 3, an assertion only
+  // ever seen to pass is decoration. Measured 2026-09-05 on the pre-fix bundle:
+  // the width half reported red at all five phone projects (6/46/61/76/116 px)
+  // and the composition half never ran at all, because this expectation stopped
+  // the test first. Soft, they both report on every red, at every width.
+  const box = await name.boundingBox();
+  expect(box, "identity name has no box").not.toBeNull();
+  expect
+    .soft(
+      Math.round(box!.width),
+      `org name box at viewport ${width}px, text ${JSON.stringify(await name.textContent())}`,
+    )
+    .toBeGreaterThan(140);
+
+  // Composition, measured as "do the first and last children of the identity
+  // row share a line" — NOT as a comparison of box sizes. With `items-center`
+  // two children on one flex line always overlap vertically; two children on
+  // different lines never do.
+  const geom = await page.evaluate(() => {
+    const el = document.querySelector<HTMLElement>('[data-testid="org-identity-name"]');
+    const row = el?.parentElement?.parentElement ?? null;
+    if (!row) return null;
+    const kids = Array.from(row.children) as HTMLElement[];
+    const rects = kids.map((k) => k.getBoundingClientRect());
+    const first = rects[0];
+    const last = rects[rects.length - 1];
+    if (!first || !last) return null;
+    return {
+      children: kids.length,
+      sameLine: first.top < last.bottom - 1 && last.top < first.bottom - 1,
+      tops: rects.map((r) => Math.round(r.top)),
+      bottoms: rects.map((r) => Math.round(r.bottom)),
+    };
+  });
+  expect(geom, "identity row not found from the name testid").not.toBeNull();
+  // Pin the shape this measurement assumes: avatar, name block, badge,
+  // switcher. If the row gains or loses a child, `first`/`last` stop meaning
+  // what this test thinks they mean, and it should red rather than drift.
+  expect(geom!.children, "identity row child count").toBe(4);
+  const seen = `tops ${geom!.tops.join(",")} bottoms ${geom!.bottoms.join(",")}`;
+  if (isPhone) {
+    expect.soft(geom!.sameLine, `${width}px: chrome must wrap BELOW the name — ${seen}`).toBe(false);
+  } else {
+    expect.soft(geom!.sameLine, `${width}px: the row must stay on ONE line — ${seen}`).toBe(true);
+  }
+});
+
+/**
  * Minor 2 (fix round H): the COMPETITION DESK had zero automated width
  * coverage. This file carried no `desk-ledger-row` / `desk-needs-you` /
  * `desk-masthead` selector at all, and the desk branch never touched it —
@@ -2646,7 +2742,7 @@ test("P7/D1b: the t20-super8 template creates 3 stages, and Super 8 fixtures res
 
   const superGen = await apiJson<{
     created: number;
-    fixtures: { home_entrant_id: string | null; away_entrant_id: string | null }[];
+    fixtures: { fixture_no: number; home_entrant_id: string | null; away_entrant_id: string | null }[];
   }>(request, `/api/v1/stages/${super8StageId}/generate`, "POST");
   expect(superGen.status, "Super 8 generate").toBeLessThan(300);
   expect(superGen.data!.created, "Super 8 must generate real fixture rows").toBeGreaterThan(0);
@@ -2659,14 +2755,23 @@ test("P7/D1b: the t20-super8 template creates 3 stages, and Super 8 fixtures res
   }
 
   await page.reload({ waitUntil: "load" });
-  const super8Section = page.locator("section.card").filter({
-    has: page.getByRole("heading", { name: /^\d+\.\s*Super 8$/ }),
-  });
-  await expect(super8Section).toBeVisible();
-  const fixtureRows = super8Section.locator("ul li");
+  // Competition Desk W2 (Task 4): fixture rows no longer render inside the
+  // stage's own card — every fixture now renders ONCE, division-wide, in
+  // the run sheet (`<RunSheet>`, mounted once in `stages-panel.tsx`,
+  // outside the per-stage card loop). These Super 8 fixtures are all TBD on
+  // both sides (never explicitly scheduled), so they land wherever the
+  // sheet's grouping puts an untimed OPEN fixture — never assumed here,
+  // located instead by `data-fixture-no`, the one stable per-fixture hook
+  // the sheet carries, fetched from the generate response rather than
+  // guessed at a block or a stage heading's proximity.
+  const fixtureRows = page.locator(
+    superGen.data!.fixtures.map((f) => `[data-fixture-no="${f.fixture_no}"]`).join(", "),
+  );
   await expect(fixtureRows.first()).toBeVisible({ timeout: 15_000 });
   const rowCount = await fixtureRows.count();
-  expect(rowCount, "Super 8 must render its generated fixtures").toBeGreaterThan(0);
+  expect(rowCount, "Super 8 must render every one of its generated fixtures").toBe(
+    superGen.data!.fixtures.length,
+  );
   const rowTexts = await fixtureRows.allTextContents();
   for (const text of rowTexts) {
     // Resolved seed-descriptor text (P6/D4b's slot-label resolver), never a

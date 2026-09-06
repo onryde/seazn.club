@@ -98,6 +98,7 @@ import type postgres from "postgres";
 import { withTenant } from "@/lib/db";
 import { requireFeature } from "@/lib/entitlements";
 import { HttpError } from "@/lib/errors";
+import { SCHEDULE_LOCKED_CODE, scheduleLockedMessageFor } from "@/lib/schedule-lock";
 import { EngineError } from "@seazn/engine/core";
 import { appendDivisionEvent } from "@/server/engine-db";
 import type { AuthCtx } from "@/server/api-v1/auth";
@@ -418,12 +419,15 @@ export async function applyCompetitionSchedule(
       const row = rowById.get(d.division_id)!;
       const lockState = await divisionLockState(tx, d.division_id);
       // A frozen division aborts EVERYTHING, not just its own slice.
+      //
+      // This is the one refusal that cannot use `SCHEDULE_LOCKED_MESSAGE`
+      // verbatim: the caller named a COMPETITION, so "the division schedule is
+      // locked" would not tell them WHICH of the divisions they submitted
+      // stopped the run. It shares the CODE with every sibling and gets its
+      // sentence from `scheduleLockedMessageFor` beside the constant, so the
+      // two still move together and neither is retyped at a call site.
       if (lockState.frozen) {
-        throw new HttpError(
-          422,
-          `the schedule for division "${row.name}" is locked — unlock it to edit`,
-          "SCHEDULE_LOCKED",
-        );
+        throw new HttpError(422, scheduleLockedMessageFor(row.name), SCHEDULE_LOCKED_CODE);
       }
       const settings = await loadSettings(tx, d.division_id);
       const fixtures = await divisionFixtures(tx, d.division_id);

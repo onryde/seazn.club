@@ -62969,7 +62969,7 @@
         ]
       },
       "post": {
-        "summary": "Create a club (Pro `clubs.hierarchy`)",
+        "summary": "Create a club (all plans; capped by `clubs.max`)",
         "tags": [
           "clubs"
         ],
@@ -65823,7 +65823,7 @@
     },
     "/api/v1/clubs/{id}/teams": {
       "post": {
-        "summary": "Add a team under a club (Pro `clubs.hierarchy`)",
+        "summary": "Add a team under a club (all plans; capped by `teams.max`)",
         "tags": [
           "clubs"
         ],
@@ -66319,7 +66319,7 @@
         ]
       },
       "post": {
-        "summary": "Create a team, optionally under a club (Pro `clubs.hierarchy`; cap-enforced)",
+        "summary": "Create a team, optionally under a club (all plans; capped by `teams.max`)",
         "tags": [
           "clubs"
         ],
@@ -66581,7 +66581,7 @@
     },
     "/api/v1/teams/{id}": {
       "patch": {
-        "summary": "Move a team into a club or detach it (`club_id: null`) — Pro `clubs.hierarchy`",
+        "summary": "Move a team into a club or detach it (`club_id: null`) — all plans",
         "tags": [
           "clubs"
         ],
@@ -69865,7 +69865,7 @@
         ]
       },
       "post": {
-        "summary": "Create an official (multi-role is Pro `officials.roles_multi`)",
+        "summary": "Create an official (multi-role on all plans)",
         "tags": [
           "officials"
         ],
@@ -72408,7 +72408,7 @@
     },
     "/api/v1/divisions/{id}/officials/auto": {
       "post": {
-        "summary": "Propose assignments — pure engine pass with locked rows as obstacles; writes nothing (Pro `officials.auto`)",
+        "summary": "Propose assignments — pure engine pass with locked rows as obstacles; writes nothing (Pro Plus `officials.auto`)",
         "tags": [
           "officials"
         ],
@@ -73769,7 +73769,7 @@
     },
     "/api/v1/divisions/{id}/officials/apply": {
       "post": {
-        "summary": "Persist a proposal transactionally; emits `officials_assigned` (Pro `officials.auto`)",
+        "summary": "Persist a proposal transactionally; emits `officials_assigned` (Pro Plus `officials.auto`)",
         "tags": [
           "officials"
         ],
@@ -74430,7 +74430,7 @@
     },
     "/api/v1/stages/{id}/officials/source": {
       "post": {
-        "summary": "Resolve rank/result sourcing → officiating entrants; pending until the source decides (Pro `officials.auto`)",
+        "summary": "Resolve rank/result sourcing → officiating entrants; pending until the source decides (Pro Plus `officials.auto`)",
         "tags": [
           "officials"
         ],
@@ -85864,6 +85864,9 @@
                               },
                               "reason": {
                                 "type": "string"
+                              },
+                              "code": {
+                                "type": "string"
                               }
                             },
                             "required": [
@@ -85903,7 +85906,8 @@
                     "failed": [
                       {
                         "division_id": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
-                        "reason": "example"
+                        "reason": "example",
+                        "code": "example"
                       }
                     ],
                     "ok": true
@@ -91116,7 +91120,7 @@
     },
     "/api/v1/fixture-officials/{id}/mark": {
       "put": {
-        "summary": "Rate an accepted, decided assignment 1..5 with an optional comment (console, Pro `officials.marks`); upsert, one per assignment; 403 outside the window",
+        "summary": "Rate an accepted, decided assignment 1..5 with an optional comment (console, all plans); upsert, one per assignment; 403 outside the window",
         "tags": [
           "officials"
         ],
@@ -91423,7 +91427,7 @@
         ]
       },
       "delete": {
-        "summary": "Clear the mark on an assignment (idempotent; Pro `officials.marks`)",
+        "summary": "Clear the mark on an assignment (idempotent; all plans)",
         "tags": [
           "officials"
         ],
@@ -91659,7 +91663,7 @@
     },
     "/api/v1/officials/{id}/marks-summary": {
       "get": {
-        "summary": "Org-scoped mark average, count and last 5 comments for an official (console, Pro `officials.marks`)",
+        "summary": "Org-scoped mark average, count and last 5 comments for an official (console, all plans)",
         "tags": [
           "officials"
         ],

@@ -118,7 +118,11 @@ export async function createImport(
   const rows = input.pinDivision
     ? parsed.map((r) => ({ ...r, divisionSlug: input.pinDivision!.slug }))
     : parsed;
-  // Jul3/01 §7: Community capped at 20 rows/file (int limit on import.bulk).
+  // The per-file row cap is `import.bulk`, an int limit resolved from the LIVE
+  // plan catalog — do not restate its value here. This comment used to say
+  // "Community capped at 20 rows/file"; the catalog has since moved to 50, and
+  // the stale number outlived the fact by long enough to be quoted back as
+  // truth. One authority per fact: `plan_entitlements` is it.
   const quota = await withinLimit(auth.orgId, "import.bulk", rows.length);
   if (!quota.ok) throw new PaymentRequiredError("import.bulk");
   const config = ImportConfig.parse(input.config ?? {});
@@ -300,6 +304,19 @@ export async function commitImport(
   const clubsHierarchy = await hasFeature(auth.orgId, "clubs.hierarchy");
   const clubCap = await getLimit(auth.orgId, "clubs.max");
   const teamCap = await getLimit(auth.orgId, "teams.max");
+  // The per-file row cap, re-resolved for the COMMIT and not merely trusted
+  // from `createImport`. An `imports` row carries only planned/committed and
+  // no expiry, so a plan made under a bigger allowance stays committable
+  // indefinitely: plan 500 rows on Pro, lapse to community, commit — and
+  // without this the rows land. No UI is involved in that, so the client's
+  // own guard is not a control at all; a second tab or one request carrying
+  // the importId defeats it.
+  //
+  // Safe on plans where the key is a BOOL: `import.bulk` is dual-valued, and a
+  // present row with a null `int_value` (Pro, V242:121) resolves through
+  // `getLimit` to null = UNLIMITED, which `assertWithinLimit` treats as no
+  // limit at all. Only the int-valued plans (community, 50 at V319:18) bind.
+  const bulkCap = await getLimit(auth.orgId, "import.bulk");
 
   const result = await withTenant(auth.orgId, async (tx) => {
     // One import commit at a time per org — serialises the club/team upsert
@@ -317,6 +334,9 @@ export async function commitImport(
       return { importId: id, stats: plan.stats, divisionIds: touched.map((r) => r.division_id) };
     }
     const rows = ImportRow.array().parse(imp.rows);
+    // Before anything is planned or written. Mirrors the clubs/teams gates
+    // below, and rejects the whole commit rather than truncating the file.
+    assertWithinLimit(bulkCap, "import.bulk", rows.length);
     const config = ImportConfig.parse(imp.config);
     const snapshot = pinSnapshot(await fetchSnapshot(tx), imp.pin_division_id);
     const plan = planImport(rows, snapshot, config);
@@ -414,7 +434,10 @@ export async function commitImport(
       }
     }
 
-    // Jul3/01 §7: the Club hierarchy itself is Pro.
+    // Gated on `clubs.hierarchy`, resolved from the live plan catalog. NOT a
+    // Pro-only feature — this comment used to say so and the catalog now grants
+    // it on all five plans, community included. Read the entitlement, not this
+    // line, before reasoning about who can import a club tree.
     if (plan.ops.some((op) => op.kind.startsWith("club."))) {
       if (!clubsHierarchy) throw new PaymentRequiredError("clubs.hierarchy");
     }

@@ -614,6 +614,7 @@ export function ConstraintsPanel({
           </span>
           <input
             type="checkbox"
+            data-testid="constraint-cross-person-clash"
             className="shrink-0"
             checked={constraints.crossPersonClash === "hard"}
             disabled={!canEdit || busy}
@@ -635,6 +636,7 @@ export function ConstraintsPanel({
           </span>
           <input
             type="checkbox"
+            data-testid="constraint-no-back-to-back"
             className="shrink-0"
             checked={constraints.noBackToBack === true}
             disabled={!canEdit || busy}
@@ -692,6 +694,7 @@ export function ConstraintsPanel({
             <Tip id="schedule.min-rest" className="shrink-0" small />
             <input
               id="rest-min"
+              data-testid="constraint-min-rest"
               // The floor note joins the described set only when it RENDERS.
               // `aria-describedby` pointing at an absent id is a dangling
               // reference; `restFloorNoteShown` is the component's own
@@ -750,6 +753,7 @@ export function ConstraintsPanel({
           <span className="flex shrink-0 items-center gap-2 text-sm text-slate-500">
             <input
               id="max-per-day"
+              data-testid="constraint-max-per-day"
               aria-describedby="max-per-day-hint max-per-day-unit"
               type="number"
               min={1}
@@ -786,6 +790,7 @@ export function ConstraintsPanel({
             <Tip id="schedule.field-fairness" className="shrink-0" small />
             <select
               id="ff-select"
+              data-testid="constraint-field-fairness"
               className="select w-full sm:w-44"
             value={constraints.fieldFairness ?? "off"}
             disabled={!canEdit || busy}
@@ -813,7 +818,7 @@ export function ConstraintsPanel({
             block in the control column would break the scan the sheet exists
             for. Last row on purpose, for the same reason. */}
         {showBlackouts && (
-          <div className="px-4 py-3 sm:px-5">
+          <div className="px-4 py-3 sm:px-5" data-testid="blackout-editor">
             <span className="block text-sm text-slate-800">{msg("constraints.blackout.title")}</span>
             <span className="mt-0.5 block text-xs text-slate-400">
               {msg("constraints.blackout.hint")}
@@ -840,7 +845,7 @@ export function ConstraintsPanel({
                     // Index key: every field is controlled from this array, so
                     // there is no per-row state for React to mis-reuse — the
                     // same choice the settings panel's court list makes.
-                    <li key={i} className="rounded-lg border border-purple-100 bg-purple-50/60 p-3">
+                    <li key={i} data-testid="blackout-row" data-blackout-index={i} className="rounded-lg border border-purple-100 bg-purple-50/60 p-3">
                       {/* One row of fields at `sm`; stacked on a phone with the
                           remove control tucked beside the scope select, so a
                           three-window list does not become three full-width red
@@ -851,6 +856,7 @@ export function ConstraintsPanel({
                         <label className="block">
                           <span className="label">{msg("constraints.blackout.scope")}</span>
                           <select
+                            data-testid="blackout-court"
                             className="select w-full"
                             value={row.court}
                             disabled={!canEdit || busy}
@@ -882,7 +888,7 @@ export function ConstraintsPanel({
                             Visible labels, not `labelHidden`: nothing above
                             these two names them, and a column header would
                             vanish at 375px where the row stacks. */}
-                        <div className="col-span-2 sm:col-span-1">
+                        <div className="col-span-2 sm:col-span-1" data-testid="blackout-from">
                           <DateTimeField
                             kind="datetime-local"
                             label={msg("constraints.blackout.from")}
@@ -892,7 +898,7 @@ export function ConstraintsPanel({
                             onChange={(v) => updateBlackout(i, { from: v })}
                           />
                         </div>
-                        <div className="col-span-2 sm:col-span-1">
+                        <div className="col-span-2 sm:col-span-1" data-testid="blackout-to">
                           <DateTimeField
                             kind="datetime-local"
                             label={msg("constraints.blackout.to")}
@@ -927,6 +933,7 @@ export function ConstraintsPanel({
               <div className="mt-3 flex flex-wrap items-center gap-2">
                 <button
                   type="button"
+                  data-testid="blackout-add"
                   className="btn btn-ghost text-sm"
                   disabled={busy}
                   onClick={() => setBlackouts((rows) => [...rows, { court: "", from: "", to: "" }])}
@@ -936,6 +943,7 @@ export function ConstraintsPanel({
                 {blackoutsDirty && (
                   <button
                     type="button"
+                    data-testid="blackout-save"
                     className="btn btn-primary text-sm"
                     disabled={busy || pendingBlackouts === null}
                     onClick={() => {
@@ -1013,6 +1021,7 @@ export function ConstraintsPanel({
           </p>
           <button
             type="button"
+            data-testid="wait-report-check"
             className="btn btn-primary px-3 py-1.5 text-xs"
             disabled={busy}
             onClick={() =>
@@ -1025,9 +1034,9 @@ export function ConstraintsPanel({
           </button>
           {report &&
             (report.worst.length === 0 ? (
-              <p className="text-sm text-slate-500">{msg("constraints.waitReport.empty")}</p>
+              <p data-testid="wait-report-result" className="text-sm text-slate-500">{msg("constraints.waitReport.empty")}</p>
             ) : (
-              <div className="scroll-x scroll-x-fade">
+              <div data-testid="wait-report-result" className="scroll-x scroll-x-fade">
                 <table className="w-full text-sm" aria-label={msg("constraints.waitReport.tableAriaLabel")}>
                   <thead>
                     <tr className="border-b border-slate-200 text-left text-xs tracking-wide text-slate-500 uppercase">

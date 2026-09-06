@@ -6,6 +6,8 @@ import { ArrowLeftRight } from "lucide-react";
 import { api } from "@/lib/client";
 import type { OrgMembership } from "@/lib/types";
 import { routes } from "@/lib/routes";
+import { useMsg } from "@/components/i18n/dict-provider";
+import type { MessageKey } from "@/lib/messages";
 
 /**
  * Where to land after switching from `oldSlug` to `newSlug`, given the current
@@ -42,6 +44,13 @@ const ROLE_BADGE: Record<string, string> = {
  * Compact "Switch" trigger that sits beside the active org's name in the
  * settings header. Opens a right-aligned popover listing the other
  * organizations (plus a "create new" shortcut); closes on outside click.
+ *
+ * All of its copy comes from the `ui` catalog via `useMsg` (settings walkthrough
+ * W2, finding E): this is a customer-facing row on ?tab=organization, and it
+ * shipped its five strings — trigger label and aria-label, the busy row, the
+ * active marker, the create shortcut — plus the role badge as English literals,
+ * so every non-English organiser read English there. The `/o` layout provides
+ * the dict; `useMsg` falls back to the English catalog outside a provider.
  */
 export function OrgSwitcher({
   orgs,
@@ -50,6 +59,7 @@ export function OrgSwitcher({
   orgs: OrgMembership[];
   activeId: string;
 }) {
+  const msg = useMsg();
   const router = useRouter();
   const pathname = usePathname();
   const [open, setOpen] = useState(false);
@@ -100,11 +110,11 @@ export function OrgSwitcher({
         onClick={() => setOpen((v) => !v)}
         aria-haspopup="menu"
         aria-expanded={open}
-        aria-label="Switch organisation"
+        aria-label={msg("settings.org.switch.aria")}
         className="btn btn-ghost flex items-center gap-1.5"
       >
         <ArrowLeftRight className="h-3.5 w-3.5" strokeWidth={1.75} />
-        Switch
+        {msg("settings.org.switch")}
       </button>
 
       {open && (
@@ -135,13 +145,17 @@ export function OrgSwitcher({
                     </span>
                   </span>
                   <span className="flex items-center gap-2">
-                    <span className={`badge ${ROLE_BADGE[o.role]}`}>{o.role}</span>
+                    <span className={`badge ${ROLE_BADGE[o.role]}`}>
+                      {msg(`role.${o.role}` as MessageKey)}
+                    </span>
                     {isActive ? (
                       <span className="text-xs font-medium text-purple-600">
-                        Active
+                        {msg("settings.org.switch.active")}
                       </span>
                     ) : busy === o.id ? (
-                      <span className="text-xs text-slate-500">Switching…</span>
+                      <span className="text-xs text-slate-500">
+                        {msg("settings.org.switch.busy")}
+                      </span>
                     ) : null}
                   </span>
                 </button>
@@ -154,7 +168,7 @@ export function OrgSwitcher({
               onClick={() => router.push("/orgs/new")}
               className="w-full rounded-lg border border-dashed border-purple-200 px-3 py-2 text-left text-sm font-medium text-purple-700 transition hover:border-purple-400 hover:bg-purple-50"
             >
-              + New organization
+              {msg("settings.org.switch.new")}
             </button>
           </li>
         </ul>

@@ -49,6 +49,36 @@ export function courtGroups(venues: readonly Venue[]): { venue: Venue; courts: C
     .filter((group) => group.courts.length > 0);
 }
 
+/**
+ * The options a PER-FIXTURE, single-select court picker needs (Competition Desk
+ * W2, ruling R35 — the picker restored inside the run sheet's inline editor).
+ *
+ * `courtGroups` gives the selectable list, and that is correct: you cannot
+ * newly assign a fixture to an archived court. But a single `<select>` differs
+ * from the multi-picker in one way that matters — when its `value` matches no
+ * `<option>`, the browser silently displays the FIRST option instead. A fixture
+ * scheduled onto a court that was archived afterwards (or one belonging to a
+ * venue this caller never loaded) would therefore read "Unassigned" while
+ * actually sitting on a court: two contradicting facts in one row, which is the
+ * class this wave exists to remove.
+ *
+ * So the currently-assigned court is returned separately when it is not already
+ * offered — to be rendered as its own option, never folded into `groups`, so it
+ * stays un-pickable for every OTHER fixture. `name` falls back to the id rather
+ * than to nothing: a raw uuid is ugly, but an empty option is a court silently
+ * disappearing on the next save.
+ */
+export function courtOptionsFor(
+  venues: readonly Venue[],
+  courtId: string | null,
+  courtName: string | null,
+): { groups: { venue: Venue; courts: Court[] }[]; current: { id: string; name: string } | null } {
+  const groups = courtGroups(venues);
+  if (courtId === null || courtId === "") return { groups, current: null };
+  const offered = groups.some((g) => g.courts.some((c) => c.id === courtId));
+  return { groups, current: offered ? null : { id: courtId, name: courtName ?? courtId } };
+}
+
 /** Every selectable (non-archived) court across every non-archived venue, in
  *  the same server order `courtGroups` renders — the pool a "pick the next
  *  unselected court" caller (the capacity card's add_court suggestion) draws
@@ -256,7 +286,7 @@ export function CourtMultiPicker({
   }
 
   return (
-    <div>
+    <div data-testid="court-picker">
       <span className="label">{label}</span>
       {description && <p className="mb-2 text-xs text-slate-400">{description}</p>}
 
@@ -343,6 +373,8 @@ export function CourtMultiPicker({
                     >
                       <input
                         type="checkbox"
+                        data-testid="court-option"
+                        data-court-id={court.id}
                         checked={checked}
                         disabled={rowDisabled}
                         onChange={() => onChange(toggleCourtSelection(value, court.id, maxSelected))}

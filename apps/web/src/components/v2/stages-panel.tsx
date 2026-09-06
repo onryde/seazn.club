@@ -9,7 +9,6 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "@/components/ui/console-link";
 import { useRouter } from "next/navigation";
 import { routes } from "@/lib/routes";
-import { ClientDateRange, ClientTime } from "@/components/client-time";
 import { apiV1, ApiV1Error } from "@/lib/client-v1";
 import { UpgradeGate } from "@/components/upgrade-gate";
 import { useConfirm } from "@/components/ui/confirm-provider";
@@ -18,7 +17,12 @@ import { useLocaleOrDefault, useMsg } from "@/components/i18n/dict-provider";
 import { seedingErrorMessage } from "@/lib/seeding-error";
 import type { Locale } from "@/lib/i18n-constants";
 import type { MessageKey } from "@/lib/messages";
-import { hasPlayedFixture, type DivisionPhase } from "@/lib/division-phase";
+import {
+  DEFAULT_MATCH_MINUTES,
+  hasPlayedFixture,
+  isUnscheduledFixture,
+  type DivisionPhase,
+} from "@/lib/division-phase";
 import { resolveSlotLabel } from "@/lib/slot-label";
 import { roundRoleFor, roundRoleLabel } from "@/lib/round-role-label";
 import { parseRoundRoleKey } from "@seazn/engine/competition";
@@ -30,17 +34,17 @@ import { DateTimeField } from "./shared/datetime-field";
 import { boardSlotTimes } from "./shared/time-options";
 import { windowsToDailyHours } from "@/lib/schedule-board";
 import { courtDisplayName, type BoardConfig } from "@/components/v2/board/types";
-// P9 pass 4d: item 1 — this panel's per-fixture court editor used to seed
-// from and PATCH the frozen `court_label` text column, which 400s against
-// PatchFixture's `.strict()` schema (only `court_id` is a valid key now).
-// `courtGroups`/`resolveCourtNames` are the SAME shared pieces the board's
+// `resolveCourtNames`/`flattenCourts` are the SAME shared pieces the board's
 // own `courtNamesById` and the settings tab's `CourtMultiPicker` already use
-// — reused here rather than a third court-name/court-picker implementation.
-import { courtGroups, flattenCourts, resolveCourtNames } from "@/components/v2/shared/court-multi-picker";
-// P9: the BOARD-side Venue (no `hours`/`exceptions`) — this panel shows and
-// picks courts, it never reads a calendar. See court-multi-picker.tsx.
+// — reused here rather than a third court-name implementation. `courtGroups`
+// left with them until fix round 4: it fed `FixtureLine`'s per-fixture court
+// picker, which had no production render site once the run sheet replaced
+// that row, and went with it (court placement lives on the schedule board —
+// fix round 1, IMPORTANT 6).
+import { flattenCourts, resolveCourtNames } from "@/components/v2/shared/court-multi-picker";
+// P9: the BOARD-side Venue (no `hours`/`exceptions`) — this panel shows
+// courts, it never reads a calendar. See court-multi-picker.tsx.
 import type { Venue } from "@/components/v2/shared/court-multi-picker";
-import type { PatchFixture } from "@/server/api-v1/schemas";
 import { zonedTimeInput } from "@/lib/zoned-datetime";
 import type { z } from "zod";
 import type { ApplyScheduleRequest, ScheduleMetrics, ScheduleSolverInfo } from "@/server/api-v1/schemas";
@@ -58,6 +62,13 @@ import {
   type CapacityRequest,
   type UseCapacityReportResult,
 } from "@/lib/use-capacity-report";
+// Competition Desk W2 (Task 4) — the run sheet's grouping builder + the
+// component that renders it. `isBye` (and, inside `buildRunSheet` itself,
+// `BRACKET_STAGE_KINDS`) are the SINGLE authorities now (R2a/R10,
+// docs/superpowers/specs/2026-09-02-competition-desk-prompts/_INDEX.md) —
+// this file's own former copies are deleted below.
+import { buildRunSheet, isBye, type RunSheetFixture } from "@/lib/run-sheet-groups";
+import { RunSheet, type RunSheetFilter } from "@/components/v2/desk/run-sheet";
 
 type Msg = (key: MessageKey, vars?: Record<string, string | number>) => string;
 
@@ -97,6 +108,18 @@ interface FixtureRow {
   /** DERIVED display name for `court_id` — never render `court_id` itself
    *  (a raw uuid). Falls back to `court_label` via `courtDisplayName`. */
   court_name: string | null;
+  /** Competition Desk W2 (Task 4) — venue-qualified display name, mirrors
+   *  `FixtureRow.venue_name` (usecases/stages.ts). Optional for the same
+   *  reason `ext_key` etc. below are: pre-existing hand-built test props in
+   *  this panel's own `__tests__` predate the field. Feeds the run sheet's
+   *  day-header venue clause and `RunSheetRow`'s `courtLabel` fallback. */
+  venue_name?: string | null;
+  /** Competition Desk W2 (Task 4) — any officials recorded on the fixture,
+   *  mirrors `FixtureRow.officials` (usecases/stages.ts). Optional, same
+   *  reason as `venue_name` above. `fixtureRowAction`'s "no scorer" input is
+   *  `officials.length > 0`, derived at ITS call site (`RunSheetRow`), never
+   *  here. */
+  officials?: unknown[];
   status: string;
   outcome: unknown;
   /** F1 (2026-08-17) — the engine's bracket-position role, persisted on
@@ -110,6 +133,24 @@ interface FixtureRow {
   is_final?: boolean;
   third_place?: boolean;
   conditional?: boolean;
+}
+
+/** Adapts this panel's hand-declared `FixtureRow` to `RunSheetFixture`
+ *  (run-sheet-groups.ts, a `Pick` of the SHARED `@/server/usecases/stages`
+ *  type) — needed only because `home_slot_label`/`away_slot_label`/
+ *  `venue_name`/`officials` are OPTIONAL here (pre-existing hand-built test
+ *  props predate them) but REQUIRED on the shared wire type `RunSheetFixture`
+ *  picks from. The real page always sends every field (`listDivisionFixtures`
+ *  selects them all); this only normalises the gap for TypeScript and for any
+ *  hand-built test fixture that omits one. */
+function toRunSheetFixture(f: FixtureRow): RunSheetFixture {
+  return {
+    ...f,
+    home_slot_label: f.home_slot_label ?? null,
+    away_slot_label: f.away_slot_label ?? null,
+    venue_name: f.venue_name ?? null,
+    officials: f.officials ?? [],
+  };
 }
 
 /** F3 Task 5 (5a) — getStageRosterDrift's wire shape (usecases/stages.ts),
@@ -175,22 +216,28 @@ interface Props {
    *  `stages-panel-*.test.tsx` files build props without it; an absent
    *  phase hides the start-locks tip below, which is the safe direction. */
   phase?: DivisionPhase;
+  /** The division's resolved `schedule_settings.config.matchMinutes`
+   *  (`page.tsx`, already falling back to `defaultMatchMinutes()`) — the
+   *  grace in the run sheet's "Needs result" filter, which is
+   *  `division-phase.ts`'s `result_missing`, the same predicate the "Needs
+   *  you" panel counts (max-effort review, finding 2).
+   *
+   *  Resolved SERVER-side and passed down rather than read here: this panel's
+   *  own `scheduleSettings` fetch runs only `if (canEdit)`, so a viewer would
+   *  never have it, and `ScheduleConfig` lives under `@/server` where a client
+   *  component cannot import it.
+   *
+   *  Optional for the same reason `venues`/`rosterDrift`/`phase` above are —
+   *  a dozen pre-existing `stages-panel-*.test.tsx` files build props without
+   *  it. The fallback is `DEFAULT_MATCH_MINUTES`, the schema's own default
+   *  pinned by `division-phase.test.ts`, never a number typed in here. */
+  matchMinutes?: number;
 }
 
 // PROMPT-66: stage kinds that accept an ad-hoc match (standings fold every
 // fixture there). Bracket kinds have no slot for a loose fixture; ladder /
 // americano have their own on-demand mechanisms.
 const ADHOC_STAGE_KINDS = new Set(["league", "group", "swiss"]);
-
-const FIXTURE_STATUS_STYLE: Record<string, string> = {
-  scheduled: "bg-slate-100 text-slate-600",
-  in_play: "bg-amber-100 text-amber-700",
-  decided: "bg-sky-100 text-sky-700",
-  finalized: "bg-emerald-100 text-emerald-700",
-  abandoned: "bg-slate-100 text-slate-400",
-  forfeited: "bg-red-50 text-red-500",
-  cancelled: "bg-slate-100 text-slate-400",
-};
 
 /**
  * The slice of GET /api/v1/divisions/{id}/schedule-settings this panel reads
@@ -396,7 +443,7 @@ export function capacityRequestForStage(
 }
 
 
-export function StagesPanel({ divisionId, divisionSeq, competitionId, orgSlug, compSlug, divSlug, stages, fixtures, entrantNames, venues = [], rosterDrift = {}, canEdit, tz, orgTz, canExport, phase }: Props) {
+export function StagesPanel({ divisionId, divisionSeq, competitionId, orgSlug, compSlug, divSlug, stages, fixtures, entrantNames, venues = [], rosterDrift = {}, canEdit, tz, orgTz, canExport, phase, matchMinutes = DEFAULT_MATCH_MINUTES }: Props) {
   const msg = useMsg();
   // Only for Intl.ListFormat in attachmentWarning below — the rebuild
   // confirm dialog joins its "this also clears …" list per locale. The
@@ -498,6 +545,13 @@ export function StagesPanel({ divisionId, divisionSeq, competitionId, orgSlug, c
   // see the hook's own header for why a per-stage child component broke
   // pre-existing tests that locate it by testid).
   const capacityByStage = useCapacityReportsByStage(divisionId, capacityRequestByStage);
+
+  // Competition Desk W2 (Task 4) — the run sheet's own filter segment. Its
+  // DEFAULT is spec: "Today" on a match day, else "All" — read once at
+  // mount, same as every other `useState` initializer here; Task 7 replaces
+  // this local state with the `?filter=` URL param without touching
+  // `<RunSheet>`'s own `filter`/`onFilter` props.
+  const [filter, setFilter] = useState<RunSheetFilter>(phase === "match_day" ? "today" : "all");
 
   async function undoLast() {
     setError(null);
@@ -718,6 +772,10 @@ export function StagesPanel({ divisionId, divisionSeq, competitionId, orgSlug, c
   }
 
   const nowPlaying = fixtures.filter((f) => f.status === "in_play");
+  // Competition Desk W2 (Task 4/C5) — computed HERE, in the render body,
+  // never at module scope: a module-scope `Date.now()` freezes at first
+  // import and the run sheet's NOW rule would stick to deploy time forever.
+  const nowMs = Date.now();
 
   return (
     <div className="space-y-6">
@@ -765,11 +823,13 @@ export function StagesPanel({ divisionId, divisionSeq, competitionId, orgSlug, c
         <p className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-600">{error}</p>
       )}
 
-      {/* Timezone honesty (v3/04 §3 item 2) + print (item 8). */}
+      {/* Print (item 8). The tz caption that used to sit beside this moved
+          into `<RunSheet>`, under its filter segment (Competition Desk W2,
+          Task 4/C2) — same `data-testid="tz-caption"`, so nothing that
+          locates it by testid needs to change. `DocumentsMenu` itself is
+          UNCHANGED here for now: it moves to the stage rail in Task 5, which
+          does not exist yet. */}
       <div className="flex flex-wrap items-center gap-3">
-        <p className="text-xs text-slate-500" data-testid="tz-caption">
-          {msg("schedule.tz.caption", { tz })}
-        </p>
         <div className="flex-1" />
         {canExport && <DocumentsMenu divisionId={divisionId} competitionId={competitionId} />}
       </div>
@@ -828,36 +888,22 @@ export function StagesPanel({ divisionId, divisionSeq, competitionId, orgSlug, c
         .sort((a, b) => a.seq - b.seq)
         .map((stage) => {
         const stageFixtures = fixtures.filter((f) => f.stage_id === stage.id);
-        const rounds = [...new Set(stageFixtures.map((f) => f.round_no))].sort((a, b) => a - b);
-        // Pinned unscheduled section (v3/04 §3 item 3): timetable-less rows
-        // come out of the round lists; byes stay in place as ghosts.
+        // Pinned unscheduled section (v3/04 §3 item 3): count + CTA stay here
+        // until Task 5 moves them to the rail; the row LIST itself now
+        // renders once, division-wide, in the `<RunSheet>` mounted below.
+        //
+        // `isUnscheduledFixture`, never a fourth hand-written copy of the same
+        // two clauses (max-effort review, finding 11 — "three numbers describe
+        // the same fact"). It is the W1 ledger's own predicate, and it is what
+        // the run sheet's chip a few centimetres below this badge already asks,
+        // so the two cannot answer differently. The stage badge stays a
+        // DIFFERENT number from the chip — per-stage against division-wide —
+        // which is exactly why the heading beside it now names its scope.
         const unscheduled = stageFixtures.filter(
-          (f) => f.scheduled_at === null && f.status === "scheduled" && !isBye(f),
+          (f) =>
+            isUnscheduledFixture({ status: f.status, scheduledAt: f.scheduled_at }) &&
+            !isBye(toRunSheetFixture(f)),
         );
-        const roundDates = (round: number): { from: string | null; to: string | null } => {
-          const times = stageFixtures
-            .filter((f) => f.round_no === round && f.scheduled_at !== null)
-            .map((f) => f.scheduled_at as string)
-            .sort();
-          return { from: times[0] ?? null, to: times[times.length - 1] ?? null };
-        };
-        // League/group rounds display in ACTUAL earliest-kickoff order, not
-        // generation order (round_no) — auto-scheduling (parallel courts) or a
-        // manual reschedule can leave a later-numbered round with an earlier
-        // kickoff than one before it, which would mislead an organiser reading
-        // the round list for "what's next" (design/fix-ui/03 §"rounds out of
-        // order"). Rounds with no scheduled fixture yet have no time to sort
-        // by, so they fall back to round_no order after every dated round.
-        // Bracket stages (splitRounds below) are structural, not chronological
-        // (Quarter → Semi → Final), so they keep round_no order untouched.
-        const orderedRounds = [...rounds].sort((a, b) => {
-          const da = roundDates(a).from;
-          const db = roundDates(b).from;
-          if (da !== null && db !== null) return da < db ? -1 : da > db ? 1 : a - b;
-          if (da !== null) return -1;
-          if (db !== null) return 1;
-          return a - b;
-        });
         // Mirrors the server guard (deleteStage) EXACTLY: only the last stage
         // in the graph, and only when it owns no played fixtures. No "keep one
         // stage" rule — the server deletes the sole stage of a pure League too,
@@ -865,9 +911,6 @@ export function StagesPanel({ divisionId, divisionSeq, competitionId, orgSlug, c
         const deletable =
           stage.seq === Math.max(...stages.map((s) => s.seq)) &&
           !stageFixtures.some((f) => ["in_play", "decided", "finalized"].includes(f.status));
-        // Bracket stages: one card per named round (Quarter-finals, Semi-finals,
-        // Final / Rung N) instead of one long card with anonymous round breaks.
-        const splitRounds = BRACKET_KINDS.has(stage.kind) && rounds.length > 0;
         // F3 Task 5 (5a) — only ever non-empty for the one stage
         // getStageRosterDrift finds eligible (usecases/stages.ts); every
         // other stage's entry is absent or both arrays empty, so this is a
@@ -1036,9 +1079,19 @@ export function StagesPanel({ divisionId, divisionSeq, competitionId, orgSlug, c
             {unscheduled.length > 0 && (
               <div className="border-b border-dashed border-slate-200 bg-slate-50/60 px-4 py-3">
                 <div className="flex flex-wrap items-center gap-2">
+                  {/* Finding 11: this heading and the run sheet's own
+                      "Not yet scheduled" sat on the same screen as a word-for-
+                      word transposition — and in fr/es/nl they were the SAME
+                      words in the same order. It now names its SCOPE ("in this
+                      stage"), which is the one thing that made the two numbers
+                      reconcilable; the sheet's heading is unchanged. Both go
+                      when Task 5 moves this CTA to the rail. */}
                   <p className="text-xs font-semibold text-slate-700">
                     {msg("schedule.unscheduled.title")}
-                    <span className="ml-1.5 rounded-full bg-slate-200 px-1.5 text-[11px] font-medium text-slate-700">
+                    <span
+                      data-testid="stage-unscheduled-count"
+                      className="ml-1.5 rounded-full bg-slate-200 px-1.5 text-[11px] font-medium text-slate-700"
+                    >
                       {unscheduled.length}
                     </span>
                   </p>
@@ -1067,72 +1120,25 @@ export function StagesPanel({ divisionId, divisionSeq, competitionId, orgSlug, c
                     {msg("schedule.capacity.blockedReason")}
                   </p>
                 )}
-                <ul className="mt-2 divide-y divide-slate-100">
-                  {unscheduled.map((f) => (
-                    <FixtureLine
-                      key={f.id}
-                      fixture={f}
-                      href={routes.fixture(orgSlug, compSlug, divSlug, f.fixture_no)}
-                      entrantNames={entrantNames}
-                      canEdit={canEdit}
-                      tz={tz}
-                      boardSlotOptions={boardSlotOptions}
-                      venues={venues}
-                      courtNames={courtNamesById}
-                      onRescheduled={() => {
-                        setNotice(msg("schedule.rescheduled"));
-                        setUndoable(true);
-                      }}
-                    />
-                  ))}
-                </ul>
+                {/* The row LIST that used to render here (FixtureLine per
+                    fixture) is gone — the run sheet's own "Not yet
+                    scheduled" group, mounted once below, division-wide,
+                    shows every one of these rows with a "Set time" action.
+                    This header keeps only the count + CTA + capacity reason
+                    until Task 5 moves them to the stage rail. */}
               </div>
             )}
 
-            {stageFixtures.length === 0 ? (
+            {/* Every fixture list that used to render here — the round-
+                grouped non-bracket list AND the bracket stage's own
+                round-sectioned sibling sections — is gone. Both now render
+                ONCE, division-wide, in the `<RunSheet>` mounted below the
+                stage loop (Competition Desk W2, Task 4, steps 5+6). This
+                card keeps only the "no fixtures generated yet" message. */}
+            {stageFixtures.length === 0 && (
               <p className="px-4 py-4 text-sm text-slate-500">
                 {canEdit ? msg("schedule.noFixtures.can") : msg("schedule.noFixtures.view")}
               </p>
-            ) : splitRounds ? null : (
-              <div className="divide-y divide-slate-100">
-                {orderedRounds.map((round) => {
-                  const dates = roundDates(round);
-                  return (
-                  <div key={round}>
-                    {/* Sticky round header (items 1 + 7): label + date range. */}
-                    <p className="sticky top-0 z-10 flex items-baseline gap-2 border-y border-slate-300 bg-slate-200 px-4 py-1.5 text-xs font-semibold uppercase tracking-wide text-slate-600">
-                      {msg("schedule.round", { n: round })}
-                      {dates.from && (
-                        <span data-testid="round-dates" className="font-medium normal-case text-slate-500">
-                          <ClientDateRange from={dates.from} to={dates.to} tz={tz} />
-                        </span>
-                      )}
-                    </p>
-                    <ul className="divide-y divide-slate-50">
-                      {stageFixtures
-                        .filter((f) => f.round_no === round && (f.scheduled_at !== null || isBye(f) || f.status !== "scheduled"))
-                        .map((f) => (
-                          <FixtureLine
-                            key={f.id}
-                            fixture={f}
-                            href={routes.fixture(orgSlug, compSlug, divSlug, f.fixture_no)}
-                            entrantNames={entrantNames}
-                            canEdit={canEdit}
-                            tz={tz}
-                            boardSlotOptions={boardSlotOptions}
-                            venues={venues}
-                            courtNames={courtNamesById}
-                            onRescheduled={() => {
-                              setNotice(msg("schedule.rescheduled"));
-                              setUndoable(true);
-                            }}
-                          />
-                        ))}
-                    </ul>
-                  </div>
-                  );
-                })}
-              </div>
             )}
 
             {/* #622 — sits with the stage's other settings, last in the card so
@@ -1144,49 +1150,41 @@ export function StagesPanel({ divisionId, divisionSeq, competitionId, orgSlug, c
               msg={msg}
             />
           </section>
-
-          {splitRounds &&
-            rounds.map((round) => {
-              const dates = roundDates(round);
-              return (
-              <section key={round} className="card overflow-hidden">
-                <header className="sticky top-0 z-10 border-b border-slate-100 bg-slate-50 px-4 py-2">
-                  <h4 className="flex items-baseline gap-2 text-xs font-medium uppercase tracking-wide text-slate-500">
-                    {stage.name} — {bracketRoundLabel(msg, stage.kind, round, stageFixtures)}
-                    {dates.from && (
-                      <span data-testid="round-dates" className="normal-case text-slate-500">
-                        <ClientDateRange from={dates.from} to={dates.to} tz={tz} />
-                      </span>
-                    )}
-                  </h4>
-                </header>
-                <ul className="divide-y divide-slate-50">
-                  {stageFixtures
-                    .filter((f) => f.round_no === round && (f.scheduled_at !== null || isBye(f) || f.status !== "scheduled"))
-                    .map((f) => (
-                      <FixtureLine
-                        key={f.id}
-                        fixture={f}
-                        href={routes.fixture(orgSlug, compSlug, divSlug, f.fixture_no)}
-                        entrantNames={entrantNames}
-                        canEdit={canEdit}
-                        tz={tz}
-                        boardSlotOptions={boardSlotOptions}
-                        venues={venues}
-                        courtNames={courtNamesById}
-                        onRescheduled={() => {
-                          setNotice(msg("schedule.rescheduled"));
-                          setUndoable(true);
-                        }}
-                      />
-                    ))}
-                </ul>
-              </section>
-              );
-            })}
           </div>
         );
       })}
+
+      {/* Competition Desk W2 (Task 4) — the run sheet, mounted ONCE, outside
+          the stage loop above: a division-wide list on a time spine, fed by
+          `buildRunSheet` over EVERY stage's fixtures (day groups merged
+          across every non-bracket stage, one bracket block per bracket
+          stage, one "Not yet scheduled" group last — owner rulings A2/3).
+          `nowMs` is computed HERE, in the render body, never at module scope
+          (C5) — a module-scope `Date.now()` freezes at first import and the
+          NOW rule would stick to deploy time. */}
+      <RunSheet
+        blocks={buildRunSheet({ fixtures: fixtures.map(toRunSheetFixture), stages, tz, nowMs })}
+        stages={stages}
+        tz={tz}
+        orgTz={orgTz}
+        nowMs={nowMs}
+        matchMinutes={matchMinutes}
+        entrantNames={entrantNames}
+        courtNames={courtNamesById}
+        // R35 — the panel already holds these for `StageCourtTagsEditor` and
+        // the (retired) FixtureLine picker; they now reach each row's inline
+        // editor instead of a second venues fetch.
+        venues={venues}
+        canEdit={canEdit}
+        hrefFor={(f) => routes.fixture(orgSlug, compSlug, divSlug, f.fixture_no)}
+        filter={filter}
+        onFilter={setFilter}
+        boardSlotOptions={boardSlotOptions}
+        onRescheduled={() => {
+          setNotice(msg("schedule.rescheduled"));
+          setUndoable(true);
+        }}
+      />
 
       {canEdit && (
         <AddStageForm
@@ -1342,8 +1340,6 @@ export function AddStageForm({
   );
 }
 
-const BRACKET_KINDS = new Set(["knockout", "double_elim", "stepladder", "page_playoff"]);
-
 /**
  * F3 Task 5 (5b) — the rebuild-click classifier, mirroring
  * generatePreconditionMessage's shape just below (same pure/exported-for-
@@ -1490,14 +1486,33 @@ export function generatePreconditionMessage(err: unknown, msg: Msg): string | nu
   return null;
 }
 
-/** A bye: one side empty with an auto-advance award outcome (v3/04 §3 item 6). */
-function isBye(f: FixtureRow): boolean {
-  const o = f.outcome as { kind?: string } | null;
-  return o?.kind === "award" && (f.home_entrant_id === null || f.away_entrant_id === null);
-}
+/** Voided fixtures render struck through with the reason (item 6). EXPORTED
+ *  (Competition Desk W2, Task 4/R13-style) — `run-sheet-row.tsx` reuses this
+ *  SAME set for the run sheet's rows rather than a second copy. */
+export const VOID_STATUSES = new Set(["cancelled", "abandoned", "forfeited"]);
 
-/** Voided fixtures render struck through with the reason (item 6). */
-const VOID_STATUSES = new Set(["cancelled", "abandoned", "forfeited"]);
+/**
+ * Localized played-fixture status; unknown values fall back to the raw token.
+ *
+ * RESTORED (max-effort review, finding 6). This function was deleted with
+ * `FixtureLine`, and the run sheet shipped with no replacement — so a
+ * cancelled, abandoned or forfeited row rendered struck through with NO reason
+ * given, indistinguishable from each other and, for a screen-reader user, from
+ * an ordinary played match (CSS `line-through` is not announced). The design of
+ * record names it explicitly: "Status is carried by the dot colour + sub-line
+ * copy (`fixtureStatusLabel` stays as the sub-line source)"
+ * (competition-desk-design.md:232-234).
+ *
+ * The `schedule.fstatus.*` keys it reads never left the four dictionaries —
+ * they retain other readers on the board — so this restores a live string
+ * rather than adding one. EXPORTED for `run-sheet-row.tsx`, the same way
+ * `outcomeText` and `VOID_STATUSES` above are: one authority, no second copy.
+ */
+export function fixtureStatusLabel(msg: Msg, status: string): string {
+  const key = `schedule.fstatus.${status}` as MessageKey;
+  const label = msg(key);
+  return label === key ? status.replace("_", " ") : label;
+}
 
 // F1 Task 4: named bracket rounds by POSITION (roundRole), never by match
 // count or a stage-wide max — a double-elim's losers bracket has more
@@ -1513,7 +1528,19 @@ const VOID_STATUSES = new Set(["cancelled", "abandoned", "forfeited"]);
 // case keeps its existing merged "Qualifiers" header; round 2 (Qualifier 2)
 // and the Final each hold exactly one fixture and resolve through the same
 // roundRole() as every other bracket kind.
-function bracketRoundLabel(msg: Msg, kind: string, roundNo: number, stageFixtures: readonly FixtureRow[]): string {
+// EXPORTED (Competition Desk W2, Task 4/R13) — `run-sheet.tsx` calls this
+// same function for a bracket block's round sub-headers rather than writing
+// a second labeller. `stageFixtures`' type is narrowed to just the six
+// fields this function reads: the run sheet passes `RunSheetFixture[]`
+// (run-sheet-groups.ts), which does not carry every field this file's own
+// `FixtureRow` does, and a `Pick` lets BOTH shapes satisfy the parameter
+// without a hand-rolled second type.
+export function bracketRoundLabel(
+  msg: Msg,
+  kind: string,
+  roundNo: number,
+  stageFixtures: readonly Pick<FixtureRow, "round_no" | "lane" | "is_final" | "third_place" | "conditional" | "ext_key">[],
+): string {
   if (kind === "page_playoff" && roundNo === 1) return msg("bracket.qualifiers");
   const first = stageFixtures.find((f) => f.round_no === roundNo);
   if (!first) return msg("schedule.round", { n: roundNo });
@@ -1549,14 +1576,9 @@ function stageStatusLabel(msg: Msg, status: string): string {
   return status;
 }
 
-/** Localized played-fixture status; unknown values fall back to the raw token. */
-function fixtureStatusLabel(msg: Msg, status: string): string {
-  const key = `schedule.fstatus.${status}` as MessageKey;
-  const label = msg(key);
-  return label === key ? status.replace("_", " ") : label;
-}
-
-function outcomeText(msg: Msg, outcome: unknown, entrantNames: Record<string, string>): string | null {
+// EXPORTED (Competition Desk W2, Task 4/R13) — `run-sheet-row.tsx` reuses
+// this same derivation rather than a second copy.
+export function outcomeText(msg: Msg, outcome: unknown, entrantNames: Record<string, string>): string | null {
   const o = outcome as { kind?: string; winner?: string } | null;
   if (!o?.kind) return null;
   const winner = entrantNames[o.winner ?? ""] ?? "?";
@@ -1574,262 +1596,6 @@ function outcomeText(msg: Msg, outcome: unknown, entrantNames: Record<string, st
     default:
       return null;
   }
-}
-
-export function FixtureLine({
-  fixture,
-  href,
-  entrantNames,
-  canEdit,
-  tz,
-  boardSlotOptions,
-  venues = [],
-  courtNames,
-  onRescheduled,
-}: {
-  fixture: FixtureRow;
-  href: string;
-  entrantNames: Record<string, string>;
-  canEdit: boolean;
-  tz?: string;
-  /** Board slots for the inline "When" field — see `boardSlotOptionsFor`
-   *  above. `undefined` lets `DateTimeField` fall back to quarter hours. */
-  boardSlotOptions?: string[];
-  /** Org venues with nested courts — feeds the court picker below (P9 pass
-   *  4d, item 1). Same shape/default as StagesPanel's own `venues` prop. */
-  venues?: Venue[];
-  /** id -> venue-qualified display name (StagesPanel's `courtNamesById`) —
-   *  see `courtDisplayName`'s own doc comment. */
-  courtNames?: Record<string, string>;
-  /** Fired after a schedule PATCH lands — the panel offers Undo (item 5). */
-  onRescheduled?: () => void;
-}) {
-  const msg = useMsg();
-  const router = useRouter();
-  const [editing, setEditing] = useState(false);
-  const [when, setWhen] = useState(
-    fixture.scheduled_at ? toLocalInput(fixture.scheduled_at) : "",
-  );
-  // P9 pass 4d: seeded from court_id, never court_label — court_label is
-  // FROZEN (no writer has touched it since the pass 3a cutover), so seeding
-  // the editor from it showed stale/blank state the moment a fixture's court
-  // had ever been set post-cutover. PatchFixture is `.strict()` and has no
-  // `venue`/`court_label` key at all, so a save built from the old
-  // venue/court text state 400'd unconditionally.
-  const [courtId, setCourtId] = useState(fixture.court_id ?? "");
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  // P9 review wave 3 ("Also yours"): archived-INCLUSIVE on purpose, unlike
-  // `courtGroups(venues)` (used below for the SELECTABLE option list, which
-  // must stay archived-filtered — you cannot newly pick an archived court).
-  // This map's only job is resolving `courtId`'s venue_id for the save below,
-  // and `courtId` can legitimately be an already-archived court's id (this
-  // fixture was scheduled onto it before it was archived) — `courtGroups`
-  // dropping that row silently cleared `venue_id` on every such save, even
-  // though `court_id` itself was preserved.
-  const courtById = new Map(venues.flatMap((venue) => venue.courts).map((c) => [c.id, c] as const));
-
-  const home = fixture.home_entrant_id
-    ? (entrantNames[fixture.home_entrant_id] ?? "?")
-    : resolveSlotLabel(fixture.home_slot_label ?? null, msg, "schedule.tbd");
-  const away = fixture.away_entrant_id
-    ? (entrantNames[fixture.away_entrant_id] ?? "?")
-    : resolveSlotLabel(fixture.away_slot_label ?? null, msg, "schedule.tbd");
-  const decided = outcomeText(msg, fixture.outcome, entrantNames);
-
-  // Bye ghost row (item 6): structural, not schedulable, no actions.
-  if (isBye(fixture)) {
-    const who = fixture.home_entrant_id ?? fixture.away_entrant_id;
-    return (
-      <li className="px-4 py-2 text-sm text-slate-500 italic">
-        R{fixture.round_no} · {msg("schedule.bye", { name: entrantNames[who ?? ""] ?? "?" })}
-      </li>
-    );
-  }
-
-  // Typed by INFERRING from PatchFixture (server/api-v1/schemas.ts) — never
-  // hand-declared. `apiV1<T>`'s `json` param is `unknown`, so a hand-rolled
-  // wire type here is exactly how the court_label/venue 400 survived 175
-  // commits: nothing caught a payload shape the schema no longer accepts.
-  async function patchSchedule(json: PatchFixture) {
-    setBusy(true);
-    setError(null);
-    try {
-      await apiV1(`/api/v1/fixtures/${fixture.id}`, { method: "PATCH", json });
-      setEditing(false);
-      router.refresh();
-      onRescheduled?.();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : msg("schedule.error.failed"));
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  const saveSchedule = () =>
-    patchSchedule({
-      scheduled_at: when ? new Date(when).toISOString() : null,
-      // A court now implies its venue, and the SERVER derives it: `moveFixture`
-      // (schedule.ts) resolves `venue_id` from `courts.venue_id` and ignores
-      // any `venue_id` a client sends, so the two can no longer disagree.
-      // Still sent from the same selection so the optimistic local row matches
-      // what the server will write.
-      court_id: courtId || null,
-      venue_id: (courtId ? courtById.get(courtId)?.venue_id : undefined) ?? null,
-    });
-
-  const unschedule = () => {
-    setWhen("");
-    void patchSchedule({ scheduled_at: null });
-  };
-
-  // Play state only matters once a match is under way / done; before that a
-  // plain "scheduled" DB status is noise next to the timetable chip.
-  const played = ["in_play", "decided", "finalized", "cancelled"].includes(fixture.status);
-  const timed = !!fixture.scheduled_at;
-
-  const voided = VOID_STATUSES.has(fixture.status);
-
-  return (
-    <li className="px-4 py-2">
-      <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center sm:gap-3">
-        <Link
-          href={href}
-          className={`min-w-0 sm:flex-1 text-sm hover:text-purple-700 ${
-            voided ? "text-slate-500 line-through" : "text-slate-800"
-          }`}
-        >
-          <span className="font-medium">{home}</span>
-          <span className="mx-1.5 text-slate-400">{msg("schedule.vs")}</span>
-          <span className="font-medium">{away}</span>
-          {decided && !voided && <span className="ml-2 text-xs text-slate-500 no-underline">{decided}</span>}
-        </Link>
-        {/* Badges/buttons cluster — own line on mobile so it never collides
-            with the team names above it (fix-ui audit 03-console-division.md). */}
-        <div className="flex flex-wrap items-center gap-2 sm:contents">
-          {/* Timetable chip — reflects whether the match has a kick-off time. */}
-          <span
-            className={`badge ${timed ? "bg-indigo-50 text-indigo-700 ring-1 ring-inset ring-indigo-200" : "bg-slate-100 text-slate-500"}`}
-            title={timed ? msg("schedule.chip.timedTitle") : msg("schedule.chip.untimedTitle")}
-          >
-            {timed ? (
-              <>
-                {msg("schedule.chip.scheduled")} · <ClientTime value={fixture.scheduled_at} mode="datetime" tz={tz} showZone />
-              </>
-            ) : (
-              msg("schedule.chip.unscheduled")
-            )}
-            {/* P9 pass 4d: resolved NAME first (venue-qualified when
-                ambiguous via courtNames), the frozen label next, then the
-                ultimate bare-venue-text fallback for a fixture older than
-                either cutover — never a raw court_id. */}
-            {(() => {
-              const text = courtDisplayName(fixture, courtNames) ?? fixture.venue;
-              return text ? ` · ${text}` : "";
-            })()}
-          </span>
-          {/* Play state only once it's under way / done. */}
-          {played && (
-            <span className={`badge ${FIXTURE_STATUS_STYLE[fixture.status] ?? ""}`}>
-              {fixtureStatusLabel(msg, fixture.status)}
-            </span>
-          )}
-          {/* Scoring pad. */}
-          <Link href={href} className="btn btn-ghost px-3 py-1 text-xs">
-            {decided ? msg("schedule.view") : fixture.status === "in_play" ? msg("schedule.scoreLive") : msg("schedule.score")}
-          </Link>
-          {/* Timetable controls only while the match is still movable — once
-              it's in play or decided the server refuses moves anyway, so the
-              buttons would just be a dead end. */}
-          {canEdit && fixture.status === "scheduled" && (
-            <button
-              type="button"
-              data-testid="fixture-schedule-toggle"
-              onClick={() => setEditing(!editing)}
-              className="btn btn-ghost px-3 py-1 text-xs"
-            >
-              {editing ? msg("schedule.close") : timed ? msg("schedule.editTime") : msg("schedule.schedule")}
-            </button>
-          )}
-          {canEdit && fixture.status === "scheduled" && timed && !editing && (
-            <button
-              type="button"
-              disabled={busy}
-              onClick={unschedule}
-              className="text-xs text-slate-500 hover:text-red-600 hover:underline"
-            >
-              {msg("schedule.unschedule")}
-            </button>
-          )}
-        </div>
-      </div>
-      {editing && (
-        <div className="mt-2 flex flex-wrap items-end gap-2">
-          <DateTimeField
-            kind="datetime-local"
-            label={msg("schedule.field.when")}
-            value={when}
-            onChange={setWhen}
-            options={boardSlotOptions}
-          />
-          {/* P9 pass 4d, item 1: real court selection, grouped by venue —
-              replaces the free-text venue/court inputs, which PATCHed the now-
-              retired `venue`/`court_label` keys and 400'd against
-              PatchFixture's `.strict()` schema. Built from the SAME
-              `courtGroups` piece CourtMultiPicker uses (court-multi-picker.tsx)
-              rather than a second court-picker implementation — a plain
-              single-select `<optgroup>`-per-venue here, since one fixture ever
-              has exactly one court (CourtMultiPicker's multi-select/reorder
-              machinery has nothing to do). Offers every ACTIVE org court, not
-              just the division's configured subset — a manual per-fixture
-              override is not the auto-scheduler, and `courtGroups` already
-              excludes archived venues/courts. Venue-qualifying the OPTION text
-              itself is unnecessary here (unlike a flat list — MovePanel's
-              dropdown, the board's column headers): each `<optgroup>` already
-              names its venue, so two courts sharing a name never collide
-              within the picker's own grouping. */}
-          <label className="block">
-            <span className="label">{msg("schedule.field.court")}</span>
-            <select
-              data-testid="fixture-court-select"
-              value={courtId}
-              onChange={(e) => setCourtId(e.target.value)}
-              // `.input`'s own padding loses to `px-2 py-1 text-xs` under
-              // Tailwind's utilities layer (S13/#422 W11). `min-h-11` survives it.
-              className="input min-h-11 w-48 px-2 py-1 text-xs"
-            >
-              <option value="">{msg("board.unassigned")}</option>
-              {courtGroups(venues).map(({ venue, courts }) => (
-                <optgroup key={venue.id} label={venue.name}>
-                  {courts.map((c) => (
-                    <option key={c.id} value={c.id}>
-                      {c.name}
-                    </option>
-                  ))}
-                </optgroup>
-              ))}
-            </select>
-          </label>
-          <button
-            type="button"
-            data-testid="fixture-save-schedule"
-            disabled={busy}
-            onClick={saveSchedule}
-            className="btn btn-primary px-3 py-1.5 text-xs"
-          >
-            {busy ? msg("schedule.saving") : msg("schedule.save")}
-          </button>
-          {error && <span className="text-xs text-red-600">{error}</span>}
-        </div>
-      )}
-    </li>
-  );
-}
-
-function toLocalInput(iso: string): string {
-  const d = new Date(iso);
-  const pad = (n: number) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
 // PROMPT-66 — inline ad-hoc match form. Two entrant selects + an optional

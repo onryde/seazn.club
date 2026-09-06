@@ -548,7 +548,7 @@ export function SettingsPanel({
             // `min-w-0 flex-1` keeps the halves equal-width the way the bare
             // `w-full` inputs were before they gained a wrapper.
             <div className="flex items-center gap-2">
-              <div className="min-w-0 flex-1">
+              <div className="min-w-0 flex-1" data-testid="settings-day-start">
                 <DateTimeField
                   kind="time"
                   label={msg("boardset.playFrom")}
@@ -559,7 +559,7 @@ export function SettingsPanel({
                 />
               </div>
               <span className="text-sm text-slate-500">–</span>
-              <div className="min-w-0 flex-1">
+              <div className="min-w-0 flex-1" data-testid="settings-day-end">
                 <DateTimeField
                   kind="time"
                   label={msg("boardset.playUntil")}
@@ -575,11 +575,11 @@ export function SettingsPanel({
         </fieldset>
         <label className="block">
           <span className="label">{msg("boardset.matchLength")}</span>
-          <input type="number" min={1} max={1440} inputMode="numeric" value={matchMinutes} onChange={(e) => setMatchMinutes(Number(e.target.value) || 30)} className="input w-full" disabled={!canEdit} />
+          <input data-testid="settings-match-minutes" type="number" min={1} max={1440} inputMode="numeric" value={matchMinutes} onChange={(e) => setMatchMinutes(Number(e.target.value) || 30)} className="input w-full" disabled={!canEdit} />
         </label>
         <label className="block">
           <span className="label">{msg("boardset.gap")}</span>
-          <input type="number" min={0} inputMode="numeric" value={gapMinutes} onChange={(e) => setGapMinutes(sanitizeNonNegativeInt(e.target.value))} className="input w-full" disabled={!canEdit} />
+          <input data-testid="settings-gap-minutes" type="number" min={0} inputMode="numeric" value={gapMinutes} onChange={(e) => setGapMinutes(sanitizeNonNegativeInt(e.target.value))} className="input w-full" disabled={!canEdit} />
           <span className="mt-0.5 block text-xs text-slate-400">{msg("boardset.gapHint", { venue })}</span>
         </label>
         {/* A <div> with an explicit htmlFor rather than a wrapping <label>:

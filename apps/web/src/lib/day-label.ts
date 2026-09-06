@@ -21,6 +21,21 @@ export function dayLabel(dayKey: string, locale: string = DEFAULT_LOCALE): strin
   });
 }
 
+/** The long form ("Saturday 5 September"), for a heading big enough to carry
+ *  it — the run sheet's sticky day spine. Added rather than reusing `dayLabel`
+ *  so that header keeps the size it was designed at; it is a fourth sibling of
+ *  the three formatters above, in this ONE module, not a second helper
+ *  somewhere else. Same determinism story as the rest of this file: the
+ *  explicit locale is what makes it identical on server and client, so a caller
+ *  needs no blank-until-mount gate. */
+export function dayLabelLong(dayKey: string, locale: string = DEFAULT_LOCALE): string {
+  return new Date(`${dayKey}T12:00`).toLocaleDateString(locale, {
+    weekday: "long",
+    day: "numeric",
+    month: "long",
+  });
+}
+
 export function dayWeekday(dayKey: string, locale: string = DEFAULT_LOCALE): string {
   return new Date(`${dayKey}T12:00`).toLocaleDateString(locale, { weekday: "short" });
 }
