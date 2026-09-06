@@ -28,6 +28,7 @@ import { ledgerRank, leadingAttention } from "@/lib/division-phase";
 import { PhasePill, AttentionChip } from "@/components/v2/desk/phase-pill";
 import { DeskToolsMore } from "@/components/v2/desk/desk-tools-more";
 import { NeedsYou, needsYouItems } from "@/components/v2/desk/needs-you";
+import { InPlayBand } from "@/components/v2/desk/in-play-band";
 import { DivisionLedger, type LedgerRow } from "@/components/v2/desk/division-ledger";
 import { log } from "@/server/logger";
 
@@ -396,6 +397,18 @@ export default async function CompetitionPage({
             />
           </div>
         </div>
+
+          {/* W3 Task 7: the live in-play band. `desk === null` (a summary
+              failure — see the `.catch` above) renders nothing here too; the
+              band's own `inPlay.length === 0` guard covers the far more
+              common "nothing live right now" case. */}
+          {desk && (
+            <InPlayBand
+              competitionId={id}
+              initial={{ inPlay: desk.in_play_fixtures, upNext: desk.up_next }}
+              dict={dict}
+            />
+          )}
 
           <NeedsYou dict={dict} items={needs} />
 
