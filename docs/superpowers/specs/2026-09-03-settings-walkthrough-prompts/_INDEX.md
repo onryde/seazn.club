@@ -21,8 +21,8 @@ check expressed as a client `disabled` prop, and `apps/web` vitest is
 | W1 | `/admin/settings` + 4 legacy redirects; `setOwnerStaffRoleSql` ships with it | **DONE** — 6 tasks, 5 fix rounds, all reviews clean |
 | W2 | `/o/{org}/settings` 7 tabs — drive+persist (sponsors CRUD half) | **MERGED** — PR #720, squashed to `997ad225b`, all 11 CI checks green |
 | W3 | `/o/{org}/settings` 7 tabs — gating matrix + first mutation sweep | **IN PLANNING** — see the W3 section below |
-| W4 | `settings/{connect,credits,add-ons}`, billing's uncovered panels, sponsor monetize half | **DONE, PENDING budget ruling** — 4 tasks + final review, all clean; measured +53.5s against the ceiling (see recommendation 3 below and the wave's own SDD ledger) |
-| W5 | Competition settings — frozen, visibility, discoverable | Not started |
+| W4 | `settings/{connect,credits,add-ons}`, billing's uncovered panels, sponsor monetize half | **DONE** — 4 tasks + final review, all clean; measured +53.5s against the old single ceiling, now resolved by owner ruling 8 (see below) |
+| W5 | Competition settings — frozen, visibility, discoverable | **IN PLANNING** — worktree `.claude/worktrees/settings-w5`, branch `feat/settings-walkthrough-w5` |
 | W6 | Division schedule + constraints — full bounds table | Not started |
 | W7 | Division registration settings — partial-save, money bounds | Not started |
 | W8 | Fix wave + programme review + second mutation sweep | Not started |
@@ -62,6 +62,18 @@ the other.
    English in `org-switcher.tsx` is on a customer-facing row, and an
    api-keys test that may be exercising the session instead of the key is
    coverage that reads as protection and is not.
+8. **Split the single ≤60s ceiling into two budgets, per recommendation 3**
+   (2026-09-06). Put to the owner with W4's measurement — cumulative
+   walkthrough cost through W4 was ~110.5-112.0s against the 60s ceiling,
+   roughly double it, with W5-W8 still ahead. Owner ruled for the
+   recommendation: a **fast-path budget** (API-first/DB-seeded, no external
+   network — W1-W4's own ~94-100s fits this bucket once widened) and a
+   **separate small allowance for real-money-completion legs** (currently one
+   file, `settings-sponsor-monetize.spec.ts`'s Task 4, at 16.9s), judged on
+   "bounded time + clean teardown" rather than folded into one number — the
+   two kinds of test do not shrink the same way (one is compute-bound, the
+   other network-bound). W5 onward reports against BOTH buckets separately,
+   not a single total.
 
 ## Recommendations I made (NOT owner rulings)
 
