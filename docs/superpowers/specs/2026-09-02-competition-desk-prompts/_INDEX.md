@@ -428,3 +428,41 @@ it is the general caution in the standing policy about `outcome` shape: any
 NEW writer of that column must use `tx.json()`, never `JSON.stringify`. The
 generalizable trap is saved to memory:
 `reference_json_stringify_into_jsonb_column_reads_as_undefined.md`.
+
+## F2/F3/F4/F8/F9 — FIXED, PR #730 (2026-09-06), not W3's to carry any more
+
+Owner ruled "add all F in single pr" — bundled the remaining findings from
+this gate into one PR, `fix/w2-walkthrough-findings` off post-#728 `main`.
+F5/F6/F7 are NOT in this PR (never scoped in; still open, see above).
+
+- **F2** — `run-sheet-groups.ts`: bracket membership is now decided BEFORE
+  the `OPEN.has(status)` untimed-routing test, so an untimed OPEN bracket
+  fixture stays in its round section instead of leaking into "Not yet
+  scheduled" and truncating `bracketRoundLabel`'s lane.
+- **F3** — `run-sheet-row.tsx` gained a `stageName` prop; `run-sheet.tsx`
+  supplies it only for the unscheduled/settled blocks, only when
+  `stages.length > 1`.
+- **F4** — `run-sheet.tsx`'s two sticky headers moved `top-0` → `top-14`,
+  matching `nav.tsx`'s own `h-14` — they no longer render behind nav.
+- **F8** — `client-time.tsx`'s `ClientTime` now formats with
+  `useLocaleOrDefault()` instead of `[]` (the browser's own locale).
+- **F9** — `ClientTime` gained an `hourCycle` prop; the run sheet's two
+  time-cell call sites pass `"h23"`, matching this repo's own `HH:mm`
+  clock convention and incidentally fixing F7's identical symptom at the
+  same call site (F7 itself was never in scope for this PR).
+
+Two existing tests (one unit — `run-sheet-groups.test.ts` — one e2e —
+`run-sheet-dates-and-court.spec.ts`) had encoded F2's bug as their expected
+value; a third e2e case (`run-sheet.spec.ts`) hand-rebuilt `ClientTime`'s
+OLD formatting call to predict display text. All three updated to the
+corrected behavior, never weakened.
+
+Verified beyond unit tests: `run-sheet.spec.ts` +
+`run-sheet-dates-and-court.spec.ts` 23/23 against a real browser; full
+`mobile.spec.ts` (never `-g`-filtered) at BOTH 320 and 768, 43/43 each
+width; one direct screenshot at 320 (28-fixture day, scrolled) confirming
+the day header renders below nav and times print 24h, single line.
+
+**Nothing is owed to W3 from this gate any more except F5/F6/F7**, which
+were never in scope for either PR — see the report referenced above for
+their detail if a future wave picks them up.
