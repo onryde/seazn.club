@@ -204,6 +204,11 @@ const WALKTHROUGH_SPECS: string[] = [
   "settings-connect-gates.spec.ts",
   "settings-add-ons-drive.spec.ts",
   "settings-billing-panels.spec.ts",
+  // Opt-in (CONNECT_WALKTHROUGH=1 + the real Connect fixture account): it
+  // sells, invoices, charges and refunds a sponsor package through real Stripe
+  // test mode. It is listed here because the inventory's job is to notice a
+  // DELETED spec — a leg that skips is still a leg CI must be able to select.
+  "settings-sponsor-monetize.spec.ts",
 
   // The directory — the organiser's own records, driven through the screens
   // that own them: club import caps, the import paywall preview, officials'
