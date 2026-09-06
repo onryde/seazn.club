@@ -13242,6 +13242,33 @@ async function marketingSuite(): Promise<void> {
   for (const slug of ["finals-day", "club-night", "northside-open"]) {
     check(`marketing: ai demo card ${slug}`, shtml.includes(`data-ai-template="${slug}"`));
   }
+
+  // R14 (entitlements v18 W3) — the /pricing box-office redesign. Coarse HTML
+  // checks only (no JS runs here); the figures and copy are pinned by
+  // pricing-page.test.tsx and pricing-v18.spec.ts, which is where that job
+  // belongs. This is the "did the page even ship" net.
+  const pricing = await fetch(`${BASE}/pricing`);
+  const phtml = await pricing.text();
+  check("pricing: 200", pricing.status === 200);
+  check("pricing: sport rail shipped", renderedAttr(phtml, "data-pricing-rail"));
+  for (const sport of [
+    "football", "cricket", "tennis", "badminton", "tabletennis",
+    "volleyball", "hockey", "icehockey", "carrom", "boardgame",
+  ]) {
+    check(`pricing: rail slot ${sport}`, phtml.includes(`data-rail-sport="${sport}"`));
+  }
+  check("pricing: rail foot line shipped", renderedAttr(phtml, "data-rail-footer"));
+  check("pricing: no rail slot for generic", !phtml.includes('data-rail-sport="generic"'));
+  check("pricing: Event Pass ticket stub shipped", renderedAttr(phtml, "data-pass-stub"));
+  check(
+    "pricing: comparison table columns are community/event_pass/pro, no event_pass_l",
+    phtml.includes('data-pricing-column="community"') &&
+      phtml.includes('data-pricing-column="event_pass"') &&
+      phtml.includes('data-pricing-column="pro"') &&
+      !phtml.includes('data-pricing-column="event_pass_l"'),
+  );
+  check("pricing: 320 accordion shipped", renderedAttr(phtml, "data-pricing-accordion"));
+  check("pricing: no retired 'Pro Plus' copy", !phtml.includes("Pro Plus"));
 }
 
 async function funnelSuite(): Promise<void> {

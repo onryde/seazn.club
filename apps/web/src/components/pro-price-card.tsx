@@ -43,6 +43,11 @@ interface Props {
   /** v17 credits line (SPEC-6 A1) — localized on the server, rendered as one of
    *  the two tier differentiators (fee % + credits) above the feature list. */
   creditsLine?: string;
+  /** `pricing.card.feePill`, pre-filled with the live `registration.fee_percent`
+   *  (R14, entitlements v18 W3) — the same pill Free prints, so the fee rate
+   *  reads the same way across every offer. Absent when the matrix could not
+   *  supply the rate; suppressed, never rendered with a hole. */
+  feeLine?: string;
   labels: ProPriceCardLabels;
 }
 
@@ -67,7 +72,14 @@ interface Props {
  * `lib/__tests__/dictionary-copy-truth.test.ts` holds all three against the
  * seed's own ladder in both directions.
  */
-export function ProPriceCard({ monthly, annualPerMonth, features, creditsLine, labels }: Props) {
+export function ProPriceCard({
+  monthly,
+  annualPerMonth,
+  features,
+  creditsLine,
+  feeLine,
+  labels,
+}: Props) {
   const [annual, setAnnual] = useState(true);
 
   return (
@@ -124,6 +136,14 @@ export function ProPriceCard({ monthly, annualPerMonth, features, creditsLine, l
           </li>
         ))}
       </ul>
+      {feeLine && (
+        <p
+          data-pro-fee-pill
+          className="mb-5 inline-flex w-fit items-baseline gap-1 whitespace-nowrap rounded border border-purple-200 bg-purple-100/60 px-2.5 py-1.5 text-[11px] font-semibold tracking-[0.08em] text-purple-700"
+        >
+          {feeLine}
+        </p>
+      )}
       <Link href="/login?tab=signup" className="btn btn-primary w-full justify-center py-3">
         {labels.cta}
       </Link>

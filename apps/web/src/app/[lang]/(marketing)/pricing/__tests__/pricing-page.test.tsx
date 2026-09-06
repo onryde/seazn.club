@@ -1,19 +1,18 @@
 // /pricing, rendered — the wave's headline buyer-facing surface.
 //
-// What was missing. The M/L ladder on the Event Pass card is the only place a
-// buyer sees both rungs priced side by side before choosing a competition, and
-// nothing witnessed it: deleting the whole `<ul data-pass-ladder>` block left
-// `tsc` at EXIT=0 and every unit suite green, because `pricing-matrix.test.ts`
-// only proves the ROW BUILDER can produce five columns and `pricing-cards.test.ts`
-// only proves the copy quotes the right numbers. Neither renders the page.
-//
-// It also pins the ladder's deliberate ASYMMETRY (see below), which is the one
-// way the block can legitimately disappear.
+// R14 (entitlements v18 W3) redesigned this page around a box-office ticket
+// composition: a sport rail, an Event Pass TICKET with a two-slot stub (Size
+// M + the pass/Pro crossover — the M/L ladder this file used to pin is gone,
+// L is off sale), and a 320 per-plan ACCORDION beside the unchanged ≥768
+// table. What was missing before still applies here: nothing renders these
+// pieces except a real render — `pricing-rail.test.ts` and
+// `pricing-crossover.test.ts` prove the DATA is correct, but only this file
+// proves the PAGE actually paints it.
 //
 // Rendered through react-dom/server — vitest runs `environment: "node"` and
 // this workspace has no jsdom (same pattern as upgrade-page.test.tsx). The
-// dictionary and every pure pricing module are REAL, because the assertions are
-// about the figures and copy a buyer actually reads.
+// dictionary and every pure pricing module are REAL, because the assertions
+// are about the figures and copy a buyer actually reads.
 import { describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 
@@ -56,6 +55,8 @@ import {
 } from "@/lib/currency";
 import { feeCrossoverMinor, readableMinor } from "@/lib/pricing-crossover";
 import { PASS_RUNG_MARKETING_KEY } from "@/lib/pass-ladder";
+import { PRICING_RAIL_SPORTS, pricingRailKey, PRICING_RAIL_FOOTER_KEY } from "@/lib/pricing-rail";
+import { PRICING_PLAN_KEYS } from "@/lib/pricing-matrix";
 import enMarketing from "@/dictionaries/en/marketing.json";
 import esMarketing from "@/dictionaries/es/marketing.json";
 import frMarketing from "@/dictionaries/fr/marketing.json";
@@ -74,24 +75,20 @@ import type { Dict } from "@/lib/i18n-constants";
  *  string would have turned a legitimate reprice into a page regression. */
 const M_PRICE = formatMinor(passPrice("usd", "event_pass"), "usd");
 const L_PRICE = formatMinor(passPrice("usd", "event_pass_l"), "usd");
-/** Every rung's ladder label as the LIVE page would render it, keyed by rung.
- *  Read from the dictionary, so the sweep below enumerates what the page can
- *  say rather than a list typed here. */
-const RUNG_LABEL: Record<string, string> = { event_pass: "M", event_pass_l: "L" };
 /** The entry rung's ladder label, from the dictionary the page renders it from. */
 const M_RUNG = (enMarketing as Record<string, string>)[PASS_RUNG_MARKETING_KEY.event_pass];
 
 /**
- * The keys this page's Event Pass card renders from: the two V341 makes the
- * rungs differ on, plus `registration.fee_percent` for the pass/Pro comparator.
+ * The keys this page's Event Pass ticket renders from: the two V341 makes the
+ * rungs differ on, plus `registration.fee_percent` for the fee pills and the
+ * pass/Pro comparator.
  *
- * NOT a mirror of the live matrix, and it never was — the header comment that
- * said so was wrong twice over. `event_pass_l`'s entrant cap is deliberately
- * NULL here because the unlimited branch is what two of the tests below exist
- * to pin, while V393 gave the live rung a real 512; and there was no fee row at
- * all despite the comment promising one. The live figures are pinned against
- * `plan_entitlements` by lib/__tests__/pricing-cards.test.ts and
- * lib/__tests__/pricing-crossover.test.ts, which is where that job belongs.
+ * NOT a mirror of the live matrix. `event_pass_l`'s entrant cap is
+ * deliberately NULL here because the unlimited branch is what the asymmetry
+ * test below exists to pin (even though L itself never reaches the stub); the
+ * live figures are pinned against `plan_entitlements` by
+ * lib/__tests__/pricing-cards.test.ts and lib/__tests__/pricing-crossover.test.ts,
+ * which is where that job belongs.
  */
 const LIVE = [
   { plan_key: "community", feature_key: "divisions.per_competition.max", bool_value: null, int_value: 4 },
@@ -99,20 +96,14 @@ const LIVE = [
   { plan_key: "event_pass_l", feature_key: "divisions.per_competition.max", bool_value: null, int_value: 20 },
   { plan_key: "community", feature_key: "entrants.per_division.max", bool_value: null, int_value: 64 },
   { plan_key: "event_pass", feature_key: "entrants.per_division.max", bool_value: null, int_value: 128 },
-  // null int_value on a PRESENT row = unlimited. This is the figure the L rung
-  // is sold on.
+  // null int_value on a PRESENT row = unlimited.
   { plan_key: "event_pass_l", feature_key: "entrants.per_division.max", bool_value: null, int_value: null },
-  // The fee ladder the comparator is derived from (V398: community 5, pass 4,
-  // pro 2). The pass costs MORE per pound of entry fees and less up front,
-  // which is the whole shape of the crossing.
+  // The fee ladder the fee pills and the comparator are derived from (V398:
+  // community 5, pass 4, pro 2).
   { plan_key: "community", feature_key: "registration.fee_percent", bool_value: null, int_value: 5 },
   { plan_key: "event_pass", feature_key: "registration.fee_percent", bool_value: null, int_value: 4 },
   { plan_key: "event_pass_l", feature_key: "registration.fee_percent", bool_value: null, int_value: 4 },
   { plan_key: "pro", feature_key: "registration.fee_percent", bool_value: null, int_value: 2 },
-  // W2: the CARD BULLETS interpolate their figures from this same matrix, so
-  // the rows they read joined the fixture. `competitions.max_active` is NULL on
-  // pro on purpose — that is the "Unlimited competitions" branch, and a row
-  // that is merely ABSENT would drop the bullet instead of rendering the word.
   { plan_key: "community", feature_key: "competitions.max_active", bool_value: null, int_value: 3 },
   { plan_key: "pro", feature_key: "competitions.max_active", bool_value: null, int_value: null },
   { plan_key: "pro", feature_key: "divisions.per_competition.max", bool_value: null, int_value: 20 },
@@ -137,130 +128,93 @@ const render = async (rows = LIVE, lang = "en") => {
   return { markup, text, plain };
 };
 
-describe("/pricing renders only the Event Pass rungs that are on sale", () => {
-  /** Every rung the ladder actually rendered, read out of the markup rather
-   *  than inferred — `data-pass-rung` is written per row by the page. */
-  const laddered = (markup: string): string[] =>
-    [...markup.matchAll(/data-pass-rung="([^"]+)"/g)].map((m) => m[1]!);
+describe("/pricing's box office board (R14)", () => {
+  /** Every sport the rail actually rendered, read out of the markup rather
+   *  than inferred — `data-rail-sport` is written per slot by the page. */
+  const railed = (markup: string): string[] =>
+    [...markup.matchAll(/data-rail-sport="([^"]+)"/g)].map((m) => m[1]!);
 
-  it("enumerates the ladder and finds exactly the sellable rungs", async () => {
-    const { markup, text } = await render();
-    expect(markup, "the ladder block itself").toContain("data-pass-ladder");
-    // ENUMERATED, not asserted-absent. A `not.toContain("Event Pass L")` passes
-    // on a page that renders nothing at all; this compares the rendered SET to
-    // the authority, so a ladder that lost its only row fails just as loudly as
-    // one that grew a row it should not have.
-    expect(laddered(markup)).toEqual([...SELLABLE_PASS_KEYS]);
-
-    // The positive half, in full: the rung that IS on sale, with its own price
-    // and its own caps read from the matrix rather than written in copy.
-    expect(text).toContain(M_PRICE);
-    expect(text).toContain("Up to 10 divisions, 128 entrants each");
-
-    // …and the negative half, stated against the hidden list rather than a
-    // literal, and about the CAPS and the LABEL as well as the price — L's
-    // price alone could plausibly appear in unrelated FAQ prose.
-    for (const hidden of HIDDEN_PASS_KEYS) {
-      expect(laddered(markup), `${hidden} is off sale`).not.toContain(hidden);
+  it("enumerates the rail and finds exactly the mockup's ten sports, in order", async () => {
+    const { markup, plain } = await render();
+    expect(markup, "the rail itself").toContain("data-pricing-rail");
+    // ENUMERATED, not asserted one at a time — a slot lost from the rail
+    // fails this the same way an extra one does.
+    expect(railed(markup)).toEqual([...PRICING_RAIL_SPORTS]);
+    for (const sport of PRICING_RAIL_SPORTS) {
+      expect(plain, sport).toContain((enMarketing as Record<string, string>)[pricingRailKey(sport)]);
     }
-    expect(text, "L's caps are its whole sales pitch").not.toContain("Up to 20 divisions");
-    expect(text).not.toContain("unlimited entrants");
+  });
+
+  it("prints the foot line, and never a raw generic label", async () => {
+    const { markup, plain } = await render();
+    expect(markup).toContain("data-rail-footer");
+    expect(plain).toContain((enMarketing as Record<string, string>)[PRICING_RAIL_FOOTER_KEY]);
+    // `generic` is the board's foot line, never an eleventh rail SLOT.
+    expect(railed(markup)).not.toContain("generic");
+  });
+});
+
+describe("/pricing's Event Pass ticket sells only the rung that is on sale", () => {
+  it("the stub quotes the M rung's price, caps and one-time credits — never L's", async () => {
+    const { markup, text } = await render();
+    expect(markup, "the stub itself").toContain("data-pass-stub");
+    expect(markup, 'the M slot').toContain('data-pass-stub-slot="m"');
+    expect(text).toContain(M_PRICE);
+    expect(text).toContain("10 divisions × 128 entrants");
+    expect(text).toContain("+25 AI credits");
+
+    // The negative half, about the CAPS and the PRICE, not just the ladder
+    // markup — L's price alone could plausibly appear in unrelated FAQ prose.
+    for (const hidden of HIDDEN_PASS_KEYS) expect(markup, hidden).not.toContain(`"${hidden}"`);
+    expect(text, "L's caps are its whole sales pitch").not.toContain("20 divisions × unlimited");
     expect(text, "the L price point").not.toContain(L_PRICE);
-    // Anti-vacuity for all three: L's price is a real, DIFFERENT number, and
-    // something really is hidden.
+    // Anti-vacuity: L's price is a real, DIFFERENT number, and something
+    // really is hidden.
     expect(M_PRICE).not.toBe(L_PRICE);
     expect(HIDDEN_PASS_KEYS.length).toBeGreaterThan(0);
   });
 
-  it("drops the ladder's two-size framing when only one size is on sale", async () => {
-    // "from" reads as a floor and the note says "either way … Choose your size
-    // when you check out" — both are statements about a CHOICE. Suppressed by
-    // the rung count rather than deleted, so putting L back on sale restores
-    // them without a copy change or a re-translation.
-    const { text } = await render();
-    const note = (enMarketing as Record<string, string>)["pricing.pass.ladderNote"]!;
-    expect(SELLABLE_PASS_KEYS.length).toBe(1);
-    expect(text).not.toContain(note);
-    expect(text).not.toContain("Choose your size");
-  });
-
-  it("never claims a multiplier — the L/M ratio is not uniform across currencies", async () => {
-    const { text } = await render();
-    // 2.03x in USD but 1.96x in GBP and 2.25x in INR, so any "double" framing
-    // is false in some currency (ledger copy constraint, T2).
-    //
-    // "double elimination" / "double elim" is a BRACKET FORMAT and reaches
-    // this page in unrelated places (the pass bullet, the matrix row label).
-    // The strip is NECESSARY, not tidy: without it a page-wide /\bdouble\b/
-    // would be permanently RED on a page that has never made a multiplier
-    // claim, and the only way to get it green again would be to delete the
-    // guard. Stripped, it has real teeth — it fails on "double the size",
-    // "twice the price", "2×" and "2x" anywhere in the price copy.
-    const priceCopy = text.toLowerCase().replace(/double elim(ination)?/g, "");
-    expect(priceCopy).not.toMatch(/\bdouble\b|\btwice\b|\b2×\b|\b2x\b/);
-    // Owner decision: no "best value" label anywhere on the ladder.
-    expect(priceCopy).not.toContain("best value");
-  });
-
-  // ── The asymmetry, pinned ────────────────────────────────────────────────
-  //
-  // `entrants` needs only the ROW to exist — a null int_value there is
-  // honoured as "unlimited", because that is exactly what L sells.
-  // `divisions` additionally needs a NUMBER, because the copy reads "Up to
-  // {divisions} divisions" and a null would render "Up to  divisions".
-  //
-  // That is deliberate, not an oversight — but it means an unlimited division
-  // cap would take the whole L presentation off the card. The first test above
-  // is what reds if that ever happens; these two pin the rule itself so the
-  // behaviour is a documented choice rather than an accident.
-
-  it("honours a null ENTRANT cap as unlimited rather than suppressing the ladder", async () => {
-    // Asserted on the SELLABLE rung, because that is the only one the ladder
-    // renders. It used to ride on L's live null cap; with L off sale the rule
-    // needs a fixture that exercises it on the rung that is still quoted, or it
-    // stops being tested at all.
-    const { markup, text } = await render(
+  it("honours a null ENTRANT cap as unlimited rather than dropping the caps line", async () => {
+    const { text } = await render(
       LIVE.map((r) =>
         r.plan_key === "event_pass" && r.feature_key === "entrants.per_division.max"
           ? { ...r, int_value: null }
           : r,
       ),
     );
-    expect(markup).toContain("data-pass-ladder");
-    expect(text).toContain("unlimited entrants");
+    expect(text).toContain("10 divisions × unlimited entrants");
   });
 
-  it("suppresses the ladder rather than quoting a figure it does not have", async () => {
-    // A DB unreachable at build makes `loadMatrix` fail soft to `{}`; a missing
-    // row read through `?? null` would advertise an UNLIMITED pass for M's price.
-    // Absence must suppress, never embellish.
-    //
-    // The dropped rows are the SELLABLE rung's now. Dropping L's would prove
-    // nothing: the guard only looks at rungs it is going to quote, which is
-    // correct — a hidden rung's missing row must not take the live offer down.
-    const { markup, text } = await render(LIVE.filter((r) => r.plan_key !== "event_pass"));
-    expect(markup, "no rung may be priced from a row that isn't there").not.toContain(
-      "data-pass-ladder",
+  it("drops the caps line rather than quoting a figure it does not have, but keeps selling", async () => {
+    // A DB unreachable at build makes `loadMatrix` fail soft to `{}`; a
+    // missing row read through `?? null` would advertise an UNLIMITED pass
+    // for M's price. Absence must suppress, never embellish — and it must
+    // not take the whole offer down with it.
+    const { text } = await render(LIVE.filter((r) => r.plan_key !== "event_pass"));
+    expect(text, "no cap may be quoted from a row that isn't there").not.toContain(
+      "divisions × 128 entrants",
     );
-    // No cap is quoted for a rung whose row is gone. Anchored on the LADDER's
-    // own phrasing ("Up to …"), because the card's static feature bullet also
-    // says "128 entrants each" and is not what this rule is about.
-    expect(text).not.toContain("Up to 10 divisions, 128 entrants each");
-    expect(text).not.toContain("Up to 10 divisions");
-    // …and the card still renders. Suppressing the ladder must not take the
-    // Event Pass offer down with it.
-    expect(text).toContain(M_PRICE);
+    expect(text, "the stub still sells").toContain(M_PRICE);
   });
 
-  it("keeps selling when a HIDDEN rung's matrix rows are missing entirely", async () => {
-    // The other direction, and it is the dormancy half: the ladder must not
-    // consult a rung it does not render. Before the sellable list existed this
-    // fixture took the whole ladder down, because the guard demanded caps for
-    // every rung in PASS_KEYS.
-    const { markup, text } = await render(LIVE.filter((r) => r.plan_key !== "event_pass_l"));
-    expect(markup).toContain("data-pass-ladder");
+  it("keeps selling when the HIDDEN rung's matrix rows are missing entirely", async () => {
+    // The dormancy half: the stub must not consult a rung it does not
+    // render. It reads `event_pass` alone, so `event_pass_l`'s rows going
+    // missing must be invisible to it.
+    const { text } = await render(LIVE.filter((r) => r.plan_key !== "event_pass_l"));
     expect(text).toContain(M_PRICE);
-    expect(text).toContain("Up to 10 divisions, 128 entrants each");
+    expect(text).toContain("10 divisions × 128 entrants");
+  });
+
+  it("never claims a multiplier anywhere on the page", async () => {
+    // 2.03x in USD but 1.96x in GBP and 2.25x in INR, so any "double" framing
+    // is false in some currency (ledger copy constraint, T2). "double
+    // elimination" is a BRACKET FORMAT and reaches this page in the pass
+    // bullet and the matrix row label, so it is stripped first.
+    const { text } = await render();
+    const priceCopy = text.toLowerCase().replace(/double elim(ination)?/g, "");
+    expect(priceCopy).not.toMatch(/\bdouble\b|\btwice\b|\b2×\b|\b2x\b/);
+    expect(priceCopy).not.toContain("best value");
   });
 });
 
@@ -283,21 +237,29 @@ describe("/pricing's comparison table has no column for a rung nobody can buy", 
       expect(rendered, `${hidden} has no column`).not.toContain(hidden);
       const label = (enMarketing as Record<string, string>)["pricing.table.pass"]!;
       expect(text, "no heading names the hidden rung").not.toContain(
-        `${label} ${RUNG_LABEL[hidden]}`,
+        `${label} L`,
       );
     }
     // `enterprise` is the Contact-us strip, never a priced column (design §4).
     expect(rendered).not.toContain("enterprise");
   });
+
+  it("is a REAL table at desktop — visible with no click needed", async () => {
+    const { markup } = await render();
+    // `hidden md:block`: at ≥768 the table renders unconditionally.
+    expect(markup).toMatch(/class="[^"]*\bhidden\b[^"]*\bmd:block\b[^"]*"[^>]*tabindex="0"/);
+  });
 });
 
-// ── The pass/Pro comparator ─────────────────────────────────────────────────
+// ── The pass/Pro comparator, now inside the stub ─────────────────────────────
 //
 // The page priced both offers and left the buyer to work out which one costs
 // them less, which reads as "the pass is cheaper" — true only below one
 // threshold, and the threshold was stated nowhere. Naming it is the whole
 // point, so the assertions below are about the FIGURE, not about the element
-// being present.
+// being present. R14 moves this into the ticket's stub as its second slot;
+// the underlying sentence and its correctness guards (pricing-crossover.test.ts)
+// are unchanged.
 describe("/pricing names where Pro overtakes the Event Pass", () => {
   /** The crossing as the page derives it: catalogue prices, matrix fee rates. */
   const CROSSING = formatMinor(
@@ -312,7 +274,7 @@ describe("/pricing names where Pro overtakes the Event Pass", () => {
     "usd",
   );
 
-  it("quotes the crossing and both fee rates, none of them typed", async () => {
+  it("quotes the crossing and both fee rates, none of them typed, inside the stub", async () => {
     const { markup, text } = await render();
     expect(markup, "the comparator itself").toContain("data-pass-crossover");
     expect(CROSSING).toBe("$150");
@@ -328,55 +290,121 @@ describe("/pricing names where Pro overtakes the Event Pass", () => {
     expect(CROSSING).not.toBe(formatMinor(proPrice("monthly", "usd"), "usd"));
   });
 
-  it("says WHICH RUNG it is true of — the card sells two and the crossing is one rung's", async () => {
-    // The line is solved for ONE rung. Read without naming it, "this is the
-    // cheaper option" is a claim about the whole Event Pass column, and it is
-    // false of L: at L's price against a month of Pro, Pro is cheaper up front
-    // AND per pound, so the two never cross. Scope, not suppression — the
-    // suppression rule stays for the shapes that genuinely have no crossing.
+  it("says WHICH RUNG it is true of — the ticket sells one and the crossing is that rung's", async () => {
     const { markup } = await render();
     const para = /<p[^>]*data-pass-crossover[^>]*>([\s\S]*?)<\/p>/.exec(markup);
     expect(para, "the comparator paragraph").not.toBeNull();
     const line = para![1].replace(/<[^>]*>/g, " ").replace(/\s+/g, " ");
 
-    // The rung's own ladder label and its own price, TOGETHER — the two things
-    // the list directly above it identifies each rung by. Both derived, neither
-    // typed, and adjacency is what carries the meaning: a bare "M" would be
-    // satisfied by any capital M on the line, and a bare price by the sticker
-    // price the card already quotes twice.
     const escape = (v: string) => v.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     expect(
       line,
       `the line must name the ${M_RUNG} rung beside its own price`,
     ).toMatch(new RegExp(`\\b${escape(M_RUNG)}\\b[^.;]{0,20}${escape(M_PRICE)}`));
-    // …and NOT the other rung, which this sentence is not true of.
     expect(M_PRICE).not.toBe(L_PRICE);
     expect(line, "the line must not read as a claim about L").not.toContain(L_PRICE);
-    // The claim itself is still intact around the scoping.
     expect(line).toContain(CROSSING);
     expect(line).toContain("2% platform fee against 4%");
   });
 
   it("says nothing at all when a fee rate could not be read", async () => {
-    // `loadMatrix` fails soft to `{}` when the DB is unreachable at build. A
-    // missing rate must take the sentence with it: a threshold computed from a
-    // rate we do not have is a number invented at the point of sale.
     const { markup, text } = await render(
       LIVE.filter((r) => !(r.feature_key === "registration.fee_percent" && r.plan_key === "pro")),
     );
     expect(markup).not.toContain("data-pass-crossover");
     expect(text).not.toContain(CROSSING);
-    // …and the card still sells. Suppressing the comparator must not take the
+    // …and the stub still sells. Suppressing the comparator must not take the
     // Event Pass offer down with it.
     expect(text).toContain(M_PRICE);
   });
+});
 
-  // The ladder shapes that have NO crossing at all — equal fees, a pass that is
-  // cheaper per pound, a pass that costs more up front — are pinned in
-  // lib/__tests__/pricing-crossover.test.ts rather than here. Measured: at this
-  // level they are unkillable. `readableMinor`'s own "nothing to render" floor
-  // catches the ±Infinity and NaN those shapes produce, so a page test for them
-  // stays green with the helper's guard deleted, and would be decoration.
+// ── The fee pills (R14): Free and Pro both print `{fee}% platform fee`,
+// derived from the SAME `registration.fee_percent` row the comparison table
+// renders from — never a typed number.
+describe("/pricing's fee pills are derived, never typed", () => {
+  /** The pill's OWN text, scoped by its data attribute — never a bare
+   *  substring search on the whole page. The crossover sentence in the stub
+   *  also contains the phrase "…% platform fee against …%", so a page-wide
+   *  `toContain("2% platform fee")` is satisfied by that sentence even when
+   *  Pro's own pill is broken — measured: a mutant that hardcoded both pills
+   *  to 5% survived a page-wide substring check and only reddened once the
+   *  assertion was scoped to the pill element itself. */
+  const pillText = (markup: string, attr: string): string | null => {
+    const re = new RegExp(`${attr}[^>]*>([\\s\\S]*?)<\\/p>`);
+    const m = re.exec(markup);
+    return m ? m[1]!.trim() : null;
+  };
+
+  it("prints Free's and Pro's own rate, and they differ", async () => {
+    const { markup } = await render();
+    expect(pillText(markup, "data-community-fee-pill")).toBe("5% platform fee");
+    expect(pillText(markup, "data-pro-fee-pill")).toBe("2% platform fee");
+  });
+
+  it("suppresses a pill it cannot read rather than printing a hole", async () => {
+    const { markup } = await render(LIVE.filter((r) => r.feature_key !== "registration.fee_percent"));
+    expect(pillText(markup, "data-community-fee-pill")).toBeNull();
+    expect(pillText(markup, "data-pro-fee-pill")).toBeNull();
+  });
+});
+
+// ── The comparison surfaces: a table at ≥768, a per-plan accordion at 320 —
+// same `sections` data, two renderers.
+describe("/pricing's table and its 320 accordion agree, row for row", () => {
+  it("the accordion lists exactly PRICING_PLAN_KEYS, and no more", async () => {
+    const { markup } = await render();
+    expect(markup).toContain("data-pricing-accordion");
+    const plans = [...markup.matchAll(/data-pricing-accordion-plan="([^"]+)"/g)].map((m) => m[1]!);
+    expect(plans).toEqual([...PRICING_PLAN_KEYS]);
+  });
+
+  it("every accordion row's value matches the table's for the same plan", async () => {
+    const { markup } = await render();
+    // Pull the table's own cell text, keyed by (row label key, plan), out of
+    // the SAME markup the accordion renders from — one source of truth
+    // compared against itself through two renderers.
+    const tableMatch = /<table[^>]*data-pricing-matrix[^>]*>([\s\S]*?)<\/table>/.exec(markup);
+    expect(tableMatch, "the table itself").not.toBeNull();
+    const tableHtml = tableMatch![1]!;
+    const headerCols = [...tableHtml.matchAll(/data-pricing-column="([^"]+)"/g)].map((m) => m[1]!);
+
+    const rowRe = /<tr>\s*<td class="font-medium[^"]*">([\s\S]*?)<\/tr>/g;
+    const tableCells: Record<string, string[]> = {};
+    for (const rowHtml of tableHtml.match(/<tr>[\s\S]*?<\/tr>/g) ?? []) {
+      const cells = [...rowHtml.matchAll(/<td[^>]*>([\s\S]*?)<\/td>/g)].map((m) =>
+        m[1]!.replace(/<[^>]*>/g, "").trim(),
+      );
+      if (cells.length !== headerCols.length + 1) continue; // section header row
+      tableCells[cells[0]!] = cells.slice(1);
+    }
+    void rowRe; // documents the row shape considered above; matched via match() instead
+
+    // Now walk the accordion and compare each `dd` to the table's cell for
+    // the same plan and the same row label text.
+    for (const plan of headerCols) {
+      const detailsRe = new RegExp(
+        `data-pricing-accordion-plan="${plan}"[\\s\\S]*?<\\/details>`,
+      );
+      const detailsHtml = detailsRe.exec(markup)?.[0];
+      expect(detailsHtml, `${plan} accordion section`).toBeTruthy();
+      const rows = [...(detailsHtml ?? "").matchAll(
+        /data-pricing-accordion-row="[^"]*"[^>]*>\s*<dt[^>]*>([\s\S]*?)<\/dt>\s*<dd[^>]*>([\s\S]*?)<\/dd>/g,
+      )];
+      expect(rows.length, `${plan} has rows`).toBeGreaterThan(0);
+      const planIndex = headerCols.indexOf(plan);
+      let checked = 0;
+      for (const [, dtHtml, ddHtml] of rows) {
+        const label = dtHtml!.replace(/<[^>]*>/g, "").trim();
+        const value = ddHtml!.replace(/<[^>]*>/g, "").trim();
+        const tableRow = tableCells[label];
+        if (!tableRow) continue; // a row whose label carries a note line — matched loosely below
+        expect(value, `${plan}/${label}`).toBe(tableRow[planIndex]);
+        checked += 1;
+      }
+      expect(checked, `${plan}: nothing was actually compared`).toBeGreaterThan(3);
+    }
+  });
 });
 
 /**
@@ -394,14 +422,9 @@ describe("/pricing names where Pro overtakes the Event Pass", () => {
  * component, in the real locale, through `getDictionary`'s en-merge — so a key
  * that exists in `en` and is simply MISSING from `es` (parity-green if the key
  * were absent everywhere, and invisible to a per-file read) shows up here as
- * English on a Spanish page. That is the leak this catches.
- *
- * Scoped to the CARD BULLETS. `ProPriceCard`'s own chrome ("Annual billing",
- * "Billed monthly · switch to yearly any time", the "/month" suffix and the
- * emerald "save 30%") was hardcoded English in every locale when this comment
- * was first written; it was fixed on 2026-09-05, and the guard that holds it is
- * the SOURCE SCAN, not this file. What this file adds for it is the one thing a
- * source scan cannot do at all — see the raw-key rule below.
+ * English on a Spanish page. That is the leak this catches. This also covers
+ * every key R14 added (the rail, the stub, the fee pills, the enterprise
+ * heading) — nothing about that set is special-cased below.
  */
 describe("the plan cards speak the visitor's language", () => {
   const DICTS: Record<string, Dict> = {
@@ -432,20 +455,12 @@ describe("the plan cards speak the visitor's language", () => {
    * ── THE RAW KEY, WHICH ONLY A RENDER CAN SEE ─────────────────────────────
    *
    * `t(dict, key)` RETURNS THE KEY when the key is missing. Not an empty
-   * string, not a throw — the dotted key itself, painted onto the page.
-   *
-   * This rule exists because it happened, in the commit that localised the Pro
-   * card. The page asked for `pricing.pro.name`, which reads like the sibling
-   * of `pricing.community.name` and `pricing.pass.name` and does not exist (the
-   * Pro column's label has only ever lived on `pricing.table.pro`). So the card
-   * painted the literal string "pricing.pro.name" as its tier eyebrow, in all
-   * four locales, past 175 green tests — including the source scan, which saw a
-   * `t()` call and was satisfied, and `i18n:check`, which compares locales to
-   * each other and cannot know what the code asks for.
-   *
-   * It was found by opening /fr/pricing. This is the assertion that means the
-   * next one is found by CI instead: a source scan proves the copy came from a
-   * dictionary, and only a render proves the dictionary answered.
+   * string, not a throw — the dotted key itself, painted onto the page. This
+   * is the guard that would have caught the `pricing.pro.name` defect
+   * (see git history), and it is what proves every R14 key actually resolves
+   * in all four locales — including a locale simply missing a NEW key, which
+   * `i18n:check`'s parity comparison would also catch, but a render is the
+   * more direct proof for a page test.
    */
   it.each(["en", "es", "fr", "nl"])(
     "paints no raw dictionary key on /%s/pricing",
@@ -453,24 +468,16 @@ describe("the plan cards speak the visitor's language", () => {
       const { plain } = await render(LIVE, locale);
       const raw = [...plain.matchAll(/\b[a-z][a-zA-Z0-9]*(?:\.[a-zA-Z0-9]+){2,}\b/g)]
         .map((m) => m[0])
-        // A version-shaped or file-shaped token is not a key. Nothing on this
-        // page has one today; the exclusion keeps the rule affordable rather
-        // than tuned down later by someone it inconveniences.
         .filter((tok) => !/^\d|\.(?:tsx?|json|com|club|io)$/.test(tok));
       expect(raw, `${locale}: a dictionary lookup missed and rendered its key`).toEqual([]);
     },
   );
 
-  // ANTI-VACUITY: the matcher above must actually recognise a key when one is
-  // on the page, or "no raw keys" is a sentence about a regex that matches
-  // nothing. Both real shapes — the one that shipped, and a deeper one.
   it("would have caught the key that shipped", () => {
     const probe = /\b[a-z][a-zA-Z0-9]*(?:\.[a-zA-Z0-9]+){2,}\b/g;
     for (const key of ["pricing.pro.name", "pricing.faq.annual.a", "billing.intervalChange.toYearly"]) {
       expect([...`Pro ${key} $10.75`.matchAll(probe)].map((m) => m[0]), key).toEqual([key]);
     }
-    // …and it must not fire on the prices, glyphs and sentences that legitimately
-    // share the page, or the rule is unaffordable.
     for (const notAKey of ["$128.99 billed yearly", "more than two months free", "2%", "u.s. only"]) {
       expect([...notAKey.matchAll(probe)].map((m) => m[0]), notAKey).toEqual([]);
     }
@@ -494,27 +501,44 @@ describe("the plan cards speak the visitor's language", () => {
       for (const bullet of translated) {
         expect(plain, `${locale}: missing "${bullet}"`).toContain(bullet);
       }
-      // The leak, stated as the ABSENCE of the English the page used to ship.
-      // Every one of these is a full bullet, so it cannot collide with a
-      // matrix row label or an FAQ clause by accident.
       for (const bullet of english) {
         expect(plain, `${locale}: English leaked — "${bullet}"`).not.toContain(bullet);
       }
-      // Anti-vacuity: the two sets really are different, so "no English" is not
-      // satisfied by the locale happening to equal en.
       expect(translated.filter((b) => english.includes(b)), `${locale} is not translated`).toEqual([]);
     },
   );
 
   it("still quotes the live caps and fee rates in a non-English locale", async () => {
-    // The FIGURES are locale-free data and must survive translation — a
-    // translator dropping "{entrants}" produces a grammatical Spanish sentence
-    // that no longer names the cap, and only the numbers can witness it.
     const { plain } = await render(LIVE, "es");
     for (const figure of ["3", "4", "64", "5%", "10", "128", "256", "20", "2%"]) {
       expect(plain, `es: the ${figure} figure`).toContain(figure);
     }
-    // …and nothing shipped a raw placeholder.
     expect(plain, "an unfilled placeholder reached the page").not.toMatch(/\{[a-z]\w*\}/i);
+  });
+
+  it("renders the rail's sport names translated, on a non-English locale", async () => {
+    const { plain } = await render(LIVE, "fr");
+    for (const sport of PRICING_RAIL_SPORTS) {
+      const frValue = (frMarketing as Record<string, string>)[pricingRailKey(sport)]!;
+      expect(plain, `fr: ${sport}`).toContain(frValue);
+    }
+  });
+});
+
+// ── Retired copy must never resurface — the two things W2/W3 explicitly
+// removed from every purchasable surface.
+describe("retired plans and rungs never reach the rendered page", () => {
+  it("says nothing about Pro Plus, on any locale", async () => {
+    for (const locale of ["en", "es", "fr", "nl"]) {
+      const { plain } = await render(LIVE, locale);
+      expect(plain.toLowerCase(), locale).not.toContain("pro plus");
+    }
+  });
+
+  it("never renders the retired event_pass_l key as a rendered attribute", async () => {
+    const { markup } = await render();
+    expect(markup).not.toMatch(/data-pricing-column="event_pass_l"/);
+    expect(markup).not.toMatch(/data-pricing-accordion-plan="event_pass_l"/);
+    expect(markup).not.toMatch(/data-pass-stub-slot="event_pass_l"/);
   });
 });

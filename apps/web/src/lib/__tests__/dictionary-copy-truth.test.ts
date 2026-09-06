@@ -234,13 +234,13 @@ const PRO_CARD_BODY = across("ui", "upgrade.proCard.body");
  * bullets: every window in these vocabularies is bounded by sentence
  * punctuation, and wrong-clause satisfaction has already appeared three times
  * in this wave.
+ *
+ * `PLUS_CARD_BULLET_KEYS` / `PLUS_CARD_KEYS` / `PLUS_SOON_KEYS` /
+ * `PLUS_CARD_VALUES` retired here — R14 (entitlements v18 W3) deleted the
+ * whole `pricing.plus.*` key family from every locale (see
+ * `_approved-dictionary-copy.ts`'s header note on the same retirement).
  */
-const PLUS_CARD_BULLET_KEYS = [1, 2, 3, 4, 5].map((n) => `pricing.plus.f${n}`);
-const PLUS_CARD_KEYS = ["pricing.plus.note", ...PLUS_CARD_BULLET_KEYS];
 
-/** The roadmap under the same card — its label and its eight items. Pinned in
- *  APPROVED_DICTIONARY_COPY; see the note over those entries for why there is no
- *  matrix row to check them against. */
 /**
  * ── THE PANEL'S ROW SET, DERIVED FROM THE PAGE (fix round 4) ────────────────
  *
@@ -256,34 +256,6 @@ const PANEL_KEYS: string[] = [
     [...BILLING_PAGE.matchAll(/"(billing\.(?:community|pro)\.f\d+)"/g)].map((m) => m[1]!),
   ),
 ].sort();
-
-const PLUS_SOON_KEYS = [
-  "pricing.plus.soonLabel",
-  ...Array.from({ length: 8 }, (_, i) => `pricing.plus.soon${i + 1}`),
-];
-
-/**
- * A MISSING key is a FAULT, not an empty string (fix round 1, minor).
- *
- * `?? ""` swallowed a deleted key: the value simply got shorter, the scans below
- * found no falsehood in it, and the suite went green on a card bullet that no
- * longer exists. The empty-value case is exactly what `localePassBoundFaults`
- * calls "empty — nothing to scan, so every rule below passes vacuously", and it
- * has to reach the fault list here too rather than be silently normalised away.
- */
-const missingCardKeys: string[] = [];
-const PLUS_CARD_VALUES: LocalisedValue[] = DICTIONARY_LOCALES.map((locale) => ({
-  locale,
-  key: "pricing.plus.f1-f5",
-  value: PLUS_CARD_BULLET_KEYS.map((key) => {
-    const value = load(locale, "marketing")[key];
-    if (typeof value !== "string" || value.trim().length === 0) {
-      missingCardKeys.push(`${locale} ${key}: missing or empty in marketing.json`);
-      return "";
-    }
-    return value;
-  }).join(". "),
-}));
 
 /**
  * THE HALF-RATE CLAIM HAS ITS OWN KEY AXIS, and this is why.
@@ -427,11 +399,13 @@ const RETIRED_CLAIMS = [
  * rediscovery.
  */
 const KNOWN_GAPS = [
-  // CLOSED by task 5: `pricing.plus.f3` (the Pro Plus CARD's third bullet) is
-  // now covered by PLUS_CARD_VALUES below and pinned in
-  // APPROVED_DICTIONARY_COPY, together with the frame and the other four
-  // bullets. lib/pricing-cards.ts PLUS_CARD_FEATURES and
-  // e2e/pro-plus-tier.spec.ts moved with it, in the same commit.
+  // CLOSED by task 5, then RETIRED by R14 (entitlements v18 W3):
+  // `pricing.plus.f3` (the Pro Plus CARD's third bullet) was covered by
+  // PLUS_CARD_VALUES and pinned in APPROVED_DICTIONARY_COPY, together with
+  // the frame and the other four bullets, until W3 deleted the whole
+  // `pricing.plus.*` family — nothing had rendered it since W2.
+  // lib/pricing-cards.ts PLUS_CARD_FEATURES and e2e/pro-plus-tier.spec.ts
+  // moved with it, in the same commit as task 5's fix.
   "config/tips.ts:82 — 'half your plan's rate', bare. Hardcoded English with no dictionary lookup, so it is a four-locale gap of its own class; routed to task 7, which is already editing that tip.",
   "content/help/scheduling/ai-scheduling.md, content/help/billing/downgrade.md — task 3's gaps, still open (#303).",
   "BOUNDED_SCOPE_GRAMMAR (and therefore all four `bounded` rules, which share its shape) decides a bound by PROXIMITY inside one sentence, not grammar: a coordinated clause such as 'buy during checkout and your competitions stay active' satisfies it. Task 3's review has this queued for a fix round; the locale rules deliberately delegate to it rather than fork it, so they inherit the repair.",
@@ -963,9 +937,7 @@ describe.skipIf(!HAS_DB)("the four-locale dictionaries say what the resolver enf
   // Anti-vacuity for the whole file: every guard below is `toEqual([])` over a
   // scan, and a scan of nothing returns []. These are the inputs.
   it("actually has copy to scan, in every locale", () => {
-    // A deleted card key must reach this list rather than be normalised to "".
-    expect(missingCardKeys).toEqual([]);
-    for (const { locale, key, value } of [...PASS_BOUND_VALUES, ...PLUS_CARD_VALUES]) {
+    for (const { locale, key, value } of PASS_BOUND_VALUES) {
       expect(value, `${locale} ${key} is missing or empty`).toBeTruthy();
       expect(value.length, `${locale} ${key}`).toBeGreaterThan(20);
     }
@@ -1003,19 +975,9 @@ describe.skipIf(!HAS_DB)("the four-locale dictionaries say what the resolver enf
     for (const key of [...HALF_CLAIM_KEYS, ...HALF_CLAIM_UI_KEYS]) {
       expect(pinned.has(key), `${key} makes a half-rate claim but is not pinned`).toBe(true);
     }
-    // …and the Pro Plus card: its frame AND every bullet it governs. Pinning the
-    // bullets without the frame would leave a reword free to delete the thing
-    // that makes them exclusivity claims at all.
-    for (const key of PLUS_CARD_KEYS) {
-      expect(pinned.has(key), `${key} is a Pro Plus card claim but is not pinned`).toBe(true);
-    }
-    // FIX ROUND 1 (I3): the ROADMAP under the same card. Its claim is
-    // availability, which no `plan_entitlements` row records, so the pin is the
-    // only thing between a one-word edit and eight undelivered features being
-    // advertised as live — measured, in whichever locale it is done.
-    for (const key of PLUS_SOON_KEYS) {
-      expect(pinned.has(key), `${key} is a roadmap claim but is not pinned`).toBe(true);
-    }
+    // The Pro Plus card and its roadmap (PLUS_CARD_KEYS / PLUS_SOON_KEYS) were
+    // pinned here until R14 (entitlements v18 W3) deleted the whole
+    // `pricing.plus.*` family — nothing had rendered it since W2.
     // FIX ROUND 4: the in-app comparison panel. Polarity never reads the string,
     // so without these the original f5 defect could be restored verbatim and
     // ship green — measured, 109/109.
@@ -1040,8 +1002,15 @@ describe.skipIf(!HAS_DB)("the four-locale dictionaries say what the resolver enf
     // to every rule here — a key-shaped guard cannot classify a string that has
     // no key. `annualSaving` is the one that mattered: it read "save 30%" while
     // the FAQ two screens below already carried the corrected floor.
+    // 356 -> 296: R14 (entitlements v18 W3) retired the `pricing.plus.*` family
+    // outright (18 keys: the Pro Plus card's frame, its five bullets, its price
+    // suffix, its eight-item roadmap) and the M/L ladder's two caps keys
+    // (`pricing.pass.ladder.caps` / `.capsUnlimited`) — replaced by the Event
+    // Pass ticket's stub, which quotes the same caps under new keys
+    // (`pricing.pass.stub.caps` / `.capsUnlimited`) plus the new
+    // `pricing.card.feePill` the Free/Pro cards both print. Net -15 keys.
     // A count, not a floor, so a DELETED pin reds too.
-    expect(APPROVED_DICTIONARY_COPY.length * DICTIONARY_LOCALES.length).toBe(356);
+    expect(APPROVED_DICTIONARY_COPY.length * DICTIONARY_LOCALES.length).toBe(296);
     // Every entry must say what it claims and what decides it — a pin with no
     // `why` is a snapshot, and a snapshot teaches the next editor to re-record
     // rather than to re-check.
@@ -1070,12 +1039,20 @@ describe.skipIf(!HAS_DB)("the four-locale dictionaries say what the resolver enf
    */
   const PRICING_KEY_DISPOSITION: Array<{ match: RegExp; pinned: boolean; why: string }> = [
     {
-      match: /^pricing\.(plus\.(note|f\d|soonLabel|soon\d)|pass\.note)$/,
+      // `plus\.(note|f\d|soonLabel|soon\d)` retired here — R14 (entitlements
+      // v18 W3) deleted the whole `pricing.plus.*` family, since nothing had
+      // rendered it since W2.
+      match: /^pricing\.pass\.note$/,
       pinned: true,
-      why: "the Pro Plus card, its roadmap, and the pass card's duration note — claim-bearing copy, pinned verbatim",
+      why: "the pass card's duration note — claim-bearing copy, pinned verbatim",
     },
     {
-      match: /^pricing\.(credits\.\w+|addons\.(credits|seat|org|sizePack)|plus\.per|pass\.(per|from|ladder\.caps\w*)|community\.price)$/,
+      // `plus\.per` and `pass\.ladder\.caps\w*` retired with `pricing.plus.*`
+      // and the M/L ladder UI (R14); the ladder's caps claim now lives on
+      // `pass\.stub\.caps\w*`, and the fee pill on `card\.feePill` — both added
+      // here rather than opening a new rule, since they are the SAME claim
+      // class (a live number, words around it that decide what it means).
+      match: /^pricing\.(credits\.\w+|addons\.(credits|seat|org|sizePack)|card\.feePill|pass\.(per|from|stub\.caps\w*)|community\.price)$/,
       pinned: true,
       why: "quotes money or an allowance — the number is interpolated live, so the words around it are the claim",
     },
@@ -1157,9 +1134,12 @@ describe.skipIf(!HAS_DB)("the four-locale dictionaries say what the resolver enf
       why: "page chrome, SEO metadata and CTA headings — they set the scene rather than describing what any plan grants",
     },
     {
-      match: /^pricing\.enterprise\.(text|link)$/,
+      // `heading` added here R14: "Bigger than a season?" is the same kind of
+      // scene-setting question `text` already was, over the SSO/federations
+      // strip rather than the sentence beside it.
+      match: /^pricing\.enterprise\.(heading|text|link)$/,
       pinned: false,
-      why: "the 'talk to us' prompt. It NAMES SSO, which is on the coming-soon roadmap, but asks whether the reader needs it rather than stating we ship it — an availability claim here would have to be pinned like soonLabel",
+      why: "the 'talk to us' strip's heading and prompt. `text` NAMES SSO, which is on the coming-soon roadmap, but both ask whether the reader needs more than Pro rather than stating we ship it",
     },
     {
       match: /^pricing\.(?!addons\.label$)\w+\.(name|cta|ctaSignedIn|popular|label)$/,
@@ -1167,9 +1147,20 @@ describe.skipIf(!HAS_DB)("the four-locale dictionaries say what the resolver enf
       why: "tier names, button labels and state text — they identify a card, they do not describe what it grants",
     },
     {
-      match: /^pricing\.(community\.note|pass\.(rung\.\w|ladderNote)|addons\.label)$/,
+      // `ladderNote` retired with the M/L ladder UI (R14); `stub\.size` is its
+      // ticket-era replacement — "Size {rung}" identifies the stub slot, it
+      // does not claim anything the caps/credits lines beside it do not.
+      match: /^pricing\.(community\.note|pass\.(rung\.\w|stub\.size)|addons\.label)$/,
       pinned: false,
-      why: "sub-labels: the rung letters (M / L), the ladder's own explanatory note and the add-ons heading. The claims they introduce are pinned on the keys that make them",
+      why: "sub-labels: the rung letters (M / L), the stub's size label and the add-ons heading. The claims they introduce are pinned on the keys that make them",
+    },
+    {
+      // R14: the box-office board. Sport NAMES, translated, and a foot line
+      // that names no plan or feature — nothing here claims what any plan
+      // grants, so none of it belongs on the pinned side.
+      match: /^pricing\.rail\./,
+      pinned: false,
+      why: "the sport-rail board (R14): ten sport names plus a foot line, none of which describe a plan's entitlements",
     },
   ];
 
@@ -1712,12 +1703,12 @@ describe.skipIf(!HAS_DB)("the four-locale dictionaries say what the resolver enf
   });
 
   it("keeps every 'not yet' row reading as 'not yet', in all four locales", () => {
+    // The 8-item `pricing.plus.soon*` roadmap this test used to scan alongside
+    // the panel's ✗ rows is retired — R14 (entitlements v18 W3) deleted the
+    // whole `pricing.plus.*` family, roadmap included, since nothing had
+    // rendered it since W2. The in-app Community panel's ✗ rows are an
+    // unrelated, still-live surface and stay scanned below.
     const rows: Array<{ key: string; file: "marketing" | "ui"; shape: boolean }> = [
-      ...Array.from({ length: 8 }, (_, i) => ({
-        key: `pricing.plus.soon${i + 1}`,
-        file: "marketing" as const,
-        shape: true,
-      })),
       // The ✗ column of the in-app Community panel — same negative-by-position
       // claim, different surface.
       { key: "billing.community.f5", file: "ui", shape: false },
@@ -1803,58 +1794,6 @@ describe.skipIf(!HAS_DB)("the four-locale dictionaries say what the resolver enf
       ["nl", "Themakleur & badge verwijderen, inbegrepen"],
     ] as Array<[DictionaryLocale, string]>) {
       expect(reds(locale, value, false), `${locale}: denial row reworded as included`).toBe(true);
-    }
-  });
-
-  it("states futurity in every language, not just English", () => {
-    for (const locale of DICTIONARY_LOCALES) {
-      const label = load(locale, "marketing")["pricing.plus.soonLabel"]!;
-      expect(label, `${locale}: no roadmap label`).toBeTruthy();
-      expect(
-        FUTURITY_FORMS[locale].test(label),
-        `${locale}: "${label}" is not a recognised way of saying "not yet" — eight undelivered features sit under it`,
-      ).toBe(true);
-      // …AND it must not ALSO claim availability. The allowlist matched
-      // anywhere, so "Now included, more soon" and "On the roadmap, and already
-      // live" shipped green — 1 of 3. A label that says both says the wrong one.
-      expect(
-        AVAILABILITY_CLAIM[locale].test(label),
-        `${locale}: "${label}" claims availability as well as futurity`,
-      ).toBe(false);
-      // A roadmap LABEL is a label, not a sentence — the same shape rule its
-      // items carry, and what actually kills the "X, and already live" form.
-      expect(CLAUSE_BREAK_IN_LABEL.test(label), `${locale}: "${label}" is a sentence`).toBe(false);
-    }
-    // The reviewer's probe: a plausible availability claim in each language must
-    // NOT satisfy the rule, however it is re-approved.
-    const labelReds = (locale: DictionaryLocale, value: string) =>
-      !FUTURITY_FORMS[locale].test(value) ||
-      AVAILABILITY_CLAIM[locale].test(value) ||
-      CLAUSE_BREAK_IN_LABEL.test(value);
-    for (const [locale, shipped] of [
-      ["en", "Included now"],
-      ["es", "Ya incluido"],
-      ["fr", "Déjà inclus"],
-      ["nl", "Nu inbegrepen"],
-      // The two that defeated the round-3 allowlist by saying BOTH.
-      ["en", "Now included, more soon"],
-      ["en", "On the roadmap, and already live"],
-      ["es", "Ya incluido, y más próximamente"],
-      ["fr", "Déjà inclus, et bientôt plus"],
-      ["nl", "Nu inbegrepen, binnenkort meer"],
-    ] as Array<[DictionaryLocale, string]>) {
-      expect(labelReds(locale, shipped), `${locale}: "${shipped}"`).toBe(true);
-    }
-    // …and the rule is not vacuous in the other direction: each locale's real
-    // label is a positive fixture for its own pattern (asserted above), and a
-    // second honest phrasing must also pass.
-    for (const [locale, alt] of [
-      ["en", "On the way"],
-      ["es", "En desarrollo"],
-      ["fr", "À venir"],
-      ["nl", "In ontwikkeling"],
-    ] as Array<[DictionaryLocale, string]>) {
-      expect(labelReds(locale, alt), `${locale}: "${alt}" is honest and must pass`).toBe(false);
     }
   });
 
@@ -2098,17 +2037,14 @@ describe.skipIf(!HAS_DB)("the four-locale dictionaries say what the resolver enf
   });
 
 
-  it("the in-app Pro Plus panel says exactly what the /pricing card says", () => {
-    for (const locale of DICTIONARY_LOCALES) {
-      const marketing = load(locale, "marketing");
-      const ui = load(locale, "ui");
-      for (const n of [1, 2, 3, 4, 5]) {
-        expect(ui[`billing.plus.f${n}`], `${locale} billing.plus.f${n}`).toBe(
-          marketing[`pricing.plus.f${n}`],
-        );
-      }
-    }
-  });
+  // "the in-app Pro Plus panel says exactly what the /pricing card says"
+  // retired here — R14 (entitlements v18 W3) deleted `pricing.plus.*`
+  // outright. `ui.json`'s `billing.plus.*` (the "in-app panel" half of this
+  // comparison) is a SECOND orphan from the same Pro Plus retirement — no
+  // component in this tree renders it either (verified 2026-09-06) — left
+  // untouched here as out of a `/pricing`-page redesign's scope; a future
+  // task should prune it from `ui.json` in all four locales and drop the two
+  // tests below that still reference it (`billing.plus.f1-f5`).
 
   it("the in-app panel claims only differentiators Pro Plus has, and carries no retired prose", () => {
     const values: LocalisedValue[] = DICTIONARY_LOCALES.map((locale) => ({
@@ -2128,9 +2064,10 @@ describe.skipIf(!HAS_DB)("the four-locale dictionaries say what the resolver enf
 
   it("carries none of the retired prose, in any locale", () => {
     expect(retiredClaimFaults(PASS_BOUND_VALUES, RETIRED_CLAIMS)).toEqual([]);
-    // The Pro Plus CARD, which carried the four AI-scheduling literals in
-    // RETIRED_CLAIMS for a whole round after the FAQ answer had dropped them.
-    expect(retiredClaimFaults(PLUS_CARD_VALUES, RETIRED_CLAIMS)).toEqual([]);
+    // The Pro Plus CARD (`PLUS_CARD_VALUES`, which carried the four
+    // AI-scheduling literals in RETIRED_CLAIMS for a whole round after the FAQ
+    // answer had dropped them) is retired along with `pricing.plus.*` itself
+    // (R14, entitlements v18 W3) — nothing had rendered it since W2.
   });
 
   // …and the registry really does hold the card's own retired wording, in every

@@ -116,75 +116,16 @@ export const APPROVED_DICTIONARY_COPY: ApprovedValue[] = [
   // it. Pinned as its own claim family, the way the pass-permanence and
   // half-rate families already are.
   //
-  // The frame is pinned WITH the bullets deliberately: "Everything in Pro,
-  // plus…" is what makes each bullet an assertion of exclusivity, so a reword
-  // that drops it would leave the differentiator rules with nothing to scope to.
-  {
-    file: "marketing",
-    key: "pricing.plus.note",
-    why: "the frame the five Pro Plus card bullets are read under. It is what turns each bullet into a claim of EXCLUSIVITY, so dropping it silently changes what f1-f5 mean. Source of truth: app/[lang]/(marketing)/pricing/page.tsx renders it directly above the f1-f5 list.",
-    text: {
-      en: "Everything in Pro, plus…",
-      es: "Todo lo de Pro, más…",
-      fr: "Tout ce qu'offre Pro, plus…",
-      nl: "Alles van Pro, plus…",
-    },
-  },
-  {
-    file: "marketing",
-    key: "pricing.plus.f1",
-    why: "unlimited members, teams and clubs. Source of truth: plan_entitlements members.max / teams.max / clubs.max — all null (unlimited) on pro_plus, and capped on pro (15 / 40 / 20), so the claim is both true and a genuine differentiator.",
-    text: {
-      en: "Unlimited members, teams & clubs",
-      es: "Miembros, equipos y clubes ilimitados",
-      fr: "Membres, équipes et clubs illimités",
-      nl: "Onbeperkt aantal leden, teams & clubs",
-    },
-  },
-  {
-    file: "marketing",
-    key: "pricing.plus.f2",
-    why: "the entry-fee platform rate on Pro Plus. Source of truth: plan_entitlements registration.fee_percent — 1 on pro_plus against 2 on pro and 8 on community.",
-    text: {
-      en: "1% platform fee on entry fees",
-      es: "Comisión de plataforma del 1% en las cuotas de inscripción",
-      fr: "Frais de plateforme de 1 % sur les frais d'inscription",
-      nl: "1% platformkosten op inschrijfgelden",
-    },
-  },
-  {
-    file: "marketing",
-    key: "pricing.plus.f3",
-    why: "THE BULLET THIS TASK FIXED. It read 'AI-assisted scheduling' (four locales) under the 'Everything in Pro, plus…' frame while plan_entitlements grants scheduling.ai on ALL FIVE plan keys — community, event_pass, event_pass_l, pro and pro_plus — so it differentiated nothing. The replacement is the one AI claim the matrix does back: ai.credits.monthly is 10 / 60 / 200, so pro_plus really does carry the largest monthly grant. It is a COMPARATIVE, judged by localeCreditLeadershipFaults against those numbers, not by a boolean grant. Its English mirror, PLUS_CARD_FEATURES[2] in lib/pricing-cards.ts, was DELETED in W2 (entitlements v18): V393 removed `pro_plus` from `plans` outright, so the comparative now reads over community 5 / pro 25 / enterprise 500 and enterprise is a Contact-us strip rather than a priced card. Nothing renders this key; pruning the locale trees is W3's.",
-    text: {
-      en: "Largest monthly AI credit grant",
-      es: "Mayor dotación mensual de créditos de IA",
-      fr: "La plus grosse dotation mensuelle de crédits IA",
-      nl: "Grootste maandelijkse AI-credittegoed",
-    },
-  },
-  {
-    file: "marketing",
-    key: "pricing.plus.f4",
-    why: "automatic officials assignment. Source of truth: plan_entitlements officials.auto — false on community and pro, true on pro_plus, so it is a real differentiator under the frame.",
-    text: {
-      en: "Auto officials assignment",
-      es: "Asignación automática de árbitros",
-      fr: "Attribution automatique des officiels",
-      nl: "Automatische toewijzing van officials",
-    },
-  },
-  {
-    file: "marketing",
-    key: "pricing.plus.f5",
-    why: "write-scoped API keys and priority support. Source of truth: plan_entitlements api.write and support.priority — both false on community and pro, true on pro_plus. (api.access is granted on pro, so the WRITE qualifier is load-bearing and must not be dropped in translation. There is no `api.read` key — it appeared in this note for two rounds and exists nowhere in the migrations or the source.)",
-    text: {
-      en: "Write API access & priority support",
-      es: "Acceso de escritura a la API y soporte prioritario",
-      fr: "Accès API en écriture et assistance prioritaire",
-      nl: "Schrijftoegang tot de API & prioritaire ondersteuning",
-    },
-  },
+  // `pricing.plus.*` (the Pro Plus card's frame, its five bullets, its price
+  // suffix and its eight-item roadmap) retired here — R14 (entitlements v18
+  // W3): nothing on /pricing has rendered this key family since W2 deleted
+  // the Pro Plus card, and pruning the dictionary is this wave's. The
+  // in-app "Pro Plus panel" (`ui.json`'s `billing.plus.*`) that this file
+  // used to cross-check these bullets against is ALSO unrendered by any
+  // component in this tree today (verified 2026-09-06) — a second orphan
+  // from the same retirement, left untouched here as out of this task's
+  // scope (a `/pricing`-page redesign, not a `ui.json` sweep) and flagged in
+  // the task report for a future cleanup.
   {
     file: "ui",
     key: "upgrade.intro",
@@ -288,17 +229,6 @@ export const APPROVED_DICTIONARY_COPY: ApprovedValue[] = [
   },
   {
     file: "marketing",
-    key: "pricing.plus.per",
-    why: "the billing period beside Pro Plus’s headline price. pricing/page.tsx renders the MONTHLY amount here (plusMonthly), so \"/month\" is a claim about what the number means; \"/year\" beside a monthly figure understates the price by 12x. Source of truth: config/stripe-plans.json seazn_pro_plus_monthly.",
-    text: {
-      en: "/month",
-      es: "/mes",
-      fr: "/mois",
-      nl: "/maand",
-    },
-  },
-  {
-    file: "marketing",
     key: "pricing.pass.per",
     why: "the unit beside the Event Pass price. The pass is bought per COMPETITION, once (V328/V334, and lib/billing.ts:884 is the ONLY non-test `insert into competition_passes` — one row per competition) — not per month and not per org. Rounds 4-5 cited a usecases/competition-passes module; no such file has ever existed in this repo.",
     text: {
@@ -363,26 +293,40 @@ export const APPROVED_DICTIONARY_COPY: ApprovedValue[] = [
       nl: "Size-pack",
     },
   },
+  // `pricing.pass.ladder.caps` / `.capsUnlimited` (the M/L ladder's caps line)
+  // retired here R14 (entitlements v18 W3): the ladder UI they described is
+  // gone from /pricing, replaced by the ticket's stub (below).
   {
     file: "marketing",
-    key: "pricing.pass.ladder.caps",
-    why: "the M rung’s caps in the ladder list. Both numbers are interpolated live from plan_entitlements (divisions.per_competition.max / entrants.per_division.max on event_pass), so the pin guards the words around them — “Up to” is what makes them ceilings rather than allocations.",
+    key: "pricing.pass.stub.caps",
+    why: "the Event Pass ticket's stub, slot 1 (R14). Both numbers are interpolated live from plan_entitlements (divisions.per_competition.max / entrants.per_division.max on event_pass) — the SAME caps line the retired ladder printed, now on the ticket. \"×\" is what makes the two figures read as one ceiling, not two unrelated counts.",
     text: {
-      en: "Up to {divisions} divisions, {entrants} entrants each",
-      es: "Hasta {divisions} divisiones, {entrants} participantes cada una",
-      fr: "Jusqu’à {divisions} divisions, {entrants} participants chacune",
-      nl: "Tot {divisions} divisies, {entrants} deelnemers per divisie",
+      en: "{divisions} divisions × {entrants} entrants",
+      es: "{divisions} divisiones × {entrants} participantes",
+      fr: "{divisions} divisions × {entrants} participants",
+      nl: "{divisions} divisies × {entrants} deelnemers",
     },
   },
   {
     file: "marketing",
-    key: "pricing.pass.ladder.capsUnlimited",
-    why: "the L rung’s caps. entrants.per_division.max is NULL on event_pass_l, so this variant must SAY unlimited rather than print a number — quoting M’s 128 here is the exact defect v17 #294 was filed for.",
+    key: "pricing.pass.stub.capsUnlimited",
+    why: "the same stub slot when entrants.per_division.max reads NULL. Kept even though the on-sale M rung never hits this branch today (it is L's shape) — the asymmetry it encodes (divisions must be a number; entrants may legitimately be unlimited) is the same one v17 #294 filed the caps line for, and dropping the branch would silently reprint M's number here if a future data shape produced it.",
     text: {
-      en: "Up to {divisions} divisions, unlimited entrants",
-      es: "Hasta {divisions} divisiones, participantes ilimitados",
-      fr: "Jusqu’à {divisions} divisions, participants illimités",
-      nl: "Tot {divisions} divisies, onbeperkt deelnemers",
+      en: "{divisions} divisions × unlimited entrants",
+      es: "{divisions} divisiones × participantes ilimitados",
+      fr: "{divisions} divisions × participants illimités",
+      nl: "{divisions} divisies × onbeperkt deelnemers",
+    },
+  },
+  {
+    file: "marketing",
+    key: "pricing.card.feePill",
+    why: "the platform-fee pill on the Free and Pro cards (R14). The NUMBER is interpolated live from registration.fee_percent (community 5, pro 2 — V398), so the pin guards the two words around it: dropping \"platform\" would read as the REGISTRANT'S fee rather than the org's platform cut, which is the exact distinction pricing.matrix.fees / feeCell already draws in the comparison table.",
+    text: {
+      en: "{fee}% platform fee",
+      es: "{fee}% de comisión de plataforma",
+      fr: "{fee} % de frais de plateforme",
+      nl: "{fee}% platformkosten",
     },
   },
   // ── THE IN-APP COMPARISON PANEL (fix round 4) ─────────────────────────────
@@ -549,122 +493,6 @@ export const APPROVED_DICTIONARY_COPY: ApprovedValue[] = [
       es: "Marcador en tiempo real",
       fr: "Tableau des scores en temps réel",
       nl: "Realtime scorebord",
-    },
-  },
-  // ── The Pro Plus ROADMAP block (fix round 1, I3) ───────────────────────────
-  //
-  // `pricing.plus.soonLabel` + `soon1-8`, under the Pro Plus card. Added because
-  // the block was covered by NOTHING — not by a vocabulary, not by a pin, and
-  // not by the card's own coverage assertion, which listed two arrays and so
-  // codified the omission rather than merely forgetting it.
-  //
-  // Measured: flipping `soonLabel` to "Included now" reclassifies EIGHT
-  // undelivered features as shipped, in whichever locale it is done, and the
-  // whole suite stayed green. That is a direct breach of SPEC-1 §6's ethics
-  // guardrail and it reads in review as a harmless copy tweak.
-  //
-  // There is no row to pin this to: availability is not in plan_entitlements,
-  // and SPEC-1 §9 deliberately seeds `domains.custom` on pro_plus while the DNS
-  // product is unbuilt (`pricing-matrix.ts` never renders that row), so the
-  // matrix would say "shipped" about a feature that is not. This gate is the
-  // guard, which is exactly the case the approved-wording shape exists for.
-  {
-    file: "marketing",
-    key: "pricing.plus.soonLabel",
-    why: "the ROADMAP LABEL under the Pro Plus card, and the single highest-leverage string on /pricing: it is what classifies the eight items below as NOT YET AVAILABLE. Measured in fix round 1 — flipping it to \"Included now\" advertised eight undelivered features as shipped and every test stayed green. SPEC-1 §6 requires the roadmap to read as ambition and never as a paywall; §9 keeps domains.custom seeded-but-unshipped, so plan_entitlements cannot decide this and the pin is the only guard. Re-approving means confirming the block is still a roadmap.",
-    text: {
-      en: "Coming soon",
-      es: "Próximamente",
-      fr: "Bientôt disponible",
-      nl: "Binnenkort",
-    },
-  },
-  {
-    file: "marketing",
-    key: "pricing.plus.soon1",
-    why: "Pro Plus ROADMAP item 1 (SPEC-1 §6) — badged \"coming soon\", NOT purchasable and NOT built. Its English mirror, PLUS_COMING_SOON[0] in lib/pricing-cards.ts, was DELETED in W2 (entitlements v18) along with the whole Pro Plus card — the plan is gone from `plans` and nothing renders this key any more. The approval stands only as a record; pruning the four locale trees is W3's. Re-approving means confirming the feature is still unshipped; shipping it means deleting it from this list and from PLUS_COMING_SOON in the same commit. Nothing in plan_entitlements records shipped-ness — SPEC-1 §9 deliberately seeds domains.custom on pro_plus while the DNS product is unbuilt — so no matrix pin is possible and this gate is the guard.",
-    text: {
-      en: "Multi-org command centre",
-      es: "Centro de mando multiorganización",
-      fr: "Centre de commande multi-organisations",
-      nl: "Commandocentrum voor meerdere organisaties",
-    },
-  },
-  {
-    file: "marketing",
-    key: "pricing.plus.soon2",
-    why: "Pro Plus ROADMAP item 2 (SPEC-1 §6) — badged \"coming soon\", NOT purchasable and NOT built. Its English mirror, PLUS_COMING_SOON[1] in lib/pricing-cards.ts, was DELETED in W2 (entitlements v18) along with the whole Pro Plus card — the plan is gone from `plans` and nothing renders this key any more. The approval stands only as a record; pruning the four locale trees is W3's. Re-approving means confirming the feature is still unshipped; shipping it means deleting it from this list and from PLUS_COMING_SOON in the same commit. Nothing in plan_entitlements records shipped-ness — SPEC-1 §9 deliberately seeds domains.custom on pro_plus while the DNS product is unbuilt — so no matrix pin is possible and this gate is the guard.",
-    text: {
-      en: "Shared templates & branding across orgs",
-      es: "Plantillas y marca compartidas entre organizaciones",
-      fr: "Modèles et identité partagés entre organisations",
-      nl: "Gedeelde sjablonen & branding over organisaties",
-    },
-  },
-  {
-    file: "marketing",
-    key: "pricing.plus.soon3",
-    why: "Pro Plus ROADMAP item 3 (SPEC-1 §6) — badged \"coming soon\", NOT purchasable and NOT built. Its English mirror, PLUS_COMING_SOON[2] in lib/pricing-cards.ts, was DELETED in W2 (entitlements v18) along with the whole Pro Plus card — the plan is gone from `plans` and nothing renders this key any more. The approval stands only as a record; pruning the four locale trees is W3's. Re-approving means confirming the feature is still unshipped; shipping it means deleting it from this list and from PLUS_COMING_SOON in the same commit. Nothing in plan_entitlements records shipped-ness — SPEC-1 §9 deliberately seeds domains.custom on pro_plus while the DNS product is unbuilt — so no matrix pin is possible and this gate is the guard.",
-    text: {
-      en: "Cross-competition analytics",
-      es: "Analíticas entre competiciones",
-      fr: "Analyses inter-compétitions",
-      nl: "Analyses over competities heen",
-    },
-  },
-  {
-    file: "marketing",
-    key: "pricing.plus.soon4",
-    why: "Pro Plus ROADMAP item 4 (SPEC-1 §6) — badged \"coming soon\", NOT purchasable and NOT built. Its English mirror, PLUS_COMING_SOON[3] in lib/pricing-cards.ts, was DELETED in W2 (entitlements v18) along with the whole Pro Plus card — the plan is gone from `plans` and nothing renders this key any more. The approval stands only as a record; pruning the four locale trees is W3's. Re-approving means confirming the feature is still unshipped; shipping it means deleting it from this list and from PLUS_COMING_SOON in the same commit. Nothing in plan_entitlements records shipped-ness — SPEC-1 §9 deliberately seeds domains.custom on pro_plus while the DNS product is unbuilt — so no matrix pin is possible and this gate is the guard.",
-    text: {
-      en: "Custom domain & white-label",
-      es: "Dominio propio y marca blanca",
-      fr: "Domaine personnalisé et marque blanche",
-      nl: "Eigen domein & white-label",
-    },
-  },
-  {
-    file: "marketing",
-    key: "pricing.plus.soon5",
-    why: "Pro Plus ROADMAP item 5 (SPEC-1 §6) — badged \"coming soon\", NOT purchasable and NOT built. Its English mirror, PLUS_COMING_SOON[4] in lib/pricing-cards.ts, was DELETED in W2 (entitlements v18) along with the whole Pro Plus card — the plan is gone from `plans` and nothing renders this key any more. The approval stands only as a record; pruning the four locale trees is W3's. Re-approving means confirming the feature is still unshipped; shipping it means deleting it from this list and from PLUS_COMING_SOON in the same commit. Nothing in plan_entitlements records shipped-ness — SPEC-1 §9 deliberately seeds domains.custom on pro_plus while the DNS product is unbuilt — so no matrix pin is possible and this gate is the guard.",
-    text: {
-      en: "SSO / SAML",
-      es: "SSO / SAML",
-      fr: "SSO / SAML",
-      nl: "SSO / SAML",
-    },
-  },
-  {
-    file: "marketing",
-    key: "pricing.plus.soon6",
-    why: "Pro Plus ROADMAP item 6 (SPEC-1 §6) — badged \"coming soon\", NOT purchasable and NOT built. Its English mirror, PLUS_COMING_SOON[5] in lib/pricing-cards.ts, was DELETED in W2 (entitlements v18) along with the whole Pro Plus card — the plan is gone from `plans` and nothing renders this key any more. The approval stands only as a record; pruning the four locale trees is W3's. Re-approving means confirming the feature is still unshipped; shipping it means deleting it from this list and from PLUS_COMING_SOON in the same commit. Nothing in plan_entitlements records shipped-ness — SPEC-1 §9 deliberately seeds domains.custom on pro_plus while the DNS product is unbuilt — so no matrix pin is possible and this gate is the guard.",
-    text: {
-      en: "SLA & dedicated support",
-      es: "SLA y soporte dedicado",
-      fr: "SLA et support dédié",
-      nl: "SLA & toegewijde ondersteuning",
-    },
-  },
-  {
-    file: "marketing",
-    key: "pricing.plus.soon7",
-    why: "Pro Plus ROADMAP item 7 (SPEC-1 §6) — badged \"coming soon\", NOT purchasable and NOT built. Its English mirror, PLUS_COMING_SOON[6] in lib/pricing-cards.ts, was DELETED in W2 (entitlements v18) along with the whole Pro Plus card — the plan is gone from `plans` and nothing renders this key any more. The approval stands only as a record; pruning the four locale trees is W3's. Re-approving means confirming the feature is still unshipped; shipping it means deleting it from this list and from PLUS_COMING_SOON in the same commit. Nothing in plan_entitlements records shipped-ness — SPEC-1 §9 deliberately seeds domains.custom on pro_plus while the DNS product is unbuilt — so no matrix pin is possible and this gate is the guard.",
-    text: {
-      en: "Data export & warehouse",
-      es: "Exportación de datos y data warehouse",
-      fr: "Export de données et entrepôt de données",
-      nl: "Data-export & datawarehouse",
-    },
-  },
-  {
-    file: "marketing",
-    key: "pricing.plus.soon8",
-    why: "Pro Plus ROADMAP item 8 (SPEC-1 §6) — badged \"coming soon\", NOT purchasable and NOT built. Its English mirror, PLUS_COMING_SOON[7] in lib/pricing-cards.ts, was DELETED in W2 (entitlements v18) along with the whole Pro Plus card — the plan is gone from `plans` and nothing renders this key any more. The approval stands only as a record; pruning the four locale trees is W3's. Re-approving means confirming the feature is still unshipped; shipping it means deleting it from this list and from PLUS_COMING_SOON in the same commit. Nothing in plan_entitlements records shipped-ness — SPEC-1 §9 deliberately seeds domains.custom on pro_plus while the DNS product is unbuilt — so no matrix pin is possible and this gate is the guard.",
-    text: {
-      en: "Bulk & scheduled automation",
-      es: "Automatización masiva y programada",
-      fr: "Automatisation en masse et planifiée",
-      nl: "Bulk- & geplande automatisering",
     },
   },
   // ── The extra-organisation TIP (v17 gap wave 7, task 7, #299) ──────────────
