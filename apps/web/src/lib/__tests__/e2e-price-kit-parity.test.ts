@@ -5,6 +5,7 @@ import {
   PASS_KEYS,
   SELLABLE_PASS_KEYS,
   SUPPORTED_CURRENCIES,
+  creditPackOptions,
   formatMinor,
   passPrice,
   proPrice,
@@ -13,9 +14,12 @@ import {
 import { ORG_ADDONS, orgAddonPriceMinor } from "@/lib/org-addons";
 import { ORG_ADDON_PLAN_KEYS } from "@/lib/org-addon-plans";
 import {
+  CREDIT_PACK_KEYS,
   HIDDEN_PASS_RUNGS,
   ORG_ADDON_RIDER_PLANS,
   SELLABLE_PASS_RUNGS,
+  creditPackLabel,
+  creditPackMinor,
   money,
   orgAddonLabel,
   orgAddonMinor,
@@ -159,5 +163,40 @@ describe("e2e/price-kit mirrors lib/currency", () => {
     expect(ORG_ADDONS.length).toBeGreaterThan(0);
     expect(ORG_ADDON_RIDER_PLANS).toEqual([...ORG_ADDON_PLAN_KEYS]);
     expect(ORG_ADDON_RIDER_PLANS).not.toContain("community");
+  });
+
+  // The credit-pack ladder (SPEC-6 §A4). `creditPackOptions` lives in
+  // `lib/currency.ts` behind the same bare JSON import, so
+  // `settings-billing-panels.spec.ts` cannot ask it how many rungs the Buy
+  // credits modal renders, nor what its Pay button quotes.
+  it("prices the credit-pack ladder exactly as the Buy credits modal does", () => {
+    for (const currency of SUPPORTED_CURRENCIES) {
+      const options = creditPackOptions(currency);
+      // ORDER, not just membership: the modal renders one radio per rung in
+      // this exact sequence, and the spec picks a rung by index.
+      expect(
+        CREDIT_PACK_KEYS,
+        `pack keys/order drifted from creditPackOptions (${currency})`,
+      ).toEqual(options.map((o) => o.key));
+      for (const option of options) {
+        expect(creditPackMinor(option.key, currency), `${option.key} ${currency}`).toBe(
+          option.amountMinor,
+        );
+        // The RENDERED string, because the modal asserts prose ("Pay $10"),
+        // not a number.
+        expect(creditPackLabel(option.key, currency)).toBe(
+          formatMinor(option.amountMinor, currency),
+        );
+      }
+    }
+    // Anti-vacuity: the seed really does sell packs, or every assertion above
+    // is about an empty list — and the modal itself renders NOTHING at all
+    // when it is (`buy-credits.tsx`: `if (packs.length === 0) return null`),
+    // so an empty ladder would silently delete the affordance under test.
+    expect(CREDIT_PACK_KEYS.length).toBeGreaterThan(0);
+    // The miss branch throws rather than returning 0 — a 0 here would render
+    // to a buyer as a free pack, the same failure `orgAddonMinor`'s null
+    // branch above exists to prevent.
+    expect(() => creditPackMinor("credits_not_a_pack")).toThrow(/credit pack/);
   });
 });
