@@ -185,7 +185,15 @@ export function RunSheet({
         <section key={block.dayKey}>
           <h3
             data-run-sheet-day={block.dayKey}
-            className="sticky top-0 z-10 border-y border-slate-300 bg-slate-200 px-4 py-1.5 text-xs font-semibold uppercase tracking-wide text-slate-600"
+            // F4 (W2 walkthrough gate 1): `nav.tsx`'s own header is
+            // `sticky top-0 z-20` over an `h-14` (56px) bar. This header used
+            // to stick at the SAME `top-0`, one z-layer below — so once
+            // scrolled to the natural "day header pinned" position, this
+            // header sat entirely BEHIND nav (never visible while doing its
+            // job) and every control in the strip it should have been
+            // showing hit-tested to nav's own logo instead. `top-14` sticks
+            // this header just below nav's own height, never under it.
+            className="sticky top-14 z-10 border-y border-slate-300 bg-slate-200 px-4 py-1.5 text-xs font-semibold uppercase tracking-wide text-slate-600"
           >
             <DayHeading
               dayKey={block.dayKey}
@@ -236,7 +244,8 @@ export function RunSheet({
             const dates = roundDateLabel(r.fixtures, tz, locale);
             return (
             <div key={r.round}>
-              <header className="sticky top-0 z-10 border-b border-slate-100 bg-slate-50 px-4 py-2">
+              {/* F4 — same nav-collision fix as the day header above. */}
+              <header className="sticky top-14 z-10 border-b border-slate-100 bg-slate-50 px-4 py-2">
                 <h4 className="text-xs font-medium uppercase tracking-wide text-slate-500">
                   {stage ? `${stage.name} — ` : ""}
                   {bracketRoundLabel(msg, stage?.kind ?? "knockout", r.round, allStageFixtures)}

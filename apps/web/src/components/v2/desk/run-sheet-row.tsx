@@ -375,11 +375,11 @@ export function RunSheetRow({
               onClick={toggleEditor}
               className="-my-1 flex min-h-11 w-14 shrink-0 items-center font-mono text-sm tabular-nums text-slate-600 underline decoration-slate-300 decoration-dotted underline-offset-4 hover:text-purple-700 hover:decoration-purple-500"
             >
-              <ClientTime value={fixture.scheduled_at} tz={tz} mode="time" />
+              <ClientTime value={fixture.scheduled_at} tz={tz} mode="time" hourCycle="h23" />
             </button>
           ) : (
             <span className="w-14 shrink-0 font-mono text-sm tabular-nums text-slate-600">
-              {fixture.scheduled_at ? <ClientTime value={fixture.scheduled_at} tz={tz} mode="time" /> : "—"}
+              {fixture.scheduled_at ? <ClientTime value={fixture.scheduled_at} tz={tz} mode="time" hourCycle="h23" /> : "—"}
               {fixture.status === "in_play" && (
                 <span aria-hidden className="ml-1.5 inline-block h-1.5 w-1.5 rounded-full bg-amber-500 align-middle" />
               )}

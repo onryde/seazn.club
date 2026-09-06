@@ -240,12 +240,20 @@ test.describe("bracket round sections carry the round's calendar date", () => {
     const bracket = page.locator('[data-run-sheet-block="bracket"]');
     await expect(bracket).toBeVisible();
     const rounds = bracket.locator("> div");
-    // Round 1 is the only round in the bracket block right now: the final is
-    // OPEN and untimed, so it is filed under "Not yet scheduled" (finding 9).
-    await expect(rounds).toHaveCount(1);
+    // F2 fix (W2 walkthrough gate 1): the final is OPEN and untimed here —
+    // an entirely ordinary shape, nothing requires slotting a knockout round
+    // onto a court before it can be played — and now stays in its OWN round
+    // section rather than leaking into "Not yet scheduled" (the exact defect
+    // F2 fixed: bracket membership is decided before the untimed-OPEN
+    // routing, so `bracketRoundLabel`'s round count is never computed from a
+    // truncated lane). Two rounds: the timed semis, and the untimed final.
+    await expect(rounds).toHaveCount(2);
     await expect(rounds.nth(0).locator("[data-run-sheet-round-dates]")).toHaveText(
       new RegExp(escapeRe(dayLabel(keyOne, "en"))),
     );
+    // The untimed final states no date — same "an empty cell is not
+    // information" rule the settled-untimed case below already covers.
+    await expect(rounds.nth(1).locator("[data-run-sheet-round-dates]")).toHaveCount(0);
 
     // ...and a round that SPANS days prints both ends, not just the first.
     await apiJson(request, `/api/v1/fixtures/${semis[1]!.id}`, "PATCH", {
