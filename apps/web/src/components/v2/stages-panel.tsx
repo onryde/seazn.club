@@ -923,6 +923,20 @@ export function StagesPanel({ divisionId, divisionSeq, competitionId, orgSlug, c
         // no-op read for the common case.
         const drift = rosterDrift[stage.id];
         const hasDrift = Boolean(drift && (drift.ghosts.length > 0 || drift.unplaced.length > 0));
+        // Fix round 1 (controller ruling): built ONCE per stage, then placed
+        // in exactly one of two positions below — never both, never a second
+        // call with duplicated props (that is how the two copies would drift
+        // apart later). `StageRail` already returns null outright when
+        // `!canEdit`, so handing it this element unconditionally is safe: the
+        // rail only actually renders it when `canEdit` is true. When
+        // `canEdit` is false the rail renders nothing at all, so this same
+        // element is rendered inline instead, where it used to live before
+        // Task 3 — an ACTION belongs on the rail, INFORMATION (a non-editing
+        // viewer's read-only view of the stage's court-tag requirements)
+        // belongs beside what it describes.
+        const courtTagsEditor = (
+          <StageCourtTagsEditor stageId={stage.id} canEdit={canEdit} suggestions={courtTagSuggestions} msg={msg} />
+        );
         return (
           <div key={stage.id} className="space-y-6">
           <section className="card overflow-hidden">
@@ -957,12 +971,14 @@ export function StagesPanel({ divisionId, divisionSeq, competitionId, orgSlug, c
                 onToggleAddMatch={(stageId) => setAddingTo(addingTo === stageId ? null : stageId)}
                 adhoc={ADHOC_STAGE_KINDS.has(stage.kind)}
                 // #622 — court tags editor moves onto the rail (Task 3). Stays
-                // mounted HERE, not inside StageRail: it reads `courtTagSuggestions`
-                // off this panel's own `venues` prop, and the rail keeps owning no
-                // data of its own (see stage-rail.tsx's own comment on why).
-                courtTagsSlot={
-                  <StageCourtTagsEditor stageId={stage.id} canEdit={canEdit} suggestions={courtTagSuggestions} msg={msg} />
-                }
+                // constructed HERE, not inside StageRail: it reads
+                // `courtTagSuggestions` off this panel's own `venues` prop, and
+                // the rail keeps owning no data of its own (see stage-rail.tsx's
+                // own comment on why). `StageRail` only actually renders this
+                // slot when `canEdit` is true (its own early-return guard) — the
+                // `!canEdit` inline placement below is what a non-editing viewer
+                // sees instead.
+                courtTagsSlot={courtTagsEditor}
               />
             </header>
 
@@ -1096,6 +1112,14 @@ export function StagesPanel({ divisionId, divisionSeq, competitionId, orgSlug, c
                 {canEdit ? msg("schedule.noFixtures.can") : msg("schedule.noFixtures.view")}
               </p>
             )}
+
+            {/* Fix round 1 — a non-editing viewer gets no StageRail at all
+                (it returns null outright for !canEdit), so their read-only
+                view of the court-tag requirements has to live here instead,
+                where it always did before Task 3 moved the editing path onto
+                the rail. Same `courtTagsEditor` element as the rail's slot
+                above — never construct a second one. */}
+            {!canEdit && courtTagsEditor}
           </section>
           </div>
         );
