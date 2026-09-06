@@ -156,6 +156,35 @@ function cancelPickerFromSource(): { placeholder: string; reasons: string[] } {
   return { placeholder, reasons };
 }
 
+/**
+ * A route path read out of the module that CALLS it.
+ *
+ * The two wire listeners below are negative-only (`toEqual([])`), and a
+ * negative assertion on a hardcoded path goes silently vacuous the day the
+ * route is renamed: the listener watches a dead path, sees nothing, and passes
+ * forever. Parsing the caller's own literal means a rename either moves the
+ * listener with it or throws here. Same reasoning as
+ * {@link cancelPickerFromSource}.
+ */
+function routeFromSource(relPath: string, pattern: RegExp): string {
+  const path = fileURLToPath(new URL(relPath, import.meta.url));
+  const found = pattern.exec(readFileSync(path, "utf8"))?.[1];
+  if (!found) throw new Error(`${path}: no route literal matched ${pattern} — did the call move?`);
+  return found;
+}
+
+/** The POST `BuyCredits` makes when `Pay` is pressed — the money boundary. */
+const CREDIT_PACK_CHECKOUT = routeFromSource(
+  "../../src/lib/billing-checkout-client.ts",
+  /fetchCreditPackCheckoutClientSecret[\s\S]*?"(\/api\/billing\/[a-z-]+)"/,
+);
+
+/** The POST `CancelSubscriptionButton` makes once the confirm resolves true. */
+const CANCEL_SUBSCRIPTION = routeFromSource(
+  "../../src/components/billing-manage.tsx",
+  /function CancelSubscriptionButton[\s\S]*?post\("(\/api\/billing\/[a-z-]+)"/,
+);
+
 let org: SeededOrg;
 
 /**
@@ -310,9 +339,7 @@ test("the Credits tab's buy control opens the seed's pack ladder, choosing nothi
   // own, so the count is 2 before anything is clicked (measured, 2026-09-06).
   const checkoutPosts: string[] = [];
   page.on("request", (r) => {
-    if (new URL(r.url()).pathname === "/api/billing/credit-pack-checkout") {
-      checkoutPosts.push(r.method());
-    }
+    if (new URL(r.url()).pathname === CREDIT_PACK_CHECKOUT) checkoutPosts.push(r.method());
   });
 
   await page.goto(routes.credits(org.slug));
@@ -416,7 +443,12 @@ test("the credits CSV export appears only once the wallet has ledger history, an
   expect(csv.headers()["content-type"]).toContain("text/csv");
   const lines = (await csv.text()).split("\r\n");
   expect(lines[0]).toBe("date,action,model,change,competition,org");
-  expect(lines.length - 1, "one CSV data line per rendered history row").toBe(rowCount);
+  // The two agree AT THIS FIXTURE's size, and that is all this pins: the table
+  // renders `creditHistory`'s default 50 and the route asks for 1000, so a
+  // wallet past 50 rows would legitimately disagree. What it does catch is the
+  // export serving a DIFFERENT slice — a wrong wallet, or a dropped row.
+  expect(rowCount).toBeLessThan(50);
+  expect(lines.length - 1, "the export is the same ledger slice the table drew").toBe(rowCount);
 
   // Column 3 is `change`; the three before it (date/action/model) never contain
   // a comma, so a quoted org name further right cannot shift it.
@@ -459,7 +491,7 @@ test("the cancel dialog opens on no reason and offers exactly the reasons the co
   // inferred: a confirm that fell through would POST here.
   const cancelPosts: string[] = [];
   page.on("request", (r) => {
-    if (new URL(r.url()).pathname === "/api/billing/cancel") cancelPosts.push(r.method());
+    if (new URL(r.url()).pathname === CANCEL_SUBSCRIPTION) cancelPosts.push(r.method());
   });
 
   await page.goto(routes.billing(org.slug));
@@ -489,7 +521,7 @@ test("the cancel dialog opens on no reason and offers exactly the reasons the co
   // returns before the POST.
   await page.keyboard.press("Escape");
   await expect(dialog).toHaveCount(0);
-  expect(cancelPosts, "dismissing the dialog must not touch /api/billing/cancel").toEqual([]);
+  expect(cancelPosts, `dismissing the dialog must not touch ${CANCEL_SUBSCRIPTION}`).toEqual([]);
   await expect(cancelButton).toBeVisible();
 });
 
@@ -573,10 +605,12 @@ test("the operator console opens a member at its real cap, refuses a negative or
   expect(negative.status, "a negative cap is a Zod rejection -> 400").toBe(400);
   const fractional = await putAllocation(request, { org_id: member.orgId, monthly_cap: 1.5 });
   expect(fractional.status, "credits are whole -> 400").toBe(400);
+  // An org id that names NOTHING — `setOrgAllocation`'s own first guard, which
+  // 404s before it ever reaches the payer check. Deliberately not the 403 arm
+  // (an org in someone ELSE's group): that needs a second identity and is
+  // already covered where the sibling group routes are gated.
   const stranger = await putAllocation(request, { org_id: randomUUID(), monthly_cap: 5 });
-  expect(stranger.status, "an org that is not in the caller's group is refused, not created").toBe(
-    404,
-  );
+  expect(stranger.status, "an unknown org is refused, never upserted into existence").toBe(404);
 
   // The clear arm, which DOES write: an explicit NULL row, not a delete. Run
   // before the UI so the editor's opening state below is one this test set.
@@ -621,6 +655,9 @@ test("the operator console opens a member at its real cap, refuses a negative or
   // catch a control this file had stopped watching.
   await expect(capField).toHaveAttribute("aria-label", ui("billing.operator.editor.capLabel"));
   const save = editor.getByTestId("allocation-save");
+  // Same split as the cap field above: the hook FINDS it, the dictionary says
+  // what it must read. A testid is not an accessible name.
+  await expect(save).toHaveText(ui("billing.operator.editor.save"));
   // Disabled because nothing CHANGED yet — the unchanged bound, distinct from
   // the invalid bound below, which is why both are asserted.
   await expect(save).toBeDisabled();
@@ -644,6 +681,23 @@ test("the operator console opens a member at its real cap, refuses a negative or
   await expect(page.getByRole("dialog")).toHaveCount(0);
   await expect(row.getByTestId("allocation-cap")).toContainText("250");
   await expect(row).toContainText(ui("billing.operator.ofCap", { cap: 250 }));
+
+  // RE-OPEN, and this is the arm that makes "opens on the member's current
+  // mode" mean anything. `AllocationEditor` seeds itself from props
+  // (`useState(member.monthlyCap === null)` / `useState(String(cap))`), so the
+  // first open above happens to agree with the component's hardcoded DEFAULT —
+  // `useState(true)` and `useState("")` both survive it. This member now holds
+  // 250 in the console's own state (`onSaved`), so a defaulted editor is a
+  // different answer from a seeded one (AGENTS.md failure class 19).
+  await capButton.click();
+  const reopened = page.getByRole("dialog");
+  await expect(
+    reopened.locator('input[name="cap-mode"]').nth(1),
+    "re-opening a capped member must arm the LIMITED radio, not the default unlimited one",
+  ).toBeChecked();
+  await expect(reopened.getByTestId("allocation-cap-input")).toHaveValue("250");
+  await reopened.getByRole("button", { name: ui("confirm.cancel"), exact: true }).click();
+  await expect(page.getByRole("dialog")).toHaveCount(0);
 
   // The server's answer, not the table's optimistic one: `onSaved` updates
   // local state, so the row above would read 250 even if the PUT had been
