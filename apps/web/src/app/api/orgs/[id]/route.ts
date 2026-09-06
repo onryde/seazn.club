@@ -106,7 +106,23 @@ export async function PATCH(
     }
     if ("logo_storage_path" in body) updates.logo_storage_path = body.logo_storage_path;
     if ("payment_instructions" in body) updates.payment_instructions = body.payment_instructions;
-    if ("default_payment_method" in body) updates.default_payment_method = body.default_payment_method;
+    if ("default_payment_method" in body) {
+      // `stripe` is only a legitimate default once the account can take a
+      // charge. The connect settings page already disables the radio on
+      // `stripe_charges_enabled` — this is the same rule where it belongs, so
+      // a client that never rendered that screen cannot default every new
+      // division to a method the org cannot collect on. Same targeted-select
+      // shape as the currency lock below, not a whole-row precondition read.
+      if (body.default_payment_method === "stripe") {
+        const [conn] = await sql<{ stripe_charges_enabled: boolean }[]>`
+          select stripe_charges_enabled from organizations where id = ${id}`;
+        if (!conn) throw new HttpError(404, "Organization not found");
+        if (!conn.stripe_charges_enabled) {
+          throw new HttpError(409, "Stripe is not ready to accept charges yet");
+        }
+      }
+      updates.default_payment_method = body.default_payment_method;
+    }
     if ("about" in body) updates.about = body.about;
     if ("timezone" in body) updates.timezone = body.timezone;
     if ("default_locale" in body) updates.default_locale = body.default_locale;
