@@ -1012,8 +1012,25 @@ export function StagesPanel({ divisionId, divisionSeq, competitionId, orgSlug, c
                 items: a CSS grid item's default `min-width: auto` lets its
                 own content force the track wider than its share, which is
                 exactly the class of overflow AGENTS.md's `truncate`/`min-w-0`
-                note warns about. */}
-            <div className="lg:grid lg:grid-cols-[1fr_280px] lg:gap-6">
+                note warns about.
+
+                Fix round 1 (Ruling T5-A, controller finding): the grid track
+                is CONDITIONAL on `canEdit`. `<StageRail>` returns `null`
+                outright when `!canEdit` (stage-rail.tsx's own guard), but a
+                fixed `grid-cols-[1fr_280px]` track reserves its 280px column
+                — plus the 24px gap — whether or not a child actually renders
+                into it; the old flex header a null child claimed zero space
+                in. Left unconditional, every non-editing viewer would see a
+                permanent blank strip to the right of each stage card at `lg`
+                and above. This is the THIRD instance of the same root cause
+                in this wave (the court-tags editor, Task 3; the
+                unscheduled-count badge, Task 4; now the column itself) —
+                anything keyed to the rail has to account for the rail
+                rendering nothing for a non-editing viewer. Never solve this
+                by having `<StageRail>` render an empty shell instead — its
+                `!canEdit -> null` contract is depended on by three tasks now
+                and must stay byte-identical. */}
+            <div className={canEdit ? "lg:grid lg:grid-cols-[1fr_280px] lg:gap-6" : undefined}>
               <div data-testid="stage-sheet" className="min-w-0">
                 <header className="flex flex-wrap items-center gap-3 border-b border-slate-100 px-4 py-3">
                   <h3 className="text-sm font-semibold text-slate-800">
