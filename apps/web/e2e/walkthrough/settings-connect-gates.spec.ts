@@ -176,7 +176,16 @@ test.afterAll(async ({ browser }) => {
   if (!org) return;
   const ctx = await browser.newContext();
   try {
-    await detachConnect(org.orgId);
+    // Swallowed on purpose. The detach is a courtesy — `releaseSettingsOrg`
+    // deletes the org outright a line later, taking the fake `acct_e2e_…`
+    // with it — but the RELEASE is the obligation, and an unguarded await
+    // here would let one DB blip skip it and leak an owner slot for the rest
+    // of the leg, which is the exact failure this hook exists to prevent.
+    try {
+      await detachConnect(org.orgId);
+    } catch {
+      // the release below is still owed
+    }
     await releaseSettingsOrg(ctx.request, org);
   } finally {
     await ctx.close();
