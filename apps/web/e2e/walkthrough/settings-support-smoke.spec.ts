@@ -2,7 +2,10 @@ import { test, expect } from "@playwright/test";
 import {
   seedSettingsOrg,
   releaseSettingsOrg,
+  seedMemberIdentity,
+  expectGate,
   settingsUrl,
+  TABS,
   type SeededOrg,
 } from "../settings-support";
 import { apiJson } from "../helpers";
@@ -74,4 +77,73 @@ test("a seeded settings org is Pro, reachable, and returns its slot", async ({ p
   const ids = (after.data ?? []).map((o) => o.id);
   expect(ids).not.toContain(seeded.orgId);
   expect(ids.length).toBeGreaterThan(0);
+});
+
+test("a seeded member really holds the role, from the app's own answer", async ({
+  browser,
+  request,
+}) => {
+  const org = await seedSettingsOrg(request, { label: "w3-ident" });
+  const member = await seedMemberIdentity(browser, request, org.orgId, "viewer");
+  try {
+    // The app's answer, not our own bookkeeping: GET /api/orgs/{id}/members is
+    // open to every ORG_ROLE, so the member can read its own row back.
+    const seen = await apiJson<{ user_id: string; role: string }[]>(
+      member.request,
+      `/api/orgs/${org.orgId}/members`,
+    );
+    expect(seen.status, "the seeded member cannot read the member list").toBe(200);
+    const mine = (seen.data ?? []).find((m) => m.user_id === member.userId);
+    expect(mine?.role, "the invite was accepted but the role did not stick").toBe(
+      "viewer",
+    );
+    // And that it is NOT the owner — the failure mode this helper exists to
+    // avoid is silently handing back the shared Pro session, which would make
+    // every gate assertion below pass for the wrong reason.
+    const whoami = await apiJson<{ id: string }>(request, "/api/users/me");
+    expect(member.userId).not.toBe(whoami.data?.id);
+  } finally {
+    await member.release();
+    await releaseSettingsOrg(request, org);
+  }
+});
+
+test("expectGate asserts the route's own exact status, not just 'some kind of refusal'", async ({
+  browser,
+  request,
+}) => {
+  // Real gate, verified against _INDEX.md's route table: `PATCH
+  // /api/orgs/{id}` is `requireOrgRole(EDITOR_ROLES)`, and a viewer (below
+  // EDITOR) is refused with 401 — the `/api/orgs/**` family's AuthError
+  // status for both "not a member" and "insufficient permissions".
+  const org = await seedSettingsOrg(request, { label: "w3-gate" });
+  const member = await seedMemberIdentity(browser, request, org.orgId, "viewer");
+  try {
+    await expectGate({
+      label: "viewer PATCH org",
+      request: member.request,
+      method: "PATCH",
+      path: `/api/orgs/${org.orgId}`,
+      body: { name: "should not persist" },
+      expectStatus: 401,
+    });
+  } finally {
+    await member.release();
+    await releaseSettingsOrg(request, org);
+  }
+});
+
+test("TABS mirrors the app's own SETTINGS_TABS, not a retyped copy", () => {
+  // A change to the app's tab set (add, remove, rename) must move this
+  // constant with it — see settings-support.ts for how TABS is derived.
+  expect(TABS).toEqual([
+    "organization",
+    "news",
+    "sponsors",
+    "team",
+    "api",
+    "preferences",
+    "account",
+  ]);
+  expect(TABS.length).toBe(7);
 });

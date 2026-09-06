@@ -19,8 +19,8 @@ check expressed as a client `disabled` prop, and `apps/web` vitest is
 | Wave | Scope | State |
 | --- | --- | --- |
 | W1 | `/admin/settings` + 4 legacy redirects; `setOwnerStaffRoleSql` ships with it | **DONE** — 6 tasks, 5 fix rounds, all reviews clean |
-| W2 | `/o/{org}/settings` 7 tabs — drive+persist (sponsors CRUD half) | Not started — W1's follow-ups were **closed in W1.5**, not carried here |
-| W3 | `/o/{org}/settings` 7 tabs — gating matrix + first mutation sweep | Not started |
+| W2 | `/o/{org}/settings` 7 tabs — drive+persist (sponsors CRUD half) | **MERGED** — PR #720, squashed to `997ad225b`, all 11 CI checks green |
+| W3 | `/o/{org}/settings` 7 tabs — gating matrix + first mutation sweep | **IN PLANNING** — see the W3 section below |
 | W4 | `settings/{connect,credits,add-ons}`, billing's uncovered panels, sponsor monetize half | Not started |
 | W5 | Competition settings — frozen, visibility, discoverable | Not started |
 | W6 | Division schedule + constraints — full bounds table | Not started |
@@ -674,6 +674,512 @@ that needs builds should check `seazn-env status` and the load first — and
 `up --all`, never `up --server` then `up --placement`, or the server starts
 without `PLACEMENT_SERVICE_HOST` and ten scheduling tests fail as
 `solver_unavailable`.
+
+## W3 — IN PLANNING (2026-09-05)
+
+Worktree `.claude/worktrees/settings-w3`, branch `feat/settings-w3-matrix`,
+based on `997ad225b` — main WITH W2 merged. Env label **`stw3`**.
+
+**W2 is CLOSED.** Everything above is either shipped or recorded as a
+follow-up below. Do not re-derive it.
+
+### Scope
+
+The gating matrix across all seven `?tab=` panels, plus the programme's first
+mutation sweep. Design-doc cases **5-9** (UI-only gating; entitlement
+transitions) and **11-14** (ownership and last-actor), the latter being the
+ones W2 deliberately excluded as irreversible against the shared Pro user.
+
+### The owner rulings that bind this wave
+
+1. **The ≤60s budget HOLDS; W3 restructures to fit it** (ruling 6 above).
+   The matrix runs on `APIRequestContext` with **no browser**; a browser round
+   trip has to earn its place. This is not a preference — W2 spent ~30s of the
+   60s programme ceiling and six waves remain.
+2. **Subagent dispatches use Opus 5** (ruling 5).
+
+### Three constraints carried in from W2 — read before seeding anything
+
+1. **The shared Pro user is at 5 of 5 org slots.** Pro base +
+   `org-management`'s second org + three W2 spec files. `assertMayOwnAnotherOrg`
+   bounds a PERSON, and `auth.setup.ts:96` lifts the cap to 50 via an
+   override — but that override is on the SETUP org, so read it rather than
+   assume it still applies to whatever W3 seeds. A worker restart after a red
+   re-runs `beforeAll` and seeds again.
+2. **An org-scoped override, not `setOrgPlanBySql`, is the matrix's tool** —
+   but the setter must match the feature's storage type, or the write is a
+   silent no-op. **Correction (W3 Task 3, verified against the migrations):**
+   `dashboard.branding`, `sponsors.tiers`, `sponsors.monetize`, `api.access`,
+   and `news.auto` are all **boolean-checked** (`V112__entitlements_v2.sql`,
+   `V283__sponsor_crm.sql`, `V295__org_news.sql` all seed `bool_value` with
+   `int_value=null`; `hasFeature`/`resolve()` in `entitlements.ts` read only
+   `bool_value` for these keys and never coalesce `int_value`). Use
+   `setBoolEntitlementOverrideSql(orgId, featureKey, boolValue)` for all five
+   — `setEntitlementOverrideSql(orgId, featureKey, intValue)` (int-only) is a
+   no-op against them and was originally miswritten as "the matrix's tool"
+   here before Case 8 caught it live. Reach for the int setter only for a
+   genuinely int-valued key (seat/quota limits, e.g. `orgs.max_owned`,
+   `members.max`, `scorers.max`). A plan flip is only for case 7's genuine
+   Pro→Free transition, and needs the group split first.
+3. **A fresh org is COMMUNITY** (`createOrgForUser` opens its own
+   `plan_key='community'` subscription), so a "this is gated on Free"
+   assertion on a fresh org can pass vacuously. Every negative assertion in
+   the matrix must be shown to redden when its guard is mutated — that is what
+   `_RULES.md` §1 exists for and it is the whole point of a gating wave.
+
+### Follow-ups W2 recorded and did NOT fix — decide their wave
+
+- **F9: pre-auth cross-tenant existence oracle** (`requireResourceAuth`
+  resolves the resource before authenticating; 404 for an absent id, 401 for a
+  real one, across 120 route files). Severity LOW — UUIDv4 ids are not
+  enumerable. **Owner ruled it becomes its own work item, NOT a settings
+  fix.** Do not absorb it into W3.
+- `e2e/api-keys.spec.ts:41-46` creates a competition in the shared Pro org
+  every run and never deletes it — unbounded row growth.
+- `ROLE_BADGE` in `org-switcher.tsx` still has no `scorer` entry.
+
+### Follow-ups W3 recorded and did NOT fix — decide their wave
+
+- **F10: seed-before-`try` leak risk.** Both `settings-role-gates.spec.ts`
+  and `settings-entitlement-gates.spec.ts` seed a SECOND resource (org then
+  member/org2) before entering the test's `try` block. If the second seed
+  throws, the first is never released — and in the entitlement file's org-
+  switch case, the active-org cookie would be left pointing at the leaked
+  org instead of restored. Found by Task 3's task review, confirmed
+  pre-existing in Task 2 as well. Fix is a safe multi-seed helper or nested
+  `try`, applied to both files together in one pass — not a Task 3 or Task 4
+  fix on its own.
+- **F11: leave-org has no organization-level lock, newly reachable.**
+  `orgs/[id]/members/me/route.ts`'s last-owner check previously could never
+  run to completion for an owner
+  (see W3 finding below — it 500'd on an illegal `FOR UPDATE` + aggregate),
+  so a race on it was structurally unreachable. Now that leave-org actually
+  works, the route has no lock analogous to `role/route.ts:28`'s
+  `select 1 from organizations ... for update` — two co-owners of a 2-owner
+  org calling `DELETE .../members/me` concurrently can each read "other
+  owners = 1" under READ COMMITTED before either commits, and both proceed,
+  leaving the org with zero owners. Found by Task 4's task review. Correctly
+  out of scope for that task's one-line fix (ruled: no added locking); needs
+  its own small fix (an `organizations` row lock mirroring `role/route.ts`)
+  in a future wave.
+- **F12: Case 9 (`settings-entitlement-gates.spec.ts:315-374`) proves a
+  narrower contract than its name claims.** Its comment says org2 becomes
+  "what the active-org cookie points at" after the explicit
+  `POST /api/orgs/active {org_id: org2.orgId}` call — but `POST /api/orgs`
+  (`api/orgs/route.ts:29`) already calls `setActiveOrgId` on creation, so
+  org2 is active the instant it's seeded and the explicit switch call is a
+  no-op. It wouldn't matter even if it weren't: `/o/{orgSlug}` pages are
+  gated by `requireOrgPage`, whose own comment (`server/page-auth.ts:6-8`)
+  states the design intent directly — "the `/o` tree authorises from the
+  URL ... the `seazn_org` cookie no longer decides what a page shows" — and
+  `/api/v1/orgs/{id}/...` routes take `orgId` from the path
+  (`server/api-v1/auth.ts:210`), never the cookie either. So neither the
+  page navigation nor the `POST /api/v1/orgs/{org2.orgId}/sponsors`
+  assertion in this test can be affected by whether the switch call ran,
+  no-opped, or broke. All it actually proves: `POST /api/orgs/active`
+  accepts a snake_case body and returns 200 — real, but not "switching
+  enforces the gap on the new org." Found by the final whole-branch review.
+  Fix needs design work (find a surface that genuinely reads the
+  active-org cookie under `/o` or `/api/v1`, or force org1 active first and
+  assert a real before/after transition) — not a mechanical patch, hence
+  deferred rather than fixed in this wave.
+- **F13: `TABS` (`settings-support.ts`) is an inert seam.** Task 1 built it
+  as a shared interface ("imported from the app's own `SETTINGS_TABS`" per
+  the plan, though shipped as a type-only-import-typed literal — see the
+  W3-verified-facts section above) and Task 2's own brief said it "consumes
+  Task 1's `seedMemberIdentity`, `expectGate`, `TABS`" — but grepping the
+  whole tree, `TABS` has exactly one reference outside its own module: a
+  smoke test that checks it equals a hardcoded literal duplicating its own
+  definition. None of the three new matrix spec files import it; each
+  hardcodes the specific tab string it needs. Found by the final
+  whole-branch review — same shape as AGENTS.md's failure class 1 (an inert
+  seam), just in test infrastructure rather than product code. Fix: either
+  wire a real per-tab consumer into whichever future wave next touches this
+  matrix, or strike the "consumes TABS" claim from future briefs.
+
+### W3 Task 5 — the mutation sweep: 7/7 killed, all restores byte-identical
+
+Every line number below was re-pinned against this tree on 2026-09-06, not
+taken from the brief or from Task 4's own comments. Every mutant was run
+against the WHOLE affected spec file (never a `-g` slice), through a real
+`seazn-env rebuild --label stw3`, with the post-rebuild checklist run after
+every rebuild (manifest probe against the new `BUILD_ID`, `lsof` the port for
+an orphan, `--project=setup` re-run if the port moved — it never did, stayed
+on 3329 for all 14 rebuilds this task ran). Every file was `cp -p`'d before
+mutating and `diff`'d byte-identical after restoring — all seven diffs below
+read empty.
+
+| # | File:line | Mutation | Killed by | Observed redden |
+| --- | --- | --- | --- | --- |
+| 1 | `api/orgs/[id]/route.ts:89` | `requireOrgRole(id, EDITOR_ROLES)` wrapped in `.catch(() => undefined)` — never throws | `settings-role-gates.spec.ts`: "a viewer is refused every write, by the route and not just the UI" | "rename the org" row: `PATCH /api/orgs/{id}` answered **200**, expected **401** |
+| 2 | `server/api-v1/auth.ts:218` | `if (!roles.includes(role))` → `if (roles.includes(role) && false)` — never throws | same test, v1 rows | "create a sponsor" row: `POST /api/v1/orgs/{id}/sponsors` answered **201**, expected **403** |
+| 3 | `server/usecases/api-keys.ts:42` | `await requireFeature(auth.orgId, "api.access");` deleted outright | `settings-entitlement-gates.spec.ts`: "Case 8: ?tab=api on a Free org…" | Still 402 (the `api.write` check one line down still fires for a non-read scope), but `feature_key` came back **"api.write"**, expected **"api.access"** — the guard-ORDER assertion the test's own header comment predicted for exactly this failure mode |
+| 4 | `api/orgs/[id]/members/me/route.ts:29` | `if (count === 0)` → `if (count === 0 && false)` | `settings-ownership.spec.ts`: "Case 11: the last owner cannot leave…" | `DELETE members/me` as the sole owner answered **200**, expected **409** |
+| 5 | `api/orgs/[id]/members/[userId]/role/route.ts:39` | `if (count === 0)` → `if (count === 0 && false)` | `settings-ownership.spec.ts`: "Case 14: demoting the sole owner…" | `POST …/role {role:"admin"}` on the sole owner answered **200**, expected **409** |
+| 6 | `api/users/me/route.ts:84-103` | the whole sole-owner `blockedOrgs` query + `if (blockedOrgs.length > 0)` guard deleted | disposable scratch spec, never committed (see below) | `DELETE /api/users/me` on a sole owner WITH another member answered **200**, expected **409** |
+| 7 | `o/[orgSlug]/settings/page.tsx:666` | `org.role !== "owner"` → `true` | `settings-ownership.spec.ts`: "Case 11: the last owner cannot leave…" | the sole owner's account card rendered a "Leave org" button: count **1**, expected **0** |
+
+**No survivors.** All 7/7 mutants reddened for the right reason and were
+confirmed restored byte-identical (`diff` against the pre-mutation `cp -p`
+backup, empty on all seven) before the next mutation began, and again at the
+end of the task (`git status`/`git diff --stat` against `HEAD` — clean, zero
+production files touched).
+
+**Mutants 5 and 6 redo Task 4's own review-time mutation proofs, for a clean
+itemized record with real command output rather than a citation of that
+report.** Task 4's implementer already drove mutant 5's exact shape
+(`if (false && count === 0)` at `role/route.ts:39`) to prove Case 14, and
+independently mutation-proved the `blockedOrgs.length > 0` guard mutant 6
+targets via its own disposable throwaway-vs-throwaway scratch scenario. Both
+are re-run here, from scratch, with fresh rebuild/redden/restore evidence.
+
+**Mutant 4 is NOT the same thing Task 4 already tested.** Task 4 mutation-
+proved the FIX ITSELF — reverting `members/me/route.ts` to reintroduce the
+illegal `for update` on the aggregate, which 500s before the count logic ever
+runs (Postgres `0A000`). This mutant instead disables the count LOGIC on the
+now-fixed route (`if (false)` on `count === 0`), a distinct failure mode: it
+proves Case 11 also catches a broken *guard*, not just a broken *query*.
+
+**Mutant 6's safety mechanism — read this before touching this file again.**
+`settings-ownership.spec.ts`'s own committed Case 12a test was never run
+against the mutated route: that test's `DELETE /api/users/me` call uses
+`request`, which is the shared Pro identity's own session (`_RULES.md` §1 —
+every project runs as one shared Pro org). With the sole-owner block deleted,
+that exact call would have deleted the shared Pro account for real, and
+nothing in this repo can undo a soft-deleted-and-anonymised user. Instead, a
+disposable spec (`e2e/walkthrough/__scratch-mutant6.spec.ts`, written, run
+green against the clean tree first as a positive control, run red against the
+mutant, then deleted before this file was committed — `git status` after
+confirms it is gone) mirrors Case 12b's mechanism for BOTH participants:
+`mintLoginPathBySql`, no `storageState`, one-off `@example.com` addresses,
+`next=/` to avoid `postAuthLanding` auto-provisioning an org before the seed
+runs. One throwaway account owns a throwaway org; a second throwaway account
+joins it as a real member via the same invite-mint-then-accept path
+`seedMemberIdentity` uses, so the org genuinely "has another member" — the
+exact shape `blockedOrgs` is checking for, which Case 12b's org (deliberately
+solo) does not exercise. The owning throwaway account is genuinely deleted
+when the mutant fires; that is correct and harmless — it is single-use and
+was never persisted to any `e2e/.auth/*.json` file. The shared Pro identity
+was never in the request path for this mutant at any point, confirmed by the
+closing full-suite re-run (Case 12a passes clean against the restored route,
+and a direct `GET /api/users/me` as the shared Pro identity still answers 200
+inside that same test).
+
+**Rebuild cost, for whoever plans the next sweep:** every one of the 7
+mutation rebuilds paid a full build, 1:39-2:29 wall each (real `time`, not
+estimated). Restoring back to a source tree the build cache had already seen
+was fast in 6 of 7 cases — 13.4-29.6s wall (mutants 1-5, 7). **Mutant 6's
+restore did NOT hit that fast path** — 1:42.98, indistinguishable from a cold
+mutation build. Not investigated further (out of this task's scope to chase),
+but worth flagging rather than smoothing over: mutant 6 was also the only one
+of the seven that DELETED a multi-line block outright rather than swapping a
+condition inline (`if (x)` → `if (x && false)`), so whatever the build cache
+keys on may be more sensitive to a structural deletion than to a same-shape
+edit. Same server port (3329) the whole task, all 14 rebuilds — no
+`--project=setup` re-run was ever needed.
+
+### W3 Task 5 — budget measurement (Step 4)
+
+**17 new walkthrough tests added across Tasks 1-4** — `test(` blocks counted
+directly, not estimated: `settings-role-gates.spec.ts` (3) +
+`settings-entitlement-gates.spec.ts` (6) + `settings-ownership.spec.ts` (5) +
+the smoke-spec addition, `settings-support-smoke.spec.ts` (3 new, Task 1's own
+support-module smoke test, `a3430539b`) — **correction (final whole-branch
+review, 2026-09-06): this file's 4th test, "a seeded settings org is Pro,
+reachable, and returns its slot," predates W3 (added in W2's `997ad225b`) and
+was wrongly credited above as new, inflating the original count to 18.** No
+other file matching `*smoke*` changed in this wave (checked: `git log
+997ad225b..HEAD --stat` against both `apps/web/e2e/**smoke**` and
+`apps/web/**/*smoke*`).
+
+Real numbers, `--reporter=json --outputFile`, all four confirmed resolving
+inside this worktree (`.testResults`/`suites[].file` all under
+`apps/web/e2e/walkthrough/`):
+
+| Measurement | Result |
+| --- | --- |
+| Serial (`--workers=1`), sum of the 18 tests' own durations (17 new + the 1 pre-existing smoke test, see correction above) | **10.976s** (excludes the 2 shared `auth.setup` deps, 2.343s) |
+| Wall clock, `--workers=1`, whole process (`time`) | **16.128s** |
+| Wall clock, `--workers=3`, whole process (`time`), run 1 | **12.511s** |
+| Wall clock, `--workers=3`, whole process (`time`), run 2 (final clean re-run) | **11.253s** |
+| All four runs' JSON stats | 20 expected (17 new + 1 pre-existing + 2 setup), 0 unexpected, 0 flaky, 0 skipped every time |
+
+**Measured at "the 3 new files + smoke spec together," per the brief's stated
+minimum** — not the full `walkthrough` project (~721.7s wall per W1's own
+measurement; re-running the whole leg for a ~20-test delta was judged not
+worth the wall-clock cost this task would have spent on it). **This method
+has a known bias, stated rather than absorbed silently**: launching Playwright
+standalone for 4 files pays the same fixed process/browser-launch overhead
+(~5-8s of the ~11-16s above) that a full-leg run amortises across all ~40+
+walkthrough specs. The true marginal cost W3 adds to the leg is very likely
+LOWER than 11-12.5s, but no full-leg before/after delta was taken this task —
+same gap W1 recorded for itself and did not solve either.
+
+**Against the ≤10s share this dispatch names for W3** (owner ruling 6: the
+programme's ≤60s budget holds, W2 already spent ~30s, "restructure the later
+waves rather than raise the ceiling"): **11.0-12.5s is over it, and that is
+reported as measured, not rounded down to fit.** The serial-sum figure
+(10.976s) alone is within a rounding error of the line; both `--workers=3`
+wall-clock figures (11.253s, 12.511s) are past it outright. Cumulative
+programme cost on this trajectory: W1's 15.7s + W2's own "~30s of leg time"
+(`_INDEX.md`'s own figure — 12 tabs-drive-and-persist tests plus Task 5's
++3.3s on the existing `settings-admin` file) + W3's ~11.0-12.5s (this wave's
+gating matrix and mutation sweep) ≈ **57-58.5s of the 60s TOTAL ceiling**,
+with W4-W8 — competition settings, both division surfaces, and a fix wave —
+still ahead. This is the
+same finding W2 already flagged ("on this trajectory the budget will be
+exceeded, probably by W5") landing one wave sooner than predicted, and it is
+put here as a measurement for the owner, not absorbed into a rounded-down
+number to make W3 read as compliant. **W3 itself did do the restructuring the
+ruling asked for** — the whole matrix runs on `APIRequestContext`, and only 7
+of the 17 new tests use the `page` fixture at all (Findings A/B, Case 7-9's
+upsell checks, Case 11/13's UI assertions — support-smoke's first test also
+uses `page`, but per the correction above it predates W3 and does not count
+toward this total), plus Case 12b, which drives one page manually via its own
+`browser.newContext()` rather than the fixture (it needs a session with no
+`storageState`). The 9 tests with no `page` at all (role-gates' three, Finding C, Case 12a/14, and
+support-smoke's last three) never launch a browser page navigation, only
+`APIRequestContext` calls — the cost that remains is inherent to the page
+navigations that ARE load-bearing, not a browser round trip that failed to
+earn its place.
+
+**Closing verification, on the fully-restored tree:** the 4-file run above
+(20 expected, 0 unexpected, 0 flaky, 0 skipped) IS that closing check — run
+after mutant 7's restore, with no further edits after. `git status`/`git diff
+--stat` against `HEAD` are both clean. `seazn-env gate --label stw3` (turbo
+lint+typecheck, 0 cached — a real run): **0 errors, 141 warnings, none in any
+file this task touched** (all seven touched files ended the task byte-
+identical to `HEAD`, confirmed by `diff` against each `cp -p` backup).
+
+### Environment note
+
+`pnpm install` and `seazn-env up --label stw3 --all` were kicked off at
+kickoff; check `/tmp/stw3-install.log` for `EXIT=0` and `/tmp/stw3-env.log`
+for `ENV_EXIT=0` before running anything. A fresh worktree has **no
+`node_modules`** — the first W2 build failed for exactly that reason.
+
+**The post-rebuild checklist is three items, and W2 paid for all three:**
+manifest probe against the new BUILD_ID (never `/api/health`, which answers
+200 for a DELETED bundle), `lsof` the old port for an orphan still serving
+pre-fix code, and **re-run `--project=setup` if the port moved** — Playwright
+stores localStorage origin-scoped and the origin includes the port, so a port
+change silently voids the cookie-consent flag and the banner then intercepts
+clicks. **Never `--no-deps`**: it is what stops the state re-minting.
+
+### W3 finding 1 — the W2 merge reddened the walkthrough leg on `main`, and the
+### cause was a live product defect, not a test artifact. FIXED, merged, e2e GREEN.
+
+E2E run `33968571673` on `997ad225b` (W2's merge commit) failed:
+`settings-admin.spec.ts:661` and `:834` both landed on
+`/login?next=%2Fsettings%3Ftab%3Daccount%26email_change%3Dinvalid` instead of
+the org-scoped account tab. **Both are green locally, at
+`--workers=3`, in the full 61-test leg.** That gap is the whole finding.
+
+`confirm/route.ts` built all five of its redirects as
+`NextResponse.redirect(new URL(path, req.url))`. **`req.url` is the server's
+INTERNAL BINDING, not the address the browser is on.** `lib/oauth.ts:25-26`
+already says exactly that — "Behind a reverse proxy (Fly.io), req.url is the
+internal binding (http://0.0.0.0:3000)" — which is why the OAuth routes go
+through `baseUrl(req)`. This route never did.
+
+CI starts the standalone server with **no `HOSTNAME`** (`e2e.yml:527`) and Next
+standalone defaults to `0.0.0.0`, so the Location read
+`http://0.0.0.0:3000/settings?…` while the browser sat on
+`http://localhost:3000`. The browser withholds the session cookie across that
+origin hop, `/settings` finds no session, and the confirmation lands on
+`/login`. Locally `seazn-env` binds `127.0.0.1` and `req.url` reports
+`localhost`, the origins match, and the identical code passes.
+
+Reproduced directly rather than inferred — a standalone server started with
+`HOSTNAME=0.0.0.0` answers:
+
+```
+location: http://0.0.0.0:3399/settings?tab=account&email_change=invalid
+```
+
+**This is a live customer defect.** Behind any reverse proxy every email-change
+confirmation sends the user cross-origin, and the SUCCESS outcome does it
+*after* the new address has already committed — the user is bounced to a login
+screen by the link that worked.
+
+**`baseUrl(req)` is NOT the fix.** With no proxy there is no
+`x-forwarded-host`, so it falls back to `new URL(req.url).origin` and
+reproduces the same binding. The fix is a **relative** Location, which has no
+origin to get wrong: the browser resolves it against the URL it requested.
+
+Three rules follow, and the third is the one that let this ship green:
+
+1. **A route-handler redirect built from `req.url` is a latent cross-origin
+   bounce.** Grep for `new URL("/…", req.url)` before adding another.
+2. **An origin difference is invisible to a `pathname + search` assertion.**
+   Both banner tests compared exactly that, so an absolute Location satisfied
+   them whenever the browser happened to be on that host — which it is,
+   locally. The guard added at `settings-admin.spec.ts:943` pins the exact
+   RELATIVE string with `maxRedirects: 0`; following the redirect is precisely
+   what erases the evidence, since the landing URL is identical either way.
+3. **`localhost` vs `0.0.0.0` is a REAL environment axis this repo's local
+   harness does not cover.** Local seazn-env pins `HOSTNAME=127.0.0.1`
+   (`seazn-env.sh:521`); CI pins nothing. Any redirect, absolute asset URL or
+   cookie-domain behaviour can differ between them, and the local leg cannot
+   see it. When CI reds on a hop the local leg passes, check the binding
+   before checking the code.
+
+Witnessed both ways: the new guard **fails** against the pre-fix server
+(1 failed / 9 passed) and passes after the rebuild.
+
+**Landed as PR #724, squashed to `a6c467ccb` on `main`, 11/11 CI checks green.**
+Two more things surfaced by review before merge, both fixed in the same PR:
+`redirectLocal` originally did not percent-encode, so a `next` path containing
+any character above U+00FF (reachable — `safeNextPath` accepts non-Latin-1)
+turned a 500 into a redirect-turned-crash; and nothing enforced "a path we
+own", so `redirectLocal("//evil.com")` emitted that header verbatim. Both
+fixed; `redirectLocal` now parses against an opaque base and rejects anything
+that isn't a same-site path. **The e2e run on the merged commit is GREEN**
+(`a6c467ccb`), which is the actual proof — CI on a PR branch is not the same
+signal as CI on the push that triggers e2e.
+
+The four more sites with the same defect (`refer/[code]/route.ts`,
+`google/route.ts`, `google/callback/route.ts` ×2) shipped in the same PR,
+found by a peer session and one more by re-reading its list.
+
+### W3 finding 2 — `_RULES.md` §2's premise is FALSE against current `main`
+
+`_RULES.md` §2 and design §3 trap 3 both say "`POST /api/orgs` creates an org
+that joins its creator's **existing** billing group", and derive from it the
+"split the group first" ceremony. **`createOrgForUser` mints its own community
+group per org** — `auth.ts:292-330` inserts a fresh `subscriptions` row inside
+the create transaction, and the doc comment names the history: "Individual by
+default (#212): every new org mints its OWN community group. The old auto-join
+(V309) dropped a user's second org onto their first group; that is now opt-in."
+
+Consequence for the matrix: `setOrgPlanBySql` on a **freshly created** org is
+group-scoped to a group containing only that org, so it cannot drag the shared
+Pro org. The split ceremony is harmless but unnecessary on that path. The rule
+still holds for any org attached to a group through `attachOrgToGroup`.
+`settings-support.ts:88-95` already documents its own split call as a retained
+no-op for the retired V309 shape.
+
+### W3 finding 3 — the shared Pro user's org cap is 50, not 5
+
+The W3 kickoff above carries "the shared Pro user is at 5 of 5 org slots" from
+W2. Verified against the tree: `assertMayOwnAnotherOrg` takes
+`limit = Math.max(...limits)` over `orgs.max_owned` for **every** owned org
+(`auth.ts:245-254`), and `auth.setup.ts:96` writes an
+`orgs.max_owned = 50` override onto the first org `GET /api/orgs` returns. So
+the effective cap is **50**, against roughly twenty orgs created across the
+suite. Two caveats that keep this from being a licence to seed freely: the
+override is attached to ONE org and nothing re-attaches it if that org is ever
+released, and `owned` counts by `org_members.user_id` with **no `deleted_at`
+filter** (`auth.ts:224-226`) — a soft-deleted org still occupies a slot, so
+only `releaseSeededOrgSql`, which deletes the membership row, actually returns
+one.
+
+### W3 verified facts — the matrix's inputs, read end to end
+
+Confirmed by reading each handler through, not by grep. The plan is written
+from this table; re-pin before trusting any line number.
+
+**Tab keys** (`_components/settings-nav.tsx:24-26`): `organization`, `news`,
+`sponsors`, `team`, `api`, `preferences`, `account`. An unrecognised or absent
+`?tab=` falls through to `organization` (`page.tsx:119`) — no redirect, no 404,
+the bad value stays in the URL.
+
+**Three UI-ONLY gates — a control the UI hides that the API still honours.**
+These are the wave's headline candidates.
+
+1. **Brand colour has NO write-side check.** `PATCH /api/orgs/{id}`
+   (`route.ts:87-190`) is `requireOrgRole(EDITOR_ROLES)` → schema → 
+   `mergeBrandColor` (`:137`) → update. No `hasFeature`/`requireFeature` in the
+   file; the schema validates shape only; no DB trigger. A **Community editor's
+   PATCH persists the colour and gets 200.** The read is masked in three places
+   (`public-site/data.ts:362-363` returns `'{}'::jsonb` and sets
+   `branded=false`; same mask in `V230` and `V306`).
+   **But the mask has an EXCEPTION, and it is reachable:** `page.tsx:386` hands
+   raw `active.branding` to `OrgAbout`, which feeds
+   `publicThemeStyleChain(branding)` into `previewStyle`
+   (`org-about.tsx:57`) — unmasked, on the Organisation tab, which a Community
+   org can open. So "stored but rendered nowhere" is FALSE as stated. Drive it
+   before writing the assertion.
+2. **`GET /api/v1/orgs/{id}/api-keys` has no `api.access` guard.**
+   `api-keys/route.ts:8-15` → `listApiKeys` → `requireSession` only
+   (`usecases/api-keys.ts:31-35`). `requireFeature("api.access")` appears only
+   in `createApiKey` (`:42`). A Community owner/admin **GETs 200 with the key
+   list** while the UI shows an upsell panel (`page.tsx:456`).
+3. **`DELETE /api/tour` has no org check at all.** `api/tour/route.ts:12-16` is
+   `getCurrentUser()` → `resetTour(user.id)`. A viewer, whose UI hides the
+   button (`page.tsx:391`), **succeeds with 200.**
+
+**The API scope radios are ungated in the UI and fail only on submit.**
+`api-keys.tsx:195-225` renders three radios with no `disabled`, no `PlanBadge`,
+and `ApiKeysPanel` is passed no plan prop at all (`page.tsx:457`). Gated values
+are `score` and `manage` (`read` is free), guard at `usecases/api-keys.ts:47`.
+**Order decides the expectation:** `requireFeature("api.access")` runs FIRST
+(`:42`), so a Community editor picking `score` gets 402 with
+`feature_key: "api.access"` and never reaches the `api.write` guard. Only a
+**Pro** editor sees `feature_key: "api.write"`. A matrix row asserting
+`api.write` against a Community org would be asserting the wrong key.
+
+**Status codes branch by route family, and the matrix must branch with them.**
+`/api/orgs/**` → `requireOrgRole` → `AuthError` → **401** for *both* "not a
+member" and "insufficient permissions" (`lib/http.ts:34-38`).
+`/api/v1/**` → `requireOrgAuth` → **401** only if not a member, **403** if the
+role is insufficient (`api-v1/auth.ts:216-218`).
+
+What a `viewer` actually receives:
+
+| route + method | viewer |
+|---|---|
+| `PATCH /api/orgs/{id}` | 401 |
+| `POST /api/orgs/{id}/logo-upload-url`, `/content-upload` | 401 |
+| `GET`,`POST /api/orgs/{id}/invites`, `…/{token}/revoke` | 401 |
+| `POST /api/orgs/{id}/members/{userId}/role` | 401 (owner-only — an **admin** also gets 401) |
+| `DELETE /api/orgs/{id}/members/{userId}` | 401 (owner-only; admin 401) |
+| `POST /api/orgs/{id}/transfer-owner` | 401 (owner-only; admin 401) |
+| `GET /api/orgs/{id}/members` | **200** — gate is `ORG_ROLES`, viewer included |
+| `DELETE /api/orgs/{id}/members/me` | **200** — no role gate; 404 only for a non-member |
+| `DELETE /api/tour` | **200** — no org check |
+| `GET /api/v1/orgs/{id}/sponsors`, `/sponsor-packages` | **200** — `read`, viewer ∈ `READ_ROLES` |
+| `POST`/`PATCH`/`DELETE` on those | 403 |
+| `POST /api/v1/orgs/{id}/posts/digest` | 403 |
+| `GET`,`POST /api/v1/orgs/{id}/api-keys` | 403 (both declared `write`) |
+| `PATCH`,`DELETE /api/v1/posts/{id}` | 403 |
+
+**`scorer` is not in `READ_ROLES`**, so it gets 403 on the `read` rows — but
+`requireOrgPage` redirects scorers to `/my-matches` (`page-auth.ts:155`), so
+that identity **cannot reach `/settings` in a browser** and only appears if the
+matrix drives the API directly.
+
+**Feature keys — two in the design doc are not keys.** REAL, per
+`lib/entitlement-domains.ts`: `dashboard.branding` (:51), `sponsors.tiers` /
+`sponsors.monetize` (:15), `api.access` (:56), `news.auto` (:53). Also live on
+this page and missing from the design's list: `branding` (org logo, free since
+V310) and `api.write` (the scope radios). **NOT keys:** `discoveryBranding` and
+`themeBranding` are React prop names on the *competition* settings page; the
+keys behind them are `discovery.branding` and `dashboard.branding`.
+`scheduling.constraints` is a real key but is **not referenced on this page**.
+
+**Identity: there is NO non-owner-member helper, and `loginUi` is not free.**
+The only working pattern in the suite is `members-roles.spec.ts:17-35` — the
+owner mints `POST /api/orgs/{id}/invites`, then a **second context on
+`community.json`** calls `POST /api/invites/{token}/accept`; role is then moved
+with `POST …/members/{userId}/role`. No `impersonate`, `loginAs`,
+`addMemberSql` or `setMemberRoleSql` exists. `loginUi` mints a brand-new user
+by magic link and spends the 5-per-5-min rate limit.
+
+**Ownership cases 11-14: three of the four are IRREVERSIBLE, so they need a
+throwaway org, not the shared one.**
+
+| case | route | guard | reversible? |
+|---|---|---|---|
+| 11 last owner leaves | `DELETE /api/orgs/{id}/members/me` | 409 "You are the sole owner…" (`me/route.ts:22-31`); **an owner never sees the control** (`page.tsx:666`) | **NO** — only invite-accept re-adds a member |
+| 12 delete account | `DELETE /api/users/me` `{confirm:"DELETE"}` | 409 when sole owner AND others exist (`users/me/route.ts:85-103`) | **NO — terminal** (anonymise + `destroySession`) |
+| 13 transfer ownership | `POST /api/orgs/{id}/transfer-owner` | not rendered at one member (`page.tsx:660-663`); 404 non-member, 400 self | yes, but the ACTOR flips — caller becomes `admin` |
+| 14 demote only owner | `POST …/members/{userId}/role` | 409 "must keep at least one owner"; **NO SELF GUARD in the route** — self-demotion is API-reachable, the UI merely hides it (`org-team.tsx:191`) | yes |
+
+**Gap by design, worth a finding:** `DELETE /api/users/me` does NOT block a
+sole owner whose org has **no other members** — `:157-158` deletes the
+membership unconditionally, leaving the organisation row with zero members and
+no owner.
 
 ## False premises found
 

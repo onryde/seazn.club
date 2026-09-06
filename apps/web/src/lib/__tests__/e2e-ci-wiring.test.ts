@@ -193,6 +193,12 @@ const WALKTHROUGH_SPECS: string[] = [
   "settings-people-tabs.spec.ts",
   "settings-support-smoke.spec.ts",
 
+  // Settings W3 — the gating matrix: role gates, entitlement gates, and
+  // ownership/last-actor cases (leave-org, delete-account, transfer).
+  "settings-entitlement-gates.spec.ts",
+  "settings-ownership.spec.ts",
+  "settings-role-gates.spec.ts",
+
   // The directory — the organiser's own records, driven through the screens
   // that own them: club import caps, the import paywall preview, officials'
   // roles against the upgrade gate, player identity and its duplicate queue,
