@@ -185,6 +185,18 @@ Transform and opacity only. No animation on mount, no continuous ticker, no
 `setInterval` for visuals; the tick is a class toggled from a previous-value
 ref and removed on `animationend`.
 
+**One deliberate exception: the football clock advances between events.**
+A match clock is DATA, not decoration, and the engine gives a snapshot
+(`phase`, `periods`, `asOf`) that only changes when something is scored or a
+period turns. Left alone the clock would freeze for minutes at a time, which
+looks broken on air. So the football family runs one 1 Hz interval that
+advances the displayed time from the last snapshot plus elapsed wall time,
+and it is **phase-aware**: it stops at half-time, at full-time and at any
+stoppage the phase declares, and it re-anchors to the snapshot on every push
+so it can never drift away from the engine's answer. This is the only timer
+in the overlay; every other motion is CSS. `prefers-reduced-motion` does not
+disable it, because it is information rather than movement.
+
 ## 7. Legibility at phone scale
 
 Most fans watch on a phone where a 1080p frame is 390 px wide (scale 0.203).
