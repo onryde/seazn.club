@@ -7,7 +7,7 @@
 > spectator worktree; its "RESUME HERE" block carries per-task detail). Update this file at
 > every handoff; it is committed, the ledger is not.
 
-**Last updated:** 2026-09-06 01:4x London.
+**Last updated:** 2026-09-06 05:4x London.
 
 ## Where things live
 
@@ -38,7 +38,7 @@
 | 8 dictionaries + coverage test | complete, reviewed; cherry-picked onto the branch as 45ed8c2e9 edd8de9d0 d1c333e5f (result keys by engine METHOD + tie/no_result/draw with `{winner}` `{margin}`; `GLYPH_CLASSES` single source; parity both ways). Branch verified: public-site 545/0, tsc 0, i18n parity OK | branch |
 | 18 pad More sheet + first line e2e | complete, reviewed; cherry-picked as 57793bf53 cab4536d3 c14c76e50 (eight labels ×4 locales; line-entry e2e `test.fixme` until the console mount fix — OWNER DECISION 1 open; public-page assertion owed to Task 15). Branch verified: scorepad 2556/0, engine 400/400, tsc 0 | branch |
 | 9 API + realtime | complete, reviewed; cherry-picked as e5a053034 (`match-centre-load.ts` loader for both call sites; parity test; OpenAPI response schema added). Branch verified: public-site 575/0, tsc 0, parity OK, zero regen drift | branch |
-| 14 page wiring | complete, reviewed (approved with owed items); cherry-picked as 061d87f19; follow-up 14b DONE (5181a7090: 6 strings ×4 locales; dead BUILDER_ONLY_KEYS retired) — review in flight; 14c owed for `SetScoreboard` "Score by {unit}" | branch |
+| 14 page wiring | complete, reviewed (approved with owed items); cherry-picked as 061d87f19; follow-ups 14b (5181a7090, reviewed) and 14c (ecde79afe: metadata templates + set scoreboard words; committed by the orchestrator after the agent stalled thrice; reviewed in the final review) DONE — the fixture page has no hardcoded English left except the OG image's baked "VS" (spec: untouched) | branch |
 | 15 walkthrough e2e | IN FLIGHT in an isolated lane (reset 061d87f19); env t15 (server); notes `task-15-contract-notes.md`; registers in WALKTHROUGH_SPECS at Task 16's rebase | lane |
 | 16 gates + R11 visual sign-off + final review + `_INDEX.md` | not started | — |
 | 19 console mount fix (owner ruling 17) | complete, reviewed (approved with owed teardown — confirmed down); cherry-picked as 28d18cce8; mount fix live-proven; the line-entry e2e stays fixme'd until Task 20 | branch |
