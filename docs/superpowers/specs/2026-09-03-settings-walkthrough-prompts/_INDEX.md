@@ -706,11 +706,21 @@ ones W2 deliberately excluded as irreversible against the shared Pro user.
    override — but that override is on the SETUP org, so read it rather than
    assume it still applies to whatever W3 seeds. A worker restart after a red
    re-runs `beforeAll` and seeds again.
-2. **`setEntitlementOverrideSql(orgId, featureKey, intValue)` is the matrix's
-   tool**, not `setOrgPlanBySql`. Org-scoped, parallel-safe, and the right
-   granularity per feature (`dashboard.branding`, `sponsors.tiers`,
-   `sponsors.monetize`, `api.access`, `news.auto`). A plan flip is only for
-   case 7's genuine Pro→Free transition, and needs the group split first.
+2. **An org-scoped override, not `setOrgPlanBySql`, is the matrix's tool** —
+   but the setter must match the feature's storage type, or the write is a
+   silent no-op. **Correction (W3 Task 3, verified against the migrations):**
+   `dashboard.branding`, `sponsors.tiers`, `sponsors.monetize`, `api.access`,
+   and `news.auto` are all **boolean-checked** (`V112__entitlements_v2.sql`,
+   `V283__sponsor_crm.sql`, `V295__org_news.sql` all seed `bool_value` with
+   `int_value=null`; `hasFeature`/`resolve()` in `entitlements.ts` read only
+   `bool_value` for these keys and never coalesce `int_value`). Use
+   `setBoolEntitlementOverrideSql(orgId, featureKey, boolValue)` for all five
+   — `setEntitlementOverrideSql(orgId, featureKey, intValue)` (int-only) is a
+   no-op against them and was originally miswritten as "the matrix's tool"
+   here before Case 8 caught it live. Reach for the int setter only for a
+   genuinely int-valued key (seat/quota limits, e.g. `orgs.max_owned`,
+   `members.max`, `scorers.max`). A plan flip is only for case 7's genuine
+   Pro→Free transition, and needs the group split first.
 3. **A fresh org is COMMUNITY** (`createOrgForUser` opens its own
    `plan_key='community'` subscription), so a "this is gated on Free"
    assertion on a fresh org can pass vacuously. Every negative assertion in
