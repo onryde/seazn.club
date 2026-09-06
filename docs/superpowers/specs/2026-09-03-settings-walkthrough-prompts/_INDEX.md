@@ -738,6 +738,31 @@ ones W2 deliberately excluded as irreversible against the shared Pro user.
   every run and never deletes it — unbounded row growth.
 - `ROLE_BADGE` in `org-switcher.tsx` still has no `scorer` entry.
 
+### Follow-ups W3 recorded and did NOT fix — decide their wave
+
+- **F10: seed-before-`try` leak risk.** Both `settings-role-gates.spec.ts`
+  and `settings-entitlement-gates.spec.ts` seed a SECOND resource (org then
+  member/org2) before entering the test's `try` block. If the second seed
+  throws, the first is never released — and in the entitlement file's org-
+  switch case, the active-org cookie would be left pointing at the leaked
+  org instead of restored. Found by Task 3's task review, confirmed
+  pre-existing in Task 2 as well. Fix is a safe multi-seed helper or nested
+  `try`, applied to both files together in one pass — not a Task 3 or Task 4
+  fix on its own.
+- **F11: leave-org has no organization-level lock, newly reachable.**
+  `orgs/[id]/members/me/route.ts`'s last-owner check previously could never
+  run to completion for an owner
+  (see W3 finding below — it 500'd on an illegal `FOR UPDATE` + aggregate),
+  so a race on it was structurally unreachable. Now that leave-org actually
+  works, the route has no lock analogous to `role/route.ts:28`'s
+  `select 1 from organizations ... for update` — two co-owners of a 2-owner
+  org calling `DELETE .../members/me` concurrently can each read "other
+  owners = 1" under READ COMMITTED before either commits, and both proceed,
+  leaving the org with zero owners. Found by Task 4's task review. Correctly
+  out of scope for that task's one-line fix (ruled: no added locking); needs
+  its own small fix (an `organizations` row lock mirroring `role/route.ts`)
+  in a future wave.
+
 ### Environment note
 
 `pnpm install` and `seazn-env up --label stw3 --all` were kicked off at
