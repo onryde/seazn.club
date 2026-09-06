@@ -8,6 +8,16 @@
 
 **Tech Stack:** Next.js (App Router, RSC + client islands), React 19.2.4, TypeScript, Tailwind v4 + `app/globals.css` custom properties, Zod 4, postgres.js + Flyway migrations, vitest (`environment: "node"`), Playwright, `scripts/smoke.ts`.
 
+**Canvas (owner-reviewed, the visual authority):**
+https://claude.ai/code/artifact/2aebcbde-28ba-45ff-9028-1151873e4901 —
+artboards "A · Broadcast bar" and "B · Corner bug" (the two registry entries
+this wave ships), "A across sports" and "B across sports" (football, tennis,
+badminton and volleyball in their real palettes), "Moments" (W2), "How fans
+see it on a phone" (the legibility test behind `_THEMES.md` §7), "What the
+club sets up" (the OBS flow), and "Organiser console: Stream this match" plus
+"Same panel at 390" (Task 6's target). Open it before building any surface;
+`_THEMES.md` holds the same design as numbers.
+
 **Spec:** `docs/superpowers/specs/2026-09-05-stream-overlay-design.md`
 **Wave prompt (rulings win over this plan; task ORDER below wins):** `docs/superpowers/specs/2026-09-05-stream-overlay-prompts/W1-step-one.md`
 **Standing rules R1–R17:** `docs/superpowers/specs/2026-09-05-stream-overlay-prompts/_RULES.md`

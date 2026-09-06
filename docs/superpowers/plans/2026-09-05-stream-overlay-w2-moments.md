@@ -8,6 +8,13 @@
 
 **Tech Stack:** Next 16 App Router (read `node_modules/next/dist/docs/` before touching a route), React 19, TypeScript 7 native tsc, Tailwind 4 + `globals.css`, zod, `@seazn/engine` (`foldMatch`, `resolveVoids`, per-module `eventSchemas`), postgres.js, vitest (`environment: "node"`, no DOM), Playwright, pnpm workspaces.
 
+**Canvas (owner-reviewed, the visual authority):**
+https://claude.ai/code/artifact/2aebcbde-28ba-45ff-9028-1151873e4901 — this
+wave's artboard is **"Moments"** (SIX, OUT, GOAL and MATCH POINT slabs beside
+the bug, in each sport's own colour), with "A across sports" and "B across
+sports" for the boards the slab attaches to. `_THEMES.md` §5 holds the same
+design as numbers.
+
 **Spec:** `docs/superpowers/specs/2026-09-05-stream-overlay-design.md` — "Decisions locked" 3–4, "Architecture" §2 (`OverlayModel`, W2 fills `detail` for cricket), §9 Motion (the slab), "Step two — moments" (`OverlayMoment`, the per-sport allowlist), "Tests". Programme index: `docs/superpowers/specs/2026-09-05-stream-overlay-prompts/_INDEX.md`. Wave 1 plan: `docs/superpowers/plans/2026-09-05-stream-overlay-w1.md` (absent when this plan was written; the W1 skeleton below is taken from the spec and every W1 path is re-pinned at execution).
 
 **Status (2026-09-05, main session review): NOT executable yet, by design.**

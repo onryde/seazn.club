@@ -1,6 +1,11 @@
 # W1 — step one: the overlay page, the projection, the stream link, the panel
 
-Read `_RULES.md` → `_INDEX.md` (both pinned-symbol tables) → `_THEMES.md`
+**Look at the canvas first** —
+https://claude.ai/code/artifact/2aebcbde-28ba-45ff-9028-1151873e4901 — it is
+what this wave builds: theme `bar` and theme `bug` on cricket, both across
+football, tennis, badminton and volleyball, the phone legibility test, the OBS
+setup flow, and the organiser panel at desktop and at 390. Then read
+`_RULES.md` → `_INDEX.md` (both pinned-symbol tables) → `_THEMES.md`
 (binding design values: §1 type, §2 sport tokens, §3 bar, §4 bug, §6 motion,
 §7 phone floors, §8 panel tokens; the overlay and panel tasks cite these
 sections instead of restating numbers) → spec §"Architecture" 1–9, §"Tests",

@@ -1,6 +1,10 @@
 # W2 — moments (SIX · OUT · GOAL · MATCH POINT) and the cricket batter/bowler line
 
-Read `_RULES.md` → `_INDEX.md` → `W1-step-one.md` (the slot this wave fills) →
+**Look at the canvas first** —
+https://claude.ai/code/artifact/2aebcbde-28ba-45ff-9028-1151873e4901 — this
+wave's artboard is **"Moments"**: the SIX, OUT, GOAL and MATCH POINT slabs
+beside the bug, each in its sport's own colour. Then read
+`_RULES.md` → `_INDEX.md` → `W1-step-one.md` (the slot this wave fills) →
 `_THEMES.md` §5 (the moment slab: tones, sizes, Barlow 800), §6 (slab row of
 the motion table), §3 (the cricket detail band cells marked W2) →
 spec §"Step two — moments", §9 "Motion", decision 4:

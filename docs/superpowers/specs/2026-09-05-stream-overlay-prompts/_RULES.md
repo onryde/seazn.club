@@ -7,7 +7,12 @@ Read this before touching anything under `apps/web/src/app/overlay/**`,
 `apps/web/src/components/v2/stages-panel.tsx`, or `public_fixtures_v`. These are
 rulings that are **not derivable from the code**. Design themes with every
 binding pixel, colour, type and motion value: `_THEMES.md` beside this file
-(native 1920×1080; cite its sections, never restate values). Design of record:
+(native 1920×1080; cite its sections, never restate values). The owner-reviewed
+canvas those values come from, and the picture of what you are building:
+https://claude.ai/code/artifact/2aebcbde-28ba-45ff-9028-1151873e4901
+(the two themes on cricket, both across four more sports, the W2 moments, the
+phone legibility test, the OBS setup flow, and the organiser panel at desktop
+and at 390). Design of record:
 `../2026-09-05-stream-overlay-design.md` (owner-approved 2026-09-05; its
 "Decisions locked" 1–7 and §9 "Motion" are binding; this file restates them for a
 subagent that cannot afford the whole spec). Programme index: `_INDEX.md` beside
