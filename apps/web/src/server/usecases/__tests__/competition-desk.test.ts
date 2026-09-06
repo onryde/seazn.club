@@ -784,4 +784,103 @@ describe.skipIf(!HAS_DB)("getCompetitionDesk", () => {
       expect(d.needs_draw_stage).toBeNull();
     });
   });
+
+  // Task 6 (W3, spec §"Task 6 — the band's producer"): the in-play fixture
+  // list the live band renders from, and the "up next" pointer beside it.
+  // Both are derived from rows `getCompetitionDesk` already fetches — no
+  // second query.
+  describe("Task 6: in_play_fixtures and up_next", () => {
+    it("carries every in-play fixture, ordered by kickoff, with its event count", async () => {
+      const { auth } = await seedOrg();
+      const { competitionId, divisionId } = await seedDivision(auth, 4);
+      const [stage] = await createStages(auth, divisionId, {
+        seq: 1, kind: "league", name: "League", config: {}, progression: null,
+      });
+      await generateStageFixtures(auth, stage!.id);
+      await sql`update divisions set status = 'active' where id = ${divisionId}`;
+      const rows = await sql<{ id: string }[]>`select id from fixtures where division_id = ${divisionId} order by fixture_no`;
+      // fixture_no 1: kicks off FIRST, no score recorded yet — the "NO SCORE"
+      // case a later task renders in red.
+      await sql`update fixtures set status = 'in_play', scheduled_at = now() - interval '10 minutes' where id = ${rows[0]!.id}`;
+      await sql`
+        insert into score_events (fixture_id, org_id, seq, type, payload)
+        values (${rows[0]!.id}, ${auth.orgId}, 0, 'core.start', '{}')`;
+      // fixture_no 2: kicks off SECOND, with one real event recorded — a
+      // DIFFERENT event count from fixture 1's zero, and a real kickoff-order
+      // difference: a single sample could not witness either an ordering bug
+      // or a per-row mapping bug.
+      await sql`update fixtures set status = 'in_play', scheduled_at = now() - interval '5 minutes' where id = ${rows[1]!.id}`;
+      await sql`
+        insert into score_events (fixture_id, org_id, seq, type, payload)
+        values (${rows[1]!.id}, ${auth.orgId}, 0, 'core.start', '{}')`;
+      await sql`
+        insert into score_events (fixture_id, org_id, seq, type, payload)
+        values (${rows[1]!.id}, ${auth.orgId}, 1, 'generic.result', '{"p1Score":1,"p2Score":0}')`;
+      const desk = await getCompetitionDesk(auth, competitionId);
+      expect(desk.in_play_fixtures.map((f) => f.fixture_no)).toEqual([1, 2]);
+      expect(desk.in_play_fixtures[0]?.event_count).toBe(0);
+      expect(desk.in_play_fixtures[1]?.event_count).toBe(1);
+      // The last assertion matters most: it pins the new list against the
+      // scalar the pill already renders, so the two cannot drift into two
+      // authorities for one fact.
+      expect(desk.in_play).toBe(desk.in_play_fixtures.length);
+    });
+
+    it("up_next is the soonest not-yet-started fixture across every division, never one already in play", async () => {
+      const { auth } = await seedOrg();
+      const { competitionId, divisionId: d1 } = await seedDivision(auth, 4);
+      const division2 = await createDivision(auth, competitionId, {
+        name: "Second",
+        slug: "second",
+        sport_key: "generic",
+        variant_key: "score",
+        config: GENERIC_CONFIG,
+      });
+      await createEntrants(
+        auth,
+        division2.id,
+        Array.from({ length: 4 }, (_, i) => ({
+          kind: "individual" as const,
+          display_name: `S${i + 1}`,
+          seed: i + 1,
+          members: [],
+        })),
+      );
+      const [stage1] = await createStages(auth, d1, {
+        seq: 1, kind: "league", name: "League", config: {}, progression: null,
+      });
+      await generateStageFixtures(auth, stage1!.id);
+      await sql`update divisions set status = 'active' where id = ${d1}`;
+      const [stage2] = await createStages(auth, division2.id, {
+        seq: 1, kind: "league", name: "League", config: {}, progression: null,
+      });
+      await generateStageFixtures(auth, stage2!.id);
+      await sql`update divisions set status = 'active' where id = ${division2.id}`;
+
+      const rows1 = await sql<{ id: string }[]>`select id from fixtures where division_id = ${d1} order by fixture_no`;
+      // Division 1's earliest fixture is IN PLAY right now — its own `next`
+      // is that live fixture, and it must NOT surface as up_next (that
+      // fixture already has its own card in in_play_fixtures).
+      await sql`update fixtures set status = 'in_play', scheduled_at = now() - interval '5 minutes' where id = ${rows1[0]!.id}`;
+      const later = new Date(Date.now() + 2 * 24 * 60 * 60 * 1000);
+      later.setMilliseconds(0);
+      await sql`update fixtures set scheduled_at = ${later.toISOString()} where id = ${rows1[1]!.id}`;
+
+      const rows2 = await sql<{ id: string }[]>`select id from fixtures where division_id = ${division2.id} order by fixture_no`;
+      // Division 2's next fixture is SOONER than division 1's later one, and
+      // not in play — the genuine "up next" answer.
+      const sooner = new Date(Date.now() + 1 * 24 * 60 * 60 * 1000);
+      sooner.setMilliseconds(0);
+      await sql`update fixtures set scheduled_at = ${sooner.toISOString()} where id = ${rows2[0]!.id}`;
+
+      const desk = await getCompetitionDesk(auth, competitionId);
+      expect(desk.up_next).not.toBeNull();
+      // Unlike the pre-existing `next` field (see G1's `Date.parse` compare
+      // above — postgres.js returns timestamptz as `Date`, not `string`),
+      // `up_next.scheduled_at` is normalised to a real ISO string by
+      // getCompetitionDesk, so this is a strict string comparison.
+      expect(desk.up_next?.scheduled_at).toBe(sooner.toISOString());
+      expect(desk.up_next?.in_play).toBe(false);
+    });
+  });
 });

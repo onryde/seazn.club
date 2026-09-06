@@ -289,7 +289,11 @@ describe("enumeration 2: the five renderings agree on every reachable phase/atte
       const rowPill = renderToStaticMarkup(
         <PhasePill dict={en} phase={r.phase} inPlay={r.desk.in_play} attention={r.attention} />,
       );
-      const desk: CompetitionDesk = { in_play: r.desk.in_play, divisions: new Map([["d1", r.desk]]), now: NOW };
+      // Task 6: this file's cases don't exercise in_play_fixtures/up_next —
+      // the honest empty/null default, same as nothing live right now.
+      const desk: CompetitionDesk = {
+        in_play: r.desk.in_play, in_play_fixtures: [], up_next: null, divisions: new Map([["d1", r.desk]]), now: NOW,
+      };
       const cp = competitionPhase(desk);
       // Review 7, Minor 9: this rendered the masthead with `attention={[]}`,
       // so the file written to make five renderings AGREE did not exercise the
@@ -342,8 +346,11 @@ describe("enumeration 2: the five renderings agree on every reachable phase/atte
     });
 
     it("4: a red attention always has a Needs-you row of the same kind, with an action", () => {
-      const items = needsYouItems(en, { in_play: r.desk.in_play, divisions: new Map([["d1", r.desk]]), now: NOW },
-        [{ id: "d1", name: "Premier", slug: "premier" }], "org", "comp", "en");
+      const items = needsYouItems(
+        en,
+        { in_play: r.desk.in_play, in_play_fixtures: [], up_next: null, divisions: new Map([["d1", r.desk]]), now: NOW },
+        [{ id: "d1", name: "Premier", slug: "premier" }], "org", "comp", "en",
+      );
       // registrations_waiting is aggregated to ONE competition-level row, so
       // it is keyed differently by design; every other kind is per division.
       for (const a of r.attention) {
@@ -413,8 +420,11 @@ describe("the needs_draw action names a button the seed-proposal panel is showin
       played: 6, total: 6, unscheduled: 0, in_play: 0, entrants: 4, next: null,
       needs_draw_stage: { name: "Finals" }, fixture_names: {}, display_tz: TZ,
     };
-    const items = needsYouItems(en, { in_play: 0, divisions: new Map([["d1", desk]]), now: NOW },
-      [{ id: "d1", name: "Premier", slug: "premier" }], "org", "comp", "en");
+    const items = needsYouItems(
+      en,
+      { in_play: 0, in_play_fixtures: [], up_next: null, divisions: new Map([["d1", desk]]), now: NOW },
+      [{ id: "d1", name: "Premier", slug: "premier" }], "org", "comp", "en",
+    );
     const label = items.find((i) => i.kind === "needs_draw")?.action.label;
     expect(label, `no needs_draw row for the ${door} door`).toBeTruthy();
 

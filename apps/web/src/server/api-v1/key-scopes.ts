@@ -81,6 +81,9 @@ const RULES: RouteRule[] = [
   // NEVER_KEY_ROUTES (payments-hardening P0-1).
   { method: "GET", path: "/competitions/:id/divisions", scope: "read", pin: "competition" },
   { method: "POST", path: "/competitions/:id/divisions", scope: "manage", pin: "competition" },
+  // W3 Task 6 — the in-play band's poll. Report-only, same scope as the
+  // competition GET it's a sibling of.
+  { method: "GET", path: "/competitions/:id/desk", scope: "read", pin: "competition" },
   { method: "GET", path: "/competitions/:id/exports/timetable", scope: "read", pin: "competition" },
   { method: "GET", path: "/competitions/:id/exports/tickets", scope: "read", pin: "competition" },
   // RS005 W1b — competition-wide Registrants tab, the cross-division twin of
