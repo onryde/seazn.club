@@ -546,10 +546,30 @@ export function StagesPanel({ divisionId, divisionSeq, competitionId, orgSlug, c
     return byStage;
   }, [scheduleSettings, stages, fixtures, orgTz, venues]);
   // The verdict itself is read live off ONE useCapacityReportsByStage
-  // subscription (not one useCapacityReport call per stage — the button
-  // below has to stay a DIRECT part of this component's own render output;
-  // see the hook's own header for why a per-stage child component broke
-  // pre-existing tests that locate it by testid).
+  // subscription (not one useCapacityReport call per stage — see the hook's
+  // own header: `stages.length` can change between renders, so N calls to
+  // the SINGLE-stage hook would call it a variable number of times per
+  // render, a real hooks-order violation, not just a test artifact).
+  //
+  // Fix round 1 correction (Task 4): this comment used to say the button
+  // reading this map "has to stay a DIRECT part of this component's own
+  // render output" — that was true before fix round 1 and is FALSE now.
+  // The auto-schedule button lives on `<StageRail>` (stage-rail.tsx): the
+  // hook-harness `renderIsland`/`walk()` used by
+  // `stages-panel-auto-schedule-seq.test.tsx` and
+  // `stages-panel-result-strip.test.tsx` to click it and observe async
+  // state gained `expandWithHooks` (`_hook-harness.tsx`), which expands a
+  // hook-using child component the same way the repo's existing
+  // `expandRows`/`expandPanel` already expand hookless ones. What did NOT
+  // change, and must not: this ONE subscription. A per-stage child reading
+  // `useCapacityReportsByStage` — or worse, calling the single-stage
+  // `useCapacityReport` once per `<StageRail>` instance — reintroduces the
+  // exact variable-hook-count hazard above, now hidden behind a component
+  // boundary instead of an obvious loop; `expandWithHooks` fixed the TEST's
+  // visibility into the rail, it did not relax this constraint. The verdict
+  // stays computed HERE and is handed to the rail as an already-resolved,
+  // plain `capacityBlocked` prop per stage (see `<StageRail>`'s own prop
+  // below and its doc comment).
   const capacityByStage = useCapacityReportsByStage(divisionId, capacityRequestByStage);
 
   // Competition Desk W2 (Task 4) — the run sheet's own filter segment. Its
@@ -912,6 +932,32 @@ export function StagesPanel({ divisionId, divisionSeq, competitionId, orgSlug, c
             isUnscheduledFixture({ status: f.status, scheduledAt: f.scheduled_at }) &&
             !isBye(toRunSheetFixture(f)),
         );
+        // Fix round 2 (Ruling T4-B, CRITICAL finding): built ONCE per stage
+        // — same rule the comment on `courtTagsEditor` below states for
+        // itself — then placed in exactly one of two mutually exclusive
+        // positions: passed to `<StageRail>` as `unscheduledBadgeSlot` (only
+        // actually renders when `canEdit`, the rail's own early-return
+        // guard) or inline below when `!canEdit`. This badge carried NO
+        // `canEdit` gate in its pre-rail position (`unscheduled.length > 0`
+        // was its only condition — see the run sheet's own chip a few
+        // centimetres below, which every viewer reads regardless of role),
+        // so routing it unconditionally through the rail would have
+        // silently hidden it from every non-editing viewer — the identical
+        // regression Ruling T3-A fixed for `courtTagsEditor` one task ago.
+        // `null` when there is nothing unscheduled, matching the former
+        // `unscheduled.length > 0` gate byte-for-byte.
+        const unscheduledBadge =
+          unscheduled.length > 0 ? (
+            <p className="text-xs font-semibold text-slate-700">
+              {msg("schedule.unscheduled.title")}
+              <span
+                data-testid="stage-unscheduled-count"
+                className="ml-1.5 rounded-full bg-slate-200 px-1.5 text-[11px] font-medium text-slate-700"
+              >
+                {unscheduled.length}
+              </span>
+            </p>
+          ) : null;
         // Task 4 — the rail's `capacityBlocked` prop: this stage's D2
         // pre-check verdict, already resolved to a plain value (never a
         // message KEY) via the SAME `capacityGateBlocks` predicate the old
@@ -993,7 +1039,7 @@ export function StagesPanel({ divisionId, divisionSeq, competitionId, orgSlug, c
                 // `!canEdit` inline placement below is what a non-editing viewer
                 // sees instead.
                 courtTagsSlot={courtTagsEditor}
-                unscheduledCount={unscheduled.length}
+                unscheduledBadgeSlot={unscheduledBadge}
                 capacityBlocked={capacityBlocked}
                 onAutoSchedule={(stageId) => void autoScheduleStage(stageId)}
               />
@@ -1063,6 +1109,16 @@ export function StagesPanel({ divisionId, divisionSeq, competitionId, orgSlug, c
                 onCancel={() => setAddingTo(null)}
               />
             )}
+
+            {/* Fix round 2 (Ruling T4-B) — a non-editing viewer gets no
+                StageRail at all (it returns null outright for !canEdit), so
+                their read of "how many fixtures still need a time" has to
+                live here instead, where it always did before this task
+                moved the CTA onto the rail. Same `unscheduledBadge` element
+                as the rail's slot above — never construct a second one.
+                Same pattern Ruling T3-A already set for `courtTagsEditor`
+                just below. */}
+            {!canEdit && unscheduledBadge}
 
             {/* Every fixture list that used to render here — the round-
                 grouped non-bracket list AND the bracket stage's own

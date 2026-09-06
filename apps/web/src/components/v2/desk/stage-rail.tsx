@@ -62,12 +62,20 @@ export interface StageRailProps {
    *  an already-built element — a slot, not a component reference — so the
    *  rail keeps owning no data hook of its own. */
   courtTagsSlot: React.ReactNode;
-  /** Task 4 — how many of this stage's fixtures are still unscheduled.
-   *  Computed by the panel from its own `fixtures` prop, same as
-   *  `fixtureCount` above. `0` hides the whole pinned section (count badge +
-   *  CTA + blocked reason), matching the panel's own former
-   *  `unscheduled.length > 0` gate byte-for-byte. */
-  unscheduledCount: number;
+  /** Task 4, fix round 2 (ruling T4-B) — the unscheduled-count badge,
+   *  already-built by the panel, same `courtTagsSlot` shape and same reason:
+   *  a non-editing viewer must still see this badge (it carried NO `canEdit`
+   *  gate in its previous, pre-rail position), but this component returns
+   *  `null` outright for `!canEdit` — so the panel builds the element ONCE
+   *  and mounts it in exactly one of two places: here when `canEdit`, or
+   *  inline in its own tree when not (see stages-panel.tsx's own comment at
+   *  that second site — same pattern Ruling T3-A already set for
+   *  `courtTagsSlot`, never a second shape for the same problem). `null`
+   *  when there is nothing unscheduled — hides the whole pinned section
+   *  (badge + CTA + blocked reason), matching the panel's own former
+   *  `unscheduled.length > 0` gate byte-for-byte, now expressed as "the slot
+   *  itself is absent" rather than a separate count prop. */
+  unscheduledBadgeSlot: React.ReactNode;
   /** Task 4 — the D2 capacity pre-check verdict for THIS stage, already
    *  resolved to a plain value by the panel's own `capacityGateBlocks`
    *  predicate and `msg("schedule.capacity.blockedReason")` call. The rail
@@ -95,7 +103,7 @@ export function StageRail({
   onToggleAddMatch,
   adhoc,
   courtTagsSlot,
-  unscheduledCount,
+  unscheduledBadgeSlot,
   capacityBlocked,
   onAutoSchedule,
 }: StageRailProps) {
@@ -195,24 +203,18 @@ export function StageRail({
         </button>
       )}
       {courtTagsSlot}
-      {/* Task 4 — the pinned unscheduled section (count + auto-schedule CTA
+      {/* Task 4 — the pinned unscheduled section (badge + auto-schedule CTA
           + capacity blocked reason), moved onto the rail verbatim: same
           classNames, same gating, same testids. The D2 capacity verdict
           itself is computed once in stages-panel.tsx (its comment above
           `useCapacityReportsByStage` explains why that subscription cannot
-          move here) and handed down already-resolved as `capacityBlocked`. */}
-      {unscheduledCount > 0 && (
+          move here) and handed down already-resolved as `capacityBlocked`.
+          Fix round 2 (T4-B): the badge itself is a slot, not a value — see
+          `unscheduledBadgeSlot`'s own doc comment above. */}
+      {unscheduledBadgeSlot && (
         <div className="border-b border-dashed border-slate-200 bg-slate-50/60 px-4 py-3">
           <div className="flex flex-wrap items-center gap-2">
-            <p className="text-xs font-semibold text-slate-700">
-              {msg("schedule.unscheduled.title")}
-              <span
-                data-testid="stage-unscheduled-count"
-                className="ml-1.5 rounded-full bg-slate-200 px-1.5 text-[11px] font-medium text-slate-700"
-              >
-                {unscheduledCount}
-              </span>
-            </p>
+            {unscheduledBadgeSlot}
             {canEdit && stage.status !== "complete" && (
               <button
                 type="button"

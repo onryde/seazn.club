@@ -5,11 +5,16 @@ import { StageRail } from "../stage-rail";
 const stage = { id: "s1", name: "League", kind: "league", seq: 1, status: "active" } as never;
 
 // Task 4 — every existing call site grows the three new required props.
-// `unscheduledCount: 0` / `capacityBlocked: null` / a no-op `onAutoSchedule`
-// are neutral defaults: 0 means the pinned unscheduled section (and its CTA)
-// stays absent, so these four pre-existing tests keep asserting exactly what
-// they asserted before this task touched the file.
-const NEUTRAL = { unscheduledCount: 0, capacityBlocked: null, onAutoSchedule: () => {} };
+// `unscheduledBadgeSlot: null` / `capacityBlocked: null` / a no-op
+// `onAutoSchedule` are neutral defaults: a null slot means the pinned
+// unscheduled section (and its CTA) stays absent, so these pre-existing
+// tests keep asserting exactly what they asserted before this task touched
+// the file. Fix round 2 (Ruling T4-B): the rail no longer builds the badge
+// itself from a count — it renders whatever `unscheduledBadgeSlot` element
+// the panel hands it, same `courtTagsSlot` shape, so the panel can also
+// mount that SAME element inline for a non-editing viewer.
+const NEUTRAL = { unscheduledBadgeSlot: null, capacityBlocked: null, onAutoSchedule: () => {} };
+const BADGE = <p data-testid="stage-unscheduled-count">3</p>;
 
 describe("StageRail", () => {
   it("renders the three header controls with their testids", () => {
@@ -23,11 +28,11 @@ describe("StageRail", () => {
     expect(html).toContain('data-testid="stage-delete"');
   });
 
-  it("renders nothing at all when the viewer cannot edit", () => {
+  it("renders nothing at all when the viewer cannot edit — even with a non-null badge slot", () => {
     const html = renderToStaticMarkup(
       <StageRail stage={stage} canEdit={false} busy={null} fixtureCount={4} deletable
         onAct={() => {}} onDelete={() => {}} addingTo={null} onToggleAddMatch={() => {}}
-        adhoc={false} courtTagsSlot={null} {...NEUTRAL} unscheduledCount={7} />,
+        adhoc={false} courtTagsSlot={null} {...NEUTRAL} unscheduledBadgeSlot={BADGE} />,
     );
     expect(html).toBe("");
   });
@@ -66,7 +71,7 @@ describe("StageRail", () => {
       <StageRail stage={stage} canEdit busy={null} fixtureCount={4} deletable
         onAct={() => {}} onDelete={() => {}} addingTo={null} onToggleAddMatch={() => {}}
         adhoc={false} courtTagsSlot={null}
-        unscheduledCount={3}
+        unscheduledBadgeSlot={BADGE}
         capacityBlocked={{ blocked: true, reason: "No courts on Saturday" }}
         onAutoSchedule={() => {}} />,
     );
@@ -85,7 +90,7 @@ describe("StageRail", () => {
       <StageRail stage={stage} canEdit busy={null} fixtureCount={4} deletable
         onAct={() => {}} onDelete={() => {}} addingTo={null} onToggleAddMatch={() => {}}
         adhoc={false} courtTagsSlot={null}
-        unscheduledCount={3}
+        unscheduledBadgeSlot={BADGE}
         capacityBlocked={{ blocked: false, reason: null }}
         onAutoSchedule={() => {}} />,
     );
@@ -99,26 +104,29 @@ describe("StageRail", () => {
     expect(ctaOpenTag).not.toContain("disabled");
   });
 
-  it("renders the unscheduled count and omits the CTA entirely when unscheduledCount is 0", () => {
+  it("renders no pinned section at all — no badge, no CTA, no blocked reason — when unscheduledBadgeSlot is null", () => {
     const html = renderToStaticMarkup(
       <StageRail stage={stage} canEdit busy={null} fixtureCount={4} deletable
         onAct={() => {}} onDelete={() => {}} addingTo={null} onToggleAddMatch={() => {}}
-        adhoc={false} courtTagsSlot={null} {...NEUTRAL} />,
+        adhoc={false} courtTagsSlot={null} {...NEUTRAL}
+        capacityBlocked={{ blocked: true, reason: "unreachable — no section to hang it on" }} />,
     );
     expect(html).not.toContain('data-testid="stage-unscheduled-count"');
     expect(html).not.toContain('data-testid="stage-auto-schedule"');
+    expect(html).not.toContain('data-testid="stage-auto-schedule-blocked"');
   });
 
-  it("renders the unscheduled count badge with the given count", () => {
+  it("renders whatever unscheduledBadgeSlot element it is given, verbatim — the rail builds no badge markup of its own", () => {
     const html = renderToStaticMarkup(
       <StageRail stage={stage} canEdit busy={null} fixtureCount={4} deletable
         onAct={() => {}} onDelete={() => {}} addingTo={null} onToggleAddMatch={() => {}}
         adhoc={false} courtTagsSlot={null}
-        unscheduledCount={5}
+        unscheduledBadgeSlot={<p data-testid="stage-unscheduled-count" data-marker="from-panel">7</p>}
         capacityBlocked={null}
         onAutoSchedule={() => {}} />,
     );
+    expect(html).toContain('data-marker="from-panel"');
     const match = /data-testid="stage-unscheduled-count"[^>]*>(\d+)</.exec(html);
-    expect(match?.[1]).toBe("5");
+    expect(match?.[1]).toBe("7");
   });
 });
