@@ -208,7 +208,7 @@ export function LiveScoreBody({
       {periods && sideIds.length === 2 ? (
         <div className="rounded-2xl border border-zinc-200/80 bg-surface p-5 shadow-sm">
           <p className="mb-3 font-display text-sm font-semibold uppercase tracking-[0.18em] text-ink-muted">
-            Goals by period
+            {t(activeDict, "matchCentre.goalsByPeriod")}
           </p>
           <div className="overflow-x-auto">
             <table className="w-full border-separate border-spacing-0 tabular-nums">
@@ -252,7 +252,7 @@ export function LiveScoreBody({
       {discipline && sideIds.length === 2 ? (
         <div className="rounded-2xl border border-zinc-200/80 bg-surface p-5 shadow-sm">
           <p className="mb-3 font-display text-sm font-semibold uppercase tracking-[0.18em] text-ink-muted">
-            Discipline
+            {t(activeDict, "matchCentre.discipline")}
           </p>
           <ul className="space-y-1.5">
             {discipline.map((entry, i) => (

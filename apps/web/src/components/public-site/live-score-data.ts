@@ -22,14 +22,27 @@ export interface LiveFixtureData {
   // decided, only who won.
   outcome: { kind?: string; winner?: string; loser?: string; method?: string } | null;
   // Task 10 dispatch ruling 1 — the match-centre document `MatchCentre` reads
-  // (`data.match_centre`). Optional, not `MatchCentreDocT` bare: the SERVER
-  // side that populates it is a later task (`getPublicFixture`/`publicFixture()`
-  // in server/usecases/public.ts do not select it yet), and the current
-  // production page still constructs `initial` without it (see the fixture
-  // detail page's `<LiveScore initial={{ status, summary, outcome }} .../>`)
-  // — making this required would have been a real (silent, since this task
-  // does not run tsc) type break on that still-unwired call site. `MatchCentre`
-  // itself guards on its absence rather than asserting it non-null.
+  // (`data.match_centre`).
+  //
+  // Task 14b update — the "later task" this comment used to point at has
+  // shipped: Task 9 wired `getPublicFixture`'s own `matchCentre` field
+  // (`server/public-site/data.ts`) and Task 14 wired BOTH real production
+  // callers of this type — the fixture detail page's own
+  // `initial.match_centre = data.matchCentre` (`page.tsx`) for first paint,
+  // and this same `publicFixture()` (`server/usecases/public.ts:376-377`,
+  // the `/api/v1/public/fixtures/[id]` polling endpoint `fetchLiveFixture`
+  // below calls) for every poll tick after that. Both go through the
+  // identical `loadMatchCentre`, which is non-nullable
+  // (`Promise<MatchCentreDocT>`, `match-centre-load.ts:224`) — so in
+  // production this field is always populated today, on first paint and on
+  // every refresh.
+  //
+  // Still optional here (not `MatchCentreDocT` bare), not because a real
+  // caller can omit it, but because `MatchCentre` itself guards on its
+  // absence rather than asserting it non-null (`match-centre.tsx`'s
+  // `if (!doc || …) return <fallback/>`) — kept for the deliberately
+  // no-`matchCentre` fixtures `page.test.ts`'s `baseData()` still
+  // constructs, which prove that fallback path (`mc-fallback`) stays intact.
   match_centre?: MatchCentreDocT;
 }
 

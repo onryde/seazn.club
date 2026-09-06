@@ -24,6 +24,7 @@ import type { LiveFixtureData } from "@/components/public-site/live-score-data";
 import { ShareButton } from "@/components/share-button";
 import { DictProvider } from "@/components/i18n/dict-provider";
 import { fixtureSubheading } from "./fixture-subheading";
+import { shareTextFor } from "./share-text";
 import { resolveSlotLabel } from "@/lib/slot-label";
 import { toLocale } from "@/lib/i18n-constants";
 import type { Dict } from "@/lib/i18n-constants";
@@ -224,19 +225,35 @@ export default async function FixturePage({ params, searchParams }: Props) {
           <h1 className="font-display text-2xl font-semibold text-ink">
             {home} <span className="text-ink-muted">{msgFn("schedule.vs")}</span> {away}
           </h1>
-          {/* One-tap share (v3/10 #2) — the message reads like a human wrote it. */}
+          {/* One-tap share (v3/10 #2) — the message reads like a human wrote it.
+              Task 14b — both `title` and `text` now go through the request
+              locale: `title` reuses the SAME `schedule.vs` word the visible
+              <h1> above already renders (it was still a bare "vs" here,
+              inconsistent with that heading in every non-English locale);
+              `text` is `shareTextFor` (`./share-text.ts`), localised via
+              `fixture.share.decided`/`fixture.share.live`/
+              `fixture.share.fullTime`. */}
           <ShareButton
-            title={`${home} vs ${away}`}
-            text={
-              fixture.status === "decided" || fixture.status === "finalized"
-                ? `${home} vs ${away} — ${withDecidedLine(fixture.summary?.headline, decidedLine) ?? "full-time"} (${division.name}, ${competition.name})`
-                : `${home} vs ${away} — ${division.name}, ${competition.name}. Follow it live:`
-            }
+            title={`${home} ${msgFn("schedule.vs")} ${away}`}
+            text={shareTextFor(
+              fixture.status === "decided" || fixture.status === "finalized",
+              home,
+              away,
+              division.name,
+              competition.name,
+              withDecidedLine(fixture.summary?.headline, decidedLine),
+              ui,
+            )}
             url={`${basePath}/fixtures/${fixture.id}`}
           />
         </div>
         <p className="mb-4 text-sm text-ink-muted">
-          {fixtureSubheading(fixture.status, fixture.scheduled_at, t(dict, "matchCentre.status.live"))}
+          {fixtureSubheading(
+            fixture.status,
+            fixture.scheduled_at,
+            t(dict, "matchCentre.status.live"),
+            t(dict, "matchCentre.status.timeTbd"),
+          )}
           {fixture.venue_name ? ` · ${fixture.venue_name}` : ""}
           {fixture.court_name ? ` · ${fixture.court_name}` : ""}
         </p>

@@ -3,7 +3,7 @@
 // (`apps/web/src/dictionaries/{en,es,fr,nl}/public.json`).
 //
 // COVERAGE BY DERIVATION, never a typed list (task-8 dispatch ruling 1) —
-// three sources, unioned into `DERIVED_KEYS` below:
+// two sources, unioned into `DERIVED_KEYS` below:
 //
 //  (a) a SOURCE SCAN — every string literal matching
 //      `/"(matchCentre|timeline|term)\.[A-Za-z0-9_.]+"/` under
@@ -17,13 +17,13 @@
 //      `RESULT_KINDS` below), `matchCentre.ball.<k>` (`glyphs.tsx`'s own
 //      `GLYPH_KINDS`), `matchCentre.status.<s>` (the header status enum),
 //      `matchCentre.tab.<id>` (the tab-id enum) and `matchCentre.band.<0-3>`
-//      (the fidelity scale, closed at 0-3);
+//      (the fidelity scale, closed at 0-3).
 //
-//  (c) `BUILDER_ONLY_KEYS` — the template-only keys Task 6's
-//      `buildMatchCentre` (and Task 9's header/chase work) will emit that no
-//      renderer names yet, read off `MatchCentreHeader`'s own schema comment.
-//      Exported so that task's own parity test can retire members of this
-//      list as its renderer starts naming them for real.
+// Task 14b — a third source used to live here, `BUILDER_ONLY_KEYS` (a
+// hand-pinned, forward-looking list of template-only keys Task 6/9's
+// `buildMatchCentre` was expected to start emitting). Retired: see its own
+// former location below (where `RESULT_KINDS`/`BALL_GLYPH_KINDS` are
+// defined) for why removing it is safe, not just tidy.
 //
 // A key ending in "." is filtered out of the source scan: the regex above
 // also matches a bare PREFIX constant used for string concatenation
@@ -71,8 +71,9 @@
 //    the SAME table `classesFor` reads (`GLYPH_CLASSES`), not a hand-typed
 //    array beside it — 5 entries, matching `classesFor`'s 5 real branches,
 //    not the 9 the hand-typed version invented. `BALL_GLYPH_KINDS` below is
-//    relabelled to make explicit that, like `BUILDER_ONLY_KEYS`, no renderer
-//    reads this family today.
+//    relabelled to make explicit that no renderer reads this family today
+//    (the same speculative-ahead-of-a-consumer risk the now-retired
+//    `BUILDER_ONLY_KEYS` list carried — see Task 14b's note above).
 // 3. MINOR — the params-parity test no longer skips a key just because
 //    English has zero `{param}`s; it asserts SET equality in both directions
 //    for every key, so a stray param introduced only in one non-English
@@ -213,15 +214,15 @@ const RESULT_KINDS: readonly string[] = [
  * UNLIKE the other five families above, no renderer reads
  * `matchCentre.ball.<k>` today — `Glyph` (`glyphs.tsx`) renders the raw
  * glyph string with no dictionary lookup and no `aria-label` at all. This
- * family is in the SAME risk category as `BUILDER_ONLY_KEYS` below: added
- * speculatively, ahead of a consumer. Kept as its own derived family rather
- * than folded into the flat `BUILDER_ONLY_KEYS` list because it genuinely
- * has a real, mechanical SOURCE today (`GLYPH_CLASSES`) — what it lacks is a
- * reader, not a producer. Whichever task first wires an accessible label to
- * the ball-glyph strip (Task 6's own `BALL_GLYPH_KINDS`, per that task's
+ * family carries the same speculative-ahead-of-a-consumer risk the
+ * now-retired `BUILDER_ONLY_KEYS` list did (Task 14b — see this file's
+ * header comment), but is kept as its own derived family rather than folded
+ * into a flat hand-pinned list because it genuinely has a real, mechanical
+ * SOURCE today (`GLYPH_CLASSES`) — what it lacks is a reader, not a
+ * producer. Whichever task first wires an accessible label to the
+ * ball-glyph strip (Task 6's own `BALL_GLYPH_KINDS`, per that task's
  * dispatch, is the expected producer) owns reconciling spelling here against
- * what it actually emits, the same way `BUILDER_ONLY_KEYS`' own comment
- * describes for the header/chase keys.
+ * what it actually emits.
  */
 const BALL_GLYPH_KINDS: readonly string[] = GLYPH_KINDS;
 
@@ -244,37 +245,33 @@ const TAB_IDS: readonly string[] = MatchCentreTabId.options;
  *  (`packages/engine/src/sport/module.ts:96`, `FIDELITY`). */
 const BAND_LEVELS: readonly string[] = ["0", "1", "2", "3"];
 
-// ------------------------------------------------- (c) builder-only keys
-
-/**
- * Keys Task 6's `buildMatchCentre` (and Task 9's header/chase work) will
- * emit that no renderer names yet — read straight off `MatchCentreHeader`'s
- * own schema comment: `statusLine` ("Queens need 34 from 21" /
- * "Starts Sat 14:00") and `rateLine` ("CRR 8.44 · RRR 9.71" — numbers today,
- * but the abbreviations imply a labelled legend is coming). Exported so that
- * task's own parity test can import and retire members of this list as its
- * renderer starts naming them for real — a member still here after that
- * lands is a genuine gap, not a false positive this list is excusing.
- *
- * Task 9 retirement — `match-centre-parity.test.ts` now scans
- * `match-centre.ts`'s own source directly (rather than this file's
- * broader renderer-side scan) and proves two of the original five members
- * are real, emitted, translated keys: `matchCentre.chase.need`
- * (`buildHeader`'s chase-line) and `matchCentre.status.startsAt`
- * (`buildHeader`'s scheduled-status line) — both literal double-quoted
- * strings in `match-centre.ts`, both now present in all four
- * `public.json` files. Retired from this list accordingly. The remaining
- * three (`chase.needFrom`, `rate.crr`, `rate.rrr`) stay: nothing in
- * `match-centre.ts` or any renderer emits them — `rateLineOf` builds a
- * plain, already-formatted string ("CRR 8.44 · RRR 9.71") with no
- * dictionary key at all, and no `needFrom`-shaped chase line exists
- * anywhere in the builder. A genuine gap if a future task expects them.
- */
-export const BUILDER_ONLY_KEYS = [
-  "matchCentre.chase.needFrom",
-  "matchCentre.rate.crr",
-  "matchCentre.rate.rrr",
-] as const;
+// --------------------------------------- (c) builder-only keys — RETIRED
+//
+// This section used to export `BUILDER_ONLY_KEYS`, a hand-pinned,
+// forward-looking list of template-only keys Task 6's `buildMatchCentre`
+// was expected to start emitting: `matchCentre.chase.need` and
+// `matchCentre.status.startsAt` (both retired from the list at Task 9, once
+// `match-centre.ts` started emitting them for real) plus three that never
+// were: `matchCentre.chase.needFrom`, `matchCentre.rate.crr`,
+// `matchCentre.rate.rrr`.
+//
+// Task 14b retirement — those three are STILL genuinely unconsumed today
+// (re-confirmed by grep: no occurrence of `needFrom`, `rate.crr` or
+// `rate.rrr` anywhere under `server/public-site` or `components/public-site`
+// other than this comment and the dictionary files themselves; `rateLineOf`
+// in `match-centre.ts` builds an already-formatted string with no dictionary
+// key at all). Deleting the pin is safe, not just tidy, because
+// `match-centre-parity.test.ts` (Task 9) derives ITS OWN required-key list
+// by scanning `match-centre.ts`'s literal source directly, independently of
+// this file — so the day that builder actually starts emitting any of these
+// three, that test's own scan picks up the new literal and starts requiring
+// dictionary coverage for it immediately, with no hand-maintained
+// forward-looking pin needed here to catch the gap. Keeping a pin whose only
+// job was "hold the door open for a key nothing emits, and nothing else
+// would catch" no longer serves a purpose once a second, source-derived
+// mechanism already covers the real case. The three dictionary VALUES
+// themselves are left in place in all four `public.json` files (harmless,
+// unused strings) — only this enforcement pin is removed.
 
 // --------------------------------------------------------------- the union
 
@@ -287,7 +284,6 @@ const DERIVED_KEYS = [
     ...HEADER_STATUS_KINDS.map((k) => `matchCentre.status.${k}`),
     ...TAB_IDS.map((k) => `matchCentre.tab.${k}`),
     ...BAND_LEVELS.map((k) => `matchCentre.band.${k}`),
-    ...BUILDER_ONLY_KEYS,
   ]),
 ].sort();
 

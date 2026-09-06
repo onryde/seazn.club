@@ -25,4 +25,18 @@ describe("fixtureSubheading", () => {
   it("ignores liveLabel for a non-live status (still Time TBD)", () => {
     expect(fixtureSubheading("scheduled", null, "En direct")).toBe("Time TBD");
   });
+
+  // Task 14b (task-14-review.md OWED item 2) — "Time TBD" was hardcoded
+  // English; `timeTbdLabel` is the same opt-in localisation `liveLabel`
+  // already got in Task 14, so a caller with no locale in hand (or an
+  // existing test calling with 2-3 args) keeps reading exactly as before.
+  it("uses the given timeTbdLabel for a non-live status with no scheduled time", () => {
+    expect(fixtureSubheading("scheduled", null, "En direct", "Heure à déterminer")).toBe(
+      "Heure à déterminer",
+    );
+  });
+
+  it("ignores timeTbdLabel for an in-play fixture (still uses liveLabel)", () => {
+    expect(fixtureSubheading("in_play", null, "En direct", "Heure à déterminer")).toBe("En direct");
+  });
 });

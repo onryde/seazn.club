@@ -18,6 +18,7 @@
 import { describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import en from "@/dictionaries/en/public.json";
+import es from "@/dictionaries/es/public.json";
 import fr from "@/dictionaries/fr/public.json";
 import type { Dict } from "@/lib/i18n-constants";
 import { LiveScoreBody } from "../live-score";
@@ -83,6 +84,89 @@ describe("LiveScoreBody — localisation actually applies (not just wired to an 
 // decided/finalized/scheduled — abandoned, cancelled, forfeited, postponed,
 // walkover — each of which used to collapse into the generic
 // `matchCentre.status.other` ("Not played") on the legacy fixture page.
+// Task 14b — the two headings below were genuinely hardcoded, unconditional
+// English (task-14-review.md's OWED item 1): `SummaryTab`'s `!cricket`
+// fallback (`summary-tab.tsx:42-49`) renders `LiveScoreBody` for EVERY
+// non-cricket sport, so a football/hockey fixture with period or card data
+// hit this on the Summary tab, in every locale, in production, before this
+// fix.
+describe("LiveScoreBody — period/discipline headings are localised, not hardcoded English", () => {
+  const emptyTemplates: DecidedOutcomeTemplates = { tie: "", plain: "", shootoutPlain: "", byMethod: {} };
+  const twoSideNames = { home: "Riverside FC", away: "Oakdale United" };
+  const dataWithPeriodsAndDiscipline = {
+    status: "in_play",
+    summary: {
+      headline: "2 – 1",
+      perSide: [
+        { entrantId: "home", line: "2" },
+        { entrantId: "away", line: "1" },
+      ],
+      detail: {
+        periods: [{ phase: "Q1", home: 1, away: 0 }],
+        discipline: [{ side: "home" as const, classKey: "yellow" }],
+      },
+    },
+    outcome: null,
+  };
+
+  it("'Goals by period' heading, rendered with the FRENCH dict: the French word appears, the English heading does not", () => {
+    const html = renderToStaticMarkup(
+      <LiveScoreBody
+        data={dataWithPeriodsAndDiscipline}
+        entrantNames={twoSideNames}
+        sportKey="football"
+        decidedTemplates={emptyTemplates}
+        dict={fr as Dict}
+      />,
+    );
+    expect(html).toContain(fr["matchCentre.goalsByPeriod"] as string); // "Buts par période"
+    expect(html).not.toContain("Goals by period");
+  });
+
+  it("'Discipline' heading, rendered with the FRENCH dict: the French word appears, the English heading does not", () => {
+    const html = renderToStaticMarkup(
+      <LiveScoreBody
+        data={dataWithPeriodsAndDiscipline}
+        entrantNames={twoSideNames}
+        sportKey="football"
+        decidedTemplates={emptyTemplates}
+        dict={fr as Dict}
+      />,
+    );
+    // French is the SAME cognate word ("Discipline") — assert the heading
+    // renders through `t()` at all (not a coincidental literal survival) by
+    // checking the Spanish dict instead, which genuinely differs ("Disciplina").
+    expect(html).toContain(fr["matchCentre.discipline"] as string);
+  });
+
+  it("'Discipline' heading with the SPANISH dict reads 'Disciplina', never the English word", () => {
+    const html = renderToStaticMarkup(
+      <LiveScoreBody
+        data={dataWithPeriodsAndDiscipline}
+        entrantNames={twoSideNames}
+        sportKey="football"
+        decidedTemplates={emptyTemplates}
+        dict={es as Dict}
+      />,
+    );
+    expect(html).toContain(es["matchCentre.discipline"] as string); // "Disciplina"
+    expect(html).not.toContain(">Discipline<");
+  });
+
+  it("with no dict prop (the English fallback), both headings still read in English — proves the default path is unbroken", () => {
+    const html = renderToStaticMarkup(
+      <LiveScoreBody
+        data={dataWithPeriodsAndDiscipline}
+        entrantNames={twoSideNames}
+        sportKey="football"
+        decidedTemplates={emptyTemplates}
+      />,
+    );
+    expect(html).toContain("Goals by period");
+    expect(html).toContain(">Discipline<");
+  });
+});
+
 describe("LiveScoreBody — the full DB status vocabulary, not just the generic 'Not played'", () => {
   const emptyTemplates: DecidedOutcomeTemplates = { tie: "", plain: "", shootoutPlain: "", byMethod: {} };
 

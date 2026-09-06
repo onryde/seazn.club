@@ -16,8 +16,10 @@
 //
 // This family has NO renderer consumer today: `Glyph` renders the raw glyph
 // string with no dictionary lookup at all (no `t()`, no `aria-label`). Task 8
-// added `matchCentre.ball.<kind>` speculatively, in the same risk category as
-// `BUILDER_ONLY_KEYS` in the coverage test — see that test's own comment.
+// added `matchCentre.ball.<kind>` speculatively — the same
+// speculative-ahead-of-a-consumer risk `BUILDER_ONLY_KEYS` in the coverage
+// test used to carry for its own three still-unconsumed keys before Task 14b
+// retired that list (see that test's header comment).
 const BASE =
   "inline-flex h-[26px] w-[26px] shrink-0 items-center justify-center rounded-full text-[11px] font-bold tabular-nums";
 
