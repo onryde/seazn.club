@@ -167,6 +167,84 @@ describe("LiveScoreBody — period/discipline headings are localised, not hardco
   });
 });
 
+// R11 fix round, C7 — `SummaryTab`'s non-cricket fallback mounts
+// `LiveScoreBody` BELOW a `CourtCard` that already renders the identical
+// court-slab scorebug (same wrapper class, same score), so the two rendered
+// side by side print the score twice. `suppressScorebug` lets that ONE
+// caller drop the duplicate; every other caller (this describe block's own
+// tests above, and `match-centre.tsx`'s no-document fallback, which has NO
+// `CourtCard` above it) must render byte-identical to before, which is why
+// the prop defaults to `false`.
+describe("LiveScoreBody — suppressScorebug (R11 fix round, C7)", () => {
+  const emptyTemplates: DecidedOutcomeTemplates = { tie: "", plain: "", shootoutPlain: "", byMethod: {} };
+  const twoSideNames = { home: "Riverside FC", away: "Oakdale United" };
+  const dataWithPeriods = {
+    status: "in_play",
+    summary: {
+      headline: "2 – 1",
+      perSide: [
+        { entrantId: "home", line: "2" },
+        { entrantId: "away", line: "1" },
+      ],
+      detail: { periods: [{ phase: "Q1", home: 1, away: 0 }] },
+    },
+    outcome: null,
+  };
+
+  it("defaults to false — omitting the prop entirely renders the scorebug exactly as before (byte-identical for every existing caller)", () => {
+    const html = renderToStaticMarkup(
+      <LiveScoreBody
+        data={dataWithPeriods}
+        entrantNames={twoSideNames}
+        sportKey="football"
+        decidedTemplates={emptyTemplates}
+        dict={en as Dict}
+      />,
+    );
+    expect(html).toContain('class="overflow-hidden rounded-2xl bg-court text-court-ink shadow-lg"');
+    expect(html).toContain(">Live<");
+  });
+
+  it("suppressScorebug=true drops the court-slab card AND the decided line, but keeps the goals-by-period table below it", () => {
+    const html = renderToStaticMarkup(
+      <LiveScoreBody
+        data={dataWithPeriods}
+        entrantNames={twoSideNames}
+        sportKey="football"
+        decidedTemplates={emptyTemplates}
+        dict={en as Dict}
+        suppressScorebug
+      />,
+    );
+    expect(html).not.toContain("bg-court");
+    expect(html).not.toContain(">Live<");
+    // The per-period breakdown is what the court card does NOT carry — it
+    // must survive the suppression, or the fix stripped more than the
+    // duplicate headline.
+    expect(html).toContain(en["matchCentre.goalsByPeriod"] as string);
+  });
+
+  it("suppressScorebug=true also drops the decided-line sentence (the court card carries the SAME sentence via header.statusLine)", () => {
+    const decidedTemplates: DecidedOutcomeTemplates = {
+      tie: "",
+      plain: "{winner} won",
+      shootoutPlain: "",
+      byMethod: {},
+    };
+    const html = renderToStaticMarkup(
+      <LiveScoreBody
+        data={{ status: "decided", summary: null, outcome: { kind: "win", winner: "home" } }}
+        entrantNames={twoSideNames}
+        sportKey="football"
+        decidedTemplates={decidedTemplates}
+        dict={en as Dict}
+        suppressScorebug
+      />,
+    );
+    expect(html).not.toContain("won");
+  });
+});
+
 // Task 14c (task-14b-review.md Remaining-English list) — `SetScoreboard`'s
 // "Score by {unit}" heading and its per-column "{unit} {n}" label were both
 // hardcoded English, fed by `setBreakdown()`'s own then-English `unit` value

@@ -62,6 +62,17 @@ export function SummaryTab({ doc, dict, data, subscribed }: SummaryTabProps) {
         decidedTemplates={EMPTY_DECIDED_TEMPLATES}
         dict={dict}
         subscribed={subscribed}
+        // R11 fix round, C7 — `MatchCentre` always renders a `CourtCard`
+        // above this panel, which already carries the live headline (LIVE
+        // pill + two-line score) for a NON-cricket fixture; unsuppressed,
+        // this fallback printed a second, near-identical dark card with the
+        // SAME numbers directly below it. Only `!cricket` is suppressed —
+        // `isPrePlay` (cricket with no live block/innings/performers yet) is
+        // this SAME fallback branch but is NOT a duplicate: the court card
+        // shows "—" scores + a "Scheduled" chip there, never this
+        // component's "Not started" headline sentence, so pre-play cricket
+        // keeps rendering its scorebug exactly as before.
+        suppressScorebug={!cricket}
       />
     );
   }

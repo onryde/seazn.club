@@ -701,18 +701,63 @@ describe("SummaryTab — the toss line (Task 14, contract notes 8b review gap)",
 });
 
 describe("SummaryTab — non-cricket", () => {
-  it("a non-cricket doc renders LiveScoreBody's own fallback headline and none of the cricket testids", () => {
+  // R11 fix round, C7 — this used to assert the OPPOSITE: that the scorebug
+  // headline ("Not started") rendered here. It no longer does — the
+  // `CourtCard` `MatchCentre` always mounts above this panel already carries
+  // that headline for a non-cricket fixture, and this fallback's own copy of
+  // it was C7's "two lifted objects" defect. See the full-`MatchCentre`
+  // "renders EXACTLY ONCE" test below for the positive proof that the court
+  // card still carries it.
+  it("a non-cricket doc suppresses LiveScoreBody's own scorebug headline (the court card above already carries it) and renders none of the cricket testids", () => {
     const html = renderToStaticMarkup(
       <SummaryTab doc={nonCricketDoc} dict={dict} data={liveFixtureFor(nonCricketDoc)} />,
     );
-    // LiveScoreBody's own headline fallback (live-score.tsx) — round 3:
-    // its own key, matchCentre.status.notStarted ("Not started"), per the
-    // product owner's ruling (see match-centre.test.tsx for the full why).
-    expect(html).toContain(dict["matchCentre.status.notStarted"] as string);
+    expect(html).not.toContain(dict["matchCentre.status.notStarted"] as string);
+    expect(html).not.toContain("bg-court");
     expect(html).not.toContain('data-testid="mc-live-block"');
     expect(html).not.toContain('data-testid="mc-top-performers"');
     expect(html).not.toContain('data-testid="mc-fow-');
     expect(html).not.toContain('data-testid="mc-partnerships-');
+  });
+
+  // Positive pair of the test above, AND the C7 witness: renders the FULL
+  // `MatchCentre` (court card + tab rail + this panel), the exact composition
+  // the orchestrator's screenshot showed duplicated. Counts occurrences of
+  // the two components' IDENTICAL wrapper class string — an "is it present"
+  // assertion would pass in both the fixed and the broken state.
+  it("R11 fix round, C7 — the court-slab scorebug renders EXACTLY ONCE in the full MatchCentre for a non-cricket fixture (not once in CourtCard and again in the Summary tab fallback)", () => {
+    const html = renderToStaticMarkup(
+      <MatchCentre
+        fixtureId={nonCricketDoc.fixtureId}
+        initial={liveFixtureFor(nonCricketDoc)}
+        realtime={false}
+        dict={dict}
+        locale="en"
+        tabParam={null}
+      />,
+    );
+    expect(html).toContain('data-testid="mc-court-card"'); // the one court card is still there
+    expect(html.match(/rounded-2xl bg-court text-court-ink shadow-lg/g)?.length).toBe(1);
+  });
+
+  // The cricket case (brief: "so the fix cannot silently strip cricket's
+  // panel") — cricket's non-pre-play Summary branch never calls
+  // `LiveScoreBody` at all (it renders its own `LiveBlock`, a DIFFERENT
+  // wrapper class), so the court card's `bg-court` block is the ONLY one on
+  // the page here too, unaffected by this fix either way.
+  it("a live cricket doc ALSO renders the court-slab wrapper exactly once (cricket's own Summary panel never mounts LiveScoreBody)", () => {
+    const html = renderToStaticMarkup(
+      <MatchCentre
+        fixtureId={cricketDoc.fixtureId}
+        initial={liveFixtureFor(cricketDoc)}
+        realtime={false}
+        dict={dict}
+        locale="en"
+        tabParam={null}
+      />,
+    );
+    expect(html).toContain('data-testid="mc-live-block"');
+    expect(html.match(/rounded-2xl bg-court text-court-ink shadow-lg/g)?.length).toBe(1);
   });
 
   // Review fix round 2 (IMPORTANT 4) — suppressing LiveScoreBody's own

@@ -57,6 +57,20 @@ interface LiveScoreBodyProps {
    * transport in hand.
    */
   subscribed?: boolean;
+  /**
+   * R11 fix round, C7 — `summary-tab.tsx`'s non-cricket fallback mounts this
+   * component BELOW a `CourtCard` that already renders the identical
+   * court-slab scorebug (same wrapper class, same score) — two near-
+   * identical lifted cards, stacked, printing the score twice. Suppresses
+   * the decided-line sentence and the whole court-slab block (the court card
+   * above already carries both, via `header.statusLine` and
+   * `header.scoreLines`); the set/period/discipline panels below are
+   * UNCHANGED, since the court card does not carry those. Defaults to
+   * `false` so every other caller (`match-centre.tsx`'s no-document
+   * fallback, which has no `CourtCard` above it, and every existing test)
+   * renders byte-identical to before this round.
+   */
+  suppressScorebug?: boolean;
 }
 
 // Task 11 review round 2 (NEW IMPORTANT B) — the DB's `fixtures.status`
@@ -93,6 +107,7 @@ export function LiveScoreBody({
   decidedTemplates,
   dict,
   subscribed = false,
+  suppressScorebug = false,
 }: LiveScoreBodyProps) {
   const activeDict = dict ?? (en as Dict);
   const inPlay = data.status === "in_play";
@@ -118,6 +133,8 @@ export function LiveScoreBody({
   const decidedLine = renderDecidedOutcome(data.outcome, entrantNames, decidedTemplates, shootoutScore);
   return (
     <div className="space-y-4">
+      {suppressScorebug ? null : (
+        <>
       {decidedLine ? <p className="text-base font-semibold text-ink">{decidedLine}</p> : null}
       {/* Court-slab scorebug — the broadcast moment of the page. */}
       <div className="overflow-hidden rounded-2xl bg-court text-court-ink shadow-lg">
@@ -193,6 +210,8 @@ export function LiveScoreBody({
         </div>
         <div aria-hidden className={`h-1 ${inPlay ? "bg-emerald-400" : "bg-accent"}`} />
       </div>
+        </>
+      )}
 
       {showBreakdown ? (
         <SetScoreboard
