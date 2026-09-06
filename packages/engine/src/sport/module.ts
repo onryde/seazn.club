@@ -288,7 +288,7 @@ export interface PadFieldToggle {
   optional?: boolean;
   /** See `PadFieldNumber.group`. A toggle's value is EXCLUDED from a
    *  group's own "has this aspect been touched" test (view-model.ts's
-   *  `groupIsTouched`) — `initialActionValues` (action-form.tsx) defaults
+   *  `groupsTouched`) — `initialActionValues` (action-form.tsx) defaults
    *  every toggle field to `false` before the scorer taps anything, so a
    *  toggle can never honestly signal "untouched" the way an unset number/
    *  enum field can. `cricket.player.line`'s `batting.out` is exactly this

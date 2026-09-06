@@ -75,10 +75,17 @@ const MISSING_ATTRIBUTION_REASON: ChassisLabel = {
  * `MessageKey`, not the wider `string` a `PadLabel.key` carries; threading a
  * per-action label through here would need a cast at the boundary this file
  * exists to keep un-cast. A future action with its own group semantics gets
- * the same generic copy for free, with zero per-sport branching added here. */
+ * the same generic copy for free, with zero per-sport branching added here.
+ *
+ * Fix round 1 (task-20-review.md, Important #1) — the copy must never claim
+ * a UI affordance the renderer doesn't have: `field.group` is read nowhere
+ * in `action-form.tsx` (no highlighting, no visual grouping, no section
+ * boundary), so the original "Fill in at least one of the highlighted
+ * sections" was a truthfulness defect, not just a wording one. This wording
+ * names no visual treatment at all. */
 const MISSING_GROUP_REASON: ChassisLabel = {
   key: "scorepad.validity.missingGroup",
-  label: "Fill in at least one of the highlighted sections to continue.",
+  label: "Fill in at least one section.",
 };
 
 /**

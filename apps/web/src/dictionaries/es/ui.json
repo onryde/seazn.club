@@ -4451,7 +4451,7 @@
   "board.result.overrideConfirm.confirm": "Repetir y permitir mover",
   "scorepad.validity.missingFields": "Completa los campos obligatorios para continuar.",
   "scorepad.validity.missingAttribution": "Elige a quién es obligatorio indicar antes de continuar.",
-  "scorepad.validity.missingGroup": "Completa al menos una de las secciones resaltadas para continuar.",
+  "scorepad.validity.missingGroup": "Rellena al menos una sección.",
   "scorepad.clock.label": "Reloj",
   "scorepad.clock.start": "Iniciar",
   "scorepad.clock.pause": "Pausar",

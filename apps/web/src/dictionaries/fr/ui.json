@@ -4451,7 +4451,7 @@
   "board.result.overrideConfirm.confirm": "Relancer et autoriser le déplacement",
   "scorepad.validity.missingFields": "Renseignez les champs obligatoires pour continuer.",
   "scorepad.validity.missingAttribution": "Choisissez la personne requise avant de continuer.",
-  "scorepad.validity.missingGroup": "Renseignez au moins une des sections en surbrillance pour continuer.",
+  "scorepad.validity.missingGroup": "Renseignez au moins une section.",
   "scorepad.clock.label": "Chrono",
   "scorepad.clock.start": "Démarrer",
   "scorepad.clock.pause": "Pause",
