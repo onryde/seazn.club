@@ -73,6 +73,7 @@ import {
   localeHalfClaimFaults,
   localePassBoundFaults,
   localePassUncoveredFaults,
+  localePaidOverclaimFaults,
   retiredClaimFaults,
   valueClauses,
   riderClaimShape,
@@ -878,6 +879,21 @@ const KNOWN_POSITIVES: string[] = [
   "de pass gaat nooit verlopen",
   "de upgrade is altijd van jou",
   "een pass zonder einde",
+  // ── W3: `localePaidOverclaimFaults`'s vocabulary (formats.double_elim /
+  //    formats.advanced) ──
+  //
+  // The four `formats.double_elim` exemplars are strings THIS TASK'S FIX
+  // DELETED from `pricing.pass.f3` — same reason as the permanence exemplars
+  // above: a pattern written to catch a falsehood has, once the fix lands,
+  // nothing left in the repo to match. "americano" alone exercises all FOUR
+  // locale forms of the `formats.advanced` pattern (the word is identical in
+  // en/es/fr/nl), and it IS still live in `pricing.pass.f3` today — added here
+  // too because this corpus is static and never reads the dictionary.
+  "double elim",
+  "doble eliminación",
+  "double élimination",
+  "dubbele eliminatie",
+  "americano",
 ];
 
 // FIX ROUND 4, CI BLOCKER. Round 3 added an `it` that calls `sql` inside this
@@ -2527,6 +2543,69 @@ describe.skipIf(!HAS_DB)("the four-locale dictionaries match plan_entitlements",
     };
     expect(localePassUncoveredFaults(preFix, lifted).join(" | ")).not.toContain(
       "sells scheduling.board",
+    );
+  });
+
+  // ── W3 fix round 1: `pricing.pass.f3` no longer illustrates the paid
+  // `formats.advanced` row with an example ("double elim") that
+  // `formats.double_elim` already grants to community ─────────────────────
+  //
+  // The INVERSE of the block above: `localePassUncoveredFaults` catches a
+  // card selling something the PASS never covers when it does;
+  // `localePaidOverclaimFaults` catches a card selling something as a PAID
+  // differentiator when COMMUNITY already has it. See its header comment in
+  // `@/lib/copy-truth` for the full reasoning.
+  it("pricing.pass.f3 no longer oversells formats.double_elim, in all four locales", async () => {
+    const grants = await grantsFor(["formats.double_elim", "formats.advanced"]);
+    // The premise, read from the seed rather than asserted from memory.
+    expect(grants["formats.double_elim"]!.community, "V393+ growth cell").toBe(true);
+    expect(grants["formats.advanced"]!.community, "the real paid lift").toBe(false);
+
+    expect(localePaidOverclaimFaults(across("marketing", "pricing.pass.f3"), grants)).toEqual([]);
+  });
+
+  it("…and the pre-fix 'double elim' wording reds in every locale, so that is not silence", async () => {
+    const grants = await grantsFor(["formats.double_elim", "formats.advanced"]);
+    // The shipped strings, verbatim, before this fix (W3 fix round 1).
+    const preFix: LocalisedValue[] = (
+      [
+        ["en", "Advanced formats — double elim, ladders"],
+        ["es", "Formatos avanzados: doble eliminación y escaleras"],
+        ["fr", "Formats avancés — double élimination, échelles"],
+        ["nl", "Geavanceerde formats — dubbele eliminatie, ladders"],
+      ] as Array<[DictionaryLocale, string]>
+    ).map(([locale, value]) => ({ locale, key: "pricing.pass.f3", value }));
+
+    const faults = localePaidOverclaimFaults(preFix, grants).join(" | ");
+    for (const locale of DICTIONARY_LOCALES) {
+      expect(faults, `${locale}: the double-elim claim must red`).toContain(
+        `${locale} pricing.pass.f3: sells formats.double_elim as a paid differentiator, but community already grants it`,
+      );
+      // DISCRIMINATING, not blanket: the very same string also names
+      // "ladders"/"escaleras"/"échelles" (formats.advanced), which community
+      // genuinely does NOT grant — that half must stay silent, or this guard
+      // would just be a banned-word list wearing a matrix lookup as a costume.
+      expect(faults, `${locale}: the ladders half must NOT red`).not.toContain(
+        `${locale} pricing.pass.f3: sells formats.advanced`,
+      );
+    }
+
+    // ANTI-VACUITY, both halves (see the header comment on
+    // `localePaidOverclaimFaults` in copy-truth.ts): the vocabulary is
+    // non-empty, and — proved here, not asserted — it just matched a real,
+    // previously shipped string in every locale, not a fixture invented only
+    // for this test.
+    expect(copyTruth.PAID_OVERCLAIM_VOCAB.length).toBeGreaterThan(0);
+
+    // …and it must fall silent the day the matrix moves the other way: if
+    // formats.double_elim were ever gated off community again, the pre-fix
+    // sentence would be true about it again.
+    const lifted = {
+      ...grants,
+      "formats.double_elim": { ...grants["formats.double_elim"]!, community: false },
+    };
+    expect(localePaidOverclaimFaults(preFix, lifted).join(" | ")).not.toContain(
+      "sells formats.double_elim",
     );
   });
 });

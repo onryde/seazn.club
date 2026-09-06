@@ -209,8 +209,11 @@ describe("/pricing's Event Pass ticket sells only the rung that is on sale", () 
   it("never claims a multiplier anywhere on the page", async () => {
     // 2.03x in USD but 1.96x in GBP and 2.25x in INR, so any "double" framing
     // is false in some currency (ledger copy constraint, T2). "double
-    // elimination" is a BRACKET FORMAT and reaches this page in the pass
-    // bullet and the matrix row label, so it is stripped first.
+    // elimination" is a BRACKET FORMAT and reaches this page in the matrix row
+    // label (`pricing.matrix.formats.double_elim`), so it is stripped first.
+    // W3 fix round 1 removed it from the pass bullet (`pricing.pass.f3`)
+    // separately — that example oversold community's own double-elim grant —
+    // but the strip stays regardless of which surface names the format.
     const { text } = await render();
     const priceCopy = text.toLowerCase().replace(/double elim(ination)?/g, "");
     expect(priceCopy).not.toMatch(/\bdouble\b|\btwice\b|\b2×\b|\b2x\b/);

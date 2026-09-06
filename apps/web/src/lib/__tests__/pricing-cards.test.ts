@@ -325,11 +325,11 @@ const APPROVED_CARD_BULLETS: ApprovedBullets[] = [
   },
   {
     array: "PASS_FEATURES",
-    why: "the Event Pass card on /pricing (and, sliced, the home ticket stub). Bullet 1 is the pass's DURATION — V328/V334 `org_has_feature` drop the pass arm once the competition is archived/completed or 7 days past ends_on, so it is bounded, not permanent; that is asserted by passBulletDurationFaults. BULLET 2 CHANGED 2026-09-05 (owner decision: the L rung comes off sale): it read '10 divisions, 128 entrants each — 20 divisions & 512 entrants on L' and now reads M's ceilings alone, because the second half advertised a size with no checkout behind it. Re-read against the code before re-pinning: plan_entitlements gives event_pass 10 divisions and 128 entrants per division, and registration.fee_percent is 4 on event_pass against 5 on community (V398's additive ladder 5/4/2/1) — both still pinned to the live matrix by CARD_SURFACES below, which now names only the rungs in SELLABLE_PASS_KEYS. The withdrawn rung's own numbers are still checked where that is a claim about the SEED rather than about copy (pricing-matrix.test.ts, entitlements-sql-parity.test.ts), so the dormant matrix cannot rot; capClaimFaults still faults any surface that calls a numeric cap unlimited, which is the rule L's own cap needed after V393 gave it a real 512. Bullets 3 and 5-7 name boolean grants (formats.advanced, exports.branded, dashboard.player_profiles, sponsors.*, realtime) that the pass lifts off community. W2 ALSO MOVED THIS CARD INTO THE DICTIONARIES: the bullets are `pricing.<card>.f*` keys in all four locales and every figure above is INTERPOLATED from the row named beside it in lib/pricing-cards.ts, so the approved text below is what `cardBullets` renders in English from the live matrix rather than a sentence anybody typed. A number can no longer disagree with its row; the WORDS are what this entry pins.",
+    why: "the Event Pass card on /pricing (and, sliced, the home ticket stub). Bullet 1 is the pass's DURATION — V328/V334 `org_has_feature` drop the pass arm once the competition is archived/completed or 7 days past ends_on, so it is bounded, not permanent; that is asserted by passBulletDurationFaults. BULLET 2 CHANGED 2026-09-05 (owner decision: the L rung comes off sale): it read '10 divisions, 128 entrants each — 20 divisions & 512 entrants on L' and now reads M's ceilings alone, because the second half advertised a size with no checkout behind it. Re-read against the code before re-pinning: plan_entitlements gives event_pass 10 divisions and 128 entrants per division, and registration.fee_percent is 4 on event_pass against 5 on community (V398's additive ladder 5/4/2/1) — both still pinned to the live matrix by CARD_SURFACES below, which now names only the rungs in SELLABLE_PASS_KEYS. The withdrawn rung's own numbers are still checked where that is a claim about the SEED rather than about copy (pricing-matrix.test.ts, entitlements-sql-parity.test.ts), so the dormant matrix cannot rot; capClaimFaults still faults any surface that calls a numeric cap unlimited, which is the rule L's own cap needed after V393 gave it a real 512. Bullets 3 and 5-7 name boolean grants (formats.advanced, exports.branded, dashboard.player_profiles, sponsors.*, realtime) that the pass lifts off community. BULLET 3 CHANGED W3 fix round 1: it illustrated `formats.advanced` with 'double elim, ladders', but `formats.double_elim` is TRUE on community (V393+ growth cell) — Free already has double elimination, so the example sold a buyer their own capability while the row it was nominally illustrating (`formats.advanced`) is the real paid lift. Swapped for 'americano', an example `formats.advanced` genuinely gates (design doc 2026-09-02-entitlements-v18-three-tier-design.md §2). `lib/copy-truth.ts`'s `localePaidOverclaimFaults` now guards this in all four dictionaries. W2 ALSO MOVED THIS CARD INTO THE DICTIONARIES: the bullets are `pricing.<card>.f*` keys in all four locales and every figure above is INTERPOLATED from the row named beside it in lib/pricing-cards.ts, so the approved text below is what `cardBullets` renders in English from the live matrix rather than a sentence anybody typed. A number can no longer disagree with its row; the WORDS are what this entry pins.",
     bullets: [
       "Upgrades ONE competition while it runs",
       "10 divisions, 128 entrants each",
-      "Advanced formats — double elim, ladders",
+      "Advanced formats — americano, ladders",
       "4% platform fee on entry fees, not 5%",
       "Branded exports & public player cards",
       "Sponsor tiers & paid sponsorship packages",
@@ -600,7 +600,7 @@ const CARD_SURFACES: CardSurface[] = [
       "Live standings":
         "the standings table is core engine output (packages/engine), produced on every plan and gated by no row. The GATED standings features are `standings.carry_over` and `standings.custom_points`, both Pro-only, and neither is claimed on this card.",
       "League, groups + knockout & swiss formats":
-        "the base formats are the engine's own repertoire (packages/engine), not a plan_entitlements row — `formats.advanced` and `formats.double_elim` are the GATED ones and are claimed on the Pass card. Nothing here is plan-conditional.",
+        "the base formats are the engine's own repertoire (packages/engine), not a plan_entitlements row. `formats.advanced` is the GATED one and is claimed on the Pass card. `formats.double_elim` is TRUE on every plan including community (V393+ growth cell) and is claimed by no card — W3 fix round 1 removed the Pass card's 'double elim' example for exactly that reason, so this bullet's own 'knockout' does the only double-elimination-adjacent naming this card does, unconditionally. Nothing here is plan-conditional.",
     },
   },
   {
@@ -646,7 +646,13 @@ const CARD_SURFACES: CardSurface[] = [
     // nothing on this card is offering it.
     booleans: [
       { feature: "formats.advanced", plans: PASS_RUNGS, says: /\badvanced formats\b/i },
-      { feature: "formats.double_elim", plans: PASS_RUNGS, says: /\bdouble elim\b/i },
+      // `formats.double_elim` was pinned here (`says: /\bdouble elim\b/i`) until
+      // W3 fix round 1. It is TRUE on every plan including community, so the
+      // pin only ever proved "the pass grants it too" — never the thing this
+      // card needed proven, which is that the DIFFERENTIATOR the row's example
+      // illustrates is actually paid. Removed with the bullet's own wording;
+      // see `localePaidOverclaimFaults` in lib/copy-truth.ts for the guard that
+      // now catches this class of mistake directly.
       { feature: "exports.branded", plans: PASS_RUNGS, says: /\bbranded exports\b/i },
       { feature: "dashboard.player_profiles", plans: PASS_RUNGS, says: /\bpublic player cards\b/i },
       { feature: "sponsors.tiers", plans: PASS_RUNGS, says: /\bsponsor tiers\b/i },

@@ -31,7 +31,7 @@ export interface ProPriceCardLabels {
   monthlyNote: string;
   /** `pricing.pro.annualToggle` — the switch's own label. */
   annualToggle: string;
-  /** `pricing.plus.cta` — the trial CTA. */
+  /** `pricing.pro.cta` — the trial CTA. */
   cta: string;
 }
 

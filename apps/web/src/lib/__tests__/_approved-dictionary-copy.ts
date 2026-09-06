@@ -120,12 +120,13 @@ export const APPROVED_DICTIONARY_COPY: ApprovedValue[] = [
   // suffix and its eight-item roadmap) retired here — R14 (entitlements v18
   // W3): nothing on /pricing has rendered this key family since W2 deleted
   // the Pro Plus card, and pruning the dictionary is this wave's. The
-  // in-app "Pro Plus panel" (`ui.json`'s `billing.plus.*`) that this file
-  // used to cross-check these bullets against is ALSO unrendered by any
-  // component in this tree today (verified 2026-09-06) — a second orphan
-  // from the same retirement, left untouched here as out of this task's
-  // scope (a `/pricing`-page redesign, not a `ui.json` sweep) and flagged in
-  // the task report for a future cleanup.
+  // in-app "Pro Plus panel" (`billing.plus.*`, in dictionaries/en/ui.json and
+  // its three siblings) that this file used to cross-check these bullets
+  // against is ALSO unrendered by any component in this tree today (verified
+  // 2026-09-06) — a second orphan from the same retirement, left untouched
+  // here as out of this task's scope (a `/pricing`-page redesign, not a
+  // dictionary-wide sweep) and flagged in the task report for a future
+  // cleanup.
   {
     file: "ui",
     key: "upgrade.intro",
@@ -777,12 +778,12 @@ export const APPROVED_DICTIONARY_COPY: ApprovedValue[] = [
   {
     file: "marketing",
     key: "pricing.pass.f3",
-    why: "the formats the pass unlocks over Community. formats.advanced on 'event_pass'. Named as EXAMPLES (double elimination, ladders) rather than as the complete set, because the row is a single boolean and enumerating it would make the copy owe an update to every format added behind it.",
+    why: "the formats the pass unlocks over Community. formats.advanced on 'event_pass'. Named as EXAMPLES (americano, ladders) rather than as the complete set, because the row is a single boolean and enumerating it would make the copy owe an update to every format added behind it. W3 fix round 1: the examples were 'double elim, ladders', but formats.double_elim is TRUE on community (V393+ growth cell) — Free already has double elimination, so the bullet sold a buyer their own capability. Swapped the false example for 'americano', which formats.advanced actually gates (design doc 2026-09-02-entitlements-v18-three-tier-design.md §2: americano, ladders, custom brackets, feeds). Guarded by lib/copy-truth.ts's localePaidOverclaimFaults, which reds if this drifts back.",
     text: {
-      en: "Advanced formats — double elim, ladders",
-      es: "Formatos avanzados: doble eliminación y escaleras",
-      fr: "Formats avancés — double élimination, échelles",
-      nl: "Geavanceerde formats — dubbele eliminatie, ladders",
+      en: "Advanced formats — americano, ladders",
+      es: "Formatos avanzados: americano y escaleras",
+      fr: "Formats avancés — americano, échelles",
+      nl: "Geavanceerde formats — americano, ladders",
     },
   },
   {

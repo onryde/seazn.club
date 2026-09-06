@@ -205,7 +205,7 @@ export const PRO_CARD_BULLETS: readonly CardBullet[] = [
 // T2): `PLUS_CARD_FEATURES`, `PLUS_COMING_SOON` and the whole "Everything in
 // Pro, plus…" surface. The plan does not exist — V393 deleted `pro_plus` from
 // `plans` and `plan_entitlements` outright — and `/pricing` had already stopped
-// rendering them: the page reads `pricing.plus.cta` as the PRO card's CTA label
+// rendering them: the page reads `pricing.pro.cta` as the PRO card's CTA label
 // and nothing else from that family, and `components/marketing/plus-reveal.tsx`
 // is imported by no page at all.
 //

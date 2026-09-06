@@ -208,3 +208,60 @@ with real counts, and per-screen verdicts at 1280 / 768 / 320. Not "CI green".
 Plus the e2e replacements the index lists as owed: `pricing-v18.spec.ts` (task
 1) and `enterprise-gate.spec.ts` (task 2), rebuilding the five live-mechanism
 cases that died with `pro-plus-tier.spec.ts` rather than guessing at them.
+
+## Task 1 fix round — a false differentiator, and the guard that missed it
+
+Found by reading the live matrix against the rendered card, after the suite was
+green and the branch review came back Approved. Neither saw it.
+
+**The defect.** `pricing.pass.f3` read *"Advanced formats — double elim,
+ladders"*. `formats.double_elim` is **true on community** (W2's growth cell) and
+on every plan; `formats.advanced` is the actual lift (false on community, true
+on both pass rungs and Pro). So the bullet's headline was true and its
+illustrative example — the concrete half a reader believes — was false. A Free
+user was told they would gain double elimination by buying a pass. They already
+had it, and the page said so itself: the comparison matrix three sections down
+renders `Double elimination brackets ✓ ✓ ✓`.
+
+Fixed to name genuinely-gated examples (americano, ladders) in all four
+locales.
+
+**Why nothing caught it.** This is the MIRROR of the class W2 already closed.
+W2 found twelve paywall reasons calling a pass-granted key "a Pro feature" and
+grew `freeClaimFaults` to catch them. Nothing covered the inverse — shipped card
+copy naming a capability as a paid differentiator when community already grants
+it. `copy-truth.ts` now carries that rule (`PAID_OVERCLAIM_VOCAB` /
+`localePaidOverclaimFaults`), deriving its offending set from the LIVE matrix
+rather than a list typed into the test, with an anti-vacuity floor on the
+vocabulary and a discrimination case proving it does NOT fire on a legitimately
+gated example.
+
+Mutation-proven independently of the implementer's own report: reverting the en
+string to "double elim, ladders" reds two assertions, one of them named
+`pricing.pass.f3 no longer oversells formats.double_elim, in all four locales`.
+Emptying the vocabulary reds the anti-vacuity floor.
+
+### TWO SIBLINGS OF THE SAME DEFECT — owed by Task 2, not fixed here
+
+Both surfaced while fixing the first. Recorded with their evidence so the next
+task inherits a finding rather than a rumour.
+
+1. **`ui.json`'s `upgrade.limit.formats`** carries the identical "double
+   elimination" claim, in all four locales, on the upgrade page's comparison
+   row. Same falsehood, different surface.
+2. **`lib/feature-copy.ts`'s `FEATURE_REASONS["formats.double_elim"]`** reads
+   *"Double-elimination brackets are a Pro format"*. It **evades
+   `freeClaimFaults` on a word** — that guard looks for "a Pro feature", and
+   this says "a Pro format". Currently inert because no plan lacks the row, so
+   nothing renders it; it becomes live the moment a plan loses double-elim.
+   The guard's vocabulary is the fragile part, exactly as suspected when the new
+   rule was written, and this is the proof.
+
+### A trap paid for in this round
+
+`git checkout -- <file>` to undo a mutation **reverted the fix instead**, because
+the fix was still uncommitted — the last committed state was the one carrying the
+defect. en disagreed with es/fr/nl until it was restored from the pre-mutation
+backup. The rule that follows: when mutating a file whose fix is not yet
+committed, restore from an explicit backup taken before the mutation, never from
+git, and re-read the value afterwards rather than assuming the restore ran.

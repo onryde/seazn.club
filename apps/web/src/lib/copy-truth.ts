@@ -3024,6 +3024,117 @@ export function localePassUncoveredFaults(
 }
 
 /**
+ * ── THE INVERSE OF `localePassUncoveredFaults`, AND OF `freeClaimFaults` ────
+ *
+ * `freeClaimFaults` catches a paywall REASON calling a pass-granted key "a Pro
+ * feature" — twelve of them, W2 (entitlements v18) 2026-09-05. Both misreads
+ * are the same class pointed opposite ways: a plan attribution that has gone
+ * stale against `plan_entitlements`. But `freeClaimFaults` is keyed to ONE ROW
+ * per sentence — `lib/feature-copy.ts`'s `FEATURE_REASONS` map is
+ * `feature_key -> reason`, so the guard always knows which row a reason is
+ * ABOUT. A pricing-card bullet carries no such key: "Advanced formats —
+ * double elim, ladders" is free prose illustrating ONE row
+ * (`formats.advanced`, the actual paid differentiator) with EXAMPLES, and one
+ * of those examples is itself a SEPARATE row (`formats.double_elim`) that
+ * community has granted since the V393 growth cell — Free already had double
+ * elimination. The bullet's own header ("Advanced formats") was true; its
+ * illustrative half was the concrete claim a reader believes, and it was
+ * false. `pricing-cards.test.ts`'s `cardBooleanFaults` cannot see this either:
+ * it only proves a claimed row IS granted to the plans that claim it, never
+ * that an EXAMPLE beside the claim names a DIFFERENT, already-free row.
+ *
+ * So — like `localePassUncoveredFaults` — this guard recognises capabilities
+ * by VOCABULARY (a phrase can appear in prose with no key attached), but it
+ * judges each recognised phrase against ITS OWN feature_key rather than the
+ * row the bullet nominally illustrates, because the phrase is the half a
+ * reader actually believes.
+ *
+ * DERIVED FROM THE LIVE MATRIX, NEVER A HARDCODED OFFENDING SET: an entry
+ * names a PHRASE and the feature_key it is a claim about; whether quoting
+ * that phrase is currently false is read from `grants` on every call, so the
+ * day a migration moves that cell the other way, this rule falls silent on
+ * its own — exactly as `localePassUncoveredFaults`'s own "must fall silent
+ * when the matrix moves" case proves for its half of this pair.
+ *
+ * THE VOCABULARY IS DELIBERATELY SMALL, and every entry is commented with why
+ * it exists — a wide "any capability word" list is unreviewable and, per the
+ * header note over this file, exactly the shape ("A DENYLIST OF PHRASINGS")
+ * that lets the same falsehood back in reworded. Two entries only:
+ *
+ *  - `formats.double_elim`: the phrase THIS TASK'S DEFECT USED ("double elim"
+ *    / "double elimination"). Community grants it, so any bullet naming it is
+ *    a fault regardless of which row the bullet is nominally selling.
+ *  - `formats.advanced`: "americano" / "ladders", the examples the fixed
+ *    copy uses instead (design doc
+ *    2026-09-02-entitlements-v18-three-tier-design.md §2: "americano,
+ *    ladders, custom brackets, feeds"). Community does NOT grant this row, so
+ *    these phrases must NEVER fault — carrying them here is what makes the
+ *    rule DISCRIMINATING rather than a blanket "double elim" ban: it proves
+ *    the guard is judging the MATRIX, not pattern-matching a banned word,
+ *    because the same shape of entry (a phrase mapped to a feature_key) reds
+ *    for one row and stays silent for the other, on the same bullet.
+ *
+ * ANTI-VACUITY, both halves: `PAID_OVERCLAIM_VOCAB.length === 0` is checked
+ * FIRST, before any loop — an empty vocabulary would otherwise fall through
+ * every string and return `[]`, indistinguishable from "scanned and clean".
+ * (Three vacuous "empty set answers no to every question" defects have
+ * shipped in this repo already; this is that failure mode's precondition,
+ * caught before the loop rather than left to be inferred from silence.) The
+ * SECOND half — the vocabulary must actually MATCH at least one real shipped
+ * string, not just be non-empty — is proved in
+ * `dictionary-copy-truth.test.ts` against the literal pre-fix wording this
+ * task replaced, never a synthetic fixture: a vocabulary that only recognises
+ * strings nobody ships is equally silent.
+ */
+export const PAID_OVERCLAIM_VOCAB: Array<[feature: string, byLocale: Record<DictionaryLocale, RegExp>]> = [
+  [
+    "formats.double_elim",
+    {
+      en: /\bdouble[- ]elim(?:ination)?\b/i,
+      es: claim(String.raw`\bdoble\s+eliminaci[oó]n\b`),
+      fr: claim(String.raw`\bdouble\s+[ée]limination\b`),
+      nl: claim(String.raw`\bdubbele\s+eliminatie\b`),
+    },
+  ],
+  [
+    "formats.advanced",
+    {
+      en: /\b(americano|ladders?)\b/i,
+      es: claim(String.raw`\b(americano|escaleras?)\b`),
+      fr: claim(String.raw`\b(americano|[ée]chelles?)\b`),
+      nl: claim(String.raw`\b(americano|ladders?)\b`),
+    },
+  ],
+];
+
+export function localePaidOverclaimFaults(
+  values: LocalisedValue[],
+  grants: FeatureGrants,
+): string[] {
+  // STATE THE EMPTY CASE FIRST — see the header comment above for why.
+  if (PAID_OVERCLAIM_VOCAB.length === 0) {
+    return ["paid-overclaim vocabulary is empty — this rule would examine nothing"];
+  }
+  const faults: string[] = [];
+  for (const { locale, key, value } of values) {
+    for (const [feature, byLocale] of PAID_OVERCLAIM_VOCAB) {
+      if (!byLocale[locale].test(value)) continue;
+      const row = grants[feature];
+      if (!row) {
+        faults.push(`${locale} ${key}: names ${feature}, which has no rows in plan_entitlements`);
+        continue;
+      }
+      if (row.community) {
+        faults.push(
+          `${locale} ${key}: sells ${feature} as a paid differentiator, but community already grants it`,
+        );
+      }
+    }
+  }
+  return faults;
+}
+
+/**
  * The comparative "the largest monthly AI credit grant". A boolean-grant guard
  * cannot judge it: it is true only while ONE plan's `ai.credits.monthly` is
  * strictly greater than every other plan's, so it is checked against the
