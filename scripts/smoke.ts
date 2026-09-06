@@ -1704,6 +1704,14 @@ async function publicQuotaDegradeSuite(): Promise<void> {
 
   // Fill to the cap. Aggregated into one check so the check COUNT does not
   // move when the cap does.
+  //
+  // Each filler is PUBLISHED, because the cap meters `PUBLIC_DASHBOARD_STATUSES`
+  // (published/live) — a draft shows the world nothing, so it holds no
+  // public-dashboard slot. Filling with bare creates fills the cap with ZERO and
+  // every check below it (the degrade, the note, the template path, the 402)
+  // silently stops testing anything. The publishes themselves are all within the
+  // cap, so the publish guard never fires here; it is proven in
+  // `public-dashboard-quota.test.ts`.
   let fillClean = capN >= 1;
   for (let i = 1; i <= capN; i += 1) {
     const res = await v1(owner, "/api/v1/competitions", "POST", {
@@ -1711,9 +1719,15 @@ async function publicQuotaDegradeSuite(): Promise<void> {
       name: `Quota Fill ${i} ${tag}`,
       visibility: "public",
     });
-    const row = v1data<{ visibility: string; public_quota_degraded?: unknown }>(res);
+    const row = v1data<{ id: string; visibility: string; public_quota_degraded?: unknown }>(res);
+    const published = await v1(owner, `/api/v1/competitions/${row.id}`, "PATCH", {
+      status: "published",
+    });
     fillClean &&=
-      res.status === 201 && row.visibility === "public" && row.public_quota_degraded === undefined;
+      res.status === 201 &&
+      row.visibility === "public" &&
+      row.public_quota_degraded === undefined &&
+      published.status === 200;
   }
   check(
     `public quota: all ${capN} creates up to the cap are public and carry NO note`,

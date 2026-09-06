@@ -200,7 +200,15 @@ async function probe(feature: string, auth: AuthCtx): Promise<() => Promise<unkn
         insert into org_entitlement_overrides (org_id, feature_key, int_value, reason)
         values (${auth.orgId}, 'competitions.max_active', ${pub + 2}, 'test probe')`;
       await invalidateOrgEntitlements(auth.orgId);
-      for (let i = 1; i <= pub; i++) await makeCompetition(auth, `P${i}`, "public");
+      // PUBLISHED, not merely created: the cap meters
+      // `PUBLIC_DASHBOARD_STATUSES` (published/live) — a draft publishes
+      // nothing, so it holds no public-dashboard slot. Filling with drafts
+      // fills the cap with zero and the PATCH below is then allowed, which is
+      // exactly the `allowed=false` arm this row exists to prove.
+      for (let i = 1; i <= pub; i++) {
+        const filler = await makeCompetition(auth, `P${i}`, "public");
+        await sql`update competitions set status = 'published' where id = ${filler.id}`;
+      }
       const spare = await makeCompetition(auth, `P${pub + 1}`, "private");
       return () => patchCompetition(auth, spare.id, { visibility: "public" } as never);
     }

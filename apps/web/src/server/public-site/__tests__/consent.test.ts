@@ -254,8 +254,13 @@ describe.skipIf(!HAS_DB)("entitlement split (doc 09 §4, doc 10)", () => {
     await sql`
       insert into org_entitlement_overrides (org_id, feature_key, int_value, reason)
       values (${auth.orgId}, 'competitions.max_active', ${pub + 2}, 'test probe')`;
+    // PUBLISHED, not merely created: `dashboard.public.max` meters
+    // `PUBLIC_DASHBOARD_STATUSES` (published/live), because a draft shows the
+    // world nothing and so is not a public dashboard. Filling with bare creates
+    // fills the cap with zero and the boundary below never binds.
     for (let i = 1; i <= pub; i++) {
-      await createCompetition(auth, { ends_on: "2030-12-31", name: `Public ${i}`, visibility: "public", branding: {} });
+      const filler = await createCompetition(auth, { ends_on: "2030-12-31", name: `Public ${i}`, visibility: "public", branding: {} });
+      await sql`update competitions set status = 'published' where id = ${filler.id}`;
     }
     // V396 (W2 T15/F, owner ruling 2026-09-03): a CREATE over the cap no
     // longer throws — it creates the competition PRIVATE and says so through
