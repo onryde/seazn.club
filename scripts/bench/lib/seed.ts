@@ -128,7 +128,7 @@
 // `apps/web` — every wire shape below is a hand mirror, cited against the
 // real schema/usecase it copies.
 import { newSession, request, signIn, type RequestOptions, type Session } from "./http.ts";
-import { fixtureKey, type PackStream, type PackVenue } from "./pack-schema.ts";
+import { fixtureKey, type PackCourt, type PackStream, type PackVenue } from "./pack-schema.ts";
 import type {
   SeedPlan,
   SeedPlanClaimInvite,
@@ -334,12 +334,15 @@ export function bindStreamFixtures(
  *  Field-for-field pass-through: `PackVenue`/`PackCourt` already carry
  *  exactly `CreateVenue`'s (`name`, `address`, `sort`) and
  *  `CreateCourtInput`'s (`name`, `sort`, `tags`) fields
- *  (pack-schema.ts:701-732's own doc comment), so there is nothing to
- *  compute here — optional fields are omitted rather than defaulted, since
+ *  (pack-schema.ts's own doc comment), so there is nothing to
+ *  compute on the create bodies — optional fields are omitted rather than defaulted, since
  *  the server already applies its own default (`CreateVenue.sort` /
  *  `CreateCourtInput.sort` both `.default(0)`, apps/web/src/server/api-v1/
  *  schemas.ts:4519-4522, apps/web/src/server/usecases/venues.ts:116-120) and
- *  restating that default here would be a second copy that could drift. */
+ *  restating that default here would be a second copy that could drift.
+ *
+ *  A court that declares a calendar takes a SECOND write after its create —
+ *  see `putCourtCalendar` below for why that one is not a pass-through. */
 async function seedVenuesAndCourts(
   base: string,
   s: Session,
@@ -371,11 +374,65 @@ async function seedVenuesAndCourts(
             },
           });
           courtIdByRef.set(c.ref, court.id);
+          await putCourtCalendar(base, s, t, orgId, court.id, c);
         }),
       );
     }),
   );
   return { venueIdByRef, courtIdByRef };
+}
+
+/** A court's weekly hours and dated exceptions — a SECOND write, because the
+ *  product has no create-with-calendar path: `CreateCourtInput` carries no
+ *  hours field at all, and `PUT /orgs/{id}/courts/{courtId}/calendar` is a
+ *  FULL replace of both lists (`putCourtCalendar`, usecases/venues.ts).
+ *
+ *  Two things here are semantics rather than plumbing:
+ *
+ *  1. **A court declaring neither list is skipped entirely, not PUT empty.**
+ *     Zero `court_hours` rows means "open all day, every day" — a property of
+ *     the COURT (`court-windows.ts`'s note 1). A court freshly POSTed already
+ *     has zero rows, so a PUT of two empty arrays would delete nothing and
+ *     insert nothing: the same state via an extra round trip whose ADVISORY
+ *     `strandedFixtureCount` response the bench would then be reading for no
+ *     reason. Skipping keeps "the pack declared nothing" and "the pack
+ *     declared emptiness" the same fact, which is what `PackCourt`'s default
+ *     of `[]` already promises.
+ *  2. **snake_case at the wire, and only here.** `PackCourt` is camelCase
+ *     throughout, matching the engine's own `CourtHoursRow`/`CourtExceptionRow`
+ *     and therefore `BoardCourt`, which is what `checker.ts` recomputes
+ *     containment from. This function is the single rename site.
+ *
+ *  A CLOSED exception sends explicit `null`s rather than omitting the pair.
+ *  `CourtExceptionInput` would default an omitted key to `null` anyway, so
+ *  this is not required — but `checker.ts` reads the absent range as "this
+ *  date is shut", and sending the null the column actually stores keeps the
+ *  bench's request identical to what a read-back returns. */
+async function putCourtCalendar(
+  base: string,
+  s: Session,
+  t: SeedTransport,
+  orgId: string,
+  courtId: string,
+  c: PackCourt,
+): Promise<void> {
+  if (c.hours.length === 0 && c.exceptions.length === 0) return;
+  await t.request(base, s, `/api/v1/orgs/${orgId}/courts/${courtId}/calendar`, {
+    method: "PUT",
+    body: {
+      hours: c.hours.map((h) => ({
+        weekday: h.weekday,
+        open_min: h.openMin,
+        close_min: h.closeMin,
+      })),
+      exceptions: c.exceptions.map((e) => ({
+        date: e.date,
+        closed: e.closed,
+        open_min: e.openMin ?? null,
+        close_min: e.closeMin ?? null,
+      })),
+    },
+  });
 }
 
 /** Every player/coach/staff person the plan resolved — `SeedPlan.persons`

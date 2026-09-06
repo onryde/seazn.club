@@ -167,6 +167,19 @@ function fakeTransport(generateFixturesByStageId: Record<string, { id: string; e
       if (method === "POST" && /^\/api\/v1\/orgs\/[^/]+\/venues\/[^/]+\/courts$/.test(path)) {
         return { id: `court-${slug((body as { name: string }).name)}` } as T;
       }
+      // The calendar route's real response is `CourtCalendar` — the stored
+      // rows plus two advisory stranded-fixture counts (schemas.ts:4556).
+      // It is deliberately NOT an echo of the request: `seedVenuesAndCourts`
+      // must not start reading its own write back as though it were a fetch,
+      // and a fake that echoed would hide it if it did.
+      if (method === "PUT" && /^\/api\/v1\/orgs\/[^/]+\/courts\/[^/]+\/calendar$/.test(path)) {
+        return {
+          hours: [],
+          exceptions: [],
+          strandedFixtureCount: 0,
+          newlyStrandedFixtureCount: 0,
+        } as T;
+      }
       if (method === "POST" && path === "/api/v1/persons") {
         return { id: `person-${slug((body as { full_name: string }).full_name)}` } as T;
       }
@@ -333,7 +346,12 @@ describe("seedSuite — two divisions, venues+courts, and a SHARED ext_key acros
     {
       ref: "v1",
       name: "Main Ground",
-      courts: [{ ref: "c1", name: "Court 1", tags: [] }],
+      // `hours`/`exceptions` are `.default([])` on `PackCourt`, so a REAL
+      // pack always arrives with both present. This literal skips
+      // `PackSchema.parse`, so it has to state them itself — `seedSuite` is
+      // entitled to a parsed pack and does not re-defend against a
+      // half-built one.
+      courts: [{ ref: "c1", name: "Court 1", tags: [], hours: [], exceptions: [] }],
     },
   ];
 
@@ -478,6 +496,153 @@ describe("seedSuite — two divisions, venues+courts, and a SHARED ext_key acros
 
     const st2Call = calls.find((c) => c.path === "/api/v1/divisions/div-division-two/stages");
     expect(st2Call?.body).toEqual([{ seq: 1, kind: "league", name: "League B", config: { legs: 1 } }]);
+  });
+
+  // -------------------------------------------------------------------------
+  // A court's calendar reaches the wire (B04 T7)
+  //
+  // `PackCourt.hours`/`.exceptions` are validated by `PackSchema` and consumed
+  // by `checker.ts`'s court-hours rule off `BoardCourt`. Between those two
+  // sits this driver, and until it issued the PUT below the field was a
+  // validated-but-unsent seam: a pack could declare a narrow window, stage 0
+  // would bless it, the product would schedule against a court that was open
+  // all day, and the checker would recompute containment against hours the
+  // database never held — reporting clean for the wrong reason.
+  //
+  // Note the calendar route is ORG-scoped (`/orgs/{id}/courts/{courtId}`),
+  // not nested under the venue the court was created through.
+  // -------------------------------------------------------------------------
+  const calendarPath = "/api/v1/orgs/org-1/courts/court-court-1/calendar";
+
+  it("PUTs a declared calendar to the org-scoped route, renaming camelCase to the wire's snake_case exactly once", async () => {
+    const { transport, calls } = fakeTransport({
+      "stage-league-a": [{ id: "fx-d1-m1", ext_key: "m1" }],
+      "stage-league-b": [{ id: "fx-d2-m1", ext_key: "m1" }],
+    });
+    await seedSuite({
+      base: "http://bench.example",
+      plan,
+      venues: [
+        {
+          ref: "v1",
+          name: "Main Ground",
+          courts: [
+            {
+              ref: "c1",
+              name: "Court 1",
+              tags: [],
+              hours: [
+                { weekday: 6, openMin: 540, closeMin: 720 },
+                { weekday: 0, openMin: 600, closeMin: 780 },
+              ],
+              exceptions: [
+                { date: "2027-04-03", closed: true },
+                { date: "2027-04-04", closed: false, openMin: 600, closeMin: 660 },
+              ],
+            },
+          ],
+        },
+      ],
+      streams,
+      runTag: "xyz789",
+      transport,
+    });
+
+    const cal = calls.filter((c) => c.path === calendarPath);
+    expect(cal).toHaveLength(1);
+    expect(cal[0]?.method).toBe("PUT");
+    // Whole-body equality, not a key probe: a driver that dropped `exceptions`
+    // or emitted `openMin` alongside `open_min` would satisfy any narrower
+    // assertion, and `PutCourtCalendarInput` is not strict about extra keys.
+    expect(cal[0]?.body).toEqual({
+      hours: [
+        { weekday: 6, open_min: 540, close_min: 720 },
+        { weekday: 0, open_min: 600, close_min: 780 },
+      ],
+      exceptions: [
+        { date: "2027-04-03", closed: true, open_min: null, close_min: null },
+        { date: "2027-04-04", closed: false, open_min: 600, close_min: 660 },
+      ],
+    });
+
+    // Declaration order survives. `court_hours` has no ordering column and
+    // `usableWindows` sorts for itself, so this is not a correctness claim
+    // about the product — it is a claim about this driver, which must not
+    // sort, dedupe or normalise a list the pack author wrote deliberately.
+    expect((cal[0]?.body as { hours: { weekday: number }[] }).hours.map((h) => h.weekday)).toEqual([6, 0]);
+
+    // Ordering against the court's own creation: a calendar PUT that raced
+    // ahead of the POST would 404 against an id that does not exist yet.
+    const courtPost = calls.findIndex(
+      (c) => c.method === "POST" && /\/venues\/[^/]+\/courts$/.test(c.path),
+    );
+    expect(courtPost).toBeGreaterThanOrEqual(0);
+    expect(calls.indexOf(cal[0]!)).toBeGreaterThan(courtPost);
+  });
+
+  it("issues NO calendar call for a court that declares neither hours nor exceptions", async () => {
+    // The other direction, and the one that carries the risk: a PUT of two
+    // empty arrays is a FULL replace that deletes every row and inserts none.
+    // On a freshly created court that is a no-op, so a driver which always
+    // PUT would look correct here and would silently wipe a calendar the
+    // moment anything else wrote one first. `_tiny`'s own courts take this
+    // path, so it is also the default the whole suite runs through.
+    const { transport, calls } = fakeTransport({
+      "stage-league-a": [{ id: "fx-d1-m1", ext_key: "m1" }],
+      "stage-league-b": [{ id: "fx-d2-m1", ext_key: "m1" }],
+    });
+    await seedSuite({
+      base: "http://bench.example",
+      plan,
+      venues,
+      streams,
+      runTag: "xyz789",
+      transport,
+    });
+
+    expect(calls.filter((c) => /\/calendar$/.test(c.path))).toEqual([]);
+    // …and the court itself was still created, so the emptiness above is the
+    // calendar's, not a venue block that never ran.
+    expect(calls.some((c) => c.method === "POST" && /\/venues\/[^/]+\/courts$/.test(c.path))).toBe(true);
+  });
+
+  it("PUTs a court that declares ONLY exceptions — the two lists are independently sufficient", async () => {
+    // Guards the skip above against being written as `||`: a court with a
+    // shutdown date but no weekly hours is open all day EXCEPT that date, and
+    // an `||` skip would drop the closure and leave it open all week.
+    const { transport, calls } = fakeTransport({
+      "stage-league-a": [{ id: "fx-d1-m1", ext_key: "m1" }],
+      "stage-league-b": [{ id: "fx-d2-m1", ext_key: "m1" }],
+    });
+    await seedSuite({
+      base: "http://bench.example",
+      plan,
+      venues: [
+        {
+          ref: "v1",
+          name: "Main Ground",
+          courts: [
+            {
+              ref: "c1",
+              name: "Court 1",
+              tags: [],
+              hours: [],
+              exceptions: [{ date: "2027-04-03", closed: true }],
+            },
+          ],
+        },
+      ],
+      streams,
+      runTag: "xyz789",
+      transport,
+    });
+
+    const cal = calls.filter((c) => c.path === calendarPath);
+    expect(cal).toHaveLength(1);
+    expect(cal[0]?.body).toEqual({
+      hours: [],
+      exceptions: [{ date: "2027-04-03", closed: true, open_min: null, close_min: null }],
+    });
   });
 });
 

@@ -23,6 +23,9 @@ import type { RawResult, Session } from "../http.ts";
 import type { ProbeTransport } from "../dls-gate.ts";
 import type { PlanEntitlementRow, PlanSql } from "../plan.ts";
 import { runTinySuite, TINY_PACK_PATH } from "../suites/tiny.ts";
+// B04 — the seven scheduling endpoints, shared with the other fakes in this
+// directory, so no two of them can disagree about what landed on the board.
+import { makeScheduleWorld } from "./_schedule-routes.ts";
 
 const silent = pino({ level: "silent" });
 
@@ -53,6 +56,8 @@ function fakeServer(opts: { statsPlayerGranted: boolean }): {
   let fixtureCounter = 0;
   let entitled = false;
 
+  const schedule = makeScheduleWorld({ solverEngine: "optimized" });
+
   const transport: ProbeTransport = {
     async signIn(_base, _s) {
       calls.push({ method: "SIGNIN", path: "signIn", body: undefined });
@@ -68,10 +73,16 @@ function fakeServer(opts: { statsPlayerGranted: boolean }): {
         return [{ id: "org-fixed", slug: "org-fixed-slug", name: "Bench Org" }] as unknown as T;
       }
       if (method === "POST" && /^\/api\/v1\/orgs\/[^/]+\/venues$/.test(routePath)) {
-        return { id: `venue-${slug((body as { name: string }).name)}` } as T;
+        const id = `venue-${slug((body as { name: string }).name)}`;
+        schedule.addVenue(id);
+        return { id } as T;
       }
-      if (method === "POST" && /^\/api\/v1\/orgs\/[^/]+\/venues\/[^/]+\/courts$/.test(routePath)) {
-        return { id: `court-1` } as T;
+      const courtsMatch = /^\/api\/v1\/orgs\/[^/]+\/venues\/([^/]+)\/courts$/.exec(routePath);
+      if (method === "POST" && courtsMatch !== null) {
+        const name = (body as { name: string }).name;
+        const id = `court-${slug(name)}`;
+        schedule.addCourt(courtsMatch[1]!, id, name);
+        return { id } as T;
       }
       if (method === "POST" && routePath === "/api/v1/persons") {
         return { id: `person-${slug((body as { full_name: string }).full_name)}` } as T;
@@ -85,9 +96,14 @@ function fakeServer(opts: { statsPlayerGranted: boolean }): {
         dlsByDivisionId.set(id, b.config?.dls?.enabled === true);
         return { id } as T;
       }
-      if (method === "POST" && /^\/api\/v1\/divisions\/[^/]+\/entrants$/.test(routePath)) {
+      const entrantsMatch = /^\/api\/v1\/divisions\/([^/]+)\/entrants$/.exec(routePath);
+      if (method === "POST" && entrantsMatch !== null) {
         const rows = body as { display_name?: string }[];
-        return rows.map((e, i) => ({ id: `entrant-${slug(e.display_name ?? String(i))}-${Math.random()}` })) as unknown as T;
+        const out = rows.map((e, i) => ({
+          id: `entrant-${slug(e.display_name ?? String(i))}-${Math.random()}`,
+        }));
+        schedule.addEntrants(entrantsMatch[1]!, out.map((e) => e.id));
+        return out as unknown as T;
       }
       if (method === "POST" && /^\/api\/v1\/divisions\/([^/]+)\/stages$/.test(routePath)) {
         const divisionId = routePath.split("/")[4]!;
@@ -96,6 +112,7 @@ function fakeServer(opts: { statsPlayerGranted: boolean }): {
           const id = `stage-${++stageCounter}`;
           legsByStageId.set(id, (st.config?.legs as number | undefined) ?? 1);
           divisionIdByStageId.set(id, divisionId);
+          schedule.addStage(id, divisionId);
           return { id };
         }) as unknown as T;
       }
@@ -108,20 +125,14 @@ function fakeServer(opts: { statsPlayerGranted: boolean }): {
           if (divisionId !== undefined) fixtureDivisionId.set(id, divisionId);
           return { id, ext_key: `rr-r${i + 1}-c1` };
         });
+        schedule.addFixtures(stageId, fixtures);
         return { fixtures } as unknown as T;
       }
-      if (method === "PUT" && /^\/api\/v1\/divisions\/[^/]+\/schedule-settings$/.test(routePath)) {
-        return {} as T;
-      }
-      if (method === "POST" && /^\/api\/v1\/stages\/[^/]+\/schedule\/auto$/.test(routePath)) {
-        return { assignments: [], conflicts: [], solver: { engine: "greedy", status: "ok" } } as unknown as T;
-      }
-      if (method === "POST" && /^\/api\/v1\/stages\/[^/]+\/schedule\/apply$/.test(routePath)) {
-        return {} as T;
-      }
-      if (method === "POST" && /^\/api\/v1\/divisions\/[^/]+\/schedule\/validate$/.test(routePath)) {
-        return { conflicts: [] } as unknown as T;
-      }
+      // B04 — the seven scheduling endpoints, from the shared world. BEFORE
+      // the officials routes below, so the anchored `PATCH /fixtures/{id}`
+      // and `PATCH /fixtures/{id}/officials` cannot shadow each other.
+      const scheduled = schedule.handle(method, routePath, body);
+      if (scheduled !== undefined) return scheduled as T;
       if (method === "POST" && /^\/api\/v1\/divisions\/[^/]+\/officials\/auto$/.test(routePath)) {
         return { assignments: [] } as unknown as T;
       }
@@ -141,7 +152,10 @@ function fakeServer(opts: { statsPlayerGranted: boolean }): {
       }
       if (method === "PATCH" && /^\/api\/v1\/fixtures\/[^/]+\/officials$/.test(routePath)) {
         const fixtureId = routePath.split("/")[4]!;
-        fixtureOfficials.set(fixtureId, (body as { set: unknown[] }).set);
+        const set = (body as { set: unknown[] }).set;
+        fixtureOfficials.set(fixtureId, set);
+        // B04: onto the BOARD too — see the same note in the other fakes.
+        schedule.setOfficials(fixtureId, set);
         return { ok: true } as T;
       }
       if (method === "GET" && /^\/api\/v1\/fixtures\/[^/]+$/.test(routePath)) {

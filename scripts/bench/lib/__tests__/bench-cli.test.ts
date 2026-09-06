@@ -2,7 +2,7 @@
 // network/DB touched. Lives under lib/__tests__ (rather than a top-level
 // scripts/bench/__tests__) purely so every bench test collects from one
 // glob; it tests ../../bench.ts, one level up from the other lib tests.
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { parseCliArgs, runSuite } from "../../bench.ts";
 import type { ProbeTransport } from "../dls-gate.ts";
 import type { PlanSql } from "../plan.ts";
@@ -175,9 +175,66 @@ describe("runSuite — B03 T7 forwards sql/transport into runTinySuite", () => {
     // (the sql/transport forward), so left unhandled on purpose.
     const config = parseCliArgs(["--suite", "_tiny", "--base", "http://bench.example", "--wipe"]);
 
-    const report = await runSuite("_tiny", config, sql, transport, transport);
+    // `runId` is the RESOLVED one `main()` computes — a literal here, since
+    // this test never writes a report and no artifact directory is created
+    // (`_tiny`'s engine artifact only lands once a run reaches the scheduling
+    // layer, which this fake's sentinel throw happens long before).
+    const report = await runSuite("_tiny", config, "test-run-id", sql, transport, transport);
 
     expect(report.gate).toBe("red");
     expect((report.errors ?? []).join(" | ")).toContain("SENTINEL");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// B04 T6 — `runSuite` forwards the RESOLVED run id and the report directory
+//
+// Both are new parameters, both are read only at the very end of a suite run
+// (`writeEngineArtifact`/`readEngineArtifacts`), and neither is observable
+// from a run that dies at the sentinel above. So this test replaces the suite
+// module itself and reads what it was handed: delete either forward in
+// `bench.ts` and exactly this reds.
+//
+// The identity matters more than the plumbing. `report.json` and
+// `engine-<engine>.json` have to land in the SAME directory or the second leg
+// of a two-engine run writes somewhere the first never looks — which is why
+// `main()` resolves the run id ONCE and passes it down, rather than letting
+// the suite re-derive it from `config.runId` (the raw CLI arg, usually
+// undefined).
+// ---------------------------------------------------------------------------
+describe("runSuite — B04 forwards reportDir and the resolved runId", () => {
+  it("hands the suite the run id it was given, not config.runId", async () => {
+    vi.resetModules();
+    const seen: Record<string, unknown>[] = [];
+    vi.doMock("../suites/tiny.ts", () => ({
+      runTinySuite: async (input: Record<string, unknown>) => {
+        seen.push(input);
+        return { suite: "_tiny", gate: "green" as const, timings: {}, keep: false };
+      },
+    }));
+    const fresh = await import("../../bench.ts");
+    // NO `--run-id`, so `config.runId` is undefined — the only way the suite
+    // can learn the identity is the parameter.
+    const config = fresh.parseCliArgs([
+      "--suite",
+      "_tiny",
+      "--base",
+      "http://bench.example",
+      "--report-dir",
+      "/tmp/bench-report-under-test",
+    ]);
+    expect(config.runId).toBeUndefined();
+
+    await fresh.runSuite("_tiny", config, "resolved-sha", {} as PlanSql);
+
+    expect(seen).toHaveLength(1);
+    expect(seen[0]!.runId).toBe("resolved-sha");
+    expect(seen[0]!.reportDir).toBe("/tmp/bench-report-under-test");
+    // And the engine assertion travels with them — `--engine` is honoured as
+    // an assertion by the scheduling layer, so the value has to arrive.
+    expect(seen[0]!.engine).toBe("optimized");
+
+    vi.doUnmock("../suites/tiny.ts");
+    vi.resetModules();
   });
 });

@@ -1640,6 +1640,178 @@ describe("PackSchema — pre-freeze reservations (venues, officials, claim invit
   });
 });
 
+// ---------------------------------------------------------------------------
+// B04 T7 — a court's own calendar
+//
+// The checker's court-hours rule (`checker.ts`'s rule 2, third operand)
+// recomputes containment from the RAW `court_hours` / `court_exceptions` rows
+// on `BoardCourt`, deliberately without the engine's `usableWindows`. Until
+// this block existed, `PackCourt` carried no hours field at all, so no pack
+// could author a court whose hours a fixture could fall outside and the rule
+// could not fire on any pack that could ever exist — the design's own
+// flagship justification for the independent recomputation, unreachable.
+//
+// The shape is the PRODUCT'S, not a bench dialect: `CourtHourRangeInput` /
+// `CourtExceptionInput` (`apps/web/src/server/usecases/venues.ts:132-169`) on
+// the way in, `CourtWithCalendar` (`api-v1/schemas.ts:4514-4518`) on the way
+// back out of `GET /orgs/{id}/venues`. Only the key CASE differs — the pack
+// dialect is camelCase throughout and there is not one snake_case key in
+// `PackSchema` — and the camelCase spelling here is the engine's OWN
+// (`CourtHoursRow` / `CourtExceptionRow`, `court-windows.ts:59,68`), which is
+// exactly what `BoardCourt` carries. `seed.ts` renames once, at the wire.
+// ---------------------------------------------------------------------------
+
+describe("PackSchema — a court's own calendar (B04 T7)", () => {
+  function withCalendar(
+    hours: unknown,
+    exceptions?: unknown,
+  ): Record<string, unknown> {
+    return pack((p) => {
+      p.venues = [
+        {
+          ref: "v-main",
+          name: "Bench Arena",
+          courts: [
+            {
+              ref: "c-1",
+              name: "Court 1",
+              hours,
+              ...(exceptions === undefined ? {} : { exceptions }),
+            },
+          ],
+        },
+      ];
+    });
+  }
+
+  it("a court may declare weekly hours and dated exceptions, and they round-trip verbatim", () => {
+    const p = parsed(
+      withCalendar(
+        [
+          { weekday: 1, openMin: 480, closeMin: 720 },
+          { weekday: 1, openMin: 780, closeMin: 1200 },
+          { weekday: 2, openMin: 480, closeMin: 1200 },
+        ],
+        [
+          { date: "2099-01-02", closed: true },
+          { date: "2099-01-03", closed: false, openMin: 600, closeMin: 660 },
+        ],
+      ),
+    );
+    const court = p.venues?.[0]?.courts[0];
+    expect(court?.hours).toEqual([
+      { weekday: 1, openMin: 480, closeMin: 720 },
+      { weekday: 1, openMin: 780, closeMin: 1200 },
+      { weekday: 2, openMin: 480, closeMin: 1200 },
+    ]);
+    expect(court?.exceptions).toEqual([
+      { date: "2099-01-02", closed: true },
+      { date: "2099-01-03", closed: false, openMin: 600, closeMin: 660 },
+    ]);
+  });
+
+  it("a court that declares NO calendar defaults both lists to empty — which is the product's 'open all day'", () => {
+    // `court-windows.ts`'s note 1, restated in `checker.ts`'s header: ZERO
+    // `court_hours` rows is a property of the COURT and means open all day,
+    // every day. So the default has to be `[]` and never a synthesised
+    // 00:00-24:00 row, which would be a different fact wearing the same shape.
+    const p = parsed(
+      pack((p2) => {
+        p2.venues = [
+          { ref: "v-main", name: "Bench Arena", courts: [{ ref: "c-1", name: "Court 1" }] },
+        ];
+      }),
+    );
+    expect(p.venues?.[0]?.courts[0]?.hours).toEqual([]);
+    expect(p.venues?.[0]?.courts[0]?.exceptions).toEqual([]);
+  });
+
+  it("a weekly range must open BEFORE it closes — the product's own refine, not a bench invention", () => {
+    expectIssue(
+      withCalendar([{ weekday: 1, openMin: 720, closeMin: 720 }]),
+      ["venues", 0, "courts", 0, "hours", 0, "closeMin"],
+      /openMin must be before closeMin/i,
+    );
+  });
+
+  it("weekday is 0..6 with 0 = Sunday, matching CourtHoursRow's own convention", () => {
+    expectIssue(
+      withCalendar([{ weekday: 7, openMin: 480, closeMin: 1200 }]),
+      ["venues", 0, "courts", 0, "hours", 0, "weekday"],
+      /less than or equal to 6|<=\s*6|too big/i,
+    );
+  });
+
+  it("a CLOSED exception may not also carry a range — the table's CHECK constraint makes them exclusive", () => {
+    expectIssue(
+      withCalendar([], [{ date: "2099-01-02", closed: true, openMin: 600, closeMin: 660 }]),
+      ["venues", 0, "courts", 0, "exceptions", 0],
+      /closed exception must omit/i,
+    );
+  });
+
+  it("an OPEN exception must carry both bounds — a half-declared range would read as a closure", () => {
+    expectIssue(
+      withCalendar([], [{ date: "2099-01-02", closed: false, openMin: 600 }]),
+      ["venues", 0, "courts", 0, "exceptions", 0],
+      /open exception needs both/i,
+    );
+  });
+
+  it("two ranges that OVERLAP on one weekday are refused here, not left to the route's 422", () => {
+    // `assertNoHoursOverlap` (usecases/venues.ts:200) is a 422
+    // COURT_HOURS_OVERLAP at seed time, which would abort a live run with an
+    // opaque HTTP error long after stage 0 called the pack clean.
+    expectIssue(
+      withCalendar([
+        { weekday: 3, openMin: 480, closeMin: 720 },
+        { weekday: 3, openMin: 700, closeMin: 1200 },
+      ]),
+      ["venues", 0, "courts", 0, "hours", 1],
+      /overlaps/i,
+    );
+  });
+
+  it("BACK-TO-BACK ranges on one weekday are legal — close_min == the next open_min is not an overlap", () => {
+    // The positive pair for the rule above: a guard that refused everything
+    // would pass that test and this one is what stops it.
+    const p = parsed(
+      withCalendar([
+        { weekday: 3, openMin: 480, closeMin: 720 },
+        { weekday: 3, openMin: 720, closeMin: 1200 },
+      ]),
+    );
+    expect(p.venues?.[0]?.courts[0]?.hours).toHaveLength(2);
+  });
+
+  it("two ranges on DIFFERENT weekdays never overlap, however they are ordered", () => {
+    const p = parsed(
+      withCalendar([
+        { weekday: 3, openMin: 480, closeMin: 1200 },
+        { weekday: 4, openMin: 480, closeMin: 1200 },
+      ]),
+    );
+    expect(p.venues?.[0]?.courts[0]?.hours).toHaveLength(2);
+  });
+
+  it("two exceptions on ONE date are refused — the table's primary key admits exactly one", () => {
+    // `assertNoDuplicateExceptionDates` is the other 422 on this route, and
+    // `checker.ts`'s `courtRangesOn` reads `exceptions.find(...)`, so a second
+    // row for the same date would be silently unreachable.
+    expectIssue(
+      withCalendar(
+        [],
+        [
+          { date: "2099-01-02", closed: true },
+          { date: "2099-01-02", closed: false, openMin: 600, closeMin: 660 },
+        ],
+      ),
+      ["venues", 0, "courts", 0, "exceptions", 1],
+      /duplicate exception date/i,
+    );
+  });
+});
+
 describe("PackSchema — the expected block", () => {
   it("a table's rows carry rank = position + 1, so array order IS the tie order", () => {
     expectIssue(

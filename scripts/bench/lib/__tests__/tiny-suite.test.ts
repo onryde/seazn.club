@@ -49,6 +49,7 @@ import {
   tinyPackStage,
 } from "../suites/tiny.ts";
 import type { Pack } from "../pack-schema.ts";
+import { makeScheduleWorld, type FakeScheduleOptions, type FakeScheduleWorld } from "./_schedule-routes.ts";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(HERE, "../../../..");
@@ -510,10 +511,17 @@ interface FakeCompetitionRow {
 // `registrationDrivers` fake instead (`TinySuiteInput.registrationDrivers`),
 // so this fixture only ever needs the ONE new route added above
 // (`GET .../divisions/{id}/registrations`) on top of what it already did.
-export function makeFakeServer(opts: { sameOrgForAll?: boolean } = {}): {
+export function makeFakeServer(
+  opts: { sameOrgForAll?: boolean; schedule?: FakeScheduleOptions } = {},
+): {
   transport: SeedTransport;
   calls: RecordedCall[];
   competitions: FakeCompetitionRow[];
+  /** B04 — the seven scheduling endpoints, shared with the other fakes in
+   *  this directory (`_schedule-routes.ts`). Exposed so a test can read the
+   *  fixture rows back and assert what actually landed on the board rather
+   *  than only what was requested. */
+  schedule: FakeScheduleWorld;
   /** B03r tasks 9+10 — `GET /api/v1/divisions/{id}/registrations`' rows,
    *  keyed by this fake's own deterministic `div-<slug>` id. A test
    *  populates it BEFORE calling `runTinySuite` (the id is predictable from
@@ -523,6 +531,7 @@ export function makeFakeServer(opts: { sameOrgForAll?: boolean } = {}): {
 } {
   const calls: RecordedCall[] = [];
   const competitions: FakeCompetitionRow[] = [];
+  const schedule = makeScheduleWorld(opts.schedule ?? {});
   const registrationRowsByDivisionId = new Map<string, unknown[]>();
   const fixtureOfficials = new Map<string, unknown[]>();
   const claimInvites = new Map<string, unknown>();
@@ -553,10 +562,16 @@ export function makeFakeServer(opts: { sameOrgForAll?: boolean } = {}): {
         return { items: competitions.filter((c) => c.org_id === orgId), nextCursor: null } as unknown as T;
       }
       if (method === "POST" && /^\/api\/v1\/orgs\/[^/]+\/venues$/.test(routePath)) {
-        return { id: `venue-${slug((body as { name: string }).name)}` } as T;
+        const id = `venue-${slug((body as { name: string }).name)}`;
+        schedule.addVenue(id);
+        return { id } as T;
       }
-      if (method === "POST" && /^\/api\/v1\/orgs\/[^/]+\/venues\/[^/]+\/courts$/.test(routePath)) {
-        return { id: `court-${slug((body as { name: string }).name)}` } as T;
+      const courtsMatch = /^\/api\/v1\/orgs\/[^/]+\/venues\/([^/]+)\/courts$/.exec(routePath);
+      if (method === "POST" && courtsMatch !== null) {
+        const name = (body as { name: string }).name;
+        const id = `court-${slug(name)}`;
+        schedule.addCourt(courtsMatch[1]!, id, name);
+        return { id } as T;
       }
       if (method === "POST" && routePath === "/api/v1/persons") {
         return { id: `person-${slug((body as { full_name: string }).full_name)}` } as T;
@@ -590,13 +605,19 @@ export function makeFakeServer(opts: { sameOrgForAll?: boolean } = {}): {
       if (method === "POST" && /^\/api\/v1\/competitions\/[^/]+\/divisions$/.test(routePath)) {
         return { id: `div-${slug((body as { name: string }).name)}` } as T;
       }
-      if (method === "POST" && /^\/api\/v1\/divisions\/[^/]+\/stages$/.test(routePath)) {
+      const stagesMatch = /^\/api\/v1\/divisions\/([^/]+)\/stages$/.exec(routePath);
+      if (method === "POST" && stagesMatch !== null) {
         const stages = body as { name: string }[];
-        return stages.map((st) => ({ id: `stage-${slug(st.name)}` })) as unknown as T;
+        const out = stages.map((st) => ({ id: `stage-${slug(st.name)}` }));
+        for (const st of out) schedule.addStage(st.id, stagesMatch[1]!);
+        return out as unknown as T;
       }
-      if (method === "POST" && /^\/api\/v1\/divisions\/[^/]+\/entrants$/.test(routePath)) {
+      const entrantsMatch = /^\/api\/v1\/divisions\/([^/]+)\/entrants$/.exec(routePath);
+      if (method === "POST" && entrantsMatch !== null) {
         const rows = body as { display_name: string }[];
-        return rows.map((e) => ({ id: `entrant-${slug(e.display_name)}` })) as unknown as T;
+        const out = rows.map((e) => ({ id: `entrant-${slug(e.display_name)}` }));
+        schedule.addEntrants(entrantsMatch[1]!, out.map((e) => e.id));
+        return out as unknown as T;
       }
       if (method === "POST" && /^\/api\/v1\/stages\/[^/]+\/generate$/.test(routePath)) {
         // STAGE-AWARE, because `_tiny.json` now declares TWO league stages
@@ -607,38 +628,27 @@ export function makeFakeServer(opts: { sameOrgForAll?: boolean } = {}): {
         // three UNCLAIMED fixtures and leave its own stream unmatched —
         // `bindStreamFixtures`'s two anti-vacuity checks (lib/seed.ts:184-185)
         // exist precisely to catch that.
-        const stageId = routePath.split("/")[4];
-        if (stageId === "stage-badminton-league") {
-          return { fixtures: [{ id: "fx-bm-1", ext_key: "rr-r1-c1" }] } as unknown as T;
-        }
-        return {
-          fixtures: [
-            { id: "fx-1", ext_key: "rr-r1-c1" },
-            { id: "fx-2", ext_key: "rr-r2-c1" },
-            { id: "fx-3", ext_key: "rr-r3-c1" },
-          ],
-        } as unknown as T;
+        const stageId = routePath.split("/")[4]!;
+        const generated =
+          stageId === "stage-badminton-league"
+            ? [{ id: "fx-bm-1", ext_key: "rr-r1-c1" }]
+            : [
+                { id: "fx-1", ext_key: "rr-r1-c1" },
+                { id: "fx-2", ext_key: "rr-r2-c1" },
+                { id: "fx-3", ext_key: "rr-r3-c1" },
+              ];
+        // B04: the SAME rows become this world's fixture table, so the board
+        // `GET /divisions/{id}/fixtures` returns below is the one `/generate`
+        // actually minted rather than a second, independently invented list.
+        schedule.addFixtures(stageId, generated);
+        return { fixtures: generated } as unknown as T;
       }
-      if (method === "PUT" && /^\/api\/v1\/divisions\/[^/]+\/schedule-settings$/.test(routePath)) {
-        return {} as T;
-      }
-      if (method === "POST" && /^\/api\/v1\/stages\/[^/]+\/schedule\/auto$/.test(routePath)) {
-        return {
-          assignments: [
-            { fixture_id: "fx-1", scheduled_at: "2099-01-01T00:00:00.000Z", court_id: "court-court-1" },
-            { fixture_id: "fx-2", scheduled_at: "2099-01-01T01:00:00.000Z", court_id: "court-court-1" },
-            { fixture_id: "fx-3", scheduled_at: "2099-01-01T02:00:00.000Z", court_id: "court-court-1" },
-          ],
-          conflicts: [],
-          solver: { engine: "greedy", status: "ok" },
-        } as unknown as T;
-      }
-      if (method === "POST" && /^\/api\/v1\/stages\/[^/]+\/schedule\/apply$/.test(routePath)) {
-        return {} as T;
-      }
-      if (method === "POST" && /^\/api\/v1\/divisions\/[^/]+\/schedule\/validate$/.test(routePath)) {
-        return { conflicts: [] } as unknown as T;
-      }
+      // B04 — the seven scheduling endpoints, from the shared world. Placed
+      // BEFORE the officials routes below so the anchored
+      // `PATCH /fixtures/{id}` (a lock) and `PATCH /fixtures/{id}/officials`
+      // (a set) cannot shadow each other.
+      const scheduled = schedule.handle(method, routePath, body);
+      if (scheduled !== undefined) return scheduled as T;
       // ---- officials + claim invites (B03 T6). These exist here because
       // wiring `seedOfficialsAndClaims` into `seedSuite` made `_tiny`'s own
       // officials reach this fake for the first time. That is the point of
@@ -664,7 +674,13 @@ export function makeFakeServer(opts: { sameOrgForAll?: boolean } = {}): {
       }
       if (method === "PATCH" && /^\/api\/v1\/fixtures\/[^/]+\/officials$/.test(routePath)) {
         const fixtureId = routePath.split("/")[4]!;
-        fixtureOfficials.set(fixtureId, (body as { set: unknown[] }).set);
+        const set = (body as { set: unknown[] }).set;
+        fixtureOfficials.set(fixtureId, set);
+        // B04: onto the BOARD too. `GET /divisions/{id}/fixtures` is what the
+        // checker's officials rule reads, and a fake that recorded the PATCH
+        // without landing it would make design §4.3's rule permanently
+        // vacuous — the exact failure that rule exists to prevent.
+        schedule.setOfficials(fixtureId, set);
         return { ok: true } as T;
       }
       if (method === "GET" && /^\/api\/v1\/fixtures\/[^/]+$/.test(routePath)) {
@@ -695,7 +711,7 @@ export function makeFakeServer(opts: { sameOrgForAll?: boolean } = {}): {
       throw new Error(`fake server: unhandled ${method} ${routePath}`);
     },
   };
-  return { transport, calls, competitions, registrationRowsByDivisionId };
+  return { transport, calls, competitions, registrationRowsByDivisionId, schedule };
 }
 
 function competitionPosts(calls: RecordedCall[]): RecordedCall[] {
@@ -744,7 +760,14 @@ describe("runTinySuite — --keep idempotence (T4)", () => {
       packPath, // the SAME pack content — same hash
       transport: server.transport,
     });
-    expect(report2.gate).toBe("green");
+    // T7e: a short circuit that skipped seeding AND scheduling must never
+    // report a bare green — that is exactly what the first live run's leg B
+    // did (schedule/checker/certificate all skipped, gate GREEN). "skipped"
+    // is a third, non-green `SuiteReport.gate` value; `gateOf` folds it into
+    // the run-level "red" so the whole run cannot silently pass on a leg that
+    // measured nothing.
+    expect(report2.gate).toBe("skipped");
+    expect(report2.gate).not.toBe("green");
     expect((report2.warnings ?? []).join(" | ")).toContain("--keep reused existing seed");
     // The load-bearing assertion: still exactly ONE competition ever created.
     expect(competitionPosts(server.calls)).toHaveLength(1);
@@ -831,7 +854,10 @@ describe("runTinySuite — --keep idempotence (T4)", () => {
     // declares 2099. The fake transport accepts any schedule-settings PUT, so
     // offline there was nothing to fail — the fourth fixture in this wave to
     // accept what the product refuses.
-    const server = makeFakeServer();
+    // B04: `--engine` is an ASSERTION now, so the fake has to say which engine
+    // actually answered. `greedy` here matches the `engine: "greedy"` below —
+    // a disagreement is a real red, and there is a test for exactly that.
+    const server = makeFakeServer({ schedule: { solverEngine: "greedy" } });
     const { packPath, dir } = writeTinyPack(TINY_TEXT);
 
     const report = await runTinySuite({
@@ -880,7 +906,10 @@ describe("runTinySuite — --keep idempotence (T4)", () => {
     // they pass identically whether or not `seedSuite` ever invokes it. Only a
     // test that drives the REAL producer can tell the difference, which is
     // what this one does.
-    const server = makeFakeServer();
+    // B04: `--engine` is an ASSERTION now, so the fake has to say which engine
+    // actually answered. `greedy` here matches the `engine: "greedy"` below —
+    // a disagreement is a real red, and there is a test for exactly that.
+    const server = makeFakeServer({ schedule: { solverEngine: "greedy" } });
     const { packPath, dir } = writeTinyPack(TINY_TEXT);
 
     const report = await runTinySuite({

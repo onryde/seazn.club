@@ -205,3 +205,57 @@ describe("buildSeedPlan — the T4 generalisation, exercised on a REAL two-divis
     ]);
   });
 });
+
+// ---------------------------------------------------------------------------
+// B04 T6 step 1 — venues and per-division scheduleConfig (design §7)
+//
+// `_tiny` had no `venues[]` at all: `suites/tiny.ts` created one venue and ONE
+// court over HTTP itself, so the pack could not name a court and a court
+// double-booking had nowhere to happen. Two courts, one venue, and both
+// SCHEDULED divisions carry a `scheduleConfig` whose `courts` name them by
+// `@`-sigil — the same sigil `pack-schema.ts`'s `checkReservations` resolves
+// against declared venues/courts and `board.ts`'s `encodeConstraints` resolves
+// against the SEEDED ids.
+// ---------------------------------------------------------------------------
+describe("packs/_tiny.json — venues and scheduleConfig (B04 T6)", () => {
+  const pack = PackSchema.parse(JSON.parse(readFileSync(TINY_JSON_PATH, "utf8")));
+
+  it("declares ONE venue with TWO courts — double-booking needs somewhere to happen", () => {
+    expect(pack.venues).toBeDefined();
+    expect(pack.venues).toHaveLength(1);
+    const venue = pack.venues?.[0];
+    if (venue === undefined) throw new Error("test fixture: _tiny declares no venue");
+    // TWO, explicitly: one court makes every court-clash rule vacuous, which
+    // is the whole reason design §7 names the number.
+    expect(venue.courts).toHaveLength(2);
+    expect(venue.courts.map((c) => c.ref)).toEqual(["c-tiny-1", "c-tiny-2"]);
+  });
+
+  it("gives BOTH scheduled divisions a scheduleConfig whose courts are @-sigilled pack refs", () => {
+    const courtRefs = (pack.venues?.[0]?.courts ?? []).map((c) => `@${c.ref}`);
+    for (const ref of ["d-tiny", "d-badminton"]) {
+      const division = pack.divisions.find((d) => d.ref === ref);
+      if (division === undefined) throw new Error(`test fixture: ${ref} missing`);
+      const cfg = division.scheduleConfig;
+      if (cfg === undefined) throw new Error(`${ref} declares no scheduleConfig`);
+      // Derived from the venue's OWN declared court refs rather than typed in
+      // again: a court renamed in the venue block and not in the config would
+      // otherwise pass here and only fail at `encodeConstraints`, live.
+      expect(cfg.courts).toEqual(courtRefs);
+      // Inside the competition window (2099-01-01..2099-01-03) — a startAt
+      // outside it 422s SCHEDULE_OUTSIDE_COMPETITION on the settings PUT.
+      expect(typeof cfg.startAt).toBe("string");
+      expect(String(cfg.startAt).startsWith("2099-01-01")).toBe(true);
+      // An explicit UTC offset: `encodeConstraints` THROWS on an offsetless
+      // ISO string, because reading one against the host timezone would make
+      // the checker's oracle machine-dependent.
+      expect(String(cfg.startAt)).toMatch(/(Z|[+-]\d{2}:\d{2})$/);
+    }
+  });
+
+  it("leaves d-registration WITHOUT a scheduleConfig — it is never seeded or scheduled", () => {
+    const division = pack.divisions.find((d) => d.ref === "d-registration");
+    if (division === undefined) throw new Error("test fixture: d-registration missing");
+    expect(division.scheduleConfig).toBeUndefined();
+  });
+});

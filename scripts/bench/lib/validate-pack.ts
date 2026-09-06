@@ -1372,6 +1372,78 @@ export function validatePack(
     }
   }
 
+  // -- Stage 1.6: scheduling — a scheduled division must pin its own zone ---
+  //
+  // Refuses a pack whose division will be scheduled and declares no
+  // `scheduleConfig`. That looks like a missing-optional-field nit and is
+  // not: it is the only way this bench can be made to FILE FALSE PRODUCT
+  // DEFECTS, which is a worse output than missing real ones — an instrument
+  // that cries wolf gets switched off, and the genuine findings go with it.
+  //
+  // The mechanism, which is not visible from either side alone:
+  //   * `ScheduleSettings.tz` is a RESOLVED value, not an echo.
+  //     `putScheduleSettings` stores what it was sent and answers with
+  //     `resolveVenueTz(stored, orgTz)` — the sent string only when it is a
+  //     valid IANA name, otherwise the org zone, otherwise `UTC`, all behind
+  //     a 200.
+  //   * `PutScheduleSettings.config` is REQUIRED, so there is no tz-only
+  //     write. A division with no `scheduleConfig` therefore never gets a PUT
+  //     at all, and its zone is never pinned or read back.
+  //   * The `Board` the checker judges carries the PACK's zone regardless. So
+  //     every wall-clock rule downstream — `not_before`, `not_after`,
+  //     court-hours containment, believability's day bucketing — reads its
+  //     local clocks in a zone nobody verified, and reds a scheduler that was
+  //     never wrong.
+  //
+  // COMPLEMENTARY to `schedule.ts`'s `crossCheckSettings` tz comparison, not
+  // a duplicate of it, and the next reader should not delete either as
+  // redundant. That one catches a product-side surprise at RUN time, but it
+  // can only speak about a division that got a PUT; this one makes the
+  // no-PUT case unrepresentable at authoring time. The gap it covers is
+  // precisely the one that check cannot see.
+  //
+  // Stage 0 rather than the read layer, per `_RULES.md` §3: a pack fault dies
+  // offline in seconds instead of minutes into a seeded HTTP run, and fixing
+  // the class here makes it unrepresentable rather than patching one caller.
+  //
+  // WHICH divisions "will be scheduled", stated as two conditions because
+  // neither alone is the fact:
+  //
+  //   1. The PACK declares at least one court. `scheduleConfig.courts` is an
+  //      array of `@`-sigil refs resolved against the pack's own venues, so a
+  //      pack declaring no court cannot express a meaningful config and has
+  //      nowhere to place a fixture — the scheduling layer does not run for
+  //      it. This is what keeps the rule off B01-B03-era packs, which are not
+  //      scheduling packs at all, rather than a special case for any one of
+  //      them.
+  //   2. The division is not a REGISTRATION-funnel division. Those are seeded
+  //      through the funnel rather than the admin/schedule path and carry no
+  //      config by design. The predicate is `pack.registration.byDivision`
+  //      membership — the same selector `suites/tiny.ts`'s own
+  //      `registrationDivisionsOf` uses for the same split, re-derived here
+  //      rather than imported because stage 0 is pure and suite-agnostic and
+  //      must not depend on a suite module.
+  const declaresAnyCourt = (pack.venues ?? []).some((v) => v.courts.length > 0);
+  if (declaresAnyCourt) {
+    for (const division of pack.divisions) {
+      if (pack.registration?.byDivision[division.ref] !== undefined) continue;
+      if (division.scheduleConfig !== undefined) continue;
+      add(
+        "error",
+        "pack.division_missing_schedule_config",
+        `divisions[ref=${division.ref}]`,
+        `division "${division.ref}" declares no scheduleConfig, but this pack declares courts and so ` +
+          `will be scheduled. PutScheduleSettings.config is required, so there is no tz-only write and ` +
+          `this division never gets a schedule-settings PUT — its timezone is never pinned and never ` +
+          `read back, while ScheduleSettings.tz is a RESOLVED value (stored division tz -> org ` +
+          `timezone -> UTC) that falls back behind a 200. Every wall-clock rule below (not_before, ` +
+          `not_after, court-hours containment, day bucketing) would then judge this division in a zone ` +
+          `nobody verified and report the difference as a product defect. Declare a scheduleConfig ` +
+          `(org timezone "${pack.org.timezone}")`,
+      );
+    }
+  }
+
   // WHICH STAGE each stream folds under — resolved ONCE, so the fold, the
   // overlay warning and the standings derivation cannot answer it three ways.
   const stageOfStream = new Map<string, PackStage | undefined>();

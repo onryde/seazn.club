@@ -9,9 +9,40 @@ import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { z } from "zod";
 import { SUITE_13_KEY, type CliEntryFlag } from "./register.ts";
+/** TYPE-ONLY, so nothing here adds a runtime edge to the scheduling layer —
+ *  these exist purely so the enums below cannot drift from the vocabularies
+ *  `schedule.ts` already owns (the same `satisfies` discipline `entryMode`
+ *  already uses against `CliEntryFlag`). `SolverMode` is read OFF
+ *  `ScheduleOutcome` rather than imported by name because `schedule.ts`
+ *  declares that union inline and this file may not widen its exports. */
+import type { ActualEngine, RequestedEngine, ScheduleOutcome } from "./schedule.ts";
+
+type SolverMode = NonNullable<ScheduleOutcome["mode"]>;
 
 export const GateStatus = z.enum(["green", "red"]);
 export type GateStatus = z.infer<typeof GateStatus>;
+
+/**
+ * T7e — `SuiteReport.gate`'s own vocabulary, a THIRD, non-green value beyond
+ * the run-level `GateStatus`: "skipped" is a `--keep` short circuit that
+ * skipped seeding AND scheduling entirely (`tiny.ts`'s `lookup.kind ===
+ * "reuse"` branch). Before this, that branch returned the literal `"green"` —
+ * the same value a run that actually scheduled, checked and certified a board
+ * reports — so a reader (and `gateOf`) could not tell "this passed" from
+ * "nothing was measured this run". That is exactly the failure class B04
+ * exists to catch everywhere else (`CheckerReport.unexercised` is the same
+ * idea one layer down): a clean verdict must never be able to mean "checked
+ * nothing".
+ *
+ * A SEPARATE schema from `GateStatus`, not a widening of it, because the
+ * run-level `BenchReport.gate` stays a closed two-value CI-exit-code signal
+ * (`bench.ts`'s `gate === "red" ? 1 : 0`) — the distinction that matters at
+ * that level is pass/fail, and `gateOf` below folds "skipped" into "red"
+ * there. The finer "why didn't this pass" distinction belongs on the suite,
+ * where a reader can see the warning that explains it.
+ */
+export const SuiteGateStatus = z.enum(["green", "red", "skipped"]);
+export type SuiteGateStatus = z.infer<typeof SuiteGateStatus>;
 
 export const PhaseTimings = z.object({
   seedMs: z.number().optional(),
@@ -98,9 +129,273 @@ export const RegistrationDivisionReport = z.object({
 });
 export type RegistrationDivisionReport = z.infer<typeof RegistrationDivisionReport>;
 
+// ---------------------------------------------------------------------------
+// B04 — the scheduling layer's report shape (design §3.2-§3.5)
+//
+// Every array below is `.readonly()` so the lib types (`CheckerReport`,
+// `CertificateVerdict`, `BelievabilityReport`, `ScheduleOutcome` — all of them
+// `readonly`) assign straight in. A mutable `z.array` would force each call
+// site to copy, and a copy is a place where a field can be dropped in silence.
+//
+// The unions that ALREADY exist elsewhere are pinned with `satisfies` rather
+// than restated: a second copy of `ActualEngine` here would compile happily
+// while meaning something different from the one `schedule.ts` writes.
+// `CheckerFindingKind` is deliberately NOT pinned — it is a closed union of 14
+// members that grows with the checker, and `z.string()` plus this note is
+// honest about the coupling in a way a stale 14-member copy would not be.
+// ---------------------------------------------------------------------------
+
+const REQUESTED_ENGINES = ["optimized", "greedy", "both"] satisfies readonly RequestedEngine[];
+const ACTUAL_ENGINES = ["greedy", "optimized"] satisfies readonly ActualEngine[];
+const SOLVER_MODES = ["build", "reflow", "polish"] satisfies readonly SolverMode[];
+
+/** `ScheduleMetricsOut` (`schedule.ts`), which is `ScheduleMetrics`
+ *  (`schemas.ts:1693-1699`) camelCased once at the driver seam. */
+export const ScheduleMetricsReport = z.object({
+  makespanMinutes: z.number(),
+  worstIdleGapMinutes: z.number(),
+  courtImbalanceMinutes: z.number(),
+  /** THE SOLVER'S OWN PROPOSAL, never the fetched board — see
+   *  `DivisionScheduleReport.unplacedCount` for the other denominator and why
+   *  the two are reported side by side rather than reconciled into one. */
+  placed: z.number(),
+  total: z.number(),
+});
+export type ScheduleMetricsReport = z.infer<typeof ScheduleMetricsReport>;
+
+export const CheckerFindingReport = z.object({
+  kind: z.string(),
+  divisionRef: z.string(),
+  /** BOTH sides of a pairwise breach — a round-order or overlap finding
+   *  naming only one fixture cannot be acted on (`board.ts`). */
+  fixtureIds: z.array(z.string()).readonly(),
+  detail: z.string(),
+  measured: z.number().optional(),
+  required: z.number().optional(),
+});
+export type CheckerFindingReport = z.infer<typeof CheckerFindingReport>;
+
+export const UncheckedConstraintReport = z.object({ type: z.string(), reason: z.string() });
+export type UncheckedConstraintReport = z.infer<typeof UncheckedConstraintReport>;
+
+/**
+ * T7b — the OPPOSITE direction from `UncheckedConstraintReport`: a rule this
+ * build fully MODELS but which the board it just judged gave nothing to
+ * compare (an empty blackout list, a rest floor of zero, a court with no
+ * hours). Same `{ ..., reason }` idiom as `unchecked` deliberately, so a
+ * reader meets one convention rather than two — `rule` rather than `type`
+ * because the thing named is one of `checker.ts`'s own eight rules (`Rule 1`
+ * .. `Rule 8`, with `2a`/`2b`/`2c` for its three independently-vacuous
+ * operands), not a pack-declared knob.
+ */
+export const UnexercisedRuleReport = z.object({ rule: z.string(), reason: z.string() });
+export type UnexercisedRuleReport = z.infer<typeof UnexercisedRuleReport>;
+
+/**
+ * `CheckerReport`, verbatim.
+ *
+ * `unchecked` travels WITH `clean` and is rendered beside it (design
+ * §1.4/§3.3): a checker that verified four of a pack's six declared
+ * constraints and found nothing wrong is reporting "clean" about four
+ * constraints, and a report that prints the verdict without the list lets that
+ * read as six.
+ *
+ * `unexercised` (T7b) travels with it for the same reason, in the other
+ * direction: a rule can be fully modelled, run, and still find nothing
+ * because the board gave it zero candidates — a court with no hours, a rest
+ * floor of zero. Both fields are required, never optional, so a caller cannot
+ * populate one and quietly drop the other.
+ */
+export const CheckerVerdictReport = z.object({
+  clean: z.boolean(),
+  findings: z.array(CheckerFindingReport).readonly(),
+  unchecked: z.array(UncheckedConstraintReport).readonly(),
+  unexercised: z.array(UnexercisedRuleReport).readonly(),
+});
+export type CheckerVerdictReport = z.infer<typeof CheckerVerdictReport>;
+
+/** `CertificateVerdict` (`board.ts`). `branch` is `z.string()` for the same
+ *  reason `CheckerFindingReport.kind` is — `certificate.ts` owns that union
+ *  and derives `red` from it through a total record, so a copy here could
+ *  only ever disagree. */
+export const CertificateVerdictReport = z.object({
+  branch: z.string(),
+  reason: z.string(),
+  red: z.boolean(),
+  violations: z.array(CheckerFindingReport).readonly(),
+});
+export type CertificateVerdictReport = z.infer<typeof CertificateVerdictReport>;
+
+/** `BelievabilityReport` (`believability.ts`) — report-only, never a gate. */
+export const BelievabilityDivisionReport = z.object({
+  metrics: z
+    .array(z.object({ key: z.string(), score: z.number() }))
+    .readonly(),
+  metricsNote: z.string().optional(),
+  similarityToHistorical: z
+    .object({
+      sameDayPct: z.number(),
+      sameInstantPct: z.number(),
+      /** The denominator, stated rather than implied — "100%" over one lucky
+       *  match reads exactly like "100%" over a full timetable. */
+      comparedFixtures: z.number(),
+      historicalRows: z.number(),
+    })
+    .optional(),
+  similarityNote: z.string().optional(),
+});
+export type BelievabilityDivisionReport = z.infer<typeof BelievabilityDivisionReport>;
+
+/**
+ * One division's whole walk: the driver's telemetry, then the three
+ * verification layers, then the composed verdict.
+ *
+ * `checker`/`certificate` are OPTIONAL, and the reason is the honest one: a
+ * division that threw before its board was fetched has no board for the
+ * checker to judge, and `checkBoard` on an empty board returns `clean: true`
+ * having measured nothing. Recording that as a clean checker would be design
+ * §1.4's false clean wearing the schema's own type annotation, so the field is
+ * absent instead and `reasons` carries the errors that made it absent.
+ */
+export const DivisionScheduleReport = z.object({
+  divisionRef: z.string(),
+  requestedEngine: z.enum(REQUESTED_ENGINES),
+  /** Absent when `auto` never answered, or answered without telemetry. */
+  actualEngine: z.enum(ACTUAL_ENGINES).optional(),
+  solverStatus: z.string().optional(),
+  notSearchedReason: z.string().optional(),
+  mode: z.enum(SOLVER_MODES).optional(),
+  budgetExpired: z.boolean().optional(),
+  tiersCompleted: z.number().optional(),
+  tiersTotal: z.number().optional(),
+  /** The PROPOSAL's own counts. Absent means `auto` returned no metrics at
+   *  all — which is a schedule error, not a zero: see `metricsNote`. */
+  metrics: ScheduleMetricsReport.optional(),
+  /** Why `metrics` is absent, when it is. Present exactly when `metrics` is
+   *  not, so "the solver placed nothing" and "the solver said nothing" can
+   *  never be read as the same state. */
+  metricsNote: z.string().optional(),
+  /** `/validate` rows with `blocking: true` — layer 1, asserted at zero. */
+  blockingCount: z.number(),
+  /** Warn-level `/validate` rows per `details.kind`. Report-only. */
+  warnKindTally: z.record(z.string(), z.number()),
+  /** Fixtures with no slot on the FETCHED board. The OTHER denominator —
+   *  never `metrics.total - metrics.placed`, which describes the proposal. */
+  unplacedCount: z.number(),
+  wallMs: z.number(),
+  scheduleErrors: z.array(z.string()).readonly(),
+  checker: CheckerVerdictReport.optional(),
+  /**
+   * F-T6-2 — the SAME checker, re-run after officials auto-assign landed.
+   *
+   * `/officials/auto` only considers fixtures whose `scheduled_at` is already
+   * set, so it cannot run before apply — which means `checker` above judged a
+   * board that predates it. BOTH verdicts are carried, never one: a single
+   * post-officials verdict would hide which stage introduced a finding, and
+   * "clean when scheduled, dirty once the officials landed" is precisely the
+   * fact a reader needs. Absent when auto-assign applied nothing, which is the
+   * ordinary case.
+   */
+  checkerAfterOfficials: CheckerVerdictReport.optional(),
+  certificate: CertificateVerdictReport.optional(),
+  believability: BelievabilityDivisionReport.optional(),
+  /** `judgeDivision`'s composition, carried so the report never re-derives a
+   *  verdict a second way. */
+  red: z.boolean(),
+  reasons: z.array(z.string()).readonly(),
+});
+export type DivisionScheduleReport = z.infer<typeof DivisionScheduleReport>;
+
+/**
+ * F-T6-3 — one court held by two overlapping fixtures from DIFFERENT
+ * divisions. A RUN-level fact, so it hangs off the suite and not off a
+ * division: no per-division layer can see it, which is the whole reason it
+ * exists. `checkBoard` is handed one division's `Board`, `certify` one
+ * division's encoding, and `POST /divisions/{id}/schedule/validate` is
+ * addressed by a division id.
+ *
+ * Both sides are always named, for the same reason `CheckerFinding.fixtureIds`
+ * carries both: a clash naming one fixture cannot be acted on.
+ */
+export const CrossDivisionCourtClashReport = z.object({
+  courtId: z.string(),
+  a: z.object({
+    divisionRef: z.string(),
+    fixtureId: z.string(),
+    /** Epoch ms, the unit every occupancy rule in this bench measures in. */
+    start: z.number(),
+    end: z.number(),
+  }),
+  b: z.object({
+    divisionRef: z.string(),
+    fixtureId: z.string(),
+    start: z.number(),
+    end: z.number(),
+  }),
+});
+export type CrossDivisionCourtClashReport = z.infer<typeof CrossDivisionCourtClashReport>;
+
+/** `EngineSnapshot` (`schedule.ts`) as it comes back off disk.
+ *
+ *  `engine` (the leg-level summary) is OPTIONAL (T7d): absent exactly when
+ *  the leg's own divisions disagreed about which engine actually ran, which
+ *  is a real, legitimate shape — see each division's own `actualEngine`. */
+export const EngineSnapshotReport = z.object({
+  runId: z.string(),
+  requestedEngine: z.enum(REQUESTED_ENGINES),
+  engine: z.enum(ACTUAL_ENGINES).optional(),
+  divisions: z
+    .array(
+      z.object({
+        divisionRef: z.string(),
+        /** THIS division's own resolved engine — separate from the leg-level
+         *  `engine` above, and the two can legitimately disagree. */
+        actualEngine: z.enum(ACTUAL_ENGINES).optional(),
+        metrics: ScheduleMetricsReport.optional(),
+        solverStatus: z.string().optional(),
+        notSearchedReason: z.string().optional(),
+        mode: z.enum(SOLVER_MODES).optional(),
+        budgetExpired: z.boolean().optional(),
+        tiersCompleted: z.number().optional(),
+        tiersTotal: z.number().optional(),
+        blockingCount: z.number(),
+        unplacedCount: z.number(),
+        wallMs: z.number(),
+        verdict: z
+          .object({ red: z.boolean(), reasons: z.array(z.string()).readonly() })
+          .optional(),
+      }),
+    )
+    .readonly(),
+});
+export type EngineSnapshotReport = z.infer<typeof EngineSnapshotReport>;
+
+/** `EngineDeltaReport` (`believability.ts`) — a RUN-level fact, assembled
+ *  from two separate runs' artifacts, so it hangs off the suite once and not
+ *  off each division. `note` is present exactly when `delta` is absent, and
+ *  it is what keeps "only greedy ran" from reading as "the engines tied". */
+export const EngineDeltaSection = z.object({
+  delta: z
+    .object({
+      greedy: EngineSnapshotReport,
+      optimized: EngineSnapshotReport,
+      /** GREEDY MINUS OPTIMIZED — positive is what optimizing bought. The
+       *  sign is kept, because "the optimizer did worse" is a legitimate and
+       *  interesting result. */
+      makespanDeltaMinutes: z.number(),
+      courtImbalanceDeltaMinutes: z.number(),
+      /** Which divisions the two sums actually cover. Two legs sharing NO
+       *  division produce 0 and 0, which reads identically to a tie. */
+      comparedDivisionRefs: z.array(z.string()).readonly(),
+    })
+    .optional(),
+  note: z.string().optional(),
+});
+export type EngineDeltaSection = z.infer<typeof EngineDeltaSection>;
+
 export const SuiteReport = z.object({
   suite: z.string(),
-  gate: GateStatus,
+  gate: SuiteGateStatus,
   timings: PhaseTimings,
   /** Whether `--keep`'s data was left in place (true) or `--wipe` was
    *  requested (false) — a run's own intent, so a reader of a committed
@@ -138,6 +433,19 @@ export const SuiteReport = z.object({
    *  1-12) every division a `--entry registration` run forced through the
    *  funnel. Absent for a suite that never touched registration at all. */
   registration: z.array(RegistrationDivisionReport).optional(),
+  /** B04 — one row per division this suite actually drove through the
+   *  scheduling layer, in the order it drove them. Absent for a suite that
+   *  never scheduled anything (a `--keep` short circuit, a pack refused by
+   *  stage 0, a run that died before seeding). */
+  scheduling: z.array(DivisionScheduleReport).readonly().optional(),
+  /** B04 — the greedy-vs-optimized comparison. RUN-level, so exactly one per
+   *  suite: `assessEngineDelta` is called ONCE after the division loop, never
+   *  per division, or every copy would list every other division's refs in
+   *  `comparedDivisionRefs`. */
+  engineDelta: EngineDeltaSection.optional(),
+  /** F-T6-3 — the run-level cross-division court gate's findings. RUN-level,
+   *  so exactly one list per suite. Absent when it found nothing. */
+  crossDivisionCourtClashes: z.array(CrossDivisionCourtClashReport).readonly().optional(),
 });
 export type SuiteReport = z.infer<typeof SuiteReport>;
 
@@ -182,10 +490,17 @@ export function resolveRunId(cliArg: string | undefined, gitSha: string): string
 }
 
 /** Any gate red — a pre-flight refusal or any suite's own gate — reds the
- *  whole run. Timings and solver telemetry never factor in here. */
+ *  whole run. Timings and solver telemetry never factor in here.
+ *
+ *  T7e: a suite gate of `"skipped"` reds the run too, same as `"red"` — the
+ *  check is "anything not green", never "anything specifically red". A run
+ *  that skipped seeding and scheduling (a `--keep` short circuit) has not
+ *  passed anything, and folding it into `"green"` here would be the exact
+ *  bare-green-on-nothing-measured defect this function exists to prevent,
+ *  just relocated from the suite level to the run level. */
 export function gateOf(report: Pick<BenchReport, "preflight" | "suites">): GateStatus {
   if (!report.preflight.ok) return "red";
-  return report.suites.some((s) => s.gate === "red") ? "red" : "green";
+  return report.suites.some((s) => s.gate !== "green") ? "red" : "green";
 }
 
 export interface WrittenReport {
@@ -360,12 +675,313 @@ function renderSuitesSection(report: BenchReport): string {
   return lines.join("\n").trimEnd();
 }
 
+// ---------------------------------------------------------------------------
+// B04 — scheduling, checker, certificate, believability, engine delta
+//
+// FIVE sections rather than one, because they answer five different questions
+// and a reader chasing one of them should not have to read the other four.
+// Each renders "" when nothing populated it, and `renderMarkdown` drops empty
+// sections — so a pre-B04 report (or a `--keep` short circuit, which schedules
+// nothing) is byte-identical to what it was.
+// ---------------------------------------------------------------------------
+
+/** Every scheduled division across every suite, each carrying the suite it
+ *  came from. Flattened once here rather than in five places. */
+function scheduledDivisions(
+  report: BenchReport,
+): readonly { suite: string; division: DivisionScheduleReport }[] {
+  return report.suites.flatMap((s) =>
+    (s.scheduling ?? []).map((division) => ({ suite: s.suite, division })),
+  );
+}
+
+const NA = "n/a";
+const num = (value: number | undefined): string => (value === undefined ? NA : String(value));
+
+function renderSchedulingSection(report: BenchReport): string {
+  const rows = scheduledDivisions(report);
+  if (rows.length === 0) return "";
+  const lines = [
+    "## Scheduling",
+    "",
+    "| Suite | Division | Requested | Actual | Status | Mode | Blocking | Unplaced (board) | Placed/Total (proposal) | Wall |",
+    "|---|---|---|---|---|---|---|---|---|---|",
+  ];
+  for (const { suite, division: d } of rows) {
+    // TWO denominators, side by side and never merged: "Unplaced (board)" is
+    // what the FETCHED board shows and is `judgeDivision`'s own gate;
+    // "Placed/Total (proposal)" is what the solver CLAIMED and is what the
+    // certificate's UNPLACED branch reads. They answer different questions,
+    // and a run where they disagree is exactly the run a reader needs to see
+    // both numbers for.
+    const proposal =
+      d.metrics === undefined ? NA : `${d.metrics.placed}/${d.metrics.total}`;
+    lines.push(
+      `| ${suite} | ${d.divisionRef} | ${d.requestedEngine} | ${d.actualEngine ?? NA} | ${d.solverStatus ?? NA} | ${d.mode ?? NA} | ${d.blockingCount} | ${d.unplacedCount} | ${proposal} | ${d.wallMs}ms |`,
+    );
+  }
+  const notes: string[] = [];
+  for (const { division: d } of rows) {
+    if (d.metricsNote !== undefined) notes.push(`- \`${d.divisionRef}\`: ${d.metricsNote}`);
+    if (d.notSearchedReason !== undefined) {
+      notes.push(`- \`${d.divisionRef}\`: solver did not search — ${d.notSearchedReason}`);
+    }
+    if (d.budgetExpired === true) {
+      notes.push(
+        `- \`${d.divisionRef}\`: solver budget expired (tiers ${num(d.tiersCompleted)}/${num(d.tiersTotal)})`,
+      );
+    }
+    const warnKinds = Object.entries(d.warnKindTally);
+    if (warnKinds.length > 0) {
+      notes.push(
+        `- \`${d.divisionRef}\`: warn-level conflicts — ${warnKinds.map(([kind, n]) => `${kind}=${n}`).join(", ")}`,
+      );
+    }
+    for (const err of d.scheduleErrors) notes.push(`- \`${d.divisionRef}\` ERROR: ${err}`);
+  }
+  if (notes.length > 0) lines.push("", ...notes);
+  return lines.join("\n");
+}
+
+function renderUncheckedLines(unchecked: readonly UncheckedConstraintReport[]): string[] {
+  if (unchecked.length === 0) {
+    return ["- Unchecked constraints: none — every declared constraint was modelled."];
+  }
+  const lines = [`- Unchecked constraints (${unchecked.length}) — "clean" above does NOT cover these:`];
+  for (const u of unchecked) lines.push(`  - \`${u.type}\`: ${u.reason}`);
+  return lines;
+}
+
+/**
+ * T7b — the OPPOSITE direction from `unchecked`: a rule this build DOES
+ * model, but which had nothing on THIS board to judge. Its own renderer
+ * (rather than folding into `renderUncheckedLines`) because it is reused at
+ * BOTH checker call sites below — unlike `unchecked`, which is encode-time
+ * and identical for a division's two checker runs, `unexercised` is a
+ * per-run fact and rule 7 (officials) is exactly the rule the post-officials
+ * re-check (F-T6-2) exists to move from unexercised to exercised.
+ */
+function renderUnexercisedLines(unexercised: readonly UnexercisedRuleReport[]): string[] {
+  if (unexercised.length === 0) {
+    return ["- Unexercised rules: none — every modelled rule had something to judge."];
+  }
+  const lines = [
+    `- Unexercised rules (${unexercised.length}) — modelled, but nothing on this board exercised them:`,
+  ];
+  for (const u of unexercised) lines.push(`  - \`${u.rule}\`: ${u.reason}`);
+  return lines;
+}
+
+/** Renders one `CheckerVerdictReport`'s `unchecked` AND `unexercised` lists,
+ *  together — the primary verdict's own caveats (design §1.4/§3.3, extended
+ *  by T7b). The post-officials verdict (F-T6-2) renders `unexercised` alone,
+ *  via `renderUnexercisedLines` directly — see that function's own note. */
+function renderCheckerCaveats(checker: CheckerVerdictReport): string[] {
+  return [...renderUncheckedLines(checker.unchecked), ...renderUnexercisedLines(checker.unexercised)];
+}
+
+/**
+ * The checker's verdict AND its `unchecked`/`unexercised` lists, in one place.
+ *
+ * All three are rendered TOGETHER and that is the requirement, not a layout
+ * choice (design §1.4/§3.3, extended by T7b): "checker clean" is a claim
+ * about the constraints the checker actually modelled AND about the rules
+ * that actually had something to judge — a pack can declare knobs it does not
+ * model, and a modelled rule can still find nothing because the board gave it
+ * no candidates. Printing the verdict without either list lets a reader take
+ * "clean" for "every declared constraint was fully verified" — the exact
+ * false clean this whole layer exists to prevent. So a division with an empty
+ * `unchecked` or an empty `unexercised` says so explicitly rather than
+ * rendering silence.
+ */
+function renderCheckerSection(report: BenchReport): string {
+  const rows = scheduledDivisions(report).filter(({ division }) => division.checker !== undefined);
+  if (rows.length === 0) return "";
+  const lines = ["## Checker (independent verifier)", ""];
+  for (const { suite, division: d } of rows) {
+    const checker = d.checker;
+    if (checker === undefined) continue;
+    lines.push(
+      `### ${suite} / ${d.divisionRef} — ${checker.clean ? "CLEAN" : `${checker.findings.length} FINDING(S)`}`,
+      "",
+    );
+    lines.push(...renderCheckerCaveats(checker));
+    for (const f of checker.findings) lines.push(`- ${renderFinding(f)}`);
+
+    // F-T6-2 — the SECOND verdict, on the board as it stands after officials
+    // auto-assign. Rendered beside the first, never instead of it: which of
+    // the two stages introduced a finding is the actionable half, and a lone
+    // post-officials verdict throws it away.
+    const after = d.checkerAfterOfficials;
+    if (after !== undefined) {
+      lines.push(
+        "",
+        `After officials auto-assign — ${after.clean ? "CLEAN" : `${after.findings.length} FINDING(S)`}` +
+          (after.clean === checker.clean
+            ? " (unchanged)"
+            : ` (CHANGED from ${checker.clean ? "clean" : "dirty"} — officials auto-assign is what moved it)`),
+      );
+      // `unexercised` only, never `unchecked` — see `renderUnexercisedLines`'s
+      // own note on why this run's list can legitimately differ from the
+      // first one's (rule 7 is exactly the rule this second pass exists to
+      // move from unexercised to exercised) while `unchecked` cannot.
+      lines.push(...renderUnexercisedLines(after.unexercised));
+      for (const f of after.findings) lines.push(`- ${renderFinding(f)}`);
+    }
+    lines.push("");
+  }
+  return lines.join("\n").trimEnd();
+}
+
+/** One finding, rendered once — both sides of a pairwise breach named, and the
+ *  measured/required pair only when the kind actually has a scalar. */
+function renderFinding(f: CheckerFindingReport): string {
+  const measured =
+    f.measured !== undefined && f.required !== undefined
+      ? ` (measured ${f.measured}, required ${f.required})`
+      : "";
+  return `\`${f.kind}\` [${f.fixtureIds.join(", ")}]: ${f.detail}${measured}`;
+}
+
+/**
+ * F-T6-3 — the run-level cross-division court gate.
+ *
+ * Its own section rather than a line inside "Checker", because it is the one
+ * verdict in this report that is NOT per-division — and because its absence is
+ * the interesting state. A reader who finds no such section on a multi-division
+ * run should be able to conclude the check ran and found nothing, so the
+ * section renders whenever any division was scheduled, not only when it fired.
+ */
+function renderCrossDivisionSection(report: BenchReport): string {
+  const suites = report.suites.filter((s) => (s.scheduling ?? []).length > 0);
+  if (suites.length === 0) return "";
+  const lines = [
+    "## Cross-division court occupancy (run-level gate)",
+    "",
+    "One court cannot hold two fixtures at once whichever division each belongs to.",
+    "Every OTHER layer in this report is division-scoped and blind to this by construction.",
+  ];
+  for (const suite of suites) {
+    const clashes = suite.crossDivisionCourtClashes ?? [];
+    if (clashes.length === 0) {
+      lines.push("", `- \`${suite.suite}\`: none — checked across ${(suite.scheduling ?? []).length} division(s).`);
+      continue;
+    }
+    lines.push("", `- \`${suite.suite}\`: **${clashes.length} clash(es)**`);
+    for (const c of clashes) {
+      lines.push(
+        `  - court \`${c.courtId}\`: ${c.a.divisionRef}/${c.a.fixtureId} ` +
+          `[${new Date(c.a.start).toISOString()} .. ${new Date(c.a.end).toISOString()}) overlaps ` +
+          `${c.b.divisionRef}/${c.b.fixtureId} ` +
+          `[${new Date(c.b.start).toISOString()} .. ${new Date(c.b.end).toISOString()})`,
+      );
+    }
+  }
+  return lines.join("\n");
+}
+
+function renderCertificateSection(report: BenchReport): string {
+  const rows = scheduledDivisions(report).filter(
+    ({ division }) => division.certificate !== undefined,
+  );
+  if (rows.length === 0) return "";
+  const lines = [
+    "## Feasibility certificate",
+    "",
+    "| Suite | Division | Branch | Red? | Reason |",
+    "|---|---|---|---|---|",
+  ];
+  for (const { suite, division: d } of rows) {
+    const c = d.certificate;
+    if (c === undefined) continue;
+    lines.push(
+      `| ${suite} | ${d.divisionRef} | \`${c.branch}\` | ${c.red ? "yes" : "no"} | ${c.reason} |`,
+    );
+  }
+  const violations: string[] = [];
+  for (const { division: d } of rows) {
+    for (const v of d.certificate?.violations ?? []) {
+      violations.push(`- \`${d.divisionRef}\` \`${v.kind}\` [${v.fixtureIds.join(", ")}]: ${v.detail}`);
+    }
+  }
+  if (violations.length > 0) {
+    lines.push("", "History's own violations of this pack's encoding:", ...violations);
+  }
+  return lines.join("\n");
+}
+
+function renderBelievabilitySection(report: BenchReport): string {
+  const rows = scheduledDivisions(report).filter(
+    ({ division }) => division.believability !== undefined,
+  );
+  if (rows.length === 0) return "";
+  const lines = [
+    "## Believability",
+    "",
+    "Report-only — nothing here ever reds a run (design §3.5).",
+    "",
+  ];
+  for (const { suite, division: d } of rows) {
+    const b = d.believability;
+    if (b === undefined) continue;
+    const metrics =
+      b.metrics.length === 0
+        ? "(none)"
+        : b.metrics.map((m) => `${m.key}=${m.score}`).join(", ");
+    lines.push(`- \`${suite}/${d.divisionRef}\`: ${metrics}`);
+    if (b.metricsNote !== undefined) lines.push(`  - ${b.metricsNote}`);
+    if (b.similarityToHistorical !== undefined) {
+      const s = b.similarityToHistorical;
+      lines.push(
+        `  - similarity to historical: ${s.sameDayPct}% same day, ${s.sameInstantPct}% same instant ` +
+          `over ${s.comparedFixtures} compared fixture(s) of ${s.historicalRows} declared row(s)`,
+      );
+    }
+    if (b.similarityNote !== undefined) lines.push(`  - ${b.similarityNote}`);
+  }
+  return lines.join("\n");
+}
+
+function renderEngineDeltaSection(report: BenchReport): string {
+  const suites = report.suites.filter((s) => s.engineDelta !== undefined);
+  if (suites.length === 0) return "";
+  const lines = ["## Engine delta (greedy − optimized)", ""];
+  for (const suite of suites) {
+    const section = suite.engineDelta;
+    if (section === undefined) continue;
+    if (section.delta === undefined) {
+      // The note is the point: "only greedy ran" and "the engines tied" both
+      // produce no numbers, and only this line tells them apart.
+      lines.push(`- \`${suite.suite}\`: ${section.note ?? "no delta and no reason given"}`);
+      continue;
+    }
+    const d = section.delta;
+    const covered =
+      d.comparedDivisionRefs.length === 0
+        ? "NO divisions in common — the two sums below compare nothing"
+        : d.comparedDivisionRefs.join(", ");
+    lines.push(
+      `- \`${suite.suite}\`: makespan ${d.makespanDeltaMinutes}min, court imbalance ${d.courtImbalanceDeltaMinutes}min ` +
+        `(positive = optimizing bought it), over: ${covered}`,
+      `  - greedy leg run \`${d.greedy.runId}\`, optimized leg run \`${d.optimized.runId}\``,
+    );
+  }
+  return lines.join("\n");
+}
+
 export function renderMarkdown(report: BenchReport): string {
   const sections = [
     renderHeader(report),
     renderPreflightSection(report),
     renderSuitesSection(report),
     renderRegistrationAtVolumeSection(report),
+    // B04 (design §10's own convention: append, never edit the existing).
+    renderSchedulingSection(report),
+    renderCheckerSection(report),
+    renderCrossDivisionSection(report),
+    renderCertificateSection(report),
+    renderBelievabilitySection(report),
+    renderEngineDeltaSection(report),
   ];
   return sections.filter((s) => s.length > 0).join("\n\n") + "\n";
 }

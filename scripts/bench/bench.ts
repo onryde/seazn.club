@@ -64,6 +64,24 @@ export function parseCliArgs(argv: string[]): BenchConfig {
     options: {
       suite: { type: "string", multiple: true, default: [] },
       engine: { type: "string", default: "optimized" },
+      // T7e: `keep` DEFAULTS to true regardless of this option's own literal
+      // default — see `keep: !values.wipe` below. This declared default of
+      // `false` is dead for every real invocation; it only shapes what an
+      // explicit bare `--keep` looks like to `parseArgs` (a no-op, since
+      // `!values.wipe` is already true without it).
+      //
+      // THE TWO/THREE-LEG PROTOCOL NEEDS `--wipe` ON EVERY LEG. A run against
+      // an unchanged pack under `--keep` (the default) finds the PRIOR leg's
+      // already-seeded competition (`tiny.ts`'s `findExistingSeed`, matched
+      // on pack hash) and short-circuits before seeding OR scheduling —
+      // exactly the shape that silently killed the documented two-leg
+      // protocol's leg B (`--engine greedy` after leg A's `--engine
+      // optimized` against the same SHA). Since T7e that short circuit
+      // reports the suite gate as `"skipped"`, never a bare green
+      // (`report.ts`'s `SuiteGateStatus`) — but the run STILL measured
+      // nothing, so `--wipe` remains the only way to get a real scheduling
+      // pass out of a leg. See `B04-handoff-2026-09-05.md`'s live-legs section
+      // for the full protocol.
       keep: { type: "boolean", default: false },
       wipe: { type: "boolean", default: false },
       "report-dir": { type: "string", default: "bench-report" },
@@ -143,6 +161,14 @@ async function gitSha(): Promise<string> {
 export async function runSuite(
   key: string,
   config: BenchConfig,
+  /** The RESOLVED run id — `resolveRunId(config.runId, gitSha)`, already
+   *  computed by `main()`. Passed explicitly rather than re-derived here (or
+   *  read off `config.runId`, which is the raw CLI arg and is usually
+   *  undefined): the engine artifact and `report.json` must land in the SAME
+   *  directory, and two resolution points for one identity is how a `--engine
+   *  greedy` leg writes into a directory the `--engine optimized` leg never
+   *  looks in. */
+  runId: string,
   sql: PlanSql,
   transport?: SeedTransport,
   probeTransport?: ProbeTransport,
@@ -150,10 +176,22 @@ export async function runSuite(
   if (key === "_tiny") {
     return runTinySuite({
       base: config.base,
+      /* B04: `--engine` is an ASSERTION, not a selector (design §2.1/§1.1 —
+       * `AutoScheduleRequest` has no engine field, so nothing in the product
+       * can be asked for one). `runTinySuite` forwards it into
+       * `runScheduleLayer`, whose `readSolver` compares it against the engine
+       * the response says actually ran and errors on a mismatch; `both`
+       * asserts nothing and nothing else is relaxed. The old "not honoured"
+       * log line is gone with the walk that emitted it. */
       engine: config.engine,
       keep: config.keep,
       log: suiteLogger("_tiny"),
       sql,
+      /* Where `engine-<engine>.json` goes, and under which run id — the same
+       * pair `writeReport` uses below, so the two legs of one commit land in
+       * one directory and the delta has both files to read. */
+      reportDir: config.reportDir,
+      runId,
       /* The whole point of `--entry`. Parsed into `BenchConfig` by task 6 and
        * consumed by `runTinySuite`'s `resolveEntryMode` since task 9 — but
        * unforwarded until now, which made the flag inert end to end: every run
@@ -211,7 +249,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
   const suites: SuiteReport[] = [];
   try {
     for (const key of config.suites) {
-      const result = await runSuite(key, config, planSql);
+      const result = await runSuite(key, config, runId, planSql);
       suites.push(result);
       log.info({ suite: key, gate: result.gate }, "suite_completed");
     }

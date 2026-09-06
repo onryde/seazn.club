@@ -480,3 +480,173 @@ bench v1; items 4–5 follow release-2; items 6–7 independent.
    migrating historical seasons from spreadsheets.
 7. **Auto-news enrichment** — inject round top-scorer/leaderboard movement
    from `divisionPlayerStats` into `resultDraft`/`roundRecapDraft` drafts.
+
+## 15. Appendix — product findings surfaced by the B04 BUILD (no issues filed)
+
+§14 records what the design surfaced. These four were surfaced by building
+B04's scheduling layer — before it had run against a live server once. Same
+policy: no GitHub issues (`RULES.md:98`, `_RULES.md:11`, §7). Owner ruled
+2026-09-05 that finding 1 is recorded here and fixed in a SEPARATE change,
+not inside B04.
+
+1. **A court can be double-booked across two competitions of one org, and
+   nothing notices.** CONFIRMED across all six enforcement seams.
+
+   `courts` are **org**-scoped (`V367__venues_and_courts.sql:48` —
+   `org_id not null references organizations(id)`), but every occupancy
+   consumer derives its board from `siblingAssignments`, whose one scoping
+   clause is `where division_id in (select id from divisions where
+   competition_id = ${competitionId} …)` (`usecases/schedule.ts:857-861`).
+
+   | Seam | Verdict |
+   |---|---|
+   | placer obstacle input (`autoSchedule`, `schedule.ts:1575`) | BLIND — `divisionFixtures` + competition-scoped siblings |
+   | `candidate-courts.ts:80` | N/A — pure tag/archived filter, no occupancy input of any scope |
+   | publish / start (`schedule.ts:3573`, `:3685`) | BLIND — both call the same competition-scoped validator |
+   | `moveFixture` (`schedule.ts:3040`) | BLIND — the drag gate's whole world is one competition |
+   | DB constraints | BLIND — no `exclude using` / `btree_gist` / `tstzrange` anywhere in `db/` |
+   | `services/placement/` | BLIND — no DB; sees only the caller's already-scoped board |
+
+   Cleared as non-substitutes: `resolveCourtCalendars`
+   (`court-candidates.ts:171`) reads only `court_hours`/`court_exceptions`, so
+   opening hours cannot stand in for a booking; `capacity-guard.ts:233`
+   assesses only `body.fixtures`.
+
+   **Customer:** a club runs a Saturday junior league and an adult ladder as
+   two competitions on the same six courts. Each organiser auto-schedules,
+   sees a green board, and publishes. Both send players to Court 3 at 10:00.
+   It surfaces when two pairs walk onto the same court.
+
+   Fixing it means widening sibling occupancy from competition to org scope
+   across five consumers (auto-schedule, drag-move, validate, publish, start),
+   plus a decision on whether a cross-competition clash blocks or warns —
+   blocking would refuse boards organisers can publish today.
+
+2. **`start_window` is coded as a hard refusal and never blocks.**
+   `ConflictReason`'s own comment calls it `(hard)` and `REASON_CODE`
+   (`apps/web/src/lib/schedule-board.ts:25-40`) gives it the `conflict.`
+   prefix reserved for hard refusals — but `isBlockingConflict`
+   (`calendar.ts:319-341`) omits it, so it ships `blocking: false`. That
+   function's three deliberate carve-outs each state their reasoning; this one
+   is unmentioned, which is what makes it look unintended rather than decided.
+   Either the prefix or the predicate is wrong.
+
+3. **`crossPersonClash` is deprecated and read by nothing**, so bench spec §5's
+   requirement that ≥2 suites cover that knob cannot be met. `#399` made an
+   introduced person double-booking refuse absolutely (`isBlockingConflict`
+   lists `person_overlap` unconditionally) and the placer avoids one for the
+   same reason, so neither side consults the setting: `"hard"` and `"warn"`
+   produce identical behaviour. **Affects B12's acceptance** — a pack setting
+   it proves nothing. The organiser-facing control it backs should be retired
+   with its UI and dictionaries, in its own change.
+
+4. **No one can request or require a scheduling engine.** `AutoScheduleRequest`
+   (`schemas.ts:1643-1688`) has no engine field, and no env var, flag, setting
+   or column selects one: `build.ts:1165-1204` always attempts the solver and
+   falls back to greedy only on `MAX_SOLVER_QUEUE`, `canSolveWithin`, or an
+   unreachable placement service. A customer cannot ask for a fast greedy
+   board, nor insist a board be solved rather than silently fall back.
+   `AutoScheduleResult.solver.engine` reports which ran, so the information
+   exists and nothing lets anyone act on it. This is why B04's `--engine`
+   became an assertion rather than a selector.
+
+## 16. Appendix — B04's first live run: what it measured, and what it could not
+
+§15 records what BUILDING B04 surfaced, expressly "before it had run against a
+live server once". This section is the opposite: the one empirical result the
+bench has produced, and why it does not yet answer the question the bench
+exists to ask. Same policy — no GitHub issues.
+
+Run `f1e38f5b420689a58c5f9c0a741faa0494f52c27`, three legs at one SHA on
+2026-09-06: `--engine optimized --wipe` with placement live, `--engine greedy
+--wipe` with it torn down, then `--engine both --wipe` for the delta. All three
+green, all three artifacts written, delta rendered.
+
+### 16.1 The numbers, read out of the artifacts
+
+`_tiny`'s two divisions, verbatim from `engine-optimized.json` and
+`engine-greedy.json`:
+
+| Division | Leg | `actualEngine` | `solverStatus` | tiers | makespan | worst idle gap | court imbalance |
+|---|---|---|---|---|---|---|---|
+| `d-tiny` | optimized | optimized | `ok` | 6/6 | **1470** | **1350** | 30 |
+| `d-tiny` | greedy | greedy | `solver_unavailable` | 0/6 | **1410** | **1305** | 30 |
+| `d-badminton` | optimized | greedy | `already_optimal` | 6/6 | 30 | 0 | 30 |
+| `d-badminton` | greedy | greedy | `solver_unavailable` | 0/6 | 30 | 0 | 30 |
+
+The legs genuinely ran different engines — which is what `--engine`'s assertion
+exists to establish, with `tiersCompleted` 6 against 0 as the corroboration.
+
+The rendered delta reads `makespan -60min, court imbalance 0min` under the
+report's own convention that positive means optimizing bought it. So on the
+only division where CP-SAT actually ran, the optimized board scored 60 minutes
+WORSE on makespan.
+
+### 16.2 That reading is weaker than it looks — neither metric discriminates here
+
+PR #731's body called this result surprising, "the optimizer losing to greedy
+on the ladder's first rung". Reading the metric definitions rather than the
+numbers alone gives a sharper and much less alarming answer, and that is the
+version to carry forward.
+
+Both are defined in `build-objectives.ts`'s metrics block:
+
+- `makespanMinutes` is `(hi - lo)` — last end minus first start across the
+  whole board, so it spans nights, not just playing time.
+- `worstIdleGapMinutes` is computed over `byParticipant`: the worst wait ONE
+  participant has between two consecutive fixtures of theirs.
+
+On `d-tiny` the optimized board's worst participant gap is 1350 of its 1470
+minutes. Someone plays on day 1 and again on day 2, and 22.5 hours of that
+"makespan" is the night in between. Greedy's is 1305 of 1410 — same shape.
+Net the overnight hole out and the two boards span 120 and 105 minutes.
+
+So the 60-minute difference is where a fixture sits AROUND a forced multi-day
+gap, not evidence that CP-SAT packed worse. And the delta's other reported
+metric, court imbalance, is 30 in both legs — identical.
+
+**The finding is therefore about the bench, not the product: on `_tiny` the
+rendered delta carries no engine-discriminating information at all.** One of
+its two metrics is dominated by the inter-day span; the other does not move.
+Telling the engines apart needs a pack with enough fixtures inside ONE day for
+packing quality to reach the span.
+
+### 16.3 The capability gap that would make even a good pack unattributable
+
+Grant a discriminating pack and the current protocol still could not attribute
+a difference to the engine, because the two legs are not the same input. Both
+must pass `--wipe` (`B04-handoff-2026-09-05.md`), so each seeds its own org,
+competition, entrants and fixtures with fresh row identities. Whether greedy's
+placement order is sensitive to those identities is UNVERIFIED — which is
+precisely the problem: a confound cannot be dismissed without being eliminated.
+
+`--wipe` is forced because the alternative does not schedule. `--keep` (the
+CLI's default) short-circuits on an unchanged pack hash and skips seeding AND
+scheduling. Since T7e it reports `gate: "skipped"` rather than a bare green, so
+the mistake is now loud — but it still measures nothing.
+
+Making `--keep` re-schedule an existing seed is not a branch edit.
+`findExistingSeed` returns `{ kind: "reuse", orgId, competitionId }` — two IDs.
+Scheduling consumes the whole `SeededSuite`: seven ref→ID maps (`venueIdByRef`,
+`courtIdByRef`, `divisionIdByRef`, `stageIdByRef`, `personIdByRef`,
+`entrantIdByRef`, `fixtureIdByKey`). Closing the gap means a re-hydrator that
+fetches all seven back from the API — an inverse of the seeder, carrying its
+own failure mode worth stating before anyone starts: **a ref→ID map rebuilt
+wrongly schedules against the wrong court and every checker rule still
+passes**, because the checker judges the board it is handed, not the board that
+was intended.
+
+### 16.4 What a later wave owes
+
+1. A pack whose fixtures sit within one day densely enough that makespan
+   measures packing rather than nights. `_tiny` cannot, by construction.
+2. Either the re-hydrator above, or a pinned-identity seed so two `--wipe` legs
+   produce identical input. The second is cheaper and unexamined: `runTag` is
+   already threaded through `SeedSuiteInput` and merely minted per run at
+   `suites/tiny.ts`, but whether DB-generated identities reach the placer's
+   ordering has not been established either way.
+3. Re-run the comparison and settle 16.1 as a result rather than a candidate.
+
+Until then the engine delta is a proven PIPELINE — it computes, it renders, and
+it survives a leg whose divisions resolve different engines — carrying a number
+that is not yet a measurement.

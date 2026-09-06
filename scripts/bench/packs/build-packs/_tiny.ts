@@ -49,6 +49,206 @@ import {
 type PackInput = z.input<typeof PackSchema>;
 
 // ---------------------------------------------------------------------------
+// B04 T6 — venues, and the per-division scheduleConfig (design §7)
+//
+// `_tiny` declared NO venues at all until now: `suites/tiny.ts` created one
+// venue and ONE court over HTTP itself, so nothing in the pack could name a
+// court and design §3.3's court-double-booking rule had nowhere to fire. The
+// pack is the one source from here on (`seedSuite` already seeds `pack.venues`,
+// seed.ts:332-378) and the ad-hoc creation is deleted.
+//
+// TWO courts, not one, and that is the whole point of the number: a single
+// court makes "two placed fixtures overlap on one courtId" unfalsifiable in
+// one direction (every fixture is on the same court) and unreachable in the
+// other, so the rule would report clean forever. Design §7 names the two.
+// ---------------------------------------------------------------------------
+
+const TINY_VENUE_REF = "v-tiny";
+const TINY_COURT_REFS = ["c-tiny-1", "c-tiny-2"] as const;
+
+/** B04 T7a: the competition's own three days, Thursday through Saturday
+ *  (`2099-01-01`..`2099-01-03` is pinned as weekday 4/5/6 — see the task
+ *  report). The court-hours rule keys on WEEKDAY, so a window authored for
+ *  the wrong day would be exactly as vacuous as declaring none.
+ *
+ *  08:00-19:00, comfortably containing whatever a real run schedules onto
+ *  these courts (it never runs past noon) — and DELIBERATELY narrower than
+ *  `TINY_SCHEDULE_CONFIG.sessionWindows`' own 08:00-20:00 close, one hour
+ *  short of it. That asymmetry (mirrored from `_board-fixtures.ts`'s own
+ *  clean board) is what lets `checker.test.ts` move a fixture to 19:15 and
+ *  breach ONLY court hours — inside the session window, outside its own
+ *  court's calendar — rather than a same-bound pair that always breach
+ *  together and can never isolate which rule actually caught it. */
+const TINY_COURT_OPEN_MIN = 8 * 60;
+const TINY_COURT_CLOSE_MIN = 19 * 60;
+const TINY_COURT_WEEKDAYS = [4, 5, 6] as const;
+const TINY_COURT_HOURS: NonNullable<PackInput["venues"]>[number]["courts"][number]["hours"] =
+  TINY_COURT_WEEKDAYS.map((weekday) => ({
+    weekday,
+    openMin: TINY_COURT_OPEN_MIN,
+    closeMin: TINY_COURT_CLOSE_MIN,
+  }));
+
+const TINY_VENUES: NonNullable<PackInput["venues"]> = [
+  {
+    ref: TINY_VENUE_REF,
+    name: "Bench Tiny Venue",
+    courts: [
+      // B04 T7a: BOTH courts declare the SAME weekly hours (design §7's own
+      // "the config is SHARED between the two divisions" reasoning, one
+      // level down) — the checker's court-hours rule (2c) was vacuous
+      // because no pack court had ever declared an `hours` row at all
+      // (`PackCourt.hours` only became authorable in f71d7d5f0). Declaring it
+      // on both, identically, is what makes "the schedule stays inside
+      // hours" true by construction rather than by one court's window
+      // agreeing with the other's by luck.
+      { ref: TINY_COURT_REFS[0], name: "Court 1", sort: 1, hours: TINY_COURT_HOURS },
+      { ref: TINY_COURT_REFS[1], name: "Court 2", sort: 2, hours: TINY_COURT_HOURS },
+    ],
+  },
+];
+
+/** The instant both scheduled divisions start at.
+ *
+ *  INSIDE the competition's own window (`2099-01-01`..`2099-01-03`):
+ *  `usecases/schedule.ts` refuses a division whose schedule starts before its
+ *  competition opens (`SCHEDULE_OUTSIDE_COMPETITION`), and the first live
+ *  `_tiny` run ever made 422'd on exactly that with a wall-clock `Date.now() +
+ *  24h`. Written as a literal here rather than derived from
+ *  `competition.startsOn` because this file emits a COMMITTED artefact — a
+ *  derived value would still be a literal in `_tiny.json`, and one that no
+ *  longer says where it came from.
+ *
+ *  The trailing `Z` is load-bearing: `encodeConstraints` THROWS on an
+ *  offsetless ISO date-time, because reading one against the host timezone
+ *  would make the checker's oracle answer differently on a BST dev box and a
+ *  UTC CI runner. */
+const TINY_SCHEDULE_START_AT = "2099-01-01T09:00:00.000Z";
+
+/** The `ScheduleConfig` both scheduled divisions get.
+ *
+ *  Shared rather than written twice: the two divisions have no reason to
+ *  differ, and two copies is how the badminton half quietly stops being
+ *  scheduled against the same courts the generic half is.
+ *
+ *  `courts` names the venue's courts by `@`-sigil — the pack cannot know the
+ *  real UUIDs, which only exist once `seedSuite` has run. `pack-schema.ts`'s
+ *  `checkReservations` resolves these against the DECLARED venues/courts at
+ *  stage 0; `board.ts`'s `encodeConstraints` resolves them against the SEEDED
+ *  ids at run time, and `schedule.ts` builds the config it PUTs from that one
+ *  resolution rather than resolving a second time.
+ *
+ *  `gapMinutes: 0` is declared deliberately, not omitted: it lands in
+ *  `EncodedConstraints.unmodelled` (a declared knob with no rule behind it —
+ *  court occupancy is judged on `matchMinutes` alone, ruling R12), and that
+ *  entry is what makes `_tiny`'s report exercise the "unchecked rendered
+ *  BESIDE the verdict" requirement on a green run instead of only on a
+ *  hypothetical one.
+ *
+ *  B04 T7a: `perEntrantMinRest`, `blackouts`, `sessionWindows` and
+ *  `constraints.hard` were ALL declared vacuous values (`0`, `[]`, `[]`,
+ *  absent) until this task — satisfied by construction on every board, never
+ *  by the rule actually comparing anything. `_tiny` is the only pack this
+ *  bench runs, so checker.ts's rules 2a/2b/2c/3/4 had never fired on a real
+ *  input. The values below are chosen to clear the bar the task report names:
+ *  satisfied by the schedule this pack actually produces AND violable by a
+ *  wrong one (proved against a hand-built board in `checker.test.ts`, not
+ *  merely reachable).
+ *
+ *   - `perEntrantMinRest: 15` — both `d-tiny` entrants play all three
+ *     fixtures, so 15 minutes of turnaround between consecutive ones is a
+ *     real, checkable floor rather than the `0` that made rule 3 vacuous.
+ *     This fake's own scheduler bakes it into its slot spacing
+ *     (`_schedule-routes.ts`).
+ *   - `constraints.hard` — ONE `max_fixtures_per_day` rule, scoped
+ *     `every_entrant` at `count: 2`. Fix round 1: `count: 3` (T7a's first
+ *     cut) was satisfied by the schedule but pinned at the cap BY THE
+ *     FIXTURE COUNT ITSELF — `d-tiny` has exactly 3 fixtures and both
+ *     entrants play all of them, so no product defect could ever raise the
+ *     figure to 4, and the only violating board `checker.test.ts` could
+ *     build was a hand-added FOURTH fixture `_tiny` cannot produce. `count:
+ *     2` forces the THIRD fixture onto a second calendar day on every real
+ *     run, so `checker.test.ts` can now also red rule 4 using `_tiny`'s
+ *     OWN three real fixtures placed on one day — the shape an actual
+ *     defect would produce. The old fake could not honour this (it had no
+ *     notion of "day" at all); `_schedule-routes.ts` was taught one, the
+ *     same way it was taught the rest-aware pitch.
+ *   - `sessionWindows` — TWO windows, day 1 and day 2 (both 08:00-20:00,
+ *     wide enough to hold the whole working day rather than a box
+ *     hand-fitted to wherever a fixture happened to land), because
+ *     `count: 2` forces a fixture onto day 2 and the pack has to admit that
+ *     day or it is infeasible rather than merely constrained. Day 3
+ *     (`2099-01-03`) is deliberately left OFF this list — it is the region
+ *     that still violates rule 2a. Both windows are WIDER than the courts'
+ *     own 08:00-19:00 hours (see `TINY_COURT_CLOSE_MIN`'s comment) — the
+ *     asymmetry is what lets a test isolate "outside court hours" from
+ *     "outside the session window".
+ *   - `blackouts` — one court-scoped window on day 1, `c-tiny-1`
+ *     09:30-12:00. Fix round 1: the first cut (12:00-12:30) sat ninety
+ *     minutes after this pack's own schedule ever runs, so nothing could
+ *     land in it either way — "a blackout the solver would never have hit
+ *     anyway proves nothing" is the task's own bar, and that draft failed
+ *     it. `09:30`, not `09:00`: `d-tiny`'s FIRST fixture is unconditionally
+ *     PINNED to `startAt` on this division's first declared court before
+ *     `auto` ever runs (ruling R22, `resolveScheduleLocks` in
+ *     `suites/tiny.ts`) — i.e. `c-tiny-1` at exactly `09:00`-`09:30` on
+ *     every run, pin or no pin. A blackout starting at `09:00` would make
+ *     the PINNED fixture itself the violation on every green run; `09:30`
+ *     abuts it instead (half-open, same convention as
+ *     `_board-fixtures.ts`'s own clean board), so the pin is UNTOUCHED and
+ *     the window still sits inside the hours a real fixture can occupy.
+ *
+ *  THE EXACT SCHEDULE THAT SATISFIES ALL FIVE CONSTRAINTS AT ONCE — checked
+ *  by hand against every one of them, and reproduced by this fake's own
+ *  scheduler (`_schedule-routes.ts`) on a default run:
+ *
+ *    d-tiny   rr-r1-c1  2099-01-01 (Thu)  09:00  c-tiny-1   [pinned, R22]
+ *    d-tiny   rr-r2-c1  2099-01-01 (Thu)  09:45  c-tiny-2
+ *    d-tiny   rr-r3-c1  2099-01-02 (Fri)  09:00  c-tiny-1
+ *    d-badminton rr-r1-c1 2099-01-01 (Thu) 11:15  c-tiny-2
+ *
+ *  Session windows: every start above falls inside its day's 08:00-20:00
+ *  window. Court hours: every start (09:00/09:45/11:15 Thu, 09:00 Fri) falls
+ *  inside 08:00-19:00 on a declared weekday. Blackout: `rr-r1-c1` on
+ *  `c-tiny-1` occupies [09:00,09:30) and the blackout is [09:30,12:00) —
+ *  abutting, not overlapping; `rr-r3-c1` is on `c-tiny-1` but day 2, outside
+ *  the blackout's single dated instant range; neither of the other two ever
+ *  touches `c-tiny-1`. Rest: `d-tiny`'s series is 09:00-09:30, 09:45-10:15,
+ *  next-day 09:00 — gaps of exactly 15 minutes then a full day, both ≥15.
+ *  Day cap (`every_entrant`, count 2): day 1 carries 2 `d-tiny` fixtures per
+ *  entrant (at the cap, not over it) and 1 `d-badminton` fixture for its own
+ *  two entrants; day 2 carries 1 `d-tiny` fixture. Nothing exceeds 2.
+ *
+ *  Rule 5 (`not_before`/`not_after`) stays DELIBERATELY unexercised — no
+ *  `constraints.hard` entry of either type is declared here. `_tiny` is the
+ *  only pack this bench runs, so if all eight rules went live, the checker's
+ *  own "this rule had nothing to check" report section (`unchecked[]`) would
+ *  have an empty list on every real run — a branch no live run could ever
+ *  witness, which is the same vacuous-report trap one level up from the rules
+ *  themselves. This mirrors `gapMinutes: 0` above: declared not to fire, on
+ *  purpose, so the report's UNCHECKED section is exercised on a GREEN run
+ *  rather than a hypothetical one. Do not "fix" this by adding a wall-clock
+ *  bound — that would leave rule 5 the one uncovered by the same argument
+ *  this comment makes for keeping it uncovered. */
+const TINY_SCHEDULE_CONFIG: NonNullable<PackInput["divisions"][number]["scheduleConfig"]> = {
+  startAt: TINY_SCHEDULE_START_AT,
+  matchMinutes: 30,
+  gapMinutes: 0,
+  courts: TINY_COURT_REFS.map((ref) => `@${ref}`),
+  perEntrantMinRest: 15,
+  blackouts: [
+    { court: `@${TINY_COURT_REFS[0]}`, from: "2099-01-01T09:30:00.000Z", to: "2099-01-01T12:00:00.000Z" },
+  ],
+  sessionWindows: [
+    { from: "2099-01-01T08:00:00.000Z", to: "2099-01-01T20:00:00.000Z" },
+    { from: "2099-01-02T08:00:00.000Z", to: "2099-01-02T20:00:00.000Z" },
+  ],
+  constraints: {
+    hard: [{ type: "max_fixtures_per_day", count: 2, scope: { kind: "every_entrant" } }],
+  },
+};
+
+// ---------------------------------------------------------------------------
 // d-tiny — the generic division, carried through as a literal.
 //
 // Every value below is copied verbatim from the `_tiny.json` this generator
@@ -81,6 +281,11 @@ const TINY_DIVISION: PackInput["divisions"][number] = {
       seeding: ["e-alpha", "e-bravo"],
     },
   ],
+  // B04 T6 (design §7): BOTH scheduled divisions get one, and both are
+  // scheduled. `_INDEX.md` recorded that `runTinySuite` drove
+  // `divisions[0]`/`stages[0]` only and that B04 owned closing it; this
+  // declaration plus `suites/tiny.ts`'s per-division loop is where it closes.
+  scheduleConfig: TINY_SCHEDULE_CONFIG,
 };
 
 const TINY_PERSONS: NonNullable<PackInput["persons"]> = [
@@ -313,6 +518,33 @@ const TINY_ADAPTATIONS: PackInput["meta"]["adaptations"] = [
     where: "officials[]",
   },
   {
+    what: "venues[] declares ONE venue with TWO courts, and BOTH scheduled divisions (d-tiny, d-badminton) carry the SAME scheduleConfig naming those courts by @-sigil. suites/tiny.ts's own ad-hoc one-venue/one-court HTTP creation is deleted; the pack is the one source.",
+    why: "B04 design \u00a77. One court makes design \u00a73.3's court-double-booking rule unfalsifiable \u2014 every fixture sits on the same court, so the rule reports clean forever \u2014 which is exactly the vacuous-guard class this bench exists to catch. Two courts give it somewhere to happen. The config is SHARED between the two divisions rather than copied, so \"both divisions are scheduled onto the same courts\" is true by construction; gapMinutes: 0 is declared on purpose so the report carries a real EncodedConstraints.unmodelled entry and the \"unchecked beside the verdict\" rendering is exercised on a green run.",
+    where: "venues[], divisions[0].scheduleConfig, divisions[1].scheduleConfig",
+  },
+  {
+    what:
+      "B04 T7a (fix round 1): both courts declare weekly `hours` (Thu/Fri/Sat 08:00-19:00), and the " +
+      "shared scheduleConfig declares a real perEntrantMinRest (15), one blackout (c-tiny-1, day 1, " +
+      "09:30-12:00), two session windows (day 1 and day 2, day 3 deliberately absent) and one " +
+      "max_fixtures_per_day hard rule (count 2, scoped every_entrant) — every one of them previously a " +
+      "vacuous sentinel (0 / [] / [] / no constraints.hard at all).",
+    why:
+      "checker.ts's rules 2a/2b/2c/3/4 could not fire on ANY input while _tiny, the only pack this " +
+      "bench runs, declared sentinel values for all five — a green live run reported CLEAN having " +
+      "measured half of what it claims. T7a's first cut used count: 3, pinned at the cap BY THE " +
+      "FIXTURE COUNT ITSELF (both d-tiny entrants play exactly 3 fixtures) — no real defect could ever " +
+      "exceed it, only a hand-added fourth fixture _tiny cannot produce. count: 2 forces the third " +
+      "fixture onto a second day on every real run, so the cap is both satisfied by the live schedule " +
+      "AND violable from _tiny's own three real fixtures (checker.test.ts proves both) — see " +
+      "TINY_SCHEDULE_CONFIG's own comment for the full reasoning and the exact satisfying schedule. " +
+      "Rule 5 stays deliberately vacuous: making all eight live would leave the report's own \"nothing " +
+      "to check\" section empty on every real run — the same vacuous-report trap one level up.",
+    where:
+      "venues[0].courts[0].hours, venues[0].courts[1].hours, divisions[0].scheduleConfig, " +
+      "divisions[1].scheduleConfig",
+  },
+  {
     what: "claimInvites[] carries two entries, one per division's own star (p-ana from d-tiny, p-cho from d-badminton) — minted, never accepted (B03 §5: \"the accept flow is B05's, seeding only mints invites\").",
     why: "Bench design §9 P2: \"pc_ claim invites for ~3 stars/suite\". Two is enough for _tiny to prove the mapping generalises across divisions without inflating a fixture whose whole point is staying small.",
     where: "claimInvites[]",
@@ -425,6 +657,10 @@ const BADMINTON_DIVISION: PackInput["divisions"][number] = {
   // legal on a pack.
   tiebreakers: badminton.defaultTiebreakers,
   stages: [BADMINTON_STAGE],
+  // The SAME object d-tiny carries — see `TINY_SCHEDULE_CONFIG`. Sharing it
+  // is what makes "both divisions are scheduled onto the same two courts"
+  // true by construction rather than by two literals agreeing.
+  scheduleConfig: TINY_SCHEDULE_CONFIG,
 };
 
 // bestOf 3, straight games: home wins 2-0. `badminton`'s `pointsMap` default
@@ -673,6 +909,7 @@ export function buildTinyPack(): PackInput {
     persons: [...TINY_PERSONS, ...BADMINTON_PERSONS, ...REGISTRATION_PERSONS],
     entrants: [...TINY_ENTRANTS, ...BADMINTON_ENTRANTS, ...REGISTRATION_SHADOW_ENTRANTS],
     streams: [...TINY_STREAMS, BADMINTON_STREAM],
+    venues: TINY_VENUES,
     officials: TINY_OFFICIALS,
     claimInvites: TINY_CLAIM_INVITES,
     expected: {
