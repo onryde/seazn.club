@@ -77,7 +77,7 @@ export function SummaryTab({ doc, dict, data, subscribed }: SummaryTabProps) {
           {t(dict, cricket.toss.key, localiseParams(dict, cricket.toss.params))}
         </p>
       ) : null}
-      <TopPerformers performers={cricket.topPerformers} innings={cricket.innings} dict={dict} />
+      <TopPerformers performers={cricket.topPerformers} dict={dict} />
       {cricket.innings.map((innings) => (
         <div key={innings.number} className="space-y-4">
           <FallOfWicketsRail innings={innings} dict={dict} />
@@ -179,58 +179,37 @@ function LiveBlock({ live, dict }: { live: LiveBlockT; dict: PublicDict }) {
   );
 }
 
-/**
- * R11 fix round, C5 — which innings a performer belongs to is not a field on
- * `TopPerformerT` (`role`/`person`/`side`/`line`/`detail` only), so it is
- * identified the same way `ScorecardTab` identifies a bowler's fielding
- * side: by matching the performer's own `person.personId` against the rows
- * the document already carries in `innings[].batting`/`bowling` — never a
- * positional assumption ("performer 0/1 is innings 1"), which would silently
- * mislabel a document whose builder ever changed that order. `null` when no
- * innings carries a matching row (an empty/degenerate `innings[]`, which
- * some fixtures deliberately carry) — the caller renders that performer
- * without a label rather than guessing.
- */
-function inningsNumberForPerformer(p: TopPerformerT, innings: readonly InningsT[]): number | null {
-  const match = innings.find((inn) =>
-    p.role === "batter"
-      ? inn.batting.some((row) => row.person.personId === p.person.personId)
-      : inn.bowling.some((row) => row.person.personId === p.person.personId),
-  );
-  return match?.number ?? null;
-}
-
-function TopPerformers({
-  performers,
-  innings,
-  dict,
-}: {
-  performers: TopPerformerT[];
-  innings: readonly InningsT[];
-  dict: PublicDict;
-}) {
+function TopPerformers({ performers, dict }: { performers: TopPerformerT[]; dict: PublicDict }) {
   if (performers.length === 0) return null;
   // Four cards (batter, bowler, batter, bowler — one pair per innings) used
   // to render with nothing telling the two pairs apart beyond the small side
-  // chip. Grouped by innings, in the order each group is first seen, so a
-  // 2-innings match reads as two labelled pairs rather than four identical
-  // cards; the existing two-up-at-md card grid is unchanged PER GROUP.
-  const groups: { number: number | null; items: TopPerformerT[] }[] = [];
+  // chip. Grouped by `p.innings` — review round 1, Important #2: this used
+  // to be RE-DERIVED here by matching `p.person.personId` against
+  // `innings[].batting`/`bowling` rows, which silently mislabelled a person
+  // who appears in BOTH a main innings' and a Super Over's rows (the SAME
+  // squad, drawn from twice) as belonging to whichever innings `.find()` hit
+  // first — always the main one, since Super Over cards are appended after
+  // the main innings (`match-centre.ts`'s own `cards()` comment). The
+  // PRODUCER (`topPerformersOf`) already knows which innings it drew each
+  // performer from and now carries that number out on the performer itself
+  // (`match-centre-schema.ts`'s `topPerformers[].innings`) — this component
+  // renders what it was handed, no lookup. Grouped in the order each
+  // innings number is first seen, so a 2-innings match reads as two
+  // labelled pairs rather than four identical cards; the existing
+  // two-up-at-md card grid is unchanged PER GROUP.
+  const groups: { number: number; items: TopPerformerT[] }[] = [];
   for (const p of performers) {
-    const number = inningsNumberForPerformer(p, innings);
-    const group = groups.find((g) => g.number === number);
+    const group = groups.find((g) => g.number === p.innings);
     if (group) group.items.push(p);
-    else groups.push({ number, items: [p] });
+    else groups.push({ number: p.innings, items: [p] });
   }
   return (
     <div data-testid="mc-top-performers" className="space-y-4">
-      {groups.map((group, gi) => (
-        <div key={group.number ?? `unlabelled-${gi}`}>
-          {group.number !== null ? (
-            <p className="mb-1.5 text-xs font-semibold uppercase tracking-[0.18em] text-ink-muted">
-              {t(dict, "matchCentre.innings", { number: group.number })}
-            </p>
-          ) : null}
+      {groups.map((group) => (
+        <div key={group.number}>
+          <p className="mb-1.5 text-xs font-semibold uppercase tracking-[0.18em] text-ink-muted">
+            {t(dict, "matchCentre.innings", { number: group.number })}
+          </p>
           <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
             {group.items.map((p, i) => (
               <PerformerCard key={i} p={p} dict={dict} />
@@ -295,7 +274,15 @@ function FallOfWicketsRail({ innings, dict }: { innings: InningsT; dict: PublicD
         data-testid={`mc-fow-${innings.number}`}
         role="list"
         tabIndex={0}
-        aria-label={t(dict, "matchCentre.fallOfWickets")}
+        // Review fix round 1, Important #1 — this accessible name still read
+        // the bare `matchCentre.fallOfWickets` key for BOTH innings, so a
+        // screen-reader user heard "Fall of wickets, list" twice with no way
+        // to tell which innings each belonged to — the exact ambiguity C2's
+        // visible heading (just above) was fixed to remove, not carried
+        // through to this element's own name. Same key/params as the heading.
+        aria-label={t(dict, "matchCentre.fallOfWicketsFor", {
+          innings: t(dict, "matchCentre.innings", { number: innings.number }),
+        })}
         className="flex gap-2 overflow-x-auto max-md:-mx-4 max-md:px-4"
       >
         {innings.fallOfWickets.map((fow, i) => (

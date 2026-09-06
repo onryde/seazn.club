@@ -451,6 +451,11 @@ function topPerformersOf(
         side: battingSide,
         line: `${bestBatter.runs} (${bestBatter.balls})`,
         detail: bestBatter.strikeRate === null ? null : `SR ${fmt1(bestBatter.strikeRate)}`,
+        // Review round 1, Important #2 — THIS loop is the one place that
+        // actually knows which innings (main or Super Over) `bestBatter` was
+        // drawn from; carried straight off the engine's own
+        // `CricketInningsCard.number`, never re-derived by identity search.
+        innings: innings.number,
       });
     }
 
@@ -465,6 +470,7 @@ function topPerformersOf(
         side: bowlingSide,
         line: `${bestBowler.wickets}/${bestBowler.runs}`,
         detail: bestBowler.economy === null ? null : `Econ ${fmt1(bestBowler.economy)}`,
+        innings: innings.number,
       });
     }
   }

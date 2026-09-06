@@ -12,7 +12,7 @@
 // pad-driving requirement is already satisfied once by
 // spectator-public.spec.ts's own match A, so widths/axe/screens/locale only
 // need a genuinely live match to READ, not a second pad-tap proof.
-import { test, expect } from "@playwright/test";
+import { test, expect, type Page } from "@playwright/test";
 import { mkdirSync } from "node:fs";
 import { activeOrg, apiJson, createStageAndGenerate, expectNoHorizontalScroll, setOrgLocaleSql, TAG } from "../helpers";
 import { scanPadContrast } from "../scorepad-a11y-kit";
@@ -479,6 +479,70 @@ test("widths 320 vs 1280: control-set diff, every tab reachable, 44px tab hit ta
     await expect(anon.getByTestId(panelId), `${panelId} must be visible once its tab is clicked`).toBeVisible();
     await expectNoHorizontalScroll(anon);
   }
+
+  // Review round 1, Important #3 — everything above runs at 1280 (the
+  // viewport switched away from 320 above, before this loop), so none of it
+  // has ever actually re-exercised the 320px clipping scenario C6 fixes
+  // (`match-a-tab-commentary-320.png` showed "Commentar…" clipped before
+  // that fix landed). `toBeVisible()` (used above) does not catch this
+  // either — Playwright's own definition is "has a box and is not
+  // display:none", never "the box is within the viewport". Commentary is
+  // the third of cricket's four tabs — far enough along the rail to sit
+  // off-screen before selection.
+  //
+  // Both scenarios use a FRESH page/context, not `anon` above (which the
+  // per-tab loop left on an arbitrary active tab and scroll position — a
+  // resize fired from THAT state can drag Commentary into view as a side
+  // effect of scrolling whatever tab the loop left active, which nearly
+  // produced a false green here). A fresh load gives a known, deterministic
+  // start: `active` is the document's first tab (Summary) and the rail's
+  // `scrollLeft` is 0, so Commentary is genuinely off-screen before
+  // selection, not "off-screen because a previous step happened to leave it
+  // there".
+  const assertCommentaryTabInsideViewport = async (page: Page, viewportWidth: number) => {
+    const box = await page.getByTestId("mc-tab-commentary").boundingBox();
+    expect(box, "mc-tab-commentary has no layout box").not.toBeNull();
+    expect(box!.x, "active tab's LEFT edge must be inside the viewport").toBeGreaterThanOrEqual(0);
+    // +1px tolerance for sub-pixel float rounding (measured ~0.08px over in
+    // practice, not a visible clip).
+    expect(box!.x + box!.width, "active tab's RIGHT edge must be inside the viewport").toBeLessThanOrEqual(
+      viewportWidth + 1,
+    );
+  };
+
+  // Two shapes, because `tab-rail.tsx`'s fix has two independent parts and
+  // each needs its own witness:
+
+  // (a) click AND view both at 320 — the "on selection" `useEffect` alone.
+  // `dispatchEvent("click")`, NOT `.click()`: Playwright's own actionability
+  // protocol scrolls a target into view before a REAL `.click()`, which
+  // made this pass even with the component's own effect deleted entirely
+  // (confirmed by hand). `dispatchEvent` fires the DOM event directly with
+  // no such assist, so only the app's own `onClick` → `onChange` →
+  // re-render → `useEffect` chain can move the rail.
+  const freshA = await anonPage(browser, { width: 320, height: 568 });
+  await freshA.goto(matchAPath, { waitUntil: "load" });
+  await expect(freshA.getByTestId("mc-court-card")).toBeVisible({ timeout: 20_000 });
+  await freshA.getByTestId("mc-tab-commentary").dispatchEvent("click");
+  await freshA.waitForTimeout(400); // let the smooth scrollIntoView settle
+  await assertCommentaryTabInsideViewport(freshA, 320);
+
+  // (b) click at a WIDE viewport, then resize down — the exact sequence
+  // `screenshotAtWidths`/`shotAllTabs` use (click once, then walk several
+  // viewports without re-clicking). The "on selection" effect alone cannot
+  // pass this shape (`active` never changes across the resize), which is
+  // exactly why the resize LISTENER was added — this is its own witness,
+  // independent of (a). A real `.click()` is fine here (matches the real
+  // harness) — at 1280 nothing needs scrolling, so Playwright's own
+  // actionability assist is a no-op.
+  const freshB = await anonPage(browser, { width: 1280, height: 900 });
+  await freshB.goto(matchAPath, { waitUntil: "load" });
+  await expect(freshB.getByTestId("mc-court-card")).toBeVisible({ timeout: 20_000 });
+  await freshB.getByTestId("mc-tab-commentary").click();
+  await freshB.waitForTimeout(300);
+  await freshB.setViewportSize({ width: 320, height: 568 });
+  await freshB.waitForTimeout(400); // let the resize listener's scrollIntoView settle
+  await assertCommentaryTabInsideViewport(freshB, 320);
 });
 
 // ---------------------------------------------------------------------------

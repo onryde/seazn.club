@@ -130,6 +130,7 @@ function cricketDocFor(status: "in_play" | "decided"): MatchCentreDocT {
                 side: { entrantId: "home", name: "Home XI", short: "HOM", colour: null, badgeUrl: null },
                 line: "82 (54)",
                 detail: null,
+                innings: 1,
               },
             ]
           : [],

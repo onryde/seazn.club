@@ -318,6 +318,47 @@ describe("buildMatchCentre — cricket", () => {
     expect(bowler.detail).toBe(`Econ ${fmt1(3)}`);
   });
 
+  // Review round 1, Important #2 — `SUPER_OVER_SCRIPT` has FOUR innings
+  // cards (main 1, main 2, super-over 3, super-over 4 — the engine's own
+  // `cards()` numbers super-over cards `state.innings.length + i`, i.e.
+  // continuing the count, `scorecard.ts:698-700`), and its bowler lists
+  // deliberately reuse the SAME person: `a7` bowls innings 1 (main) AND
+  // innings 4 (the super over's home-reply); `h7` bowls innings 2 (main)
+  // AND innings 3 (the super over's away-batting). Each of those four
+  // innings has exactly ONE bowler, so that bowler is trivially "best" in
+  // each — this is the exact shape the pre-fix `.find()`-based lookup in
+  // `summary-tab.tsx` could not tell apart: a person credited in TWO
+  // innings used to collapse to whichever one `.find()` reached first
+  // (always the main one). `topPerformersOf` now carries the innings
+  // number out at the point of selection, so it must produce TWO SEPARATE
+  // entries per person, each with its OWN (different) innings number — a
+  // fixture where the two numbers happened to agree could not witness this
+  // regression, which is why this uses the super over, not `groupedPerformersDoc`.
+  it("top performers: a bowler credited in BOTH a main innings and the super over gets two entries with their OWN, DIFFERENT innings numbers", () => {
+    const ledger = scriptLedger(SUPER_OVER_SCRIPT);
+    const doc = buildMatchCentre(input({ events: ledger.events, cfg: ledger.cfg, fixture: decidedFixture(ledger) }));
+    const performers = doc.cricket!.topPerformers;
+
+    const a7Entries = performers.filter((p) => p.role === "bowler" && p.person.personId === "a7");
+    expect(a7Entries.length).toBe(2);
+    expect(a7Entries.map((p) => p.innings).sort((x, y) => x - y)).toEqual([1, 4]);
+
+    // Positive/negative pair on the same shape: h7 bowls innings 2 and 3 —
+    // a DIFFERENT pair of numbers than a7's, so this cannot pass by
+    // accidentally hardcoding a7's answer for both.
+    const h7Entries = performers.filter((p) => p.role === "bowler" && p.person.personId === "h7");
+    expect(h7Entries.length).toBe(2);
+    expect(h7Entries.map((p) => p.innings).sort((x, y) => x - y)).toEqual([2, 3]);
+
+    // Never collapsed to a single entry — the defect this test exists for
+    // would have shown as `a7Entries.length === 2` (both pushed) but both
+    // entries claiming the SAME (wrong) innings number had the mislabeling
+    // lived in a re-derived lookup instead of the producer; asserting the
+    // two DIFFER is the actual witness.
+    expect(a7Entries[0]!.innings).not.toBe(a7Entries[1]!.innings);
+    expect(h7Entries[0]!.innings).not.toBe(h7Entries[1]!.innings);
+  });
+
   it("final: header status decided, statusLine is the result key with the margin params, live null", () => {
     const ledger = scriptLedger(DECIDED_BY_RUNS_SCRIPT);
     const doc = buildMatchCentre(input({ events: ledger.events, cfg: ledger.cfg, fixture: decidedFixture(ledger) }));

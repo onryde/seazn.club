@@ -12,7 +12,9 @@
 import { beforeAll, describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import en from "@/dictionaries/en/public.json";
+import es from "@/dictionaries/es/public.json";
 import fr from "@/dictionaries/fr/public.json";
+import nl from "@/dictionaries/nl/public.json";
 import type { Dict } from "@/lib/i18n-constants";
 import { t } from "@/lib/i18n-runtime";
 import { MatchCentreDoc, type MatchCentreDocT } from "@/server/public-site/match-centre-schema";
@@ -22,6 +24,8 @@ import { SummaryTab } from "../summary-tab";
 
 const dict = en as Dict;
 const frDict = fr as Dict;
+const esDict = es as Dict;
+const nlDict = nl as Dict;
 
 function baseHeader(status: MatchCentreDocT["header"]["status"] = "in_play") {
   return {
@@ -179,6 +183,7 @@ const cricketDoc: MatchCentreDocT = {
         side: { entrantId: "home", name: "Home XI", short: "HOM", colour: null, badgeUrl: null },
         line: "82 (54)",
         detail: "6 fours, 3 sixes",
+        innings: 1,
       },
       {
         role: "bowler",
@@ -186,6 +191,7 @@ const cricketDoc: MatchCentreDocT = {
         side: { entrantId: "away", name: "Away XI", short: "AWY", colour: null, badgeUrl: null },
         line: "3/24",
         detail: "4 overs",
+        innings: 1,
       },
     ],
   },
@@ -202,11 +208,13 @@ const finalDoc: MatchCentreDocT = {
 };
 
 // R11 fix round, C5 — a fixture built specifically to exercise the innings
-// grouping: TWO batter/bowler pairs, each performer's `personId` planted in
-// exactly ONE innings' own `batting`/`bowling` rows (the identity-matching
-// contract `inningsNumberForPerformer` relies on), so the test can assert
-// each pair renders under its OWN "Innings N" label rather than four
-// identical unlabelled cards.
+// grouping: TWO batter/bowler pairs, each carrying its OWN `innings` number
+// (review round 1, Important #2 — the producer's field, not a re-derived
+// identity match), so the test can assert each pair renders under its OWN
+// "Innings N" label rather than four identical unlabelled cards. The
+// `innings[].batting`/`bowling` rows below are kept as realistic supporting
+// data (matching the `topPerformers` entries) even though the component no
+// longer reads them to determine grouping.
 const groupedPerformersDoc: MatchCentreDocT = {
   ...cricketDoc,
   fixtureId: "fx-grouped-performers",
@@ -294,6 +302,7 @@ const groupedPerformersDoc: MatchCentreDocT = {
         side: { entrantId: "home", name: "Home XI", short: "HOM", colour: null, badgeUrl: null },
         line: "82 (54)",
         detail: "6 fours, 3 sixes",
+        innings: 1,
       },
       {
         role: "bowler",
@@ -301,6 +310,7 @@ const groupedPerformersDoc: MatchCentreDocT = {
         side: { entrantId: "away", name: "Away XI", short: "AWY", colour: null, badgeUrl: null },
         line: "3/24",
         detail: "4 overs",
+        innings: 1,
       },
       {
         role: "batter",
@@ -308,6 +318,7 @@ const groupedPerformersDoc: MatchCentreDocT = {
         side: { entrantId: "away", name: "Away XI", short: "AWY", colour: null, badgeUrl: null },
         line: "40 (30)",
         detail: "2 fours",
+        innings: 2,
       },
       {
         role: "bowler",
@@ -315,6 +326,7 @@ const groupedPerformersDoc: MatchCentreDocT = {
         side: { entrantId: "home", name: "Home XI", short: "HOM", colour: null, badgeUrl: null },
         line: "2/18",
         detail: "3.5 overs",
+        innings: 2,
       },
     ],
   },
@@ -404,7 +416,72 @@ describe("SummaryTab — cricket", () => {
     expect(html).toContain('data-testid="mc-fow-1"');
     expect(html).toContain('role="list"');
     expect(html).toContain('tabindex="0"');
-    expect(html).toContain(`aria-label="${dict["matchCentre.fallOfWickets"] as string}"`);
+    expect(html).toContain(
+      `aria-label="${t(dict, "matchCentre.fallOfWicketsFor", { innings: t(dict, "matchCentre.innings", { number: 1 }) })}"`,
+    );
+  });
+
+  // Review fix round 1, Important #1 — the visible "FALL OF WICKETS —
+  // INNINGS N" heading was disambiguated by C2, but the SAME rail's own
+  // `aria-label` (the accessible name a screen reader actually announces for
+  // the `role="list"`) still read the bare `matchCentre.fallOfWickets` key
+  // for every innings — a screen-reader user heard "Fall of wickets, list"
+  // twice with no way to tell them apart. Asserts the ACCESSIBLE NAME
+  // specifically (not the heading text, which a prior test already covers),
+  // and that it differs between two innings that both carry fall-of-wickets
+  // entries. Mutant: revert the `aria-label` to the bare key → this reds.
+  it("the fall-of-wickets rail's ACCESSIBLE NAME (aria-label) is innings-disambiguated, not just its visible heading", () => {
+    const twoFowDoc: MatchCentreDocT = {
+      ...cricketDoc,
+      fixtureId: "fx-two-fow",
+      cricket: {
+        ...cricketDoc.cricket!,
+        innings: [
+          cricketDoc.cricket!.innings[0]!,
+          {
+            ...cricketDoc.cricket!.innings[1]!,
+            fallOfWickets: [
+              { wicket: 1, runs: 10, over: "2.1", batter: { personId: "p-away1", name: "Away Opener", masked: false } },
+            ],
+          },
+        ],
+      },
+    };
+    expect(MatchCentreDoc.safeParse(twoFowDoc).success).toBe(true);
+    const html = renderToStaticMarkup(<SummaryTab doc={twoFowDoc} dict={dict} data={liveFixtureFor(twoFowDoc)} />);
+    expect(html).toContain('data-testid="mc-fow-1"');
+    expect(html).toContain('data-testid="mc-fow-2"');
+    const ariaLabels = [...html.matchAll(/data-testid="mc-fow-\d+"[^>]*aria-label="([^"]*)"/g)].map((m) => m[1]);
+    expect(ariaLabels.length).toBe(2);
+    // Neither is the bare, non-disambiguated key.
+    for (const label of ariaLabels) expect(label).not.toBe(dict["matchCentre.fallOfWickets"] as string);
+    // The two are DIFFERENT — the whole point of disambiguating by innings.
+    expect(ariaLabels[0]).not.toBe(ariaLabels[1]);
+    expect(ariaLabels[0]).toBe(
+      t(dict, "matchCentre.fallOfWicketsFor", { innings: t(dict, "matchCentre.innings", { number: 1 }) }),
+    );
+    expect(ariaLabels[1]).toBe(
+      t(dict, "matchCentre.fallOfWicketsFor", { innings: t(dict, "matchCentre.innings", { number: 2 }) }),
+    );
+  });
+
+  // Checked per the review's own instruction ("check the partnerships rail
+  // for the same split... and fix it if present"): PartnershipsBars has NO
+  // `role`/`aria-label` at all — it is a plain `<div>` of visible bars, so
+  // there is no separate accessible-name element to fall out of sync with
+  // the heading. Nothing to fix there; this test pins that absence so a
+  // FUTURE add of an aria-label there is forced to go through the disambiguated
+  // key from day one, not copy today's fall-of-wickets mistake.
+  it("partnerships has no separate aria-label to fall out of sync (only the fall-of-wickets rail needed the fix)", () => {
+    const html = renderToStaticMarkup(<SummaryTab doc={cricketDoc} dict={dict} data={liveFixtureFor(cricketDoc)} />);
+    // Scoped to the PartnershipsBars container's own opening tag (not the
+    // whole subtree, which for other fixtures could also contain the NEXT
+    // innings' fall-of-wickets rail and its legitimate aria-label) — this
+    // targets exactly "does this container carry a separate accessible
+    // name", the shape the fall-of-wickets rail had wrong.
+    const partnershipsTags = [...html.matchAll(/<div data-testid="mc-partnerships-\d+"[^>]*>/g)];
+    expect(partnershipsTags.length).toBeGreaterThan(0);
+    for (const tag of partnershipsTags) expect(tag[0]).not.toContain("aria-label");
   });
 
   // Review fix round 2 (IMPORTANT 1, corrected) — the name cell only
@@ -506,10 +583,15 @@ describe("SummaryTab — cricket", () => {
   // Scorecard accordion's own sub-line renders. Mutant: revert to the bare
   // `matchCentre.partnerships`/`matchCentre.fallOfWickets` keys → the two
   // headings collapse back to identical text and this reds.
-  it("partnerships and fall-of-wickets headings carry a DIFFERENT innings label per innings, in English and French", () => {
+  // Minor (review round 1) — this covered en/fr only; es/nl's `{innings}`
+  // interpolation was unverified by anything except `i18n:check`'s key-parity
+  // check, which does not validate placeholder well-formedness.
+  it("partnerships and fall-of-wickets headings carry a DIFFERENT innings label per innings, in all four locales", () => {
     for (const [locale, d] of [
       ["en", dict],
+      ["es", esDict],
       ["fr", frDict],
+      ["nl", nlDict],
     ] as const) {
       const html = renderToStaticMarkup(<SummaryTab doc={cricketDoc} dict={d} data={liveFixtureFor(cricketDoc)} />);
       const innings1Label = t(d, "matchCentre.innings", { number: 1 });
@@ -529,11 +611,13 @@ describe("SummaryTab — cricket", () => {
 
   // R11 fix round, C5 — four stacked top-performer cards (batter, bowler,
   // batter, bowler — one pair per innings) with no innings label. Each
-  // group is now labelled the same "Innings {number}" way, derived by
-  // matching the performer's own personId against the innings' real
-  // batting/bowling rows (never a positional assumption). Mutant: replace
-  // `inningsNumberForPerformer` with a function that always returns `null`
-  // → both labels disappear and this reds.
+  // group is now labelled the same "Innings {number}" way, grouped by the
+  // `innings` number the PRODUCER (`topPerformersOf`) already carried out on
+  // each performer (review round 1, Important #2 — see the dedicated Super
+  // Over test below for why this is no longer an identity match). Mutant:
+  // group by `p.role` instead of `p.innings` → both pairs collapse into one
+  // "batter" group and one "bowler" group with no innings label at all, and
+  // this reds.
   it("top-performer pairs are grouped and labelled by innings, in English and French", () => {
     for (const [locale, d] of [
       ["en", dict],

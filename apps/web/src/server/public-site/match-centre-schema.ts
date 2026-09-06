@@ -39,7 +39,18 @@ export const CricketView = z.object({
   toss: Msg.nullable(),
   innings: z.array(CricketInningsView),
   live: z.object({ striker: Person.nullable(), nonStriker: Person.nullable(), bowler: Person.nullable(), batters: z.array(CricketBattingRow), bowling: z.array(CricketBowlingRow), thisOver: z.array(z.string()), partnership: z.string().nullable(), lastWicket: Msg.nullable() }).nullable(),
-  topPerformers: z.array(z.object({ role: z.enum(["batter", "bowler"]), person: Person, side: Side, line: z.string(), detail: z.string().nullable() })),
+  // `innings` (review round 1, Important #2) — WHICH innings the builder
+  // (`topPerformersOf`) drew this performer from, carried straight off
+  // `CricketInningsCard.number` at the point of selection. Added because the
+  // component used to re-derive this by searching `innings[].batting`/
+  // `bowling` for a matching `person.personId` — a person who appears in
+  // BOTH a main innings and a Super Over (the same squad, drawn from twice)
+  // silently resolved to whichever innings `.find()` hit first, always the
+  // main one. The producer already knows the real answer; carrying it out
+  // is the fix, not a smarter lookup at the consumer.
+  topPerformers: z.array(
+    z.object({ role: z.enum(["batter", "bowler"]), person: Person, side: Side, line: z.string(), detail: z.string().nullable(), innings: z.number() }),
+  ),
 });
 export const TimelineLine = z.object({ seq: z.number(), at: z.string().nullable(), marker: z.string().nullable(), sideIndex: z.union([z.literal(0), z.literal(1)]).nullable(), text: Msg, emphasis: z.enum(["normal", "score", "strong"]) });
 // `unit` (controller ruling, Task 7 review): what ONE column is called in the
