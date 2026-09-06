@@ -77,6 +77,18 @@ import { routes } from "../../src/lib/routes";
  *     render for a solo org — `showOperator` requires `members.length > 1`, so
  *     this file builds a real group of two.
  *
+ * SELECTORS. `billing-manage.tsx` and `operator-console.tsx` carried no
+ * `data-testid` at all, so every control here could only be reached by role or
+ * by copy — and the entitlements ladder rewrite is about to move copy on this
+ * exact surface, which would break these anchors silently. Six hooks were added
+ * with this file (`cancel-subscription`, `cancel-reason`, `promo-box` on all
+ * three PromoCodeBox shapes, `allocation-cap`, `allocation-cap-input`,
+ * `allocation-save`) and every positive assertion below anchors on them. Two
+ * anchors are deliberately NOT testids: the cancel picker's option text, which
+ * is derived from the component's own `CANCEL_REASONS` and so already moves
+ * with a copy change, and the dictionary strings read through `ui()`, which are
+ * the thing under test rather than a way of finding it.
+ *
  * `mode: "default"`, matching its sibling settings specs: `serial` would skip
  * every test after the first red, which is the opposite of what a walkthrough
  * is for.
@@ -451,7 +463,7 @@ test("the cancel dialog opens on no reason and offers exactly the reasons the co
   });
 
   await page.goto(routes.billing(org.slug));
-  const cancelButton = page.getByRole("button", { name: "Cancel subscription", exact: true });
+  const cancelButton = page.getByTestId("cancel-subscription");
   await expect(
     cancelButton,
     "the manage block needs isPayer && isPaid && a live subscription — see makeGroupLive",
@@ -460,7 +472,7 @@ test("the cancel dialog opens on no reason and offers exactly the reasons the co
 
   const dialog = page.getByRole("alertdialog");
   await expect(dialog).toBeVisible();
-  const picker = dialog.getByRole("combobox");
+  const picker = dialog.getByTestId("cancel-reason");
   // WHAT IT OPENS AT: no reason chosen. The reason is optional and is sent as
   // `undefined` when blank, so a preselected first reason would file every
   // cancellation under "Season finished".
@@ -529,11 +541,15 @@ test("the promo route refuses three distinct ways before it can reach Stripe, an
   // `PromoCodeBox` is gated on `overview`, and `getBillingOverview` returns null
   // the moment `stripe_customer_id` is null. Recorded, not filed as a defect: a
   // group that completed checkout has a customer and gets the box.
+  //
+  // HONEST LIMIT, stated rather than hidden: a `toHaveCount(0)` on a testid is
+  // satisfied by that testid being DELETED, so this half cannot witness the
+  // hook's own removal. `promo-box` is on all three of PromoCodeBox's shapes
+  // precisely so the wave that can render one — a group with a live Stripe
+  // customer — has a positive pair to write against it.
   await page.goto(routes.billing(org.slug));
-  await expect(page.getByRole("button", { name: "Cancel subscription", exact: true })).toBeVisible({
-    timeout: READ_MS,
-  });
-  await expect(page.getByRole("button", { name: "Have a promo code?" })).toHaveCount(0);
+  await expect(page.getByTestId("cancel-subscription")).toBeVisible({ timeout: READ_MS });
+  await expect(page.getByTestId("promo-box")).toHaveCount(0);
 });
 
 test("the operator console opens a member at its real cap, refuses a negative or fractional one, and a saved cap reaches the route", async ({
@@ -589,7 +605,7 @@ test("the operator console opens a member at its real cap, refuses a negative or
   await expect(row).toHaveCount(1);
 
   // WHAT THE ROW OPENS AT: the null cap set above, rendered as Unlimited.
-  const capButton = row.getByRole("button").first();
+  const capButton = row.getByTestId("allocation-cap");
   await expect(capButton).toContainText(ui("billing.operator.unlimited"));
   await capButton.click();
 
@@ -597,9 +613,14 @@ test("the operator console opens a member at its real cap, refuses a negative or
   await expect(editor).toContainText(ui("billing.operator.editor.title", { org: member.name }));
   const modes = editor.locator('input[name="cap-mode"]');
   await expect(modes.first(), "the editor must open on the member's CURRENT mode").toBeChecked();
-  const capField = editor.getByRole("spinbutton", { name: ui("billing.operator.editor.capLabel") });
+  const capField = editor.getByTestId("allocation-cap-input");
   await expect(capField).toHaveValue("");
-  const save = editor.getByRole("button", { name: ui("billing.operator.editor.save"), exact: true });
+  // The accessible name is still asserted, separately from the hook that finds
+  // the field: a testid makes the control reachable, it does not make it
+  // labelled, and dropping the `aria-label` would leave axe's own gate to
+  // catch a control this file had stopped watching.
+  await expect(capField).toHaveAttribute("aria-label", ui("billing.operator.editor.capLabel"));
+  const save = editor.getByTestId("allocation-save");
   // Disabled because nothing CHANGED yet — the unchanged bound, distinct from
   // the invalid bound below, which is why both are asserted.
   await expect(save).toBeDisabled();
@@ -621,7 +642,7 @@ test("the operator console opens a member at its real cap, refuses a negative or
   await save.click();
 
   await expect(page.getByRole("dialog")).toHaveCount(0);
-  await expect(row.getByRole("button").first()).toContainText("250");
+  await expect(row.getByTestId("allocation-cap")).toContainText("250");
   await expect(row).toContainText(ui("billing.operator.ofCap", { cap: 250 }));
 
   // The server's answer, not the table's optimistic one: `onSaved` updates

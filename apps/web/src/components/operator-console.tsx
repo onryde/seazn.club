@@ -114,6 +114,7 @@ export function OperatorConsole({
                   <td className="whitespace-nowrap py-3 pr-3">
                     <button
                       type="button"
+                      data-testid="allocation-cap"
                       onClick={() => setEditing(m)}
                       className="inline-flex items-center gap-1 rounded-lg px-2 py-1 font-medium text-purple-700 transition hover:bg-purple-50 focus-visible:ring-2 focus-visible:ring-purple-300"
                     >
@@ -239,6 +240,7 @@ function AllocationEditor({
           </button>
           <button
             type="button"
+            data-testid="allocation-save"
             onClick={save}
             disabled={saving || invalid || !changed}
             className="btn btn-primary disabled:opacity-40"
@@ -281,6 +283,7 @@ function AllocationEditor({
           <span className="text-sm text-slate-700">{t(dict, "billing.operator.editor.limited")}</span>
           <input
             type="number"
+            data-testid="allocation-cap-input"
             min={0}
             step={1}
             inputMode="numeric"
