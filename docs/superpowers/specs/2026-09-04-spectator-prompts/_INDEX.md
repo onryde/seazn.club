@@ -137,14 +137,58 @@ None yet.
 See `_RULES.md` §Environment. No standing env between waves; W0's env was torn
 down the moment its screens were on disk (2026-09-05).
 
-W0 harness: `apps/web/e2e/walkthrough/w0-spectator-capture.spec.ts` — skips
-unless `W0_DIR` is set; seeds a public competition (four 8-a-side cricket teams,
-8 overs, one finished + one live match, three football sides) through the API
-and captures every `/shared` page at 320/375/768/1280 in an anonymous context,
-writing `manifest.json` (h-scroll + control set per width) and `seed.json`.
-`W0_SEED=<seed.json>` reuses a seed instead of posting it again. Run from
-`apps/web` with `PLAYWRIGHT_BASE`, `E2E_PROD_TARGET`, `DATABASE_URL`,
-`DATABASE_SSL=disable` from `seazn-env env --label spx`, `--project=walkthrough`.
+W0 harness (HISTORY — deleted 2026-09-06, Task 15): `apps/web/e2e/walkthrough/
+w0-spectator-capture.spec.ts` used to skip unless `W0_DIR` was set; it seeded a
+public competition (four 8-a-side cricket teams, 8 overs, one finished + one
+live match, three football sides) through the API and captured every `/shared`
+page at 320/375/768/1280 in an anonymous context, writing `manifest.json`
+(h-scroll + control set per width) and `seed.json`. Its job is done — Task 15
+replaced it with the real, committed walkthrough, split across TWO files (each
+kept comfortably under Playwright's per-run budget) plus a shared helpers
+module:
+- `apps/web/e2e/walkthrough/spectator-public.spec.ts` — the two cricket
+  matches: A tapped through the real v3 pad (R7) and read live on an
+  anonymous page opened before the taps (R10); B finished, band-2 player
+  lines including Task 18's owed enriched-line check.
+- `apps/web/e2e/walkthrough/spectator-public-2.spec.ts` — football, tennis,
+  consent masking, the 320-vs-1280 control-set diff, axe, screens, locale.
+- `apps/web/e2e/walkthrough/spectator-public-helpers.ts` — the shared
+  seeding/pad/screenshot helpers both files import (never duplicated).
+Both reuse W0's seeding shapes (`playInnings`, `postEvent`/`mustPost`,
+`fixtureSides`, `putLineups`, `createPersons`); the throwaway capture code
+itself was not kept. Run either file from `apps/web` with `PLAYWRIGHT_BASE`,
+`E2E_PROD_TARGET`, `DATABASE_URL`, `DATABASE_SSL=disable` from
+`seazn-env env --label <yours>`, `--project=walkthrough`.
+
+## Task 15 — done, 2026-09-06
+
+Both walkthrough files green (see task-15-report.md for full run counts);
+registered in `WALKTHROUGH_SPECS` (`e2e-ci-wiring.test.ts`, needed once the
+branch rebased onto main's PR #723 inventory). `mobile.spec.ts`'s "public
+surfaces: no horizontal scroll" now covers the public match-centre page too,
+green on all seven width projects. `scripts/smoke.ts` gained
+`matchCentreSmoke()` (no local run — the script has no CLI filter; exercised
+by CI's PR smoke).
+
+One real bug found and fixed in the walkthrough's own seeding: match A's
+innings-2 seed (41) left its chase only 4 runs short of target after the
+scripted 27 balls, so the pad's own second tap legitimately completed the
+match and the third tap was correctly rejected 422 `ALREADY_DECIDED` by the
+engine — not a product defect. seed=43 leaves a 25-run margin.
+
+Two genuine, previously-undiscovered PRODUCT defects recorded with evidence
+via `test.fixme` (owed to the match-centre/Task 10 owner, not fixed here —
+both were masked until the seed fix above let the serial file's later tests
+run at all): the tab rail's tap targets are ~32px at 320px (below the 44px
+minimum, `tab-rail.tsx`'s `py-1.5`+`text-sm`); two SERIOUS axe
+color-contrast violations at 320 (`mc-updated-at` 4.09:1, the bowling-figure
+labels 3.45:1, both short of WCAG AA's 4.5:1).
+
+Also fixed: `makeCricketDivision` (shared helper) now derives
+`maxOversPerBowler`/`minOversForResult` from the division's own
+`ballsPerInnings` — the t20 preset's defaults (scaled for a 20-over match)
+exceeded the Consent division's 2-over innings and 500'd its public page
+with a ZodError, again only visible once the seed fix let the suite reach it.
 
 ## Session status — 2026-09-05 (W1 execution, handoff)
 
