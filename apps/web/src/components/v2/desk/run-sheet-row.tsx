@@ -262,6 +262,23 @@ export function RunSheetRow({
           ? msg("runsheet.sub.noScorer")
           : null;
 
+  // Task 9 (A3, "two deliberate lines"): the stage/court/round meta text, as a
+  // plain string rather than the three-ternary JSX below — computed ONCE so
+  // the desktop meta line and the phone line-2 text below read the SAME
+  // value instead of restating the interpolation twice. Always non-empty:
+  // `schedule.round` has no guard, unlike the two optional prefixes.
+  const metaLine = `${stageName ? `${stageName} · ` : ""}${courtLabel ? `${courtLabel} · ` : ""}${msg("schedule.round", { n: fixture.round_no })}`;
+  // Below `md`, W2's gate photographed THREE reflowed lines at 320 (meta,
+  // name, then either the result sub-line or the action pill on its own —
+  // four when a fixture actually carried one). Two deliberate lines instead:
+  // line 1 is time + entrants (unchanged below), line 2 folds the meta text
+  // and the result sub-line into ONE string that sits beside the one action,
+  // right-aligned — never a THIRD phone-only line for the result. Desktop is
+  // untouched: `metaLine` and `subLine` keep rendering as their own separate
+  // paragraphs there (see the `hidden md:block` pair below); this combined
+  // string is read ONLY by the `md:hidden` line-2 paragraph further down.
+  const phoneLineTwo = subLine !== null && subLine !== "" ? `${metaLine} · ${subLine}` : metaLine;
+
   /**
    * THE ONLY DOOR into the editor, and the one place `when` is seeded.
    *
@@ -353,7 +370,15 @@ export function RunSheetRow({
           W3 Task 8 (ruling 15): this used to switch at `sm:` (640), while
           the ledger switches at `md:` (768) — at 768 the ledger was already
           a card while this row was already a desktop row. Unified on `md:`
-          so the whole desk agrees on where "phone" ends. */}
+          so the whole desk agrees on where "phone" ends.
+          W3 Task 9 (A3): below `md` this used to reflow into three lines
+          (meta, name, action) — four when a result or "no scorer" sub-line
+          also rendered. Now exactly two: line 1 (this first `md:contents`
+          div) is time + entrants; line 2 (the second one, below) is the
+          combined meta/sub-line text beside the one action, right-aligned.
+          One DOM, branched — `md:` above keeps the original three-paragraph
+          stack (`hidden md:block` on the meta and sub-line paragraphs);
+          `max-md` below shows only the `md:hidden` combined line instead. */}
       <div className="flex min-w-0 flex-col gap-2 md:flex-row md:flex-wrap md:items-center md:gap-3">
         <div className="flex min-w-0 items-center gap-3 md:contents">
           {/* Time spine cell — mono/tabular so the column lines up; an
@@ -396,11 +421,10 @@ export function RunSheetRow({
             </span>
           )}
           <div className="min-w-0 flex-1">
-            <p className="min-w-0 truncate text-xs text-slate-500">
-              {stageName ? `${stageName} · ` : ""}
-              {courtLabel ? `${courtLabel} · ` : ""}
-              {msg("schedule.round", { n: fixture.round_no })}
-            </p>
+            {/* Task 9: desktop-only now — `phoneLineTwo` below carries this
+                same text (combined with the result sub-line) on phone, so
+                printing it here too would be the row's THIRD line again. */}
+            <p className="hidden min-w-0 truncate text-xs text-slate-500 md:block">{metaLine}</p>
             {/* IMPORTANT 2 (fix round 1): the ONE-action rule governs the
                 action CONTROL, not the row's own identity link — `FixtureLine`
                 had both. An unscheduled row's single action is "Set time" (a
@@ -425,34 +449,47 @@ export function RunSheetRow({
               <span className="mx-1.5 text-slate-500">{msg("schedule.vs")}</span>
               {away}
             </Link>
+            {/* Task 9: `hidden md:block`, same reasoning as the meta line
+                above — `phoneLineTwo` is the phone's copy of this text. */}
             {subLine !== null && subLine !== "" && (
-              <p className="min-w-0 truncate text-xs text-slate-500">{subLine}</p>
+              <p className="hidden min-w-0 truncate text-xs text-slate-500 md:block">{subLine}</p>
             )}
           </div>
         </div>
-        {/* The ONE action — a plain link for every kind except `set_time`,
-            which toggles the inline editor below (≥44px either way). Its own
-            row on mobile so it never collides with the entrant names above. */}
-        <div className="flex flex-wrap items-center gap-2 md:contents">
-          {action.kind === "set_time" ? (
-            <button
-              type="button"
-              data-row-action="set_time"
-              disabled={busy}
-              onClick={toggleEditor}
-              className="btn btn-primary min-h-11 shrink-0 px-3 text-xs"
-            >
-              {actionLabel}
-            </button>
-          ) : (
-            <Link
-              href={href}
-              data-row-action={action.kind}
-              className="btn btn-ghost min-h-11 shrink-0 px-3 text-xs"
-            >
-              {actionLabel}
-            </Link>
-          )}
+        {/* Line 2 on phone (Task 9, A3): the meta/sub-line text, left, beside
+            the one action, right-aligned — `justify-between` on one flex
+            row. `md:contents` unwraps this wrapper at `md:` and up exactly
+            as it always did, so the desktop composition (this whole div
+            reduced to just the action control, a flex item of the outer
+            row) is byte-for-byte what it was before this task; the
+            `md:hidden` paragraph below simply renders `display:none` there
+            and takes no space. `min-w-0` down to the truncated paragraph,
+            same discipline the entrant column above already carries. */}
+        <div className="flex min-w-0 items-center justify-between gap-2 md:contents">
+          <p className="min-w-0 flex-1 truncate text-xs text-slate-500 md:hidden">{phoneLineTwo}</p>
+          {/* The ONE action — a plain link for every kind except `set_time`,
+              which toggles the inline editor below (≥44px either way). */}
+          <div className="flex flex-wrap items-center gap-2 md:contents">
+            {action.kind === "set_time" ? (
+              <button
+                type="button"
+                data-row-action="set_time"
+                disabled={busy}
+                onClick={toggleEditor}
+                className="btn btn-primary min-h-11 shrink-0 px-3 text-xs"
+              >
+                {actionLabel}
+              </button>
+            ) : (
+              <Link
+                href={href}
+                data-row-action={action.kind}
+                className="btn btn-ghost min-h-11 shrink-0 px-3 text-xs"
+              >
+                {actionLabel}
+              </Link>
+            )}
+          </div>
         </div>
       </div>
       {editing && (

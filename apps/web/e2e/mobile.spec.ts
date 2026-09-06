@@ -915,7 +915,12 @@ test("competition desk: the tool row is a phone composition below sm, not the de
   request,
 }) => {
   const width = projectViewport()?.width ?? 0;
-  const isPhone = width < 640;
+  // Ruling T8-C: Task 8 unified this row's own breakpoint (and the masthead
+  // tool row's) from `sm:` (640) onto `md:` (768) — this literal was left
+  // behind, stale against the split it is meant to classify. Harmless while
+  // no matrix width falls in [640, 768), but the constant and the breakpoint
+  // must move together or the next width added here silently misclassifies.
+  const isPhone = width < 768;
 
   const comp = await apiJson<{ id: string; slug: string }>(request, "/api/v1/competitions", "POST", {
     name: `Desk Tools ${TAG}`, visibility: "public", ends_on: "2030-12-31",
@@ -3162,7 +3167,17 @@ test("P6 task B: panel resolves the tie, confirms, bracket shows real entrants, 
 
   // Non-destructive guarantee, on screen: the court pinned before anyone
   // qualified is still exactly what shows now that the slot is filled.
-  await expect(page.getByText(P6B_COURT, { exact: false }).first()).toBeVisible();
+  //
+  // `p:visible`, not a bare `getByText(...).first()` (W3 Task 9 blast
+  // radius): the run-sheet row now carries this SAME court/round text in
+  // TWO paragraphs — one `hidden md:block` (desktop), one `md:hidden`
+  // (phone, combined with the result sub-line) — "one DOM, branched", the
+  // repo-wide phone-composition idiom. Below `md` the desktop copy is first
+  // in DOM order but NOT visible, so a bare `.first()` resolved to it and
+  // read "hidden" even though the phone copy of the same text was on
+  // screen a few nodes later. Same fix `mobile.spec.ts:976`'s `nowLine`
+  // already uses for the identical shape.
+  await expect(page.locator("p:visible", { hasText: P6B_COURT }).first()).toBeVisible();
 
   await expectNoHorizontalScroll(page);
 });

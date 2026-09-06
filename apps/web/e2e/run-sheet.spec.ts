@@ -1,4 +1,4 @@
-import { test, expect, type Page } from "@playwright/test";
+import { test, expect, type Page, type Locator } from "@playwright/test";
 import AxeBuilder from "@axe-core/playwright";
 import {
   TAG,
@@ -11,6 +11,12 @@ import {
   setDateTime,
   expectNoHorizontalScroll,
 } from "./helpers";
+// The repo's one cookie-banner dismissal — idempotent no-op under the authed
+// `page` fixture (consent is already pre-dismissed into AUTH_STATE), but
+// Task 9's brief calls it out explicitly: a fresh phone context is the one
+// place it actually matters, so every width loop below calls it anyway
+// rather than assuming the storageState always covers the surface driving.
+import { dismissCookieBanner } from "./scorepad-a11y-kit";
 // Same authority the row itself uses (`zoned-datetime.ts`, #448) — the
 // expected instant below is DERIVED from the two zones, not typed as a
 // constant, so the case still witnesses the regression if either zone
@@ -1357,4 +1363,225 @@ test("Task 8: the run-sheet row is one line at 768 and still stacked at 700 (md,
       ).toBeLessThan(6);
     }
   }
+});
+
+// W3 Task 9 (A3) — the phone run-sheet row becomes two deliberate lines.
+//
+// Before this, the phone row reflowed into THREE lines below `md` (meta,
+// name, action) — a FOURTH whenever a fixture actually carried a result or
+// "no scorer yet" sub-line, which the seeded state below does on purpose, so
+// the merge this task makes is actually exercised. Design of record (W3
+// spec, "Tasks 1 and 6-10"): "the acceptance criterion for the phone work is
+// a CONTROL-SET DIFF... W2's gate measured them byte-identical (71 controls,
+// diff empty) — that equality is the groomed-shrink signature this wave
+// exists to break, not a side effect of it." A box-size or screenshot
+// comparison cannot witness that; only a diff of the live DOM's visible
+// parts can.
+test("Task 9: the phone run-sheet row is two deliberate lines, and its control set differs from desktop's", async ({
+  page,
+  request,
+}) => {
+  // `middayZoneFor` (this file, above): the venue zone this seed's "today"
+  // check runs in. Puts ~12h of headroom either side of the UTC day
+  // boundary around the `scheduled_at` set below, the same reasoning the
+  // day-grouping case at the top of this file already needed once.
+  const { divisionId, fixtureIds } = await seedRunSheetDivision(request, { tz: middayZoneFor(Date.now()) });
+  expect(fixtureIds.length, "seed produced no fixtures — setup failed, not the row").toBeGreaterThanOrEqual(1);
+  const target = fixtureIds[0]!;
+  const targetInfo = await apiJson<{ fixture_no: number; home_entrant_id: string | null }>(
+    request,
+    `/api/v1/fixtures/${target}`,
+  );
+  const fixtureNo = targetInfo.data!.fixture_no;
+  const homeEntrantId = targetInfo.data!.home_entrant_id;
+  expect(homeEntrantId, "seeded fixture has no home entrant — cannot rename it, not what this case tests").not.toBeNull();
+
+  // A realistic long entrant name, not a short placeholder — the scorepad
+  // phone-composition wave's own regression (a single missing `min-w-0` on
+  // the ancestor chain put 106px of overflow on the page at 320-390) was
+  // visible ONLY with a name this long and only in a browser.
+  const LONG_NAME = "Bartholomew Alexander Weatherstonehaugh Jr.";
+  expect(LONG_NAME.length, "fixture setup: this case needs the realistic 43-char name the brief calls for").toBe(43);
+  const renamed = await apiJson(request, `/api/v1/entrants/${homeEntrantId}`, "PATCH", { display_name: LONG_NAME });
+  expect(renamed.status, `renaming the entrant failed: ${JSON.stringify(renamed.error)}`).toBeLessThan(300);
+
+  // Scheduled TODAY with no officials assigned — `fixtureRowAction`'s branch
+  // 6, the ONE ladder state that populates the result-shaped sub-line
+  // ("No scorer yet") alongside a real action ("Assign scorer"). A fixture
+  // with neither would leave line 2 carrying only the meta text, and could
+  // not witness the meta+sub-line MERGE this task makes.
+  await setFixtureScheduledAtSql(target, new Date(Date.now() + 5 * 60_000).toISOString());
+
+  // The row's visible parts — every visible `a[href]`/`button`/`p` inside
+  // it, as `tag:text`, in BOTH forms: `order` is GEOMETRIC reading order
+  // (y-centre then x — never DOM order, since CSS is what composes a phone
+  // row) for the report to show what a reader actually sees; `bag` is the
+  // same list SORTED, for the membership+repeats comparison the acceptance
+  // criterion gates on.
+  //
+  // The gate reads `bag`, not `order`, because `order` has a real, harmless
+  // tie this row's OWN desktop layout already contains and Task 9 does not
+  // touch: `items-center` puts the action button's centre exactly on the
+  // entrant column's MIDDLE line (measured: time/name/action all centre at
+  // y=857 on a seeded row, meta 18px above, sub-line 18px below), so at
+  // 1280 the action sorts ahead of the sub-line by x — a tie-break, not a
+  // compositional fact. Gating on `order` flagged that tie as "the sets
+  // already differ" against the UNCHANGED baseline the first time this was
+  // run (see the task report), which would make the gate pass without the
+  // fix ever landing — the "guard nothing kills" shape. `bag` is immune to
+  // it: today the exact same five strings render at both widths (same bag,
+  // different tie-broken order); after the fix, hiding the meta/sub-line
+  // paragraphs on phone and replacing them with ONE combined string is a
+  // genuine four-vs-five MEMBERSHIP change no tie-break can produce.
+  const rowControlSet = (fno: number): Promise<{ order: string[]; bag: string[] }> =>
+    page.evaluate((fixtureNoArg) => {
+      const root = document.querySelector<HTMLElement>(`[data-fixture-no="${fixtureNoArg}"]`);
+      if (root === null) return { order: ["(row absent)"], bag: ["(row absent)"] };
+      const isVisible = (el: HTMLElement) => {
+        const r = el.getBoundingClientRect();
+        const cs = getComputedStyle(el);
+        return r.width > 0 && r.height > 0 && cs.visibility !== "hidden" && cs.display !== "none";
+      };
+      const items = Array.from(root.querySelectorAll<HTMLElement>("a[href], button, p"))
+        .filter(isVisible)
+        .map((el) => {
+          const r = el.getBoundingClientRect();
+          const text = (el.innerText || el.textContent || "").replace(/\s+/g, " ").trim();
+          return { tag: el.tagName.toLowerCase(), text, yCenter: Math.round(r.top + r.height / 2), x: Math.round(r.left) };
+        })
+        .filter((i) => i.text !== "");
+      const order = [...items].sort((a, b) => a.yCenter - b.yCenter || a.x - b.x).map((i) => `${i.tag}:${i.text}`);
+      const bag = [...order].sort();
+      return { order, bag };
+    }, fno);
+
+  const sets: Record<number, { order: string[]; bag: string[] }> = {};
+  for (const width of [320, 1280]) {
+    await page.setViewportSize({ width, height: 900 });
+    await page.goto(await divisionPath(request, divisionId, "?tab=fixtures"));
+    await dismissCookieBanner(page);
+    const sheet = page.getByTestId("run-sheet");
+    await expect(sheet, `run sheet did not render at ${width}px`).toBeVisible();
+    const row = page.locator(`[data-fixture-no="${fixtureNo}"]`);
+    await expect(row, `seeded row did not render at ${width}px`).toHaveCount(1);
+    sets[width] = await rowControlSet(fixtureNo);
+  }
+  // PRINT WHAT WAS SEEN beside the gate (_RULES.md) — this dump IS the
+  // baseline/after-fix measurement the task report has to carry.
+  console.log("Task 9 row control set at 320px: ", JSON.stringify(sets[320]));
+  console.log("Task 9 row control set at 1280px:", JSON.stringify(sets[1280]));
+
+  // THE ACCEPTANCE CRITERION (design of record, quoted above): the phone and
+  // desktop composition must be a genuinely different set of visible parts.
+  // Non-vacuous first — an empty-vs-empty "difference" would trivially
+  // satisfy the inequality below without proving anything.
+  expect(sets[320]!.bag.length, "phone control set is empty — nothing was measured").toBeGreaterThan(0);
+  expect(sets[1280]!.bag.length, "desktop control set is empty — nothing was measured").toBeGreaterThan(0);
+  expect(
+    sets[320]!.bag,
+    "the 320px and 1280px control sets must DIFFER — see the printed sets above; equal sets mean the phone row is the desktop row shrunk, not composed",
+  ).not.toEqual(sets[1280]!.bag);
+
+  // ---- geometry at 320: exactly two lines ---------------------------------
+  await page.setViewportSize({ width: 320, height: 900 });
+  await page.goto(await divisionPath(request, divisionId, "?tab=fixtures"));
+  await dismissCookieBanner(page);
+  const row320 = page.locator(`[data-fixture-no="${fixtureNo}"]`);
+  await expect(row320, "seeded row did not render at 320px").toHaveCount(1);
+
+  const nameLink = row320.locator("a", { hasText: LONG_NAME.slice(0, 12) }).first();
+  const action = row320.locator("[data-row-action]").first();
+  const timeEl = row320.getByTestId("run-sheet-edit-time");
+  await expect(nameLink, "no entrant name link at 320px — setup did not produce the state under test").toBeVisible();
+  await expect(action, "no action element at 320px — setup did not produce the state under test").toBeVisible();
+  await expect(
+    timeEl,
+    "no editable time cell at 320px — setup did not reach canEditFixtureTime, not what this case tests",
+  ).toBeVisible();
+
+  // The two-line ceiling, DERIVED live from the row's own computed styles —
+  // never a hardcoded pixel constant, which goes stale the moment the type
+  // scale or the tap-target floor moves (the "flat literal beside a derived
+  // boundary" shape Ruling T8-C, above in mobile.spec.ts, exists to prevent).
+  const geometry = await row320.evaluate((li) => {
+    const num = (v: string) => parseFloat(v) || 0;
+    const outer = li.firstElementChild as HTMLElement | null; // the flex-col wrapper
+    const nameEl = li.querySelector("a[href]") as HTMLElement | null;
+    const actionEl = li.querySelector("[data-row-action]") as HTMLElement | null;
+    const liCs = getComputedStyle(li);
+    const outerCs = outer ? getComputedStyle(outer) : null;
+    return {
+      liHeight: li.getBoundingClientRect().height,
+      lineHeight: nameEl ? num(getComputedStyle(nameEl).lineHeight) : 20,
+      actionMinHeight: actionEl ? num(getComputedStyle(actionEl).minHeight) : 44,
+      rowGap: outerCs ? num(outerCs.rowGap || outerCs.gap) : 8,
+      padY: num(liCs.paddingTop) + num(liCs.paddingBottom),
+    };
+  });
+  console.log("Task 9 geometry at 320px:", JSON.stringify(geometry));
+  // Each of the two lines is at least as tall as its own control's declared
+  // tap floor (line 1's time button, line 2's action button both carry
+  // `min-h-11`) or its text line-height, whichever is taller — plus the
+  // row's own gap and padding. A small rounding tolerance (2px) covers
+  // sub-pixel layout, never a margin big enough to hide a real third line.
+  const ceiling = geometry.padY + geometry.rowGap + 2 * Math.max(geometry.lineHeight, geometry.actionMinHeight) + 2;
+  expect(
+    geometry.liHeight,
+    `row height ${geometry.liHeight}px exceeds the derived two-line ceiling ${ceiling}px — the row is reflowing into more than two lines`,
+  ).toBeLessThanOrEqual(ceiling);
+
+  // Line 2 shares a visual line: the combined meta/sub-line text and the
+  // action's own box must sit at (roughly) the same y-centre.
+  // `p:visible`, not a bare `p`: the desktop-only copy of this text
+  // (`hidden md:block`) is still IN THE DOM at 320px (one DOM, branched —
+  // never a second phone tree) and its exact "No scorer yet" is a
+  // substring of the phone paragraph's combined "Round 1 · No scorer yet",
+  // so an unscoped `hasText` match is a strict-mode violation on two nodes.
+  const line2Text = row320.locator("p:visible", { hasText: UI_EN["runsheet.sub.noScorer"]! });
+  await expect(line2Text, "no phone line-2 text at 320px — the merge did not render").toBeVisible();
+  const line2Box = await line2Text.boundingBox();
+  const actionBox = await action.boundingBox();
+  expect(line2Box, "line-2 text has no box").not.toBeNull();
+  expect(actionBox, "action has no box").not.toBeNull();
+  const line2CenterY = line2Box!.y + line2Box!.height / 2;
+  const actionCenterY = actionBox!.y + actionBox!.height / 2;
+  console.log("Task 9 line-2 y-centres — text:", line2CenterY, "| action:", actionCenterY);
+  expect(
+    Math.abs(line2CenterY - actionCenterY),
+    "the action and the line-2 sub-line text do not share a visual line",
+  ).toBeLessThan(8);
+
+  // ---- hit-test, not box measurement (AGENTS.md #2/#10, this file's own
+  // "fix round 4" case above): `boundingBox()` reports paint, not hit area —
+  // a control can measure 44px and still be untappable under an overlay. ----
+  const hitTest = async (locator: Locator): Promise<string> => {
+    // `elementFromPoint` is VIEWPORT-relative and returns null for anything
+    // below the fold, which reads as "untappable" when it only means
+    // "off-screen" — this file's own "fix round 4" case above hit exactly
+    // this and scrolls first for the same reason.
+    await locator.scrollIntoViewIfNeeded();
+    const box = await locator.boundingBox();
+    if (box === null) return "(no box)";
+    return locator.evaluate(
+      (el, [x, y]) => {
+        const hit = document.elementFromPoint(x as number, y as number);
+        if (hit === null) return "(nothing)";
+        return hit === el || el.contains(hit) ? "self" : hit.tagName.toLowerCase();
+      },
+      [box.x + box.width / 2, box.y + box.height / 2],
+    );
+  };
+  const hits = {
+    time: await hitTest(timeEl),
+    name: await hitTest(nameLink),
+    action: await hitTest(action),
+  };
+  console.log("Task 9 hit-test at 320px:", JSON.stringify(hits));
+  for (const [control, result] of Object.entries(hits)) {
+    expect(result, `${control}'s own centre must hit itself or a child, got "${result}"`).toBe("self");
+  }
+
+  // ---- no clipping, even with the 43-character name ----------------------
+  await expectNoHorizontalScroll(page);
+  await expectRunSheetNotClipped(page, "Task 9 two-line row at 320px, 43-char entrant name");
 });
