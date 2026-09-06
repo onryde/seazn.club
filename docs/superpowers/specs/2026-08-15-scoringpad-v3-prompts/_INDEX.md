@@ -7607,3 +7607,60 @@ First e2e ever to drive a `cricket.player.line` through the pad UI
 (`apps/web/e2e/scorepad-v3-cricket-lines.spec.ts`) — stops at the ledger
 (`/api/v1/fixtures/:id/events`), never the public match centre (that page is
 not wired yet; owed to the spectator programme's Task 15).
+
+## 2026-09-06 — the console now keeps the pad mounted in its post phase for modules that declare post-phase actions (owner ruling 17, Task 19)
+
+Task 18 (above) proved `cricket.player.line` structurally unreachable: its
+only panel is `phase: "post"` (cricket.ts's `padSpec`), the cricket skin's
+`resolvePhase` reaches that PadPhase only once `state.phase` is
+`"done"`/`"final"`, and BOTH real pad consumers —
+`apps/web/src/components/v2/fixture-console.tsx` and `device-score-pad.tsx`
+— unmounted the pad the instant a fixture became `decided`, which is the
+SAME instant `phase` turns terminal. Owner ruling 17 ("Decision 1 - fix")
+authorized fixing the mount condition itself, relaxing the "do not touch
+the scorepad/organiser console" line for exactly these two files (plus the
+Task 18 e2e spec and this file).
+
+`shouldMountPad({decided, padSpec})` (exported from `fixture-console.tsx`,
+imported by `device-score-pad.tsx` — that file already imports plain types
+from there, so this follows the same convention): a live fixture always
+mounts; a decided fixture mounts iff the resolved module's `padSpec(cfg)`
+declares at least one panel for phase `"post"`. Every sport without one
+(football, generic, ...) is byte-for-byte unchanged — proven by running
+`scorepad-v3-football.spec.ts` in full (19/19 green, including its own
+decided-shootout test asserting the pad still unmounts). Builder-level
+proof: `apps/web/src/components/v2/__tests__/fixture-console-post-phase.test.tsx`
+(the predicate in isolation, from REAL `padSpec` output, plus a real render
+of both consumers with a REAL decided cricket fold proving the JSX wiring,
+not just the function).
+
+**The mount fix works — proven live in the browser** (screens:
+`apps/web/e2e/__screens__/spectator-w1/more-sheet-{320,768}.png`): a decided
+cricket fixture's console still shows the result summary first, and the
+pad now stays mounted below it with "More" surfacing "Scorecard line" and
+every dismissal chip clearing the 44px floor.
+
+**A second, deeper, PRE-EXISTING defect still blocks the submission
+itself**, found only by finally driving this for real: `cricket.player.line`'s
+legacy seven fields (`batting.runs`/`.balls`, `bowling.legalBalls`/`.runs`/
+`.wickets`) carry no `optional: true` — only Task 17/18's six NEW fields do
+— so `checkActionValidity` refuses Confirm until all five legacy numeric
+fields are filled, and every real submission therefore carries BOTH a
+`batting` and a `bowling` sub-object. `applyPlayerLine` then requires
+`payload.person` to belong to BOTH the batting side's order (for the
+`batting` half) and the OPPOSING side's bowling order (for the `bowling`
+half) in the same payload — impossible for any real two-team fixture,
+since `state.orders.home`/`.away` are disjoint rosters. Verified first-hand
+against a live server: POSTing this test's exact "batting-only" line
+returns 422 `INVALID_EVENT` — "… is not in the bowling lineup for innings
+1". The mirror case (a bowling-only line from a bowler) fails the same way
+against the batting order. **Net: `cricket.player.line` cannot be submitted
+through the pad's generic form today, for ANY real fixture, regardless of
+the mount fix above** — this predates Tasks 17/18/19 (the legacy seven
+fields are original to the action). `cricket.ts`/`action-form.tsx`/
+`view-model.ts` are not on Task 19's file list and remain out of scope.
+`apps/web/e2e/scorepad-v3-cricket-lines.spec.ts` is `test.fixme`'d again
+with this new reason (not deleted, not weakened) so this known-red spec
+does not break `e2e-parallel` CI. **Flagged for the owner/controller**:
+Task 15's own planned e2e (reading the enriched line back on the PUBLIC
+page) cannot succeed until this is fixed either.
