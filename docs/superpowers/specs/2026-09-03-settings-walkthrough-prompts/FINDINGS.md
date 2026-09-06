@@ -62,3 +62,17 @@ Found: Task 3, same spec.
 On an otherwise fully-localised surface (everything around them goes through `t(dict, …)`), `billing-manage.tsx` hardcodes: the cancel confirmation dialog's title, body copy, the five `CANCEL_REASONS` options, and its buttons (`:462-537`); and the promo box's "Have a promo code?" trigger, its `aria-label`, button labels, and two error fallbacks (`:887-944`). A Spanish, French, or Dutch payer sees an English cancellation dialog and an English promo box.
 
 **Status:** open, pre-existing (not introduced by W4). Fix is four locale dictionaries plus a `CANCEL_REASONS` key per reason, then `gen-keys`. Flagged rather than fixed this wave — the scope and blast radius (a user-facing money dialog's full copy, ×4 locales) is larger than the small mechanical fixes ruling 7 moved up; better suited to a dedicated task.
+
+### F7 (real, moderate) — a sponsor's pay-now link is unrecoverable the moment the banner goes
+
+Found: Task 4, `settings-sponsor-monetize.spec.ts`, while driving the invoice leg.
+
+`startSponsorCheckout` (`server/usecases/sponsors.ts`) mints a real Stripe Checkout Session and returns its URL, but **nothing persists it**. `sponsor_orders` has no session column at all — `id, org_id, package_id, sponsor_name, sponsor_email, payment_intent_id, amount_cents, currency, status, sponsor_id, created_at, paid_at, disputed_at, dispute_id` (read off the live table, not off `ORDER_COLS`). The URL exists in exactly two places: the emailed invoice, and `sponsor-packages.tsx`'s `sentUrl` React state, which is cleared by a page reload, by navigating away, and explicitly by `setSentUrl(null)` on the very next Send-invoice toggle (`sponsor-packages.tsx:376`).
+
+The orders list renders sponsor name, email, amount, a status badge, a Refund button (paid only) and an evidence link (disputed only). There is no payment link, no copy-link and no re-send on a `pending` row — so once the banner is gone the organiser cannot answer "the sponsor says they never got it" without minting a SECOND order, which the console's own duplicate dialog warns about in its own words: "Both payment links stay payable — the sponsor could pay twice."
+
+Registrations do not have this gap: `registration_groups.checkout_session_id` is stored (`registrations.ts:347, 2440`), the mint path is re-entrant, and a superseded session is expired rather than left payable (`expireSupersededCheckoutSession`, `registrations.ts:2468-2469`). Sponsors have no equivalent on either half.
+
+**Reproduction:** with a connected org, sell a package, send an invoice, then reload `?tab=sponsors`. Observe: the order row is present and `pending`, and there is no way from the console to reach or resend its payment link.
+
+**Status:** open, not fixed this wave — it is a schema column plus a re-send/copy affordance plus supersede-on-remint, which is a task, not an inline fix. Not a defect in anything W4 built; found by driving the surface W2 deliberately left uncovered.
