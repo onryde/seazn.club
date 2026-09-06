@@ -274,21 +274,115 @@ Tests (W2):
 
 ## W3 — phone layouts and the in-play band
 
-- Band component `components/v2/desk/in-play-band.tsx`: night ground, lime LED
-  numerals (existing `--sport-led` token), one card per `in_play` fixture across
-  divisions, plus one dashed "Up next" card; "NO SCORE" in red when the fixture
-  has zero events. Rendered only when `inPlay.length > 0`; no empty state.
-- Polling: client refetches `/api/v1/competitions/{id}/desk` every 20 s while the
-  competition pill says in play, stops otherwise. Endpoint is new, read-only,
-  documented in OpenAPI (`npm run openapi:gen` drift check before commit).
-- Phone: masthead tools collapse to icons; ledger rows become stacked cards (C3);
-  run sheet rows become two-line (A3); stage rail → bottom sheet.
+**AMENDED 2026-09-06 (amendment 5).** The bullets this section used to carry
+are kept below, struck through in prose rather than deleted, because two of
+them described work W1 had ALREADY SHIPPED and a third presupposed a component
+that does not exist. Owner rulings 12–17 in
+`2026-09-02-competition-desk-prompts/_INDEX.md` are the authority; this section
+restates them so a reader of the design alone is not misled.
 
-Tests (W3): unit (band renders nothing at zero in-play — mutate the guard); e2e
-(band appears when a fixture is set in_play via API, disappears on decide; polling
-verified with `page.clock`); smoke (endpoint 200, schema-validated); regression
-(band absent off match day). Screenshots at 1280 / 768 / 320 for both pages in all
-four phases, images confirmed to exist and DIFFER.
+### What changed and why
+
+- **RETIRED — "ledger rows become stacked cards (C3)".** Already shipped by W1.
+  `components/v2/desk/division-ledger.tsx` renders two compositions per row,
+  gated by class and not by JS: a mobile card (`md:hidden`) and a desktop grid
+  (`hidden … md:grid`), with `line-clamp-2 md:truncate` on the name and a
+  mobile-only action button. W3 must not rebuild it (ruling 14).
+- **RETIRED — "masthead tools collapse to icons".** W1 shipped the phone
+  counterpart as `desk-tools-more.tsx` (`sm:hidden`), a full-width LABELLED
+  overflow menu. The owner accepted the labelled menu over the drawn icon row:
+  icons without labels cost recognition on staff tools used rarely (ruling 14).
+- **RE-HOMED — "stage rail → bottom sheet" presupposed a rail that was never
+  built.** `components/v2/desk/stage-rail.tsx` does not exist and
+  `stages-panel.tsx` has no two-column split; the file says so itself ("it
+  moves to the stage rail in Task 5, which does not exist yet", :830, :1128).
+  Owner ruling 11 is therefore unimplemented. The rail is W2 DEBT, built
+  desktop-only, and W3 folds it afterwards (ruling 13). Rulings 6 and 7 hold.
+- **ADDED — the odd-Swiss roster-drift miscopy** joins the wave (ruling 12).
+
+### PR A — W2 tail, desktop only (ruling 13)
+
+Build `components/v2/desk/stage-rail.tsx` and the `lg:` two-column `1fr 280px`
+split; move Add match, Generate/Pair next, Complete stage, Delete stage,
+Required court tags, auto-schedule and Compute proposal off the sheet and onto
+it. Closes ruling 11 and current-state finding 6 ("actions in six places").
+Merges before W3 begins, because W3 folds what it builds.
+
+### PR B — W3 proper
+
+**T1 — the odd-Swiss sit-out miscopy (item 6), FIRST.** It runs first because
+it is the only task whose SHAPE is unknown. `swiss.ts`'s `pairRound` puts the
+sat-out entrant in a `bye` field; `stages.ts`'s `swissGen` maps only
+`round.pairings`, so that entrant gets no fixture row at all, and roster drift —
+which computes `unplaced` STAGE-WIDE — reports a designed sit-out as a data
+fault ("Fixtures don't match the roster" + "Rebuild fixtures"). Drive an
+odd-entrant Swiss stage across two rounds in a browser and read the banner in
+both BEFORE choosing between the three candidate fixes: suppress the sit-out
+from `unplaced`, re-word the banner, or add swiss to
+`ROSTER_DRIFT_INELIGIBLE_KINDS` (`lib/roster-drift-eligibility.ts`, which today
+excludes only ladder and americano). Ruling 17. `stage-roster-drift.test.ts`
+has ZERO swiss cases today — its green is not coverage here.
+
+**T2 — the band's producer, ONE authority (ruling 16).** `getCompetitionDesk`
+today returns `in_play: number` and a single `next` pointer per division, and
+no in-play fixture list exists anywhere. It gains that list — per fixture:
+entrants, score, event count (for "NO SCORE"), division, kickoff. The new
+`GET /api/v1/competitions/{id}/desk` returns the SAME shape for the poll, via
+the `v1()` wrapper (which supplies the `{ok, data, requestId}` envelope), plus
+exactly one row in `ROUTES` (`server/api-v1/openapi.ts`) and `openapi:gen`.
+A coverage test asserts route files and that table match 1:1, so drift is
+CI-red. Rejected: a client-only band fetching on mount, which would make the
+server-rendered pill and the client band two authorities for one fact.
+
+**T3 — the band.** `components/v2/desk/in-play-band.tsx`, mounted in the slot
+W1 reserved between the tools row and "Needs you". Night ground, `--sport-led`
+numerals built FRESH (the token exists in `globals.css`; no LED-numeral
+component does), one card per in-play fixture across divisions, one dashed
+"Up next", "NO SCORE" in red at zero events, rendered only when
+`inPlay.length > 0`, no empty state. Poll every 20 s with a plain
+`setInterval` while the pill says in play, cleared otherwise — matching
+`live-score.tsx` and `run-elapsed.tsx`; this repo has no query library.
+
+**T4 — breakpoint unification (ruling 15).** The masthead and
+`run-sheet-row.tsx` move `sm:` (640) → `md:` (768), matching the ledger and the
+repo-wide `max-md:` / `md:hidden` convention. Today at 768 the ledger is a card
+while the run sheet is already a desktop row.
+
+**T5 — two-line run-sheet rows (A3).** `run-sheet-row.tsx` is already
+mobile-first (`flex-col`, collapsing via `sm:contents`); this recomposes that
+stack into two deliberate lines, not the three reflowed ones W2's gate
+photographed at 320.
+
+**T6 — the rail fold.** PR A's rail becomes a bottom sheet below `md:`, opened
+by a floating "Stage tools" button, reusing `components/modal.tsx`'s existing
+bottom-sheet-under-`sm` pattern (`rounded-t-2xl`, `max-h-[85dvh]`,
+`sheet-handle`) rather than inventing one.
+
+### Tests (W3) — what they must actually do
+
+- **unit:** the band renders nothing at zero in-play — MUTATE the guard (delete
+  `inPlay.length > 0`) and confirm exactly one test reddens.
+- **e2e:** `in_play` is DERIVED from the ledger (`has("core.start")`,
+  `engine-db/append-event.ts`), never a stored flag — a test that "sets a
+  fixture in play" appends a `core.start` event through `e2e/helpers.ts`. A
+  status patch would assert nothing. Band appears on that event, disappears on
+  decide; the poll is verified with `page.clock`, never a sleep.
+- **smoke:** the new endpoint 200s and is schema-validated.
+- **regression:** band absent off match day; the first swiss case in
+  `stage-roster-drift.test.ts`.
+- **The acceptance criterion for the phone work is a CONTROL-SET DIFF.** At 320
+  versus 1280 the sets must DIFFER. W2's gate measured them byte-identical (71
+  controls, `diff` empty) — that equality is the groomed-shrink signature this
+  wave exists to break, not a side effect of it.
+- Run the WHOLE `mobile.spec.ts`, never a `-g` slice, at 320 and 768; a red
+  count in that file is a floor, not a total (it is `mode: "serial"`).
+- **T4 changes the 640–767 band, which NO width project covers** (the matrix is
+  320/360/375/390/430/768/834). W3 owes a check at ~700 that its own gates are
+  structurally blind to.
+- Screenshots at 1280 / 768 / 320 for both pages in all four phases, images
+  confirmed to EXIST and to DIFFER.
+- New strings in all four locale dictionaries + `i18n:gen-keys`.
+
 
 ## Copy and i18n
 
