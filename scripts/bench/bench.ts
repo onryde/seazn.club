@@ -64,6 +64,24 @@ export function parseCliArgs(argv: string[]): BenchConfig {
     options: {
       suite: { type: "string", multiple: true, default: [] },
       engine: { type: "string", default: "optimized" },
+      // T7e: `keep` DEFAULTS to true regardless of this option's own literal
+      // default — see `keep: !values.wipe` below. This declared default of
+      // `false` is dead for every real invocation; it only shapes what an
+      // explicit bare `--keep` looks like to `parseArgs` (a no-op, since
+      // `!values.wipe` is already true without it).
+      //
+      // THE TWO/THREE-LEG PROTOCOL NEEDS `--wipe` ON EVERY LEG. A run against
+      // an unchanged pack under `--keep` (the default) finds the PRIOR leg's
+      // already-seeded competition (`tiny.ts`'s `findExistingSeed`, matched
+      // on pack hash) and short-circuits before seeding OR scheduling —
+      // exactly the shape that silently killed the documented two-leg
+      // protocol's leg B (`--engine greedy` after leg A's `--engine
+      // optimized` against the same SHA). Since T7e that short circuit
+      // reports the suite gate as `"skipped"`, never a bare green
+      // (`report.ts`'s `SuiteGateStatus`) — but the run STILL measured
+      // nothing, so `--wipe` remains the only way to get a real scheduling
+      // pass out of a leg. See `B04-handoff-2026-09-05.md`'s live-legs section
+      // for the full protocol.
       keep: { type: "boolean", default: false },
       wipe: { type: "boolean", default: false },
       "report-dir": { type: "string", default: "bench-report" },
