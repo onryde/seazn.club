@@ -279,14 +279,36 @@ function groupBy(placed: readonly Placed[], keysOf: (p: Placed) => readonly stri
 }
 
 // ---------------------------------------------------------------------------
+// T7b — the modelled-but-unexercised direction (`CheckerReport.unexercised`)
+//
+// `RuleResult` is what every rule below returns instead of a bare
+// `CheckerFinding[]`: `exercised` travels WITH the findings, set from inside
+// the SAME loop that decides them, never from a table of preconditions read
+// beside the rule (`board.ts`'s own note on this — a second copy of "is this
+// input non-empty" drifts from what the rule actually iterates the moment
+// either one changes). Rule 2 returns three flags instead of one, because its
+// three operands (session windows, blackouts, court hours) can each be
+// vacuous independently — task brief's own granularity requirement.
+// ---------------------------------------------------------------------------
+
+interface RuleResult {
+  findings: CheckerFinding[];
+  /** True iff the rule's own loop reached at least one genuine candidate
+   *  comparison — a real declared constraint measured against a real placed
+   *  fixture — regardless of whether that comparison produced a finding. */
+  exercised: boolean;
+}
+
+// ---------------------------------------------------------------------------
 // Rule 1 — court double-booking
 // ---------------------------------------------------------------------------
 
 function courtDoubleBooking(
   placed: readonly Placed[],
   constraints: EncodedConstraints,
-): CheckerFinding[] {
+): RuleResult {
   const out: CheckerFinding[] = [];
+  let exercised = false;
   for (let i = 0; i < placed.length; i += 1) {
     for (let j = i + 1; j < placed.length; j += 1) {
       const a = placed[i];
@@ -295,6 +317,10 @@ function courtDoubleBooking(
       // An unplaced-on-a-court fixture cannot double-book: `undefined ===
       // undefined` would pair every court-less fixture with every other.
       if (court === undefined || court !== b.fixture.courtId) continue;
+      // Reaching here IS the candidate: two placed fixtures genuinely share a
+      // court, so this pair is a real occupancy comparison whether or not it
+      // turns out to overlap.
+      exercised = true;
       if (!overlaps(a, b)) continue;
       out.push(
         finding(
@@ -306,7 +332,7 @@ function courtDoubleBooking(
       );
     }
   }
-  return out;
+  return { findings: out, exercised };
 }
 
 // ---------------------------------------------------------------------------
@@ -340,14 +366,29 @@ function courtRangesOn(
     .map((h) => ({ openMin: h.openMin, closeMin: h.closeMin }));
 }
 
+/** `windowContainment`'s three operands, each independently exercisable —
+ *  never collapsed into one flag (task T7b's granularity requirement: all
+ *  three were independently vacuous on `_tiny` before the sibling task, and a
+ *  single verdict for "rule 2" would have reported it exercised because ONE
+ *  of the three had input). */
+interface WindowResult {
+  findings: CheckerFinding[];
+  sessionWindowsExercised: boolean;
+  blackoutsExercised: boolean;
+  courtHoursExercised: boolean;
+}
+
 function windowContainment(
   placed: readonly Placed[],
   board: Board,
   constraints: EncodedConstraints,
-): CheckerFinding[] {
+): WindowResult {
   const out: CheckerFinding[] = [];
   const courtById = new Map(board.courts.map((c) => [c.courtId, c]));
   const durationMinutes = constraints.matchMinutes;
+  let sessionWindowsExercised = false;
+  let blackoutsExercised = false;
+  let courtHoursExercised = false;
 
   for (const p of placed) {
     const id = p.fixture.fixtureId;
@@ -357,6 +398,10 @@ function windowContainment(
     // `court-windows.ts` both state — so the court test is a MATCH, never a
     // requirement.
     for (const blackout of constraints.blackouts) {
+      // Reaching this line at all means `constraints.blackouts` is non-empty
+      // AND a fixture was placed to test it against — the genuine candidate,
+      // regardless of whether it turns out to apply to THIS fixture's court.
+      blackoutsExercised = true;
       const applies =
         blackout.courtId === undefined || blackout.courtId === p.fixture.courtId;
       if (!applies) continue;
@@ -376,6 +421,9 @@ function windowContainment(
     // already apply. Containment is TOTAL: a fixture that starts inside a
     // window and finishes after it is outside it.
     if (constraints.sessionWindows.length > 0) {
+      // The SAME condition that already gates this rule's own findings —
+      // reused, not restated, so the two cannot drift apart.
+      sessionWindowsExercised = true;
       const inside = constraints.sessionWindows.some((w) => w.from <= p.start && p.end <= w.to);
       if (!inside) {
         out.push(
@@ -426,6 +474,11 @@ function windowContainment(
     if (court !== undefined) {
       const ranges = courtRangesOn(court, p.ymd, p.weekday);
       if (ranges !== "open_all_day") {
+        // "open_all_day" IS "a court with no hours [for this date]" — exactly
+        // the zero-candidate case task T7b names. Reaching past it means a
+        // real calendar (weekly hours or a dated exception) was found and
+        // genuinely measured against this fixture.
+        courtHoursExercised = true;
         const endMinutes = p.startMinutes + durationMinutes;
         const inside = ranges.some((r) => r.openMin <= p.startMinutes && endMinutes <= r.closeMin);
         if (!inside) {
@@ -445,7 +498,7 @@ function windowContainment(
       }
     }
   }
-  return out;
+  return { findings: out, sessionWindowsExercised, blackoutsExercised, courtHoursExercised };
 }
 
 // ---------------------------------------------------------------------------
@@ -471,11 +524,17 @@ function restBreaches(
   requiredMinutes: number,
   kindDetail: (a: Placed, b: Placed, measured: number) => string,
   constraints: EncodedConstraints,
-): CheckerFinding[] {
-  if (requiredMinutes <= 0) return [];
+): RuleResult {
+  // The SAME guard that already gates this rule's findings — reused for
+  // `exercised` rather than restated, so the two cannot drift.
+  if (requiredMinutes <= 0) return { findings: [], exercised: false };
   const ordered = [...series].sort((a, b) => a.start - b.start || a.index - b.index);
   const out: CheckerFinding[] = [];
+  let exercised = false;
   for (let i = 1; i < ordered.length; i += 1) {
+    // A real floor AND a genuine consecutive pair to measure it against — the
+    // candidate, whether or not the gap turns out to be short.
+    exercised = true;
     const previous = ordered[i - 1];
     const next = ordered[i];
     const measured = Math.round((next.start - previous.end) / MS_PER_MINUTE);
@@ -493,39 +552,38 @@ function restBreaches(
       ),
     );
   }
-  return out;
+  return { findings: out, exercised };
 }
 
-function restMinima(
-  placed: readonly Placed[],
-  constraints: EncodedConstraints,
-): CheckerFinding[] {
+function restMinima(placed: readonly Placed[], constraints: EncodedConstraints): RuleResult {
   const out: CheckerFinding[] = [];
+  let exercised = false;
 
   // The top-level floor: per ENTRANT, unscoped — it is a division knob
   // (`schemas.ts:1303`), not a `HardConstraint`.
   const byEntrant = groupBy(placed, (p) => p.fixture.entrantIds);
   for (const [entrantId, series] of byEntrant) {
-    out.push(
-      ...restBreaches(
-        series,
-        constraints.perEntrantMinRest,
-        (a, b, measured) =>
-          `entrant ${entrantId} rests ${measured}m between ${a.fixture.fixtureId} (${localLabel(a)}) and ${b.fixture.fixtureId} (${localLabel(b)}), below perEntrantMinRest`,
-        constraints,
-      ),
+    const r = restBreaches(
+      series,
+      constraints.perEntrantMinRest,
+      (a, b, measured) =>
+        `entrant ${entrantId} rests ${measured}m between ${a.fixture.fixtureId} (${localLabel(a)}) and ${b.fixture.fixtureId} (${localLabel(b)}), below perEntrantMinRest`,
+      constraints,
     );
+    out.push(...r.findings);
+    if (r.exercised) exercised = true;
   }
 
-  return out;
+  return { findings: out, exercised };
 }
 
 // ---------------------------------------------------------------------------
 // Rule 4 — day caps
 // ---------------------------------------------------------------------------
 
-function dayCaps(placed: readonly Placed[], constraints: EncodedConstraints): CheckerFinding[] {
+function dayCaps(placed: readonly Placed[], constraints: EncodedConstraints): RuleResult {
   const out: CheckerFinding[] = [];
+  let exercised = false;
   for (const rule of constraints.hard) {
     if (rule.type !== "max_fixtures_per_day") continue;
     // The day is the LOCAL civil date, not a rolling 24 hours: "two matches a
@@ -533,6 +591,10 @@ function dayCaps(placed: readonly Placed[], constraints: EncodedConstraints): Ch
     // Monday-evening / Tuesday-morning pair.
     const buckets = groupBy(placed, (p) => tallyKeys(p.fixture, rule.scope).map((k) => `${k}@${p.ymd}`));
     for (const [bucket, group] of buckets) {
+      // A bucket existing at all means a real `max_fixtures_per_day` rule
+      // matched a placed fixture's scope on some day — the candidate,
+      // whether or not the count is actually over.
+      exercised = true;
       if (group.length <= rule.count) continue;
       out.push(
         finding(
@@ -546,7 +608,7 @@ function dayCaps(placed: readonly Placed[], constraints: EncodedConstraints): Ch
       );
     }
   }
-  return out;
+  return { findings: out, exercised };
 }
 
 // ---------------------------------------------------------------------------
@@ -581,15 +643,16 @@ function dayCaps(placed: readonly Placed[], constraints: EncodedConstraints): Ch
  *  in a place where it is easy to write `scope.kind === "competition"` and mean
  *  it. One finding per covered fixture, never one per key: `every_entrant`
  *  yields a key per entrant and the fixture still breaches only once. */
-function wallClockBounds(
-  placed: readonly Placed[],
-  constraints: EncodedConstraints,
-): CheckerFinding[] {
+function wallClockBounds(placed: readonly Placed[], constraints: EncodedConstraints): RuleResult {
   const out: CheckerFinding[] = [];
+  let exercised = false;
   for (const rule of constraints.hard) {
     if (rule.type !== "not_before" && rule.type !== "not_after") continue;
     for (const p of placed) {
       if (tallyKeys(p.fixture, rule.scope).length === 0) continue;
+      // A real not_before/not_after rule covers this placed fixture — the
+      // candidate, whether or not its start actually breaches the bound.
+      exercised = true;
       const breached =
         rule.type === "not_before"
           ? p.startMinutes < rule.minutesIntoDay
@@ -607,17 +670,21 @@ function wallClockBounds(
       );
     }
   }
-  return out;
+  return { findings: out, exercised };
 }
 
 // ---------------------------------------------------------------------------
 // Rule 6 — pin integrity
 // ---------------------------------------------------------------------------
 
-function pinIntegrity(board: Board, constraints: EncodedConstraints): CheckerFinding[] {
+function pinIntegrity(board: Board, constraints: EncodedConstraints): RuleResult {
   const out: CheckerFinding[] = [];
+  let exercised = false;
   const byId = new Map(board.fixtures.map((f) => [f.fixtureId, f]));
   for (const pin of constraints.pins) {
+    // A declared pin IS the candidate: the rule's whole job is to verify each
+    // one, whether or not it moved.
+    exercised = true;
     const fixture = byId.get(pin.fixtureId);
     if (fixture === undefined) {
       // A pinned fixture that is not on the board at all is the strongest
@@ -651,7 +718,7 @@ function pinIntegrity(board: Board, constraints: EncodedConstraints): CheckerFin
       ),
     );
   }
-  return out;
+  return { findings: out, exercised };
 }
 
 // ---------------------------------------------------------------------------
@@ -670,7 +737,7 @@ function pinIntegrity(board: Board, constraints: EncodedConstraints): CheckerFin
  *
  *  What survives is the check that CAN fail on a real board: a division whose
  *  pack declared officials and whose fetch returned none. */
-function officials(placed: readonly Placed[], constraints: EncodedConstraints): CheckerFinding[] {
+function officials(placed: readonly Placed[], constraints: EncodedConstraints): RuleResult {
   const out: CheckerFinding[] = [];
 
   // Design §4.3's other half, and the reason this rule can fail at all: a
@@ -679,7 +746,13 @@ function officials(placed: readonly Placed[], constraints: EncodedConstraints): 
   // empty array makes every "no official is double-booked" test below pass
   // forever. Only red when something WAS placed: a division with no placed
   // fixtures is Task 4's unplaced gate, not this one's.
-  if (constraints.declaresOfficials && placed.length > 0) {
+  //
+  // The SAME boolean also settles `exercised` (T7b) — reused, not restated:
+  // officials input is genuine only when the pack declared some AND
+  // something was placed to check them against, which is exactly what this
+  // rule's own findings-gate already reads.
+  const hasOfficialsInput = constraints.declaresOfficials && placed.length > 0;
+  if (hasOfficialsInput) {
     const anyOfficial = placed.some((p) => p.fixture.officialIds.length > 0);
     if (!anyOfficial) {
       out.push(
@@ -710,7 +783,7 @@ function officials(placed: readonly Placed[], constraints: EncodedConstraints): 
       );
     }
   }
-  return out;
+  return { findings: out, exercised: hasOfficialsInput };
 }
 
 // ---------------------------------------------------------------------------
@@ -722,9 +795,10 @@ function officials(placed: readonly Placed[], constraints: EncodedConstraints): 
  *  (1,2,3 winners / 7-10 losers / 14 grand final), so ordering rounds there
  *  would address the wrong fixtures. `isRoundRobin` is the gate, and a test
  *  runs the disordered board through it with the flag off. */
-function roundOrder(placed: readonly Placed[], constraints: EncodedConstraints): CheckerFinding[] {
-  if (!constraints.isRoundRobin) return [];
+function roundOrder(placed: readonly Placed[], constraints: EncodedConstraints): RuleResult {
+  if (!constraints.isRoundRobin) return { findings: [], exercised: false };
   const out: CheckerFinding[] = [];
+  let exercised = false;
   for (let i = 0; i < placed.length; i += 1) {
     for (let j = 0; j < placed.length; j += 1) {
       if (i === j) continue;
@@ -734,6 +808,9 @@ function roundOrder(placed: readonly Placed[], constraints: EncodedConstraints):
       const rPrime = later.fixture.roundNo;
       if (typeof r !== "number" || typeof rPrime !== "number") continue;
       if (!(r < rPrime)) continue;
+      // A genuine, comparable round pair — the candidate this rule judges,
+      // whether or not the two ever land out of order.
+      exercised = true;
       // day(r) <= day(r'). ISO dates compare correctly as strings.
       if (earlier.ymd > later.ymd) {
         out.push(
@@ -760,7 +837,7 @@ function roundOrder(placed: readonly Placed[], constraints: EncodedConstraints):
       }
     }
   }
-  return out;
+  return { findings: out, exercised };
 }
 
 // ---------------------------------------------------------------------------
@@ -777,25 +854,103 @@ function roundOrder(placed: readonly Placed[], constraints: EncodedConstraints):
  *  dirty: it is rendered BESIDE the verdict so "checker clean" cannot be read
  *  as "every declared constraint was verified" (design §1.4/§3.3).
  *
+ *  `unexercised` (task T7b) is the opposite direction, and IS composed here —
+ *  it is a CHECK-time fact (did this run's board give a MODELLED rule any
+ *  candidate to judge?), not an encode-time one, so `board.ts` has nothing to
+ *  forward. Every rule function above returns its own `exercised` flag,
+ *  derived from its own loop rather than from a restated precondition, and
+ *  this function only collects them under the label a reader can match to
+ *  this file's own section headers. Rule 2's three operands are collected
+ *  separately (2a/2b/2c) for the same reason they are checked separately: a
+ *  single verdict for "rule 2" would report it exercised because ONE operand
+ *  had input.
+ *
  *  `clean` is this module's own verdict and `judgeDivision` never re-derives
- *  it, so it is set from the findings here and nowhere else. */
+ *  it, so it is set from the findings here and nowhere else. `unexercised`
+ *  never touches it, for the same reason `unchecked` does not: a rule with
+ *  nothing to judge is not a violation. */
 export function checkBoard(board: Board, constraints: EncodedConstraints): CheckerReport {
   const placed = placedFixtures(board, constraints);
 
+  const rule1 = courtDoubleBooking(placed, constraints);
+  const rule2 = windowContainment(placed, board, constraints);
+  const rule3 = restMinima(placed, constraints);
+  const rule4 = dayCaps(placed, constraints);
+  const rule5 = wallClockBounds(placed, constraints);
+  const rule6 = pinIntegrity(board, constraints);
+  const rule7 = officials(placed, constraints);
+  const rule8 = roundOrder(placed, constraints);
+
   const findings: CheckerFinding[] = [
-    ...courtDoubleBooking(placed, constraints),
-    ...windowContainment(placed, board, constraints),
-    ...restMinima(placed, constraints),
-    ...dayCaps(placed, constraints),
-    ...wallClockBounds(placed, constraints),
-    ...pinIntegrity(board, constraints),
-    ...officials(placed, constraints),
-    ...roundOrder(placed, constraints),
+    ...rule1.findings,
+    ...rule2.findings,
+    ...rule3.findings,
+    ...rule4.findings,
+    ...rule5.findings,
+    ...rule6.findings,
+    ...rule7.findings,
+    ...rule8.findings,
   ];
+
+  const unexercised: { rule: string; reason: string }[] = [];
+  const note = (exercised: boolean, rule: string, reason: string): void => {
+    if (!exercised) unexercised.push({ rule, reason });
+  };
+  note(
+    rule1.exercised,
+    "Rule 1 — court double-booking",
+    "no two placed fixtures share a court to compare for overlap",
+  );
+  note(
+    rule2.sessionWindowsExercised,
+    "Rule 2a — session windows",
+    "sessionWindows is empty, or nothing was placed — no window was available to contain a fixture within",
+  );
+  note(
+    rule2.blackoutsExercised,
+    "Rule 2b — blackouts",
+    "blackouts is empty, or nothing was placed — no blackout was available to test a placed fixture against",
+  );
+  note(
+    rule2.courtHoursExercised,
+    "Rule 2c — court hours",
+    "every placed fixture's court declared no hours or exceptions for its date (or nothing was placed) — every court read as open all day",
+  );
+  note(
+    rule3.exercised,
+    "Rule 3 — rest minima",
+    "perEntrantMinRest is 0, or no entrant played two or more placed fixtures to measure a gap between",
+  );
+  note(
+    rule4.exercised,
+    "Rule 4 — day caps",
+    "no max_fixtures_per_day hard rule matched a placed fixture's scope on any day",
+  );
+  note(
+    rule5.exercised,
+    "Rule 5 — not_before / not_after",
+    "no not_before/not_after hard rule matched a placed fixture's scope",
+  );
+  note(
+    rule6.exercised,
+    "Rule 6 — pin integrity",
+    "pins is empty — no pin was declared for this rule to verify",
+  );
+  note(
+    rule7.exercised,
+    "Rule 7 — officials",
+    "the pack did not declare officials for this division, or nothing was placed",
+  );
+  note(
+    rule8.exercised,
+    "Rule 8 — round order",
+    "isRoundRobin is false, or no two placed fixtures had a comparable round number",
+  );
 
   return {
     findings,
     unchecked: constraints.unmodelled,
+    unexercised,
     clean: findings.length === 0,
   };
 }

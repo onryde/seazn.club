@@ -332,10 +332,39 @@ export interface CheckerFinding {
  *  `findings.length`, so there is exactly one place that decides what clean
  *  means. `unchecked` never makes a report dirty: it is rendered beside the
  *  verdict so "checker clean" can never be read as "every declared constraint
- *  was verified" when it was not (design §1.4/§3.3). */
+ *  was verified" when it was not (design §1.4/§3.3).
+ *
+ *  `unexercised` is the OPPOSITE direction from `unchecked`, and the two are
+ *  not interchangeable (task T7b):
+ *
+ *    - `unchecked` (= `EncodedConstraints.unmodelled`, forwarded) is a
+ *      DECLARED-BUT-UNMODELLED fact, resolved once at ENCODE time: the pack
+ *      named a knob (`gapMinutes`) that no rule in `checker.ts` implements at
+ *      all.
+ *    - `unexercised` is a MODELLED-BUT-HAD-NOTHING-TO-JUDGE fact, resolved at
+ *      CHECK time, per `checkBoard` call: the rule is fully implemented and
+ *      ran, but the board it was handed gave it zero candidates to compare —
+ *      an empty blackout list, a rest floor of zero, a court with no hours.
+ *      Such a rule contributes no findings, `clean` stays `true`, and without
+ *      this field nothing would say the rule was inert rather than satisfied.
+ *
+ *  Each entry names the rule in the same form as `checker.ts`'s own section
+ *  headers ("Rule 1" .. "Rule 8", `Rule 2a`/`2b`/`2c` for the three
+ *  independently-vacuous operands `Rule 2` judges), so a reader can jump
+ *  straight from this list to the code that produced it.
+ *
+ *  A rule with ZERO CANDIDATES is not the same as a rule with candidates and
+ *  no violations — both produce zero findings for that rule, and only the
+ *  first belongs here. `checker.ts` derives every entry from the rule's OWN
+ *  iteration (did its loop actually run a candidate comparison?), never from
+ *  a restated precondition kept beside the rule: a second copy of "is this
+ *  input non-empty" is exactly the kind of fact that drifts from what the
+ *  rule actually iterates once either one changes. Like `unchecked`, this
+ *  list is rendered BESIDE the verdict and never makes a clean report dirty. */
 export interface CheckerReport {
   findings: readonly CheckerFinding[];
   unchecked: readonly { type: string; reason: string }[];
+  unexercised: readonly { rule: string; reason: string }[];
   clean: boolean;
 }
 

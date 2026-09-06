@@ -1025,3 +1025,248 @@ describe("checkBoard — _tiny's own declared config is live (B04 T7a)", () => {
     expect(r.findings[0].fixtureIds).toEqual(["fx-tiny-1", "fx-tiny-2", "fx-tiny-3"]);
   });
 });
+
+// ---------------------------------------------------------------------------
+// T7b — `CheckerReport.unexercised`: which MODELLED rules had nothing to
+// judge on this board.
+//
+// Every case pairs a ZERO-CANDIDATE board (the rule is unexercised) against
+// an EXERCISED-AND-CLEAN one (the rule ran, found nothing) — the distinction
+// the task brief names explicitly: both produce zero findings for that rule,
+// and only the first belongs in `unexercised`. Most "exercised and clean"
+// cases are simply the baseline `cleanBoard()`/`cleanConstraints()`, which is
+// already clean for every rule but rule 5 (no `not_before`/`not_after` is
+// declared there) and rule 6 (no pin is declared there) — both deliberately,
+// per `_board-fixtures.ts`'s own header.
+// ---------------------------------------------------------------------------
+
+describe("checkBoard — unexercised rules (T7b)", () => {
+  const unexercisedRules = (r: { unexercised: readonly { rule: string }[] }): string[] =>
+    r.unexercised.map((u) => u.rule);
+
+  // -----------------------------------------------------------------------
+  // Rule 1 — court double-booking
+  // -----------------------------------------------------------------------
+
+  it("rule 1 — unexercised when no two placed fixtures share a court", () => {
+    const b = cleanBoard();
+    const board: Board = {
+      ...b,
+      fixtures: b.fixtures.map((f, i) => (i === 2 ? { ...f, courtId: "court-3" } : f)),
+      courts: [...b.courts, { courtId: "court-3", name: "Court 3", venueId: "venue-1", hours: [], exceptions: [] }],
+    };
+    const r = checkBoard(board, cleanConstraints());
+    expect(r.clean).toBe(true);
+    expect(unexercisedRules(r)).toContain("Rule 1 — court double-booking");
+  });
+
+  it("rule 1 — exercised and clean when two fixtures share a court without overlapping", () => {
+    // The baseline board: fx-0 and fx-2 both sit on court-1, at different times.
+    const r = checkBoard(cleanBoard(), cleanConstraints());
+    expect(r.clean).toBe(true);
+    expect(unexercisedRules(r)).not.toContain("Rule 1 — court double-booking");
+  });
+
+  // -----------------------------------------------------------------------
+  // Rule 2 — its three operands, tracked and reported SEPARATELY
+  // -----------------------------------------------------------------------
+
+  it("rule 2a — unexercised when no session window is declared", () => {
+    const r = checkBoard(cleanBoard(), { ...cleanConstraints(), sessionWindows: [] });
+    expect(r.clean).toBe(true);
+    expect(unexercisedRules(r)).toContain("Rule 2a — session windows");
+  });
+
+  it("rule 2a — exercised and clean on the baseline board", () => {
+    const r = checkBoard(cleanBoard(), cleanConstraints());
+    expect(r.clean).toBe(true);
+    expect(unexercisedRules(r)).not.toContain("Rule 2a — session windows");
+  });
+
+  it("rule 2b — unexercised when no blackout is declared", () => {
+    const r = checkBoard(cleanBoard(), { ...cleanConstraints(), blackouts: [] });
+    expect(r.clean).toBe(true);
+    expect(unexercisedRules(r)).toContain("Rule 2b — blackouts");
+  });
+
+  it("rule 2b — exercised and clean on the baseline board", () => {
+    const r = checkBoard(cleanBoard(), cleanConstraints());
+    expect(r.clean).toBe(true);
+    expect(unexercisedRules(r)).not.toContain("Rule 2b — blackouts");
+  });
+
+  it("rule 2c — unexercised when every court declares no hours", () => {
+    const b = cleanBoard();
+    const board: Board = { ...b, courts: b.courts.map((c) => ({ ...c, hours: [], exceptions: [] })) };
+    const r = checkBoard(board, cleanConstraints());
+    expect(r.clean).toBe(true);
+    expect(unexercisedRules(r)).toContain("Rule 2c — court hours");
+  });
+
+  it("rule 2c — exercised and clean on the baseline board", () => {
+    const r = checkBoard(cleanBoard(), cleanConstraints());
+    expect(r.clean).toBe(true);
+    expect(unexercisedRules(r)).not.toContain("Rule 2c — court hours");
+  });
+
+  it("rule 2's three operands never collapse into one verdict — one vacuous does not silence, or false-report, the other two", () => {
+    // Only blackouts emptied. Session windows and court hours are still real
+    // and still exercised on this same board — a single "rule 2" flag would
+    // report the whole rule exercised (session windows/hours have input) and
+    // hide that the blackout operand did not, or the reverse.
+    const r = checkBoard(cleanBoard(), { ...cleanConstraints(), blackouts: [] });
+    const rules = unexercisedRules(r);
+    expect(rules).toContain("Rule 2b — blackouts");
+    expect(rules).not.toContain("Rule 2a — session windows");
+    expect(rules).not.toContain("Rule 2c — court hours");
+  });
+
+  it("rule 2's three operands (and every other rule) derive from PLACEMENT, not from static declared config — nothing placed at all", () => {
+    // `constraints` is untouched (blackouts, sessionWindows and both courts'
+    // hours are all still genuinely declared) — only the BOARD changes, to one
+    // where nothing is placed. A table of `.length > 0` predicates read beside
+    // the rules would still report every one of these exercised; deriving from
+    // the rule's own iteration over PLACED fixtures does not.
+    const b = cleanBoard();
+    const unplaced: Board = {
+      ...b,
+      fixtures: b.fixtures.map((f) => ({ ...f, start: undefined, end: undefined })),
+    };
+    const r = checkBoard(unplaced, cleanConstraints());
+    expect(r.clean).toBe(true);
+    const rules = unexercisedRules(r);
+    expect(rules).toContain("Rule 1 — court double-booking");
+    expect(rules).toContain("Rule 2a — session windows");
+    expect(rules).toContain("Rule 2b — blackouts");
+    expect(rules).toContain("Rule 2c — court hours");
+    expect(rules).toContain("Rule 3 — rest minima");
+    expect(rules).toContain("Rule 4 — day caps");
+    expect(rules).toContain("Rule 7 — officials");
+    expect(rules).toContain("Rule 8 — round order");
+  });
+
+  // -----------------------------------------------------------------------
+  // Rule 3 — rest minima
+  // -----------------------------------------------------------------------
+
+  it("rule 3 — unexercised when perEntrantMinRest is 0", () => {
+    const r = checkBoard(cleanBoard(), { ...cleanConstraints(), perEntrantMinRest: 0 });
+    expect(r.clean).toBe(true);
+    expect(unexercisedRules(r)).toContain("Rule 3 — rest minima");
+  });
+
+  it("rule 3 — exercised and clean on the baseline board", () => {
+    // e-a plays fx-0 and fx-2, 90 minutes apart against a 60-minute floor.
+    const r = checkBoard(cleanBoard(), cleanConstraints());
+    expect(r.clean).toBe(true);
+    expect(unexercisedRules(r)).not.toContain("Rule 3 — rest minima");
+  });
+
+  // -----------------------------------------------------------------------
+  // Rule 4 — day caps
+  // -----------------------------------------------------------------------
+
+  it("rule 4 — unexercised when no max_fixtures_per_day rule is declared", () => {
+    const r = checkBoard(cleanBoard(), { ...cleanConstraints(), hard: [] });
+    expect(r.clean).toBe(true);
+    expect(unexercisedRules(r)).toContain("Rule 4 — day caps");
+  });
+
+  it("rule 4 — exercised and clean on the baseline board", () => {
+    const r = checkBoard(cleanBoard(), cleanConstraints());
+    expect(r.clean).toBe(true);
+    expect(unexercisedRules(r)).not.toContain("Rule 4 — day caps");
+  });
+
+  // -----------------------------------------------------------------------
+  // Rule 5 — not_before / not_after
+  // -----------------------------------------------------------------------
+
+  it("rule 5 — unexercised when no not_before/not_after rule is declared (the baseline board)", () => {
+    const r = checkBoard(cleanBoard(), cleanConstraints());
+    expect(r.clean).toBe(true);
+    expect(unexercisedRules(r)).toContain("Rule 5 — not_before / not_after");
+  });
+
+  it("rule 5 — exercised and clean when a wall-clock bound matches with no breach", () => {
+    const r = checkBoard(cleanBoard(), {
+      ...cleanConstraints(),
+      hard: [
+        ...cleanConstraints().hard,
+        { type: "not_before", minutesIntoDay: 0, scope: { kind: "every_entrant" } },
+      ],
+    });
+    expect(r.clean).toBe(true);
+    expect(unexercisedRules(r)).not.toContain("Rule 5 — not_before / not_after");
+  });
+
+  // -----------------------------------------------------------------------
+  // Rule 6 — pin integrity
+  // -----------------------------------------------------------------------
+
+  it("rule 6 — unexercised when no pin is declared (the baseline board)", () => {
+    const r = checkBoard(cleanBoard(), cleanConstraints());
+    expect(r.clean).toBe(true);
+    expect(unexercisedRules(r)).toContain("Rule 6 — pin integrity");
+  });
+
+  it("rule 6 — exercised and clean when a held pin matches the board", () => {
+    const b = cleanBoard();
+    const held = b.fixtures[0];
+    const r = checkBoard(b, {
+      ...cleanConstraints(),
+      pins: [{ fixtureId: held.fixtureId, start: held.start as number, courtId: held.courtId as string }],
+    });
+    expect(r.clean).toBe(true);
+    expect(unexercisedRules(r)).not.toContain("Rule 6 — pin integrity");
+  });
+
+  // -----------------------------------------------------------------------
+  // Rule 7 — officials
+  // -----------------------------------------------------------------------
+
+  it("rule 7 — unexercised when the pack does not declare officials", () => {
+    const r = checkBoard(cleanBoard(), { ...cleanConstraints(), declaresOfficials: false });
+    expect(r.clean).toBe(true);
+    expect(unexercisedRules(r)).toContain("Rule 7 — officials");
+  });
+
+  it("rule 7 — exercised and clean on the baseline board", () => {
+    // The baseline board declares officials AND every fixture carries one.
+    const r = checkBoard(cleanBoard(), cleanConstraints());
+    expect(r.clean).toBe(true);
+    expect(unexercisedRules(r)).not.toContain("Rule 7 — officials");
+  });
+
+  // -----------------------------------------------------------------------
+  // Rule 8 — round order
+  // -----------------------------------------------------------------------
+
+  it("rule 8 — unexercised when isRoundRobin is false", () => {
+    const r = checkBoard(cleanBoard(), { ...cleanConstraints(), isRoundRobin: false });
+    expect(r.clean).toBe(true);
+    expect(unexercisedRules(r)).toContain("Rule 8 — round order");
+  });
+
+  it("rule 8 — exercised and clean on the baseline board", () => {
+    // fx-0 (round 1) and fx-2 (round 2) are a comparable, correctly-ordered pair.
+    const r = checkBoard(cleanBoard(), cleanConstraints());
+    expect(r.clean).toBe(true);
+    expect(unexercisedRules(r)).not.toContain("Rule 8 — round order");
+  });
+
+  // -----------------------------------------------------------------------
+  // Sanity: unexercised never touches `clean`, in either direction.
+  // -----------------------------------------------------------------------
+
+  it("does not make a report dirty, and does not launder a real finding into 'merely unexercised'", () => {
+    // A genuinely DIRTY board (fx-2 inside the blackout) still names its
+    // finding, and still carries whatever else was unexercised on it —
+    // the two lists coexist rather than one crowding out the other.
+    const r = checkBoard(movedTo(cleanBoard(), 2, MON, "12:00"), cleanConstraints());
+    expect(kinds(r.findings)).toEqual(["inside_blackout"]);
+    expect(r.clean).toBe(false);
+    expect(unexercisedRules(r)).toContain("Rule 5 — not_before / not_after");
+    expect(unexercisedRules(r)).toContain("Rule 6 — pin integrity");
+  });
+});
