@@ -38221,6 +38221,9 @@
                                                 "type": "null"
                                               }
                                             ]
+                                          },
+                                          "innings": {
+                                            "type": "number"
                                           }
                                         },
                                         "required": [
@@ -38228,7 +38231,8 @@
                                           "person",
                                           "side",
                                           "line",
-                                          "detail"
+                                          "detail",
+                                          "innings"
                                         ],
                                         "additionalProperties": false
                                       }
@@ -38723,7 +38727,8 @@
                               "badgeUrl": null
                             },
                             "line": "example",
-                            "detail": null
+                            "detail": null,
+                            "innings": 1
                           }
                         ]
                       },
