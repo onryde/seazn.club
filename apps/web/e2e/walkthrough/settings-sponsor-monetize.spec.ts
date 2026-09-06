@@ -10,6 +10,12 @@ import {
   settingsUrl,
   type SeededOrg,
 } from "../settings-support";
+import {
+  claimConnectAccount,
+  releaseConnectAccount,
+  withDb,
+  type ConnectClaim,
+} from "../rs007-money-kit";
 
 /**
  * W4 of the settings walkthrough programme — the sponsor MONETIZE half of
@@ -30,8 +36,10 @@ import {
  * `mode: "serial"`, and the ONLY settings spec in this programme that is —
  * every sibling is `mode: "default"` so one red cannot hide the next. Serial is
  * forced here twice over. The fixture account (`STRIPE_CONNECT_TEST_ACCOUNT`)
- * is claimed by a `beforeAll` and `organizations.stripe_account_id` is UNIQUE,
- * so a second worker generation would seize it from the first mid-run; and the
+ * is claimed by a `beforeAll` behind an advisory lock (see below), so a second
+ * worker generation would not seize it — it would STALL on that lock for the
+ * whole of the first generation's run, which is a hang rather than a defect
+ * but is no better; and the
  * four legs below are ONE money trail (package -> order -> payment -> refund),
  * where leg N+1 has nothing to assert without leg N's Stripe object. Same
  * reason `registration-connect.spec.ts` and the rs007 specs are each their own
@@ -244,82 +252,39 @@ interface SponsorRow {
  * fixture account at a time. Take it for the duration and give it back — the
  * smoke sponsor suite crashes if it finds the account already claimed.
  *
- * Deliberately a FILE-LOCAL copy of `registration-connect.spec.ts:60-107`
- * rather than an import of it: the claim is a mutual exclusion, and two spec
- * files sharing one module-scoped implementation would let each take the
- * account from under the other without either being able to see it. Copying is
- * the point.
+ * IMPORTED from `rs007-money-kit.ts`, not copied. The first draft of this file
+ * kept a file-local copy, reasoning that "the claim IS the mutual exclusion, so
+ * two files must not share one implementation". That is exactly backwards: the
+ * kit's `claimConnectAccount` takes `pg_advisory_lock(70070071)` on a dedicated
+ * `max: 1` connection held open for the duration, so a second worker QUEUES
+ * instead of seizing the account mid-run — and an exclusion only excludes if
+ * every claimant waits on the SAME lock. A local copy opts out of it. This
+ * matters concretely rather than in principle: the `walkthrough` project does
+ * not set `fullyParallel: false` and CI runs it with `--workers=3`, and four
+ * files now contend for this one account (`registration-connect.spec.ts`, the
+ * two rs007 specs, and this one). The symptom of losing that race is a Stripe
+ * "missing destination" error hundreds of lines from its cause.
  *
  * Equally deliberately NOT `helpers.ts`'s `setOrgConnectSql`: that writes a
  * fabricated `acct_e2e_<id>` (helpers.ts:542) which Stripe rejects as a
  * transfer destination, so the Checkout Session in leg 2 would never mint.
+ *
+ * The kit's `releaseConnectAccount` returns `void` and logs `RESTORE>>>`, so
+ * the restoration assertion below reads the row back for itself through the
+ * kit's `withDb` rather than trusting a return value or a log line.
  */
-async function withDb<T>(fn: (sql: import("postgres").Sql) => Promise<T>): Promise<T> {
-  const url = process.env.DATABASE_URL;
-  if (!url) throw new Error("DATABASE_URL required");
-  const { default: postgres } = await import("postgres");
-  const sql = postgres(url, { connection: { search_path: "seazn_club" }, ssl: false });
-  try {
-    return await fn(sql);
-  } finally {
-    await sql.end({ timeout: 5 });
-  }
-}
-
-async function claimConnectAccount(orgId: string): Promise<string | null> {
-  return withDb(async (sql) => {
-    const prior = await sql`
-      select id from organizations where stripe_account_id = ${CONNECT_ACCOUNT}`;
-    const priorId = (prior[0]?.id as string | undefined) ?? null;
-    if (priorId) {
-      await sql`
-        update organizations
-        set stripe_account_id = null, stripe_charges_enabled = false
-        where id = ${priorId}`;
-    }
-    await sql`
-      update organizations
-      set stripe_account_id = ${CONNECT_ACCOUNT}, stripe_charges_enabled = true
-      where id = ${orgId}`;
-    return priorId;
-  });
-}
-
-/** Hands the account back and RETURNS what actually holds it afterwards, so
- *  the caller can assert the restoration rather than trust the log line. A
- *  broken hand-back breaks every other Connect spec in the repo, not just this
- *  one, so it is asserted — see the `afterAll` below. */
-async function releaseConnectAccount(orgId: string, priorId: string | null): Promise<string | null> {
-  return withDb(async (sql) => {
-    await sql`
-      update organizations
-      set stripe_account_id = null, stripe_charges_enabled = false
-      where id = ${orgId}`;
-    if (priorId) {
-      await sql`
-        update organizations
-        set stripe_account_id = ${CONNECT_ACCOUNT}, stripe_charges_enabled = true
-        where id = ${priorId}`;
-    }
-    const back = await sql`
-      select id from organizations where stripe_account_id = ${CONNECT_ACCOUNT}`;
-    const holder = (back[0]?.id as string | undefined) ?? null;
-    console.log(
-      `RESTORE>>> fixture now held by ${holder ?? "NOBODY"} (expected ${priorId ?? "NOBODY"})`,
-    );
-    return holder;
-  });
-}
 
 // ---------------------------------------------------------------------------
 // Shared state (serial file — see the header)
 // ---------------------------------------------------------------------------
 
 let org: SeededOrg;
-let priorHolder: string | null = null;
-let claimedFor: string | null = null;
-/** Whatever held the fixture after `afterAll` handed it back — captured so the
- *  assertion can run AFTER every other cleanup step, never instead of one. */
+/** The kit's claim handle (`{ priorId, orgId }`), or null on a skipped run
+ *  where the account was never taken. */
+let claim: ConnectClaim | null = null;
+/** Whatever held the fixture after `afterAll` handed it back, READ BACK from
+ *  the database — captured so the assertion can run AFTER every other cleanup
+ *  step, never instead of one. */
 let restoredHolder: string | null = null;
 let restoreRan = false;
 
@@ -351,9 +316,11 @@ test.beforeAll(async ({ request }: { request: APIRequestContext }) => {
   org = await seedSettingsOrg(request, { plan: "pro", label: "W4-sponsor-monetize" });
   // See doc note 3: redundant against today's catalog, kept against tomorrow's.
   await setBoolEntitlementOverrideSql(org.orgId, "sponsors.monetize", true);
-  priorHolder = await claimConnectAccount(org.orgId);
-  claimedFor = org.orgId;
-  console.log(`CONNECT>>> ${CONNECT_ACCOUNT} taken from ${priorHolder ?? "nobody"} for ${org.slug}`);
+  // Blocks until any other worker holding the fixture gives it back.
+  claim = await claimConnectAccount(org.orgId);
+  console.log(
+    `CONNECT>>> ${CONNECT_ACCOUNT} taken from ${claim.priorId ?? "nobody"} for ${org.slug}`,
+  );
 });
 
 test.afterAll(async ({ request }: { request: APIRequestContext }) => {
@@ -361,8 +328,16 @@ test.afterAll(async ({ request }: { request: APIRequestContext }) => {
   // fixture must be detached BEFORE the org is released, or a soft-deleted org
   // keeps the account forever. Every step is independently guarded so one
   // failure cannot strand the next.
-  if (claimedFor) {
-    restoredHolder = await releaseConnectAccount(claimedFor, priorHolder);
+  if (claim) {
+    await releaseConnectAccount(claim);
+    // The kit hands the account back and logs it, but returns void — so what
+    // actually holds the account now is read back here rather than taken on
+    // trust. The assertion's source is this query, not the kit's say-so.
+    restoredHolder = await withDb(async (sql) => {
+      const back = await sql`
+        select id from organizations where stripe_account_id = ${CONNECT_ACCOUNT}`;
+      return (back[0]?.id as string | undefined) ?? null;
+    });
     restoreRan = true;
   }
   for (const id of strayEventIds) {
@@ -380,7 +355,7 @@ test.afterAll(async ({ request }: { request: APIRequestContext }) => {
       restoredHolder,
       `the Connect fixture ${CONNECT_ACCOUNT} was NOT handed back to its prior holder — ` +
         `every other Connect spec in this repo is now broken until this is repaired by hand`,
-    ).toBe(priorHolder);
+    ).toBe(claim?.priorId ?? null);
   }
 });
 
