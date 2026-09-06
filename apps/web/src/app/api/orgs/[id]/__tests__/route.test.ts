@@ -82,6 +82,40 @@ describe.skipIf(!HAS_DB)("PATCH /api/orgs/[id] slug cache invalidation", () => {
   });
 });
 
+// The org-wide default payment method for NEW divisions. `stripe` is only a
+// legitimate default once the org's Connect account can actually take a
+// charge: `stripe_charges_enabled` is what the connect settings page reads to
+// disable the radio, and what registration-submit re-checks before quoting a
+// card price. The UI gate was the ONLY gate until this suite — the route
+// accepted the write from any client that skipped the screen, leaving new
+// divisions defaulted to a method the org cannot collect on.
+describe.skipIf(!HAS_DB)("PATCH /api/orgs/[id] default_payment_method gate", () => {
+  it("refuses stripe as the default method while charges are not enabled", async () => {
+    const org = await seedOrg();
+    const res = await PATCH(patchReq({ default_payment_method: "stripe" }), {
+      params: Promise.resolve({ id: org.id }),
+    });
+    expect(res.status).toBe(409);
+  });
+
+  it("accepts stripe once charges are enabled", async () => {
+    const org = await seedOrg();
+    await sql`update organizations set stripe_charges_enabled = true where id = ${org.id}`;
+    const res = await PATCH(patchReq({ default_payment_method: "stripe" }), {
+      params: Promise.resolve({ id: org.id }),
+    });
+    expect(res.status).toBe(200);
+  });
+
+  it("always accepts offline, regardless of charges_enabled", async () => {
+    const org = await seedOrg();
+    const res = await PATCH(patchReq({ default_payment_method: "offline" }), {
+      params: Promise.resolve({ id: org.id }),
+    });
+    expect(res.status).toBe(200);
+  });
+});
+
 afterAll(async () => {
   if (!HAS_DB) return; // DB-less unit job: connecting just to disconnect throws
   await sql.end();

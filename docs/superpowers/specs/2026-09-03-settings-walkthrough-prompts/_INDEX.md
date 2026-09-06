@@ -21,7 +21,7 @@ check expressed as a client `disabled` prop, and `apps/web` vitest is
 | W1 | `/admin/settings` + 4 legacy redirects; `setOwnerStaffRoleSql` ships with it | **DONE** — 6 tasks, 5 fix rounds, all reviews clean |
 | W2 | `/o/{org}/settings` 7 tabs — drive+persist (sponsors CRUD half) | **MERGED** — PR #720, squashed to `997ad225b`, all 11 CI checks green |
 | W3 | `/o/{org}/settings` 7 tabs — gating matrix + first mutation sweep | **IN PLANNING** — see the W3 section below |
-| W4 | `settings/{connect,credits,add-ons}`, billing's uncovered panels, sponsor monetize half | Not started |
+| W4 | `settings/{connect,credits,add-ons}`, billing's uncovered panels, sponsor monetize half | **DONE, PENDING budget ruling** — 4 tasks + final review, all clean; measured +53.5s against the ceiling (see recommendation 3 below and the wave's own SDD ledger) |
 | W5 | Competition settings — frozen, visibility, discoverable | Not started |
 | W6 | Division schedule + constraints — full bounds table | Not started |
 | W7 | Division registration settings — partial-save, money bounds | Not started |
@@ -85,6 +85,29 @@ the other.
    `t`/`dict` island)". A session in between briefly reported the opposite from
    a loose `t(` grep that matched inside unrelated identifiers; a grep is not a
    read, and the correction was the error.
+3. **Split the ≤60s ceiling into two budgets rather than raise it (2026-09-06,
+   W4).** Measured, not estimated: the whole `walkthrough` project run
+   (`--project=walkthrough --workers=3`, JSON reporter, per-file
+   `.testResults[].duration` summed — never a `-g` re-run) puts W4's four new
+   files at +53.5s (Tasks 1-3 combined 36.6s; Task 4's real-Stripe leg, run in
+   isolation with a correctly-exported `CONNECT_WALKTHROUGH=1`, 16.9s across
+   its own 4 tests). Cumulative against ruling 6's reported 57-58.5s through
+   W3: **~110.5-112.0s of the 60s ceiling**, roughly double it, with W5-W8
+   still ahead. Ruling 6 held the line by moving work to `APIRequestContext`
+   with no browser — W4's Tasks 1-3 already do that (confirmed from the JSON,
+   not assumed) and still cost 36.6s, so the same lever that fixed W3 does not
+   close this gap on its own; Task 4's 16.9s is a REAL Stripe network round
+   trip with no API-only substitute (real money completion was the wave's own
+   mandate, ruling 3). Recommendation: split the single ceiling into a
+   fast-path budget (API-first/DB-seeded, no external network — W0-W3's
+   ~57-58.5s plus W4's own 36.6s fit at ~94s if that bucket is widened once)
+   and a separate small allowance for real-money-completion legs (currently
+   one file), judged on "bounded time + clean teardown" rather than folded
+   into the same number — the two kinds of test do not shrink the same way
+   (one is compute-bound, the other network-bound). Owner has not ruled on
+   this; flagged at handoff, per ruling 6's own precedent of putting the
+   measurement to the owner rather than silently absorbing or hiding it. Full
+   numbers and methodology: `.superpowers/sdd/2026-09-06-settings-walkthrough-w4/progress.md`.
 
 ## Findings
 

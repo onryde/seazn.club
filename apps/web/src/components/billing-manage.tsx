@@ -497,6 +497,7 @@ export function CancelSubscriptionButton({
           <label className="block text-xs font-medium text-slate-600">
             What made you cancel? (optional)
             <select
+              data-testid="cancel-reason"
               className="select mt-1"
               defaultValue=""
               onChange={(e) => (reasonRef.current = e.target.value)}
@@ -527,7 +528,12 @@ export function CancelSubscriptionButton({
 
   return (
     <div>
-      <button className="btn btn-ghost text-red-600" onClick={go} disabled={loading}>
+      <button
+        data-testid="cancel-subscription"
+        className="btn btn-ghost text-red-600"
+        onClick={go}
+        disabled={loading}
+      >
         {loading ? "Cancelling…" : "Cancel subscription"}
       </button>
       {error && <p className="mt-1 text-xs text-red-500">{error}</p>}
@@ -859,6 +865,13 @@ function TaxIdManager({ taxIds }: { taxIds: TaxIdRow[] }) {
 // Promotion code on the live subscription
 // ---------------------------------------------------------------------------
 
+/**
+ * Every branch below carries `data-testid="promo-box"`. The box has THREE
+ * shapes — an applied discount, a collapsed "Have a promo code?" link, and the
+ * open code field — and a test asking whether the promo affordance reached the
+ * page at all must not have to know which one it is in, nor anchor on copy the
+ * entitlements ladder rewrite is about to move.
+ */
 export function PromoCodeBox({ discount }: { discount: DiscountSummary | null }) {
   const router = useRouter();
   const [code, setCode] = useState("");
@@ -892,7 +905,7 @@ export function PromoCodeBox({ discount }: { discount: DiscountSummary | null })
 
   if (discount) {
     return (
-      <div className="flex flex-wrap items-center gap-2 text-sm">
+      <div data-testid="promo-box" className="flex flex-wrap items-center gap-2 text-sm">
         <span className="badge bg-emerald-100 text-emerald-700">{discount.label}</span>
         <span className="text-slate-600">{discount.description} — applies to upcoming invoices.</span>
         <button className="text-xs text-red-600 hover:underline" onClick={remove} disabled={busy}>
@@ -905,14 +918,18 @@ export function PromoCodeBox({ discount }: { discount: DiscountSummary | null })
 
   if (!open) {
     return (
-      <button className="text-xs text-purple-600 hover:underline" onClick={() => setOpen(true)}>
+      <button
+        data-testid="promo-box"
+        className="text-xs text-purple-600 hover:underline"
+        onClick={() => setOpen(true)}
+      >
         Have a promo code?
       </button>
     );
   }
 
   return (
-    <div className="flex flex-wrap items-center gap-2">
+    <div data-testid="promo-box" className="flex flex-wrap items-center gap-2">
       <input
         className="input w-44"
         placeholder="Promo code"

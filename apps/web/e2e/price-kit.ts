@@ -115,3 +115,74 @@ export function proMinor(
 export function proAnnualPerMonthLabel(currency: Currency = DEFAULT_CURRENCY): string {
   return money(Math.round(proMinor("annual", currency) / 12), currency);
 }
+
+/**
+ * What ONE extra-organisation rider costs PER MONTH on `planKey`, in minor
+ * units — the `org_addons` SKU Stripe actually bills, mirroring
+ * `orgAddonPriceMinor` (src/lib/org-addons.ts).
+ *
+ * Here rather than imported for the reason this whole file exists, twice over:
+ * `org-addons.ts` opens with `import "server-only"` AND pulls the seed in as a
+ * bare `import stripePlans from "@/config/stripe-plans.json"`, so a spec that
+ * imports it collects ZERO TESTS.
+ *
+ * `null` — never 0 — when the plan has no rider SKU (community). The
+ * difference is the whole point: 0 would render as a free add-on, while null
+ * means the surface must not offer one at all. `e2e-price-kit-parity.test.ts`
+ * compares this to `orgAddonPriceMinor` for every plan in the seed AND for a
+ * plan that is not, so the null branch is guarded too.
+ *
+ * NOT `extraOrgPrice()` (the plan's graduated `up_to: "inf"` tier): the two
+ * agree monthly and diverge annually, so quoting the tier would understate an
+ * annual group's rider by about a third.
+ */
+export function orgAddonMinor(planKey: string, currency: Currency = DEFAULT_CURRENCY): number | null {
+  const entry = (seed.org_addons ?? []).find((e) => e.plan_key === planKey);
+  if (!entry) return null;
+  return amountFor(entry.price, currency);
+}
+
+/** The rendered price of one rider — what the Add-ons stepper reads on screen. */
+export function orgAddonLabel(planKey: string, currency: Currency = DEFAULT_CURRENCY): string {
+  const minor = orgAddonMinor(planKey, currency);
+  if (minor === null) throw new Error(`stripe-plans.json sells no extra-org rider on ${planKey}`);
+  return money(minor, currency);
+}
+
+/** Plan keys the seed sells a rider on, in catalog order — mirrors
+ *  `ORG_ADDON_PLAN_KEYS` (src/lib/org-addon-plans.ts), which a spec cannot
+ *  import for the same bare-JSON reason. Guarded in the parity test. */
+export const ORG_ADDON_RIDER_PLANS: readonly string[] = (seed.org_addons ?? []).map(
+  (e) => e.plan_key,
+);
+
+/**
+ * The credit-pack ladder's keys, IN SEED ORDER (SPEC-6 §A4).
+ *
+ * Mirrors `creditPackOptions` (src/lib/currency.ts), which maps the seed's
+ * `packs` array straight through — so the Buy credits modal renders one radio
+ * per entry here, in this order. Order matters to a caller, not just
+ * membership: the modal's rungs are picked by index, and the parity test
+ * compares the whole sequence rather than a set.
+ */
+export const CREDIT_PACK_KEYS: readonly string[] = (seed.packs ?? []).map((p) => p.key);
+
+/**
+ * One credit pack's price in minor units — `creditPackOptions`'s `amountMinor`.
+ *
+ * THROWS on an unknown key rather than returning 0: a 0 would render to a buyer
+ * as a free pack, which is the same failure `orgAddonMinor`'s null branch above
+ * exists to prevent, and a spec asking for a rung the seed does not sell has a
+ * stale expectation that must be loud.
+ */
+export function creditPackMinor(key: string, currency: Currency = DEFAULT_CURRENCY): number {
+  const pack = (seed.packs ?? []).find((p) => p.key === key);
+  if (!pack) throw new Error(`stripe-plans.json sells no credit pack "${key}"`);
+  return amountFor(pack.price, currency);
+}
+
+/** The rendered price of one pack — what the modal's radio row shows and what
+ *  its `Pay {price}` button quotes for the selected rung. */
+export function creditPackLabel(key: string, currency: Currency = DEFAULT_CURRENCY): string {
+  return money(creditPackMinor(key, currency), currency);
+}

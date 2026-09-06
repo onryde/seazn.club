@@ -199,6 +199,22 @@ const WALKTHROUGH_SPECS: string[] = [
   "settings-ownership.spec.ts",
   "settings-role-gates.spec.ts",
 
+  // Settings W4 — connect/credits/add-ons, the billing panels the existing
+  // suites leave uncovered, and the sponsor monetize half.
+  "settings-connect-gates.spec.ts",
+  "settings-add-ons-drive.spec.ts",
+  "settings-billing-panels.spec.ts",
+  // Runs for REAL in CI, on every push to `main`: it sells, invoices, charges
+  // and refunds a sponsor package through real Stripe test mode. Not opt-out
+  // there — `STRIPE_SECRET_KEY` and `STRIPE_CONNECT_TEST_ACCOUNT` are both
+  // configured repo secrets, and e2e.yml maps them onto the `walkthrough`
+  // matrix leg alone, then exports `CONNECT_WALKTHROUGH=1` and a freshly minted
+  // `STRIPE_WEBHOOK_SECRET` through `$GITHUB_ENV` before the server boots, so
+  // runner and server verify against the same secret. Locally it is opt-in and
+  // skips loudly without those exported. Listed here because the inventory's
+  // job is to notice a DELETED spec, whatever the run state of the leg.
+  "settings-sponsor-monetize.spec.ts",
+
   // The directory — the organiser's own records, driven through the screens
   // that own them: club import caps, the import paywall preview, officials'
   // roles against the upgrade gate, player identity and its duplicate queue,

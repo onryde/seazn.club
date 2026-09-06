@@ -240,7 +240,12 @@ export function SponsorPackages({
   }
 
   return (
-    <div className="space-y-4">
+    // `sponsor-packages` scopes the e2e walkthrough's locators to this console.
+    // Not convenience: `OrgSponsors` renders directly above on the same tab and
+    // draws its Tier and Competition labels from the SAME two dictionary keys
+    // (`sponsors.tierLabel`, `sponsors.scopeLabel`), so an unscoped label
+    // locator is ambiguous by construction.
+    <div data-testid="sponsor-packages" className="space-y-4">
       <p className="text-sm text-slate-500">{msg("sponsors.sell.hint")}</p>
       {error && <p className="text-sm text-red-600">{error}</p>}
       {sentUrl ? (

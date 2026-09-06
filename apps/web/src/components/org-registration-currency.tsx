@@ -76,6 +76,7 @@ export function OrgRegistrationCurrency({
       <div className="flex flex-wrap items-center gap-3">
         <select
           className="input min-h-11 w-auto"
+          data-testid="reg-currency-select"
           aria-label={msg("settings.org.regCurrency.aria")}
           value={value}
           disabled={locked}

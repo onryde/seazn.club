@@ -5,15 +5,24 @@ import {
   PASS_KEYS,
   SELLABLE_PASS_KEYS,
   SUPPORTED_CURRENCIES,
+  creditPackOptions,
   formatMinor,
   passPrice,
   proPrice,
   type Currency,
 } from "@/lib/currency";
+import { ORG_ADDONS, orgAddonPriceMinor } from "@/lib/org-addons";
+import { ORG_ADDON_PLAN_KEYS } from "@/lib/org-addon-plans";
 import {
+  CREDIT_PACK_KEYS,
   HIDDEN_PASS_RUNGS,
+  ORG_ADDON_RIDER_PLANS,
   SELLABLE_PASS_RUNGS,
+  creditPackLabel,
+  creditPackMinor,
   money,
+  orgAddonLabel,
+  orgAddonMinor,
   passMinor,
   proMinor,
   passLabel,
@@ -124,5 +133,70 @@ describe("e2e/price-kit mirrors lib/currency", () => {
     // hidden, or both assertions above are about empty arrays.
     expect(SELLABLE_PASS_RUNGS.length).toBeGreaterThan(0);
     expect(HIDDEN_PASS_RUNGS.length).toBeGreaterThan(0);
+  });
+
+  // The extra-organisation rider (v17 gap #293). Mirrored here for TWO reasons
+  // at once — `lib/org-addons.ts` opens with `import "server-only"` and pulls
+  // the seed in as a bare JSON import — so `settings-add-ons-drive.spec.ts`
+  // could not quote the price it asserts without this kit.
+  it("prices the extra-organisation rider exactly as the Add-ons tab does", () => {
+    for (const currency of SUPPORTED_CURRENCIES) {
+      for (const entry of ORG_ADDONS) {
+        expect(orgAddonMinor(entry.planKey, currency), `${entry.planKey} ${currency}`).toBe(
+          orgAddonPriceMinor(entry.planKey, currency),
+        );
+        // The RENDERED string, because the stepper asserts prose, not a number.
+        expect(orgAddonLabel(entry.planKey, currency)).toBe(
+          formatMinor(orgAddonPriceMinor(entry.planKey, currency)!, currency),
+        );
+      }
+      // The null branch, guarded rather than assumed. `orgAddonPriceMinor`
+      // returns null — not 0 — for a plan with no rider SKU, and 0 would read
+      // to a customer as a free add-on. Community is the live case: the tab
+      // renders `addOns.communityNotice` instead of a stepper on the strength
+      // of exactly this answer.
+      expect(orgAddonMinor("community", currency)).toBeNull();
+      expect(orgAddonPriceMinor("community", currency)).toBeNull();
+    }
+    // Anti-vacuity for the loop above: the seed really does sell a rider
+    // somewhere, or every assertion in it is about an empty list.
+    expect(ORG_ADDONS.length).toBeGreaterThan(0);
+    expect(ORG_ADDON_RIDER_PLANS).toEqual([...ORG_ADDON_PLAN_KEYS]);
+    expect(ORG_ADDON_RIDER_PLANS).not.toContain("community");
+  });
+
+  // The credit-pack ladder (SPEC-6 §A4). `creditPackOptions` lives in
+  // `lib/currency.ts` behind the same bare JSON import, so
+  // `settings-billing-panels.spec.ts` cannot ask it how many rungs the Buy
+  // credits modal renders, nor what its Pay button quotes.
+  it("prices the credit-pack ladder exactly as the Buy credits modal does", () => {
+    for (const currency of SUPPORTED_CURRENCIES) {
+      const options = creditPackOptions(currency);
+      // ORDER, not just membership: the modal renders one radio per rung in
+      // this exact sequence, and the spec picks a rung by index.
+      expect(
+        CREDIT_PACK_KEYS,
+        `pack keys/order drifted from creditPackOptions (${currency})`,
+      ).toEqual(options.map((o) => o.key));
+      for (const option of options) {
+        expect(creditPackMinor(option.key, currency), `${option.key} ${currency}`).toBe(
+          option.amountMinor,
+        );
+        // The RENDERED string, because the modal asserts prose ("Pay $10"),
+        // not a number.
+        expect(creditPackLabel(option.key, currency)).toBe(
+          formatMinor(option.amountMinor, currency),
+        );
+      }
+    }
+    // Anti-vacuity: the seed really does sell packs, or every assertion above
+    // is about an empty list — and the modal itself renders NOTHING at all
+    // when it is (`buy-credits.tsx`: `if (packs.length === 0) return null`),
+    // so an empty ladder would silently delete the affordance under test.
+    expect(CREDIT_PACK_KEYS.length).toBeGreaterThan(0);
+    // The miss branch throws rather than returning 0 — a 0 here would render
+    // to a buyer as a free pack, the same failure `orgAddonMinor`'s null
+    // branch above exists to prevent.
+    expect(() => creditPackMinor("credits_not_a_pack")).toThrow(/credit pack/);
   });
 });
