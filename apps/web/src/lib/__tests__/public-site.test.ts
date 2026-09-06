@@ -393,6 +393,23 @@ describe("teamShortOf / personShortCandidates / disambiguatedShorts (R11 fix rou
     expect(away.startsWith("B")).toBe(true);
   });
 
+  // Found by driving the real spectator walkthrough (e2e/walkthrough/
+  // spectator-public-2.spec.ts names its two tennis entrants "Player One
+  // <tag>"/"Player Two <tag>" — the SAME per-run tag suffix on both, so
+  // first word AND last word collide and only the middle differs). Without
+  // this rung the ladder fell to the untruncated full name, which overflows
+  // the 24x24px badge chips in `timeline-tab.tsx`/`sets-tab.tsx` — a real,
+  // screenshotted defect, not a hypothetical.
+  it("disambiguatedShorts: first AND last word collide (a shared per-run tag), only the MIDDLE word differs — still resolves to a short 3-letter code, not the untruncated full name", () => {
+    const [home, away] = disambiguatedShorts(
+      { name: "Player One mtpyoivq", isPerson: true },
+      { name: "Player Two mtpyoivq", isPerson: true },
+    );
+    expect(home).not.toBe(away);
+    expect(home).toBe("ONE");
+    expect(away).toBe("TWO");
+  });
+
   it("disambiguatedShorts: genuinely identical full names on both sides — every candidate exhausted, the positional tie-break still guarantees 'never equal'", () => {
     const [home, away] = disambiguatedShorts(
       { name: "John Smith", isPerson: true },

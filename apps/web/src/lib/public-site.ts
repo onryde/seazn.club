@@ -470,16 +470,29 @@ export function personShortCandidates(name: string): string[] {
   if (words.length === 0) return ["?"];
   const surname = words[words.length - 1]!;
   const first = words[0]!;
+  // Found by driving the real spectator walkthrough (R11 fix round, C9
+  // follow-up): its own fixtures name two entrants "Player One <tag>" /
+  // "Player Two <tag>" — SAME first word, SAME last word (a per-run unique
+  // suffix), differing only in the middle. Every rung above and below this
+  // one collides for that pair, so without a middle-word candidate the
+  // ladder fell all the way to the full, untruncated name — which overflows
+  // the 24x24px badge chips in the Timeline/Sets tabs (`timeline-tab.tsx`,
+  // `sets-tab.tsx`). A 3+-word name's middle word(s) are exactly where a
+  // shared first-and-last-word pair still differs.
+  const middle = words.length > 2 ? words.slice(1, -1).join("") : "";
   const out: string[] = [];
   const add = (s: string) => {
     if (s.length > 0 && !out.includes(s)) out.push(s);
   };
   add(surname.slice(0, 3));
   if (words.length > 1) add(`${first.slice(0, 1)}${surname.slice(0, 2)}`);
+  if (middle.length > 0) add(middle.slice(0, 3));
   add(surname.slice(0, 4));
   if (words.length > 1) add(`${first.slice(0, 2)}${surname.slice(0, 2)}`);
+  if (middle.length > 0) add(middle.slice(0, 4));
   add(words.join("").slice(0, 3));
   add(surname);
+  if (middle.length > 0) add(middle);
   add(words.join(""));
   return out.length > 0 ? out : ["?"];
 }
