@@ -895,8 +895,14 @@ export function StagesPanel({ divisionId, divisionSeq, competitionId, orgSlug, c
         .map((stage) => {
         const stageFixtures = fixtures.filter((f) => f.stage_id === stage.id);
         // Pinned unscheduled section (v3/04 §3 item 3): count + CTA stay here
-        // until Task 5 moves them to the rail; the row LIST itself now
-        // renders once, division-wide, in the `<RunSheet>` mounted below.
+        // — Task 4 tried moving them onto `<StageRail>` and reverted; see
+        // stage-rail.tsx's own header comment for why (in short: `walk()`,
+        // the hook-harness `stages-panel-auto-schedule-seq.test.tsx` and
+        // `stages-panel-result-strip.test.tsx` use to click this button and
+        // observe async state, never sees past a nested component boundary,
+        // no matter how the button reaches it — inline or as a slot prop).
+        // The row LIST itself still renders once, division-wide, in the
+        // `<RunSheet>` mounted below.
         //
         // `isUnscheduledFixture`, never a fourth hand-written copy of the same
         // two clauses (max-effort review, finding 11 — "three numbers describe
@@ -1056,8 +1062,7 @@ export function StagesPanel({ divisionId, divisionSeq, competitionId, orgSlug, c
                       word transposition — and in fr/es/nl they were the SAME
                       words in the same order. It now names its SCOPE ("in this
                       stage"), which is the one thing that made the two numbers
-                      reconcilable; the sheet's heading is unchanged. Both go
-                      when Task 5 moves this CTA to the rail. */}
+                      reconcilable; the sheet's heading is unchanged. */}
                   <p className="text-xs font-semibold text-slate-700">
                     {msg("schedule.unscheduled.title")}
                     <span
@@ -1096,8 +1101,14 @@ export function StagesPanel({ divisionId, divisionSeq, competitionId, orgSlug, c
                     fixture) is gone — the run sheet's own "Not yet
                     scheduled" group, mounted once below, division-wide,
                     shows every one of these rows with a "Set time" action.
-                    This header keeps only the count + CTA + capacity reason
-                    until Task 5 moves them to the stage rail. */}
+                    This header keeps only the count + CTA + capacity reason.
+                    Task 4 (competition-desk-w3): tried moving this section
+                    onto `<StageRail>` and reverted — see stage-rail.tsx's
+                    header comment for why (the hook-harness `walk()` used by
+                    stages-panel-auto-schedule-seq.test.tsx and
+                    stages-panel-result-strip.test.tsx cannot see past ANY
+                    nested component boundary, inline render or slot prop
+                    alike). Stays here until that constraint is lifted. */}
               </div>
             )}
 

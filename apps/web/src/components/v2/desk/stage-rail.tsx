@@ -11,8 +11,40 @@
 // own `useCapacityReportsByStage` comment for why a data-fetching hook
 // specifically must not move into a per-stage child: it broke pre-existing
 // tests that locate the auto-schedule button by testid). Task 5 folds this
-// into a phone bottom sheet and a later task moves the auto-schedule CTA
-// onto it — both depend on this shape staying prop-driven.
+// into a phone bottom sheet.
+//
+// Task 4 tried and REVERTED moving the auto-schedule CTA here — recorded so
+// a future attempt does not re-spend the same investigation. The failure is
+// NOT about the capacity hook (that constraint is satisfied fine: the panel
+// can compute a plain per-stage verdict and hand it down as a prop). It is
+// `_hook-harness.tsx`'s `walk()`: `stages-panel.tsx` is driven through
+// `renderIsland`/`walk` by `stages-panel-auto-schedule-seq.test.tsx` and
+// `stages-panel-result-strip.test.tsx`, which locate the auto-schedule
+// button by testid and click it to observe async state INSIDE StagesPanel —
+// `renderToStaticMarkup` cannot do that (no interactivity). `walk()` only
+// recurses into an element's `.props.children`; it never invokes a nested
+// function component's own render function, so ANY element that ends up
+// inside `<StageRail>`'s returned tree is invisible to it from
+// `StagesPanel`'s root — proved empirically (moving the button here
+// reddened exactly those two files' 3 tests, restored clean by reverting).
+// Critically, this is true regardless of HOW the button reaches
+// `<StageRail>`: building it inside this file's own render, or handing it
+// in as an already-built element via a named prop (a `courtTagsSlot`-shaped
+// "slot"), are the SAME shape from `walk()`'s perspective — it only ever
+// reads `.props.children`, never any other prop, so a slot is exactly as
+// invisible as an inline render. Calling `StageRail` as a plain function
+// (skipping the JSX/component boundary, so its output inlines directly into
+// `StagesPanel`'s own tree) is also unsafe: `StagesPanel` calls it once per
+// stage inside `.map()` over a variable-length `stages` array, and this
+// file's own `useMsg()` is a real hook — a variable per-render hook count
+// corrupts React's hook list the moment a stage is added or removed, in
+// production, not just in this harness. The only way to move the CTA here
+// for real is to give `stages-panel-auto-schedule-seq.test.tsx` and
+// `stages-panel-result-strip.test.tsx` a custom `expand` argument to
+// `renderIsland` that also expands `StageRail` (this repo already has that
+// pattern elsewhere — see `create-org-form.test.tsx`'s `expandRows` /
+// `registration-hub-config-panel.test.tsx`'s `expandPanel`) — out of scope
+// for a task that may not touch those two files.
 import { useMsg } from "@/components/i18n/dict-provider";
 
 interface StageRow {
