@@ -25,15 +25,24 @@ export default defineConfig([
     // `openapi:gen`. Linting output is linting the generator twice.
     "openapi/**",
     "bench-report/**",
-    // The REST of scripts/ is not linted yet, and this is a scope line rather
-    // than an oversight. Pointing this config at the whole tree reports 519
-    // errors, almost all in `smoke.ts` (18k lines) and the older generators —
-    // mostly `no-unnecessary-type-assertion`, which is worth fixing and is not
-    // this wave's to fix. `lint:scripts` therefore runs `scripts/bench` only.
+    // The top-level tools and the pack generators are still not linted, and
+    // this is a scope line rather than an oversight. Measured 2026-09-06 with
+    // `eslint scripts --no-ignore`: 498 errors, 269 of them auto-fixable, and
+    // 476 of them in four files — smoke.ts (255), repro-ai-bracket-frozen-
+    // feeder.ts (81), seed-demo.ts (77), seed-fifa2026.ts (63). Mostly
+    // `no-unnecessary-type-assertion`. Worth fixing; not this change's to fix.
     //
-    // Widening it is a small, separate change: drop this ignore, run
-    // `eslint scripts --fix` (280 of the 519 are auto-fixable), and read the
-    // remainder. Left undone deliberately, not forgotten.
+    // Everything NOT ignored here IS now gated. `lint:scripts` was widened
+    // 2026-09-06 from `scripts/bench` to `eslint scripts` — which surfaced 4
+    // errors in `scripts/i18n`, since fixed — and ci.yml runs it as a blocking
+    // step next to the turbo `eslint` one. Before that it was chained only
+    // into root `npm run lint`, which CI never invokes, so it ran for nobody.
+    // This ignore list is therefore the WHOLE of the remaining gap: 56 of the
+    // tree's 81 TS files are gated, these 25 plus build-packs are not.
+    //
+    // Closing it is a small, separate change: drop these two entries, run
+    // `eslint scripts --fix`, and read the remainder. Left undone
+    // deliberately, not forgotten.
     "scripts/*.ts",
     "scripts/build-packs/**",
   ]),
