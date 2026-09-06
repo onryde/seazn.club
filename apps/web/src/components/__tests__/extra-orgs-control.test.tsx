@@ -93,7 +93,7 @@ describe("ExtraOrgsControl — a refusal keeps its own remedy", () => {
 
     // And each is the RIGHT one — distinctness alone would survive a shuffle.
     expect(planChange).toBe(
-      "This billing group can't hold extra organisations. Move to Pro or Pro Plus first.",
+      "This billing group can't hold extra organisations. Move to Pro first.",
     );
     expect(differentNumber).toBe("Choose a whole number between 0 and 50.");
     expect(moveAnOrgOut).toBe(

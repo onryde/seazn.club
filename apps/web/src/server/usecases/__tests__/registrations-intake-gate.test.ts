@@ -215,10 +215,33 @@ describe.skipIf(!HAS_DB)("revoked card intake gate (P2-10)", () => {
     // …and the resolver must actually be READING it for this org+comp, else the
     // assertion below would hold for the boring reason (community's own
     // registration.paid = true, denied) and pin nothing about the pass.
-    // fee_percent is the pass-lifted key that proves the arm fires: community 8,
-    // event_pass 5, and no override touches it.
-    expect(await getLimit(orgId, "registration.fee_percent", competition.id)).toBe(5);
-    expect(await getLimit(orgId, "registration.fee_percent")).toBe(8);
+    // fee_percent is the pass-lifted key that proves the arm fires: the pass
+    // rung's rate sits under community's, and no override touches it.
+    //
+    // Both numbers are READ FROM THE MATRIX, never typed here. They were `5`
+    // and `8` until V398 re-cut the ladder for the additive fee model, and a
+    // typed pair turns every legitimate reprice into a red that teaches the
+    // next editor to retype the constants instead of re-checking the claim.
+    // The `not.toBe` is what keeps the derivation honest: if the two rates ever
+    // converged, both assertions below would hold for the boring reason and
+    // this "guard the guard" would pin nothing about the pass arm at all.
+    const [communityFee] = await sql<{ int_value: number | null }[]>`
+      select int_value from plan_entitlements
+      where plan_key = 'community' and feature_key = 'registration.fee_percent'`;
+    const [passFee] = await sql<{ int_value: number | null }[]>`
+      select int_value from plan_entitlements
+      where plan_key = 'event_pass' and feature_key = 'registration.fee_percent'`;
+    expect(passFee?.int_value, "no event_pass fee row — the probe below is vacuous").toEqual(
+      expect.any(Number),
+    );
+    expect(
+      passFee!.int_value,
+      "the pass rate equals community's, so this probe can no longer witness the pass arm",
+    ).not.toBe(communityFee!.int_value);
+    expect(await getLimit(orgId, "registration.fee_percent", competition.id)).toBe(
+      passFee!.int_value,
+    );
+    expect(await getLimit(orgId, "registration.fee_percent")).toBe(communityFee!.int_value);
 
     const info = await publicRegistrationInfo(orgSlug, competition.slug);
     const d = info.divisions.find((x) => x.division_id === division.id)!;

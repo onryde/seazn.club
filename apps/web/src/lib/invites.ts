@@ -57,14 +57,23 @@ export function inviteProblem(invite: InviteRow): string | null {
 
 /**
  * Membership grant for an accepted invite (doc 13 §4/§5): seat quota counted
- * in the same tx as the insert (members.max for owner/admin/viewer,
- * scorers.max for scorer — separate pools), and a scorer invite's
+ * in the same tx as the insert (the staff pool for owner/admin/viewer, the
+ * scorer pool for scorer — still two separate COUNTS), and a scorer invite's
  * default_scope becomes an assignment atomically. No-op when already a member.
+ *
+ * V395 (entitlements v18 W2 T12, owner ruling 2026-09-03): both pools read
+ * `members.max`. `scorers.max` is deleted from `plan_entitlements` and a key
+ * with NO ROW resolves to 0, not unlimited (`getLimit`), so a grant that still
+ * asked for it would refuse every scorer invite rather than freeing it. The two
+ * pools deliberately stay separate — design §2 records "merging into staff
+ * seats would let scorers eat the 10 staff" as the REJECTED alternative — the
+ * scorer seat simply stopped being sold separately, so it draws the staff
+ * seat's number.
  */
 export async function grantInvite(invite: InviteRow, userId: string): Promise<void> {
   const { getLimit } = await import("@/lib/entitlements");
   const { PaymentRequiredError } = await import("@/lib/errors");
-  const quotaKey = invite.role === "scorer" ? "scorers.max" : "members.max";
+  const quotaKey = "members.max";
   const limit = await getLimit(invite.org_id, quotaKey);
   await sql.begin(async (tx) => {
     // Serialise seat changes per org (FOR UPDATE on the org row), then count.

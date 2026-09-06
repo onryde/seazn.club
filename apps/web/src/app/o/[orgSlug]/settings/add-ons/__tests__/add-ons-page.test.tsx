@@ -95,7 +95,7 @@ async function render(overrides: Partial<AddOnsTabView> = {}) {
 }
 
 const GUEST = "Only the person who pays for this billing group can buy add-ons.";
-const COMMUNITY = "Add-ons are available on Pro and Pro Plus.";
+const COMMUNITY = "Add-ons are available on Pro.";
 const NO_LIVE = "Extra organisations need an active paid subscription.";
 const PAUSED =
   "Adding organisations is paused right now — either this bill needs attention or an organisation on it is suspended.";

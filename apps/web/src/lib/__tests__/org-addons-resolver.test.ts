@@ -24,7 +24,8 @@ vi.mock("@/lib/cache", () => ({
 import { sql } from "@/lib/db";
 import { createOrgForUser } from "@/lib/auth";
 import { walletIdFor } from "@/lib/credits";
-import { getLimit, withinLimit } from "@/lib/entitlements";
+import { getLimit, invalidateOrgEntitlements, withinLimit } from "@/lib/entitlements";
+import { setOrgPlan } from "@/lib/__tests__/_billing-group";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 const uniq = () => randomUUID().slice(0, 8);
@@ -134,14 +135,22 @@ describe.skipIf(!HAS_DB)("org_addons — additive cap resolver", () => {
     const org = await createOrgForUser(userId, "Addon Unlimited Org");
     const walletId = await walletIdFor(org.id);
 
-    // officials.per_fixture.max is null (unlimited) on community (V319).
-    expect(await getLimit(org.id, "officials.per_fixture.max")).toBeNull();
+    // The vehicle used to be `officials.per_fixture.max`, null on community
+    // under V319. V393 DELETED that key from plan_entitlements entirely, and a
+    // key with no row resolves to 0, not to unlimited — so the old assertion
+    // (`toBeNull`) stopped describing an unlimited cap and started describing a
+    // denial. `competitions.max_active` is null on pro, which is the same
+    // "present, no ceiling" shape the resolver has to read.
+    const KEY = "competitions.max_active";
+    await setOrgPlan(org.id, "pro");
+    await invalidateOrgEntitlements(org.id);
+    expect(await getLimit(org.id, KEY)).toBeNull();
 
     await sql`
       insert into org_addons (wallet_id, target_org_id, feature_key, delta_each, qty, status)
-      values (${walletId}, ${org.id}, 'officials.per_fixture.max', 10, 1, 'active')`;
+      values (${walletId}, ${org.id}, ${KEY}, 10, 1, 'active')`;
 
     // Unlimited stays unlimited — an add-on can never turn null into a number.
-    expect(await getLimit(org.id, "officials.per_fixture.max")).toBeNull();
+    expect(await getLimit(org.id, KEY)).toBeNull();
   });
 });

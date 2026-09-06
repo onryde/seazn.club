@@ -1,12 +1,12 @@
 ---
 title: Operator console
-description: Pro Plus operators run several organisations on one shared credit wallet. The operator console shows the pool balance and lets you set a monthly credit cap per organisation so no single member burns the whole month.
+description: An operator who pays for a billing group runs several organisations on one shared credit wallet. The operator console shows the pool balance and lets you set a monthly credit cap per organisation so no single member burns the whole month.
 order: 6
 ---
 
 ## What the operator console is
 
-If you pay for a **Pro Plus** billing group that covers more than one organisation — a federation, an academy, a county body — the **operator console** appears on your **Plan & Billing** page. It is the command center for the shared AI-credit wallet that every organisation in the group spends from.
+If you pay for a billing group that covers more than one organisation — a federation, an academy, a county body — the **operator console** appears on your **Plan & Billing** page. It is the command center for the shared AI-credit wallet that every organisation in the group spends from.
 
 It shows:
 

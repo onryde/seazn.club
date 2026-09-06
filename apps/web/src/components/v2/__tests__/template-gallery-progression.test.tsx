@@ -217,7 +217,15 @@ describe("templates.detail.progression.line — all four locales interpolate sou
 const renderSheet = (template: CompetitionTemplate, dict: Dict = enUi as Dict, locale: Locale = "en") =>
   renderToStaticMarkup(
     <DictProvider dict={dict} locale={locale}>
-      <TemplateDetailSheet orgSlug="acme" template={template} onClose={() => {}} />
+      {/* The public-dashboard upgrade figure is required (see the
+          component) but irrelevant here — these tests render the form,
+          never the degrade card. */}
+      <TemplateDetailSheet
+        orgSlug="acme"
+        template={template}
+        onClose={() => {}}
+        publicDashboardUpgrade={null}
+      />
     </DictProvider>,
   );
 

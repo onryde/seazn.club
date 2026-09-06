@@ -44,7 +44,7 @@ import type { CreateFromTemplate, FromTemplateResult } from "@/server/api-v1/sch
 import { slugify, withUniqueSlug, SLUG_CONSTRAINT } from "./slugs";
 import {
   assertActiveQuota,
-  assertPublicQuota,
+  resolveCreateVisibility,
   fireCompetitionCreated,
   fireCompetitionMadePublic,
   shouldFireMadePublic,
@@ -168,7 +168,10 @@ export async function instantiateTemplate(
   // a templated one can never disagree about where the boundary is.
   const divisionCap = await getLimit(auth.orgId, "divisions.per_competition.max", competitionId);
   assertWithinLimit(divisionCap, "divisions.per_competition.max", template.divisions.length);
-  const stageCap = await getLimit(auth.orgId, "stages.per_division.max");
+  // Same competition id, and for the same reason the `requireFeature` block
+  // above spells out: V393 lifts this cap on an Event Pass, so the read must be
+  // competition-scoped even though no pass can reference this id yet.
+  const stageCap = await getLimit(auth.orgId, "stages.per_division.max", competitionId);
   for (const division of template.divisions) {
     assertWithinLimit(stageCap, "stages.per_division.max", division.stages.length);
   }
@@ -176,7 +179,19 @@ export async function instantiateTemplate(
   // itself runs — a template-created competition is a competition for quota
   // purposes.
   await assertActiveQuota(auth);
-  if (input.visibility === "public") await assertPublicQuota(auth);
+  // Degrades rather than refuses, exactly as createCompetition does (T15/F,
+  // owner ruling 2026-09-03) — a template instantiation is a create, and a
+  // create is never blocked by the public-dashboard cap. Resolved here,
+  // BEFORE the transaction, for the same pooled-read reason as the quota
+  // checks above it.
+  //
+  // Through the SHARED helper, not a second copy (T20): the copy that used to
+  // live here keyed the guard on `=== "public"` and the value on
+  // `?? "public"`, so an omitted visibility skipped the quota check and still
+  // created a public competition. `degraded` is carried into the result below
+  // — `FromTemplateResult` had no visibility at all, which is what left the
+  // template gallery redirecting into a silently private competition.
+  const { visibility, degraded } = await resolveCreateVisibility(auth, input.visibility);
 
   const dict = await getDictionary("en", "ui");
 
@@ -195,7 +210,7 @@ export async function instantiateTemplate(
         await q`
           insert into competitions (id, org_id, name, slug, visibility, branding, created_by,
                                      ends_on, starts_on, template_key, template_version)
-          values (${competitionId}, ${auth.orgId}, ${input.name}, ${candidate}, ${input.visibility ?? "private"},
+          values (${competitionId}, ${auth.orgId}, ${input.name}, ${candidate}, ${visibility},
                   '{}', ${auth.userId}, ${input.ends_on}, ${input.starts_on ?? null},
                   ${template.key}, ${template.version})`;
         return candidate;
@@ -376,7 +391,7 @@ export async function instantiateTemplate(
   // own placement (never inside the tx: analytics must not count a write
   // that could still roll back). P4 review finding 1 — an earlier draft
   // called neither emitter, so this path was invisible to the funnel.
-  await fireCompetitionCreated(auth, input.visibility ?? "private");
+  await fireCompetitionCreated(auth, visibility);
   // P4 review follow-up (2026-08-13): finding 1's first fix stopped at
   // COMPETITION_CREATED and missed that createCompetition ALSO fires
   // COMPETITION_MADE_PUBLIC when a competition is created directly public
@@ -385,7 +400,7 @@ export async function instantiateTemplate(
   // CreateCompetition's does, so a template instantiated public must
   // complete the SAME milestone. Reuses the exact predicate + emitter
   // createCompetition calls, imported, not restated.
-  if (shouldFireMadePublic(undefined, input.visibility ?? "private")) {
+  if (shouldFireMadePublic(undefined, visibility)) {
     await fireCompetitionMadePublic(auth, competitionId);
   }
   for (const templateDivision of template.divisions) {
@@ -395,6 +410,8 @@ export async function instantiateTemplate(
   return {
     competitionId,
     slug,
+    visibility,
+    ...(degraded ? { public_quota_degraded: degraded } : {}),
     divisions,
     templateKey: template.key,
     templateVersion: template.version,

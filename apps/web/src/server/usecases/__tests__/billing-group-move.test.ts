@@ -784,7 +784,7 @@ describe.skipIf(!HAS_DB)("detach", () => {
     const clubOwner = await makeUser("clubowner");
     const trialStamp = "2026-01-02T03:04:05.000Z";
     const group = await makeGroup(payer, {
-      plan: "pro_plus",
+      plan: "enterprise",
       stripeSubId: "sub_det_" + uniq(),
       quantityPaid: 2,
       periodEndDays: 30,
@@ -804,7 +804,7 @@ describe.skipIf(!HAS_DB)("detach", () => {
     const fresh = await readGroup(res.subscription_id);
     expect(await orgGroup(orgId)).toBe(res.subscription_id);
     expect(fresh.owner_user_id).toBe(clubOwner);
-    expect(fresh.plan_key).toBe("pro_plus");
+    expect(fresh.plan_key).toBe("enterprise");
     expect(fresh.status).toBe("active");
     expect(fresh.quantity_paid).toBe(1);
     // The period the old payer already paid for, and nothing more.
@@ -1091,13 +1091,13 @@ describe.skipIf(!HAS_DB)("detach", () => {
   it("ride_out SPENDS the freed seat, so a re-add is charged again — closes the detach farm", async () => {
     // The farm: buy one extra seat once, then cycle orgs through it for free.
     // Attaching orgB charges seat 2 (quantity_paid -> 2). Detaching orgB with a
-    // comp (ride_out) hands it pro_plus until the period ends, so the seat is
+    // comp (ride_out) hands it Enterprise until the period ends, so the seat is
     // SPENT and must go with it — otherwise the freed slot is reusable AND the
     // departed org keeps the plan, one paid seat entitling two orgs, minted
     // without limit by repeating attach/detach. The seat follows the comped org.
     const payer = await makeUser("payer");
     const group = await makeGroup(payer, {
-      plan: "pro_plus",
+      plan: "enterprise",
       stripeSubId: "sub_farm_" + uniq(),
       quantityPaid: 1,
       periodEndDays: 30,
@@ -1133,13 +1133,13 @@ describe.skipIf(!HAS_DB)("detach", () => {
 
   it("release drops the org to Community immediately and keeps the freed slot reusable", async () => {
     // The other half of the choice: the payer frees the slot NOW. The removed org
-    // loses pro_plus the instant it leaves (Community, no ride-out comp), and the
+    // loses Enterprise the instant it leaves (Community, no ride-out comp), and the
     // seat the payer already bought stays theirs — reusable at no charge until the
     // period ends. No comp handed out, so nothing to farm.
     const payer = await makeUser("payer");
     const clubOwner = await makeUser("clubowner");
     const group = await makeGroup(payer, {
-      plan: "pro_plus",
+      plan: "enterprise",
       stripeSubId: "sub_rel_" + uniq(),
       quantityPaid: 2,
       periodEndDays: 30,
@@ -1233,13 +1233,13 @@ describe.skipIf(!HAS_DB)("detach audits the comp it hands out (#306)", () => {
     // A ride_out mints the leaver a free paid-plan period at the OLD payer's
     // expense. Before #306 the only trace of that grant was a column value on a
     // brand-new subscriptions row: no actor, no old group, no payer, nothing to
-    // answer "who took a month of Pro Plus off my subscription, and when".
+    // answer "who took a month of Enterprise off my subscription, and when".
     // The wallet forfeit beside it has been audited since #285; a comped plan is
     // the same class of silent, money-adjacent outcome.
     const payer = await makeUser("payer");
     const clubOwner = await makeUser("clubowner");
     const group = await makeGroup(payer, {
-      plan: "pro_plus",
+      plan: "enterprise",
       stripeSubId: "sub_comp_audit_" + uniq(),
       quantityPaid: 2,
       periodEndDays: 30,
@@ -1253,7 +1253,7 @@ describe.skipIf(!HAS_DB)("detach audits the comp it hands out (#306)", () => {
     // The comp really was handed out (otherwise the audit assertions below are
     // asserting about nothing).
     const fresh = await readGroup(res.subscription_id);
-    expect(fresh.plan_key).toBe("pro_plus");
+    expect(fresh.plan_key).toBe("enterprise");
     expect(fresh.comped_until).not.toBeNull();
 
     const audit = await compAudit(orgId);
@@ -1265,7 +1265,7 @@ describe.skipIf(!HAS_DB)("detach audits the comp it hands out (#306)", () => {
     // Whose subscription paid for it. The actor here is the club owner, NOT the
     // payer, so a row that recorded only the actor would name the wrong party.
     expect(audit?.detail?.payer_user_id).toBe(payer);
-    expect(audit?.detail?.plan_key).toBe("pro_plus");
+    expect(audit?.detail?.plan_key).toBe("enterprise");
     // What was granted, and until when — the same instant that landed on the row.
     expect(audit?.detail?.comped_until).toBe(fresh.comped_until?.toISOString());
     expect(audit?.detail?.mode).toBe("ride_out");
@@ -2218,7 +2218,7 @@ describe.skipIf(!HAS_DB)("a detach racing an attach into the group it empties", 
     const payer = await makeUser("payer");
     const clubOwner = await makeUser("clubowner");
     const group = await makeGroup(payer, {
-      plan: "pro_plus",
+      plan: "enterprise",
       stripeSubId: "sub_rollback_" + uniq(),
       periodEndDays: 30,
       quantityPaid: 2,
@@ -2238,7 +2238,7 @@ describe.skipIf(!HAS_DB)("a detach racing an attach into the group it empties", 
     // drops out of every live-subscription filter, including the sweep's.
     const after = await readGroup(group);
     expect(after.status).toBe("active");
-    expect(after.plan_key).toBe("pro_plus");
+    expect(after.plan_key).toBe("enterprise");
     expect(after.quantity_paid).toBe(2);
     expect(res!.cancelled_group).toBeNull();
   });
@@ -2257,7 +2257,7 @@ describe.skipIf(!HAS_DB)("the connection pool", () => {
       // cap resolution moves back inside the transaction.
       const payer = await makeUser("payer");
       const group = await makeGroup(payer, {
-        plan: "pro_plus", // cap 10, so the cap itself is not what refuses
+        plan: "enterprise", // orgs.max_owned is unlimited, so the cap itself is not what refuses
         stripeSubId: "sub_pool_" + uniq(),
       });
       await makeOrg(group, payer);

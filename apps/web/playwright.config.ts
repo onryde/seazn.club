@@ -29,7 +29,7 @@ const BASE = process.env.PLAYWRIGHT_BASE ?? "http://localhost:3000";
 const AUTH_STATE = "e2e/.auth/pro.json";
 
 const SERIAL_SPECS =
-  /(journey-pro|journey-community|org-management|billing|billing-states|billing-groups|billing-groups-journey|members-roles|scorer|device-links|division-delete|pricing-v3|player-accounts|fixture-config-snapshot)\.spec\.ts/;
+  /(journey-pro|journey-community|org-management|billing|billing-states|billing-groups|billing-groups-journey|members-roles|scorer|device-links|division-delete|pricing-v3|player-accounts|fixture-config-snapshot|public-dashboards)\.spec\.ts/;
 
 // --- how e2e.yml splits the `parallel` project across three jobs ------------
 //

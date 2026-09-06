@@ -137,7 +137,7 @@ export function isTiered(spec: PriceSpec): boolean {
  *  price's own `unit_amount`). Pinned to SUPPORTED_CURRENCIES by
  *  stripe-sync.test.ts; kept as a literal here because scripts/ is compiled by
  *  tsconfig.scripts.json and does not resolve apps/web's `@/` alias. */
-export const REQUIRED_CURRENCIES = ["eur", "gbp", "inr", "aud"] as const;
+export const REQUIRED_CURRENCIES = ["eur", "gbp", "inr"] as const;
 
 /** Every price must price every currency. A hole does NOT fail at sync time —
  *  Stripe accepts the price and falls back to ADAPTIVE PRICING, an FX-converted
@@ -368,7 +368,7 @@ export async function ensurePrice(
     // silently ignored by the API (verified against a live account, v17 #293).
     // Without these the sync logged "! <price>: <currency> tiers were not
     // expanded — skipping its drift check" for every currency of every tiered
-    // price, so a changed eur/gbp/inr/aud tier amount was never re-minted.
+    // price, so a changed eur/gbp/inr tier amount was never re-minted.
     expand: [
       "data.product",
       "data.currency_options",

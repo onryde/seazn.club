@@ -30,6 +30,18 @@ vi.mock("@/lib/posthog-server", () => ({ captureServer: vi.fn().mockResolvedValu
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
+/** V393 (entitlements v18 §2) granted several formerly-Pro keys to Community,
+ *  so a plan alone no longer withholds them. The gate sites are still live
+ *  code; a DENY override is the one remaining lever that takes a key away, and
+ *  it beats both the pass and the plan — so it is what proves a gate shuts. */
+async function denyFeature(orgId: string, featureKey: string): Promise<void> {
+  await sql`
+    insert into org_entitlement_overrides (org_id, feature_key, bool_value, reason)
+    values (${orgId}, ${featureKey}, false, 'test')
+    on conflict (org_id, feature_key) do update set bool_value = false`;
+  await invalidateOrgEntitlements(orgId);
+}
+
 async function seedOrg(plan: "community" | "pro" = "pro"): Promise<{ auth: AuthCtx }> {
   const suffix = randomUUID().slice(0, 8);
   const [{ id: orgId }] = await sql<{ id: string }[]>`
@@ -104,6 +116,19 @@ function makeDivision(sportKey: string, variantKey: string): CompetitionTemplate
     entrantCount: 8,
     stages: [{ i18nNameKey: "templates.stage.mainDraw", kind: "knockout" }],
   };
+}
+
+/** Pin an org's `dashboard.public.max` to an exact value, cache busted.
+ *  A cap of 0 puts the org AT its ceiling before it owns a single public
+ *  competition, so the degrade can be driven without seeding cap-many
+ *  competitions first (and without depending on what the number is today —
+ *  it has moved three times: 1, 3, 2). */
+async function capPublicDashboards(orgId: string, value: number): Promise<void> {
+  await sql`
+    insert into org_entitlement_overrides (org_id, feature_key, int_value, reason)
+    values (${orgId}, 'dashboard.public.max', ${value}, 'test')
+    on conflict (org_id, feature_key) do update set int_value = ${value}, bool_value = null`;
+  await invalidateOrgEntitlements(orgId);
 }
 
 afterAll(async () => {
@@ -214,10 +239,11 @@ describe.skipIf(!HAS_DB)("createFromTemplate (D1a, P4)", () => {
   });
 
   it.each(["double_elim", "page_playoff"] as const)(
-    "regression: a synthetic %s stage on an org without formats.double_elim is refused by CODE, leaving nothing behind",
+    "regression: a synthetic %s stage on an org denied formats.double_elim is refused by CODE, leaving nothing behind",
     async (kind) => {
       await seedTemplateSportCatalog();
       const { auth } = await seedOrg("community");
+      await denyFeature(auth.orgId, "formats.double_elim");
       const before = await competitionCount(auth.orgId);
       await expect(
         instantiateTemplate(auth, SLAM_STAGE_TEMPLATE({ kind }), {
@@ -296,6 +322,89 @@ describe.skipIf(!HAS_DB)("createFromTemplate — activation funnel events (P4 re
     vi.mocked(captureServer).mockClear();
   });
 
+  it("an omitted visibility instantiates a PUBLIC competition (V396)", async () => {
+    // The two create paths must not disagree about what an omitted visibility
+    // means: `CreateFromTemplate` and `CreateCompetition` both default to
+    // public in the schema, and `createFromTemplate` coalesces the same way so
+    // a direct usecase call cannot land on a different answer than a request.
+    await seedTemplateSportCatalog();
+    const { auth } = await seedOrg("pro");
+    const template: CompetitionTemplate = {
+      key: "test-default-visibility",
+      version: 1,
+      i18n: { nameKey: "templates.slam128.name", descriptionKey: "templates.slam128.desc" },
+      divisions: [makeDivision("tennis", "grand-slam")],
+    };
+    const result = await instantiateTemplate(auth, template, {
+      name: `Default vis ${randomUUID().slice(0, 6)}`,
+      ends_on: "2030-12-31",
+    });
+    const [row] = await sql<{ visibility: string }[]>`
+      select visibility from competitions where id = ${result.competitionId}`;
+    expect(row!.visibility).toBe("public");
+  });
+
+  it("at the cap it degrades to private and SAYS SO in the result the gallery reads", async () => {
+    // T20 CRITICAL (reviewer pass 3, 2026-09-03). `instantiateTemplate` has
+    // performed the identical degrade as `createCompetition` since V396, but
+    // `FromTemplateResult` carried no visibility at all — so the template
+    // gallery, which is the DEFAULT create path (`/competitions/new` opens on
+    // it), had nothing to diff and redirected unconditionally. A Free org at
+    // its cap created from a template, got a silently private competition, and
+    // shared a link that 404s for every fan.
+    await seedTemplateSportCatalog();
+    const { auth } = await seedOrg("pro");
+    await capPublicDashboards(auth.orgId, 0);
+    const template: CompetitionTemplate = {
+      key: "test-degrade-signalled",
+      version: 1,
+      i18n: { nameKey: "templates.slam128.name", descriptionKey: "templates.slam128.desc" },
+      divisions: [makeDivision("tennis", "grand-slam")],
+    };
+    const result = await instantiateTemplate(auth, template, {
+      name: `Degraded tmpl ${randomUUID().slice(0, 6)}`,
+      ends_on: "2030-12-31",
+      visibility: "public",
+    });
+    expect(result.visibility).toBe("private");
+    expect(result.public_quota_degraded).toMatchObject({
+      feature_key: "dashboard.public.max",
+      requested_visibility: "public",
+      applied_visibility: "private",
+    });
+    // And the RESULT is not a hopeful label over a different row: the
+    // competition that actually landed is the private one.
+    const [row] = await sql<{ visibility: string }[]>`
+      select visibility from competitions where id = ${result.competitionId}`;
+    expect(row!.visibility).toBe("private");
+  });
+
+  it("an OMITTED visibility is quota-checked, not waved straight through to public", async () => {
+    // T20 finding 3. The guard keyed on `input.visibility === "public"` while
+    // the VALUE keyed on `input.visibility ?? "public"`, so an omitted
+    // visibility skipped the quota check entirely and still created a PUBLIC
+    // competition — over the cap, with no note and no refusal. Guard and value
+    // now read one resolved answer, so the two cannot disagree again.
+    await seedTemplateSportCatalog();
+    const { auth } = await seedOrg("pro");
+    await capPublicDashboards(auth.orgId, 0);
+    const template: CompetitionTemplate = {
+      key: "test-degrade-omitted-visibility",
+      version: 1,
+      i18n: { nameKey: "templates.slam128.name", descriptionKey: "templates.slam128.desc" },
+      divisions: [makeDivision("tennis", "grand-slam")],
+    };
+    const result = await instantiateTemplate(auth, template, {
+      name: `Omitted vis over cap ${randomUUID().slice(0, 6)}`,
+      ends_on: "2030-12-31",
+    });
+    expect(result.visibility).toBe("private");
+    expect(result.public_quota_degraded).toBeTruthy();
+    const [row] = await sql<{ visibility: string }[]>`
+      select visibility from competitions where id = ${result.competitionId}`;
+    expect(row!.visibility).toBe("private");
+  });
+
   it("fires COMPETITION_CREATED once and DIVISION_CREATED once per division", async () => {
     await seedTemplateSportCatalog();
     const { auth } = await seedOrg("pro");
@@ -305,9 +414,18 @@ describe.skipIf(!HAS_DB)("createFromTemplate — activation funnel events (P4 re
       i18n: { nameKey: "templates.slam128.name", descriptionKey: "templates.slam128.desc" },
       divisions: [makeDivision("tennis", "grand-slam"), makeDivision("boardgame", "classical")],
     };
+    // `visibility` is PASSED here, and explicitly private. It used to be
+    // omitted, and the omission used to mean private — V396 (W2 T15/F, owner
+    // ruling 2026-09-03) made an omitted visibility PUBLIC, on both create
+    // paths and in the zod schema alike. Stating it keeps this case testing
+    // what its own assertions below are about (a private instantiation does
+    // not complete the made-public milestone) instead of silently becoming a
+    // second public-path test. The default itself is pinned separately, right
+    // below.
     const result = await instantiateTemplate(auth, twoDivisions, {
       name: `Funnel ${randomUUID().slice(0, 6)}`,
       ends_on: "2030-12-31",
+      visibility: "private",
     });
 
     const calls = vi.mocked(captureServer).mock.calls.map(([args]) => args);

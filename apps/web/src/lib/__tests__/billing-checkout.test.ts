@@ -27,7 +27,6 @@ import {
   currencyFromAcceptLanguage,
   formatMinor,
   passPrice,
-  proPlusPrice,
   proPrice,
   type Currency,
   PASS_KEYS,
@@ -366,19 +365,40 @@ describe("requireCard on a trial checkout (v3/07 D13)", () => {
 
 describe("currency price points (v3/07 §4)", () => {
   it("reads SET price points from stripe-plans.json", () => {
-    expect(proPrice("monthly", "usd")).toBe(1900);
-    expect(proPrice("monthly", "eur")).toBe(1800);
-    expect(proPrice("monthly", "gbp")).toBe(1500);
-    expect(proPrice("monthly", "inr")).toBe(139900);
-    expect(proPrice("annual", "usd")).toBe(15900);
-    expect(passPrice("usd", "event_pass")).toBe(2900);
-    expect(passPrice("gbp", "event_pass")).toBe(2500);
-    expect(passPrice("aud", "event_pass")).toBe(4500);
+    // Read out of the seed rather than typed here. The claim is that each
+    // reader picks the RIGHT point — the right plan, interval, rung and
+    // currency — never that the file holds a particular number today; W3
+    // repriced every one of them, and a typed table would have made a
+    // legitimate reprice look like a regression in the reader.
+    const pro = seed.plans.find((p) => p.key === "pro")!.prices;
+    const passM = seed.passes.find((p) => p.key === "event_pass")!.price;
+    expect(proPrice("monthly", "usd")).toBe(pro.monthly.unit_amount);
+    expect(proPrice("monthly", "eur")).toBe(pro.monthly.currency_options.eur);
+    expect(proPrice("monthly", "gbp")).toBe(pro.monthly.currency_options.gbp);
+    expect(proPrice("monthly", "inr")).toBe(pro.monthly.currency_options.inr);
+    expect(proPrice("annual", "usd")).toBe(pro.annual.unit_amount);
+    expect(passPrice("usd", "event_pass")).toBe(passM.unit_amount);
+    expect(passPrice("gbp", "event_pass")).toBe(passM.currency_options.gbp);
+    expect(passPrice("inr", "event_pass")).toBe(passM.currency_options.inr);
+    // ANTI-TAUTOLOGY: every point above must be a DISTINCT number, or a reader
+    // that ignored its arguments and returned one amount for everything would
+    // satisfy the whole case. (`amountFor` falls back to `unit_amount` when a
+    // currency has no point, so "returns the usd number under every symbol" is
+    // the live failure mode, not a hypothetical one.)
+    const points = [
+      pro.monthly.unit_amount,
+      pro.monthly.currency_options.eur,
+      pro.monthly.currency_options.gbp,
+      pro.monthly.currency_options.inr,
+      pro.annual.unit_amount,
+      passM.unit_amount,
+    ];
+    expect(new Set(points).size).toBe(points.length);
   });
 
   it("formats whole amounts without decimals", () => {
-    expect(formatMinor(1900, "usd")).toBe("$19");
-    expect(formatMinor(139900, "inr")).toBe("₹1,399");
+    expect(formatMinor(1200, "usd")).toBe("$12");
+    expect(formatMinor(49900, "inr")).toBe("₹499");
     expect(formatMinor(20000 / 12, "usd")).toBe("$16.67");
   });
 
@@ -386,32 +406,41 @@ describe("currency price points (v3/07 §4)", () => {
     expect(currencyFromAcceptLanguage("en-GB,en;q=0.9")).toBe("gbp");
     expect(currencyFromAcceptLanguage("en-IN")).toBe("inr");
     expect(currencyFromAcceptLanguage("de-DE,de;q=0.9")).toBe("eur");
-    expect(currencyFromAcceptLanguage("en-AU")).toBe("aud");
+    // AUD was withdrawn outright (entitlements v18 T10), so an Australian
+    // browser falls through to the usd default rather than to a currency the
+    // seed can no longer price. Pinned, because the alternative — leaving the
+    // `au` branch in place — would return a code `isSupportedCurrency` rejects.
+    expect(currencyFromAcceptLanguage("en-AU")).toBe("usd");
     expect(currencyFromAcceptLanguage("en-US")).toBe("usd");
     expect(currencyFromAcceptLanguage(null)).toBe("usd");
   });
 });
 
-describe("Pro Plus price points", () => {
-  it("reads SET price points from stripe-plans.json", () => {
-    expect(proPlusPrice("monthly", "usd")).toBe(3900);
-    expect(proPlusPrice("monthly", "eur")).toBe(3700);
-    expect(proPlusPrice("monthly", "gbp")).toBe(3300);
-    expect(proPlusPrice("monthly", "inr")).toBe(299900);
-    expect(proPlusPrice("monthly", "aud")).toBe(5900);
-    expect(proPlusPrice("annual", "usd")).toBe(32700);
-  });
-
-  it("annual gives at least a 30% discount vs 12x monthly, Pro + Pro Plus, every currency", () => {
-    for (const price of [proPrice, proPlusPrice]) {
-      for (const currency of SUPPORTED_CURRENCIES as readonly Currency[]) {
-        const monthly = price("monthly", currency);
-        const annual = price("annual", currency);
-        // ≥30% off: a year of annual costs no more than 70% of 12 monthly bills.
-        expect(annual, `${price.name} annual ${currency}`).toBeLessThanOrEqual(
-          monthly * 12 * 0.7,
-        );
-      }
+// "Pro Plus price points" describe block removed — pro_plus is retired
+// (entitlements v18, V393) and `proPlusPrice()` no longer exists
+// (lib/currency.ts). Pro's own annual-discount shape is still covered below.
+describe("Pro price points", () => {
+  it("prices a year at 8 to 9 monthly bills, every currency", () => {
+    // The band is the owner's (entitlements v18, 2026-09-03) and the SEED's own
+    // copy of it is checked in config/__tests__/stripe-plans-ladder.test.ts.
+    // What is asserted here is the same rule seen through `proPrice`, which is
+    // the function every surface actually quotes from — the route where a
+    // currency_options lookup could pick the wrong point and still leave the
+    // raw seed valid. 9 months is a 25% discount, 8 months a 33% one.
+    //
+    // Was "at least a 30% discount" against the pre-v18 prices, where the
+    // worst case was 8.39 months. The reprice moved eur to 8.90 (25.8% off) —
+    // inside the ruled band and outside the old constant, which is why the
+    // constant moved to the band rather than the band to the constant.
+    for (const currency of SUPPORTED_CURRENCIES as readonly Currency[]) {
+      const monthly = proPrice("monthly", currency);
+      const annual = proPrice("annual", currency);
+      expect(annual, `pro annual ${currency} is dearer than 9 months`).toBeLessThanOrEqual(
+        monthly * 9,
+      );
+      expect(annual, `pro annual ${currency} is cheaper than 8 months`).toBeGreaterThanOrEqual(
+        monthly * 8,
+      );
     }
   });
 });
@@ -523,12 +552,20 @@ describe("assertCheckoutAllowed past_due", () => {
 });
 
 describe("checkoutSchema plan_key", () => {
-  it("accepts pro and pro_plus", () => {
+  it("accepts pro", () => {
     expect(checkoutSchema.safeParse({ plan_key: "pro", interval: "monthly" }).success).toBe(true);
-    expect(checkoutSchema.safeParse({ plan_key: "pro_plus", interval: "annual" }).success).toBe(true);
   });
 
-  it("rejects an unknown plan_key like business", () => {
+  // pro_plus is retired (entitlements v18, V393); enterprise is never
+  // self-serve (design §4 — Contact-us/comped only) — both must now be
+  // refused the same as any other unknown plan_key.
+  it("rejects pro_plus, enterprise, and an unknown plan_key like business", () => {
+    expect(checkoutSchema.safeParse({ plan_key: "pro_plus", interval: "annual" }).success).toBe(
+      false,
+    );
+    expect(checkoutSchema.safeParse({ plan_key: "enterprise", interval: "monthly" }).success).toBe(
+      false,
+    );
     expect(checkoutSchema.safeParse({ plan_key: "business", interval: "monthly" }).success).toBe(false);
   });
 });

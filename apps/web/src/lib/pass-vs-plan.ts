@@ -30,10 +30,10 @@ import { sql } from "@/lib/db";
  *
  * Everything else in this table is a CAP, where higher is better and null means
  * unlimited. `registration.fee_percent` is the exception and it is the exception
- * that costs money: community 8%, Pro 2%, both pass rungs 5%. Comparing it with
- * the cap rule would call the pass's 5% "better" than Pro's 2% and then, once
- * the resolver overlays it, charge a Pro organiser 5% on every entry fee for
- * their passed competition. A pass must never make an org worse off, and on
+ * that costs money: community 5%, Pro 2%, both pass rungs 4% (V398). Comparing
+ * it with the cap rule would call the pass's 4% "better" than Pro's 2% and then,
+ * once the resolver overlays it, charge a Pro organiser 4% on every entry fee
+ * for their passed competition. A pass must never make an org worse off, and on
  * this one key "better" means smaller.
  */
 const LOWER_IS_BETTER = new Set(["registration.fee_percent"]);

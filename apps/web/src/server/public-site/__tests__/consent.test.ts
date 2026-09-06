@@ -79,14 +79,14 @@ async function seedPublicScene(
   opts: { playerProfiles?: boolean } = {},
 ): Promise<PublicScene> {
   const { auth, orgId } = await seedOrg();
-  // Consent is the variable under test here; grant the Pro read feature
-  // (doc 10 §1 dashboard.player_profiles, PROMPT-13) unless a test is
-  // explicitly probing the entitlement split.
-  if (opts.playerProfiles !== false) {
-    await sql`
-      insert into org_entitlement_overrides (org_id, feature_key, bool_value, reason)
-      values (${orgId}, 'dashboard.player_profiles', true, 'test')`;
-  }
+  // Consent is the variable under test here, so `dashboard.player_profiles` is
+  // STATED either way rather than inherited. V393 granted the key to Community,
+  // so the false arm now has to DENY explicitly — leaving the override out
+  // would silently give every scene the feature and stop the entitlement split
+  // being probed at all.
+  await sql`
+    insert into org_entitlement_overrides (org_id, feature_key, bool_value, reason)
+    values (${orgId}, 'dashboard.player_profiles', ${opts.playerProfiles !== false}, 'test')`;
   const alice = await seedPerson(orgId, "Alice Wonder", {
     public_name: true,
     public_photo: true,
@@ -190,6 +190,14 @@ describe.skipIf(!HAS_DB)("public read model — visibility (doc 09 §1)", () => 
 });
 
 describe.skipIf(!HAS_DB)("entitlement split (doc 09 §4, doc 10)", () => {
+  // The view's key CHANGED in W2 (entitlements v18 T17, V397):
+  // `dashboard.branding` -> `dashboard.theme`. The colour and the "Powered by
+  // seazn.club" badge shared one key until then, so V396 making badge removal
+  // enterprise-only silently emptied this blob for Pro. The assertion is
+  // unchanged and still has its teeth — override the key the view reads and
+  // the colour comes back, override anything else and it does not — but it now
+  // names the key that actually gates a colour. Overriding `dashboard.branding`
+  // here would (correctly) restore nothing.
   it("nulls branding in the view for non-entitled (community) orgs, restores on override", async () => {
     const scene = await seedPublicScene();
     const [before] = await sql<{ branding: Record<string, unknown> }[]>`
@@ -198,7 +206,7 @@ describe.skipIf(!HAS_DB)("entitlement split (doc 09 §4, doc 10)", () => {
 
     await sql`
       insert into org_entitlement_overrides (org_id, feature_key, bool_value, reason)
-      values (${scene.orgId}, 'dashboard.branding', true, 'test')`;
+      values (${scene.orgId}, 'dashboard.theme', true, 'test')`;
     const [after] = await sql<{ branding: Record<string, unknown> }[]>`
       select branding from public_competitions_v where id = ${scene.competitionId}`;
     expect(after.branding).toEqual({ logo: "logos/x.png", banner: "banners/x.png" });
@@ -234,19 +242,40 @@ describe.skipIf(!HAS_DB)("entitlement split (doc 09 §4, doc 10)", () => {
     expect(ids).not.toContain(scene.bob); // unconsented — still invisible, plan or no plan
   });
 
-  it("community orgs hold at most one public competition (dashboard.public.max)", async () => {
+  it("community orgs hold at most dashboard.public.max public competitions", async () => {
     const { auth } = await seedOrg();
-    // The v3 active-comp cap (1) would fire first — lift it via override so
-    // this test isolates the public-dashboard quota.
+    // The active-comp cap would fire first — lift it via override so this test
+    // isolates the public-dashboard quota. The quota itself is READ from the
+    // matrix (V319 1 -> V393 3), so a re-tune moves the boundary this test
+    // walks up to instead of leaving it asserting nothing.
+    const [{ int_value: pub }] = await sql<{ int_value: number }[]>`
+      select int_value from plan_entitlements
+       where plan_key = 'community' and feature_key = 'dashboard.public.max'`;
     await sql`
       insert into org_entitlement_overrides (org_id, feature_key, int_value, reason)
-      values (${auth.orgId}, 'competitions.max_active', 10, 'test probe')`;
-    await createCompetition(auth, { ends_on: "2030-12-31", name: "First", visibility: "public", branding: {} });
-    await expect(
-      createCompetition(auth, { ends_on: "2030-12-31", name: "Second", visibility: "public", branding: {} }),
-    ).rejects.toThrow(PaymentRequiredError);
+      values (${auth.orgId}, 'competitions.max_active', ${pub + 2}, 'test probe')`;
+    // PUBLISHED, not merely created: `dashboard.public.max` meters
+    // `PUBLIC_DASHBOARD_STATUSES` (published/live), because a draft shows the
+    // world nothing and so is not a public dashboard. Filling with bare creates
+    // fills the cap with zero and the boundary below never binds.
+    for (let i = 1; i <= pub; i++) {
+      const filler = await createCompetition(auth, { ends_on: "2030-12-31", name: `Public ${i}`, visibility: "public", branding: {} });
+      await sql`update competitions set status = 'published' where id = ${filler.id}`;
+    }
+    // V396 (W2 T15/F, owner ruling 2026-09-03): a CREATE over the cap no
+    // longer throws — it creates the competition PRIVATE and says so through
+    // the row it returns. The boundary is still here, and this asserts it in
+    // the shape the product now has: the competition exists and is not public.
+    const overCap = await createCompetition(auth, {
+      ends_on: "2030-12-31",
+      name: "One too many",
+      visibility: "public",
+      branding: {},
+    });
+    expect(overCap.visibility).toBe("private");
 
-    // Unlisted/private don't count; flipping one to public re-checks the quota.
+    // Unlisted/private don't count; flipping one to public re-checks the quota
+    // — and PATCH is the path that still 402s.
     const unlisted = await createCompetition(auth, {
       ends_on: "2030-12-31",
       name: "Third",

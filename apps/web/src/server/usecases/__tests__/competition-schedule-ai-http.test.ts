@@ -168,7 +168,8 @@ async function seedDivision(
 const ALPHA_MOVABLE = 6;
 const BETA_MOVABLE = 10;
 
-/** pro_plus (scheduling.ai + scheduling.multi_division + api.access/api.write)
+/** enterprise (api.write is Enterprise-only after V393; scheduling keys are
+ *  free on every plan now)
  *  with a funded wallet, plus two divisions on DISJOINT courts so a legal joint
  *  plan exists. */
 async function seedBoard(): Promise<{
@@ -177,7 +178,7 @@ async function seedBoard(): Promise<{
   divisions: SeededDivision[];
 }> {
   const { auth } = await seedOrg("community");
-  await setOrgPlan(auth.orgId, "pro_plus");
+  await setOrgPlan(auth.orgId, "enterprise");
   await invalidateOrgEntitlements(auth.orgId);
   await recordPackPurchase(await walletIdFor(auth.orgId), 100, `seed-${randomUUID()}`);
   const comp = await createCompetition(auth, {

@@ -12,10 +12,13 @@
 // drift apart.
 import { describe, expect, it } from "vitest";
 import stripePlans from "@/config/stripe-plans.json";
-import { extraOrgPrice, proPrice, proPlusPrice, SUPPORTED_CURRENCIES } from "@/lib/currency";
+import { extraOrgPrice, proPrice, SUPPORTED_CURRENCIES } from "@/lib/currency";
 import { APPROVED_DICTIONARY_COPY } from "./_approved-dictionary-copy";
 
-const PLANS = ["pro", "pro_plus"] as const;
+// pro_plus retired (entitlements v18, V393) — extraOrgPrice narrows to "pro"
+// (lib/currency.ts), so this tuple drops to the one plan that still sells an
+// extra-organisation add-on.
+const PLANS = ["pro"] as const;
 const INTERVALS = ["monthly", "annual"] as const;
 
 /**
@@ -34,7 +37,10 @@ const INTERVALS = ["monthly", "annual"] as const;
 const HALF_RATE_DICTIONARY_KEYS = [
   "pricing.matrix.orgs.max_owned.note",
   "pricing.faq.groups.a",
-  "pricing.faq.proPlus.a",
+  // `pricing.faq.proPlus.a` was the sixth. It is DELETED, with the plan it
+  // answered a question about (V393 removed `pro_plus` from `plans`), so it is
+  // gone from the approved inventory too and the two sides still agree —
+  // which is exactly what the second half of the test below is for.
   "tips.billing.extra-org.body",
   "orgNew.bill.addToExistingHint",
   "billing.group.attach.confirmCharge",
@@ -88,14 +94,38 @@ describe("extra-organisation price", () => {
     for (const plan of PLANS) {
       for (const interval of INTERVALS) {
         for (const currency of SUPPORTED_CURRENCIES) {
-          const base = plan === "pro" ? proPrice(interval, currency) : proPlusPrice(interval, currency);
+          const base = proPrice(interval, currency);
           const extra = extraOrgPrice(plan, interval, currency);
-          // Rounded DOWN to a whole major unit (INR to the nearest x99), so
-          // exact halves are not required — but the customer must never be
-          // charged MORE than half, and never so much less that "half" is a
-          // meaningfully wrong description of what they pay.
+          // Half, FLOORED TO THE CHARM GRID (x.99, and for INR a whole-rupee
+          // x99), so exact halves are not required — but the customer must
+          // never be charged MORE than half, and never so much less that
+          // "half" is a meaningfully wrong description of what they pay.
+          //
+          // REWORDED W3 (2026-09-04) with the rule itself: this read "rounded
+          // DOWN to a whole major unit", which the charm reprice falsifies —
+          // half of $14.99 is charged as $6.99, not $7. The BOUND below did
+          // not have to move, and that is the point of expressing it as a
+          // grid step rather than as a percentage: flooring to the charm grid
+          // loses strictly less than one step, whichever grid a currency is
+          // on. `config/__tests__/stripe-plans-ladder.test.ts` asserts the
+          // floored value exactly; this file guards the COPY that rests on it.
+          //
+          // THE FLOOR IS THE ROUNDING RULE'S OWN STEP, not a percentage. It was
+          // `half * 0.9` (i.e. at least 45% of base), a bound tuned to the
+          // pre-v18 prices where the worst case was 47.4%. The entitlements
+          // v18 reprice put INR monthly at ₹199 against a ₹499 base — 39.9%.
+          // OWNER RULING 2026-09-03, put explicitly and chosen with the
+          // alternative on the table: keep ₹499 and re-derive this bound.
+          // ₹599 would have put the rider back at 49.9% and needed no change
+          // here, and was rejected because it costs the volume market 20%.
+          // A percentage floor cannot express that: rounding down
+          // to a grid costs a FIXED amount, so it eats a larger FRACTION of a
+          // cheaper plan. Expressed as one grid step, the bound still catches a
+          // real drift (a rider set to half of half) at every price point,
+          // including the ones this seed does not use today.
+          const step = currency === "inr" ? 100_00 : 1_00;
           const half = base / 2;
-          if (extra > half || extra < half * 0.9)
+          if (extra > half || extra < half - step)
             offenders.push(`${plan} ${interval} ${currency}: base ${base}, extra ${extra}`);
         }
       }
@@ -115,22 +145,14 @@ describe("extra-organisation price", () => {
     for (const plan of PLANS) {
       for (const interval of INTERVALS) {
         for (const currency of SUPPORTED_CURRENCIES) {
-          const base = plan === "pro" ? proPrice(interval, currency) : proPlusPrice(interval, currency);
+          const base = proPrice(interval, currency);
           expect(extraOrgPrice(plan, interval, currency)).toBeLessThanOrEqual(base);
         }
       }
     }
   });
 
-  it("charges less for a Pro extra organisation than Pro Plus does", () => {
-    // Pins the ladder itself: the tiers are independent numbers in JSON, so
-    // nothing but this stops a Pro extra org being priced above a Pro Plus one.
-    for (const interval of INTERVALS) {
-      for (const currency of SUPPORTED_CURRENCIES) {
-        expect(extraOrgPrice("pro", interval, currency)).toBeLessThan(
-          extraOrgPrice("pro_plus", interval, currency),
-        );
-      }
-    }
-  });
+  // "charges less for a Pro extra organisation than Pro Plus does" removed —
+  // pro_plus is retired (entitlements v18, V393) and `extraOrgPrice` no
+  // longer accepts it; there is only one rung left to compare against itself.
 });

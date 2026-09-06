@@ -10,7 +10,7 @@
 // fan-out failure this feature can ship — a sibling org serving the old plan for
 // up to the 300s TTL — is invisible without a cache that actually remembers.
 // Real Postgres required; skipped without DATABASE_URL.
-import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 
 const store = vi.hoisted(() => new Map<string, string>());
@@ -50,6 +50,26 @@ import { PaymentRequiredError } from "@/lib/errors";
 import { featureReason } from "@/lib/feature-copy";
 
 const HAS_DB = !!process.env.DATABASE_URL;
+
+/** `members.max` per plan, READ from the live matrix. It has moved twice
+ *  (V319 community 5 / pro 15, V393 community 3 / pro 10); a typed number here
+ *  stops the degrade assertions distinguishing the two matrices at all. */
+let COMMUNITY_MEMBERS: number | null = null;
+let PRO_MEMBERS: number | null = null;
+
+beforeAll(async () => {
+  if (!HAS_DB) return;
+  const rows = await sql<{ plan_key: string; int_value: number | null }[]>`
+    select plan_key, int_value from plan_entitlements
+     where feature_key = 'members.max' and plan_key in ('community', 'pro')`;
+  COMMUNITY_MEMBERS = rows.find((r) => r.plan_key === "community")?.int_value ?? null;
+  PRO_MEMBERS = rows.find((r) => r.plan_key === "pro")?.int_value ?? null;
+  // Anti-vacuity: every "degrades to community" assertion here turns on the two
+  // caps DIFFERING, so equal (or absent) values would satisfy them either way.
+  expect(COMMUNITY_MEMBERS, "no community members.max row").toBeTypeOf("number");
+  expect(PRO_MEMBERS, "no pro members.max row").toBeTypeOf("number");
+  expect(PRO_MEMBERS).toBeGreaterThan(COMMUNITY_MEMBERS!);
+});
 const uniq = () => randomUUID().slice(0, 8);
 
 interface Group {
@@ -175,7 +195,7 @@ describe.skipIf(!HAS_DB)("a billing group of three orgs", () => {
 
     for (const orgId of orgIds) {
       expect(await hasFeature(orgId, "api.access")).toBe(true);
-      expect(await getLimit(orgId, "members.max")).toBe(15);
+      expect(await getLimit(orgId, "members.max")).toBe(PRO_MEMBERS);
     }
 
     await sql`update subscriptions set plan_key = 'community' where id = ${subId}`;
@@ -183,7 +203,7 @@ describe.skipIf(!HAS_DB)("a billing group of three orgs", () => {
 
     for (const orgId of orgIds) {
       expect(await hasFeature(orgId, "api.access")).toBe(false);
-      expect(await getLimit(orgId, "members.max")).toBe(5);
+      expect(await getLimit(orgId, "members.max")).toBe(COMMUNITY_MEMBERS);
     }
   });
 
@@ -197,7 +217,7 @@ describe.skipIf(!HAS_DB)("a billing group of three orgs", () => {
 
     for (const orgId of orgIds) {
       expect(await hasFeature(orgId, "api.access")).toBe(false);
-      expect(await getLimit(orgId, "members.max")).toBe(5);
+      expect(await getLimit(orgId, "members.max")).toBe(COMMUNITY_MEMBERS);
     }
 
     // The blast radius is reads only. This is the cost the design accepted:
@@ -257,13 +277,19 @@ describe.skipIf(!HAS_DB)("the group cap counts orgs in the GROUP", () => {
     );
   });
 
-  it("lets a Pro Plus group hold 10", async () => {
-    const nine = await seedGroup("pro_plus", 9);
-    await expect(assertGroupMayHoldAnotherOrg(nine.subId)).resolves.toBeUndefined();
-    const ten = await seedGroup("pro_plus", 10);
-    await expect(assertGroupMayHoldAnotherOrg(ten.subId)).rejects.toBeInstanceOf(
-      PaymentRequiredError,
-    );
+  it("never refuses an Enterprise group — its orgs.max_owned is unlimited", async () => {
+    // Pro Plus used to sit here with a finite 10. Enterprise replaced it with a
+    // NULL cap (V393), which is a different property worth its own case: the
+    // guard must read null as "no ceiling" rather than as zero, which is what a
+    // missing row would resolve to.
+    const [row] = await sql<{ int_value: number | null }[]>`
+      select int_value from plan_entitlements
+       where plan_key = 'enterprise' and feature_key = 'orgs.max_owned'`;
+    expect(row, "enterprise must HAVE an orgs.max_owned row — a missing one denies").toBeDefined();
+    expect(row!.int_value, "enterprise orgs.max_owned must be unlimited").toBeNull();
+
+    const big = await seedGroup("enterprise", 12);
+    await expect(assertGroupMayHoldAnotherOrg(big.subId)).resolves.toBeUndefined();
   });
 });
 
@@ -460,10 +486,10 @@ describe.skipIf(!HAS_DB)("suspension is org-scoped, billing is group-scoped", ()
     await invalidateOrgEntitlements(suspended!); // moderation is an org-scoped write
 
     expect(await hasFeature(suspended!, "api.access")).toBe(false);
-    expect(await getLimit(suspended!, "members.max")).toBe(5);
+    expect(await getLimit(suspended!, "members.max")).toBe(COMMUNITY_MEMBERS);
     for (const orgId of siblings) {
       expect(await hasFeature(orgId, "api.access")).toBe(true);
-      expect(await getLimit(orgId, "members.max")).toBe(15);
+      expect(await getLimit(orgId, "members.max")).toBe(PRO_MEMBERS);
     }
   });
 

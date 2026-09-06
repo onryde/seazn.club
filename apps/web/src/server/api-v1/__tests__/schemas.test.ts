@@ -797,6 +797,43 @@ describe("EventImportRequest (P11 batch import)", () => {
       expect(r.success, `expected ${JSON.stringify(at)} to be accepted`).toBe(true);
     }
   });
+
+  // W2: `type` was the ONE unbounded string left in this request. Its
+  // single-append sibling `AppendEventRequest` has always capped it at 100,
+  // and this is the shape that takes up to `IMPORT_CAPS.eventsPerCall`
+  // (10,000) of them in one body — so the batch door was the wider of the
+  // two. `score_events.type` is `text`, so nothing downstream refuses a
+  // megabyte-long type either: the fold rejects it as an unknown event and
+  // the whole string still travels through resolution and into the report.
+  //
+  // The bound is READ from the sibling, never typed twice: two hand-copied
+  // numbers is exactly how the two doors drifted apart in the first place.
+  const TYPE_MAX = (() => {
+    const shape = (AppendEventRequest as unknown as {
+      shape: { type: { maxLength: number | null } };
+    }).shape;
+    const max = shape.type.maxLength;
+    if (max == null) throw new Error("AppendEventRequest.type has no maxLength to inherit");
+    return max;
+  })();
+
+  it("refuses an event `type` longer than the single-append door allows", () => {
+    // Anti-vacuity: a bound of 0 or 1 would pass the rejection below for the
+    // wrong reason and fail the acceptance beside it.
+    expect(TYPE_MAX).toBeGreaterThan(28); // 'cricket.innings.summary.runs', the longest type the engine registers
+    const r = EventImportRequest.safeParse(stream({ type: "a".repeat(TYPE_MAX + 1) }));
+    expect(r.success).toBe(false);
+    if (!r.success) {
+      expect(r.error.issues.some((i) => i.path.join(".").endsWith("events.0.type"))).toBe(true);
+    }
+  });
+
+  it("accepts an event `type` exactly AT the bound", () => {
+    // The other half. Without it the refusal above is satisfied by a schema
+    // that refuses every type there is.
+    const r = EventImportRequest.safeParse(stream({ type: "a".repeat(TYPE_MAX) }));
+    expect(r.success).toBe(true);
+  });
 });
 
 

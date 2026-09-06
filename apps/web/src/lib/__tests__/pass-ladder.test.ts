@@ -25,66 +25,134 @@ import {
   passLadderOptions,
 } from "../pass-ladder";
 import { PASS_LOCK_REASONS } from "@/lib/entitlements";
-import { PASS_KEYS, SUPPORTED_CURRENCIES, passPrice } from "@/lib/currency";
+import {
+  HIDDEN_PASS_KEYS,
+  PASS_KEYS,
+  SELLABLE_PASS_KEYS,
+  SUPPORTED_CURRENCIES,
+  passPrice,
+} from "@/lib/currency";
+import { PASS_CREDIT_GRANT } from "@/lib/pricing-cards";
 import uiEn from "@/dictionaries/en/ui.json";
+import seed from "@/config/stripe-plans.json";
 
+/**
+ * Each rung's price point, READ FROM THE SEED and keyed by rung — never typed
+ * here. A typed pair freezes today's amounts and reds on the next legitimate
+ * reprice (W3 moved every one of them onto charm points), which teaches the
+ * next editor to retype the constants instead of re-checking the claim.
+ *
+ * It is NOT tautological against `passPrice`: the assertions below pin which
+ * OPTION carries which RUNG's amount, so a ladder that handed M the L price
+ * point still fails — the exact defect this file exists for. The seed, rather
+ * than `passPrice`, so the pin does not route through the same reader the
+ * subject does.
+ */
+const SEED_PASS_PRICE = Object.fromEntries(
+  seed.passes.map((pass) => [
+    pass.key,
+    (currency: string): number =>
+      currency === "usd"
+        ? pass.price.unit_amount
+        : (pass.price.currency_options as Record<string, number>)[currency]!,
+  ]),
+) as Record<"event_pass" | "event_pass_l", (currency: string) => number>;
+
+/** Caps for the rungs the ladder actually renders — one entry per SELLABLE
+ *  rung, which is what `PassRungCaps` is now keyed by. A hidden rung's caps are
+ *  not asked for, because the ladder never quotes them. */
 const CAPS = {
   event_pass: { entrants: 128, divisions: 10 },
-  event_pass_l: { entrants: null, divisions: 20 },
 } as const;
 
 describe("passLadderOptions", () => {
-  it("returns M first, then L, priced from stripe-plans.json with the caller's caps", () => {
+  // THE LADDER IS A SELLING SURFACE, so it renders `SELLABLE_PASS_KEYS` and not
+  // `PASS_KEYS` (owner decision 2026-09-05, the L rung off sale). Enumerated
+  // against the authority rather than against a typed list of rungs: a
+  // `not.toContain("event_pass_l")` would also pass on a ladder that rendered
+  // nothing at all, and the positive half is what stops that.
+  it("renders exactly the rungs on sale, in the authority's order", () => {
     const options = passLadderOptions("usd", CAPS);
-    expect(options.map((o) => o.key)).toEqual(["event_pass", "event_pass_l"]);
+    expect(options.map((o) => o.key)).toEqual([...SELLABLE_PASS_KEYS]);
+    // The positive: the entry rung is really there, priced and capped.
     expect(options[0]).toMatchObject({
-      amountMinor: 2900,
+      key: "event_pass",
+      amountMinor: SEED_PASS_PRICE.event_pass("usd"),
       entrants: 128,
       divisions: 10,
-      credits: 25,
+      credits: PASS_CREDIT_GRANT.event_pass,
     });
-    expect(options[1]).toMatchObject({
-      amountMinor: 5900,
-      entrants: null,
-      divisions: 20,
-      credits: 25,
-    });
+    // …and the negative, stated against the hidden list rather than a literal.
+    for (const hidden of HIDDEN_PASS_KEYS) {
+      expect(options.map((o) => o.key), `${hidden} is off sale`).not.toContain(hidden);
+    }
+    // Anti-vacuity for that loop: something IS hidden, and the ladder is
+    // genuinely shorter than the full rung set because of it.
+    expect(HIDDEN_PASS_KEYS.length).toBeGreaterThan(0);
+    expect(options.length).toBe(PASS_KEYS.length - HIDDEN_PASS_KEYS.length);
   });
 
   it("prices in the requested currency", () => {
     const options = passLadderOptions("gbp", CAPS);
-    expect(options[0]!.amountMinor).toBe(2500);
-    expect(options[1]!.amountMinor).toBe(4900);
+    expect(options[0]!.amountMinor).toBe(SEED_PASS_PRICE.event_pass("gbp"));
+    // The gbp points must actually DIFFER from the usd ones, or this case
+    // passes while `passLadderOptions` ignores its currency argument entirely.
+    expect(SEED_PASS_PRICE.event_pass("gbp")).not.toBe(SEED_PASS_PRICE.event_pass("usd"));
   });
 
-  it("never quotes the same amount for both rungs, in any supported currency", () => {
-    // The failure this exists for: a rung that silently reads the other rung's
-    // price point. Asserted as a joined string so the reporter NAMES the
-    // currency — `toEqual([])` on an array of currencies elides the contents.
-    const same = (["usd", "eur", "gbp", "inr", "aud"] as const).filter((c) => {
-      const [m, l] = passLadderOptions(c, CAPS);
-      return m!.amountMinor === l!.amountMinor;
+  it("never lets two rungs share a price point, in any supported currency", () => {
+    // The failure this exists for: a rung that silently reads the OTHER rung's
+    // price point. It used to be asked of the ladder, which now renders one
+    // rung and could not witness it — so it is asked of `passPrice` over every
+    // rung instead, hidden ones included. That is deliberate: this is a rule
+    // over the SEED, and a dormant rung's price rotting into the live one's is
+    // exactly what would make putting L back on sale a silent mis-sale.
+    // Asserted as a joined string so the reporter NAMES the currency.
+    const same = SUPPORTED_CURRENCIES.filter((c) => {
+      const amounts = PASS_KEYS.map((k) => passPrice(c, k));
+      return new Set(amounts).size !== amounts.length;
     });
     expect(same.join(", ")).toBe("");
+    // Anti-vacuity: there is more than one rung to collide.
+    expect(PASS_KEYS.length).toBeGreaterThan(1);
   });
 
-  it("carries the SAME credit grant on both rungs", () => {
-    // PASS_CREDIT_GRANT is flat by decision (v17 #294): L buys a bigger
-    // competition, not more credits. A rung-scaled grant would have to be a
-    // deliberate product change, not a helper that quietly multiplied.
-    const [m, l] = passLadderOptions("usd", CAPS);
-    expect(l!.credits).toBe(m!.credits);
+  it("carries the option's OWN credit grant, indexed by its own key", () => {
+    // Entitlements v18 W2 T5 (design R9): the grant is sized by rung. The
+    // failure this exists for is a card advertising one rung's number beside
+    // another's price — `credits: PASS_CREDIT_GRANT.event_pass` hardcoded for
+    // every option type-checks, and that is the mistake this catches.
+    //
+    // With one rung on sale the ladder cannot witness a cross-rung swap on its
+    // own, so this pins the INDEXING (every option's credits equal its own
+    // key's grant) and `pass-credit-grant.test.ts` keeps the two rungs' grants
+    // distinct in the declaration.
+    for (const option of passLadderOptions("usd", CAPS)) {
+      expect(option.credits, option.key).toBe(PASS_CREDIT_GRANT[option.key]);
+    }
+    expect(PASS_CREDIT_GRANT.event_pass_l).not.toBe(PASS_CREDIT_GRANT.event_pass);
   });
 });
 
 describe("rung label maps", () => {
-  it("name and size every rung the product can sell, with no key reused", () => {
+  it("name and size every rung that EXISTS, sellable or not, with no key reused", () => {
+    // Keyed by PASS_KEYS and not by SELLABLE_PASS_KEYS on purpose. A rung taken
+    // off sale is still a rung a held ticket has to NAME: an org that paid for
+    // L and is shown the family name alone is being told it holds the other
+    // product, on the only screen that says which it holds. So these two maps
+    // stay complete while the LADDER shortens.
+    //
     // A rung added to PASS_KEYS without a label here renders the raw plan key
     // on the ticket. tsc catches the omission; this catches the subtler slip —
-    // two rungs pointing at ONE key, which labels L as M on a $59 purchase.
+    // two rungs pointing at ONE key, which labels L as M on a $44.99 purchase.
     for (const map of [PASS_RUNG_NAME_KEY, PASS_RUNG_SIZE_KEY]) {
       expect(PASS_KEYS.filter((k) => !map[k]).join(", ")).toBe("");
       expect(new Set(Object.values(map)).size).toBe(PASS_KEYS.length);
+    }
+    // …and the hidden rungs are genuinely among them, or "sellable or not" is
+    // a claim about an empty set.
+    for (const hidden of HIDDEN_PASS_KEYS) {
+      expect(PASS_RUNG_NAME_KEY[hidden], `${hidden} must keep its name`).toBeTruthy();
     }
   });
 });
@@ -115,21 +183,44 @@ describe("lowestPricedRung", () => {
 });
 
 describe("lowestPassRung", () => {
-  // Every surface that quotes ONE number for a two-rung product ("Event Pass —
-  // from $29") has to quote the floor. Before #294 they each passed the literal
+  // Every surface that quotes ONE number for a ladder ("Event Pass — from
+  // $11.99") has to quote the floor. Before #294 they each passed the literal
   // "event_pass", which is right only for as long as M stays the cheapest rung
   // — and `tsc` cannot see that assumption at all.
-  it("is the cheapest rung in every supported currency", () => {
+  it("is the cheapest rung ON SALE in every supported currency", () => {
     const wrong = SUPPORTED_CURRENCIES.filter((c) => {
-      const cheapest = Math.min(...PASS_KEYS.map((k) => passPrice(c, k)));
+      const cheapest = Math.min(...SELLABLE_PASS_KEYS.map((k) => passPrice(c, k)));
       return lowestPassRung(c).amountMinor !== cheapest;
     });
     expect(wrong.join(", ")).toBe("");
   });
 
+  it("never quotes a rung that is off sale, at any price", () => {
+    // The load-bearing direction, and it is not the same claim as "cheapest".
+    // If a hidden rung were ever discounted below the entry rung, a
+    // `lowestPassRung` reading the full ladder would start quoting a price
+    // nothing on the site will sell — a "from" figure the checkout refuses.
+    // Reading the sellable list makes that structurally impossible; this
+    // witnesses it.
+    for (const c of SUPPORTED_CURRENCIES) {
+      expect(HIDDEN_PASS_KEYS as readonly string[], c).not.toContain(lowestPassRung(c).key);
+      expect(SELLABLE_PASS_KEYS as readonly string[], c).toContain(lowestPassRung(c).key);
+    }
+  });
+
   it("quotes M's real price point today, and names M as the rung it quoted", () => {
-    expect(lowestPassRung("usd")).toEqual({ key: "event_pass", amountMinor: 2900 });
-    expect(lowestPassRung("gbp")).toEqual({ key: "event_pass", amountMinor: 2500 });
+    expect(lowestPassRung("usd")).toEqual({
+      key: "event_pass",
+      amountMinor: SEED_PASS_PRICE.event_pass("usd"),
+    });
+    expect(lowestPassRung("gbp")).toEqual({
+      key: "event_pass",
+      amountMinor: SEED_PASS_PRICE.event_pass("gbp"),
+    });
+    // …and M is genuinely the cheaper rung in both, so "names M" is a claim
+    // about the ORDER rather than a restatement of whichever rung came first.
+    expect(SEED_PASS_PRICE.event_pass("usd")).toBeLessThan(SEED_PASS_PRICE.event_pass_l("usd"));
+    expect(SEED_PASS_PRICE.event_pass("gbp")).toBeLessThan(SEED_PASS_PRICE.event_pass_l("gbp"));
   });
 
   it("never quotes the more expensive rung", () => {

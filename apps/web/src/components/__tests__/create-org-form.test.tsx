@@ -199,7 +199,7 @@ describe("create-org-form billing decisions", () => {
     const eligibleGroups = groups.filter((g) => eligibility(g, msg).eligible);
     expect(eligibleGroups.length).toBe(0);
     expect(msg("orgNew.bill.noneEligible")).toBe(
-      "No eligible bills — each needs an open slot on Pro or Pro Plus.",
+      "No eligible bills — each needs an open slot on Pro.",
     );
   });
 });
@@ -418,7 +418,7 @@ describe("CreateOrgForm island (v17 gap #293 — the wiring, end to end)", () =>
     const toggle = buttonNamed(island.tree(), "Add to an existing bill");
     expect(propsOf(toggle!).disabled).toBe(true);
     expect(island.text()).toContain(
-      "No eligible bills — each needs an open slot on Pro or Pro Plus.",
+      "No eligible bills — each needs an open slot on Pro.",
     );
 
     const links = linksIn(island.tree());
@@ -519,7 +519,10 @@ describe("CreateOrgForm island (v17 gap #293 — the wiring, end to end)", () =>
     const fullPlus: CreateOrgGroup = {
       ...fullGroup,
       id: "sub_full_2",
-      plan_key: "pro_plus",
+      // Both bills are Pro: entitlements v18 retired Pro Plus, and the extra-
+      // organisation rider is now sold on exactly one plan. What this test is
+      // about is the `.map` over SEVERAL full bills, not two different plans.
+      plan_key: "pro",
       orgs: [{ id: "o3", name: "Eastside Hockey", slug: "eastside" }],
     };
     const island = mount([fullPro, fullPlus], ["o2", "o3"]);

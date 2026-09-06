@@ -8,12 +8,12 @@
 // cache bounds staleness, exactly like the comped_until read-time flip in the
 // same CASE.
 //
-// Non-community plans are generic — pro AND pro_plus must degrade identically.
+// Non-community plans are generic — pro AND enterprise must degrade identically.
 //
 // NOTE on the feature key: the spec brief names `exports`, but in this schema
 // `exports` is true for EVERY plan (community included, since the v12
 // free-plain-exports change), so it can't observe a pro→community degradation.
-// `exports.branded` is the Pro-gated export feature (true for pro/pro_plus,
+// `exports.branded` is the Pro-gated export feature (true for pro/enterprise,
 // false for community) and is used here to actually detect the flip. Plain
 // `exports` staying true is asserted alongside to prove reads land on the
 // COMMUNITY matrix (a degrade), not a blanket deny.
@@ -90,9 +90,9 @@ describe.skipIf(!HAS_DB)("past_due read-time grace (P1-6)", () => {
     expect(await hasFeature(orgId, "exports.branded")).toBe(true);
   });
 
-  it("pro_plus past_due beyond grace degrades to community (plan-generic)", async () => {
+  it("enterprise past_due beyond grace degrades to community (plan-generic)", async () => {
     const orgId = await seedSubOrg({
-      plan: "pro_plus",
+      plan: "enterprise",
       status: "past_due",
       daysAgo: 20,
     });
@@ -100,9 +100,9 @@ describe.skipIf(!HAS_DB)("past_due read-time grace (P1-6)", () => {
     expect(await hasFeature(orgId, "exports")).toBe(true);
   });
 
-  it("pro_plus past_due within grace keeps paid entitlements (plan-generic)", async () => {
+  it("enterprise past_due within grace keeps paid entitlements (plan-generic)", async () => {
     const orgId = await seedSubOrg({
-      plan: "pro_plus",
+      plan: "enterprise",
       status: "past_due",
       daysAgo: 2,
     });

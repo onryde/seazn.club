@@ -254,6 +254,26 @@ export function __setBridgeProbeForTests(fn: BridgeProbe | null): void {
   bridgeProbe = fn ?? realBridgeProbe;
 }
 
+/** The competition an Event-Pass-lifted gate must be resolved against.
+ *
+ *  lib/entitlements.ts only consults `competition_passes` when a competition is
+ *  in scope, so a gate on a key V393 lifts (`discipline.enforced`) that omits it makes the
+ *  pass INVISIBLE — the org pays $29 and is refused on the competition it
+ *  bought. Same shape as usecases/officials.ts's `competitionForDivision` (T6).
+ *
+ *  Pooled `sql`, and deliberately OUTSIDE the any tenant transaction:
+ *  `resolve` queries the pooled proxy, and issuing that from inside a pinned
+ *  tenant transaction asks the pool for a second connection while the first is
+ *  still held — the self-deadlock lib/db.ts guards against.
+ *
+ *  A missing row yields `undefined`, which resolves the gate org-wide (the
+ *  pre-V393 behaviour) and the 404 is raised inside the transaction as before. */
+async function competitionForDivision(divisionId: string): Promise<string | undefined> {
+  const [row] = await superuser<{ competition_id: string }[]>`
+    select competition_id from divisions where id = ${divisionId}`;
+  return row?.competition_id;
+}
+
 /**
  * Soft bridge into SPEC-1 (V293): for each misconduct/red-card incident that
  * names a person, raise a *pending* suspension the organiser confirms/adjusts.
@@ -267,7 +287,8 @@ async function bridgeReportSuspensions(a: ReportAssignment, incidents: ReportInc
     .map((inc, idx) => ({ inc, idx }))
     .filter(({ inc }) => SUSPENDABLE.includes(inc.kind) && !!inc.person_id);
   if (targets.length === 0) return;
-  if (!(await hasFeature(a.org_id, "discipline.enforced"))) return;
+  const competitionId = await competitionForDivision(a.division_id);
+  if (!(await hasFeature(a.org_id, "discipline.enforced", competitionId))) return;
   if (!(await bridgeProbe())) return;
   // Only real persons in this org — a stale picker id must not FK-fail submit.
   const personIds = [...new Set(targets.map((t) => t.inc.person_id!))];

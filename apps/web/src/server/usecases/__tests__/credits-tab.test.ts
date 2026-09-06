@@ -3,7 +3,7 @@
 // pure read/derive over the ledger — balance, the grant meter (this month's
 // grant-bucket run_spend, clamped), never-expire packs, shared-org count, and
 // the run history mapping.
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { randomUUID } from "node:crypto";
 import { sql } from "@/lib/db";
 import {
@@ -23,6 +23,23 @@ import { creditHistory, getCreditsTab } from "../credits-tab";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
+/** `ai.credits.monthly` per plan, READ from the live matrix. The ladder has
+ *  moved twice (V320 community 10 / pro 60, V393 community 5 / pro 35) and a
+ *  typed number stops the meter assertions testing the clamp. */
+const rate: Record<string, number> = {};
+
+beforeAll(async () => {
+  if (!HAS_DB) return;
+  const rows = await sql<{ plan_key: string; int_value: number | null }[]>`
+    select plan_key, int_value from plan_entitlements
+     where feature_key = 'ai.credits.monthly'`;
+  for (const r of rows) if (r.int_value !== null) rate[r.plan_key] = r.int_value;
+  // Anti-vacuity: several cases here turn on Pro's cap being STRICTLY above
+  // Community's, so both must exist and disagree.
+  expect(rate.community, "no community ai.credits.monthly row").toBeGreaterThan(0);
+  expect(rate.pro, "no pro ai.credits.monthly row").toBeGreaterThan(rate.community!);
+});
+
 describe.skipIf(!HAS_DB)("getCreditsTab", () => {
   afterAll(async () => {
     await sql.end({ timeout: 5 });
@@ -32,15 +49,15 @@ describe.skipIf(!HAS_DB)("getCreditsTab", () => {
     const { auth } = await seedOrg("pro");
     const walletId = await walletIdFor(auth.orgId);
 
-    expect(await grantMonthly(walletId, "pro", 1)).toBe(60);
+    expect(await grantMonthly(walletId, "pro", 1)).toBe(rate.pro!);
     expect(await recordPackPurchase(walletId, 100, `pack-${randomUUID()}`)).toBe(100);
     const hold = await reserve(walletId, auth.orgId, 1);
     await settle(hold, randomUUID());
 
     const view = await getCreditsTab(auth.orgId);
 
-    expect(view.balance).toBe(159); // 60 grant + 100 pack − 1 spend
-    expect(view.grantCap).toBe(60);
+    expect(view.balance).toBe(rate.pro! + 100 - 1); // grant + 100 pack − 1 spend
+    expect(view.grantCap).toBe(rate.pro!);
     expect(view.grantUsed).toBe(1); // one grant credit spent this period
     expect(view.packBalance).toBe(100);
     expect(view.sharedOrgCount).toBe(1);
@@ -50,18 +67,18 @@ describe.skipIf(!HAS_DB)("getCreditsTab", () => {
     expect(view.history).toHaveLength(3);
     const run = view.history.find((r) => r.action === "run");
     expect(run?.delta).toBe(-1);
-    expect(view.history.find((r) => r.action === "monthlyGrant")?.delta).toBe(60);
+    expect(view.history.find((r) => r.action === "monthlyGrant")?.delta).toBe(rate.pro!);
     expect(view.history.find((r) => r.action === "pack")?.delta).toBe(100);
     // No ai_runs table yet — model/competition are null, org names present.
     expect(run?.model).toBeNull();
     expect(run?.competitionName).toBeNull();
   });
 
-  it("caps the grant meter at the Community flat 10 and starts empty", async () => {
+  it("caps the grant meter at the Community flat rate and starts empty", async () => {
     const { auth } = await seedOrg("community");
 
     const view = await getCreditsTab(auth.orgId);
-    expect(view.grantCap).toBe(10);
+    expect(view.grantCap).toBe(rate.community!);
     expect(view.grantUsed).toBe(0);
     expect(view.balance).toBe(0);
     expect(view.sharedOrgCount).toBe(1);
@@ -83,13 +100,14 @@ describe.skipIf(!HAS_DB)("getCreditsTab", () => {
     await sql`update organizations set subscription_id = ${groupId} where id = ${rider.orgId}`;
 
     const walletId = await walletIdFor(auth.orgId);
-    expect(await grantMonthly(walletId, "pro", 2)).toBe(120); // what the sweep grants
-    const hold = await reserve(walletId, auth.orgId, 70);
+    expect(await grantMonthly(walletId, "pro", 2)).toBe(rate.pro! * 2); // what the sweep grants
+    const spend = rate.pro! + 1; // strictly more than ONE seat's grant
+    const hold = await reserve(walletId, auth.orgId, spend);
     await settle(hold, randomUUID());
 
     const view = await getCreditsTab(auth.orgId);
-    expect(view.grantCap).toBe(120); // NOT 60 — 70 used must not exceed the cap
-    expect(view.grantUsed).toBe(70);
+    expect(view.grantCap).toBe(rate.pro! * 2); // NOT one seat — the spend must not exceed the cap
+    expect(view.grantUsed).toBe(spend);
     expect(view.sharedOrgCount).toBe(2);
   });
 
@@ -106,10 +124,10 @@ describe.skipIf(!HAS_DB)("getCreditsTab", () => {
     await sql`update organizations set subscription_id = ${groupId} where id = ${extra.orgId}`;
 
     const walletId = await walletIdFor(auth.orgId);
-    expect(await grantMonthly(walletId, "pro", 1)).toBe(60); // what the sweep grants
+    expect(await grantMonthly(walletId, "pro", 1)).toBe(rate.pro!); // what the sweep grants
 
     const view = await getCreditsTab(auth.orgId);
-    expect(view.grantCap).toBe(60); // NOT 120 — the trial max() must not apply
+    expect(view.grantCap).toBe(rate.pro!); // NOT two seats — the trial max() must not apply
     expect(view.sharedOrgCount).toBe(2);
   });
 
@@ -136,10 +154,10 @@ describe.skipIf(!HAS_DB)("getCreditsTab", () => {
 
     const walletId = await walletIdFor(auth.orgId);
     const swept = await grantMonthlyForAllWallets({ walletIds: [walletId] });
-    expect(swept.granted).toBe(10); // what the wallet ACTUALLY got
+    expect(swept.granted).toBe(rate.community!); // what the wallet ACTUALLY got
 
     const view = await getCreditsTab(auth.orgId);
-    expect(view.grantCap).toBe(10); // NOT 60 — the raw plan_key still reads 'pro'
+    expect(view.grantCap).toBe(rate.community!); // NOT Pro's — the raw plan_key still reads 'pro'
   });
 
   // The other side of #318, and the reason the fix resolves the plan on the
@@ -161,10 +179,10 @@ describe.skipIf(!HAS_DB)("getCreditsTab", () => {
 
     const walletId = await walletIdFor(member.orgId);
     const swept = await grantMonthlyForAllWallets({ walletIds: [walletId] });
-    expect(swept.granted).toBe(60); // the group is still Pro; the pool is unharmed
+    expect(swept.granted).toBe(rate.pro!); // the group is still Pro; the pool is unharmed
 
     const view = await getCreditsTab(member.orgId);
-    expect(view.grantCap).toBe(60); // NOT 10 — moderation is per-org, the wallet is the group's
+    expect(view.grantCap).toBe(rate.pro!); // NOT Community's — moderation is per-org, the wallet is the group's
     expect(view.sharedOrgCount).toBe(2);
   });
 
@@ -223,7 +241,7 @@ describe.skipIf(!HAS_DB)("getCreditsTab", () => {
 
     const view = await getCreditsTab(auth.orgId);
     expect(view.grantUsed).toBe(1); // NOT 4 — the released run was refunded
-    expect(view.balance).toBe(59); // and the ledger already agrees
+    expect(view.balance).toBe(rate.pro! - 1); // and the ledger already agrees
   });
 
   // v17 gap #285: credits that arrive because the org joined a billing group

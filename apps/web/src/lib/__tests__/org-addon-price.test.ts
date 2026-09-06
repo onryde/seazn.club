@@ -32,7 +32,12 @@ describe("orgAddonPriceMinor", () => {
     // bill; the rider is a separate monthly charge. Quoting the annual tier to
     // an annual group understates the rider by roughly a third AND implies a
     // yearly cadence that will actually arrive every month.
-    for (const plan of ["pro", "pro_plus"] as const) {
+    // pro_plus dropped from this loop: `extraOrgPrice()` narrows to
+    // `PurchasablePlanKey` ("pro" only — entitlements v18, V393) and can no
+    // longer price that tier. `orgAddonPriceMinor` itself still reads the
+    // seed's `org_addons[1]` row directly (untouched, T4's to remove), so
+    // its own coverage above is unaffected.
+    for (const plan of ["pro"] as const) {
       for (const currency of SUPPORTED_CURRENCIES) {
         expect(
           orgAddonPriceMinor(plan, currency),

@@ -8,7 +8,13 @@
 // written down in code or copy.) Prices come from `lib/currency`'s
 // stripe-plans.json-backed `passPrice` for the same reason — one price list,
 // the same one `stripe:sync` pushes to Stripe.
-import { PASS_KEYS, passPrice, type Currency, type PassKey } from "@/lib/currency";
+import {
+  SELLABLE_PASS_KEYS,
+  passPrice,
+  type Currency,
+  type PassKey,
+  type SellablePassKey,
+} from "@/lib/currency";
 import { PASS_CREDIT_GRANT } from "@/lib/pricing-cards";
 import type { Dict } from "@/lib/i18n-constants";
 import type { DictionaryKey } from "@/lib/i18n-keys";
@@ -20,34 +26,67 @@ import type { PassLockReason } from "@/lib/entitlements";
 import { t } from "@/lib/i18n-runtime";
 
 export interface PassRungOption {
+  /** `PassKey`, deliberately wider than `PassRungCaps` below. WHICH rungs are
+   *  offered is decided once, by `passLadderOptions`, the only producer of
+   *  these; `<PassRungLadder>` is a presentation component that renders the
+   *  ladder it is handed. Narrowing this to `SellablePassKey` would put the
+   *  authority in two places and, worse, would make the picker's multi-rung
+   *  behaviour — the pre-selected default the real-money e2e suite clicks
+   *  through — impossible to test at all while one rung is on sale. */
   key: PassKey;
   /** Price in the display currency's minor units. */
   amountMinor: number;
   /** null = unlimited — `plan_entitlements`' own convention for "no ceiling". */
   entrants: number | null;
   divisions: number | null;
-  /** AI credits granted on purchase. Flat across rungs by decision (#294). */
+  /** AI credits granted on purchase. PER RUNG since entitlements v18 W2 T5
+   *  (design R9): M grants 25, L grants 50. It was flat, and while it was, this
+   *  card advertised M's 25 beside L's price — the number a buyer reads on the
+   *  rung they are about to pick. */
   credits: number;
 }
 
+/** A ladder row as `passLadderOptions` PRODUCES it — narrowed to a rung that is
+ *  actually on sale. `<PassRungLadder>` takes the wider `PassRungOption`,
+ *  because a presentation component renders whatever ladder it is handed; this
+ *  is what a CALLER gets back, so a surface that also labels the rung (the
+ *  `/pricing` card reads `PASS_RUNG_MARKETING_KEY`, which is keyed by the
+ *  sellable set) type-checks without a cast. */
+export interface SellablePassRungOption extends PassRungOption {
+  key: SellablePassKey;
+}
+
+/** Caps for the rungs the ladder RENDERS — keyed by `SellablePassKey`, not by
+ *  `PassKey`. A rung that is off sale is never quoted here, so asking a caller
+ *  for its caps would be asking it to read a matrix row it must not print. */
 export type PassRungCaps = Readonly<
-  Record<PassKey, { entrants: number | null; divisions: number | null }>
+  Record<SellablePassKey, { entrants: number | null; divisions: number | null }>
 >;
 
 /**
- * Both rungs, M first, priced in `currency`, with the caller's live caps.
+ * The rungs ON SALE, cheapest-size first, priced in `currency`, with the
+ * caller's live caps.
  *
  * Ordered smallest-first because that is the order the stub renders and the
- * order the buyer reads; M is also what the picker pre-selects, so the first
- * element is the default sale.
+ * order the buyer reads; the first element is also what the picker pre-selects,
+ * so it is the default sale.
+ *
+ * `SELLABLE_PASS_KEYS`, never `PASS_KEYS` (owner decision 2026-09-05, the L
+ * rung off sale). This is the buy ladder — the one place a customer picks a
+ * rung — so it reads the authority rather than the full rung set. The full set
+ * stays complete for resolution, and `PASS_RUNG_NAME_KEY` below is still keyed
+ * by it, because a held pass must go on naming whichever rung it is.
  */
-export function passLadderOptions(currency: Currency, caps: PassRungCaps): PassRungOption[] {
-  return (["event_pass", "event_pass_l"] as const).map((key) => ({
+export function passLadderOptions(
+  currency: Currency,
+  caps: PassRungCaps,
+): SellablePassRungOption[] {
+  return SELLABLE_PASS_KEYS.map((key) => ({
     key,
     amountMinor: passPrice(currency, key),
     entrants: caps[key].entrants,
     divisions: caps[key].divisions,
-    credits: PASS_CREDIT_GRANT,
+    credits: PASS_CREDIT_GRANT[key],
   }));
 }
 
@@ -89,8 +128,14 @@ export function lowestPricedRung<T extends PricedRung>(rungs: readonly T[]): T {
  * that also names the rung cannot name a different one from the one it priced.
  */
 export function lowestPassRung(currency: Currency): PricedRung {
+  // SELLABLE, not every rung. A "from" price is an offer, and quoting the floor
+  // of a ladder that includes a rung nobody can buy advertises a price the
+  // checkout would refuse — which is a worse version of the mis-sale the "from"
+  // wording exists to prevent. Today the entry rung is cheapest anyway, so this
+  // choice is invisible in the numbers; it stops being invisible the moment a
+  // hidden rung is discounted.
   return lowestPricedRung(
-    PASS_KEYS.map((key) => ({ key, amountMinor: passPrice(currency, key) })),
+    SELLABLE_PASS_KEYS.map((key) => ({ key, amountMinor: passPrice(currency, key) })),
   );
 }
 
@@ -223,13 +268,19 @@ export const PASS_RUNG_SIZE_KEY: Record<PassKey, DictionaryKey> = {
  * loads `marketing` and not `ui`, and would otherwise have to ship a second
  * dictionary to a page that needs two words from it.
  *
- * Same shape and same reason as the two maps above: a third rung is a compile
- * error here rather than a `/pricing` card that silently prices two sizes and
- * labels one.
+ * Keyed by `SellablePassKey`, unlike the two maps above, and the split is the
+ * point. Those two label a rung a customer HOLDS, so they stay complete; this
+ * one labels a rung a customer is being OFFERED, and `/pricing` offers only
+ * what is on sale. A hidden rung with a marketing label here is a label with
+ * nowhere to render — and the day it does render is the day the page advertises
+ * a rung the owner withdrew.
+ *
+ * Same compile-error discipline either way: a rung added to
+ * `SELLABLE_PASS_KEYS` without an entry here is a type error rather than a
+ * `/pricing` card that silently prices two sizes and labels one.
  */
-export const PASS_RUNG_MARKETING_KEY: Record<PassKey, DictionaryKey> = {
+export const PASS_RUNG_MARKETING_KEY: Record<SellablePassKey, DictionaryKey> = {
   event_pass: "pricing.pass.rung.m",
-  event_pass_l: "pricing.pass.rung.l",
 };
 
 /**

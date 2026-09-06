@@ -1,15 +1,14 @@
 ---
 title: Add-ons — buying more of one thing
-description: Four ways to buy extra capacity without changing plan — AI credit packs, extra member seats, competition size packs and extra organisations. Each one is scoped, billed and bought differently.
+description: Three ways to buy extra capacity without changing plan — AI credit packs, competition size packs and extra organisations. Each one is scoped, billed and bought differently.
 order: 7
 ---
 
-An add-on buys **more of one specific thing** without moving you to a different plan. There are four of them, and they do not behave the same way:
+An add-on buys **more of one specific thing** without moving you to a different plan. There are three of them, and they do not behave the same way:
 
 | Add-on | What it lifts | Scope | Billing |
 | --- | --- | --- | --- |
 | AI credit pack | Credit balance | The shared wallet | One-time |
-| Extra seat | Members, +1 each | One organisation | Monthly |
 | Size pack | Entrants per division, +32 each | One competition | One-time |
 | Extra organisation | Organisations on the bill, +1 each | The billing group | Monthly |
 
@@ -18,12 +17,6 @@ An add-on buys **more of one specific thing** without moving you to a different 
 A credit pack tops up the shared wallet that every organisation on the bill spends from. It is a one-time purchase, the credits land as soon as the payment clears, and the credits themselves **never expire** — unlike your monthly grant, which resets on the 1st. Buy one with **Buy credits** on the Credits tab.
 
 See [AI credits](/help/billing/credits) for the pack ladder, the order runs spend in, and how a billing group shares one wallet.
-
-## Extra seats — one organisation, every month
-
-An extra seat raises **one** organisation's member limit by one, for as long as you keep paying for it. It rides your billing group's existing subscription as one more line on the same invoice — never a second bill and never a second renewal date. Add a seat part-way through a period and you pay the difference for the rest of that period, but it is **added to your next invoice** rather than charged on the spot. Removing one takes effect immediately, with no refund for the rest of the period.
-
-Extra seats have **no control in Settings yet**. If you need one, [talk to us](mailto:hello@seazn.club).
 
 ## Size packs — one competition, bought once
 
@@ -35,9 +28,9 @@ Size packs have **no control in Settings yet** either. [Talk to us](mailto:hello
 
 ## Extra organisations — the whole bill, every month
 
-One subscription already covers several organisations: Pro covers 5 and Pro Plus covers 10. Once every slot is full, an extra organisation buys **one more slot** rather than forcing you up a plan. Each organisation after the first costs no more than half the base rate.
+One subscription already covers several organisations: Pro covers 5, and Enterprise is unlimited. Once every slot is full, an extra organisation buys **one more slot** rather than forcing you up a plan. Each organisation after the first costs no more than half the base rate.
 
-The add-on is charged **every month, whatever your plan's own billing period** — so on a monthly bill it matches that half rate exactly, and on an annual bill it does not. An annual group pays for its extra organisations monthly, which comes to **at least a third more over a year** than a slot inside the plan's own limit costs, and rather more than that in some currencies. If you are annual and expect to stay over the limit, compare the add-on against moving up a plan before you buy.
+The add-on is charged **every month, whatever your plan's own billing period** — so on a monthly bill it matches that half rate exactly, and on an annual bill it does not. An annual group pays for its extra organisations monthly, which comes to **at least a sixth more over a year** than a slot inside the plan's own limit costs, and rather more than that in some currencies. If you are annual and expect to stay over the limit, compare the add-on against moving up a plan before you buy.
 
 Raise the count and you pay the difference for the rest of the period, **added to your next invoice** rather than charged on the spot. Lower it and it takes effect immediately, with no refund. You cannot go below the number of organisations that are actually standing on an extra organisation: move one out of the group first.
 

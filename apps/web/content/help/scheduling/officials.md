@@ -6,7 +6,7 @@ order: 6
 
 Officials are your umpire/scoring path: invite one, they claim their profile, accept the assignment on their `/me` home, and score the match on the same full fixture console you use — no separate scorer role, no device link to mint. Officials are an org-wide pool, managed from **Directory → Officials** — the same roster is shared across every competition and division, so you add and invite an official once and pick them on any schedule. A division's **schedule → Officials tab** stays where you assign them to fixtures: auto-assign, manual pick, phased sourcing from results, and blackout warnings. Inviting an official, their home view, accepting and declining, blackout dates, and scoring are **available on all plans**.
 
-**Assigning officials is free on every plan.** Add a *second* official to the same fixture — a referee and a line judge, say — on Community, Event Pass, Pro or Pro Plus alike; there's no per-fixture cap. **Multiple roles on one official** (see below) is likewise available on every plan — it's about how many hats one person wears, not how many people cover a match. The one part that stays **Pro Plus** is *automatic* (AI) officials assignment.
+**Assigning officials is free on every plan.** Add a *second* official to the same fixture — a referee and a line judge, say — on Community, Event Pass or Pro alike; there's no per-fixture cap. **Multiple roles on one official** (see below) is likewise available on every plan — it's about how many hats one person wears, not how many people cover a match. The one part that needs a paid plan is *automatic* (AI) officials assignment — **Pro, or an Event Pass on that competition**.
 
 ## Add and invite an official
 
@@ -18,7 +18,7 @@ On any roster row, **Edit roles** opens the same chip picker to change an existi
 
 ## Assigning on a division's schedule
 
-The schedule's **Officials tab** shows a compact roster strip (with a link back to the directory to manage it) plus the assignment tools: propose/apply an auto-assignment, phase officials in from results, or pick manually per fixture. Every official in the org-wide pool is available to every division — there's no separate roster per division. **Automatic officials assignment (propose/apply) is a Pro Plus feature** — picking officials manually works on every plan, including a second official per fixture and multiple roles per person. To staff a whole timetable from one instruction, see [AI Officials](/help/scheduling/ai-officials).
+The schedule's **Officials tab** shows a compact roster strip (with a link back to the directory to manage it) plus the assignment tools: propose/apply an auto-assignment, phase officials in from results, or pick manually per fixture. Every official in the org-wide pool is available to every division — there's no separate roster per division. **Automatic officials assignment (propose/apply) needs Pro, or an Event Pass on that competition** — picking officials manually works on every plan, including a second official per fixture and multiple roles per person. To staff a whole timetable from one instruction, see [AI Officials](/help/scheduling/ai-officials).
 
 ## What the official sees
 

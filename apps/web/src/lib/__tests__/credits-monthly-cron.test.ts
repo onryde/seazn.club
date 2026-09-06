@@ -15,11 +15,17 @@
 // anchoring on it (a prior version of this cron did, for paid wallets) is a
 // cadence regression, not an approximation.
 // Real Postgres required; skipped without DATABASE_URL.
-import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 import { sql, statementCount } from "@/lib/db";
 import { balance, grantBalance, grantMonthlyForAllWallets, utcMonthStart } from "@/lib/credits";
 import { setOrgPlan } from "./_billing-group";
+
+/** `ai.credits.monthly` per plan, READ from the live matrix rather than typed
+ *  here. The ladder has already moved twice (V320 community 10 / pro 60,
+ *  V393 community 5 / pro 35 / enterprise 500) and a typed number stops
+ *  testing the sweep's arithmetic the moment it drifts. */
+const rate: Record<string, number> = {};
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
@@ -68,6 +74,22 @@ afterEach(() => {
 // Anyone tempted to re-add one: it will silently defeat `--testTimeout`
 // again, whatever value that flag is given.
 
+const HAS_DB_RATE = !!process.env.DATABASE_URL;
+
+beforeAll(async () => {
+  if (!HAS_DB_RATE) return;
+  const rows = await sql<{ plan_key: string; int_value: number | null }[]>`
+    select plan_key, int_value from plan_entitlements
+     where feature_key = 'ai.credits.monthly'`;
+  for (const r of rows) if (r.int_value !== null) rate[r.plan_key] = r.int_value;
+  // Anti-vacuity: the sweep tests below prove that three plans get three
+  // DIFFERENT rates, so all three must exist and disagree.
+  for (const k of ["community", "pro", "enterprise"]) {
+    expect(rate[k], `no ${k} ai.credits.monthly row`).toBeGreaterThan(0);
+  }
+  expect(new Set([rate.community, rate.pro, rate.enterprise]).size).toBe(3);
+});
+
 describe.skipIf(!HAS_DB)("grantMonthlyForAllWallets (billing-grant cron)", () => {
   it("grants a paid wallet the scaled amount (monthly(plan) * quantity_paid)", async () => {
     const orgId = await seedOrg();
@@ -82,10 +104,10 @@ describe.skipIf(!HAS_DB)("grantMonthlyForAllWallets (billing-grant cron)", () =>
     const res = await grantMonthlyForAllWallets();
 
     expect(res.wallets).toBeGreaterThan(0);
-    expect(await balance(subId)).toBe(60 * 3);
+    expect(await balance(subId)).toBe(rate.pro! * 3);
   });
 
-  it("grants a community wallet the FLAT 10, ignoring quantity_paid", async () => {
+  it("grants a community wallet the FLAT plan rate, ignoring quantity_paid", async () => {
     const orgId = await seedOrg();
     const subId = await setOrgPlan(orgId, "community");
     // Even if quantity_paid were ever non-1 on a community group-of-one,
@@ -94,18 +116,18 @@ describe.skipIf(!HAS_DB)("grantMonthlyForAllWallets (billing-grant cron)", () =>
 
     await grantMonthlyForAllWallets({ walletIds: [subId] });
 
-    expect(await balance(subId)).toBe(10);
+    expect(await balance(subId)).toBe(rate.community!);
   });
 
   it("is a no-op on a second run in the same calendar month (idempotent per period)", async () => {
     const orgId = await seedOrg();
-    const subId = await setOrgPlan(orgId, "pro_plus");
+    const subId = await setOrgPlan(orgId, "enterprise");
 
     await grantMonthlyForAllWallets({ walletIds: [subId] });
-    expect(await balance(subId)).toBe(200);
+    expect(await balance(subId)).toBe(rate.enterprise!);
 
     await grantMonthlyForAllWallets({ walletIds: [subId] });
-    expect(await balance(subId)).toBe(200);
+    expect(await balance(subId)).toBe(rate.enterprise!);
   });
 
   it("REGRESSION (#290): grants the resolved Community rate for a canceled (churned) subscription, not zero", async () => {
@@ -121,7 +143,7 @@ describe.skipIf(!HAS_DB)("grantMonthlyForAllWallets (billing-grant cron)", () =>
     // 'past_due')`) skipped this row entirely — a churned org got 0 credits
     // forever even though every OTHER entitlement read already resolves it
     // to Community and expects the Community grant to back that up.
-    expect(await balance(subId)).toBe(10);
+    expect(await balance(subId)).toBe(rate.community!);
   });
 
   it("REGRESSION (#290): grants the resolved Community rate for an incomplete (never-paid) subscription", async () => {
@@ -130,7 +152,7 @@ describe.skipIf(!HAS_DB)("grantMonthlyForAllWallets (billing-grant cron)", () =>
 
     await grantMonthlyForAllWallets({ walletIds: [subId] });
 
-    expect(await balance(subId)).toBe(10);
+    expect(await balance(subId)).toBe(rate.community!);
   });
 
   it("expires the prior period's unspent grant balance before granting the new period (D1)", async () => {
@@ -145,8 +167,8 @@ describe.skipIf(!HAS_DB)("grantMonthlyForAllWallets (billing-grant cron)", () =>
     await grantMonthlyForAllWallets({ walletIds: [subId] });
 
     // Not 15 + 60 banked — expired then re-granted to exactly this period's amount.
-    expect(await grantBalance(subId)).toBe(60);
-    expect(await balance(subId)).toBe(60);
+    expect(await grantBalance(subId)).toBe(rate.pro!);
+    expect(await balance(subId)).toBe(rate.pro!);
   });
 
   it("a paid wallet's period is the calendar month, never current_period_end — a Stripe cycle change within the same month is a no-op", async () => {
@@ -156,12 +178,12 @@ describe.skipIf(!HAS_DB)("grantMonthlyForAllWallets (billing-grant cron)", () =>
     await sql`update subscriptions set current_period_end = ${cycle1} where id = ${subId}`;
 
     await grantMonthlyForAllWallets({ walletIds: [subId] });
-    expect(await balance(subId)).toBe(60);
+    expect(await balance(subId)).toBe(rate.pro!);
 
     // Same calendar month, same period boundary — a second poll (e.g. the
     // next day's cron run) must be a no-op.
     await grantMonthlyForAllWallets({ walletIds: [subId] });
-    expect(await balance(subId)).toBe(60);
+    expect(await balance(subId)).toBe(rate.pro!);
 
     // Stripe rolls the subscription to a new cycle (webhook sync advances
     // current_period_end) but we're still in the SAME calendar month — this
@@ -171,8 +193,8 @@ describe.skipIf(!HAS_DB)("grantMonthlyForAllWallets (billing-grant cron)", () =>
     await sql`update subscriptions set current_period_end = ${cycle2} where id = ${subId}`;
 
     await grantMonthlyForAllWallets({ walletIds: [subId] });
-    expect(await grantBalance(subId)).toBe(60); // still exactly one month's grant, not 120
-    expect(await balance(subId)).toBe(60);
+    expect(await grantBalance(subId)).toBe(rate.pro!); // still exactly one month's grant, not 120
+    expect(await balance(subId)).toBe(rate.pro!);
   });
 
   it("Community wallets grant on plain calendar month (no Stripe period at all)", async () => {
@@ -183,10 +205,10 @@ describe.skipIf(!HAS_DB)("grantMonthlyForAllWallets (billing-grant cron)", () =>
     expect(row?.current_period_end).toBeNull();
 
     await grantMonthlyForAllWallets({ walletIds: [subId] });
-    expect(await balance(subId)).toBe(10);
+    expect(await balance(subId)).toBe(rate.community!);
 
     await grantMonthlyForAllWallets({ walletIds: [subId] });
-    expect(await balance(subId)).toBe(10); // still idempotent via the calendar-month key
+    expect(await balance(subId)).toBe(rate.community!); // still idempotent via the calendar-month key
   });
 
   it("REGRESSION (SPEC-2 §5.4 Cadence): an annual (yearly-renewing) Pro subscription still grants 12x/year, not a single lump", async () => {
@@ -218,27 +240,27 @@ describe.skipIf(!HAS_DB)("grantMonthlyForAllWallets (billing-grant cron)", () =>
     const only = { walletIds: [subId] };
 
     await grantMonthlyForAllWallets(only);
-    expect(await balance(subId)).toBe(60); // month N
+    expect(await balance(subId)).toBe(rate.pro!); // month N
 
     // Same calendar month — a second poll must stay a no-op.
     await grantMonthlyForAllWallets(only);
-    expect(await balance(subId)).toBe(60);
+    expect(await balance(subId)).toBe(rate.pro!);
 
     // Advance to month N+1 — current_period_end is UNCHANGED (still a year
     // out), yet a fresh grant must land: cadence is monthly, not
     // billing-cycle.
     vi.setSystemTime(new Date("2026-07-03T00:00:00Z"));
     await grantMonthlyForAllWallets(only);
-    expect(await grantBalance(subId)).toBe(60); // reset to this month's own 60, not banked to 120
-    expect(await balance(subId)).toBe(60);
+    expect(await grantBalance(subId)).toBe(rate.pro!); // reset to this month's own 60, not banked to 120
+    expect(await balance(subId)).toBe(rate.pro!);
 
     // ...and month N+2, proving this isn't a one-off double-grant fluke —
     // 3 calendar months in, 3 grants, still 60 in the bucket each time
     // (180 total ever granted across the ledger, use-or-lose resets each).
     vi.setSystemTime(new Date("2026-08-10T00:00:00Z"));
     await grantMonthlyForAllWallets(only);
-    expect(await grantBalance(subId)).toBe(60);
-    expect(await balance(subId)).toBe(60);
+    expect(await grantBalance(subId)).toBe(rate.pro!);
+    expect(await balance(subId)).toBe(rate.pro!);
   });
 
   it("REGRESSION (#291): a trialing group grants for the LIVE org count when quantity_paid is frozen below it", async () => {
@@ -257,7 +279,7 @@ describe.skipIf(!HAS_DB)("grantMonthlyForAllWallets (billing-grant cron)", () =>
     // max(quantity_paid=1, liveOrgCount=2) — not quantity_paid alone, or the
     // rider org would spend against a wallet that only ever got 1 seat's
     // worth of monthly credits.
-    expect(await balance(subId)).toBe(60 * 2);
+    expect(await balance(subId)).toBe(rate.pro! * 2);
   });
 
   it("can be scoped to named wallets, so a parallel suite's wallets cannot move the answer (#351)", async () => {
@@ -270,7 +292,7 @@ describe.skipIf(!HAS_DB)("grantMonthlyForAllWallets (billing-grant cron)", () =>
 
     const res = await grantMonthlyForAllWallets({ walletIds: [subId] });
     expect(res.wallets).toBe(1);
-    expect(await balance(subId)).toBe(60 * 2);
+    expect(await balance(subId)).toBe(rate.pro! * 2);
     expect(await balance(otherSub)).toBe(0); // untouched: not in scope
   });
 
@@ -287,7 +309,7 @@ describe.skipIf(!HAS_DB)("grantMonthlyForAllWallets (billing-grant cron)", () =>
 
     await grantMonthlyForAllWallets({ walletIds: [subId] });
 
-    expect(await balance(subId)).toBe(60 * 3);
+    expect(await balance(subId)).toBe(rate.pro! * 3);
   });
 
   // #390 — the sweep runs DAILY but grants MONTHLY, so on 30 of 31 days every
@@ -297,18 +319,18 @@ describe.skipIf(!HAS_DB)("grantMonthlyForAllWallets (billing-grant cron)", () =>
   // subscription in the schema" — the assertions below pin that new meaning.
   it("does not re-consider a wallet already granted this period (#390)", async () => {
     const orgId = await seedOrg();
-    const subId = await setOrgPlan(orgId, "pro_plus");
+    const subId = await setOrgPlan(orgId, "enterprise");
 
     const first = await grantMonthlyForAllWallets({ walletIds: [subId] });
     expect(first.wallets).toBe(1);
-    expect(first.granted).toBe(200);
+    expect(first.granted).toBe(rate.enterprise!);
 
     // Second run the same month: the wallet is filtered out by the sweep
     // itself, so it is never opened, locked, or re-read.
     const second = await grantMonthlyForAllWallets({ walletIds: [subId] });
     expect(second.wallets).toBe(0);
     expect(second.granted).toBe(0);
-    expect(await balance(subId)).toBe(200);
+    expect(await balance(subId)).toBe(rate.enterprise!);
   });
 
   it("still grants a wallet that has no key for this period (#390)", async () => {
@@ -321,7 +343,7 @@ describe.skipIf(!HAS_DB)("grantMonthlyForAllWallets (billing-grant cron)", () =>
 
   it("#390: the anti-join is a pre-filter, not the guard — a concurrent double-run still grants once", async () => {
     const orgId = await seedOrg();
-    const subId = await setOrgPlan(orgId, "pro_plus");
+    const subId = await setOrgPlan(orgId, "enterprise");
     // Both calls pass the anti-join (neither sees a key yet); the advisory
     // lock and the in-transaction key check must still make exactly one of
     // them win. If the anti-join were ever mistaken for the guard, this is
@@ -331,8 +353,8 @@ describe.skipIf(!HAS_DB)("grantMonthlyForAllWallets (billing-grant cron)", () =>
       grantMonthlyForAllWallets({ walletIds: [subId] }),
     ]);
     expect(a.failed + b.failed).toBe(0);
-    expect(a.granted + b.granted).toBe(200);
-    expect(await balance(subId)).toBe(200);
+    expect(a.granted + b.granted).toBe(rate.enterprise!);
+    expect(await balance(subId)).toBe(rate.enterprise!);
   });
 
   it("#390: a zero-grant plan keeps re-qualifying, and that is harmless", async () => {
@@ -342,7 +364,7 @@ describe.skipIf(!HAS_DB)("grantMonthlyForAllWallets (billing-grant cron)", () =>
     // resolves the grant amount in the sweep rather than per row.
     //
     // The zero-grant plan here is `event_pass`, NOT `community`: community
-    // carries `ai.credits.monthly = 10` (V320), so it grants, writes a key,
+    // carries an `ai.credits.monthly` row, so it grants, writes a key,
     // and IS filtered out on the second run. Event Pass deliberately carries
     // no `ai.credits.monthly` row at all — it is the only plan in the matrix
     // whose monthly grant is genuinely zero (scripts/smoke.ts says so too).
@@ -366,17 +388,17 @@ describe.skipIf(!HAS_DB)("grantMonthlyForAllWallets (billing-grant cron)", () =>
     // of same-plan wallets is satisfied by the bug.
     const [proOrg, plusOrg, commOrg] = await Promise.all([seedOrg(), seedOrg(), seedOrg()]);
     const pro = await setOrgPlan(proOrg, "pro");
-    const plus = await setOrgPlan(plusOrg, "pro_plus");
+    const plus = await setOrgPlan(plusOrg, "enterprise");
     const comm = await setOrgPlan(commOrg, "community");
 
     const res = await grantMonthlyForAllWallets({ walletIds: [pro, plus, comm] });
 
     expect(res.wallets).toBe(3);
     expect(res.failed).toBe(0);
-    expect(await balance(pro)).toBe(60);
-    expect(await balance(plus)).toBe(200);
-    expect(await balance(comm)).toBe(10);
-    expect(res.granted).toBe(60 + 200 + 10);
+    expect(await balance(pro)).toBe(rate.pro!);
+    expect(await balance(plus)).toBe(rate.enterprise!);
+    expect(await balance(comm)).toBe(rate.community!);
+    expect(res.granted).toBe(rate.pro! + rate.enterprise! + rate.community!);
   });
 
   it("#390: a re-qualifying zero-grant wallet costs one statement per wallet, not two", async () => {
@@ -441,12 +463,12 @@ describe.skipIf(!HAS_DB)("grantMonthlyForAllWallets (billing-grant cron)", () =>
     const res = await grantMonthlyForAllWallets({ walletIds: [subId] });
 
     expect(res.wallets).toBe(1); // considered, despite last month's key
-    expect(res.granted).toBe(60);
+    expect(res.granted).toBe(rate.pro!);
     expect(res.failed).toBe(0);
-    // Last month's 60 was expired (D1 use-or-lose) and this month's granted —
-    // exactly one month's allowance in the bucket, not a banked 120.
-    expect(await grantBalance(subId)).toBe(60);
-    expect(await balance(subId)).toBe(60);
+    // Last month's seeded leftover was expired (D1 use-or-lose) and this
+    // month's granted — exactly one month's allowance, never the two banked.
+    expect(await grantBalance(subId)).toBe(rate.pro!);
+    expect(await balance(subId)).toBe(rate.pro!);
   });
 
   it("#390: a MIXED sweep considers only the wallets still missing this period's key", async () => {
@@ -461,9 +483,9 @@ describe.skipIf(!HAS_DB)("grantMonthlyForAllWallets (billing-grant cron)", () =>
     const res = await grantMonthlyForAllWallets({ walletIds: [a!, b!, c!, d!] });
 
     expect(res.wallets).toBe(2); // c and d only — a and b never opened
-    expect(res.granted).toBe(60 * 2);
+    expect(res.granted).toBe(rate.pro! * 2);
     expect(res.failed).toBe(0);
-    for (const sub of [a!, b!, c!, d!]) expect(await balance(sub)).toBe(60);
+    for (const sub of [a!, b!, c!, d!]) expect(await balance(sub)).toBe(rate.pro!);
     // ...and the already-granted pair got exactly one grant row each, not two.
     const [{ n }] = await sql<{ n: number }[]>`
       select count(*)::int as n from ai_credit_ledger
@@ -495,8 +517,8 @@ describe.skipIf(!HAS_DB)("grantMonthlyForAllWallets (billing-grant cron)", () =>
 
     const swept = await grantMonthlyForAllWallets();
 
-    expect(await balance(subA)).toBe(60); // one grant each, not two
-    expect(await balance(subB)).toBe(60);
+    expect(await balance(subA)).toBe(rate.pro!); // one grant each, not two
+    expect(await balance(subB)).toBe(rate.pro!);
 
     // ...and neither was even CONSIDERED. `total` is the population the sweep
     // would have opened WITHOUT the anti-join (every subscription with a live

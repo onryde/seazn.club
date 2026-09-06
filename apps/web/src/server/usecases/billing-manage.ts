@@ -14,6 +14,7 @@ import {
 } from "@/lib/billing";
 import { invalidateEntitlementsForOrgGroup, isPassLocked } from "@/lib/entitlements";
 import { isPassKey, type PassKey } from "@/lib/currency";
+import type { PurchasablePlanKey } from "@/lib/types";
 import { subscriptionIdForOrg } from "@/lib/billing-group";
 import { planItem } from "@/lib/subscription-items";
 import { logStaffAction } from "@/lib/admin";
@@ -814,14 +815,17 @@ export async function applyIntervalChange(
 }
 
 // ---------------------------------------------------------------------------
-// Plan switch (Pro ↔ Pro Plus)
+// Plan switch (interval change on the one purchasable plan — entitlements
+// v18 retired the Pro ↔ Pro Plus switch this used to name; a local
+// `PlanKey = "pro" | "pro_plus"` here was its own unnamed mirror of
+// `checkoutSchema.plan_key`, so this now imports the shared purchasable-set
+// type instead of restating it. `enterprise` never reaches this path — it
+// is never self-serve.)
 // ---------------------------------------------------------------------------
-
-export type PlanKey = "pro" | "pro_plus";
 
 export async function previewPlanChange(
   orgId: string,
-  planKey: PlanKey,
+  planKey: PurchasablePlanKey,
   interval: BillingInterval,
 ): Promise<IntervalPreview> {
   const ctx = await resolvePriceChange(orgId, planKey, interval);
@@ -872,7 +876,7 @@ export async function previewPlanChange(
 
 export async function applyPlanChange(
   orgId: string,
-  planKey: PlanKey,
+  planKey: PurchasablePlanKey,
   interval: BillingInterval,
   prorationDate: number,
 ): Promise<IntervalChangeResult> {

@@ -8,6 +8,7 @@ import { football } from "@seazn/engine/sports/football";
 import { sql } from "@/lib/db";
 import { PaymentRequiredError } from "@/lib/errors";
 import { getLimit, invalidateOrgEntitlements } from "@/lib/entitlements";
+import { bulkImportRowsReason } from "@/lib/feature-copy";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { createCompetition } from "../competitions";
 import { createDivision } from "../divisions";
@@ -201,6 +202,48 @@ describe.skipIf(!HAS_DB)("bulk import (Jul3/01)", () => {
       csvUpload(["Team", ...rows.slice(0, 50)].join("\n")),
     );
     expect(under.rowCount).toBe(50);
+  });
+
+  it("the refusal QUOTES the cap it was refused by, read from the entitlement", async () => {
+    // W2 T12. The paywall sentence said "Files over 20 rows need a Pro plan"
+    // and had been wrong since V319 — a Free user refused at 60 rows was told
+    // the limit was 20 and split into three files when two would do. The cap
+    // stays 50; the message was the defect.
+    //
+    // The expected number is READ from plan_entitlements, never typed: a
+    // literal here would just be a fourth copy of the figure that drifted.
+    const [row] = await sql<{ int_value: number | null }[]>`
+      select int_value from plan_entitlements
+       where plan_key = 'community' and feature_key = 'import.bulk'`;
+    const cap = row!.int_value!;
+    expect(cap, "import.bulk must be a finite community cap").toBeTypeOf(
+      "number",
+    );
+    // Anti-vacuity: the right answer must differ from the number the old
+    // sentence hardcoded, or this test cannot witness the regression.
+    expect(cap).not.toBe(20);
+
+    const { auth } = await seedOrg("community");
+    await seedDivision(auth);
+    const csv = [
+      "Team",
+      ...Array.from({ length: cap + 1 }, (_, i) => `Team ${i}`),
+    ].join("\n");
+    const err = await createImport(auth, csvUpload(csv)).then(
+      () => null,
+      (e: unknown) =>
+        e as PaymentRequiredError & { extra?: Record<string, unknown> },
+    );
+    expect(err, "a file one row over the cap must be refused").toBeInstanceOf(
+      PaymentRequiredError,
+    );
+    expect(err!.featureKey).toBe("import.bulk");
+    // The whole point: the number in the customer's sentence is the cap that
+    // actually refused them, and the machine hint carries it too.
+    expect(err!.extra?.limit).toBe(cap);
+    expect(err!.extra?.reason).toBe(bulkImportRowsReason(cap));
+    expect(String(err!.extra?.reason)).toContain(`over ${cap} rows`);
+    expect(String(err!.extra?.reason)).not.toContain("over 20 rows");
   });
 
   it("Community commit with club columns succeeds under the clubs cap (hierarchy opened, V292)", async () => {

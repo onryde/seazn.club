@@ -11,7 +11,7 @@ import {
   usePassRung,
   usePassSellableRungs,
 } from "@/components/competition-pass-provider";
-import { formatMinor, passPrice, proPlusPrice, proPrice, type Currency } from "@/lib/currency";
+import { formatMinor, passPrice, proPrice, type Currency } from "@/lib/currency";
 import {
   lowestPassRung,
   lowestPricedRung,
@@ -104,24 +104,64 @@ function passHrefFromPath(pathname: string | null, feature: string): string | nu
  */
 const creditLine = (msg: ReturnType<typeof useMsg>, plan: string) => msg("upgrade.credit", { plan });
 
+/** A resolved paywall action: either a priced Pro upgrade, or — entitlements
+ *  v18 — a Contact-us mailto for the handful of keys above Pro (`api.write`
+ *  plus the two ceiling ints; see feature-copy.ts's `ENTERPRISE_FEATURES`).
+ *  Both carry their own `href` so the caller always renders the same button
+ *  shape without branching twice. */
+type PlanCta =
+  | { kind: "priced"; name: string; price: string; href: string }
+  | { kind: "contact"; name: string; href: string };
+
 /**
- * Name and monthly price of the plan that actually unlocks a key.
+ * The paywall action that actually unlocks a key: a priced Pro upgrade, or
+ * — for the short list of above-Pro keys — a Contact-us mailto.
  *
- * The two-path card can hardcode Pro — every key in PASS_FEATURES is a Pro
- * key — but the pass-owned card also renders for features the pass never
- * covered, and some of those (officials.auto, api.write, domains.custom …)
- * are Pro Plus. Reading the plan from the same helper <PlanBadge> uses keeps
- * the button from saying "Go Pro" directly beneath a PRO PLUS badge.
+ * The two-path card can't hardcode Pro — the pass-owned card also renders
+ * for features the pass never covered, and one of those (api.write) is
+ * above Pro. Reading the plan from the same helper <PlanBadge> uses keeps
+ * the button from saying "Go Pro" directly beneath an ENTERPRISE badge.
  *
  * `currency` comes from the competition layout via the pass provider, and every
  * amount on one card must use it: a paywall quoting the pass in £ beside Pro in
  * $ is worse than the hardcoded usd it replaced. Outside a competition there is
  * no provider and the default is usd — exactly what this rendered before.
+ *
+ * `reason` becomes the mailto subject for the Contact-us path — it is
+ * already the human-readable sentence this same card shows next to the
+ * badge (`featureReason(feature)`, or a caller's override), so this reuses
+ * it rather than inventing a second, shorter label nobody asked for.
  */
-function paidPlan(feature: string, currency: Currency): { name: string; price: string } {
-  const plus = featurePlan(feature) === "pro_plus";
-  const minor = plus ? proPlusPrice("monthly", currency) : proPrice("monthly", currency);
-  return { name: plus ? "Pro Plus" : "Pro", price: `${formatMinor(minor, currency)}/mo` };
+function paidPlan(feature: string, currency: Currency, href: string, reason: string): PlanCta {
+  if (featurePlan(feature) === "enterprise") {
+    return {
+      kind: "contact",
+      name: "Enterprise",
+      href: `mailto:hello@seazn.club?subject=${encodeURIComponent(reason)}`,
+    };
+  }
+  const minor = proPrice("monthly", currency);
+  return { kind: "priced", name: "Pro", price: `${formatMinor(minor, currency)}/mo`, href };
+}
+
+/** The button a `PlanCta` renders as — one shape for both arms, so the three
+ *  cards below don't each hand-write the priced/contact branch. A plain
+ *  `<a>` for the mailto arm, never `<Link>`: this is an external protocol,
+ *  not an internal route. */
+function PlanCtaButton({ plan }: { plan: PlanCta }) {
+  const msg = useMsg();
+  if (plan.kind === "contact") {
+    return (
+      <a href={plan.href} className="btn btn-primary px-4 py-2 text-sm">
+        {msg("upgrade.contactUs")}
+      </a>
+    );
+  }
+  return (
+    <Link href={plan.href} className="btn btn-primary px-4 py-2 text-sm">
+      Go {plan.name} — {plan.price}
+    </Link>
+  );
 }
 
 /**
@@ -212,7 +252,7 @@ export function UpgradeGate({
   // The org already holds this competition's pass. One path out, and an
   // acknowledgement that they have already paid us once for this competition.
   if (passOwned) {
-    const plan = paidPlan(feature, currency);
+    const plan = paidPlan(feature, currency, href, reason);
     return (
       <div
         data-feature={feature}
@@ -243,13 +283,16 @@ export function UpgradeGate({
             : "This one is not included in the Event Pass."}
         </p>
         <div className="mt-3">
-          <Link href={href} className="btn btn-primary px-4 py-2 text-sm">
-            Go {plan.name} — {plan.price}
-          </Link>
+          <PlanCtaButton plan={plan} />
         </div>
-        <p className="mt-2 text-xs text-purple-700">
-          {plan.name} covers every competition in your organization. {creditLine(msg, plan.name)}
-        </p>
+        {/* The pass-credit sentence only makes sense against a priced,
+            self-serve invoice — an Enterprise deal is comped/bespoke, so
+            there is no invoice for a pass to come off. */}
+        {plan.kind === "priced" && (
+          <p className="mt-2 text-xs text-purple-700">
+            {plan.name} covers every competition in your organization. {creditLine(msg, plan.name)}
+          </p>
+        )}
       </div>
     );
   }
@@ -270,7 +313,7 @@ export function UpgradeGate({
   // impossible pairing ever did arrive it degrades to the plain Pro card rather
   // than rendering a heading above a missing sentence.
   if (passEnded && lockReason) {
-    const plan = paidPlan(feature, currency);
+    const plan = paidPlan(feature, currency, href, reason);
     return (
       <div
         data-feature={feature}
@@ -304,9 +347,7 @@ export function UpgradeGate({
             above for the rung label, so this adds no new provider dependency. */}
         <p className="mt-2">{t(dict, PASS_LOCK_REASON_KEY[lockReason])}</p>
         <div className="mt-3">
-          <Link href={href} className="btn btn-primary px-4 py-2 text-sm">
-            Go {plan.name} — {plan.price}
-          </Link>
+          <PlanCtaButton plan={plan} />
         </div>
       </div>
     );
@@ -328,7 +369,7 @@ export function UpgradeGate({
   // working — false twice over here, since nothing was bought. The two sets of
   // copy are separate Records for exactly that reason.
   if (passClosed && lockReason) {
-    const plan = paidPlan(feature, currency);
+    const plan = paidPlan(feature, currency, href, reason);
     return (
       <div
         data-feature={feature}
@@ -356,9 +397,7 @@ export function UpgradeGate({
             exhaustiveness the Record exists to provide. */}
         <p className="mt-2">{t(dict, PASS_CLOSED_REASON_KEY[lockReason])}</p>
         <div className="mt-3">
-          <Link href={href} className="btn btn-primary px-4 py-2 text-sm">
-            Go {plan.name} — {plan.price}
-          </Link>
+          <PlanCtaButton plan={plan} />
         </div>
       </div>
     );

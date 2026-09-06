@@ -1,18 +1,32 @@
 import Link from "next/link";
 import { ticketTiers } from "@/lib/pricing-cards";
 import type { Currency } from "@/lib/currency";
+import { t } from "@/lib/i18n-runtime";
+import type { Dict } from "@/lib/i18n-constants";
+import type { MatrixData } from "@/lib/pricing-matrix";
 import { Reveal } from "./reveal";
 
 /** Floodlit finale pricing (design/v3/12 §4.8): three ticket stubs, Event
- *  Pass glowing. Content comes from the shared pricing-cards source. */
-export function TicketStubs({ currency }: { currency: Currency }) {
+ *  Pass glowing. Content comes from the shared pricing-cards source — tier
+ *  names, price qualifiers and bullets all as dictionary keys, with the caps
+ *  and fee rates interpolated from `plan_entitlements`. The page passes both
+ *  in: this is a plain (non-async) component and must not load either itself. */
+export function TicketStubs({
+  currency,
+  dict,
+  matrix,
+}: {
+  currency: Currency;
+  dict: Dict;
+  matrix: MatrixData;
+}) {
   return (
     <div className="flex flex-wrap justify-center gap-5">
-      {ticketTiers(currency).map((t, i) => (
+      {ticketTiers(currency, dict, matrix).map((tier, i) => (
         <Reveal
-          key={t.tier}
+          key={tier.tier}
           className={`mk-stub relative w-64 rounded-xl border p-5 text-left ${
-            t.glow
+            tier.glow
               ? "border-[var(--mk-lime)] shadow-[0_0_34px_rgba(163,230,53,0.22)]"
               : "border-[#3b2a6e]"
           }`}
@@ -27,24 +41,24 @@ export function TicketStubs({ currency }: { currency: Currency }) {
           </span>
           <p
             className={`mk-display text-xs font-semibold tracking-[0.18em] ${
-              t.glow ? "text-[var(--mk-lime)]" : "text-[#b7aede]"
+              tier.glow ? "text-[var(--mk-lime)]" : "text-[#b7aede]"
             }`}
           >
-            {t.tier}
+            {tier.tier}
           </p>
           <p className="mk-display my-1 text-4xl font-bold tabular-nums text-[var(--mk-cream)]">
-            {t.prefix ? (
+            {tier.prefix ? (
               <span className="mr-1 align-middle text-xs font-semibold uppercase tracking-[0.12em] text-[#b7aede]">
-                {t.prefix}
+                {tier.prefix}
               </span>
             ) : null}
-            {t.price}
-            {t.period ? (
-              <span className="text-base font-medium text-[#b7aede]">{t.period}</span>
+            {tier.price}
+            {tier.period ? (
+              <span className="text-base font-medium text-[#b7aede]">{tier.period}</span>
             ) : null}
           </p>
           <ul className="w-40 space-y-1 text-xs leading-relaxed text-[#cfc6ec]">
-            {t.bullets.map((b) => (
+            {tier.bullets.map((b) => (
               <li key={b}>
                 <span className="text-[var(--mk-lime)]">✓</span> {b}
               </li>
@@ -57,7 +71,7 @@ export function TicketStubs({ currency }: { currency: Currency }) {
           href="/pricing"
           className="text-xs text-[#8d7fc0] underline hover:text-[var(--mk-lime)]"
         >
-          Compare plans in detail →
+          {t(dict, "home.finale.compare")}
         </Link>
       </p>
     </div>

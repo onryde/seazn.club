@@ -5,7 +5,7 @@
 //   * a NON-OWNER got the full priced card with a sentence under it, which is a
 //     price nobody will let them pay;
 //   * the OWNED state was a dead-end green box — it confirmed the purchase and
-//     offered nothing next: no receipt for the $29, and no way to Pro, on the
+//     offered nothing next: no receipt for the money taken, and no way to Pro, on the
 //     one page a converting customer is already standing on;
 //   * a buyer sent back here by the pass's OWN ceiling got that same "you're
 //     all set" box while still blocked, with no explanation and no action;
@@ -19,6 +19,38 @@
 // controls exist, so the real `en` strings have to be in play.
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
+import stripePlans from "@/config/stripe-plans.json";
+import { formatMinor } from "@/lib/currency";
+
+/**
+ * The two rung prices the picker actually renders, READ from the same seed it
+ * reads rather than typed here.
+ *
+ * They used to be the literals `$29` and `$59`, and W2's reprice (M 29 -> 15
+ * -> 11.99, L 59 -> 39 -> 44.99) broke them TWICE in ways worth remembering: the four POSITIVE
+ * assertions failed loudly, but the two NEGATIVE ones — "must not price
+ * anything once a pass is held" — went silently VACUOUS. `not.toContain("$29")`
+ * passes trivially on a page that has never heard of $29, so the guard against
+ * advertising an uncompletable M->L upgrade stopped guarding anything while
+ * still reporting green. A derived value cannot fail that way in either
+ * direction.
+ */
+const rungPrice = (key: "event_pass" | "event_pass_l"): string => {
+  const rung = stripePlans.passes.find((r) => r.key === key);
+  if (!rung) throw new Error(`stripe-plans.json has no ${key} rung to price`);
+  // Formatted the way the PAGE formats it, not by dividing by 100 here. The
+  // hand-rolled version carried `if (minor % 100 !== 0) throw` — a guard that
+  // was correct for whole-dollar rungs and became a module-scope THROW the
+  // moment charm pricing landed (event_pass is 1199). A throw at module scope
+  // is the worst shape available: the file fails to COLLECT, so vitest reports
+  // `numFailedTests: 0` for it and the whole suite goes silently missing from
+  // the wave's counts rather than going red. `formatMinor` drops the decimals
+  // on whole amounts and keeps them on fractional ones, which is exactly the
+  // rule the page renders by.
+  return formatMinor(rung.price.unit_amount, "usd");
+};
+const M_PRICE = rungPrice("event_pass");
+const L_PRICE = rungPrice("event_pass_l");
 
 const h = vi.hoisted(() => ({
   role: "owner" as string,
@@ -167,7 +199,7 @@ vi.mock("@/server/usecases/billing-manage", () => ({ getPassPurchases: async () 
 // The picker is NOT mocked. Since v17 #294 it owns both prices, the buy
 // button and the owner-only sentence, so a stand-in stub would make every
 // assertion in this file about those things vacuous — the page would "contain
-// $29" only because the stub was told to say so. Only Stripe.js is mocked
+// the rung price" only because the stub was told to say so. Only Stripe.js is mocked
 // (same two modules as pass-checkout-parity.test.tsx), which is all the real
 // component actually needs a browser for.
 vi.mock("@stripe/react-stripe-js", () => ({
@@ -180,7 +212,8 @@ vi.mock("@/components/ui/tip", () => ({ Tip: () => <span data-tip /> }));
 import Page from "../page";
 // Pure module (no db, no server-only) — the real rung list, so the paid-plan
 // guard below covers every rung that exists rather than a copy of the list.
-import { PASS_KEYS } from "@/lib/currency";
+import { HIDDEN_PASS_KEYS, PASS_KEYS, SELLABLE_PASS_KEYS } from "@/lib/currency";
+import { rungsExceedingPlan } from "@/lib/pass-vs-plan";
 import { PASS_CLOSED_REASON_KEY, PASS_LOCK_REASON_KEY } from "@/lib/pass-ladder";
 import { t } from "@/lib/i18n-runtime";
 import uiEn from "@/dictionaries/en/ui.json";
@@ -246,30 +279,51 @@ describe("not owned — the owner", () => {
   it("offers the pass at its price, with a way to buy it", async () => {
     const html = await render();
     expect(html).toContain("data-pass-ticket");
-    expect(html).toContain("$29");
+    expect(html).toContain(M_PRICE);
     expect(html).toContain("data-pass-buy");
     expect(html).toContain("Buy the pass");
   });
 
-  it("offers BOTH rungs, priced, with M the one that would be bought", async () => {
-    // v17 #294. The default matters beyond taste: event-pass.spec.ts clicks
-    // [data-pass-buy] straight through to Stripe without touching the picker,
-    // so whatever is pre-selected here is what that real-money suite buys.
+  it("offers exactly the rungs on sale, priced, with the entry rung pre-selected", async () => {
+    // v17 #294, narrowed by the 2026-09-05 decision to hide the L rung. The
+    // default matters beyond taste: event-pass.spec.ts clicks [data-pass-buy]
+    // straight through to Stripe without touching the picker, so whatever is
+    // pre-selected here is what that real-money suite buys.
+    //
+    // ENUMERATED from the radio inputs the picker actually rendered, not
+    // asserted absent: `not.toContain(L_PRICE)` on its own passes just as well
+    // on a page that rendered no ladder at all.
     const html = await render();
-    expect(html).toContain("$29");
-    expect(html).toContain("$59");
+    const offered = [...html.matchAll(/<input[^>]*name="pass-rung"[^>]*value="([^"]+)"/g)].map(
+      (m) => m[1]!,
+    );
+    expect(offered).toEqual([...SELLABLE_PASS_KEYS]);
+    expect(html).toContain(M_PRICE);
     expect(html).toContain('checked="" value="event_pass"');
-    expect(html).not.toContain('checked="" value="event_pass_l"');
     expect(html).toContain("Buy the pass — M");
+    // …and the hidden rung is nowhere in the picker, by key AND by price. The
+    // two prices must differ, or the price half of that claim is satisfied by
+    // one number appearing twice.
+    expect(M_PRICE).not.toBe(L_PRICE);
+    expect(html).not.toContain(L_PRICE);
+    for (const hidden of HIDDEN_PASS_KEYS) expect(offered).not.toContain(hidden);
+    expect(HIDDEN_PASS_KEYS.length).toBeGreaterThan(0);
   });
 
-  it("compares both rungs against free and Pro, from the live matrix", async () => {
+  it("compares the rung on sale against free and Pro, from the live matrix", async () => {
     const html = await render();
+    const columns = [...html.matchAll(/data-compare-col="([^"]+)"/g)].map((m) => m[1]!);
+    // The positive: free, the rung on sale, and Pro.
+    expect(columns).toContain("community");
+    expect(columns).toContain("pro");
+    for (const sellable of SELLABLE_PASS_KEYS) expect(columns).toContain(sellable);
     expect(html).toContain("Event Pass M");
-    expect(html).toContain("Event Pass L");
-    // L's own figures, not M's: 20 divisions and a NULL entrant cap.
-    expect(html).toContain(">20<");
-    expect(html).toContain("Unlimited");
+    // M's own figures from the fixture matrix: 10 divisions, 64 entrants.
+    expect(html).toContain(">10<");
+    // …and no column for a rung nobody can buy. A comparison column IS an
+    // offer: it is where a reader checks the case for spending the money.
+    for (const hidden of HIDDEN_PASS_KEYS) expect(columns).not.toContain(hidden);
+    expect(html).not.toContain("Event Pass L");
   });
 
   it("names the real limits rather than a hardcoded claim", async () => {
@@ -303,7 +357,7 @@ describe("not owned — a non-owner", () => {
     // next move is to take a number to whoever can spend it.
     h.role = "admin";
     const html = await render();
-    expect(html).toContain("$29");
+    expect(html).toContain(M_PRICE);
     expect(html).toContain("Entrants per division");
   });
 });
@@ -319,7 +373,7 @@ describe("owned", () => {
   });
 
   it("names the rung that was actually bought", async () => {
-    // A $59 buyer must not be shown the $29 product's name (v17 #294).
+    // An L buyer must not be shown the M product's name (v17 #294).
     heldPass({ passKey: "event_pass_l" });
     const html = await render();
     expect(html).toContain("Event Pass L");
@@ -343,12 +397,16 @@ describe("owned", () => {
     // There is no M->L upgrade path (#294 Q3, deferred), so a second pass
     // column here would advertise a purchase the product cannot complete —
     // and it must never price anything on a page where a pass is already held.
+    //
+    // Still asserted even though the L rung is off sale: this rule is about the
+    // HELD state, and the day a second rung is on sale again it is the only
+    // thing standing between an owner and a second sale for one competition.
     heldPass();
     const html = await render();
     expect(html).toContain("Event Pass M");
     expect(html).not.toContain("Event Pass L");
-    expect(html).not.toContain("$29");
-    expect(html).not.toContain("$59");
+    expect(html).not.toContain(M_PRICE);
+    expect(html).not.toContain(L_PRICE);
   });
 
   it("links the receipt for the money that was taken", async () => {
@@ -372,7 +430,7 @@ describe("owned", () => {
     heldPass();
     const html = await render();
     expect(html).not.toContain("data-pass-buy");
-    expect(html).not.toContain("$29");
+    expect(html).not.toContain(M_PRICE);
   });
 
   it("promises the credit only while pass-credit.ts would actually pay it", async () => {
@@ -400,7 +458,7 @@ describe("owned", () => {
 
   it("says nothing about a credit for a pass nobody paid for", async () => {
     // A staff grant has a null `stripe_payment_intent` and returns
-    // `unpaid_pass`. Promising it a refund of $29 that was never charged is a
+    // `unpaid_pass`. Promising it a refund of money that was never charged is a
     // support ticket the copy created.
     heldPass({ intent: null });
     const html = await render();
@@ -444,7 +502,7 @@ describe("owned, at the pass's ceiling", () => {
     heldPass();
     const html = await render({ feature: "entrants.per_division.max" });
     expect(html).not.toContain("data-pass-buy");
-    expect(html).not.toContain("$29");
+    expect(html).not.toContain(M_PRICE);
     expect(html).toContain("comes off your first Pro invoice in full");
   });
 });
@@ -465,7 +523,7 @@ describe("already on a paid plan", () => {
     expect(html).not.toContain("data-pass-buy");
     expect(html).not.toContain("data-pass-cta");
     expect(html).not.toContain("data-pass-ticket");
-    expect(html).not.toContain("$29");
+    expect(html).not.toContain(M_PRICE);
   });
 
   it("compares against the plan the org actually has", async () => {
@@ -494,7 +552,7 @@ describe("already on a paid plan", () => {
 
   it("keeps a pass the org bought before it upgraded", async () => {
     // U15 — the pass is bought outright and survives a downgrade. Silence here
-    // would read as if the $29 had been absorbed by the subscription.
+    // would read as if the pass price had been absorbed by the subscription.
     h.planKey = "pro";
     heldPass();
     const html = await render();
@@ -516,30 +574,45 @@ describe("already on a paid plan", () => {
     expect(html).not.toMatch(/covers everything/i);
   });
 
-  // v17 gap #327 — the decision underneath the copy fix above. A Pro organiser
-  // with one division over 256 entrants had no self-serve path: refused at the
-  // checkout, and told here that their plan already covered it.
-  it("offers the rung that beats the plan, and says why", async () => {
+  // v17 gap #327 — a Pro organiser with one division over 256 entrants had no
+  // self-serve path: refused at the checkout, and told here that their plan
+  // already covered it. #327 opened the gate for the ONE rung that genuinely
+  // exceeds Pro, and that rung is L.
+  //
+  // THE 2026-09-05 DECISION CLOSES THAT GATE AGAIN, and the closure is a
+  // product consequence rather than a bug: the only rung that beats Pro is the
+  // one taken off sale, so a Pro org is now offered nothing here. Recorded
+  // rather than deleted, with the #327 MECHANISM asserted intact beside it, so
+  // that putting L back on sale restores the path without anyone having to
+  // rediscover why it existed.
+  it("offers a Pro org nothing, because the only rung that beats Pro is off sale", async () => {
     h.planKey = "pro";
     const html = await render();
-    expect(html).toContain("data-pass-buy");
-    // The reason, in the reader's own words. Without it the page reads as an
-    // upsell to somebody who has already bought the bigger thing.
-    expect(html).toContain("raises a limit your plan caps");
-    // And NOT the panel's claim, which would now be false on this page.
-    expect(html).not.toContain("already includes every Event Pass feature");
+    expect(html).not.toContain("data-pass-buy");
+    expect(html).not.toContain("data-pass-ticket");
+    expect(html).not.toContain(M_PRICE);
+    expect(html).not.toContain(L_PRICE);
+    // No pass column either — a column is where a reader checks the case for
+    // spending, so it is the quiet half of the same offer.
+    for (const rung of PASS_KEYS) {
+      expect(html).not.toContain(`data-compare-col="${rung}"`);
+    }
   });
 
-  it("does not offer a Pro org the rung its plan already covers", async () => {
-    // The other half, and the one that keeps this a rule rather than a special
-    // case for L: M grants 64 entrants and 10 divisions in this fixture, both
-    // under Pro's 256 and its uncapped count, so offering it would be the
-    // downgrade sale f70b8e52 removed.
-    h.planKey = "pro";
-    const html = await render();
-    expect(html).not.toContain(`data-compare-col="event_pass"`);
-    expect(html).toContain(`data-compare-col="event_pass_l"`);
-    expect(html).not.toContain("$29");
+  it("keeps the #327 rule itself alive — a hidden rung still BEATS Pro in the matrix", async () => {
+    // The rule is a fact about `plan_entitlements`, and it is still true: L's
+    // 512-entrant cap exceeds Pro's 256. Only the SALE was withdrawn. Asked of
+    // the full rung set on purpose, because that is what makes this a witness
+    // for the dormant rung rather than a restatement of the test above.
+    const beats = await rungsExceedingPlan(PASS_KEYS, "pro");
+    expect(beats).toEqual([...HIDDEN_PASS_KEYS]);
+    // …and the entry rung genuinely does NOT beat Pro, which is why offering
+    // it to a Pro org would be the downgrade sale f70b8e52 removed: M grants
+    // 64 entrants and 10 divisions in this fixture, both under Pro's 256 and
+    // its uncapped division count.
+    for (const sellable of SELLABLE_PASS_KEYS) expect(beats).not.toContain(sellable);
+    // The gate the page consults reads the SELLABLE list, so it finds nothing.
+    expect(await rungsExceedingPlan(SELLABLE_PASS_KEYS, "pro")).toEqual([]);
   });
 
   it("does not push a Pro org toward Pro", async () => {
@@ -701,7 +774,7 @@ describe("ended — the pass is on the record but has stopped applying", () => {
     expect(html).toContain("data-pass-ended");
     expect(html).not.toContain("data-pass-active");
     expect(html).not.toContain("data-pass-buy");
-    expect(html).not.toContain("$29");
+    expect(html).not.toContain(M_PRICE);
     expect(html).not.toContain("Event Pass active");
   });
 
@@ -824,8 +897,8 @@ describe("closed — past the pass line, and nothing was ever bought (#376)", ()
     expect(html).toContain('data-pass-closed-panel="');
     expect(html).not.toContain("data-pass-buy");
     expect(html).not.toContain("data-pass-ticket");
-    expect(html).not.toContain("$29");
-    expect(html).not.toContain("$59");
+    expect(html).not.toContain(M_PRICE);
+    expect(html).not.toContain(L_PRICE);
   });
 
   it("invents no purchase — no rung, no bought-on date, no receipt", async () => {
@@ -877,7 +950,7 @@ describe("closed — past the pass line, and nothing was ever bought (#376)", ()
 
   it("drops both pass columns from the comparison table", async () => {
     // The table is the page's SECOND offer surface. A closed competition that
-    // still advertised a $29 and a $59 column would be recommending, in
+    // still advertised an M and an L column would be recommending, in
     // figures, the purchase the panel above it has just refused.
     closedComp();
     const html = await render();
@@ -899,7 +972,7 @@ describe("closed — past the pass line, and nothing was ever bought (#376)", ()
     const html = await render();
     expect(html).not.toContain("data-pass-closed-panel");
     expect(html).toContain("data-pass-buy");
-    expect(html).toContain("$29");
+    expect(html).toContain(M_PRICE);
   });
 
   it("shows the panel to a non-owner too, without the action they cannot take", async () => {

@@ -2,7 +2,6 @@ import type { Metadata } from "next";
 import { Fragment } from "react";
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { sql } from "@/lib/db";
 import { MarketingShell } from "@/components/marketing/marketing-shell";
 import { TrackOnMount } from "@/components/analytics-track-mount";
 import { EVENTS } from "@/lib/analytics-events";
@@ -13,23 +12,24 @@ import {
   type MatrixData,
   type PricingPlanKey,
 } from "@/lib/pricing-matrix";
-import { passLadderOptions, PASS_RUNG_MARKETING_KEY } from "@/lib/pass-ladder";
+import { lowestPricedRung, passLadderOptions, PASS_RUNG_MARKETING_KEY } from "@/lib/pass-ladder";
 import {
-  FREE_FEATURES,
-  PASS_FEATURES,
-  PRO_FEATURES,
-  PLUS_CARD_FEATURES,
-  PLUS_COMING_SOON,
+  FREE_CARD_BULLETS,
+  PASS_CARD_BULLETS,
+  PRO_CARD_BULLETS,
   PASS_CREDIT_GRANT,
+  cardBullets,
 } from "@/lib/pricing-cards";
+import { loadPricingMatrix } from "@/lib/pricing-matrix-server";
 import {
   formatMinor,
   lowestCreditPackAmount,
+  SELLABLE_PASS_KEYS,
   passPrice,
   proPrice,
-  proPlusPrice,
   type Currency,
 } from "@/lib/currency";
+import { feeCrossoverMinor, readableMinor } from "@/lib/pricing-crossover";
 import { preferredCurrency } from "@/lib/currency-server";
 import { getActiveOrgId, getCurrentUser, getUserOrgs } from "@/lib/auth";
 import { pickActiveOrg } from "@/lib/active-org";
@@ -44,16 +44,19 @@ import { hasLocale } from "@/lib/i18n-constants";
 export const dynamic = "force-dynamic";
 
 /** Per-column cell styling. A `Record` so a plan added to PRICING_PLAN_KEYS
- *  without a tone is a compile error, not an unstyled column. Both pass rungs
- *  share the lime the Event Pass card uses — they are one offer, two sizes. */
+ *  without a tone is a compile error, not an unstyled column. Every pass rung
+ *  takes the lime the Event Pass card uses — one offer, however many sizes. */
 const CELL_TONE: Record<PricingPlanKey, string> = {
   community: "text-slate-500",
   event_pass: "text-[#4d7c0f]",
-  event_pass_l: "text-[#4d7c0f]",
   pro: "font-medium text-purple-700",
-  pro_plus: "font-medium text-indigo-700",
 };
 
+// "proPlus" removed (entitlements v18 — the plan is retired, and its
+// {plus}/{plusAnnual}-interpolated answer went with it). The page already
+// carries a Contact-us strip under the table (`pricing.enterprise.*`) for
+// the above-Pro conversation; a proper FAQ entry for it is W3's redesign,
+// not restored here as a stopgap.
 const FAQ_KEYS = [
   "card",
   "eventPass",
@@ -64,7 +67,6 @@ const FAQ_KEYS = [
   "currencies",
   "annual",
   "cancel",
-  "proPlus",
 ] as const;
 
 // `pricing.meta.description` quotes USD amounts deliberately, unlike the page
@@ -111,23 +113,6 @@ async function passColumnCta(): Promise<ReturnType<typeof passCtaVariant>> {
   return passCtaVariant({ signedIn: true, paidPlan });
 }
 
-async function loadMatrix(): Promise<MatrixData> {
-  const rows = await sql<
-    { plan_key: string; feature_key: string; bool_value: boolean | null; int_value: number | null }[]
-  >`
-    select plan_key, feature_key, bool_value, int_value
-    from plan_entitlements
-    where plan_key = any(${[...PRICING_PLAN_KEYS]})`;
-  const data: MatrixData = {};
-  for (const r of rows) {
-    (data[r.feature_key] ??= {})[r.plan_key] = {
-      bool_value: r.bool_value,
-      int_value: r.int_value,
-    };
-  }
-  return data;
-}
-
 export default async function PricingPage({
   params,
 }: {
@@ -142,28 +127,41 @@ export default async function PricingPage({
   // plan_entitlements so marketing can never drift from what the resolver
   // enforces (spec 2026-07-18 pro-plus-tier §5; v17 SPEC-6 A1 for credits). DB
   // may be unreachable at build: fail soft to an empty table.
-  const matrix: MatrixData = await loadMatrix().catch(() => ({}));
+  const matrix: MatrixData = await loadPricingMatrix().catch(() => ({}));
   const sections = buildPricingSections(matrix);
 
   // v17 AI credit wallet (SPEC-6 A1): each plan's monthly grant is the live
   // `ai.credits.monthly` value — the same single source the wallet meters
   // against — so the marketing number cannot drift. The Event Pass adds a
-  // one-time top-up (PASS_CREDIT_GRANT); it has no monthly matrix row.
+  // one-time top-up (PASS_CREDIT_GRANT, per rung); it has no monthly matrix row.
   const creditsMonthly = (plan: string): number | null =>
     matrix["ai.credits.monthly"]?.[plan]?.int_value ?? null;
   const communityCredits = creditsMonthly("community");
   const proCredits = creditsMonthly("pro");
-  const plusCredits = creditsMonthly("pro_plus");
   const communityCreditsLine =
     communityCredits != null ? t(d, "pricing.credits.perMonth", { count: communityCredits }) : null;
-  const passCreditsLine = t(d, "pricing.credits.passGrant", { count: PASS_CREDIT_GRANT });
+  // W2 T5 (design R9): the top-up is sized by rung. The chip used to name both
+  // rungs' grants because the card sold both; with the L rung off sale
+  // (2026-09-05) it names the grant of the rung actually being offered — the
+  // cheapest one on sale, the same rung the headline price quotes, so the two
+  // figures on this card are about the same product.
+  //
+  // Rendered UNCONDITIONALLY, unlike the ladder below it, which is suppressed
+  // when `loadMatrix` fails soft. So this is the one credit figure a buyer is
+  // guaranteed to see, and it must be the offered rung's own — the defect it
+  // was rewritten for was M's 25 sitting beside L's price. Interpolated from
+  // `PASS_CREDIT_GRANT` rather than typed, so a repricing moves the copy with
+  // the declaration.
+  const offeredRung = lowestPricedRung(
+    SELLABLE_PASS_KEYS.map((key) => ({ key, amountMinor: passPrice(currency, key) })),
+  );
+  const passCreditsLine = t(d, "pricing.credits.passGrant", {
+    count: PASS_CREDIT_GRANT[offeredRung.key],
+  });
   const proCreditsLine =
     proCredits != null ? t(d, "pricing.credits.perMonth", { count: proCredits }) : null;
-  const plusCreditsLine =
-    plusCredits != null ? t(d, "pricing.credits.perMonthOperator", { count: plusCredits }) : null;
 
   const passLabel = formatMinor(passPrice(currency, "event_pass"), currency);
-  const passLLabel = formatMinor(passPrice(currency, "event_pass_l"), currency);
 
   // The M/L ladder on the Event Pass card. Prices come from stripe-plans.json;
   // the CAPS come from the same `matrix` the comparison table below renders
@@ -174,9 +172,16 @@ export default async function PricingPage({
   // when the DB is unreachable at build, and a null `int_value` legitimately
   // means UNLIMITED — so a missing row read through `?? null` would advertise
   // an unlimited pass. Absence must suppress the block, not embellish it.
+  //
+  // `SELLABLE_PASS_KEYS`, never `PASS_KEYS` (lib/currency.ts — owner decision
+  // 2026-09-05, the L rung off sale). Both halves matter: a rung that is off
+  // sale must not be quoted here, AND its absent matrix rows must not suppress
+  // the offer that IS on sale. Demanding caps for every rung in `PASS_KEYS`
+  // would do the second — a hidden rung losing its rows would take the live
+  // ladder down with it.
   const rungCap = (feature: string, plan: string): number | null | undefined =>
     matrix[feature]?.[plan]?.int_value;
-  const passLadder = (["event_pass", "event_pass_l"] as const).every(
+  const passLadder = SELLABLE_PASS_KEYS.every(
     (k) =>
       matrix["entrants.per_division.max"]?.[k] !== undefined &&
       typeof rungCap("divisions.per_competition.max", k) === "number",
@@ -185,10 +190,6 @@ export default async function PricingPage({
         event_pass: {
           entrants: rungCap("entrants.per_division.max", "event_pass") ?? null,
           divisions: rungCap("divisions.per_competition.max", "event_pass") ?? null,
-        },
-        event_pass_l: {
-          entrants: rungCap("entrants.per_division.max", "event_pass_l") ?? null,
-          divisions: rungCap("divisions.per_competition.max", "event_pass_l") ?? null,
         },
       })
     : null;
@@ -200,19 +201,72 @@ export default async function PricingPage({
   // the session or the plan read is unavailable.
   const passCta = await passColumnCta().catch(() => "signup" as const);
   const proMonthly = formatMinor(proPrice("monthly", currency), currency);
-  const plusMonthly = formatMinor(proPlusPrice("monthly", currency), currency);
+
+  // WHERE THE TWO OFFERS CROSS (lib/pricing-crossover.ts). The pass is cheaper
+  // up front and dearer per pound of entry fees, so for a competition that runs
+  // a month the two cost the same at exactly one volume — and the page never
+  // said so. Read plainly it said "the pass is cheaper", which is true only
+  // below that point and pushes volume at the ONE-TIME sku when the recurring
+  // one is what retains.
+  //
+  // Every input is live: the two prices from the same `stripe-plans.json` the
+  // cards above quote, both fee rates from the `matrix` the comparison table
+  // below renders from. The line disappears rather than misleads when a rate is
+  // unreadable or the ladder stops having a crossing at all — the same rule the
+  // M/L ladder above follows for a cap it does not have.
+  const feePercent = (plan: string): number | null | undefined =>
+    matrix["registration.fee_percent"]?.[plan]?.int_value;
+  const proFeePercent = feePercent("pro");
+  // WHICH RUNG the sentence is about is the SAME value as the rung the number
+  // is derived from, because it is read once. The line used to solve for
+  // `event_pass` and then say "this is the cheaper option" on a card that sells
+  // BOTH rungs — and it is not true of L: at 4499 against a month of Pro at
+  // 1499, L is dearer up front AND dearer per pound of entry fees, so there is
+  // no volume at which the two cross. `feeCrossoverMinor` says so itself
+  // (`null` for that shape); the sentence was simply printed beside it anyway.
+  // The entry rung is the honest subject: it is the cheapest, it is what the
+  // in-app picker pre-selects, and it is the only one the crossing exists for.
+  //
+  // Derived from `SELLABLE_PASS_KEYS` for a second reason on top of that one:
+  // a crossing solved for a rung nobody can buy is a threshold quoted against a
+  // price the checkout would refuse.
+  const crossoverRung = offeredRung;
+  const passFeePercent = feePercent(crossoverRung.key);
+  const crossoverMinor = feeCrossoverMinor({
+    passMinor: crossoverRung.amountMinor,
+    proMonthlyMinor: proPrice("monthly", currency),
+    passFeePercent,
+    proFeePercent,
+  });
+  const crossoverReadable = crossoverMinor === null ? 0 : readableMinor(crossoverMinor);
+  const crossoverLine =
+    crossoverReadable > 0
+      ? t(d, "pricing.pass.crossover", {
+          amount: formatMinor(crossoverReadable, currency),
+          pro: proMonthly,
+          // The rung the claim is scoped to — its ladder label and its price,
+          // the two things the list directly above the line shows it by.
+          rung: t(d, PASS_RUNG_MARKETING_KEY[crossoverRung.key]),
+          pass: formatMinor(crossoverRung.amountMinor, currency),
+          // Non-null wherever `crossoverMinor` is: `feeCrossoverMinor` returns
+          // null unless both rates are numbers. Narrowed rather than defaulted,
+          // so a rate that went missing can never render as a rate of 0.
+          proFee: proFeePercent as number,
+          passFee: passFeePercent as number,
+        })
+      : null;
 
   // The FAQ used to hardcode "$19/mo" while the cards above it honoured the
   // currency switcher — a GBP visitor saw £ and $ on one page. Every answer is
   // interpolated with the same switched amounts instead; `t()` leaves an answer
   // without placeholders untouched, so only the ones that quote a price change.
+  // `plus`/`plusAnnual` dropped with the Pro Plus card (entitlements v18).
+  // `passL` dropped with the L rung's copy (2026-09-05): the Event Pass answer
+  // no longer describes two sizes, so nothing interpolates it.
   const faqVars = {
     pass: passLabel,
-    passL: passLLabel,
     pro: proMonthly,
     proAnnual: formatMinor(proPrice("annual", currency), currency),
-    plus: plusMonthly,
-    plusAnnual: formatMinor(proPlusPrice("annual", currency), currency),
   };
 
   // Most matrix cells are locale-free literals (numbers, ∞, ✓, —); only the
@@ -232,16 +286,21 @@ export default async function PricingPage({
             </h1>
             <p className="text-lg text-slate-600">{t(d, "pricing.subhead")}</p>
             <div className="mt-6 flex justify-center">
-              <CurrencySwitcher current={currency} />
+              <CurrencySwitcher current={currency} label={t(d, "pricing.currency.label")} />
             </div>
           </section>
 
-          {/* Four offers — v17 ladder (SPEC-6 A1): Community / Event Pass / Pro
-              / Pro Plus, each carrying the two v17 differentiators (fee % + the
-              credit line). Stacks on mobile, 2-up on tablet, 4-up on desktop —
-              no horizontal scroll at 375px. */}
+          {/* Three offers — entitlements v18: Community / Event Pass / Pro.
+              The Pro Plus card that used to sit here is retired along with
+              the plan (V393); the above-Pro conversation is now the
+              Contact-us strip under the comparison table below, per design
+              §4 — a redesigned ticket-styled layout is W3's, this interim
+              grid just stops rendering a fourth card for a plan that no
+              longer exists. Each card still carries the two v17
+              differentiators (fee % + the credit line). Stacks on mobile,
+              3-up on desktop — no horizontal scroll at 375px. */}
           <section className="mx-auto max-w-6xl px-4 pb-20">
-            <div className="grid gap-6 md:grid-cols-2 xl:grid-cols-4">
+            <div className="grid gap-6 md:grid-cols-2 xl:grid-cols-3">
               {/* Community */}
               <div className="card flex flex-col p-8">
                 <p className="mb-1 text-xs font-semibold uppercase tracking-wider text-slate-400">
@@ -258,7 +317,7 @@ export default async function PricingPage({
                   </p>
                 )}
                 <ul className="mb-8 flex-1 space-y-2.5 text-sm text-slate-600">
-                  {FREE_FEATURES.map((f) => (
+                  {cardBullets(d, FREE_CARD_BULLETS, matrix).map((f) => (
                     <li key={f} className="flex items-start gap-2">
                       <span className="mt-0.5 text-emerald-500">✓</span>
                       {f}
@@ -275,13 +334,20 @@ export default async function PricingPage({
                 <p className="mk-display mb-1 text-xs font-semibold tracking-[0.18em] text-[#4d7c0f]">
                   {t(d, "pricing.pass.name")}
                 </p>
-                {/* "from", because the pass is a ladder: $29 is the floor, not
-                    the price. The two rungs are laid out below so a buyer sees
-                    the difference without clicking through to a competition. */}
+                {/* "from" is a claim about a LADDER — the floor of several
+                    prices, not the price. It renders only while more than one
+                    rung is on sale (owner decision 2026-09-05 took the L rung
+                    off sale). Derived from the authority rather than deleted,
+                    so putting L back restores the word with no copy change and
+                    no re-translation; and a single price introduced beside a
+                    "from" would tell a buyer there is a bigger, dearer size
+                    they cannot actually reach. */}
                 <p className="mb-1 text-4xl font-bold text-slate-900">
-                  <span className="mr-1.5 align-middle text-sm font-semibold uppercase tracking-wider text-slate-400">
-                    {t(d, "pricing.pass.from")}
-                  </span>
+                  {SELLABLE_PASS_KEYS.length > 1 && (
+                    <span className="mr-1.5 align-middle text-sm font-semibold uppercase tracking-wider text-slate-400">
+                      {t(d, "pricing.pass.from")}
+                    </span>
+                  )}
                   {passLabel}
                   <span className="text-lg font-normal text-slate-500">
                     {t(d, "pricing.pass.per")}
@@ -299,6 +365,11 @@ export default async function PricingPage({
                     {passLadder.map((o) => (
                       <li
                         key={o.key}
+                        // The rung this row is FOR, so a test can enumerate what
+                        // the ladder rendered instead of asserting a name is
+                        // absent — an absence assertion passes just as well on a
+                        // ladder that rendered nothing at all.
+                        data-pass-rung={o.key}
                         className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5 rounded-lg bg-white/70 px-3 py-2"
                       >
                         <span className="min-w-4 text-sm font-bold text-[#4d7c0f]">
@@ -329,11 +400,26 @@ export default async function PricingPage({
                   <span aria-hidden>⚡</span>
                   {passCreditsLine}
                 </p>
-                {passLadder && (
+                {/* "the same platform fee EITHER WAY … CHOOSE YOUR SIZE when
+                    you check out" — every clause is about a choice between two
+                    sizes, and there is one size on sale. Suppressed by the rung
+                    count for the same reason the "from" prefix above is: the
+                    sentence is correct again the moment a second rung is, with
+                    no copy edit in any of the four locales. */}
+                {passLadder && SELLABLE_PASS_KEYS.length > 1 && (
                   <p className="mb-4 text-xs text-slate-500">{t(d, "pricing.pass.ladderNote")}</p>
                 )}
+                {/* The comparator, on the pass card rather than beside Pro:
+                    this is where the buyer is choosing, and the mis-sale this
+                    prevents is choosing the pass for a competition big enough
+                    that Pro is cheaper. */}
+                {crossoverLine && (
+                  <p className="mb-4 text-xs text-slate-500" data-pass-crossover>
+                    {crossoverLine}
+                  </p>
+                )}
                 <ul className="mb-8 flex-1 space-y-2.5 text-sm text-slate-600">
-                  {PASS_FEATURES.map((f) => (
+                  {cardBullets(d, PASS_CARD_BULLETS, matrix).map((f) => (
                     <li key={f} className="flex items-start gap-2">
                       <span className="mt-0.5 text-[#4d7c0f]">✓</span>
                       {f}
@@ -368,74 +454,34 @@ export default async function PricingPage({
               <ProPriceCard
                 monthly={proMonthly}
                 annualPerMonth={formatMinor(Math.round(proPrice("annual", currency) / 12), currency)}
-                annualTotal={formatMinor(proPrice("annual", currency), currency)}
-                features={PRO_FEATURES}
+                features={cardBullets(d, PRO_CARD_BULLETS, matrix)}
                 creditsLine={proCreditsLine ?? undefined}
-                ctaLabel={t(d, "pricing.plus.cta")}
+                // Every string the card paints, resolved HERE. The component
+                // carries no copy and no English fallback — see
+                // components/pro-price-card.tsx and the source scan in
+                // lib/__tests__/pricing-card-i18n.test.ts.
+                labels={{
+                  // `pricing.table.pro`, NOT a `pricing.pro.name` — there is
+                  // no such key. Community and the pass have `.name`; the Pro
+                  // column's label has only ever lived on the comparison
+                  // table's key, which is what `ticketTiers` reads for the home
+                  // stub too (lib/pricing-cards.ts). One authority for one
+                  // fact. Caught by driving /fr/pricing after 175 green tests:
+                  // `t()` returns the KEY when it misses, so the card painted
+                  // the literal string "pricing.pro.name" in every locale.
+                  tier: t(d, "pricing.table.pro"),
+                  perMonth: t(d, "pricing.pro.per"),
+                  // The yearly TOTAL, in the visitor's currency, interpolated
+                  // rather than typed into four locale files.
+                  annualBilled: t(d, "pricing.pro.annualBilled", {
+                    total: formatMinor(proPrice("annual", currency), currency),
+                  }),
+                  annualSaving: t(d, "pricing.pro.annualSaving"),
+                  monthlyNote: t(d, "pricing.pro.monthlyNote"),
+                  annualToggle: t(d, "pricing.pro.annualToggle"),
+                  cta: t(d, "pricing.plus.cta"),
+                }}
               />
-
-              {/* Pro Plus — v17 (SPEC-6 A1): promoted from the old progressive
-                  disclosure to a full fourth card, the visual hero (Popular
-                  badge + subtle glow via the existing shadow pattern). Carries
-                  its Live features AND the badged, non-clickable "Coming soon"
-                  roadmap (SPEC-1 §6 ethics: never gates money). */}
-              <div
-                data-plus-card
-                className="card relative flex flex-col border-indigo-400 bg-indigo-50 p-8 shadow-[0_0_34px_rgba(99,102,241,0.22)]"
-              >
-                <span className="mk-display absolute -top-3 right-6 rounded-full bg-indigo-600 px-3 py-1 text-xs font-semibold tracking-wider text-white">
-                  {t(d, "pricing.plus.popular")}
-                </span>
-                <p className="mb-1 text-xs font-semibold uppercase tracking-wider text-indigo-500">
-                  {t(d, "pricing.plus.name")}
-                </p>
-                <p className="mb-1 text-4xl font-bold text-indigo-900">
-                  {plusMonthly}
-                  <span className="text-lg font-normal text-slate-500">
-                    {t(d, "pricing.plus.per")}
-                  </span>
-                </p>
-                <p className="mb-4 text-sm text-slate-500">{t(d, "pricing.plus.note")}</p>
-                {plusCreditsLine && (
-                  <p className="mb-4 flex items-center gap-1.5 rounded-lg bg-indigo-100 px-3 py-2 text-sm font-semibold text-indigo-800">
-                    <span aria-hidden>⚡</span>
-                    {plusCreditsLine}
-                  </p>
-                )}
-                <ul className="mb-6 flex-1 space-y-2.5 text-sm text-slate-600">
-                  {/* PLUS_CARD_FEATURES pins the count/order (matches Task 8's
-                      billing.plus.f1-f5); the text itself is fully localized,
-                      unlike the other three cards' hardcoded-English arrays. */}
-                  {PLUS_CARD_FEATURES.map((_, i) => (
-                    <li key={i} className="flex items-start gap-2">
-                      <span className="mt-0.5 text-indigo-500">✓</span>
-                      {t(d, `pricing.plus.f${i + 1}`)}
-                    </li>
-                  ))}
-                </ul>
-                {/* Roadmap (SPEC-1 §6): badged "coming soon", NOT purchasable —
-                    plain non-interactive text, never buttons/links. Muted so the
-                    tier's ceiling reads as ambition rather than a paywall. */}
-                <div className="mb-8 rounded-xl border border-indigo-100 bg-white/60 p-4">
-                  <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-indigo-400">
-                    {t(d, "pricing.plus.soonLabel")}
-                  </p>
-                  <ul className="space-y-1.5 text-sm text-slate-500">
-                    {PLUS_COMING_SOON.map((_, i) => (
-                      <li key={i} className="flex items-start gap-2">
-                        <span className="mt-0.5 text-indigo-300">◦</span>
-                        {t(d, `pricing.plus.soon${i + 1}`)}
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-                <Link
-                  href="/login?tab=signup"
-                  className="btn w-full justify-center bg-indigo-600 py-3 text-white hover:bg-indigo-700"
-                >
-                  {t(d, "pricing.plus.cta")}
-                </Link>
-              </div>
             </div>
 
             {/* Add-ons strip (SPEC-6 A1): the recurring + one-time extras sit
@@ -451,16 +497,15 @@ export default async function PricingPage({
                   <span aria-hidden>⚡</span>
                   {/* fix round 2: this line hardcoded "$10" in all four
                       locales while every other price on the page honours the
-                      CurrencySwitcher. The seed's cheapest pack is eur 900 /
-                      gbp 800 / aud 1500 / inr 79900, so the literal was false
-                      in four of five currencies — #191's defect, again. */}
+                      CurrencySwitcher. The seed's cheapest pack was eur 900 /
+                      gbp 800 / inr 79900 then and is eur 900 / gbp 800 /
+                      inr 39900 now, so the literal was false in three of
+                      four currencies — #191's defect, again. The point of
+                      deriving it is that this comment can go stale and the
+                      rendered price cannot. */}
                   {t(d, "pricing.addons.credits", {
                     price: formatMinor(lowestCreditPackAmount(currency), currency),
                   })}
-                </span>
-                <span className="flex items-center gap-1.5">
-                  <span aria-hidden>＋</span>
-                  {t(d, "pricing.addons.seat")}
                 </span>
                 <span className="flex items-center gap-1.5">
                   <span aria-hidden>＋</span>
@@ -475,10 +520,10 @@ export default async function PricingPage({
 
             {/* Feature comparison table — rendered from plan_entitlements,
                 grouped into ENTITLEMENT_DOMAINS sections. Columns come from
-                PRICING_PLAN_KEYS, the same tuple `loadMatrix` selects on, so a
-                plan can never be read from the database and then have nowhere
-                to render. Wider than the card grid on purpose: the Event Pass
-                is one card and two columns, because the rungs differ in the
+                PRICING_PLAN_KEYS, the same tuple `loadPricingMatrix` selects on,
+                so a plan can never be read from the database and then have
+                nowhere to render. Wider than the card grid on purpose: the Event
+                Pass is one card and two columns, because the rungs differ in the
                 only two rows a buyer chooses between. */}
             {sections.length > 0 && (
               <div className="scroll-x scroll-x-fade mt-12 rounded-2xl border border-purple-100 bg-white">
@@ -487,7 +532,16 @@ export default async function PricingPage({
                     <tr>
                       <th className="py-3 text-left">{t(d, "pricing.table.feature")}</th>
                       {PRICING_PLAN_KEYS.map((plan) => (
-                        <th key={plan} className="py-3 text-center whitespace-nowrap">
+                        <th
+                          key={plan}
+                          // The plan this column is FOR. `PRICING_PLAN_KEYS`
+                          // decides the set, and this is what lets a test read
+                          // the rendered set back rather than infer it from
+                          // headings — the headings are translated, the keys
+                          // are not.
+                          data-pricing-column={plan}
+                          className="py-3 text-center whitespace-nowrap"
+                        >
                           {t(d, PRICING_COLUMN_LABEL_KEY[plan])}
                         </th>
                       ))}

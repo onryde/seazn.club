@@ -490,8 +490,12 @@ async function main() {
       org2Ent.plan_key === "pro" && org2Ent.entitlements["exports.branded"]?.enabled === true,
     );
     check(
+      // 10, not 15: V393 (entitlements v18) re-cut the seat allowance. The
+      // number is a LITERAL on purpose — this reads back through the live API,
+      // which reads `plan_entitlements`, so deriving it from that table would
+      // make the check a tautology.
       "billing-group: quotas are per org, not shared across the group",
-      org2Ent.entitlements["members.max"]?.limit === 15,
+      org2Ent.entitlements["members.max"]?.limit === 10,
     );
 
     // 5. The listing now shows BOTH orgs on the group, and quantity_paid is
@@ -653,6 +657,26 @@ async function main() {
     await call(viewer, "/api/users/me", "PATCH", { timezone: null });
   }
 
+  // --- HEADROOM: org2's public dashboards --------------------------------
+  // V396 retired Pro's "unlimited public dashboards" and made the cap a finite
+  // `dashboard.public.max` = 10, and (T15/F) a create past it is no longer
+  // refused — it silently comes back PRIVATE. org2 is the shared Pro org that
+  // ~30 suites below run against, and between them they create far more than
+  // ten public competitions; a real Pro club would not. Once the cap was met,
+  // every later "public" competition landed private, `public_fixtures_v`
+  // (`visibility = any('{public,unlisted}')`) stopped returning it, and NINE
+  // checks failed at the far end of the run — the news feed, the post page,
+  // the story PNG, the v3 public page and CTA, the QR poster, the embed and
+  // the sponsor strip.
+  //
+  // The cap is not the thing under test in any of those, so the harness org
+  // gets the headroom its scenario needs rather than the assertions being
+  // rewritten to accept a degraded page. The degrade ITSELF is asserted on its
+  // own fresh community org, at its own plan's cap, by
+  // `publicQuotaDegradeSuite` below — the product behaviour is pinned, this
+  // override just stops it firing where it is incidental.
+  await insertEntitlementOverride(admin, org2.id, "dashboard.public.max", 100);
+
   // --- Platform API /api/v1 (PROMPT-11) — the full engine v2 lifecycle ---
   await v1Suite(admin, org2.id, renamed.slug);
 
@@ -755,14 +779,14 @@ async function main() {
   await v4AiSuite(admin, org2.id, renamed.slug);
 
   // --- C1 gap B: the AI planning path's round-order blind spot, over real
-  // HTTP (own fresh Pro Plus session — not an entitlement gate). Needs the
+  // HTTP (own fresh paid session — not an entitlement gate). Needs the
   // same T17 fixture server as v4AiSuite; skips the same way when
   // SCHEDULING_AI_BASE_URL is unset.
   await scheduleAiRoundOrderSuite();
 
   // --- #350 multi-division JOINT AI scheduling: the batch-discount price
   // (rungs 2+3 → 4 credits, budget sized from the undiscounted 5) and the
-  // atomic apply on a fresh Pro Plus org, plus the two refusals that must
+  // atomic apply on a fresh Pro org, plus the two refusals that must
   // happen before any model call — a one-division request (400) and a wallet
   // that cannot cover the quote (402). The refusals are keyless-safe; the
   // priced run needs the T17 fixture server.
@@ -821,10 +845,11 @@ async function main() {
   // /help + /developers, scoped keys, OG/poster/embed/sponsors — pro + free.
   await v3ContentApiSuite(admin, org2.id, renamed.slug);
 
-  // --- pro-plus-tier (Task 11): community per-fixture-official + save-point
-  // caps, api.write re-armed above Pro, Pro Plus lifting both — own fresh
-  // org, restores its own plan before returning (shared-DB poison trap).
-  await proPlusSuite();
+  // --- the above-Pro rung (Task 11): community's save-point window and its
+  // ungated officials, api.write re-armed above Pro, and the rung above Pro
+  // lifting the window and minting the key — own fresh org, restores its own
+  // plan before returning (shared-DB poison trap).
+  await aboveProRungSuite();
 
   // --- PROMPT-36 pricing v3: free caps, Event Pass lift + scope isolation,
   // pro interplay, pass survival after downgrade — and the /start funnel
@@ -961,10 +986,14 @@ async function main() {
   await p72Suite();
 
   // --- payments-hardening (Task 16): the 4-plan user matrix — one fresh owner
-  // per plan (community/pro/pro_plus/event_pass) asserting the entitlements that
+  // per plan (community/pro/enterprise/event_pass) asserting the entitlements that
   // distinguish its tier at the resolution + HTTP-status level. Own fresh orgs;
   // keyless-safe. The HTTP-level plan-truth net for the two e2e tasks that follow.
   await smokePlanMatrix();
+
+  // --- T20: a create at `dashboard.public.max` is NEVER refused, and never
+  // silent either. Own fresh community org; keyless-safe.
+  await publicQuotaDegradeSuite();
 
   // --- Task 23: every grant an Event Pass actually delivers, asserted as a
   // passed-vs-sibling PAIR inside one fresh community org — allowed here,
@@ -1004,8 +1033,8 @@ async function main() {
   // grant, over the real `ref`-cookie flow. Own fresh orgs; keyless-safe.
   await referralSuite();
 
-  // --- v17 gap #293: the extra-organisation recurring add-on. A Pro Plus
-  // payer at the 10-org cap gets a 402 CARRYING a purchase offer, buying the
+  // --- v17 gap #293: the extra-organisation recurring add-on. A Pro
+  // payer at the 5-org cap gets a 402 CARRYING a purchase offer, buying the
   // rider lifts the cap by one and the same create then succeeds; a community
   // owner and a NON-PAYER inside that same group are refused the same way and
   // offered nothing. Own fresh group; keyless-safe.
@@ -1484,7 +1513,8 @@ async function p72Suite(): Promise<void> {
   // === KEY AUTH: DELETE /competitions/:id is never key-accessible → 403 for
   // ANY scope (the route is absent from the allowlist, so it default-denies).
   // A read key is enough to prove the door, and — unlike a write-capable key,
-  // which V290 made Pro Plus only — it mints on a plain Pro org. ===
+  // which V290 put above Pro and v18 kept there — it mints on a plain Pro
+  // org. ===
   const mkKey = await v1(owner, `/api/v1/orgs/${orgId}/api-keys`, "POST", {
     name: "p72 probe",
     scopes: ["read"],
@@ -1513,7 +1543,7 @@ async function p72Suite(): Promise<void> {
   // card division's availability turns on CONNECT, not on plan. Both sides are
   // proved below. registration.paid is no longer a pass differentiator, so the
   // old "an Event Pass reopens a community card division" scenario is obsolete —
-  // the pass's real grants (entrants 64, 5% fee, branded exports, realtime, …)
+  // the pass's real grants (entrants 64, a cheaper fee, branded exports, …)
   // are covered by the pass-scope suites and the entrants/fee checks above. ===
   const comm = newSession();
   const commWho = await signIn(comm, `p72comm_${tag}@example.com`);
@@ -1637,10 +1667,148 @@ async function p72Suite(): Promise<void> {
  *  any Stripe/LLM call, and each check runs AFTER its data is seeded. Own fresh
  *  orgs (never touches org/org2 from main()); the pass persona stays community.
  *
- *  V291 truths this pins: Pro AI cap 5/division, Pro Plus unlimited (null); a
+ *  V291 truths this pins: the AI cap rises with the tier; a
  *  pass overlays comp-scoped Pro features INSIDE the passed comp only; the dead
  *  Event-Pass members.max row is gone → org-wide keys resolve community for a
  *  passed org. */
+/**
+ * T20 — `dashboard.public.max` DEGRADES a create; it never refuses one, and it
+ * is never silent about it.
+ *
+ * V396 made competitions public by default and (T15/F, owner ruling
+ * 2026-09-03) made a create at the cap come back PRIVATE rather than 402 —
+ * Free is 3 active competitions against 2 public dashboards, so under the old
+ * refusal the third create on the plan whose one-line sell is "run a club
+ * night" would have failed by default, with no wrong choice made by the
+ * organiser. What was missing was the other half: the 201 said nothing, so a
+ * caller had to diff the row it got against the row it asked for to notice,
+ * and `public_fixtures_v` (`visibility = any('{public,unlisted}')`) then 404s
+ * the link the organiser shares.
+ *
+ * Both create paths are asserted, because the TEMPLATE path is the one
+ * `/competitions/new` opens on — it carried no visibility at all until T20 and
+ * redirected straight into the silently private competition.
+ *
+ * Own fresh community org, so this cannot be satisfied by ambient state; the
+ * cap is READ from the org's own entitlements rather than typed, because it
+ * has been 1, 3 and 2 across three migrations and a literal here would have
+ * been wrong in between. `competitions.max_active` (3 on community) is lifted
+ * for this org only — it would fire first and mask the axis under test, the
+ * same isolation `public-dashboard-quota.test.ts` documents. Keyless-safe.
+ */
+async function publicQuotaDegradeSuite(): Promise<void> {
+  const owner = newSession();
+  const who = await signIn(owner, `pubquota_${tag}@example.com`);
+  const orgId = who.org_id;
+  await insertEntitlementOverride(owner, orgId, "competitions.max_active", 50);
+
+  const ent = (await call(owner, `/api/orgs/${orgId}/entitlements`)) as {
+    entitlements: Record<string, { limit?: number | null }>;
+  };
+  const cap = ent.entitlements["dashboard.public.max"]?.limit;
+  check(
+    "public quota: community resolves a FINITE public-dashboard cap to fill",
+    typeof cap === "number" && cap >= 1,
+  );
+  const capN = typeof cap === "number" ? cap : 0;
+
+  // Fill to the cap. Aggregated into one check so the check COUNT does not
+  // move when the cap does.
+  //
+  // Each filler is PUBLISHED, because the cap meters `PUBLIC_DASHBOARD_STATUSES`
+  // (published/live) — a draft shows the world nothing, so it holds no
+  // public-dashboard slot. Filling with bare creates fills the cap with ZERO and
+  // every check below it (the degrade, the note, the template path, the 402)
+  // silently stops testing anything. The publishes themselves are all within the
+  // cap, so the publish guard never fires here; it is proven in
+  // `public-dashboard-quota.test.ts`.
+  let fillClean = capN >= 1;
+  for (let i = 1; i <= capN; i += 1) {
+    const res = await v1(owner, "/api/v1/competitions", "POST", {
+      ends_on: "2030-12-31",
+      name: `Quota Fill ${i} ${tag}`,
+      visibility: "public",
+    });
+    const row = v1data<{ id: string; visibility: string; public_quota_degraded?: unknown }>(res);
+    const published = await v1(owner, `/api/v1/competitions/${row.id}`, "PATCH", {
+      status: "published",
+    });
+    fillClean &&=
+      res.status === 201 &&
+      row.visibility === "public" &&
+      row.public_quota_degraded === undefined &&
+      published.status === 200;
+  }
+  check(
+    `public quota: all ${capN} creates up to the cap are public and carry NO note`,
+    fillClean,
+  );
+
+  const over = await v1(owner, "/api/v1/competitions", "POST", {
+    ends_on: "2030-12-31",
+    name: `Quota Over ${tag}`,
+    visibility: "public",
+  });
+  const overRow = v1data<{
+    id: string;
+    visibility: string;
+    public_quota_degraded?: {
+      feature_key?: string;
+      requested_visibility?: string;
+      applied_visibility?: string;
+      limit?: number | null;
+      reason?: string;
+    };
+  }>(over);
+  check("public quota: the create AT the cap is 201, never 402", over.status === 201);
+  check("public quota: and it comes back PRIVATE, not public", overRow.visibility === "private");
+  const note = overRow.public_quota_degraded;
+  check(
+    "public quota: the 201 SAYS SO — feature key, both visibilities, and the LIVE cap in the reason",
+    !!note &&
+      note.feature_key === "dashboard.public.max" &&
+      note.requested_visibility === "public" &&
+      note.applied_visibility === "private" &&
+      note.limit === capN &&
+      typeof note.reason === "string" &&
+      note.reason.includes(String(capN)),
+  );
+
+  // The DEFAULT create path. `visibility` is deliberately omitted, which is
+  // both what the gallery sends and the case whose guard used to key on
+  // `=== "public"` while its value keyed on `?? "public"` — skipping the quota
+  // check entirely and creating a PUBLIC competition over the cap.
+  const tmpl = await v1(owner, "/api/v1/competitions/from-template", "POST", {
+    template_key: "slam128",
+    name: `Quota Template ${tag}`,
+    ends_on: "2030-12-31",
+  });
+  const tmplRow = v1data<{
+    visibility: string;
+    public_quota_degraded?: { feature_key?: string; applied_visibility?: string };
+  }>(tmpl);
+  check(
+    "public quota: the TEMPLATE path degrades identically and carries the SAME note",
+    tmpl.status === 201 &&
+      tmplRow.visibility === "private" &&
+      tmplRow.public_quota_degraded?.feature_key === "dashboard.public.max" &&
+      tmplRow.public_quota_degraded?.applied_visibility === "private",
+  );
+
+  // The other direction, so "never refuses" cannot be satisfied by deleting
+  // the cap: flipping an EXISTING competition to public is a deliberate act
+  // with a wrong answer available, and still 402s.
+  const patched = await v1(owner, `/api/v1/competitions/${overRow.id}`, "PATCH", {
+    visibility: "public",
+  });
+  check(
+    "public quota: the PATCH path still 402s — only a CREATE degrades",
+    patched.status === 402 &&
+      (patched.json.error as { feature_key?: string } | undefined)?.feature_key ===
+        "dashboard.public.max",
+  );
+}
+
 async function smokePlanMatrix(): Promise<void> {
   const genericDiv = {
     sport_key: "generic",
@@ -1679,7 +1847,7 @@ async function smokePlanMatrix(): Promise<void> {
     owner: Session,
     orgId: string,
     hostCompId: string,
-    key: string, // email suffix + label: community | pro | proplus | pass
+    key: string, // email suffix + label: community | pro | enterprise | pass
     expectBranded: boolean,
   ): Promise<void> => {
     // --- Full data feed: one division, all three entrant shapes. Entrant #1
@@ -1772,8 +1940,9 @@ async function smokePlanMatrix(): Promise<void> {
     check(`matrix/${key}: the accepted official records a result`, offScore.status === 201);
 
     // --- User 3 (member/scorer): a division-scoped scorer invite seats a
-    // member (scorers.max = 1 on community, so exactly one fits) who scores a
-    // DIFFERENT fixture via the assignment path (scoresViaAssignment).
+    // member who scores a DIFFERENT fixture via the assignment path
+    // (scoresViaAssignment). V395 deleted `scorers.max`; the seat is charged
+    // against `members.max` now, which on community is 3 — so one still fits.
     const scorerEmail = `scorer_${key}_${tag}@example.com`;
     const scorerSession = newSession();
     await signIn(scorerSession, scorerEmail);
@@ -1867,21 +2036,27 @@ async function smokePlanMatrix(): Promise<void> {
   );
   // V302: the AI Schedule Architect is granted on EVERY plan; the graded axis
   // is no longer a per-division run count (retired V322) but the monthly AI
-  // credit wallet allowance (community 10, V320).
+  // credit wallet allowance. V393 (entitlements v18) cut it from 10 to 5.
+  //
+  // The literal is deliberate here, and stays a literal. This script reads the
+  // number back out of the live API, which reads it out of `plan_entitlements`
+  // — deriving the expected value from the same table would make the whole
+  // check a tautology. 5 is the independent oracle: design doc §2, pinned
+  // cell-for-cell by `src/server/__tests__/entitlements-v18-matrix.test.ts`.
   check(
     "matrix/community: scheduling.ai is granted on every plan (V302)",
     commEnt.entitlements["scheduling.ai"]?.enabled === true,
   );
   check(
-    "matrix/community: ai.credits.monthly resolves 10 (V320)",
-    commEnt.entitlements["ai.credits.monthly"]?.limit === 10,
+    "matrix/community: ai.credits.monthly resolves 5 (V393)",
+    commEnt.entitlements["ai.credits.monthly"]?.limit === 5,
   );
   // The bootstrap grant (createOrgForUser) synchronously seeds this period's
   // allowance at org creation, so a brand-new Community org's wallet already
   // holds it — no up-to-24h wait on the daily billing-grant cron.
   check(
-    "matrix/community: a freshly-created org's AI credit wallet is bootstrap-granted 10 credits",
-    (await walletBalance(commOrg)) === 10,
+    "matrix/community: a freshly-created org's AI credit wallet is bootstrap-granted 5 credits",
+    (await walletBalance(commOrg)) === 5,
   );
 
   // A scored-through division so a real export renders.
@@ -1957,12 +2132,20 @@ async function smokePlanMatrix(): Promise<void> {
     proEnt.entitlements["scheduling.ai"]?.enabled === true,
   );
   check(
-    "matrix/pro: ai.credits.monthly resolves 60 (V320)",
-    proEnt.entitlements["ai.credits.monthly"]?.limit === 60,
+    "matrix/pro: ai.credits.monthly resolves 25 (V395 re-cut it from V393's 35)",
+    proEnt.entitlements["ai.credits.monthly"]?.limit === 25,
   );
+  // V393 DELETED `officials.per_fixture.max` — it resolved to ∞ on every plan
+  // and nothing read it. The check is INVERTED rather than dropped, because
+  // "absent" and "unlimited" are different answers that this endpoint reports
+  // differently, and the old assertion would now read `undefined === null` and
+  // FAIL rather than quietly pass. A deleted int key is a DENIAL in the
+  // resolver (`const base = row ? row.int_value : 0`), so the thing worth
+  // proving is that the key is not being served at all — if it reappeared with
+  // a row, every plan would silently gain a finite officials cap.
   check(
-    "matrix/pro: officials.per_fixture.max is unlimited (null)",
-    proEnt.entitlements["officials.per_fixture.max"]?.limit === null,
+    "matrix/pro: officials.per_fixture.max is not served at all (V393 deleted the key)",
+    proEnt.entitlements["officials.per_fixture.max"] === undefined,
   );
 
   // Behavioural proof of the wallet gate: setPlan is a raw plan_key flip (it
@@ -1991,46 +2174,59 @@ async function smokePlanMatrix(): Promise<void> {
     proCapped.status === 402 && featureKey(proCapped).feature_key === "ai.credits",
   );
 
-  // === PERSONA 3 — pro_plus ============================================
-  const plus = newSession();
-  const plusOrg = (await signIn(plus, `smoke-proplus-${tag}@example.com`)).org_id;
-  await setPlan(plusOrg, "pro_plus", plus);
-  const plusEnt = await readEnt(plus, plusOrg);
-  check("matrix/pro_plus: org resolves the pro_plus plan", plusEnt.plan_key === "pro_plus");
+  // === PERSONA 3 — enterprise (the tier above Pro) ======================
+  // WAS pro_plus. V393 (entitlements v18) deleted that plan from `plans`, and
+  // `subscriptions.plan_key` carries a live FK, so this flip was throwing and
+  // taking the rest of the run with it. The persona's JOB is unchanged — it is
+  // the above-Pro rung of the matrix — so it follows the rung to `enterprise`
+  // rather than being deleted; the numbers below move to that column.
+  const ent = newSession();
+  const entOrg = (await signIn(ent, `smoke-enterprise-${tag}@example.com`)).org_id;
+  await setPlan(entOrg, "enterprise", ent);
+  const entEnt = await readEnt(ent, entOrg);
+  check("matrix/enterprise: org resolves the enterprise plan", entEnt.plan_key === "enterprise");
+  // Deliberate literals, for the reason PERSONA 1 spells out: this script reads
+  // the number back out of the live API, so deriving it from `plan_entitlements`
+  // would make the check a tautology. The independent oracle is design doc §2,
+  // pinned cell-for-cell by `entitlements-v18-matrix.test.ts`.
   check(
-    "matrix/pro_plus: ai.credits.monthly resolves 200 (V320)",
-    plusEnt.entitlements["ai.credits.monthly"]?.limit === 200,
+    "matrix/enterprise: ai.credits.monthly resolves 500 (V393)",
+    entEnt.entitlements["ai.credits.monthly"]?.limit === 500,
   );
   check(
-    "matrix/pro_plus: registration.fee_percent resolves 1",
-    plusEnt.entitlements["registration.fee_percent"]?.limit === 1,
+    "matrix/enterprise: registration.fee_percent resolves 1 (the floor rate)",
+    entEnt.entitlements["registration.fee_percent"]?.limit === 1,
   );
 
-  // api.write grants: a write-capable (manage) key mints on Pro Plus — the same
-  // key 402s on a plain Pro org (proPlusSuite covers the negative).
-  const plusKey = await v1(plus, `/api/v1/orgs/${plusOrg}/api-keys`, "POST", {
-    name: `matrix plus ${tag}`,
+  // api.write grants: a write-capable (manage) key mints above Pro — the same
+  // key 402s on a plain Pro org (aboveProRungSuite covers the negative). This is
+  // still a REAL differentiator after v18: api.write is true on enterprise and
+  // false on pro.
+  const entKey = await v1(ent, `/api/v1/orgs/${entOrg}/api-keys`, "POST", {
+    name: `matrix ent ${tag}`,
     scopes: ["manage"],
   });
-  check("matrix/pro_plus: api.write grants a manage-scope key (201)", plusKey.status === 201);
+  check("matrix/enterprise: api.write grants a manage-scope key (201)", entKey.status === 201);
 
-  // officials.auto grant (Task 16 amendment): the auto-propose path a plain Pro
-  // org now 402s on (see jul3Suite) succeeds on Pro Plus — coverage of the
-  // feature moves to the right tier instead of vanishing.
-  const plusComp = v1data<{ id: string }>(
-    await v1(plus, "/api/v1/competitions", "POST", { ends_on: "2030-12-31",
-      name: `Matrix Plus ${tag}`,
+  // officials.auto: kept, but it is no longer a TIER assertion. V290 put the
+  // grant above Pro and this check was written against that; V393 brought it
+  // back down to Pro (jul3Suite asserts the Pro side directly). What survives
+  // here is the propose path working end to end on the top tier — coverage of
+  // the feature, not of the rung it used to sit on.
+  const entComp = v1data<{ id: string }>(
+    await v1(ent, "/api/v1/competitions", "POST", { ends_on: "2030-12-31",
+      name: `Matrix Enterprise ${tag}`,
     }),
   );
-  const plusDiv = v1data<{ id: string }>(
-    await v1(plus, `/api/v1/competitions/${plusComp.id}/divisions`, "POST", {
+  const entDiv = v1data<{ id: string }>(
+    await v1(ent, `/api/v1/competitions/${entComp.id}/divisions`, "POST", {
       name: "Open",
       ...genericDiv,
     }),
   );
   await v1(
-    plus,
-    `/api/v1/divisions/${plusDiv.id}/entrants`,
+    ent,
+    `/api/v1/divisions/${entDiv.id}/entrants`,
     "POST",
     ["A", "B", "C", "D"].map((n, i) => ({
       kind: "individual",
@@ -2038,28 +2234,28 @@ async function smokePlanMatrix(): Promise<void> {
       seed: i + 1,
     })),
   );
-  const plusStage = v1data<{ id: string }>(
-    await v1(plus, `/api/v1/divisions/${plusDiv.id}/stages`, "POST", {
+  const entStage = v1data<{ id: string }>(
+    await v1(ent, `/api/v1/divisions/${entDiv.id}/stages`, "POST", {
       seq: 1,
       kind: "league",
       name: "League",
     }),
   );
-  const plusFixtures = v1data<{ fixtures: { id: string }[] }>(
-    await v1(plus, `/api/v1/stages/${plusStage.id}/generate`, "POST"),
+  const entFixtures = v1data<{ fixtures: { id: string }[] }>(
+    await v1(ent, `/api/v1/stages/${entStage.id}/generate`, "POST"),
   ).fixtures;
-  await v1(plus, `/api/v1/divisions/${plusDiv.id}/start`, "POST");
-  await v1(plus, "/api/v1/officials", "POST", {
+  await v1(ent, `/api/v1/divisions/${entDiv.id}/start`, "POST");
+  await v1(ent, "/api/v1/officials", "POST", {
     display_name: `Matrix Ref ${tag}`,
     role_keys: ["referee"],
   });
-  const plusAuto = await v1(plus, `/api/v1/divisions/${plusDiv.id}/officials/auto`, "POST", {
+  const entAuto = await v1(ent, `/api/v1/divisions/${entDiv.id}/officials/auto`, "POST", {
     policy: { roles: ["referee"] },
   });
   check(
-    "matrix/pro_plus: officials.auto is allowed (200, assignments proposed)",
-    plusAuto.status === 200 &&
-      Array.isArray(v1data<{ assignments: unknown[] }>(plusAuto).assignments),
+    "matrix/enterprise: officials.auto is allowed (200, assignments proposed)",
+    entAuto.status === 200 &&
+      Array.isArray(v1data<{ assignments: unknown[] }>(entAuto).assignments),
   );
 
   // #448 — maxPerDay is capped on the ORG's calendar day, not the UTC day. Put
@@ -2069,11 +2265,11 @@ async function smokePlanMatrix(): Promise<void> {
   // `call` returns json.data and THROWS on ok:false — it has no .status, so
   // assert the value actually landed. The two checks below are meaningless if
   // this org is still on UTC, so this must fail loudly rather than silently.
-  const tzOrg = (await call(plus, `/api/orgs/${plusOrg}`, "PATCH", {
+  const tzOrg = (await call(ent, `/api/orgs/${entOrg}`, "PATCH", {
     timezone: "America/Los_Angeles",
   })) as { timezone: string };
   check(
-    "matrix/pro_plus #448: org timezone set to America/Los_Angeles",
+    "matrix/enterprise #448: org timezone set to America/Los_Angeles",
     tzOrg.timezone === "America/Los_Angeles",
   );
 
@@ -2086,23 +2282,23 @@ async function smokePlanMatrix(): Promise<void> {
     "2026-07-12T03:00:00.000Z",
   ];
   const capVenue = v1data<{ id: string }>(
-    await v1(plus, `/api/v1/orgs/${plusOrg}/venues`, "POST", { name: `Cap Venue ${tag}` }),
+    await v1(ent, `/api/v1/orgs/${entOrg}/venues`, "POST", { name: `Cap Venue ${tag}` }),
   );
   const capCourt = v1data<{ id: string }>(
-    await v1(plus, `/api/v1/orgs/${plusOrg}/venues/${capVenue.id}/courts`, "POST", {
+    await v1(ent, `/api/v1/orgs/${entOrg}/venues/${capVenue.id}/courts`, "POST", {
       name: "Court 1",
     }),
   );
-  const capIds = plusFixtures.slice(0, 4).map((f) => f.id);
+  const capIds = entFixtures.slice(0, 4).map((f) => f.id);
   for (const [i, id] of capIds.entries()) {
-    await v1(plus, `/api/v1/fixtures/${id}`, "PATCH", {
+    await v1(ent, `/api/v1/fixtures/${id}`, "PATCH", {
       scheduled_at: localSaturday[i],
       court_id: capCourt.id,
     });
   }
   // Park every other fixture far away so it cannot compete for the capped ref.
-  for (const [i, f] of plusFixtures.slice(4).entries()) {
-    await v1(plus, `/api/v1/fixtures/${f.id}`, "PATCH", {
+  for (const [i, f] of entFixtures.slice(4).entries()) {
+    await v1(ent, `/api/v1/fixtures/${f.id}`, "PATCH", {
       scheduled_at: `2026-09-${String(i + 1).padStart(2, "0")}T18:00:00.000Z`,
       court_id: capCourt.id,
     });
@@ -2111,13 +2307,13 @@ async function smokePlanMatrix(): Promise<void> {
   // The cap only binds if NO other official can absorb the overflow, so give
   // this one a role nobody else on the roster holds ("Matrix Ref" is referee).
   const cappedRef = v1data<{ id: string }>(
-    await v1(plus, "/api/v1/officials", "POST", {
+    await v1(ent, "/api/v1/officials", "POST", {
       display_name: `Capped Judge ${tag}`,
       role_keys: ["judge"],
       max_per_day: 2,
     }),
   );
-  const capAuto = await v1(plus, `/api/v1/divisions/${plusDiv.id}/officials/auto`, "POST", {
+  const capAuto = await v1(ent, `/api/v1/divisions/${entDiv.id}/officials/auto`, "POST", {
     policy: { roles: ["judge"] },
     rng_seed: "tz448",
   });
@@ -2130,11 +2326,11 @@ async function smokePlanMatrix(): Promise<void> {
     (a) => capSet.has(a.fixtureId) && a.officialId === cappedRef.id,
   );
   check(
-    "matrix/pro_plus #448: maxPerDay caps on the ORG day across a UTC midnight",
+    "matrix/enterprise #448: maxPerDay caps on the ORG day across a UTC midnight",
     capAuto.status === 200 && cappedOnSaturday.length === 2,
   );
   check(
-    "matrix/pro_plus #448: the two over-cap local-Saturday slots report role_unfilled",
+    "matrix/enterprise #448: the two over-cap local-Saturday slots report role_unfilled",
     capBody.conflicts.filter(
       (c) => c.kind === "role_unfilled" && capSet.has(c.fixtureId ?? ""),
     ).length === 2,
@@ -2206,8 +2402,10 @@ async function smokePlanMatrix(): Promise<void> {
     passEnt.plan_key === "community",
   );
   check(
-    "matrix/event_pass: org-wide members.max resolves the community value (5)",
-    passEnt.entitlements["members.max"]?.limit === 5,
+    // 3, not 5 — V393 re-cut community's seats. Line 267 of this file already
+    // said 3 while this said 5; the two disagreed inside one script.
+    "matrix/event_pass: org-wide members.max resolves the community value (3)",
+    passEnt.entitlements["members.max"]?.limit === 3,
   );
 
   // === Task 20 — populated-competition assertions per plan org ===========
@@ -2221,7 +2419,7 @@ async function smokePlanMatrix(): Promise<void> {
   // competition-scoped and must never leak to the org — see the note above).
   await seedFeedAndAssert(comm, commOrg, cComp.id, "community", false);
   await seedFeedAndAssert(pro, proOrg, proComp.id, "pro", true);
-  await seedFeedAndAssert(plus, plusOrg, plusComp.id, "proplus", true);
+  await seedFeedAndAssert(ent, entOrg, entComp.id, "enterprise", true);
   await seedFeedAndAssert(passer, passOrg, passedComp.id, "pass", false);
 }
 
@@ -2244,8 +2442,10 @@ async function smokePlanMatrix(): Promise<void> {
  * ── Two numbers the plan brief got wrong, deliberately not asserted ─────────
  *  • `branding` — V310 made it true on EVERY plan, so "the pass delivers
  *    branding" is a test that cannot fail. Dropped. It is NOT the same key as
- *    `dashboard.branding` (the brand-colour gate), which stays Pro-only and
- *    which the pass does not grant, so neither is substituted for the other.
+ *    `dashboard.theme` (the brand-colour gate since V397 — it was
+ *    `dashboard.branding`, which is now badge removal alone and enterprise
+ *    only), which is Pro and above and which the pass does not grant, so
+ *    neither is substituted for the other.
  *  • "the entrant cap" — V319 raised Community to 64 and the pass to 128.
  *    Asserting 64 asserts what a passless community org already gets.
  * The live matrix (`set search_path = seazn_club`; the `public` schema holds a
@@ -2278,10 +2478,14 @@ async function passGrantsSuite(): Promise<void> {
   const orgs = (await call(s, "/api/orgs")) as { id: string; slug: string; name: string }[];
   const org = orgs.find((o) => o.id === orgId)!;
 
-  // Unlisted, not public: `dashboard.public.max` is 1 on community, and both
-  // competitions still resolve through the public read model (only `private`
-  // is excluded from public_competitions_v), so the public player card and the
-  // public register panel both stay reachable.
+  // Unlisted, not public: `dashboard.public.max` is 2 on community (V396 —
+  // the comment said 1 until the retired-plan copy sweep re-read the row), and
+  // both competitions still resolve through the public read model (only
+  // `private` is excluded from public_competitions_v), so the public player
+  // card and the public register panel both stay reachable. `unlisted` is
+  // still the right choice here: it takes the cap out of the picture entirely
+  // rather than sitting one under it, which is what the assertions below
+  // assume.
   const mkComp = async (name: string) =>
     v1data<{ id: string; slug: string }>(
       await v1(s, "/api/v1/competitions", "POST", { ends_on: "2030-12-31", name: `${name} ${tag}`, visibility: "unlisted" }),
@@ -2319,7 +2523,8 @@ async function passGrantsSuite(): Promise<void> {
 
   // Per competition: a board division carrying real fixtures (realtime, the
   // branded export and the player card all read it) plus the ceiling probes.
-  const board: Record<"pass" | "plain", { divId: string; fixtureId: string }> = {} as never;
+  const board: Record<"pass" | "plain", { divId: string; fixtureId: string; stageId: string }> =
+    {} as never;
   for (const [key, comp] of [["pass", passComp], ["plain", plainComp]] as const) {
     const div = await mkDiv(comp.id, "Board");
     await v1(s, `/api/v1/divisions/${div.id}/entrants`, "POST", [
@@ -2333,7 +2538,7 @@ async function passGrantsSuite(): Promise<void> {
       await v1(s, `/api/v1/stages/${stage.id}/generate`, "POST"),
     ).fixtures;
     await v1(s, `/api/v1/divisions/${div.id}/start`, "POST");
-    board[key] = { divId: div.id, fixtureId: fixtures[0].id };
+    board[key] = { divId: div.id, fixtureId: fixtures[0].id, stageId: stage.id };
   }
 
   // === entrants.per_division.max — community 64, pass 128 (V319) ==========
@@ -2456,9 +2661,20 @@ async function passGrantsSuite(): Promise<void> {
     plainExport.length > 1 && !plainExport.includes(org.name),
   );
 
-  // === dashboard.player_profiles — community false, pass true =============
-  // Same person, same consent, same entrant membership on both sides: the only
-  // difference between a 200 and a 404 here is the pass.
+  // === dashboard.player_profiles — community FALSE, pass TRUE again =======
+  //
+  // This cell has moved twice in one day and the history is why the comment is
+  // this long. It was "community false, pass true" originally; V393
+  // (entitlements v18 W2 T1) granted it on Community as one of design §2's
+  // three "share loops go free" acquisition cells, and this block was inverted
+  // to assert the card renders on BOTH sides. V396 (W2 T15, owner ruling
+  // 2026-09-03) REVERSED that — the owner chose value capture over the loop,
+  // with the acquisition argument put and overruled.
+  //
+  // So the pair is back to its original shape: the ONLY difference between a
+  // 200 and a 404 is the pass. Do not "restore" the free cell on the strength
+  // of design §2's prose — that prose is now the older decision, and §2's own
+  // table has been amended.
   const passCard = await fetch(`${BASE}/shared/${org.slug}/${passComp.slug}/players/${person.id}`);
   const plainCard = await fetch(`${BASE}/shared/${org.slug}/${plainComp.slug}/players/${person.id}`);
   check(
@@ -2466,7 +2682,7 @@ async function passGrantsSuite(): Promise<void> {
     passCard.status === 200,
   );
   check(
-    "pass grants/profiles: the same person has no card on the sibling (404) — no leak",
+    "pass grants/profiles: the UNPASSED sibling stays dark (404) — V396 made profiles paid again",
     plainCard.status === 404,
   );
 
@@ -2506,17 +2722,141 @@ async function passGrantsSuite(): Promise<void> {
     plainPackage.status === 402 && featureKey(plainPackage) === "sponsors.monetize",
   );
 
-  // === registration.fee_percent — community 8, pass 5 =====================
+  // === officials.auto — community false, pass true (V393) =================
+  // Auto-officials became a pass grant in v18. All THREE gates are probed,
+  // because they resolve the competition by different routes: the two division
+  // gates read `divisions.competition_id`, and `/stages/{id}/officials/source`
+  // has to hop stages -> divisions first. A gate that forgot the competition
+  // id would 402 on the passed side — the org paid for a feature it is then
+  // refused — and one that resolved org-wide would 200 on the sibling.
+  const officialsAuto = async (divisionId: string) =>
+    v1(s, `/api/v1/divisions/${divisionId}/officials/auto`, "POST", {
+      policy: { roles: ["referee"] },
+    });
+  const officialsApply = async (divisionId: string) =>
+    v1(s, `/api/v1/divisions/${divisionId}/officials/apply`, "POST", { assignments: [] });
+  const officialsSource = async (stageId: string) =>
+    v1(s, `/api/v1/stages/${stageId}/officials/source`, "POST", {
+      sources: [{ kind: "rank", fromStage: stageId, take: [{ rank: 1 }] }],
+    });
+  const passAuto = await officialsAuto(board.pass.divId);
+  const plainAuto = await officialsAuto(board.plain.divId);
+  const passApply = await officialsApply(board.pass.divId);
+  const plainApply = await officialsApply(board.plain.divId);
+  const passSource = await officialsSource(board.pass.stageId);
+  const plainSource = await officialsSource(board.plain.stageId);
+  check(
+    "pass grants/officials: auto-assign runs on the passed competition (200, proposal returned)",
+    passAuto.status === 200 &&
+      Array.isArray(v1data<{ assignments: unknown[] }>(passAuto).assignments),
+  );
+  check(
+    "pass grants/officials: the sibling is refused auto-assign (402 officials.auto) — no leak",
+    plainAuto.status === 402 && featureKey(plainAuto) === "officials.auto",
+  );
+  check(
+    "pass grants/officials: apply runs on the passed competition (200)",
+    passApply.status === 200,
+  );
+  check(
+    "pass grants/officials: the sibling is refused apply (402 officials.auto)",
+    plainApply.status === 402 && featureKey(plainApply) === "officials.auto",
+  );
+  check(
+    "pass grants/officials: rank sourcing runs on the passed competition (200) — stage -> division -> competition",
+    passSource.status === 200,
+  );
+  check(
+    "pass grants/officials: the sibling is refused rank sourcing (402 officials.auto)",
+    plainSource.status === 402 && featureKey(plainSource) === "officials.auto",
+  );
+
+  // === stats.player — community false, pass true (V393) ====================
+  // W2 T13. This and the two blocks below are the rest of what V393 handed the
+  // pass, and every enforcement site for them used to resolve ORG-WIDE — so the
+  // pass was invisible and the passed competition 402'd on a feature the org
+  // had just paid for. Both directions on the SAME org throughout: a one-sided
+  // check stays green if the grant leaks org-wide, the same $29 hole in the
+  // other direction.
+  const passStats = await v1(s, `/api/v1/divisions/${board.pass.divId}/stats/players`);
+  const plainStats = await v1(s, `/api/v1/divisions/${board.plain.divId}/stats/players`);
+  check(
+    "pass grants/stats: the passed competition's player leaderboard reads (200)",
+    passStats.status === 200,
+  );
+  check(
+    "pass grants/stats: the sibling's leaderboard is refused (402 stats.player) — no leak",
+    plainStats.status === 402 && featureKey(plainStats) === "stats.player",
+  );
+
+  // === scoring.device_links — community false, pass true (V393) ============
+  // Minted against the board fixtures generated above; both are still
+  // scheduled, so the only difference between the two calls is the pass.
+  const passLink = await v1(s, `/api/v1/fixtures/${board.pass.fixtureId}/device-links`, "POST", {
+    label: "Pitch 1",
+  });
+  const plainLink = await v1(s, `/api/v1/fixtures/${board.plain.fixtureId}/device-links`, "POST", {
+    label: "Pitch 1",
+  });
+  check(
+    "pass grants/device links: a day-of scoring device mints on the passed competition (201)",
+    passLink.status === 201,
+  );
+  check(
+    "pass grants/device links: the sibling refuses it (402 scoring.device_links) — no leak",
+    plainLink.status === 402 && featureKey(plainLink) === "scoring.device_links",
+  );
+
+  // === stages.per_division.max — community 2, pass 4 (V393) ================
+  // Run on the ENTRANT-CAP divisions, which carry NO stages at all — the board
+  // divisions already hold one and both competitions are at their division
+  // ceiling, so there is no fresh division to take instead. Counting from ZERO
+  // is load-bearing: an earlier draft started at seq 2 and the sibling's third
+  // create was only its SECOND stage, so it landed 201 and the check passed
+  // while proving nothing.
+  const addStage = (divisionId: string, seq: number) =>
+    v1(s, `/api/v1/divisions/${divisionId}/stages`, "POST", {
+      seq,
+      kind: "league",
+      name: `Cap Stage ${seq}`,
+    });
+  const passStages = [
+    await addStage(passCap.id, 1),
+    await addStage(passCap.id, 2),
+    await addStage(passCap.id, 3),
+  ];
+  const plainStages = [
+    await addStage(plainCap.id, 1),
+    await addStage(plainCap.id, 2),
+    await addStage(plainCap.id, 3),
+  ];
+  check(
+    "pass grants/stages: the passed competition takes a 3rd stage — past community's 2",
+    passStages.every((r) => r.status === 201),
+  );
+  check(
+    "pass grants/stages: the sibling takes 2 and is refused a 3rd (402 stages.per_division.max)",
+    plainStages[0].status === 201 &&
+      plainStages[1].status === 201 &&
+      plainStages[2].status === 402 &&
+      featureKey(plainStages[2]) === "stages.per_division.max",
+  );
+
+  // === registration.fee_percent — the pass cuts the org's rate ============
   // Stated plainly, because this one is weaker than the rest and the reason
   // matters: the rate has NO competition-scoped read surface. `feePercentFor`
   // is consumed in exactly two places (the registration checkout and the
   // sponsor checkout), and both feed it straight into a Stripe
   // `application_fee_amount` that never comes back out — so there is nothing
   // keyless to observe. What IS assertable is split in two:
-  //   • the matrix itself — the pass row must still say 5 against community's
-  //     8, which fails the moment a migration regresses the grant;
-  //   • the org-wide resolution — a competition-scoped 5% must not become the
-  //     org's rate, which is the leak this suite exists to catch.
+  //   • the matrix itself — the pass row must still sit UNDER community's,
+  //     which fails the moment a migration regresses the grant. Read from the
+  //     table and compared to each other rather than pinned to 5 and 8: V398
+  //     re-cut the whole ladder (community 8 -> 5, both pass rungs 5 -> 4) for
+  //     the additive fee model, and the claim this suite is making is that the
+  //     pass is CHEAPER, never that either rate is a particular number;
+  //   • the org-wide resolution — the competition-scoped pass rate must not
+  //     become the org's rate, which is the leak this suite exists to catch.
   // If a competition-scoped fee ever surfaces (a quote endpoint, or the
   // application fee echoed on the registration read), replace the first half
   // with the behavioural pair the other grants get.
@@ -2531,9 +2871,11 @@ async function passGrantsSuite(): Promise<void> {
     await feeDb.end();
   }
   const feeFor = (planKey: string) => feeMatrix.find((r) => r.plan_key === planKey)?.int_value;
+  const passFee = feeFor("event_pass");
+  const communityFee = feeFor("community");
   check(
-    "pass grants/fee: the pass still cuts the platform rate to 5% (community 8%)",
-    feeFor("event_pass") === 5 && feeFor("community") === 8,
+    `pass grants/fee: the pass still cuts the platform rate (${passFee}% against community's ${communityFee}%)`,
+    typeof passFee === "number" && typeof communityFee === "number" && passFee < communityFee,
   );
 
   // === The org itself is untouched — every grant above is competition-scoped
@@ -2546,20 +2888,45 @@ async function passGrantsSuite(): Promise<void> {
     "pass grants/scope: the org still resolves the community plan",
     ent.plan_key === "community",
   );
+  // `dashboard.player_profiles` left this list in V393, when Community was
+  // granted the key and asserting a paywall would have asserted one that no
+  // longer existed. V396 put the paywall back (owner ruling 2026-09-03), so the
+  // key is pass-lifted again — it is asserted OFF org-wide in its own named
+  // check below rather than folded into this && chain, because a chain this
+  // long reports only "false" and this particular cell has now moved twice.
   check(
-    "pass grants/scope: every boolean grant stays OFF org-wide (realtime, exports.branded, profiles, sponsors)",
+    "pass grants/scope: every boolean grant stays OFF org-wide (realtime, exports.branded, sponsors, and the V393 keys)",
     flagOff("realtime") &&
       flagOff("exports.branded") &&
-      flagOff("dashboard.player_profiles") &&
       flagOff("sponsors.tiers") &&
-      flagOff("sponsors.monetize"),
+      flagOff("sponsors.monetize") &&
+      // W2 T13 — the leak half. Threading a competition id into these gates
+      // must not turn a competition-scoped grant into an org-wide one: they
+      // read TRUE on the passed competition above and FALSE for the org here.
+      flagOff("stats.player") &&
+      flagOff("scoring.device_links") &&
+      flagOff("discipline.enforced") &&
+      flagOff("officials.auto"),
   );
   check(
-    "pass grants/scope: every quota stays at the community figure org-wide (64/4/10 entrants/divisions/AI credits, fee 8%)",
+    "pass grants/scope: dashboard.player_profiles is OFF org-wide — paid again since V396, and pass-scoped",
+    ent.entitlements["dashboard.player_profiles"]?.enabled === false,
+  );
+  check(
+    `pass grants/scope: every quota stays at the community figure org-wide (64/4/5 entrants/divisions/AI credits, fee ${communityFee}%)`,
     ent.entitlements["entrants.per_division.max"]?.limit === 64 &&
       ent.entitlements["divisions.per_competition.max"]?.limit === 4 &&
-      ent.entitlements["ai.credits.monthly"]?.limit === 10 &&
-      ent.entitlements["registration.fee_percent"]?.limit === 8,
+      ent.entitlements["ai.credits.monthly"]?.limit === 5 &&
+      // The org's own row, read out of the matrix above — never the literal.
+      // This is the LEAK half: the passed competition resolves `passFee`, and
+      // the org must still resolve its own, whatever V398 (or its successor)
+      // set them to.
+      ent.entitlements["registration.fee_percent"]?.limit === communityFee,
+  );
+  check(
+    "pass grants/scope: the two V393 caps stay at the community figure org-wide (2 stages, 2 save points)",
+    ent.entitlements["stages.per_division.max"]?.limit === 2 &&
+      ent.entitlements["schedule.checkpoints.max"]?.limit === 2,
   );
 
   // === lock (archived) — a pass stops lifting once its competition is
@@ -2717,9 +3084,10 @@ async function passRungLSuite(): Promise<void> {
       lRow?.pass_key === "event_pass_l" && lRow?.stripe_payment_intent === lIntent,
     );
     const afterL = await walletBalance(orgId);
+    const lGrant = afterL - startBalance;
     check(
-      "pass L/paid: the one-time +25 AI credit grant fires on an L purchase",
-      afterL - startBalance === 25,
+      "pass L/paid: a one-time AI credit grant fires on an L purchase",
+      lGrant > 0,
     );
 
     const mIntent = `pi_smoke_${tag}_m`;
@@ -2734,9 +3102,21 @@ async function passRungLSuite(): Promise<void> {
       "pass L/paid: the same writer files an M purchase as event_pass — the rung is read from the session, not hardcoded",
       mAck === 200 && mRow?.pass_key === "event_pass" && mRow?.stripe_payment_intent === mIntent,
     );
+    // PER RUNG since entitlements v18 W2 T5, and this check asserted the
+    // opposite: it pinned a FLAT 25 on both rungs, with a literal, and W2 T12
+    // then set L to 35. It had been red on the L leg ever since — a stale
+    // assertion in the one path a customer can no longer reach, now that the L
+    // rung is off sale (owner decision 2026-09-05), which is exactly why it
+    // went unnoticed.
+    //
+    // The rungs are compared to EACH OTHER rather than to numbers. Smoke cannot
+    // import `PASS_CREDIT_GRANT` (see the PASS_RUNGS comment above — no `@/`
+    // alias, no JSON import), and a literal here is what rotted; the ordering
+    // is the product rule and it moves with the constant.
+    const mGrant = (await walletBalance(orgId)) - afterL;
     check(
-      "pass L/paid: M grants the same 25 — PASS_CREDIT_GRANT is flat across rungs, never parametrised by one",
-      (await walletBalance(orgId)) - afterL === 25,
+      `pass L/paid: each rung grants its OWN credit top-up — L ${lGrant}, M ${mGrant}, both positive and NOT equal`,
+      mGrant > 0 && lGrant > mGrant,
     );
   } else {
     await grantPass(orgId, lComp.id, "event_pass_l");
@@ -2859,8 +3239,17 @@ async function passRungLSuite(): Promise<void> {
   // Until V344 the overlay was skipped entirely under a paid plan, so an L
   // holder who subscribed to Pro silently lost unlimited entrants on the
   // competition they had already paid to unlock. Now the BETTER of the two
-  // applies per axis, and both directions of that are checked below: the plan
-  // wins on divisions, the pass wins on entrants. ===
+  // applies per axis.
+  //
+  // The DIVISIONS half used to be the second direction of that ("the plan wins
+  // on divisions"), and it stopped being one: entitlements v18 (V393, §2 "R2:
+  // bounded; 20 is a federation") bounded Pro at 20, which is exactly what
+  // event_pass_l already carried. Two equal numbers cannot witness which side
+  // won, so this check no longer asserts that the 21st division lands — it
+  // asserts what remains true and observable, that the pass does not LOWER the
+  // Pro competition below its own plan's cap. The ENTRANTS check below (Pro 256
+  // against L's unlimited) is now the only leg on this pair that discriminates,
+  // and it is deliberately left as the load-bearing one. ===
   const pro = newSession();
   const proOrgId = (await signIn(pro, `passlpro_${tag}@example.com`)).org_id;
   await setPlan(proOrgId, "pro", pro);
@@ -2877,19 +3266,33 @@ async function passRungLSuite(): Promise<void> {
     proPass?.pass_key === "event_pass_l",
   );
 
+  // The cap is READ from the org's own resolved entitlements, never typed: it
+  // was written into this file as a bare 21-iteration loop against "L's 20",
+  // and V393 moved Pro onto the same 20 underneath it.
+  const proEnt = (await call(pro, `/api/orgs/${proOrgId}/entitlements`)) as {
+    entitlements: Record<string, { limit?: number | null }>;
+  };
+  const resolvedDivCap = proEnt.entitlements["divisions.per_competition.max"]?.limit;
+  check(
+    "pass L/pro: a passed Pro competition resolves a FINITE divisions.per_competition.max",
+    typeof resolvedDivCap === "number" && resolvedDivCap >= 2,
+  );
+  const proDivCap = typeof resolvedDivCap === "number" ? resolvedDivCap : 0;
   const proDivIds: string[] = [];
-  let proDivisionsOk = true;
-  for (let i = 1; i <= 21; i++) {
+  let oneOver: V1Res | null = null;
+  for (let i = 1; i <= proDivCap + 1; i++) {
     const r = await v1(pro, `/api/v1/competitions/${proComp.id}/divisions`, "POST", {
       name: `Pro Div ${i}`,
       ...genericDiv,
     });
-    if (r.status !== 201) proDivisionsOk = false;
-    else proDivIds.push(v1data<{ id: string }>(r).id);
+    if (i === proDivCap + 1) oneOver = r;
+    else if (r.status === 201) proDivIds.push(v1data<{ id: string }>(r).id);
   }
   check(
-    "pass L/pro: an L pass does not CAP a Pro competition at L's 20 divisions — the 21st still lands, because the PLAN wins on the axis where it is better (#327)",
-    proDivisionsOk,
+    "pass L/pro: an L pass does not LOWER a Pro competition's own division cap — every one of its divisions lands, and only the one past the cap is refused (#327)",
+    proDivIds.length === proDivCap &&
+      oneOver?.status === 402 &&
+      featureKey(oneOver) === "divisions.per_competition.max",
   );
 
   const proDivId = proDivIds[0];
@@ -3221,8 +3624,8 @@ async function referralSuite(): Promise<void> {
  * v17 gap #293 — the extra-organisation recurring add-on, end to end at the
  * wire, on BOTH paths.
  *
- * PRO path (the payer): a Pro Plus payer standing on their plan's 10-org cap is
- * refused a plain "create org #11" with a 402 that CARRIES a purchase offer;
+ * PRO path (the payer): a Pro payer standing on their plan's 5-org cap is
+ * refused a plain "create org #6" with a 402 that CARRIES a purchase offer;
  * buying the rider lifts the cap by exactly one and the SAME create then
  * succeeds. The refusal is asserted BEFORE the purchase deliberately — "the
  * create succeeded" is evidence of a lift only if it was first proven refused.
@@ -3232,7 +3635,7 @@ async function referralSuite(): Promise<void> {
  * is an upgrade; offering a purchase there would only relocate the dead end to
  * the purchase route's 400 one screen later.
  *
- * NON-PAYER: an owner of organisations INSIDE the Pro Plus group above, at the
+ * NON-PAYER: an owner of organisations INSIDE the Pro group above, at the
  * very same cap, who is not that group's `subscriptions.owner_user_id`. Also
  * refused, also with no offer — the purchase route (setExtraOrgs →
  * requireBillingOwner) 403s anyone but the payer. Reachable in production:
@@ -3258,11 +3661,16 @@ async function referralSuite(): Promise<void> {
  * Own fresh group; keyless-safe, no Stripe calls.
  */
 async function extraOrgAddonSuite(): Promise<void> {
-  // V314: community 1 / pro 5 / pro_plus 10. The two rider RATES ($9 Pro,
-  // $19 Pro Plus) are Stripe's business and are pinned by the BILLING_LIVE
-  // suite; what smoke owns is the CAPACITY those caps bound.
-  const PRO_PLUS_ORG_CAP = 10;
+  // orgs.max_owned: community 1 / pro 5. V393 (entitlements v18) deleted the
+  // `pro_plus` plan this suite used to start on — and enterprise, the rung that
+  // replaced it, resolves orgs.max_owned to NULL (unlimited), which would leave
+  // this suite with no boundary to stand on and every refusal below vacuous.
+  // So it runs on the two tiers that still HAVE a finite cap: it fills Pro to
+  // its cap of 5 and ends by dropping to community's 1. The rider RATE is
+  // Stripe's business and is pinned by the BILLING_LIVE suite; what smoke owns
+  // is the CAPACITY those caps bound.
   const PRO_ORG_CAP = 5;
+  const COMMUNITY_ORG_CAP = 1;
 
   interface Refusal {
     feature_key?: string;
@@ -3282,7 +3690,7 @@ async function extraOrgAddonSuite(): Promise<void> {
   const payerEmail = `orgaddon_${tag}@example.com`;
   const payer = newSession();
   const auth = await signIn(payer, payerEmail);
-  await setPlan(auth.org_id, "pro_plus", payer); // busts the entitlement cache itself
+  await setPlan(auth.org_id, "pro", payer); // busts the entitlement cache itself
 
   const db = smokeDb();
   try {
@@ -3294,12 +3702,12 @@ async function extraOrgAddonSuite(): Promise<void> {
     const payerUserId = ownerRow.id;
     const walletId = orgRow.wallet_id;
 
-    // Fill the group to the Pro Plus cap of 10 — nine more organisations on the
-    // same subscription, owned by the payer. Both caps must read "at 10": the
+    // Fill the group to the Pro cap of 5 — four more organisations on the
+    // same subscription, owned by the payer. Both caps must read "at 5": the
     // PERSON cap (assertMayOwnAnotherOrg, which is what a bare create hits) and
     // the GROUP cap (attachOrgToGroup, not exercised here).
     const fillIds: string[] = [];
-    for (let i = 0; i < PRO_PLUS_ORG_CAP - 1; i++) {
+    for (let i = 0; i < PRO_ORG_CAP - 1; i++) {
       const [seeded] = await db<{ id: string }[]>`
         insert into organizations (name, slug, created_by, subscription_id)
         values (${`Org Addon Fill ${tag} ${i}`}, ${`org-addon-fill-${tag}-${i}`},
@@ -3312,18 +3720,18 @@ async function extraOrgAddonSuite(): Promise<void> {
     const [groupSize] = await db<{ n: number }[]>`
       select count(*)::int as n from organizations where subscription_id = ${walletId}`;
     check(
-      `extra-org: fixture built — one Pro Plus bill carrying ${PRO_PLUS_ORG_CAP} organisations, all owned by its payer`,
-      groupSize?.n === PRO_PLUS_ORG_CAP,
+      `extra-org: fixture built — one Pro bill carrying ${PRO_ORG_CAP} organisations, all owned by its payer`,
+      groupSize?.n === PRO_ORG_CAP,
     );
     check(
-      "extra-org: the resolved cap starts at the Pro Plus base of 10 — nothing bought yet",
-      (await orgCap(payer, auth.org_id)) === PRO_PLUS_ORG_CAP,
+      "extra-org: the resolved cap starts at the Pro base of 5 — nothing bought yet",
+      (await orgCap(payer, auth.org_id)) === PRO_ORG_CAP,
     );
 
     // --- the refusal, asserted BEFORE anything is bought -----------------
-    const blocked = await raw(payer, "/api/orgs", "POST", { name: `Org 11 ${tag}` });
+    const blocked = await raw(payer, "/api/orgs", "POST", { name: `Org 6 ${tag}` });
     check(
-      "extra-org: organisation #11 is REFUSED at the Pro Plus cap of 10 (402)",
+      "extra-org: organisation #6 is REFUSED at the Pro cap of 5 (402)",
       blocked.status === 402,
     );
     check(
@@ -3333,11 +3741,11 @@ async function extraOrgAddonSuite(): Promise<void> {
     );
 
     // --- NON-PAYER: same group, same cap, no offer -----------------------
-    // Co-owning the nine seeded organisations puts this user at the same
+    // Co-owning the four seeded organisations puts this user at the same
     // PERSON cap (it counts organisations they own, on anyone's bill) while the
     // only group they could actually buy on is their own auto-provisioned
     // community one. Runs BEFORE the purchase on purpose — a bought rider would
-    // lift this cap to 11 and the refusal would stop being reachable.
+    // lift this cap to 6 and the refusal would stop being reachable.
     const nonPayerEmail = `orgaddon_nonpayer_${tag}@example.com`;
     const nonPayer = newSession();
     await signIn(nonPayer, nonPayerEmail);
@@ -3349,7 +3757,7 @@ async function extraOrgAddonSuite(): Promise<void> {
     }
     const npBlocked = await raw(nonPayer, "/api/orgs", "POST", { name: `NP Org ${tag}` });
     check(
-      "extra-org/non-payer: an owner inside the same Pro Plus group is refused at the same cap (402)",
+      "extra-org/non-payer: an owner inside the same Pro group is refused at the same cap (402)",
       npBlocked.status === 402 && refusal(npBlocked.json).feature_key === "orgs.max_owned",
     );
     check(
@@ -3403,34 +3811,34 @@ async function extraOrgAddonSuite(): Promise<void> {
       values (${walletId}, null, 'orgs.max_owned', 1, 1,
               ${`si_smoke_orgaddon_${tag}`}, 'active')`;
     check(
-      "extra-org: the purchased rider lifts the resolved cap by exactly one (10 → 11)",
-      (await orgCap(payer, auth.org_id)) === PRO_PLUS_ORG_CAP + 1,
+      "extra-org: the purchased rider lifts the resolved cap by exactly one (5 → 6)",
+      (await orgCap(payer, auth.org_id)) === PRO_ORG_CAP + 1,
     );
 
-    const created = await raw(payer, "/api/orgs", "POST", { name: `Org 11 ${tag}` });
+    const created = await raw(payer, "/api/orgs", "POST", { name: `Org 6 ${tag}` });
     check(
-      "extra-org: the SAME create that 402'd above now succeeds — organisation #11 exists",
+      "extra-org: the SAME create that 402'd above now succeeds — organisation #6 exists",
       created.status === 200 && !!(created.json.data as { id?: string } | undefined)?.id,
     );
-    const org11Id = (created.json.data as { id?: string } | undefined)?.id;
+    const org6Id = (created.json.data as { id?: string } | undefined)?.id;
 
-    // --- the customer's ACTUAL next move: put #11 on the bill they bought for
+    // --- the customer's ACTUAL next move: put #6 on the bill they bought for
     // A new organisation is minted on its OWN group, so the story so far ends
     // one step short of what the payer wanted — capacity on THIS bill. The
     // attach is governed by the GROUP cap (assertWithinGroupCap → groupOrgLimit)
     // rather than the PERSON cap the create hit, and that is a second reader of
-    // the rider entirely. 10 held + 1 against a cap of 10 + 1 rider is exactly
+    // the rider entirely. 5 held + 1 against a cap of 5 + 1 rider is exactly
     // at the line, so this passes only while the rider is being counted.
-    const attached11 = await raw(payer, "/api/billing/group/attach", "POST", {
-      org_id: org11Id,
+    const attached6 = await raw(payer, "/api/billing/group/attach", "POST", {
+      org_id: org6Id,
       subscription_id: walletId,
     });
     const [groupAfter] = await db<{ n: number }[]>`
       select count(*)::int as n from organizations
        where subscription_id = ${walletId} and deleted_at is null`;
     check(
-      "extra-org: organisation #11 ATTACHES to the bill the rider was bought on — the GROUP cap counts it too (11 on one bill)",
-      attached11.status === 200 && groupAfter?.n === PRO_PLUS_ORG_CAP + 1,
+      "extra-org: organisation #6 ATTACHES to the bill the rider was bought on — the GROUP cap counts it too (6 on one bill)",
+      attached6.status === 200 && groupAfter?.n === PRO_ORG_CAP + 1,
     );
 
     // --- a tier change RE-PRICES the rider; it never resizes it -----------
@@ -3440,10 +3848,14 @@ async function extraOrgAddonSuite(): Promise<void> {
     // notice is assertable here with no Stripe at all: after the tier moves,
     // the rider they are still paying for must still be worth exactly +1
     // against the NEW plan's base, never the old one and never nothing.
-    await setPlan(auth.org_id, "pro", payer);
+    // Pro → Community is the downgrade a real customer makes (cancelling Pro
+    // drops them to it), and after v18 it is the only tier move left with a
+    // finite base on both sides — enterprise resolves this key to unlimited, so
+    // "+1 against the new base" is not expressible there.
+    await setPlan(auth.org_id, "community", payer);
     check(
-      "extra-org: after a Pro Plus → Pro tier change the rider still adds exactly one (5 → 6) — a re-price is never a capacity change",
-      (await orgCap(payer, auth.org_id)) === PRO_ORG_CAP + 1,
+      "extra-org: after a Pro → Community tier change the rider still adds exactly one (1 → 2) — a re-price is never a capacity change",
+      (await orgCap(payer, auth.org_id)) === COMMUNITY_ORG_CAP + 1,
     );
 
     // --- CANCELLING the rider gives the capacity back --------------------
@@ -3457,8 +3869,8 @@ async function extraOrgAddonSuite(): Promise<void> {
       update org_addons set status = 'canceled'
        where wallet_id = ${walletId} and stripe_item_id = ${`si_smoke_orgaddon_${tag}`}`;
     check(
-      "extra-org: a CANCELED rider stops counting — the cap falls straight back to the plan base (6 → 5)",
-      (await orgCap(payer, auth.org_id)) === PRO_ORG_CAP,
+      "extra-org: a CANCELED rider stops counting — the cap falls straight back to the plan base (2 → 1)",
+      (await orgCap(payer, auth.org_id)) === COMMUNITY_ORG_CAP,
     );
   } finally {
     await db.end();
@@ -3538,7 +3950,11 @@ async function addonChurnWebhookSuite(): Promise<void> {
     };
 
     // === #330 — churn. The subscription is gone; so is the capacity it billed.
-    const churn = await seedGroup("churn", "pro_plus");
+    // `pro`, not the deleted `pro_plus` (V393, entitlements v18). The plan key
+    // is incidental here — what is under test is a webhook cancelling the
+    // add-on rows on a PAID group — and Pro is the only self-serve paid tier
+    // left that a Stripe subscription would legitimately sit on.
+    const churn = await seedGroup("churn", "pro");
     const before = await statuses(churn.walletId);
     check(
       "addon churn: fixture built — a paid group carrying a purchased rider, a purchased seat block and an admin comp, all live",
@@ -3639,8 +4055,6 @@ async function addonChurnWebhookSuite(): Promise<void> {
  * refusal STATUS rather than a completed purchase, so it never needs Stripe.
  */
 async function passLockEnforcementSuite(): Promise<void> {
-  // V319: community carries 10 concurrent competitions.
-  const COMMUNITY_COMP_CAP = 10;
   const featureKey = (r: V1Res) =>
     (r.json.error as { feature_key?: string } | undefined)?.feature_key;
   // A UTC calendar date `n` days from today, as a string. Written as a string
@@ -3651,6 +4065,21 @@ async function passLockEnforcementSuite(): Promise<void> {
 
   const s = newSession();
   const orgId = (await signIn(s, `passlock_${tag}@example.com`)).org_id;
+  // READ, never typed. This was `const COMMUNITY_COMP_CAP = 10` on a comment
+  // citing V319; entitlements v18 (V393) cut `competitions.max_active` on
+  // community to 3, so the fixture loop below 402'd on the fourth create,
+  // threw on `v1data(...).id` and ABORTED the entire run from here down —
+  // which is a large part of why nobody had a green smoke on this branch. The
+  // cap has now moved twice; the next move must not cost another run.
+  const capEnt = (await call(s, `/api/orgs/${orgId}/entitlements`)) as {
+    entitlements: Record<string, { limit?: number | null }>;
+  };
+  const resolvedCompCap = capEnt.entitlements["competitions.max_active"]?.limit;
+  check(
+    "pass lock/quota: community resolves a FINITE competitions.max_active to fill",
+    typeof resolvedCompCap === "number" && resolvedCompCap >= 2,
+  );
+  const COMMUNITY_COMP_CAP = typeof resolvedCompCap === "number" ? resolvedCompCap : 0;
   const mkComp = async (name: string) =>
     v1data<{ id: string }>(
       await v1(s, "/api/v1/competitions", "POST", { ends_on: "2030-12-31", name: `${name} ${tag}`, visibility: "unlisted" }),
@@ -4648,11 +5077,15 @@ async function newsSuite(admin: Session, proOrgId: string, proOrgSlug: string): 
   check("news free (P3): Generate digest gated 402 (Pro news.auto)", freeDigest.status === 402);
 }
 
-/** PLG growth loops (design/plg): the free-tier "Powered by Seazn Club"
- *  footer is an acquisition CTA (attribution-link.tsx) and every public
- *  competition page carries a fan-facing share bar (share-bar.tsx) — pro
- *  orgs keep the share bar but drop the attribution footer (unchanged
- *  org.branded gate). /me carries the player→organiser nudge
+/** PLG growth loops (design/plg): the "Powered by Seazn Club" footer is an
+ *  acquisition CTA (attribution-link.tsx) and every public competition page
+ *  carries a fan-facing share bar (share-bar.tsx). The footer used to be the
+ *  free tier's alone; V396 (entitlements v18 W2 T15, owner ruling 2026-09-03)
+ *  made badge removal ENTERPRISE-only, so a Pro org now carries BOTH — the
+ *  `org.branded` gate is unchanged, the row behind it moved. That is the
+ *  acquisition loop the same ruling took off profiles, embeds and auto posts;
+ *  it runs through public dashboards instead. /me carries the player→organiser
+ *  nudge
  *  (run-your-own-cta.tsx) and /discover always offers the /start CTA. */
 async function plgGrowthSuite(admin: Session, proOrgId: string, proOrgSlug: string): Promise<void> {
   admin.cookies["seazn_org"] = proOrgId;
@@ -4675,8 +5108,16 @@ async function plgGrowthSuite(admin: Session, proOrgId: string, proOrgSlug: stri
     // Key off the attribution CTA's own text, not a bare "Powered by" — the
     // community attribution line itself reads "Powered by Seazn Club", so that
     // substring never isolated the footer that org.branded drops.
-    "plg pro page drops the Seazn attribution footer",
-    !proShared.body.includes("Run your own free"),
+    //
+    // INVERTED by V396, not deleted. This asserted that a Pro page DROPS the
+    // footer, which was true for as long as `dashboard.branding` was true on
+    // Pro (V112 → V395). The owner moved badge removal to enterprise on
+    // 2026-09-03: every self-serve plan carries the badge now, Pro included,
+    // and the assertion has to say so rather than be quietly retired. The
+    // enterprise case has no persona in this script; `entitlements-v18-badge.test.ts`
+    // covers all five plans through `org_has_feature` itself.
+    "plg pro page KEEPS the Seazn attribution footer (V396: badge removal is enterprise-only)",
+    proShared.body.includes("Run your own free"),
   );
 
   // --- RS007: the `/shared/[orgSlug]` segment must MISS with a 404, never a
@@ -6300,8 +6741,8 @@ async function oneTrialSuite(): Promise<void> {
   // so both trial copies — and `upgrade.proCard.cta` = "Go Pro — 14-day free
   // trial" — sit in the body whatever the org's state. Inside that JSON the
   // label is preceded by an escaped quote, so only the rendered <button> text
-  // matches here. ("Go Pro Plus — …" never collides: '>Go Pro —' needs the
-  // dash next.)
+  // matches here. (The retired "Go Pro Plus — …" could not collide either:
+  // '>Go Pro —' needs the dash next.)
   const OFFERS_TRIAL = ">Start free trial —";
   const OFFERS_NO_TRIAL = ">Go Pro —";
 
@@ -11365,7 +11806,7 @@ async function placementPerCourtBlackoutSuite(): Promise<void> {
 
 /** design/v4 (Task 18): the AI Schedule Architect end-to-end over HTTP.
  *
- *  A fresh Pro Plus org walks the two-phase happy path — schedule ai-plan
+ *  A fresh Pro org walks the two-phase happy path — schedule ai-plan
  *  (proposal shape + a schedule.ai_generated ledger row stamping model/usage/
  *  cost_usd) → apply with the `ai` provenance block → ai-last recall → officials
  *  ai-plan with an EMPTY instruction (zero-token solver draft →
@@ -11379,8 +11820,10 @@ async function placementPerCourtBlackoutSuite(): Promise<void> {
  *  deterministic draft, so a run is CLEAN by construction. Model-dependent steps
  *  run only when SCHEDULING_AI_BASE_URL is set — the server under test must be
  *  booted pointing at our fixture server (recipe in the Task 18 report). The cap
- *  402 is keyless-safe and always runs. officials.auto is Pro Plus (V290), so the
- *  happy path uses its own fresh pro_plus org rather than the passed pro org. */
+ *  402 is keyless-safe and always runs. The happy path uses its OWN fresh paid
+ *  org rather than the passed pro org, so its wallet and entitlement cache are
+ *  never shared with a sibling suite. (It used to say officials.auto is Pro Plus
+ *  per V290 — V393 brought that grant back down to Pro and deleted the plan.) */
 async function v4AiSuite(admin: Session, proOrgId: string, proOrgSlug: string): Promise<void> {
   void admin;
   void proOrgId;
@@ -11455,14 +11898,14 @@ async function v4AiSuite(admin: Session, proOrgId: string, proOrgSlug: string): 
       );
     }
 
-    // ---- Pro Plus two-phase happy path (schedule + officials) — needs the model ----
+    // ---- Paid two-phase happy path (schedule + officials) — needs the model ----
     if (fixture) {
-      const plus = newSession();
-      const plusOrg = (await signIn(plus, `smoke-ai-plus-${tag}@example.com`)).org_id;
-      await setPlan(plusOrg, "pro_plus", plus);
-      const { compId, divId, stageId } = await seedPlannableAiDivision(plus, "AI Plus");
+      const paid = newSession();
+      const paidOrg = (await signIn(paid, `smoke-ai-pro-${tag}@example.com`)).org_id;
+      await setPlan(paidOrg, "pro", paid);
+      const { compId, divId, stageId } = await seedPlannableAiDivision(paid, "AI Paid");
       const firstRefId = v1data<{ id: string }>(
-        await v1(plus, "/api/v1/officials", "POST", {
+        await v1(paid, "/api/v1/officials", "POST", {
           display_name: `AI Ref ${tag}`,
           role_keys: ["referee"],
         }),
@@ -11480,8 +11923,8 @@ async function v4AiSuite(admin: Session, proOrgId: string, proOrgSlug: string): 
       // (`FIXTURE_COMPILE_BRIEF`); against any other sentence the canned model
       // answers "nothing compiled", and `hard.length > 0` would be asserting
       // the fixture rather than the endpoint.
-      const creditsBeforePreview = await walletBalance(plusOrg);
-      const pv = await v1(plus, `/api/v1/divisions/${divId}/schedule/ai-preview`, "POST", {
+      const creditsBeforePreview = await walletBalance(paidOrg);
+      const pv = await v1(paid, `/api/v1/divisions/${divId}/schedule/ai-preview`, "POST", {
         instruction: FIXTURE_COMPILE_BRIEF,
       });
       const preview = v1data<AiPreviewLite>(pv);
@@ -11499,7 +11942,7 @@ async function v4AiSuite(admin: Session, proOrgId: string, proOrgSlug: string): 
       );
       check(
         "W5 preview: compiling spends NO credit — the point of the gate (#400)",
-        (await walletBalance(plusOrg)) === creditsBeforePreview,
+        (await walletBalance(paidOrg)) === creditsBeforePreview,
       );
       // Unpriced, but never invisible: the compile has its own ledger line under
       // the same field names a run stamps (#387/#398).
@@ -11514,7 +11957,7 @@ async function v4AiSuite(admin: Session, proOrgId: string, proOrgSlug: string): 
       // The reuse gate. A confirmation is a confirmation of THAT sentence: an
       // edited brief must be refused, not silently recompiled behind the
       // agreement the organiser already gave.
-      const stale = await v1(plus, `/api/v1/divisions/${divId}/schedule/ai-plan`, "POST", {
+      const stale = await v1(paid, `/api/v1/divisions/${divId}/schedule/ai-plan`, "POST", {
         instruction: "a completely different sentence",
         preview_id: preview.preview_id,
         mode: "generate",
@@ -11525,17 +11968,17 @@ async function v4AiSuite(admin: Session, proOrgId: string, proOrgSlug: string): 
       );
       check(
         "W5 preview: the refused reuse charged nothing either",
-        (await walletBalance(plusOrg)) === creditsBeforePreview,
+        (await walletBalance(paidOrg)) === creditsBeforePreview,
       );
 
-      const planRes = await v1(plus, `/api/v1/divisions/${divId}/schedule/ai-plan`, "POST", {
+      const planRes = await v1(paid, `/api/v1/divisions/${divId}/schedule/ai-plan`, "POST", {
         instruction,
         mode: "generate",
         officials_policy: { roles: ["referee"] },
       });
       const plan = v1data<AiPlanResponseLite>(planRes);
       check(
-        "v4 AI/plus: schedule ai-plan returns a verified proposal (proposal + diff + usage + coverage)",
+        "v4 AI/paid: schedule ai-plan returns a verified proposal (proposal + diff + usage + coverage)",
         planRes.status === 200 &&
           Array.isArray(plan.proposal) &&
           plan.proposal.length > 0 &&
@@ -11545,7 +11988,7 @@ async function v4AiSuite(admin: Session, proOrgId: string, proOrgSlug: string): 
           plan.officials_coverage !== undefined,
       );
       check(
-        "v4 AI/plus: the fixture model served the schedule phase",
+        "v4 AI/paid: the fixture model served the schedule phase",
         fixture.calls.some((c) => c.phase === "schedule"),
       );
       // ---- #397: the pack's calendar anchor, over the one surface that shows
@@ -11566,7 +12009,7 @@ async function v4AiSuite(admin: Session, proOrgId: string, proOrgSlug: string): 
 
       const genEvent = await latestCompetitionEvent(compId, "schedule.ai_generated");
       check(
-        "v4 AI/plus: schedule.ai_generated ledger row stamps model + usage + cost_usd",
+        "v4 AI/paid: schedule.ai_generated ledger row stamps model + usage + cost_usd",
         !!genEvent &&
           typeof genEvent.model === "string" &&
           !!genEvent.usage &&
@@ -11625,7 +12068,7 @@ async function v4AiSuite(admin: Session, proOrgId: string, proOrgSlug: string): 
           (plan.repair.minimality !== "proved" || typeof plan.repair.moved === "number"),
       );
 
-      const applied = await v1(plus, `/api/v1/stages/${stageId}/schedule/apply`, "POST", {
+      const applied = await v1(paid, `/api/v1/stages/${stageId}/schedule/apply`, "POST", {
         // ApplyScheduleRequest.assignments[] wants court_id — the AI plan's
         // own proposal keeps the court_label field NAME (it already carries a
         // real court id as its value, P9 pass 3b), so this is a rename at the
@@ -11644,17 +12087,17 @@ async function v4AiSuite(admin: Session, proOrgId: string, proOrgSlug: string): 
         },
       });
       check(
-        "v4 AI/plus: applying the AI proposal writes the schedule (source ai)",
+        "v4 AI/paid: applying the AI proposal writes the schedule (source ai)",
         applied.status === 200 && v1data<{ applied: number }>(applied).applied > 0,
       );
 
-      const last = await v1(plus, `/api/v1/divisions/${divId}/schedule/ai-last`);
+      const last = await v1(paid, `/api/v1/divisions/${divId}/schedule/ai-last`);
       const lastData = v1data<{
         last?: { instruction?: string } | null;
         runs?: { used?: number; max?: number | null };
       }>(last);
       check(
-        "v4 AI/plus: ai-last recalls the applied instruction",
+        "v4 AI/paid: ai-last recalls the applied instruction",
         last.status === 200 && lastData?.last?.instruction === instruction,
       );
       check(
@@ -11662,11 +12105,11 @@ async function v4AiSuite(admin: Session, proOrgId: string, proOrgSlug: string): 
         // used to resolve (pro_plus 50); the AI credit wallet meters spend
         // instead, so `runs.max` is now always null (lastAiApply, schedule.ts) —
         // `runs.used` still counts the same schedule.ai_generated rows.
-        "v4 AI/plus: ai-last reports 1 run used and no per-division max (wallet-metered now)",
+        "v4 AI/paid: ai-last reports 1 run used and no per-division max (wallet-metered now)",
         lastData?.runs?.used === 1 && lastData?.runs?.max === null,
       );
 
-      const offRes = await v1(plus, `/api/v1/divisions/${divId}/officials/ai-plan`, "POST", {
+      const offRes = await v1(paid, `/api/v1/divisions/${divId}/officials/ai-plan`, "POST", {
         instruction: "",
         policy: { roles: ["referee"] },
         // #387: what a confirm card would have shown. The empty-instruction
@@ -11691,19 +12134,19 @@ async function v4AiSuite(admin: Session, proOrgId: string, proOrgSlug: string): 
         quote_mismatch?: { quoted: number; charged: number };
       }>(offRes);
       check(
-        "v4 AI/plus: officials ai-plan (empty instruction) returns a zero-token solver draft",
+        "v4 AI/paid: officials ai-plan (empty instruction) returns a zero-token solver draft",
         offRes.status === 200 &&
           off.usage.input_tokens === 0 &&
           off.usage.output_tokens === 0 &&
           off.usage.repair_rounds === 0,
       );
       check(
-        "v4 AI/plus: the empty-instruction officials run made NO model call",
+        "v4 AI/paid: the empty-instruction officials run made NO model call",
         !fixture.calls.some((c) => c.phase === "officials"),
       );
       const offEvent = await latestCompetitionEvent(compId, "schedule.ai_officials_generated");
       check(
-        'v4 AI/plus: schedule.ai_officials_generated ledger row stamps model "solver-draft"',
+        'v4 AI/paid: schedule.ai_officials_generated ledger row stamps model "solver-draft"',
         !!offEvent && offEvent.model === "solver-draft",
       );
 
@@ -11735,7 +12178,7 @@ async function v4AiSuite(admin: Session, proOrgId: string, proOrgSlug: string): 
       // the one the solver did NOT choose for that slot. If the adoption were
       // dropped, the response would come back naming the control's pick.
       const secondRefId = v1data<{ id: string }>(
-        await v1(plus, "/api/v1/officials", "POST", {
+        await v1(paid, "/api/v1/officials", "POST", {
           display_name: `AI Ref B ${tag}`,
           role_keys: ["referee"],
         }),
@@ -11748,7 +12191,7 @@ async function v4AiSuite(admin: Session, proOrgId: string, proOrgSlug: string): 
       const control = v1data<{
         assignments: { fixtureId: string; officialId: string; roleKey: string }[];
       }>(
-        await v1(plus, `/api/v1/divisions/${divId}/officials/ai-plan`, "POST", {
+        await v1(paid, `/api/v1/divisions/${divId}/officials/ai-plan`, "POST", {
           instruction: "",
           policy: { roles: ["referee"] },
           schedule: officialsSchedule,
@@ -11756,7 +12199,7 @@ async function v4AiSuite(admin: Session, proOrgId: string, proOrgSlug: string): 
       );
       const target = control.assignments[0];
       const adoptedId = target?.officialId === secondRefId ? firstRefId : secondRefId;
-      const adoptRes = await v1(plus, `/api/v1/divisions/${divId}/officials/ai-plan`, "POST", {
+      const adoptRes = await v1(paid, `/api/v1/divisions/${divId}/officials/ai-plan`, "POST", {
         instruction: "",
         policy: { roles: ["referee"] },
         schedule: officialsSchedule,
@@ -11803,7 +12246,7 @@ async function v4AiSuite(admin: Session, proOrgId: string, proOrgSlug: string): 
       // below is the difference, and it reds if the recursion behind the null
       // slots is removed, because an undecided fixture then carries no people
       // at all.
-      const bracket = await seedBracketAiDivision(plus, "AI Bracket");
+      const bracket = await seedBracketAiDivision(paid, "AI Bracket");
       const tbdIds = new Set(
         bracket.fixtures
           .filter((f) => f.home_entrant_id === null && f.away_entrant_id === null)
@@ -11825,7 +12268,7 @@ async function v4AiSuite(admin: Session, proOrgId: string, proOrgSlug: string): 
         })),
       ];
       const refinedRes = await v1(
-        plus,
+        paid,
         `/api/v1/divisions/${bracket.divId}/schedule/ai-plan`,
         "POST",
         {
@@ -11889,12 +12332,12 @@ async function v4AiSuite(admin: Session, proOrgId: string, proOrgSlug: string): 
       // so a drafted date must be today or later. Read, again, through the
       // proposal — the pack's own draft echoed back by the fixture model.
       //
-      // Topped up first: this is one more metered run on the plus wallet, and
+      // Topped up first: this is one more metered run on the paid wallet, and
       // an `ai.credits` 402 here would look like an anchor regression.
-      await topUpWallet(plusOrg, 3);
-      const undated = await seedPlannableAiDivision(plus, "AI Undated", null);
+      await topUpWallet(paidOrg, 3);
+      const undated = await seedPlannableAiDivision(paid, "AI Undated", null);
       const undatedRes = await v1(
-        plus,
+        paid,
         `/api/v1/divisions/${undated.divId}/schedule/ai-plan`,
         "POST",
         { instruction: "spread the fixtures across both courts", mode: "generate" },
@@ -11962,12 +12405,15 @@ async function scheduleAiRoundOrderSuite(): Promise<void> {
     return;
   }
   try {
-    const plus = newSession();
-    const plusOrg = (await signIn(plus, `smoke-ai-roundorder-${tag}@example.com`)).org_id;
-    await setPlan(plusOrg, "pro_plus", plus);
-    const { divId } = await seedPlannableAiDivision(plus, "AI Round Order");
+    // Plan-agnostic: this suite is about round-order DETECTION, not a tier. It
+    // sits on `pro` because that is the paid plan v4AiSuite uses and `pro_plus`
+    // no longer exists in `plans` (V393, entitlements v18).
+    const paid = newSession();
+    const paidOrg = (await signIn(paid, `smoke-ai-roundorder-${tag}@example.com`)).org_id;
+    await setPlan(paidOrg, "pro", paid);
+    const { divId } = await seedPlannableAiDivision(paid, "AI Round Order");
 
-    const planRes = await v1(plus, `/api/v1/divisions/${divId}/schedule/ai-plan`, "POST", {
+    const planRes = await v1(paid, `/api/v1/divisions/${divId}/schedule/ai-plan`, "POST", {
       instruction: `${FIXTURE_ROUND_ORDER} — spread the fixtures across both courts.`,
       mode: "generate",
     });
@@ -12126,9 +12572,12 @@ async function jointAiSuite(): Promise<void> {
   try {
     const s = newSession();
     const orgId = (await signIn(s, `smoke-ai-joint-${tag}@example.com`)).org_id;
-    // scheduling.multi_division is Pro and above; Pro Plus matches the sibling
-    // AI suite and keeps the grant comfortably above the 4 credits below.
-    await setPlan(orgId, "pro_plus", s);
+    // scheduling.multi_division is Pro and above, and Pro matches the sibling AI
+    // suite. (It used to flip to `pro_plus`, a plan V393 deleted from `plans`;
+    // the credit balance this suite reasons about is set by `drainWallet`
+    // below, not by the plan's monthly allowance, so nothing here depended on
+    // the larger grant.)
+    await setPlan(orgId, "pro", s);
     const { compId, divIds } = await seedJointAiCompetition(s, "Joint AI");
     const instruction = "keep both divisions off each other's courts and finish by 6pm";
     const rung_overrides = { [divIds[0]]: 2, [divIds[1]]: 3 };
@@ -12333,17 +12782,23 @@ async function scheduledCountsByDivision(divisionIds: string[]): Promise<Record<
   }
 }
 
-/** pro-plus-tier (Task 11, spec §1): community's per-fixture-official cap
- *  (1) and save-point cap (1) 402, api.write (any write-capable key scope —
- *  score or manage) is re-armed above Pro — Pro's read-only keys stay free
- *  but a score- or manage-scope key still needs Pro Plus — and Pro Plus
- *  lifts both quotas plus both key scopes. Runs
- *  on its own fresh community owner (never touches org/org2 from main()),
+/** The rung ABOVE Pro (Task 11, spec §1), walked on one org across three plans:
+ *  community's save-point window rolls at 2 and its officials stay ungated,
+ *  Pro's read-only keys stay free while a score- or manage-scope key still
+ *  402s on api.write, and the tier above Pro lifts the save-point window and
+ *  mints the write-capable key.
+ *
+ *  Was `proPlusSuite`. V393 (entitlements v18) deleted `pro_plus` from `plans`,
+ *  so the rung is `enterprise` now; the suite follows the rung rather than the
+ *  plan name, because what it exists to prove — that api.write is the
+ *  above-Pro differentiator — is still true.
+ *
+ *  Runs on its own fresh community owner (never touches org/org2 from main()),
  *  but still restores the org's own plan at the end (shared-DB poison trap:
  *  leave a flipped org as found in case a later suite lands above this one). */
-async function proPlusSuite(): Promise<void> {
+async function aboveProRungSuite(): Promise<void> {
   const owner = newSession();
-  const who = await signIn(owner, `proplus_${tag}@example.com`);
+  const who = await signIn(owner, `aboveprorung_${tag}@example.com`);
   const orgId = who.org_id;
 
   const comp = v1data<{ id: string; slug: string }>(
@@ -12398,7 +12853,7 @@ async function proPlusSuite(): Promise<void> {
     });
   const officialsAllowed = await setTwoOfficials();
   check(
-    "pp: community allows a 2nd official on one fixture (officials.per_fixture.max ungated #253)",
+    "rung: community allows a 2nd official on one fixture (officials.per_fixture.max ungated #253)",
     officialsAllowed.status === 200,
   );
 
@@ -12409,38 +12864,38 @@ async function proPlusSuite(): Promise<void> {
   const cp1 = await v1(owner, `/api/v1/divisions/${div.id}/checkpoints`, "POST", {
     label: cp1Label,
   });
-  check("pp: community's first save point is free", cp1.status === 201);
+  check("rung: community's first save point is free", cp1.status === 201);
   const cp2 = await v1(owner, `/api/v1/divisions/${div.id}/checkpoints`, "POST", {
     label: `plus 2 ${tag}`,
   });
-  check("pp: community's second save point is free (cap is 2)", cp2.status === 201);
+  check("rung: community's second save point is free (cap is 2)", cp2.status === 201);
   const cp3Rolled = await v1(owner, `/api/v1/divisions/${div.id}/checkpoints`, "POST", {
     label: `plus 3 ${tag}`,
   });
   check(
-    "pp: community's 3rd save point rolls the window and names what it replaced (#382)",
+    "rung: community's 3rd save point rolls the window and names what it replaced (#382)",
     cp3Rolled.status === 201 &&
       (cp3Rolled.json.data as { evicted?: { label?: string } } | undefined)?.evicted?.label ===
         cp1Label,
   );
   const cpList = await v1(owner, `/api/v1/divisions/${div.id}/checkpoints`, "GET");
   check(
-    "pp: community holds exactly 2 manual save points after the roll",
+    "rung: community holds exactly 2 manual save points after the roll",
     ((cpList.json.data as { kind?: string }[] | undefined) ?? []).filter(
       (r) => (r.kind ?? "manual") === "manual",
     ).length === 2,
   );
 
   // (b) Pro: read-only keys stay free (api.access), but a score- or
-  // manage-scope key still needs Pro Plus — V290 re-arms the above-Pro rung
-  // (api.write).
+  // manage-scope key still needs the rung ABOVE Pro — V290 re-armed it and
+  // v18 kept it there (api.write: false on pro, true on enterprise).
   await setPlan(orgId, "pro", owner);
   const proScoreKey = await v1(owner, `/api/v1/orgs/${orgId}/api-keys`, "POST", {
     name: "plus score",
     scopes: ["score"],
   });
   check(
-    "pp: pro 402s a score-scope key (api.write is Pro Plus only)",
+    "rung: pro 402s a score-scope key (api.write is granted above Pro only)",
     proScoreKey.status === 402 &&
       (proScoreKey.json.error as { feature_key?: string } | undefined)?.feature_key === "api.write",
   );
@@ -12449,39 +12904,72 @@ async function proPlusSuite(): Promise<void> {
     scopes: ["manage"],
   });
   check(
-    "pp: pro 402s a manage-scope key (api.write is Pro Plus only)",
+    "rung: pro 402s a manage-scope key (api.write is granted above Pro only)",
     proManageKey.status === 402 &&
       (proManageKey.json.error as { feature_key?: string } | undefined)?.feature_key ===
         "api.write",
   );
 
-  // (c) Pro Plus: both quota gates lift and both write-capable key scopes mint.
-  await setPlan(orgId, "pro_plus", owner);
+  // (c) The rung ABOVE Pro. Was `pro_plus`; V393 (entitlements v18) deleted that
+  // plan from `plans` and `subscriptions.plan_key` carries a live FK, so this
+  // flip was throwing. `enterprise` is the rung now.
+  await setPlan(orgId, "enterprise", owner);
+
+  // NOT a cap lift any more, and the old name said it was. V393 DELETED
+  // `officials.per_fixture.max` outright — arm (a) above already gets 200 for
+  // the same two officials on COMMUNITY. So what is worth asserting here is
+  // that the key stays gone at the top of the ladder too: if a row for it ever
+  // reappeared, a finite cap would arrive on every plan at once and this is the
+  // tier where nobody would think to look.
   const officialsOk = await setTwoOfficials();
-  check("pp: pro_plus lifts officials.per_fixture.max", officialsOk.status === 200);
+  check(
+    "rung: two officials on one fixture still land above Pro (V393 deleted officials.per_fixture.max)",
+    officialsOk.status === 200,
+  );
+
+  // A save-point lift, asserted so it can FAIL. `201` alone is satisfied by
+  // community too, because #382 made the over-cap 3rd ROLL rather than 402 —
+  // the difference between the tiers is whether anything was EVICTED to make
+  // room. Community rolled at 2 (asserted above, `evicted.label`); above Pro
+  // the cap is unlimited, so the 3rd must land with no eviction and the window
+  // must hold three.
   const cp3 = await v1(owner, `/api/v1/divisions/${div.id}/checkpoints`, "POST", {
-    label: `plus 3 ${tag}`,
+    label: `rung 3 ${tag}`,
   });
-  check("pp: pro_plus lifts schedule.checkpoints.max", cp3.status === 201);
-  const plusManageKey = await v1(owner, `/api/v1/orgs/${orgId}/api-keys`, "POST", {
-    name: "plus manage",
+  const cp3Evicted = (cp3.json.data as { evicted?: { label?: string } } | undefined)?.evicted;
+  const cpListAfter = await v1(owner, `/api/v1/divisions/${div.id}/checkpoints`, "GET");
+  check(
+    "rung: the save-point window lifts above Pro — the 3rd lands and evicts NOTHING (community rolled here)",
+    cp3.status === 201 &&
+      cp3Evicted === undefined &&
+      ((cpListAfter.json.data as { kind?: string }[] | undefined) ?? []).filter(
+        (r) => (r.kind ?? "manual") === "manual",
+      ).length === 3,
+  );
+
+  const rungManageKey = await v1(owner, `/api/v1/orgs/${orgId}/api-keys`, "POST", {
+    name: "rung manage",
     scopes: ["manage"],
   });
-  check("pp: pro_plus mints a manage-scope key", plusManageKey.status === 201);
+  check("rung: the tier above Pro mints a manage-scope key", rungManageKey.status === 201);
 
-  // (d) /pricing renders the matrix marker + the Pro Plus offer — marketing
-  // never drifts from what the resolver enforces (spec §5).
+  // (d) /pricing renders the matrix marker + the above-Pro offer — marketing
+  // never drifts from what the resolver enforces (spec §5). The Pro Plus CARD
+  // is gone with the plan (V393); design §4 replaced it with a Contact-us strip
+  // under the comparison table (`pricing.enterprise.*`), so that strip is what
+  // the above-Pro offer looks like now.
   const pricing = await html(newSession(), "/en/pricing");
   check(
-    "pp: /pricing carries the comparison table + Pro Plus offer",
+    "rung: /pricing carries the comparison table + the above-Pro contact offer",
     pricing.status === 200 &&
       pricing.body.includes("data-pricing-matrix") &&
-      pricing.body.includes("Pro Plus"),
+      pricing.body.includes("federations, leagues at scale") &&
+      pricing.body.includes("Talk to us"),
   );
   // T84: the three v16 league-ops entitlements (discipline, marks, auto
   // news) are surfaced on the Pro card + comparison matrix, not just gated.
   check(
-    "pp: /pricing surfaces the v16 league-ops entitlements",
+    "rung: /pricing surfaces the v16 league-ops entitlements",
     pricing.body.includes("Suspensions &amp; discipline tracking") &&
       pricing.body.includes("Automatic suspension tracking"),
   );
@@ -14414,7 +14902,8 @@ async function schedRegV3Suite(
 
   // Dual payments on community: offline fees were always plan-free, and since
   // V310 (registration.paid on every plan) the CARD method is free too — the
-  // platform monetises it through the higher community fee (8% vs pro's 2%),
+  // platform monetises it through the higher community fee (5% vs pro's 2%
+  // since V398; it was 8% vs 2%),
   // not by gating it. It still requires Connect, so it is refused UNTIL Connect
   // is live, then allowed.
   const fOffline = await v1(free, `/api/v1/divisions/${fDiv.id}/registration-settings`, "PUT", {
@@ -14954,7 +15443,9 @@ async function v1Suite(admin: Session, orgId: string, orgSlug: string): Promise<
 
   // Public-page theming, free path (public redesign): the branding write is
   // accepted, but the public view empties it for orgs without
-  // dashboard.branding — the page must NOT carry the --ps-* accent override.
+  // `dashboard.theme` (V397 — the key was `dashboard.branding` until W2 T17
+  // split badge removal off it) — the page must NOT carry the --ps-* accent
+  // override.
   const branded = await v1(admin, `/api/v1/competitions/${compId}`, "PATCH", {
     branding: { colors: { primary: "#0f766e" } },
   });
@@ -14975,7 +15466,7 @@ async function v1Suite(admin: Session, orgId: string, orgSlug: string): Promise<
   check("community slideshow renders", freeBoard.status === 200);
   check("community slideshow keeps default theme", !freeBoardHtml.includes("--ps-accent:#0f766e"));
   // Org-level brand color: the write lands on any plan, but the public org
-  // landing ignores it without dashboard.branding.
+  // landing ignores it without dashboard.theme.
   const orgBrand = await raw(admin, `/api/orgs/${orgId}`, "PATCH", {
     branding: { colors: { primary: "#0f766e" } },
   });
@@ -15064,9 +15555,16 @@ async function jul3Suite(admin: Session, orgId: string, orgSlug: string): Promis
     }),
   );
 
-  // Public-page theming, pro path (public redesign): dashboard.branding lets
+  // Public-page theming, pro path (public redesign): dashboard.theme lets
   // the brand color through the public view and the competition page inlines
   // the --ps-* accent override for its whole subtree.
+  //
+  // These four theme checks went RED under V396 and were left red on purpose:
+  // badge removal became enterprise-only, and the colour rode the same key, so
+  // a paying Pro org lost its palette. V397 gave the colour its own key rather
+  // than editing these to match the defect. If they red again, the two keys
+  // have been re-welded somewhere — start at server/public-site/data.ts,
+  // public_competitions_v and server/slideshow-data.ts.
   await v1(admin, `/api/v1/competitions/${comp.id}`, "PATCH", {
     branding: { colors: { primary: "#0f766e" } },
   });
@@ -15080,8 +15578,8 @@ async function jul3Suite(admin: Session, orgId: string, orgSlug: string): Promis
   });
   const divId = v1data<{ id: string }>(div).id;
 
-  // Slideshow theming, pro path: dashboard.branding tints the noticeboard
-  // with the brand color via the same --ps-* resolver.
+  // Slideshow theming, pro path: dashboard.theme tints the noticeboard
+  // with the brand color via the same --ps-* resolver (orgBoardChrome).
   const proBoard = await fetch(`${BASE}/slideshow/divisions/${divId}`, {
     headers: { cookie: cookieHeader(admin) },
   });
@@ -15163,17 +15661,18 @@ async function jul3Suite(admin: Session, orgId: string, orgSlug: string): Promis
   await v1(admin, `/api/v1/divisions/${divId}/start`, "POST");
 
   const officialId = v1data<{ id: string }[]>(officials)[0].id;
-  // V290 moved officials.auto up to Pro Plus (approved hard move, no grandfather).
-  // This suite runs on a plain Pro org, so the auto-propose path now 402s here —
-  // the ALLOWED path moved to smokePlanMatrix's pro_plus persona, so coverage of
-  // the feature lands on the right tier instead of vanishing.
+  // V290 moved officials.auto up to Pro Plus; V393 (entitlements v18 W2 T1)
+  // brought it BACK to Pro when Pro Plus was deleted, and gave it to both pass
+  // rungs as well. This suite runs on a plain Pro org, so the auto-propose path
+  // succeeds here again. Rewritten rather than deleted: a 402 assertion on a
+  // key the plan now grants is a paywall claim for a paywall that is gone, and
+  // deleting it would leave the Pro path with no coverage at all.
   const auto = await v1(admin, `/api/v1/divisions/${divId}/officials/auto`, "POST", {
     policy: { roles: ["referee"] },
   });
   check(
-    "jul3 officials auto is Pro Plus only (402 officials.auto on Pro)",
-    auto.status === 402 &&
-      (auto.json.error as { feature_key?: string } | undefined)?.feature_key === "officials.auto",
+    "jul3 officials auto is allowed on Pro (V393 brought it back off Pro Plus)",
+    auto.status === 200,
   );
   const patchOff = await v1(admin, `/api/v1/fixtures/${fixtures[0].id}/officials`, "PATCH", {
     set: [{ official_id: officialId, role_key: "referee", locked: false }],
@@ -15604,7 +16103,16 @@ async function gapSuite(admin: Session, org1Id: string, proOrgId: string): Promi
     "gap scorer sees assigned fixtures",
     assigned.status === 200 && v1data<unknown[]>(assigned).length > 0,
   );
-  // scorers.max (Pro = 1): a second scorer can't take a seat.
+  // V395 (entitlements v18 W2 T12) DELETED `scorers.max`. This check asserted
+  // 402 on the second scorer against a Pro cap of 1, and its own NAME stated
+  // that rule — so it is INVERTED rather than dropped, the same way the V393
+  // `officials.per_fixture.max` check above was: the interesting fact is now
+  // that the seat is FREE to take, and a check that quietly disappeared would
+  // leave the deletion's most likely failure (a key with no row resolving to 0,
+  // refusing every scorer) with nothing watching it end to end.
+  //
+  // The seat is charged against `members.max` now, which is 10 on Pro, so the
+  // second scorer fits — where a leftover `scorers.max` read would 402.
   const scorerInvite2 = (await call(admin, `/api/orgs/${proOrgId}/invites`, "POST", {
     role: "scorer",
     max_uses: 1,
@@ -15612,13 +16120,16 @@ async function gapSuite(admin: Session, org1Id: string, proOrgId: string): Promi
   })) as { token: string };
   const scorer2 = newSession();
   await signIn(scorer2, `scorer2_${tag}@example.com`);
-  const seatFull = await raw(scorer2, `/api/invites/${scorerInvite2.token}/accept`, "POST", {});
-  check("gap second scorer seat blocked (scorers.max)", seatFull.status === 402);
+  const secondSeat = await raw(scorer2, `/api/invites/${scorerInvite2.token}/accept`, "POST", {});
+  check(
+    "gap second scorer seat is free to take (V395 deleted scorers.max)",
+    secondSeat.status === 200,
+  );
 
   // --- Additive invites: accepting never changes an existing role. An
   // editor's own test scan is a no-op that doesn't burn the link; a viewer
-  // accepting the same link keeps viewer and gains the assignment — even
-  // with the scorer seat pool full (no seat is charged) ---
+  // accepting the same link keeps viewer and gains the assignment — and no
+  // seat is charged for it, because they already hold one ---
   const gapViewerInvite = (await call(admin, `/api/orgs/${proOrgId}/invites`, "POST", {
     role: "viewer",
     max_uses: 1,
@@ -17313,7 +17824,7 @@ async function cleanup(tag: string): Promise<void> {
     `ui_free_${tag}@example.com`,
     `disc_free_${tag}@example.com`,
     `pass_${tag}@example.com`,
-    `proplus_${tag}@example.com`,
+    `aboveprorung_${tag}@example.com`,
     `funnel_${tag}@example.com`,
     `tos_${tag}@example.com`,
     `player_${tag}@example.com`,
@@ -17342,8 +17853,12 @@ async function cleanup(tag: string): Promise<void> {
     `p72comm_${tag}@example.com`,
     `smoke-community-${tag}@example.com`,
     `smoke-pro-${tag}@example.com`,
-    `smoke-proplus-${tag}@example.com`,
+    `smoke-enterprise-${tag}@example.com`,
     `smoke-pass-${tag}@example.com`,
+    // T20 publicQuotaDegradeSuite — its own community org (the cap-many public
+    // competitions, the degraded one and the templated one all cascade with
+    // it, as does its competitions.max_active override).
+    `pubquota_${tag}@example.com`,
     // Task 23 — passGrantsSuite's own org (its two competitions, pass row,
     // sponsors, packages, person and AI ledger rows all cascade with it).
     `passgrant_${tag}@example.com`,
@@ -17352,7 +17867,7 @@ async function cleanup(tag: string): Promise<void> {
     `passl_${tag}@example.com`,
     `passlpro_${tag}@example.com`,
     // Task 20 — the three extra users seeded per plan org (owner is above).
-    ...["community", "pro", "proplus", "pass"].flatMap((k) => [
+    ...["community", "pro", "enterprise", "pass"].flatMap((k) => [
       `scorer_${k}_${tag}@example.com`,
       `official_${k}_${tag}@example.com`,
       `player_${k}_${tag}@example.com`,
@@ -17375,7 +17890,7 @@ async function cleanup(tag: string): Promise<void> {
     // trips: by the time it's checked, both rows are already gone together.
     `referrer_${tag}@example.com`,
     `referred_${tag}@example.com`,
-    // #293 extraOrgAddonSuite — the Pro Plus payer (whose nine seeded fill
+    // #293 extraOrgAddonSuite — the Pro payer (whose four seeded fill
     // organisations carry created_by = this user and so go with the purge
     // below), the non-payer co-owner, and the community owner.
     `orgaddon_${tag}@example.com`,

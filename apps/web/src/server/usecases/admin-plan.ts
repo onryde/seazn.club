@@ -130,10 +130,13 @@ export async function planPanel(orgId: string): Promise<PlanPanel> {
   // Liveness, not mere presence: a cancelled subscription keeps its id for
   // ever, and that org's plan is no longer sourced from Stripe.
   // Any PAID plan without a live subscription is a comp — an org comped at
-  // pro_plus is just as comped as one at pro.
+  // enterprise is just as comped as one at pro. (pro_plus retired,
+  // entitlements v18 V393 — enterprise is its above-Pro successor, and is
+  // ALWAYS comped: design §4 says it is granted only through this admin
+  // path or a bespoke Stripe subscription, never self-serve checkout.)
   const source = hasLiveSubscription(sub)
     ? "stripe"
-    : sub.plan_key === "pro" || sub.plan_key === "pro_plus"
+    : sub.plan_key === "pro" || sub.plan_key === "enterprise"
       ? "comped"
       : "none";
   return {
@@ -356,7 +359,8 @@ export async function extendTrial(
     // No live subscription: the grant has to CONVEY Pro, because entitlements
     // resolve on plan_key — status/trial_end grant nothing. comped_until is the
     // expiry the resolver already honours, so nothing needs to sweep it. Only
-    // lift a community org; an org comped at pro_plus must not be demoted.
+    // lift a community org; an org comped at enterprise (pro_plus's retired,
+    // entitlements v18) must not be demoted.
     //
     // status only moves to 'trialing' when there is NO subscription id at all.
     // A departed org keeps its dead id, and writing a live-looking status onto

@@ -92,6 +92,28 @@ function requireSessionEditor(auth: AuthCtx): void {
   }
 }
 
+/** The competition an Event-Pass-lifted gate must be resolved against.
+ *
+ *  lib/entitlements.ts only consults `competition_passes` when a competition is
+ *  in scope, so a gate on a key V393 lifts (`scoring.device_links`) that omits it makes the
+ *  pass INVISIBLE — the org pays $29 and is refused on the competition it
+ *  bought. Same shape as usecases/officials.ts's `competitionForDivision` (T6).
+ *
+ *  Pooled `sql`, and deliberately OUTSIDE the `withTenant` callback below:
+ *  `resolve` queries the pooled proxy, and issuing that from inside a pinned
+ *  tenant transaction asks the pool for a second connection while the first is
+ *  still held — the self-deadlock lib/db.ts guards against.
+ *
+ *  A missing row yields `undefined`, which resolves the gate org-wide (the
+ *  pre-V393 behaviour) and the 404 is raised inside the transaction as before. */
+async function competitionForFixture(fixtureId: string): Promise<string | undefined> {
+  const [row] = await sql<{ competition_id: string }[]>`
+    select d.competition_id from fixtures f
+    join divisions d on d.id = f.division_id
+    where f.id = ${fixtureId}`;
+  return row?.competition_id;
+}
+
 /**
  * Mint a device link for a fixture (doc 13 §7). Revokes prior active links —
  * one live device per fixture. Secret returned exactly once.
@@ -102,7 +124,12 @@ export async function createDeviceLink(
   label: string | null,
 ): Promise<DeviceLinkRow & { secret: string }> {
   requireSessionEditor(auth);
-  await requireFeature(auth.orgId, "scoring.device_links"); // 402 for Community
+  // 402 for Community, unless an Event Pass covers this fixture's competition.
+  await requireFeature(
+    auth.orgId,
+    "scoring.device_links",
+    await competitionForFixture(fixtureId),
+  );
   const secret = mintDeviceLinkSecret();
   const row = await withTenant(auth.orgId, async (tx) => {
     const [fixture] = await tx<{ id: string; division_id: string; status: string }[]>`

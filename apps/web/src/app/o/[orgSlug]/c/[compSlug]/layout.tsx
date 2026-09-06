@@ -39,7 +39,7 @@ export const dynamic = "force-dynamic";
 // pre-empting it.
 import { sql } from "@/lib/db";
 import { isPaidPlan, orgPlanKey, passLockReason, type PassLockReason } from "@/lib/entitlements";
-import { isPassKey, PASS_KEYS, type Currency, type PassKey } from "@/lib/currency";
+import { isPassKey, SELLABLE_PASS_KEYS, type Currency, type PassKey } from "@/lib/currency";
 import { sellablePassRungs } from "@/lib/pass-vs-plan";
 import { preferredCurrency } from "@/lib/currency-server";
 import { orgBySlug, compBySlug } from "@/server/slug-resolve";
@@ -139,8 +139,11 @@ async function passState(
     passKey: null,
     paidPlan: false,
     // Unresolvable org/competition: the child page owns the 404, and every rung
-    // stays nominally for sale, which is what shipped before #327.
-    sellableRungs: [...PASS_KEYS] as PassKey[],
+    // ON SALE stays nominally for sale, which is what shipped before #327.
+    // Never the full ladder — a fallback that offers a withdrawn rung is the
+    // one place the withdrawal would leak, and it leaks on the path where
+    // nothing else is known.
+    sellableRungs: [...SELLABLE_PASS_KEYS] as PassKey[],
     currency: "usd" as Currency,
     lockReason: null,
   };
@@ -184,7 +187,7 @@ async function passState(
   const sellableRungs =
     hasPass || lockReason !== null
       ? []
-      : ((await sellablePassRungs(PASS_KEYS, planKey, paid)) as PassKey[]);
+      : ((await sellablePassRungs(SELLABLE_PASS_KEYS, planKey, paid)) as PassKey[]);
   const covered = paid && sellableRungs.length === 0;
   return {
     passKey: hasPass && isPassKey(row.pass_key) ? (row.pass_key as PassKey) : hasPass ? "event_pass" : null,

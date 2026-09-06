@@ -11,8 +11,12 @@ import {
 
 // Scorer seat: a scorer invite with a division default_scope both creates the
 // membership AND the scorer_assignments row (there is no separate assign API).
-// The scorer is a fresh user — this spec spends ONE magic link; the org's
-// scorers.max on Pro is 1, so it is also the only scorer spec.
+// The scorer is a fresh user — this spec spends ONE magic link. It used to be
+// the only scorer spec because the org's `scorers.max` on Pro was 1; V395
+// (entitlements v18 W2 T12) DELETED that key and the seat is charged against
+// `members.max` instead (10 on Pro), so the seat is no longer the scarce
+// resource it was. Staying a single serial spec is now a magic-link budget
+// decision, not a seat one.
 test.describe.serial("scorer routing and scoring surface", () => {
   const scorerEmail = `e2e-scorer-${TAG}@example.com`;
   let divisionId: string;

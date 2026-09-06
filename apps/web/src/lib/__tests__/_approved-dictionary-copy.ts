@@ -63,19 +63,30 @@ export const APPROVED_DICTIONARY_COPY: ApprovedValue[] = [
   },
   {
     file: "marketing",
-    key: "pricing.faq.eventPass.a",
-    why: "what the pass buys, for how long, and the size of the one-time credit grant. Caps come from plan_entitlements (event_pass / event_pass_l); the grant is PASS_CREDIT_GRANT in lib/pricing-cards.ts and is FLAT across rungs; the duration is V328/V334.",
+    key: "pricing.pass.crossover",
+    why: "which of the two offers is cheaper, and the volume of entry fees at which that flips. Every figure is interpolated live — the two prices from config/stripe-plans.json via lib/currency's passPrice/proPrice, both rates from registration.fee_percent in plan_entitlements (V398: pass 4, pro 2), and the crossing itself from lib/pricing-crossover.ts's feeCrossoverMinor. So the NUMBERS cannot rot; the WORDS decide which side of the threshold each offer is on, and a reword that swaps them sells the one-time sku to the organisers the recurring one is cheaper for. Suppressed entirely when a rate is unreadable or the ladder stops crossing, so this sentence never appears without both rates behind it. THE DURATION CLAUSE IS LOAD-BEARING and was missing for a wave: feeCrossoverMinor solves a one-time pass against ONE MONTH of Pro, so the threshold is only the answer for a competition of about that length. Read without it the line recommended Pro to a three-month event at $300/mo of entry fees — $62.97 on Pro against $47.99 on the pass — i.e. it was wrong for exactly the long seasons it matters most to. The page has no duration input and must not invent one; the sentence states its own assumption instead, and pricing-crossover.test.ts scans all four locales for a competition tied to a month in one clause. IT ALSO NAMES ITS RUNG, and did not for a wave: the figure is solved for ONE rung (`lowestPricedRung` over SELLABLE_PASS_KEYS — the entry rung, which the in-app picker pre-selects; it read PASS_KEYS until the L rung came off sale on 2026-09-05, and reading the sellable list is what stops a crossing ever being solved for a rung the checkout would refuse) while the card sells BOTH, and “this is the cheaper option” was therefore printed beside an L rung it is false of. L at 4499 is dearer than a month of Pro at 1499 AND dearer per pound, so the two never cross at any volume and `feeCrossoverMinor` returns null for that shape — the suppression rule was already right, the sentence's SCOPE was not. `{rung}` and `{pass}` are interpolated from the same rung the number came from, so the claim and its subject cannot drift apart; pricing-crossover.test.ts scans all four locales for both tokens and pricing-page.test.tsx reads the rendered paragraph.",
     text: {
-      en: "One competition, for as long as it’s running. The M pass ({pass}) gives that competition 10 divisions and 128 entrants per division; the L pass ({passL}) takes the same competition to 20 divisions and no entrant limit at all. Either way you get advanced formats, exports and realtime, the same one-time +25 AI credits added to your wallet, and a 5% platform fee on its entry fees instead of Community’s 8% — and it stops counting against your free active-competition slot. Pick the size at checkout; a competition holds one pass and keeps it. Your club logo and card entry fees work on every plan already, pass or no pass. Other competitions in your org stay on Community limits.",
-      es: "Una competición, mientras está en curso. El pase M ({pass}) le da a esa competición 10 divisiones y 128 participantes por división; el pase L ({passL}) lleva la misma competición a 20 divisiones y sin ningún límite de participantes. En ambos casos obtienes formatos avanzados, exportaciones y tiempo real, los mismos +25 créditos de IA de una sola vez añadidos a tu monedero, y una comisión de plataforma del 5% sobre sus cuotas de inscripción en lugar del 8% de Community — y deja de contar en tu cupo gratuito de competiciones activas. Elige el tamaño al pagar; una competición tiene un solo pase y lo conserva. El logotipo de tu club y las cuotas con tarjeta ya funcionan en todos los planes, con pase o sin él. Otras competiciones de tu organización se mantienen con los límites de Community.",
-      fr: "Une compétition, tant qu’elle est en cours. Le pass M ({pass}) donne à cette compétition 10 divisions et 128 participants par division ; le pass L ({passL}) porte la même compétition à 20 divisions et sans aucune limite de participants. Dans les deux cas vous bénéficiez des formats avancés, des exports et du temps réel, des mêmes +25 crédits IA ponctuels ajoutés à votre portefeuille, ainsi que de 5 % de frais de plateforme sur ses frais d’inscription au lieu des 8 % de Communauté — et elle cesse de compter dans votre quota gratuit de compétition active. Choisissez la taille au moment de payer ; une compétition détient un seul pass et le conserve. Le logo de votre club et les frais d’inscription par carte fonctionnent déjà sur tous les forfaits, avec ou sans pass. Les autres compétitions de votre organisation restent soumises aux limites Communauté.",
-      nl: "Één competitie, zolang ze loopt. De M-pass ({pass}) geeft die competitie 10 divisies en 128 deelnemers per divisie; de L-pass ({passL}) tilt dezelfde competitie naar 20 divisies en helemaal geen deelnemerslimiet. In beide gevallen krijg je geavanceerde formats, exports en realtime, dezelfde eenmalige +25 AI-credits in je wallet, plus 5% platformkosten op de inschrijfgelden in plaats van de 8% van Community — en telt de competitie niet meer mee voor je gratis actieve-competitieplek. Kies de maat bij het afrekenen; een competitie heeft één pass en houdt die. Het logo van je club en inschrijfgelden per kaart werken al bij elk abonnement, met of zonder pass. Andere competities in je organisatie blijven op de Community-limieten.",
+      en: "On a competition running about a month, the {rung} pass ({pass}) is the cheaper option up to about {amount} of entry fees; above that it is Pro at {pro}/mo — a {proFee}% platform fee against {passFee}%. The pass is one-time, so a longer competition puts that threshold higher.",
+      es: "En una competición de aproximadamente un mes, el pase {rung} ({pass}) es la opción más barata hasta unos {amount} de cuotas de inscripción; por encima de eso lo es Pro a {pro}/mes: una comisión de plataforma del {proFee}% frente al {passFee}%. El pase es de pago único, así que una competición más larga sitúa ese umbral más alto.",
+      fr: "Sur une compétition d’environ un mois, le pass {rung} ({pass}) est l’option la moins chère jusqu’à environ {amount} de frais d’inscription ; au-delà, c’est Pro à {pro}/mois — {proFee} % de frais de plateforme contre {passFee} %. Le pass est ponctuel : une compétition plus longue place ce seuil plus haut.",
+      nl: "Bij een competitie van ongeveer een maand is de {rung}-pass ({pass}) de goedkoopste keuze tot ongeveer {amount} aan inschrijfgelden; daarboven is dat Pro voor {pro}/mnd — {proFee}% platformkosten tegen {passFee}%. De pass is eenmalig, dus bij een langere competitie ligt die grens hoger.",
+    },
+  },
+  {
+    file: "marketing",
+    key: "pricing.faq.eventPass.a",
+    why: "what the pass buys, for how long, and the size of the one-time credit grant. REWRITTEN 2026-09-05 (owner decision: the L rung comes off sale): the answer described two sizes and told the reader to 'pick the size at checkout', and there is one size on sale, so both halves were describing a purchase that cannot be made. It now describes the rung a buyer can actually reach. Every figure re-read against the code before this text was pinned: caps from plan_entitlements (event_pass = 10 divisions, 128 entrants per division), the grant from PASS_CREDIT_GRANT.event_pass in lib/pricing-cards.ts (25), the 4% / 5% fee pair from registration.fee_percent on event_pass and on community (V398), the duration from V328/V334. Pinned per locale by 'the Event Pass answer quotes the live caps of every rung on sale' in dictionary-copy-truth, which reads SELLABLE_PASS_KEYS and additionally forbids the HIDDEN rung's numbers appearing here — the L rung said 'no entrant limit at all' in all four locales for a whole wave after V393 gave it a real 512-entrant cap, so no rule anywhere lets a cap go back to a word. The rung's own matrix is still checked (pricing-matrix.test.ts, entitlements-sql-parity.test.ts): dormant, not deleted.",
+    text: {
+      en: "One competition, for as long as it’s running. The pass ({pass}) gives that competition 10 divisions and 128 entrants per division. You also get advanced formats, exports and realtime, a one-time AI credit top-up (+25 AI credits), and a 4% platform fee on its entry fees instead of Community’s 5% — and it stops counting against your free active-competition slot. A competition holds one pass and keeps it. Your club logo and card entry fees work on every plan already, pass or no pass. Other competitions in your org stay on Community limits.",
+      es: "Una competición, mientras está en curso. El pase ({pass}) le da a esa competición 10 divisiones y 128 participantes por división. Además obtienes formatos avanzados, exportaciones y tiempo real, una recarga de créditos de IA de una sola vez (+25 créditos de IA), y una comisión de plataforma del 4% sobre sus cuotas de inscripción en lugar del 5% de Community — y deja de contar en tu cupo gratuito de competiciones activas. Una competición tiene un solo pase y lo conserva. El logotipo de tu club y las cuotas con tarjeta ya funcionan en todos los planes, con pase o sin él. Otras competiciones de tu organización se mantienen con los límites de Community.",
+      fr: "Une compétition, tant qu’elle est en cours. Le pass ({pass}) donne à cette compétition 10 divisions et 128 participants par division. Vous bénéficiez aussi des formats avancés, des exports et du temps réel, d’une recharge ponctuelle de crédits IA (+25 crédits IA), ainsi que de 4 % de frais de plateforme sur ses frais d’inscription au lieu des 5 % de Communauté — et elle cesse de compter dans votre quota gratuit de compétition active. Une compétition détient un seul pass et le conserve. Le logo de votre club et les frais d’inscription par carte fonctionnent déjà sur tous les forfaits, avec ou sans pass. Les autres compétitions de votre organisation restent soumises aux limites Communauté.",
+      nl: "Één competitie, zolang ze loopt. De pass ({pass}) geeft die competitie 10 divisies en 128 deelnemers per divisie. Je krijgt ook geavanceerde formats, exports en realtime, een eenmalige AI-creditbijboeking (+25 AI-credits), plus 4% platformkosten op de inschrijfgelden in plaats van de 5% van Community — en telt de competitie niet meer mee voor je gratis actieve-competitieplek. Een competitie heeft één pass en houdt die. Het logo van je club en inschrijfgelden per kaart werken al bij elk abonnement, met of zonder pass. Andere competities in je organisatie blijven op de Community-limieten.",
     },
   },
   {
     file: "marketing",
     key: "pricing.faq.upgraded.a",
-    why: "what happens to a pass when the org is on Pro and when Pro is cancelled. Source of truth: V344 org_has_feature — since #327/#337 the pass arm applies under ANY plan and only ever grants, and lib/entitlements.ts overlays the two matrices as the BETTER of each axis (lib/pass-vs-plan.ts). So 'the pass sits dormant', which V338's community-only arm made true, is now false: an L holder who subscribes to Pro keeps unlimited entrants AND gains Pro's uncapped divisions. The canceled arm still resolves 'community', and pass rows are deleted only on refund/dispute (usecases/billing-events.ts, lib/billing.ts), never on a plan change.",
+    why: "what happens to a pass when the org is on Pro and when Pro is cancelled. Source of truth: V344 org_has_feature — since #327/#337 the pass arm applies under ANY plan and only ever grants, and lib/entitlements.ts overlays the two matrices as the BETTER of each axis (lib/pass-vs-plan.ts). So 'the pass sits dormant', which V338's community-only arm made true, is now false: an L holder who subscribes to Pro keeps L's 512-entrant cap against Pro's 256 (V393 capped the rung; it had been unlimited) AND gains Pro's uncapped divisions. The canceled arm still resolves 'community', and pass rows are deleted only on refund/dispute (usecases/billing-events.ts, lib/billing.ts), never on a plan change.",
     text: {
       en: "While you're on Pro, Pro's limits apply across the whole organisation — and on the competition you passed, the two are read together: whichever limit is higher wins, so nothing the pass bought is taken back. If you ever cancel Pro the pass carries that competition on its own, for as long as it is still running — a pass is tied to the competition it was bought for and stops with it.",
       es: "Mientras estés en Pro se aplican los límites de Pro en toda la organización — y en la competición con pase se leen los dos juntos: gana el límite más alto, así que no se pierde nada de lo que compraste. Si alguna vez cancelas Pro, el pase sostiene esa competición por sí solo mientras siga en curso: un pase está ligado a la competición para la que se compró y termina con ella.",
@@ -86,28 +97,18 @@ export const APPROVED_DICTIONARY_COPY: ApprovedValue[] = [
   {
     file: "marketing",
     key: "pricing.faq.groups.a",
-    why: "the extra-organisation rate. 'half your plan's rate' unqualified is false — the seed rounds the rider DOWN (usd pro monthly 1900 -> 900 = 47.4%) while eur/aud land on exact halves, so only 'no more than half' is true in all twenty plan x interval x currency combinations. Source of truth: config/stripe-plans.json graduated tiers, via riderClaimShape.",
+    why: "the extra-organisation rate, and the entry-fee rate a Community org drops to on joining. 'half your plan's rate' unqualified is false — the seed FLOORS the rider to the charm grid (usd pro monthly 1499 -> 699 = 46.6%), so only 'no more than half' is true in every plan x interval x currency combination. Source of truth: config/stripe-plans.json graduated tiers, via riderClaimShape. The 5% -> 2% clause is registration.fee_percent in plan_entitlements, re-cut by V398 (it read 8% -> 2%).",
     text: {
-      en: "Yes. A subscription is a billing group: it can hold several organisations under one card and one invoice, and each organisation after the first costs no more than half your plan’s rate. Every organisation in the group runs on the group’s plan, so joining a Pro Plus group takes an organisation’s entry-fee rate from 8% to 1%. Payouts are untouched — each organisation keeps its own Stripe account and its own bank details.",
-      es: "Sí. Una suscripción es un grupo de facturación: puede incluir varias organizaciones con una sola tarjeta y una sola factura, y cada organización a partir de la primera cuesta no más de la mitad de la tarifa de tu plan. Todas las organizaciones del grupo funcionan con el plan del grupo, así que unirse a un grupo Pro Plus baja la comisión de inscripción de una organización del 8% al 1%. Los pagos no cambian: cada organización conserva su propia cuenta de Stripe y sus propios datos bancarios.",
-      fr: "Oui. Un abonnement est un groupe de facturation : il peut réunir plusieurs organisations sous une seule carte et une seule facture, et chaque organisation après la première coûte au plus la moitié du tarif de votre forfait. Toutes les organisations du groupe fonctionnent avec le forfait du groupe : rejoindre un groupe Pro Plus fait passer les frais d’inscription d’une organisation de 8 % à 1 %. Les reversements ne changent pas : chaque organisation conserve son propre compte Stripe et ses propres coordonnées bancaires.",
-      nl: "Ja. Een abonnement is een facturatiegroep: het kan meerdere organisaties omvatten met één kaart en één factuur, en elke organisatie na de eerste kost hoogstens de helft van het tarief van je abonnement. Elke organisatie in de groep draait op het abonnement van de groep, dus toetreden tot een Pro Plus-groep brengt het inschrijfkostenpercentage van een organisatie van 8% naar 1%. Uitbetalingen veranderen niet: elke organisatie houdt haar eigen Stripe-account en haar eigen bankgegevens.",
-    },
-  },
-  {
-    file: "marketing",
-    key: "pricing.faq.proPlus.a",
-    why: "Pro Plus's differentiators and the extra-organisation rate. Every claim after 'Everything in Pro, plus' asserts EXCLUSIVITY, so each must be a feature lower plans lack: scheduling.ai is granted on all five plan keys and must NOT appear here. Source of truth: plan_entitlements (officials.auto, api.write, support.priority are pro_plus-only; ai.credits.monthly is 10/60/200).",
-    text: {
-      en: "Everything in Pro, plus unlimited members, teams and clubs inside every organisation, a 1% platform fee, the largest monthly AI credit grant, auto officials assignment, write API access and priority support. Pro is {pro}/month; Pro Plus is {plus}/month or {plusAnnual}/year. Pro covers up to 5 organisations on one bill and Pro Plus up to 10, each extra one at no more than half the base rate.",
-      es: "Todo lo de Pro, más miembros, equipos y clubes ilimitados dentro de cada organización, comisión de plataforma del 1 %, la mayor dotación mensual de créditos de IA, asignación automática de árbitros, acceso de escritura a la API y soporte prioritario. Pro cuesta {pro}/mes; Pro Plus cuesta {plus}/mes o {plusAnnual}/año. Pro cubre hasta 5 organizaciones en una sola factura y Pro Plus hasta 10, cada una adicional por no más de la mitad de la tarifa base.",
-      fr: "Tout ce qu’offre Pro, plus des membres, équipes et clubs illimités au sein de chaque organisation, 1 % de frais de plateforme, la dotation mensuelle de crédits IA la plus élevée, l’attribution automatique des officiels, l’accès API en écriture et une assistance prioritaire. Pro est à {pro}/mois ; Pro Plus est à {plus}/mois ou {plusAnnual}/an. Pro couvre jusqu’à 5 organisations sur une seule facture et Pro Plus jusqu’à 10, chaque organisation supplémentaire pour au plus la moitié du tarif de base.",
-      nl: "Alles van Pro, plus onbeperkt leden, teams en clubs binnen elke organisatie, 1% platformkosten, het grootste maandelijkse AI-credittegoed, automatische toewijzing van officials, schrijftoegang tot de API en prioritaire ondersteuning. Pro is {pro}/maand; Pro Plus is {plus}/maand of {plusAnnual}/jaar. Pro dekt tot 5 organisaties op één factuur en Pro Plus tot 10, elke extra organisatie voor hoogstens de helft van het basistarief.",
+      en: "Yes. A subscription is a billing group: it can hold several organisations under one card and one invoice, and each organisation after the first costs no more than half your plan’s rate. Every organisation in the group runs on the group’s plan, so joining a Pro group takes an organisation’s entry-fee rate from 5% to 2%. Payouts are untouched — each organisation keeps its own Stripe account and its own bank details.",
+      es: "Sí. Una suscripción es un grupo de facturación: puede incluir varias organizaciones con una sola tarjeta y una sola factura, y cada organización a partir de la primera cuesta no más de la mitad de la tarifa de tu plan. Todas las organizaciones del grupo funcionan con el plan del grupo, así que unirse a un grupo Pro baja la comisión de inscripción de una organización del 5% al 2%. Los pagos no cambian: cada organización conserva su propia cuenta de Stripe y sus propios datos bancarios.",
+      fr: "Oui. Un abonnement est un groupe de facturation : il peut réunir plusieurs organisations sous une seule carte et une seule facture, et chaque organisation après la première coûte au plus la moitié du tarif de votre forfait. Toutes les organisations du groupe fonctionnent avec le forfait du groupe : rejoindre un groupe Pro fait passer les frais d’inscription d’une organisation de 5 % à 2 %. Les reversements ne changent pas : chaque organisation conserve son propre compte Stripe et ses propres coordonnées bancaires.",
+      nl: "Ja. Een abonnement is een facturatiegroep: het kan meerdere organisaties omvatten met één kaart en één factuur, en elke organisatie na de eerste kost hoogstens de helft van het tarief van je abonnement. Elke organisatie in de groep draait op het abonnement van de groep, dus toetreden tot een Pro-groep brengt het inschrijfkostenpercentage van een organisatie van 5% naar 2%. Uitbetalingen veranderen niet: elke organisatie houdt haar eigen Stripe-account en haar eigen bankgegevens.",
     },
   },
   // ── The Pro Plus CARD (v17 gap wave 7, #299) ───────────────────────────────
   //
-  // `pricing.faq.proPlus.a` above is the ANSWER three cards down the page. These
+  // `pricing.faq.proPlus.a` was the ANSWER three cards down the page; it is
+  // deleted with the plan (retired-plan copy sweep, V393). These
   // six keys are the CARD itself — the frame plus its five bullets — and until
   // this task they were the only Pro Plus surface nothing pinned. The result was
   // a page that disagreed with itself: the FAQ had dropped "AI-assisted
@@ -154,7 +155,7 @@ export const APPROVED_DICTIONARY_COPY: ApprovedValue[] = [
   {
     file: "marketing",
     key: "pricing.plus.f3",
-    why: "THE BULLET THIS TASK FIXED. It read 'AI-assisted scheduling' (four locales) under the 'Everything in Pro, plus…' frame while plan_entitlements grants scheduling.ai on ALL FIVE plan keys — community, event_pass, event_pass_l, pro and pro_plus — so it differentiated nothing. The replacement is the one AI claim the matrix does back: ai.credits.monthly is 10 / 60 / 200, so pro_plus really does carry the largest monthly grant. It is a COMPARATIVE, judged by localeCreditLeadershipFaults against those numbers, not by a boolean grant. Mirrored in English by PLUS_CARD_FEATURES[2] in lib/pricing-cards.ts.",
+    why: "THE BULLET THIS TASK FIXED. It read 'AI-assisted scheduling' (four locales) under the 'Everything in Pro, plus…' frame while plan_entitlements grants scheduling.ai on ALL FIVE plan keys — community, event_pass, event_pass_l, pro and pro_plus — so it differentiated nothing. The replacement is the one AI claim the matrix does back: ai.credits.monthly is 10 / 60 / 200, so pro_plus really does carry the largest monthly grant. It is a COMPARATIVE, judged by localeCreditLeadershipFaults against those numbers, not by a boolean grant. Its English mirror, PLUS_CARD_FEATURES[2] in lib/pricing-cards.ts, was DELETED in W2 (entitlements v18): V393 removed `pro_plus` from `plans` outright, so the comparative now reads over community 5 / pro 25 / enterprise 500 and enterprise is a Contact-us strip rather than a priced card. Nothing renders this key; pruning the locale trees is W3's.",
     text: {
       en: "Largest monthly AI credit grant",
       es: "Mayor dotación mensual de créditos de IA",
@@ -266,7 +267,7 @@ export const APPROVED_DICTIONARY_COPY: ApprovedValue[] = [
   {
     file: "marketing",
     key: "pricing.credits.passGrant",
-    why: "the Event Pass credit chip. The pass has NO ai.credits.monthly row — the grant is the one-time PASS_CREDIT_GRANT in lib/pricing-cards.ts — so \"one-time\" is the load-bearing word and a recurring re-wording is the exact inverse claim RECURRING_GRANT_PATTERNS exists for.",
+    why: "the Event Pass credit chip. The pass has NO ai.credits.monthly row — the grant is the one-time PASS_CREDIT_GRANT in lib/pricing-cards.ts — so \"one-time\" is the load-bearing word and a recurring re-wording is the exact inverse claim RECURRING_GRANT_PATTERNS exists for. Entitlements v18 W2 T5 sized it BY RUNG and the chip named both, because the card sold both. REWRITTEN 2026-09-05 (owner decision: the L rung off sale): it names the grant of the rung actually being offered, interpolated from PASS_CREDIT_GRANT indexed by the cheapest SELLABLE rung — the same rung the headline price above it quotes, so the two figures on this card are about one product. The single-{count} shape is the one this chip carried BEFORE the ladder, and the defect that ended it (M's 25 printed beside L's price) cannot recur while the price and the grant are read from the same key; pricing/page.tsx derives both from `offeredRung`. It still renders unconditionally while the ladder above it is suppressed whenever loadMatrix fails soft, so it is the one credit figure a buyer is guaranteed to see.",
     text: {
       en: "+{count} AI credits, one-time",
       es: "+{count} créditos de IA, una sola vez",
@@ -342,19 +343,8 @@ export const APPROVED_DICTIONARY_COPY: ApprovedValue[] = [
   },
   {
     file: "marketing",
-    key: "pricing.addons.seat",
-    why: "the extra-seat add-on label. Priced and delta-ed in config/stripe-plans.json (seat add-on, monthly interval, +1 each) and described in content/help/billing/add-ons.md, which task 7 pins against the seed.",
-    text: {
-      en: "Extra seat",
-      es: "Plaza adicional",
-      fr: "Siège supplémentaire",
-      nl: "Extra plaats",
-    },
-  },
-  {
-    file: "marketing",
     key: "pricing.addons.org",
-    why: "the extra-organisation add-on label. Its RATE is the “no more than half the base rate” claim pinned on pricing.faq.groups.a and pricing.faq.proPlus.a and verified against the seed’s graduated tiers by riderClaimShape.",
+    why: "the extra-organisation add-on label. Its RATE is the “no more than half the base rate” claim pinned on pricing.faq.groups.a and verified against the seed’s graduated tiers by riderClaimShape.",
     text: {
       en: "Extra org",
       es: "Organización adicional",
@@ -410,12 +400,12 @@ export const APPROVED_DICTIONARY_COPY: ApprovedValue[] = [
   {
     file: "ui",
     key: "billing.community.f1",
-    why: "Community’s active-competition cap, in the in-app Settings → Billing panel (rendered with a ✓). Source of truth: plan_entitlements competitions.max_active on community. Pinned numerically against that row by pricing-cards.test.ts.",
+    why: "Community’s active-competition cap, in the in-app Settings → Billing panel (rendered with a ✓). Source of truth: plan_entitlements competitions.max_active on community. Pinned numerically against that row by pricing-cards.test.ts. W2 (entitlements v18, V393) re-cut the cap 10 -> 3; the panel and the public Community card both said 10, overselling the free tier threefold in four languages.",
     text: {
-      en: "10 active competitions",
-      es: "10 competiciones activas",
-      fr: "10 compétitions actives",
-      nl: "10 actieve competities",
+      en: "3 active competitions",
+      es: "3 competiciones activas",
+      fr: "3 compétitions actives",
+      nl: "3 actieve competities",
     },
   },
   {
@@ -432,23 +422,23 @@ export const APPROVED_DICTIONARY_COPY: ApprovedValue[] = [
   {
     file: "ui",
     key: "billing.community.f3",
-    why: "Community’s public-dashboard cap, ✓ row. Source of truth: plan_entitlements dashboard.public.max on community. The number is asserted as a whole token, not a substring — a `toContain(\"1\")` would have passed “10 public dashboards”.",
+    why: "Community’s public-dashboard cap, ✓ row. Source of truth: plan_entitlements dashboard.public.max on community. The number is asserted as a whole token, not a substring — a `toContain(\"1\")` would have passed “10 public dashboards”. W2: the cap has been 3 (V393) and is now 2 (V396), and this row said 1 through all three values — the plural changes with it in every language. The tightening to 2 is only honest because the same wave stopped `assertPublicQuota` counting finished and passed competitions, so the cap meters live surfaces rather than history.",
     text: {
-      en: "1 public dashboard",
-      es: "1 panel público",
-      fr: "1 tableau de bord public",
-      nl: "1 openbaar dashboard",
+      en: "2 public dashboards",
+      es: "2 paneles públicos",
+      fr: "2 tableaux de bord publics",
+      nl: "2 openbare dashboards",
     },
   },
   {
     file: "ui",
     key: "billing.community.f4",
-    why: "that Community can take online registrations AND card entry fees, ✓ row, at the 8% platform cut. Source of truth: plan_entitlements registration.enabled / registration.paid (both true on community) and registration.fee_percent (8). THIS ROW WAS FALSE until fix round 3: it read “Free-event registration”, the exact framing pricing-cards.ts records the public card being corrected away from, while f5 separately denied entry fees outright.",
+    why: "that Community can take online registrations AND card entry fees, ✓ row, at the 5% platform cut. Source of truth: plan_entitlements registration.enabled / registration.paid (both true on community) and registration.fee_percent (5 since V398, which re-cut the whole ladder to 5/4/2/1 for the additive fee model; it was 8). THIS ROW WAS FALSE until fix round 3: it read “Free-event registration”, the exact framing pricing-cards.ts records the public card being corrected away from, while f5 separately denied entry fees outright.",
     text: {
-      en: "Online registration & entry fees (8%)",
-      es: "Inscripción online y cuotas de inscripción (8%)",
-      fr: "Inscription en ligne et frais d’inscription (8 %)",
-      nl: "Online inschrijving & inschrijfgelden (8%)",
+      en: "Online registration & entry fees (5%)",
+      es: "Inscripción online y cuotas de inscripción (5%)",
+      fr: "Inscription en ligne et frais d’inscription (5 %)",
+      nl: "Online inschrijving & inschrijfgelden (5%)",
     },
   },
   {
@@ -465,7 +455,7 @@ export const APPROVED_DICTIONARY_COPY: ApprovedValue[] = [
   {
     file: "ui",
     key: "billing.community.f6",
-    why: "the org theme colour and badge removal, ✗ row. Source of truth: plan_entitlements dashboard.branding, false on community. THIS ROW WAS FALSE until fix round 3: it read “Branding & exports” with a ✗ while `branding` AND `exports` are both TRUE on community (V310) — only dashboard.branding and exports.branded are denied.",
+    why: "the org theme colour and badge removal, ✗ row. Source of truth: plan_entitlements dashboard.theme AND dashboard.branding, both false on community — TWO rows since V397 split them, and the row names both things, so both are pinned. THIS ROW WAS FALSE until fix round 3: it read “Branding & exports” with a ✗ while `branding` AND `exports` are both TRUE on community (V310) — only dashboard.branding and exports.branded are denied.",
     text: {
       en: "Theme colour & badge removal",
       es: "Color del tema y quitar la insignia",
@@ -487,12 +477,12 @@ export const APPROVED_DICTIONARY_COPY: ApprovedValue[] = [
   {
     file: "ui",
     key: "billing.pro.f1",
-    why: "Pro’s unlimited competitions and divisions, ✓ row. Source of truth: plan_entitlements competitions.max_active and divisions.per_competition.max, both null (unlimited) on pro.",
+    why: "Pro’s competition and division allowances, ✓ row. Source of truth: plan_entitlements competitions.max_active (still null — unlimited) and divisions.per_competition.max (20 since V393) on pro. The two rows used to share one word and W2 split them: one bullet covering two rows outlives a change to either, which is exactly how this came to promise unlimited divisions against a cap the resolver enforces at 20. The check behind it now requires the WORD for the null row and the NUMBER for the capped one, and forbids any other digit.",
     text: {
-      en: "Unlimited competitions & divisions",
-      es: "Competiciones y divisiones ilimitadas",
-      fr: "Compétitions et divisions illimitées",
-      nl: "Onbeperkt aantal competities & divisies",
+      en: "Unlimited competitions, 20 divisions each",
+      es: "Competiciones ilimitadas, 20 divisiones cada una",
+      fr: "Compétitions illimitées, 20 divisions chacune",
+      nl: "Onbeperkt aantal competities, 20 divisies elk",
     },
   },
   {
@@ -531,7 +521,7 @@ export const APPROVED_DICTIONARY_COPY: ApprovedValue[] = [
   {
     file: "ui",
     key: "billing.pro.f5",
-    why: "the org theme colour, ✓ row — the same dashboard.branding row Community’s f6 denies, and the row SPEC-1 §5 once ticked for the Event Pass in error. Source of truth: plan_entitlements dashboard.branding, true on pro.",
+    why: "the org theme colour, ✓ row — the same row Community’s f6 denies, and the row SPEC-1 §5 once ticked for the Event Pass in error. Source of truth: plan_entitlements dashboard.theme, true on pro. It was `dashboard.branding` until V397: that key gated the colour AND badge removal, V396 made badge removal enterprise-only, and this ✓ row would have gone false while the string still promised Pro its branding. The STRING is unchanged and correct — “Custom branding” is the colour — only the row it is pinned to moved.",
     text: {
       en: "Custom branding",
       es: "Marca personalizada",
@@ -592,7 +582,7 @@ export const APPROVED_DICTIONARY_COPY: ApprovedValue[] = [
   {
     file: "marketing",
     key: "pricing.plus.soon1",
-    why: "Pro Plus ROADMAP item 1 (SPEC-1 §6) — badged \"coming soon\", NOT purchasable and NOT built. Mirrored in English by PLUS_COMING_SOON[0] in lib/pricing-cards.ts, which pricing-cards.test.ts pins. Re-approving means confirming the feature is still unshipped; shipping it means deleting it from this list and from PLUS_COMING_SOON in the same commit. Nothing in plan_entitlements records shipped-ness — SPEC-1 §9 deliberately seeds domains.custom on pro_plus while the DNS product is unbuilt — so no matrix pin is possible and this gate is the guard.",
+    why: "Pro Plus ROADMAP item 1 (SPEC-1 §6) — badged \"coming soon\", NOT purchasable and NOT built. Its English mirror, PLUS_COMING_SOON[0] in lib/pricing-cards.ts, was DELETED in W2 (entitlements v18) along with the whole Pro Plus card — the plan is gone from `plans` and nothing renders this key any more. The approval stands only as a record; pruning the four locale trees is W3's. Re-approving means confirming the feature is still unshipped; shipping it means deleting it from this list and from PLUS_COMING_SOON in the same commit. Nothing in plan_entitlements records shipped-ness — SPEC-1 §9 deliberately seeds domains.custom on pro_plus while the DNS product is unbuilt — so no matrix pin is possible and this gate is the guard.",
     text: {
       en: "Multi-org command centre",
       es: "Centro de mando multiorganización",
@@ -603,7 +593,7 @@ export const APPROVED_DICTIONARY_COPY: ApprovedValue[] = [
   {
     file: "marketing",
     key: "pricing.plus.soon2",
-    why: "Pro Plus ROADMAP item 2 (SPEC-1 §6) — badged \"coming soon\", NOT purchasable and NOT built. Mirrored in English by PLUS_COMING_SOON[1] in lib/pricing-cards.ts, which pricing-cards.test.ts pins. Re-approving means confirming the feature is still unshipped; shipping it means deleting it from this list and from PLUS_COMING_SOON in the same commit. Nothing in plan_entitlements records shipped-ness — SPEC-1 §9 deliberately seeds domains.custom on pro_plus while the DNS product is unbuilt — so no matrix pin is possible and this gate is the guard.",
+    why: "Pro Plus ROADMAP item 2 (SPEC-1 §6) — badged \"coming soon\", NOT purchasable and NOT built. Its English mirror, PLUS_COMING_SOON[1] in lib/pricing-cards.ts, was DELETED in W2 (entitlements v18) along with the whole Pro Plus card — the plan is gone from `plans` and nothing renders this key any more. The approval stands only as a record; pruning the four locale trees is W3's. Re-approving means confirming the feature is still unshipped; shipping it means deleting it from this list and from PLUS_COMING_SOON in the same commit. Nothing in plan_entitlements records shipped-ness — SPEC-1 §9 deliberately seeds domains.custom on pro_plus while the DNS product is unbuilt — so no matrix pin is possible and this gate is the guard.",
     text: {
       en: "Shared templates & branding across orgs",
       es: "Plantillas y marca compartidas entre organizaciones",
@@ -614,7 +604,7 @@ export const APPROVED_DICTIONARY_COPY: ApprovedValue[] = [
   {
     file: "marketing",
     key: "pricing.plus.soon3",
-    why: "Pro Plus ROADMAP item 3 (SPEC-1 §6) — badged \"coming soon\", NOT purchasable and NOT built. Mirrored in English by PLUS_COMING_SOON[2] in lib/pricing-cards.ts, which pricing-cards.test.ts pins. Re-approving means confirming the feature is still unshipped; shipping it means deleting it from this list and from PLUS_COMING_SOON in the same commit. Nothing in plan_entitlements records shipped-ness — SPEC-1 §9 deliberately seeds domains.custom on pro_plus while the DNS product is unbuilt — so no matrix pin is possible and this gate is the guard.",
+    why: "Pro Plus ROADMAP item 3 (SPEC-1 §6) — badged \"coming soon\", NOT purchasable and NOT built. Its English mirror, PLUS_COMING_SOON[2] in lib/pricing-cards.ts, was DELETED in W2 (entitlements v18) along with the whole Pro Plus card — the plan is gone from `plans` and nothing renders this key any more. The approval stands only as a record; pruning the four locale trees is W3's. Re-approving means confirming the feature is still unshipped; shipping it means deleting it from this list and from PLUS_COMING_SOON in the same commit. Nothing in plan_entitlements records shipped-ness — SPEC-1 §9 deliberately seeds domains.custom on pro_plus while the DNS product is unbuilt — so no matrix pin is possible and this gate is the guard.",
     text: {
       en: "Cross-competition analytics",
       es: "Analíticas entre competiciones",
@@ -625,7 +615,7 @@ export const APPROVED_DICTIONARY_COPY: ApprovedValue[] = [
   {
     file: "marketing",
     key: "pricing.plus.soon4",
-    why: "Pro Plus ROADMAP item 4 (SPEC-1 §6) — badged \"coming soon\", NOT purchasable and NOT built. Mirrored in English by PLUS_COMING_SOON[3] in lib/pricing-cards.ts, which pricing-cards.test.ts pins. Re-approving means confirming the feature is still unshipped; shipping it means deleting it from this list and from PLUS_COMING_SOON in the same commit. Nothing in plan_entitlements records shipped-ness — SPEC-1 §9 deliberately seeds domains.custom on pro_plus while the DNS product is unbuilt — so no matrix pin is possible and this gate is the guard.",
+    why: "Pro Plus ROADMAP item 4 (SPEC-1 §6) — badged \"coming soon\", NOT purchasable and NOT built. Its English mirror, PLUS_COMING_SOON[3] in lib/pricing-cards.ts, was DELETED in W2 (entitlements v18) along with the whole Pro Plus card — the plan is gone from `plans` and nothing renders this key any more. The approval stands only as a record; pruning the four locale trees is W3's. Re-approving means confirming the feature is still unshipped; shipping it means deleting it from this list and from PLUS_COMING_SOON in the same commit. Nothing in plan_entitlements records shipped-ness — SPEC-1 §9 deliberately seeds domains.custom on pro_plus while the DNS product is unbuilt — so no matrix pin is possible and this gate is the guard.",
     text: {
       en: "Custom domain & white-label",
       es: "Dominio propio y marca blanca",
@@ -636,7 +626,7 @@ export const APPROVED_DICTIONARY_COPY: ApprovedValue[] = [
   {
     file: "marketing",
     key: "pricing.plus.soon5",
-    why: "Pro Plus ROADMAP item 5 (SPEC-1 §6) — badged \"coming soon\", NOT purchasable and NOT built. Mirrored in English by PLUS_COMING_SOON[4] in lib/pricing-cards.ts, which pricing-cards.test.ts pins. Re-approving means confirming the feature is still unshipped; shipping it means deleting it from this list and from PLUS_COMING_SOON in the same commit. Nothing in plan_entitlements records shipped-ness — SPEC-1 §9 deliberately seeds domains.custom on pro_plus while the DNS product is unbuilt — so no matrix pin is possible and this gate is the guard.",
+    why: "Pro Plus ROADMAP item 5 (SPEC-1 §6) — badged \"coming soon\", NOT purchasable and NOT built. Its English mirror, PLUS_COMING_SOON[4] in lib/pricing-cards.ts, was DELETED in W2 (entitlements v18) along with the whole Pro Plus card — the plan is gone from `plans` and nothing renders this key any more. The approval stands only as a record; pruning the four locale trees is W3's. Re-approving means confirming the feature is still unshipped; shipping it means deleting it from this list and from PLUS_COMING_SOON in the same commit. Nothing in plan_entitlements records shipped-ness — SPEC-1 §9 deliberately seeds domains.custom on pro_plus while the DNS product is unbuilt — so no matrix pin is possible and this gate is the guard.",
     text: {
       en: "SSO / SAML",
       es: "SSO / SAML",
@@ -647,7 +637,7 @@ export const APPROVED_DICTIONARY_COPY: ApprovedValue[] = [
   {
     file: "marketing",
     key: "pricing.plus.soon6",
-    why: "Pro Plus ROADMAP item 6 (SPEC-1 §6) — badged \"coming soon\", NOT purchasable and NOT built. Mirrored in English by PLUS_COMING_SOON[5] in lib/pricing-cards.ts, which pricing-cards.test.ts pins. Re-approving means confirming the feature is still unshipped; shipping it means deleting it from this list and from PLUS_COMING_SOON in the same commit. Nothing in plan_entitlements records shipped-ness — SPEC-1 §9 deliberately seeds domains.custom on pro_plus while the DNS product is unbuilt — so no matrix pin is possible and this gate is the guard.",
+    why: "Pro Plus ROADMAP item 6 (SPEC-1 §6) — badged \"coming soon\", NOT purchasable and NOT built. Its English mirror, PLUS_COMING_SOON[5] in lib/pricing-cards.ts, was DELETED in W2 (entitlements v18) along with the whole Pro Plus card — the plan is gone from `plans` and nothing renders this key any more. The approval stands only as a record; pruning the four locale trees is W3's. Re-approving means confirming the feature is still unshipped; shipping it means deleting it from this list and from PLUS_COMING_SOON in the same commit. Nothing in plan_entitlements records shipped-ness — SPEC-1 §9 deliberately seeds domains.custom on pro_plus while the DNS product is unbuilt — so no matrix pin is possible and this gate is the guard.",
     text: {
       en: "SLA & dedicated support",
       es: "SLA y soporte dedicado",
@@ -658,7 +648,7 @@ export const APPROVED_DICTIONARY_COPY: ApprovedValue[] = [
   {
     file: "marketing",
     key: "pricing.plus.soon7",
-    why: "Pro Plus ROADMAP item 7 (SPEC-1 §6) — badged \"coming soon\", NOT purchasable and NOT built. Mirrored in English by PLUS_COMING_SOON[6] in lib/pricing-cards.ts, which pricing-cards.test.ts pins. Re-approving means confirming the feature is still unshipped; shipping it means deleting it from this list and from PLUS_COMING_SOON in the same commit. Nothing in plan_entitlements records shipped-ness — SPEC-1 §9 deliberately seeds domains.custom on pro_plus while the DNS product is unbuilt — so no matrix pin is possible and this gate is the guard.",
+    why: "Pro Plus ROADMAP item 7 (SPEC-1 §6) — badged \"coming soon\", NOT purchasable and NOT built. Its English mirror, PLUS_COMING_SOON[6] in lib/pricing-cards.ts, was DELETED in W2 (entitlements v18) along with the whole Pro Plus card — the plan is gone from `plans` and nothing renders this key any more. The approval stands only as a record; pruning the four locale trees is W3's. Re-approving means confirming the feature is still unshipped; shipping it means deleting it from this list and from PLUS_COMING_SOON in the same commit. Nothing in plan_entitlements records shipped-ness — SPEC-1 §9 deliberately seeds domains.custom on pro_plus while the DNS product is unbuilt — so no matrix pin is possible and this gate is the guard.",
     text: {
       en: "Data export & warehouse",
       es: "Exportación de datos y data warehouse",
@@ -669,7 +659,7 @@ export const APPROVED_DICTIONARY_COPY: ApprovedValue[] = [
   {
     file: "marketing",
     key: "pricing.plus.soon8",
-    why: "Pro Plus ROADMAP item 8 (SPEC-1 §6) — badged \"coming soon\", NOT purchasable and NOT built. Mirrored in English by PLUS_COMING_SOON[7] in lib/pricing-cards.ts, which pricing-cards.test.ts pins. Re-approving means confirming the feature is still unshipped; shipping it means deleting it from this list and from PLUS_COMING_SOON in the same commit. Nothing in plan_entitlements records shipped-ness — SPEC-1 §9 deliberately seeds domains.custom on pro_plus while the DNS product is unbuilt — so no matrix pin is possible and this gate is the guard.",
+    why: "Pro Plus ROADMAP item 8 (SPEC-1 §6) — badged \"coming soon\", NOT purchasable and NOT built. Its English mirror, PLUS_COMING_SOON[7] in lib/pricing-cards.ts, was DELETED in W2 (entitlements v18) along with the whole Pro Plus card — the plan is gone from `plans` and nothing renders this key any more. The approval stands only as a record; pruning the four locale trees is W3's. Re-approving means confirming the feature is still unshipped; shipping it means deleting it from this list and from PLUS_COMING_SOON in the same commit. Nothing in plan_entitlements records shipped-ness — SPEC-1 §9 deliberately seeds domains.custom on pro_plus while the DNS product is unbuilt — so no matrix pin is possible and this gate is the guard.",
     text: {
       en: "Bulk & scheduled automation",
       es: "Automatización masiva y programada",
@@ -680,7 +670,7 @@ export const APPROVED_DICTIONARY_COPY: ApprovedValue[] = [
   // ── The extra-organisation TIP (v17 gap wave 7, task 7, #299) ──────────────
   //
   // A FOURTH surface of the half-rate claim, and the one that showed the axis
-  // was still not closed. `pricing.faq.groups.a` and `pricing.faq.proPlus.a`
+  // was still not closed. `pricing.faq.groups.a` and the Pro Plus FAQ answer
   // were corrected earlier in this wave; this key said "half your plan's rate",
   // bare, in all four locales the whole time — the same phrase, the same
   // pattern (`en.halfClaim` spells it out), and again nothing pointed the rule
@@ -694,12 +684,12 @@ export const APPROVED_DICTIONARY_COPY: ApprovedValue[] = [
   {
     file: "ui",
     key: "tips.billing.extra-org.body",
-    why: "the extra-organisation rate, in the ⓘ tip beside the billing-group controls. 'half your plan's rate' unqualified is false — the seed rounds the rider DOWN (usd pro monthly 1900 -> 900 = 47.4%, pro_plus 3900 -> 1900 = 48.7%) while eur and aud land on exact halves, so only 'no more than half' is true in all twenty plan x interval x currency combinations. Source of truth: config/stripe-plans.json graduated tiers, via riderClaimShape. The 2%/1%/8% clause is registration.fee_percent in plan_entitlements and is unchanged.",
+    why: "the extra-organisation rate, in the ⓘ tip beside the billing-group controls. 'half your plan's rate' unqualified is false — the seed FLOORS the rider to the charm grid (usd pro monthly 1499 -> 699 = 46.6%), so only 'no more than half' is true in every plan x interval x currency combination. Source of truth: config/stripe-plans.json graduated tiers, via riderClaimShape. The 2%/5% clause is registration.fee_percent in plan_entitlements, re-cut by V398 (community 8 -> 5); pro_plus is gone (V393) and aud is gone (V394), so both are out of the arithmetic above.",
     text: {
-      en: "Each organisation after the first costs no more than half the base rate. It also moves to your plan's entry-fee cut — 2% on Pro or 1% on Pro Plus, instead of the 8% a free organisation pays.",
-      es: "Cada organización después de la primera cuesta no más de la mitad de la tarifa base. También pasa a la comisión de inscripción de tu plan: 2 % en Pro o 1 % en Pro Plus, en lugar del 8 % que paga una organización gratuita.",
-      fr: "Chaque organisation après la première coûte au plus la moitié du tarif de base. Elle passe aussi à la commission d'inscription de votre formule — 2 % sur Pro ou 1 % sur Pro Plus, au lieu des 8 % que paie une organisation gratuite.",
-      nl: "Elke organisatie na de eerste kost hoogstens de helft van het basistarief. Ze gaat ook over op het inschrijfgeldpercentage van je abonnement — 2% op Pro of 1% op Pro Plus, in plaats van de 8% die een gratis organisatie betaalt.",
+      en: "Each organisation after the first costs no more than half the base rate. It also moves to your plan's entry-fee cut — 2% on Pro, instead of the 5% a free organisation pays.",
+      es: "Cada organización después de la primera cuesta no más de la mitad de la tarifa base. También pasa a la comisión de inscripción de tu plan: 2 % en Pro, en lugar del 5 % que paga una organización gratuita.",
+      fr: "Chaque organisation après la première coûte au plus la moitié du tarif de base. Elle passe aussi à la commission d'inscription de votre formule — 2 % sur Pro, au lieu des 5 % que paie une organisation gratuite.",
+      nl: "Elke organisatie na de eerste kost hoogstens de helft van het basistarief. Ze gaat ook over op het inschrijfgeldpercentage van je abonnement — 2% op Pro, in plaats van de 5% die een gratis organisatie betaalt.",
     },
   },
   // ── The remaining three half-rate surfaces (v17 gap wave 7, task 7 round 2) ──
@@ -850,6 +840,308 @@ export const APPROVED_DICTIONARY_COPY: ApprovedValue[] = [
       es: "Crear la próxima edición",
       fr: "Créer la prochaine édition",
       nl: "Volgende editie aanmaken",
+    },
+  },
+  // ── THE THREE PLAN CARDS' BULLETS (entitlements v18 W2) ────────────────────
+  //
+  // These 22 keys did not exist until this wave. `/pricing` and the home ticket
+  // stubs rendered three hardcoded ENGLISH arrays from lib/pricing-cards.ts, in
+  // every locale — a Spanish visitor read a localised crossover sentence, a
+  // localised FAQ and a localised comparison matrix, then three cards of
+  // English. The arrays now hold dictionary KEYS, and every figure they quote
+  // is interpolated from plan_entitlements rather than typed into four locale
+  // files (a number written into copy goes stale under the row it describes;
+  // written into four locales it goes stale four times and is fixed once).
+  //
+  // So what is pinned here is the WORDING, in four locales side by side — which
+  // rows each bullet claims and how it frames them. The NUMBERS are pinned
+  // elsewhere and better: lib/__tests__/pricing-cards.test.ts re-renders every
+  // card from the live matrix, and lib/__tests__/pricing-card-i18n.test.ts
+  // forbids a digit appearing in any of these values in any locale.
+  {
+    file: "marketing",
+    key: "pricing.community.f1",
+    why: "Community's active-competition and division caps, on the public card. BOTH figures are interpolated from plan_entitlements at render time (competitions.max_active and divisions.per_competition.max on plan_key 'community', live 3 and 4) — lib/pricing-cards.ts declares the rows and lib/__tests__/pricing-cards.test.ts re-renders the card from the live matrix and asserts both appear, so the numbers cannot rot. What is pinned here is the SENTENCE: which two allowances it names, and that it names them as caps rather than as a grant. Bullet 1 read '10 active competitions' against a cap V393 re-cut to 3 — the card oversold the free tier threefold.",
+    text: {
+      en: "{competitions} active competitions, {divisions} divisions",
+      es: "{competitions} competiciones activas, {divisions} divisiones",
+      fr: "{competitions} compétitions actives, {divisions} divisions",
+      nl: "{competitions} actieve competities, {divisions} divisies",
+    },
+  },
+  {
+    file: "marketing",
+    key: "pricing.community.f2",
+    why: "Community's entrant ceiling. entrants.per_division.max on 'community' (live 64), interpolated. The words pinned here scope it PER DIVISION — dropping that qualifier turns a per-division cap into an org-wide one, which is the same class of error the plans article shipped when it gave the pass Community's number.",
+    text: {
+      en: "{entrants} entrants per division",
+      es: "{entrants} participantes por división",
+      fr: "{entrants} participants par division",
+      nl: "{entrants} deelnemers per divisie",
+    },
+  },
+  {
+    file: "marketing",
+    key: "pricing.community.f3",
+    why: "the formats a free organiser can actually run. No number and no matrix row of its own: formats.advanced is what the Event Pass LIFTS, so this bullet names the ones below that line (league, groups, knockout, swiss). Naming an advanced format here would sell what the resolver refuses on Community.",
+    text: {
+      en: "League, groups + knockout & swiss formats",
+      es: "Formatos de liga, grupos + eliminatoria y suizo",
+      fr: "Formats championnat, poules + élimination directe et suisse",
+      nl: "Competitie-, poule- + knock-out- en Zwitserse formats",
+    },
+  },
+  {
+    file: "marketing",
+    key: "pricing.community.f4",
+    why: "that Community can take online registrations AND card entry fees, at a rate. registration.fee_percent on 'community' is interpolated (live 5); registration.paid and registration.enabled are the boolean rows behind the claim, pinned by CARD_SURFACES in lib/__tests__/pricing-cards.test.ts. V310: charging entry fees is free on every plan and only the platform cut differs, so this must not read as though payment were a paid unlock.",
+    text: {
+      en: "Online registration & entry fees ({fee}% fee)",
+      es: "Inscripción en línea y cuotas de inscripción (comisión del {fee}%)",
+      fr: "Inscription en ligne et frais d’inscription ({fee} % de commission)",
+      nl: "Online inschrijving & inschrijfgelden ({fee}% kosten)",
+    },
+  },
+  {
+    file: "marketing",
+    key: "pricing.community.f5",
+    why: "live standings and a public dashboard on the free tier. dashboard.public.max >= 1 on 'community' is the row; it is INT-shaped, so 1 -> 0 makes the bullet false with no boolean moving, which is why CARD_SURFACES pins it with an atLeast rather than as a boolean.",
+    text: {
+      en: "Live standings & public dashboard",
+      es: "Clasificación en directo y panel público",
+      fr: "Classement en direct et tableau de bord public",
+      nl: "Live stand & openbaar dashboard",
+    },
+  },
+  {
+    file: "marketing",
+    key: "pricing.community.f6",
+    why: "that a free competition is listed publicly. discovery.listed on 'community'. Deliberately NOT a share-loop claim: V396 (owner ruling 2026-09-03) made dashboard.player_profiles, embeds.enabled and news.auto paid on Free, so a bullet naming any of those would sell what the resolver now refuses.",
+    text: {
+      en: "Listed on the seazn.club showcase",
+      es: "Listado en el escaparate de seazn.club",
+      fr: "Référencé sur la vitrine seazn.club",
+      nl: "Vermeld in de seazn.club-etalage",
+    },
+  },
+  {
+    file: "marketing",
+    key: "pricing.pass.f1",
+    why: "the pass's DURATION, on its own card. V328/V334 (org_has_feature) bind the pass arm to the competition's own lifecycle — it drops out once the competition is archived or completed, or more than 7 days past its end date — so the pass is bounded, not permanent. 'forever' was false here for a whole wave (v17 gap wave 7). The scope word is load-bearing too: ONE competition, not the organisation.",
+    text: {
+      en: "Upgrades ONE competition while it runs",
+      es: "Mejora UNA competición mientras se disputa",
+      fr: "Améliore UNE compétition tant qu’elle se déroule",
+      nl: "Upgradet ÉÉN competitie zolang die loopt",
+    },
+  },
+  {
+    file: "marketing",
+    key: "pricing.pass.f2",
+    why: "the size a pass buys. divisions.per_competition.max and entrants.per_division.max on 'event_pass' (live 10 and 128), both interpolated. It named BOTH rungs' ceilings until the owner took the L rung off sale on 2026-09-05; the second half then advertised 512 entrants with no checkout behind it, so it went. 'the pass bullet names the division cap of every rung on sale, and no other' in lib/__tests__/pricing-cards.test.ts reads SELLABLE_PASS_KEYS and reds if a withdrawn rung's numbers come back.",
+    text: {
+      en: "{divisions} divisions, {entrants} entrants each",
+      es: "{divisions} divisiones, {entrants} participantes cada una",
+      fr: "{divisions} divisions, {entrants} participants chacune",
+      nl: "{divisions} divisies, elk {entrants} deelnemers",
+    },
+  },
+  {
+    file: "marketing",
+    key: "pricing.pass.f3",
+    why: "the formats the pass unlocks over Community. formats.advanced on 'event_pass'. Named as EXAMPLES (double elimination, ladders) rather than as the complete set, because the row is a single boolean and enumerating it would make the copy owe an update to every format added behind it.",
+    text: {
+      en: "Advanced formats — double elim, ladders",
+      es: "Formatos avanzados: doble eliminación y escaleras",
+      fr: "Formats avancés — double élimination, échelles",
+      nl: "Geavanceerde formats — dubbele eliminatie, ladders",
+    },
+  },
+  {
+    file: "marketing",
+    key: "pricing.pass.f4",
+    why: "the pass's platform fee, AS A SAVING. Both rates are interpolated — registration.fee_percent on 'event_pass' and on 'community' (live 4 against 5, V398's additive ladder 5/4/2/1). Two rows on purpose: quoting only the pass's own rate would survive Community's moving and stop being a saving at all, and this is the bullet a buyer does the arithmetic with.",
+    text: {
+      en: "{fee}% platform fee on entry fees, not {communityFee}%",
+      es: "Comisión de plataforma del {fee}% sobre las cuotas de inscripción, no del {communityFee}%",
+      fr: "{fee} % de frais de plateforme sur les frais d’inscription, au lieu de {communityFee} %",
+      nl: "{fee}% platformkosten op inschrijfgelden, niet {communityFee}%",
+    },
+  },
+  {
+    file: "marketing",
+    key: "pricing.pass.f5",
+    why: "the two boolean grants the pass lifts that a buyer can see on a public page: exports.branded and dashboard.player_profiles. NOT 'custom branding & PDF/XLSX exports' — branding and exports are both true for Community (V310), so that wording sold the pass something it does not add.",
+    text: {
+      en: "Branded exports & public player cards",
+      es: "Exportaciones personalizadas y fichas públicas de jugador",
+      fr: "Exports personnalisés et fiches joueurs publiques",
+      nl: "Exports met huisstijl & openbare spelerskaarten",
+    },
+  },
+  {
+    file: "marketing",
+    key: "pricing.pass.f6",
+    why: "sponsorship. sponsors.tiers and sponsors.monetize on 'event_pass' — the paid half is what makes this a pass claim rather than a Community one, so both halves are load-bearing.",
+    text: {
+      en: "Sponsor tiers & paid sponsorship packages",
+      es: "Niveles de patrocinadores y paquetes de patrocinio de pago",
+      fr: "Niveaux de sponsors et offres de sponsoring payantes",
+      nl: "Sponsorniveaus & betaalde sponsorpakketten",
+    },
+  },
+  {
+    file: "marketing",
+    key: "pricing.pass.f7",
+    why: "realtime on the passed competition. The realtime row on 'event_pass'. Same feature the comparison table calls 'Realtime scoreboard & slideshow', worded to match so a reader comparing card to table is reading one claim.",
+    text: {
+      en: "Realtime scoreboard & slideshow",
+      es: "Marcador y presentación en tiempo real",
+      fr: "Tableau de score et diaporama en temps réel",
+      nl: "Live scorebord & diavoorstelling",
+    },
+  },
+  {
+    file: "marketing",
+    key: "pricing.pro.f1",
+    why: "Pro's competition and division allowances — the bullet that had to SPLIT. competitions.max_active is null on pro (unlimited) while divisions.per_competition.max is 20 since V393, so one bullet covering both rows outlived a change to either and came to promise a cap the resolver enforces at 20. The division figure is interpolated; 'unlimited' is a word about a NULL row, and CARD_SURFACES faults it the moment that row takes a number.",
+    text: {
+      en: "Unlimited competitions, {divisions} divisions each",
+      es: "Competiciones ilimitadas, {divisions} divisiones cada una",
+      fr: "Compétitions illimitées, {divisions} divisions chacune",
+      nl: "Onbeperkt aantal competities, elk {divisions} divisies",
+    },
+  },
+  {
+    file: "marketing",
+    key: "pricing.pro.f2",
+    why: "Pro's entrant ceiling. entrants.per_division.max on 'pro' (live 256), interpolated, per division for the same reason Community's is.",
+    text: {
+      en: "{entrants} entrants per division",
+      es: "{entrants} participantes por división",
+      fr: "{entrants} participants par division",
+      nl: "{entrants} deelnemers per divisie",
+    },
+  },
+  {
+    file: "marketing",
+    key: "pricing.pro.f3",
+    why: "Pro's platform fee. registration.fee_percent on 'pro' (live 2), interpolated. Stated as a rate on entry fees rather than as an unlock — taking entry fees is free on every plan since V310.",
+    text: {
+      en: "Entry fees at a {fee}% platform fee",
+      es: "Cuotas de inscripción con una comisión de plataforma del {fee}%",
+      fr: "Frais d’inscription avec {fee} % de frais de plateforme",
+      nl: "Inschrijfgelden met {fee}% platformkosten",
+    },
+  },
+  {
+    file: "marketing",
+    key: "pricing.pro.f4",
+    why: "the one scoring row that is still Pro-only. It read 'Ball-by-ball & rally scoring, player stats' until W1 (owner ruling 2026-08-30); V390 deleted scoring.ball_by_ball and scoring.rally_by_rally from plan_entitlements, so two thirds of that sentence pointed at no row AND sold Community something it already has. stats.player is the survivor and is what this names.",
+    text: {
+      en: "Player stats & scorecards",
+      es: "Estadísticas de jugadores y planillas",
+      fr: "Statistiques des joueurs et feuilles de match",
+      nl: "Spelersstatistieken & scorekaarten",
+    },
+  },
+  {
+    file: "marketing",
+    key: "pricing.pro.f5",
+    why: "four boolean Pro grants in one line: officials rows, exports, api.access and scoring.device_links. A list rather than four bullets because none of them is the reason anyone buys Pro; each is pinned individually by CARD_SURFACES so the compression cannot hide one going false.",
+    text: {
+      en: "Officials, exports, API keys, device links",
+      es: "Árbitros, exportaciones, claves de API y vinculación de dispositivos",
+      fr: "Officiels, exports, clés API et liaison d’appareils",
+      nl: "Officials, exports, API-sleutels en apparaatkoppelingen",
+    },
+  },
+  {
+    file: "marketing",
+    key: "pricing.pro.f6",
+    why: "how a Pro org's public pages LOOK. dashboard.theme on 'pro' — the key V397 split out of dashboard.branding. It replaced a badge-removal claim: V396 (owner ruling 2026-09-03) made badge removal enterprise-only, so every self-serve plan carries the badge and that bullet promised a row Pro no longer holds. Replaced rather than dropped, because the card should keep a visual-differentiator claim and this is one the matrix backs.",
+    text: {
+      en: "Your club colours on public pages & slideshow",
+      es: "Los colores de tu club en las páginas públicas y la presentación",
+      fr: "Les couleurs de votre club sur les pages publiques et le diaporama",
+      nl: "De kleuren van je club op openbare pagina’s & de diavoorstelling",
+    },
+  },
+  {
+    file: "marketing",
+    key: "pricing.pro.f7",
+    why: "discipline.enforced on 'pro' (v16 league-ops, V293). Suspensions tracked automatically, which is a claim about enforcement rather than about record-keeping — Community can still write a card into a match.",
+    text: {
+      en: "Suspensions & discipline tracking",
+      es: "Seguimiento de suspensiones y disciplina",
+      fr: "Suivi des suspensions et de la discipline",
+      nl: "Schorsingen & disciplineregistratie",
+    },
+  },
+  {
+    file: "marketing",
+    key: "pricing.pro.f8",
+    why: "two officials rows in one bullet: officials.auto (V393 brought it down to Pro from the deleted tier above it, so the Pro card can make this claim for the first time) and officials.marks (V294). Folded together rather than added as a tenth bullet; both are pinned in CARD_SURFACES.",
+    text: {
+      en: "Auto officials assignment & ratings",
+      es: "Asignación automática de árbitros y valoraciones",
+      fr: "Attribution automatique des officiels et notations",
+      nl: "Automatische toewijzing van officials & beoordelingen",
+    },
+  },
+  {
+    file: "marketing",
+    key: "pricing.pro.f9",
+    why: "news.auto on 'pro' (V295). Drafted, not published — the word matters, because the feature writes a draft for a human to send.",
+    text: {
+      en: "Auto-drafted result posts",
+      es: "Publicaciones de resultados redactadas automáticamente",
+      fr: "Articles de résultats rédigés automatiquement",
+      nl: "Automatisch opgestelde wedstrijdverslagen",
+    },
+  },
+  {
+    file: "marketing",
+    key: "pricing.pro.per",
+    why: "the '/month' suffix beside the Pro card's headline figure, and the word that decides whether the number above it is read as a monthly or a yearly price. Source of truth: config/stripe-plans.json plans[pro].prices.monthly.interval = 'month'; with the annual toggle ON the page divides the ANNUAL amount by twelve (pricing/page.tsx) so the suffix stays true in both toggle states. It was the literal '/month' in every locale until 2026-09-05, on a page whose every other price honours the currency switcher.",
+    text: {
+      en: "/month",
+      es: "/mes",
+      fr: "/mois",
+      nl: "/maand",
+    },
+  },
+  {
+    file: "marketing",
+    key: "pricing.pro.annualBilled",
+    why: "the yearly TOTAL under the per-month figure, shown while the annual toggle is on. {total} is interpolated by pricing/page.tsx from proPrice('annual', currency) — never typed into a locale file, because the seed prices each market independently (usd 12899 / eur 10899 / gbp 8899 / inr 499900) and a figure frozen into copy goes stale four times and is corrected once. The words are the claim that this amount is charged ONCE A YEAR rather than monthly.",
+    text: {
+      en: "{total} billed yearly",
+      es: "{total} facturado al año",
+      fr: "{total} facturé à l'année",
+      nl: "{total} per jaar gefactureerd",
+    },
+  },
+  {
+    file: "marketing",
+    key: "pricing.pro.annualSaving",
+    why: "WHAT PAYING YEARLY IS WORTH, in the emerald badge on the Pro card. It said 'save 30%' — hardcoded English, and false in every market: derived from config/stripe-plans.json the base tier saves 28.29% usd / 30.08% eur / 32.52% gbp / 30.45% inr, and the extra-organisation rider 23.71% / 24.89% / 26.54% / 30.35%. No single percentage can be right, so the claim is a FLOOR read off the ladder — a year costs 8.10 to 9.16 monthly payments at the eight live price points, so 'more than two months free' is true everywhere with room. DELIBERATELY THE SAME WORDING as pricing.faq.annual.a and billing.annualSaves: one fact, one sentence, and dictionary-copy-truth's annual suite judges all three against annualPricePoints() together.",
+    text: {
+      en: "more than two months free",
+      es: "más de dos meses gratis",
+      fr: "plus de deux mois offerts",
+      nl: "meer dan twee maanden gratis",
+    },
+  },
+  {
+    file: "marketing",
+    key: "pricing.pro.monthlyNote",
+    why: "shown in place of the yearly line when the toggle is OFF, and it makes two claims: that this price is billed monthly, and that the interval can be changed later. Source of truth for the second, RE-CHECKED against the tree rather than assumed: POST /api/billing/interval -> applyIntervalChange in lib/billing-manage.ts swaps the subscription's price with proration, with GET /api/billing/interval/preview quoting the charge first, and components/billing-manage.tsx renders the control (billing.intervalChange.toYearly / .toMonthly). So 'any time' is the product's behaviour, not a marketing flourish.",
+    text: {
+      en: "Billed monthly · switch to yearly any time",
+      es: "Facturación mensual · cambia a anual cuando quieras",
+      fr: "Facturation mensuelle · passez à l'annuel à tout moment",
+      nl: "Maandelijkse facturering · stap altijd over op jaarlijks",
     },
   },
 ];

@@ -84,23 +84,25 @@ describe.skipIf(!HAS_DB)("an Event Pass under a paid plan (#327/#337)", () => {
     compId = await seedCompetition(orgId);
   });
 
-  it("keeps the pass's unlimited entrants when the org upgrades to Pro", async () => {
-    // #337 itself. Community + L = unlimited; the upgrade to Pro must not put a
-    // 256 ceiling back on a competition the org already paid to unlock.
+  it("keeps the pass's HIGHER entrant ceiling when the org upgrades to Pro", async () => {
+    // #337 itself. L lifts entrants to 512 (V393 closed the formerly-unlimited
+    // cap); the upgrade to Pro must not put its own 256 ceiling back on a
+    // competition the org already paid to unlock.
     await grantPass(orgId, compId, "event_pass_l");
-    expect(await getLimit(orgId, "entrants.per_division.max", compId)).toBeNull();
+    expect(await getLimit(orgId, "entrants.per_division.max", compId)).toBe(512);
 
     await setPlan(orgId, "pro");
-    expect(await getLimit(orgId, "entrants.per_division.max", compId)).toBeNull();
+    expect(await getLimit(orgId, "entrants.per_division.max", compId)).toBe(512);
   });
 
-  it("keeps the PLAN's unlimited divisions rather than the pass's 20", async () => {
-    // The other direction, and the one a naive "pass wins" overlay gets wrong:
-    // L caps divisions at 20 and Pro does not cap them at all, so taking the
-    // pass wholesale would make the purchase a downgrade on that axis.
+  it("keeps the PLAN's higher division ceiling rather than an M pass's lower one", async () => {
+    // The other direction, and the one a naive "pass wins" overlay gets wrong.
+    // It used to be argued with L (20) against Pro's unlimited; V393 gave Pro
+    // 20 as well, so L can no longer witness it — an M pass (10) against Pro's
+    // 20 is the pair that still discriminates, and it is the same rule.
     await setPlan(orgId, "pro");
-    await grantPass(orgId, compId, "event_pass_l");
-    expect(await getLimit(orgId, "divisions.per_competition.max", compId)).toBeNull();
+    await grantPass(orgId, compId, "event_pass");
+    expect(await getLimit(orgId, "divisions.per_competition.max", compId)).toBe(20);
   });
 
   it("charges the PLAN's lower entry-fee percentage, not the pass's higher one", async () => {
@@ -115,11 +117,19 @@ describe.skipIf(!HAS_DB)("an Event Pass under a paid plan (#327/#337)", () => {
   });
 
   it("does not let the pass switch off a feature the plan grants", async () => {
-    // `dashboard.branding` is true on Pro and false on both rungs. Before #327
-    // the pass arm never ran under a paid plan so this could not arise; now it
-    // does, and a coalesce that took the pass's `false` first would strip a
-    // Pro-only feature from exactly the competition the org paid extra for.
-    await setPlan(orgId, "pro");
+    // `dashboard.branding` is true on ENTERPRISE and false on both rungs.
+    // Before #327 the pass arm never ran under a paid plan so this could not
+    // arise; now it does, and a coalesce that took the pass's `false` first
+    // would strip a paid feature from exactly the competition the org paid
+    // extra for.
+    //
+    // The plan under test is `enterprise` because V396 (W2 T15) moved badge
+    // removal off Pro, and this key is now the ONLY plan-true / both-rungs-
+    // false shape left in the whole matrix — a query for another candidate
+    // returns nothing. So this case has to follow the key rather than stay on
+    // Pro; the invariant it guards is unchanged, and it is asserted at the one
+    // place the matrix still expresses it.
+    await setPlan(orgId, "enterprise");
     await grantPass(orgId, compId, "event_pass_l");
     expect(await hasFeature(orgId, "dashboard.branding", compId)).toBe(true);
     expect(await sqlHasFeature(orgId, "dashboard.branding", compId)).toBe(true);

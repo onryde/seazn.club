@@ -18,11 +18,17 @@ import type { PassKey } from "../src/lib/currency";
 // visits — the same discipline the components' own `Record<PassLockReason, …>`
 // props enforce.
 import type { PassLockReason } from "../src/lib/entitlements";
+// The one RUNTIME import from the app side, and deliberately not
+// `@/lib/currency`: see e2e/price-kit.ts for why importing that here collects
+// zero tests instead of failing loudly. Every money figure below — rendered or
+// charged — comes from the seed through this, because these numbers have now
+// moved three times and a literal has rotted every time.
+import { HIDDEN_PASS_RUNGS, SELLABLE_PASS_RUNGS, passLabel, passMinor } from "./price-kit";
 
 // Event Pass, end to end, through a REAL Stripe test-mode purchase (task 22).
 //
 // Every other pass test in this repo grants the pass with an INSERT. This file
-// is the one place where $29 actually moves: embedded checkout, card 4242,
+// is the one place where the pass price actually moves: embedded checkout, 4242,
 // reconcile-on-return, and the invoice Stripe draws for it. Everything it then
 // asserts — the lifted quota, the ceiling, the receipt, the Pro credit, the
 // survival of a downgrade, the revocation on refund — hangs off that one real
@@ -35,7 +41,7 @@ import type { PassLockReason } from "../src/lib/entitlements";
 //   U7  REMOVED by RS001 (registration demolition) — its mechanism was the
 //       public register POST, which no longer exists; owed back by RS006/RS007
 //   U12 billing page names the purchase and links its Stripe invoice
-//   U14 upgrade to Pro inside 30 days: same customer, $29 on the balance,
+//   U14 upgrade to Pro inside 30 days: same customer, the pass on the balance,
 //       card required, pass dormant not consumed
 //   U15 Pro downgrades to community — the pass survives on its competition
 //   U16 a full refund revokes the pass (and is where `refunds.create` on the
@@ -392,7 +398,7 @@ async function buyPassWithTestCard(page: Page, url: string): Promise<void> {
     await page.goto(url);
     // No rung is chosen first: the M/L picker (v17 #294) pre-selects M, so this
     // single click still goes straight to the Stripe sheet and still buys the
-    // $29 rung these use cases are written against.
+    // M rung these use cases are written against.
     await page.locator("[data-pass-buy]").click();
     await expect(page.locator('iframe[src*="stripe.com"]').first()).toBeVisible({
       timeout: 45_000,
@@ -460,7 +466,9 @@ test.beforeAll(() => {
   if (!/^(sk|rk)_test_/.test(STRIPE_KEY)) {
     throw new Error(
       "event-pass.spec.ts needs a Stripe TEST key in STRIPE_SECRET_KEY " +
-        "(`set -a; . ./.env.local; set +a`). It buys a real $29 test-mode pass.",
+        `(\`set -a; . ./.env.local; set +a\`). It buys a real ${passLabel(
+          "event_pass",
+        )} test-mode pass.`,
     );
   }
   if (!WEBHOOK_SECRET) {
@@ -536,7 +544,9 @@ for (const vp of VIEWPORTS) {
       // Scoped to the feature that bit — this page carries other gates.
       const gate = page.locator('[data-pass-gate][data-feature="divisions.per_competition.max"]');
       await expect(gate).toBeVisible({ timeout: 30_000 });
-      await expect(gate.locator("[data-pass-cta]")).toContainText("$29");
+      // From the seed, never a literal: the CTA renders the FLOOR of what is
+      // sellable to this org, which on a free plan is the M rung.
+      await expect(gate.locator("[data-pass-cta]")).toContainText(passLabel("event_pass"));
       const passHref = await gate.locator("[data-pass-cta]").getAttribute("href");
       // The gate appends `?feature=<key>` so the upgrade page can render its
       // ceiling state (76020eeb) — anchor on the path, not the whole string, and
@@ -546,7 +556,7 @@ for (const vp of VIEWPORTS) {
 
       // …and the ticket it leads to is the unsold one.
       await page.goto(passHref!);
-      await expect(page.locator("[data-pass-ticket]")).toContainText("$29");
+      await expect(page.locator("[data-pass-ticket]")).toContainText(passLabel("event_pass"));
       await expect(page.locator("[data-pass-buy]")).toBeVisible();
 
       await buyPassWithTestCard(page, passHref!);
@@ -559,16 +569,23 @@ for (const vp of VIEWPORTS) {
       passIntent = rows[0]!.stripe_payment_intent!;
 
       // The page it lands on states the purchase and stops selling it. The
-      // page-wide "$29" negative is the point: the worst failure this surface
-      // can have is selling the same competition twice.
+      // page-wide price negative is the point: the worst failure this surface
+      // can have is selling the same competition twice, and the ticket stub
+      // holds "no price anywhere once a pass is held" on purpose (its own
+      // comment in upgrade/page.tsx says why).
+      //
+      // Pinned to the SAME derived string the ticket assertion above just
+      // matched on this same page, which is what makes it a real negative: an
+      // amount the page has never rendered in any state — "$29" since the
+      // reprice — passes here no matter what the page does.
       await expect(page.locator("[data-pass-active]")).toBeVisible({ timeout: 20_000 });
       await expect(page.locator("[data-pass-cta]")).toHaveCount(0);
-      expect(await page.locator("main").innerText()).not.toContain("$29");
+      expect(await page.locator("main").innerText()).not.toContain(passLabel("event_pass"));
 
       // Stripe drew a real invoice for it (U1's "invoice exists").
       const pi = await stripe.paymentIntents.retrieve(passIntent);
       expect(pi.status).toBe("succeeded");
-      expect(pi.amount).toBe(2900);
+      expect(pi.amount).toBe(passMinor("event_pass"));
       // `invoice_creation` draws the invoice AFTER the payment succeeds, so this
       // polls rather than reading once — a bare read here loses the race by a
       // second or two and reports "no invoice" for money that is on its way.
@@ -579,11 +596,17 @@ for (const vp of VIEWPORTS) {
               customer: pi.customer as string,
               limit: 5,
             });
-            return invoices.data.some((i) => i.total === 2900 && !!i.hosted_invoice_url);
+            // The TOTALS, not a boolean. `some(...)` collapses every cause
+            // into `false`, and a 60s poll that ends "Expected true, Received
+            // false" reads as flake and gets retried rather than fixed — which
+            // is how a wrong expected amount survives a reprice. The array
+            // makes the failure name itself: `[2900]` not containing 1199 is a
+            // price mismatch, `[]` is a missing invoice.
+            return invoices.data.filter((i) => !!i.hosted_invoice_url).map((i) => i.total);
           },
           { timeout: 60_000, intervals: [1_000, 2_000, 3_000, 5_000] },
         )
-        .toBe(true);
+        .toContain(passMinor("event_pass"));
 
       // The gate is gone: the write that 402'd before now goes through.
       const fifth = await apiJson<{ id: string }>(
@@ -625,7 +648,7 @@ for (const vp of VIEWPORTS) {
       expect(eleventh.status).toBe(402);
       expect(eleventh.error?.code).toBe("PAYMENT_REQUIRED");
 
-      // The paywall now renders pass-OWNED: one Pro path out, no second $29.
+      // The paywall now renders pass-OWNED: one Pro path out, no second sale.
       await page.goto(`/o/${rig.orgSlug}/c/${rig.compSlug}/d/new`);
       await page.getByPlaceholder("U16 Boys T20").fill("Eleventh");
       await page.getByRole("button", { name: "Scheduling" }).click();
@@ -645,7 +668,7 @@ for (const vp of VIEWPORTS) {
       // NAMES the rung since v17 #294: U1 bought M through the real Stripe
       // sheet, so this card must say M and not the product family. A literal
       // "Event Pass active" would now be a rung-blind assertion on the one
-      // surface a $59 buyer reads to learn which ceiling stopped them.
+      // surface an L buyer reads to learn which ceiling stopped them.
       await expect(owned).toContainText("Event Pass M active");
       // Page-wide, and deliberately so: no gate anywhere on this page may offer
       // the pass a second time to an org that already holds it.
@@ -658,7 +681,11 @@ for (const vp of VIEWPORTS) {
       await expect(page.locator("[data-ceiling-row]")).toHaveCount(1);
       await expect(page.locator("[data-ceiling-row]")).toContainText("Divisions");
       await expect(page.locator("[data-pass-credit]")).toBeVisible();
-      expect(await page.locator("main").innerText()).not.toContain("$29");
+      // Same derived negative as U1, on the ceiling state: a holder is never
+      // re-quoted the rung they already bought. The Pro card on this page DOES
+      // print Pro's monthly price, so this is a claim about the pass figure
+      // specifically, not about the page being priceless.
+      expect(await page.locator("main").innerText()).not.toContain(passLabel("event_pass"));
     });
 
     // U7 · public registration passes 64 on the passed competition only — REMOVED
@@ -681,11 +708,12 @@ for (const vp of VIEWPORTS) {
       // Named after the competition it bought, not an anonymous Stripe row —
       // the whole reason this section exists next to the invoice list.
       await expect(purchases).toContainText("EP Cup");
-      // `formatMinor` drops the trailing zeros on a whole amount, so this is
-      // "$29", not "$29.00". The figure itself is the assertion that matters:
-      // the row renders an amount ONLY when the Stripe invoice read succeeded
-      // (a staff grant, or a failed read, renders the date alone).
-      await expect(purchases).toContainText("$29");
+      // The figure is what matters: the row renders an amount ONLY when the
+      // Stripe invoice read succeeded (a staff grant, or a failed read, renders
+      // the date alone). It is `formatMinor`'d, so the charm price keeps its
+      // decimals ("$11.99") where a whole amount would drop them ("$29") —
+      // which is exactly why it is derived and not typed.
+      await expect(purchases).toContainText(passLabel("event_pass"));
       // …and WHICH rung it was (v17 #294). Pinned to the key, not the label:
       // a rename of `upgrade.rung.m` must not quietly empty this. U1 bought M
       // through the real Stripe sheet, so nothing here is seeded.
@@ -711,7 +739,7 @@ for (const vp of VIEWPORTS) {
       expect(checkout.status).toBe(200);
       expect(checkout.data?.client_secret).toBeTruthy();
 
-      // Same Stripe customer the $29 was charged to — a second customer would
+      // Same Stripe customer the pass was charged to — a second customer would
       // strand the credit where the subscription can never draw on it.
       const customerId = await stripeCustomerId(rig.orgId);
       const pi = await stripe.paymentIntents.retrieve(passIntent);
@@ -747,10 +775,12 @@ for (const vp of VIEWPORTS) {
       proSubscriptionId = sub.id;
       await postSignedStripeWebhook(page, "customer.subscription.created", sub);
 
-      // $29 sits on the customer BALANCE (D12 — Checkout refuses `discounts`
-      // alongside `allow_promotion_codes`, so a balance credit is the only lever).
+      // What was PAID sits on the customer BALANCE (D12 — Checkout refuses
+      // `discounts` alongside `allow_promotion_codes`, so a balance credit is
+      // the only lever). Same figure as the payment intent, from the same seed:
+      // a credit that drifts from the price is money given away or withheld.
       const customer = (await stripe.customers.retrieve(customerId!)) as Stripe.Customer;
-      expect(customer.balance).toBe(-2900);
+      expect(customer.balance).toBe(-passMinor("event_pass"));
       const txns = await stripe.customers.listBalanceTransactions(customerId!, { limit: 5 });
       expect(
         txns.data.some((t) => t.metadata?.pass_payment_intent === passIntent),
@@ -792,7 +822,7 @@ for (const vp of VIEWPORTS) {
       await expect(page.locator("[data-plan-covered]")).toBeVisible({ timeout: 20_000 });
       await expect(page.locator("[data-pass-dormant]")).toBeVisible();
       await expect(page.locator("[data-pass-ticket]")).toHaveCount(0);
-      expect(await page.locator("main").innerText()).not.toContain("$29");
+      expect(await page.locator("main").innerText()).not.toContain(passLabel("event_pass"));
 
       // TRACED against production, not assumed (Part 2): a genuinely live
       // Stripe subscription changes which button the billing page even OFFERS.
@@ -863,7 +893,7 @@ for (const vp of VIEWPORTS) {
         { idempotencyKey: `e2e-pass-refund-${passIntent}` },
       );
       expect(refund.status).toBe("succeeded");
-      expect(refund.amount).toBe(2900);
+      expect(refund.amount).toBe(passMinor("event_pass"));
 
       // Stripe would deliver charge.refunded to a public endpoint; localhost has
       // none, so the REAL charge object is posted to the real webhook route with
@@ -893,7 +923,7 @@ for (const vp of VIEWPORTS) {
       expect(refundedCustomer.balance).toBe(0);
 
       await page.goto(upgradeUrl(rig));
-      await expect(page.locator("[data-pass-ticket]")).toContainText("$29");
+      await expect(page.locator("[data-pass-ticket]")).toContainText(passLabel("event_pass"));
       await expect(page.locator("[data-pass-buy]")).toBeVisible();
     });
   });
@@ -1029,17 +1059,30 @@ async function expectPricedForTheRung(
 }
 
 test.describe("the rung the buyer picks is the rung Stripe is asked for", () => {
-  test("L and M each reach the wire, and Stripe quotes each at its own price", async ({ page }) => {
+  // Owner decision 2026-09-05 took the L rung off sale, and this test is where
+  // that lands hardest: it used to pick L in the ladder and press buy. It could
+  // not simply lose that leg. What it proved was the SEAM — that the rung the
+  // picker highlights is the rung the browser posts and the rung Stripe prices —
+  // and a one-rung ladder cannot witness a seam at all, because every possible
+  // answer is the right one.
+  //
+  // So it is split along the line the decision draws. Through the UI: the ladder
+  // offers exactly the rungs on sale, and the one it opens on is the one that
+  // reaches Stripe at its own price. Through the API: the withdrawn rung is
+  // still a real, priced, purchasable product — the R13 dormancy requirement,
+  // kept because the Stripe price and the backend stay live and an org that
+  // already holds an L pass must go on working. Nothing but a direct POST can
+  // reach it, which is exactly the claim.
+  test("the ladder offers only what is on sale, and that rung reaches Stripe at its own price", async ({
+    page,
+  }) => {
     test.setTimeout(180_000);
     const rig = await seedRig("wire");
     await signIn(page, rig.ownerEmail);
 
-    // Probe the EXPENSIVE rung. An unsynced L is the ordinary state of any
-    // environment where `stripe:sync` has not run for it, and probing M instead
-    // would turn that into a failure at the Stripe iframe rather than a skip.
-    const probeL = await passCheckoutProbeStatus(page.request, rig.orgId, rig.compId, "event_pass_l");
-    test.skip(probeL >= 500, "Stripe not usable / event_pass_l unsynced — skipping");
-    expect(probeL, "L must not 503 — `npm run stripe:sync` writes its one-time price id").toBe(200);
+    const probe = await passCheckoutProbeStatus(page.request, rig.orgId, rig.compId);
+    test.skip(probe >= 500, "Stripe not usable / event_pass unsynced — skipping");
+    expect(probe, "the entry rung must not 503 — `npm run stripe:sync` writes its price id").toBe(200);
 
     // Every pass-checkout POST this page makes, exactly as the browser sent it,
     // and the client_secret that came back (`<session id>_secret_…`) so the
@@ -1057,59 +1100,85 @@ test.describe("the rung the buyer picks is the rung Stripe is asked for", () => 
       if (body?.data?.client_secret) secrets.push(body.data.client_secret);
     });
 
-    /** Pick `rung` in the ladder, press buy, and return STRIPE's view of the
-     *  session that opened — asserting the wire body on the way through. */
-    async function openThroughTheUi(rung: PassKey): Promise<Stripe.Checkout.Session> {
-      const seen = posted.length;
-      // Both watermarks, not just the request one. The response handler runs an
-      // `await res.json()`, so the secret lands strictly later than its POST —
-      // and on the SECOND call through here a `secrets.length > 0` poll is
-      // already satisfied by the FIRST leg's secret, so a slow body would let
-      // this read the previous rung's session id. Everything downstream then
-      // asserts against the wrong session and reds for the wrong reason.
-      const seenSecrets = secrets.length;
-      await page.goto(upgradeUrl(rig));
-      // M is options[0] and therefore pre-selected. Asserted, not assumed: "L
-      // reached the wire" proves nothing if L was what the page opened on.
-      await expect(page.locator('[data-pass-rung="event_pass"][data-pass-rung-active]')).toBeVisible();
-      if (rung !== "event_pass") await page.locator(`[data-pass-rung="${rung}"]`).click();
-      await expect(page.locator(`[data-pass-rung="${rung}"][data-pass-rung-active]`)).toBeVisible();
+    await page.goto(upgradeUrl(rig));
 
-      await page.locator("[data-pass-buy]").click();
-      // The sheet mounting at all is the proof the route did not 503 for L.
-      await expect(page.locator('iframe[src*="stripe.com"]').first()).toBeVisible({ timeout: 45_000 });
-      await expect.poll(() => posted.length, { timeout: 15_000 }).toBeGreaterThan(seen);
-      await expect.poll(() => secrets.length, { timeout: 15_000 }).toBeGreaterThan(seenSecrets);
+    // THE CONTROL SET, read out of the live DOM. Membership and order, against
+    // the authority — not "L is absent", which a ladder that rendered nothing
+    // would also satisfy.
+    const offered = await page
+      .locator("[data-pass-rung]")
+      .evaluateAll((els) => els.map((el) => el.getAttribute("data-pass-rung")!));
+    expect(offered).toEqual([...SELLABLE_PASS_RUNGS]);
+    for (const hidden of HIDDEN_PASS_RUNGS) expect(offered).not.toContain(hidden);
+    expect(HIDDEN_PASS_RUNGS.length).toBeGreaterThan(0);
 
-      const body = JSON.parse(posted[posted.length - 1]!) as { pass_key?: string; competition_id?: string };
-      expect(body.competition_id).toBe(rig.compId);
-      expect(body.pass_key, "the browser asked Stripe for a rung the buyer did not pick").toBe(rung);
+    // The rung the ladder OPENS ON — asserted, not assumed. event-pass.spec.ts
+    // presses [data-pass-buy] without touching the picker in half a dozen other
+    // tests, so whatever is pre-selected here is what those buy.
+    const opensOn = SELLABLE_PASS_RUNGS[0]!;
+    await expect(page.locator(`[data-pass-rung="${opensOn}"][data-pass-rung-active]`)).toBeVisible();
 
-      // `line_items` is not returned by default, and it is what says WHICH
-      // Stripe price the route actually put in the session.
-      const session = await stripe.checkout.sessions.retrieve(
-        secrets[secrets.length - 1]!.split("_secret_")[0]!,
-        { expand: ["line_items"] },
-      );
-      await stripe.checkout.sessions.expire(session.id).catch(() => undefined);
-      return session;
-    }
+    await page.locator("[data-pass-buy]").click();
+    await expect(page.locator('iframe[src*="stripe.com"]').first()).toBeVisible({ timeout: 45_000 });
+    await expect.poll(() => posted.length, { timeout: 15_000 }).toBeGreaterThan(0);
+    await expect.poll(() => secrets.length, { timeout: 15_000 }).toBeGreaterThan(0);
 
-    const l = await openThroughTheUi("event_pass_l");
-    expect(l.metadata?.pass_key).toBe("event_pass_l");
-    await expectPricedForTheRung(l, "event_pass_l");
+    const body = JSON.parse(posted[posted.length - 1]!) as { pass_key?: string; competition_id?: string };
+    expect(body.competition_id).toBe(rig.compId);
+    expect(body.pass_key, "the browser asked Stripe for a rung the buyer did not pick").toBe(opensOn);
 
-    const m = await openThroughTheUi("event_pass");
-    expect(m.metadata?.pass_key).toBe("event_pass");
-    await expectPricedForTheRung(m, "event_pass");
+    // `line_items` is not returned by default, and it is what says WHICH Stripe
+    // price the route actually put in the session.
+    const session = await stripe.checkout.sessions.retrieve(
+      secrets[secrets.length - 1]!.split("_secret_")[0]!,
+      { expand: ["line_items"] },
+    );
+    await stripe.checkout.sessions.expire(session.id).catch(() => undefined);
+    expect(session.metadata?.pass_key).toBe(opensOn);
+    await expectPricedForTheRung(session, opensOn);
+  });
 
-    // Currency-agnostic backstop: whatever the buyer's currency, L costs more.
-    expect(l.currency).toBe(m.currency);
-    expect(l.amount_total!).toBeGreaterThan(m.amount_total!);
-    // Two rungs, two sessions. A rung-blind idempotency key would hand the
-    // second press the FIRST session, and the two amounts would then agree by
-    // accident rather than because each rung resolved its own price.
-    expect(l.id).not.toBe(m.id);
+  test("a rung that is off sale still prices correctly at the API — dormant, not deleted", async ({
+    page,
+  }) => {
+    // THE DORMANCY REQUIREMENT, driven end to end. The rung keeps its plans
+    // row, its stripe-plans.json entry and its Stripe price (R13: backend and
+    // price kept, no purchase UI anywhere), so an org that already holds one
+    // goes on working and the rung can be put back on sale without a repricing.
+    // Nothing in the product offers it — the test above is what proves that —
+    // so this is the only way left to exercise the path, which is precisely why
+    // it is the one most likely to rot.
+    test.setTimeout(180_000);
+    const hidden = HIDDEN_PASS_RUNGS[0];
+    test.skip(hidden === undefined, "no rung is off sale — nothing to keep dormant");
+    const rig = await seedRig("dorm");
+    await signIn(page, rig.ownerEmail);
+
+    const probe = await passCheckoutProbeStatus(page.request, rig.orgId, rig.compId, hidden!);
+    test.skip(probe >= 500, `Stripe not usable / ${hidden} unsynced — skipping`);
+    expect(
+      probe,
+      `${hidden} is off sale but must stay PURCHASABLE at the API — a 4xx here means the rung was retired, not hidden`,
+    ).toBe(200);
+
+    // …and Stripe must quote it at its OWN price, not the entry rung's. That is
+    // the half a status code cannot see, and the mis-sale the rung's own price
+    // point exists to prevent.
+    const res = await apiJson(page.request, "/api/billing/pass-checkout", "POST", {
+      competition_id: rig.compId,
+      pass_key: hidden,
+    });
+    const secret = (res.data as { client_secret?: string } | undefined)?.client_secret;
+    expect(secret, "no client_secret came back for the dormant rung").toBeTruthy();
+    const session = await stripe.checkout.sessions.retrieve(secret!.split("_secret_")[0]!, {
+      expand: ["line_items"],
+    });
+    await stripe.checkout.sessions.expire(session.id).catch(() => undefined);
+    expect(session.metadata?.pass_key).toBe(hidden);
+    await expectPricedForTheRung(session, hidden!);
+    // The two rungs must genuinely differ in price, or "its own price" is
+    // satisfied by the entry rung's amount.
+    expect(session.amount_total).not.toBe(passMinor(SELLABLE_PASS_RUNGS[0]!, "usd"));
   });
 });
 
@@ -1185,7 +1254,7 @@ test.describe("a competition past the pass line sells nothing", () => {
       await expect(page.locator("[data-pass-cta]")).toHaveCount(0);
       // Page-wide, exactly as U1 and U6 do it: the worst thing this surface can
       // do is quote a price for something the server will refuse.
-      expect(await page.locator("main").innerText()).not.toContain("$29");
+      expect(await page.locator("main").innerText()).not.toContain(passLabel("event_pass"));
     });
   }
 

@@ -9,7 +9,6 @@ import {
   CancelSubscriptionButton,
   PaymentMethodsManager,
   PlanIntervalSwitcher,
-  PlanKeySwitcher,
   PromoCodeBox,
   ResumeSubscriptionButton,
   RetryPaymentButton,
@@ -23,11 +22,15 @@ import {
 } from "@/server/usecases/billing-manage";
 import { InvoiceList } from "@/components/billing-invoice-list";
 import { getCreditsTab } from "@/server/usecases/credits-tab";
+import {
+  countActiveCompetitions,
+  countPublicDashboards,
+} from "@/server/usecases/entitlement-freeze";
 import { type Subscription } from "@/lib/types";
 import { getLimit, isPaidPlan, isPlanLapsed, orgPlanKey } from "@/lib/entitlements";
 import { TrackOnMount } from "@/components/analytics-track-mount";
 import { EVENTS } from "@/lib/analytics-events";
-import { asCurrency, formatMinor, proPrice, proPlusPrice, creditPackOptions } from "@/lib/currency";
+import { asCurrency, formatMinor, proPrice, creditPackOptions } from "@/lib/currency";
 import { lowestPassRung } from "@/lib/pass-ladder";
 import { preferredCurrency } from "@/lib/currency-server";
 import { planLabel } from "@/lib/plan-label";
@@ -139,11 +142,10 @@ export default async function BillingPage({
 
   const planKey = sub?.plan_key ?? "community";
   const status = sub?.status ?? "active";
-  const isPro = planKey === "pro";
-  // V290 added pro_plus above pro — isPaid recognises either paid plan (the
-  // upgrade section only shows on Community); isPro/isPlus stay exact-plan.
-  const isPaid = planKey === "pro" || planKey === "pro_plus";
-  const isPlus = planKey === "pro_plus";
+  // Entitlements v18 (V393): `pro_plus` is retired, so "paid" is simply
+  // "not Community" — it also covers a comped `enterprise` org, which is
+  // just as paid as one on Pro and must not see the upgrade section either.
+  const isPaid = planKey !== "community";
   // One trial per org (V277): the upgrade CTA must not promise a trial the
   // checkout won't grant.
   const trialAvailable = !sub?.trial_used_at;
@@ -168,24 +170,22 @@ export default async function BillingPage({
   // v2 usage vs plan quotas (doc 10 §1) — v1 seasons/tournaments died at the
   // PROMPT-15 cutover; overrides are honoured via getLimit.
   //
-  // The active-competition count MUST exclude Event-Passed competitions, exactly
-  // as the write-side quota does (server/usecases/competitions.ts assertActiveQuota,
-  // v3/07 §3: a pass buys its competition out of the quota). Without the same
-  // `not exists` clause this meter read 6/5 — over quota, in red — for an org
-  // that enforcement was still happily letting create another competition.
-  const [counts] = await sql<
-    { competitions_active: number; dashboards_public: number; members: number }[]
-  >`
-    select
-      (select count(*)::int from competitions c
-        where c.org_id = ${orgId} and c.status in ('draft','published','live')
-          and not exists (
-            select 1 from competition_passes cp where cp.competition_id = c.id))
-        as competitions_active,
-      (select count(*)::int from competitions
-        where org_id = ${orgId} and visibility = 'public') as dashboards_public,
-      (select count(*)::int from org_members m
-        where m.org_id = ${orgId} and m.role != 'scorer') as members`;
+  // Both competition counts come from the functions ENFORCEMENT counts with
+  // (server/usecases/entitlement-freeze.ts), not from this page's own SQL. A
+  // meter and a cap are two faces of one fact, and this page held the other
+  // implementation of it — which is how it once read 6/5 in red for an org the
+  // write path was still letting create another competition. That symptom was
+  // patched by copying the pass clause in; the copy then drifted again on its
+  // own terms (it asked whether a pass ROW EXISTS, which V343 retired because a
+  // lapsed pass kept its exemption for ever) while the public-dashboard count
+  // beside it never grew a status or pass clause at all and went on metering
+  // archived seasons. Agreeing copies are the defect, so there are none: see
+  // `quotaCount`.
+  const competitionsActive = await countActiveCompetitions(orgId);
+  const dashboardsPublic = await countPublicDashboards(orgId);
+  const [counts] = await sql<{ members: number }[]>`
+    select (select count(*)::int from org_members m
+      where m.org_id = ${orgId} and m.role != 'scorer') as members`;
   const [competitionsLimit, dashboardsLimit, membersLimit] = await Promise.all([
     getLimit(orgId, "competitions.max_active"),
     getLimit(orgId, "dashboard.public.max"),
@@ -432,28 +432,13 @@ export default async function BillingPage({
                 )}
               </div>
               {overview && <PromoCodeBox discount={overview.discount} />}
-              {/* Live-sub plan change (Task 7): Pro -> Pro Plus upsell here;
-                  Pro Plus already has the ceiling, so it only gets the
-                  priority-support perk below. */}
-              {isPro && overview?.interval && (
-                <div className="rounded-xl border border-indigo-200 bg-indigo-50 px-4 py-3">
-                  <p className="text-sm font-semibold text-indigo-800">
-                    {t(dict, "billing.cta.goPlus")}
-                  </p>
-                  <p className="mt-1 text-xs text-indigo-700">{t(dict, "billing.plus.f5")}</p>
-                  <div className="mt-2">
-                    <PlanKeySwitcher currentPlanKey="pro" interval={overview.interval} />
-                  </div>
-                </div>
-              )}
-              {isPlus && (
-                <a
-                  href="mailto:plus@seazn.club"
-                  className="rounded-xl border border-indigo-200 bg-indigo-50 px-4 py-3 text-sm text-indigo-800 hover:underline"
-                >
-                  {t(dict, "billing.plusSupport")}
-                </a>
-              )}
+              {/* The Pro -> Pro Plus upsell (PlanKeySwitcher) and the Plus
+                  priority-support mailto that used to sit here are gone with
+                  the plan (entitlements v18, V393) — Pro is the ceiling of
+                  self-serve now; the above-Pro conversation is Contact-us,
+                  owned by W3's ladder redesign, not restored here as a
+                  stopgap (owner ruling: W2 ships no design work on this
+                  page). */}
             </div>
           )}
         </section>
@@ -562,12 +547,12 @@ export default async function BillingPage({
           <div className="space-y-3">
             <UsageRow
               label={t(dict, "billing.usage.competitions")}
-              current={counts?.competitions_active ?? 0}
+              current={competitionsActive}
               limit={competitionsLimit}
             />
             <UsageRow
               label={t(dict, "billing.usage.dashboards")}
-              current={counts?.dashboards_public ?? 0}
+              current={dashboardsPublic}
               limit={dashboardsLimit}
             />
             <UsageRow
@@ -603,8 +588,8 @@ export default async function BillingPage({
         />
 
         {/* Upgrade / plan comparison. Shown on Community, and also when a paid
-            plan has LAPSED (raw pro/pro_plus, resolver → community) so a lapsed
-            payer has a way back — the "Current plan" card's resubscribe CTA
+            plan has LAPSED (raw pro, resolver → community) so a lapsed payer
+            has a way back — the "Current plan" card's resubscribe CTA
             anchors here. */}
         {(!isPaid || planLapsed) && isPayer && (
           <section id="upgrade" className="card p-5">
@@ -644,20 +629,9 @@ export default async function BillingPage({
                   <li>✓ {t(dict, "billing.pro.f7")}</li>
                 </ul>
               </div>
-              <div className="rounded-xl border-2 border-indigo-500 bg-indigo-50 p-4">
-                <p className="mb-1 font-semibold text-indigo-700">Pro Plus</p>
-                <p className="text-2xl font-bold text-slate-800">
-                  {formatMinor(proPlusPrice("monthly", currency), currency)}
-                  <span className="text-base font-normal text-slate-500">{t(dict, "billing.perMo")}</span>
-                </p>
-                <ul className="mt-3 space-y-1 text-slate-700">
-                  <li>✓ {t(dict, "billing.plus.f1")}</li>
-                  <li>✓ {t(dict, "billing.plus.f2")}</li>
-                  <li>✓ {t(dict, "billing.plus.f3")}</li>
-                  <li>✓ {t(dict, "billing.plus.f4")}</li>
-                  <li>✓ {t(dict, "billing.plus.f5")}</li>
-                </ul>
-              </div>
+              {/* The Pro Plus card that used to sit here is gone with the
+                  plan (entitlements v18, V393) — Pro is the top of this
+                  ladder now; W3 owns the redesigned Contact-us strip. */}
             </div>
             <p className="mb-4 text-xs text-slate-500">
               {trialAvailable
@@ -684,26 +658,10 @@ export default async function BillingPage({
             <p className="mt-2 text-xs text-emerald-600">
               {t(dict, "billing.annualSaves")}
             </p>
-            {/* Pro Plus goes straight to checkout too — no separate compare
-                page; the card above already states what it adds over Pro. */}
-            <div className="mt-4 flex flex-wrap items-center gap-3 border-t border-slate-100 pt-4">
-              <UpgradeButton
-                plan="pro_plus"
-                interval="annual"
-                label={`${t(dict, "billing.cta.goPlus")} — ${formatMinor(
-                  Math.round(proPlusPrice("annual", currency) / 12),
-                  currency,
-                )}${t(dict, "billing.perMoBilledYearly")}`}
-              />
-              <UpgradeButton
-                plan="pro_plus"
-                interval="monthly"
-                label={t(dict, "billing.orMonthly", {
-                  price: formatMinor(proPlusPrice("monthly", currency), currency),
-                })}
-                ghost
-              />
-            </div>
+            {/* The second "Pro Plus goes straight to checkout" button row
+                that used to sit here is gone with the plan (entitlements
+                v18, V393); Pro's two buttons above are the only self-serve
+                checkout now. */}
           </section>
         )}
       </SettingsShell>

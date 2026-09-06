@@ -606,17 +606,29 @@ export async function patchDivision(
   id: string,
   patch: PatchDivision,
 ): Promise<DivisionRow> {
+  // Both gates below resolve against THIS division's competition, so one
+  // lookup serves them: `formats.advanced` has always been pass-lifted, and
+  // V396 made `news.auto` pass-lifted too (false on Free, granted on both
+  // Event Pass rungs). On the pooled proxy and BEFORE `withTenant` opens —
+  // `requireFeature` is a pooled read and issuing one inside a tenant
+  // transaction is the pool self-deadlock (lib/db.ts).
+  const needsCompetition = patch.auto_progress === true || patch.auto_posts === true;
+  const competitionId = needsCompetition
+    ? (
+        await sql<{ competition_id: string }[]>`
+          select competition_id from divisions where id = ${id}`
+      )[0]?.competition_id
+    : undefined;
   // Jul3/08 §8: auto-advance is part of the advanced-formats Pro layer (or
   // an Event Pass on this division's competition, v3/07 §3).
   if (patch.auto_progress === true) {
-    const [d] = await sql<{ competition_id: string }[]>`
-      select competition_id from divisions where id = ${id}`;
-    await requireFeature(auth.orgId, "formats.advanced", d?.competition_id);
+    await requireFeature(auth.orgId, "formats.advanced", competitionId);
   }
-  // SPEC-2: turning auto-drafted news ON is Pro `news.auto` (402 PlusReveal);
-  // turning it off is always allowed (a downgraded org can quiet its toggle).
+  // SPEC-2: turning auto-drafted news ON is Pro `news.auto` — or an Event Pass
+  // on this competition since V396; turning it off is always allowed (a
+  // downgraded org can quiet its toggle).
   if (patch.auto_posts === true) {
-    await requireFeature(auth.orgId, "news.auto");
+    await requireFeature(auth.orgId, "news.auto", competitionId);
   }
   let previousSlug: string | null = null;
   let previousCompetitionId: string | null = null;

@@ -5,6 +5,7 @@
 // convention as app/api/orgs/[id]/__tests__/route.test.ts; the plan_key
 // lookup runs for real against the migrated test Postgres via a seeded
 // subscriptions row.
+import type { AnyPlanKey } from "@/lib/currency";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 import { sql } from "@/lib/db";
@@ -37,7 +38,7 @@ vi.mock("@/lib/auth", async (importOriginal) => {
 import { GET } from "../route";
 
 import { setOrgPlan } from "@/lib/__tests__/_billing-group";
-async function seedOrgWithPlan(plan: string): Promise<OrgMembership> {
+async function seedOrgWithPlan(plan: AnyPlanKey): Promise<OrgMembership> {
   const suffix = randomUUID().slice(0, 8);
   const [org] = await sql<
     {

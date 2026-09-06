@@ -498,7 +498,7 @@
         ]
       },
       "post": {
-        "summary": "Create a competition",
+        "summary": "Create a competition. Public by default; at `dashboard.public.max` the create is NOT refused — it is created private and the 201 carries `public_quota_degraded` naming the cap",
         "tags": [
           "competitions"
         ],
@@ -551,7 +551,7 @@
                     "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))$"
                   },
                   "visibility": {
-                    "default": "private",
+                    "default": "public",
                     "type": "string",
                     "enum": [
                       "private",
@@ -739,6 +739,53 @@
                         },
                         "frozen": {
                           "type": "boolean"
+                        },
+                        "public_quota_degraded": {
+                          "type": "object",
+                          "properties": {
+                            "feature_key": {
+                              "type": "string",
+                              "const": "dashboard.public.max"
+                            },
+                            "requested_visibility": {
+                              "type": "string",
+                              "enum": [
+                                "public",
+                                "unlisted"
+                              ]
+                            },
+                            "applied_visibility": {
+                              "type": "string",
+                              "const": "private"
+                            },
+                            "limit": {
+                              "anyOf": [
+                                {
+                                  "type": "integer",
+                                  "minimum": -9007199254740991,
+                                  "maximum": 9007199254740991
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "reason": {
+                              "type": "string"
+                            },
+                            "discoverable_dropped": {
+                              "type": "boolean",
+                              "const": true
+                            }
+                          },
+                          "required": [
+                            "feature_key",
+                            "requested_visibility",
+                            "applied_visibility",
+                            "limit",
+                            "reason"
+                          ],
+                          "additionalProperties": false
                         }
                       },
                       "required": [
@@ -1025,7 +1072,7 @@
                     "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))$"
                   },
                   "visibility": {
-                    "default": "private",
+                    "default": "public",
                     "type": "string",
                     "enum": [
                       "private",
@@ -1083,6 +1130,61 @@
                           "maxLength": 80,
                           "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
                         },
+                        "visibility": {
+                          "type": "string",
+                          "enum": [
+                            "private",
+                            "unlisted",
+                            "public"
+                          ]
+                        },
+                        "public_quota_degraded": {
+                          "type": "object",
+                          "properties": {
+                            "feature_key": {
+                              "type": "string",
+                              "const": "dashboard.public.max"
+                            },
+                            "requested_visibility": {
+                              "type": "string",
+                              "enum": [
+                                "public",
+                                "unlisted"
+                              ]
+                            },
+                            "applied_visibility": {
+                              "type": "string",
+                              "const": "private"
+                            },
+                            "limit": {
+                              "anyOf": [
+                                {
+                                  "type": "integer",
+                                  "minimum": -9007199254740991,
+                                  "maximum": 9007199254740991
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "reason": {
+                              "type": "string"
+                            },
+                            "discoverable_dropped": {
+                              "type": "boolean",
+                              "const": true
+                            }
+                          },
+                          "required": [
+                            "feature_key",
+                            "requested_visibility",
+                            "applied_visibility",
+                            "limit",
+                            "reason"
+                          ],
+                          "additionalProperties": false
+                        },
                         "divisions": {
                           "type": "array",
                           "items": {
@@ -1136,6 +1238,7 @@
                       "required": [
                         "competitionId",
                         "slug",
+                        "visibility",
                         "divisions",
                         "templateKey",
                         "templateVersion"
@@ -1153,6 +1256,14 @@
                   "data": {
                     "competitionId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
                     "slug": "example",
+                    "visibility": "private",
+                    "public_quota_degraded": {
+                      "feature_key": "dashboard.public.max",
+                      "requested_visibility": "public",
+                      "applied_visibility": "private",
+                      "limit": -9007199254740991,
+                      "reason": "example"
+                    },
                     "divisions": [
                       {
                         "id": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
@@ -33593,7 +33704,8 @@
                             "properties": {
                               "type": {
                                 "type": "string",
-                                "minLength": 1
+                                "minLength": 1,
+                                "maxLength": 100
                               },
                               "payload": {
                                 "default": {},
@@ -71836,7 +71948,7 @@
     },
     "/api/v1/officials/import": {
       "post": {
-        "summary": "Bulk CSV/XLSX import (multipart `file`: Name, Roles, MaxPerDay)",
+        "summary": "Bulk CSV/XLSX import (multipart `file`: Name, Roles, MaxPerDay). Subject to the same per-FILE row cap as POST /imports (`import.bulk`): over it, 402 quoting the cap that refused the file",
         "tags": [
           "officials"
         ],
@@ -71919,6 +72031,50 @@
           },
           "401": {
             "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "402": {
+            "description": "Plan upgrade required",
             "content": {
               "application/json": {
                 "schema": {
@@ -72408,7 +72564,7 @@
     },
     "/api/v1/divisions/{id}/officials/auto": {
       "post": {
-        "summary": "Propose assignments — pure engine pass with locked rows as obstacles; writes nothing (Pro Plus `officials.auto`)",
+        "summary": "Propose assignments — pure engine pass with locked rows as obstacles; writes nothing (Pro `officials.auto`)",
         "tags": [
           "officials"
         ],
@@ -73769,7 +73925,7 @@
     },
     "/api/v1/divisions/{id}/officials/apply": {
       "post": {
-        "summary": "Persist a proposal transactionally; emits `officials_assigned` (Pro Plus `officials.auto`)",
+        "summary": "Persist a proposal transactionally; emits `officials_assigned` (Pro `officials.auto`)",
         "tags": [
           "officials"
         ],
@@ -74430,7 +74586,7 @@
     },
     "/api/v1/stages/{id}/officials/source": {
       "post": {
-        "summary": "Resolve rank/result sourcing → officiating entrants; pending until the source decides (Pro Plus `officials.auto`)",
+        "summary": "Resolve rank/result sourcing → officiating entrants; pending until the source decides (Pro `officials.auto`)",
         "tags": [
           "officials"
         ],
@@ -75751,7 +75907,7 @@
         ]
       },
       "post": {
-        "summary": "Create a save point at the current watermark (quota `schedule.checkpoints.max`: 2 free / 5 Pro / unlimited Pro Plus; at the cap the oldest save point is replaced)",
+        "summary": "Create a save point at the current watermark (quota `schedule.checkpoints.max`: 2 free / 10 Pro; at the cap the oldest save point is replaced)",
         "tags": [
           "history"
         ],
@@ -86106,7 +86262,7 @@
     },
     "/api/v1/stages/{id}/standings/override": {
       "post": {
-        "summary": "Pin final ranks (placement games decide 3rd/4th); cascade orders the unlocked remainder; audited rank_overridden (Pro `tiebreakers.custom`)",
+        "summary": "Pin final ranks (placement games decide 3rd/4th); cascade orders the unlocked remainder; audited rank_overridden; free on every plan (`tiebreakers.custom`)",
         "tags": [
           "stages"
         ],

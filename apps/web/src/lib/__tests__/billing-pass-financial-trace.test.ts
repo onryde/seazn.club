@@ -242,14 +242,14 @@ describe.skipIf(!HAS_DB)("Event Pass leaves a financial trace (webhook)", () => 
     const cid = "cus_pass_hook_" + uniq();
 
     await processStripeEvent(
-      passEvent(passSession(orgId, compId, { customer: cid, currency: "aud" })),
+      passEvent(passSession(orgId, compId, { customer: cid, currency: "inr" })),
     );
 
     const [sub] = await readSub(orgId);
     // The pass branch `return`s before the shared linkStripeCustomer call at the
     // bottom of handleCheckoutCompleted, so it needed its own.
     expect(sub.stripe_customer_id).toBe(cid);
-    expect(sub.currency).toBe("aud");
+    expect(sub.currency).toBe("inr");
   });
 
   it("a refunded duplicate does NOT repoint the org's customer or currency", async () => {
@@ -321,7 +321,7 @@ describe.skipIf(!HAS_DB)("Event Pass leaves a financial trace (webhook)", () => 
 // many times the webhook / reconcile redeliver, and never for a refunded
 // duplicate second charge.
 describe.skipIf(!HAS_DB)("Event Pass grants one-time AI credits", () => {
-  it("a bought pass grants PASS_CREDIT_GRANT credits to the org's wallet", async () => {
+  it("a bought M pass grants M's own credit top-up to the org's wallet", async () => {
     const { orgId, compId } = await seedPassBuyer();
     const walletId = await walletIdFor(orgId);
     expect(await balance(walletId)).toBe(0);
@@ -333,7 +333,7 @@ describe.skipIf(!HAS_DB)("Event Pass grants one-time AI credits", () => {
       paymentIntent: "pi_grant_" + uniq(),
     });
     expect(res.recorded).toBe(true);
-    expect(await balance(walletId)).toBe(PASS_CREDIT_GRANT);
+    expect(await balance(walletId)).toBe(PASS_CREDIT_GRANT.event_pass);
   });
 
   it("a webhook + reconcile replay of the same payment does NOT double-grant", async () => {
@@ -352,17 +352,17 @@ describe.skipIf(!HAS_DB)("Event Pass grants one-time AI credits", () => {
     });
     stripeMock.retrieve.mockResolvedValue(session);
 
-    // A paid Event Pass grants ONLY the SPEC-2 pass credits (25). The SPEC-5 §2
+    // A paid Event Pass grants ONLY the SPEC-2 pass credits (M's 25 here). The SPEC-5 §2
     // first_paid earn does NOT stack here: buying a pass is not the org taking a
     // paid registration, so the earn hook lives in confirmPaidRegistration, not
     // the pass webhook branch. Both writes are one-time and idempotent, so the
     // replay below adds nothing.
     await processStripeEvent(passEvent(session));
-    expect(await balance(walletId)).toBe(PASS_CREDIT_GRANT);
+    expect(await balance(walletId)).toBe(PASS_CREDIT_GRANT.event_pass);
     // A second delivery of the same payment is a replay, not a new purchase:
     // recordPassGrant's per-payment-intent idempotency key makes it a no-op.
     expect(await reconcilePassCheckout(orgId, "cs_grant_replay")).toBe(true);
-    expect(await balance(walletId)).toBe(PASS_CREDIT_GRANT);
+    expect(await balance(walletId)).toBe(PASS_CREDIT_GRANT.event_pass);
   });
 
   it("a refunded duplicate second charge does NOT grant a second time", async () => {
@@ -376,7 +376,7 @@ describe.skipIf(!HAS_DB)("Event Pass grants one-time AI credits", () => {
       passSession(orgId, compId, { payment_intent: "pi_grant_winner_" + uniq() }),
     );
     expect(await reconcilePassCheckout(orgId, "cs_grant_winner")).toBe(true);
-    expect(await balance(walletId)).toBe(PASS_CREDIT_GRANT);
+    expect(await balance(walletId)).toBe(PASS_CREDIT_GRANT.event_pass);
 
     // A second owner pays for the SAME competition; the charge is refunded and
     // the wallet must NOT be credited again (a duplicate second charge is sent
@@ -385,7 +385,7 @@ describe.skipIf(!HAS_DB)("Event Pass grants one-time AI credits", () => {
       passEvent(passSession(orgId, compId, { payment_intent: "pi_grant_loser_" + uniq() })),
     );
     expect(stripeMock.refundCreate).toHaveBeenCalledTimes(1);
-    expect(await balance(walletId)).toBe(PASS_CREDIT_GRANT);
+    expect(await balance(walletId)).toBe(PASS_CREDIT_GRANT.event_pass);
   });
 
   it("in a billing group the credits land in the shared group pool", async () => {
@@ -417,8 +417,8 @@ describe.skipIf(!HAS_DB)("Event Pass grants one-time AI credits", () => {
     });
     expect(res.recorded).toBe(true);
     // The 25 lands in the ONE shared pool, visible from either org's walletId.
-    expect(await balance(groupWallet)).toBe(PASS_CREDIT_GRANT);
-    expect(await balance(await walletIdFor(payerOrg))).toBe(PASS_CREDIT_GRANT);
+    expect(await balance(groupWallet)).toBe(PASS_CREDIT_GRANT.event_pass);
+    expect(await balance(await walletIdFor(payerOrg))).toBe(PASS_CREDIT_GRANT.event_pass);
   });
 });
 
@@ -434,7 +434,7 @@ describe.skipIf(!HAS_DB)("Event Pass claws back its credits on refund/dispute", 
     const intent = "pi_refund_" + uniq();
 
     expect((await recordPassPurchase({ orgId, competitionId: compId, passKey: "event_pass", paymentIntent: intent })).recorded).toBe(true);
-    expect(await balance(walletId)).toBe(PASS_CREDIT_GRANT);
+    expect(await balance(walletId)).toBe(PASS_CREDIT_GRANT.event_pass);
 
     expect(await revokePassForRefundedCharge(refundedCharge(intent))).toBe(true);
     // Nothing was spent, so the whole grant is clawed — wallet back to 0.
@@ -450,7 +450,7 @@ describe.skipIf(!HAS_DB)("Event Pass claws back its credits on refund/dispute", 
     await recordPassPurchase({ orgId, competitionId: compId, passKey: "event_pass", paymentIntent: intent });
     // Consume 10 of the 25 (a real AI run's hold from the pack bucket).
     await reserve(walletId, orgId, 10);
-    expect(await balance(walletId)).toBe(PASS_CREDIT_GRANT - 10); // 15 left
+    expect(await balance(walletId)).toBe(PASS_CREDIT_GRANT.event_pass - 10); // 15 left
 
     expect(await revokePassForRefundedCharge(refundedCharge(intent))).toBe(true);
     // Claws only the 15 unspent; the 10 already consumed is gone (not retro-
@@ -465,7 +465,7 @@ describe.skipIf(!HAS_DB)("Event Pass claws back its credits on refund/dispute", 
     const intent = "pi_dispute_" + uniq();
 
     await recordPassPurchase({ orgId, competitionId: compId, passKey: "event_pass", paymentIntent: intent });
-    expect(await balance(walletId)).toBe(PASS_CREDIT_GRANT);
+    expect(await balance(walletId)).toBe(PASS_CREDIT_GRANT.event_pass);
 
     await processStripeEvent(disputeClosedEvent(intent, "lost"));
     expect(await balance(walletId)).toBe(0);
@@ -495,7 +495,7 @@ describe.skipIf(!HAS_DB)("Event Pass claws back its credits on refund/dispute", 
     const { orgId, compId } = await seedPassBuyer();
     const walletId = await walletIdFor(orgId);
 
-    // Buy → refund: the pass row is deleted and its 25 clawed.
+    // Buy → refund: the pass row is deleted and its rung's grant clawed.
     await recordPassPurchase({ orgId, competitionId: compId, passKey: "event_pass", paymentIntent: "pi_first_" + uniq() });
     await revokePassForRefundedCharge(refundedCharge((await lastPassIntent(compId)) ?? ""));
     expect(await balance(walletId)).toBe(0);
@@ -509,7 +509,7 @@ describe.skipIf(!HAS_DB)("Event Pass claws back its credits on refund/dispute", 
       paymentIntent: "pi_second_" + uniq(),
     });
     expect(second.recorded).toBe(true);
-    expect(await balance(walletId)).toBe(PASS_CREDIT_GRANT);
+    expect(await balance(walletId)).toBe(PASS_CREDIT_GRANT.event_pass);
   });
 
   it("in a billing group the claw-back debits the shared group pool it credited", async () => {
@@ -529,7 +529,7 @@ describe.skipIf(!HAS_DB)("Event Pass claws back its credits on refund/dispute", 
     const intent = "pi_grp_" + uniq();
 
     await recordPassPurchase({ orgId: memberOrg, competitionId: memberComp, passKey: "event_pass", paymentIntent: intent });
-    expect(await balance(groupWallet)).toBe(PASS_CREDIT_GRANT);
+    expect(await balance(groupWallet)).toBe(PASS_CREDIT_GRANT.event_pass);
 
     expect(await revokePassForRefundedCharge(refundedCharge(intent))).toBe(true);
     // Debited from the ONE shared pool, visible from either org's walletId.
@@ -538,13 +538,16 @@ describe.skipIf(!HAS_DB)("Event Pass claws back its credits on refund/dispute", 
   });
 });
 
-// v17 #294 — the L rung ($59, 20 divisions / unlimited entrants). The credit and
-// refund machinery never reads pass_key at all (recordPassGrant takes a flat
-// PASS_CREDIT_GRANT; revokePassForRefundedCharge keys purely on
-// stripe_payment_intent), so the tests here that touch money PROVE that rather
-// than exercise anything new. What IS new is the wiring: recordPassPurchase
-// writing the rung it was told, and the webhook / reconcile paths reading it back
-// out of session metadata.
+// v17 #294 — the L rung ($39, 20 divisions / unlimited entrants). The CLAW-BACK
+// machinery still never reads pass_key (revokePassForRefundedCharge keys purely
+// on stripe_payment_intent, and refunds whatever that grant recorded), so the
+// refund tests here PROVE that rather than exercise anything new.
+//
+// The GRANT, however, does read it now: entitlements v18 W2 T5 sized the top-up
+// by rung, so `recordPassGrant` is handed `PASS_CREDIT_GRANT[passKey]` and an L
+// purchase credits a different number from an M one. The comment this replaces
+// said the credit machinery "never reads pass_key at all", which is exactly the
+// premise the wave overturned.
 //
 // The landmine this closes: recordPassPurchase omitted pass_key from its INSERT
 // entirely and V271 declares the column `not null default 'event_pass'`, so an L
@@ -559,7 +562,7 @@ describe.skipIf(!HAS_DB)("Event Pass L rung (v17 #294) — same money machinery 
     return row?.pass_key;
   };
 
-  it("records pass_key='event_pass_l' and grants the SAME PASS_CREDIT_GRANT (25)", async () => {
+  it("records pass_key='event_pass_l' and grants L's OWN, LARGER credit top-up", async () => {
     const { orgId, compId } = await seedPassBuyer();
     const walletId = await walletIdFor(orgId);
 
@@ -570,9 +573,22 @@ describe.skipIf(!HAS_DB)("Event Pass L rung (v17 #294) — same money machinery 
       passKey: "event_pass_l",
     });
     expect(res.recorded).toBe(true);
-    // The grant is flat by design (owner decision): L buys a bigger competition,
-    // not more credits. Parametrizing it would be the bug.
-    expect(await balance(walletId)).toBe(PASS_CREDIT_GRANT);
+    // Entitlements v18 W2 T5 (design R9, owner ruling 2026-09-03): the grant is
+    // sized BY the rung. This test read the flat constant and its own title
+    // asserted "the SAME (25)" — the assertion that would have kept passing had
+    // the wiring been left behind. Both figures come from the declaration, and
+    // the `not.toBe` below is what stops M's number satisfying L's assertion.
+    expect(await balance(walletId)).toBe(PASS_CREDIT_GRANT.event_pass_l);
+    // The discriminator: without it, a grant left flat at M's 25 would satisfy
+    // the line above on the day the two numbers were made equal again.
+    expect(await balance(walletId)).not.toBe(PASS_CREDIT_GRANT.event_pass);
+    // …and the SECOND discriminator, W2 T12: every assertion above is derived
+    // from `PASS_CREDIT_GRANT`, so all of them move silently with the constant
+    // and none can witness a change to the number itself. 50 is what T5 shipped
+    // and what the owner re-cut to 35 on 2026-09-03; a revert of that edit
+    // reaches the wallet, and this is the line that sees it. Deliberately a
+    // literal — the retired value has no live declaration left to read.
+    expect(await balance(walletId), "W2 T12 re-cut L's grant from 50 to 35").not.toBe(50);
     expect(await recordedRung(compId)).toBe("event_pass_l");
   });
 
@@ -687,7 +703,7 @@ describe.skipIf(!HAS_DB)("Event Pass L rung (v17 #294) — same money machinery 
         })
       ).recorded,
     ).toBe(true);
-    expect(await balance(walletId)).toBe(PASS_CREDIT_GRANT);
+    expect(await balance(walletId)).toBe(PASS_CREDIT_GRANT.event_pass_l);
 
     // Keyed purely on the payment intent — the claw-back never looks at the rung.
     expect(await revokePassForRefundedCharge(refundedCharge(intent))).toBe(true);
@@ -707,7 +723,7 @@ describe.skipIf(!HAS_DB)("Event Pass L rung (v17 #294) — same money machinery 
       paymentIntent: intent,
       passKey: "event_pass_l",
     });
-    expect(await balance(walletId)).toBe(PASS_CREDIT_GRANT);
+    expect(await balance(walletId)).toBe(PASS_CREDIT_GRANT.event_pass_l);
 
     await processStripeEvent(disputeClosedEvent(intent, "lost"));
     expect(await balance(walletId)).toBe(0);

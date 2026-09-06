@@ -38,7 +38,7 @@ export const TIPS = {
   },
   "persons.public-cards": {
     title: "What makes a profile public",
-    body: "Two separate locks, and a public player card needs both. The player's own consent — no plan overrides it, and switching it off takes the card down again — and your plan: public cards need Pro, Pro Plus, or an Event Pass on that competition. Name and photo are consented separately.",
+    body: "Two separate locks, and a public player card needs both. The player's own consent — no plan overrides it, and switching it off takes the card down again — and your plan: public cards need Pro or an Event Pass on that competition. Name and photo are consented separately.",
     helpSlug: "players/player-stats-and-photo",
   },
   "persons.actions": {
@@ -53,7 +53,7 @@ export const TIPS = {
   },
   "billing.downgrade-freeze": {
     title: "What downgrading freezes",
-    body: "Nothing is deleted. Anything over the Community limits becomes read-only until you upgrade again or archive something. Your logo and your card entry fees keep working — only the platform fee goes back to 8% — while Pro extras like your brand colour, branded exports and API keys switch off.",
+    body: "Nothing is deleted. Anything over the Community limits becomes read-only until you upgrade again or archive something. Your logo and your card entry fees keep working — only the platform fee goes back to 5% — while Pro extras like your brand colour, branded exports and API keys switch off.",
     helpSlug: "billing/downgrade",
   },
   "billing.groups": {
@@ -94,7 +94,7 @@ export const TIPS = {
     // msg(`tips.${id}.body`) from the four dictionaries; this is the source of
     // truth the en dictionary mirrors, and lib/__tests__/dictionary-copy-truth
     // asserts the two are identical so a fix here can never be cosmetic.
-    body: "Each organisation after the first costs no more than half the base rate. It also moves to your plan's entry-fee cut — 2% on Pro or 1% on Pro Plus, instead of the 8% a free organisation pays.",
+    body: "Each organisation after the first costs no more than half the base rate. It also moves to your plan's entry-fee cut — 2% on Pro, instead of the 5% a free organisation pays.",
     helpSlug: "billing/groups",
   },
   // Held back when the tips landed, because quantity_paid was written by
@@ -113,15 +113,19 @@ export const TIPS = {
   "billing.event-pass": {
     title: "What an Event Pass covers",
     // The entrant figure here said 64 until v17 #294 — Community's cap, not
-    // the pass's, and wrong by half since V319 raised the pass to 128. Both
-    // rungs' numbers are pinned against plan_entitlements by
+    // the pass's, and wrong by half since V319 raised the pass to 128. The
+    // numbers are pinned against plan_entitlements by
     // lib/__tests__/pricing-cards.test.ts, in all four locales.
-    body: "For this competition only: an M pass gives it 128 entrants per division and up to 10 divisions; an L pass gives it unlimited entrants and up to 20 divisions. Both sizes add branded exports, public player cards, sponsor packages, the realtime scoreboard, the same one-time credit top-up and a 5% platform fee instead of 8%. It is not Pro — your brand colour, player stats, officials, discipline, embeds and API access all stay Pro. A passed competition stops counting against your active-competition limit; the pass doesn't carry to next season's edition.",
+    //
+    // The L rung's half of this sentence went on 2026-09-05 with the rung's
+    // sale (owner decision): a tip that describes a size the checkout will not
+    // sell is an offer, and this one sits directly beside the buy link.
+    body: "For this competition only: the pass gives it 128 entrants per division and up to 10 divisions. It adds branded exports, public player cards, player stats, auto officials assignment, discipline tracking, embeds, sponsor packages, the realtime scoreboard, a one-time AI credit top-up and a 4% platform fee instead of 5%. It is not Pro — your brand colour on public pages, API access and your organisation's own limits all stay Pro. A passed competition stops counting against your active-competition limit; the pass doesn't carry to next season's edition.",
     helpSlug: "billing/event-pass",
   },
   "registration.platform-fee": {
     title: "The platform fee",
-    body: "Charging entry fees is free on every plan, Community included. What your plan sets is the fee we keep on card payments: 8% on Community, 5% on a competition with an Event Pass, 2% on Pro, 1% on Pro Plus. Stripe's own processing fee is separate.",
+    body: "Charging entry fees is free on every plan, Community included. What your plan sets is the fee we keep on card payments: 5% on Community, 4% on a competition with an Event Pass, 2% on Pro, 1% on Enterprise. Stripe's own processing fee is separate.",
     helpSlug: "registration/card-payments",
   },
   "registration.ref-number": {
@@ -166,7 +170,7 @@ export const TIPS = {
   },
   "schedule.save-points": {
     title: "Save points",
-    body: "A save point bookmarks the timetable exactly as it is now — every kick-off time and court. Restore rewinds the schedule to that bookmark by undoing each change since, one by one. Match results are never touched: if rewinding would erase a played result, the restore stops there. One save point is free, Pro includes five, Pro Plus is unlimited.",
+    body: "A save point bookmarks the timetable exactly as it is now — every kick-off time and court. Restore rewinds the schedule to that bookmark by undoing each change since, one by one. Match results are never touched: if rewinding would erase a played result, the restore stops there. Community keeps 2 save points per division and Pro keeps 10.",
     helpSlug: "scheduling/undo",
   },
   "schedule.field-fairness": {

@@ -29,6 +29,18 @@ const GENERIC_CONFIG = {
   progressScore: false,
 };
 
+/** V393 (entitlements v18 §2) granted several formerly-Pro keys to Community,
+ *  so a plan alone no longer withholds them. The gate sites are still live
+ *  code; a DENY override is the one remaining lever that takes a key away, and
+ *  it beats both the pass and the plan — so it is what proves a gate shuts. */
+async function denyFeature(orgId: string, featureKey: string): Promise<void> {
+  await sql`
+    insert into org_entitlement_overrides (org_id, feature_key, bool_value, reason)
+    values (${orgId}, ${featureKey}, false, 'test')
+    on conflict (org_id, feature_key) do update set bool_value = false`;
+  await invalidateOrgEntitlements(orgId);
+}
+
 async function seedOrg(plan: "community" | "pro" = "pro"): Promise<{ auth: AuthCtx }> {
   const suffix = randomUUID().slice(0, 8);
   const [{ id: orgId }] = await sql<{ id: string }[]>`
@@ -183,7 +195,7 @@ describe.skipIf(!HAS_DB)("custom points & rank control (Jul3/05)", () => {
     expect(rows.every((r) => r.tieUnbroken === true)).toBe(true);
   });
 
-  it("manual override pins 3rd/4th and survives recompute; Community 402s", async () => {
+  it("manual override pins 3rd/4th and survives recompute; a denied org 402s", async () => {
     const { auth } = await seedOrg();
     const { division, entrants } = await seedDivision(auth, ["A", "B", "C", "D"]);
     const [stage] = await createStages(auth, division.id, {
@@ -224,6 +236,7 @@ describe.skipIf(!HAS_DB)("custom points & rank control (Jul3/05)", () => {
     expect(ev).toEqual({ broken: null });
 
     const { auth: freeAuth } = await seedOrg("community");
+    await denyFeature(freeAuth.orgId, "tiebreakers.custom");
     const { division: freeDiv, entrants: freeEntrants } = await seedDivision(freeAuth, ["A", "B"]);
     const [freeStage] = await createStages(freeAuth, freeDiv.id, {
       seq: 1,
@@ -239,7 +252,7 @@ describe.skipIf(!HAS_DB)("custom points & rank control (Jul3/05)", () => {
     ).rejects.toMatchObject({ featureKey: "tiebreakers.custom" });
   });
 
-  it("carry-over seeds Phase 2 with prior points; bonuses are Pro at stage create", async () => {
+  it("carry-over seeds Phase 2 with prior points; bonuses are gated at stage create", async () => {
     const { auth } = await seedOrg();
     const { division, entrants } = await seedDivision(auth, ["A", "B", "C", "D"]);
     const [g, final] = await createStages(auth, division.id, [
@@ -282,6 +295,7 @@ describe.skipIf(!HAS_DB)("custom points & rank control (Jul3/05)", () => {
 
     // Pro gates at stage create
     const { auth: freeAuth } = await seedOrg("community");
+    await denyFeature(freeAuth.orgId, "standings.custom_points");
     const { division: freeDiv } = await seedDivision(freeAuth, ["A", "B"]);
     await expect(
       createStages(freeAuth, freeDiv.id, {

@@ -31,7 +31,7 @@ async function makeUser(tag: string): Promise<string> {
 }
 
 /** A group (subscription) owned by `ownerId`. Its id IS the wallet id. */
-async function makeGroup(ownerId: string, plan = "pro_plus"): Promise<string> {
+async function makeGroup(ownerId: string, plan = "pro"): Promise<string> {
   const [{ id }] = await sql<{ id: string }[]>`
     insert into subscriptions (owner_user_id, plan_key, status, quantity_paid)
     values (${ownerId}, ${plan}, 'active', 1) returning id`;

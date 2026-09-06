@@ -154,8 +154,9 @@ const RULES: RouteRule[] = [
   // Fix round 1 (Task 5 review): moved off NEVER_KEY_ROUTES. This file's own
   // never-list is scoped to STRUCTURAL bans (key management, Stripe,
   // refunds, device-links, /me) — "rollout caution" isn't that, and
-  // import.events (no plan grants it, per-org override only) is the actual
-  // gate. `score`, not `manage`: same scope as /fixtures/:id/events, which
+  // import.events is the actual gate (V396 grants it on every plan, so it
+  // now refuses only on a staff override deny — it is not a plan boundary).
+  // `score`, not `manage`: same scope as /fixtures/:id/events, which
   // this route is a bulk-write sibling of — a club migrating its own history
   // is exactly the automation case an org-scoped key exists for, and it
   // writes the same ledger a score-scoped key can already write one event

@@ -464,7 +464,7 @@ export async function setZoneSplitSql(opts: {
 
 export async function setOrgPlanBySql(
   target: { orgId?: string; email?: string },
-  plan: "pro" | "community" | "pro_plus",
+  plan: "pro" | "community",
 ): Promise<void> {
   await withDb(async (sql) => {
     if (target.orgId) {
@@ -996,6 +996,47 @@ export async function invalidateOrgEntitlements(
  *  the wrong rung's numbers. That landmine has now been closed five times in
  *  this wave (passPrice, recordPassPurchase, fetchPassCheckoutClientSecret,
  *  smoke's grantPass, and here); a required parameter is what stops a sixth. */
+/**
+ * One `plan_entitlements` cell, live — the number the resolver enforces and the
+ * number `/pricing` renders, read from the same row.
+ *
+ * THREE outcomes, and the third is why this returns `number | null | undefined`
+ * rather than a number: a row with a null `int_value` is UNLIMITED, and NO ROW
+ * is a denial. Collapsing them lets a table cell reading "∞" satisfy a plan
+ * that has no such grant at all.
+ *
+ * It exists because the pricing-matrix assertions in `pricing-v3.spec.ts` were
+ * hardcoded figures, and every repricing left them asserting yesterday's
+ * numbers against a page that had moved — the same failure this repo's own
+ * `price-kit.ts` header describes for prices. The matrix is the source of truth
+ * for the caps exactly as `stripe-plans.json` is for the amounts.
+ */
+export async function planCapSql(
+  featureKey: string,
+  planKey: string,
+): Promise<number | null | undefined> {
+  return withDb(async (sql) => {
+    const rows = await sql<{ int_value: number | null }[]>`
+      select int_value from plan_entitlements
+       where feature_key = ${featureKey} and plan_key = ${planKey}`;
+    return rows[0]?.int_value;
+  });
+}
+
+/** The same cell as a BOOLEAN grant. `undefined` when the plan has no row —
+ *  which the resolver reads as denied, and the table renders as a dash. */
+export async function planFlagSql(
+  featureKey: string,
+  planKey: string,
+): Promise<boolean | null | undefined> {
+  return withDb(async (sql) => {
+    const rows = await sql<{ bool_value: boolean | null }[]>`
+      select bool_value from plan_entitlements
+       where feature_key = ${featureKey} and plan_key = ${planKey}`;
+    return rows[0]?.bool_value;
+  });
+}
+
 export async function grantCompetitionPassSql(
   orgId: string,
   competitionId: string,
@@ -1089,12 +1130,20 @@ export async function joinOrgToGroupSql(orgId: string, groupId: string): Promise
 /**
  * Give `orgId` a billing group of ITS OWN, and return the new group's id.
  *
- * The inverse of joinOrgToGroupSql, and the fixture V309 made necessary: a new
- * org joins its creator's EXISTING group (lib/auth.ts createOrgForUser), so
- * three orgs minted by one e2e user are three orgs on ONE bill, not three
- * groups. A spec that wants to watch orgs move between groups has to break them
- * apart first, or every "join" it performs is a no-op against a group that
- * already holds everything.
+ * The inverse of joinOrgToGroupSql. This comment used to say a new org joins
+ * its creator's EXISTING group (citing lib/auth.ts createOrgForUser), so three
+ * orgs minted by one e2e user shared ONE bill. That was FALSE, and a peer
+ * session acted on it before withdrawing the conclusion: `createOrgForUser`
+ * inserts a FRESH `subscriptions` row inside its own transaction and stamps it
+ * onto the new org ("Individual by default (#212): every new org mints its OWN
+ * community group", and its race comment says "each minted an org + a Community
+ * group"). V309's auto-join is opt-in now. The only writers that attach an org
+ * to an EXISTING group are the explicit usecases in billing-groups.ts.
+ *
+ * So a spec that wants to watch orgs move between groups starts from orgs that
+ * are already apart, and this helper is what a spec uses when it has
+ * deliberately JOINED them (joinOrgToGroupSql, or the attach route) and now
+ * needs one back on a bill of its own.
  *
  * Mirrors what a detach leaves behind — a fresh community group owned by the
  * org's owner — and drops the old group if this emptied it, like dropEmptyGroup.
@@ -1762,9 +1811,11 @@ export async function createCompetitionViaUi(
   // ahead of now — everything created here has to stay a RUNNING competition,
   // or the Event Pass surfaces under test would render their locked state.
   await page.getByLabel(/^Ends on/i).fill("2030-12-31");
-  // Visibility is a radio-card group; the wizard defaults to PRIVATE, so
-  // always select explicitly. The input hides behind the styled card, so
-  // click the wrapping label and verify the radio took.
+  // Visibility is a radio-card group. The wizard defaults to PUBLIC since V396
+  // (entitlements v18 W2 T15/F) — it defaulted to private before — so callers
+  // that want anything else must be explicit, and this helper always selects
+  // explicitly rather than depending on either default. The input hides behind
+  // the styled card, so click the wrapping label and verify the radio took.
   const radio = page.getByRole("radio", { name: new RegExp(`^${visibility}`, "i") });
   await page.locator("label").filter({ has: radio }).click();
   await expect(radio).toBeChecked();

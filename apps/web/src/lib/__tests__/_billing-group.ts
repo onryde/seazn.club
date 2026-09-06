@@ -15,6 +15,7 @@
 // dated status_changed_at, ...) write the CTE inline instead; only the plain
 // plan/status case lives here.
 import { randomUUID } from "node:crypto";
+import type { AnyPlanKey } from "@/lib/currency";
 import { sql } from "@/lib/db";
 
 /** A throwaway user to carry subscriptions.owner_user_id for orgs seeded
@@ -37,7 +38,11 @@ async function makePayer(): Promise<string> {
  *
  * @returns the subscription (group) id.
  */
-export async function setOrgPlan(orgId: string, plan = "pro", status = "active"): Promise<string> {
+export async function setOrgPlan(
+  orgId: string,
+  plan: AnyPlanKey = "pro",
+  status = "active",
+): Promise<string> {
   const [org] = await sql<{ subscription_id: string | null; owner: string | null }[]>`
     select o.subscription_id,
            coalesce(

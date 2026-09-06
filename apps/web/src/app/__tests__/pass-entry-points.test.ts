@@ -265,6 +265,77 @@ describe("a surface that offers no rung quotes the ladder's floor", () => {
   });
 });
 
+/**
+ * WHICH FILES MAY ASK FOR THE WHOLE LADDER.
+ *
+ * `SELLABLE_PASS_KEYS` (lib/currency.ts) is the authority on which rungs are on
+ * sale; `PASS_KEYS` is every rung that EXISTS, on sale or dormant. Reaching for
+ * the second where the first is meant is how a withdrawn rung gets offered
+ * again, and it is not a mistake `tsc` can see: both are `readonly PassKey[]`,
+ * so a selling surface that swaps one for the other compiles, renders, and
+ * quietly puts a size back on the shelf that the owner took off it.
+ *
+ * MEASURED, which is why this guard is source-level and not behavioural: with
+ * `lowestPassRung` reverted to `PASS_KEYS`, 167 tests across four suites stayed
+ * GREEN. The entry rung is the cheapest in every currency today, so reducing
+ * over the full ladder and over the sellable one return the same answer — the
+ * two implementations agree by luck, and would stop agreeing the day a dormant
+ * rung was discounted, which is exactly the day nobody would be looking. There
+ * is no observable difference to assert, so the CALL SITE is what gets pinned.
+ *
+ * Every file listed here IMPORTS the full ladder deliberately, and each reason
+ * is a RESOLUTION reason — recognising, pricing or labelling a rung that already
+ * exists — never an offer. `lib/currency.ts` itself is not here because it
+ * declares the tuple rather than importing it; `SELLABLE_PASS_KEYS` and
+ * `HIDDEN_PASS_KEYS` are filters of it, which is the point — one tuple decides,
+ * and the ladder's order cannot diverge between them.
+ */
+const FULL_LADDER_CALLERS: Record<string, string> = {
+  "app/api/billing/pass-checkout/route.ts":
+    "REQUEST VALIDATION, and it must stay over the full set. A rung being off sale removes it from every buy surface; it does not retire the product. The Stripe price stays live (design §1 R13, the extra-seat precedent: 'keep code and price dormant'), and an org that already holds a dormant rung has to keep working — including a refund reconciling against its own amount. Narrowing this enum would turn a hidden rung into a deleted one.",
+  "lib/billing.ts":
+    "maps every rung to its `stripe-plans.json` lookup key, for the sync and reconcile paths. Those read a rung back OUT of Stripe, so they must recognise whatever was ever sold — the question `isPassKey` answers, not the one `isSellablePassKey` does.",
+  "lib/pricing-matrix.ts":
+    "`PASS_PLANS` — the set of columns that FALL THROUGH to community when a key has no row. That is a fact about how the resolver treats a pass, true of a rung whether or not it is on sale; filtering it by sellability would make it accidentally right today and wrong the moment a hidden rung is rendered anywhere.",
+};
+
+describe("no selling surface enumerates rungs from the full ladder", () => {
+  it("only the declared resolution paths value-import PASS_KEYS", () => {
+    /** An IMPORT of the value, not a mention of the name. `type PassKey` and
+     *  every comment quoting `PASS_KEYS` are irrelevant — what puts a rung on a
+     *  page is importing the list and mapping over it. */
+    const importsFullLadder = (file: string): boolean => {
+      const src = code(...file.split("/"));
+      for (const match of src.matchAll(/import\s*\{([^}]*)\}\s*from\s*["'][^"']*currency["']/g)) {
+        const named = match[1]!.split(",").map((n) => n.trim());
+        if (named.some((n) => /^PASS_KEYS(\s+as\s+\w+)?$/.test(n))) return true;
+      }
+      return false;
+    };
+
+    const callers = walkSrc().filter(importsFullLadder).sort();
+    expect(callers).toEqual(Object.keys(FULL_LADDER_CALLERS).sort());
+  });
+
+  it("names a reason for every one of them", () => {
+    // Anti-vacuity, and the thing that stops the list above being extended by
+    // reflex: an entry with no reason is an entry nobody argued for.
+    for (const [file, why] of Object.entries(FULL_LADDER_CALLERS)) {
+      expect(why.length, `${file} has no reason`).toBeGreaterThan(60);
+    }
+    expect(Object.keys(FULL_LADDER_CALLERS).length).toBeGreaterThan(0);
+  });
+
+  it("the ladder helpers derive their offers from the SELLABLE list", () => {
+    // The positive pair. The sweep above says no selling surface reads the full
+    // ladder; this says the two that decide what is offered read the right one,
+    // so the sweep cannot be satisfied by a module that enumerates nothing.
+    const src = code("lib", "pass-ladder.ts");
+    expect(src, "the buy ladder").toMatch(/passLadderOptions[\s\S]{0,400}SELLABLE_PASS_KEYS\.map/);
+    expect(src, "the 'from' floor").toMatch(/lowestPassRung[\s\S]{0,600}SELLABLE_PASS_KEYS\.map/);
+  });
+});
+
 describe("the competition layout resolves what its islands cannot", () => {
   const LAYOUT = ["app", "o", "[orgSlug]", "c", "[compSlug]", "layout.tsx"];
 

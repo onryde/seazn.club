@@ -2,14 +2,18 @@
 // tier before they click (doc 10 §3). Server- and client-safe (no hooks).
 import { featurePlan, type PaidPlan } from "@/lib/feature-copy";
 
+// Entitlements v18: `pro_plus` retired (V393); the above-Pro badge now reads
+// "Enterprise" for the Contact-us conversation (design §4). Both are
+// `Record<PaidPlan, …>`, so a third `PaidPlan` member with no style/label
+// here is a compile error rather than a silently blank pill.
 const STYLE: Record<PaidPlan, string> = {
   pro: "bg-purple-100 text-purple-700",
-  pro_plus: "bg-indigo-100 text-indigo-700",
+  enterprise: "bg-indigo-100 text-indigo-700",
 };
 
 const LABEL: Record<PaidPlan, string> = {
   pro: "Pro ✦",
-  pro_plus: "Pro Plus ◆",
+  enterprise: "Enterprise ◆",
 };
 
 export function PlanBadge({ plan, feature }: { plan?: PaidPlan; feature?: string }) {

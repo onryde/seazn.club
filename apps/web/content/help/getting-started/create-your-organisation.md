@@ -18,11 +18,11 @@ Everything you run on seazn.club lives inside an **organisation** — your club,
 The welcome tour walks you through this next, right after naming your organisation:
 
 1. **Connect Stripe** under **Settings → Connect** so you can take **card entry fees** — registrants pay at sign-up and the money settles straight into your own Stripe account. It's a one-time, secure onboarding; [here's the whole money journey](/help/registration/card-payments).
-2. Check **Settings → Plan & Billing** — you start on the free **Community** plan, and it can already take card entry fees. Upgrading doesn't switch payments on; it lowers the **platform fee** (8% on Community, 5% with an Event Pass, 2% on Pro, 1% on Pro Plus) and raises your limits. [Compare plans](/help/billing/plans) whenever you're ready. Running a free event? Community is plenty.
+2. Check **Settings → Plan & Billing** — you start on the free **Community** plan, and it can already take card entry fees. Upgrading doesn't switch payments on; it lowers the **platform fee** (5% on Community, 4% with an Event Pass, 2% on Pro, 1% on Enterprise) and raises your limits. [Compare plans](/help/billing/plans) whenever you're ready. Running a free event? Community is plenty.
 
 ## Common questions
 
-**Can I run more than one organisation?** On a paid plan, yes — switch between them from the organisation menu. Each keeps its own competitions, team and Stripe payouts, but they don't need separate subscriptions: one plan covers up to 5 organisations on Pro or 10 on Pro Plus, with each one after the first at no more than half the base rate. Community covers one organisation. See [one subscription, several organisations](/help/billing/groups).
+**Can I run more than one organisation?** On a paid plan, yes — switch between them from the organisation menu. Each keeps its own competitions, team and Stripe payouts, but they don't need separate subscriptions: one plan covers up to 5 organisations on Pro, with each one after the first at no more than half the base rate. Community covers one organisation, and Enterprise is unlimited. See [one subscription, several organisations](/help/billing/groups).
 
 **Who can see my organisation?** Only what you explicitly share. Competitions start Private; your public page at `/shared/your-org` lists only competitions you make Public.
 

@@ -4,7 +4,7 @@
 
 export const FEATURE_REASONS: Record<string, string> = {
   // Structure & scale
-  "embeds.enabled": "Embedding live widgets on your own website is a Pro feature.",
+  "embeds.enabled": "Embedding live widgets on your own website is on Pro and the Event Pass.",
   // Billing groups (spec 2026-07-21): the cap belongs to the billing GROUP, so
   // the way forward is the group's plan — not a per-org purchase. Never says
   // "clubs", which is a separate in-org entity with its own clubs.max cap.
@@ -28,9 +28,14 @@ export const FEATURE_REASONS: Record<string, string> = {
   // reads it from the rider SKU; this sentence names only the CADENCE, which is
   // true on every plan and in every currency.
   "orgs.max_owned":
-    "Your current plan covers the most organisations it allows (Community 1, Pro 5, Pro Plus 10). On Pro or Pro Plus, buy an extra organisation from Settings → Add-ons; it's billed monthly on top of your current bill. Community upgrades to Pro first.",
+    "Your current plan covers the most organisations it allows (Community 1, Pro 5). On Pro, buy an extra organisation from Settings → Add-ons; it's billed monthly on top of your current bill. Community upgrades to Pro first.",
+  // `scorers.max` used to sit here. V395 (entitlements v18 W2 T12) deleted the
+  // key from `plan_entitlements` outright and repointed both enforcement
+  // branches at `members.max`, so nothing can raise a 402 for it any more —
+  // same reasoning as the W1/W2 removals noted further down. A refusal on a
+  // scorer seat now reads the team-member line above, which is the honest one:
+  // it is the members.max pool that refused.
   "members.max": "You've reached your plan's team-member seats.",
-  "scorers.max": "You've reached your plan's scorer seats.",
   "competitions.max_active": "Your plan's active-competition limit is reached.",
   "divisions.per_competition.max": "Adding another division needs a bigger plan.",
   "entrants.per_division.max": "This division is at your plan's entrant limit.",
@@ -48,35 +53,110 @@ export const FEATURE_REASONS: Record<string, string> = {
   // one error worse than paywalling something, because a free org reads it and
   // stops. `featureReason` falls back to the generic line for any key not
   // listed, so their removal cannot crash a caller.
-  "cricket.dls": "DLS revised targets are a Pro feature — a manual umpire target still works.",
-  "stats.player": "Player stats and scorecard entry are a Pro feature.",
-  "scoring.audit_export": "The signed match audit trail download is a Pro feature.",
-  "discipline.enforced": "Automatic suspension tracking is a Pro feature.",
-  "stats.club_championship": "Club championship tables are a Pro feature.",
-  "tiebreakers.custom": "Custom tiebreaker order is a Pro feature.",
-  "standings.custom_points": "Bonus-point rules and forfeit points are a Pro feature — plain win/draw/loss points work on every plan.",
+  //
+  // W2 (entitlements v18, V393): four more keys leave this map for the same
+  // reason — `stats.club_championship`, `officials.per_fixture.max`,
+  // `domains.custom` and `support.priority`. V393 deleted all four from
+  // `plan_entitlements` outright, so no gate can raise a 402 for any of them
+  // and a reason here would be an upsell nothing can reach. The last two
+  // additionally named "Pro Plus", a plan that no longer exists.
+  //
+  // NOT removed, and deliberately: `schedule.checkpoints.max`. Its KEY is live
+  // (§2 keeps it), so only the SENTENCE was stale — it said "Pro includes five,
+  // Pro Plus unlimited" against a plan V393 deleted and a Pro cap V319 moved to
+  // 10. Rewritten here, in the retired-plan copy sweep, to the two rungs a
+  // reader of this 402 can actually be on: community 2, pro 10. Above Pro is
+  // unlimited and is the Contact-us conversation, which no 402 upsell reaches.
+  // ── SEVEN REASONS THAT NAMED PRO FOR A KEY COMMUNITY GRANTS ──────────────
+  //
+  // Found by `freeClaimFaults` (lib/copy-truth.ts) on its first run, which is
+  // the whole argument for judging each sentence against its OWN row. Four were
+  // freed by V393 in this wave (`cricket.dls`, `tiebreakers.custom`,
+  // `standings.custom_points`, `scheduling.multi_division`) and three had been
+  // free for waves (`exports` since V310, both officials keys since V319).
+  //
+  // SOME of these fire from a plan and some cannot — read the row before
+  // trusting a sentence here. This comment used to say "None of these gates can
+  // fire from a PLAN any more", on the reasoning that `orgPlanKey` coalesces a
+  // subscription-less org to 'community', which grants them. True for three of
+  // the seven; FALSE for four. Community is `false` on `stats.player`,
+  // `discipline.enforced`, `scoring.audit_export` and `standings.carry_over`,
+  // so every free org reaches those four strings on the ordinary path.
+  //
+  // Which makes the comment's own warning land on itself: "a sentence nobody
+  // can reach is exactly where a falsehood survives — no customer complains, no
+  // test renders it, and the next reader takes it as a statement of the
+  // paywall". The unreachability was the falsehood, and it kept three
+  // misattributed sentences alive underneath it.
+  //
+  // The three that ARE unreachable from a plan — `cricket.dls`,
+  // `standings.custom_points`, `tiebreakers.custom`, all `true` on community —
+  // keep the override wording, because for them an explicit
+  // `org_entitlement_overrides` deny really is the only refusal left.
+  "cricket.dls": "DLS revised targets are switched off for this organisation — a manual umpire target still works.",
+  // Reads only — `divisionPlayerStats`, `personStats`, `personCareerStats`.
+  // Nothing gates scorecard ENTRY on this key, so that half of the old
+  // sentence described a paywall the code does not have.
+  "stats.player": "Player stats are on Pro and the Event Pass.",
+  "scoring.audit_export": "The signed match audit trail download is on Pro and the Event Pass.",
+  "discipline.enforced": "Automatic suspension tracking is on Pro and the Event Pass.",
+  "tiebreakers.custom": "Custom tiebreaker order is switched off for this organisation.",
+  "standings.custom_points": "Bonus-point rules and forfeit points are switched off for this organisation — plain win/draw/loss points work on every plan.",
   "standings.carry_over": "Carrying Phase-1 standings into Phase 2 is a Pro feature.",
-  "eligibility.enforced": "Enforced eligibility locks are a Pro feature.",
+  // `eligibility.enforced` has NO rows in plan_entitlements at all, so no
+  // plan grants or denies it and "a Pro feature" described a paywall that
+  // does not exist. Kept rather than deleted — the key is still passed to
+  // `featureReason` — and reworded to the refusal that is actually possible.
+  "eligibility.enforced": "Enforced eligibility locks are switched off for this organisation.",
   // Public & realtime
-  "dashboard.public.max": "Your plan hosts one public dashboard at a time.",
-  "dashboard.branding": "Custom dashboard branding is a Pro feature.",
-  "dashboard.player_profiles": "Public player profiles are a Pro feature.",
-  realtime: "Live push updates are a Pro feature.",
+  // The number is NOT written here, for the same reason `import.bulk` stopped
+  // writing its own: this sentence said "one public dashboard at a time"
+  // through caps of 1 (V112), 3 (V393) and 2 (V396) — a false customer-facing
+  // claim on every plan but the first. `publicDashboardsReason` below builds
+  // it from the limit `withinPublicQuota` actually resolved. This flat form is
+  // the fallback for a caller with no limit to hand (the /admin reason column,
+  // <UpgradeGate>'s key-only lookup).
+  "dashboard.public.max": "Your plan's public dashboards are all in use — archive a finished one, or upgrade.",
+  // V396 made badge removal enterprise-only, so this must not say "Pro" — a
+  // Pro subscriber reading it would be told to buy what they already have.
+  // `featurePlan` sends the gate to Contact-us via ENTERPRISE_FEATURES below.
+  //
+  // It also must not still say "colours work on every plan": V397 split the
+  // accent colour onto its own key and priced it at Pro, so that half of the
+  // sentence stopped being true the moment this key stopped gating it. The
+  // logo half is still true — `branding` is free on every plan (V310).
+  "dashboard.branding": "Removing the seazn.club badge is an Enterprise feature (Contact us) — your own club logo works on every plan.",
+  // V397 (entitlements v18 W2 T17): the accent colour used to ride
+  // `dashboard.branding` above, which is why it went dark for Pro when badge
+  // removal became enterprise-only. It is a plain Pro feature and `featurePlan`
+  // answers "pro" for it by default — it is deliberately NOT in
+  // ENTERPRISE_FEATURES, or this gate would quote Contact-us for something a
+  // self-serve upgrade already covers.
+  "dashboard.theme": "Your own colours on public pages, the slideshow and shared cards are a Pro feature — your club logo works on every plan.",
+  "dashboard.player_profiles": "Public player profiles are on Pro and the Event Pass.",
+  realtime: "Live push updates are on Pro and the Event Pass.",
   // Platform
   "api.access": "API keys are a Pro feature.",
-  "api.write": "Write access via the API is a Pro Plus feature — read keys work on Pro.",
-  exports: "CSV/PDF exports are a Pro feature.",
-  "exports.branded": "Branded print templates (club colours, sponsor logos) are a Pro feature.",
+  "api.write": "Write access via the API is an Enterprise feature (Contact us) — read keys work on Pro.",
+  exports: "CSV/PDF exports are switched off for this organisation.",
+  "exports.branded": "Branded print templates (club colours, sponsor logos) are on Pro and the Event Pass.",
   // Clubs & bulk import (Jul3/01 §7)
-  // STATES NO NUMBER AND NO PLAN, deliberately. This sentence used to read
-  // "Files over 20 rows need a Pro plan"; the live catalog has since moved
-  // community to 50 (V319), so a community organiser refused at 51 rows was
-  // told the limit was 20 and would split into two 26-row files — each of
-  // which would have imported whole. `import.bulk` is also a DUAL-VALUED key
-  // (bool on Pro, an int cap on community), so "needs a Pro plan" was wrong in
-  // kind as well as in value: a community org has a real, usable allowance.
-  // The cap lives in `plan_entitlements` and nowhere else; copy that restates
-  // it goes stale silently and is then quoted back as truth.
+  // STATES NO NUMBER AND NO PLAN, deliberately, and both sides of a rebase
+  // arrived at that independently — main removed the figure while this wave was
+  // removing it too, which is worth knowing before anyone "restores" one.
+  //
+  // It used to read "Files over 20 rows need a Pro plan". The catalog moved
+  // community to 50 (V319), so an organiser refused at 51 rows was told the
+  // limit was 20 and would split into two 26-row files — each of which would
+  // have imported whole. `import.bulk` is also a DUAL-VALUED key (bool on Pro,
+  // an int cap on community), so "needs a Pro plan" was wrong in kind as well as
+  // in value: a community org has a real, usable allowance.
+  //
+  // Writing 50 here would be the third hardcoded copy of a figure that has
+  // already drifted once. So the cap travels with the refusal instead —
+  // `bulkImportRowsReason` builds the sentence from the limit `withinLimit`
+  // actually resolved. THIS flat form is the fallback for callers with no limit
+  // to hand: the /admin reason column, and `<UpgradeGate>`'s key-only lookup.
   "import.bulk": "This file has more rows than your plan allows — split it into smaller files, or upgrade for a higher limit.",
   "logos.bulk": "Multi-file logo upload is a Pro feature — you can still set logos one at a time.",
   "clubs.hierarchy": "Club hierarchies (parent clubs, group-by-club) — your plan's limits apply.",
@@ -93,12 +173,14 @@ export const FEATURE_REASONS: Record<string, string> = {
   "scheduling.board": "Editing the schedule board is not available on this plan.",
   // Still a real paywall — and since V353 an Event Pass lifts it for one
   // competition, which is why the key is in `PASS_FEATURES`.
+  // V393 granted this to community: joint planning is free on every plan and
+  // there is no door. `ai-scheduling.md` carried the same false sentence and
+  // moved with this one.
   "scheduling.multi_division":
-    "The competition-wide schedule board is a Pro feature — or an Event Pass, for one competition.",
-  "officials.auto": "Auto-assigning officials (solver, phased sourcing) is a Pro Plus feature — manual assignment still works.",
-  "officials.roles_multi": "Multiple official roles per fixture (judge + referee) are a Pro feature.",
-  "officials.per_fixture.max": "Community includes one official per fixture — more need Pro.",
-  "officials.marks": "Rating your match officials is a Pro feature.",
+    "The competition-wide schedule board is switched off for this organisation.",
+  "officials.auto": "Auto-assigning officials (solver, phased sourcing) is on Pro and the Event Pass — manual assignment still works.",
+  "officials.roles_multi": "Multiple official roles per fixture (judge + referee) are switched off for this organisation.",
+  "officials.marks": "Rating your match officials is switched off for this organisation.",
   "scheduling.ai": "AI Schedule (plan, refine and repair your schedule from plain-language instructions) is not available on this plan.",
   // scheduling.ai.runs_per_division.max retired (v17 Phase 2 Task 5, V322):
   // the graded per-division run cap below it is gone, replaced by the
@@ -110,11 +192,10 @@ export const FEATURE_REASONS: Record<string, string> = {
   "ai.credits":
     "You're out of AI credits for this billing period. Top up a credit pack or upgrade your plan to keep using AI Schedule and AI Officials.",
   "schedule.versioning": "Multi-site scope locks are a Pro feature — undo/redo always works.",
-  "schedule.checkpoints.max": "You've reached your plan's save points — Pro includes five, Pro Plus unlimited. Undo/redo always works.",
-  "domains.custom": "Serving your public pages on your own domain is a Pro Plus feature.",
-  "support.priority": "Priority support is included with Pro Plus.",
+  "schedule.checkpoints.max":
+    "You've reached your plan's save points — Community keeps 2 per division and Pro keeps 10. Undo/redo always works.",
   "scoring.device_links":
-    "Hand-this-device-over scoring links are a Pro feature — your scorer seat still works.",
+    "Hand-this-device-over scoring links are on Pro and the Event Pass — your scorer seat still works.",
   // Registration & entry fees (doc 16 §1.1)
   "registration.enabled": "Online registration is not available on this plan.",
   // V309 seeds registration.paid TRUE on every plan, so no PLAN can deny this
@@ -127,14 +208,14 @@ export const FEATURE_REASONS: Record<string, string> = {
   // renders these lines above a $29 CTA as well as the Pro one — say what is
   // still free on Community rather than implying sponsors need a plan at all.
   "sponsors.tiers":
-    "Sponsor tiers (Title, Gold, Silver) and per-competition placement are a Pro feature — the flat partner strip is free on every plan.",
+    "Sponsor tiers (Title, Gold, Silver) and per-competition placement are on Pro and the Event Pass — the flat partner strip is free on every plan.",
   "sponsors.monetize":
-    "Selling priced sponsorship packages is a Pro feature — showing sponsor logos is free on every plan.",
+    "Selling priced sponsorship packages is on Pro and the Event Pass — showing sponsor logos is free on every plan.",
   // Discovery showcase (doc 15 §5)
   "discovery.listed": "Showcasing on seazn.club is not available on this plan.",
   "discovery.featured": "The featured showcase row is a Pro perk.",
   "discovery.branding": "Card tagline and hero image on seazn.club are a Pro feature.",
-  "news.auto": "Auto-drafted result posts are a Pro feature.",
+  "news.auto": "Auto-drafted result posts are on Pro and the Event Pass.",
 };
 
 /** Human, contextual sentence for a 402 / paywall. Never throws. */
@@ -165,22 +246,107 @@ export function doubleElimFormatReason(stageKind: string): string {
     : featureReason("formats.double_elim");
 }
 
+/**
+ * The `import.bulk` refusal, quoting the cap that actually refused the file.
+ *
+ * `FEATURE_REASONS["import.bulk"]` cannot name a number: the cap is a plan
+ * entitlement (Free 50 rows per file, Pro 500) and this module is isomorphic,
+ * read by the client paywall with no database in reach. The previous sentence
+ * DID name one — "Files over 20 rows" — and it had been wrong since V319 raised
+ * the cap to 50, in both directions: it understated Free by more than half and
+ * said nothing true for Pro at all.
+ *
+ * So the caller that already resolved the limit (`withinLimit`'s own answer, in
+ * `usecases/imports.ts`) passes it here and ships the sentence with the 402.
+ * `null` is unlimited, which cannot refuse anything — the flat line is then the
+ * only honest answer.
+ */
+export function bulkImportRowsReason(limit: number | null): string {
+  if (limit === null) return featureReason("import.bulk");
+  return `Files over ${limit} rows need a bigger plan — split the file or upgrade.`;
+}
+
+/**
+ * The public-dashboard refusal, quoting the cap it was refused BY.
+ *
+ * Says ARCHIVE, not delete, and it is now true: since V396 the quota counts
+ * only LIVE public dashboards (`liveUnpassedCompetition`), so archiving a
+ * finished season really does free a slot. Before that it did not, and telling
+ * a customer to archive would have been advice that changed nothing.
+ */
+export function publicDashboardsReason(limit: number | null): string {
+  if (limit === null) return featureReason("dashboard.public.max");
+  return limit === 1
+    ? "Your plan hosts 1 public dashboard at a time — archive the finished one, or upgrade."
+    : `Your plan hosts ${limit} public dashboards at a time — archive a finished one, or upgrade.`;
+}
+
 // Cheapest plan that unlocks each feature (mirrors plan_entitlements,
-// V112 + V240 + V290 + V291 + V302). Everything not listed unlocks on Pro —
-// only the above-Pro (Pro Plus) exceptions need rows. (The AI run cap that
-// used to be a graded quota here — V302: 5/10/20/50 — was retired in v17
-// Phase 2 Task 5, V322: the credit wallet meters runs on every tier now.)
-const PLUS_FEATURES = new Set([
-  "api.write",
-  "scorers.max",
-  "officials.auto",
-  "domains.custom",
-  "support.priority",
-]);
+// V112 + V240 + V393). Everything not listed unlocks on Pro — only the
+// above-Pro (Contact-us `enterprise`) exceptions need rows. (The AI run cap
+// that used to be a graded quota here — V302: 5/10/20/50 — was retired in
+// v17 Phase 2 Task 5, V322: the credit wallet meters runs on every tier now.)
+//
+// Entitlements v18 (V393): `pro_plus` is retired and its above-Pro
+// conversations move to a non-public, Contact-us-only `enterprise` plan.
+// `ENTERPRISE_FEATURES` holds ONE key, and the reason it holds exactly one
+// is worth stating, because the first version of this list held three and
+// broke the product's main conversion path.
+//
+// A key belongs here only when NO SELF-SERVE PLAN GRANTS IT AT ALL.
+// `api.write` qualifies: false on community, false on pro, true only on
+// enterprise (V393), so "contact us" really is the cheapest way to get it.
+//
+// It briefly also held `competitions.max_active` and `dashboard.public.max`,
+// on the rule "every INT key whose Pro value is already the ceiling
+// (`int_value IS NULL`, unlimited)". That rule is BACKWARDS, and design §4
+// states it in the same backwards form — see the correction recorded there.
+// If Pro is already unlimited then Pro is precisely the cheapest plan that
+// unlocks the key, so the answer is "pro". Sending it to "enterprise" meant a
+// Community organiser hitting the 3-competition cap saw an `Enterprise ◆`
+// badge and a mailto button, with the priced "Go Pro" link suppressed
+// (`upgrade-gate.tsx` renders a price only for `kind: "priced"`) — no
+// self-serve route out of the paywall on the highest-volume Free→Pro gate
+// in the product. Found in review, not by a test: the test that was supposed
+// to guard this DERIVED the same backwards rule and pinned it.
+//
+// `officials.auto` and `scorers.max` also left this set at v18: post-V393
+// both were plain, finite Pro caps (and V395 then deleted `scorers.max`
+// entirely, so where the ladder lands it is moot — the documented default
+// applies). `domains.custom` and `support.priority` left for an unrelated
+// reason — T1 deleted both keys from `plan_entitlements` outright, so nothing
+// gates on them at all.
+//
+// If an above-Pro int upsell is ever wanted, the correct predicate is the
+// INVERSE of the one that broke: a key where Pro is FINITE and enterprise is
+// unlimited (`members.max` is pro 10, enterprise NULL). Note that such a key
+// is still "pro" for a Community org — `featurePlan` answers per KEY, not per
+// caller's current plan, so a plan-aware answer needs a different function,
+// not a bigger set.
+//
+// V396 (entitlements v18 W2 T15, owner ruling 2026-09-03) adds the SECOND key.
+// `dashboard.branding` — removing the "Powered by seazn.club" badge — moved to
+// false on Pro, so no self-serve plan grants it any more and it satisfies the
+// rule above exactly as `api.write` does. Leaving it out would have pointed a
+// Pro subscriber at a "Go Pro" upgrade for something Pro no longer includes,
+// which `entitlements-v18-enterprise-ceiling.test.ts` catches by deriving the
+// set from the live matrix rather than from this list.
+const ENTERPRISE_FEATURES = new Set(["api.write", "dashboard.branding"]);
 
-export type PaidPlan = "pro" | "pro_plus";
+export type PaidPlan = "pro" | "enterprise";
 
-/** Cheapest plan that unlocks a feature key. Never throws. */
+/**
+ * Cheapest plan that unlocks a feature key. Never throws.
+ *
+ * A contains-ladder with exactly one rung: is this key in
+ * `ENTERPRISE_FEATURES`? The "no" branch is the DEFAULT, and it is
+ * deliberate, not incidental — it covers both an ordinary Pro-gated key
+ * (the overwhelming majority) AND a key this map has never heard of (a typo,
+ * a key retired from the matrix, a future addition nobody wired here yet).
+ * Answering "pro" — the cheaper, more permissive plan — for an unrecognised
+ * key is the safe default: the worse failure mode is quoting Contact-us for
+ * something a self-serve upgrade already covers.
+ */
 export function featurePlan(featureKey: string): PaidPlan {
-  return PLUS_FEATURES.has(featureKey) ? "pro_plus" : "pro";
+  return ENTERPRISE_FEATURES.has(featureKey) ? "enterprise" : "pro";
 }

@@ -30,12 +30,12 @@ everything bespoke to a conversation:
 | Offer | One-line sell | Value metric |
 |---|---|---|
 | **Free** | Run a club night. | 1 org, small caps, badge on |
-| **Event Pass** (M $15 / L $29, one-time) | One tournament, fully powered. | competition size |
-| **Pro** ($9/mo, $79/yr) | Your whole season. | organisation scale: seats, teams, squads, credits |
+| **Event Pass** (M $11.99 / L $44.99, one-time) | One tournament, fully powered. | competition size |
+| **Pro** ($14.99/mo, $128.99/yr) | Your whole season. | organisation scale: seats, teams, squads, credits |
 | **Contact Us** (dark `enterprise`) | Your federation. | unlimited + bespoke |
 
-Prices are the R2 ladder ruled 2026-09-02 (§3a); they land in W2 with the
-matrix.
+Prices are the R2 ladder ruled 2026-09-02 and repriced in W3 alongside V398's
+additive fee (§3a is the live table; this row is a summary of it).
 
 Pro Plus is retired. No public plan carries an unlimited team, squad, seat or
 credit figure; only the dark `enterprise` plan does, and it is never
@@ -58,7 +58,7 @@ self-serve.
   so a pass row would be invisible until the call passes the division's
   competition id. The route is `POST /divisions/{id}/officials/auto`, so the
   id is one join away.
-- `scorers.max` is real: `org_members.role = 'scorer'` is its own pool
+- `scorers.max` was real (W2 T12 deleted the key; the pool below is history): `org_members.role = 'scorer'` is its own pool
   (`lib/invites.ts:67`), offered in `components/org-team.tsx`, excluded from
   the billing usage count (`billing.usage.scorerNote`). Free 1, Pro 1 today.
 - `news.auto` gates both auto-drafted result posts and the weekly digest
@@ -139,16 +139,17 @@ Rationale is one line per changed row; unchanged rows say "keep".
 |---|---|---|---|---|---|---|
 | `orgs.max_owned` | 1 | 5 | – | – | ∞ | keep; extra org $9/mo add-on stays |
 | `members.max` (staff) | **3** | **10** | – | – | ∞ | R10; the extra-seat add-on is **hidden** (R13): backend and Stripe price stay dormant, nothing advertises it |
-| `scorers.max` | **2** | **10** | – | – | ∞ | pool exists (Background); 1/1 was indistinguishable from Free. Volunteer scorer logins are cheap seats; a club with ten is normal. Alternative rejected: merging into staff seats would let scorers eat the 10 staff |
+| `scorers.max` | — | — | — | — | — | **delete key** (W2 T12, owner ruling 2026-09-03): the cap meters a capability the product gives away. W1 made scoring free on every plan, and an ACCEPTED fixture official already reads AND scores with no org role at all (`requireFixtureActor`), so the seat is not separately sold. The scorer ROLE stays — deprecating it is its own wave (#707) |
 | `competitions.max_active` | **3** | ∞ | +1 | +1 | ∞ | R6; Pro headline stays "unlimited competitions" |
-| `dashboard.public.max` | **3** | ∞ | – | – | ∞ | growth: equals Free's 3 competitions so every free competition can be public and carry the badge. Org-level, a pass cannot lift it, which is why it must equal the comp cap |
+| `dashboard.public.max` | **2** | **10** | – | – | ∞ | W2 T15, owner ruling 2026-09-03: Free 3 -> 2, Pro loses "unlimited". Org-level, so a pass cannot lift it — but a PASSED competition no longer counts against it, and neither does an archived one: `assertPublicQuota` was a flat row count with no status filter and no pass exclusion, so it metered history rather than live surfaces. Free's third active competition is what the create-path degrade (T15/F) exists for: 3 active competitions, 2 public dashboards, and a create that is never blocked |
 | `divisions.per_competition.max` | 4 | **20** | 10 | 20 | ∞ | R2: bounded; 20 is a federation |
 | `stages.per_division.max` | 2 | **6** | **4** | **4** | ∞ | pass today falls to Free's 2, which blocks a plate/bowl |
 | `entrants.per_division.max` | 64 | 256 | 128 | **512** | ∞ | R2; size pack +32 stays |
 | `teams.max` | 8 | **100** | – | – | ∞ | R4 |
-| `teams.squad_max` | 20 | **40** | – | – | ∞ | cricket 15, football 23, rugby 23: Free = one matchday squad, Pro = season roster. Pass rows (20 = Free) were no-ops and are dropped |
+| `teams.squad_max` | **23** | **40** | – | – | ∞ | Free = one matchday squad, Pro = season roster. 23 is the engine's own largest matchday squad, not a guess: `football.ts` declares `lineup: { size: 11, benchMax: 12 }` and `icehockey.ts` `{ size: 6, benchMax: 17 }`, both 23; cricket is 15 and volleyball 14, so they already fit. At 20 a football or ice-hockey club could not register its first full squad on Free at all (W2 T12; the earlier "rugby 23" rationale cited a sport the engine catalogue does not carry). Pass rows (20 = Free) were no-ops and are dropped |
 | `clubs.max` | 5 | **25** | – | – | ∞ | bounded |
 | `import.bulk` (rows) | 50 | **500** | – | – | ∞ | bounded |
+| `import.events` (batch score import) | **T** | **T** | **T** | **T** | **T** | W2 T14, owner ruling 2026-09-03: LAUNCHED, on every plan. The key had no row at all and a `// 402 during rollout` kill-switch; R9 says scoring detail is never a price boundary and W1 already stripped the fidelity gate off this same importer, so gating it by plan would restore the boundary R9 removed. The house pattern for imports is a volume cap (`import.bulk` above), never a gate — if event-import volume needs bounding, add a CAP key. True everywhere, so it is deliberately NOT a `pricing-matrix.ts` row and not an `ENTITLEMENT_DOMAINS` entry: it differentiates nothing |
 
 ### Money
 
@@ -156,7 +157,7 @@ Rationale is one line per changed row; unchanged rows say "keep".
 |---|---|---|---|---|---|---|
 | `registration.enabled` | T | T | T | T | T | keep |
 | `registration.paid` | T | T | T | T | T | keep |
-| `registration.fee_percent` | 8 | 2 | 5 | 5 | 1 | keep; 8% is how Free pays for itself, 5% is a pass reason, 2% a Pro reason |
+| `registration.fee_percent` | **5** | 2 | **4** | **4** | 1 | **W3, V398 (owner ruling 2026-09-04): the fee becomes ADDITIVE.** The connected account bears Stripe's own cost, so our percentage is pure margin and every rate comes down. At destination-charge rates today (2.9% + $0.30 US) our 2% on Pro never covers Stripe's cut, so Pro *and* Enterprise lose money on every registration regardless of its size — the loss is a rate, not an overhead a bigger entry fee absorbs. Additive also matches how the market quotes: LeagueApps "2.5% on top of Stripe", Regystra "1% plus standard Stripe processing". Pro stays 2 and Enterprise stays 1 (already pure margin); Free 8 → 5 is still how Free pays for itself, and the pass keeps a full point of daylight under it. The charge-path change (`on_behalf_of`) is a SEPARATE task — these rates are lower rates on the existing charge shape until it lands, so nobody is worse off at any point in the sequence |
 | `sponsors.tiers` | F | T | T | T | T | keep (organiser monetisation = leverage) |
 | `sponsors.monetize` | F | T | T | T | T | keep |
 
@@ -168,7 +169,7 @@ Rationale is one line per changed row; unchanged rows say "keep".
 | `formats.double_elim` | **T** | T | T | T | T | growth: double-elim is the club-night format for racquet sports; gating it makes Free feel broken on night one |
 | `standings.custom_points` | **T** | T | T | T | T | correctness: bonus and forfeit points are how rugby and cricket tables are *right* |
 | `tiebreakers.custom` | **T** | T | T | T | T | correctness: wrong tiebreak order = wrong table |
-| `standings.carry_over` | F | T | T | T | T | keep (multi-phase leagues are Pro-sized) |
+| `standings.carry_over` | F | T | – | – | T | keep (multi-phase leagues are Pro-sized). **Pass cells corrected 2026-09-03**: they read T, but no pass row has ever existed and Free is F, so a passed competition has never had carry-over — the row's own "Pro-sized" rationale and the §3 Event Pass card (which never lists it) both agree. Separately: nothing in the product emits `carry` at all, so this is a SOLD Pro feature with no control — F6 / issue #625, not this programme |
 | `discipline.enforced` (suspensions) | F | T | **T** | **T** | T | owner asked. Automation = leverage, stays paid; a weekend cup with cards needs it, so the pass gets it |
 
 ### Scheduling & officials
@@ -197,23 +198,24 @@ Rationale is one line per changed row; unchanged rows say "keep".
 | `scoring.audit_export` (signed audit trail) | F | T | **T** | **T** | T | tournament disputes are where the signed trail is wanted |
 | `cricket.dls` | **T** | T | T | T | T | correctness: a rain-rule result is the result. Manual target "still works" is exactly the correctness paywall R9 forbids |
 | `stats.player` | F | T | **T** | **T** | T | keep Pro (reach + data value); pass gets top-scorer tables for the weekend |
-| `dashboard.player_profiles` | **T** | T | T | T | T | growth: a player sharing their own profile page is the cheapest acquisition loop the product has; badge on. Risk: removes a Pro bullet — accepted, Pro sells scale |
+| `dashboard.player_profiles` | **F** | T | T | T | T | W2 T15, owner ruling 2026-09-03: one of the three share loops that go PAID. Reverses V393's growth cell, with the acquisition-loop argument put and overruled — value capture over the loop. The pass rows (V308) are what separate one competition from the next again, so `public-players-gate.test.ts` is back to asserting a dark unpassed competition |
 | `realtime` (live scoreboard) | F | T | T | T | T | keep paid: it has marginal cost and it is THE pass trigger ("live scores on the big screen") |
 
 ### Reach & brand
 
 | key | Free | Pro | Pass M | Pass L | Ent | why |
 |---|---|---|---|---|---|---|
-| `branding` (org logo) | T | T | T | T | T | keep |
-| `dashboard.branding` (badge off) | F | T | F | F | T | D7, never moves |
+| `branding` (org logo) | T | T | T | T | T | keep. An early W2 T15 draft flipped this to F on Free and the owner WITHDREW it: a free club uploads its own logo. What is sold is the removal of OUR badge — see `dashboard.branding` below |
+| `dashboard.branding` (badge off, and ONLY the badge) | F | **F** | F | F | T | W2 T15, owner ruling 2026-09-03: **the badge is SHOWN on every plan except enterprise.** This cell's old note read "D7, never moves" — it has now moved, deliberately, and that note is the older decision. Badge removal becomes an ENTERPRISE-only feature, which is where R3 already puts white label. Every self-serve plan carries our badge, Pro included: the acquisition loop the three share loops used to carry now runs through public dashboards instead |
+| `dashboard.theme` (accent colour) | **F** | **T** | – | – | **T** | W2 T17, owner ruling 2026-09-03: a NEW key, because `dashboard.branding` was OVERLOADED — one key gated badge removal AND the org/competition accent colour (`public-site/data.ts`, `public_competitions_v`, `slideshow-data.ts`, and both colour pickers). The split was already half done: the LOGO has ridden the free `branding` key since V310. T15 turning `dashboard.branding` off for Pro therefore took a paying customer's brand colour off their public pages — four smoke checks caught it and were left RED rather than edited to match the defect. Rejected: letting colour ride `branding`, which would hand it to Free; the owner chose to keep it a paid visual differentiator. **No pass rows, deliberately** — the palette is an ORG-level property, so a competition-scoped pass could never lift it and an inert row would read as pass-lifted to `pass-scoping-guard.test.ts` |
 | `exports` | T | T | T | T | T | keep |
 | `exports.branded` | F | T | T | T | T | keep |
 | `logos.bulk` | F | T | – | – | T | keep (convenience) |
-| `embeds.enabled` | **T** | T | T | T | T | growth: an embed on a club website is the badge on someone else's site |
+| `embeds.enabled` | **F** | T | **T** | **T** | T | W2 T15, owner ruling 2026-09-03: paid on Free. The pass cells are the TRAP this row exists to record — the key had NO pass rows, because it did not need any while community granted it, so flipping Free without inserting them would have silently taken embeds off the competition an Event Pass paid for. V396 inserts both |
 | `discovery.listed` | T | T | T | T | T | keep |
 | `discovery.featured` | F | T | – | – | T | keep |
 | `discovery.branding` | F | T | – | – | T | keep |
-| `news.auto` (auto posts + weekly digest) | **T** | T | T | T | T | owner asked. No AI spend, cheap rows, and every auto post is shareable content with the badge on. Free |
+| `news.auto` (auto posts + weekly digest) | **F** | T | T | T | T | W2 T15, owner ruling 2026-09-03: paid on Free, reversing V393's own "owner asked" free cell. The pass rows stay, which makes this key pass-lifted — so the weekly digest, an ORG-level artefact, resolves its scope per competition (`newsAutoCompetitionScope`) instead of asking the org-wide question a pass cannot honestly answer |
 | `clubs.hierarchy` | T | T | T | T | T | keep |
 
 ### Platform & credits
@@ -225,9 +227,9 @@ Rationale is one line per changed row; unchanged rows say "keep".
 | `domains.custom` | — | — | — | — | — | **delete key**: no code behind it. Sold in the Contact-Us conversation, built later |
 | `support.priority` | — | — | — | — | — | **delete key**: a label, not a gate. Lives in Contact-Us copy |
 | `stats.club_championship` | — | — | — | — | — | **delete key**: inert |
-| `ai.credits.monthly` | **5** | **35** | – | – | **500** (staff override per deal) | R9 |
-| `ai.credits.trial` | – | 20 | – | – | 20 | keep |
-| pass credit grant (constant, not a key) | | | **+25** | **+50** | | R9; per-rung map replaces `PASS_CREDIT_GRANT` |
+| `ai.credits.monthly` | **5** | **25** | – | – | **500** (staff override per deal) | R9; Pro re-cut 35 → 25 (W2 T12, owner ruling 2026-09-03) |
+| `ai.credits.trial` | – | **15** | – | – | 20 | Pro re-cut 20 → 15 (W2 T12). Enterprise deliberately KEEPS 20 — its numbers are set per deal, so the asymmetry is intended and is not a drift to "fix" |
+| pass credit grant (constant, not a key) | | | **+25** | **+35** | | R9; per-rung map replaces `PASS_CREDIT_GRANT`. L re-cut 50 → 35 with the monthly grants (W2 T12) |
 
 Rule going forward: **the matrix carries only enforced keys.** Anything that
 is copy-only lives in dictionaries, never in `plan_entitlements`.
@@ -239,55 +241,109 @@ Cards are dictionary-driven (`pricing.community.*`, `pricing.pass.*`,
 re-derived from the matrix and guarded by `lib/copy-truth.ts`. Target copy
 (English; all four locales follow):
 
-- **Free — "Run a club night."** 1 organisation · 3 staff + 2 scorer seats ·
-  3 live competitions, each public · 4 divisions, 64 entrants each · every
-  sport, every scoring detail · right tables (tiebreakers, bonus points, DLS)
-  · double-elimination · joint scheduling · player profiles, embeds and
-  auto-drafted posts (badge on) · online registration (8% fee) · 5 AI credits
-  a month.
+- **Free — "Run a club night."** 1 organisation · 3 staff seats ·
+  3 live competitions, **2 of them with a public dashboard** · 4 divisions, 64
+  entrants each · every sport, every scoring detail · right tables
+  (tiebreakers, bonus points, DLS) · double-elimination · joint scheduling ·
+  your own club logo · online registration (8% fee) · 5 AI credits a month.
+  Amended W2 (owner rulings 2026-09-03): the scorer seats went with the
+  `scorers.max` key (T12), and **player profiles, embeds and auto-drafted
+  posts are no longer free** (T15) — they are Pro or Event Pass. The badge is
+  on, and now stays on for Pro too.
 - **Event Pass — "One tournament, fully powered."** Per competition, no
   subscription. M: 10 divisions × 128 entrants, +25 credits. L: 20 × 512,
-  +50 credits. Live scoreboard · hand-over scoring devices · auto officials ·
+  +35 credits (re-cut from 50 by T12, owner ruling 2026-09-03 — the rungs
+  still differ, but L is no longer double M). Live scoreboard · hand-over scoring devices · auto officials ·
   suspension tracking · advanced formats · top-scorer stats · branded exports
   · sponsors · 5 restore points · 5% fee · counts toward Pro if you subscribe
   within 30 days. Nudge: three L passes ($87) cost more than Pro annual
   ($79).
-- **Pro — "Your whole season."** Unlimited competitions · 100 teams · squads
-  of 40 · 25 clubs · 10 staff + 10 scorer seats · 5 organisations on one bill
-  · everything the pass has, all season · badge removed · API (read) · 35 AI
-  credits a month · 2% fee · annual ≈ 8.8 months, "over three months free".
+- **Pro — "Your whole season."** Unlimited competitions · **10 public
+  dashboards** · 100 teams · squads of 40 · 25 clubs · 10 staff seats · 5
+  organisations on one bill · everything the pass has, all season · player
+  profiles, embeds and auto-drafted posts · API (read) · 25 AI credits a month
+  · 2% fee · annual ≈ 8.8 months, "over three months free".
+  Amended W2 (owner rulings 2026-09-03): "unlimited public dashboards" is
+  withdrawn — the cap is 10 (T15) — the scorer seats went with the key (T12),
+  the credit grant was re-cut 35 → 25 (T12), and **"badge removed" is gone
+  from this card**: badge removal is enterprise-only now (T15). What Pro gains
+  in exchange is the three share loops.
+  Amended again W2 T17 (owner ruling 2026-09-03): **the public accent colour
+  is back on this card, on its own key.** `dashboard.branding` gated the badge
+  AND the colour, so T15 took a paying Pro customer's palette off their public
+  pages along with the perk they never bought. `dashboard.theme` is Pro and
+  above, no pass rows, and the Pro card's visual claim is the colour — "your
+  club colours on public pages & slideshow" — where it used to be the badge.
 
 ### 3a. Prices (R12) — every amount is a SET point per currency
 
+**Superseded twice — read the W3 table below, not this paragraph's history.**
+W2 (2026-09-03) withdrew AUD outright, leaving four currencies; W3
+(2026-09-04) repriced every SKU onto CHARM POINTS alongside V398's additive
+fee. What follows is the live table.
+
 Ladder rules that every number below satisfies and that
-`org-addon-catalog-parity.test.ts` / `copy-truth.ts` keep pinned: Pass M <
-Pass L < Pro annual; three L passes ≥ Pro annual; annual ≈ 8–9 months; the
-graduated tier-2 (extra organisation) rate = half the base rounded DOWN to a
-whole major unit (INR down to the nearest x99); pass price redeemable against
-Pro within 30 days.
+`config/__tests__/stripe-plans-ladder.test.ts`,
+`org-addon-catalog-parity.test.ts` and `copy-truth.ts` keep pinned:
 
-| Price | USD | EUR | GBP | AUD | INR |
-|---|---|---|---|---|---|
-| Pro monthly (tier 1) | 9 | 8 | 7 | 12 | 399 |
-| Pro monthly tier 2+ / extra org add-on | 4 | 4 | 3 | 6 | 199 |
-| Pro annual (tier 1) | 79 | 69 | 59 | 99 | 2,999 |
-| Pro annual tier 2+ | 39 | 34 | 29 | 49 | 1,499 |
-| Event Pass M | 15 | 14 | 12 | 19 | 599 |
-| Event Pass L | 29 | 27 | 24 | 39 | 1,199 |
-| Extra seat / month (**hidden**, R13 — catalog price kept for the dormant backend) | 2 | 2 | 2 | 3 | 99 |
-| Size pack +32 (one-time) | 5 | 5 | 4 | 7 | 199 |
-| AI credit packs 40 / 105 / 220 / 460 | unchanged (10 / 25 / 50 / 100 and today's set points) — credits are compute, not packaging |
+1. Pass M < Pass L < Pro annual.
+2. **Pass M < one MONTH of Pro** — added W3. Pass M is a strict SUBSET of Pro
+   (10 divisions vs 20, 128 entrants vs 256, 4 stages vs 6, 5 restore points
+   vs 10, a 4% entry-fee rate vs 2%), so a rung dearer than a month of the
+   plan that dominates it is a product nobody rational buys. Its absence is
+   what let $15 M ship against $12/month Pro: every other bound compared the
+   rungs against the ANNUAL price, where $15 < $99 passes comfortably.
+3. Three L passes ≥ Pro annual; two L passes < it.
+4. Annual ≈ 8–9 months.
+5. The graduated tier-2 (extra organisation) rate = half the base **floored to
+   the charm grid**. **Reworded W3**: it read "rounded DOWN to a whole major
+   unit (INR down to the nearest x99)", which the charm points falsify — half
+   of $14.99 is $7.495 and the rider is $6.99, not $7. Floored, never rounded
+   up, which is what keeps the "no more than half your plan's rate" promise
+   four locales make. It is now asserted as an EQUALITY, so a rider set too
+   low is a fault too.
+6. Every SET point sits on its currency's charm grid: `x.99` in usd/eur/gbp,
+   whole-rupee `x99` in inr (₹599, ₹4,999 — paise-level `.99` is a conversion
+   artefact in that market, not a price). The AI credit packs are the one
+   deliberate exception, below.
+7. Pass price redeemable against Pro within 30 days.
 
-Checks: 3 × L = 87 ≥ 79 (USD); 3 × 27 = 81 ≥ 69 (EUR); 3 × 24 = 72 ≥ 59
-(GBP); 3 × 39 = 117 ≥ 99 (AUD); 3 × 1,199 = 3,597 ≥ 2,999 (INR). Two L passes
-are cheaper than annual in every currency, so a two-tournament organiser is
-never pushed into a subscription.
+| Price | USD | EUR | GBP | INR |
+|---|---|---|---|---|
+| Pro monthly (tier 1) | 14.99 | 12.99 | 10.99 | 599 |
+| Pro monthly tier 2+ / extra org add-on | 6.99 | 5.99 | 4.99 | 299 |
+| Pro annual (tier 1) | 128.99 | 108.99 | 88.99 | 4,999 |
+| Pro annual tier 2+ | 63.99 | 53.99 | 43.99 | 2,499 |
+| Event Pass M | 11.99 | 9.99 | 8.99 | 499 |
+| Event Pass L | 44.99 | 38.99 | 31.99 | 1,699 |
+| Extra seat / month (**hidden**, R13 — catalog price kept for the dormant backend) | 1.99 | 1.99 | 1.99 | 99 |
+| Size pack +32 (one-time) | 4.99 | 4.99 | 3.99 | 199 |
+| AI credit packs 40 / 105 / 220 / 460 | unchanged and deliberately ROUND (10 / 25 / 50 / 100 and today's set points) — credits are compute, not packaging: a pack is a quantity of a metered resource, so $9.99 for 40 credits reads as a discount on arithmetic rather than as a keen price |
 
-Why these points: INR at ₹399 is 29% of today's ₹1,399 — Indian clubs are the
-volume market and were being charged near FX parity. GBP/EUR sit under USD
-because club budgets there are set in whole tens. AUD sits above because AUD
-prices are read against an AUD 15–20 coffee-and-court norm. Revenue per Pro
-org falls 53% against today; the bet is volume plus the badge network.
+Checks, every rule against every currency:
+
+| | USD | EUR | GBP | INR |
+|---|---|---|---|---|
+| annual ÷ monthly (8–9) | 8.61 | 8.39 | 8.10 | 8.35 |
+| tier 2+ ≤ half base (monthly) | 6.99 ≤ 7.495 | 5.99 ≤ 6.495 | 4.99 ≤ 5.495 | 299 ≤ 299.5 |
+| tier 2+ ≤ half base (annual) | 63.99 ≤ 64.495 | 53.99 ≤ 54.495 | 43.99 ≤ 44.495 | 2,499 ≤ 2,499.5 |
+| M < Pro monthly | 11.99 < 14.99 | 9.99 < 12.99 | 8.99 < 10.99 | 499 < 599 |
+| M < L < annual | 11.99 < 44.99 < 128.99 | 9.99 < 38.99 < 108.99 | 8.99 < 31.99 < 88.99 | 499 < 1,699 < 4,999 |
+| 3 × L ≥ annual | 134.97 ≥ 128.99 | 116.97 ≥ 108.99 | 95.97 ≥ 88.99 | 5,097 ≥ 4,999 |
+| 2 × L < annual | 89.98 < 128.99 | 77.98 < 108.99 | 63.98 < 88.99 | 3,398 < 4,999 |
+
+Two L passes stay cheaper than a year in every currency, so a two-tournament
+organiser is never pushed into a subscription; a third pass always costs more
+than subscribing.
+
+Why these points: the additive fee (V398) means our percentage is now margin
+rather than a blended number, so the subscription can carry more of the price
+and the entry-fee rate less — Pro rises from $12 while Free's rate falls from
+8% to 5%. INR at ₹599/month is still the volume-market point and stays a
+whole-rupee charm price. GBP/EUR sit under USD because club budgets there are
+set in whole tens. Pass M comes DOWN to $11.99 to sit under a month of Pro
+(rule 2); Pass L goes UP to $44.99 so that three of them still clear the
+annual price after Pro annual rose.
 - **Contact Us — "Your federation."** A strip, not a card: unlimited seats,
   teams and organisations · write API · 1% fee · pooled AI credits · priority
   support. Listed as *"ask us"* and never as included: custom domain, white
@@ -295,9 +351,14 @@ org falls 53% against today; the bet is volume plus the badge network.
 
 ### Why this attracts more customers without giving the product away
 
-- **Three share loops go free**: player profiles, embeds, auto posts. Each
-  one puts the badge in front of people who are not yet customers. None of
-  them has meaningful marginal cost.
+- ~~**Three share loops go free**: player profiles, embeds, auto posts.~~
+  **WITHDRAWN by the owner, 2026-09-03 (W2 T15).** The counter-argument in
+  this bullet was put and overruled: value capture over the loop. All three
+  are Pro or Event Pass now. The acquisition loop survives, and runs through
+  **public dashboards** instead — every self-serve plan carries the badge,
+  Pro included, so a Pro club's public dashboard is now an ad where before it
+  was not. Struck through rather than deleted, because the reversal is the
+  part a later reader needs to see.
 - **Free is never wrong**: DLS, tiebreakers, bonus points, joint scheduling,
   double-elim. A club that gets a wrong table on night one does not come back
   to pay; a club that gets a right table on night one tells the league.
@@ -305,8 +366,10 @@ org falls 53% against today; the bet is volume plus the badge network.
   organiser has no reason to look elsewhere for a weekend — and every pass
   buyer is 30 days from a Pro redemption.
 - **Pro's reasons are unambiguous**: more people (seats), more teams, more
-  season (unlimited competitions, restore points), the badge off, the API,
-  and the 2% fee. Nothing on Pro is something Free needs to be correct.
+  season (unlimited competitions, restore points), the share loops (player
+  profiles, embeds, auto posts), the API, and the 2% fee. Nothing on Pro is
+  something Free needs to be correct. ("The badge off" was in this list and is
+  not any more — W2 T15 made badge removal enterprise-only.)
 - **What stays paid has marginal cost or is leverage**: realtime, pads, AI
   credits, auto officials, suspension automation, branded exports, sponsors.
 
@@ -317,9 +380,28 @@ org falls 53% against today; the bet is volume plus the badge network.
   (`server/usecases/admin-plan.ts`) and per-org overrides
   (`org_entitlement_overrides`). Billing for such deals is off-platform or a
   bespoke Stripe subscription mapped by `planKeyForPrice`; out of scope here.
-- `featurePlan()` becomes three-valued: `ENTERPRISE_FEATURES = {api.write}`
-  plus any int whose Pro value is the ceiling → `"enterprise"`; everything
-  else → `"pro"`. `scorers.max` and `officials.auto` leave the set.
+- `featurePlan()` becomes three-valued: `ENTERPRISE_FEATURES = {api.write}`,
+  and **nothing else**; everything else → `"pro"`. `scorers.max` and
+  `officials.auto` leave the set.
+
+  **CORRECTION 2026-09-03 (W2).** This bullet used to read "plus any int whose
+  Pro value is the ceiling → `enterprise`". That rule is BACKWARDS and it
+  shipped a regression before review caught it. `featurePlan` answers "the
+  CHEAPEST plan that unlocks this key" — so if Pro is already unlimited, Pro is
+  the answer. Sending `competitions.max_active` and `dashboard.public.max` to
+  `enterprise` meant a Community organiser hitting the 3-competition cap saw an
+  `Enterprise ◆` badge and a `mailto:` button, with the priced "Go Pro" link
+  suppressed (`upgrade-gate.tsx` renders a price only for `kind: "priced"`) —
+  no self-serve route out of the product's highest-volume Free→Pro gate. A key
+  belongs in `ENTERPRISE_FEATURES` only when **no self-serve plan grants it at
+  all**, which today is `api.write` alone (false on community, false on pro,
+  true on enterprise).
+
+  If an above-Pro int upsell is ever wanted, the correct predicate is the
+  INVERSE: Pro finite and enterprise unlimited (`members.max` is pro 10,
+  enterprise NULL). Even then, such a key is still `"pro"` for a Community org
+  — `featurePlan` answers per KEY, not per caller's plan, so a plan-aware
+  answer needs a different function, not a longer set.
 - `upgrade-gate.tsx` `paidPlan()` and `plan-badge.tsx` render a **"Contact
   us"** CTA (mailto `hello@seazn.club`, subject prefilled with the feature's
   human label) when the target is `enterprise`, a price otherwise. No contact
