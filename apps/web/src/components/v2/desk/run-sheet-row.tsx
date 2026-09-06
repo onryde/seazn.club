@@ -344,14 +344,18 @@ export function RunSheetRow({
   return (
     <li data-fixture-no={fixture.fixture_no} className="px-4 py-2">
       {/* Same two-tier responsive shape `FixtureLine` used (fix-ui audit
-          03-console-division.md): stacked below `sm` so the action never
+          03-console-division.md): stacked below `md` so the action never
           collides with the entrant names on a narrow screen, one row again
-          at `sm:` via `sm:contents` on the action's own wrapper. `min-w-0`
+          at `md:` via `md:contents` on the action's own wrapper. `min-w-0`
           on the WHOLE ancestor chain down to the truncated spans — a
           missing one put 106px of horizontal overflow on the page at
-          320-390, visible only with a realistic entrant name. */}
-      <div className="flex min-w-0 flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center sm:gap-3">
-        <div className="flex min-w-0 items-center gap-3 sm:contents">
+          320-390, visible only with a realistic entrant name.
+          W3 Task 8 (ruling 15): this used to switch at `sm:` (640), while
+          the ledger switches at `md:` (768) — at 768 the ledger was already
+          a card while this row was already a desktop row. Unified on `md:`
+          so the whole desk agrees on where "phone" ends. */}
+      <div className="flex min-w-0 flex-col gap-2 md:flex-row md:flex-wrap md:items-center md:gap-3">
+        <div className="flex min-w-0 items-center gap-3 md:contents">
           {/* Time spine cell — mono/tabular so the column lines up; an
               em-dash for a row with no time at all (the unscheduled group).
               Fix round 5 (owner ruling): when the time is EDITABLE the cell
@@ -429,7 +433,7 @@ export function RunSheetRow({
         {/* The ONE action — a plain link for every kind except `set_time`,
             which toggles the inline editor below (≥44px either way). Its own
             row on mobile so it never collides with the entrant names above. */}
-        <div className="flex flex-wrap items-center gap-2 sm:contents">
+        <div className="flex flex-wrap items-center gap-2 md:contents">
           {action.kind === "set_time" ? (
             <button
               type="button"

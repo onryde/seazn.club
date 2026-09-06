@@ -87,7 +87,7 @@ export function InPlayBand({ competitionId, initial, dict }: InPlayBandProps): R
           unconditionally — tabindex cannot be varied by media query, and an
           unguarded one trips axe's `scrollable-region-focusable`. */}
       <div
-        className="scroll-x flex gap-3 rounded-2xl bg-slate-900 p-4"
+        className="scroll-x scroll-x-fade flex gap-3 rounded-2xl bg-slate-900 p-4"
         tabIndex={0}
         role="region"
         aria-label={t(dict, "desk.band.aria")}

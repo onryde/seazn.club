@@ -2,7 +2,7 @@
 
 // F2 (round J): the phone half of the competition masthead's tool row.
 //
-// Below `sm` every tool label was `hidden sm:inline`, so the row collapsed to
+// Below `md` every tool label was `hidden md:inline`, so the row collapsed to
 // five unlabelled 46x34 icon tiles — under the 44px tap bar, unreadable, on
 // the width most likely to be in a hand at a venue. That is a groomed shrink
 // of the desktop row, which is the thing this programme exists to undo.
@@ -12,8 +12,13 @@
 // Here the trigger carries the WORD and the panel is a full-width stack of
 // labelled rows, each at the tap floor.
 //
-// It renders only below `sm` (the caller supplies `sm:hidden`); at `sm` and up
+// It renders only below `md` (the caller supplies `md:hidden`); at `md` and up
 // the labelled row is unchanged and must stay that way.
+//
+// W3 Task 8 (ruling 15): this used to switch at `sm:` (640) — unified on
+// `md:` (768) so the masthead agrees with the ledger about where "phone"
+// ends. See `apps/web/src/app/o/[orgSlug]/c/[compSlug]/page.tsx`, the actual
+// caller that supplies the `md:hidden` class this doc refers to.
 import Link from "@/components/ui/console-link";
 import { useEffect, useId, useRef, useState } from "react";
 import { ChevronDown } from "lucide-react";

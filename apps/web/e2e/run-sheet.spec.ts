@@ -1296,3 +1296,65 @@ test("desktop (Task 5): the stage rail sits beside the fixtures sheet, and no st
     );
   }
 });
+
+// W3 Task 8 — unify the phone breakpoint on `md:` (768), not `sm:` (640).
+// Ruling 15: the ledger switches at `md:`, while the masthead and this row
+// used to switch at `sm:` — at 768 the ledger was already a card while the
+// run sheet was already a desktop row, i.e. the two disagreed about where
+// "phone" ends. 768 already reads as one line under EITHER breakpoint (768
+// >= 640 and >= 768), so it cannot witness this change by itself — the case
+// that actually distinguishes `sm:` from `md:` is 700 (>= 640, < 768), a
+// width no e2e project covers (the seven-width matrix is
+// 320/360/375/390/430/768/834 — nothing in 641-767). Before this task the
+// row read `sm:flex-row`, so 700 rendered ONE LINE (wrong: an organiser
+// scrolling faster than 768px still had the entrant name and the action
+// sharing a row it should not); after, `md:flex-row`, so 700 stays STACKED.
+test("Task 8: the run-sheet row is one line at 768 and still stacked at 700 (md, not sm)", async ({
+  page,
+  request,
+}) => {
+  const { divisionId, fixtureIds } = await seedRunSheetDivision(request);
+  expect(fixtureIds.length, "seed produced no fixtures — setup failed, not the row").toBeGreaterThanOrEqual(1);
+  const target = fixtureIds[0]!;
+  const fixtureNo = (await apiJson<{ fixture_no: number }>(request, `/api/v1/fixtures/${target}`)).data!.fixture_no;
+  // A future, still-`scheduled` time so `canEditFixtureTime` renders the time
+  // cell as a button (`run-sheet-edit-time`, same setup `fixtureRowAction`'s
+  // own test above uses) — the element this test measures against the
+  // action column.
+  await setFixtureScheduledAtSql(target, "2030-06-15T09:00:00.000Z");
+
+  for (const { width, stacked } of [
+    { width: 768, stacked: false },
+    { width: 700, stacked: true },
+  ]) {
+    await page.setViewportSize({ width, height: 900 });
+    await page.goto(await divisionPath(request, divisionId, "?tab=fixtures"));
+    const sheet = page.getByTestId("run-sheet");
+    await expect(sheet).toBeVisible();
+    const row = page.locator(`[data-fixture-no="${fixtureNo}"]`);
+    await expect(row).toHaveCount(1);
+    const timeCell = row.getByTestId("run-sheet-edit-time");
+    const action = row.locator("[data-row-action]").first();
+    await expect(timeCell, `no editable time cell at ${width}px — setup did not produce the state under test`).toBeVisible();
+    await expect(action, `no action element at ${width}px — setup did not produce the state under test`).toBeVisible();
+    const timeBox = await timeCell.boundingBox();
+    const actionBox = await action.boundingBox();
+    // PRINT WHAT WAS SEEN beside the gate (_RULES.md) — a width gate cannot
+    // otherwise tell you it measured the wrong page state.
+    console.log(`Task 8 row geometry at ${width}px — time cell box:`, timeBox, "| action box:", actionBox);
+    expect(timeBox, `time cell has no box at ${width}px`).not.toBeNull();
+    expect(actionBox, `action has no box at ${width}px`).not.toBeNull();
+    const deltaY = Math.abs(actionBox!.y - timeBox!.y);
+    if (stacked) {
+      expect(
+        deltaY,
+        `expected the row STACKED at ${width}px (action well below the time cell), saw deltaY=${deltaY}`,
+      ).toBeGreaterThan(20);
+    } else {
+      expect(
+        deltaY,
+        `expected the row ONE LINE at ${width}px (time cell and action share a y), saw deltaY=${deltaY}`,
+      ).toBeLessThan(6);
+    }
+  }
+});

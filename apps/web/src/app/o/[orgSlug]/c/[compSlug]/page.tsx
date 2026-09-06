@@ -225,17 +225,21 @@ export default async function CompetitionPage({
             </div>
           </div>
           {/* Header actions.
-              `sm` and up: unchanged — icon + label, wrapped in a row.
-              Below `sm` (F2, round J): NOT the same row shrunk. It stacks,
+              `md` and up: unchanged — icon + label, wrapped in a row.
+              Below `md` (F2, round J): NOT the same row shrunk. It stacks,
               full width, and the set itself changes — one primary action
               (Schedule board), the one tool that carries status
               (Registration, with its count), and everything else folded into
               a labelled "More" disclosure. Before this, all five tools
               collapsed to unlabelled 46x34 icon tiles under the 44px tap
-              floor, which is a groomed shrink of the desktop row. */}
+              floor, which is a groomed shrink of the desktop row.
+              W3 Task 8 (ruling 15): this row used to switch at `sm:` (640) —
+              unified on `md:` (768) with the ledger, which already switched
+              there, so the desk no longer disagrees with itself about where
+              "phone" ends. */}
           <div
             data-testid="desk-tool-row"
-            className="flex flex-wrap items-center gap-2 max-sm:w-full max-sm:flex-col max-sm:items-stretch"
+            className="flex flex-wrap items-center gap-2 max-md:w-full max-md:flex-col max-md:items-stretch"
           >
             {/* Entry point 1 of 4 (task 19): the pass, offered in the
                 competition's own header instead of only at a paywall. Renders
@@ -252,7 +256,7 @@ export default async function CompetitionPage({
                 renders nothing at all.
                 It is a discovery chip, not a tool: last on a phone, and never
                 between the organiser and their work. */}
-            <div className="max-sm:order-5">
+            <div className="max-md:order-5">
             <CompetitionPassEntry
               href={routes.competitionUpgrade(orgSlug, compSlug)}
               buyLabel={t(dict, "pass.entry.buy", {
@@ -284,10 +288,10 @@ export default async function CompetitionPage({
               href={routes.slideshowCompetition(competition.id)}
               target="_blank"
               aria-label={t(dict, "aria.slideshowNewTab")}
-              className="btn btn-ghost gap-1.5 max-sm:hidden"
+              className="btn btn-ghost gap-1.5 max-md:hidden"
             >
               <MonitorPlay className="h-4 w-4" strokeWidth={1.75} />
-              <span className="hidden sm:inline">{t(dict, "action.slideshow")} ↗</span>
+              <span className="hidden md:inline">{t(dict, "action.slideshow")} ↗</span>
             </Link>
             {/* The organiser's most likely action at a venue, so on a phone it
                 is THE action: first, full width, filled, and labelled. */}
@@ -295,7 +299,7 @@ export default async function CompetitionPage({
               href={routes.competitionSchedule(orgSlug, compSlug)}
               aria-label={t(dict, "aria.scheduleBoard")}
               data-testid="desk-tool-schedule"
-              // `max-sm:hover:*` is not decoration: `btn-ghost` carries
+              // `max-md:hover:*` is not decoration: `btn-ghost` carries
               // `hover:bg-purple-50 hover:text-purple-700`, and a `hover:`
               // utility outranks a plain one — so on a phone, touching the
               // primary turned it pale lavender with purple text, i.e. it
@@ -307,20 +311,20 @@ export default async function CompetitionPage({
               // full-width controls with one of them centred read as three
               // unrelated things. The fill is what marks the primary now, not
               // a different alignment.
-              className="btn btn-ghost gap-1.5 max-sm:order-1 max-sm:min-h-11 max-sm:w-full max-sm:justify-start max-sm:border-purple-600 max-sm:bg-purple-600 max-sm:px-4 max-sm:text-white max-sm:hover:border-purple-700 max-sm:hover:bg-purple-700 max-sm:hover:text-white"
+              className="btn btn-ghost gap-1.5 max-md:order-1 max-md:min-h-11 max-md:w-full max-md:justify-start max-md:border-purple-600 max-md:bg-purple-600 max-md:px-4 max-md:text-white max-md:hover:border-purple-700 max-md:hover:bg-purple-700 max-md:hover:text-white"
             >
               <CalendarRange className="h-4 w-4" strokeWidth={1.75} />
-              <span className="sm:inline">{t(dict, "action.scheduleBoard")}</span>
+              <span className="md:inline">{t(dict, "action.scheduleBoard")}</span>
             </Link>
             {publicPath && (
               <Link
                 href={publicPath}
                 target="_blank"
                 aria-label={t(dict, "aria.viewPublicNewTab")}
-                className="btn btn-ghost gap-1.5 max-sm:hidden"
+                className="btn btn-ghost gap-1.5 max-md:hidden"
               >
                 <Globe className="h-4 w-4" strokeWidth={1.75} />
-                <span className="hidden sm:inline">{t(dict, "action.viewPublic")} ↗</span>
+                <span className="hidden md:inline">{t(dict, "action.viewPublic")} ↗</span>
               </Link>
             )}
             {publicPath && (
@@ -330,10 +334,10 @@ export default async function CompetitionPage({
                 href={`${publicPath}/poster.pdf`}
                 target="_blank"
                 aria-label={t(dict, "aria.qrPoster")}
-                className="btn btn-ghost gap-1.5 max-sm:hidden"
+                className="btn btn-ghost gap-1.5 max-md:hidden"
               >
                 <Printer className="h-4 w-4" strokeWidth={1.75} />
-                <span className="hidden sm:inline">{t(dict, "action.qr")}</span>
+                <span className="hidden md:inline">{t(dict, "action.qr")}</span>
               </a>
             )}
             {(
@@ -348,7 +352,7 @@ export default async function CompetitionPage({
               // this page does not render for one at all, so no gate is owed
               // here: whoever sees this overview may see the hub.
               <RegistrationHubNavEntry
-                className="max-sm:order-2"
+                className="max-md:order-2"
                 href={routes.competitionRegistration(orgSlug, compSlug)}
                 label={t(dict, "action.registration")}
                 // The breakdown, not just "Registration": the tooltip that
@@ -372,17 +376,19 @@ export default async function CompetitionPage({
             <Link
               href={routes.competitionSettings(orgSlug, compSlug)}
               aria-label={t(dict, "aria.settings")}
-              className="btn btn-ghost gap-1.5 max-sm:hidden"
+              className="btn btn-ghost gap-1.5 max-md:hidden"
             >
               <Settings className="h-4 w-4" strokeWidth={1.75} />
-              <span className="hidden sm:inline">{t(dict, "action.settings")}</span>
+              <span className="hidden md:inline">{t(dict, "action.settings")}</span>
             </Link>
-            {/* Phone only, and the counterpart of the four `max-sm:hidden`
+            {/* Phone only, and the counterpart of the four `max-md:hidden`
                 tools above: the same destinations, as labelled full-width
                 rows at the tap floor instead of unreadable glyphs. Its own
-                `sm:hidden` is what keeps 640-and-up literally unchanged. */}
+                `md:hidden` is what keeps 768-and-up literally unchanged.
+                W3 Task 8 (ruling 15): unified from `sm:` (640) to `md:` (768)
+                with the rest of the desk. */}
             <DeskToolsMore
-              className="max-sm:order-3 sm:hidden"
+              className="max-md:order-3 md:hidden"
               label={t(dict, "desk.tools.more")}
               items={[
                 { label: t(dict, "action.slideshow"), href: routes.slideshowCompetition(competition.id), external: true },
