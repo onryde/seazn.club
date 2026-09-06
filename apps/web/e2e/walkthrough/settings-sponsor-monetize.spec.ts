@@ -195,6 +195,24 @@ const STRIPE_MS = 30_000;
 const budget = (navs: number, stripeCalls: number): number =>
   Math.max(90_000, 20_000 + navs * NAV_MS + stripeCalls * STRIPE_MS);
 
+/**
+ * The `beforeAll` hook's own budget, and it needs one: a Playwright hook
+ * carries its OWN timeout, defaulting to the global `testConfig.timeout`
+ * (60_000 — playwright.config.ts, which the `walkthrough` project does not
+ * override), and only an explicit `test.setTimeout` INSIDE the hook raises it.
+ * `claimConnectAccount` blocks on `pg_advisory_lock(70070071)` with no bound on
+ * the wait, and every other holder of that lock takes it from a test body that
+ * has already budgeted itself 600_000 (rs007-invite-pay-cancel.spec.ts and
+ * all five cases in rs007-money-matrix.spec.ts). So the incumbent may
+ * legitimately hold it for ten minutes while this hook is given one — a flaky
+ * hook timeout under CI's `--workers=3`, not a deterministic one.
+ */
+const CONNECT_LOCK_WAIT_MS = 600_000;
+/** The hook's own work on top of that wait: the org seed, the entitlement
+ *  override, and the claim's own UPDATEs once the lock is won. */
+const SETUP_WORK_MS = 90_000;
+const SETUP_MS = CONNECT_LOCK_WAIT_MS + SETUP_WORK_MS;
+
 const READ_MS = 20_000;
 
 /** "the control inside the wrapping label that says X" — see doc note 2. */
@@ -323,6 +341,9 @@ test.use({
 });
 
 test.beforeAll(async ({ request }: { request: APIRequestContext }) => {
+  // FIRST STATEMENT, before the skip and before any await: see SETUP_MS. The
+  // hook's default 60s cannot outlast a lock holder that budgets itself 600s.
+  test.setTimeout(SETUP_MS);
   test.skip(SKIP_REASON !== null, SKIP_REASON ?? "");
   org = await seedSettingsOrg(request, { plan: "pro", label: "W4-sponsor-monetize" });
   // See doc note 3: redundant against today's catalog, kept against tomorrow's.
