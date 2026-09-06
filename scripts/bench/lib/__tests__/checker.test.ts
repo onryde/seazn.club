@@ -787,7 +787,7 @@ describe("checkBoard", () => {
 });
 
 // ---------------------------------------------------------------------------
-// B04 T7a — _tiny's OWN declared scheduleConfig, previously vacuous, now live
+// B04 T7a (fix round 1) — _tiny's OWN declared scheduleConfig, live for real
 // ---------------------------------------------------------------------------
 //
 // Every case in this block is grounded in `_tiny`'s REAL declared config —
@@ -795,18 +795,45 @@ describe("checkBoard", () => {
 // copy of its numbers — because "the pack now declares a blackout" and "the
 // blackout rule notices" are different claims (task brief). Rules 2a
 // (session windows), 2b (blackouts), 2c (court hours), 3 (rest) and 4 (day
-// caps) were ALL vacuous on `_tiny` before T7a: `sessionWindows: []` and
-// `blackouts: []` mean unrestricted, `perEntrantMinRest: 0` means no floor
-// can be short, and no `constraints.hard` at all means rule 4 never ran.
+// caps) were ALL vacuous on `_tiny` before T7a.
 //
-// The board below is shaped like the schedule `_tiny`'s own live run
-// actually produces: `d-tiny`'s three fixtures between its two entrants
-// (both play every one), spaced by `_schedule-routes.ts`'s own rest-aware
-// slot pitch (`matchMinutes + perEntrantMinRest` = 30 + 15 = 45 minutes) —
-// 09:00, 09:45, 10:30 on 2099-01-01 (Thursday, weekday 4). Each violation
-// case moves exactly ONE fixture (or adds one), chosen so it trips the named
-// rule alone: `_tiny.ts`'s court hours close an hour before its session
-// window does specifically so a move can cross one bound without the other.
+// Fix round 1: T7a's first cut declared `max_fixtures_per_day` at `count: 3`
+// against a division that plays exactly 3 fixtures per entrant — satisfied
+// by the live schedule, but pinned at the cap BY THE FIXTURE COUNT ITSELF, so
+// no board `_tiny` can actually produce could ever violate it (only a
+// hand-added fourth fixture could, which is worth keeping but is not what a
+// real defect would look like). `count: 2` fixes that: it forces the third
+// `d-tiny` fixture onto a SECOND calendar day on every real run, and now
+// `_tiny`'s own three real fixtures placed on ONE day genuinely breach it
+// (the "4b" case below). The old blackout (12:00-12:30) sat 90 minutes after
+// this pack's schedule ever runs and could never be hit either way; it is
+// now 09:30-12:00 on day 1, inside the band the schedule actually occupies.
+//
+// The clean board below is the EXACT schedule `_tiny.ts`'s own comment
+// documents and `_schedule-routes.ts`'s fake scheduler actually produces on a
+// default run (verified by hand against all five constraints in both
+// places):
+//
+//   fx-tiny-1  2099-01-01 (Thu)  09:00  c-tiny-1   [the R22 pin: this
+//                                                    division's first
+//                                                    declared stream is
+//                                                    ALWAYS locked to its own
+//                                                    startAt/first court
+//                                                    before `auto` runs —
+//                                                    `resolveScheduleLocks`,
+//                                                    `suites/tiny.ts` — which
+//                                                    is why the blackout
+//                                                    starts at 09:30, not
+//                                                    09:00: it must abut this
+//                                                    fixture, not swallow it]
+//   fx-tiny-2  2099-01-01 (Thu)  09:45  c-tiny-2
+//   fx-tiny-3  2099-01-02 (Fri)  09:00  c-tiny-1
+//
+// Each violation case moves exactly ONE fixture, chosen so it trips the
+// named rule alone: `_tiny.ts`'s court hours close an hour before its
+// session windows do, specifically so a move can cross one bound without
+// the other, and day 3 (2099-01-03) is left off the session-window list on
+// purpose so it stays the region that violates 2a.
 describe("checkBoard — _tiny's own declared config is live (B04 T7a)", () => {
   const TINY_PACK = buildTinyPack();
   const TINY_DIVISION = TINY_PACK.divisions.find((d) => d.ref === "d-tiny");
@@ -823,7 +850,10 @@ describe("checkBoard — _tiny's own declared config is live (B04 T7a)", () => {
 
   // `declaresOfficials: false` and `pins: []`: this block is about rules
   // 2a-4 only, so officials and pin integrity are left inert rather than
-  // adding findings this board was never built to carry.
+  // adding findings this board was never built to carry. (The R22 PIN
+  // MECHANISM in the real wiring is a fact about how the LIVE schedule is
+  // produced, not something `checkBoard` itself needs told — pin integrity
+  // and window containment are independent rules over the same board.)
   const TINY_CONSTRAINTS: EncodedConstraints = encodeConstraints({
     divisionRef: "d-tiny",
     scheduleConfig: TINY_CONFIG,
@@ -841,7 +871,11 @@ describe("checkBoard — _tiny's own declared config is live (B04 T7a)", () => {
     expect(TINY_CONSTRAINTS.perEntrantMinRest).toBeGreaterThan(0);
     expect(TINY_CONSTRAINTS.blackouts.length).toBeGreaterThan(0);
     expect(TINY_CONSTRAINTS.sessionWindows.length).toBeGreaterThan(0);
-    expect(TINY_CONSTRAINTS.hard.some((h) => h.type === "max_fixtures_per_day")).toBe(true);
+    const dayCapRule = TINY_CONSTRAINTS.hard.find((h) => h.type === "max_fixtures_per_day");
+    expect(dayCapRule?.type).toBe("max_fixtures_per_day");
+    // Fix round 1's own premise: the cap must be BELOW the fixture count, or
+    // it is unreachable by construction again (finding 1 of the fix round).
+    expect(dayCapRule?.type === "max_fixtures_per_day" ? dayCapRule.count : undefined).toBeLessThan(3);
     expect(TINY_COURT_HOURS.length).toBeGreaterThan(0);
   });
 
@@ -849,7 +883,7 @@ describe("checkBoard — _tiny's own declared config is live (B04 T7a)", () => {
   const TINY_TEMPLATE = [
     { fixtureId: "fx-tiny-1", extKey: "rr-r1-c1", iso: "2099-01-01T09:00:00.000Z", courtId: "crt-1", roundNo: 1 },
     { fixtureId: "fx-tiny-2", extKey: "rr-r2-c1", iso: "2099-01-01T09:45:00.000Z", courtId: "crt-2", roundNo: 2 },
-    { fixtureId: "fx-tiny-3", extKey: "rr-r3-c1", iso: "2099-01-01T10:30:00.000Z", courtId: "crt-1", roundNo: 3 },
+    { fixtureId: "fx-tiny-3", extKey: "rr-r3-c1", iso: "2099-01-02T09:00:00.000Z", courtId: "crt-1", roundNo: 3 },
   ] as const;
 
   /** One of `_tiny`'s three real `d-tiny` fixtures, at its own live-run slot
@@ -897,60 +931,60 @@ describe("checkBoard — _tiny's own declared config is live (B04 T7a)", () => {
   });
 
   it("2a — flags a fixture moved to a day the session window never names", () => {
-    // `sessionWindows` is one instant range on 2099-01-01 only. Moved a day
-    // later (Friday, weekday 5 — still inside the court's own declared
-    // hours, and outside the single-day blackout) it is caught ONLY by the
-    // window: the earlier two fixtures still leave it 21+ hours of rest, the
-    // day cap (3) is not reached on either day, and round order still holds
-    // (round 3 later than round 2, and Jan 2 > Jan 1).
-    const moved = tinyFixture(2, { iso: "2099-01-02T09:00:00.000Z" });
+    // `sessionWindows` covers day 1 and day 2 only. fx-3 moved from day 2 to
+    // day 3 (Saturday, weekday 6 — still inside the court's own declared
+    // hours, and outside the single-day blackout) is caught ONLY by the
+    // window: rest stays huge, the day cap (2) is not reached on day 1 or
+    // day 3, and round order still holds (round 3 later than round 2, day 3
+    // after day 1).
+    const moved = tinyFixture(2, { iso: "2099-01-03T09:00:00.000Z" });
     const r = checkBoard(tinyBoard([tinyFixture(0), tinyFixture(1), moved]), TINY_CONSTRAINTS);
     expect(kinds(r.findings)).toEqual(["outside_session_windows"]);
     expect(r.findings[0].fixtureIds).toEqual(["fx-tiny-3"]);
   });
 
   it("2b — flags a fixture moved inside the declared blackout", () => {
-    // The blackout is 12:00-12:30 on court c-tiny-1, which is where fx-3
-    // already sits — well inside both court hours (08:00-19:00) and the
-    // session window (08:00-20:00), and far enough from fx-2 (09:45) that
-    // rest is not touched either.
-    const moved = tinyFixture(2, { iso: "2099-01-01T12:00:00.000Z" });
-    const r = checkBoard(tinyBoard([tinyFixture(0), tinyFixture(1), moved]), TINY_CONSTRAINTS);
+    // The blackout is c-tiny-1, 09:30-12:00 on day 1. fx-2 moved onto that
+    // court at 10:00 (still day 1, so the day cap stays at exactly 2; still
+    // 30 minutes clear of fx-1's own 09:00-09:30, so rest is untouched) lands
+    // inside it.
+    const moved = tinyFixture(1, { iso: "2099-01-01T10:00:00.000Z", courtId: "crt-1" });
+    const r = checkBoard(tinyBoard([tinyFixture(0), moved, tinyFixture(2)]), TINY_CONSTRAINTS);
     expect(kinds(r.findings)).toEqual(["inside_blackout"]);
-    expect(r.findings[0].fixtureIds).toEqual(["fx-tiny-3"]);
+    expect(r.findings[0].fixtureIds).toEqual(["fx-tiny-2"]);
   });
 
   it("2c — flags a fixture moved outside its own court's declared hours", () => {
-    // 19:15 is past the court's 19:00 close but still inside the 20:00
-    // session window — the asymmetry `_tiny.ts` declares on purpose so this
-    // case cannot be satisfied by the window guard instead.
-    const moved = tinyFixture(2, { iso: "2099-01-01T19:15:00.000Z" });
-    const r = checkBoard(tinyBoard([tinyFixture(0), tinyFixture(1), moved]), TINY_CONSTRAINTS);
+    // 19:15 is past the court's 19:00 close but still inside the day-1
+    // session window's 20:00 close — the asymmetry `_tiny.ts` declares on
+    // purpose so this case cannot be satisfied by the window guard instead.
+    // Still c-tiny-2, so the blackout (c-tiny-1 only) is not in play.
+    const moved = tinyFixture(1, { iso: "2099-01-01T19:15:00.000Z" });
+    const r = checkBoard(tinyBoard([tinyFixture(0), moved, tinyFixture(2)]), TINY_CONSTRAINTS);
     expect(kinds(r.findings)).toEqual(["outside_court_hours"]);
-    expect(r.findings[0].fixtureIds).toEqual(["fx-tiny-3"]);
+    expect(r.findings[0].fixtureIds).toEqual(["fx-tiny-2"]);
   });
 
   it("3 — flags both entrants below the declared rest floor", () => {
-    // fx-2 ends 10:15; fx-3 moved to 10:20 leaves 5 minutes against a
+    // fx-1 ends 09:30; fx-2 moved to 09:35 leaves 5 minutes against a
     // declared floor of 15. Both entrants play every fixture, so both
     // series breach — matching the abstract rest tests above, grounded in
-    // _tiny's own numbers instead.
-    const moved = tinyFixture(2, { iso: "2099-01-01T10:20:00.000Z" });
-    const r = checkBoard(tinyBoard([tinyFixture(0), tinyFixture(1), moved]), TINY_CONSTRAINTS);
+    // _tiny's own numbers instead. Still c-tiny-2, so the blackout is moot.
+    const moved = tinyFixture(1, { iso: "2099-01-01T09:35:00.000Z" });
+    const r = checkBoard(tinyBoard([tinyFixture(0), moved, tinyFixture(2)]), TINY_CONSTRAINTS);
     expect(kinds(r.findings)).toEqual(["entrant_below_rest", "entrant_below_rest"]);
-    expect(r.findings[0].fixtureIds).toEqual(["fx-tiny-2", "fx-tiny-3"]);
+    expect(r.findings[0].fixtureIds).toEqual(["fx-tiny-1", "fx-tiny-2"]);
     expect(r.findings[0].measured).toBe(5);
     expect(r.findings[0].required).toBe(15);
   });
 
-  it("4 — flags a fourth same-day fixture breaching the declared day cap", () => {
-    // _tiny's real schedule never has a fourth d-tiny fixture on one day —
-    // this is the shape a real `count: 2` pack would force a second day to
-    // avoid, and the reason `_tiny.ts` declares `count: 3` for its own
-    // three-fixture schedule (satisfied EXACTLY, not with slack). A
-    // hand-added fourth, same pair, same day, breaches it — and only it: no
-    // `roundNo`, so round order (round-robin only) has nothing to compare it
-    // against.
+  it("4a — flags a hand-added fourth same-day fixture breaching the declared day cap", () => {
+    // A board `_tiny` cannot itself produce (it has only three fixtures) —
+    // kept because it proves the RULE independently of what the pack can
+    // reach, which is a different, still-worthwhile claim from "4b" below.
+    // No `roundNo`, so round order (round-robin only) has nothing to compare
+    // it against; c-tiny-2 at 15:00 so neither the blackout nor rest is
+    // touched.
     const fourth: Board["fixtures"][number] = {
       fixtureId: "fx-tiny-4",
       divisionId: TINY_DIVISION_ID,
@@ -968,8 +1002,26 @@ describe("checkBoard — _tiny's own declared config is live (B04 T7a)", () => {
       TINY_CONSTRAINTS,
     );
     expect(kinds(r.findings)).toEqual(["day_cap_exceeded", "day_cap_exceeded"]);
-    expect(r.findings[0].measured).toBe(4);
-    expect(r.findings[0].required).toBe(3);
-    expect(r.findings[0].fixtureIds).toEqual(["fx-tiny-1", "fx-tiny-2", "fx-tiny-3", "fx-tiny-4"]);
+    expect(r.findings[0].measured).toBe(3);
+    expect(r.findings[0].required).toBe(2);
+    // fx-tiny-3 is on day 2, a SEPARATE bucket — only day 1's three fixtures
+    // are named.
+    expect(r.findings[0].fixtureIds).toEqual(["fx-tiny-1", "fx-tiny-2", "fx-tiny-4"]);
+  });
+
+  it("4b — the LIVE cap is violable from _tiny's own shape: three real fixtures, one day", () => {
+    // Fix round 1's own point: with `count: 2`, `_tiny`'s OWN three real
+    // fixtures — no synthetic fourth — breach the cap the moment a wrong
+    // schedule puts all three on one day, which is exactly the shape an
+    // actual placement defect would produce. fx-3 moved from its live day 2
+    // slot onto day 1, c-tiny-2 (not c-tiny-1, so the blackout stays out of
+    // it) at 11:00 — 45 minutes clear of fx-2 (09:45-10:15), so rest is not
+    // what catches this.
+    const moved = tinyFixture(2, { iso: "2099-01-01T11:00:00.000Z", courtId: "crt-2" });
+    const r = checkBoard(tinyBoard([tinyFixture(0), tinyFixture(1), moved]), TINY_CONSTRAINTS);
+    expect(kinds(r.findings)).toEqual(["day_cap_exceeded", "day_cap_exceeded"]);
+    expect(r.findings[0].measured).toBe(3);
+    expect(r.findings[0].required).toBe(2);
+    expect(r.findings[0].fixtureIds).toEqual(["fx-tiny-1", "fx-tiny-2", "fx-tiny-3"]);
   });
 });

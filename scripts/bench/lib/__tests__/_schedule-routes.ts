@@ -142,6 +142,7 @@ export interface FakeScheduleWorld {
 }
 
 const MINUTE_MS = 60_000;
+const DAY_MS = 24 * 60 * MINUTE_MS;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -387,49 +388,149 @@ export function makeScheduleWorld(options: FakeScheduleOptions = {}): FakeSchedu
         occupied.add(`${other.court_id}@${Date.parse(other.scheduled_at)}`);
       }
     }
-    const slotAt = (slot: number): { at: number; court: string } => ({
-      at: options.doubleBookCourt === true ? startMs : startMs + slot * pitchMinutes * MINUTE_MS,
-      court:
-        courts.length === 0
-          ? "court-unset"
-          : courts[options.doubleBookCourt === true ? 0 : slot % courts.length]!,
-    });
+    // T7a fix round 1: a declared `max_fixtures_per_day` (scoped
+    // `every_entrant` — the only scope `_tiny` declares) is honoured by
+    // spilling the OFFENDING fixture onto the next calendar day, never by
+    // ignoring the cap. Without this, the moment `_tiny` declared a real cap
+    // the DEFAULT ("well-behaved product") scenario would itself breach its
+    // own declared constraint — a false product defect of exactly the kind
+    // `perEntrantMinRest`'s rest-aware pitch (above) already exists to avoid.
+    // Only `every_entrant`/`competition` scopes are modelled (the two this
+    // bench ever declares); any other scope is read as "no cap", matching
+    // this fake's existing default-to-well-behaved stance.
+    const hardRules: readonly unknown[] =
+      isRecord(cfg.constraints) && Array.isArray(cfg.constraints.hard) ? cfg.constraints.hard : [];
+    const dayCap = hardRules
+      .filter(isRecord)
+      .find(
+        (r) =>
+          r.type === "max_fixtures_per_day" &&
+          typeof r.count === "number" &&
+          isRecord(r.scope) &&
+          (r.scope.kind === "every_entrant" || r.scope.kind === "competition"),
+      )?.count as number | undefined;
+
+    function entrantsOf(row: FakeFixtureRow): string[] {
+      return [row.home_entrant_id, row.away_entrant_id].filter((e): e is string => e !== null);
+    }
+    // Per-entrant, per calendar-day count — LOCAL to this call, because
+    // `checkBoard` (and therefore this cap) only ever sees one division's own
+    // fixtures. `dayIdx` is `Math.floor((at - startMs) / DAY_MS)`, which is
+    // exact because `_tiny`'s org zone is UTC — a real multi-timezone fake
+    // would need `checker.ts`'s own `civil()`, not raw epoch arithmetic.
+    const dayCountByEntrant = new Map<string, Map<number, number>>();
+    function dayCapBlocks(row: FakeFixtureRow, dayIdx: number): boolean {
+      if (dayCap === undefined) return false;
+      return entrantsOf(row).some((e) => (dayCountByEntrant.get(e)?.get(dayIdx) ?? 0) + 1 > dayCap);
+    }
+    function recordDay(row: FakeFixtureRow, dayIdx: number): void {
+      for (const e of entrantsOf(row)) {
+        const byDay = dayCountByEntrant.get(e) ?? new Map<number, number>();
+        byDay.set(dayIdx, (byDay.get(dayIdx) ?? 0) + 1);
+        dayCountByEntrant.set(e, byDay);
+      }
+    }
+
+    // T7a fix round 1: a declared `blackouts[]` entry is honoured by walking
+    // PAST it, the same way this fake already walks past a sibling's
+    // occupied slot — never by placing into it and letting the checker
+    // discover the breach on the default scenario. `court` is already the
+    // REAL resolved court id here (`resolvedConfig` in `schedule.ts` rewrites
+    // every `@`-ref before this config is PUT), matching `chosen.court`
+    // directly. An entry with no `court` key is GLOBAL, same semantics as
+    // `board.ts`'s own reading of it.
+    const blackouts: { court?: string; from: number; to: number }[] = Array.isArray(cfg.blackouts)
+      ? (cfg.blackouts as readonly unknown[])
+          .filter(isRecord)
+          .map((b) => ({
+            court: typeof b.court === "string" ? b.court : undefined,
+            from: typeof b.from === "string" ? Date.parse(b.from) : Number.NaN,
+            to: typeof b.to === "string" ? Date.parse(b.to) : Number.NaN,
+          }))
+          .filter((b) => Number.isFinite(b.from) && Number.isFinite(b.to))
+      : [];
+    function isBlackedOut(court: string, at: number): boolean {
+      const end = at + matchMinutes * MINUTE_MS;
+      return blackouts.some((b) => (b.court === undefined || b.court === court) && at < b.to && b.from < end);
+    }
+
+    // `dayIndex`/`slotInDay` replace the old single `slot` counter: TIME and
+    // COURT both reset to the pack's own daily opening slot at the start of
+    // each calendar day, rather than drifting through the clock as `slot`
+    // climbs — which is what let a spilled-over fixture land at local
+    // midnight, outside every declared court-hours/session-window range, in
+    // an earlier draft of this change. `doubleBookCourt` still forces every
+    // candidate to the fixed `startMs`/`courts[0]` regardless of either
+    // counter, unchanged from before.
+    function candidateAt(dayIdx: number, slotInDay: number): { at: number; court: string } {
+      return {
+        at:
+          options.doubleBookCourt === true
+            ? startMs
+            : startMs + dayIdx * DAY_MS + slotInDay * pitchMinutes * MINUTE_MS,
+        court:
+          courts.length === 0
+            ? "court-unset"
+            : courts[options.doubleBookCourt === true ? 0 : slotInDay % courts.length]!,
+      };
+    }
 
     const assignments: { fixture_id: string; scheduled_at: string; court_id: string }[] = [];
     if (!(options.proposeNothing === true)) {
       const placeable = rows.slice(0, rows.length - (options.leaveUnplaced ?? 0));
-      let slot = 0;
+      let dayIndex = 0;
+      let slotInDay = 0;
       for (const row of placeable) {
         // A LOCKED fixture keeps the slot it already holds — a lock is
-        // honoured on every mode, unconditionally.
+        // honoured on every mode, unconditionally. It is deliberately NOT
+        // added to `occupied`: an unlocked row in the SAME stage must still
+        // be able to land on the identical slot (the `doubleBookCourt`
+        // court-double-booking test depends on exactly that), and only
+        // OTHER stages' persisted fixtures populate `occupied` at all. It
+        // still counts toward the day cap, because the real cap counts every
+        // placed fixture, locked or not.
         if (row.schedule_locked && row.scheduled_at !== null && row.court_id !== null) {
+          recordDay(row, Math.floor((Date.parse(row.scheduled_at) - startMs) / DAY_MS));
           assignments.push({
             fixture_id: row.id,
             scheduled_at: row.scheduled_at,
             court_id: row.court_id,
           });
-          slot += 1;
+          slotInDay += 1;
           continue;
         }
-        // Walk past anything a sibling division already holds. Bounded, so a
-        // fully-booked venue proposes fewer assignments rather than looping —
-        // which is the honest answer and reaches the driver's own
-        // "auto proposed 0 assignments" refusal.
-        let chosen = slotAt(slot);
+        // Walk past anything a sibling division already holds, anything
+        // inside a declared blackout, or anything the day cap would breach —
+        // a day-cap block jumps straight to day+1 (nothing on the REST of
+        // today's slots can help), the other two just try the next slot
+        // today. Bounded, so a fully-booked venue proposes fewer assignments
+        // rather than looping — which is the honest answer and reaches the
+        // driver's own "auto proposed 0 assignments" refusal.
+        let chosen = candidateAt(dayIndex, slotInDay);
         let guard = 0;
-        while (occupied.has(`${chosen.court}@${chosen.at}`) && guard < 200) {
-          slot += 1;
+        const blocked = (): boolean =>
+          dayCapBlocks(row, dayIndex) ||
+          occupied.has(`${chosen.court}@${chosen.at}`) ||
+          isBlackedOut(chosen.court, chosen.at);
+        while (blocked() && guard < 200) {
+          if (dayCapBlocks(row, dayIndex)) {
+            dayIndex += 1;
+            slotInDay = 0;
+          } else {
+            slotInDay += 1;
+          }
+          chosen = candidateAt(dayIndex, slotInDay);
           guard += 1;
-          chosen = slotAt(slot);
         }
-        if (occupied.has(`${chosen.court}@${chosen.at}`)) continue;
+        if (blocked()) continue;
         occupied.add(`${chosen.court}@${chosen.at}`);
+        recordDay(row, dayIndex);
         assignments.push({
           fixture_id: row.id,
           scheduled_at: new Date(chosen.at).toISOString(),
           court_id: chosen.court,
         });
-        slot += 1;
+        slotInDay += 1;
       }
     }
 

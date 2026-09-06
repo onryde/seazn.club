@@ -61,21 +61,25 @@
         "blackouts": [
           {
             "court": "@c-tiny-1",
-            "from": "2099-01-01T12:00:00.000Z",
-            "to": "2099-01-01T12:30:00.000Z"
+            "from": "2099-01-01T09:30:00.000Z",
+            "to": "2099-01-01T12:00:00.000Z"
           }
         ],
         "sessionWindows": [
           {
             "from": "2099-01-01T08:00:00.000Z",
             "to": "2099-01-01T20:00:00.000Z"
+          },
+          {
+            "from": "2099-01-02T08:00:00.000Z",
+            "to": "2099-01-02T20:00:00.000Z"
           }
         ],
         "constraints": {
           "hard": [
             {
               "type": "max_fixtures_per_day",
-              "count": 3,
+              "count": 2,
               "scope": {
                 "kind": "every_entrant"
               }
@@ -125,21 +129,25 @@
         "blackouts": [
           {
             "court": "@c-tiny-1",
-            "from": "2099-01-01T12:00:00.000Z",
-            "to": "2099-01-01T12:30:00.000Z"
+            "from": "2099-01-01T09:30:00.000Z",
+            "to": "2099-01-01T12:00:00.000Z"
           }
         ],
         "sessionWindows": [
           {
             "from": "2099-01-01T08:00:00.000Z",
             "to": "2099-01-01T20:00:00.000Z"
+          },
+          {
+            "from": "2099-01-02T08:00:00.000Z",
+            "to": "2099-01-02T20:00:00.000Z"
           }
         ],
         "constraints": {
           "hard": [
             {
               "type": "max_fixtures_per_day",
-              "count": 3,
+              "count": 2,
               "scope": {
                 "kind": "every_entrant"
               }
@@ -1231,8 +1239,8 @@
         "where": "venues[], divisions[0].scheduleConfig, divisions[1].scheduleConfig"
       },
       {
-        "what": "B04 T7a: both courts now declare weekly `hours` (Thu/Fri/Sat 08:00-19:00), and the shared scheduleConfig declares a real perEntrantMinRest (15), one blackout, one session window and one max_fixtures_per_day hard rule (count 3, scoped every_entrant) — every one of them previously a vacuous sentinel (0 / [] / [] / no constraints.hard at all).",
-        "why": "checker.ts's rules 2a (session windows), 2b (blackouts), 2c (court hours), 3 (rest) and 4 (day caps) could not fire on ANY input while _tiny, the only pack this bench runs, declared sentinel values for all five — a green live run reported CLEAN having measured half of what it claims. Each value is chosen to be satisfied by the schedule this pack's own live run actually produces and violable by a wrong one (proved in checker.test.ts against a hand-built board, not merely reachable) — see TINY_SCHEDULE_CONFIG's own comment for the per-value reasoning. Rule 5 (not_before/not_after) is deliberately LEFT vacuous: _tiny is the only pack this bench runs, so making all eight rules live would leave the report's own \"nothing to check\" unchecked-list section with an empty list on every real run — the same vacuous-report trap one level up.",
+        "what": "B04 T7a (fix round 1): both courts declare weekly `hours` (Thu/Fri/Sat 08:00-19:00), and the shared scheduleConfig declares a real perEntrantMinRest (15), one blackout (c-tiny-1, day 1, 09:30-12:00), two session windows (day 1 and day 2, day 3 deliberately absent) and one max_fixtures_per_day hard rule (count 2, scoped every_entrant) — every one of them previously a vacuous sentinel (0 / [] / [] / no constraints.hard at all).",
+        "why": "checker.ts's rules 2a/2b/2c/3/4 could not fire on ANY input while _tiny, the only pack this bench runs, declared sentinel values for all five — a green live run reported CLEAN having measured half of what it claims. T7a's first cut used count: 3, pinned at the cap BY THE FIXTURE COUNT ITSELF (both d-tiny entrants play exactly 3 fixtures) — no real defect could ever exceed it, only a hand-added fourth fixture _tiny cannot produce. count: 2 forces the third fixture onto a second day on every real run, so the cap is both satisfied by the live schedule AND violable from _tiny's own three real fixtures (checker.test.ts proves both) — see TINY_SCHEDULE_CONFIG's own comment for the full reasoning and the exact satisfying schedule. Rule 5 stays deliberately vacuous: making all eight live would leave the report's own \"nothing to check\" section empty on every real run — the same vacuous-report trap one level up.",
         "where": "venues[0].courts[0].hours, venues[0].courts[1].hours, divisions[0].scheduleConfig, divisions[1].scheduleConfig"
       },
       {

@@ -151,35 +151,73 @@ const TINY_SCHEDULE_START_AT = "2099-01-01T09:00:00.000Z";
  *  by the rule actually comparing anything. `_tiny` is the only pack this
  *  bench runs, so checker.ts's rules 2a/2b/2c/3/4 had never fired on a real
  *  input. The values below are chosen to clear the bar the task report names:
- *  satisfied by the schedule this pack actually produces (both entrants play
- *  every `d-tiny` fixture back to back, so this fake's own scheduler bakes
- *  `perEntrantMinRest` into its slot spacing — see `_schedule-routes.ts`) AND
- *  violable by a wrong one (proved against a hand-built board in
- *  `checker.test.ts`, not merely reachable).
+ *  satisfied by the schedule this pack actually produces AND violable by a
+ *  wrong one (proved against a hand-built board in `checker.test.ts`, not
+ *  merely reachable).
  *
  *   - `perEntrantMinRest: 15` — both `d-tiny` entrants play all three
  *     fixtures, so 15 minutes of turnaround between consecutive ones is a
  *     real, checkable floor rather than the `0` that made rule 3 vacuous.
- *   - `blackouts` — one court-scoped window at midday (12:00-12:30), well
- *     after this pack's real schedule ever runs (it never runs past noon);
- *     a blackout the solver would never have hit anyway would prove nothing,
- *     but this one is a real "and the schedule stays outside it" fact, not a
- *     decoration.
- *   - `sessionWindows` — one window (08:00-20:00) wide enough to hold the
- *     whole working day, so it is the working day itself that is asserted,
- *     not a hand-fitted box around wherever three fixtures happened to land.
- *     Deliberately WIDER than the courts' own 08:00-19:00 hours (see
- *     `TINY_COURT_CLOSE_MIN`'s comment) — the asymmetry is what lets a test
- *     isolate "outside court hours" from "outside the session window".
+ *     This fake's own scheduler bakes it into its slot spacing
+ *     (`_schedule-routes.ts`).
  *   - `constraints.hard` — ONE `max_fixtures_per_day` rule, scoped
- *     `every_entrant` at `count: 3`. `d-tiny` plays exactly 3 fixtures per
- *     entrant on one day, so the cap is satisfied EXACTLY rather than with
- *     slack — declaring `count: 2` would be a false product defect on this
- *     pack's own real schedule the moment the rule is applied, since this
- *     fake cannot re-plan across a second day the way the real placer can.
- *     `checker.test.ts` proves the rule fires on a fourth same-day fixture,
- *     which is the shape a real `count: 2` pack would force a second day
- *     to avoid.
+ *     `every_entrant` at `count: 2`. Fix round 1: `count: 3` (T7a's first
+ *     cut) was satisfied by the schedule but pinned at the cap BY THE
+ *     FIXTURE COUNT ITSELF — `d-tiny` has exactly 3 fixtures and both
+ *     entrants play all of them, so no product defect could ever raise the
+ *     figure to 4, and the only violating board `checker.test.ts` could
+ *     build was a hand-added FOURTH fixture `_tiny` cannot produce. `count:
+ *     2` forces the THIRD fixture onto a second calendar day on every real
+ *     run, so `checker.test.ts` can now also red rule 4 using `_tiny`'s
+ *     OWN three real fixtures placed on one day — the shape an actual
+ *     defect would produce. The old fake could not honour this (it had no
+ *     notion of "day" at all); `_schedule-routes.ts` was taught one, the
+ *     same way it was taught the rest-aware pitch.
+ *   - `sessionWindows` — TWO windows, day 1 and day 2 (both 08:00-20:00,
+ *     wide enough to hold the whole working day rather than a box
+ *     hand-fitted to wherever a fixture happened to land), because
+ *     `count: 2` forces a fixture onto day 2 and the pack has to admit that
+ *     day or it is infeasible rather than merely constrained. Day 3
+ *     (`2099-01-03`) is deliberately left OFF this list — it is the region
+ *     that still violates rule 2a. Both windows are WIDER than the courts'
+ *     own 08:00-19:00 hours (see `TINY_COURT_CLOSE_MIN`'s comment) — the
+ *     asymmetry is what lets a test isolate "outside court hours" from
+ *     "outside the session window".
+ *   - `blackouts` — one court-scoped window on day 1, `c-tiny-1`
+ *     09:30-12:00. Fix round 1: the first cut (12:00-12:30) sat ninety
+ *     minutes after this pack's own schedule ever runs, so nothing could
+ *     land in it either way — "a blackout the solver would never have hit
+ *     anyway proves nothing" is the task's own bar, and that draft failed
+ *     it. `09:30`, not `09:00`: `d-tiny`'s FIRST fixture is unconditionally
+ *     PINNED to `startAt` on this division's first declared court before
+ *     `auto` ever runs (ruling R22, `resolveScheduleLocks` in
+ *     `suites/tiny.ts`) — i.e. `c-tiny-1` at exactly `09:00`-`09:30` on
+ *     every run, pin or no pin. A blackout starting at `09:00` would make
+ *     the PINNED fixture itself the violation on every green run; `09:30`
+ *     abuts it instead (half-open, same convention as
+ *     `_board-fixtures.ts`'s own clean board), so the pin is UNTOUCHED and
+ *     the window still sits inside the hours a real fixture can occupy.
+ *
+ *  THE EXACT SCHEDULE THAT SATISFIES ALL FIVE CONSTRAINTS AT ONCE — checked
+ *  by hand against every one of them, and reproduced by this fake's own
+ *  scheduler (`_schedule-routes.ts`) on a default run:
+ *
+ *    d-tiny   rr-r1-c1  2099-01-01 (Thu)  09:00  c-tiny-1   [pinned, R22]
+ *    d-tiny   rr-r2-c1  2099-01-01 (Thu)  09:45  c-tiny-2
+ *    d-tiny   rr-r3-c1  2099-01-02 (Fri)  09:00  c-tiny-1
+ *    d-badminton rr-r1-c1 2099-01-01 (Thu) 11:15  c-tiny-2
+ *
+ *  Session windows: every start above falls inside its day's 08:00-20:00
+ *  window. Court hours: every start (09:00/09:45/11:15 Thu, 09:00 Fri) falls
+ *  inside 08:00-19:00 on a declared weekday. Blackout: `rr-r1-c1` on
+ *  `c-tiny-1` occupies [09:00,09:30) and the blackout is [09:30,12:00) —
+ *  abutting, not overlapping; `rr-r3-c1` is on `c-tiny-1` but day 2, outside
+ *  the blackout's single dated instant range; neither of the other two ever
+ *  touches `c-tiny-1`. Rest: `d-tiny`'s series is 09:00-09:30, 09:45-10:15,
+ *  next-day 09:00 — gaps of exactly 15 minutes then a full day, both ≥15.
+ *  Day cap (`every_entrant`, count 2): day 1 carries 2 `d-tiny` fixtures per
+ *  entrant (at the cap, not over it) and 1 `d-badminton` fixture for its own
+ *  two entrants; day 2 carries 1 `d-tiny` fixture. Nothing exceeds 2.
  *
  *  Rule 5 (`not_before`/`not_after`) stays DELIBERATELY unexercised — no
  *  `constraints.hard` entry of either type is declared here. `_tiny` is the
@@ -199,11 +237,14 @@ const TINY_SCHEDULE_CONFIG: NonNullable<PackInput["divisions"][number]["schedule
   courts: TINY_COURT_REFS.map((ref) => `@${ref}`),
   perEntrantMinRest: 15,
   blackouts: [
-    { court: `@${TINY_COURT_REFS[0]}`, from: "2099-01-01T12:00:00.000Z", to: "2099-01-01T12:30:00.000Z" },
+    { court: `@${TINY_COURT_REFS[0]}`, from: "2099-01-01T09:30:00.000Z", to: "2099-01-01T12:00:00.000Z" },
   ],
-  sessionWindows: [{ from: "2099-01-01T08:00:00.000Z", to: "2099-01-01T20:00:00.000Z" }],
+  sessionWindows: [
+    { from: "2099-01-01T08:00:00.000Z", to: "2099-01-01T20:00:00.000Z" },
+    { from: "2099-01-02T08:00:00.000Z", to: "2099-01-02T20:00:00.000Z" },
+  ],
   constraints: {
-    hard: [{ type: "max_fixtures_per_day", count: 3, scope: { kind: "every_entrant" } }],
+    hard: [{ type: "max_fixtures_per_day", count: 2, scope: { kind: "every_entrant" } }],
   },
 };
 
@@ -483,20 +524,22 @@ const TINY_ADAPTATIONS: PackInput["meta"]["adaptations"] = [
   },
   {
     what:
-      "B04 T7a: both courts now declare weekly `hours` (Thu/Fri/Sat 08:00-19:00), and the shared " +
-      "scheduleConfig declares a real perEntrantMinRest (15), one blackout, one session window and one " +
-      "max_fixtures_per_day hard rule (count 3, scoped every_entrant) — every one of them previously a " +
+      "B04 T7a (fix round 1): both courts declare weekly `hours` (Thu/Fri/Sat 08:00-19:00), and the " +
+      "shared scheduleConfig declares a real perEntrantMinRest (15), one blackout (c-tiny-1, day 1, " +
+      "09:30-12:00), two session windows (day 1 and day 2, day 3 deliberately absent) and one " +
+      "max_fixtures_per_day hard rule (count 2, scoped every_entrant) — every one of them previously a " +
       "vacuous sentinel (0 / [] / [] / no constraints.hard at all).",
     why:
-      "checker.ts's rules 2a (session windows), 2b (blackouts), 2c (court hours), 3 (rest) and 4 (day " +
-      "caps) could not fire on ANY input while _tiny, the only pack this bench runs, declared sentinel " +
-      "values for all five — a green live run reported CLEAN having measured half of what it claims. " +
-      "Each value is chosen to be satisfied by the schedule this pack's own live run actually produces " +
-      "and violable by a wrong one (proved in checker.test.ts against a hand-built board, not merely " +
-      "reachable) — see TINY_SCHEDULE_CONFIG's own comment for the per-value reasoning. Rule 5 " +
-      "(not_before/not_after) is deliberately LEFT vacuous: _tiny is the only pack this bench runs, so " +
-      "making all eight rules live would leave the report's own \"nothing to check\" unchecked-list " +
-      "section with an empty list on every real run — the same vacuous-report trap one level up.",
+      "checker.ts's rules 2a/2b/2c/3/4 could not fire on ANY input while _tiny, the only pack this " +
+      "bench runs, declared sentinel values for all five — a green live run reported CLEAN having " +
+      "measured half of what it claims. T7a's first cut used count: 3, pinned at the cap BY THE " +
+      "FIXTURE COUNT ITSELF (both d-tiny entrants play exactly 3 fixtures) — no real defect could ever " +
+      "exceed it, only a hand-added fourth fixture _tiny cannot produce. count: 2 forces the third " +
+      "fixture onto a second day on every real run, so the cap is both satisfied by the live schedule " +
+      "AND violable from _tiny's own three real fixtures (checker.test.ts proves both) — see " +
+      "TINY_SCHEDULE_CONFIG's own comment for the full reasoning and the exact satisfying schedule. " +
+      "Rule 5 stays deliberately vacuous: making all eight live would leave the report's own \"nothing " +
+      "to check\" section empty on every real run — the same vacuous-report trap one level up.",
     where:
       "venues[0].courts[0].hours, venues[0].courts[1].hours, divisions[0].scheduleConfig, " +
       "divisions[1].scheduleConfig",
