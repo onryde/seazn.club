@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { test, expect, type APIRequestContext, type Page } from "@playwright/test";
 import { seedSettingsOrg, releaseSettingsOrg, type SeededOrg } from "../settings-support";
-import { setOrgSubscriptionSql } from "../helpers";
+import { orgGroupIdSql, setOrgSubscriptionSql } from "../helpers";
 import { ORG_ADDON_RIDER_PLANS, money, orgAddonMinor } from "../price-kit";
 import { routes } from "../../src/lib/routes";
 
@@ -28,8 +28,15 @@ import { routes } from "../../src/lib/routes";
  * browser; `add-ons-page.test.tsx` renders the component with props handed to
  * it, which proves the component and not the wiring.
  *
- * THREE THINGS THE BRIEF FOR THIS FILE GOT WRONG, all corrected here and all
+ * FOUR THINGS THE BRIEF FOR THIS FILE GOT WRONG, all corrected here and all
  * verified against the tree rather than assumed (AGENTS.md failure class 5):
+ *
+ *  0. The page is reached with `routes.addOns(slug)`, NOT
+ *     `settingsUrl(slug, "add-ons")`. `add-ons` is a `SettingsNavKey` with its
+ *     own route, not a `SettingsTab`, and `settings/page.tsx` falls an
+ *     unrecognised `?tab=` back to "organization" SILENTLY — so the brief's
+ *     spelling would have driven the organisation panel while every locator
+ *     below timed out. Exactly the class of bug Task 1 found for `connect`.
  *
  *  1. `POST /api/billing/extra-orgs` takes `{ count }` and NOTHING else — its
  *     Zod schema is `.strict()`, so the `{ org_id, count }` body the brief
@@ -81,6 +88,30 @@ const READ_MS = 20_000;
 const PLAN = "pro";
 
 let org: SeededOrg;
+
+/**
+ * Every org seeded INSIDE a test, registered at creation.
+ *
+ * A test-local `finally` is the fast path and not the guarantee: a Playwright
+ * `test.setTimeout` does not unwind the test function, so on a timeout the
+ * `finally` never runs — and a leaked seed permanently spends one of the shared
+ * Pro user's five owner slots for the rest of the leg, which then 402s some
+ * unrelated spec. This list is drained in `afterAll`, which DOES run.
+ * `releaseSettingsOrg` is documented safe to call twice, so the two paths
+ * cannot fight.
+ */
+const strays: SeededOrg[] = [];
+
+/** Seed an org for one test and register it for the drain in the same breath —
+ *  the two must never be separate statements, or a throw between them leaks. */
+async function seedStray(
+  request: APIRequestContext,
+  opts: { plan?: "community" | "pro"; label?: string },
+): Promise<SeededOrg> {
+  const seeded = await seedSettingsOrg(request, opts);
+  strays.push(seeded);
+  return seeded;
+}
 
 // ---------------------------------------------------------------------------
 // State the product itself has no path to set
@@ -144,6 +175,61 @@ async function makeGroupLive(seeded: SeededOrg, planKey = PLAN): Promise<void> {
 }
 
 /**
+ * Put the group into a state where it ALREADY HOLDS riders, and where some of
+ * them are being STOOD ON — the only way this file can witness a real
+ * `extraOrgCount` and a real `minExtraOrgs` rather than two zeroes that could
+ * not have come out any other way.
+ *
+ * Two rows, because one is not enough, and the arithmetic says why
+ * (`ridersInUse`, lib/billing-group.ts):
+ *
+ *     standingOnRiders = liveOrgs - base - grantedBonus
+ *     min              = max(0, min(standingOnRiders, purchased))
+ *
+ *  - `org_addons` (qty riders, group-wide) sets `purchased`, and so what the
+ *    stepper OPENS AT.
+ *  - `org_entitlement_overrides` drops `base` from the Pro plan's 5 to 0. A
+ *    seeded group has ONE organisation, so at a base of 5 `standingOnRiders`
+ *    is -4 and the floor is 0 no matter how many riders are bought — the floor
+ *    would be untestable, and asserting it at 0 would be asserting nothing.
+ *    At a base of 0 the group's single live organisation IS standing on a
+ *    rider, which is the state the floor exists for.
+ *
+ * `walletIdFor` is `coalesce(subscription_id, id)`, so the rider rows are keyed
+ * on the billing GROUP, and `target_org_id`/`target_competition_id` must be
+ * null — that is exactly what `getAddOnsTab` filters on to keep a seat or a
+ * competition-scoped grant out of this count. `status: 'active'`, not
+ * 'granted': a granted comp counts toward capacity but is deliberately NOT
+ * cancellable in the stepper.
+ */
+async function seedRiders(orgId: string, qty: number, base: number): Promise<void> {
+  const groupId = await orgGroupIdSql(orgId);
+  await withDb(async (sql) => {
+    await sql`
+      insert into org_entitlement_overrides (org_id, feature_key, int_value, reason)
+      values (${orgId}::uuid, 'orgs.max_owned', ${base}, 'e2e W4 add-ons floor fixture')
+      on conflict (org_id, feature_key) do update set int_value = excluded.int_value`;
+    await sql`
+      insert into org_addons
+        (wallet_id, target_org_id, target_competition_id, feature_key, delta_each, qty, status)
+      values (${groupId}, null, null, 'orgs.max_owned', 1, ${qty}, 'active')`;
+  });
+}
+
+/** Undo {@link seedRiders}. Idempotent, and run both in the test's own
+ *  `finally` (so the tests that follow see a clean group) and again in
+ *  `afterAll` (so a timeout cannot leave the rows behind). */
+async function clearRiderFixtures(orgId: string): Promise<void> {
+  const groupId = await orgGroupIdSql(orgId);
+  await withDb(async (sql) => {
+    await sql`delete from org_addons where wallet_id = ${groupId}`;
+    await sql`
+      delete from org_entitlement_overrides
+       where org_id = ${orgId}::uuid and feature_key = 'orgs.max_owned'`;
+  });
+}
+
+/**
  * `POST /api/billing/extra-orgs`, naming the org in the header the product's
  * own client seams stamp (`x-seazn-org`, lib/org-scope.ts).
  *
@@ -193,14 +279,32 @@ test.beforeAll(async ({ browser }) => {
 });
 
 test.afterAll(async ({ browser }) => {
-  // The release lives here, never in a `finally` inside a test: a Playwright
-  // `test.setTimeout` does not unwind the test function, so a `finally` there
-  // never runs and a leaked seed spends one of the shared Pro user's five
-  // owner slots for the rest of the leg.
-  if (!org) return;
+  // EVERY release lives here, never only in a `finally` inside a test: a
+  // Playwright `test.setTimeout` does not unwind the test function, so a
+  // `finally` there never runs and a leaked seed spends one of the shared Pro
+  // user's five owner slots for the rest of the leg.
   const ctx = await browser.newContext();
   try {
-    await releaseSettingsOrg(ctx.request, org);
+    // The rider fixtures first — they are rows this file wrote by hand, and
+    // nothing else deletes them (`org_addons.wallet_id` is plain text with no
+    // FK, so dropping the organisation would orphan rather than cascade them).
+    // Swallowed: the RELEASES below are the obligation, and one DB blip here
+    // must not skip them.
+    try {
+      if (org) await clearRiderFixtures(org.orgId);
+    } catch {
+      // the releases are still owed
+    }
+    // Drained one at a time, each guarded, so one failure cannot strand the
+    // rest. Every one of these is idempotent.
+    for (const stray of strays.splice(0)) {
+      try {
+        await releaseSettingsOrg(ctx.request, stray);
+      } catch {
+        // best effort; the next stray still gets its turn
+      }
+    }
+    if (org) await releaseSettingsOrg(ctx.request, org);
   } finally {
     await ctx.close();
   }
@@ -377,12 +481,18 @@ test("the ceiling the stepper declares is the ceiling the route enforces", async
   ).toHaveCount(0);
 
   // The other side of the boundary, so the refusal is about the ceiling rather
-  // than about any large-looking number.
+  // than about any large-looking number. `aria-invalid` is asserted in BOTH
+  // directions: a field hardcoded to "true" would satisfy the assertion above
+  // on its own, and screen-reader users would be told a legal value is invalid.
   await count.fill(String(max));
   await expect(
     page.getByText(ui("addOns.extraOrg.outOfRange", { min: 0, max })),
     "at the ceiling, the complaint clears",
   ).toHaveCount(0);
+  await expect(count, "…and the field is marked valid again").toHaveAttribute(
+    "aria-invalid",
+    "false",
+  );
   await expect(saveButton(page), "…and the save is offered").toBeVisible();
 
   // The server's own answer, reached before any Stripe call (the count check is
@@ -392,8 +502,12 @@ test("the ceiling the stepper declares is the ceiling the route enforces", async
   // have drifted before in this repo.
   const refused = await postExtraOrgs(request, org.slug, { count: max + 1 });
   expect(refused.status, "one past the ceiling").toBe(422);
+  // Anchored on the END of the sentence, not on the bare number: the route says
+  // "…must be an integer between 0 and 50.", and a bound that silently drifted
+  // to 500 would still CONTAIN "50". The terminating "." is what makes this
+  // read the whole number rather than a prefix of a larger one.
   expect(refused.error, "the route refuses on the same bound the control declares").toContain(
-    String(max),
+    ` and ${max}.`,
   );
 });
 
@@ -409,7 +523,7 @@ test("the API refuses a group with no live subscription — 409, and the tab nev
   // Its own org, and this is the isolation case design §3 sanctions extra orgs
   // for: the state under test is "no live subscription", which is exactly the
   // state the shared org in this file has been moved out of.
-  const community = await seedSettingsOrg(request, { plan: "community", label: "W4-addons-nosub" });
+  const community = await seedStray(request, { plan: "community", label: "W4-addons-nosub" });
   try {
     const refused = await postExtraOrgs(request, community.slug, { count: 1 });
     expect(refused.status, "a group with nothing to attach an item to").toBe(409);
@@ -446,7 +560,7 @@ test("…and refuses a live subscription on a plan the catalog sells no rider fo
   ).not.toContain("community");
   expect(ORG_ADDON_RIDER_PLANS.length, "…and some plan must have one").toBeGreaterThan(0);
 
-  const community = await seedSettingsOrg(request, { plan: "community", label: "W4-addons-sku" });
+  const community = await seedStray(request, { plan: "community", label: "W4-addons-sku" });
   try {
     // A live subscription ON COMMUNITY: contrived, but it is the only way to
     // reach the SECOND 409 — the first guard would otherwise answer for it, and
@@ -464,5 +578,72 @@ test("…and refuses a live subscription on a plan the catalog sells no rider fo
     ).not.toContain("active paid subscription");
   } finally {
     await releaseSettingsOrg(request, community);
+  }
+});
+
+/**
+ * LAST IN THE FILE ON PURPOSE. It is the only test that writes rider rows onto
+ * the shared org, and `mode: "default"` runs tests in declaration order — so if
+ * its cleanup were ever skipped (a `test.setTimeout` does not unwind the
+ * function), no later test can inherit the mess. `afterAll` clears the rows
+ * regardless.
+ */
+test("a group that already holds riders opens at what it holds, and cannot reduce below what is standing on them", async ({
+  page,
+}: {
+  page: Page;
+}) => {
+  test.setTimeout(budget(1, 0));
+
+  await makeGroupLive(org);
+  // 2 riders bought, plan base dropped to 0 — see seedRiders for why the base
+  // has to move for the floor to be reachable at all.
+  await seedRiders(org.orgId, 2, 0);
+  try {
+    await page.goto(routes.addOns(org.slug));
+    const count = countField(page);
+    await expect(count).toBeVisible({ timeout: READ_MS });
+
+    // The whole point of this case: a value that could NOT have arrived by
+    // default. Everywhere else in this file the group holds nothing, so "opens
+    // at 0" is what an unwired control would also show.
+    await expect(count, "the stepper opens at the riders the group is billed for").toHaveValue(
+      "2",
+    );
+    // …and the FLOOR is likewise a real number, not zero-by-luck: one live
+    // organisation is standing on one rider, so the customer may cancel one and
+    // no more.
+    await expect(count, "the floor is what is being stood on, not zero").toHaveAttribute(
+      "min",
+      "1",
+    );
+    await expect(
+      page.getByText(ui("addOns.extraOrg.floorNote", { min: 1 })),
+      "…and the page says why, naming that number",
+    ).toBeVisible();
+
+    const decrease = page.getByRole("button", { name: ui("addOns.extraOrg.decrease") });
+    await expect(decrease, "above the floor, a reduction is offered").toBeEnabled();
+    await decrease.click();
+    await expect(count).toHaveValue("1");
+    await expect(decrease, "at the floor, it is dead — the 423 never has to fire").toBeDisabled();
+
+    // Below the floor by hand, which the stepper cannot reach: the control must
+    // still refuse it, or the route's 423 becomes the customer's first contact
+    // with a rule the page already knew.
+    const max = Number(await count.getAttribute("max"));
+    await count.fill("0");
+    await expect(
+      page.getByText(ui("addOns.extraOrg.outOfRange", { min: 1, max })),
+      "typing below the floor is refused in the control, naming the floor",
+    ).toBeVisible();
+    await expect(count, "…and the field is marked invalid").toHaveAttribute(
+      "aria-invalid",
+      "true",
+    );
+    await expect(saveButton(page), "…and no save is offered for it").toHaveCount(0);
+  } finally {
+    // Fast path; `afterAll` is the guarantee.
+    await clearRiderFixtures(org.orgId);
   }
 });
