@@ -14,7 +14,7 @@ function keysFor(locale: string): string[] {
   const dir = join(DICT_DIR, locale);
   return readdirSync(dir)
     .filter((f) => f.endsWith(".json"))
-    .flatMap((f) => flattenKeys(JSON.parse(readFileSync(join(dir, f), "utf8"))));
+    .flatMap((f) => flattenKeys(JSON.parse(readFileSync(join(dir, f), "utf8")) as Record<string, unknown>));
 }
 
 const enKeys = keysFor(EN);

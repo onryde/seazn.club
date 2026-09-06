@@ -25,17 +25,12 @@ export default defineConfig([
     // `openapi:gen`. Linting output is linting the generator twice.
     "openapi/**",
     "bench-report/**",
-    // The REST of scripts/ is not linted yet, and this is a scope line rather
-    // than an oversight. Pointing this config at the whole tree reports 519
-    // errors, almost all in `smoke.ts` (18k lines) and the older generators —
-    // mostly `no-unnecessary-type-assertion`, which is worth fixing and is not
-    // this wave's to fix. `lint:scripts` therefore runs `scripts/bench` only.
-    //
-    // Widening it is a small, separate change: drop this ignore, run
-    // `eslint scripts --fix` (280 of the 519 are auto-fixable), and read the
-    // remainder. Left undone deliberately, not forgotten.
-    "scripts/*.ts",
-    "scripts/build-packs/**",
+    // `scripts/*.ts` and `scripts/build-packs/**` were ignored here until
+    // 2026-09-06, on the reasoning that pointing the config at them reported
+    // ~500 errors that were not that wave's to fix. They are now linted: the
+    // measured 498 came down to 0, and what could not be fixed honestly is
+    // relaxed by NAME below rather than hidden behind a path glob. A glob
+    // silently absorbs new files; a named list does not.
   ]),
 
   js.configs.recommended,
@@ -73,6 +68,42 @@ export default defineConfig([
         "error",
         { "ts-ignore": true, "ts-expect-error": "allow-with-description" },
       ],
+    },
+  },
+
+  {
+    // The three scripts that predate this gate and read untyped JSON straight
+    // off `fetch`. Each has exactly ONE helper whose return type is `any` —
+    // `seed-demo.ts`'s `call()`, `seed-fifa2026.ts`'s `call<T = any>()`, and
+    // `repro-ai-bracket-frozen-feeder.ts`'s `call()` — and every downstream
+    // member access inherits it. That accounts for 205 of the 498 errors this
+    // tree carried when the gate was switched on (2026-09-06). The other 293
+    // are FIXED, not suppressed: 271 by `eslint --fix`, 20 by hand, and two
+    // pinned to named lines in `smoke.ts`, which has the same `call()` shape
+    // but keeps all six rules on everywhere else.
+    //
+    // Relaxed rather than typed BECAUSE typing them means writing ~200
+    // response shapes inferred from call sites, for APIs these scripts can
+    // only be exercised against with a live server and a seeded database.
+    // A wrong shape compiles and then reads as fact, which is worse than an
+    // honest `any`. Closing this is per-file work with a clear finish line:
+    // give that file's `call()` a real return type, fix what reds, delete its
+    // entry here.
+    //
+    // Every OTHER rule still applies to these files, and no new file joins
+    // this list without editing it.
+    files: [
+      "scripts/seed-demo.ts",
+      "scripts/seed-fifa2026.ts",
+      "scripts/repro-ai-bracket-frozen-feeder.ts",
+    ],
+    rules: {
+      "@typescript-eslint/no-explicit-any": "off",
+      "@typescript-eslint/no-unsafe-argument": "off",
+      "@typescript-eslint/no-unsafe-assignment": "off",
+      "@typescript-eslint/no-unsafe-call": "off",
+      "@typescript-eslint/no-unsafe-member-access": "off",
+      "@typescript-eslint/no-unsafe-return": "off",
     },
   },
 

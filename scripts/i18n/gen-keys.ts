@@ -20,7 +20,7 @@ const OUT = join(here, "../../apps/web/src/lib/i18n-keys.ts");
 
 const keys = new Set<string>();
 for (const f of readdirSync(EN_DIR).filter((f) => f.endsWith(".json"))) {
-  for (const k of flattenKeys(JSON.parse(readFileSync(join(EN_DIR, f), "utf8")))) keys.add(k);
+  for (const k of flattenKeys(JSON.parse(readFileSync(join(EN_DIR, f), "utf8")) as Record<string, unknown>)) keys.add(k);
 }
 
 const union = [...keys].sort();

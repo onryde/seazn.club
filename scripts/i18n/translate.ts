@@ -62,8 +62,8 @@ export async function translateBatch(
 
 async function main(): Promise<void> {
   const client = new Anthropic();
-  const glossary = existsSync(GLOSSARY) ? JSON.parse(readFileSync(GLOSSARY, "utf8")) : {};
-  const manifest: Manifest = existsSync(MANIFEST) ? JSON.parse(readFileSync(MANIFEST, "utf8")) : {};
+  const glossary: unknown = existsSync(GLOSSARY) ? JSON.parse(readFileSync(GLOSSARY, "utf8")) : {};
+  const manifest: Manifest = existsSync(MANIFEST) ? (JSON.parse(readFileSync(MANIFEST, "utf8")) as Manifest) : {};
 
   const namespaces = readdirSync(join(DICT, EN))
     .filter((f) => f.endsWith(".json"))

@@ -17,7 +17,7 @@ import { createRequire } from "node:module";
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 // Playwright is a devDependency of apps/web — resolve it from there.
 const require = createRequire(join(root, "apps", "web", "package.json"));
-// eslint-disable-next-line @typescript-eslint/no-require-imports
+ 
 const { chromium } = require("playwright") as typeof import("playwright");
 
 const BASE = process.env.SHOTS_BASE ?? "http://localhost:3000";

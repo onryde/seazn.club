@@ -105,8 +105,8 @@ async function raw(s: Session, path: string, method = "GET", body?: unknown) {
 }
 async function call(s: Session, path: string, method = "GET", body?: unknown) {
   const { json } = await raw(s, path, method, body);
-  if ((json as any).ok === false) throw new Error(`${path}: ${(json as any).error}`);
-  return (json as any).data;
+  if ((json).ok === false) throw new Error(`${path}: ${(json).error}`);
+  return (json).data;
 }
 async function signIn(s: Session, email: string) {
   const req = (await call(s, "/api/auth/magic-link", "POST", { email })) as { login_url?: string };
@@ -151,7 +151,7 @@ async function setPlan(orgId: string, plan: string): Promise<void> {
                ${plan}, 'active'
           from organizations o where o.id = ${orgId}
         returning id`;
-      await sql`update organizations set subscription_id = ${group!.id} where id = ${orgId}`;
+      await sql`update organizations set subscription_id = ${group.id} where id = ${orgId}`;
     }
   } finally {
     await sql.end();

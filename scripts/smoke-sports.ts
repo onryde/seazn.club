@@ -78,7 +78,8 @@ let pass = 0;
 let fail = 0;
 const check = (label: string, cond: boolean, detail?: string) => {
   console.log(`${cond ? "PASS" : "FAIL"}  ${label}${cond || !detail ? "" : `  [${detail}]`}`);
-  cond ? pass++ : fail++;
+  if (cond) pass++;
+  else fail++;
 };
 
 const tag = Date.now().toString(36);
@@ -106,7 +107,7 @@ async function seedCatalog(): Promise<void> {
     for (const m of builtinModules) {
       await sql`
         insert into sports (key, name, module_version, position_catalog)
-        values (${m.key}, ${m.key}, ${m.version}, ${sql.json(m.positions as never)})
+        values (${m.key}, ${m.key}, ${m.version}, ${sql.json(m.positions)})
         on conflict (key) do update set
           module_version = excluded.module_version,
           position_catalog = excluded.position_catalog`;
@@ -145,7 +146,7 @@ async function setPlan(orgId: string, plan: string): Promise<void> {
                ${plan}, 'active'
           from organizations o where o.id = ${orgId}
         returning id`;
-      await sql`update organizations set subscription_id = ${group!.id} where id = ${orgId}`;
+      await sql`update organizations set subscription_id = ${group.id} where id = ${orgId}`;
     }
   } finally {
     await sql.end();
@@ -442,7 +443,7 @@ const DRIVERS: SportDriver[] = [
     variantKey: "blitz",
     decideEvents: (fx) => [{ type: "boardgame.result", payload: { winner: fx.home } }],
     async edge(s, fx, label) {
-      let seq = await appendAll(
+      const seq = await appendAll(
         s,
         fx.id,
         [

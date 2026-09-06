@@ -263,7 +263,7 @@ async function setPro(orgId: string) {
            'pro', 'active'
       from organizations o where o.id = ${orgId}
     returning id`;
-  await sql`update organizations set subscription_id = ${group!.id} where id = ${orgId}`;
+  await sql`update organizations set subscription_id = ${group.id} where id = ${orgId}`;
 }
 
 async function ensureOrg(): Promise<string> {
@@ -386,7 +386,7 @@ async function main() {
           display_name: nameFor(code),
           seed: seedForGroup(GROUPS.indexOf(g), slot),
           members,
-          badge_url: flagUrl(data.teams[code]!.iso2), // v13: national flag as the entrant badge
+          badge_url: flagUrl(data.teams[code].iso2), // v13: national flag as the entrant badge
         });
         codeToEntrant.set(code, entrant.id);
         console.log(
@@ -461,7 +461,7 @@ async function main() {
   await call(`/api/v1/divisions/${divId}/start`, "POST").catch((e) => {
     if (!/already|started/i.test(String(e))) throw e;
   });
-  const gen = await call<{ fixtures: any[] }>(`/api/v1/stages/${groupStage!.id}/generate`, "POST");
+  const gen = await call<{ fixtures: any[] }>(`/api/v1/stages/${groupStage.id}/generate`, "POST");
 
   // 4) Apply real group scores + dates. Map each real match to its fixture by
   //    unordered entrant pair; goals attributed by entrant id (orientation-free).
@@ -510,7 +510,7 @@ async function main() {
   }
 
   // 5) Complete group stage → knockout bracket seeds from real standings.
-  await call(`/api/v1/stages/${groupStage!.id}/complete`, "POST").catch((e) => {
+  await call(`/api/v1/stages/${groupStage.id}/complete`, "POST").catch((e) => {
     if (!/complete/i.test(String(e))) throw e;
   });
 
@@ -525,8 +525,8 @@ async function main() {
       if (id) seedOf.set(id, seedForGroup(GROUPS.indexOf(g), slot));
     });
   }
-  const kgen = await call<{ fixtures: any[] }>(`/api/v1/stages/${koStage!.id}/generate`, "POST");
-  let koFixtures: any[] = kgen.fixtures;
+  const kgen = await call<{ fixtures: any[] }>(`/api/v1/stages/${koStage.id}/generate`, "POST");
+  const koFixtures: any[] = kgen.fixtures;
 
   // v13 verification: the engine-combined qualification + DEMO_SLOT_ORDER must
   // reproduce the intended round-one map. Seeds 1-12/13-24 assert exactly

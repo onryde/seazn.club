@@ -163,6 +163,18 @@ jobs:
       - name: eslint
         run: npx turbo run lint
 
+      # `npx turbo run lint` above reaches only the pnpm workspaces —
+      # `apps/*` and `packages/*` (pnpm-workspace.yaml) — so everything under
+      # `scripts/` had NO lint gate between push and merge: the bench, the
+      # smoke runner, the i18n generators, the migration helpers. The
+      # `lint:scripts` script existed and was chained into root `npm run lint`,
+      # which is its only caller and which CI never invokes, so it ran for
+      # nobody. Found 2026-09-06 with `scripts/bench` carrying 13 errors and
+      # `scripts/i18n` 4 — same shape as #344's finding above, and gated the
+      # same way: blocking, errors only.
+      - name: eslint (scripts/)
+        run: npm run lint:scripts
+
       # Scheduler bench's own library code (B01, scripts/bench/lib/**) —
       # pre-flight orchestration and the report schema/writer. DB-free BY
       # DESIGN (env.ts's PreflightProbes injection exists specifically so

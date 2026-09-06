@@ -227,7 +227,7 @@ async function main(): Promise<void> {
         skippedStripeUnreadable++;
         console.warn(
           `SKIP subscription=${sub.id} customer=${sub.stripe_customer_id}: ` +
-            `could not list balance transactions (${err instanceof Error ? err.message : err})`,
+            `could not list balance transactions (${err instanceof Error ? err.message : String(err)})`,
         );
         continue;
       }
@@ -285,7 +285,7 @@ async function main(): Promise<void> {
         );
       }
 
-      const chosen = candidates[0]!;
+      const chosen = candidates[0];
 
       // competition_id is NOT NULL on pass_credit_redemptions and is not on
       // the Stripe transaction, so it has to come from the pass row the
@@ -305,7 +305,7 @@ async function main(): Promise<void> {
         skippedDbError++;
         console.warn(
           `SKIP subscription=${sub.id} org=${chosen.orgId} intent=${chosen.intent}: ` +
-            `could not read competition_passes (${err instanceof Error ? err.message : err}) ` +
+            `could not read competition_passes (${err instanceof Error ? err.message : String(err)}) ` +
             `— transient DB error, re-run to retry this subscription`,
         );
         continue;
@@ -331,7 +331,7 @@ async function main(): Promise<void> {
         skippedDbError++;
         console.warn(
           `SKIP subscription=${sub.id} org=${chosen.orgId} intent=${chosen.intent}: ` +
-            `could not read organizations (${err instanceof Error ? err.message : err}) ` +
+            `could not read organizations (${err instanceof Error ? err.message : String(err)}) ` +
             `— transient DB error, re-run to retry this subscription`,
         );
         continue;

@@ -54,7 +54,7 @@ const listRes = await fetch(`${BASE}/models`, {
   headers: { authorization: `Bearer ${KEY}` },
 });
 if (!listRes.ok) throw new Error(`models list failed: HTTP ${listRes.status}`);
-const models: OpenRouterModel[] = (await listRes.json()).data;
+const models = ((await listRes.json()) as { data: OpenRouterModel[] }).data;
 
 const derived = eligibleCandidates(models);
 const derivedIds = new Set(derived.map((c) => c.id));
