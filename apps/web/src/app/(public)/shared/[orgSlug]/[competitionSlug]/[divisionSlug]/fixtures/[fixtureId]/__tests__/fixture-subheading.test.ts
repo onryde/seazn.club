@@ -15,4 +15,14 @@ describe("fixtureSubheading", () => {
     expect(result).not.toBe("Time TBD");
     expect(result).not.toBe("Live");
   });
+
+  // Task 14 — the page now passes the localised `matchCentre.status.live`
+  // word instead of relying on the bare English default.
+  it("uses the given liveLabel for an in-play fixture with no scheduled time", () => {
+    expect(fixtureSubheading("in_play", null, "En direct")).toBe("En direct");
+  });
+
+  it("ignores liveLabel for a non-live status (still Time TBD)", () => {
+    expect(fixtureSubheading("scheduled", null, "En direct")).toBe("Time TBD");
+  });
 });

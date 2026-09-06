@@ -49,8 +49,29 @@ export interface TimelineTabProps {
  * ones `buildTimeline` fills from an enum (`colour`, `kind`, `phase`, `key`,
  * `method`, `to`). Everything else passes through untouched, which is what
  * protects side names, person names and free text.
+ *
+ * `elected` — Task 14 (spectator surface W1) — is a seventh: the cricket
+ * toss's `matchCentre.toss` Msg (`match-centre.ts`'s `buildCricketView`)
+ * fills it from `card.toss.elected`, the engine's own `z.enum(["bat",
+ * "bowl"])` (`packages/engine/src/sports/cricket/cricket.ts:242`), the same
+ * shape as every other member here. Left out, a French/Spanish/Dutch reader
+ * saw the bare English word "bat"/"bowl" inside an otherwise-translated
+ * sentence — the 8b review gap this task's dispatch named. `term.bat`/
+ * `term.bowl` were added to all four `public.json` files for it.
+ *
+ * `outcome` (football penalty/shot result — `ShotOutcome`/`PenaltyOutcome`,
+ * `packages/engine/src/sports/football/football.ts:306,399`) and `level`
+ * (`SetBasedSanctionLevel`, `packages/engine/src/sports/setbased/kernel.ts:
+ * 219`) are the SAME shape — a bare engine enum token landing in a Msg param
+ * — but were left OUT of this set deliberately: no `public.json` carries a
+ * `term.<value>` key for any of their members (scored/saved/missed/blocked;
+ * warning/penalty/expulsion/disqualification) in any locale, and this task's
+ * own dispatch restricts it to the toss/enum keys it actually needs — adding
+ * them here today would be a harmless no-op (an enum name with no matching
+ * `term.*` key falls through to the raw value, same as before), not a fix.
+ * Recorded for whichever task next adds those dictionary entries.
  */
-const ENUM_PARAMS = new Set(["colour", "kind", "phase", "key", "method", "to"]);
+const ENUM_PARAMS = new Set(["colour", "kind", "phase", "key", "method", "to", "elected"]);
 
 /** Bare engine tokens only: letters, digits and underscores. Belt and braces
  *  beside the name check — an enum member never contains a space. */

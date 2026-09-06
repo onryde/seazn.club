@@ -1,26 +1,28 @@
-// Spectator surface W1, Task 10 — placeholder tab panels. Task 11 replaced
-// the `summary` placeholder with the real `SummaryTab`; scorecard/commentary/
-// timeline/sets/info are still built by Tasks 12–13. Each placeholder takes
-// no parameters even though `TAB_PANELS`' value type is
-// `(props: TabPanelProps) => ReactNode` — TS structurally allows a function
-// with FEWER declared parameters to satisfy a type expecting more, so this
-// avoids an unused-`props` binding in components that have nothing to read
-// yet.
+// Spectator surface W1, Task 10 — the tab-id → panel map. Task 11 wired the
+// `summary` tab to the real `SummaryTab`; Tasks 12–13 built the real
+// scorecard/commentary/timeline/sets/info panels, and Task 14 wires the
+// remaining five here, retiring the five placeholders that used to stand in
+// for them (they returned `null` — see the report/git history for the
+// pre-Task-14 shape of this file). Every value is now a REAL panel: TS
+// structurally allows a function with fewer declared parameters to satisfy
+// `TabPanelProps` (several panels never read `subscribed`), which is why
+// their own signatures vary slightly and none of that needs papering over
+// here.
 //
-// Review fix round 2 — placeholders no longer render their own
-// `data-testid="mc-tab-panel-<id>"`: `MatchCentre`'s own tabpanel wrapper
-// (`match-centre.tsx`) now carries that testid ALONGSIDE its
-// `role="tabpanel"`/`id`/`aria-labelledby`, for every tab regardless of
-// whether its panel is a placeholder or a real one — a placeholder that
-// ALSO carried it would leave two elements with the SAME `data-testid` in
-// the DOM at once (a real, later-caught duplicate-testid bug, not a
-// hypothetical one). Placeholders return `null`; the wrapper's testid alone
-// is what every panel-identity assertion needs.
+// `data-testid="mc-tab-panel-<id>"` lives on `MatchCentre`'s own tabpanel
+// wrapper (`match-centre.tsx`), never on a panel's own root — see
+// `tab-panel.tsx`'s doc comment for why a panel declaring it too would
+// duplicate the id/role.
 import type { ReactNode } from "react";
 import type { Dict as PublicDict } from "@/lib/i18n-constants";
 import type { LiveFixtureData } from "../live-score-data";
 import type { MatchCentreDocT, MatchCentreTabIdT } from "@/server/public-site/match-centre-schema";
 import { SummaryTab } from "./summary-tab";
+import { ScorecardTab } from "./scorecard-tab";
+import { CommentaryTab } from "./commentary-tab";
+import { TimelineTab } from "./timeline-tab";
+import { SetsTab } from "./sets-tab";
+import { InfoTab } from "./info-tab";
 
 export interface TabPanelProps {
   doc: MatchCentreDocT;
@@ -36,31 +38,11 @@ export interface TabPanelProps {
   subscribed?: boolean;
 }
 
-export function ScorecardPanelPlaceholder(): ReactNode {
-  return null;
-}
-
-export function CommentaryPanelPlaceholder(): ReactNode {
-  return null;
-}
-
-export function TimelinePanelPlaceholder(): ReactNode {
-  return null;
-}
-
-export function SetsPanelPlaceholder(): ReactNode {
-  return null;
-}
-
-export function InfoPanelPlaceholder(): ReactNode {
-  return null;
-}
-
 export const TAB_PANELS: Record<MatchCentreTabIdT, (props: TabPanelProps) => ReactNode> = {
   summary: SummaryTab,
-  scorecard: ScorecardPanelPlaceholder,
-  commentary: CommentaryPanelPlaceholder,
-  timeline: TimelinePanelPlaceholder,
-  sets: SetsPanelPlaceholder,
-  info: InfoPanelPlaceholder,
+  scorecard: ScorecardTab,
+  commentary: CommentaryTab,
+  timeline: TimelineTab,
+  sets: SetsTab,
+  info: InfoTab,
 };

@@ -12,6 +12,7 @@
 import { beforeAll, describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import en from "@/dictionaries/en/public.json";
+import fr from "@/dictionaries/fr/public.json";
 import type { Dict } from "@/lib/i18n-constants";
 import { MatchCentreDoc, type MatchCentreDocT } from "@/server/public-site/match-centre-schema";
 import type { LiveFixtureData } from "../../live-score-data";
@@ -19,6 +20,7 @@ import { MatchCentre } from "../match-centre";
 import { SummaryTab } from "../summary-tab";
 
 const dict = en as Dict;
+const frDict = fr as Dict;
 
 function baseHeader(status: MatchCentreDocT["header"]["status"] = "in_play") {
   return {
@@ -337,6 +339,55 @@ describe("SummaryTab — cricket", () => {
     // satisfied by coincidence from an unrelated part of the page.
     const p2Start = html.indexOf('data-testid="mc-partnerships-2"');
     expect(html.slice(p2Start)).toMatch(/width:\s*0%/);
+  });
+});
+
+describe("SummaryTab — the toss line (Task 14, contract notes 8b review gap)", () => {
+  const tossDoc: MatchCentreDocT = {
+    ...cricketDoc,
+    fixtureId: "fx-toss",
+    cricket: {
+      ...cricketDoc.cricket!,
+      toss: { key: "matchCentre.toss", params: { side: "Home XI", elected: "bat" } },
+    },
+  };
+
+  beforeAll(() => {
+    MatchCentreDoc.parse(tossDoc);
+  });
+
+  it("a doc WITH a toss renders one line under the live block, in English", () => {
+    const html = renderToStaticMarkup(<SummaryTab doc={tossDoc} dict={dict} data={liveFixtureFor(tossDoc)} />);
+    expect(html).toContain('data-testid="mc-toss"');
+    expect(html).toContain("Home XI won the toss, elected to bat");
+  });
+
+  it("a doc WITHOUT a toss (cricketDoc's own toss: null) renders no mc-toss line — the positive pair above", () => {
+    const html = renderToStaticMarkup(<SummaryTab doc={cricketDoc} dict={dict} data={liveFixtureFor(cricketDoc)} />);
+    expect(html).not.toContain('data-testid="mc-toss"');
+  });
+
+  it("rendered with the FRENCH dict: the French toss sentence appears, 'bat' is swapped for the localised term, and no raw {elected}/params ever leaks", () => {
+    const html = renderToStaticMarkup(<SummaryTab doc={tossDoc} dict={frDict} data={liveFixtureFor(tossDoc)} />);
+    expect(html).toContain('data-testid="mc-toss"');
+    // The whole French sentence, `elected` swapped for `term.bat` — proves
+    // BOTH the outer Msg (`matchCentre.toss`) and the enum param went
+    // through the French dictionary, not the English fallback.
+    expect(html).toContain(
+      `Home XI a gagné le tirage au sort, a choisi ${frDict["term.bat"] as string}`,
+    );
+    expect(html).not.toContain("elected to bat"); // no English leak
+    expect(html).not.toContain("{elected}"); // no unfilled param leak
+  });
+
+  it("'bowl' is swapped for its own localised term, distinct from 'bat' — a positive/negative pair on the enum's OTHER member", () => {
+    const bowlDoc: MatchCentreDocT = {
+      ...tossDoc,
+      cricket: { ...tossDoc.cricket!, toss: { key: "matchCentre.toss", params: { side: "Away XI", elected: "bowl" } } },
+    };
+    const html = renderToStaticMarkup(<SummaryTab doc={bowlDoc} dict={frDict} data={liveFixtureFor(bowlDoc)} />);
+    expect(html).toContain(frDict["term.bowl"] as string);
+    expect(html).not.toContain(frDict["term.bat"] as string);
   });
 });
 

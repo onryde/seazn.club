@@ -1,14 +1,18 @@
 "use client";
-// Live scoreboard for the public match page (doc 09 §2). Entitlement split
-// (doc 09 §4): Pro orgs get Supabase Realtime push on `fixture:{id}`; everyone
-// falls back to 15 s polling of the public fixture endpoint.
+// `LiveScoreBody` — the score-strip/set-scoreboard/period/discipline
+// rendering for the public match page (doc 09 §2), pure and hookless.
 //
-// Task 10 (spectator surface W1) lifted the transport (poll/realtime/debounce)
-// out into `useLiveFixture` (`./match-centre/use-live-fixture.ts`), shared
-// with the new `MatchCentre` root, so this file now only delegates to it and
-// renders. `LiveScoreBody` is exported separately (no behaviour change) so a
-// later task can reuse today's JSX from inside the match centre's own summary
-// tab without a second copy of it.
+// Task 10 (spectator surface W1) lifted the transport (poll/realtime/
+// debounce, doc 09 §4's Pro-realtime/community-poll split) out into
+// `useLiveFixture` (`./match-centre/use-live-fixture.ts`), shared by the new
+// `MatchCentre` root; Task 14 retired this file's own `LiveScore` wrapper
+// (the transport + this body, composed for the legacy fixture page) once the
+// fixture detail page switched to rendering `<MatchCentre>` directly —
+// `MatchCentre` calls `useLiveFixture` itself and falls back to
+// `LiveScoreBody` only for a missing/empty document (`match-centre.tsx`) or
+// a non-cricket/pre-play `SummaryTab` (`summary-tab.tsx`). Both of those
+// call sites import `LiveScoreBody` directly; nothing imports `LiveScore`
+// any more.
 import type { Dict } from "@/lib/i18n-constants";
 import { t } from "@/lib/i18n-runtime";
 import en from "@/dictionaries/en/public.json";
@@ -27,54 +31,8 @@ import {
   shootoutScoreFromDetail,
   type DecidedOutcomeTemplates,
 } from "@/lib/scoring-vocab";
-import { useLiveFixture } from "./match-centre/use-live-fixture";
 
 export type { LiveFixtureData };
-
-interface Props {
-  fixtureId: string;
-  initial: LiveFixtureData;
-  realtime: boolean; // org entitlement, resolved server-side
-  entrantNames: Record<string, string>;
-  sportKey: string;
-  /**
-   * R3.5/Task O — the decided-fixture sentence's pre-localized templates,
-   * resolved ONCE server-side (`decidedOutcomeTemplates`, `@/lib/
-   * scoring-vocab`) by the page component, which has a dictionary this
-   * client island does not. Every live poll/realtime update interpolates a
-   * NEW `data.outcome` into these SAME strings via `renderDecidedOutcome`,
-   * so the sentence updates live instead of only on the next full page
-   * load — the gap this task exists to close (see `live-score-no-i18n`).
-   */
-  decidedTemplates: DecidedOutcomeTemplates;
-}
-
-export function LiveScore({
-  fixtureId,
-  initial,
-  realtime,
-  entrantNames,
-  sportKey,
-  decidedTemplates,
-}: Props) {
-  const { data, transport } = useLiveFixture(fixtureId, initial, realtime);
-  // Called as a plain function, not `<LiveScoreBody .../>` — `LiveScoreBody`
-  // is hookless (no local state of its own; everything it renders is derived
-  // from `data`/`entrantNames`/etc. on every call), so this is behaviourally
-  // identical to JSX composition and keeps `LiveScore`'s OWN returned tree
-  // flat, exactly as it was before this task's extraction — the
-  // `_hook-harness`-driven `live-score.test.tsx` walks that tree directly
-  // (`island.text()`), and a `<LiveScoreBody/>` element would be an opaque,
-  // unexpanded leaf to it (the harness renders one function component one
-  // level deep, by design — see `_hook-harness.tsx`'s own doc comment).
-  return LiveScoreBody({
-    data,
-    entrantNames,
-    sportKey,
-    decidedTemplates,
-    subscribed: transport === "realtime",
-  });
-}
 
 interface LiveScoreBodyProps {
   data: LiveFixtureData;
@@ -83,11 +41,11 @@ interface LiveScoreBodyProps {
   decidedTemplates: DecidedOutcomeTemplates;
   /**
    * Task 11 review fix round 1 — now actually consumed (status text,
-   * "Winner:"). Optional so `LiveScore`'s own caller (the fixture detail
-   * page, which has no dictionary — R3.5/Task O's whole reason
-   * `decidedTemplates` is pre-resolved server-side instead) keeps working
-   * unchanged: an absent `dict` falls back to the English `public.json`
-   * import below, which is byte-for-byte what these strings already were.
+   * "Winner:"). Optional so a caller with no dictionary in hand (R3.5/Task
+   * O's whole reason `decidedTemplates` is pre-resolved server-side instead)
+   * keeps working unchanged: an absent `dict` falls back to the English
+   * `public.json` import below, which is byte-for-byte what these strings
+   * already were.
    */
   dict?: Dict;
   /**

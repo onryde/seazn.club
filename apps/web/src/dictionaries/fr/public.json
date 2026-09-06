@@ -213,6 +213,8 @@
   "term.SHOOTOUT": "Tirs au but",
   "term.motm": "Homme du match",
   "term.mvp": "Joueur le plus utile",
+  "term.bat": "de battre",
+  "term.bowl": "de lancer",
   "matchCentre.col.side": "Équipe",
   "timeline.core.lineup.unknownSide": "Changement de composition",
   "term.short.H1": "1st",

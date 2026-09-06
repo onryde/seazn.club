@@ -13,6 +13,11 @@ import { LiveScoreBody } from "../live-score";
 import { StatTable, type StatColumn } from "./stat-table";
 import { Glyph } from "./glyphs";
 import { EMPTY_DECIDED_TEMPLATES } from "./decided-templates";
+// Task 14 (contract notes, 8b review gap) — the toss line's `elected` param
+// ("bat"/"bowl", the engine's own `z.enum`) needs the SAME enum→term swap
+// the Timeline already does for `colour`/`kind`/`phase`/etc.; reused rather
+// than re-implemented so both tabs localise the same way.
+import { localiseParams } from "./timeline-tab";
 
 export interface SummaryTabProps {
   doc: MatchCentreDocT;
@@ -63,6 +68,15 @@ export function SummaryTab({ doc, dict, data, subscribed }: SummaryTabProps) {
   return (
     <div className="space-y-4">
       {cricket.live ? <LiveBlock live={cricket.live} dict={dict} /> : null}
+      {/* Contract notes (Task 14, 8b review gap) — `CricketViewT.toss` was
+          emitted by the builder (Task 6) but rendered by nothing. One line
+          under the live block, absent when the document carries no toss
+          (a super over, or a document built before a toss was recorded). */}
+      {cricket.toss ? (
+        <p data-testid="mc-toss" className="text-sm text-ink-muted">
+          {t(dict, cricket.toss.key, localiseParams(dict, cricket.toss.params))}
+        </p>
+      ) : null}
       <TopPerformers performers={cricket.topPerformers} dict={dict} />
       {cricket.innings.map((innings) => (
         <div key={innings.number} className="space-y-4">

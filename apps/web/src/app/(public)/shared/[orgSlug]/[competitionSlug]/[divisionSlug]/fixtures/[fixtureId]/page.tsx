@@ -1,19 +1,36 @@
 // Live match page (doc 09 §2): render-agnostic scoreboard from the fold
 // cache's ScoreSummary, live via realtime push (Pro) or 15 s polling, with
 // SportsEvent JSON-LD (doc 09 §3).
+//
+// Task 14 (spectator surface W1) replaced the legacy `<LiveScore>` scorebug
+// with the full match centre (`<MatchCentre>`, Task 10's shell + Tasks
+// 11-13's real tab panels): `initial` is built here from the SAME
+// `getPublicFixture` result the poll endpoint's own `match_centre` field
+// mirrors (`server/public-site/data.ts`), so first paint and every refresh
+// after it render the identical document shape (rule R10). `ShareButton`'s
+// `useMsg()` (ui.json) needs a `<DictProvider>` ancestor to see the request
+// locale at all — this route had none before this task, so its "Share on
+// WhatsApp"/"Copied" labels always rendered in English regardless of
+// `org.default_locale`; wrapping the page fixes that for real, the same
+// convention `(public)/r/[ref]/page.tsx` already uses.
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import type { Metadata } from "next";
 import { getPublicFixture } from "@/server/public-site/data";
 import { sportsEventJsonLd } from "@/lib/public-site";
 import { publicThemeStyle } from "@/lib/public-theme";
-import { LiveScore } from "@/components/public-site/live-score";
+import { MatchCentre } from "@/components/public-site/match-centre/match-centre";
+import type { LiveFixtureData } from "@/components/public-site/live-score-data";
 import { ShareButton } from "@/components/share-button";
+import { DictProvider } from "@/components/i18n/dict-provider";
 import { fixtureSubheading } from "./fixture-subheading";
 import { resolveSlotLabel } from "@/lib/slot-label";
 import { toLocale } from "@/lib/i18n-constants";
+import type { Dict } from "@/lib/i18n-constants";
 import { msgFor } from "@/lib/messages-i18n";
-import { decidedOutcomeText, decidedOutcomeTemplates, shootoutScoreFromDetail } from "@/lib/scoring-vocab";
+import { getDictionary, t } from "@/lib/i18n";
+import type { MatchCentreDocT } from "@/server/public-site/match-centre-schema";
+import { decidedOutcomeText, shootoutScoreFromDetail } from "@/lib/scoring-vocab";
 // P6 fix round 1, finding #2 (CRITICAL) — org.default_locale, same pattern
 // as data.ts:502-503 and every other public surface this fix round wires.
 // This IS a server component and getPublicFixture already carries `org`, so
@@ -52,13 +69,43 @@ function withDecidedLine(headline: string | undefined, decidedLine: string | nul
   return headline ? `${headline} — ${decidedLine}` : decidedLine;
 }
 
-export const revalidate = 30;
-
-// ISR (task-8): empty-array generateStaticParams is required for on-demand
-// ISR on a dynamic segment in this Next version — see generate-static-params.md.
-export async function generateStaticParams() {
-  return [];
+/**
+ * Task 14 — the decided fixture's raw score lines ("HOM 156/6" ·
+ * "AWY 98 all out") plus the localised result sentence, straight off the
+ * SAME match-centre document the page's own `<MatchCentre>` (and every
+ * live poll after it) renders — never re-derived from `fixture.outcome`/
+ * `summary` a second way. `null` when the document has neither (a decided
+ * fixture the builder could not resolve a header for), so a title never
+ * grows a bare "()".
+ */
+function scoreAndResultFor(matchCentre: MatchCentreDocT, dict: Dict): string | null {
+  const scoreParts = matchCentre.header.sides
+    .map((side, i) => {
+      const line = matchCentre.header.scoreLines[i];
+      return line ? `${side.short || side.name} ${line}` : null;
+    })
+    .filter((s): s is string => s !== null);
+  const resultPhrase = matchCentre.header.statusLine
+    ? t(dict, matchCentre.header.statusLine.key, matchCentre.header.statusLine.params)
+    : null;
+  const parts = [...scoreParts, ...(resultPhrase ? [resultPhrase] : [])];
+  return parts.length > 0 ? parts.join(" · ") : null;
 }
+
+// Task 14 — the page now reads `searchParams` (`?tab=`), which this Next
+// version's own docs (generate-static-params.md: "this allows [it] to
+// validate your route doesn't incorrectly access … searchParams at
+// runtime") flag as incompatible with the ISR shape this page used before
+// (`revalidate = 30` + an empty-array `generateStaticParams`, task-8) — a
+// route declared cacheable-at-build cannot ALSO read a per-request value.
+// Confirmed live: keeping both threw `DYNAMIC_SERVER_USAGE` on every
+// request once `searchParams` was read. `force-dynamic` is the same fix
+// `(public)/…/register/join/page.tsx` already uses for the identical
+// shape (a public page that reads its own `searchParams`); the underlying
+// DB reads stay cached regardless, since `getPublicFixture`'s own
+// `unstable_cache(.... { revalidate: REVALIDATE_FAST })` in `data.ts` is a
+// separate, data-layer cache untouched by this route's own rendering mode.
+export const dynamic = "force-dynamic";
 
 type Props = {
   params: Promise<{
@@ -67,13 +114,16 @@ type Props = {
     divisionSlug: string;
     fixtureId: string;
   }>;
+  searchParams: Promise<{ tab?: string }>;
 };
 
-export async function generateMetadata({ params }: Props): Promise<Metadata> {
+export async function generateMetadata({ params }: Pick<Props, "params">): Promise<Metadata> {
   const { orgSlug, competitionSlug, divisionSlug, fixtureId } = await params;
   const data = await getPublicFixture(orgSlug, competitionSlug, divisionSlug, fixtureId);
   if (!data) return {};
-  const msgFn = lookup(toLocale(data.org.default_locale));
+  const locale = toLocale(data.org.default_locale);
+  const msgFn = lookup(locale);
+  const dict = await getDictionary(locale, "public");
   const home = data.fixture.home_entrant_id
     ? (data.entrantNames[data.fixture.home_entrant_id] ?? resolveSlotLabel(null, msgFn, "schedule.tbd"))
     : resolveSlotLabel(data.fixture.home_slot_label, msgFn, "schedule.tbd");
@@ -81,8 +131,16 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
     ? (data.entrantNames[data.fixture.away_entrant_id] ?? resolveSlotLabel(null, msgFn, "schedule.tbd"))
     : resolveSlotLabel(data.fixture.away_slot_label, msgFn, "schedule.tbd");
   const decidedLine = decidedLineFor(data.fixture, data.entrantNames, msgFn);
+  const decided = data.fixture.status === "decided" || data.fixture.status === "finalized";
+  // Task 14 acceptance (a) — a decided fixture's title carries both the raw
+  // score lines and the result phrase, so a share/search preview shows the
+  // final score without opening the page.
+  const scoreAndResult = decided ? scoreAndResultFor(data.matchCentre, dict) : null;
+  const title = scoreAndResult
+    ? `${home} vs ${away} — ${data.division.name} (${scoreAndResult})`
+    : `${home} vs ${away} — ${data.division.name}`;
   return {
-    title: `${home} vs ${away} — ${data.division.name}`,
+    title,
     description:
       withDecidedLine(data.fixture.summary?.headline, decidedLine) ??
       `${home} vs ${away} at ${data.competition.name}`,
@@ -92,12 +150,20 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
   };
 }
 
-export default async function FixturePage({ params }: Props) {
+export default async function FixturePage({ params, searchParams }: Props) {
   const { orgSlug, competitionSlug, divisionSlug, fixtureId } = await params;
+  const { tab } = await searchParams;
   const data = await getPublicFixture(orgSlug, competitionSlug, divisionSlug, fixtureId);
   if (!data) notFound();
   const { org, competition, division, fixture, entrantNames, realtime } = data;
-  const msgFn = lookup(toLocale(org.default_locale));
+  const locale = toLocale(org.default_locale);
+  const msgFn = lookup(locale);
+  // `public` (match-centre copy, threaded to `<MatchCentre>` as an explicit
+  // prop — Task 11's convention) and `ui` (`ShareButton`'s `useMsg()`, via
+  // the `<DictProvider>` below — the SAME split `(public)/r/[ref]/page.tsx`
+  // already uses).
+  const dict = await getDictionary(locale, "public");
+  const ui = await getDictionary(locale, "ui");
 
   const home = fixture.home_entrant_id
     ? (entrantNames[fixture.home_entrant_id] ?? resolveSlotLabel(null, msgFn, "schedule.tbd"))
@@ -125,61 +191,73 @@ export default async function FixturePage({ params }: Props) {
           : "EventScheduled",
   });
 
-  return (
-    <div style={publicThemeStyle(competition.branding)}>
-      <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: jsonLd }} />
-      <nav className="mb-4 text-xs text-ink-muted">
-        <Link
-          href={`/shared/${org.slug}/${competition.slug}`}
-          className="hover:text-accent-strong hover:underline"
-        >
-          {competition.name}
-        </Link>{" "}
-        /{" "}
-        <Link href={basePath} className="hover:text-accent-strong hover:underline">
-          {division.name}
-        </Link>
-      </nav>
+  // Task 14 — the SAME `LiveFixtureData` shape the poll endpoint returns
+  // (`match_centre`, snake_case on the wire — `getPublicFixture`'s own
+  // `matchCentre` field, camelCase, is the identical document under a
+  // different key), so `useLiveFixture`'s first render and every refresh
+  // after it are one shape, never two.
+  const initial: LiveFixtureData = {
+    status: fixture.status,
+    summary: fixture.summary,
+    outcome: fixture.outcome,
+    match_centre: data.matchCentre,
+  };
 
-      <div className="mb-1 flex flex-wrap items-start justify-between gap-3">
-        <h1 className="font-display text-2xl font-semibold text-ink">
-          {home} <span className="text-ink-muted">vs</span> {away}
-        </h1>
-        {/* One-tap share (v3/10 #2) — the message reads like a human wrote it. */}
-        <ShareButton
-          title={`${home} vs ${away}`}
-          text={
-            fixture.status === "decided" || fixture.status === "finalized"
-              ? `${home} vs ${away} — ${withDecidedLine(fixture.summary?.headline, decidedLine) ?? "full-time"} (${division.name}, ${competition.name})`
-              : `${home} vs ${away} — ${division.name}, ${competition.name}. Follow it live:`
-          }
-          url={`${basePath}/fixtures/${fixture.id}`}
+  return (
+    <DictProvider dict={ui} locale={locale}>
+      <div style={publicThemeStyle(competition.branding)}>
+        <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: jsonLd }} />
+        <nav className="mb-4 text-xs text-ink-muted">
+          <Link
+            href={`/shared/${org.slug}/${competition.slug}`}
+            className="hover:text-accent-strong hover:underline"
+          >
+            {competition.name}
+          </Link>{" "}
+          /{" "}
+          <Link href={basePath} className="hover:text-accent-strong hover:underline">
+            {division.name}
+          </Link>
+        </nav>
+
+        <div className="mb-1 flex flex-wrap items-start justify-between gap-3">
+          <h1 className="font-display text-2xl font-semibold text-ink">
+            {home} <span className="text-ink-muted">{msgFn("schedule.vs")}</span> {away}
+          </h1>
+          {/* One-tap share (v3/10 #2) — the message reads like a human wrote it. */}
+          <ShareButton
+            title={`${home} vs ${away}`}
+            text={
+              fixture.status === "decided" || fixture.status === "finalized"
+                ? `${home} vs ${away} — ${withDecidedLine(fixture.summary?.headline, decidedLine) ?? "full-time"} (${division.name}, ${competition.name})`
+                : `${home} vs ${away} — ${division.name}, ${competition.name}. Follow it live:`
+            }
+            url={`${basePath}/fixtures/${fixture.id}`}
+          />
+        </div>
+        <p className="mb-4 text-sm text-ink-muted">
+          {fixtureSubheading(fixture.status, fixture.scheduled_at, t(dict, "matchCentre.status.live"))}
+          {fixture.venue_name ? ` · ${fixture.venue_name}` : ""}
+          {fixture.court_name ? ` · ${fixture.court_name}` : ""}
+        </p>
+
+        {/* Task 14 — the match centre replaces the old bare scorebug
+            (`<LiveScore>`, retired). `<MatchCentre>` drives its own live
+            transport (`useLiveFixture`) from `initial` and re-renders every
+            open tab in place on each poll/realtime update (rule R10) — the
+            decided-fixture sentence R3.5/Task G|O introduced now lives in
+            the document's own `header.statusLine` (`CourtCard`), resolved
+            through the SAME `dict` every panel gets, so it updates live in
+            the viewer's own locale without this page re-rendering. */}
+        <MatchCentre
+          fixtureId={fixture.id}
+          initial={initial}
+          realtime={realtime}
+          dict={dict}
+          locale={locale}
+          tabParam={tab ?? null}
         />
       </div>
-      <p className="mb-4 text-sm text-ink-muted">
-        {fixtureSubheading(fixture.status, fixture.scheduled_at)}
-        {fixture.venue_name ? ` · ${fixture.venue_name}` : ""}
-        {fixture.court_name ? ` · ${fixture.court_name}` : ""}
-      </p>
-
-      {/* R3.5/Task G gave this page the winner-and-HOW sentence (`decidedLine`
-          above, still used by the OG description and share text below, which
-          are inherently one-shot renders). R3.5/Task O moved the VISIBLE copy
-          of it from a static paragraph here into `LiveScore` itself: a Server
-          Component can only render `decidedLine` once, at request time, so a
-          spectator already on this page when a decider lands never saw it
-          without a reload. `LiveScore` recomputes the same sentence from its
-          own live `data.outcome` on every poll/realtime update — the
-          `decidedTemplates` prop is the (pre-localized, not yet interpolated)
-          copy this client island has no dictionary of its own to produce. */}
-      <LiveScore
-        fixtureId={fixture.id}
-        initial={{ status: fixture.status, summary: fixture.summary, outcome: fixture.outcome }}
-        realtime={realtime}
-        entrantNames={entrantNames}
-        sportKey={division.sport_key}
-        decidedTemplates={decidedOutcomeTemplates(msgFn)}
-      />
-    </div>
+    </DictProvider>
   );
 }

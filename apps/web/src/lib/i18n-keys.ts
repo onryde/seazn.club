@@ -5660,6 +5660,8 @@ export type DictionaryKey =
   | "term.QT"
   | "term.SHOOTOUT"
   | "term.ace"
+  | "term.bat"
+  | "term.bowl"
   | "term.double_fault"
   | "term.motm"
   | "term.mvp"

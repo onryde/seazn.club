@@ -213,6 +213,8 @@
   "term.SHOOTOUT": "Shoot-out",
   "term.motm": "Player of the match",
   "term.mvp": "Most valuable player",
+  "term.bat": "bat",
+  "term.bowl": "bowl",
   "matchCentre.col.side": "Side",
   "timeline.core.lineup.unknownSide": "Line-up change",
   "term.short.H1": "1st",
