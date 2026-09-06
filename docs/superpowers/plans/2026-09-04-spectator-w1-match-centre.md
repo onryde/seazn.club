@@ -1134,3 +1134,52 @@ describe("shouldMountPad", () => {
   **Step 5: Commit** — "console(pad): a decided fixture keeps the pad's post-phase panel when the module declares one; the player-line walkthrough runs for real".
 
 ---
+
+
+### Task 20: Pad + engine — a player line may carry ONE aspect (batting or bowling), so band-2 lines can be submitted
+
+**Added 2026-09-06 (product-owner ruling, same customer goal as ruling 17).** Task 19's live run
+proved the mount fix and then hit a second pre-existing defect: the legacy seven fields of
+`cricket.player.line` carry no `optional: true`, so the pad's generic form always sends BOTH a
+`batting` and a `bowling` sub-object, and `applyPlayerLine` then requires the same person to be in
+the batting side's order AND the opposing side's bowling order — impossible for any real fixture
+(`422 INVALID_EVENT "… is not in the bowling lineup for innings 1"`). No player line has ever been
+submittable through the product. Runs after Task 19 is on the branch (same files).
+
+**Files (pinned by the Task 19 report, 2026-09-06):**
+- Modify: `packages/engine/src/sports/cricket/cricket.ts` — the `playerLineAction` declaration
+  (legacy seven fields): the `batting.*` and `bowling.*` fields become optional AS GROUPS (a line
+  must carry at least one aspect); `CricketPlayerLine` schema: `batting` and `bowling` each
+  optional with a refinement "at least one present" — ONLY if the schema requires both today
+  (read it first; if a single aspect already parses, leave the schema alone and say so);
+  `applyPlayerLine` (~1776-1863): the order-membership check for an aspect runs only when that
+  aspect is PRESENT (verify it already does; if an all-zero untouched aspect is still sent by
+  the form, the fix is in the builder, not the reducer).
+- Modify: `apps/web/src/components/v2/scorepad/view-model.ts:222-233` (`checkActionValidity`)
+  and `buildActionPayload` (:250-267) — an untouched optional GROUP is omitted from the payload
+  entirely (never sent as zeros); a line with neither aspect touched is invalid ("enter a batting
+  or a bowling line" — four locales, `ui.json`).
+- Modify: `apps/web/e2e/scorepad-v3-cricket-lines.spec.ts` — remove the `test.fixme` (Task 19's
+  re-gate) so the walkthrough RUNS: batting-only line → 201 and the ledger row deep-equals the
+  tapped values (batting present, NO `bowling` key); a bowling-only line likewise; the legacy
+  7-field pair test becomes "batting-only legacy payload is byte-identical to the documented
+  shape" (update the snapshot's DOCUMENTED shape — record it).
+- Tests: `apps/web/src/components/v2/scorepad/__tests__/view-model*.test.ts` (group omission;
+  neither-aspect invalid), `packages/engine/src/sports/cricket/__tests__/player-line.test.ts`
+  (batting-only and bowling-only lines accepted by schema + reducer; a line with neither
+  rejected), `__tests__/scorecard.test.ts` (the fold reads a batting-only line into a BattingLine
+  and produces no BowlingLine for that person — and vice versa).
+- `docs/superpowers/specs/2026-08-15-scoringpad-v3-prompts/_INDEX.md` — one line.
+
+- [ ] **Step 1: Failing tests** (builder: untouched group omitted; neither-aspect invalid; engine:
+  single-aspect lines accepted; fold: single-aspect lines read). **Step 2: Run — failures.**
+  **Step 3: Implement.** **Step 4: Run — green**: scoped pad suite + `src/sports/cricket` +
+  `testkit/{schema-snapshot,golden,golden-slim}.test.ts` (a schema change regenerates
+  `cricket.schema.json`; EXTEND the golden corpus with a single-aspect line — never re-baseline);
+  `apps/web` + engine tsc; then the e2e on a fresh `t20` env — the WHOLE spec must pass, then
+  `scorepad-v3-football.spec.ts` unchanged; screens as Task 19. Mutants: (a) send the untouched
+  group as zeros → the omission test reds; (b) drop the "at least one aspect" rule → the
+  neither-aspect test reds. **Step 5: Commit** — "pad(cricket): a player line carries one aspect
+  — batting or bowling — so band-2 lines can be submitted through the product".
+
+---
