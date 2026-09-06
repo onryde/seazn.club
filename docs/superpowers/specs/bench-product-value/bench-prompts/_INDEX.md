@@ -33,8 +33,8 @@ B03/B04/B05 are sequential (shared `scripts/bench/lib/`). B17 needs B15
 | B02 | `B02-pack-lib.md` | PackSchema, stage-0 validator, reconstruction | B01 | **MERGED #701 `1cdcaf4c6`** |
 | B03 | `B03-seeding-layer.md` | org/comp/divisions/persons/officials/plans/claims | B02 | **MERGED #711 `3cfac6332` 2026-09-03** |
 | B03r | `B03r-registration-layer.md` | registration entry path: `--entry` flag, http+browser drivers, PackSchema `registration` block, Stripe test-mode payer, funnel oracle | B03 + **RS007–RS011, RS010 merged** | **MERGED #713 `310eb22ac` 2026-09-04** — paid path proven live (2 × 100 USD destination charges, webhook accepted); bench 721/721 |
-| B04 | `B04-scheduling-layer.md` | config apply, auto/validate, checker, certificate, metrics | B03 | **IN FLIGHT 2026-09-05** — five modules built, reviewed and merged on `feat/bench-b04-scheduling`; 1047/1047, tsc 0. Two fix branches unmerged, then rebase/#716, live legs, final review, PR. **Read `../B04-handoff-2026-09-05.md` first** — the SDD ledger is gitignored and does not travel. Design: `../designs/2026-09-05-b04-scheduling-layer-design.md`. Product findings: bench design **§15**. |
-| B05 | `B05-simulation-layer.md` | event loop, advancement, oracles, people-layer steps | B04 | TODO |
+| B04 | `B04-scheduling-layer.md` | config apply, auto/validate, checker, certificate, metrics | B03 | **MERGED #731 `6e70c7270` 2026-09-06** — 1187/1187, tsc 0, eslint 0; three live legs at one SHA, all green. Four defects found by RUNNING it, each past a green suite (see the status log). Design: `../designs/2026-09-05-b04-scheduling-layer-design.md`. Product findings: bench design **§15**. Run results and the engine delta's limits: bench design **§16**. `../B04-handoff-2026-09-05.md` is HISTORICAL — it describes a mid-wave state, do not follow it. |
+| B05 | `B05-simulation-layer.md` | event loop, advancement, oracles, people-layer steps | B04 | **UNGATED 2026-09-06** — B04 (#731) merged; verify by SHA on main, not from this row. Still needs an explicit owner green-light per the creative-only ruling (`_MASTER.md`). |
 | B06 | `B06-pack-darts-pilot.md` | suite 11 (PDC) — pilot proves the playbook | B05 | TODO |
 | B07 | `B07-pack-carrom.md` | suite 10 (ICF) — thin-data resilience | B06 | TODO |
 | B08 | `B08-pack-cricket.md` | suite 1 (T20WC24 + CT25) — volume monster | B06 | TODO |
@@ -106,6 +106,44 @@ fall back from, is live — no B-prompt needs its fallback path.
 ## Status log
 
 (append as sessions run)
+
+- 2026-09-06 — **B04 MERGED, PR #731 `6e70c7270`.** Scheduling layer:
+  `board.ts`, `schedule.ts`, `checker.ts` (eight rules recomputed
+  independently of the product), `certificate.ts`, `believability.ts`, wired
+  through `tiny.ts`/`bench.ts`/`report.ts`. Gates at merge: 1187/1187, tsc 0,
+  eslint 0. Three live legs at one SHA, all green.
+
+  **Four defects were found by RUNNING it, each after a fully green unit
+  suite, a clean tsc, and multiple reviewer passes.** They are the wave's real
+  output and the reason `_RULES.md` §2's "green is not run" line stands:
+
+  - **The bench could not start.** A TS parameter property in `schedule.ts`,
+    which `node --experimental-strip-types` refuses outright. Survived T1–T7
+    behind 1150 passing tests because vitest transpiles and tsc only
+    typechecks. Now gated by `strip-types-loadable.test.ts`, which spawns node
+    against every shipped module. `--experimental-strip-types --check` was
+    tried first and REJECTED: it exits 0 on the broken file.
+  - **A leg that measured nothing reported GREEN.** `--keep` is the CLI's
+    default, so the documented second leg always short-circuited before
+    seeding OR scheduling and returned a hard-coded `green` with `actual=n/a`.
+    A suite gate can now be `"skipped"`, folded into the run-level red. Every
+    leg of the engine protocol needs `--wipe`.
+  - **The engine assertion redded a leg where the optimizer DID run.**
+    `already_optimal` is the product's proof that the tiers ran and could not
+    improve the greedy seed — not a fallback. Now satisfies an `optimized`
+    request; `solver_unavailable` still errors.
+  - **The engine artifact was keyed by a value that is absent exactly when it
+    matters.** One leg's divisions can resolve different actual engines. Re-keyed
+    to the REQUESTED engine, which is always singular.
+
+  Run results, and why the engine delta is not yet a measurement, are recorded
+  in the design of record **§16** — not here, and not only in the PR body. The
+  short version: on `_tiny`, 1350 of the optimized board's 1470-minute makespan
+  is ONE participant's overnight gap, so neither reported metric discriminates
+  between engines at this pack size. §16.4 says what a later wave owes.
+
+  `../B04-handoff-2026-09-05.md` is now HISTORICAL — it describes a mid-wave
+  state that no longer exists. Read §16 and the design, not the handoff.
 
 - 2026-08-27 — **Registration + customer-journey amendment approved in
   brainstorm** (owner). New sessions B03r + B16, B18 amended, gate
