@@ -117,13 +117,27 @@ const EMPHASIS_CLASS: Record<string, string> = {
  * Sizing to the CONTENT settles it without depending on anyone's measurement
  * of a font at 10px. `sets-tab.tsx`'s row badge is the same chip and carries
  * the same classes; they are two renderings of one object.
+ *
+ * `tabular-nums` is not decoration. A content-sized chip is only as wide as its
+ * glyphs, and the disambiguation tie-break's whole output differs by exactly
+ * one digit — `AND1` against `AND2`. Driving the real page measured those at
+ * 30px and 32px, because "2" is wider than "1" in a proportional face, so the
+ * two chips in the Sets table's stacked rows started their names 2px apart.
+ * Tabular figures make every ordinal the same advance, which removes the
+ * raggedness for exactly the case the tie-break creates.
+ *
+ * What `tabular-nums` does NOT fix, and is accepted: two sides whose labels
+ * differ in LENGTH (`KY` against `ANDE`) still produce different widths. That
+ * is inherent to sizing by content, and the alternative — one fixed width wide
+ * enough for four characters — turns every two-character label into a lozenge.
+ * The floor keeps the common case square; the ragged case is the rarer one.
  */
 function SideBadge({ side, seq }: { side: SideT; seq: number }): ReactNode {
   return (
     <span
       data-testid={`mc-side-badge-${seq}`}
       title={side.name}
-      className="inline-flex h-6 min-w-[24px] shrink-0 items-center justify-center rounded-md bg-accent/15 px-0.5 text-[10px] font-bold uppercase"
+      className="inline-flex h-6 min-w-[24px] shrink-0 items-center justify-center rounded-md bg-accent/15 px-0.5 text-[10px] font-bold uppercase tabular-nums"
     >
       {side.short || side.name.slice(0, 3)}
     </span>

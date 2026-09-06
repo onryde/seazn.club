@@ -121,9 +121,16 @@ async function maskSideNames(
 }
 
 /**
- * A `Side.short` abbreviation — 3 characters for a TEAM, clamped (Task 6
- * contract note: "Side.short is clamped to 3 characters by the BUILDER; the
- * tile has overflow-hidden"). No `short_name` reaches the public surface
+ * A `Side.short` abbreviation — 3 characters for a TEAM (`teamShortOf`), up to
+ * `BADGE_MAX_CHARS` for a PERSON, because the disambiguation tie-break appends
+ * an ordinal to a 3-character stem (`AND1`/`AND2`). The Task 6 contract note
+ * said "clamped to 3 characters by the BUILDER; the tile has overflow-hidden",
+ * and that is no longer true of the person branch: the R11 cosmetic round
+ * raised the person ceiling to 4 and made the Timeline/Sets chips size to
+ * their content. Any consumer that still budgets 3 and clips is relying on a
+ * retired contract — `summary-tab.tsx`'s performer chip was one, and was fixed
+ * with this note rather than left to clip if a person-entrant sport ever
+ * reaches it. No `short_name` reaches the public surface
  * today: `team_display_v` HAS one (`teams.short_name`/`clubs.short_name`),
  * but `public_entrants_v`'s `team_display` block (V350) selects only
  * `club_id`/`club_name`/`logo_path`/`colors` — never `short_name` — and

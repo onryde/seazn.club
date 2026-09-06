@@ -425,67 +425,6 @@ test("tennis: the Sets tab is present with one column per set", async ({ browser
   await expect(anon.getByTestId(/^mc-sets-col-\d+$/)).toHaveCount(1);
 });
 
-// The chip that carries an entrant's abbreviation is a fixed-height box with
-// no `truncate`: a label wider than the box does not clip, it spills. Nothing
-// in the suite could see that. A unit test cannot — `apps/web` vitest is
-// `environment: "node"`, so there is no layout to measure — and every fixture
-// that had ever been screenshotted abbreviated to three characters, so the
-// four-character case was invisible in both directions at once.
-//
-// `scrollWidth > clientWidth` is the check, and it is only meaningful because
-// these two entrants force the widest label the ladder can produce. Run at 320
-// as well as 1280: the chip sits beside a truncating name at both, and the
-// phone width is where a two-pixel spill actually collides with something.
-test("badge chips hold the WIDEST abbreviation the ladder produces, at 320 and 1280", async ({ browser }) => {
-  const namesPath = publicFixturePath(orgSlug, compSlug, namesDivSlug, namesFixture);
-  for (const width of [320, 1280]) {
-    const anon = await anonPage(browser, { width, height: 900 });
-    await anon.goto(namesPath, { waitUntil: "load" });
-    await expect(anon.getByTestId("mc-court-card")).toBeVisible({ timeout: 20_000 });
-    await anon.getByTestId("mc-tab-sets").click();
-
-    const badge = anon.getByTestId("mc-sets-badge-0");
-    await expect(badge).toBeVisible();
-    // The label is what makes this test able to fail. Assert it before the
-    // geometry: a three-character code would fit any of these boxes, so a
-    // green geometry check on the wrong label proves nothing.
-    await expect(badge).toHaveText("AND1");
-    await expect(anon.getByTestId("mc-sets-badge-1")).toHaveText("AND2");
-
-    for (const seq of [0, 1]) {
-      const box = await anon.getByTestId(`mc-sets-badge-${seq}`).evaluate((el) => ({
-        scroll: el.scrollWidth,
-        client: el.clientWidth,
-        text: el.textContent,
-      }));
-      expect(box.scroll, `sets badge ${seq} at ${width}px: "${box.text}" needs ${box.scroll}px in ${box.client}px`).toBeLessThanOrEqual(box.client);
-    }
-
-    // Same chip, the other tab. `SideBadge` and the Sets row badge are two
-    // renderings of one object and have gone out of step before. The Timeline
-    // tab is present by CONTENT (`extraTabs`), so it is checked when it is
-    // there rather than assumed — but if it is there it owes the same box.
-    const hasTimeline = (await anon.getByTestId("mc-tab-timeline").count()) > 0;
-    if (!hasTimeline) {
-      await anon.close();
-      continue;
-    }
-    await anon.getByTestId("mc-tab-timeline").click();
-    const timelineBadges = anon.getByTestId(/^mc-side-badge-\d+$/);
-    const count = await timelineBadges.count();
-    expect(count, "the timeline rendered at least one entrant chip").toBeGreaterThan(0);
-    for (let i = 0; i < count; i++) {
-      const box = await timelineBadges.nth(i).evaluate((el) => ({
-        scroll: el.scrollWidth,
-        client: el.clientWidth,
-        text: el.textContent,
-      }));
-      expect(box.scroll, `timeline badge ${i} at ${width}px: "${box.text}" needs ${box.scroll}px in ${box.client}px`).toBeLessThanOrEqual(box.client);
-    }
-    await anon.close();
-  }
-});
-
 // ---------------------------------------------------------------------------
 // 4. consent — masked, never blank, positive + negative pair
 // ---------------------------------------------------------------------------
@@ -861,4 +800,122 @@ test("locale: a French-locale org renders French tab labels and status words, En
   // differ). "Sets" is identical in both locales (see en/fr public.json) —
   // no negative assertion is possible for it, so none is made.
   await setOrgLocaleSql(localeOrg.data.id, "en");
+});
+
+// ---------------------------------------------------------------------------
+// 9. badge chip width — LAST, deliberately
+// ---------------------------------------------------------------------------
+//
+// This file is `mode: "serial"`, so a red here aborts every test below it. This
+// one pins an exact abbreviation string produced by a ladder that changed in
+// three consecutive review rounds, which makes it the most likely test in the
+// file to red on a future edit — and when it sat above them, a red took the axe
+// pass, the width sweep, the deep-link test and all 39 screenshots with it,
+// reporting "1 failed" for what was really "1 failed, 6 never ran". Last, so a
+// count in this file is a total rather than a floor.
+// The chip that carries an entrant's abbreviation is a fixed-height box with
+// no `truncate`: a label wider than the box does not clip, it spills. Nothing
+// in the suite could see that. A unit test cannot — `apps/web` vitest is
+// `environment: "node"`, so there is no layout to measure — and every fixture
+// that had ever been screenshotted abbreviated to three characters, so the
+// four-character case was invisible in both directions at once.
+//
+// TWO ASSERTIONS, and the second is the one with teeth. `scrollWidth <=
+// clientWidth` only rules out a spill, and once the chips became content-sized
+// (`min-w-[24px] px-0.5`, no fixed width) that is nearly true by construction —
+// it kills the `w-6` revert by about a pixel, which a rounding difference on
+// another runner's font metrics could erase. So the box must also be shown to
+// have GROWN past its floor for a four-character label: a `w-6` revert pins
+// `clientWidth` at exactly the floor, which no rounding can fake. A
+// reachability check is satisfied by any value; pin what the control opens at.
+//
+// Run at 320 as well as 1280: the chip sits beside a truncating name at both,
+// and the phone width is where a two-pixel spill collides with something.
+const BADGE_MIN_PX = 24; // `min-w-[24px]` on both chips — the FLOOR, not a ceiling.
+const COURT_CARD_TIMEOUT_MS = 20_000;
+test("badge chips hold the WIDEST abbreviation the ladder produces, at 320 and 1280", async ({ browser }) => {
+  // Two page loads, each fronted by an explicit 20s court-card wait, against a
+  // 60s default. Expressed against those waits rather than as a flat number so
+  // that raising one raises the budget with it — a blown budget reports itself
+  // as a DATA defect here, printing whichever `expect` was in flight (the
+  // `toHaveText("AND1")`) above the timeout line, which reads as a broken
+  // abbreviation ladder rather than a wall clock.
+  const WIDTHS = [320, 1280];
+  test.setTimeout(Math.max(60_000, WIDTHS.length * (COURT_CARD_TIMEOUT_MS + 25_000)));
+  const namesPath = publicFixturePath(orgSlug, compSlug, namesDivSlug, namesFixture);
+  for (const width of WIDTHS) {
+    const anon = await anonPage(browser, { width, height: 900 });
+    await anon.goto(namesPath, { waitUntil: "load" });
+    await expect(anon.getByTestId("mc-court-card")).toBeVisible({ timeout: COURT_CARD_TIMEOUT_MS });
+    await anon.getByTestId("mc-tab-sets").click();
+
+    const badge = anon.getByTestId("mc-sets-badge-0");
+    await expect(badge).toBeVisible();
+    // The label is what makes this test able to fail. Assert it before the
+    // geometry: a three-character code would fit any of these boxes, so a
+    // green geometry check on the wrong label proves nothing.
+    await expect(badge).toHaveText("AND1");
+    await expect(anon.getByTestId("mc-sets-badge-1")).toHaveText("AND2");
+
+    const setsBoxes = [];
+    for (const seq of [0, 1]) {
+      const box = await anon.getByTestId(`mc-sets-badge-${seq}`).evaluate((el) => ({
+        scroll: el.scrollWidth,
+        client: el.clientWidth,
+        text: el.textContent,
+      }));
+      expect(box.scroll, `sets badge ${seq} at ${width}px: "${box.text}" needs ${box.scroll}px in ${box.client}px`).toBeLessThanOrEqual(box.client);
+      expect(box.client, `sets badge ${seq} at ${width}px: "${box.text}" is 4 characters and must have widened past the ${BADGE_MIN_PX}px floor, not sat on it`).toBeGreaterThan(BADGE_MIN_PX);
+      setsBoxes.push(box);
+    }
+
+    // These two chips are STACKED, one per side, and their names are laid out
+    // after them — so a width difference between them starts the two entrant
+    // names at different x. `AND1` and `AND2` are the same length and differ by
+    // one digit, so they are only the same width because the chip carries
+    // `tabular-nums`; without it a proportional face renders "2" wider than
+    // "1" and the column goes ragged by ~2px. This is the assertion that
+    // notices if that class is dropped — nothing else in the repo would.
+    expect(
+      setsBoxes[0]!.client,
+      `at ${width}px the two stacked sets badges are different widths ("${setsBoxes[0]!.text}" ${setsBoxes[0]!.client}px vs "${setsBoxes[1]!.text}" ${setsBoxes[1]!.client}px), so the two entrant names no longer start at the same x — the chip needs tabular figures`,
+    ).toBe(setsBoxes[1]!.client);
+
+    // And the consequence itself, rather than only its cause: the names line up.
+    const nameLefts = await anon
+      .locator("tbody th span.block")
+      .evaluateAll((els) => els.map((el) => Math.round(el.getBoundingClientRect().left)));
+    expect(new Set(nameLefts).size, `entrant names start at ${nameLefts.join(" and ")} at ${width}px`).toBe(1);
+
+    // Same chip, the other tab. `SideBadge` and the Sets row badge are two
+    // renderings of one object and have gone out of step before.
+    //
+    // This ASSERTS the Timeline tab rather than skipping when it is absent.
+    // The tab's presence is not a fact discovered about someone else's data —
+    // this test seeds its own division and posts the three `tennis.point`
+    // events that make `extraTabs` push `timeline`. A `continue` here would be
+    // a guard over a fact the test itself establishes, and it sits on the ONLY
+    // browser-side measurement of `SideBadge` in the repository: `mobile.spec`
+    // reaches the match centre only through a cricket fixture, and cricket
+    // renders neither the Sets nor the Timeline tab. Lose this and the chip
+    // has no width gate at all, with everything still green.
+    await expect(
+      anon.getByTestId("mc-tab-timeline"),
+      "the seeded tennis fixture must expose a Timeline tab — this test's own events produce it",
+    ).toHaveCount(1);
+    await anon.getByTestId("mc-tab-timeline").click();
+    const timelineBadges = anon.getByTestId(/^mc-side-badge-\d+$/);
+    const count = await timelineBadges.count();
+    expect(count, "the timeline rendered at least one entrant chip").toBeGreaterThan(0);
+    for (let i = 0; i < count; i++) {
+      const box = await timelineBadges.nth(i).evaluate((el) => ({
+        scroll: el.scrollWidth,
+        client: el.clientWidth,
+        text: el.textContent,
+      }));
+      expect(box.scroll, `timeline badge ${i} at ${width}px: "${box.text}" needs ${box.scroll}px in ${box.client}px`).toBeLessThanOrEqual(box.client);
+      expect(box.client, `timeline badge ${i} at ${width}px: "${box.text}" is 4 characters and must have widened past the ${BADGE_MIN_PX}px floor, not sat on it`).toBeGreaterThan(BADGE_MIN_PX);
+    }
+    await anon.close();
+  }
 });

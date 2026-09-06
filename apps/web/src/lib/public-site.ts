@@ -449,14 +449,25 @@ function compactWord(word: string): string {
 }
 
 /**
- * How wide a badge label may be. The chips these labels land in are `h-6 w-6`
- * — 24x24px, `items-center justify-center`, no `truncate` — in
- * `timeline-tab.tsx`'s `SideBadge` and `sets-tab.tsx`'s row badge, so anything
- * wider does not shrink or clip: it spills out of the box. Four characters is
- * the widest the ladder's own early rungs already produce (`surname.slice(0,
- * 4)`, `first.slice(0, 2) + surname.slice(0, 2)`), which is what makes it the
- * ceiling rather than an invented number. If those chips ever grow, this
- * constant and their classes move together.
+ * How wide a badge label may be. This is the LADDER's own bound, not the chip's
+ * — the chips (`timeline-tab.tsx`'s `SideBadge`, `sets-tab.tsx`'s row badge)
+ * size to their content and carry `min-w-[24px]` as a FLOOR, so they have no
+ * ceiling for this constant to correspond to. An earlier version of this
+ * comment said they were fixed 24x24px boxes that a wider label "spills" out
+ * of, and that this constant and their classes "move together"; the round that
+ * made the chips content-sized left that standing, so it is stated plainly
+ * here: nothing in CSS pins this number any more.
+ *
+ * What forces 4 is the tie-break below (`disambiguatedShorts`): its terminal
+ * shape is `${surname.slice(0, 3)}1` / `…2`, three characters plus an ordinal.
+ * A ceiling under 4 would truncate that suffix and stop it disambiguating; a
+ * ceiling above it buys nothing the earlier rungs do not already provide, and
+ * costs legibility at `text-[10px]`. The ladder's own early rungs happen to
+ * land on the same width (`surname.slice(0, 4)`, `first.slice(0, 2) +
+ * surname.slice(0, 2)`), which is why 4 reads as derived rather than invented.
+ *
+ * Moving it is a real change, not a tuning knob: `public-site.test.ts`'s
+ * "Ann Smith"/"Anna Smith" case reds at 3, 5 and 6.
  */
 export const BADGE_MAX_CHARS = 4;
 
@@ -488,22 +499,28 @@ export function personShortCandidates(name: string): string[] {
   // "Player Two <tag>" — SAME first word, SAME last word (a per-run unique
   // suffix), differing only in the middle. Every rung above and below this
   // one collides for that pair, so without a middle-word candidate the
-  // ladder fell all the way to the full, untruncated name — which overflows
-  // the 24x24px badge chips in the Timeline/Sets tabs (`timeline-tab.tsx`,
-  // `sets-tab.tsx`). A 3+-word name's middle word(s) are exactly where a
-  // shared first-and-last-word pair still differs.
+  // ladder fell all the way to the full, untruncated name — far past
+  // `BADGE_MAX_CHARS`, and so past the width the badge chips in the
+  // Timeline/Sets tabs are legible at. A 3+-word name's middle word(s) are
+  // exactly where a shared first-and-last-word pair still differs.
   const middle = words.length > 2 ? words.slice(1, -1).join("") : "";
   const out: string[] = [];
-  // Every rung is clamped to the chip, not just the early ones. The re-review
-  // of this round caught the three terminal rungs going out unsliced — the
-  // full surname, the full middle words, the whole compacted name — which
-  // resolved "John Andersen" against "John Anderson" as ANDERSEN/ANDERSON,
-  // eight characters in the same 24x24px box the ladder's early rungs are
-  // sized for. A candidate wider than the box does not disambiguate anything:
-  // it renders as overflow whatever it says. So the ladder ends at the box,
-  // and a pair that collides through every rung inside it falls to
-  // `disambiguatedShorts`'s positional tie-break — which stays legible, and
-  // is honest that the two names are indistinguishable at this width.
+  // EVERY RUNG BELOW STATES ITS OWN WIDTH; the clamp inside `add` is a net
+  // under them, not the mechanism that shortens them. That distinction is
+  // load-bearing in both directions: remove the per-rung `slice` calls trusting
+  // the clamp and the ladder still holds, remove the clamp trusting the rungs
+  // and it still holds — but do BOTH and the ladder silently uncaps, with the
+  // unit suite green, because no test pins a candidate LIST. The pair to watch
+  // is `slice(0, 3)`/`slice(0, 4)` on the rungs against `slice(0,
+  // BADGE_MAX_CHARS)` here.
+  //
+  // The bound exists because a candidate wider than the chip does not
+  // disambiguate anything — it renders as overflow whatever it says. Before it,
+  // "John Andersen" against "John Anderson" resolved to ANDERSEN/ANDERSON,
+  // eight characters, which is longer than AND1/AND2 without being clearer. So
+  // the ladder ends at `BADGE_MAX_CHARS`, and a pair that collides through
+  // every rung inside it falls to `disambiguatedShorts`'s positional tie-break
+  // — honest that the two names are indistinguishable at this width.
   const add = (s: string) => {
     const clamped = s.slice(0, BADGE_MAX_CHARS);
     if (clamped.length > 0 && !out.includes(clamped)) out.push(clamped);
@@ -555,12 +572,13 @@ export function disambiguatedShorts(
   // The tie-break is built from each side's FIRST (shortest) candidate, never
   // its last. The last rung is the full compacted name by construction, so
   // `${last}1` produced a 10-character label like "JOHNSMITH1" for two
-  // entrants genuinely called the same thing — which overflows the 24x24px
-  // badge chips (`timeline-tab.tsx`, `sets-tab.tsx`: `h-6 w-6`, no
-  // `truncate`), the exact defect the C9 follow-up rung exists to prevent.
+  // entrants genuinely called the same thing — a label no badge chip is
+  // legible at, and the exact defect the C9 follow-up rung exists to prevent.
   // Every first candidate is at most three characters (`surname.slice(0, 3)`,
-  // or `teamShortOf`), so the suffixed label is at most four — the same width
-  // the ladder's own widest short rungs already produce.
+  // or `teamShortOf`), so the suffixed label is at most four. THIS SHAPE IS
+  // WHAT SETS `BADGE_MAX_CHARS`: three plus an ordinal. The two must move
+  // together — a smaller ceiling truncates the ordinal away and the tie-break
+  // stops disambiguating.
   const firstA = candsA[0]!;
   const firstB = candsB[0]!;
   return [`${firstA}1`, `${firstB}2`];

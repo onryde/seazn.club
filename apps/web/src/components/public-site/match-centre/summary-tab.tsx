@@ -237,15 +237,23 @@ function PerformerCard({ p, dict }: { p: TopPerformerT; dict: PublicDict }) {
     <div className="rounded-2xl border border-zinc-200/80 bg-surface p-4 shadow-sm">
       <div className="flex items-center gap-2">
         {/* Review fix round 2 (minor) — the side's own short label, so
-            "Top batter" names its TEAM, not just the person. `overflow-
-            hidden` guards a `short` longer than the tile expects — the
-            BUILDER is ruled to clamp `short` to 3 characters (note for
-            Task 6, the view-model task; not enforced here, since this
-            component never re-derives/truncates data the document
-            already carries). */}
+            "Top batter" names its TEAM, not just the person.
+
+            R11 fix round 4: this used to be a fixed `w-5` with
+            `overflow-hidden`, resting on the Task 6 note that the BUILDER
+            clamps `short` to 3 characters. That note is retired — the person
+            branch now goes to `BADGE_MAX_CHARS` (4), because the tie-break
+            appends an ordinal. A 4-character `short` in a 20px box with
+            `overflow-hidden` CLIPS, silently and without a test: this block
+            only renders for cricket, whose sides are teams and so still 3, so
+            nothing clips today and nothing would have caught it if it did.
+            Sized to content instead — the same fix, and for the same reason,
+            as `timeline-tab.tsx`'s `SideBadge`. `min-w-[20px]` keeps the
+            circle round for the 2- and 3-character labels that are the case
+            in practice. */}
         <span
           data-testid="mc-performer-side"
-          className="inline-flex h-5 w-5 shrink-0 items-center justify-center overflow-hidden rounded-full bg-accent-soft text-[9px] font-bold uppercase text-accent-strong"
+          className="inline-flex h-5 min-w-[20px] shrink-0 items-center justify-center rounded-full bg-accent-soft px-0.5 text-[9px] font-bold uppercase tabular-nums text-accent-strong"
         >
           {p.side.short}
         </span>
