@@ -592,15 +592,32 @@ KNOCKOUT generation-time bye (a null-opponent row, `status: "forfeited"`).
 No test has ever exercised this path — do not read that suite's green as
 coverage for it.
 
-**UNCONFIRMED, and it decides the fix.** Whether a later round in which the
-same entrant plays retroactively clears the flag. Because `referenced` is
-stage-wide, it very likely does — which would make the banner *transient*,
-visible only until the sat-out entrant is first paired. That is an inference
-from reading the query, **not** a driven observation, and the shape of the fix
-turns on it (suppress a Swiss sit-out from `unplaced` vs. re-word the banner
-vs. exclude swiss in `roster-drift-eligibility.ts`). Settle it by driving an
-odd-entrant Swiss stage in a browser across two rounds before choosing.
-A read is not a run.
+**CONFIRMED — driven in a browser, 2026-09-06 (Task 1).** A 5-entrant
+progression-less Swiss stage, round 1 generated: the banner rendered exactly
+as predicted, `data-roster-drift-state="unplaced"`,
+`"Active, but not on a fixture yet: <round-1 sit-out's name>"`. Both round-1
+fixtures decided, round 2 generated (the sit-out now plays, a different
+entrant sits out round 2) — the banner disappeared entirely
+(`roster-drift-banner` count 0), confirming `referenced` is stage-wide: once
+the sat-out entrant has ANY fixture in the stage, they drop out of
+`unplaced` on their own. The flag is transient, not standing, for the reason
+the query's shape predicted.
+
+**Fix shipped.** Narrow, in `getStageRosterDrift` (`server/usecases/
+stages.ts`), not a banner re-word and not a `roster-drift-eligibility.ts`
+exclusion (both were the fallback if the narrow fix proved unworkable; it
+didn't). For a swiss stage only, an active entrant already registered
+(`entrants.created_at`) before the stage's most-recently-generated round
+(`max(fixtures.created_at)` for the stage) is excluded from `unplaced` even
+if still unreferenced — they were necessarily part of that round's pairing
+pool, so an unreferenced result there is `pairRound`'s own bye pick, not
+roster drift. An entrant registered AFTER the latest round (a genuine late
+add, never through a Generate call) is unaffected and still flagged,
+proven by a dedicated test that seeds both a legitimate sit-out and a real
+late registration in the same stage and asserts `unplaced` names only the
+latter. Tests: `__tests__/stage-roster-drift.test.ts`, two new cases under
+"F3 Task 5 (5a) — getStageRosterDrift"; mutation-confirmed (revert the fix
+locally → exactly and only those two cases redden, 18 total unchanged).
 
 ## W3 planning — false premises found (2026-09-06)
 

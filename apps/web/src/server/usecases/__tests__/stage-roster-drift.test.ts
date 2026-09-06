@@ -250,6 +250,48 @@ describe.skipIf(!HAS_DB)("F3 Task 5 (5a) — getStageRosterDrift", () => {
     const drift = await getStageRosterDrift(auth, koStage.id);
     expect(drift).toEqual({ ghosts: [], unplaced: [], attachments: NO_ATTACH });
   });
+
+  // Task 1 (W3) — swiss's pairRound puts an odd round's sat-out entrant in a
+  // `bye` field the generator never maps to a fixture row (swissGen maps only
+  // round.pairings — packages/engine/src/scheduling/swiss.ts). Stage-wide
+  // `unplaced` used to read that entrant exactly like a genuine late
+  // registration and fire the roster-drift banner on a division where
+  // nothing had gone wrong — confirmed live in a browser: the banner named
+  // the round-1 sit-out ("Active, but not on a fixture yet") and cleared on
+  // its own once round 2 gave them a real fixture (docs/superpowers/specs/
+  // 2026-09-02-competition-desk-prompts/_INDEX.md, "W3 item 6").
+  it("an odd-entrant swiss stage does not report its own sit-out as roster drift", async () => {
+    const { auth } = await seedOrg();
+    const { divisionId } = await seedDivision(auth, ["A", "B", "C", "D", "E"]); // 5 — ODD on purpose
+    const [stage] = await createStages(auth, divisionId, {
+      seq: 1, kind: "swiss", name: "Swiss", config: {}, progression: null,
+    });
+    const { fixtures } = await generateStageFixtures(auth, stage!.id);
+    expect(fixtures.length).toBe(2); // 5 entrants -> 2 pairings, 1 sits out
+
+    const drift = await getStageRosterDrift(auth, stage!.id);
+    expect(drift.unplaced).toEqual([]);
+  });
+
+  // The fix must be SPECIFIC to the round-1 sit-out, not a blanket amnesty
+  // for every unreferenced entrant on a swiss stage — a late registration
+  // after Generate is exactly the case `unplaced` exists to catch, and it
+  // must still be caught even while a legitimate sit-out is also present.
+  it("...but a swiss stage still reports a genuine late registration, alongside a legitimate sit-out", async () => {
+    const { auth } = await seedOrg();
+    const { divisionId } = await seedDivision(auth, ["A", "B", "C", "D", "E"]);
+    const [stage] = await createStages(auth, divisionId, {
+      seq: 1, kind: "swiss", name: "Swiss", config: {}, progression: null,
+    });
+    await generateStageFixtures(auth, stage!.id); // round 1: 2 fixtures, one of the five sits out
+
+    const added = await createEntrants(auth, divisionId, [
+      { kind: "individual", display_name: "F", seed: 6, members: [] },
+    ]);
+
+    const drift = await getStageRosterDrift(auth, stage!.id);
+    expect(drift.unplaced.map((e) => e.id)).toEqual([added[0]!.id]);
+  });
 });
 
 describe.skipIf(!HAS_DB)("F3 Task 5 (5b) — rebuildStageFixtures", () => {

@@ -1630,9 +1630,9 @@ export async function getStageRosterDrift(auth: AuthCtx, stageId: string): Promi
       select count(*)::int as count from fixtures where stage_id = ${stageId}`;
     if (fixtureCount === 0) return { ghosts: [], unplaced: [], attachments: NO_ATTACHMENTS };
 
-    const [active, referenced] = await Promise.all([
-      tx<StageRosterDriftEntrant[]>`
-        select id, display_name from entrants
+    const [active, referenced, swissLatestRound] = await Promise.all([
+      tx<(StageRosterDriftEntrant & { created_at: Date })[]>`
+        select id, display_name, created_at from entrants
         where division_id = ${stage.division_id} and status in ('registered', 'confirmed')
         order by display_name`,
       tx<StageRosterDriftEntrant[]>`
@@ -1644,9 +1644,25 @@ export async function getStageRosterDrift(auth: AuthCtx, stageId: string): Promi
           select away_entrant_id from fixtures where stage_id = ${stageId} and away_entrant_id is not null
         )
         order by e.display_name`,
+      // Odd-Swiss sit-out (F3 W3 item 6): pairRound puts the sat-out entrant
+      // in a `bye` field swissGen never maps to a fixture row
+      // (packages/engine/src/scheduling/swiss.ts), so that entrant reads
+      // exactly like an unreferenced late registration — a false "roster
+      // drift", confirmed in a browser: the banner named the round-1 sitter
+      // and cleared on its own once round 2 gave them a real fixture. An
+      // entrant who already existed before the stage's most-recently
+      // generated round was necessarily part of that round's pairing pool —
+      // if still unreferenced, that pool's own bye pick is why, not drift. A
+      // late registration (created AFTER the latest round) never went
+      // through a Generate call at all and stays flagged, same as any other
+      // stage kind.
+      stage.kind === "swiss"
+        ? tx<{ latest: Date | null }[]>`select max(created_at) as latest from fixtures where stage_id = ${stageId}`
+        : Promise.resolve([{ latest: null }]),
     ]);
     const activeIds = new Set(active.map((e) => e.id));
     const referencedIds = new Set(referenced.map((e) => e.id));
+    const swissLatestRoundAt = swissLatestRound[0]?.latest ?? null;
     // One round trip for all three — each is a plain count over the stage's
     // own fixture ids, and none of them is large enough to want three.
     const [counts] = await tx<{ officials: number; lineups: number; device_links: number }[]>`
@@ -1659,7 +1675,10 @@ export async function getStageRosterDrift(auth: AuthCtx, stageId: string): Promi
            join fixtures f on f.id = dl.fixture_id where f.stage_id = ${stageId})::int as device_links`;
     return {
       ghosts: referenced.filter((e) => !activeIds.has(e.id)),
-      unplaced: active.filter((e) => !referencedIds.has(e.id)),
+      unplaced: active
+        .filter((e) => !referencedIds.has(e.id))
+        .filter((e) => !(swissLatestRoundAt !== null && e.created_at <= swissLatestRoundAt))
+        .map(({ id, display_name }) => ({ id, display_name })),
       attachments: {
         officials: counts?.officials ?? 0,
         lineups: counts?.lineups ?? 0,
