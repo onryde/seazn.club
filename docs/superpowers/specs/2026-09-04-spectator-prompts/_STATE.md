@@ -41,8 +41,8 @@
 | 14 page wiring | IN FLIGHT in an isolated lane (reset e5a053034); env t14 (server) for a real browser pass; notes `task-14-contract-notes.md` (toss line, dict threading, BUILDER_ONLY_KEYS) | lane |
 | 15 walkthrough e2e | not started (owes the public-page assertion of Task 18's enriched line; testids `mc-over-<innings>.<over>`, `mc-ball-<innings>.<over>.<ball>`) | — |
 | 16 gates + R11 visual sign-off + final review + `_INDEX.md` | not started | — |
-| 19 console mount fix (owner ruling 17) | implementer DONE (lane commit ada9670f1 in `agent-a064b94926543f9fb`); mount fix proven live; review IN FLIGHT. SECOND pre-existing defect found: legacy line fields not optional as groups → every line sends both aspects → 422 (person cannot be in both orders) — no player line has ever been submittable through the product | lane |
-| 20 single-aspect player lines (product-owner ruling, same goal as 17) | plan written; dispatch after Task 19 is on the branch (same files) | — |
+| 19 console mount fix (owner ruling 17) | complete, reviewed (approved with owed teardown — confirmed down); cherry-picked as 28d18cce8; mount fix live-proven; the line-entry e2e stays fixme'd until Task 20 | branch |
+| 20 single-aspect player lines (product-owner ruling, same goal as 17) | IN FLIGHT in an isolated lane (reset 28d18cce8); env t20 (server); preferred fix = split `playerLineAction` into batting-only + bowling-only actions; the e2e must pass for real | lane |
 
 Integration already done on the branch: lane B (7 commits) and lane C (14 commits) were
 CHERRY-PICKED (never merged — lane branches carry copies of each other's commits), the four
