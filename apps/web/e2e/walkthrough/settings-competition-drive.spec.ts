@@ -248,6 +248,35 @@ test("general fields persist across the reload, and the rename that regenerates 
     await expect(field(page, L.name)).toHaveValue(renamed);
     await expect(field(page, L.starts)).toHaveValue("2027-03-01");
     await expect(field(page, L.ends)).toHaveValue("2027-03-14");
+
+    // THE NEGATIVE CONTROL FOR THE YOUTH INTERSTITIAL, and it lives here rather
+    // than in the youth test because only this test has the fixture for it:
+    // a competition that is `private` with NO divisions at all.
+    //
+    // `visibility-picker.tsx:51` gates on `hasYouthDivisions && value ===
+    // "private" && next !== "private"`. The youth test kills the whole block,
+    // but nothing kills the FIRST conjunct on its own: drop it and every
+    // organiser leaving Private is asked to confirm guardian consent they were
+    // never asked for. That mutant is invisible to the youth test (it seeds a
+    // youth division), invisible to case #10 (it starts public, so the second
+    // conjunct is already false), and there is no other coverage of this
+    // component anywhere in the tree — `competition-wizard.tsx` mounts it too.
+    //
+    // Order matters. `toBeChecked()` FIRST: an interstitial holds the radio at
+    // its old value (`pick()` returns before `onChange`), so a public radio
+    // that ends up checked is positive proof the transition was not gated.
+    // `toHaveCount(0)` alone would be a silence test, satisfied by a click the
+    // page never processed — and satisfied instantly, before a dialog that was
+    // going to open had opened.
+    await visibilityRadio(page, "public").click();
+    await expect(
+      visibilityRadio(page, "public"),
+      "no youth divisions: leaving Private must apply immediately, ungated",
+    ).toBeChecked();
+    await expect(
+      page.getByRole("alertdialog"),
+      "the guardian-consent interstitial must not fire without a youth division",
+    ).toHaveCount(0);
   } finally {
     await releaseCompetition(request, comp.id);
   }
