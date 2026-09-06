@@ -7664,3 +7664,15 @@ with this new reason (not deleted, not weakened) so this known-red spec
 does not break `e2e-parallel` CI. **Flagged for the owner/controller**:
 Task 15's own planned e2e (reading the enriched line back on the PUBLIC
 page) cannot succeed until this is fixed either.
+
+## 2026-09-06 — a player line carries one aspect (batting or bowling), Task 20
+
+The defect above is CLOSED, with no schema or reducer change (both already
+accepted a single aspect — `CricketPlayerLine`'s `.refine()`, `applyPlayerLine`'s
+independent order checks): `PadField.group` (sport/module.ts) lets
+`playerLineAction`'s legacy fields stay optional AS GROUPS, so
+`checkActionValidity`/`buildActionPayload` (view-model.ts) omit an
+untouched aspect entirely and still refuse Confirm when neither is
+touched; `scorepad-v3-cricket-lines.spec.ts`'s `test.fixme` is removed and
+the spec now posts a batting-only line, a bowling-only line, and the
+legacy single-aspect shape, all read back off the ledger.

@@ -598,3 +598,178 @@ describe("buildActionPayload — thin wrapper over buildPathObject, fields + att
     });
   });
 });
+
+// Task 20 — `PadField.group` (sport/module.ts): fields sharing a `group` name
+// are all-or-nothing for Confirm. A group with ZERO touched fields is treated
+// as entirely omitted (none of its fields required, none of their values
+// reach the built payload); the moment ANY field in the group is touched,
+// every field in that group reverts to its own `optional` flag. An action
+// declaring 2+ distinct groups additionally requires at least one be touched.
+// Generic ad-hoc fixtures first (proves the mechanism itself, not just
+// cricket's use of it), then the real `cricket.player.line` action (memory
+// rule #19 — a hand-typed fixture alone would drift from the engine's own
+// declarations the moment they changed).
+describe("checkActionValidity — field groups (Task 20)", () => {
+  const groupedAction = {
+    fields: [
+      { kind: "number" as const, path: "a.one", min: 0, max: 10, group: "a" },
+      { kind: "number" as const, path: "a.two", min: 0, max: 10, group: "a" },
+      { kind: "number" as const, path: "b.one", min: 0, max: 10, group: "b" },
+      { kind: "number" as const, path: "b.two", min: 0, max: 10, group: "b" },
+    ],
+    attribution: [],
+  };
+
+  it("neither group touched is invalid, with a reason distinct from the plain missing-fields reason", () => {
+    const result = checkActionValidity(groupedAction, {});
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(typeof result.reason.key).toBe("string");
+      expect(result.reason.label.length).toBeGreaterThan(0);
+      expect(result.reason.key).not.toBe("scorepad.validity.missingFields");
+    }
+  });
+
+  it("one group fully touched, the other untouched entirely, is valid — the untouched group is not required", () => {
+    expect(checkActionValidity(groupedAction, { "a.one": 1, "a.two": 2 })).toEqual({ ok: true });
+  });
+
+  it("a group PARTIALLY touched still blocks Confirm on its own remaining field — touching a group does not waive it", () => {
+    const result = checkActionValidity(groupedAction, { "a.one": 1 });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.missing.map((f) => f.path)).toEqual(["a.two"]);
+  });
+
+  it("a toggle field in a group never counts as 'touching' that group, even when explicitly set to its own default", () => {
+    const withToggle = {
+      fields: [
+        { kind: "toggle" as const, path: "a.flag", group: "a" },
+        { kind: "number" as const, path: "a.value", min: 0, max: 10, group: "a" },
+        { kind: "number" as const, path: "b.one", min: 0, max: 10, group: "b" },
+      ],
+      attribution: [],
+    };
+    // "a.flag" carries its `initialActionValues` default (`false`) but no
+    // OTHER field in group "a" is set, and group "b" IS fully touched — the
+    // action must read as valid (group "b" chosen), not demand "a.value" too.
+    const result = checkActionValidity(withToggle, { "a.flag": false, "b.one": 1 });
+    expect(result).toEqual({ ok: true });
+  });
+
+  // Real cricket.player.line — proves the engine's own `group` declarations
+  // (cricket.ts's playerLineAction) wire into this exact mechanism.
+  describe("cricket.player.line — a single aspect is enough to submit (Task 20)", () => {
+    const cricketCfg = cricket.configSchema.parse({});
+    const cricketSpec = cricket.padSpec!(cricketCfg);
+    const lineAction = allActionViews(cricketSpec, { band: 3 }).find(
+      (a) => a.type === "cricket.player.line",
+    )!;
+
+    it("the fixture actually proves the engine grouped the legacy fields (else this suite proves nothing)", () => {
+      expect(lineAction.fields.find((f) => f.path === "batting.runs")!.group).toBe("batting");
+      expect(lineAction.fields.find((f) => f.path === "bowling.legalBalls")!.group).toBe("bowling");
+    });
+
+    it("a batting-only line (bowling never touched) is valid", () => {
+      const values = {
+        innings: 1,
+        "batting.out": true,
+        "batting.runs": 30,
+        "batting.balls": 20,
+        person: "p1",
+      };
+      expect(checkActionValidity(lineAction, values)).toEqual({ ok: true });
+    });
+
+    it("a bowling-only line (batting never touched) is valid, even though its toggle carries a leftover default", () => {
+      // "batting.out" simulates `initialActionValues`'s forced `false`
+      // default for a toggle the scorer never tapped — it must NOT count as
+      // touching the batting aspect.
+      const values = {
+        innings: 1,
+        "batting.out": false,
+        "bowling.legalBalls": 12,
+        "bowling.runs": 20,
+        "bowling.wickets": 2,
+        person: "p1",
+      };
+      expect(checkActionValidity(lineAction, values)).toEqual({ ok: true });
+    });
+
+    it("neither aspect touched (only innings + person) is invalid", () => {
+      const result = checkActionValidity(lineAction, { innings: 1, person: "p1" });
+      expect(result.ok).toBe(false);
+    });
+  });
+});
+
+describe("buildActionPayload — field groups (Task 20)", () => {
+  const groupedAction = {
+    fields: [
+      { kind: "toggle" as const, path: "a.flag", group: "a" },
+      { kind: "number" as const, path: "a.value", min: 0, max: 10, group: "a" },
+      { kind: "number" as const, path: "b.one", min: 0, max: 10, group: "b" },
+    ],
+    attribution: [],
+  };
+
+  it("an untouched group's fields are OMITTED from the payload, even a toggle carrying its own default value", () => {
+    const payload = buildActionPayload(groupedAction, { "a.flag": false, "b.one": 5 });
+    expect(payload).toEqual({ b: { one: 5 } });
+    expect(Object.prototype.hasOwnProperty.call(payload, "a")).toBe(false);
+  });
+
+  it("a touched group's fields build normally", () => {
+    const payload = buildActionPayload(groupedAction, { "a.flag": true, "a.value": 3 });
+    expect(payload).toEqual({ a: { flag: true, value: 3 } });
+  });
+
+  // The exact production scenario: cricket.player.line's `batting.out` toggle
+  // is pre-seeded `false` by `initialActionValues` even when the scorer only
+  // ever meant to submit a bowling-only line. Before Task 20, this stray
+  // `false` (plus the un-omitted legacy fields) built a payload carrying a
+  // half-formed `batting` object the schema would reject outright — the
+  // "sent as zeros" defect this task closes.
+  describe("cricket.player.line — an untouched aspect never leaks into the payload (Task 20)", () => {
+    const cricketCfg = cricket.configSchema.parse({});
+    const cricketSpec = cricket.padSpec!(cricketCfg);
+    const lineAction = allActionViews(cricketSpec, { band: 3 }).find(
+      (a) => a.type === "cricket.player.line",
+    )!;
+
+    it("a bowling-only submission builds NO batting key at all, despite batting.out's leftover toggle default", () => {
+      const values = {
+        innings: 1,
+        "batting.out": false, // initialActionValues's default — never tapped
+        "bowling.legalBalls": 12,
+        "bowling.runs": 20,
+        "bowling.wickets": 2,
+        person: "p1",
+      };
+      const payload = buildActionPayload(lineAction, values);
+      expect(Object.prototype.hasOwnProperty.call(payload, "batting")).toBe(false);
+      expect(payload).toEqual({
+        innings: 1,
+        person: "p1",
+        bowling: { legalBalls: 12, runs: 20, wickets: 2 },
+      });
+    });
+
+    it("a batting-only submission builds NO bowling key at all", () => {
+      const values = {
+        innings: 1,
+        "batting.out": true,
+        "batting.runs": 30,
+        "batting.balls": 20,
+        person: "p1",
+      };
+      const payload = buildActionPayload(lineAction, values);
+      expect(Object.prototype.hasOwnProperty.call(payload, "bowling")).toBe(false);
+      expect(payload).toEqual({
+        innings: 1,
+        person: "p1",
+        batting: { out: true, runs: 30, balls: 20 },
+      });
+    });
+  });
+});

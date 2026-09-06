@@ -64,6 +64,44 @@ const MISSING_ATTRIBUTION_REASON: ChassisLabel = {
   label: "Choose who's required before you can continue.",
 };
 
+/**
+ * Task 20 — Confirm's reason when an action declares one or more `PadField
+ * .group`s (module.ts) and NONE of them has been touched. Deliberately
+ * chassis-generic, like the two reasons above, and NEVER the sport-specific
+ * wording a particular action's groups happen to mean ("batting or bowling",
+ * for `cricket.player.line`): this file's own header states the contract —
+ * "a chassis-native reason is never one of those keys" (an engine `PadLabel`)
+ * — and `ActionValidity.reason` is typed `ChassisLabel`, whose `key` is a
+ * `MessageKey`, not the wider `string` a `PadLabel.key` carries; threading a
+ * per-action label through here would need a cast at the boundary this file
+ * exists to keep un-cast. A future action with its own group semantics gets
+ * the same generic copy for free, with zero per-sport branching added here. */
+const MISSING_GROUP_REASON: ChassisLabel = {
+  key: "scorepad.validity.missingGroup",
+  label: "Fill in at least one of the highlighted sections to continue.",
+};
+
+/**
+ * Task 20 — which of an action's declared `PadField.group` names have at
+ * least one field "touched" (a defined value in `values`). A `kind: "toggle"`
+ * field is EXCLUDED from this test on purpose: `initialActionValues`
+ * (action-form.tsx) pre-seeds every toggle to `false` before the scorer taps
+ * anything, so a toggle's mere presence in `values` says nothing about
+ * whether its group was genuinely engaged (`cricket.player.line`'s
+ * `batting.out` is exactly this case). Shared by `checkActionValidity` and
+ * `buildActionPayload` so the two can never drift on what "touched" means. */
+function groupsTouched(
+  fields: readonly PadField[],
+  values: Readonly<Record<string, PadFieldValue | undefined>>,
+): ReadonlySet<string> {
+  const touched = new Set<string>();
+  for (const field of fields) {
+    if (field.group === undefined || field.kind === "toggle") continue;
+    if (values[field.path] !== undefined) touched.add(field.group);
+  }
+  return touched;
+}
+
 // W1 / Task 4 (entitlements v18): `ActionAvailability` and its
 // `LOCKED_REASON` are DELETED, not defaulted. They had exactly one producer —
 // `spec.fidelityEntitlements[band]`, a field Task 2 removed from the engine —
@@ -218,19 +256,53 @@ export type ActionValidity =
  * anything. Enforced by an `@ts-expect-error` proof in view-model.test.ts,
  * since vitest never typechecks and nothing at runtime can witness a
  * parameter that was merely widened.
+ *
+ * Task 20 — `field.group` (module.ts, hand-authored): a group with ZERO
+ * touched fields (`groupsTouched` above) is skipped entirely, same as an
+ * `optional` field, regardless of each member's own `optional` flag. The
+ * moment ANY field in a group is touched, every field in THAT group reverts
+ * to its own `optional` flag exactly as if `group` were absent — a
+ * half-filled aspect still blocks Confirm on its own required fields. An
+ * action declaring 1+ distinct group names additionally requires at least
+ * one be touched (`cricket.player.line`'s "batting and/or bowling" rule,
+ * mirrored from `CricketPlayerLine`'s own schema `.refine()` — see that
+ * schema's comment — with no schema or reducer change needed).
  */
 export function checkActionValidity(
   action: Pick<PadAction, "fields" | "attribution">,
   values: Readonly<Record<string, PadFieldValue | undefined>>,
 ): ActionValidity {
+  const touchedGroups = groupsTouched(action.fields, values);
+  const groupNames = new Set(action.fields.map((field) => field.group).filter((g): g is string => g !== undefined));
+
   // Owner ruling 12, S18 — `field.optional` (module.ts, hand-authored, never
   // derived) is skipped from the gate entirely: a field flagged this way may
   // stay unset and Confirm still fires. Absent/falsy behaves exactly as
   // before this flag existed — every pre-ruling-12 field on every action
   // stays required. See cricket's `cricket.player.line` for the shipped
   // example (its six band-2 enrichment fields vs. its original seven).
-  const missingFields = action.fields.filter((field) => field.optional !== true && values[field.path] === undefined);
+  //
+  // Task 20 — a field whose `group` is declared but NOT (yet) touched is
+  // also skipped here, on top of `optional`: an untouched aspect is not
+  // "missing", it is not being submitted at all.
+  const missingFields = action.fields.filter((field) => {
+    if (field.optional === true) return false;
+    if (field.group !== undefined && !touchedGroups.has(field.group)) return false;
+    return values[field.path] === undefined;
+  });
   if (missingFields.length > 0) return { ok: false, missing: missingFields, reason: MISSING_FIELDS_REASON };
+
+  // Task 20 — the action declares groups (an "aspect" choice) but the
+  // scorer has touched none of them: refuse before ever reaching the
+  // attribution gate, same posture as the missing-fields check above.
+  if (groupNames.size > 0 && touchedGroups.size === 0) {
+    return {
+      ok: false,
+      missing: action.fields.filter((field) => field.group !== undefined),
+      reason: MISSING_GROUP_REASON,
+    };
+  }
+
   // The `?? []` stays deliberately, even though the type now forbids the
   // case: this is the Confirm path of a live scoring pad, and an untyped
   // caller (a cast, a hand-built fixture) should not crash it. The TYPE is
@@ -261,13 +333,26 @@ export function checkActionValidity(
  * ever reaching the payload without `batting.dismissal.kind` alongside them
  * (the schema requires `kind` inside that sub-object; see the field's own
  * doc in sport/module.ts).
+ *
+ * Task 20 — a field whose `group` (module.ts) is declared but NOT touched
+ * (`groupsTouched` above, shared with `checkActionValidity` so the two can
+ * never disagree) is forced to `undefined` here REGARDLESS of what `values`
+ * holds for it — closing the exact defect this task fixes: a toggle field's
+ * own `initialActionValues` default (e.g. `cricket.player.line`'s
+ * `batting.out`, pre-seeded `false`) would otherwise survive into the built
+ * payload even when the scorer never touched that aspect at all, building a
+ * half-formed `batting`/`bowling` sub-object the engine's schema rejects.
  */
 export function buildActionPayload(
   action: Pick<PadAction, "fields" | "attribution">,
   values: Readonly<Record<string, PadFieldValue | undefined>>,
 ): Record<string, unknown> {
+  const touchedGroups = groupsTouched(action.fields, values);
   const entries: (readonly [string, unknown])[] = [];
-  for (const field of action.fields) entries.push([field.path, values[field.path]]);
+  for (const field of action.fields) {
+    const suppressed = field.group !== undefined && !touchedGroups.has(field.group);
+    entries.push([field.path, suppressed ? undefined : values[field.path]]);
+  }
   for (const item of action.attribution) {
     const gated = item.requiresField !== undefined && values[item.requiresField] === undefined;
     entries.push([item.path, gated ? undefined : values[item.path]]);

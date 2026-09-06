@@ -89,45 +89,42 @@ const PLAYER_LINE_LABEL = {
 // reach "post" phase on a decided fixture and the "More" sheet DOES surface
 // "Scorecard line" — the owner-ruling-17 mount defect is gone.
 //
-// A SECOND, DEEPER, UNRELATED DEFECT BLOCKS THE SUBMISSION ITSELF (found by
+// A SECOND, DEEPER DEFECT USED TO BLOCK THE SUBMISSION ITSELF (found by
 // running this test for real for the first time — memory rule "the brief is
 // a hypothesis": Task 18's own assumption that fixing the mount would let
-// this pass outright does not hold). `cricket.player.line`'s legacy seven
-// fields (`batting.runs`/`.balls`, `bowling.legalBalls`/`.runs`/`.wickets`)
-// carry NO `optional: true` (cricket.ts's `playerLineAction`, unchanged by
-// Task 17/18 — only the six NEW fields got that flag), so
-// `checkActionValidity` (view-model.ts:232) refuses Confirm until ALL FIVE
-// are filled, and every real submission therefore carries BOTH a `batting`
-// AND a `bowling` sub-object — never just one. `applyPlayerLine`
-// (cricket.ts:~1776) then requires `payload.person` to be a member of the
-// BATTING side's order (for the `batting` half) **and** the OPPOSING side's
-// bowling order (for the `bowling` half) in the SAME payload — impossible
-// for any real two-team fixture, since `state.orders.home`/`.away` are
-// built from disjoint rosters (`orderFromLineup`, cricket.ts:3329). Verified
-// first-hand, not inferred: this test's own POST (captured from the trace,
-// fixture f35e48b3-693b-4709-8052-ede29e9e3547) —
-//   request  {"payload":{"innings":1,"batting":{"out":true,"runs":42,...},
-//             "bowling":{"legalBalls":0,"runs":0,"wickets":0},
-//             "person":"5fe3b568-…" /* the HOME batter */}}
-//   response 422 {"code":"INVALID_EVENT","message":"V3 Line Batter … is not
-//             in the bowling lineup for innings 1"}
-// The same structural conflict blocks a bowling-credit line the other way
-// (a bowler is never in the batting side's order either). Net: NEITHER of
-// this test's two submissions — nor any real scorer's — can ever succeed
-// through the pad's generic form as it stands today, independent of the
-// mount fix above. This predates Task 17/18/19 entirely (the legacy seven
-// fields are original to the action) and is out of Task 19's scope —
-// `cricket.ts`/`action-form.tsx`/`view-model.ts` are not on this task's
-// file list and remain on the programme's "do not touch" list. Flagged for
-// the owner/controller per this program's standing rule ("bench product
-// gaps → TELL the owner"): Task 15's own planned e2e (reading the enriched
-// line back on the PUBLIC page) cannot succeed until this is resolved
-// either — there is still no way to get a `cricket.player.line` onto a
-// fixture's ledger through the product. `test.fixme` restored below with
-// this new reason (not deleted, not weakened — every assertion is
-// byte-identical to Task 18's round 1) so this known-red spec does not
-// break the `e2e-parallel` CI job on the next push (task-18-review.md's own
-// Critical #1 finding, still the applicable rule).
+// this pass outright did not hold), FIXED HERE (Task 20). `cricket.player
+// .line`'s legacy seven fields (`batting.runs`/`.balls`,
+// `bowling.legalBalls`/`.runs`/`.wickets`) carried NO `optional: true`
+// (cricket.ts's `playerLineAction`, unchanged by Task 17/18 — only the six
+// NEW fields got that flag), so `checkActionValidity` (view-model.ts)
+// refused Confirm until ALL FIVE were filled, and every real submission
+// therefore carried BOTH a `batting` AND a `bowling` sub-object — never
+// just one. `applyPlayerLine` (cricket.ts:~1776) then required
+// `payload.person` to be a member of the BATTING side's order (for the
+// `batting` half) **and** the OPPOSING side's bowling order (for the
+// `bowling` half) in the SAME payload — impossible for any real two-team
+// fixture, since `state.orders.home`/`.away` are built from disjoint
+// rosters (`orderFromLineup`, cricket.ts:3329). Verified first-hand at the
+// time, not inferred: a 422 was captured from the trace on fixture
+// f35e48b3-693b-4709-8052-ede29e9e3547 — `"V3 Line Batter … is not in the
+// bowling lineup for innings 1"`.
+//
+// Task 20's own investigation found `CricketPlayerLine`'s zod schema
+// (cricket.ts:332-369) and `applyPlayerLine` (cricket.ts:1806, 1838)
+// ALREADY accepted either aspect alone — `batting`/`bowling` are each
+// `.optional()`, with a `.refine()` requiring only "at least one", and the
+// two order-membership checks already run independently
+// (`if (payload.batting !== undefined)` / `if (payload.bowling !==
+// undefined)`). So NO schema or reducer change was needed. The fix is
+// `PadField.group` (sport/module.ts): every `batting.*`/`bowling.*` field
+// on `playerLineAction` now carries `group: "batting"`/`"bowling"`, and
+// `checkActionValidity`/`buildActionPayload` (view-model.ts) treat a group
+// with zero touched fields as entirely omitted — not required, and never
+// leaking a stray value (e.g. a toggle's own `initialActionValues` default)
+// into the built payload — while still refusing Confirm when NEITHER
+// aspect is touched at all. This test now RUNS FOR REAL: a batting-only
+// line, a bowling-only line, and the legacy single-aspect shape, each
+// posted through the pad's actual UI and read back off the ledger.
 //
 // Deliberately NOT serial: this spec seeds its own fixture, so there is no
 // shared-fixture race to serialise for (matches scorepad-v3-cricket.spec.ts's
@@ -180,55 +177,51 @@ async function postEvent(
   }
 }
 
-/** Every `send()` in pad-host.tsx (including `ActionFormList`'s own
- *  `onSubmit`) goes through `heldSubmit` — a HOLD_MS (12s default) soft-
- *  commit queue, exactly like every ball tap in scorepad-v3-cricket.spec.ts.
- *  Flushing through the dock's own "Send now" (`pad.dock.dismiss`) rather
- *  than waiting out the window keeps this spec's budget sane for TWO
- *  separate player-line submissions. */
-async function sendHeldNow(page: Page): Promise<void> {
-  await pad(page)
-    .locator('[data-role="v3-dock"]')
-    .getByRole("button", { name: "Send now", exact: true })
-    .click();
-}
+/**
+ * Every `send()` in pad-host.tsx (including `ActionFormList`'s own
+ * `onSubmit`) goes through `heldSubmit` — a HOLD_MS (12s default,
+ * `HOLD_MS_DEFAULT` in scorepad/queue.ts) soft-commit queue.
+ *
+ * Found by driving THIS action for real, for the first time (the "brief is
+ * a hypothesis" rule again): unlike a ball tap, `cricket.player.line` has NO
+ * manual "Send now" control to flush early. `pad-host.tsx`'s
+ * `resolveDockSpec` calls the cricket skin's `buildDock(eventType, …)`,
+ * which opens with `if (!BALL_EVENT_TYPES.has(eventType)) return null` —
+ * `BALL_EVENT_TYPES` is only `{"cricket.ball", "cricket.superover.ball"}`
+ * (skins/cricket.tsx:153). A `null` dock spec makes `dockController` return
+ * `null` too (`detail-dock.tsx:158`), and `DetailDock` itself then renders
+ * `null` (`detail-dock.tsx:413`) — an empty `<div data-role="v3-dock">`
+ * with no title, no chips, and no dismiss/"Send now" button at all. This is
+ * a pre-existing, orthogonal characteristic of the dock/skin system (every
+ * generic More-sheet action shares it, not just this one) — out of this
+ * task's scope to change, and the scorepad/its skins are on the programme's
+ * "do not touch" list. So this spec simply WAITS OUT the natural HOLD_MS
+ * window instead of flushing early: every `expect.poll` below gives the
+ * drain comfortably more than 12s of margin (25s), and the three
+ * submissions are strictly sequential (each poll resolves before the next
+ * line's form is even opened), so there is never more than one held item
+ * in flight at a time. */
 
 async function playerLineEvents(request: APIRequestContext, fixtureId: string) {
   return (await ledger(request, fixtureId)).filter((e) => e.type === "cricket.player.line");
 }
 
 test(
-  "cricket v3: the More sheet's Scorecard line collects 4s/6s/how-out/bowler credit, and a " +
-    "legacy-only line stays byte-identical to the pre-ruling-12 7-field payload",
+  "cricket v3: the More sheet's Scorecard line accepts a single aspect (batting-only, bowling-only), " +
+    "and the legacy single-aspect shape stays byte-identical to the documented shape (Task 20)",
   async ({ page }) => {
-    // Task 19 (owner ruling 17) — see the file header for the full chain.
-    // Short version: the ORIGINAL fixme (Task 18) is gone — `shouldMountPad`
-    // (fixture-console.tsx) now keeps the pad mounted in its post phase once
+    // Task 19 (owner ruling 17) fixed the mount gate — `shouldMountPad`
+    // (fixture-console.tsx) keeps the pad mounted in its post phase once
     // decided, proven live in this exact test (the pad reaches "post" and
-    // "More" surfaces "Scorecard line"). A SECOND, unrelated, pre-existing
-    // defect still blocks the submission itself (legacy 7-field group always
-    // sends both a batting AND bowling aspect; the engine then requires the
-    // same person to be in BOTH sides' lineups, which no real fixture can
-    // satisfy — verified via the 422 in the file header). Re-fixme'd with
-    // this new reason, not deleted or weakened — remove once that defect is
-    // fixed (owner/controller decision owed, out of Task 19's scope).
-    test.fixme(
-      true,
-      "cricket.player.line still cannot be submitted: the mount defect (owner ruling 17) is FIXED " +
-        "(the pad reaches post phase and the More sheet surfaces \"Scorecard line\" — proven before this " +
-        "guard was re-added), but the legacy 7-field group has no `optional: true` on either aspect " +
-        "(cricket.ts's playerLineAction), so every real Confirm sends BOTH `batting` and `bowling`, and " +
-        "applyPlayerLine (cricket.ts) then requires the SAME person to be in both the batting side's AND " +
-        "the opposing bowling side's order — impossible for any real fixture (disjoint rosters). 422 " +
-        "INVALID_EVENT \"… is not in the bowling lineup for innings 1\", captured verbatim in the file " +
-        "header. Pre-existing, unrelated to Task 19, out of scope (cricket.ts/action-form.tsx/view-model.ts " +
-        "are not on this task's file list) — flagged for the owner/controller, blocks Task 15 too.",
-    );
+    // "More" surfaces "Scorecard line"). Task 20 fixed the second, deeper
+    // defect the mount fix's own live run exposed — see the file header for
+    // the full chain. No `test.fixme` — this spec RUNS.
 
-    // Two held dispatches (one per player-line submission), each flushed via
-    // "Send now" rather than waited out — see sendHeldNow's own doc — plus
-    // fixture setup and two innings-summary posts.
-    test.setTimeout(90_000);
+    // THREE held dispatches (one per player-line submission), each one
+    // waited OUT rather than flushed early — see `playerLineEvents`'s own
+    // preceding doc comment for why "Send now" does not exist for this
+    // event type — plus fixture setup and two innings-summary posts.
+    test.setTimeout(180_000);
 
     // THREE players a side, not one: `allOutWickets` (cricket.ts) is
     // `max(1, min(cfg.playersPerSide, order.length) - 1)` — a one-player
@@ -254,8 +247,14 @@ test(
     });
     const batterName = `V3 Line Batter ${TAG}`;
     const bowlerName = `V3 Line Bowler ${TAG}`;
+    // A THIRD person (a spare home roster slot), never given a line by the
+    // first two submissions below — `applyPlayerLine`'s own dupe check
+    // refuses a second line for the SAME person+aspect in one innings, so
+    // the legacy-shape line (line 3) needs a person of its own.
+    const home2Name = `V3 Line Home2 ${TAG}`;
     const batterId = fx.personIds[batterName]!;
     const bowlerId = fx.personIds[bowlerName]!;
+    const home2Id = fx.personIds[home2Name]!;
 
     await postEvent(page.request, fx.fixtureId, "core.start", {});
     // Innings 1 — home bats first (no toss posted, cricket.ts's default
@@ -286,21 +285,18 @@ test(
     await pad(page).getByRole("button", { name: "More", exact: true }).click();
     await pad(page).getByRole("button", { name: "Scorecard line", exact: true }).click();
 
-    // --- Line 1: every new field touched. ---------------------------------
+    // --- Line 1: BATTING-ONLY, every batting field touched, bowling never
+    // touched at all (Task 20's headline scenario). -----------------------
     await pad(page).getByLabel("Innings", { exact: true }).fill("1");
     await pad(page).getByLabel("Batting out", { exact: true }).check();
     await pad(page).getByLabel("Batting runs", { exact: true }).fill("42");
     await pad(page).getByLabel("Batting balls", { exact: true }).fill("30");
     await pad(page).getByLabel(PLAYER_LINE_LABEL.fours, { exact: true }).fill("5");
     await pad(page).getByLabel(PLAYER_LINE_LABEL.sixes, { exact: true }).fill("2");
-    // The original seven fields cover BOTH a batting and a bowling aspect on
-    // one action (`checkActionValidity` requires every declared, non-
-    // optional field) — this line only bats, so its bowling aspect is
-    // recorded as zeroes, exactly as a scorer filing a batting-only line
-    // always had to before this task.
-    await pad(page).getByLabel("Bowling legal balls", { exact: true }).fill("0");
-    await pad(page).getByLabel("Bowling runs", { exact: true }).fill("0");
-    await pad(page).getByLabel("Bowling wickets", { exact: true }).fill("0");
+    // Deliberately NOT filled: "Bowling legal balls"/"Bowling runs"/
+    // "Bowling wickets" — before Task 20 these had to be zero-filled just to
+    // satisfy Confirm; now the bowling GROUP stays untouched and is omitted
+    // from the built payload entirely (view-model.ts's `groupsTouched`).
 
     // The dismissal-kind chip row (owner ruling 12/S18 — PadFieldEnum.chips).
     // Scoped by `data-field-path`, not by PLAYER_LINE_LABEL.dismissalKind's
@@ -338,16 +334,16 @@ test(
       .click();
 
     await pad(page).getByRole("button", { name: "Confirm", exact: true }).click();
-    await sendHeldNow(page);
-
+    // No "Send now" for this event type (see the doc above) — the poll
+    // itself waits out the natural HOLD_MS drain, 25s margin over 12s.
     await expect
-      .poll(async () => (await playerLineEvents(page.request, fx.fixtureId)).length, { timeout: 20_000 })
+      .poll(async () => (await playerLineEvents(page.request, fx.fixtureId)).length, { timeout: 25_000 })
       .toBe(1);
 
-    const enrichedLine = (await playerLineEvents(page.request, fx.fixtureId))[0]!;
-    // deep-equal, not toMatchObject — no extra keys, and every tapped value
-    // lands exactly where it was tapped.
-    expect(enrichedLine.payload).toEqual({
+    const battingOnlyLine = (await playerLineEvents(page.request, fx.fixtureId))[0]!;
+    // deep-equal, not toMatchObject — no extra keys, every tapped value
+    // lands exactly where it was tapped, and NO `bowling` key at all.
+    expect(battingOnlyLine.payload).toEqual({
       innings: 1,
       person: batterId,
       batting: {
@@ -358,43 +354,84 @@ test(
         sixes: 2,
         dismissal: { kind: "bowled", bowler: bowlerId },
       },
-      bowling: { legalBalls: 0, runs: 0, wickets: 0 },
     });
+    expect(Object.prototype.hasOwnProperty.call(battingOnlyLine.payload, "bowling")).toBe(false);
 
-    // --- Line 2: negative-with-positive pair — touch NOTHING new. ---------
-    // Confirm on line 1 collapses the row back (ActionFormList's own
-    // `resetAction`); the "More" sheet itself stays open, so the same
-    // collapsed "Scorecard line" row is tapped again with fresh values.
+    // --- Line 2: BOWLING-ONLY, mirroring Line 1 — batting never touched at
+    // all, including its "Batting out" toggle (view-model.ts's `groupsTouched`
+    // excludes toggles from "touched" precisely so this leftover default
+    // never leaks a half-formed `batting` object into the payload). The
+    // bowler ("V3 Line Bowler") is in the AWAY roster, the bowling side for
+    // innings 1 — `applyPlayerLine` checks the bowling order independently
+    // of the batting order it never touches for this line. `wickets: 1`
+    // (not 2) — `applyPlayerLine`'s coarse-mode sum-consistency check bounds
+    // it against innings 1's own recorded total of 1 wicket ("150/1"); a
+    // higher figure 422s with "player line disagrees with the innings
+    // totals", found by driving this line for real (verified directly
+    // against the server, not inferred). Confirm on line 1 collapses the
+    // row back (ActionFormList's own `resetAction`); the "More" sheet
+    // itself stays open, so the same collapsed "Scorecard line" row is
+    // tapped again with fresh values. -------------------------------------
+    await pad(page).getByRole("button", { name: "Scorecard line", exact: true }).click();
+    await pad(page).getByLabel("Innings", { exact: true }).fill("1");
+    await pad(page).getByLabel("Bowling legal balls", { exact: true }).fill("12");
+    await pad(page).getByLabel("Bowling runs", { exact: true }).fill("20");
+    await pad(page).getByLabel("Bowling wickets", { exact: true }).fill("1");
+    await pad(page).getByLabel(PLAYER_LINE_LABEL.maidens, { exact: true }).fill("1");
+    await pad(page).getByLabel(PLAYER_LINE_LABEL.wides, { exact: true }).fill("2");
+    await pad(page).getByLabel(PLAYER_LINE_LABEL.noBalls, { exact: true }).fill("0");
+    await pad(page)
+      .locator('[data-attribution-path="person"]')
+      .getByRole("button", { name: bowlerName, exact: true })
+      .click();
+
+    await pad(page).getByRole("button", { name: "Confirm", exact: true }).click();
+    await expect
+      .poll(async () => (await playerLineEvents(page.request, fx.fixtureId)).length, { timeout: 25_000 })
+      .toBe(2);
+
+    const bowlingOnlyLine = (await playerLineEvents(page.request, fx.fixtureId))[1]!;
+    expect(bowlingOnlyLine.payload).toEqual({
+      innings: 1,
+      person: bowlerId,
+      bowling: { legalBalls: 12, runs: 20, wickets: 1, maidens: 1, wides: 2, noBalls: 0 },
+    });
+    expect(Object.prototype.hasOwnProperty.call(bowlingOnlyLine.payload, "batting")).toBe(false);
+
+    // --- Line 3: the legacy single-aspect shape — only the ORIGINAL three
+    // batting fields (out/runs/balls), none of Task 17's six band-2
+    // enrichment fields, and bowling untouched. This is the documented
+    // shape a pre-ruling-12 scorer's batting-only line has always produced
+    // (byte-identical): before Task 20 the pad could never actually reach
+    // it (bowling's three legacy fields had to be zero-filled too); now it
+    // can. A fresh person (home2) since `applyPlayerLine` refuses a second
+    // line for the SAME person+aspect in one innings. ----------------------
     await pad(page).getByRole("button", { name: "Scorecard line", exact: true }).click();
     await pad(page).getByLabel("Innings", { exact: true }).fill("1");
     await pad(page).getByLabel("Batting out", { exact: true }).check();
     await pad(page).getByLabel("Batting runs", { exact: true }).fill("10");
     await pad(page).getByLabel("Batting balls", { exact: true }).fill("8");
-    await pad(page).getByLabel("Bowling legal balls", { exact: true }).fill("6");
-    await pad(page).getByLabel("Bowling runs", { exact: true }).fill("4");
-    await pad(page).getByLabel("Bowling wickets", { exact: true }).fill("1");
     await pad(page)
       .locator('[data-attribution-path="person"]')
-      .getByRole("button", { name: batterName, exact: true })
+      .getByRole("button", { name: home2Name, exact: true })
       .click();
 
     await pad(page).getByRole("button", { name: "Confirm", exact: true }).click();
-    await sendHeldNow(page);
-
     await expect
-      .poll(async () => (await playerLineEvents(page.request, fx.fixtureId)).length, { timeout: 20_000 })
-      .toBe(2);
+      .poll(async () => (await playerLineEvents(page.request, fx.fixtureId)).length, { timeout: 25_000 })
+      .toBe(3);
 
-    const legacyLine = (await playerLineEvents(page.request, fx.fixtureId))[1]!;
-    // The exact legacy 7-field shape (pre-ruling-12) — no fours/sixes/
-    // dismissal/maidens/wides/noBalls key anywhere, proving the six new
-    // optional fields never widen the payload when a scorer never touches
-    // them.
-    expect(legacyLine.payload).toEqual({
+    const legacyShapeLine = (await playerLineEvents(page.request, fx.fixtureId))[2]!;
+    // The documented single-aspect legacy shape: `{ innings, person,
+    // batting: { out, runs, balls } }` — no fours/sixes/dismissal key, and
+    // no `bowling` key at all (updated from Task 18's own documented shape,
+    // which required both aspects — see the file header for why that was
+    // never actually reachable through the product).
+    expect(legacyShapeLine.payload).toEqual({
       innings: 1,
-      person: batterId,
+      person: home2Id,
       batting: { out: true, runs: 10, balls: 8 },
-      bowling: { legalBalls: 6, runs: 4, wickets: 1 },
     });
+    expect(Object.prototype.hasOwnProperty.call(legacyShapeLine.payload, "bowling")).toBe(false);
   },
 );

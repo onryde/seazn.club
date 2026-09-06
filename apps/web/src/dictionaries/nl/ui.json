@@ -4451,6 +4451,7 @@
   "board.result.overrideConfirm.confirm": "Opnieuw uitvoeren en verplaatsen toestaan",
   "scorepad.validity.missingFields": "Vul de verplichte velden in om door te gaan.",
   "scorepad.validity.missingAttribution": "Kies wie verplicht is voordat je verdergaat.",
+  "scorepad.validity.missingGroup": "Vul ten minste een van de gemarkeerde secties in om door te gaan.",
   "scorepad.clock.label": "Klok",
   "scorepad.clock.start": "Starten",
   "scorepad.clock.pause": "Pauzeren",

@@ -3015,20 +3015,30 @@ export function padSpec(cfg: CricketCfg): PadSpec {
   //   ever picking a kind would otherwise build a payload the schema rejects
   //   outright. See `PadAttributionItem.requiresField`'s own doc in
   //   sport/module.ts for the full mechanism.
+  //
+  // Task 20 — `group: "batting"`/`"bowling"` on every field of its aspect
+  // (including the legacy, still-`optional`-less ones): `CricketPlayerLine`'s
+  // schema and `applyPlayerLine` already accept EITHER aspect alone (see
+  // this schema's own `.refine()` and `applyPlayerLine`'s independent
+  // `payload.batting !== undefined`/`payload.bowling !== undefined` checks
+  // below) — the pad-form layer was the only place still requiring BOTH.
+  // `PadField.group`'s own doc (sport/module.ts) has the full mechanism;
+  // `innings` stays ungrouped (shared by both aspects, always required).
   const playerLineAction: PadAction = {
     type: "cricket.player.line",
     labelKey: { key: "pad.cricket.action.playerLine", label: "Scorecard line" },
     fields: [
       { kind: "number", path: "innings", min: 1, max: Math.max(1, cfg.inningsPerSide * 2) },
-      { kind: "toggle", path: "batting.out" },
-      { kind: "number", path: "batting.runs", min: 0, max: MAX_PLAUSIBLE_RUNS },
-      { kind: "number", path: "batting.balls", min: 0, max: inningsBallsBound(cfg) },
+      { kind: "toggle", path: "batting.out", group: "batting" },
+      { kind: "number", path: "batting.runs", min: 0, max: MAX_PLAUSIBLE_RUNS, group: "batting" },
+      { kind: "number", path: "batting.balls", min: 0, max: inningsBallsBound(cfg), group: "batting" },
       {
         kind: "number",
         path: "batting.fours",
         min: 0,
         max: inningsBallsBound(cfg),
         optional: true,
+        group: "batting",
         labelKey: { key: "pad.cricket.action.playerLine.field.fours", label: "Fours" },
       },
       {
@@ -3037,6 +3047,7 @@ export function padSpec(cfg: CricketCfg): PadSpec {
         min: 0,
         max: inningsBallsBound(cfg),
         optional: true,
+        group: "batting",
         labelKey: { key: "pad.cricket.action.playerLine.field.sixes", label: "Sixes" },
       },
       {
@@ -3045,17 +3056,19 @@ export function padSpec(cfg: CricketCfg): PadSpec {
         values: DISMISSAL_KINDS,
         chips: true,
         optional: true,
+        group: "batting",
         labelKey: { key: "pad.cricket.action.playerLine.field.dismissalKind", label: "How out" },
       },
-      { kind: "number", path: "bowling.legalBalls", min: 0, max: inningsBallsBound(cfg) },
-      { kind: "number", path: "bowling.runs", min: 0, max: MAX_PLAUSIBLE_RUNS },
-      { kind: "number", path: "bowling.wickets", min: 0, max: Math.max(0, cfg.playersPerSide - 1) },
+      { kind: "number", path: "bowling.legalBalls", min: 0, max: inningsBallsBound(cfg), group: "bowling" },
+      { kind: "number", path: "bowling.runs", min: 0, max: MAX_PLAUSIBLE_RUNS, group: "bowling" },
+      { kind: "number", path: "bowling.wickets", min: 0, max: Math.max(0, cfg.playersPerSide - 1), group: "bowling" },
       {
         kind: "number",
         path: "bowling.maidens",
         min: 0,
         max: Math.max(0, Math.floor(inningsBallsBound(cfg) / cfg.ballsPerOver)),
         optional: true,
+        group: "bowling",
         labelKey: { key: "pad.cricket.action.playerLine.field.maidens", label: "Maidens" },
       },
       {
@@ -3064,6 +3077,7 @@ export function padSpec(cfg: CricketCfg): PadSpec {
         min: 0,
         max: MAX_PLAUSIBLE_RUNS,
         optional: true,
+        group: "bowling",
         labelKey: { key: "pad.cricket.action.playerLine.field.wides", label: "Wides" },
       },
       {
@@ -3072,6 +3086,7 @@ export function padSpec(cfg: CricketCfg): PadSpec {
         min: 0,
         max: MAX_PLAUSIBLE_RUNS,
         optional: true,
+        group: "bowling",
         labelKey: { key: "pad.cricket.action.playerLine.field.noBalls", label: "No-balls" },
       },
     ],

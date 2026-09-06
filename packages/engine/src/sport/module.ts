@@ -224,6 +224,9 @@ export interface PadFieldEnum {
    *  restated here because `PadField` is a discriminated union and each
    *  member carries its own copy of the flag. */
   optional?: boolean;
+  /** Task 20 — same meaning as `PadFieldNumber.group` below, restated here
+   *  for the same discriminated-union reason `optional` gives above. */
+  group?: string;
 }
 export interface PadFieldNumber {
   kind: "number";
@@ -244,6 +247,36 @@ export interface PadFieldNumber {
    *  required), which is what keeps the legacy 7-field payload reachable
    *  from the pad with nothing new touched. */
   optional?: boolean;
+  /**
+   * Task 20 — a THIRD, independent hand-authored flag: fields sharing the
+   * same `group` name on one `PadAction` form an aspect that is all-or-
+   * nothing from Confirm's point of view. `checkActionValidity`/
+   * `buildActionPayload` (view-model.ts) treat a group with ZERO touched
+   * fields as entirely omitted — none of its fields are required, and none
+   * of their values (even a stray default, e.g. a toggle's own `false`
+   * from `initialActionValues`) reach the built payload. The moment ANY
+   * field in the group is touched, every field in that same group reverts
+   * to its own `optional` flag exactly as if `group` were absent (so a
+   * half-filled aspect still blocks Confirm on its own required fields).
+   *
+   * Why this exists (`cricket.player.line`, Task 20): the legacy seven
+   * fields split evenly across `batting.*`/`bowling.*`, and `applyPlayerLine`
+   * (cricket.ts) — like `CricketPlayerLine`'s own schema — already accepts
+   * EITHER aspect alone (the schema's `.refine()` requires only "at least
+   * one"). Before `group`, every field lacking `optional: true` was
+   * unconditionally required, so a real Confirm always built BOTH aspects —
+   * impossible for a real fixture, since a person cannot be a member of a
+   * batting side's order AND the OPPOSING side's bowling order at once.
+   * `group` lets the pad mirror the schema's own "at least one, not both"
+   * rule instead of requiring both, with no schema or reducer change.
+   *
+   * An action declaring 2+ distinct group names on its fields additionally
+   * requires that at least one group be touched — see
+   * `MISSING_GROUP_REASON`'s own doc in view-model.ts for why that reason
+   * stays chassis-generic rather than naming "batting"/"bowling" here.
+   * Absent means "ungrouped", identical to every field before this flag
+   * existed. */
+  group?: string;
 }
 export interface PadFieldToggle {
   kind: "toggle";
@@ -253,6 +286,15 @@ export interface PadFieldToggle {
    *  present for union symmetry, so `checkActionValidity` can read
    *  `field.optional` generically without a per-kind type narrow. */
   optional?: boolean;
+  /** See `PadFieldNumber.group`. A toggle's value is EXCLUDED from a
+   *  group's own "has this aspect been touched" test (view-model.ts's
+   *  `groupIsTouched`) — `initialActionValues` (action-form.tsx) defaults
+   *  every toggle field to `false` before the scorer taps anything, so a
+   *  toggle can never honestly signal "untouched" the way an unset number/
+   *  enum field can. `cricket.player.line`'s `batting.out` is exactly this
+   *  case: grouped `"batting"`, but its pre-seeded `false` must never by
+   *  itself mark the batting aspect as touched. */
+  group?: string;
 }
 export type PadField = PadFieldEnum | PadFieldNumber | PadFieldToggle;
 

@@ -1249,6 +1249,15 @@ describe("deriveCricketScorecard — coarser bands, result, super over", () => {
     // Every expected number is read back off the LEDGER's own line records —
     // `state.playerLines` is what `applyPlayerLine` stored from the very
     // payloads the fold reads — never re-typed here.
+    //
+    // Task 20 — `scorecard-ledger.ts`'s own `DEFAULT_LINES` (this test's
+    // fixture, via `lineLedger()`) has ALWAYS been two single-aspect lines
+    // (h1 batting-only, a7 bowling-only), so this test already proves the
+    // fold's own `onLine` (scorecard.ts) reads a single aspect correctly —
+    // extended here (not duplicated) with the explicit negative half: a
+    // batting-only line produces NO BowlingLine for that same person, and
+    // the mirror case, closing the exact gap the pad-form layer used to
+    // paper over by sending both aspects regardless.
     const h1Line = state.playerLines.find((line) => line.person === "h1")!.batting!;
     const h1 = inn1.batting.find((b) => b.person === "h1")!;
     expect(h1).toMatchObject({
@@ -1260,6 +1269,7 @@ describe("deriveCricketScorecard — coarser bands, result, super over", () => {
     });
     expect(h1.strikeRate).toBe(150);
     expect(h1.strikeRate).toBe(Math.round(((h1Line.runs * 100) / h1Line.balls) * 10) / 10);
+    expect(inn1.bowling.find((b) => b.person === "h1")).toBeUndefined();
 
     const a7Line = state.playerLines.find((line) => line.person === "a7")!.bowling!;
     expect(inn1.bowling[0]).toMatchObject({
@@ -1273,6 +1283,9 @@ describe("deriveCricketScorecard — coarser bands, result, super over", () => {
     });
     expect(inn1.bowling[0]!.economy).toBe(10);
     expect(inn1.bowling[0]!.economy).toBe((a7Line.runs * cfg.ballsPerOver) / a7Line.legalBalls);
+    // Mirror of the h1 negative assertion above: a bowling-only line
+    // produces NO BattingLine for that same person.
+    expect(inn1.batting.find((b) => b.person === "a7")).toBeUndefined();
     // `overs` is the same notation the totals print, off the line's own balls.
     expect(inn1.bowling[0]!.overs).toBe(
       `${Math.floor(a7Line.legalBalls / cfg.ballsPerOver)}.${a7Line.legalBalls % cfg.ballsPerOver}`,

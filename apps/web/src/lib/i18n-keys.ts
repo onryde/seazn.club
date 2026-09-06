@@ -4996,6 +4996,7 @@ export type DictionaryKey =
   | "scorepad.v2.moduleUnavailable"
   | "scorepad.validity.missingAttribution"
   | "scorepad.validity.missingFields"
+  | "scorepad.validity.missingGroup"
   | "scoring.position.board"
   | "scoring.position.clock"
   | "scoring.position.game"

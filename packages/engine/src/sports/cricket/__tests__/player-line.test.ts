@@ -175,3 +175,73 @@ describe("cricket.player.line padSpec — S18 pad-wiring flags", () => {
     expect(fielder.requiresField).toBe("batting.dismissal.kind");
   });
 });
+
+// Task 20 — Task 19's live run proved a second, pre-existing defect: the pad's
+// generic form always sent BOTH `batting` and `bowling` (the legacy seven
+// fields carried no `optional: true`), so `applyPlayerLine`'s independent
+// order-membership checks then required the SAME person to be a member of
+// BOTH the batting side's AND the opposing side's bowling order —
+// structurally impossible for any real two-team fixture.
+//
+// Verified from source first (task-19-review.md's own independent read,
+// re-confirmed here): `CricketPlayerLine.batting`/`.bowling` are ALREADY
+// each `.optional()` (cricket.ts:338-365) with a `.refine()` requiring at
+// least one (cricket.ts:367-369), and `applyPlayerLine`'s two order checks
+// (cricket.ts:1806, 1838) already run only `if (payload.batting !==
+// undefined)` / `if (payload.bowling !== undefined)`. So NO schema or
+// reducer change is needed — this suite proves that, and
+// `scorecard-ledger.ts`'s own `DEFAULT_LINES` (h1 batting-only, a7
+// bowling-only — see that file's comment) has exercised exactly this shape
+// as the DEFAULT fixture for every test using `lineLedger()` since Task 4,
+// which is independent, pre-existing evidence the reducer path was never
+// the problem. The fix (below, view-model.ts) is confined to the pad-form
+// layer: `PadField.group` lets the legacy 7 fields stay optional AS A
+// GROUP (an untouched aspect is omitted from the payload) while a NEITHER-
+// aspect line is still refused before Confirm.
+describe("cricket.player.line — a single aspect is accepted end to end (Task 20)", () => {
+  it("CricketPlayerLine schema accepts a batting-only line (no bowling key at all)", () => {
+    const result = CricketPlayerLine.safeParse({ innings: 1, person: "h1", batting: { runs: 30, balls: 20 } });
+    expect(result.success).toBe(true);
+    if (result.success) expect(Object.prototype.hasOwnProperty.call(result.data, "bowling")).toBe(false);
+  });
+
+  it("CricketPlayerLine schema accepts a bowling-only line (no batting key at all)", () => {
+    const result = CricketPlayerLine.safeParse({
+      innings: 1,
+      person: "a7",
+      bowling: { legalBalls: 12, runs: 20, wickets: 2 },
+    });
+    expect(result.success).toBe(true);
+    if (result.success) expect(Object.prototype.hasOwnProperty.call(result.data, "batting")).toBe(false);
+  });
+
+  it("CricketPlayerLine schema rejects a line with NEITHER aspect", () => {
+    const result = CricketPlayerLine.safeParse({ innings: 1, person: "h1" });
+    expect(result.success).toBe(false);
+  });
+
+  it("applyPlayerLine accepts a batting-only line for a home player — never consults the away bowling order", () => {
+    // "h1" is in home's BATTING order only; if the reducer wrongly checked
+    // the bowling side too (the pre-Task-20 pad-layer defect's symptom), this
+    // would throw "not in the bowling lineup" instead of succeeding.
+    expect(() => lineLedger(undefined, [{ innings: 1, person: "h1", batting: { runs: 5, balls: 5 } }])).not.toThrow();
+  });
+
+  it("applyPlayerLine accepts a bowling-only line for an away player — never consults the home batting order", () => {
+    expect(() =>
+      lineLedger(undefined, [{ innings: 1, person: "a7", bowling: { legalBalls: 6, runs: 5, wickets: 0 } }]),
+    ).not.toThrow();
+  });
+
+  it("padSpec(cfg) groups every batting.* field 'batting' and every bowling.* field 'bowling' (view-model.ts's group-omission needs this)", () => {
+    const cfg = cricket.configSchema.parse({});
+    const action = padSpec(cfg)
+      .panels.flatMap((p) => p.actions)
+      .find((a) => a.type === "cricket.player.line")!;
+    for (const field of action.fields) {
+      if (field.path.startsWith("batting.")) expect(field.group).toBe("batting");
+      else if (field.path.startsWith("bowling.")) expect(field.group).toBe("bowling");
+      else expect(field.group).toBeUndefined(); // "innings" — shared, ungrouped
+    }
+  });
+});

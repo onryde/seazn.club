@@ -4451,6 +4451,7 @@
   "board.result.overrideConfirm.confirm": "Re-run and allow moving",
   "scorepad.validity.missingFields": "Fill in the required fields to continue.",
   "scorepad.validity.missingAttribution": "Choose who's required before you can continue.",
+  "scorepad.validity.missingGroup": "Fill in at least one of the highlighted sections to continue.",
   "scorepad.clock.label": "Clock",
   "scorepad.clock.start": "Start",
   "scorepad.clock.pause": "Pause",
