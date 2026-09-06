@@ -9,42 +9,26 @@
 // renders as props and calls no `use*` DATA hook of its own (useMsg is a
 // plain context read, not a data fetch, and is fine — see stages-panel.tsx's
 // own `useCapacityReportsByStage` comment for why a data-fetching hook
-// specifically must not move into a per-stage child: it broke pre-existing
-// tests that locate the auto-schedule button by testid). Task 5 folds this
-// into a phone bottom sheet.
+// specifically must not move into a per-stage child). Task 5 folds this into
+// a phone bottom sheet.
 //
-// Task 4 tried and REVERTED moving the auto-schedule CTA here — recorded so
-// a future attempt does not re-spend the same investigation. The failure is
-// NOT about the capacity hook (that constraint is satisfied fine: the panel
-// can compute a plain per-stage verdict and hand it down as a prop). It is
-// `_hook-harness.tsx`'s `walk()`: `stages-panel.tsx` is driven through
-// `renderIsland`/`walk` by `stages-panel-auto-schedule-seq.test.tsx` and
-// `stages-panel-result-strip.test.tsx`, which locate the auto-schedule
-// button by testid and click it to observe async state INSIDE StagesPanel —
-// `renderToStaticMarkup` cannot do that (no interactivity). `walk()` only
-// recurses into an element's `.props.children`; it never invokes a nested
-// function component's own render function, so ANY element that ends up
-// inside `<StageRail>`'s returned tree is invisible to it from
-// `StagesPanel`'s root — proved empirically (moving the button here
-// reddened exactly those two files' 3 tests, restored clean by reverting).
-// Critically, this is true regardless of HOW the button reaches
-// `<StageRail>`: building it inside this file's own render, or handing it
-// in as an already-built element via a named prop (a `courtTagsSlot`-shaped
-// "slot"), are the SAME shape from `walk()`'s perspective — it only ever
-// reads `.props.children`, never any other prop, so a slot is exactly as
-// invisible as an inline render. Calling `StageRail` as a plain function
-// (skipping the JSX/component boundary, so its output inlines directly into
-// `StagesPanel`'s own tree) is also unsafe: `StagesPanel` calls it once per
-// stage inside `.map()` over a variable-length `stages` array, and this
-// file's own `useMsg()` is a real hook — a variable per-render hook count
-// corrupts React's hook list the moment a stage is added or removed, in
-// production, not just in this harness. The only way to move the CTA here
-// for real is to give `stages-panel-auto-schedule-seq.test.tsx` and
-// `stages-panel-result-strip.test.tsx` a custom `expand` argument to
-// `renderIsland` that also expands `StageRail` (this repo already has that
-// pattern elsewhere — see `create-org-form.test.tsx`'s `expandRows` /
-// `registration-hub-config-panel.test.tsx`'s `expandPanel`) — out of scope
-// for a task that may not touch those two files.
+// Task 4 first attempt moved the auto-schedule CTA here and reverted: it
+// reddened `stages-panel-auto-schedule-seq.test.tsx` and
+// `stages-panel-result-strip.test.tsx`, which locate the button by testid
+// through `renderIsland`'s default `walk()` — and `walk()` only recurses an
+// element's `.props.children`, never invoking a nested function component's
+// own render, so anything inside `<StageRail>`'s output was invisible to it
+// from `StagesPanel`'s root, inline render or slot prop alike (full
+// investigation in git history / task-4-report.md).
+//
+// Fix round 1 (owner ruling): fixed the TEST HELPER instead of abandoning
+// the move. `_hook-harness.tsx` grew `expandWithHooks`, a way to expand a
+// hook-using child (this file's own `useMsg()`) from a custom `expand`
+// passed to `renderIsland` — mirroring the repo's existing hookless
+// `expandRows`/`expandPanel` pattern, but installing a minimal `useContext`-
+// only dispatcher for the duration of the call so a real hook doesn't hit
+// React with no dispatcher active. Both test files now use it. The CTA
+// below is the result — see its own comment for the shape.
 import { useMsg } from "@/components/i18n/dict-provider";
 
 interface StageRow {
@@ -78,6 +62,25 @@ export interface StageRailProps {
    *  an already-built element — a slot, not a component reference — so the
    *  rail keeps owning no data hook of its own. */
   courtTagsSlot: React.ReactNode;
+  /** Task 4 — how many of this stage's fixtures are still unscheduled.
+   *  Computed by the panel from its own `fixtures` prop, same as
+   *  `fixtureCount` above. `0` hides the whole pinned section (count badge +
+   *  CTA + blocked reason), matching the panel's own former
+   *  `unscheduled.length > 0` gate byte-for-byte. */
+  unscheduledCount: number;
+  /** Task 4 — the D2 capacity pre-check verdict for THIS stage, already
+   *  resolved to a plain value by the panel's own `capacityGateBlocks`
+   *  predicate and `msg("schedule.capacity.blockedReason")` call. The rail
+   *  owns no `useCapacityReportsByStage` subscription of its own — see this
+   *  file's own header, and stages-panel.tsx's comment above its one call to
+   *  that hook. `null` (or `{ blocked: false, reason: null }`) never blocks
+   *  — same fail-open contract `capacityGateBlocks` documents. */
+  capacityBlocked: { blocked: boolean; reason: string | null } | null;
+  /** Task 4 — fires the "Auto-schedule remaining" propose+apply pair for
+   *  this stage. The rail only ever calls this with `stage.id`; it holds no
+   *  request state of its own (`busy` above is what disables it mid-flight,
+   *  same prop the other rail buttons already read). */
+  onAutoSchedule: (stageId: string) => void;
 }
 
 export function StageRail({
@@ -92,6 +95,9 @@ export function StageRail({
   onToggleAddMatch,
   adhoc,
   courtTagsSlot,
+  unscheduledCount,
+  capacityBlocked,
+  onAutoSchedule,
 }: StageRailProps) {
   const msg = useMsg();
 
@@ -189,6 +195,43 @@ export function StageRail({
         </button>
       )}
       {courtTagsSlot}
+      {/* Task 4 — the pinned unscheduled section (count + auto-schedule CTA
+          + capacity blocked reason), moved onto the rail verbatim: same
+          classNames, same gating, same testids. The D2 capacity verdict
+          itself is computed once in stages-panel.tsx (its comment above
+          `useCapacityReportsByStage` explains why that subscription cannot
+          move here) and handed down already-resolved as `capacityBlocked`. */}
+      {unscheduledCount > 0 && (
+        <div className="border-b border-dashed border-slate-200 bg-slate-50/60 px-4 py-3">
+          <div className="flex flex-wrap items-center gap-2">
+            <p className="text-xs font-semibold text-slate-700">
+              {msg("schedule.unscheduled.title")}
+              <span
+                data-testid="stage-unscheduled-count"
+                className="ml-1.5 rounded-full bg-slate-200 px-1.5 text-[11px] font-medium text-slate-700"
+              >
+                {unscheduledCount}
+              </span>
+            </p>
+            {canEdit && stage.status !== "complete" && (
+              <button
+                type="button"
+                data-testid="stage-auto-schedule"
+                disabled={busy !== null || (capacityBlocked?.blocked ?? false)}
+                onClick={() => onAutoSchedule(stage.id)}
+                className="btn btn-primary min-h-11 px-3 py-1 text-xs"
+              >
+                {busy === stage.id ? msg("schedule.working") : msg("schedule.unscheduled.cta")}
+              </button>
+            )}
+          </div>
+          {capacityBlocked?.blocked && (
+            <p data-testid="stage-auto-schedule-blocked" className="mt-1.5 text-xs text-red-600">
+              {capacityBlocked.reason}
+            </p>
+          )}
+        </div>
+      )}
     </>
   );
 }

@@ -403,3 +403,70 @@ export function renderIsland<P>(
     },
   };
 }
+
+/**
+ * Competition Desk W3 Task 4, fix round 1 — expand a CHILD function
+ * component that itself calls hooks, from OUTSIDE a live `renderIsland`
+ * render (e.g. from a custom `expand` argument, the way `expandRows`
+ * (`create-org-form.test.tsx`) walks into a hookless `BillRow`). That
+ * existing pattern calls the child directly as a plain function — safe only
+ * because `BillRow` is hookless, so no dispatcher needs to be active. A
+ * hook-using child called the same way would hit React's REAL
+ * `useContext`/`useState`/etc with no dispatcher installed (`renderIsland`'s
+ * own `run()` has already restored `slot.H` to whatever it was before the
+ * render finished by the time a test's `expand` runs) — "Invalid hook call"
+ * in real React, not a graceful degrade.
+ *
+ * This installs a minimal, STATELESS dispatcher — for the duration of the
+ * call, then restores whatever was active before — supporting exactly the
+ * READ-ONLY hooks that need no cross-render identity to stay correct:
+ * `useContext` (same "no provider tree, read the DEFAULT value" contract
+ * `renderIsland`'s own dispatcher documents above), and `useMemo`/
+ * `useCallback` as unconditional passthroughs (`create()`/`fn` every call —
+ * memoisation is a performance optimisation, never a correctness one, so
+ * recomputing on a one-shot call is always safe; discovered necessary
+ * because `useMsg()` itself is `useContext` THEN `useMemo` over the result,
+ * not `useContext` alone — see dict-provider.tsx). Every STATEFUL hook
+ * throws a clearly-labelled error rather than silently misbehaving: a child
+ * that turns out to need real state (`useState`/`useEffect`/a reducer/a
+ * store subscription) needs `renderIsland` on it directly, not this — this
+ * helper exists for the narrow "presentational child whose only hooks are
+ * plain reads" shape (`StageRail`'s own `useMsg()`, see stage-rail.tsx's
+ * header for why it stays exactly that).
+ */
+export function expandWithHooks<P>(Component: (props: P) => ReactNode, props: P): ReactNode {
+  const slot = hookDispatcherSlot();
+  const previous = slot.H;
+  const readOnly: HookDispatcher = {
+    useState() {
+      throw new Error("expandWithHooks: useState is not supported — this helper is read-only hooks (useContext/useMemo/useCallback) only.");
+    },
+    useEffect() {
+      throw new Error("expandWithHooks: useEffect is not supported — this helper is read-only hooks (useContext/useMemo/useCallback) only.");
+    },
+    useMemo(create) {
+      return create();
+    },
+    useCallback(fn) {
+      return fn;
+    },
+    useRef() {
+      throw new Error("expandWithHooks: useRef is not supported — this helper is read-only hooks (useContext/useMemo/useCallback) only.");
+    },
+    useReducer() {
+      throw new Error("expandWithHooks: useReducer is not supported — this helper is read-only hooks (useContext/useMemo/useCallback) only.");
+    },
+    useContext(context) {
+      return context._currentValue;
+    },
+    useSyncExternalStore() {
+      throw new Error("expandWithHooks: useSyncExternalStore is not supported — this helper is read-only hooks (useContext/useMemo/useCallback) only.");
+    },
+  };
+  slot.H = readOnly;
+  try {
+    return Component(props);
+  } finally {
+    slot.H = previous;
+  }
+}

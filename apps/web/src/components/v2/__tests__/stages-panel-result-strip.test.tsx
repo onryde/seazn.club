@@ -14,8 +14,9 @@
 // No DOM here (vitest `environment: "node"`), so the panel is mounted through
 // the shared hook harness and the CTA is fired through its own `onClick`.
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { ReactElement } from "react";
-import { propsOf, renderIsland } from "@/components/__tests__/_hook-harness";
+import type { ReactElement, ReactNode } from "react";
+import { expandWithHooks, propsOf, renderIsland, walk } from "@/components/__tests__/_hook-harness";
+import { StageRail } from "@/components/v2/desk/stage-rail";
 
 const nav = vi.hoisted(() => ({ refresh: vi.fn(), push: vi.fn() }));
 vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: nav.refresh, push: nav.push }) }));
@@ -107,6 +108,23 @@ const SOLVER = {
 
 const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
 
+/** Task 4, fix round 1 — the auto-schedule CTA now lives on `<StageRail>`,
+ *  which `walk()`'s default `expand` cannot see past (it only recurses an
+ *  element's `.props.children`, never invoking a nested function
+ *  component's own render — see stage-rail.tsx's own header). Expand
+ *  `<StageRail>` the same way `create-org-form.test.tsx`'s `expandRows`
+ *  expands the hookless `BillRow`, except `StageRail` calls a real hook
+ *  (`useMsg`), so `expandWithHooks` (not a bare `StageRail(propsOf(el))`
+ *  call) installs a minimal dispatcher for the duration of the call. */
+function expandStageRail(node: ReactNode): ReactElement[] {
+  const top = walk(node);
+  const rails = top.filter((el) => el.type === StageRail);
+  return [
+    ...top,
+    ...rails.flatMap((el) => walk(expandWithHooks(StageRail, propsOf(el) as unknown as Parameters<typeof StageRail>[0]))),
+  ];
+}
+
 /**
  * The panel's auto-schedule CTA, by testid.
  *
@@ -135,7 +153,7 @@ describe("StagesPanel — Auto-schedule remaining reports its run", () => {
       metrics: METRICS,
       solver: SOLVER,
     };
-    const island = renderIsland(StagesPanel, baseProps);
+    const island = renderIsland(StagesPanel, baseProps, expandStageRail);
     expect(island.tree().find((n) => n.type === ScheduleResultStrip)).toBeUndefined();
 
     await fireAutoSchedule(island.tree());
@@ -159,7 +177,7 @@ describe("StagesPanel — Auto-schedule remaining reports its run", () => {
    */
   it("reports a run that placed nothing, instead of a bare 'nothing to schedule'", async () => {
     net.auto = { assignments: [], metrics: { ...METRICS, placed: 0 }, solver: SOLVER };
-    const island = renderIsland(StagesPanel, baseProps);
+    const island = renderIsland(StagesPanel, baseProps, expandStageRail);
 
     await fireAutoSchedule(island.tree());
     await flush();
@@ -176,7 +194,7 @@ describe("StagesPanel — Auto-schedule remaining reports its run", () => {
     net.auto = {
       assignments: [{ fixture_id: "f1", scheduled_at: "2026-08-01T09:00:00.000Z", court_label: "C1" }],
     };
-    const island = renderIsland(StagesPanel, baseProps);
+    const island = renderIsland(StagesPanel, baseProps, expandStageRail);
 
     await fireAutoSchedule(island.tree());
     await flush();
@@ -200,7 +218,7 @@ describe("StagesPanel — Auto-schedule remaining reports its run", () => {
       metrics: METRICS,
       solver: SOLVER,
     };
-    const island = renderIsland(StagesPanel, baseProps);
+    const island = renderIsland(StagesPanel, baseProps, expandStageRail);
     await fireAutoSchedule(island.tree());
     await flush();
     expect(island.tree().find((n) => n.type === ScheduleResultStrip)).toBeDefined();

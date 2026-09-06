@@ -894,14 +894,10 @@ export function StagesPanel({ divisionId, divisionSeq, competitionId, orgSlug, c
         .sort((a, b) => a.seq - b.seq)
         .map((stage) => {
         const stageFixtures = fixtures.filter((f) => f.stage_id === stage.id);
-        // Pinned unscheduled section (v3/04 §3 item 3): count + CTA stay here
-        // — Task 4 tried moving them onto `<StageRail>` and reverted; see
-        // stage-rail.tsx's own header comment for why (in short: `walk()`,
-        // the hook-harness `stages-panel-auto-schedule-seq.test.tsx` and
-        // `stages-panel-result-strip.test.tsx` use to click this button and
-        // observe async state, never sees past a nested component boundary,
-        // no matter how the button reaches it — inline or as a slot prop).
-        // The row LIST itself still renders once, division-wide, in the
+        // Pinned unscheduled section (v3/04 §3 item 3): count + CTA now live
+        // on `<StageRail>` (Task 4, fix round 1 — see stage-rail.tsx's own
+        // header for the harness fix that made this possible) — this is only
+        // the count itself; the row LIST renders once, division-wide, in the
         // `<RunSheet>` mounted below.
         //
         // `isUnscheduledFixture`, never a fourth hand-written copy of the same
@@ -916,6 +912,18 @@ export function StagesPanel({ divisionId, divisionSeq, competitionId, orgSlug, c
             isUnscheduledFixture({ status: f.status, scheduledAt: f.scheduled_at }) &&
             !isBye(toRunSheetFixture(f)),
         );
+        // Task 4 — the rail's `capacityBlocked` prop: this stage's D2
+        // pre-check verdict, already resolved to a plain value (never a
+        // message KEY) via the SAME `capacityGateBlocks` predicate the old
+        // inline button/paragraph pair used, so the two can still never
+        // disagree. `capacityByStage` itself is read live off the ONE
+        // `useCapacityReportsByStage` subscription below — see that call's
+        // own comment for why it stays here and not on the rail.
+        const stageCapacityBlocked = capacityGateBlocks(capacityByStage.get(stage.id));
+        const capacityBlocked = {
+          blocked: stageCapacityBlocked,
+          reason: stageCapacityBlocked ? msg("schedule.capacity.blockedReason") : null,
+        };
         // Mirrors the server guard (deleteStage) EXACTLY: only the last stage
         // in the graph, and only when it owns no played fixtures. No "keep one
         // stage" rule — the server deletes the sole stage of a pure League too,
@@ -985,6 +993,9 @@ export function StagesPanel({ divisionId, divisionSeq, competitionId, orgSlug, c
                 // `!canEdit` inline placement below is what a non-editing viewer
                 // sees instead.
                 courtTagsSlot={courtTagsEditor}
+                unscheduledCount={unscheduled.length}
+                capacityBlocked={capacityBlocked}
+                onAutoSchedule={(stageId) => void autoScheduleStage(stageId)}
               />
             </header>
 
@@ -1051,65 +1062,6 @@ export function StagesPanel({ divisionId, divisionSeq, competitionId, orgSlug, c
                 }}
                 onCancel={() => setAddingTo(null)}
               />
-            )}
-
-            {/* Pinned unscheduled section (item 3) — count + auto CTA. */}
-            {unscheduled.length > 0 && (
-              <div className="border-b border-dashed border-slate-200 bg-slate-50/60 px-4 py-3">
-                <div className="flex flex-wrap items-center gap-2">
-                  {/* Finding 11: this heading and the run sheet's own
-                      "Not yet scheduled" sat on the same screen as a word-for-
-                      word transposition — and in fr/es/nl they were the SAME
-                      words in the same order. It now names its SCOPE ("in this
-                      stage"), which is the one thing that made the two numbers
-                      reconcilable; the sheet's heading is unchanged. */}
-                  <p className="text-xs font-semibold text-slate-700">
-                    {msg("schedule.unscheduled.title")}
-                    <span
-                      data-testid="stage-unscheduled-count"
-                      className="ml-1.5 rounded-full bg-slate-200 px-1.5 text-[11px] font-medium text-slate-700"
-                    >
-                      {unscheduled.length}
-                    </span>
-                  </p>
-                  {canEdit && stage.status !== "complete" && (
-                    <button
-                      type="button"
-                      data-testid="stage-auto-schedule"
-                      disabled={busy !== null || capacityGateBlocks(capacityByStage.get(stage.id))}
-                      onClick={() => void autoScheduleStage(stage.id)}
-                      className="btn btn-primary min-h-11 px-3 py-1 text-xs"
-                    >
-                      {busy === stage.id ? msg("schedule.working") : msg("schedule.unscheduled.cta")}
-                    </button>
-                  )}
-                </div>
-                {/* D2 capacity pre-check (owner ruling: Solve hard-blocked
-                    ONLY on a genuinely FRESH "impossible" — "tight" is
-                    advisory and never blocks, and per the review fix above,
-                    neither does a check that FAILED to run at all). The full
-                    card with bars/suggestions lives on the Settings tab;
-                    this is just the reason the button here is disabled —
-                    same shared `capacityGateBlocks` predicate the button's
-                    own `disabled` reads, so the two can never disagree. */}
-                {capacityGateBlocks(capacityByStage.get(stage.id)) && (
-                  <p data-testid="stage-auto-schedule-blocked" className="mt-1.5 text-xs text-red-600">
-                    {msg("schedule.capacity.blockedReason")}
-                  </p>
-                )}
-                {/* The row LIST that used to render here (FixtureLine per
-                    fixture) is gone — the run sheet's own "Not yet
-                    scheduled" group, mounted once below, division-wide,
-                    shows every one of these rows with a "Set time" action.
-                    This header keeps only the count + CTA + capacity reason.
-                    Task 4 (competition-desk-w3): tried moving this section
-                    onto `<StageRail>` and reverted — see stage-rail.tsx's
-                    header comment for why (the hook-harness `walk()` used by
-                    stages-panel-auto-schedule-seq.test.tsx and
-                    stages-panel-result-strip.test.tsx cannot see past ANY
-                    nested component boundary, inline render or slot prop
-                    alike). Stays here until that constraint is lifted. */}
-              </div>
             )}
 
             {/* Every fixture list that used to render here — the round-
