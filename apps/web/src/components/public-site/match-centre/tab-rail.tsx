@@ -38,6 +38,7 @@ import { useEffect, useRef } from "react";
 import type { Dict as PublicDict } from "@/lib/i18n-constants";
 import { t } from "@/lib/i18n-runtime";
 import type { MatchCentreTabIdT } from "@/server/public-site/match-centre-schema";
+import { SETS_LABEL_KEY, type SetsUnit } from "./sets-vocabulary";
 
 /**
  * R11 fix round, C6 (Task 15 re-review) — the rail never scrolled the
@@ -81,23 +82,18 @@ export interface TabRailProps {
    * today's fixed "Sets" label (`sets-tab.tsx`'s own note 2 on `unit`).
    * Ignored for every tab other than "sets".
    */
-  setsUnit?: "set" | "game" | "period";
+  setsUnit?: SetsUnit;
 }
 
 // R11 fix round, C8 — keyed by UNIT, never `kind`: a game-unit sport's own
 // `SetsView.kind` is still "sets" (`timeline.test.ts:615`), so `kind` cannot
-// tell "Sets" and "Games" apart. Reuses the SAME words `sets-tab.tsx`'s own
-// panel caption already renders for "sets"/"period" (`matchCentre.sets`/
-// `matchCentre.periods`) — one authority per word, not two dictionary keys
-// that happen to agree today.
-const SETS_TAB_LABEL_KEY: Record<"set" | "game" | "period", string> = {
-  set: "matchCentre.sets",
-  game: "matchCentre.games",
-  period: "matchCentre.periods",
-};
-
-function tabLabelKey(tab: MatchCentreTabIdT, setsUnit: "set" | "game" | "period" | undefined): string {
-  if (tab === "sets" && setsUnit !== undefined) return SETS_TAB_LABEL_KEY[setsUnit];
+// tell "Sets" and "Games" apart. The map itself lives in `sets-vocabulary.ts`
+// — the panel caption names the same thing and reads the same authority.
+// The `undefined` fallback here is the rail's own, and deliberately NOT the
+// caption's: a document built before `unit` existed keeps the original
+// `matchCentre.tab.sets` tab key rather than inventing a heading for it.
+function tabLabelKey(tab: MatchCentreTabIdT, setsUnit: SetsUnit | undefined): string {
+  if (tab === "sets" && setsUnit !== undefined) return SETS_LABEL_KEY[setsUnit];
   return `matchCentre.tab.${tab}`;
 }
 

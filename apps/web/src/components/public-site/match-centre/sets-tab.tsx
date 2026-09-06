@@ -5,12 +5,16 @@
 // Not derivable from reading this file
 // ---------------------------------------------------------------------------
 //
-// 1. `kind` CHOOSES THE CAPTION; `unit` CHOOSES THE COLUMN LABEL. They are not
-//    the same question. `kind` is the shape of the table ("Sets" or "Periods");
-//    `unit` is what ONE column is called in the sport's own vocabulary, and
-//    badminton and table tennis score GAMES inside a table whose `kind` is
-//    still "sets". Labelling a badminton column "Set 1" is wrong in a way a
-//    badminton player notices immediately.
+// 1. `unit` CHOOSES BOTH THE CAPTION AND THE COLUMN LABEL; `kind` chooses only
+//    the table's SHAPE. `unit` is what one division of play is called in the
+//    sport's own vocabulary, and badminton and table tennis score GAMES inside
+//    a table whose `kind` is still "sets". Labelling a badminton column "Set 1"
+//    is wrong in a way a badminton player notices immediately — and so is
+//    captioning that same table "Sets", which is what this file did until the
+//    R11 re-review caught it. The caption and the tab rail read one map,
+//    `sets-vocabulary.ts`; `kind` survives here only as the fallback for a
+//    document built before `unit` existed (note 2), which carries nothing else
+//    to answer the question with.
 //
 // 2. `unit` IS OPTIONAL AND THE FALLBACK IS LOAD-BEARING. It was added after
 //    the first documents were built, so a document without it must still
@@ -45,6 +49,7 @@ import type { Dict as PublicDict } from "@/lib/i18n-constants";
 import { lookup, t } from "@/lib/i18n-runtime";
 import type { MatchCentreDocT } from "@/server/public-site/match-centre-schema";
 import type { LiveFixtureData } from "../live-score-data";
+import { setsLabelKey } from "./sets-vocabulary";
 import { TabPanel } from "./tab-panel";
 
 export interface SetsTabProps {
@@ -58,7 +63,10 @@ export function SetsTab({ doc, dict }: SetsTabProps): ReactNode {
   const sets = doc.sets;
   if (sets === null) return <TabPanel id="sets" className="grid gap-2" />;
 
-  const caption = t(dict, sets.kind === "periods" ? "matchCentre.periods" : "matchCentre.sets");
+  // The caption names the same thing the tab rail names, from the same map —
+  // see `sets-vocabulary.ts`. Keying it off `kind` (as this line did) printed
+  // "Sets" over "Game 1" / "Game 2" columns for badminton and table tennis.
+  const caption = t(dict, setsLabelKey(sets.unit, sets.kind));
 
   // `lookup`, not `t`, throughout — `t` RETURNS THE KEY on a miss, so it would
   // answer "yes, `term.short.OT9`" for every phase and print the key.

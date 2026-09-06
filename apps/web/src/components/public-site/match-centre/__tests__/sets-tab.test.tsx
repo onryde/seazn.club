@@ -243,6 +243,23 @@ describe("SetsTab", () => {
     expect(render(FOOTBALL)).not.toContain(`>${en["matchCentre.sets"]}<`);
   });
 
+  // C8's defect, one level down, caught by this round's re-review: the caption
+  // keyed off `kind` while the column headers and the tab rail both key off
+  // `unit`. A badminton fixture is `kind: "sets"` with `unit: "game"`, so it
+  // printed a "Sets" heading over correctly-labelled "Game 1"/"Game 2"
+  // columns. Anchored on `>…<`, not a bare substring: "Sets" occurs in this
+  // markup in states where the caption is right and in states where it is
+  // wrong, so an unanchored probe passes either way.
+  it("the caption reads the sport's own UNIT, not the breakdown's shape — a game-unit sport captions 'Games', never 'Sets'", () => {
+    const html = render(BADMINTON);
+    expect(en["matchCentre.games"]).not.toBe(en["matchCentre.sets"]);
+    expect(html).toContain(`>${en["matchCentre.games"]}<`);
+    expect(html).not.toContain(`>${en["matchCentre.sets"]}<`);
+    // The columns were already right; this pins that the caption now agrees
+    // with them rather than the two disagreeing on the same screen.
+    expect(html).toContain(en["matchCentre.col.game"].replace("{n}", "1"));
+  });
+
   it("the table is fixed-layout with sized columns, and a reachable region", () => {
     // Same ruled shape as the Scorecard's tables: `min-w-0` on a <th> is inert
     // and an auto-layout table grows to its longest entrant name, so the name

@@ -522,7 +522,16 @@ export function disambiguatedShorts(
     const candB = candsB[Math.min(i, candsB.length - 1)]!;
     if (candA !== candB) return [candA, candB];
   }
-  const lastA = candsA[candsA.length - 1]!;
-  const lastB = candsB[candsB.length - 1]!;
-  return [`${lastA}1`, `${lastB}2`];
+  // The tie-break is built from each side's FIRST (shortest) candidate, never
+  // its last. The last rung is the full compacted name by construction, so
+  // `${last}1` produced a 10-character label like "JOHNSMITH1" for two
+  // entrants genuinely called the same thing — which overflows the 24x24px
+  // badge chips (`timeline-tab.tsx`, `sets-tab.tsx`: `h-6 w-6`, no
+  // `truncate`), the exact defect the C9 follow-up rung exists to prevent.
+  // Every first candidate is at most three characters (`surname.slice(0, 3)`,
+  // or `teamShortOf`), so the suffixed label is at most four — the same width
+  // the ladder's own widest short rungs already produce.
+  const firstA = candsA[0]!;
+  const firstB = candsB[0]!;
+  return [`${firstA}1`, `${firstB}2`];
 }

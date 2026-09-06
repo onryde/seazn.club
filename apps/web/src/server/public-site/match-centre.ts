@@ -583,16 +583,21 @@ function rateLineOf(live: CricketLive): string | null {
  * has no single "current set" to carry, and cricket's `detail` has no
  * `sets` array at all, so `setsView` is `null` for it and this returns
  * `[null, null]` unconditionally, same as before this fix. The open set is
- * the engine's own `closedMask` entry, never inferred from "the last one"
- * (the same reasoning `sets-tab.tsx`'s own note 3 already states for the
- * Sets tab).
+ * the FIRST `closedMask` entry that is `false` — the engine's own record of
+ * which column is in progress, never inferred from "the last one" (the same
+ * reasoning `sets-tab.tsx`'s own note 3 already states for the Sets tab, and
+ * the same scan its per-column loop runs). Re-review of this round caught the
+ * first draft asserting that reasoning in the comment while reading
+ * `closedMask[length - 1]` in the code: today the two coincide, because a set
+ * must close before the next one opens, but that is a sport rule this
+ * function had no business assuming on the engine's behalf.
  */
 function liveSubLines(setsView: SetsViewT | null): [string | null, string | null] {
   if (setsView === null || setsView.kind !== "sets") return [null, null];
-  const last = setsView.closedMask.length - 1;
-  if (last < 0 || setsView.closedMask[last]) return [null, null];
-  const home = setsView.rows[0][last];
-  const away = setsView.rows[1][last];
+  const open = setsView.closedMask.findIndex((closed) => closed === false);
+  if (open < 0) return [null, null];
+  const home = setsView.rows[0][open];
+  const away = setsView.rows[1][open];
   return [home === null || home === undefined ? null : `(${home})`, away === null || away === undefined ? null : `(${away})`];
 }
 
