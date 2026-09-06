@@ -428,3 +428,82 @@ it is the general caution in the standing policy about `outcome` shape: any
 NEW writer of that column must use `tx.json()`, never `JSON.stringify`. The
 generalizable trap is saved to memory:
 `reference_json_stringify_into_jsonb_column_reads_as_undefined.md`.
+
+## F2/F3/F4/F8/F9 — FIXED, PR #730 (2026-09-06), not W3's to carry any more
+
+Owner ruled "add all F in single pr" — bundled the remaining findings from
+this gate into one PR, `fix/w2-walkthrough-findings` off post-#728 `main`.
+F5/F6/F7 are NOT in this PR (never scoped in; still open, see above).
+
+- **F2** — `run-sheet-groups.ts`: bracket membership is now decided BEFORE
+  the `OPEN.has(status)` untimed-routing test, so an untimed OPEN bracket
+  fixture stays in its round section instead of leaking into "Not yet
+  scheduled" and truncating `bracketRoundLabel`'s lane.
+- **F3** — `run-sheet-row.tsx` gained a `stageName` prop; `run-sheet.tsx`
+  supplies it only for the unscheduled/settled blocks, only when
+  `stages.length > 1`.
+- **F4** — `run-sheet.tsx`'s two sticky headers moved `top-0` → `top-14`,
+  matching `nav.tsx`'s own `h-14` — they no longer render behind nav.
+- **F8** — `client-time.tsx`'s `ClientTime` now formats with
+  `useLocaleOrDefault()` instead of `[]` (the browser's own locale).
+- **F9** — `ClientTime` gained an `hourCycle` prop; the run sheet's two
+  time-cell call sites pass `"h23"`, matching this repo's own `HH:mm`
+  clock convention and incidentally fixing F7's identical symptom at the
+  same call site (F7 itself was never in scope for this PR).
+
+Two existing tests (one unit — `run-sheet-groups.test.ts` — one e2e —
+`run-sheet-dates-and-court.spec.ts`) had encoded F2's bug as their expected
+value; a third e2e case (`run-sheet.spec.ts`) hand-rebuilt `ClientTime`'s
+OLD formatting call to predict display text. All three updated to the
+corrected behavior, never weakened.
+
+Verified beyond unit tests: `run-sheet.spec.ts` +
+`run-sheet-dates-and-court.spec.ts` 23/23 against a real browser; full
+`mobile.spec.ts` (never `-g`-filtered) at BOTH 320 and 768, 43/43 each
+width; one direct screenshot at 320 (28-fixture day, scrolled) confirming
+the day header renders below nav and times print 24h, single line.
+
+## F5/F6/F7 — F5 FIXED, F6/F7 closed with no code change, PR #730 (2026-09-06)
+
+Owner ruled "fix before merge" — folded these three into the same PR rather
+than deferring to W3.
+
+- **F5 (MEDIUM, fixed)** — `fixture-row-action.ts` gained a new ladder branch:
+  a `scheduled` fixture that HAS a time but is still `awaitingDraw` (either
+  `home_entrant_id`/`away_entrant_id` null) now returns `view`, never
+  `score`/`assign_scorer`. Placed after the untimed→`set_time` branch (a
+  pre-draw slot pick is a legitimate action) and before `assign_scorer`/
+  `score` (which presuppose entrants that exist). `awaitingDraw` is computed
+  once in `run-sheet-row.tsx` and threaded into both the sub-line ("Awaiting
+  draw") and the action ladder, so the two can never disagree. Mutation-proved:
+  reverting the branch reddens exactly one test
+  (`fixture-row-action.test.ts`, "F5: a timed, awaiting-draw fixture is VIEW,
+  never score or assign_scorer") and nothing else.
+- **F6 (closed, no code change)** — grepped `packages/engine/src` for every
+  writer of the bracket-only `award` marker; it is set exclusively in
+  `scheduling/bracket.ts`, never by league/swiss/group/americano/ladder
+  generators. R7(c)'s "accepted information loss" ruling defends a
+  precondition that cannot currently occur through any non-bracket stage —
+  confirmed at the code level, not just "the walkthrough didn't hit it".
+  Nothing to fix unless a future generator starts setting `award` outside a
+  bracket.
+- **F7 (closed, duplicate)** — same defect and same call site as F8/F9's
+  12-hour-clock / wrap fix above; `hourCycle: "h23"` already resolves F7's
+  symptom. No separate work needed.
+
+Verified beyond unit tests: new e2e regression
+`run-sheet-dates-and-court.spec.ts` — "a timed, undrawn bracket fixture never
+offers Score (F5)" — drives a real 4-entrant knockout, schedules the final
+ahead of the draw, confirms the row reads View with no Score/assign_scorer
+control. Full file 7/7, `run-sheet.spec.ts` 13/13 (23/23 combined, unchanged
+from the F2-F9 wave). `fixture-row-action.test.ts` 38/38,
+`run-sheet-row.test.tsx` 20/20. `mobile.spec.ts` (whole file, never
+`-g`-filtered — F5 touches every sport's run-sheet row) 43/43 at 320.
+
+A tangential finding surfaced but NOT fixed here (out of scope, never one of
+"the Fs"): an odd-Swiss stage's natural sit-out round can read as "Fixtures
+don't match the roster" with a "Rebuild fixtures" CTA — a miscopy, not a
+missing bye. Flagging for a future wave; see the original walkthrough report.
+
+**Nothing is owed to W3 from this gate any more.** F1/F2/F3/F4/F5/F8/F9 are
+fixed; F6/F7 are closed with no code owed.

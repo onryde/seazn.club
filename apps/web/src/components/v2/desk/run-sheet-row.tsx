@@ -95,6 +95,7 @@ export function RunSheetRow({
   venues,
   boardSlotOptions,
   onRescheduled,
+  stageName,
 }: {
   fixture: RunSheetFixture;
   href: string;
@@ -126,6 +127,15 @@ export function RunSheetRow({
   /** Fired after a "Set time" save lands, so the sheet can offer the same
    *  notice+undo affordance the rest of the panel already does. */
   onRescheduled?: () => void;
+  /** F3 (W2 walkthrough gate 1): the unscheduled and settled groups merge
+   *  every stage into one list with nothing on the row identifying which
+   *  stage a fixture belongs to — two same-named "Round 1 · Bravo vs Echo"
+   *  rows from different stages were indistinguishable. `RunSheet` passes
+   *  this only for those two blocks, and only when the division has more
+   *  than one stage (single-stage divisions gain no noise); day and bracket
+   *  blocks never pass it — a day header/bracket section already identifies
+   *  its stage. */
+  stageName?: string | null;
 }) {
   const msg = useMsg();
   const router = useRouter();
@@ -183,6 +193,11 @@ export function RunSheetRow({
   // so a length test reads "fully staffed" on the exact fixture whose scorer
   // has just said no. The whole argument lives on that function.
   const hasOfficials = hasAssignedScorer(fixture.officials);
+  // F5 (W2 walkthrough gate 1): computed once, fed to BOTH the ladder (so the
+  // action can never invite scoring/assigning a scorer for a match nobody has
+  // named yet) and the sub-line below (so the label and the action can never
+  // disagree about which fixtures are still undrawn).
+  const awaitingDraw = fixture.home_entrant_id === null || fixture.away_entrant_id === null;
   const action: RowAction = fixtureRowAction({
     status: fixture.status,
     scheduledAt: fixture.scheduled_at,
@@ -190,6 +205,7 @@ export function RunSheetRow({
     canEdit,
     tz,
     nowMs,
+    awaitingDraw,
   });
 
   // C3: copied verbatim from FixtureLine's own derivation — never reinvented.
@@ -235,7 +251,7 @@ export function RunSheetRow({
   //  - otherwise an unresolved entrant ("Awaiting draw") is the more
   //    fundamental blocker than "no scorer yet" — an organiser cannot assign a
   //    scorer to a match that doesn't know who is playing yet.
-  const awaitingDraw = fixture.home_entrant_id === null || fixture.away_entrant_id === null;
+  //    (`awaitingDraw` computed once, above, alongside `action` — see there.)
   const subLine: string | null = voided
     ? [fixtureStatusLabel(msg, fixture.status), decided].filter((p): p is string => Boolean(p)).join(" · ")
     : decided !== null
@@ -365,11 +381,11 @@ export function RunSheetRow({
               onClick={toggleEditor}
               className="-my-1 flex min-h-11 w-14 shrink-0 items-center font-mono text-sm tabular-nums text-slate-600 underline decoration-slate-300 decoration-dotted underline-offset-4 hover:text-purple-700 hover:decoration-purple-500"
             >
-              <ClientTime value={fixture.scheduled_at} tz={tz} mode="time" />
+              <ClientTime value={fixture.scheduled_at} tz={tz} mode="time" hourCycle="h23" />
             </button>
           ) : (
             <span className="w-14 shrink-0 font-mono text-sm tabular-nums text-slate-600">
-              {fixture.scheduled_at ? <ClientTime value={fixture.scheduled_at} tz={tz} mode="time" /> : "—"}
+              {fixture.scheduled_at ? <ClientTime value={fixture.scheduled_at} tz={tz} mode="time" hourCycle="h23" /> : "—"}
               {fixture.status === "in_play" && (
                 <span aria-hidden className="ml-1.5 inline-block h-1.5 w-1.5 rounded-full bg-amber-500 align-middle" />
               )}
@@ -377,6 +393,7 @@ export function RunSheetRow({
           )}
           <div className="min-w-0 flex-1">
             <p className="min-w-0 truncate text-xs text-slate-500">
+              {stageName ? `${stageName} · ` : ""}
               {courtLabel ? `${courtLabel} · ` : ""}
               {msg("schedule.round", { n: fixture.round_no })}
             </p>

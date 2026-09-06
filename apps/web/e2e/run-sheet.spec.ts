@@ -695,14 +695,17 @@ test.describe("zone-split cases — they share organizations.timezone", () => {
       time: (el.querySelector("select") as HTMLSelectElement | null)?.value ?? null,
     }));
     // The DISPLAY string, formatted in the page with the same call
-    // `ClientTime` makes — never rebuilt from the ISO string by hand. Two
-    // reasons: the browser locale here is en-US, so 04:00 renders "4:00 AM"
-    // and a `wrongZoneInput.slice(11)` comparison would simply be wrong; and
-    // deriving it any other way re-implements the component under test.
+    // `ClientTime` makes — never rebuilt from the ISO string by hand. F9 (W2
+    // walkthrough gate 1) forced `hourCycle: "h23"` on the run sheet's time
+    // cell specifically (its fixed 56px column wrapped a 12-hour "4:00 AM" to
+    // two lines at every width) — mirrored here, or this comparison would
+    // still expect the pre-fix AM/PM string and fail on the fix, not the
+    // regression it exists to catch.
     const display = await page.evaluate(
       ([iso, venueTz, orgZone]) => {
         const d = new Date(iso);
-        const f = (z: string) => d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", timeZone: z });
+        const f = (z: string) =>
+          d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", timeZone: z, hourCycle: "h23" });
         return { inTz: f(venueTz), inOrgTz: f(orgZone) };
       },
       [at, "Asia/Tokyo", ORG_TZ] as const,

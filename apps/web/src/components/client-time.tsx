@@ -1,6 +1,7 @@
 "use client";
 
 import { createContext, useContext, useEffect, useState } from "react";
+import { useLocaleOrDefault } from "@/components/i18n/dict-provider";
 import { fmtDate, fmtTime, fmtDateTime, fmtZoneAbbrev } from "@/lib/format";
 
 /**
@@ -126,6 +127,7 @@ export function ClientTime({
   mode = "time",
   tz,
   showZone = false,
+  hourCycle,
 }: {
   value: string | Date | null;
   mode?: "time" | "datetime" | "date";
@@ -134,28 +136,47 @@ export function ClientTime({
   tz?: string;
   /** Append the zone abbrev ("19:00 IST"). No-op for date mode (no clock). */
   showZone?: boolean;
+  /** Force a clock convention regardless of locale default. F9 (W2
+   *  walkthrough gate 1): the run sheet's fixed 56px time column wrapped to
+   *  two lines on EVERY row at EVERY width, because an English-locale
+   *  "2:30 PM" does not fit a column sized for "14:30" — 5 monospace
+   *  characters. Callers with a fixed-width clock cell pass `"h23"`; every
+   *  other caller keeps the locale's own convention (unset). */
+  hourCycle?: "h23" | "h12";
 }) {
+  // F8 (W2 walkthrough gate 1): `[]` as an Intl locale argument means "the
+  // runtime's default locale" — the VIEWER'S BROWSER, not the app's active
+  // one. A French-language page with an en-US browser printed 12-hour "2:30
+  // PM" times inside otherwise-French copy. `dayLabelLong` (this row's own
+  // day header, finding 13) was already fixed for the identical defect;
+  // `useLocaleOrDefault` degrades to English outside a `DictProvider` (this
+  // component renders bare in several component tests) rather than throwing.
+  const locale = useLocaleOrDefault();
   const [text, setText] = useState("");
 
   useEffect(() => {
     if (!value) return;
     const d = value instanceof Date ? value : new Date(value);
-    const zone = tz ? { timeZone: tz } : {};
+    const zone: Intl.DateTimeFormatOptions = {
+      ...(tz ? { timeZone: tz } : {}),
+      ...(hourCycle ? { hourCycle } : {}),
+    };
     try {
       const base =
         mode === "datetime"
-          ? d.toLocaleString([], { dateStyle: "medium", timeStyle: "short", ...zone })
+          ? d.toLocaleString(locale, { dateStyle: "medium", timeStyle: "short", ...zone })
           : mode === "date"
-            ? d.toLocaleDateString([], { dateStyle: "medium", ...zone })
-            : d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", ...zone });
+            ? d.toLocaleDateString(locale, { dateStyle: "medium", ...zone })
+            : d.toLocaleTimeString(locale, { hour: "2-digit", minute: "2-digit", ...zone });
       const abbrev =
         showZone && mode !== "date" ? ` ${fmtZoneAbbrev(tz ?? UTC_LOCAL(), d)}` : "";
       setText(base + abbrev);
     } catch {
-      // Unknown zone string — fall back to the viewer's local time.
-      setText(mode === "date" ? d.toLocaleDateString() : d.toLocaleString());
+      // Unknown zone string — fall back to the viewer's local time, still in
+      // the app's own locale.
+      setText(mode === "date" ? d.toLocaleDateString(locale) : d.toLocaleString(locale));
     }
-  }, [value, mode, tz, showZone]);
+  }, [value, mode, tz, showZone, locale, hourCycle]);
 
   return <span suppressHydrationWarning>{text}</span>;
 }

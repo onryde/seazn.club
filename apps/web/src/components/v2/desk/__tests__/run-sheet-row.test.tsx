@@ -60,7 +60,7 @@ function fx(o: Partial<RunSheetFixture> = {}): RunSheetFixture {
   };
 }
 
-function rowHtml(fixture: RunSheetFixture, canEdit = true): string {
+function rowHtml(fixture: RunSheetFixture, canEdit = true, stageName?: string | null): string {
   return renderToStaticMarkup(
     <RunSheetRow
       fixture={fixture}
@@ -70,6 +70,7 @@ function rowHtml(fixture: RunSheetFixture, canEdit = true): string {
       nowMs={NOW_MS}
       canEdit={canEdit}
       entrantNames={ENTRANTS}
+      stageName={stageName}
     />,
   );
 }
@@ -98,6 +99,26 @@ function rowAction(html: string): string | null {
 // announced). Design of record, `competition-desk-design.md:232-234`: "Status
 // is carried by the dot colour + sub-line copy (`fixtureStatusLabel` stays as
 // the sub-line source)."
+// F3 (W2 walkthrough gate 1): the unscheduled/settled groups merge every
+// stage into one list with nothing identifying which stage a row belongs
+// to — two same-named "Round 1 · Bravo vs Echo" rows from different stages
+// were indistinguishable. `RunSheet` passes `stageName` only for those two
+// blocks and only when the division has more than one stage; this proves
+// the ROW half of that contract: rendered when given, absent when not.
+describe("stageName (F3 — unscheduled/settled rows identify their stage)", () => {
+  it("prints the stage name ahead of the court/round meta line when provided", () => {
+    const html = rowHtml(fx(), true, "Cup");
+    expectRowRendered(html);
+    expect(html).toContain("Cup ·");
+  });
+
+  it("omits the stage name entirely when not provided (single-stage division)", () => {
+    const html = rowHtml(fx());
+    expectRowRendered(html);
+    expect(html).not.toContain("Cup ·");
+  });
+});
+
 describe("a voided row says WHY it is struck through", () => {
   // Enumerated, not sampled: the three void statuses must be distinguishable
   // from each other, which one lucky sample cannot show.
@@ -146,6 +167,27 @@ describe("a voided row says WHY it is struck through", () => {
     const html = rowHtml(fx({ home_entrant_id: null, home_slot_label: null }));
     expect(html).toContain("Bravo");
     expect(html).toContain(messages["runsheet.sub.awaitingDraw"]);
+  });
+
+  // F5 (W2 walkthrough gate 1): the report's own screenshot — a TIMED row
+  // reading "Awaiting draw" and offering "Score" at the same time, a promise
+  // the fixture cannot keep since neither side is named yet. The sub-line
+  // half of this was already correct (the test above); this is the ACTION
+  // half, at its real call site — a test of the pure ladder alone
+  // (`fixture-row-action.test.ts`) cannot see whether the row actually wires
+  // `awaitingDraw` through to it.
+  it("F5: a TIMED, undrawn fixture never offers Score or Assign scorer — it reads View", () => {
+    const html = rowHtml(fx({ home_entrant_id: null, home_slot_label: null }));
+    expect(rowAction(html)).toBe("view");
+    expect(html).toContain(messages["runsheet.action.view"]);
+    expect(html).not.toContain(messages["runsheet.action.score"]);
+  });
+
+  // The POSITIVE pair: an UNTIMED, undrawn fixture still offers Set time —
+  // pre-scheduling a bracket round's slot ahead of the draw is unaffected.
+  it("F5: an UNTIMED, undrawn fixture still offers Set time, not View", () => {
+    const html = rowHtml(fx({ home_entrant_id: null, home_slot_label: null, scheduled_at: null }));
+    expect(rowAction(html)).toBe("set_time");
   });
 });
 

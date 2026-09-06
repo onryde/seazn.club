@@ -39,6 +39,13 @@ export type RowActionInput = {
    *  Never the org zone: one zone per fixture (_RULES.md). */
   tz: string;
   nowMs: number;
+  /** F5 (W2 walkthrough gate 1): true when either side is still a TBD slot
+   *  (`home_entrant_id`/`away_entrant_id` null — a bracket round drawn from
+   *  "Winner of R1·N" placeholders, pre-draw). `RunSheetRow` already computes
+   *  this identically for its own sub-line ("Awaiting draw") — this is the
+   *  SAME fact, threaded in rather than re-derived, so the label and the
+   *  action can never disagree about which fixtures are undrawn. */
+  awaitingDraw: boolean;
 };
 
 /**
@@ -118,14 +125,17 @@ export function canEditFixtureTime(input: {
 }
 
 export function fixtureRowAction(input: RowActionInput): RowAction {
-  const { status, scheduledAt, hasOfficials, canEdit, tz, nowMs } = input;
+  const { status, scheduledAt, hasOfficials, canEdit, tz, nowMs, awaitingDraw } = input;
 
   // 1. Live beats everything. A match in play is the one thing an organiser
   //    standing at the venue is looking for, whatever its time says.
   if (status === "in_play") return { kind: "open_pad" };
 
   // 2. Settled. Checked before the scheduling rules below so a cancelled match
-  //    never invites an organiser to score a match that will not be played.
+  //    never invites an organiser to score a match that will not be played —
+  //    and before the awaiting-draw check below, since a decided match with a
+  //    TBD-labelled loser (a walkover recorded before the OTHER semi finished)
+  //    is still a result, not a match still waiting on its draw.
   if (SETTLED.has(status)) return { kind: "result" };
 
   // 3. Anything not "scheduled" by now is a status this table does not know.
@@ -133,10 +143,21 @@ export function fixtureRowAction(input: RowActionInput): RowAction {
   //    is how a wrong write path gets offered.
   if (status !== "scheduled") return { kind: "view" };
 
-  // 4. Scheduled with no time: the missing fact IS the action.
+  // 4. Scheduled with no time: the missing fact IS the action. Offered even
+  //    when the entrants are still undrawn — pre-scheduling a bracket round's
+  //    slot (court/time) ahead of the draw that fills it is an ordinary
+  //    organiser action, and nothing below this line criticises it.
   if (scheduledAt === null) return canEdit ? { kind: "set_time" } : { kind: "view" };
 
-  // 5. Scheduled TODAY in the venue zone with nobody to score it. Not "any day
+  // 5. F5 (W2 walkthrough gate 1): a TIMED fixture whose entrants are still
+  //    undrawn ("Winner of R1·3" vs "Winner of R1·4") cannot be scored and has
+  //    nobody to assign a scorer FOR — both of the branches below presuppose
+  //    entrants that exist. Checked after step 4 (an untimed, undrawn fixture
+  //    still offers `set_time`) and before assign_scorer/score, which is the
+  //    dead-end this finding names: "Awaiting draw" beside a "Score" button.
+  if (awaitingDraw) return { kind: "view" };
+
+  // 6. Scheduled TODAY in the venue zone with nobody to score it. Not "any day
   //    with no scorer" — a fixture three weeks out with no scorer is not yet a
   //    problem, and printing it as one on every row is the noise this wave
   //    exists to remove ("an empty cell is not information").
@@ -144,6 +165,6 @@ export function fixtureRowAction(input: RowActionInput): RowAction {
   const day = dayKeyInTz(Date.parse(scheduledAt), tz);
   if (day === today && !hasOfficials) return { kind: "assign_scorer" };
 
-  // 6. Otherwise: score it.
+  // 7. Otherwise: score it.
   return { kind: "score" };
 }

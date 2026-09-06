@@ -172,22 +172,24 @@ export function buildRunSheet(input: RunSheetInput): RunSheetBlock[] {
       continue;
     }
     if (f.scheduled_at === null) {
-      // Only OPEN work belongs in the unscheduled pile. A decided match with
-      // no recorded time is a result, not open scheduling work — finding 3.
-      if (OPEN.has(f.status)) {
-        unscheduled.push(f);
-      } else if (bracketStageIds.has(f.stage_id)) {
-        // Task 4 fix (found driving this seam through a real knockout e2e,
-        // `knockout.spec.ts`): a settled BRACKET fixture that was never
-        // explicitly timed — an entirely normal shape; nothing in this
-        // product requires scheduling a knockout round before playing it —
-        // still belongs in its own round section. Dropping it here would not
-        // just remove a stale "Unscheduled" label, it would erase a played
-        // match's result from its bracket outright, which is a worse defect
-        // than the one finding 3 fixed.
+      // F2 (W2 walkthrough gate 1): bracket membership is decided BEFORE the
+      // OPEN-status routing below. An untimed round is entirely normal for a
+      // bracket stage — nothing in this product requires slotting a knockout
+      // round onto a court before it can be played — whether that round is
+      // still OPEN (scheduled/in_play, not yet timed) or already decided
+      // without ever being timed. Checking `OPEN.has(f.status)` first sent an
+      // untimed-but-open bracket fixture to the unscheduled pile like any
+      // other stage's row, which truncated the round's own fixture list and
+      // shifted every downstream round header (`bracketRoundLabel`'s
+      // `lastRoundInLane`) up by one.
+      if (bracketStageIds.has(f.stage_id)) {
         const list = bracketed.get(f.stage_id) ?? [];
         list.push(f);
         bracketed.set(f.stage_id, list);
+      } else if (OPEN.has(f.status)) {
+        // Only OPEN work belongs in the unscheduled pile. A decided match with
+        // no recorded time is a result, not open scheduling work — finding 3.
+        unscheduled.push(f);
       } else {
         // Fix round 1 (controller ruling): a NON-bracket stage has no day to
         // bucket an untimed row into, but dropping it OUTRIGHT is the
