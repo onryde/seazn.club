@@ -203,6 +203,7 @@ const WALKTHROUGH_SPECS: string[] = [
   // suites leave uncovered, and the sponsor monetize half.
   "settings-connect-gates.spec.ts",
   "settings-add-ons-drive.spec.ts",
+  "settings-billing-panels.spec.ts",
 
   // The directory — the organiser's own records, driven through the screens
   // that own them: club import caps, the import paywall preview, officials'
