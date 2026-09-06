@@ -125,6 +125,7 @@ export async function generateMetadata({ params }: Pick<Props, "params">): Promi
   const locale = toLocale(data.org.default_locale);
   const msgFn = lookup(locale);
   const dict = await getDictionary(locale, "public");
+  const ui = await getDictionary(locale, "ui");
   const home = data.fixture.home_entrant_id
     ? (data.entrantNames[data.fixture.home_entrant_id] ?? resolveSlotLabel(null, msgFn, "schedule.tbd"))
     : resolveSlotLabel(data.fixture.home_slot_label, msgFn, "schedule.tbd");
@@ -137,14 +138,19 @@ export async function generateMetadata({ params }: Pick<Props, "params">): Promi
   // score lines and the result phrase, so a share/search preview shows the
   // final score without opening the page.
   const scoreAndResult = decided ? scoreAndResultFor(data.matchCentre, dict) : null;
+  // Task 14c (task-14b-review.md Remaining-English list) — the "vs"/"at"
+  // glue words in this page's <title>/description were hardcoded English in
+  // every locale; both are now whole-string templates (`fixture.meta.*`,
+  // `ui.json`), mirroring the `fixture.share.*` templates `share-text.ts`
+  // already uses for the identical "vs"→"contre"/"tegen" word choice.
   const title = scoreAndResult
-    ? `${home} vs ${away} — ${data.division.name} (${scoreAndResult})`
-    : `${home} vs ${away} — ${data.division.name}`;
+    ? t(ui, "fixture.meta.titleDecided", { home, away, division: data.division.name, result: scoreAndResult })
+    : t(ui, "fixture.meta.title", { home, away, division: data.division.name });
   return {
     title,
     description:
       withDecidedLine(data.fixture.summary?.headline, decidedLine) ??
-      `${home} vs ${away} at ${data.competition.name}`,
+      t(ui, "fixture.meta.description", { home, away, competition: data.competition.name }),
     ...(data.competition.visibility === "unlisted"
       ? { robots: { index: false, follow: false } }
       : {}),
@@ -176,7 +182,7 @@ export default async function FixturePage({ params, searchParams }: Props) {
   const decidedLine = decidedLineFor(fixture, entrantNames, msgFn);
 
   const jsonLd = sportsEventJsonLd({
-    name: `${home} vs ${away} — ${division.name}, ${competition.name}`,
+    name: t(ui, "fixture.meta.jsonLdName", { home, away, division: division.name, competition: competition.name }),
     ...(fixture.scheduled_at ? { startDate: fixture.scheduled_at } : {}),
     // P9 cutover: venue_name is DERIVED (fixtures.venue_id via data.ts's
     // withCourtVenueNames) — venue is frozen, no writer touches it any more.

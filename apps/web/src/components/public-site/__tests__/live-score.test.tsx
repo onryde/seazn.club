@@ -167,6 +167,79 @@ describe("LiveScoreBody — period/discipline headings are localised, not hardco
   });
 });
 
+// Task 14c (task-14b-review.md Remaining-English list) — `SetScoreboard`'s
+// "Score by {unit}" heading and its per-column "{unit} {n}" label were both
+// hardcoded English, fed by `setBreakdown()`'s own then-English `unit` value
+// ("Game"/"Set") — `lib/public-site.ts:303`. `unit` is now a dictionary-key
+// suffix ("game"/"set", never a display word), resolved here through
+// `matchCentre.scoreByUnit`/`matchCentre.unit.<unit>` (heading) and the SAME
+// `matchCentre.col.<unit>` family `sets-tab.tsx` already reads off the
+// newer `SetsView.unit` document.
+describe("LiveScoreBody — SetScoreboard's 'Score by {unit}' heading and column labels are localised", () => {
+  const emptyTemplates: DecidedOutcomeTemplates = { tie: "", plain: "", shootoutPlain: "", byMethod: {} };
+  const twoSideNames = { home: "Riverside FC", away: "Oakdale United" };
+  const dataWithSets = (sets: { home: number; away: number; closed: boolean }[]) => ({
+    status: "in_play",
+    summary: {
+      headline: "1 – 0 (14–11)",
+      perSide: [
+        { entrantId: "home", line: "1" },
+        { entrantId: "away", line: "0" },
+      ],
+      detail: { sets },
+    },
+    outcome: null,
+  });
+  const twoSets = [
+    { home: 21, away: 15, closed: true },
+    { home: 14, away: 11, closed: false },
+  ];
+
+  it("volleyball ('set' unit), rendered with the FRENCH dict: heading and column label read French, not English", () => {
+    const html = renderToStaticMarkup(
+      <LiveScoreBody
+        data={dataWithSets(twoSets)}
+        entrantNames={twoSideNames}
+        sportKey="volleyball"
+        decidedTemplates={emptyTemplates}
+        dict={fr as Dict}
+      />,
+    );
+    expect(html).toContain("Score par set");
+    expect(html).toContain("Set 1"); // matchCentre.col.set is "Set {n}" in every locale — a genuine cognate
+    expect(html).not.toContain("Score by set");
+  });
+
+  it("badminton ('game' unit), rendered with the FRENCH dict: heading and column label read French, not English", () => {
+    const html = renderToStaticMarkup(
+      <LiveScoreBody
+        data={dataWithSets(twoSets)}
+        entrantNames={twoSideNames}
+        sportKey="badminton"
+        decidedTemplates={emptyTemplates}
+        dict={fr as Dict}
+      />,
+    );
+    expect(html).toContain("Score par jeu");
+    expect(html).toContain("Jeu 1");
+    expect(html).not.toContain("Score by game");
+    expect(html).not.toContain(">game<");
+  });
+
+  it("badminton ('game' unit) with no dict prop (the English fallback): heading and column label still read English", () => {
+    const html = renderToStaticMarkup(
+      <LiveScoreBody
+        data={dataWithSets(twoSets)}
+        entrantNames={twoSideNames}
+        sportKey="badminton"
+        decidedTemplates={emptyTemplates}
+      />,
+    );
+    expect(html).toContain("Score by game");
+    expect(html).toContain("Game 1");
+  });
+});
+
 describe("LiveScoreBody — the full DB status vocabulary, not just the generic 'Not played'", () => {
   const emptyTemplates: DecidedOutcomeTemplates = { tie: "", plain: "", shootoutPlain: "", byMethod: {} };
 

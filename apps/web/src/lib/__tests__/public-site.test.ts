@@ -283,16 +283,20 @@ describe("setBreakdown (public per-set scoreboard)", () => {
     },
   };
 
+  // Task 14c — `unit` is now a dictionary-key suffix ("game"/"set"), not the
+  // literal English display word ("Game"/"Set") this test used to pin —
+  // `live-score.tsx` resolves it through `matchCentre.col.<unit>` /
+  // `matchCentre.unit.<unit>` instead of rendering it straight through.
   it("extracts every set including the live one, unit-labelled per sport", () => {
     expect(setBreakdown(summary, "badminton")).toEqual({
-      unit: "Game",
+      unit: "game",
       sets: [
         { home: 21, away: 15, closed: true },
         { home: 5, away: 3, closed: false },
       ],
     });
-    expect(setBreakdown(summary, "tabletennis")?.unit).toBe("Game");
-    expect(setBreakdown(summary, "volleyball")?.unit).toBe("Set");
+    expect(setBreakdown(summary, "tabletennis")?.unit).toBe("game");
+    expect(setBreakdown(summary, "volleyball")?.unit).toBe("set");
   });
 
   it("returns null for non-set-based or malformed summaries", () => {

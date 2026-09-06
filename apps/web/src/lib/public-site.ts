@@ -273,8 +273,19 @@ export interface SetScore {
 }
 
 export interface SetBreakdown {
-  /** Column label: badminton & table tennis score "Games", volleyball "Sets". */
-  unit: string;
+  /**
+   * Task 14c — a DICTIONARY-KEY suffix, not a display word: badminton &
+   * table tennis are "game", tennis & volleyball are "set" (never "period"
+   * — that's `SetsView.unit`'s own third value, in `match-centre-schema.ts`,
+   * a different document this function never sees). The renderer resolves
+   * it through `matchCentre.col.<unit>` (column labels) and
+   * `matchCentre.unit.<unit>` (the bare word in "Score by {unit}") — same
+   * `matchCentre.col.*` family `sets-tab.tsx` already reads off the newer
+   * `SetsView.unit`, so this and that document share one translated
+   * vocabulary instead of two. Used to be the literal English word
+   * ("Game"/"Set") rendered straight into the page in every locale.
+   */
+  unit: "game" | "set";
   sets: SetScore[];
 }
 
@@ -300,7 +311,7 @@ export function setBreakdown(summary: unknown, sportKey: string): SetBreakdown |
     if (typeof home !== "number" || typeof away !== "number") return null;
     sets.push({ home, away, closed: closed === true });
   }
-  return { unit: GAME_UNIT_SPORTS.has(sportKey) ? "Game" : "Set", sets };
+  return { unit: GAME_UNIT_SPORTS.has(sportKey) ? "game" : "set", sets };
 }
 
 // ---------------------------------------------------------------------------

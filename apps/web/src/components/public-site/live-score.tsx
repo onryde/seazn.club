@@ -197,6 +197,7 @@ export function LiveScoreBody({
       {showBreakdown ? (
         <SetScoreboard
           breakdown={breakdown}
+          dict={activeDict}
           names={sideIds.map((id, row) => {
             const name = entrantNames[id] ?? "—";
             const hasServe = serving !== null && (row === 0 ? "home" : "away") === serving;
@@ -280,19 +281,25 @@ export function LiveScoreBody({
   );
 }
 
-/** Per-set scoreboard card: one column per played set, live set tinted. */
+/** Per-set scoreboard card: one column per played set, live set tinted.
+ *  Task 14c — `dict` added so the heading and per-column labels resolve
+ *  through `matchCentre.scoreByUnit`/`matchCentre.unit.<unit>`/
+ *  `matchCentre.col.<unit>` instead of rendering `breakdown.unit`'s raw
+ *  English word straight through. */
 function SetScoreboard({
   breakdown,
   names,
+  dict,
 }: {
   breakdown: NonNullable<ReturnType<typeof setBreakdown>>;
   names: string[];
+  dict: Dict;
 }) {
   const sides = ["home", "away"] as const;
   return (
     <div className="rounded-2xl border border-zinc-200/80 bg-surface p-5 shadow-sm">
       <p className="mb-3 font-display text-sm font-semibold uppercase tracking-[0.18em] text-ink-muted">
-        Score by {breakdown.unit.toLowerCase()}
+        {t(dict, "matchCentre.scoreByUnit", { unit: t(dict, `matchCentre.unit.${breakdown.unit}`) })}
       </p>
       <div className="overflow-x-auto">
         <table className="w-full border-separate border-spacing-0 tabular-nums">
@@ -310,7 +317,7 @@ function SetScoreboard({
                     {!s.closed && (
                       <span className="animate-live-pulse h-1.5 w-1.5 rounded-full bg-emerald-500" />
                     )}
-                    {breakdown.unit} {i + 1}
+                    {t(dict, `matchCentre.col.${breakdown.unit}`, { n: i + 1 })}
                   </span>
                 </th>
               ))}
