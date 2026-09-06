@@ -19,10 +19,13 @@ export async function DELETE(
 
     await sql.begin(async (tx) => {
       if (role === "owner") {
+        // Aggregates cannot carry FOR UPDATE (Postgres rejects it outright —
+        // 0A000 "FOR UPDATE is not allowed with aggregate functions"; this
+        // query 500'd on every owner leave attempt until this fix). Mirrors
+        // role/route.ts's identical check, which never had the clause.
         const [{ count }] = await tx<{ count: number }[]>`
           select count(*)::int as count from org_members
-          where org_id = ${id} and role = 'owner' and user_id <> ${user.id}
-          for update`;
+          where org_id = ${id} and role = 'owner' and user_id <> ${user.id}`;
         if (count === 0) {
           throw new HttpError(
             409,
