@@ -32,7 +32,8 @@ import {
   createPersons,
   anonPage,
   closeOpenContexts,
-  shot,
+  shotAllTabs,
+  shotAtWidths,
   controlSet,
   centreHits,
   OUT,
@@ -548,34 +549,33 @@ test("axe: the match centre at 320 has zero serious/critical violations", async 
 // 7. screens — every tab at 320/1280, the page at 768
 // ---------------------------------------------------------------------------
 
-test("screens: every tab at 320 and 1280, the page at 768", async ({ browser }) => {
-  test.setTimeout(120_000);
+test("screens: every tab at 320/768/1280 for match A (live) and the tennis fixture", async ({ browser }, testInfo) => {
+  // Fix round 1 (task-15-review.md I4): 320/768/1280 for EVERY tab, via the
+  // real pinned `screenshotAtWidths` (wrapped as `shotAllTabs`/`shotAtWidths`
+  // -- see spectator-public-helpers.ts), committed under
+  // `__screens__/spectator-w1/walkthrough/` (Task 19's own convention).
+  // Match B (finished) is shot from spectator-public.spec.ts instead, where
+  // it's actually seeded -- this file's own competition has no band-2 match.
+  test.setTimeout(180_000);
   mkdirSync(OUT, { recursive: true });
+  const WIDTHS = [320, 768, 1280];
+
   const matchAPath = publicFixturePath(orgSlug, compSlug, liveDivSlug, matchA);
   const anon = await anonPage(browser, { width: 1280, height: 900 });
   await anon.goto(matchAPath, { waitUntil: "load" });
   await expect(anon.getByTestId("mc-court-card")).toBeVisible({ timeout: 20_000 });
-  await shot(anon, "match-a-page", 768);
-
-  const tabIds = ["summary", "scorecard", "commentary", "info"] as const;
-  for (const id of tabIds) {
-    const tab = anon.getByTestId(`mc-tab-${id}`);
-    if ((await tab.count()) === 0) continue;
-    await tab.click();
-    await expect(anon.getByTestId(`mc-tab-panel-${id}`)).toBeVisible();
-    await shot(anon, `match-a-tab-${id}`, 320);
-    await shot(anon, `match-a-tab-${id}`, 1280);
-  }
+  await shotAtWidths(anon, testInfo, "match-a-page", WIDTHS);
+  await shotAllTabs(anon, testInfo, "match-a", WIDTHS);
 
   const footballPath = publicFixturePath(orgSlug, compSlug, footballDivSlug, footballFixture);
   await anon.goto(footballPath, { waitUntil: "load" });
   await expect(anon.getByTestId("mc-court-card")).toBeVisible({ timeout: 20_000 });
-  for (const id of ["timeline", "sets"] as const) {
-    await anon.getByTestId(`mc-tab-${id}`).click();
-    await expect(anon.getByTestId(`mc-tab-panel-${id}`)).toBeVisible();
-    await shot(anon, `football-tab-${id}`, 320);
-    await shot(anon, `football-tab-${id}`, 1280);
-  }
+  await shotAllTabs(anon, testInfo, "football", WIDTHS);
+
+  const tennisPath = publicFixturePath(orgSlug, compSlug, tennisDivSlug, tennisFixture);
+  await anon.goto(tennisPath, { waitUntil: "load" });
+  await expect(anon.getByTestId("mc-court-card")).toBeVisible({ timeout: 20_000 });
+  await shotAllTabs(anon, testInfo, "tennis", WIDTHS);
 });
 
 // ---------------------------------------------------------------------------

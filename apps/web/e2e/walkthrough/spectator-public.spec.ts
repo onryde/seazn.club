@@ -22,6 +22,7 @@
 // fixture's own choice. This file posts the toss FIRST and checks it with
 // `mustPost`.
 import { test, expect } from "@playwright/test";
+import { mkdirSync } from "node:fs";
 import { activeOrg, apiJson, createStageAndGenerate, fixturePath, TAG } from "../helpers";
 import { HOLD_MS } from "../../src/components/v2/scorepad/queue";
 import { POLL_MS } from "../../src/components/public-site/match-centre/use-live-fixture";
@@ -41,6 +42,8 @@ import {
   pollBallCount,
   anonPage,
   closeOpenContexts,
+  shotAllTabs,
+  OUT,
 } from "./spectator-public-helpers";
 
 test.describe.configure({ mode: "serial" });
@@ -213,7 +216,9 @@ test("cricket match A: the anonymous match centre updates live as the real pad a
   browser,
 }) => {
   const taps = 7; // 6 legal balls (one a wicket) + 1 wide
-  test.setTimeout(Math.max(120_000, taps * (HOLD_MS + 2_000) + POLL_MS + 30_000));
+  // Fix round 1: +POLL_MS for the extra scorecard-row poll (task-15-review
+  // I1) added after the taps below.
+  test.setTimeout(Math.max(120_000, taps * (HOLD_MS + 2_000) + 2 * POLL_MS + 30_000));
 
   const matchAPath = publicFixturePath(orgSlug, compSlug, liveDivSlug, matchA);
 
@@ -229,6 +234,25 @@ test("cricket match A: the anonymous match centre updates live as the real pad a
     await anon320.getByTestId("mc-score-1").textContent(),
   ];
   const fowBefore = await anon320.getByTestId("mc-fow-2").locator('[role="listitem"]').count();
+
+  // Fix round 1 (task-15-review.md I1) -- the THIRD R10 witness (score
+  // strip, newest over, scorecard row): find whoever is CURRENTLY on strike
+  // via the ledger's own last `cricket.ball` event (the real API state, not
+  // a guess) so the pad's first tap below is guaranteed to add a real,
+  // provable run to a KNOWN row, whichever way the fold's strike-rotation
+  // and over-boundary swaps otherwise move the crease.
+  const ledgerBeforeTaps = await ledger(page.request, matchA);
+  const priorBall = [...ledgerBeforeTaps].reverse().find((e) => e.type === "cricket.ball");
+  const strikerId = priorBall?.payload.striker as string | undefined;
+  expect(strikerId, "a striker must already be on strike before the pad taps").toBeTruthy();
+  await anon320.getByTestId("mc-tab-scorecard").click();
+  const strikerRow = anon320.getByTestId(`mc-bat-${strikerId}`);
+  await expect(strikerRow, "the current striker must already have a scorecard row").toBeVisible();
+  const strikerRunsBefore = await strikerRow.locator("td").nth(1).textContent();
+  // back to Commentary -- the taps below assert the newest ball appears there.
+  await anon320.getByTestId("mc-tab-commentary").click();
+  await expect(anon320.getByTestId("mc-tab-panel-commentary")).toBeVisible();
+
   let loadFired = false;
   anon320.on("load", () => {
     loadFired = true;
@@ -282,6 +306,41 @@ test("cricket match A: the anonymous match centre updates live as the real pad a
   await expect
     .poll(async () => anon320.getByTestId("mc-fow-2").locator('[role="listitem"]').count(), { timeout: POLL_MS + 5_000 })
     .toBeGreaterThan(fowBefore);
+
+  // Fix round 1 (task-15-review.md I1) -- the THIRD R10 witness: the
+  // striker's own Scorecard row updates IN PLACE. Tap 1 (`run1`) is odd and
+  // is the very first event after `strikerId` was captured, so it MUST add
+  // at least one run to this row regardless of whatever strike-rotation the
+  // rest of the over does afterward (`playInnings`'s own swap rules, mirrored
+  // by the real reducer both the pad and the API share). Read from the DOM,
+  // never the API payload.
+  await anon320.getByTestId("mc-tab-scorecard").click();
+  await expect(anon320.getByTestId("mc-tab-panel-scorecard")).toBeVisible();
+  const strikerRowAfter = anon320.getByTestId(`mc-bat-${strikerId}`);
+  await expect(strikerRowAfter, "the striker's row must still render after the update").toBeVisible();
+  await expect
+    .poll(async () => strikerRowAfter.locator("td").nth(1).textContent(), { timeout: POLL_MS + 5_000 })
+    .not.toBe(strikerRunsBefore);
+
+  // Fix round 1 (task-15-review.md I2) -- the positive pair for "no
+  // navigation": a fresh document arrived, even though the page never
+  // navigated. NOT a before/after TEXT-equality check: caught live on the
+  // first real run of this exact assertion -- `mc-updated-at`'s "Updated Ns
+  // ago" resets to "Updated 0s ago" on ANY fresh document, so a page that is
+  // merely newly loaded and a page that just received a genuinely new one
+  // can both read "Updated 0s ago" at the moment each is checked (before
+  // !== after is neither necessary -- a real update can leave the STRING
+  // unchanged -- nor sufficient -- the ticking clock alone changes it a
+  // second later with no update at all). Parsing the elapsed-seconds NUMBER
+  // and asserting it is small is real proof: if the client were still
+  // showing the page-load-stale document at this point (tens of seconds
+  // into the test by now), that number would be large, not small.
+  const updatedAtAfter = await anon320.getByTestId("mc-updated-at").textContent();
+  const secondsAfter = Number(updatedAtAfter?.match(/(\d+)s ago/)?.[1]);
+  expect(Number.isFinite(secondsAfter), `mc-updated-at did not parse as "Updated Ns ago": ${updatedAtAfter}`).toBe(true);
+  expect(secondsAfter, "mc-updated-at must show a FRESH elapsed time right after the update, not the page-load-old one").toBeLessThan(
+    10,
+  );
 
   // negative pair: same URL, no navigation event, throughout the whole update.
   expect(new URL(anon320.url()).pathname, "the anonymous page must never navigate to a different page").toBe(pathBefore);
@@ -340,4 +399,21 @@ test("cricket match B (finished): result line, two top-performer cards, no live 
   await expect(anon.getByTestId("mc-tab-panel-summary").getByTestId("mc-live-block")).toHaveCount(0);
   const performers = anon.getByTestId("mc-top-performers").locator("> div");
   await expect(performers).toHaveCount(2);
+});
+
+// ---------------------------------------------------------------------------
+// 5. screens — match B (finished), every tab at 320/768/1280 (task-15-review
+//    I4: the brief's "live and final" pairing needs BOTH; match B only
+//    exists in this file's own seeded competition, so its screenshots live
+//    here rather than in spectator-public-2.spec.ts's own "screens" test)
+// ---------------------------------------------------------------------------
+
+test("screens: match B (finished) — every tab at 320/768/1280", async ({ browser }, testInfo) => {
+  test.setTimeout(120_000);
+  mkdirSync(OUT, { recursive: true });
+  const matchBPath = publicFixturePath(orgSlug, compSlug, finishedDivSlug, matchB);
+  const anon = await anonPage(browser, { width: 1280, height: 900 });
+  await anon.goto(matchBPath, { waitUntil: "load" });
+  await expect(anon.getByTestId("mc-court-card")).toBeVisible({ timeout: 20_000 });
+  await shotAllTabs(anon, testInfo, "match-b", [320, 768, 1280]);
 });

@@ -12,9 +12,10 @@
 // from the deleted `e2e/walkthrough/w0-spectator-capture.spec.ts` — see
 // spectator-public.spec.ts's own header for the one real bug W0 carried
 // (toss posted after core.start, swallowed by a non-throwing postEvent).
+import { copyFileSync } from "node:fs";
 import { join } from "node:path";
-import { expect, type APIRequestContext, type Browser, type BrowserContext, type Page } from "@playwright/test";
-import { apiJson, setDivisionConfigSql } from "../helpers";
+import { expect, type APIRequestContext, type Browser, type BrowserContext, type Page, type TestInfo } from "@playwright/test";
+import { apiJson, screenshotAtWidths, setDivisionConfigSql } from "../helpers";
 import { consentedAnonymousState } from "../scorepad-a11y-kit";
 
 export const OUT = join(import.meta.dirname, "..", "__screens__", "spectator-w1", "walkthrough");
@@ -374,6 +375,37 @@ export async function shot(page: Page, name: string, width: number): Promise<voi
   await page.waitForTimeout(250); // settle CSS transitions (Task 14's own "two active tab pills" fix)
   await page.screenshot({ path: join(OUT, `${name}-${width}.png`), fullPage: true });
   if (original) await page.setViewportSize(original);
+}
+
+/** Fix round 1 (task-15-review.md I4) — reuses the REAL pinned
+ *  `screenshotAtWidths` (`../helpers.ts`), never a parallel reimplementation
+ *  (one authority per behaviour), then copies its output out of Playwright's
+ *  per-test `testInfo.outputPath()` (ephemeral, wiped between runs) into this
+ *  walkthrough's own committed `__screens__/spectator-w1/walkthrough/`
+ *  directory — the same convention Task 19's `more-sheet-{320,768}.png`
+ *  already committed under `__screens__/spectator-w1/`. */
+export async function shotAtWidths(page: Page, testInfo: TestInfo, name: string, widths: number[]): Promise<void> {
+  await screenshotAtWidths(page, testInfo, name, widths);
+  for (const width of widths) {
+    copyFileSync(`${testInfo.outputPath()}/${name}-${width}.png`, join(OUT, `${name}-${width}.png`));
+  }
+}
+
+/** Every tab a fixture's own document actually renders (discovered live from
+ *  the DOM, never a hardcoded per-sport list — a band-2 or tennis fixture
+ *  does not carry the same tab set as a band-3 cricket one), shot at every
+ *  width via `shotAtWidths` above. */
+export async function shotAllTabs(page: Page, testInfo: TestInfo, namePrefix: string, widths: number[]): Promise<void> {
+  const tabIds = (
+    await page.locator('[role="tab"]').evaluateAll((els) => els.map((el) => el.getAttribute("data-testid")))
+  ).filter((id): id is string => !!id);
+  for (const testId of tabIds) {
+    const id = testId.replace("mc-tab-", "");
+    await page.getByTestId(testId).click();
+    await expect(page.getByTestId(`mc-tab-panel-${id}`)).toBeVisible();
+    await page.waitForTimeout(250); // settle CSS transitions (Task 14's own "two active tab pills" fix)
+    await shotAtWidths(page, testInfo, `${namePrefix}-tab-${id}`, widths);
+  }
 }
 
 /** Visible interactive controls, in DOM order — the same shape
