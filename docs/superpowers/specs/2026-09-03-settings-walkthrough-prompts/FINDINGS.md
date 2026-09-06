@@ -31,4 +31,12 @@ Found: Task 2, while deriving expected prices from the catalog.
 
 `lib/org-addons.ts`'s module header, `orgAddonPriceMinor`'s doc comment, and `setExtraOrgs`' doc comment all describe "$9/mo Pro, $19/mo Pro Plus" and argue the two rates are load-bearing ("one flat rate would let Pro + extras undercut Pro Plus"). There is no `pro_plus` plan row today (`plans` holds `community, enterprise, event_pass, event_pass_l, pro`), and `config/stripe-plans.json`'s `org_addons` holds exactly one entry — `pro` at 699 (not 900). No live gap (every member of `PURCHASABLE_PLAN_KEYS` — just `pro` — has a rider), but the comments state a false catalog fact that a later session could build on.
 
-**Status:** open. Comment-only fix, no test needed (nothing asserts the stale comment). Cheap enough to fix inline whenever a session next touches this file; not worth a dedicated task.
+**Status:** open. Comment-only fix, no test needed (nothing asserts the stale comment). Cheap enough to fix inline whenever a session next touches this file; not worth a dedicated task. The same stale claim also appears at `apps/web/src/app/api/billing/extra-orgs/route.ts:13` — both sites move together.
+
+### F4 (documentation only, no product impact, but it is F1's own false premise) — `add-ons-tab.ts` claims no plan grants an unlimited cap
+
+Found: Task 2 reviewer, while confirming F1.
+
+`add-ons-tab.ts:141-142` states "No plan grants unlimited `orgs.max_owned`, so `orgCap === null` means a staff override with a null `int_value`" and uses that to argue the `capReduced` second branch is unreachable. `V393__entitlements_v18.sql:25-26,46-48` falsified this when it added the `enterprise` plan with `orgs.max_owned` unlimited — which is the exact mechanism F1's contradictory copy runs through. The `capReduced` logic itself is still correct (the claim is about reachability, not behavior), so this is documentation-only, but a future session re-deriving F1's cause from this comment would derive it wrong.
+
+**Status:** open, same disposition as F3 — comment-only, fix whenever the file is next touched.
