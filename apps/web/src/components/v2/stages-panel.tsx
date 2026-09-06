@@ -953,20 +953,17 @@ export function StagesPanel({ divisionId, divisionSeq, competitionId, orgSlug, c
                     if (ok) void act(s.id, "delete");
                   })();
                 }}
+                addingTo={addingTo}
+                onToggleAddMatch={(stageId) => setAddingTo(addingTo === stageId ? null : stageId)}
+                adhoc={ADHOC_STAGE_KINDS.has(stage.kind)}
+                // #622 — court tags editor moves onto the rail (Task 3). Stays
+                // mounted HERE, not inside StageRail: it reads `courtTagSuggestions`
+                // off this panel's own `venues` prop, and the rail keeps owning no
+                // data of its own (see stage-rail.tsx's own comment on why).
+                courtTagsSlot={
+                  <StageCourtTagsEditor stageId={stage.id} canEdit={canEdit} suggestions={courtTagSuggestions} msg={msg} />
+                }
               />
-              {canEdit &&
-                stage.status !== "complete" &&
-                ADHOC_STAGE_KINDS.has(stage.kind) &&
-                stageFixtures.length > 0 && (
-                  <button
-                    type="button"
-                    disabled={busy !== null}
-                    onClick={() => setAddingTo(addingTo === stage.id ? null : stage.id)}
-                    className="btn btn-ghost px-3 py-1.5 text-xs"
-                  >
-                    {msg("stage.addMatch.button")}
-                  </button>
-                )}
             </header>
 
             {/* F3 Task 5 (5a/5b) — the board no longer matches the roster:
@@ -1013,7 +1010,13 @@ export function StagesPanel({ divisionId, divisionSeq, competitionId, orgSlug, c
               </div>
             )}
 
-            {/* PROMPT-66: inline ad-hoc match form (replay / friendly / tie-breaker). */}
+            {/* PROMPT-66: inline ad-hoc match form (replay / friendly / tie-breaker).
+                Competition Desk W3 Task 3 — only the OPEN TRIGGER moved onto
+                StageRail (data-testid="stage-add-match"); this form stays
+                mounted here, deliberately, because it reads `boardSlotOptions`
+                below, which also feeds `<RunSheet>` further down this file.
+                Do not move this form to "finish" the rail move — that would
+                fork `boardSlotOptions` into two derivations. */}
             {addingTo === stage.id && (
               <AddMatchForm
                 msg={msg}
@@ -1093,15 +1096,6 @@ export function StagesPanel({ divisionId, divisionSeq, competitionId, orgSlug, c
                 {canEdit ? msg("schedule.noFixtures.can") : msg("schedule.noFixtures.view")}
               </p>
             )}
-
-            {/* #622 — sits with the stage's other settings, last in the card so
-                it never pushes the fixture list below the fold. */}
-            <StageCourtTagsEditor
-              stageId={stage.id}
-              canEdit={canEdit}
-              suggestions={courtTagSuggestions}
-              msg={msg}
-            />
           </section>
           </div>
         );

@@ -33,9 +33,34 @@ export interface StageRailProps {
   deletable: boolean;
   onAct: (stageId: string, action: "generate" | "complete" | "delete") => void;
   onDelete: (stage: { id: string; name: string }) => void;
+  /** Stage id whose inline "Add match" form is currently open (owned by the
+   *  panel's `addingTo` state) — used only to reflect the trigger's disclosure
+   *  state via `aria-expanded`, the same convention `StageCourtTagsEditor`'s
+   *  own toggle uses. */
+  addingTo: string | null;
+  onToggleAddMatch: (stageId: string) => void;
+  /** Whether this stage's kind is in `ADHOC_STAGE_KINDS` — computed by the
+   *  panel, not the rail, so the rail stays presentational. */
+  adhoc: boolean;
+  /** `StageCourtTagsEditor` stays mounted by the panel and is handed down as
+   *  an already-built element — a slot, not a component reference — so the
+   *  rail keeps owning no data hook of its own. */
+  courtTagsSlot: React.ReactNode;
 }
 
-export function StageRail({ stage, canEdit, busy, fixtureCount, deletable, onAct, onDelete }: StageRailProps) {
+export function StageRail({
+  stage,
+  canEdit,
+  busy,
+  fixtureCount,
+  deletable,
+  onAct,
+  onDelete,
+  addingTo,
+  onToggleAddMatch,
+  adhoc,
+  courtTagsSlot,
+}: StageRailProps) {
   const msg = useMsg();
 
   if (!canEdit) return null;
@@ -114,6 +139,24 @@ export function StageRail({ stage, canEdit, busy, fixtureCount, deletable, onAct
           {msg("schedule.delete")}
         </button>
       )}
+      {stage.status !== "complete" && adhoc && fixtureCount > 0 && (
+        // Task 3 — trigger only. `AddMatchForm` deliberately stays mounted in
+        // stages-panel.tsx: it reads `boardSlotOptions`, which also feeds
+        // `<RunSheet>`, so hoisting the form itself here would mean building
+        // a second copy of that derivation. Do not "finish the job" by moving
+        // the form too — that would break the run sheet's own slot options.
+        <button
+          type="button"
+          disabled={busy !== null}
+          onClick={() => onToggleAddMatch(stage.id)}
+          aria-expanded={addingTo === stage.id}
+          data-testid="stage-add-match"
+          className="btn btn-ghost px-3 py-1.5 text-xs"
+        >
+          {msg("stage.addMatch.button")}
+        </button>
+      )}
+      {courtTagsSlot}
     </>
   );
 }
