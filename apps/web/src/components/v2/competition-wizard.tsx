@@ -6,23 +6,57 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { apiV1, ApiV1Error } from "@/lib/client-v1";
 import { UpgradeGate } from "@/components/upgrade-gate";
+import {
+  publicDashboardGain,
+  PUBLIC_DASHBOARD_FEATURE,
+  type PublicDashboardUpgrade,
+} from "@/lib/public-dashboard-upgrade";
 import { VisibilityPicker } from "@/components/ui/visibility-picker";
 import { DateTimeField } from "@/components/v2/shared/datetime-field";
 import { routes } from "@/lib/routes";
 import { useMsg } from "@/components/i18n/dict-provider";
 
 
-export function CompetitionWizard({ orgSlug }: { orgSlug: string }) {
+export function CompetitionWizard({
+  orgSlug,
+  publicDashboardUpgrade,
+}: {
+  orgSlug: string;
+  /**
+   * What the next plan up hosts for `dashboard.public.max`, read out of
+   * `plan_entitlements` by the Server Component page.
+   *
+   * REQUIRED, not optional, and passed down rather than derived here: this is a
+   * "use client" island with no database in reach, and an optional prop is how
+   * the figure quietly stops arriving — the whole class of defect this thread
+   * exists to close. `tsc` names every caller instead.
+   */
+  publicDashboardUpgrade: PublicDashboardUpgrade | null;
+}) {
   const msg = useMsg();
   const router = useRouter();
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
-  const [visibility, setVisibility] = useState<string>("private");
+  // PUBLIC BY DEFAULT (entitlements v18 W2 T15/F, owner ruling 2026-09-03). A
+  // competition nobody can see does not grow the product, and the organiser who
+  // wants private says so. Safe as a default only because the server DEGRADES
+  // over the public-dashboard cap instead of refusing — see `degraded` below.
+  const [visibility, setVisibility] = useState<string>("public");
   const [discoverable, setDiscoverable] = useState(false);
   const [startsOn, setStartsOn] = useState("");
   const [endsOn, setEndsOn] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [paywall, setPaywall] = useState<{ feature: string; reason?: string } | null>(null);
+  // Set when the org asked for a public competition and the server created a
+  // private one because its public dashboards are all in use. NOT an error —
+  // the competition exists — so it replaces the redirect with a note and a way
+  // onward, rather than an error banner over a form that already succeeded.
+  // `limit` is the cap the create was refused BY — the server resolved it
+  // against this org's own plan and says so on the 201, so the card can name
+  // the number instead of gesturing at it.
+  const [degraded, setDegraded] = useState<
+    { name: string; slug: string; limit: number | null } | null
+  >(null);
   const [busy, setBusy] = useState(false);
 
   async function submit(e: React.FormEvent) {
@@ -44,7 +78,12 @@ export function CompetitionWizard({ orgSlug }: { orgSlug: string }) {
     }
     setBusy(true);
     try {
-      const created = await apiV1<{ id: string; slug: string }>("/api/v1/competitions", {
+      const created = await apiV1<{
+        id: string;
+        slug: string;
+        visibility: string;
+        public_quota_degraded?: { feature_key: string; limit: number | null };
+      }>("/api/v1/competitions", {
         method: "POST",
         json: {
           name,
@@ -58,6 +97,20 @@ export function CompetitionWizard({ orgSlug }: { orgSlug: string }) {
           branding: {},
         },
       });
+      // The server is the authority on what was actually created, and since T20
+      // it SAYS so rather than leaving every consumer to diff the row against
+      // its own request. Read off the explicit note, not a re-derivation of it:
+      // `created.visibility` is still the truthful value on the resource (and
+      // is what a caller ignoring the note reads), but making this component
+      // check both would be two guards covering for each other, each untested.
+      if (created.public_quota_degraded) {
+        setDegraded({
+          name: name.trim(),
+          slug: created.slug,
+          limit: created.public_quota_degraded.limit,
+        });
+        return;
+      }
       router.push(routes.competition(orgSlug, created.slug));
     } catch (err) {
       if (err instanceof ApiV1Error && err.code === "PAYMENT_REQUIRED") {
@@ -71,6 +124,48 @@ export function CompetitionWizard({ orgSlug }: { orgSlug: string }) {
     } finally {
       setBusy(false);
     }
+  }
+
+  // The create SUCCEEDED — this replaces the form rather than sitting under it,
+  // because leaving an armed "Create competition" button under a competition
+  // that already exists is how the same night gets created twice.
+  if (degraded) {
+    // BOTH numbers, or as many of them as are true: the cap they hit and what
+    // the next plan up hosts. See lib/public-dashboard-upgrade.ts for when the
+    // second one is suppressed — a Pro org at Pro's own cap must not read
+    // "Pro hosts 10" as an offer.
+    const gain = publicDashboardGain(degraded.limit, publicDashboardUpgrade);
+    return (
+      <div className="card space-y-4 p-6" data-testid="public-quota-degraded">
+        <h2 className="text-lg font-semibold text-slate-800">
+          {msg("comp.wizard.publicDegraded.title")}
+        </h2>
+        <p className="text-sm leading-relaxed text-slate-600">
+          {msg("comp.wizard.publicDegraded.body", { name: degraded.name })}
+        </p>
+        {degraded.limit !== null && (
+          <p className="text-sm font-medium text-slate-700" data-testid="public-quota-caps">
+            {gain !== null && publicDashboardUpgrade
+              ? msg("comp.wizard.publicDegraded.caps", {
+                  limit: degraded.limit,
+                  plan: publicDashboardUpgrade.plan,
+                  upgrade: gain,
+                })
+              : msg("comp.wizard.publicDegraded.capsOwn", { limit: degraded.limit })}
+          </p>
+        )}
+        <UpgradeGate feature={PUBLIC_DASHBOARD_FEATURE} />
+        <div className="flex justify-end">
+          <button
+            type="button"
+            onClick={() => router.push(routes.competition(orgSlug, degraded.slug))}
+            className="btn btn-primary"
+          >
+            {msg("comp.wizard.publicDegraded.continue")}
+          </button>
+        </div>
+      </div>
+    );
   }
 
   return (

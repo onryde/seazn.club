@@ -7,12 +7,17 @@ export const dynamic = "force-dynamic";
 // needs to link a fixture — every string lives in ImportClient.tsx via
 // useMsg(), so there is nothing to localize here.
 //
-// Feature absent -> notFound(), and the console carries NO link to this
-// page during rollout (spec §2.4: import.events has no plan_entitlements
-// row on any plan, so only a per-org override grants it) — deliberate, not
-// an oversight. The ROUTE (Task 5) is the actual write-path authority and
-// answers 402/403 regardless of what this page renders; the check below
-// only keeps the surface invisible.
+// Feature absent -> notFound(). V396 (entitlements v18 W2 T14, owner ruling
+// 2026-09-03) grants `import.events` on all five plans, so this gate now
+// admits every org and only a staff `org_entitlement_overrides` deny closes
+// it — it is a deny hook, no longer a rollout curtain. The ROUTE (Task 5) is
+// the actual write-path authority and answers 402/403 regardless of what
+// this page renders; the check below only keeps the surface invisible.
+//
+// STILL UNLINKED: no console surface routes here (the link was withheld
+// during rollout and W2 did not add one), so the page is reachable by URL
+// only. Recorded rather than fixed — the entry point is a UI decision this
+// migration task has no ruling for.
 import { notFound } from "next/navigation";
 import { requireDivisionPage } from "@/server/page-auth";
 import { hasFeature } from "@/lib/entitlements";

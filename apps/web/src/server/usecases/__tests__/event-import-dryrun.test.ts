@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { sql } from "@/lib/db";
+import { invalidateOrgEntitlements } from "@/lib/entitlements";
 import { importEvents, IMPORT_CAPS } from "../event-import";
 import {
   seedOrg,
@@ -204,8 +205,16 @@ describe.skipIf(!HAS_DB)("importEvents — guards and dry run", () => {
   // scoring door (scoring.ts's `requiresDlsEntitlement`). Without the
   // import-side counterpart a non-entitled org buys a DLS target by
   // importing instead of scoring.
-  it("rejects a DLS-computed cricket.revise when the org lacks cricket.dls (import.entitlement)", async () => {
+  it("rejects a DLS-computed cricket.revise when the org is denied cricket.dls (import.entitlement)", async () => {
+    // V393 (entitlements v18 §2) granted `cricket.dls` on every plan, so no
+    // plan withholds it. The import-side gate is still live code and still has
+    // to match `scoreEvent`'s, so a DENY override is what drives it.
     const { auth } = await seedOrg();
+    await sql`
+      insert into org_entitlement_overrides (org_id, feature_key, bool_value, reason)
+      values (${auth.orgId}, 'cricket.dls', false, 'test')
+      on conflict (org_id, feature_key) do update set bool_value = false`;
+    await invalidateOrgEntitlements(auth.orgId);
     const { divisionId, fixtureId } = await startedCricketDivisionWithFixture(auth);
     // The division-level config is what BOTH paths read (owner ruling R-B) —
     // not the fixture's cfg snapshot — so parity with `scoreEvent` is

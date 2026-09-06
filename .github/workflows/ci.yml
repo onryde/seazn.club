@@ -1109,11 +1109,21 @@ jobs:
       #
       # db-suite-ci-wiring.test.ts fails if a new DB-gated suite appears outside
       # those three trees without a line here, so this list cannot silently rot.
+      #
+      # Two added 2026-09-04 by the entitlements v18 W2 wave, and the guard is
+      # the only reason they were noticed: `public-quota-degraded-numbers`
+      # (src/components/v2) proves the degrade card names the cap it hit and the
+      # cap the next plan gives, and `stripe-plans-ladder` (src/config) reads the
+      # included credit rate out of `plan_entitlements` to compare a consumable
+      # against the plan that includes it. Both are DB-gated and both live
+      # outside src/server|lib|app, so until this line they ran NOWHERE and
+      # reported green by reporting nothing — a guard that does not execute is
+      # decoration, which is precisely what both were written to prevent.
       # It is how capture.test.ts was found, after the first draft listed only
       # the other two. That guard reads ci.yml as a whole and does not care WHICH
       # job holds the line, which is what makes this move safe.
       - name: DB-gated suites outside src/server|lib|app (real Postgres)
-        run: npm test --workspace apps/web -- --reporter=default --reporter=json --outputFile=vitest-results-outliers.json src/components/__tests__/upgrade-gate-pass-features.test.ts src/demo/ai-templates/__capture__/__tests__/seeds.test.ts src/demo/ai-templates/__capture__/capture.test.ts
+        run: npm test --workspace apps/web -- --reporter=default --reporter=json --outputFile=vitest-results-outliers.json src/components/__tests__/upgrade-gate-pass-features.test.ts src/components/v2/__tests__/public-quota-degraded-numbers.test.tsx src/config/__tests__/stripe-plans-ladder.test.ts src/demo/ai-templates/__capture__/__tests__/seeds.test.ts src/demo/ai-templates/__capture__/capture.test.ts
 
       # The DB-gated suites under src/app. src/lib is NOT repeated here — and
       # note the original reason still holds under the split, for a different

@@ -1,18 +1,25 @@
 // D23 — the settings page must gate the LOGO and the BRAND COLOUR on two
 // different keys, because the resolver already does.
 //
-//   branding            org logo upload + display   → free for everyone (V310)
-//   dashboard.branding  org THEME COLOUR            → Pro / Pro Plus only
+//   branding         org logo upload + display   → free for everyone (V310)
+//   dashboard.theme  org THEME COLOUR            → Pro and above (V397)
 //
 // One flag drove both gates. V310 made `branding` free, so a Community org was
 // handed a working colour picker whose value is stripped on the way out:
 // server/public-site/data.ts wraps o.branding in
-// `case when org_has_feature(o.id, 'dashboard.branding') then … else '{}' end`.
+// `case when org_has_feature(o.id, '…') then … else '{}' end`.
 // The org picks a colour, saves it, and nothing anywhere changes — the worst
 // kind of gate, one that takes the input and silently discards it.
 //
+// The colour key CHANGED in W2 (entitlements v18 T17, owner ruling 2026-09-03).
+// It was `dashboard.branding` until V397, which is the same key that removes the
+// "Powered by seazn.club" badge — and V396 had just made badge removal
+// enterprise-only. So a Pro org lost the picker AND the rendered colour in one
+// step, for a perk it never asked to stop buying. `dashboard.branding` now
+// means the badge and nothing else; the colour rides `dashboard.theme`.
+//
 // These render the real page with the resolver stubbed per key, so the test
-// fails if the two gates are ever collapsed back onto one flag.
+// fails if the gates are ever collapsed back onto one flag.
 //
 // prerender, not renderToStaticMarkup: the page is an async server component
 // (it awaits requireOrgPage, getDictionary, …) and the synchronous renderer
@@ -113,8 +120,8 @@ beforeEach(() => {
 
 describe("settings → organisation: logo and brand colour are gated separately (D23)", () => {
   it("a Community org gets the logo uploader but NOT the colour picker", async () => {
-    // V310's shipped matrix exactly: logos free, theme colour still Pro.
-    grant({ branding: true, "dashboard.branding": false });
+    // V310's shipped matrix exactly: logos free, theme colour still paid.
+    grant({ branding: true, "dashboard.theme": false });
     const html = await render();
 
     expect(html).toContain("org-logo-uploader");
@@ -126,8 +133,12 @@ describe("settings → organisation: logo and brand colour are gated separately 
     expect(html).not.toContain("Org logo requires");
   });
 
-  it("a Pro org gets both", async () => {
-    grant({ branding: true, "dashboard.branding": true });
+  it("a Pro org gets both — with the badge key OFF, as V396 leaves it", async () => {
+    // The pairing that regressed: a Pro org has `dashboard.branding` FALSE
+    // (the badge is shown on every self-serve plan) and must still get the
+    // colour picker. Re-weld the two keys and this case fails — which is the
+    // whole point of stating the badge key here rather than omitting it.
+    grant({ branding: true, "dashboard.theme": true, "dashboard.branding": false });
     const html = await render();
 
     expect(html).toContain("org-logo-uploader");
@@ -135,20 +146,24 @@ describe("settings → organisation: logo and brand colour are gated separately 
     expect(html).not.toContain("Brand color requires");
   });
 
-  it("asks the resolver for dashboard.branding, not just branding", async () => {
-    grant({ branding: true, "dashboard.branding": false });
+  it("asks the resolver for dashboard.theme, not just branding", async () => {
+    grant({ branding: true, "dashboard.theme": false });
     await render();
 
     const keys = hasFeature.mock.calls.map((c: unknown[]) => c[1]);
     expect(keys).toContain("branding");
-    expect(keys).toContain("dashboard.branding");
+    expect(keys).toContain("dashboard.theme");
+    // …and it must NOT reach for the badge key here. Asking it would be
+    // harmless today only because the stub answers false; in production it is
+    // enterprise-only, so a page that consulted it would deny every Pro org.
+    expect(keys).not.toContain("dashboard.branding");
   });
 
   // The inverse pairing can't happen from a plan row today, but it is what
   // proves the two gates are genuinely independent rather than one flag read
   // twice: colour on, logo off must render colour and upsell the logo.
-  it("honours the keys independently when only dashboard.branding is granted", async () => {
-    grant({ branding: false, "dashboard.branding": true });
+  it("honours the keys independently when only dashboard.theme is granted", async () => {
+    grant({ branding: false, "dashboard.theme": true });
     const html = await render();
 
     expect(html).not.toContain("org-logo-uploader");

@@ -34,11 +34,22 @@ import stripePlans from "@/config/stripe-plans.json";
 import { sql } from "@/lib/db";
 import { PASS_CREDIT_GRANT } from "@/lib/pricing-cards";
 import { FEATURE_REASONS } from "@/lib/feature-copy";
-import { passPrice, proPrice } from "@/lib/currency";
+import {
+  HIDDEN_PASS_KEYS,
+  PASS_KEYS,
+  SELLABLE_PASS_KEYS,
+  passPrice,
+  proPrice,
+} from "@/lib/currency";
 import { TIPS } from "@/config/tips";
 import * as copyTruth from "@/lib/copy-truth";
 import { APPROVED_DICTIONARY_COPY } from "./_approved-dictionary-copy";
 import {
+  ANNUAL_SAVING_CLAIM,
+  annualClaimFaults,
+  annualPricePoints,
+  annualSavingFaults,
+  SEED_CURRENCIES,
   approvedDictionaryFaults,
   sourceControlCharacterFaults,
   unexportedPatternFaults,
@@ -62,7 +73,6 @@ import {
   localeHalfClaimFaults,
   localePassBoundFaults,
   localePassUncoveredFaults,
-  localePlusDifferentiatorFaults,
   retiredClaimFaults,
   valueClauses,
   riderClaimShape,
@@ -174,18 +184,28 @@ const FAQ_EXEMPT: Record<string, string> = {
   "pricing.faq.currencies.a": "about currency pinning",
   "pricing.faq.annual.a": "about annual billing",
   "pricing.faq.cancel.a": "about cancelling Pro; no pass claim",
-  "pricing.faq.proPlus.a": "scanned, but for differentiators and the rider rate — not pass permanence",
 };
 
 /** The one pass string that quantifies the credit grant. */
 const PASS_CREDIT_VALUES = across("marketing", "pricing.faq.eventPass.a");
+// W2 T5: the grant is per rung, so the figures come off the declaration rather
+// than being typed here — a repricing moves these proofs with it.
+const M_GRANT = PASS_CREDIT_GRANT.event_pass;
+const L_GRANT = PASS_CREDIT_GRANT.event_pass_l;
+const GRANTS: readonly number[] = Object.values(PASS_CREDIT_GRANT);
+// …and the subset the SHIPPED answer is a claim about. The FAQ describes what a
+// reader can buy, so it quotes the grants of the rungs on sale and no others
+// (owner decision 2026-09-05 took the L rung off sale). `GRANTS` above stays the
+// FULL declared set and is what the guard's own unit cases below exercise, so
+// the rule keeps its two-grant teeth while the corpus check narrows.
+const SELLABLE_GRANTS: readonly number[] = SELLABLE_PASS_KEYS.map((k) => PASS_CREDIT_GRANT[k]);
 
-/** The Pro Plus FAQ answer — a different claim family, deliberately NOT scanned
- *  for pass permanence. Pro Plus is a subscription: "for as long as you pay" is
- *  a true thing to say about it, and reusing the pass's vocabulary here would
- *  red on honest copy. (Measured: it carries no permanence hit in any locale
- *  today, in any of the four vocabularies.) */
-const PLUS_VALUES = across("marketing", "pricing.faq.proPlus.a");
+// `PLUS_VALUES` — `pricing.faq.proPlus.a`, the /pricing FAQ answer to "What's
+// in Pro Plus?" — is DELETED here with the key itself (retired-plan copy sweep).
+// V393 removed `pro_plus` from `plans`, and a question ABOUT a plan that does
+// not exist has no true rewording: the answer went, not its wording. Its three
+// scans (the anti-vacuity floor, the retired-claim registry, the half-rate
+// axis) lose one input each; every one of them still has others.
 
 /** #382 review, finding 1 — the Pro card on the per-competition upgrade page
  *  (`app/o/[orgSlug]/c/[compSlug]/upgrade/page.tsx`). A FOURTH key axis, and
@@ -198,7 +218,8 @@ const PRO_CARD_BODY = across("ui", "upgrade.proCard.body");
 /**
  * THE PRO PLUS CARD — a THIRD key axis, and the reason it now exists.
  *
- * `PLUS_VALUES` above is the FAQ answer, three cards down the /pricing page.
+ * `pricing.faq.proPlus.a` was the FAQ answer, three cards down the /pricing
+ * page; it is deleted with the plan.
  * The card itself is six other keys, and nothing scanned them: task 4 removed
  * "AI-assisted scheduling" from the answer while the card two screens above
  * went on selling it, in all four locales. A page disagreeing with itself is
@@ -267,7 +288,7 @@ const PLUS_CARD_VALUES: LocalisedValue[] = DICTIONARY_LOCALES.map((locale) => ({
 /**
  * THE HALF-RATE CLAIM HAS ITS OWN KEY AXIS, and this is why.
  *
- * `localeHalfClaimFaults` was only ever called with `PLUS_VALUES`, so
+ * `localeHalfClaimFaults` was only ever called with the Pro Plus FAQ answer, so
  * `pricing.faq.groups.a` — which says "half your plan's rate", bare, in all four
  * locales, three FAQ cards away — was never scanned. `en.halfClaim` literally
  * spells that phrase out; the pattern existed and nothing pointed it at the key.
@@ -283,7 +304,9 @@ const PLUS_CARD_VALUES: LocalisedValue[] = DICTIONARY_LOCALES.map((locale) => ({
  * is only a decision once every key that makes the claim is on it.
  */
 const HALF_CLAIM_KEYS = [
-  "pricing.faq.proPlus.a",
+  // `pricing.faq.proPlus.a` left this axis with the key (retired-plan copy
+  // sweep). `pricing.faq.groups.a` — the falsehood that started the axis — is
+  // still on it, so the family keeps a marketing-side member.
   "pricing.faq.groups.a",
   "pricing.matrix.orgs.max_owned.note",
 ];
@@ -318,6 +341,33 @@ const HALF_CLAIM_VALUES: LocalisedValue[] = [
  * tarifa base", so the retired form has to carry enough context ("adicional a
  * mitad…") to tell the two apart.
  */
+// The three plan-ATTRIBUTION patterns `freeClaimFaults` reads (W2). They live
+// in copy-truth's exports, so `inertPatternFaults` demands a fixture for each
+// — and `ENTERPRISE_ATTRIBUTION` had none on the run it was added, which is
+// the corpus doing exactly its job: a pattern nobody exercises makes every
+// assertion resting on it report clean.
+const ATTRIBUTION_POSITIVES = [
+  // PRO_ATTRIBUTION — all four arms. The "is on Pro" arm was added 2026-09-05
+  // with the twelve reasons that name both plans; without a fixture here it was
+  // a pattern nothing proved, which is the exact defect the rule below exists
+  // for. It was added WITHOUT one, in the same commit that added the pattern.
+  "Custom tiebreaker order is a Pro feature.",
+  "Player stats are on Pro and the Event Pass.",
+  "this needs a Pro plan",
+  "upgrade to Pro",
+  // PASS_ATTRIBUTION. Used only negatively — a Pro claim is a fault when a pass
+  // rung also grants the key and the sentence does not say so — but it is still
+  // a pattern, and a pattern nobody can fire is a rule that examines nothing.
+  "the Event Pass covers this competition",
+  // ENTERPRISE_ATTRIBUTION — both arms, because the second ("needs an
+  // Enterprise plan") is the one no shipped sentence uses today.
+  "Write access via the API is an Enterprise feature",
+  "this needs an Enterprise plan",
+  // FREE_ATTRIBUTION
+  "your own club logo works on every plan",
+  "free for everyone",
+];
+
 const RETIRED_CLAIMS = [
   // en
   "for its lifetime",
@@ -348,6 +398,12 @@ const RETIRED_CLAIMS = [
   // string per language is not a vocabulary.
   "voor het hele verloop",
   "voor altijd",
+  // RESTORED. This entry was deleted by mistake while pruning the corpus of
+  // fixtures whose patterns went with `plusClaims` — the same literal appeared
+  // in BOTH lists, and a line-based sweep took both copies. They are not the
+  // same thing: the corpus proves a pattern fires, this list is the retired
+  // wording itself, and the nl half of "holds the card's retired AI-scheduling
+  // wording, in all four locales" is what caught the loss.
   "AI-ondersteunde planning",
   "organisatie voor de helft van het basistarief",
   // Fix round 1 — `pricing.faq.upgraded.a`. Two claims per locale: the
@@ -578,6 +634,7 @@ const ADVERSARIAL: Record<DictionaryLocale, string[]> = {
  * directions: an unused fixture is a fault too.
  */
 const KNOWN_POSITIVES: string[] = [
+  ...ATTRIBUTION_POSITIVES,
   ...Object.values(REWORDINGS).flat(),
   ...Object.values(ADVERSARIAL).flat(),
   ...Object.values(BOUNDED),
@@ -658,6 +715,28 @@ const KNOWN_POSITIVES: string[] = [
   "Chaque niveau de détail est disponible sur tous les forfaits.",
   "Bal-voor-bal scoren vereist een Pro-abonnement.",
   "Elk detailniveau is beschikbaar op elk abonnement.",
+  // ── The annual saving, stated as a floor (entitlements v18 / W2) ──
+  //    One line per locale, each carrying all three parts of
+  //    `ANNUAL_SAVING_CLAIM` — numeral, unit and giveaway — so twelve patterns
+  //    are proven live by four fixtures, and a mangled escape in any of them
+  //    reds here instead of quietly matching nothing.
+  "Paying yearly is more than two months free.",
+  "Pagar por a\u00f1o son m\u00e1s de dos meses gratis.",
+  "Payer \u00e0 l'ann\u00e9e, c'est plus de deux mois offerts.",
+  "Per jaar betalen is meer dan twee maanden gratis.",
+  // ── Per-plan CAPACITY claims (entitlements v18 / W2) ──
+  //    Six one-word fixtures, because these patterns read TABLE CELLS rather
+  //    than sentences: `PLAN_CAP_AXES[*].column` and the two cell patterns are
+  //    `^…$`-anchored on purpose, so that "20 per club" is not read as the cap
+  //    20 and "No change" is not read as a grant. A prose fixture matches none
+  //    of them, and a pattern nothing matches is exactly what this list exists
+  //    to catch.
+  "Clubs",
+  "Teams",
+  "Squad size",
+  "Members",
+  "Unlimited",
+  "23",
   // ── Task 3's APPROVED FORMS (the help-tree allowlist) ──
   // These are positives in the opposite sense to everything else here: they are
   // the shapes the help copy is ALLOWED to use, so each one is a real sentence
@@ -677,29 +756,10 @@ const KNOWN_POSITIVES: string[] = [
   "write API access",
   "priority support",
   "the largest monthly AI credit grant",
-  "programación asistida por IA",
-  "IA para la planificación",
-  "asignación automática de árbitros",
-  "los árbitros se asignan automáticamente",
-  "acceso de escritura a la API",
-  "la API con permisos de escritura",
-  "soporte prioritario",
   "la mayor asignación mensual de créditos de IA",
-  "une planification assistée par IA",
-  "l'IA de planification",
-  "attribution automatique des officiels",
-  "les officiels sont assignés de façon automatique",
-  "accès API en écriture",
-  "l'écriture via API",
-  "assistance prioritaire",
   "la plus grosse dotation mensuelle de crédits IA",
-  "AI-ondersteunde planning",
-  "planning met AI",
   "automatische toewijzing van officials",
   "officials automatische toewijzing",
-  "schrijftoegang tot de API",
-  "de API schrijftoegang",
-  "prioritaire ondersteuning",
   "de grootste maandelijkse AI-credittoekenning",
   // ── The rider rate, four languages ──
   "each extra one at half the base rate",
@@ -905,13 +965,14 @@ describe.skipIf(!HAS_DB)("the four-locale dictionaries say what the resolver enf
   it("actually has copy to scan, in every locale", () => {
     // A deleted card key must reach this list rather than be normalised to "".
     expect(missingCardKeys).toEqual([]);
-    for (const { locale, key, value } of [...PASS_BOUND_VALUES, ...PLUS_VALUES, ...PLUS_CARD_VALUES]) {
+    for (const { locale, key, value } of [...PASS_BOUND_VALUES, ...PLUS_CARD_VALUES]) {
       expect(value, `${locale} ${key} is missing or empty`).toBeTruthy();
       expect(value.length, `${locale} ${key}`).toBeGreaterThan(20);
     }
     for (const claims of Object.values(LOCALE_CLAIMS)) {
       expect(claims.permanence.length).toBeGreaterThan(4);
-      expect(claims.plusClaims.length).toBeGreaterThan(2);
+      // `plusClaims` left `LocaleClaims` in W2 with the guard that read it —
+      // see copy-truth.ts. The remaining two lists are what this floor covers.
       expect(claims.recurring.length).toBeGreaterThan(2);
     }
   });
@@ -962,8 +1023,25 @@ describe.skipIf(!HAS_DB)("the four-locale dictionaries say what the resolver enf
       expect(pinned.has(key), `${key} is an in-app panel claim but is not pinned`).toBe(true);
     }
     // 236 -> 256: the five `pass.entry.ended.*` keys x four locales, pinned by
-    // the W8 review round. A count, not a floor, so a DELETED pin reds too.
-    expect(APPROVED_DICTIONARY_COPY.length * DICTIONARY_LOCALES.length).toBe(256);
+    // the W8 review round. 256 -> 252: entitlements v18 R13 hid the extra-seat
+    // add-on, so `pricing.addons.seat` no longer exists to pin in any locale.
+    // 252 -> 248: the retired-plan copy sweep deleted `pricing.faq.proPlus.a`,
+    // the answer to a question about a plan V393 removed from `plans`.
+    // 248 -> 252: `pricing.pass.crossover`, the pass-vs-Pro comparator W2 added
+    // to the Event Pass card — the page priced both offers and never said which
+    // one was cheaper, or from what volume of entry fees that changes.
+    // 252 -> 340: the 22 plan-card bullets W2 moved out of `pricing-cards.ts`'s
+    // hardcoded English arrays and into the four dictionaries. They are the
+    // cards' claims about what each plan grants, and until this wave they were
+    // not dictionary copy at all — /es/pricing rendered them in English.
+    // 340 -> 356: the Pro card's own price chrome (`pricing.pro.per`,
+    // `annualBilled`, `annualSaving`, `monthlyNote`), hardcoded English inside
+    // `components/pro-price-card.tsx` until 2026-09-05 and therefore invisible
+    // to every rule here — a key-shaped guard cannot classify a string that has
+    // no key. `annualSaving` is the one that mattered: it read "save 30%" while
+    // the FAQ two screens below already carried the corrected floor.
+    // A count, not a floor, so a DELETED pin reds too.
+    expect(APPROVED_DICTIONARY_COPY.length * DICTIONARY_LOCALES.length).toBe(356);
     // Every entry must say what it claims and what decides it — a pin with no
     // `why` is a snapshot, and a snapshot teaches the next editor to re-record
     // rather than to re-check.
@@ -1000,6 +1078,42 @@ describe.skipIf(!HAS_DB)("the four-locale dictionaries say what the resolver enf
       match: /^pricing\.(credits\.\w+|addons\.(credits|seat|org|sizePack)|plus\.per|pass\.(per|from|ladder\.caps\w*)|community\.price)$/,
       pinned: true,
       why: "quotes money or an allowance — the number is interpolated live, so the words around it are the claim",
+    },
+    {
+      // W2: the pass-vs-Pro comparator. It states WHICH offer is cheaper and up
+      // to what volume of entry fees — a claim no `plan_entitlements` row makes
+      // on its own, because it is derived from two prices and two rates at once.
+      match: /^pricing\.pass\.crossover$/,
+      pinned: true,
+      why: "names the point where a month of Pro overtakes the Event Pass, and the two platform-fee rates that put it there. Every figure is live (lib/pricing-crossover.ts over stripe-plans.json + registration.fee_percent); the words are what say which side is which, and swapping them mis-sells the one-time sku",
+    },
+    {
+      // W2 (entitlements v18): the three plan cards' bullets. They were
+      // hardcoded English arrays in lib/pricing-cards.ts until this wave and
+      // had no dictionary keys at all, which is exactly why nothing here
+      // classified them — the most claim-bearing copy on the page was outside
+      // the rule that exists to make every pricing string a decision, because
+      // the rule can only see keys. Every figure they quote is now interpolated
+      // from plan_entitlements, so what is pinned is the wording.
+      match: /^pricing\.(community|pass|pro)\.f\d+$/,
+      pinned: true,
+      why: "the Community / Event Pass / Pro card bullets. Each names the plan_entitlements rows its card claims; the caps and fee rates inside them are interpolated live by cardBullets in lib/pricing-cards.ts, and the English rendering is judged against the matrix by CARD_SURFACES in lib/__tests__/pricing-cards.test.ts. Pinned here for the WORDS, in four locales side by side",
+    },
+    {
+      // W2 (entitlements v18), 2026-09-05: the Pro card's PRICE CHROME. It was
+      // hardcoded English in `components/pro-price-card.tsx` on every locale
+      // until this task, so it had no keys and this rule could not see it —
+      // the same blind spot the card bullets sat in one commit earlier, and
+      // the reason "every pricing key is a decision" is only ever as wide as
+      // the set of strings that HAVE keys.
+      match: /^pricing\.pro\.(per|annualBilled|annualSaving|monthlyNote)$/,
+      pinned: true,
+      why: "the Pro card's price chrome: the /month suffix, the yearly total line, the annual saving and the monthly-billing note. Each one quotes or qualifies money, the figures inside them are interpolated live from stripe-plans.json, and the saving is the claim that stood on this card as a flat 'save 30%' — false in all four markets and contradicting the FAQ on the same page. Held against the seed's own ladder by the annual-saving suite below",
+    },
+    {
+      match: /^pricing\.pro\.annualToggle$/,
+      pinned: false,
+      why: "the label on the Pro card's annual/monthly switch. It names the control; what either option costs is stated by pricing.pro.per, annualBilled and annualSaving, all three pinned",
     },
     {
       match: /^pricing\.faq\./,
@@ -1291,8 +1405,9 @@ describe.skipIf(!HAS_DB)("the four-locale dictionaries say what the resolver enf
    * `pricing.addons.credits` said "$10" in all four locales (es "desde 10 $",
    * fr "à partir de 10 $", nl "vanaf $10") and rendered statically, while every
    * other price on the page is interpolated behind the CurrencySwitcher. The
-   * seed's cheapest pack is eur 900 / gbp 800 / aud 1500 / inr 79900, so it was
-   * false in four of five currencies.
+   * seed's cheapest pack was eur 900 / gbp 800 / aud 1500 / inr 79900 when that
+   * was written (AUD is gone and INR is 39900 since W2), so it was false in four
+   * of the five currencies of the day.
    *
    * Scanned as a CLASS rather than as that one key: any pricing value carrying a
    * currency symbol or an ISO code is the same defect (#191), whoever writes it
@@ -1302,7 +1417,7 @@ describe.skipIf(!HAS_DB)("the four-locale dictionaries say what the resolver enf
     // A symbol, or an amount with an ISO code. Deliberately not a bare digit:
     // caps, percentages and credit counts are locale-agnostic DATA and belong in
     // the copy.
-    const CURRENCY = /[$£€₹]|\b\d[\d.,]*\s?(?:USD|EUR|GBP|INR|AUD)\b|\b(?:USD|EUR|GBP|INR|AUD)\s?\d/i;
+    const CURRENCY = /[$£€₹]|\b\d[\d.,]*\s?(?:USD|EUR|GBP|INR)\b|\b(?:USD|EUR|GBP|INR)\s?\d/i;
     // SEO METADATA IS THE ONE HONEST EXCEPTION, and it is pinned rather than
     // waved through (below). A description is a SINGLE cached document served to
     // every visitor and to crawlers — there is no per-visitor currency to switch
@@ -1346,8 +1461,17 @@ describe.skipIf(!HAS_DB)("the four-locale dictionaries say what the resolver enf
   it("pins the metadata's hardcoded amounts to the seed that sets them", () => {
     const pass = passPrice("usd", "event_pass") / 100;
     const pro = proPrice("monthly", "usd") / 100;
-    expect(pass, "the seed's M-rung list price").toBe(29);
-    expect(pro, "the seed's Pro monthly list price").toBe(19);
+    // Both figures are the SEED's, never typed here — W3 repriced them onto
+    // charm points ($15 -> $11.99, $12 -> $14.99) and a typed pair would have
+    // reported a legitimate reprice as a copy regression. What IS asserted is
+    // that they are usable as a pin: two finite, positive and DISTINCT amounts,
+    // so a description that quoted one number twice cannot satisfy both regexes
+    // below, and a reader that returned NaN cannot make them vacuous.
+    for (const [label, amount] of [["the M rung", pass], ["Pro monthly", pro]] as const) {
+      expect(Number.isFinite(amount), `${label}: the seed price is not a number`).toBe(true);
+      expect(amount, `${label}: the seed price is not positive`).toBeGreaterThan(0);
+    }
+    expect(pass, "the pass and the plan must be priced apart for this pin to bite").not.toBe(pro);
     for (const locale of DICTIONARY_LOCALES) {
       const description = load(locale, "marketing")["pricing.meta.description"]!;
       expect(description, `${locale}: the pass price`).toMatch(
@@ -1450,14 +1574,21 @@ describe.skipIf(!HAS_DB)("the four-locale dictionaries say what the resolver enf
   }> = [
     { key: "billing.community.f4", plan: "community", polarity: "granted", features: ["registration.enabled", "registration.paid"] },
     { key: "billing.community.f5", plan: "community", polarity: "denied", features: ["exports.branded", "dashboard.player_profiles"] },
-    { key: "billing.community.f6", plan: "community", polarity: "denied", features: ["dashboard.branding"] },
+    // TWO rows since V397 split the accent colour off badge removal, and this
+    // sentence names both things ("Theme colour & badge removal"). Pinning only
+    // one of them would let the other move under the ✗ unnoticed.
+    { key: "billing.community.f6", plan: "community", polarity: "denied", features: ["dashboard.branding", "dashboard.theme"] },
     { key: "billing.community.f7", plan: "community", polarity: "denied", features: ["realtime"] },
     // W1 (entitlements v18): was `["scoring.ball_by_ball", "scoring.rally_by_rally"]`
     // until V390 deleted both rows. The bullet is now the third capability that
     // sentence used to name — `stats.player` — which is the one of the three
     // that is still Pro-only.
     { key: "billing.pro.f4", plan: "pro", polarity: "granted", features: ["stats.player"] },
-    { key: "billing.pro.f5", plan: "pro", polarity: "granted", features: ["dashboard.branding"] },
+    // WAS `dashboard.branding`. V396 (W2 T15) made badge removal
+    // enterprise-only, so that row went FALSE on pro and this ✓ would have been
+    // a live falsehood; V397 split the accent colour — which is what "Custom
+    // branding" means here — onto `dashboard.theme`, which pro does grant.
+    { key: "billing.pro.f5", plan: "pro", polarity: "granted", features: ["dashboard.theme"] },
     { key: "billing.pro.f6", plan: "pro", polarity: "granted", features: ["exports"] },
     { key: "billing.pro.f7", plan: "pro", polarity: "granted", features: ["realtime"] },
   ];
@@ -1760,7 +1891,7 @@ describe.skipIf(!HAS_DB)("the four-locale dictionaries say what the resolver enf
     // The rule fires: the three rows this round corrected, as they shipped.
     const flipped: Record<string, Record<string, boolean | null>> = {
       ...grants,
-      "dashboard.branding": { ...grants["dashboard.branding"], community: true },
+      "dashboard.theme": { ...grants["dashboard.theme"], community: true },
     };
     const refaults: string[] = [];
     for (const claim of PANEL_CLAIMS.filter((c) => c.key === "billing.community.f6")) {
@@ -1852,11 +1983,27 @@ describe.skipIf(!HAS_DB)("the four-locale dictionaries say what the resolver enf
      * predicate is the exact inverse — this one must quote NO number — and
      * folding the two together is what made the exemption uncheckable.
      */
-    const unlimited: Record<string, string> = {
-      "billing.pro.f1": "BOTH competitions.max_active and divisions.per_competition.max are null on pro, so the claim is the WORD and not a number. Pinned by 'billing.pro.f1 says unlimited only while both rows are unlimited', which fails if either row gains a cap OR if a digit appears in the copy. Nothing asserted this until fix round 5, and the reason written here in round 4 said it was pinned when it was not.",
+    const unlimited: Record<string, string> = {};
+    /**
+     * …and a THIRD shape, which W2 (entitlements v18) created and neither of
+     * the two above can describe: a row covering TWO matrix rows where one is
+     * null and the other is a number.
+     *
+     * `billing.pro.f1` was in `unlimited` — "BOTH competitions.max_active and
+     * divisions.per_competition.max are null on pro, so the claim is the WORD
+     * and not a number". V393 capped pro at 20 divisions. Moving it to
+     * `numeric` would have dropped the requirement to say "unlimited" for the
+     * row that still is; leaving it here would have kept forbidding the digit
+     * the truth now requires. Either single-class answer WEAKENS a predicate,
+     * which is the tell that the class was wrong rather than the copy.
+     *
+     * A row here must do BOTH: say unlimited, and quote a number.
+     */
+    const mixed: Record<string, string> = {
+      "billing.pro.f1": "TWO rows, one of each shape: competitions.max_active is null on pro (the WORD) and divisions.per_competition.max is 20 since V393 (the NUMBER). Pinned by pricing-cards.test.ts 'billing.pro.f1 says unlimited for the unlimited row and quotes the cap for the capped one', which also forbids any digit that is not the live division cap — so a second figure cannot ride in beside it.",
     };
     const unclassified = PANEL_KEYS.filter(
-      (k) => !declared.has(k) && !(k in numeric) && !(k in unlimited),
+      (k) => !declared.has(k) && !(k in numeric) && !(k in unlimited) && !(k in mixed),
     );
     expect(unclassified, "panel rows in neither PANEL_CLAIMS nor the numeric list").toEqual([]);
     // …and the inverse: a declared row the page no longer renders is a rule
@@ -1916,10 +2063,28 @@ describe.skipIf(!HAS_DB)("the four-locale dictionaries say what the resolver enf
       }
     }
 
-    // Both sets FROZEN by content, so growing either is a deliberate edit
-    // rather than a quiet one — the laundering route the reviewer measured.
+    // The MIXED rows: both predicates, because they make both claims.
+    for (const [key, why] of Object.entries(mixed)) {
+      expect(PANEL_KEYS, `${key} is classified but not rendered`).toContain(key);
+      expect(why.length, `${key} has no reason`).toBeGreaterThan(20);
+      for (const locale of DICTIONARY_LOCALES) {
+        const value = load(locale, "ui")[key];
+        expect(value, `${locale} ${key}: exempted as mixed but absent`).toBeTruthy();
+        expect(
+          UNLIMITED_WORD[locale].test(value!),
+          `${locale} ${key}: exempted as MIXED but never says unlimited`,
+        ).toBe(true);
+        expect(
+          /\d/.test(value!),
+          `${locale} ${key}: exempted as MIXED but quotes no number — the capped row is unstated`,
+        ).toBe(true);
+      }
+    }
+
+    // All three sets FROZEN by content, so growing any of them is a deliberate
+    // edit rather than a quiet one — the laundering route the reviewer measured.
     expect(
-      [...Object.keys(numeric), ...Object.keys(unlimited)].sort(),
+      [...Object.keys(numeric), ...Object.keys(unlimited), ...Object.keys(mixed)].sort(),
       "the exemption sets are frozen — adding a row must be deliberate",
     ).toEqual([
       "billing.community.f1",
@@ -1963,7 +2128,6 @@ describe.skipIf(!HAS_DB)("the four-locale dictionaries say what the resolver enf
 
   it("carries none of the retired prose, in any locale", () => {
     expect(retiredClaimFaults(PASS_BOUND_VALUES, RETIRED_CLAIMS)).toEqual([]);
-    expect(retiredClaimFaults(PLUS_VALUES, RETIRED_CLAIMS)).toEqual([]);
     // The Pro Plus CARD, which carried the four AI-scheduling literals in
     // RETIRED_CLAIMS for a whole round after the FAQ answer had dropped them.
     expect(retiredClaimFaults(PLUS_CARD_VALUES, RETIRED_CLAIMS)).toEqual([]);
@@ -1987,7 +2151,13 @@ describe.skipIf(!HAS_DB)("the four-locale dictionaries say what the resolver enf
   });
 
   it("quotes the one-time credit grant at its live size, not as a recurring one", () => {
-    expect(localeCreditGrantFaults(PASS_CREDIT_VALUES, PASS_CREDIT_GRANT)).toEqual([]);
+    expect(localeCreditGrantFaults(PASS_CREDIT_VALUES, SELLABLE_GRANTS)).toEqual([]);
+    // Anti-vacuity: the narrowed set is a real, non-empty subset. An empty one
+    // makes `localeCreditGrantFaults` fault by design, but a set that had
+    // silently grown back to every rung would make this line assert the old
+    // claim under a new name.
+    expect(SELLABLE_GRANTS.length).toBeGreaterThan(0);
+    expect(SELLABLE_GRANTS.length).toBeLessThan(GRANTS.length);
   });
 
   // The extra-organisation rate. The CLAIM comes from four dictionaries and the
@@ -1995,7 +2165,7 @@ describe.skipIf(!HAS_DB)("the four-locale dictionaries say what the resolver enf
   // nothing. `riderClaimShape` decides which qualifier is honest today.
   it("quotes an extra-organisation rate the seed's tiers actually charge", () => {
     const shape = riderClaimShape(stripePlans.plans as unknown as PricedPlan[]);
-    expect(shape, "eur/aud land on exact halves while usd is 47.4% — only 'no more than half' is true").toBe(
+    expect(shape, "usd/eur land on exact halves while gbp is 44.4% — only 'no more than half' is true").toBe(
       "atMost",
     );
     expect(localeHalfClaimFaults(HALF_CLAIM_VALUES, shape)).toEqual([]);
@@ -2044,7 +2214,13 @@ describe.skipIf(!HAS_DB)("the four-locale dictionaries say what the resolver enf
   it("declares every key that actually makes the half-rate claim, and cannot shrink", () => {
     // FLOORS. Not derived from the lists — restated deliberately, because a
     // floor computed from the thing it bounds is not a floor.
-    expect(HALF_CLAIM_KEYS.length, "the marketing half of the axis has been emptied").toBeGreaterThanOrEqual(3);
+    // 3 -> 2 in the retired-plan copy sweep, and ONLY because the third key was
+    // DELETED WITH ITS SUBJECT: `pricing.faq.proPlus.a` answered "What's in Pro
+    // Plus?" about a plan V393 removed from `plans`. A floor is lowered for a
+    // deleted subject, never for a reword — a value that stops matching
+    // `halfClaim` while its key survives reds the derivation below instead, and
+    // that is the direction this floor cannot see.
+    expect(HALF_CLAIM_KEYS.length, "the marketing half of the axis has been emptied").toBeGreaterThanOrEqual(2);
     expect(HALF_CLAIM_UI_KEYS.length, "the ui half of the axis has been emptied").toBeGreaterThanOrEqual(3);
 
     // DERIVATION, per file, over every locale's own vocabulary.
@@ -2181,113 +2357,142 @@ describe.skipIf(!HAS_DB)("the four-locale dictionaries match plan_entitlements",
     return Object.fromEntries(rows.map((r) => [r.plan_key, r.int_value]));
   };
 
-  // THE DEFECT THIS TASK FIXES, stated as the matrix states it. "AI-assisted
-  // scheduling" was sold as the thing you get for moving up to Pro Plus while
-  // `scheduling.ai` was true on every plan key including community — so the
-  // differentiator was worth exactly nothing.
-  it("scheduling.ai is granted on every plan, so it differentiates nothing", async () => {
-    const grants = await grantsFor(["scheduling.ai"]);
-    expect(grants["scheduling.ai"]).toEqual({
-      community: true,
-      event_pass: true,
-      event_pass_l: true,
-      pro: true,
-      pro_plus: true,
-    });
-  });
+  // Five tests lived here, all about the Pro Plus card and the FAQ answer under
+  // it, and all five were DELETED in W2 (entitlements v18) — the plan is gone
+  // from `plans` and `/pricing` renders neither surface. Two of them are worth
+  // naming because their SUBJECT survives elsewhere:
+  //
+  //  • "scheduling.ai is granted on every plan, so it differentiates nothing"
+  //    moved to pricing-cards.test.ts, where it now asserts the whole plan set
+  //    (enterprise in, pro_plus out) rather than five hardcoded keys.
+  //  • "the FAQ quotes each plan's live organisation cap" pinned `pro` and
+  //    `pro_plus` org caps in four locales. `pro` is still 5 and still quoted;
+  //    enterprise's cap is NULL, so the sentence a re-approval writes has to say
+  //    so in WORDS. help-copy-truth.test.ts already enforces exactly that shape
+  //    on the add-ons article, and W3 owns the /pricing FAQ's own rewrite.
+  //
+  // The credit-leadership guard itself survives and is exercised further down
+  // with the live ordering (community 5 / pro 25 / enterprise 500) and with the
+  // leader passed explicitly.
 
-  it("claims only differentiators Pro Plus actually has, in all four locales", async () => {
-    const grants = await grantsFor([
-      "scheduling.ai",
-      "officials.auto",
-      "api.write",
-      "support.priority",
-    ]);
-    expect(localePlusDifferentiatorFaults(PLUS_VALUES, grants, ["community", "pro"])).toEqual([]);
-  });
+  // ── W2: the four caps in the Event Pass FAQ answer ────────────────────────
+  //
+  // `pricing.faq.eventPass.a` describes BOTH rungs in one sentence and quotes
+  // four numbers. None of them was bound to anything, and it showed: V393 gave
+  // the L rung a real 512-entrant cap where `int_value` had been null, and the
+  // answer went on promising "no entrant limit at all" — in all four locales,
+  // for a whole wave.
+  //
+  // It survived two guards that look like they cover it. `APPROVED_DICTIONARY_COPY`
+  // pins the WORDING, which is a different question from whether the wording is
+  // true. `capClaimFaults` is the rule for exactly this claim family and even
+  // carries the V393 case in its own comment — but it is only ever called with
+  // the rung DESCRIPTIONS (plan-copy-truth.test.ts), and nothing pointed it at
+  // this key. A guard's scope is its call site, not its name.
+  //
+  // Two halves, deliberately, because either alone is satisfied by the bug: the
+  // live numbers must be PRESENT with their nouns, and no locale may describe a
+  // capped rung as uncapped. The vocabulary is per locale and built through
+  // `claim()` — `\b` and `\w` are ASCII-only, so a French pattern written with
+  // plain literals reports clean on "sans aucune limite".
+  const RUNG_CAP_COPY: Record<
+    DictionaryLocale,
+    { entrants: string; divisions: string; uncapped: RegExp }
+  > = {
+    en: {
+      entrants: "entrants",
+      divisions: "divisions",
+      uncapped: claim(String.raw`\b(unlimited|no\s+\w*\s*limit)\b`),
+    },
+    es: {
+      entrants: "participantes",
+      divisions: "divisiones",
+      uncapped: claim(String.raw`\b(ilimitad\w*|sin\s+(ning\w+\s+)?l\w+mite)\b`),
+    },
+    fr: {
+      entrants: "participants",
+      divisions: "divisions",
+      uncapped: claim(String.raw`\b(illimit\w*|sans\s+(aucune\s+)?limite)\b`),
+    },
+    nl: {
+      entrants: "deelnemers",
+      divisions: "divisies",
+      uncapped: claim(String.raw`\b(onbeperkt\w*|geen\s+\w*limiet)\b`),
+    },
+  };
 
-  it("the 'largest monthly AI credit grant' claim is the matrix's own ordering", async () => {
-    const credits = await monthlyCredits();
-    expect(credits.community).toBe(10);
-    expect(credits.pro).toBe(60);
-    expect(credits.pro_plus).toBe(200);
-    expect(localeCreditLeadershipFaults(PLUS_VALUES, credits)).toEqual([]);
-  });
+  /** Both rungs' live caps, from the table the resolver enforces. */
+  const rungCaps = async (): Promise<
+    Record<string, { entrants: number | null; divisions: number | null }>
+  > => {
+    const rows = await sql<{ plan_key: string; feature_key: string; int_value: number | null }[]>`
+      select plan_key, feature_key, int_value from plan_entitlements
+      where plan_key = any(${["event_pass", "event_pass_l"]})
+        and feature_key = any(${["entrants.per_division.max", "divisions.per_competition.max"]})`;
+    const out: Record<string, { entrants: number | null; divisions: number | null }> = {};
+    for (const row of rows) {
+      const cell = (out[row.plan_key] ??= { entrants: null, divisions: null });
+      if (row.feature_key === "entrants.per_division.max") cell.entrants = row.int_value;
+      else cell.divisions = row.int_value;
+    }
+    return out;
+  };
 
-  // ── The Pro Plus CARD, the surface the FAQ answer above had left behind ────
+  it("the Event Pass answer quotes the live caps of every rung on sale, and only those", async () => {
+    const caps = await rungCaps();
+    // The premise, read from the seed rather than asserted from memory: EVERY
+    // rung is finite on both axes — hidden ones included, because the seed is
+    // still a live thing that a later migration can move. If a rung is ever
+    // uncapped again the sentence has to say so in words, and this test must be
+    // rewritten rather than relaxed: an unlimited cap quoted as a number is the
+    // same defect pointing the other way.
+    for (const plan of PASS_KEYS) {
+      expect(typeof caps[plan]?.entrants, `${plan} entrant cap`).toBe("number");
+      expect(typeof caps[plan]?.divisions, `${plan} division cap`).toBe("number");
+    }
+    expect(caps.event_pass!.entrants).not.toBe(caps.event_pass_l!.entrants);
 
-  it("the card claims only differentiators Pro Plus actually has, in all four locales", async () => {
-    const grants = await grantsFor([
-      "scheduling.ai",
-      "officials.auto",
-      "api.write",
-      "support.priority",
-    ]);
-    expect(localePlusDifferentiatorFaults(PLUS_CARD_VALUES, grants, ["community", "pro"])).toEqual([]);
-    // …and the PRE-FIX bullet, in its own language, so this fails without the
-    // copy change rather than merely passing beside it.
-    const preFix: LocalisedValue[] = (
-      [
-        ["en", "AI-assisted scheduling. Auto officials assignment"],
-        ["es", "Programación asistida por IA. Asignación automática de árbitros"],
-        ["fr", "Planification assistée par IA. Attribution automatique des officiels"],
-        ["nl", "AI-ondersteunde planning. Automatische toewijzing van officials"],
-      ] as Array<[DictionaryLocale, string]>
-    ).map(([locale, value]) => ({ locale, key: "pre-fix", value }));
-    const faults = localePlusDifferentiatorFaults(preFix, grants, ["community", "pro"]).join(" | ");
     for (const locale of DICTIONARY_LOCALES) {
-      expect(faults, `${locale}: the pre-fix bullet must red`).toContain(
-        `${locale} pre-fix: sells scheduling.ai as a Pro Plus differentiator`,
-      );
-    }
-  });
-
-  // FRESH PROBE G8: the FAQ directly under the cards names each plan's
-  // organisation cap ("Pro covers up to 5 organisations on one bill and Pro Plus
-  // up to 10"). It was PINNED as copy and pinned to nothing else, so moving
-  // `orgs.max_owned` left the sentence green and false — the same copy-copy
-  // failure the card numbers had. Task 7 pins the add-ons article's version of
-  // this sentence the same way; this is its /pricing sibling.
-  it("the FAQ quotes each plan's live organisation cap, in all four locales", async () => {
-    const rows = await sql<{ plan_key: string; int_value: number | null }[]>`
-      select plan_key, int_value from plan_entitlements where feature_key = 'orgs.max_owned'`;
-    const caps = Object.fromEntries(rows.map((r) => [r.plan_key, r.int_value]));
-    for (const plan of ["pro", "pro_plus"]) {
-      expect(caps[plan], `plan_entitlements has no ${plan}/orgs.max_owned row`).toBeDefined();
-      expect(caps[plan], `${plan} must have a finite org cap for this sentence`).not.toBeNull();
-    }
-    for (const { locale, value } of PLUS_VALUES) {
-      // Numerals are identical across these four locales, so the digits are
-      // checkable without reading the prose around them — but as WHOLE TOKENS.
-      // `toContain("5")` was satisfied by the "5" inside any figure the answer
-      // carried, so "up to 50 organisations … and Pro Plus up to 100" shipped
-      // green against a live 5/10: a 10x overclaim of a paid entitlement, in
-      // the FAQ directly under the pricing cards. See `wholeNumber`.
-      expect(value, `${locale}: pro's live org cap`).toMatch(wholeNumber(caps.pro!));
-      expect(value, `${locale}: pro_plus's live org cap`).toMatch(wholeNumber(caps.pro_plus!));
-    }
-  });
-
-  it("the card's AI claim is the comparative the credit rows back, in all four locales", async () => {
-    const credits = await monthlyCredits();
-    expect(localeCreditLeadershipFaults(PLUS_CARD_VALUES, credits)).toEqual([]);
-    // Paired both ways: DELETING the replacement claim must red too, or the card
-    // could simply stop saying anything about AI and pass — which is what an
-    // absence-shaped rule is happiest with. Proved per locale, because the
-    // comparative is the one claim with a different regex in each language.
-    for (const locale of DICTIONARY_LOCALES) {
+      const answer = load(locale, "marketing")["pricing.faq.eventPass.a"];
+      expect(answer, `${locale} has no pricing.faq.eventPass.a`).toBeDefined();
+      const words = RUNG_CAP_COPY[locale];
+      // The POSITIVE half: every rung on sale states both of its live caps.
+      for (const plan of SELLABLE_PASS_KEYS) {
+        for (const [n, noun] of [
+          [caps[plan]!.entrants, words.entrants],
+          [caps[plan]!.divisions, words.divisions],
+        ] as const) {
+          expect(
+            answer!,
+            `${locale} drops ${plan}'s live cap of ${n} ${noun}`,
+          ).toMatch(claim(String.raw`\b` + n + String.raw`\s+` + noun + String.raw`\b`));
+        }
+      }
+      // …and the NEGATIVE half, which is what stops narrowing the loop above
+      // from being a way to stop looking. A withdrawn rung's caps left in this
+      // answer would advertise, in figures, a size the checkout will not sell —
+      // and they are the very figures that make the rung look worth buying.
+      for (const plan of HIDDEN_PASS_KEYS) {
+        for (const [n, noun] of [
+          [caps[plan]!.entrants, words.entrants],
+          [caps[plan]!.divisions, words.divisions],
+        ] as const) {
+          expect(
+            answer!,
+            `${locale} still quotes ${plan}'s ${n} ${noun}, and ${plan} is off sale`,
+          ).not.toMatch(claim(String.raw`\b` + n + String.raw`\s+` + noun + String.raw`\b`));
+        }
+      }
       expect(
-        localeCreditLeadershipFaults(
-          [{ locale, key: "no-claim", value: load(locale, "marketing")["pricing.plus.f4"]! }],
-          credits,
-        ),
-        locale,
-      ).toEqual([`${locale} no-claim: never claims the largest monthly AI credit grant`]);
+        answer!,
+        `${locale} describes a capped rung as uncapped (${copyTruth.describeClaim(words.uncapped)})`,
+      ).not.toMatch(words.uncapped);
     }
-    // …and it must stop being true the day the matrix moves.
-    expect(
-      localeCreditLeadershipFaults(PLUS_CARD_VALUES, { ...credits, pro: 500 }).join(" "),
-    ).toContain("but pro_plus grants 200");
+    // Anti-vacuity for the negative loop: something is genuinely hidden, and
+    // the two rungs' caps really do differ, so "does not quote L's numbers" is
+    // not accidentally satisfied by them being M's numbers.
+    expect(HIDDEN_PASS_KEYS.length).toBeGreaterThan(0);
+    expect(caps.event_pass!.divisions).not.toBe(caps.event_pass_l!.divisions);
   });
 
   // ── #382 review, finding 1: the Pro card on the UPGRADE page ──────────────
@@ -2314,7 +2519,13 @@ describe.skipIf(!HAS_DB)("the four-locale dictionaries match plan_entitlements",
     expect(grants["scheduling.board"]!.event_pass, "V353 put the board on the pass").toBe(true);
     expect(grants["scheduling.multi_division"]!.event_pass).toBe(true);
     expect(grants["officials.marks"]!.event_pass).toBe(true);
-    expect(grants["stats.player"]?.event_pass ?? false, "no event_pass row").toBe(false);
+    // `stats.player` LEFT this card in W2. V393 granted it to both pass rungs,
+    // so "player stats … the pass never covers" became the same falsehood V353
+    // created with the schedule board — a Pro card arguing against the $29
+    // purchase sitting directly above it. `api.access` is the one claim left,
+    // and it is still true: no `event_pass` row, so the overlay falls through
+    // to community's false.
+    expect(grants["stats.player"]?.event_pass ?? false, "V393 put player stats on the pass").toBe(true);
     expect(grants["api.access"]?.event_pass ?? false, "no event_pass row").toBe(false);
 
     expect(localePassUncoveredFaults(PRO_CARD_BODY, grants)).toEqual([]);
@@ -2712,24 +2923,36 @@ describe("the dictionary guards survive a rewording, in every locale", () => {
   });
 
   it("catches a drifted, missing or recurring credit grant, in each language", () => {
+    const both = `+${M_GRANT} AI credits con M, +${L_GRANT} con L`;
     for (const locale of DICTIONARY_LOCALES) {
-      expect(
-        localeCreditGrantFaults(v(locale, `los mismos +${PASS_CREDIT_GRANT} AI credits`), PASS_CREDIT_GRANT),
-        locale,
-      ).toEqual([]);
+      expect(localeCreditGrantFaults(v(locale, both), GRANTS), locale).toEqual([]);
     }
-    // A rung-keyed grant is the drift this guards against: the grant is FLAT,
-    // and never reads the pass key.
-    expect(localeCreditGrantFaults(v("en", "the same one-time +50 AI credits"), PASS_CREDIT_GRANT)).toEqual(
-      [
-        `en k: does not state the one-time +${PASS_CREDIT_GRANT} AI credit grant`,
-        `en k: quotes +50, but the pass grants +${PASS_CREDIT_GRANT}`,
-      ],
+    // ENTITLEMENTS V18 W2 T5. This answer covers BOTH rungs in one sentence, so
+    // the rule reads the declared SET — and the case that matters is the half
+    // update: an editor who moves M's figure and leaves L's behind, or the
+    // reverse. Each is now a fault; under the flat rule the first was the
+    // required wording and the second was invisible.
+    expect(localeCreditGrantFaults(v("en", `a one-time +${M_GRANT} AI credits`), GRANTS)).toEqual([
+      `en k: does not state the one-time +${L_GRANT} AI credit grant`,
+    ]);
+    expect(localeCreditGrantFaults(v("en", `a one-time +${L_GRANT} AI credits`), GRANTS)).toEqual([
+      `en k: does not state the one-time +${M_GRANT} AI credit grant`,
+    ]);
+    // A figure that is NEITHER rung's is still drift.
+    expect(localeCreditGrantFaults(v("en", `${both} +40`), GRANTS).join(" ")).toContain(
+      "quotes +40",
     );
     // Deletion.
     expect(
-      localeCreditGrantFaults(v("en", "advanced formats, exports and realtime"), PASS_CREDIT_GRANT),
-    ).toEqual([`en k: does not state the one-time +${PASS_CREDIT_GRANT} AI credit grant`]);
+      localeCreditGrantFaults(v("en", "advanced formats, exports and realtime"), GRANTS),
+    ).toEqual([
+      `en k: does not state the one-time +${M_GRANT} AI credit grant`,
+      `en k: does not state the one-time +${L_GRANT} AI credit grant`,
+    ]);
+    // ...and an empty grant set would examine nothing.
+    expect(localeCreditGrantFaults(v("en", "anything"), [])).toEqual([
+      "credit-grant set is empty — this rule would examine nothing",
+    ]);
     // The inverse claim — right number, wrong cadence — in each language.
     for (const [locale, recurring] of [
       ["en", "+25 AI credits every month"],
@@ -2738,7 +2961,7 @@ describe("the dictionary guards survive a rewording, in every locale", () => {
       ["nl", "+25 AI-credits per maand"],
     ] as Array<[DictionaryLocale, string]>) {
       expect(
-        localeCreditGrantFaults(v(locale, recurring), PASS_CREDIT_GRANT).join(" "),
+        localeCreditGrantFaults(v(locale, recurring), GRANTS).join(" "),
         `${locale}: ${recurring}`,
       ).toContain("sells the one-time grant as recurring");
     }
@@ -2766,97 +2989,56 @@ describe("the dictionary guards survive a rewording, in every locale", () => {
       ["nl", "Bij elke verlenging +25 AI-credits."],
     ] as Array<[DictionaryLocale, string]>) {
       expect(
-        localeCreditGrantFaults(v(locale, recurring), PASS_CREDIT_GRANT).join(" "),
+        localeCreditGrantFaults(v(locale, recurring), GRANTS).join(" "),
         `${locale}: ${recurring}`,
       ).toContain("sells the one-time grant as recurring");
     }
   });
 
-  // ── The Pro Plus differentiators ───────────────────────────────────────────
+  // ── The Pro Plus differentiators ──────────────────────────────────────────
+  //
+  // Four tests lived here and were DELETED in W2 (entitlements v18) with
+  // `localePlusDifferentiatorFaults`, the guard they exercised. It judged the
+  // "Everything in Pro, plus …" frame against `pro_plus` grants, and V393
+  // deleted that plan from `plans` — so every call reported four faults about a
+  // card `/pricing` no longer renders. The four LOCALE vocabularies that fed it
+  // (`LocaleClaims.plusClaims`) went with it.
+  //
+  // What the deletion does NOT give up: the same question, asked of the cards
+  // that still exist, by `crossCardExclusivityFaults` in pricing-cards.test.ts
+  // over `EXCLUSIVE_CLAIM_VOCAB` — the identical list, renamed. `officials.auto`
+  // is what keeps it non-vacuous: V393 moved that key down to Pro, and the Pro
+  // card now claims it.
 
-  const SHARED = { community: true, pro: true, pro_plus: true };
-  const PLUS_ONLY = { community: false, pro: false, pro_plus: true };
-  const LIVE_GRANTS: FeatureGrants = {
-    "scheduling.ai": SHARED,
-    "officials.auto": PLUS_ONLY,
-    "api.write": PLUS_ONLY,
-    "support.priority": PLUS_ONLY,
-  };
-
-  it("catches the AI-scheduling claim in each language, however it is phrased", () => {
-    for (const [locale, reworded] of [
-      ["en", "Everything in Pro, plus AI-powered scheduling and priority support."],
-      ["en", "Everything in Pro, plus scheduling with AI built in, and priority support."],
-      ["es", "Todo lo de Pro, más programación con IA y soporte prioritario."],
-      ["es", "Todo lo de Pro, más IA para la planificación y soporte prioritario."],
-      ["fr", "Tout ce qu’offre Pro, plus une planification par IA et une assistance prioritaire."],
-      ["fr", "Tout ce qu’offre Pro, plus l’IA de planification et une assistance prioritaire."],
-      ["nl", "Alles van Pro, plus AI-gestuurde planning en prioritaire ondersteuning."],
-      ["nl", "Alles van Pro, plus planning met AI en prioritaire ondersteuning."],
-    ] as Array<[DictionaryLocale, string]>) {
-      expect(
-        localePlusDifferentiatorFaults(v(locale, reworded), LIVE_GRANTS, ["community", "pro"]).join(" "),
-        `${locale}: ${reworded}`,
-      ).toContain("sells scheduling.ai as a Pro Plus differentiator");
-    }
-  });
-
-  // THE NEGATIVE CASE. A rule that fired unconditionally would satisfy every
-  // stated requirement of this task — and be wrong the day the matrix moved.
-  // If `scheduling.ai` became pro_plus-only the claim becomes TRUE, and this
-  // guard must fall silent rather than keep banning a phrase.
-  it("stops objecting to AI scheduling if the matrix ever makes it plus-only", () => {
-    const plusOnlyAi: FeatureGrants = { ...LIVE_GRANTS, "scheduling.ai": PLUS_ONLY };
-    expect(
-      localePlusDifferentiatorFaults(
-        v("en", "Everything in Pro, plus AI-assisted scheduling and priority support."),
-        plusOnlyAi,
-        ["community", "pro"],
-      ),
-    ).toEqual([]);
-    // …and the mirror: a claim Pro Plus does NOT grant is a fault even when no
-    // lower plan grants it either.
-    expect(
-      localePlusDifferentiatorFaults(v("en", "Everything in Pro, plus write API access."), {
-        "api.write": { community: false, pro: false, pro_plus: false },
-      }, ["community", "pro"]).join(" "),
-    ).toContain("claims api.write, but pro_plus does not grant it");
-  });
-
-  // Anti-vacuity: an answer phrased entirely outside the vocabulary would have
-  // this guard examine NOTHING and report clean — the exact shape that let a
-  // wave-6 guard ship green.
-  it("reds when it recognises no differentiator at all", () => {
-    for (const locale of DICTIONARY_LOCALES) {
-      expect(
-        localePlusDifferentiatorFaults(v(locale, "Everything in Pro, plus more."), LIVE_GRANTS, [
-          "community",
-          "pro",
-        ]),
-        locale,
-      ).toEqual([
-        `${locale} k: names no recognised differentiator — the ${locale} vocabulary has gone stale and this guard examined nothing`,
-      ]);
-    }
-  });
-
+  // The LEADER is an argument now (W2): it was hardcoded `pro_plus`, a plan
+  // V393 deleted, so the guard compared `undefined` against everything and
+  // named a plan that does not exist in its own failure message. The live
+  // ordering is enterprise 500 > pro 25 > community 5.
   it("judges the credit-leadership claim against the numbers, both ways", () => {
-    const live = { community: 10, pro: 60, pro_plus: 200 };
+    const live = { community: 5, pro: 25, enterprise: 500 };
     for (const [locale, honest] of [
       ["en", "plus the largest monthly AI credit grant"],
       ["es", "más la mayor asignación mensual de créditos de IA"],
       ["fr", "plus la plus grosse dotation mensuelle de crédits IA"],
       ["nl", "plus de grootste maandelijkse AI-credittoekenning"],
     ] as Array<[DictionaryLocale, string]>) {
-      expect(localeCreditLeadershipFaults(v(locale, honest), live), locale).toEqual([]);
-      // The claim stated while the matrix contradicts it.
+      expect(localeCreditLeadershipFaults(v(locale, honest), live, "enterprise"), locale).toEqual([]);
+      // The claim stated while the matrix contradicts it — the lower plan
+      // catching up, which leaves every string true and the comparative false.
       expect(
-        localeCreditLeadershipFaults(v(locale, honest), { ...live, pro: 500 }).join(" "),
+        localeCreditLeadershipFaults(v(locale, honest), { ...live, pro: 900 }, "enterprise").join(" "),
         locale,
-      ).toContain("but pro_plus grants 200");
+      ).toContain("but enterprise grants 500");
+      // …and the leader ARGUMENT itself has to bite: the same numbers, claimed
+      // for the wrong plan. This is the case that shipped for a whole wave as
+      // `undefined` and reported a plan nobody could buy.
+      expect(
+        localeCreditLeadershipFaults(v(locale, honest), live, "pro").join(" "),
+        locale,
+      ).toContain("but pro grants 25");
     }
-    // Deletion: dropping the replacement differentiator entirely.
-    expect(localeCreditLeadershipFaults(v("en", "plus priority support"), live)).toEqual([
+    // Deletion: dropping the claim entirely.
+    expect(localeCreditLeadershipFaults(v("en", "plus priority support"), live, "enterprise")).toEqual([
       "en k: never claims the largest monthly AI credit grant",
     ]);
   });
@@ -2925,8 +3107,8 @@ describe("the dictionary guards survive a rewording, in every locale", () => {
             lookup_key: "x_monthly",
             unit_amount: 2000,
             tiers: [
-              { up_to: 1, unit_amount: 2000, currency_options: { eur: 2000, gbp: 2000, inr: 2000, aud: 2000 } },
-              { up_to: "inf", unit_amount: 1000, currency_options: { eur: 1000, gbp: 1000, inr: 1000, aud: 1000 } },
+              { up_to: 1, unit_amount: 2000, currency_options: { eur: 2000, gbp: 2000, inr: 2000 } },
+              { up_to: "inf", unit_amount: 1000, currency_options: { eur: 1000, gbp: 1000, inr: 1000 } },
             ],
           },
         },
@@ -2990,7 +3172,14 @@ describe("every pattern in @/lib/copy-truth does something", () => {
     const paths = patterns.map((p) => p.path);
     expect(paths).toContain("BOUNDED_SCOPE_GRAMMAR");
     expect(paths.some((p) => /^FALSE_PASS_PERMANENCE_PATTERNS\[\d+\]$/.test(p))).toBe(true);
-    expect(paths.some((p) => /^LOCALE_CLAIMS\.fr\.plusClaims\[\d+\]\[1\]$/.test(p))).toBe(true);
+    // W2: this used to name `LOCALE_CLAIMS.fr.plusClaims[n][1]`, a tuple inside
+    // a record inside a record — the deepest shape the walk had to reach. That
+    // field went with `localePlusDifferentiatorFaults`, so the depth proof moves
+    // to `EXCLUSIVE_CLAIM_VOCAB`, which is the same [feature, RegExp] tuple
+    // shape at the top level, plus a genuine record-of-record path that still
+    // exists. Both are asserted, so the walk cannot lose either descent.
+    expect(paths.some((p) => /^EXCLUSIVE_CLAIM_VOCAB\[\d+\]\[1\]$/.test(p))).toBe(true);
+    expect(paths.some((p) => /^LOCALE_CLAIMS\.fr\.permanence\[\d+\]$/.test(p))).toBe(true);
   });
 
   // Defect 2's signature: a mangled escape leaves a raw control character in the
@@ -3377,7 +3566,10 @@ describe("no dictionary string sells scoring detail (W1: it is free on every pla
     // or above", which is a recording level, not a price).
     const ANCHORS: Array<[key: string, half: "planName" | "paidVerb"]> = [
       ["board.ai.error.upgrade", "paidVerb"],
-      ["board.ai.error.upgradeToProPlus", "planName"],
+      // Renamed in W2: the key was `…upgradeToProPlus` and named a plan V393
+      // deleted. Still a `planName` anchor — "Pro" is untranslated in all four
+      // locales, which is exactly what makes it the right half to test here.
+      ["board.ai.error.upgradeToPro", "planName"],
       ["addOns.extraOrg.error.planCannot", "planName"],
       ["billing.planChange.toPro", "planName"],
     ];
@@ -3550,4 +3742,194 @@ describe("no dictionary string sells scoring detail (W1: it is free on every pla
       scoringFreeClaimFaults(sentences(twoClaims).map((part) => ["split", part] as const)),
     ).toHaveLength(1);
   });
+});
+
+// =============================================================================
+// THE ANNUAL SAVING - a claim no single number could have made true
+// =============================================================================
+//
+// `pricing.faq.annual.a` and `billing.annualSaves` both said "annual billing
+// saves 30%", in all four locales, on two live surfaces: the /pricing FAQ and
+// the emerald hint under the Go Pro buttons in Settings -> Billing. Eight
+// shipped strings, one claim, and after the charm reprice it is wrong in every
+// market -- 28.29% usd, 30.08% eur, 32.52% gbp, 30.45% inr on the base tier,
+// and 23.71-30.35% on the extra-organisation rider.
+//
+// The defect is not the NUMBER, it is the SHAPE. The seed prices each market
+// independently, so no single percentage can be right, and re-cutting 30% to
+// 28% would put the next reprice straight back here. The copy now states a
+// floor derived from the ladder -- "a year up front costs less than ten
+// monthly payments in every currency we bill in, so annual is more than two
+// months free" -- and this suite holds the copy and the seed together in both
+// directions.
+describe("the annual saving the copy promises is one the seed delivers", () => {
+  const ANNUAL_CLAIM = { monthsFree: 2, staleBeyond: 5 };
+  const ANNUAL_KEYS = [
+    ["marketing", "pricing.faq.annual.a"],
+    // NOT in the brief, and found by grepping the dictionaries for a percentage
+    // beside an annual word rather than by trusting the one key that was named.
+    // It renders live in `settings/billing/page.tsx`, under two buttons that
+    // already print the real monthly and annual-per-month prices -- so it was
+    // contradicting arithmetic on its own screen.
+    ["ui", "billing.annualSaves"],
+    // THE THIRD SURFACE, 2026-09-05. The Pro pricing card said "save 30%" in
+    // hardcoded English, on every locale, while the FAQ two screens below it
+    // already carried the corrected claim -- the product contradicting itself
+    // on one page. It is in THIS list rather than in a rule of its own because
+    // one fact deserves one wording: the floor, the vocabulary and the
+    // percentage ban now judge all three surfaces together, so a re-cut moves
+    // them together or reds.
+    ["marketing", "pricing.pro.annualSaving"],
+  ] as const;
+  const ANNUAL_VALUES: LocalisedValue[] = ANNUAL_KEYS.flatMap(([file, key]) =>
+    across(file, key),
+  );
+
+  it("costs at most ten monthly payments, every currency and BOTH tiers", () => {
+    const points = annualPricePoints(stripePlans.plans as unknown as PricedPlan[]);
+    expect(annualSavingFaults(points, ANNUAL_CLAIM)).toEqual([]);
+  });
+
+  // ANTI-VACUITY: the check above is a loop over a derived list, and an empty
+  // one passes. Four currencies on two graduated tiers is eight points, and the
+  // rider tier must actually be among them -- it is the rung that saves least,
+  // so a sweep that lost it would call a claim safe on the strength of the
+  // generous half alone.
+  it("actually compared every price point, the rider rung included", () => {
+    const points = annualPricePoints(stripePlans.plans as unknown as PricedPlan[]);
+    expect(points.length, "the point sweep collapsed").toBeGreaterThanOrEqual(
+      SEED_CURRENCIES.length * 2,
+    );
+    expect(new Set(points.map((p) => p.tier))).toEqual(new Set(["base", "rider"]));
+    expect(new Set(points.map((p) => p.currency))).toEqual(new Set(SEED_CURRENCIES));
+  });
+
+  // ...and the bound is a real bound, not one the numbers satisfy whatever they
+  // are. A claim of five months free must FAIL on today's ladder, or the check
+  // above is decoration: the live spread is 2.8-3.9 months, so 2 passes and 5
+  // must not.
+  it("would reject a floor the ladder does not reach", () => {
+    const points = annualPricePoints(stripePlans.plans as unknown as PricedPlan[]);
+    const overclaimed = annualSavingFaults(points, { monthsFree: 5, staleBeyond: 9 });
+    expect(overclaimed.length, "a five-month claim passed on a ladder that gives under four").toBeGreaterThan(0);
+    expect(overclaimed.join(" ")).toContain("but the copy promises more than 5");
+  });
+
+  // The loose side, proven the same way: a floor of half a month is TRUE at
+  // every point and still a claim that has stopped describing the product.
+  it("would reject a floor that has gone stale in the customer's favour", () => {
+    const points = annualPricePoints(stripePlans.plans as unknown as PricedPlan[]);
+    const stale = annualSavingFaults(points, { monthsFree: 0.5, staleBeyond: 1 });
+    expect(stale.join(" ")).toContain("has stopped describing the product");
+  });
+
+  it("says it in all four locales, numeral and unit and giveaway", () => {
+    expect(ANNUAL_VALUES).toHaveLength(ANNUAL_KEYS.length * DICTIONARY_LOCALES.length);
+    // The vocabulary itself must cover every locale, or a locale with no entry
+    // is checked by nothing and the sweep reports clean on untranslated copy.
+    expect(
+      Object.keys(ANNUAL_SAVING_CLAIM).sort(),
+      "the claim vocabulary does not cover every locale",
+    ).toEqual([...DICTIONARY_LOCALES].sort());
+    expect(annualClaimFaults(ANNUAL_VALUES)).toEqual([]);
+  });
+
+  // THE INVERSE, because a presence rule alone is satisfied by copy that also
+  // carries the falsehood. A percentage is exactly what these eight strings
+  // used to be, and a percentage cannot be right here for any value: the eight
+  // price points do not share one.
+  it("quotes no percentage on either surface, in any locale", () => {
+    const withPercent = ANNUAL_VALUES.filter((v) => /\d\s*%/.test(v.value));
+    expect(
+      withPercent.map((v) => `${v.locale}/${v.key}: ${v.value}`),
+      "a single percentage cannot be true across four independently priced markets",
+    ).toEqual([]);
+  });
+
+  // Each PART of the claim is separately killable, or a three-way vocabulary is
+  // really a one-way one wearing a costume: without these, dropping the unit
+  // and the giveaway from `ANNUAL_SAVING_CLAIM` leaves this suite green,
+  // because the percentage probes below fail on the numeral alone.
+  it("names WHICH half of the sentence went missing", () => {
+    const missing: Array<[string, LocalisedValue]> = [
+      ["giveaway", { locale: "en", key: "probe", value: "Annual billing costs two months less." }],
+      ["numeral", { locale: "en", key: "probe", value: "Annual billing gives you months free." }],
+      ["unit", { locale: "en", key: "probe", value: "Annual billing gets you two free." }],
+    ];
+    for (const [part, value] of missing) {
+      expect(annualClaimFaults([value]).join(" "), `${value.value} must fail on ${part}`).toContain(
+        `states no ${part}`,
+      );
+    }
+    // ...and the true sentence passes all three, so the probes above are
+    // measuring the vocabulary rather than an always-fault.
+    expect(
+      annualClaimFaults([
+        { locale: "en", key: "probe", value: "Paying yearly is more than two months free." },
+      ]),
+    ).toEqual([]);
+  });
+
+  // ...and it must not come back as a word, either. The negative above is
+  // lexical; this one is the reason it exists.
+  it("catches the percentage returning, spelled out or reworded", () => {
+    const reworded: LocalisedValue[] = [
+      { locale: "en", key: "probe", value: "Yes — annual billing saves 30%, and it's the default." },
+      { locale: "en", key: "probe", value: "Save 28 % by paying for the year." },
+    ];
+    for (const v of reworded) {
+      expect(annualClaimFaults([v]).length, `${v.value} must fail the claim`).toBeGreaterThan(0);
+      expect(/\d\s*%/.test(v.value), `${v.value} must trip the percentage ban`).toBe(true);
+    }
+  });
+});
+
+// ── Key-set parity across the four locales ───────────────────────────────────
+//
+// WHY NOTHING CAUGHT `nav.dashboard` BEING ENGLISH-ONLY FOR SEVERAL WAVES.
+// `lib/i18n-keys.ts` is GENERATED FROM `en` ALONE, so the drift check it feeds
+// answers "does this key exist?" by looking at exactly one locale. A key added
+// to `en` and forgotten in `es`/`fr`/`nl` is invisible to it — 438 keys in `en`
+// against 437 in each of the others, on `main` as well as here, and every
+// existing guard in this file reads VALUES for keys it already knows about.
+//
+// This asks the question none of them do: do the four locales hold the SAME
+// keys, file for file? A missing key does not throw at runtime — `t()` falls
+// back — so the symptom is an English word on a Spanish page, which only a
+// person looking at that page in that language will ever notice.
+describe("every locale carries the same keys, file for file", () => {
+  const dictionaryFiles = readdirSync("src/dictionaries/en")
+    .filter((f) => f.endsWith(".json"))
+    .map((f) => f.replace(/\.json$/, ""))
+    .sort();
+
+  // Anti-vacuity: a glob that matched nothing, or a locale list of one, would
+  // make every assertion below pass by examining nothing at all.
+  it("has files and locales to compare", () => {
+    expect(dictionaryFiles.length).toBeGreaterThan(3);
+    expect(DICTIONARY_LOCALES.length).toBeGreaterThan(1);
+    expect(DICTIONARY_LOCALES).toContain("en");
+  });
+
+  for (const file of dictionaryFiles) {
+    it(`${file}.json holds one key set across every locale`, () => {
+      const enKeys = Object.keys(load("en", file));
+      const faults: string[] = [];
+      for (const locale of DICTIONARY_LOCALES.filter((l) => l !== "en")) {
+        const theirs = new Set(Object.keys(load(locale, file)));
+        // Both directions. A key present only in a translation is just as much
+        // a drift as one missing from it, and it is the shape a rename leaves
+        // behind — the old key orphaned in three locales, the new one in `en`.
+        const missing = enKeys.filter((k) => !theirs.has(k));
+        const extra = [...theirs].filter((k) => !enKeys.includes(k)).sort();
+        if (missing.length > 0) {
+          faults.push(`${locale} is missing ${missing.length}: ${missing.slice(0, 6).join(", ")}`);
+        }
+        if (extra.length > 0) {
+          faults.push(`${locale} has ${extra.length} key(s) en does not: ${extra.slice(0, 6).join(", ")}`);
+        }
+      }
+      expect(faults, `${file}.json key drift:\n  ${faults.join("\n  ")}`).toEqual([]);
+    });
+  }
 });

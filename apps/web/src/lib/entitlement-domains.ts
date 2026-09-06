@@ -1,10 +1,16 @@
 // Domain grouping for entitlement keys — shared by /pricing and
 // /admin/entitlements so the two surfaces tell the same story (V290).
-// Keys NOT listed here are deliberately unadvertised (vestigial D9 keys +
-// domains.custom until Spec 2 ships) — /admin still shows them under "other".
+// Keys NOT listed here are deliberately unadvertised (vestigial D9 keys) —
+// /admin still shows them under "other". `domains.custom` used to be named
+// here as "unadvertised until Spec 2 ships"; V393 deleted the key entirely, so
+// there is no longer a row to advertise later.
 export const ENTITLEMENT_DOMAINS: { slug: string; features: string[] }[] = [
-  // scorers.max is deliberately absent (#244): the seat is dormant legacy and
-  // retired from the pricing comparison; /admin still surfaces it under "other".
+  // scorers.max is not listed here because the KEY no longer exists: V395
+  // (entitlements v18 W2 T12, owner ruling 2026-09-03) deleted it from
+  // plan_entitlements outright, and both enforcement branches now draw on
+  // members.max. It used to be described here as "deliberately absent (#244) —
+  // dormant legacy, surfaced under /admin's `other`"; there is nothing left for
+  // /admin to surface. The scorer ROLE is untouched (#707).
   { slug: "scale", features: [
     "competitions.max_active", "orgs.max_owned", "divisions.per_competition.max",
     "entrants.per_division.max", "members.max",
@@ -47,12 +53,37 @@ export const ENTITLEMENT_DOMAINS: { slug: string; features: string[] }[] = [
   { slug: "officials", features: [
     "officials.roles_multi", "officials.auto", "officials.marks",
   ]},
+  // `dashboard.branding` left this list in W2 (entitlements v18 T17) and
+  // `dashboard.theme` took its place. Not a rename — a correction of which key
+  // the row was ever describing. The label has always read "Your colours on
+  // public pages" — and the colour is exactly what V397 split out, while
+  // `dashboard.branding` is badge removal alone. The four locale strings are
+  // re-pointed rather than duplicated: nothing else read the old key.
+  //
+  // The badge row does not simply move across, for the same reason
+  // `support.priority` left below: V396 made badge removal ENTERPRISE-only,
+  // enterprise is not a `/pricing` column (design §4 — it is the Contact-us
+  // strip under the table), so the row would render a tick-free line in all
+  // four columns. Worse than telling no story: it would have told a Pro
+  // subscriber their colours are not included, which is what it did between
+  // V396 and V397. Badge removal is a Contact-us conversation now.
+  //
+  // /admin keeps showing `dashboard.branding` — `entitlement-admin.ts` files
+  // every key this list omits under its trailing "other" section.
   { slug: "brand", features: [
-    "branding", "dashboard.branding", "realtime", "embeds.enabled",
+    "branding", "dashboard.theme", "realtime", "embeds.enabled",
     "discovery.listed", "discovery.featured", "discovery.branding",
     "exports", "exports.branded", "news.auto",
   ]},
+  // support.priority left this list in W2 (entitlements v18): V393 deleted the
+  // key from `plan_entitlements`, and a comparison row for a key with no rows
+  // renders "—" in every column — a paywall tick for something no plan grants.
+  // Priority support is now a Contact-us conversation (design §4), not a matrix
+  // row. The `pricing.matrix.support.priority` label stays in the four
+  // dictionaries as an unused key: `lib/i18n-keys.ts` is generated from the en
+  // dictionaries and NOT from this list, so nothing here orphans it, and the
+  // dictionary tree is W3's to prune.
   { slug: "platform", features: [
-    "clubs.hierarchy", "logos.bulk", "api.access", "api.write", "support.priority",
+    "clubs.hierarchy", "logos.bulk", "api.access", "api.write",
   ]},
 ];

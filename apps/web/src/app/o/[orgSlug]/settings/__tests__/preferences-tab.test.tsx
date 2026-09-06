@@ -229,8 +229,8 @@ describe("settings → preferences", () => {
     // V365's same-currency rule: syncConnectAccount re-mirrors this column on
     // every sync, so an editable control here would save and then revert.
     orgRow.stripe_account_id = "acct_123";
-    orgRow.currency = "aud";
-    expect(await render("preferences")).toContain('data-locked="aud"');
+    orgRow.currency = "inr";
+    expect(await render("preferences")).toContain('data-locked="inr"');
   });
 
   it("names the UNSUPPORTED settlement code when the account settles outside the allowlist", async () => {

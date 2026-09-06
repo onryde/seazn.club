@@ -166,14 +166,14 @@ function refusalResponse(): AiChatResponse<unknown> {
   };
 }
 
-/** community org promoted to pro_plus directly — mirrors
- *  officials-ai-route.test.ts's seedPlusOrg. Plan no longer matters on the AI
+/** community org promoted to a paid plan directly — mirrors
+ *  officials-ai-route.test.ts's seedPaidOrg. Plan no longer matters on the AI
  *  officials path (Task 4 review: officials.auto, Pro Plus post-V290, is the
  *  MANUAL officials.ts gate, not this one) — kept around for parity with the
  *  zero-LLM-call solver-draft test below, which isn't plan-specific either. */
-async function seedPlusOrg(): Promise<AuthCtx> {
+async function seedPaidOrg(): Promise<AuthCtx> {
   const { auth } = await seedOrg("community");
-  await setOrgPlan(auth.orgId, "pro_plus");
+  await setOrgPlan(auth.orgId, "pro");
   await invalidateOrgEntitlements(auth.orgId);
   return auth;
 }
@@ -387,8 +387,8 @@ function spread(fixtureIds: string[], gapMin = 120): { fixture_id: string; sched
 }
 
 describe.skipIf(!HAS_DB)("AI credit wallet metering — officials-ai (SPEC-2 §5.2, Task 4)", () => {
-  it("a pro_plus org with 0 credits gets 402 before any model call", async () => {
-    const auth = await seedPlusOrg();
+  it("a paid org with 0 credits gets 402 before any model call", async () => {
+    const auth = await seedPaidOrg();
     const { divisionId, fixtureIds } = await seedPlannableDivision(auth, { officials: 1 });
     const walletId = await walletIdFor(auth.orgId);
     expect(await balance(walletId)).toBe(0);
@@ -405,7 +405,7 @@ describe.skipIf(!HAS_DB)("AI credit wallet metering — officials-ai (SPEC-2 §5
   });
 
   it("a funded wallet spends exactly 1 credit per run — including the zero-LLM-call solver draft", async () => {
-    const auth = await seedPlusOrg();
+    const auth = await seedPaidOrg();
     const { divisionId, fixtureIds } = await seedPlannableDivision(auth, { officials: 1 });
     const walletId = await walletIdFor(auth.orgId);
     await grantCredits(walletId, 3);

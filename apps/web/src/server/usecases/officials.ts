@@ -16,8 +16,9 @@ import {
 } from "@seazn/engine/officials";
 import { z } from "zod";
 import { sql, withTenant } from "@/lib/db";
-import { HttpError } from "@/lib/errors";
-import { requireFeature } from "@/lib/entitlements";
+import { HttpError, PaymentRequiredError } from "@/lib/errors";
+import { bulkImportRowsReason } from "@/lib/feature-copy";
+import { requireFeature, withinLimit } from "@/lib/entitlements";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { AiApplyMeta, CreateOfficial, PatchOfficial } from "@/server/api-v1/schemas";
 import { sendOfficialAssignedEmail } from "@/lib/email";
@@ -290,6 +291,25 @@ export async function importOfficials(
   const capCol = norm.findIndex((h) => ["maxperday", "cap", "max"].includes(h));
   if (nameCol < 0) throw new HttpError(422, "No Name column found");
 
+  // W2 T19: the same `import.bulk` per-FILE row cap the participants import
+  // enforces (`usecases/imports.ts`). This route shipped with no entitlement
+  // check at all — API-only, no UI — so the free cap was unenforceable
+  // through it. The number is deliberately not written here: it is read from
+  // the entitlement, and `bulkImportRowsReason` builds the customer's
+  // sentence from the limit that actually refused them (both error envelopes
+  // spread `extra` AFTER `reason`, which is what lets it through).
+  //
+  // BEFORE `withTenant`, exactly as the sibling is: `withinLimit` reaches the
+  // POOLED `sql` proxy, and asking the pool for a second connection while
+  // `withTenant` has one pinned is the self-deadlock `lib/db.ts` guards.
+  const quota = await withinLimit(auth.orgId, "import.bulk", data.length);
+  if (!quota.ok) {
+    throw new PaymentRequiredError("import.bulk", {
+      limit: quota.limit,
+      reason: bulkImportRowsReason(quota.limit),
+    });
+  }
+
   return withTenant(auth.orgId, async (tx) => {
     const existing = await tx<{ display_name: string }[]>`select display_name from officials`;
     const seen = new Set(existing.map((r) => r.display_name.trim().toLowerCase()));
@@ -433,13 +453,47 @@ export const AutoAssignInput = z.object({
 });
 export type AutoAssignInput = z.infer<typeof AutoAssignInput>;
 
+/** The competition an `officials.auto` gate must be resolved against.
+ *
+ *  V393 turns `officials.auto` TRUE on `event_pass`/`event_pass_l` and FALSE on
+ *  `community`, and the Event Pass overlay in lib/entitlements.ts is
+ *  competition-scoped — it only consults `competition_passes` when a competition
+ *  is in scope. Gating org-wide would therefore sell a Free org auto-officials
+ *  with the pass and then refuse them on the competition it paid for.
+ *
+ *  Pooled `sql`, and deliberately OUTSIDE the `withTenant` callbacks below:
+ *  `requireFeature` -> `resolve` queries the pooled proxy, and issuing that from
+ *  inside a pinned tenant transaction asks the pool for a second connection while
+ *  the first is still held — the self-deadlock lib/db.ts guards against (see
+ *  `assertWithinLimit`'s header in lib/entitlements.ts). Same shape as
+ *  `createStages`' `divComp` lookup in usecases/stages.ts.
+ *
+ *  A missing row yields `undefined`, which resolves the gate org-wide — the
+ *  pre-V393 behaviour — and the 404 for the vanished division/stage is then
+ *  raised inside the transaction as before.
+ */
+async function competitionForDivision(divisionId: string): Promise<string | undefined> {
+  const [row] = await sql<{ competition_id: string }[]>`
+    select competition_id from divisions where id = ${divisionId}`;
+  return row?.competition_id;
+}
+
+/** As above, one hop further out: stages -> divisions -> competition. */
+async function competitionForStage(stageId: string): Promise<string | undefined> {
+  const [row] = await sql<{ competition_id: string }[]>`
+    select d.competition_id from stages s
+    join divisions d on d.id = s.division_id
+    where s.id = ${stageId}`;
+  return row?.competition_id;
+}
+
 /** POST /divisions/{id}/officials/auto — propose only, writes nothing. */
 export async function autoAssignOfficials(
   auth: AuthCtx,
   divisionId: string,
   input: AutoAssignInput,
 ): Promise<AssignResult> {
-  await requireFeature(auth.orgId, "officials.auto");
+  await requireFeature(auth.orgId, "officials.auto", await competitionForDivision(divisionId));
   return withTenant(auth.orgId, async (tx) => {
     const [division] = await tx`select 1 from divisions where id = ${divisionId}`;
     if (!division) throw new HttpError(404, "division not found");
@@ -478,7 +532,7 @@ export async function applyOfficialAssignments(
   divisionId: string,
   input: ApplyAssignmentsInput,
 ): Promise<{ applied: number }> {
-  await requireFeature(auth.orgId, "officials.auto");
+  await requireFeature(auth.orgId, "officials.auto", await competitionForDivision(divisionId));
   return withTenant(auth.orgId, async (tx) => {
     await tx`select pg_advisory_xact_lock(hashtext(${"division:" + divisionId}))`;
     const [division] = await tx`select 1 from divisions where id = ${divisionId}`;
@@ -738,7 +792,7 @@ export async function sourceOfficials(
   resolved: { entrant_id: string; display_name: string; official_id: string | null }[];
   pending: { reason: string }[];
 }> {
-  await requireFeature(auth.orgId, "officials.auto");
+  await requireFeature(auth.orgId, "officials.auto", await competitionForStage(stageId));
   return withTenant(auth.orgId, async (tx) => {
     const [stage] = await tx<{ division_id: string }[]>`
       select division_id from stages where id = ${stageId}`;

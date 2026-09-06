@@ -26,7 +26,7 @@ import type Stripe from "stripe";
 // Same separator the sibling comp-liveness suite uses: `exports` is true on both
 // matrices and so cannot fail, while competitions.max_active is finite on
 // community and unlimited (null) on pro. Proves WHICH MATRIX was resolved.
-const COMMUNITY_MAX_ACTIVE = 10;
+const COMMUNITY_MAX_ACTIVE = 3; // V393 (entitlements v18 §2), was 10 under V319
 
 const HAS_DB = !!process.env.DATABASE_URL;
 const uniq = () => randomUUID().slice(0, 8);
@@ -90,8 +90,8 @@ describe.skipIf(!HAS_DB)("a cancelled subscription does not convey its plan", ()
     expect(await getLimit(orgId, "competitions.max_active")).toBe(COMMUNITY_MAX_ACTIVE);
   });
 
-  it("the same shape at pro_plus also degrades", async () => {
-    const orgId = await seedOrg({ status: "canceled", planKey: "pro_plus" });
+  it("the same shape at enterprise also degrades", async () => {
+    const orgId = await seedOrg({ status: "canceled", planKey: "enterprise" });
     expect(await orgPlanKey(orgId)).toBe("community");
   });
 

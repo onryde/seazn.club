@@ -62,7 +62,7 @@ import {
   formatMinor,
   isPassKey,
   proPrice,
-  PASS_KEYS,
+  SELLABLE_PASS_KEYS,
   type Currency,
   type PassKey,
 } from "@/lib/currency";
@@ -271,9 +271,19 @@ export default async function CompetitionUpgradePage({
   // cannot buy a second for the same competition. The answer comes from
   // `plan_entitlements`, which is the same table the comparison below renders,
   // so the page cannot offer a column it would then show as no improvement.
+  //
+  // `SELLABLE_PASS_KEYS`, never `PASS_KEYS` (owner decision 2026-09-05). This
+  // list drives an OFFER — the columns beside a paying customer's plan and the
+  // ladder under them — so it must never carry a rung the shop has withdrawn.
+  //
+  // The consequence is deliberate and worth naming: the one rung that exceeds
+  // Pro is the one now off sale, so a Pro org is offered nothing here and the
+  // #327 path is closed for as long as that holds. The RULE is untouched — L
+  // still beats Pro in `plan_entitlements` — so putting the rung back on sale
+  // reopens the path with no further change here.
   const exceedingRungs =
     paidPlan && !pass
-      ? ((await rungsExceedingPlan(PASS_KEYS, planKey)) as PassKey[])
+      ? ((await rungsExceedingPlan(SELLABLE_PASS_KEYS, planKey)) as PassKey[])
       : [];
   const state = upgradePageState({
     paidPlan,
@@ -328,7 +338,12 @@ export default async function CompetitionUpgradePage({
       ? ["community", heldRung, "pro"]
       : closedToPasses
         ? ["community", "pro"]
-        : ["community", "event_pass", "event_pass_l", "pro"];
+        // The rungs ON SALE, never every rung (owner decision 2026-09-05). A
+        // comparison column IS an offer — it is where a reader checks the case
+        // for spending the money — so a column for a rung with no checkout
+        // behind it advertises in figures exactly what the picker below refuses
+        // to sell. The HELD arm above keeps naming whichever rung was bought.
+        : ["community", ...SELLABLE_PASS_KEYS, "pro"];
   const [matrix, purchases] = await Promise.all([
     readMatrix(columns),
     // Only fetched where a receipt is rendered: one Stripe call per pass the ORG
@@ -354,7 +369,6 @@ export default async function CompetitionUpgradePage({
   });
   const ladderOptions: PassRungOption[] = passLadderOptions(currency, {
     event_pass: rungCaps("event_pass"),
-    event_pass_l: rungCaps("event_pass_l"),
   })
     // #327: a paid org is offered ONLY the rungs that beat its plan. Filtering
     // here rather than in `passLadderOptions` keeps the ladder itself a pure

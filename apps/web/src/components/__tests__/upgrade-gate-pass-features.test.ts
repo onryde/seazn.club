@@ -31,7 +31,8 @@ afterAll(async () => {
 /**
  * The one key the pass lifts that must NOT be offered a paywall.
  *
- * `registration.fee_percent` (8% → 5%) is a deduction RATE, not a gate: it is
+ * `registration.fee_percent` (Free's rate → the pass's; 5% → 4% since V398) is
+ * a deduction RATE, not a gate: it is
  * read with `getLimit` at server/usecases/registrations.ts and folded into the
  * payout, so it never throws PaymentRequiredError and no <UpgradeGate> can ever
  * be rendered for it. It is named here, rather than subtracted silently, so a

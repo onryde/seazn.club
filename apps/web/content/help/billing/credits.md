@@ -14,9 +14,9 @@ The **Credits** tab on your billing page (Plan & Billing → AI credits) is the 
 
 Every plan comes with a monthly grant that **resets on the 1st of each month** — use it or lose it:
 
-- **Community** — 10 credits a month
-- **Pro** — 60 credits a month
-- **Pro Plus** — 200 credits a month
+- **Community** — 5 credits a month
+- **Pro** — 25 credits a month
+- **Enterprise** — 500 credits a month
 
 The grant meter on the Credits tab shows how much of this month's grant you've used and when it resets. Unused grant credits don't roll over — the pool is topped back up to the full amount each month.
 

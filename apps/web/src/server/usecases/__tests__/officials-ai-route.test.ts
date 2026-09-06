@@ -105,14 +105,14 @@ async function setSettings(auth: AuthCtx, divisionId: string): Promise<void> {
     on conflict (division_id) do update set config = excluded.config, tz = excluded.tz`;
 }
 
-/** community org promoted to pro_plus directly (seedOrg only knows pro/community).
+/** community org promoted to a paid plan directly.
  *  AI runs are wallet-metered on every tier now (v17 SPEC-2 §5.2), and seedOrg
  *  never runs the org-creation bootstrap grant, so fund the wallet with a pack
  *  well above any test's run count — otherwise every "should-run" test would
  *  402 ai.credits at the reserve before reaching the mocked provider. */
-async function seedPlusOrg(): Promise<AuthCtx> {
+async function seedPaidOrg(): Promise<AuthCtx> {
   const { auth } = await seedOrg("community");
-  await setOrgPlan(auth.orgId, "pro_plus");
+  await setOrgPlan(auth.orgId, "pro");
   await invalidateOrgEntitlements(auth.orgId);
   await recordPackPurchase(await walletIdFor(auth.orgId), 100, `seed-${randomUUID()}`);
   return auth;
@@ -233,7 +233,7 @@ beforeEach(() => {
 
 describe.skipIf(!HAS_DB)("officialsAiPlanForDivision — runner (v4/03 §2)", () => {
   it("echoes a locked assignment in the proposal (LLM path)", async () => {
-    const auth = await seedPlusOrg();
+    const auth = await seedPaidOrg();
     const { divisionId, fixtureIds, officialIds } = await seedOfficials(auth, {
       entrants: 3,
       officials: [{ name: "Ref A", roles: ["referee"] }],
@@ -274,7 +274,7 @@ describe.skipIf(!HAS_DB)("officialsAiPlanForDivision — runner (v4/03 §2)", ()
   });
 
   it("empty instruction returns the solver draft with zero LLM calls; a locked row survives", async () => {
-    const auth = await seedPlusOrg();
+    const auth = await seedPaidOrg();
     const { divisionId, fixtureIds, officialIds } = await seedOfficials(auth, {
       entrants: 3,
       officials: [{ name: "Ref A", roles: ["referee"] }],
@@ -314,7 +314,7 @@ describe.skipIf(!HAS_DB)("officialsAiPlanForDivision — runner (v4/03 §2)", ()
   });
 
   it("records pack_units alongside cost, and calls the expensive-run alert check (v17 gap #295)", async () => {
-    const auth = await seedPlusOrg();
+    const auth = await seedPaidOrg();
     const { divisionId, fixtureIds, officialIds } = await seedOfficials(auth, {
       entrants: 3,
       officials: [{ name: "Ref A", roles: ["referee"] }],
@@ -398,7 +398,7 @@ describe.skipIf(!HAS_DB)("officialsAiPlanForDivision — runner (v4/03 §2)", ()
   });
 
   it("an overlap is repaired: repair_rounds:1 and no residual official_overlap", async () => {
-    const auth = await seedPlusOrg();
+    const auth = await seedPaidOrg();
     const { divisionId, fixtureIds, officialIds } = await seedOfficials(auth, {
       entrants: 3,
       officials: [{ name: "Ref A", roles: ["referee"] }],
@@ -462,7 +462,7 @@ describe.skipIf(!HAS_DB)("officialsAiPlanForDivision — runner (v4/03 §2)", ()
     // this drives both through the SAME repair loop: f0 is locked to Ref A,
     // f0/f1 overlap (both proposed to Ref A round 1), round 2 must drop f1
     // without ever touching (or being allowed to touch) the locked f0 row.
-    const auth = await seedPlusOrg();
+    const auth = await seedPaidOrg();
     const { divisionId, fixtureIds, officialIds } = await seedOfficials(auth, {
       entrants: 3,
       officials: [{ name: "Ref A", roles: ["referee"] }],
@@ -525,7 +525,7 @@ describe.skipIf(!HAS_DB)("officialsAiPlanForDivision — runner (v4/03 §2)", ()
     // as bare fixture ids vs a baseline of "the prior proposal when given, else
     // the locked assignments". With no prior, a from-scratch proposal that only
     // echoes the lock must report that fixture as unchanged.
-    const auth = await seedPlusOrg();
+    const auth = await seedPaidOrg();
     const { divisionId, fixtureIds, officialIds } = await seedOfficials(auth, {
       entrants: 3,
       officials: [{ name: "Ref A", roles: ["referee"] }],
@@ -551,7 +551,7 @@ describe.skipIf(!HAS_DB)("officialsAiPlanForDivision — runner (v4/03 §2)", ()
     // Second half of the same contract: with a prior, diff entries are bare
     // fixture ids and a fixture is `changed` only when its assignment set
     // actually differs from the prior — not the whole plan.
-    const auth = await seedPlusOrg();
+    const auth = await seedPaidOrg();
     const { divisionId, fixtureIds, officialIds } = await seedOfficials(auth, {
       entrants: 3,
       officials: [
@@ -593,7 +593,7 @@ describe.skipIf(!HAS_DB)("officialsAiPlanForDivision — runner (v4/03 §2)", ()
   });
 
   it("empty roster → 422 NO_OFFICIALS before any LLM call", async () => {
-    const auth = await seedPlusOrg();
+    const auth = await seedPaidOrg();
     const { divisionId, fixtureIds } = await seedOfficials(auth, {
       entrants: 3,
       officials: [],
@@ -614,7 +614,7 @@ describe.skipIf(!HAS_DB)("officialsAiPlanForDivision — runner (v4/03 §2)", ()
     // unknown ids, so without the gate a hallucinated id would vanish instead of
     // failing. Both the initial output and the one corrective retry carry it, so
     // the runner 422s AI_PLAN_FAILED after exactly two calls.
-    const auth = await seedPlusOrg();
+    const auth = await seedPaidOrg();
     const { divisionId, fixtureIds, officialIds } = await seedOfficials(auth, {
       entrants: 3,
       officials: [{ name: "Ref A", roles: ["referee"] }],
@@ -648,7 +648,7 @@ describe.skipIf(!HAS_DB)("officialsAiPlanForDivision — runner (v4/03 §2)", ()
   it("a hallucinated official id fails the structural gate the same way → 422", async () => {
     // Second branch of the same binding decision: an official_id outside the
     // pack roster must also fail loudly, not be silently dropped by the referee.
-    const auth = await seedPlusOrg();
+    const auth = await seedPaidOrg();
     const { divisionId, fixtureIds } = await seedOfficials(auth, {
       entrants: 3,
       officials: [{ name: "Ref A", roles: ["referee"] }],
@@ -700,7 +700,7 @@ describe.skipIf(!HAS_DB)("officialsAiPlanForDivision — gates (v4/03 §2, corpu
 
   it("kill-switch off → 403 FEATURE_DISABLED (before the paid gate)", async () => {
     isServerFeatureEnabled.mockResolvedValueOnce(false);
-    const auth = await seedPlusOrg();
+    const auth = await seedPaidOrg();
     const { divisionId, fixtureIds } = await seedOfficials(auth, {
       entrants: 3,
       officials: [{ name: "Ref A", roles: ["referee"] }],
@@ -716,9 +716,9 @@ describe.skipIf(!HAS_DB)("officialsAiPlanForDivision — gates (v4/03 §2, corpu
   });
 
   it("policy asking for >1 role without officials.roles_multi → 402", async () => {
-    // pro_plus grants officials.roles_multi; override it off so the >1-role branch
+    // every plan grants officials.roles_multi; override it off so the >1-role branch
     // is what 402s (not the base officials.auto gate that precedes it).
-    const auth = await seedPlusOrg();
+    const auth = await seedPaidOrg();
     const { divisionId, fixtureIds } = await seedOfficials(auth, {
       entrants: 3,
       officials: [{ name: "Ref A", roles: ["referee"] }],
@@ -741,7 +741,7 @@ describe.skipIf(!HAS_DB)("officialsAiPlanForDivision — gates (v4/03 §2, corpu
   });
 
   it("6th call in the hour → 429 (5/h per division, no run cap)", async () => {
-    const auth = await seedPlusOrg();
+    const auth = await seedPaidOrg();
     const { divisionId, fixtureIds, officialIds } = await seedOfficials(auth, {
       entrants: 3,
       officials: [{ name: "Ref A", roles: ["referee"] }],
@@ -767,7 +767,7 @@ describe.skipIf(!HAS_DB)("officialsAiPlanForDivision — gates (v4/03 §2, corpu
 
 describe.skipIf(!HAS_DB)("officialsAiPlanForDivision — telemetry (v4/03 §2)", () => {
   it("ai_plan_run fires with phase officials + usage on success", async () => {
-    const auth = await seedPlusOrg();
+    const auth = await seedPaidOrg();
     const { divisionId, fixtureIds, officialIds } = await seedOfficials(auth, {
       entrants: 3,
       officials: [{ name: "Ref A", roles: ["referee"] }],
@@ -800,7 +800,7 @@ describe.skipIf(!HAS_DB)("officialsAiPlanForDivision — telemetry (v4/03 §2)",
   });
 
   it("a refusal 422 still meters the spent tokens (phase officials)", async () => {
-    const auth = await seedPlusOrg();
+    const auth = await seedPaidOrg();
     const { divisionId, fixtureIds } = await seedOfficials(auth, {
       entrants: 3,
       officials: [{ name: "Ref A", roles: ["referee"] }],

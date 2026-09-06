@@ -446,99 +446,14 @@ export function PlanIntervalSwitcher({ current }: { current: "monthly" | "annual
   );
 }
 
-// ---------------------------------------------------------------------------
-// Plan switch (Pro ↔ Pro Plus) with proration preview — same pattern as
-// PlanIntervalSwitcher above, targeting /api/billing/plan(/preview) instead.
-// ---------------------------------------------------------------------------
-
-export function PlanKeySwitcher({
-  currentPlanKey,
-  interval,
-}: {
-  currentPlanKey: "pro" | "pro_plus";
-  interval: "monthly" | "annual";
-}) {
-  const msg = useMsg();
-  const router = useRouter();
-  const target = currentPlanKey === "pro" ? "pro_plus" : "pro";
-  const [preview, setPreview] = useState<IntervalPreview | null>(null);
-  const [phase, setPhase] = useState<"idle" | "previewing" | "confirming">("idle");
-  const [error, setError] = useState<string | null>(null);
-
-  const switchLabel = target === "pro_plus" ? msg("billing.planChange.toPlus") : msg("billing.planChange.toPro");
-
-  async function loadPreview() {
-    setPhase("previewing");
-    setError(null);
-    const res = await fetch(`/api/billing/plan/preview?plan_key=${target}&interval=${interval}`);
-    const data = await res.json();
-    if (data.ok) setPreview(data.data);
-    else setError(data.error ?? "Could not preview the change");
-    setPhase("idle");
-  }
-
-  async function confirm() {
-    if (!preview) return;
-    setPhase("confirming");
-    setError(null);
-    const data = await post("/api/billing/plan", {
-      plan_key: target,
-      interval,
-      proration_date: preview.prorationDate,
-    });
-    if (!data.ok) {
-      setError(data.error ?? "Could not change the plan");
-      setPhase("idle");
-      setPreview(null);
-      return;
-    }
-    if (data.data?.requires_action && data.data.client_secret) {
-      const stripe = await stripePromise;
-      const sca = await stripe?.confirmCardPayment(data.data.client_secret);
-      if (sca?.error) {
-        setError(sca.error.message ?? "Your bank declined the confirmation");
-        setPhase("idle");
-        return;
-      }
-    }
-    setPreview(null);
-    setPhase("idle");
-    router.refresh();
-  }
-
-  if (!preview) {
-    return (
-      <div>
-        <button className="btn btn-ghost" onClick={loadPreview} disabled={phase !== "idle"}>
-          {phase === "previewing" ? msg("billing.change.checking") : switchLabel}
-        </button>
-        {error && <p className="mt-1 text-xs text-red-500">{error}</p>}
-      </div>
-    );
-  }
-
-  return (
-    <ProrationSummary
-      preview={preview}
-      heading={switchLabel}
-      error={error}
-      actions={
-        <>
-          <button className="btn btn-primary" onClick={confirm} disabled={phase === "confirming"}>
-            {phase === "confirming" ? msg("billing.change.applying") : msg("billing.planChange.confirm")}
-          </button>
-          <button
-            className="btn btn-ghost"
-            onClick={() => setPreview(null)}
-            disabled={phase === "confirming"}
-          >
-            {msg("billing.planChange.keep")}
-          </button>
-        </>
-      }
-    />
-  );
-}
+// The Pro <-> Pro Plus PLAN SWITCHER that lived here is DELETED (entitlements
+// v18, V393). It targeted `plan_key=pro_plus` — a plan the migration removed
+// from `plans` — so for a Pro subscriber it rendered "Upgrade to Pro Plus" and
+// POSTed a key /api/billing/plan can no longer honour. The billing page had
+// already stopped rendering it (settings/billing/page.tsx), which left the
+// component orphaned rather than harmless: its `billing.planChange.toPlus`
+// string was still shipped in four dictionaries. Pro is the ceiling of
+// self-serve; above-Pro is the Contact-us conversation, owned by W3.
 
 // ---------------------------------------------------------------------------
 // Cancel / resume + dunning retry

@@ -36,9 +36,9 @@ dictionaries, help and `copy-truth.ts`, so there are no parallel lanes.
 
 | Wave | Scope | Status |
 |---|---|---|
-| W1 | R9 "scoring goes free" — gate removal, `fidelityTiers` retirement, recording chip, three keys deleted, pinned tests moved | **COMPLETE, UNMERGED** — Tasks 0–7 done and reviewed; branch `feat/entitlements-w1-scoring-free`, 25 commits, no PR opened |
-| W2 | Matrix & plumbing — migration, inert-key deletion, `featurePlan`, labels, add-on sets, credits math, per-rung pass grant, `stripe-plans.json`, copy-truth guards. **R12 prices and R13 hidden add-on land here.** | not started |
-| W3 | Surfaces — pricing page redesign (R14), billing settings, gates, dictionaries ×4, emails, help, e2e replacements | not started |
+| W1 | R9 "scoring goes free" — gate removal, `fidelityTiers` retirement, recording chip, three keys deleted, pinned tests moved | **MERGED** — PR #704, squashed onto `main` as `ae0751682` (2026-09-03). W2 is cut from that commit. |
+| W2 | Matrix & plumbing — migration, inert-key deletion, `featurePlan`, labels, add-on sets, credits math, per-rung pass grant, `stripe-plans.json`, copy-truth guards. **R12 prices and R13 hidden add-on land here.** | **IN PROGRESS** — branch `feat/entitlements-w2-matrix-plumbing`, 90 commits, migrations V393–V398, no PR. Scope grew well past the brief on owner rulings taken during execution (AUD removed, the whole catalogue re-priced to charm `.99`, the share loops made paid, competitions public by default, the platform fee made additive). **The state block and the remaining-work list live in `../../plans/2026-09-03-entitlements-w2-matrix-plumbing.md` — read it before touching this branch.** Not yet gated as a whole; five items owed. |
+| W3 | Surfaces — pricing page redesign (R14), billing settings, gates, dictionaries ×4, emails, help, e2e replacements. **Plus W3-A (`stats.player`: free the record, keep the career rollup — and fix the public-beats-owner inversion) and W3-B (paywalls offer the pass as well as Pro), both owner-approved 2026-09-05 — scope and evidence in the section above.** | not started |
 | W4 | Proofs & walkthrough — pass and Free proof e2es, full product walkthrough on a prod build, Stripe archive ops step | not started |
 
 ### W1 as shipped
@@ -148,6 +148,190 @@ These are in addition to R1–R14 in the design doc.
   one-time $15 above the $9/mo recurring **by the owner's choice**, with the
   counter-argument put first and overruled. Do not "fix" it.
 
+### Owner ruling 2026-09-04 — the five W2-boundary product gaps, all approved
+
+Raised as a product-owner read of the wave rather than as a task list, each verified
+against the tree or the `entw2` database. Full write-up with the arithmetic:
+`../../plans/2026-09-03-entitlements-w2-matrix-plumbing.md`, "Product-owner gaps".
+
+1. **SUPERSEDED THE SAME DAY — `on_behalf_of` cannot do this.** The recommendation as
+   first written ("the rail ships with V398 or V398 reverts") rested on the wave's own
+   false premise, asserted in three places in the tree including V398's header. Verified
+   against `docs.stripe.com/connect/charges`: destination charges debit Stripe's fees
+   from the PLATFORM's balance, and `on_behalf_of` sets the business of record —
+   settlement country, that country's fee schedule, statement descriptor, payout timing —
+   not who pays. **Only direct charges carry the lever**, and they are a charge-type plus
+   Connect-account migration (refunds and disputes move to the connected account; Stripe
+   does not recommend direct charges for the legacy Express accounts `stripe-connect.ts`
+   creates). **Owner ruling: keep V398's rates and gate LAUNCH on that migration** — no
+   club takes real registrations until it lands. It owes its own wave. The underlying
+   diagnosis was right and predates V398: any rate below Stripe's 2.9% is negative and
+   worsens with volume, which was already true of Pro at 2%.
+2. **INR credit packs are re-anchored** — 10/25/50/100 to ₹399/₹999/₹1,999/₹3,999,
+   which is 1.67× the included rate, exactly USD's ratio. They were carried as
+   "unchanged" while the plans moved to PPP set points, leaving ₹799 buying 10 credits
+   where ₹599 bought a month of Pro including 25. A dominated SKU throws no error; it
+   just never sells. **Ships with a new ladder rule comparing a consumable against the
+   plan that includes the same thing** — the six existing rules only compare plans to
+   passes, which is why this could happen silently.
+3. **A blank platform-fee field stops meaning 0%.** `Number("")` is `0` and both layers
+   accepted it. `min(0)` stays — a deliberate promo is legitimate — but empty is no
+   longer zero, and the fix ships with a paired positive assertion so it cannot pass by
+   refusing everything.
+4. **The pass/Pro crossover gets named on the pricing page**, derived from the live
+   catalogue rather than typed: the pass wins below roughly $150 of entry fees and Pro
+   above it. Unstated, the page reads "the pass is cheaper" and pushes volume at the
+   one-time SKU when the recurring one is what retains.
+5. **The degrade card names its numbers.** The client dropped `limit` from the 201, so
+   the best-timed upgrade moment in the product could not say the org is at 2 and Pro
+   is 10.
+
+
+### Owner ruling 2026-09-05 — the Event Pass L rung comes OFF SALE
+
+**The reasoning, which is the part that will not be re-derivable from the code.**
+L is priced 4499 against Pro's 1499/mo and carries the SAME 4% platform fee as M,
+so **Pro is cheaper than L in money at every volume for a one-month competition**.
+L's only genuine edge is 512 entrants per division against Pro's 256. It therefore
+reads as a savings product while being a capacity product, and a buyer comparing on
+price is misled. The owner chose to take the rung off sale rather than ship copy
+explaining the distinction.
+
+**Hidden, not deleted — the R13 precedent** (which hid the extra-seat add-on the same
+way: backend and Stripe price kept, no purchase UI, code dormant).
+
+- **KEPT**: `event_pass_l` rows in `plan_entitlements`, its `stripe-plans.json` entry,
+  its Stripe price, `PASS_CREDIT_GRANT.event_pass_l`, every resolution path. **An org
+  already holding an L pass must keep working exactly as before** — that is the
+  dormancy requirement, and it carries its own test.
+- **REMOVED**: L from every surface a customer can buy or choose from, and from every
+  shipped string that names it.
+- **No migration, and nothing archived in Stripe** — W4 owns the Stripe sync.
+
+**One authority, not six conditionals:** `SELLABLE_PASS_KEYS` beside `PASS_KEYS` in
+`lib/currency.ts`. Selling surfaces read the sellable list; resolution keeps reading
+the full one. Same shape as `PUBLICLY_READABLE_VISIBILITIES`, introduced days earlier
+for the identical reason. A scattered `key !== "event_pass_l"` across six files is the
+"two implementations that agree today" defect this wave has already fixed three times.
+
+**The guards split deliberately**, and this is the rule for anyone touching them later:
+a ladder rule over the SEED keeps validating L, because the rung still exists and must
+stay coherent if it is ever put back on sale — a rule that stops examining it lets the
+dormant price rot. A guard over SHIPPED COPY stops expecting it, because the copy no
+longer names it.
+
+**If L is ever put back on sale**, the honest version of the card says it is a capacity
+product: "L is for size, not saving — 512 entrants per division. If cost is the
+question, compare M against Pro." That sentence is the one this ruling avoided having
+to write.
+
+## W3 scope added 2026-09-05 — owner-approved, with the evidence
+
+Two changes, both about selling better rather than gating harder. Written here
+rather than executed in W2 because each is copy plus an entitlement row, and this
+programme's own rule is that a row change and the copy quoting it are ONE unit of
+work — W2 is closing and its pricing copy has already churned four times.
+
+### W3-A — `stats.player`: free the record, keep the analysis
+
+**Why, and it is not generosity.** The paywall does not currently work.
+`publicDivisionStats` (`usecases/player-stats.ts:638`, served by
+`/api/v1/public/orgs/…/divisions/…/stats`) has **no entitlement gate at all**,
+while every authenticated reader has one. Combined with V396 making competitions
+public by default, the live behaviour for a default Free org is:
+
+| Who | Sees the player stats |
+|---|---|
+| The whole internet, via the public dashboard | **Yes** |
+| The org that entered the data, signed in | **402 — upgrade to Pro** |
+
+The gate stops the customer and not the public. Worse, `recomputePlayerStats`
+runs regardless of plan — it fires for every org in the weekly digest sweep — so
+we pay the compute and withhold the result from the only person who earned it.
+W1 already settled the principle this offends: **charge for leverage, never for
+correctness.** A player's own record is correctness.
+
+**The split, which maps onto the existing function boundaries with no new
+seams:**
+
+| | Function | Route | Plan |
+|---|---|---|---|
+| The record | `divisionPlayerStats` | `/api/v1/divisions/[id]/stats/players` | **Free** |
+| The record, per person | `personStats` (division-scoped) | `/api/v1/persons/[id]/stats` | **Free** |
+| The rollup | `personCareerStats` | same route, career shape | **Pro + pass** |
+
+`personCareerStats` is the leverage half and already reasons about pass scoping
+in its own comment: *"A career rollup spans competitions, so an Event Pass covers
+the part of the career played inside the competition it was bought for, and no
+more."* That sentence is the split, already written; W3 makes the matrix agree
+with it.
+
+**Owner value.** Player stats are the most shareable artefact in amateur sport —
+the thing a parent screenshots and a player links. Freeing the record feeds the
+badge network the growth-reversal ruling was protecting, while the career rollup
+stays a real Pro/pass differentiator. It costs one `plan_entitlements` row and
+the copy that quotes it.
+
+**Counter-argument, stated so it is not rediscovered as an objection.**
+`pass-features.ts:46` lists `stats.player` as a pass grant, so freeing it
+wholesale would shrink the pass story — which is exactly why the split exists
+rather than a blanket free. Do NOT free `personCareerStats` with it.
+
+**Owed with it:** fix the public/authenticated inversion in the same change,
+whichever way the split lands. Serving the public more than the owner is
+incoherent under any pricing.
+
+### W3-B — the paywall should offer the cheaper route, not just the dearer one
+
+**Extended 2026-09-05, and hiding the L rung made it urgent.** The same fix must also
+stop the paywall selling a customer the plan they are already on. `UpgradeGate` reads
+`featurePlan(feature)`, a pure function of the KEY with no knowledge of the viewer's
+org, so it cannot tell "you need Pro" from "you have Pro". Two live consequences:
+
+- `components/v2/board/ai-out-of-credits.tsx` offers a Pro org "Upgrade to Pro"
+  (copy review M4).
+- **New since L came off sale:** L was the only rung exceeding Pro's
+  `entrants.per_division.max` of 256, so a Pro org with a larger division used to have
+  a self-serve route — buy an L pass for that competition. It no longer does, and the
+  gate it now hits says Go Pro. The v17 #327 self-serve path is closed, deliberately
+  and with the rule asserted intact in the tests rather than papered over, but the
+  DEAD END is not acceptable to ship: that org's real answer is Contact us.
+
+Note this cannot be fixed inside `featurePlan` — a Community org at 64 entrants
+should still be sold Pro for the same key. The answer depends on the viewer's plan, so
+the gate has to receive it. Make the prop REQUIRED rather than optional so `tsc`
+enumerates every call site; an optional one is exactly how a figure quietly stops
+arriving (the same lesson `public-quota-degraded` learned two days earlier).
+
+**Not owed:** the "from {price}" wording. With one sellable rung the two clauses that
+would be FALSE (`pricing.pass.ladderNote` and the `/pricing` "from" prefix) are
+suppressed by rung count rather than deleted, so they return automatically if L does.
+The remaining "from" on the in-app buy links is true of the credit packs it describes.
+W3 redesigns that page wholesale; rewording it twice is waste.
+
+W2 fixed twelve reasons that read "is a Pro feature" for keys the Event Pass also
+grants (`3c0463dec`); they now name both plans. That corrects the falsehood and
+leaves the commercial gap open: the sentence names two plans, and the CTA still
+sells one.
+
+Twelve times, at the moment a customer is blocked and most ready to buy, we
+should be offering **both routes with their prices** — the pass at its rung price
+for THIS competition, and Pro for the whole org — and letting them pick. Today
+`featurePlan()` is three-valued (`community` / `pro` / `enterprise`) and knows
+nothing about the pass, so `UpgradeGate` cannot express it.
+
+**Owner value.** The pass is the cheaper entry and the lower-commitment yes; for
+a single-competition organiser it is often the right product, and we currently
+hide it at the exact instant it is most relevant. The crossover work already
+landed the arithmetic (`lib/pricing-crossover.ts`) — this is putting it where the
+decision is actually made rather than only on `/pricing`.
+
+**Guard obligation for both.** `freeClaimFaults` grew a fourth rule in W2 because
+its first three reasoned about community, pro and enterprise and never asked the
+pass — twelve sentences drifted behind that blind spot. Any W3 change to how a
+paywall names a plan must extend that rule set in the same commit, and must be
+mutation-proved: restore the old wording and confirm it reds.
+
 ## Findings that changed the work
 
 - **`fidelityTiers` was the RECORDABLE set; `padSpec.fidelity` is the
@@ -239,6 +423,18 @@ items to W1, so nothing below is owed by anyone else.
 
 Each needs a task and an owner. Nothing here is fixed by W1.
 
+0. **W3 entry gate — baseline the distribution the growth reversal gives up.**
+   W2 put player profiles, embeds and auto posts back behind the paywall on an
+   explicit owner ruling, reversing the PLG position recorded higher in this file.
+   That is not re-litigated — but it trades off-platform distribution for revenue,
+   and **nothing in the tree measures the distribution side**, so the trade cannot be
+   read later, only argued about. The badge network was the stated reason those keys
+   were free; removing them removes the badge from the surfaces that carried it.
+   Take the baseline BEFORE W3 ships the surfaces — embed loads, public-profile
+   views, auto-posted items, and how many orgs use each — or the counterfactual is
+   gone for good. Cheap now, impossible in a month. Raised as a product-owner
+   finding at the W2 boundary, 2026-09-04, and approved with the five fixes below.
+
 1. **The setbased kernel registers event schemas and fidelity bands for types
    no shipped preset accepts** — a badminton expedite system, a table-tennis
    substitution. 63 recordable vs 68 registered; the five are named in
@@ -282,6 +478,218 @@ Each needs a task and an owner. Nothing here is fixed by W1.
    not swept during a close wave. The one-line fix is
    `storageState: await consentedAnonymousState()` from
    `e2e/scorepad-a11y-kit.ts`; each needs its own spec re-run to be honest.
+
+6. **W2 deleted `pro-plus-tier.spec.ts` (505 lines, 10 tests) and
+   `pricing-pro-plus.spec.ts` (49 lines, 2 tests), and the replacements are
+   owed to W3** — `pricing-v18.spec.ts` and `enterprise-gate.spec.ts` (owner
+   ruling 2026-09-03, W2 plan decision 6). Both files were deleted whole and
+   nothing outside themselves referenced them. This is the inventory of what
+   the tree no longer proves in a browser, so W3 rebuilds coverage rather than
+   guessing at it. Five of the ten cases were about the retired tier and are
+   simply gone; the other five tested a LIVE mechanism through a `pro_plus`
+   vehicle and are the real debt:
+
+   - **Save points roll a WINDOW; they do not 402.** Two cases
+     (`Community: the 3rd save point rolls the window rather than 402ing
+     (limit 2)`, `Pro: 5 save points are silent, the 6th rolls (limit 5)`)
+     drove `schedule.checkpoints.max` to its ceiling and asserted the oldest
+     checkpoint is discarded instead of the request being refused. That is
+     unusual for a cap in this codebase — every other quota raises a
+     `PaymentRequiredError` — and it is now proven nowhere in a browser.
+     **The numbers moved too**: V393 sets community 2 (unchanged), pro 5 -> 10,
+     and gave BOTH pass rungs their own row at 5 where they used to fall
+     through to community. A replacement must read the cap from the matrix,
+     not retype it — the old spec hardcoded 2 and 5.
+   - **`officials.auto` and `api.write` gating, end to end, including that a
+     read-only API key still mints when the write scope is refused.** Both
+     keys changed side in V393: `officials.auto` is now granted on Pro AND on
+     both pass rungs (so W2 T6's competition-scoped resolution is what makes
+     the pass grant safe, and that scoping has no browser test), and
+     `api.write` is the only bool in `ENTERPRISE_FEATURES` — the sole
+     self-serve-unreachable feature in the product. `enterprise-gate.spec.ts`
+     is the natural home for both.
+   - **The billing surface's two states**: a Community org seeing the paid
+     upsell with a price rendered, and a paid org having the upgrade grid
+     HIDDEN. The second is the one that matters — an org that already pays
+     being shown an upgrade grid is a visible defect, and after V393 the paid
+     state to assert is `pro`, with `enterprise` reaching the Contact-us CTA
+     W2 T3 added rather than a priced card.
+   - **`/admin/entitlements` renders a column per plan.** The old case asserted
+     the Pro Plus column existed. `ADMIN_PLAN_KEYS` now derives from
+     `ALL_PLAN_KEYS` unfiltered, so the replacement should assert the column
+     SET matches that list — including `enterprise`, which is the one column
+     `/pricing` deliberately does not show.
+   - **`/pricing` renders a card per purchasable plan, with its price, and a
+     comparison column to match, with no click needed.** `pricing-v18.spec.ts`
+     owns this. Two V393 facts make it more than a rename: `PRICING_PLAN_KEYS`
+     is four wide (enterprise is a Contact-us strip, not a column), and the
+     locale matters — `/pricing` reads the `[lang]` PATH, not the cookie.
+
+7. **An unrecognised org-addon rider is a SILENT BILLING PATH, and W2 deleted
+   the two tests that named it** (owner ruling 2026-09-03, W2 plan decision 8;
+   the tests were `a pro_plus org-addon item prices/lifts independently of
+   pro's` and `resolves the PRO PLUS price for a pro_plus group, not pro's` in
+   `server/usecases/__tests__/extra-org-addon.test.ts`). The mechanism:
+   `isOrgAddonItem` (`lib/org-addons.ts`) matches a subscription item's
+   `lookup_key` against the CATALOG's own set, and `scripts/stripe-sync.ts`
+   never prunes — it iterates only the entries the seed still names. So a seed
+   entry that DISAPPEARS leaves its Stripe price active and purchasable, and a
+   subscription still carrying `seazn_extra_org_pro_plus_monthly` is
+   unrecognised end to end: never re-priced, never synced into `org_addons`,
+   never alerted on — and still billing the customer every month.
+
+   Bounded to test mode ONLY because there is no live Stripe catalogue (owner,
+   2026-09-03), which is why the owner ruled it not worth code that outlives
+   Pro Plus. **It must be closed before a live catalogue exists.** The shape of
+   the fix is a reconciliation that walks the subscription's items rather than
+   the seed's — anything on a `seazn_*` lookup key the catalog cannot name is
+   an alert, not a silent skip. Note the same asymmetry protects nothing else:
+   `planKeyForPrice` would likewise resolve an orphaned price id to a `plans`
+   row this wave deleted.
+
+8. **`scripts/smoke.ts` still seeds a `pro_plus` subscription at EIGHT sites,
+   and no typecheck can see it.** `tsc -p tsconfig.scripts.json` exits 0 with
+   all eight present, because `setPlan`'s plan argument is a plain `string`,
+   not `PlanKey` — so V393 left this entirely to a runtime FK violation
+   (`subscriptions_plan_key_fkey`). The first one aborts the run, and every
+   check after it never executes, which is the shape that reads as "smoke is
+   broken" rather than as eight specific stale assertions.
+
+   The write sites, as of this commit: `smoke.ts:1997` (the `PERSONA 3 —
+   pro_plus` block, ~140 lines through :2210, including the `#448` timezone /
+   maxPerDay cases and a feed seed), `:3354`, `:3610`
+   (`seedGroup("churn", "pro_plus")`), `:11362`, `:11867`, `:12031`, `:12359`.
+
+   Repointing them onto `enterprise` is mechanical for the plan key but NOT for
+   the assertions around them, and three of the surrounding premises have
+   changed sides:
+   - `ai.credits.monthly` on the above-Pro tier is **500**, not 200.
+   - `officials.auto` and `scorers.max` are **plain Pro** keys now, so a
+     persona proving "the tier above Pro unlocks officials.auto" proves nothing
+     — `api.write` is the ONLY bool left that Pro cannot reach.
+   - `orgs.max_owned` on `enterprise` is **NULL (unlimited)**, where `pro_plus`
+     was a finite 10. Any group-cap or rider assertion seeded on the above-Pro
+     tier therefore has no threshold to cross and needs `pro` as its vehicle
+     instead. `smoke.ts:3296`'s own comment ("V314: community 1 / pro 5 /
+     pro_plus 10. The two rider RATES…") is stale for the same reason, and
+     there is no `enterprise` rider SKU in `stripe-plans.json` at all.
+
+   **This was deliberately NOT swept in the T7/T9 sweep**, and the reason is
+   the standing rule that a read is not a run: smoke cannot be verified without
+   a prod build and a live server, and eight blind edits to an 18,700-line
+   script that only a real smoke run can judge is how a wrong assertion gets
+   frozen in and later "fixed" by weakening it. It needs its own task, with a
+   full `npm run test:smoke` as the acceptance gate — not a typecheck, which
+   already passes and always did.
+
+   Already fixed in that file by the sweep (these were named, bounded, and
+   independently checkable against the live matrix): community
+   `ai.credits.monthly` 10 -> 5 and its bootstrap wallet grant, Pro 60 -> 35,
+   the deleted `officials.per_fixture.max` cap check (inverted to assert the
+   key is not served at all, since `undefined === null` would now fail), and
+   the `dashboard.player_profiles` pair — V393 grants profiles on Community, so
+   the unpassed sibling renders 200 where the old check demanded a 404.
+
+9. **The Stripe seed's `event_pass_l` description tells buyers the entrant cap
+   is "unlimited". It is 512.** `capClaimFaults` catches it, and the fault is
+   live right now: `plan-copy-truth.test.ts` fails with `event_pass_l: does not
+   quote its live entrant cap (512)`.
+
+   The reason it was not caught when V393 landed is worth keeping. That whole
+   test file **failed to COLLECT** — W2 T4 deleted `pro_plus` from
+   `stripe-plans.json` while the file's module scope still did
+   `stripePlans.plans.find(p => p.key === "pro_plus")!.product.description`,
+   which threw before a single test registered. The JSON reporter reports a
+   non-collecting suite as **0 tests and 0 FAILURES**, so the suite looked
+   clean, and the file is the only caller of `passCreditGrantFaults` — the
+   per-rung pass-credit change shipped with no running witness at all. The
+   collect is repaired; the copy fault it exposes is real and belongs to the
+   copy sweep (`stripe-plans.json` product descriptions + `capClaimFaults`).
+
+10. **V393 SOLD FIVE FEATURES ON THE EVENT PASS THAT A PASS HOLDER CANNOT
+    REACH.** This is a live product defect, not a test to retire, and it is the
+    highest-value thing the T7/T9 sweep found. `pass-scoping-guard.test.ts`
+    ("Event Pass grants are resolved with a competition in scope") is RED with
+    eight offenders:
+
+    ```
+    src/server/usecases/device-links.ts:105   requireFeature("scoring.device_links")
+    src/server/usecases/history.ts:420        getLimit("schedule.checkpoints.max")
+    src/server/usecases/match-reports.ts:270  hasFeature("discipline.enforced")
+    src/server/usecases/player-stats.ts:296   requireFeature("stats.player")
+    src/server/usecases/player-stats.ts:359   requireFeature("stats.player")
+    src/server/usecases/player-stats.ts:481   requireFeature("stats.player")
+    src/server/usecases/stages.ts:288         getLimit("stages.per_division.max")
+    src/server/usecases/templates.ts:171      getLimit("stages.per_division.max")
+    ```
+
+    **Why it is new.** That guard computes the pass-lifted key set from the
+    LIVE matrix — `event_pass` rows whose value `is distinct from` community's
+    — and then scans production source for enforcement sites that resolve the
+    key WITHOUT a competition id. It was green before V393 because none of
+    these five keys was lifted. V393 lifted all five: `stats.player` and
+    `scoring.audit_export` granted on the pass, `discipline.enforced` granted,
+    `scoring.device_links` granted, `stages.per_division.max` 2 -> 4, and
+    `schedule.checkpoints.max` given its own pass row (5) where it used to fall
+    through to community's 2.
+
+    **What a customer sees.** An org on Community buys an Event Pass for a
+    competition. Design §2 says that pass includes player stats, discipline
+    enforcement, device-link scoring, four stages per division and five save
+    points. At every site above the code asks the ORG-WIDE question, which for
+    a Community org resolves to the community value — so the buyer is refused,
+    or capped at Free's number, on features they have paid for. Money taken,
+    feature withheld, no error anywhere.
+
+    **This is exactly the class T6 fixed for officials** (`requireFeature`
+    already accepts a competition id at `entitlements.ts:666-672`; the three
+    officials call sites simply never passed it). The same one-argument change
+    is owed at these eight sites, plus a test per site proving the pass lifts
+    it on the passed competition and does NOT lift it on a sibling — T6's
+    mutation check (drop the id from one call, the test must red) is the model.
+
+    **The guard's own header says "DO NOT WEAKEN THIS ASSERTION AND DO NOT ADD
+    A SUPPRESSION LIST."** It was not weakened. It is left RED on purpose so
+    the next wave cannot miss it, and it will go green on its own once the ids
+    are threaded — no test edit is owed, only production code.
+
+    Note `divisions.per_competition.max` and `entrants.per_division.max` are in
+    the lifted set too and are NOT offenders: those call sites already scope to
+    a competition. So the guard is discriminating, not blanket.
+
+    **A SECOND guard is red on the other half of the same defect, and the two
+    must be fixed IN THIS ORDER.** `components/__tests__/upgrade-gate-pass-features.test.ts`
+    derives the lifted set the same way and compares it against
+    `lib/pass-features.ts`'s hand-written `PASS_FEATURES` — the set that decides
+    whether a paywall offers the Event Pass or only the Pro card. It disagrees
+    with the live matrix in both directions:
+
+    - **Seven keys are missing** (the pass lifts them, the paywall does not
+      offer it): `discipline.enforced`, `officials.auto`,
+      `schedule.checkpoints.max`, `scoring.audit_export`,
+      `scoring.device_links`, `stats.player`, `stages.per_division.max`.
+    - **Three are stale** (in the set, no longer lifted):
+      `dashboard.player_profiles` (V393 made it free on Community),
+      `scheduling.multi_division` and `formats.double_elim` (granted on every
+      plan, so the pass lifts nothing).
+
+    **Do not "fix" `PASS_FEATURES` first.** Six of those seven additions are
+    exactly the unscoped enforcement sites listed above. Adding them while the
+    gates still resolve org-wide makes the product OFFER a pass for features it
+    then refuses to deliver — the user pays and stays blocked, which is the
+    precise harm that test's own header names as its right-hand-side failure,
+    and it is strictly worse than today's "never offered". Thread the
+    competition ids first, then widen `PASS_FEATURES`, then both guards go
+    green together. The three stale removals are safe in either order but do
+    not make the test green on their own (it asserts set EQUALITY).
+
+    Both of these are the same failure shape and worth naming as a class: a
+    guard whose target set is DERIVED FROM THE DATABASE goes red when a
+    migration lands, with no application diff to point at. Nothing in V393's
+    own diff mentions `player-stats.ts` or `pass-features.ts`. Run the
+    source-scanning and matrix-derived guards explicitly after any
+    `plan_entitlements` change — file-based test selection will never reach
+    them.
 
 ### Closed by W1, recorded so nobody re-opens them
 

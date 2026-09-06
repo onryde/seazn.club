@@ -214,7 +214,7 @@ unlimited; a **missing matrix row resolves to 0 and refuses**.
 (`:126,201`).
 
 **The plan keys are moving under this design.** Confirmed 2026-09-03 with the
-session holding `feat/entitlements-w2-matrix-plumbing` (DB at V395) — these are
+session holding `feat/entitlements-w2-matrix-plumbing` (DB at V396) — these are
 facts about that in-flight branch, not an owner ruling:
 
 - **`pro_plus` is DELETED**; `enterprise` is added (`is_public=false`,
@@ -235,7 +235,7 @@ limits live and sizes nothing from a literal, the re-valuations move the tests
 rather than break them — which is the entire reason §2 chose that.
 
 This design adds **no migration**; if one is ever needed, that branch occupies
-V392–V396 and `main` took V391, so take **V397 or later**.
+V393–V397 and `main` took V391, so take **V398 or later**.
 
 ### 3.7 Org isolation — ALL FOUR specs mint their own org
 

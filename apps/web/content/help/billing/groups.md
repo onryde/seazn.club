@@ -10,19 +10,19 @@ A subscription isn't tied to one organisation. It's a **billing group**: one pla
 
 Two things, and the second is usually the bigger one.
 
-**A cheaper bill.** The first organisation pays the plan's normal rate. Every organisation after that costs **no more than half the base rate** — Pro is $19/month plus $9/month each, Pro Plus is $39/month plus $19/month each. Annually that's $159 plus $79, and $327 plus $163. Eight clubs on Pro Plus annually come to $1,468 for the group, against eight separate Pro subscriptions at $1,272 — and the group buys the 1% entry-fee rate for all eight.
+**A cheaper bill.** The first organisation pays the plan's normal rate. Every organisation after that costs **no more than half the base rate** — Pro is $14.99/month plus $6.99/month each, or $128.99/year plus $63.99/year each. Five clubs on Pro annually come to **$384.95** for the group, against five separate Pro subscriptions at $644.95 — $260 a year saved, on one card and one invoice.
 
 **A cheaper entry-fee rate.** Every organisation in the group runs on the *group's* plan, so the platform fee on entry fees follows it:
 
 | The group's plan | Platform fee on entries |
 | --- | --- |
-| Community | 8% |
+| Community | 5% |
 | Pro | 2% |
-| Pro Plus | 1% |
+| Enterprise | 1% |
 
-So adding a free club to a Pro Plus group takes that club from 8% to 1% the moment it joins. For those eight clubs, the seven points saved cover the $1,468 subscription at about **$21,000 of entries across the group** — roughly $2,600 per club per year. Above that, grouping wins; below it, staying free and paying 8% is genuinely cheaper. It's worth doing the arithmetic for your own volume rather than assuming either way.
+So adding a free club to a Pro group takes that club from 5% to 2% the moment it joins. For those five clubs, the three points saved cover the $384.95 subscription at about **$12,800 of entries across the group** — roughly $2,600 per club per year. Above that, grouping wins; below it, staying free and paying 5% is genuinely cheaper. It's worth doing the arithmetic for your own volume rather than assuming either way.
 
-**How many organisations fit:** Community holds 1, Pro holds 5, Pro Plus holds 10. Beyond ten, [talk to us](mailto:hello@seazn.club).
+**How many organisations fit:** Community holds 1 and Pro holds 5. Beyond five, [talk to us](mailto:hello@seazn.club) — Enterprise is unlimited.
 
 ## Who pays, and who can't
 
@@ -52,8 +52,8 @@ If that invoice later fails, the organisation stays in the group — it doesn't 
 
 The added organisation becomes an extra **seat on the bill you already have** — never a new, separate subscription. So it inherits your bill's shape:
 
-- **On a monthly bill** it's no more than half the base rate per month (Pro **+$9/mo**, Pro Plus **+$19/mo**), prorated for the rest of the current month and added to your next invoice.
-- **On an annual bill** it's no more than half the base rate per **year** (Pro **+$79/yr**, Pro Plus **+$163/yr**), prorated for the rest of the current year and added to your next invoice — it renews on your existing annual date, not a new one. Mid-year, the proration covers only the slice of the year that's left; the full amount lands at your next renewal.
+- **On a monthly bill** it's no more than half the base rate per month (Pro **+$6.99/mo**), prorated for the rest of the current month and added to your next invoice.
+- **On an annual bill** it's no more than half the base rate per **year** (Pro **+$63.99/yr**), prorated for the rest of the current year and added to your next invoice — it renews on your existing annual date, not a new one. Mid-year, the proration covers only the slice of the year that's left; the full amount lands at your next renewal.
 
 You never guess the figure: the "Add to an existing bill" step shows the **exact amount that will be added to your bill**, taken live from Stripe, before you confirm.
 
@@ -122,7 +122,7 @@ This is only about who can *see* an invoice. It moves no money and changes no pl
 
 ## The entry-fee rate locks when sales start
 
-Because a group's plan can be changed by the payer — who might not be the person running a competition — the platform fee on entries is **fixed the moment a competition takes its first paid entry**. From then on every entrant in that competition is charged the same rate, whatever happens to the plan afterwards: a group detach, a downgrade, or a switch between Pro and Pro Plus none of it re-rates a competition whose entrants have already started paying.
+Because a group's plan can be changed by the payer — who might not be the person running a competition — the platform fee on entries is **fixed the moment a competition takes its first paid entry**. From then on every entrant in that competition is charged the same rate, whatever happens to the plan afterwards: a group detach, a downgrade, or any other plan change — none of it re-rates a competition whose entrants have already started paying.
 
 Before the first paid entry the rate is still live, so if you set a competition up on the wrong plan you can fix the plan and see the new rate apply — right up until someone pays. Free and offline entries don't lock anything; the rate is set by the first entry that actually pays through the platform.
 
@@ -138,7 +138,7 @@ Each organisation keeps its own Stripe account, its own verification, its own ba
 
 **Do the group's organisations share limits?** No. Quotas — team members, clubs, active competitions, public dashboards — are per organisation. Three organisations on Pro get three organisations' worth of everything, and that headroom is what the extra organisation's rate buys.
 
-**The bill says it's full — do we have to upgrade?** Only on Community, which covers one organisation and sells nothing to raise that. On **Pro and Pro Plus**, a full bill is a purchase rather than a plan change: buy an extra organisation under **Settings → Add-ons** and the limit goes up by one for the whole group. It's a recurring add-on billed every month on top of your current bill, on its own cadence — so an annual group pays for it monthly, and the Add-ons tab shows the exact amount in your currency before you confirm.
+**The bill says it's full — do we have to upgrade?** Only on Community, which covers one organisation and sells nothing to raise that. On **Pro**, a full bill is a purchase rather than a plan change: buy an extra organisation under **Settings → Add-ons** and the limit goes up by one for the whole group. It's a recurring add-on billed every month on top of your current bill, on its own cadence — so an annual group pays for it monthly, and the Add-ons tab shows the exact amount in your currency before you confirm.
 
 **Are team members shared?** No. Membership is per organisation; someone who works on two of them is invited to both. Paying for an organisation doesn't put you inside it, and being inside it doesn't let you see the group's card or invoices. See [inviting your team](/help/getting-started/invite-your-team).
 

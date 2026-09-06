@@ -26,12 +26,12 @@ Each payment settles to your connected Stripe account, minus Stripe's processing
 
 | Plan | Platform fee |
 | --- | --- |
-| Community | 8% |
-| Event Pass | 5% |
+| Community | 5% |
+| Event Pass | 4% |
 | Pro | 2% |
-| Pro Plus | 1% |
+| Enterprise | 1% |
 
-The rate that applies is the best one the competition can claim, so a Community org can put its big annual event on an [Event Pass](/help/billing/event-pass) and pay 5% on that event while the rest of the org stays at 8%. Stripe's processing fee is separate, set by Stripe, and taken whichever plan you're on.
+The rate that applies is the best one the competition can claim, so a Community org can put its big annual event on an [Event Pass](/help/billing/event-pass) and pay 4% on that event while the rest of the org stays at 5%. Stripe's processing fee is separate, set by Stripe, and taken whichever plan you're on.
 
 ## 4. Refunds
 
@@ -63,7 +63,7 @@ While an order is disputed you can't refund it — the card networks freeze a ch
 
 An **Event Pass** is paid to Seazn Club, not into your Connect account — there is no transfer to reverse. A refunded or lost-dispute pass instead **revokes the pass**, and the competition drops back to your plan's normal limits (nothing you've built is deleted). See [the Event Pass](/help/billing/event-pass).
 
-The same holds for a chargeback on a **Pro or Pro Plus subscription** payment: it's a platform charge, so there's nothing to reclaim from your Connect account. The subscription is flagged, and if the dispute is lost your org drops to **Community** limits — nothing is deleted, exactly like a [downgrade](/help/billing/downgrade). Subscribing again clears the flag and restores Pro.
+The same holds for a chargeback on a **Pro subscription** payment: it's a platform charge, so there's nothing to reclaim from your Connect account. The subscription is flagged, and if the dispute is lost your org drops to **Community** limits — nothing is deleted, exactly like a [downgrade](/help/billing/downgrade). Subscribing again clears the flag and restores Pro.
 
 ## Common questions
 

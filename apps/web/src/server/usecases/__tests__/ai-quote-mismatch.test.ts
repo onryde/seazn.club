@@ -147,10 +147,11 @@ async function seedDivision(
   };
 }
 
-/** pro_plus (scheduling.ai + scheduling.multi_division) with a funded wallet. */
-async function seedPlusOrg(): Promise<AuthCtx> {
+/** A paid (pro) org with a funded wallet. V393 opened every scheduling key on
+ *  every plan, so `pro` is simply a real purchasable plan here. */
+async function seedPaidOrg(): Promise<AuthCtx> {
   const { auth } = await seedOrg("community");
-  await setOrgPlan(auth.orgId, "pro_plus");
+  await setOrgPlan(auth.orgId, "pro");
   await invalidateOrgEntitlements(auth.orgId);
   await recordPackPurchase(await walletIdFor(auth.orgId), 100, `seed-${randomUUID()}`);
   return auth;
@@ -264,7 +265,7 @@ describe("quoted_credits on the wire (#387)", () => {
 
 describe.skipIf(!HAS_DB)("quote/charge mismatch — schedule-ai (#387)", () => {
   it("records a competition_event when the charge differs from the quote", async () => {
-    const auth = await seedPlusOrg();
+    const auth = await seedPaidOrg();
     const comp = await createCompetition(auth, { ends_on: "2030-12-31", name: "QM", visibility: "public", branding: {} });
     const division = await seedDivision(auth, comp.id);
     chat.mockResolvedValueOnce(chatResponse(legalPlan([division])));
@@ -294,7 +295,7 @@ describe.skipIf(!HAS_DB)("quote/charge mismatch — schedule-ai (#387)", () => {
   });
 
   it("reports an UNDER-quote too — the billing-complaint direction", async () => {
-    const auth = await seedPlusOrg();
+    const auth = await seedPaidOrg();
     const comp = await createCompetition(auth, { ends_on: "2030-12-31", name: "QM under", visibility: "public", branding: {} });
     // Forcing rung 3 makes the server charge 3 against a card that said 1.
     const division = await seedDivision(auth, comp.id);
@@ -315,7 +316,7 @@ describe.skipIf(!HAS_DB)("quote/charge mismatch — schedule-ai (#387)", () => {
   });
 
   it("records nothing and reports nothing when they agree", async () => {
-    const auth = await seedPlusOrg();
+    const auth = await seedPaidOrg();
     const comp = await createCompetition(auth, { ends_on: "2030-12-31", name: "QM agree", visibility: "public", branding: {} });
     const division = await seedDivision(auth, comp.id);
     chat.mockResolvedValueOnce(chatResponse(legalPlan([division])));
@@ -332,7 +333,7 @@ describe.skipIf(!HAS_DB)("quote/charge mismatch — schedule-ai (#387)", () => {
   });
 
   it("an omitted quoted_credits is not a mismatch", async () => {
-    const auth = await seedPlusOrg();
+    const auth = await seedPaidOrg();
     const comp = await createCompetition(auth, { ends_on: "2030-12-31", name: "QM silent", visibility: "public", branding: {} });
     const division = await seedDivision(auth, comp.id);
     chat.mockResolvedValueOnce(chatResponse(legalPlan([division])));
@@ -346,7 +347,7 @@ describe.skipIf(!HAS_DB)("quote/charge mismatch — schedule-ai (#387)", () => {
 
 describe.skipIf(!HAS_DB)("quote/charge mismatch — the joint solve (#387)", () => {
   it("records it on the competition path too", async () => {
-    const auth = await seedPlusOrg();
+    const auth = await seedPaidOrg();
     const comp = await createCompetition(auth, { ends_on: "2030-12-31", name: "QM joint", visibility: "public", branding: {} });
     const a = await seedDivision(auth, comp.id, { courts: await seedCourts(auth.orgId, 2) });
     const b = await seedDivision(auth, comp.id, { courts: await seedCourts(auth.orgId, 2) });
@@ -371,7 +372,7 @@ describe.skipIf(!HAS_DB)("quote/charge mismatch — the joint solve (#387)", () 
   });
 
   it("records nothing when the joint quote agrees", async () => {
-    const auth = await seedPlusOrg();
+    const auth = await seedPaidOrg();
     const comp = await createCompetition(auth, { ends_on: "2030-12-31", name: "QM joint ok", visibility: "public", branding: {} });
     const a = await seedDivision(auth, comp.id, { courts: await seedCourts(auth.orgId, 2) });
     const b = await seedDivision(auth, comp.id, { courts: await seedCourts(auth.orgId, 2) });
@@ -391,7 +392,7 @@ describe.skipIf(!HAS_DB)("quote/charge mismatch — the joint solve (#387)", () 
 
 describe.skipIf(!HAS_DB)("quote/charge mismatch — officials (#387)", () => {
   it("records it on the officials path too", async () => {
-    const auth = await seedPlusOrg();
+    const auth = await seedPaidOrg();
     const comp = await createCompetition(auth, { ends_on: "2030-12-31", name: "QM officials", visibility: "public", branding: {} });
     const division = await seedDivision(auth, comp.id, { officials: 2 });
 
@@ -412,7 +413,7 @@ describe.skipIf(!HAS_DB)("quote/charge mismatch — officials (#387)", () => {
   });
 
   it("records nothing when the officials quote agrees", async () => {
-    const auth = await seedPlusOrg();
+    const auth = await seedPaidOrg();
     const comp = await createCompetition(auth, { ends_on: "2030-12-31", name: "QM officials ok", visibility: "public", branding: {} });
     const division = await seedDivision(auth, comp.id, { officials: 2 });
 

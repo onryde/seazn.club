@@ -94,6 +94,29 @@ setup("authenticate as a fresh Pro org", async ({ page }) => {
   ).json()) as { data?: { id: string }[] };
   const setupOrgId = orgs.data?.[0]?.id;
   if (setupOrgId) await setEntitlementOverrideSql(setupOrgId, "orgs.max_owned", 50);
+  // Same argument, second axis. V396 retired Pro's "unlimited public
+  // dashboards" for a finite `dashboard.public.max` of 10, and competitions are
+  // PUBLIC BY DEFAULT now. Past the cap a create is not refused (T15/F): it
+  // comes back PRIVATE, which drops the competition out of `public_fixtures_v`
+  // and, since T20, stops the template gallery navigating at all — so an
+  // unrelated new spec turns into a mystery failure in whichever spec happened
+  // to run last.
+  //
+  // That is not hypothetical: it happened. This override was 50, the run put
+  // 279 competitions on this org, and the 229 after the fiftieth were created
+  // private — taking out five public-page specs (`ui-system`, `seo-meta`,
+  // `v6-sports`, both `scorepad-v3-football` public-page cases) plus the
+  // `setup:` fixture on tablet-834, none of which look anything like a quota
+  // failure from the outside.
+  //
+  // The cap now meters only PUBLISHED competitions (`PUBLIC_DASHBOARD_STATUSES`
+  // — a draft shows the world nothing), and nearly everything this suite
+  // creates stays a draft, so the pressure that caused that is gone rather than
+  // merely raised. 50 is kept as headroom for the specs that do publish; it is
+  // deliberate slack, not a ledger. `public-dashboards.spec.ts` drives the cap
+  // deliberately and restores it to this same value; nothing else in e2e
+  // asserts it. Raise it further rather than hunting for the true count.
+  if (setupOrgId) await setEntitlementOverrideSql(setupOrgId, "dashboard.public.max", 50);
   await capture(page, PRO_STATE);
 });
 

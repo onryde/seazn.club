@@ -14,69 +14,93 @@
 import { afterAll, describe, expect, it } from "vitest";
 import Stripe from "stripe";
 import postgres from "postgres";
-import { buildIntervalChangeParams, buildIntervalPreviewParams } from "@/lib/billing-manage";
+import {
+  buildIntervalChangeParams,
+  buildIntervalPreviewParams,
+} from "@/lib/billing-manage";
 
-const LIVE = process.env.BILLING_LIVE === "1" && !!process.env.STRIPE_SECRET_KEY;
+const LIVE =
+  process.env.BILLING_LIVE === "1" && !!process.env.STRIPE_SECRET_KEY;
 
 const cleanup: Array<() => Promise<unknown>> = [];
 afterAll(async () => {
   for (const fn of cleanup) await fn().catch(() => undefined);
 });
 
-describe.skipIf(!LIVE)("in-app plan change params (live Stripe, test mode)", () => {
-  it("previews and applies a real interval switch without a parameter rejection", async () => {
-    const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!);
-    const sql = postgres(process.env.DATABASE_URL!, {
-      connection: { search_path: process.env.DB_SCHEMA ?? "seazn_club" },
-    });
-    const [pro] = await sql<{ monthly: string; annual: string }[]>`
+describe.skipIf(!LIVE)(
+  "in-app plan change params (live Stripe, test mode)",
+  () => {
+    it("previews and applies a real interval switch without a parameter rejection", async () => {
+      const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!);
+      const sql = postgres(process.env.DATABASE_URL!, {
+        connection: { search_path: process.env.DB_SCHEMA ?? "seazn_club" },
+      });
+      const [pro] = await sql<{ monthly: string; annual: string }[]>`
       select stripe_price_id_monthly as monthly, stripe_price_id_annual as annual
       from plans where key = 'pro'`;
-    const [plus] = await sql<{ annual: string }[]>`
-      select stripe_price_id_annual as annual from plans where key = 'pro_plus'`;
-    await sql.end();
-    expect(pro?.annual, "plans table needs Stripe price ids").toBeTruthy();
+      // Every OTHER self-serve plan the console could switch to, READ from the
+      // catalog rather than named. This query used to say `where key =
+      // 'pro_plus'`; entitlements v18 (V393) deleted that plan, so it returned no
+      // row and the bare `plus.annual` below threw a TypeError instead of failing
+      // an assertion — a retired plan should not be able to crash this file.
+      // Deriving the set means a plan added or retired moves the loop with it.
+      const alsoOffered = await sql<{ annual: string }[]>`
+      select stripe_price_id_annual as annual from plans
+       where is_public and key <> 'pro' and stripe_price_id_annual is not null`;
+      await sql.end();
+      expect(pro?.annual, "plans table needs Stripe price ids").toBeTruthy();
+      expect(pro?.monthly, "plans table needs Stripe price ids").toBeTruthy();
 
-    const customer = await stripe.customers.create({
-      email: `proration-probe-${Date.now()}@example.com`,
-      payment_method: "pm_card_visa",
-      invoice_settings: { default_payment_method: "pm_card_visa" },
-    });
-    cleanup.push(() => stripe.customers.del(customer.id));
-    const sub = await stripe.subscriptions.create({
-      customer: customer.id,
-      items: [{ price: pro.annual }],
-    });
-    cleanup.push(() => stripe.subscriptions.cancel(sub.id));
+      const customer = await stripe.customers.create({
+        email: `proration-probe-${Date.now()}@example.com`,
+        payment_method: "pm_card_visa",
+        invoice_settings: { default_payment_method: "pm_card_visa" },
+      });
+      cleanup.push(() => stripe.customers.del(customer.id));
+      const sub = await stripe.subscriptions.create({
+        customer: customer.id,
+        items: [{ price: pro.annual }],
+      });
+      cleanup.push(() => stripe.subscriptions.cancel(sub.id));
 
-    const ctx = {
-      customerId: customer.id,
-      subscriptionId: sub.id,
-      itemId: sub.items.data[0].id,
-      trialing: false,
-      prorationDate: Math.floor(Date.now() / 1000),
-    };
+      const ctx = {
+        customerId: customer.id,
+        subscriptionId: sub.id,
+        itemId: sub.items.data[0].id,
+        trialing: false,
+        prorationDate: Math.floor(Date.now() / 1000),
+      };
 
-    // Every target the console offers: the interval switch and the same-interval
-    // plan upgrade. Both went through the same builders, so both were broken.
-    for (const priceId of [pro.monthly, plus.annual]) {
-      const preview = await stripe.invoices.createPreview(
-        buildIntervalPreviewParams({ ...ctx, priceId }),
+      // Every target the console offers: the interval switch, plus any
+      // same-interval plan upgrade. Both go through the same builders, so both
+      // were broken. Since v18 `pro` is the only self-serve subscription —
+      // `enterprise` is is_public=false with no Stripe price ids — so
+      // `alsoOffered` is empty today and the interval switch is the whole set.
+      // A new paid plan joins this loop automatically rather than going
+      // uncovered, which is the failure the hardcoded `pro_plus` produced.
+      const targets = [pro.monthly, ...alsoOffered.map((p) => p.annual)];
+      for (const priceId of targets) {
+        const preview = await stripe.invoices.createPreview(
+          buildIntervalPreviewParams({ ...ctx, priceId }),
+        );
+        expect(typeof preview.total).toBe("number");
+      }
+
+      // The apply call takes the SAME pinned proration_date, and the interval
+      // change must reset the cycle on its own — we no longer ask it to.
+      const updated = await stripe.subscriptions.update(
+        sub.id,
+        buildIntervalChangeParams({ ...ctx, priceId: pro.monthly }),
       );
-      expect(typeof preview.total).toBe("number");
-    }
-
-    // The apply call takes the SAME pinned proration_date, and the interval
-    // change must reset the cycle on its own — we no longer ask it to.
-    const updated = await stripe.subscriptions.update(
-      sub.id,
-      buildIntervalChangeParams({ ...ctx, priceId: pro.monthly }),
-    );
-    const item = updated.items.data[0];
-    expect(item.price.recurring?.interval).toBe("month");
-    const start = item.current_period_start;
-    const end = item.current_period_end;
-    const days = (end - start) / 86_400;
-    expect(days, "cycle reset to one month without billing_cycle_anchor").toBeLessThan(32);
-  }, 60_000);
-});
+      const item = updated.items.data[0];
+      expect(item.price.recurring?.interval).toBe("month");
+      const start = item.current_period_start;
+      const end = item.current_period_end;
+      const days = (end - start) / 86_400;
+      expect(
+        days,
+        "cycle reset to one month without billing_cycle_anchor",
+      ).toBeLessThan(32);
+    }, 60_000);
+  },
+);

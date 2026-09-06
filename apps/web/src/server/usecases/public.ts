@@ -1,9 +1,25 @@
 import "server-only";
 // Public read model (doc 08 §3 public block, §6 caching). No auth: every query
 // goes through the consent-filtered public_*_v views ONLY (superuser
-// connection — the views themselves restrict to visibility='public' and strip
-// person data per consent). Redis cache-aside in front; scoring writes
-// invalidate the same keys they make stale.
+// connection — the views strip person data per consent). Redis cache-aside in
+// front; scoring writes invalidate the same keys they make stale.
+//
+// WHAT THE VIEWS ACTUALLY ADMIT, because this comment used to say otherwise and
+// a whole entitlement was built on the wrong sentence. It read "the views
+// themselves restrict to visibility='public'". They do not:
+// `public_competitions_v` is `where visibility = any(array['public',
+// 'unlisted'])` — confirmed with `pg_get_viewdef`, not inferred. So an UNLISTED
+// competition is served the same field set as a public one by both
+// `getPublicCompetition` and the /api/v1 reader; the only thing `unlisted`
+// withholds is a place in `getPublicOrg`'s landing LIST. A private one is 404
+// in both.
+//
+// The cost of the wrong sentence: `dashboard.public.max` was written to count
+// `visibility = 'public'`, so any org could hold unlimited public dashboards by
+// choosing "unlisted" — the cap was a one-word bypass away from meaningless.
+// `PUBLICLY_READABLE_VISIBILITIES` (usecases/entitlement-freeze.ts) is now the
+// single authority for "readable by anyone with the link", and it is what the
+// quota, the create path, the PATCH guard and both usage meters read.
 import { sql } from "@/lib/db";
 import { cacheGet, cacheSet } from "@/lib/cache";
 import { HttpError } from "@/lib/errors";

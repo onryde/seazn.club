@@ -161,9 +161,9 @@ async function seedDivision(
   };
 }
 
-async function seedPlusOrg(): Promise<AuthCtx> {
+async function seedPaidOrg(): Promise<AuthCtx> {
   const { auth } = await seedOrg("community");
-  await setOrgPlan(auth.orgId, "pro_plus");
+  await setOrgPlan(auth.orgId, "pro");
   await invalidateOrgEntitlements(auth.orgId);
   await recordPackPurchase(await walletIdFor(auth.orgId), 100, `seed-${randomUUID()}`);
   return auth;
@@ -210,7 +210,7 @@ beforeEach(() => {
 
 describe.skipIf(!HAS_DB)("the architect's assumptions on the plan response (W5 #400)", () => {
   it("carries the model's assumptions into the single-division response", async () => {
-    const auth = await seedPlusOrg();
+    const auth = await seedPaidOrg();
     const comp = await createCompetition(auth, {
       ends_on: "2030-12-31",
       name: "W5 Assumptions",
@@ -229,7 +229,7 @@ describe.skipIf(!HAS_DB)("the architect's assumptions on the plan response (W5 #
   });
 
   it("defaults to an empty array when the model omits them", async () => {
-    const auth = await seedPlusOrg();
+    const auth = await seedPaidOrg();
     const comp = await createCompetition(auth, {
       ends_on: "2030-12-31",
       name: "W5 Assumptions Empty",
@@ -251,7 +251,7 @@ describe.skipIf(!HAS_DB)("the architect's assumptions on the plan response (W5 #
   });
 
   it("carries the model's assumptions into the joint response", async () => {
-    const auth = await seedPlusOrg();
+    const auth = await seedPaidOrg();
     const comp = await createCompetition(auth, {
       ends_on: "2030-12-31",
       name: "W5 Joint Assumptions",
@@ -272,7 +272,7 @@ describe.skipIf(!HAS_DB)("the architect's assumptions on the plan response (W5 #
   });
 
   it("defaults the joint response to an empty array when the model omits them", async () => {
-    const auth = await seedPlusOrg();
+    const auth = await seedPaidOrg();
     const comp = await createCompetition(auth, {
       ends_on: "2030-12-31",
       name: "W5 Joint Assumptions Empty",

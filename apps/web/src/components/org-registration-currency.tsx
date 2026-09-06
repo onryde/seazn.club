@@ -25,7 +25,6 @@ const LABELS: Record<Currency, string> = {
   eur: "€ EUR",
   gbp: "£ GBP",
   inr: "₹ INR",
-  aud: "A$ AUD",
 };
 
 export function OrgRegistrationCurrency({

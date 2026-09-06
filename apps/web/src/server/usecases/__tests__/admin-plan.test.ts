@@ -137,21 +137,25 @@ describe.skipIf(!HAS_DB)("admin plan tools", () => {
     const { orgId, actorId } = await seedOrg();
     await compToPro(actorId, orgId, null, "pre-test comp");
     const s = randomUUID().slice(0, 8);
-    // Twelve active competitions against a community cap of 10 (V319 raised it
-    // from 5) — two over, so the "two stalest freeze" arithmetic below still
-    // exercises a partial freeze rather than an all-or-nothing one.
-    for (const n of [
-      "One", "Two", "Three", "Four", "Five", "Six",
-      "Seven", "Eight", "Nine", "Ten", "Eleven", "Twelve",
-    ]) {
+    // TWO more active competitions than the community cap, read from the
+    // matrix (V319 10 -> V393 3), so the "two stalest freeze" arithmetic still
+    // exercises a PARTIAL freeze rather than an all-or-nothing one. A typed 12
+    // against a cap of 3 froze nine and stopped testing the boundary.
+    const [capRow] = await sql<{ int_value: number | null }[]>`
+      select int_value from plan_entitlements
+       where plan_key = 'community' and feature_key = 'competitions.max_active'`;
+    const commCap = capRow?.int_value;
+    expect(commCap, "community must carry a finite active-competition cap").toBeTypeOf("number");
+    const total = commCap! + 2;
+    for (let i = 1; i <= total; i++) {
       await sql`
         insert into competitions (org_id, name, slug, status)
-        values (${orgId}, ${n + " " + s}, ${n.toLowerCase() + "-" + s}, 'published')`;
+        values (${orgId}, ${`Comp ${i} ${s}`}, ${`comp-${i}-${s}`}, 'published')`;
     }
 
     const preview = await downgradeFreezePreview(orgId);
-    expect(preview.limit).toBe(10); // community quota (V319)
-    expect(preview.active).toBe(12);
+    expect(preview.limit).toBe(commCap);
+    expect(preview.active).toBe(total);
     expect(preview.frozen).toHaveLength(2); // the two stalest
 
     const result = await adminDowngrade(actorId, orgId, "abuse of comp");
@@ -289,12 +293,14 @@ describe.skipIf(!HAS_DB)("admin plan tools", () => {
   });
 
   it("does not demote an org already comped above Pro", async () => {
+    // pro_plus is retired (entitlements v18, V393); "above Pro" is now the
+    // non-public `enterprise` plan.
     const { orgId, actorId } = await seedOrg();
-    await sql`update subscriptions set plan_key = 'pro_plus' where id = (select subscription_id from organizations where id = ${orgId})`;
-    await extendTrial(actorId, orgId, 7, "keep the plus");
+    await sql`update subscriptions set plan_key = 'enterprise' where id = (select subscription_id from organizations where id = ${orgId})`;
+    await extendTrial(actorId, orgId, 7, "keep enterprise");
     const [row] = await sql<{ plan_key: string }[]>`
       select plan_key from subscriptions where id = (select subscription_id from organizations where id = ${orgId})`;
-    expect(row.plan_key).toBe("pro_plus");
+    expect(row.plan_key).toBe("enterprise");
   });
 
   // A cancelled subscription keeps its id. Without the liveness test this org

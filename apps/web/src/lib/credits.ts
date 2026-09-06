@@ -558,14 +558,16 @@ export async function grantMonthlyForAllWallets(
 }
 
 /**
- * The one-time trial grant (SPEC-2 §5.4): `ai.credits.trial` (default 20,
- * pro / pro_plus only — community and event_pass carry no matrix row for
- * this key, so they simply grant nothing). **Once per org**, guarded by the
+ * The one-time trial grant (SPEC-2 §5.4): `ai.credits.trial`, read from the
+ * matrix — pro (15 since V395; it was 20) and enterprise (still 20, set per
+ * deal) only. Community and event_pass carry no row for this key, so they
+ * simply grant nothing, and no figure is written into this file. **Once per
+ * org**, guarded by the
  * org's billing-group `subscriptions.trial_used_at` — the same "has this org
  * ever had a paid trial" marker `checkoutTrialDays` reads (`lib/billing.ts`,
  * V277's one-trial-per-org flag). Reusing it is deliberate, not incidental:
  * SPEC-2 §5.4 names `trial_used_at` as the guard, bundling the 14-day
- * checkout trial and the 20 free AI credits into one "first time on Pro"
+ * checkout trial and the free AI credits into one "first time on Pro"
  * moment rather than tracking two independent one-shot flags. Wiring exactly
  * when this is called relative to checkout/sync is a later task; this
  * function only owns the guard-and-grant, atomically (`for update` on the

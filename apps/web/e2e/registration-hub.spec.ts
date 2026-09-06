@@ -361,16 +361,14 @@ test.describe("RS004 registration hub", () => {
   // itself (404), while a viewer must reach the page AND see the nav entry
   // that gets them there.
   test("guard: a scorer 404s on the hub; a viewer reads it and can navigate to it", async ({ browser }) => {
-    // A FRESH, throwaway org (not the shared Pro org) — scorer.spec.ts's own
-    // comment records that the shared org's scorers.max entitlement is 1 and
-    // that spec (the SERIAL project) already claims that one seat; e2e-
-    // parallel and e2e-serial are independent CI jobs with no `needs:`
-    // between them, so a second scorer-consuming test in this (parallel)
-    // spec racing it there is a real, repeatable way to break both. A
-    // brand-new org has zero pre-existing scorer members, so its own
-    // scorers.max pool (1 on every plan, including community —
-    // scorers.test.ts) has full headroom for the one this test needs, with
-    // no shared resource at all.
+    // A FRESH, throwaway org (not the shared Pro org). The original reason was
+    // seat contention: the shared org's `scorers.max` was 1 and scorer.spec.ts
+    // (the SERIAL project) already claimed it, and e2e-parallel / e2e-serial
+    // are independent CI jobs with no `needs:` between them. V395
+    // (entitlements v18 W2 T12) deleted `scorers.max` and the seat now draws on
+    // `members.max` (3 on community, 10 on Pro), so the pool is no longer a
+    // single seat — but a brand-new org still shares NO resource with the
+    // serial job at all, which is the property this test actually wants.
     const suffix = `${TAG}-${Math.random().toString(36).slice(2, 7)}`;
     const ownerCtx = await browser.newContext();
     const ownerPage = await ownerCtx.newPage();

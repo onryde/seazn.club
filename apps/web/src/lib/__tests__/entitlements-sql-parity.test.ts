@@ -546,8 +546,10 @@ describe.skipIf(!HAS_DB)("org_has_feature parity with lib/entitlements", () => {
       values (${compId}, ${orgId}, 'event_pass_l')`;
     await invalidateOrgEntitlements(orgId);
 
-    // Unlimited (null cap) — diverges from M's 128.
-    expect(await getLimit(orgId, "entrants.per_division.max", compId)).toBeNull();
+    // 512 entrants — diverges from M's 128. V393 (entitlements v18 §2) closed
+    // L's formerly-unlimited entrants to a stated ceiling; #294's rule is
+    // unchanged (L overrides M on exactly these two keys), only the number.
+    expect(await getLimit(orgId, "entrants.per_division.max", compId)).toBe(512);
     // 20 divisions — diverges from M's 10.
     expect(await getLimit(orgId, "divisions.per_competition.max", compId)).toBe(20);
     // Everything else is DERIVED from M unchanged — realtime is the existing
@@ -570,7 +572,7 @@ describe.skipIf(!HAS_DB)("org_has_feature parity with lib/entitlements", () => {
     expect(await hasFeature(orgId, "realtime", compId)).toBe(true);
     expect(await sqlHasFeature(orgId, "realtime", compId)).toBe(true);
     // The numeric override lifts too, while live.
-    expect(await getLimit(orgId, "entrants.per_division.max", compId)).toBeNull();
+    expect(await getLimit(orgId, "entrants.per_division.max", compId)).toBe(512);
 
     await sql`update competitions set status = 'completed' where id = ${compId}`;
     await invalidateOrgEntitlements(orgId);
@@ -660,7 +662,7 @@ describe.skipIf(!HAS_DB)("org_has_feature parity with lib/entitlements", () => {
     expect(await sql`
       select int_value from plan_entitlements
       where plan_key = 'event_pass_l' and feature_key = 'entrants.per_division.max'`).toEqual([
-      { int_value: null },
+      { int_value: 512 },
     ]);
     expect(await sql`
       select int_value from plan_entitlements

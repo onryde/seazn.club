@@ -63,8 +63,10 @@ export function AdminPlatformSettings({
       <div>
         <h2 className="text-sm font-semibold text-white">Entry-fee platform cut</h2>
         <p className="mt-1 text-xs text-slate-400">
-          Default % taken from card entry fees. Applies when an org has no per-org override
-          (set on the org page) and its plan has no fee row — Pro carries 2%, Event Pass 5%.
+          Default % taken from card entry fees. Applies only when an org has no per-org
+          override (set on the org page) and its plan carries no fee row of its own — every
+          plan currently does, so this is a fallback rather than the usual rate. Each
+          plan&rsquo;s own rate lives in the plan matrix and is not restated here.
           Changes apply to new checkouts within ~5 minutes (cache TTL).
         </p>
       </div>

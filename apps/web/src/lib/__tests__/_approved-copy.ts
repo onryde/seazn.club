@@ -60,8 +60,8 @@ export const APPROVED_PLANS_PASS: ApprovedParagraph[] = [
   {
     id: "plans.md#event-pass-opening",
     find: /^One-time upgrade for a single competition/,
-    why: "the pass's scope again, on the page most readers meet first. It said 'for that event's lifetime' until this wave, which V328/V334 contradict. Source of truth: lib/entitlements.ts.",
-    text: "One-time upgrade for a single competition, while that competition is still running, without a subscription. It comes in two sizes, and the only difference between them is how big that one event may get:",
+    why: "the pass's scope again, on the page most readers meet first. It said 'for that event's lifetime' until this wave, which V328/V334 contradict. Source of truth: lib/entitlements.ts. RE-APPROVED 2026-09-05 (owner decision: the L rung off sale): the trailing 'it comes in two sizes, and the only difference between them is how big that one event may get' went with the size ladder it introduced. The load-bearing half — 'while that competition is still running' — is untouched, which is the clause this fixture exists to hold.",
+    text: "One-time upgrade for a single competition, while that competition is still running, without a subscription:",
   },
 ];
 
@@ -84,32 +84,54 @@ export const APPROVED_PLANS_PASS: ApprovedParagraph[] = [
  *
  * See `inventoryFaults` for why this is a digest list and not prose, and the
  * header of this file for what to do when it fails.
+ *
+ * REGENERATED 2026-09-05 — the L rung came off sale (owner decision). Both
+ * articles described a size the checkout will no longer sell, and `event-pass.md`
+ * led with a two-column M-vs-L comparison table, which was the loudest instance
+ * of it in the product. What changed, and what each change was read against
+ * before it was re-pinned:
+ *
+ *   event-pass.md — 21 surfaces gone, 19 back: the "Two sizes: M and L" heading
+ *   and its table became a one-column "The pass" table; the "pick the size
+ *   before you buy" paragraph became "a competition holds one pass", with the
+ *   over-128-entrant reader pointed at Pro; the entrants/divisions bullet, the
+ *   AI-credit bullet, the ended-marker sentence, the closed-competition
+ *   sentence, the on-Pro paragraph and the last three FAQ answers each lost
+ *   their L clause. Every figure re-read against `plan_entitlements`
+ *   (event_pass: 128 entrants, 10 divisions, 4% against community's 5%) and
+ *   `PASS_CREDIT_GRANT.event_pass` (25).
+ *
+ *   plans.md — 6 surfaces gone, 5 back: the Event Pass section lost its
+ *   two-bullet size ladder and its "sized with the pass" credit sentence.
+ *   Same sources, same figures.
+ *
+ * Nothing about a pass a customer already HOLDS changed: the "Event Pass M
+ * active" marker, the receipt, and the pass's own grants are untouched, and the
+ * rung is dormant in `plan_entitlements` rather than deleted.
  */
 export const APPROVED_EVENT_PASS_INVENTORY: string[] = [
   "7af62a47607d7223",
   "74fb0e84d81cf750",
   "7b44a9ceda103f3a",
-  "2b5ae63b6b4f7fef",
-  "c265587d5f9e7989",
-  "ab3d2d6b1335de57",
-  "57618eb0b22ecf4c",
-  "c568f8fe6e21cf2a",
-  "ca5e9f43ca10e67f",
-  "838e381d03407571",
-  "ff0840ec5e1d5748",
-  "293db3d817dc1664",
-  "d30d9ef9b7e39dcd",
-  "d245f2a2cbe8b0d6",
+  "0f6590c1fd0b70ad",
+  "3d07b637e0fcd0db",
+  "9906a08781bbfbc3",
+  "c8038bc5e87faf21",
+  "d0495741c4edb2b5",
+  "0db7160badf812ff",
+  "976beed391d0884f",
+  "0ba86d238db064af",
+  "e6cf2a38bc6c024c",
   "dd3d5b5673e222ca",
-  "6b72dd9495e4af80",
-  "ce57acff6db52773",
-  "9389b83536af8fa1",
+  "b2cd535f2424c883",
+  "a1fbda470105d463",
+  "1f4d0c836719b26f",
   "193ac3fc3eb05678",
   "1b57ba96756ac962",
   "fcd1bcb9b15230dd",
   "9cdc77f8e4467e2c",
   "4ebceeab83e6a5bf",
-  "3ea37f8416583be0",
+  "adede976a539f9fa",
   "219ccaea5a3878ae",
   "6feca5577c55cf2b",
   "170d10914abdbfe5",
@@ -119,87 +141,16 @@ export const APPROVED_EVENT_PASS_INVENTORY: string[] = [
   "f39d96b7fbbbfc13",
   "665584fd0671d579",
   "3f3be96ac6e6be4e",
-  // Re-approved 2026-08-06 (cadence-neutral pass link). Label change only:
-  // "Create next year's edition" → "Create the next edition", quoted here
-  // because this paragraph names the two links the ended marker offers. Read
-  // against `dictionaries/*/ui.json` `pass.entry.ended.nextEdition`, which is
-  // where the rendered label comes from, and against `routes.competitionNew` —
-  // the link still points at a BLANK competition, so the surrounding claim
-  // ("never offered for sale again on that competition") is untouched.
-  "d3494f085c5710ec",
-  // Approved 2026-07-29 (v17 gap #353). ONE new paragraph, inserted here: "The
-  // same line decides when a pass can be BOUGHT. You can buy a pass while its
-  // competition is still running, or during the 7-day grace after its end date;
-  // once a competition has passed that line the purchase is refused rather than
-  // sold, so you can never pay for a pass that would apply to nothing."
-  //
-  // Read against the code before recording, per this file's own rule. The claim
-  // is "the buy window is the same window as the apply window", and the code it
-  // describes is `lib/entitlements.ts`'s `passLockReason` — status in
-  // {completed, archived}, or ends_on + PASS_END_GRACE_DAYS (7) < today (UTC) —
-  // which is now what `api/billing/pass-checkout/route.ts` gates the purchase
-  // on, and what `pass_applies` (V343) gates the billing page's offer list on.
-  // So the two windows are literally the same predicate, and "7 days" is that
-  // constant rather than a number written down twice. "Refused rather than sold"
-  // is the 410, which is raised BEFORE any Stripe session is created — no money
-  // moves, which is the part of the sentence a reader is relying on.
+  "79e1623c03c1f2a8",
   "3b3bc011debe7da5",
   "9a68888ef2d9aa1a",
-  // Approved 2026-08-05 (#376). ONE new section — a heading and six paragraphs,
-  // inserted here: "When a competition closes to new passes". The claim is that
-  // the line which stops a pass APPLYING is also the line which stops one being
-  // SOLD, that it is a property of the competition rather than of a purchase,
-  // and that the offer is now withdrawn rather than left on screen in front of a
-  // checkout that refuses.
-  //
-  // Read against the code before recording, per this file's own rule:
-  //   - the two reasons and the 7-day grace are `lib/entitlements.ts`
-  //     `passLockReason` / `PASS_END_GRACE_DAYS`, unchanged by #376 — the same
-  //     predicate the SQL `pass_applies` (V343) uses, which is why the section
-  //     says "that same line" rather than writing a second rule down.
-  //   - "not offered anywhere", four places: the chip on
-  //     `c/[compSlug]/page.tsx` and `c/[compSlug]/settings/page.tsx` (both
-  //     render `competition-pass-entry.tsx`, which returns the closed link
-  //     instead of the buy pill once `usePassGateState()` is "closed"), the ⋯
-  //     menu on `o/[orgSlug]/page.tsx:235` (`!isPassLocked(...)`), and the
-  //     billing page's offer list (`pass_applies`, V343).
-  //   - "This competition is closed to Event Passes" is the literal
-  //     `upgrade.closed.title` string, rendered by `ClosedPanel` in
-  //     `c/[compSlug]/upgrade/page.tsx`; the two next steps, and which reason
-  //     gets which, are its `Record<PassLockReason, …>` — `terminal` →
-  //     `routes.competitionNew`, `past_ends_on` → `routes.competitionSettings`.
-  //     Both links are gated on the viewer being able to act, which is why the
-  //     copy says only an editor sees one.
-  //   - "the checkout behind it refused the sale" is the 410 in
-  //     `api/billing/pass-checkout/route.ts:185` — still the server's answer,
-  //     and the defect #376 was filed about was that the offer did not agree
-  //     with it.
-  //   - "correcting either one puts the offer back" is compute-at-read: no
-  //     column stores the verdict (`passLockReason`'s own doc comment), which
-  //     is the same property `lib/competition-wrapup.ts`'s header gives as the
-  //     reason the product PROMPTS for a wrap-up rather than sweeping a status.
-  //   - the paid-plan paragraph is `upgrade-page-state.ts`'s paid arm, where
-  //     #376 added `closedToPasses === null` to the #327 exceeding-rung offer —
-  //     so the L offer a Pro org sometimes gets is withdrawn past the line too.
-  //   - the "already bought" paragraph deliberately does NOT say a held pass is
-  //     unaffected by the line. `usePassGateState` resolves "ended", not
-  //     "held", once `lockReason` is set, and the resolver has already stopped
-  //     honouring the row (SPEC-4 §7); the OFFER side is all #376 changed, and
-  //     the two sections above this one already state the applying side.
   "4901d7ce5eea800a",
   "e83c931a71f7d62e",
-  "f7d474e47cbd8920",
-  // Re-approved 2026-08-06 (cadence-neutral pass link). Same label change, plus
-  // ONE sentence saying why the label names no interval — nothing in the schema
-  // makes a competition annual (`starts_on`/`ends_on` are two dates, there is no
-  // recurrence column), and the ladder and league formats run weekly. Read
-  // against `lib/entitlements.ts` `passLockReason`: the terminal arm and the
-  // past-ends-on arm are still the two this paragraph splits, and each still
-  // gets the step described here.
+  "81e902865f77d84a",
   "69fbd1e0e9c144ec",
   "8c072be7bd782c73",
   "51f349d614c306b2",
-  "38a84f5715684c23",
+  "774d4d6b3246dd97",
   "c42978cab6965d56",
   "331525dbff809017",
   "32654b5a563aabb6",
@@ -221,50 +172,13 @@ export const APPROVED_EVENT_PASS_INVENTORY: string[] = [
   "2e4b128e7b5331ea",
   "09c784bdca897d29",
   "10c39c76a97d3772",
-  "057ca7fca5ccd0b0",
-  "1bb443d58b849161",
-  "9c62d251033d27b5",
+  "15be1bf424e38ba0",
+  "d6294f4ea7c1dbb2",
+  "2508d8869fe2a54a",
   "c503ebdc56e74a10",
-  // Re-approved 2026-08-05 (#376), "Where do I buy one?". The four buy links it
-  // lists were unconditional; three of the four are now suppressed for a locked
-  // competition and the fourth always was. One sentence added, saying they go
-  // together and why. Read against `competition-pass-entry.tsx` (the overview
-  // and settings chip, "closed" arm), `o/[orgSlug]/page.tsx:235`'s
-  // `!isPassLocked(c.status, c.ends_on)` on the ⋯ menu item, and the billing
-  // page's `pass_applies` (V343) offer list.
-  "f84bab0a6dac4e46",
-  // Re-approved 2026-07-29 (W8 final review, M-1). Both surfaces carried a
-  // SUPERSET claim — "your plan already grants more" and "buying one would give
-  // you less than you hold" — which is #337: V341 gives event_pass_l unlimited
-  // entrants per division against pro's 256 (V270), so Pro is NOT a superset of
-  // the L rung and neither sentence is true for an L holder.
-  //
-  // Read against the code before re-recording, per this file's own rule. The
-  // approved replacement is the FEATURES form, which is literally true for both
-  // rungs and is the form `api/billing/pass-checkout/route.ts:42-50` already
-  // uses — its comment records the same correction being made there when L
-  // shipped. The help article never got it; W8 then re-approved these two
-  // digests with the stale clause still inside them, which is how a positional
-  // gate freezes a falsehood faithfully.
-  // Re-approved 2026-08-06 (cadence-neutral pass link). "points you at next
-  // year's edition" → "points you at the next edition". Prose, not the label,
-  // but it asserted the same annual cadence the label used to. The stale
-  // clause the note above describes is NOT what changed here and is still
-  // present — do not read this re-approval as fixing it.
-  "c2f89b4cb48e1710",
-  // Re-approved 2026-08-05 (#376), "What does the competition's upgrade page
-  // show me?". That answer enumerates the page's states and was missing the one
-  // #376 added, so it described a checkout on a page that no longer offers one.
-  // One clause added for the `closed` state. Read against
-  // `lib/upgrade-page-state.ts` — `{ kind: "closed"; reason; canBuy }`, which
-  // precedes both offer arms — and against `ClosedPanel` in
-  // `c/[compSlug]/upgrade/page.tsx`, which renders a heading, the one reason
-  // sentence and at most one link: no rung, no price, no receipt stub.
-  // Re-approved 2026-08-06 (cadence-neutral pass link) on top of the #376
-  // approval above: "with next year's edition offered alongside Pro" → "with
-  // the next edition offered alongside Pro". The #376 clause about the `closed`
-  // state is unchanged and its reading still stands.
-  "4fd38a76c19ca08a",
+  "3f08a1036ddefbd7",
+  "3ad16eeee6e0b482",
+  "02427d5e988e6afa",
 ];
 
 /**
@@ -284,63 +198,31 @@ export const APPROVED_EVENT_PASS_INVENTORY: string[] = [
  */
 export const APPROVED_PLANS_INVENTORY: string[] = [
   "bc2337dbe88e419f",
-  "5b2cc6eea4cf751a",
+  "6b5d30ec51106068",
   "5ef78cfff635a513",
-  // Community's paragraph, re-approved for V354/V355. It used to end "When
-  // something is finished, complete or archive it to free the slot", which read
-  // as covering both quotas in a sentence that names competitions AND divisions
-  // — and is now false for half of them. It now says the competition rule, then
-  // names the division rule as different.
-  //
-  // Read against the code before recording, per this file's own rule. The
-  // competition half is `usecases/competitions.ts`'s `assertActiveQuota`:
-  // `competitions.max_active` counts draft/published/live, so completed and
-  // archived genuinely free the slot. The division half is
-  // `usecases/divisions.ts`'s createDivision count — `d.archived_at is null or
-  // (division_has_results(d.id) and d.slot_waived_at is null)` — so an archived
-  // division still consumes its slot once it has results, and only an UNPLAYED
-  // one hands it back. `division_has_results` is defined in
-  // db/migration/deltas/V355__division_results_abandoned_outcome.sql: decided,
-  // finalized or forfeited, or abandoned with a non-`no_result` outcome. The
-  // linked article (divisions/archive.md) is the long form of the same rule.
-  "c7fa6c9c9e79fc08",
-  "4cc311ddc69a48c1",
-  "4d5875384bf155e4",
-  "43e1d69d597e5579",
-  "b3b732cc02d27ad8",
-  "9fea5a1e65adc92a",
-  // Re-approved 2026-08-06 (cadence-neutral pass link). Two clauses in the
-  // Event Pass pitch: "Right for the annual tournament that doesn't justify a
-  // year of Pro" → "the tournament that comes round rarely enough that a
-  // running subscription doesn't pay for itself", and "doesn't carry to next
-  // year's edition" → "to the next edition".
-  //
-  // The interval had to come out for the same reason as the label, but the
-  // COMPARISON had to be rewritten rather than rescaled: Pro is $19/month
-  // against a $29 pass (plans.md's own headings, `plan_entitlements`), so the
-  // obvious edit — "doesn't justify a month of Pro" — states something false.
-  // What is actually true is that the pass wins when the event does not recur
-  // often enough to keep a subscription running, which is what it now says and
-  // is the same rule `passExceedsPlan` encodes.
-  "6e856342deb34abe",
-  "1d48d4377c637fbb",
-  "87619eb00e3415c4",
-  "88f54c8d84fe39f9",
-  "894ad2338e0976bf",
-  "e14a6ded6b393859",
+  "1e9a3c2b4d3941d7",
+  "e5ac72886c19cefc",
+  "8ee85036b1264382",
+  "249e25ab9983cc87",
+  "cde930076d641e8b",
+  "f7c7084faf0e9fab",
+  "d5a0df90dfe35a6c",
+  "01b10f014d674ec5",
+  "4dfe30f3187b4fef",
+  "19cc31042b1e3028",
   "2f2961e11a66159d",
-  "44379ceba055ec0f",
+  "0ba155341fe9b6f0",
   "f8caf2ade16bbe59",
   "1bd31d9b7a370257",
   "63402ce5db94d1d1",
   "d2190ce79f9684a3",
-  "87261be9da787175",
-  "83ad164e750b9232",
+  "0feb98b86f880f7c",
+  "a0b053e3cc5a3cc7",
   "beaab221487f9585",
-  "edd2b6da9a126c56",
+  "5be7274033911d5c",
   "077d725be913cdc7",
   "0acb8e961819e27a",
-  "4ee173df88b4ac53",
+  "af7307c82e8109ec",
   "da146eaf5a60a77b",
   "36e15d26466a260a",
   "03e4c9c866a25934",
@@ -352,8 +234,8 @@ export const APPROVED_PLANS_INVENTORY: string[] = [
   "6fa96bd59b17b841",
   "09c784bdca897d29",
   "951db7b9a2c1569d",
-  "ac7b429848f9f114",
-  "cf5ec66b42651197",
+  "b6e5cea0e6333bb4",
+  "7ddb02c1405c7f9d",
   "36cda4bf12f7677b",
   "c75ef841931dc4cd",
 ];
@@ -486,33 +368,23 @@ export const APPROVED_PLANS_INVENTORY: string[] = [
  */
 export const APPROVED_ADD_ONS_INVENTORY: string[] = [
   "58a683b53e5184b9",
-  "2f6f0a90f146909c",
-  "86f7fbbc9cd26f08",
+  "3c91c5603471c7ec",
+  "4fead1c6b8b471ba",
   "535adfa4bbb23fb0",
   "7bc95c0f047118eb",
   "ecd4ad8f51fde6ab",
-  "f58db85d7d962581",
   "7a3863a273a702d6",
   "fe1787304c8e8f0c",
   "696896c6174d0812",
   "81f45d76b157c68a",
   "5cbbcf82d4703a2e",
-  "51ec9ed81333165c",
-  "05b585e71c12137b",
-  "b315422a65436656",
   "628281436c3b5d97",
   "57ab4cb8d1c7ae64",
   "dd3682cfbbbd86eb",
   "904600a779329e0b",
   "81ba6ce07303ccdc",
-  "88ce7e8f444d70eb",
-  "122c884440848810",
-  // FIX ROUND 6 (M1). Was "the number of organisations the group is actually
-  // using", which names the wrong quantity: the floor is on the RIDER count,
-  // not the org count. `ridersInUse` (`lib/billing-group.ts:431-437`) is
-  // `clamp(liveOrgs - base - grantedBonus, 0, purchased)`, so a Pro group with
-  // 6 live orgs has a floor of 1, not 6. Re-read against that function and
-  // against `addOns.extraOrg.floorNote`, which already said it correctly.
+  "2884caabfd4cb14f",
+  "bbaba7db595534ff",
   "80ea0dd21adfd486",
   "00df8be3e9bd06ef",
   "df7321201a99bd2c",
@@ -520,61 +392,11 @@ export const APPROVED_ADD_ONS_INVENTORY: string[] = [
   "7d1518387c5c90e4",
   "d1d87a9a3dbdeb8e",
   "b50fa0d68d469172",
-  // FIX ROUND 6 (C1 + M2). Was "…not API-key clients and not the app's own
-  // screens", and "Members already over the limit are MARKED read-only".
-  //
-  // C1: the app-screens half was FALSE. `lib/client-v1.ts:23-27` sends only
-  // `Content-Type`, so in-app components hitting `/api/v1/orgs/**` take the
-  // SESSION branch of `requireOrgAuth` (`server/api-v1/auth.ts:204` returns
-  // from `apiKeyAuth` only when a bearer token is present) and ARE
-  // freeze-checked. Five screens write through it — api-keys.tsx,
-  // news/composer.tsx, org-sponsors.tsx, sponsor-packages.tsx,
-  // org-payment-instructions.tsx.
-  //
-  // M2: nothing renders a MARK. `frozenMemberIds`
-  // (`server/usecases/entitlement-freeze.ts:103`) has exactly one production
-  // caller, `assertMemberNotFrozen` (`:123`) — no read model flags a member,
-  // unlike competitions, which the module header says ARE flagged. "Treated as
-  // read-only", resolved when a write arrives.
-  //
-  // ROUND 7: the C1 correction was RIGHT IN DIRECTION AND AN ORDER OF MAGNITUDE
-  // SHORT. It named four screens (API keys, News, Sponsors, Payments) because
-  // the guard behind it discovered callers by the single prefix
-  // `/api/v1/orgs/`. But the freeze lives in `requireOrgAuth`, and
-  // `requireResourceAuth` delegates to it — 83 write-scoped route files are
-  // freeze-checked across 17 URL prefixes, and 47 component files write through
-  // them. A frozen admin is blocked across essentially the whole editing
-  // product, not four screens. Re-read against `server/api-v1/auth.ts`
-  // (requireResourceAuth -> requireOrgAuth) and the measured caller walk.
-  //
-  // ROUND 8 (RS001 registration demolition). Dropped "registrations"
-  // from the example list — the org-console "registrations panel" component
-  // this word named is deleted along with the rest of the old org-console
-  // registration UI (design
-  // `docs/superpowers/specs/2026-08-16-registration-redesign-design.md`; not
-  // cited by its own former path here, since a deleted file would fail this
-  // very file's citation-existence gate). Checked against the same caller
-  // walk `help-copy-truth.test.ts` runs: no registration-related component
-  // currently writes through a freeze-checked (`requireOrgAuth` /
-  // `requireResourceAuth`) route — the one surviving piece of registration
-  // UI is a PUBLIC-facing surface authenticated by access token, not a
-  // session, so it was never in this set. The remaining four examples
-  // (schedule board, entrants, officials, settings) are unchanged and still
-  // real callers. RS004/RS005/RS009 own re-adding an example once the new
-  // competition-level Registration hub ships a freeze-checked org-console
-  // surface.
   "83bc6609f7aa1de5",
-  // ROUND 7 (M1's twin). This paragraph said the control "refuses to go below
-  // the number of organisations the group is standing on" — the ORG count,
-  // sixteen lines after the identical error was corrected at surface 23 and in
-  // the same paragraph this article's freeze guard is named after. The floor is
-  // the RIDER count: `ridersInUse` = clamp(liveOrgs - base - grantedBonus, 0,
-  // purchased) (`lib/billing-group.ts:431-437`). Nothing asserted on the floor
-  // at all before this round; both statements of it are now checked.
   "7e9eaa52377fc2e6",
   "89e6a00cfa216278",
   "e0bc899381ce86af",
-  "fe061d7659564782",
+  "fe061d7659564782"
 ];
 
 /**
@@ -627,24 +449,17 @@ export const APPROVED_GROUPS_INVENTORY: string[] = [
   "889eb9bb8adb1b8f",
   "0b3f064c075f4830",
   "2c08e52c75400e40",
-  "b27d737d14d930a1",
+  "d9d2fda79e6acad3",
   "650ab572d939bca6",
   "f78e9f343b9dc2e8",
   "d2190ce79f9684a3",
-  "87261be9da787175",
+  "0feb98b86f880f7c",
   "beaab221487f9585",
-  "edd2b6da9a126c56",
-  "9faecfa06325046c",
-  "a09dc0137f8e8527",
+  "5be7274033911d5c",
+  "a1d537317da5529d",
+  "d5ddc1b7a27ed12b",
   "e12f4df63f6cc9ea",
   "03db06a1af2d3405",
-  // v17 gap #333, position 17. Read against `server/page-auth.ts`
-  // requireBillingPage: the payer branch is entered only on
-  // `subscriptions.owner_user_id` of the org's OWN group ("any organisation on
-  // it"), and hands back role null / canEdit false while every other page in
-  // the /o tree stays on requireOrgPage — which is what makes "the bill and
-  // nothing else" true. The three tabs named are exactly the three that call
-  // it: settings/{billing,credits,add-ons}/page.tsx.
   "8cca87480a6deb54",
   "696c2fcc2ecfec40",
   "a052c3f07ce2508c",
@@ -659,8 +474,8 @@ export const APPROVED_GROUPS_INVENTORY: string[] = [
   "bb6e0a58fdb569a4",
   "93cbb9e0a733ea84",
   "a082daadd09b8b31",
-  "506437e366fdbb9f",
-  "3eca421ec4c1ecd2",
+  "76f844d7c521260b",
+  "99dafbaddeddd281",
   "ce62fde77df9f3cb",
   "af77535948d286c5",
   "791c29feee358ae2",
@@ -699,7 +514,7 @@ export const APPROVED_GROUPS_INVENTORY: string[] = [
   "19438b187f04e834",
   "84701e090fcbf515",
   "ddc8366bdf93737f",
-  "bb92ff4f463ccd7b",
+  "44a3cac6b1327242",
   "29c9a5af721c8abb",
   "a04e4219f607e695",
   "2b57b36732a3e9fb",
@@ -707,7 +522,7 @@ export const APPROVED_GROUPS_INVENTORY: string[] = [
   "c5c32d350da1d6b1",
   "09c784bdca897d29",
   "3d324adb3ee0b927",
-  "e2fe25cfb8981353",
+  "636714ad25e8f991",
   "1415f62ed176347a",
   "a83851ffc59ddfeb",
   "290e525981e1463d",
@@ -715,7 +530,7 @@ export const APPROVED_GROUPS_INVENTORY: string[] = [
   "8d2ecf6ae325690e",
   "7dde35de16939fb2",
   "2f102e765460c832",
-  "3b281af0174847e4",
+  "3b281af0174847e4"
 ];
 
 /**
@@ -741,9 +556,9 @@ export const APPROVED_CREATE_ORG_INVENTORY: string[] = [
   "332fd65e1bd72032",
   "b29441d979e91695",
   "b389c86ad2de4a26",
-  "264f686b9b00d09f",
+  "7e96998f849cb38b",
   "09c784bdca897d29",
-  "37c315ff03bb75b3",
+  "98cabe982ddf445c",
   "d78a55bea4454182",
-  "ec33da78b550dcac",
+  "ec33da78b550dcac"
 ];

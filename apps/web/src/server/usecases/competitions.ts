@@ -6,19 +6,23 @@ import { z } from "zod";
 import { sql, withTenant } from "@/lib/db";
 import { HttpError, PaymentRequiredError } from "@/lib/errors";
 import { invalidateOrgEntitlements, requireFeature, withinLimit } from "@/lib/entitlements";
+import { publicDashboardsReason } from "@/lib/feature-copy";
 import { captureServer } from "@/lib/posthog-server";
 import { EVENTS, type AnalyticsEvent } from "@/lib/analytics-events";
 import { log } from "@/server/logger";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { page, type ListQuery, type Page } from "@/server/api-v1/http";
-import { CompetitionStatus, type CreateCompetition, type PatchCompetition } from "@/server/api-v1/schemas";
+import { CompetitionStatus, type CreateCompetition, type PatchCompetition, type PublicQuotaDegraded } from "@/server/api-v1/schemas";
 import { fireDiscoveryRevalidate, invalidateDiscoveryCache } from "@/server/public-site/revalidate";
 import { ONBOARDING_EARN, REFERRAL_WELCOME_EARN, tryEarnGrant } from "@/lib/credits";
 import { invalidateSlugCache } from "@/server/slug-resolve";
 import {
-  ACTIVE_COMPETITION_STATUSES,
   assertCompetitionNotFrozen,
+  countActiveCompetitions,
+  countPublicDashboards,
+  countsTowardPublicQuota,
   frozenCompetitionIds,
+  PUBLIC_DASHBOARD_STATUSES,
 } from "./entitlement-freeze";
 
 export interface CompetitionRow {
@@ -38,6 +42,11 @@ export interface CompetitionRow {
   discovery: unknown;
   /** doc 10 §2.4 — over-quota after a downgrade: read-only, never deleted. */
   frozen?: boolean;
+  /** T20 — set by `createCompetition` ONLY, and only when the
+   *  public-dashboard cap turned a requested public create private. Not a
+   *  column: it describes what happened to THIS request, so a later read of
+   *  the same row never carries it. */
+  public_quota_degraded?: PublicQuotaDegraded;
 }
 
 const COLS = [
@@ -110,35 +119,123 @@ export async function listCompetitions(
 // this is the SAME pre-transaction check createCompetition itself runs below
 // — reused, not restated, so the two can never disagree about the boundary.
 export async function assertActiveQuota(auth: AuthCtx): Promise<void> {
-  const count = await withTenant(auth.orgId, async (tx) => {
-    const [{ n }] = await tx<{ n: number }[]>`
-      select count(*)::int as n from competitions c
-      where c.status in ${tx([...ACTIVE_COMPETITION_STATUSES])}
-        and not exists (
-          select 1 from competition_passes cp
-           where cp.competition_id = c.id
-             and pass_applies(c.status, c.ends_on, (now() at time zone 'utc')::date))`;
-    return n;
-  });
+  const count = await countActiveCompetitions(auth.orgId);
   const { ok } = await withinLimit(auth.orgId, "competitions.max_active", count + 1);
   if (!ok) throw new PaymentRequiredError("competitions.max_active");
 }
 
-// Doc 10 §1: `dashboard.public.max` — Community holds 1 public competition at
-// a time. Enforced here, at the write (doc 10 §2 rule 1), not in the UI.
-/** Exported (only) for createFromTemplate — see assertActiveQuota above. */
+/**
+ * Doc 10 §1: `dashboard.public.max` — how many public dashboards the org may
+ * have LIVE at once. Enforced at the write (doc 10 §2 rule 1), not in the UI.
+ *
+ * WHICH visibilities that is, and why `unlisted` is one of them, lives with the
+ * set itself: `PUBLICLY_READABLE_VISIBILITIES` in ./entitlement-freeze, beside
+ * the status/pass predicate below. Counting only `visibility = 'public'` left a
+ * one-word bypass beside the cap until 2026-09-05 — an unlisted competition is
+ * served the same dashboard by `public_competitions_v`, so it was the paid
+ * thing under a different name.
+ *
+ * The count is the same `liveUnpassedCompetition` predicate `assertActiveQuota`
+ * uses, and until V396 it was neither half of it: a flat
+ * `count(*) where visibility = 'public'` with no status filter and no pass
+ * exclusion. So it metered HISTORY — a club three seasons in carried three
+ * public dashboards for ever and was refused a fourth while nothing at all was
+ * running — and a competition an Event Pass had bought out of the active quota
+ * still occupied a public slot. That mattered more once T15 cut Free's cap to
+ * 2. The old header here also claimed "Community holds 1 public competition at
+ * a time", which had been wrong through two cap changes; the number is not
+ * restated in prose any more, it travels with the refusal (see below).
+ *
+ * `excludeId` is the PATCH path's "don't count the row being changed".
+ *
+ * Split into a boolean form and an asserting form because the create path must
+ * DEGRADE rather than refuse (T15/F, owner ruling 2026-09-03) while the patch
+ * path still 402s.
+ */
+export async function withinPublicQuota(auth: AuthCtx, excludeId?: string): Promise<{ ok: boolean; limit: number | null }> {
+  const count = await countPublicDashboards(auth.orgId, excludeId);
+  return withinLimit(auth.orgId, "dashboard.public.max", count + 1);
+}
+
+/** The REFUSING form, and the only caller left is `patchCompetition` below:
+ *  since T15/F both create paths degrade instead (`resolveCreateVisibility`),
+ *  so createFromTemplate — which this comment used to name as the reason for
+ *  the export — no longer calls it. Kept exported alongside
+ *  `withinPublicQuota` so the boolean and asserting forms stay one pair with
+ *  one visibility. */
 export async function assertPublicQuota(auth: AuthCtx, excludeId?: string): Promise<void> {
-  const count = await withTenant(auth.orgId, async (tx) => {
-    const rows = excludeId
-      ? await tx<{ n: string }[]>`
-          select count(*) as n from competitions
-          where visibility = 'public' and id <> ${excludeId}`
-      : await tx<{ n: string }[]>`
-          select count(*) as n from competitions where visibility = 'public'`;
-    return Number(rows[0]?.n ?? 0);
-  });
-  const { ok } = await withinLimit(auth.orgId, "dashboard.public.max", count + 1);
-  if (!ok) throw new PaymentRequiredError("dashboard.public.max");
+  const { ok, limit } = await withinPublicQuota(auth, excludeId);
+  // The cap travels WITH the refusal rather than being restated in copy: the
+  // flat sentence in `feature-copy.ts` said "one public dashboard at a time"
+  // through caps of 1, 3 and 2. Same mechanism `import.bulk` uses.
+  if (!ok) {
+    throw new PaymentRequiredError("dashboard.public.max", {
+      limit,
+      reason: publicDashboardsReason(limit),
+    });
+  }
+}
+
+/**
+ * The create-time visibility decision, resolved ONCE for both create paths
+ * (T20, reviewer pass 3, 2026-09-03).
+ *
+ * `createCompetition` and `instantiateTemplate` each carried their own copy of
+ *
+ *     const quotaMet = input.visibility === "public" && !(await withinPublicQuota(auth)).ok;
+ *     const visibility = quotaMet ? "private" : (input.visibility ?? "public");
+ *
+ * and the template copy had a real hole in it: the GUARD keyed on
+ * `=== "public"` while the VALUE keyed on `?? "public"`, so an omitted
+ * visibility skipped the quota check entirely and still created a PUBLIC
+ * competition, over the cap, with neither a note nor a refusal. Two spellings
+ * of one rule is how that happens, so there is now one — the default is
+ * applied FIRST and the guard reads the resolved answer, which makes the two
+ * incapable of disagreeing again.
+ *
+ * Returns the note as well as the value, because the note is the API contract:
+ * see `PublicQuotaDegraded` (api-v1/schemas.ts) for why a silent substitution
+ * in a 201 is wrong for every consumer and not only for the client that
+ * happens to diff the row.
+ *
+ * NEVER blocks. The PATCH path still 402s through `assertPublicQuota` above —
+ * switching an existing competition to public is a deliberate act with a wrong
+ * answer available, so it gets an error; a create is not.
+ */
+export async function resolveCreateVisibility(
+  auth: AuthCtx,
+  requested: "private" | "unlisted" | "public" | undefined,
+): Promise<{
+  visibility: "private" | "unlisted" | "public";
+  degraded: PublicQuotaDegraded | null;
+}> {
+  // PUBLIC BY DEFAULT (V396/T15). Applied here, before the guard reads it, so
+  // "what an omitted visibility means" is answered in exactly one place for
+  // both create paths and for every direct usecase caller.
+  const wanted = requested ?? "public";
+  if (!countsTowardPublicQuota(wanted))
+    return { visibility: wanted, degraded: null };
+  const { ok, limit } = await withinPublicQuota(auth);
+  // `wanted`, NOT a hardcoded "public". The literal was harmless while only
+  // `public` could reach this line; now that `unlisted` does, returning
+  // "public" here would publish a competition the organiser asked to keep off
+  // the listing — a silent promotion, which is worse than the refusal this
+  // function exists to avoid.
+  if (ok) return { visibility: wanted, degraded: null };
+  return {
+    visibility: "private",
+    degraded: {
+      feature_key: "dashboard.public.max",
+      // What the CALLER asked for. A note that always said "public" would tell
+      // a consumer something untrue about its own request.
+      requested_visibility: wanted,
+      applied_visibility: "private",
+      limit,
+      // The SAME sentence `assertPublicQuota`'s 402 carries, from the same
+      // builder — the cap travels with the answer instead of being restated.
+      reason: publicDashboardsReason(limit),
+    },
+  };
 }
 
 /** Activation event (feature 1) — first competition is the "aha" moment.
@@ -185,15 +282,39 @@ export async function createCompetition(
   input: CreateCompetition,
 ): Promise<CompetitionRow> {
   await assertActiveQuota(auth);
-  if (input.visibility === "public") await assertPublicQuota(auth);
+  // NEVER BLOCK A CREATE on the public-dashboard cap (T15/F, owner ruling
+  // 2026-09-03). Competitions are public BY DEFAULT now, and Free is 3 active
+  // competitions against 2 public dashboards — so under the old
+  // `assertPublicQuota` throw the THIRD create on the plan whose one-line sell
+  // is "run a club night" would have 402'd by default, with no wrong choice
+  // made by the organiser. It degrades instead: the competition is created
+  // PRIVATE, the row that comes back carries the visibility that was actually
+  // applied, and (T20) `public_quota_degraded` names the substitution and the
+  // cap that caused it, so a consumer does not have to diff the response
+  // against its own request to notice. The PATCH path still 402s — switching
+  // an existing competition to public is a deliberate act with a wrong answer
+  // available, so it gets one.
+  // Resolved through the shared helper both create paths use — see
+  // `resolveCreateVisibility` for why the default and the guard must be one
+  // answer, and `PublicQuotaDegraded` for why `degraded` reaches the caller.
+  const { visibility, degraded } = await resolveCreateVisibility(
+    auth,
+    input.visibility,
+  );
   // Showcase at create time follows the exact PATCH rules (doc 15 §1):
-  // gate key server-side, and never let a non-public competition opt in.
+  // gate key server-side, and never let a non-public competition opt in. Both
+  // checks read the CALLER'S OWN input, not the degraded value: a caller that
+  // asked for private + showcase is contradicting itself and must still get
+  // the 422, and one that asked for public + showcase must still be told about
+  // the entitlement. The degrade then drops the opt-in below, because a
+  // private competition can never be showcased.
   if (input.discoverable === true) {
     await requireFeature(auth.orgId, "discovery.listed");
     if (input.visibility !== "public") {
       throw new HttpError(422, "Only public competitions can be showcased on seazn.club");
     }
   }
+  const discoverable = !degraded && input.discoverable === true;
   const row = await withTenant(auth.orgId, async (tx) => {
     // The insert is shared by both slug paths so the generated one can be
     // RETRIED against the unique index — `q` is the savepoint the retry rolls
@@ -203,8 +324,8 @@ export async function createCompetition(
         insert into competitions (org_id, name, slug, description, starts_on, ends_on,
                                   visibility, branding, discoverable, created_by)
         values (${auth.orgId}, ${input.name}, ${slug}, ${input.description ?? null},
-                ${input.starts_on ?? null}, ${input.ends_on ?? null}, ${input.visibility},
-                ${q.json(input.branding as never)}, ${input.discoverable === true},
+                ${input.starts_on ?? null}, ${input.ends_on ?? null}, ${visibility},
+                ${q.json(input.branding as never)}, ${discoverable},
                 ${auth.userId})
         returning ${q(COLS)}`;
       return row!;
@@ -247,12 +368,31 @@ export async function createCompetition(
     fireDiscoveryRevalidate();
   }
   // Activation event (feature 1) — first competition is the "aha" moment.
-  await fireCompetitionCreated(auth, input.visibility);
+  // The visibility it was CREATED with, not the one that was asked for: a
+  // degraded competition is a private one and the funnel must not read it as a
+  // public launch.
+  await fireCompetitionCreated(auth, visibility);
   // Activation funnel completion — created directly public (no prior state).
-  if (shouldFireMadePublic(undefined, input.visibility)) {
+  if (shouldFireMadePublic(undefined, visibility)) {
     await fireCompetitionMadePublic(auth, row.id);
   }
-  return row;
+  // The degrade note rides ALONGSIDE the row rather than replacing anything in
+  // it: a consumer that never looks at it still reads the truthful
+  // `visibility` off the resource itself (T20).
+  // The degrade note carries BOTH substitutions or it under-reports. `degraded`
+  // is built by `resolveCreateVisibility`, which never sees `input.discoverable`
+  // — so the showcase half is attached here, where both facts are in scope.
+  return degraded
+    ? {
+        ...row,
+        public_quota_degraded: {
+          ...degraded,
+          ...(input.discoverable === true
+            ? { discoverable_dropped: true as const }
+            : {}),
+        },
+      }
+    : row;
 }
 
 // Two phases on purpose, and the boundary is load-bearing (see
@@ -334,7 +474,44 @@ export async function patchCompetition(
   patch: PatchCompetition,
 ): Promise<CompetitionRow> {
   if (!isRetirePatch(patch)) await assertCompetitionNotFrozen(auth.orgId, id);
-  if (patch.visibility === "public") await assertPublicQuota(auth, id);
+  // Any transition INTO a publicly readable state, not just into `public`
+  // (owner ruling 2026-09-05). `excludeId` is what keeps a LATERAL move
+  // possible: public -> unlisted does not add a readable dashboard, so counting
+  // the row against itself would refuse a change that costs the org nothing.
+  if (patch.visibility && countsTowardPublicQuota(patch.visibility)) {
+    await assertPublicQuota(auth, id);
+  }
+  // The OTHER transition into a publicly readable state, and the one that
+  // closes the hole `PUBLIC_DASHBOARD_STATUSES` would otherwise open. Since a
+  // draft no longer meters, an org could create any number of PUBLIC drafts
+  // (each counting zero) and then publish them all — the cap enforced nowhere,
+  // because create degrades rather than refusing and nothing else looked at
+  // status. Publishing is exactly the "deliberate act with a wrong answer
+  // available" the visibility guard above exists for, so it 402s the same way.
+  //
+  // Reads the row's CURRENT visibility when the patch does not carry one:
+  // publishing an already-public draft is the common case and the patch that
+  // does it usually says only `status`.
+  if (
+    patch.status &&
+    (PUBLIC_DASHBOARD_STATUSES as readonly string[]).includes(patch.status)
+  ) {
+    const [current] = await withTenant(
+      auth.orgId,
+      (tx) =>
+        tx<{ visibility: string; status: string }[]>`
+          select visibility, status from competitions where id = ${id}`,
+    );
+    // Only a transition — republishing something already published (or going
+    // published -> live) must not be refused for a slot it already holds.
+    const alreadyMetered =
+      !!current &&
+      (PUBLIC_DASHBOARD_STATUSES as readonly string[]).includes(current.status);
+    const goingPublic =
+      !!current &&
+      countsTowardPublicQuota(patch.visibility ?? current.visibility);
+    if (goingPublic && !alreadyMetered) await assertPublicQuota(auth, id);
+  }
   // Doc 15 §5: listing is free on every tier, but the gate stays server-side
   // so a plan without the key (or a staff override) can switch it off.
   if (patch.discoverable === true) await requireFeature(auth.orgId, "discovery.listed");

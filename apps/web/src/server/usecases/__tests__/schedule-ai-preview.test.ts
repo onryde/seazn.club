@@ -140,9 +140,9 @@ const parseCalls = (): number => chat.mock.calls.length;
 /** Calls into the stage-2 architect. A preview must never make one. */
 const architectCalls = (): number => architectParse.mock.calls.length;
 
-async function seedPlusOrg(): Promise<AuthCtx> {
+async function seedPaidOrg(): Promise<AuthCtx> {
   const { auth } = await seedOrg("community");
-  await setOrgPlan(auth.orgId, "pro_plus");
+  await setOrgPlan(auth.orgId, "pro");
   await invalidateOrgEntitlements(auth.orgId);
   return auth;
 }
@@ -269,7 +269,7 @@ function compilerAnswers(...bodies: (RawParsed | null)[]): void {
 
 describe.skipIf(!HAS_DB)("previewScheduleAi (W5 #400)", () => {
   it("spends no credit and makes no architect call", async () => {
-    const auth = await seedPlusOrg();
+    const auth = await seedPaidOrg();
     const walletId = await walletIdFor(auth.orgId);
     await recordPackPurchase(walletId, 10, `fund-${randomUUID()}`);
     const { divisionId } = await seedPlannable(auth);
@@ -307,7 +307,7 @@ describe.skipIf(!HAS_DB)("previewScheduleAi (W5 #400)", () => {
   });
 
   it("refuses before any model call when the wallet cannot afford the run", async () => {
-    const auth = await seedPlusOrg();
+    const auth = await seedPaidOrg();
     const walletId = await walletIdFor(auth.orgId);
     // Deliberately NON-EMPTY but short: a 2-credit wallet against a rung-3 run.
     // `balance > 0` passes here and is exactly the check this test forbids.
@@ -328,7 +328,7 @@ describe.skipIf(!HAS_DB)("previewScheduleAi (W5 #400)", () => {
   });
 
   it("stamps the parse spend on the ledger", async () => {
-    const auth = await seedPlusOrg();
+    const auth = await seedPaidOrg();
     await recordPackPurchase(await walletIdFor(auth.orgId), 10, `fund-${randomUUID()}`);
     const { divisionId } = await seedPlannable(auth);
     compilerAnswers(COMPILED);
@@ -347,7 +347,7 @@ describe.skipIf(!HAS_DB)("previewScheduleAi (W5 #400)", () => {
   });
 
   it("returns a failed compile as a state, not an error", async () => {
-    const auth = await seedPlusOrg();
+    const auth = await seedPaidOrg();
     const walletId = await walletIdFor(auth.orgId);
     await recordPackPurchase(walletId, 10, `fund-${randomUUID()}`);
     const { divisionId } = await seedPlannable(auth);
@@ -380,7 +380,7 @@ describe.skipIf(!HAS_DB)("previewScheduleAi (W5 #400)", () => {
   });
 
   it("resolves a stated window to both its days in the org's zone", async () => {
-    const auth = await seedPlusOrg();
+    const auth = await seedPaidOrg();
     await recordPackPurchase(await walletIdFor(auth.orgId), 10, `fund-${randomUUID()}`);
     // A zone that is neither UTC nor the machine's, and far enough east that a
     // day boundary rendered in the WRONG zone lands on a different date.
@@ -398,7 +398,7 @@ describe.skipIf(!HAS_DB)("previewScheduleAi (W5 #400)", () => {
   });
 
   it("refuses the 6th preview in the window before it reaches the model", async () => {
-    const auth = await seedPlusOrg();
+    const auth = await seedPaidOrg();
     await recordPackPurchase(await walletIdFor(auth.orgId), 10, `fund-${randomUUID()}`);
     const { divisionId } = await seedPlannable(auth);
     compilerAnswers(COMPILED);
@@ -418,7 +418,7 @@ describe.skipIf(!HAS_DB)("previewScheduleAi (W5 #400)", () => {
   });
 
   it("refuses the preview when the limiter backend is unreachable", async () => {
-    const auth = await seedPlusOrg();
+    const auth = await seedPaidOrg();
     await recordPackPurchase(await walletIdFor(auth.orgId), 10, `fund-${randomUUID()}`);
     const { divisionId } = await seedPlannable(auth);
     compilerAnswers(COMPILED);
@@ -437,7 +437,7 @@ describe.skipIf(!HAS_DB)("previewScheduleAi (W5 #400)", () => {
   });
 
   it("refuses a joint preview the wallet cannot afford, before any model call", async () => {
-    const auth = await seedPlusOrg();
+    const auth = await seedPaidOrg();
     const walletId = await walletIdFor(auth.orgId);
     // THREE divisions at the default rung: minimumCredits([u,u,u]) === 2, so a
     // 1-credit wallet is short. Two divisions would bound at 1 and this wallet
@@ -458,7 +458,7 @@ describe.skipIf(!HAS_DB)("previewScheduleAi (W5 #400)", () => {
   });
 
   it("bounds the joint preview on the competition bucket at 3 an hour", async () => {
-    const auth = await seedPlusOrg();
+    const auth = await seedPaidOrg();
     await recordPackPurchase(await walletIdFor(auth.orgId), 10, `fund-${randomUUID()}`);
     const { competitionId, divisionIds } = await seedJoint(auth, 3);
     compilerAnswers(COMPILED);
@@ -481,7 +481,7 @@ describe.skipIf(!HAS_DB)("previewScheduleAi (W5 #400)", () => {
   });
 
   it("refuses a joint preview naming fewer than two divisions", async () => {
-    const auth = await seedPlusOrg();
+    const auth = await seedPaidOrg();
     await recordPackPurchase(await walletIdFor(auth.orgId), 10, `fund-${randomUUID()}`);
     const { competitionId, divisionIds } = await seedJoint(auth, 2);
     compilerAnswers(COMPILED);
@@ -496,7 +496,7 @@ describe.skipIf(!HAS_DB)("previewScheduleAi (W5 #400)", () => {
   });
 
   it("drops a division with nothing movable before it compiles (R6)", async () => {
-    const auth = await seedPlusOrg();
+    const auth = await seedPaidOrg();
     await recordPackPurchase(await walletIdFor(auth.orgId), 10, `fund-${randomUUID()}`);
     const { competitionId, divisionIds } = await seedJoint(auth, 3, { emptyLast: true });
     compilerAnswers(COMPILED);

@@ -205,17 +205,18 @@ async function seedDivision(
   };
 }
 
-/** pro_plus (scheduling.ai + scheduling.multi_division) with a funded wallet. */
-async function seedPlusOrg(credits = 100): Promise<AuthCtx> {
+/** A paid (pro) org with a funded wallet. V393 opened every scheduling key on
+ *  every plan, so `pro` is simply a real purchasable plan here. */
+async function seedPaidOrg(credits = 100): Promise<AuthCtx> {
   const { auth } = await seedOrg("community");
-  await setOrgPlan(auth.orgId, "pro_plus");
+  await setOrgPlan(auth.orgId, "pro");
   await invalidateOrgEntitlements(auth.orgId);
   await recordPackPurchase(await walletIdFor(auth.orgId), credits, `seed-${randomUUID()}`);
   return auth;
 }
 
 async function seedSingle(): Promise<{ auth: AuthCtx; division: SeededDivision }> {
-  const auth = await seedPlusOrg();
+  const auth = await seedPaidOrg();
   const comp = await createCompetition(auth, {
     ends_on: "2030-12-31",
     name: "W5 Reuse",
@@ -230,7 +231,7 @@ async function seedJoint(): Promise<{
   competitionId: string;
   divisions: SeededDivision[];
 }> {
-  const auth = await seedPlusOrg();
+  const auth = await seedPaidOrg();
   const comp = await createCompetition(auth, {
     ends_on: "2030-12-31",
     name: "W5 Joint Reuse",

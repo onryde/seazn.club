@@ -18,6 +18,7 @@ import { randomUUID } from "node:crypto";
 import type postgres from "postgres";
 import { sql } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
+import { invalidateOrgEntitlements } from "@/lib/entitlements";
 import { EngineError } from "@seazn/engine/core";
 import type { Conflict } from "@seazn/engine/scheduling";
 import type { AuthCtx } from "@/server/api-v1/auth";
@@ -799,13 +800,20 @@ describe.skipIf(!HAS_DB)("applyCompetitionSchedule (#350)", () => {
     expect(parsed.conflicts).toEqual(blocking.conflicts);
   }, 60_000);
 
-  it("an org without scheduling.multi_division is refused, and nothing is written", async () => {
+  it("an org denied scheduling.multi_division is refused, and nothing is written", async () => {
     // The request carries client-supplied assignments, so this endpoint needs no
     // prior plan run and no AI: it is a multi-division bulk write in its own
     // right, reachable with a bare `manage` key. `scheduling.multi_division` is
-    // the paywall for exactly that capability. Community holds `scheduling.ai`
-    // and lacks this one, which is what makes it the right seed.
+    // the gate for exactly that capability — and since V393 (entitlements v18
+    // §2) granted it on every plan, a DENY override is the only state that
+    // still exercises the gate. Deleting this case instead would leave the
+    // bulk-write door with no refusal test at all.
     const { auth: community } = await seedOrg("community");
+    await sql`
+      insert into org_entitlement_overrides (org_id, feature_key, bool_value, reason)
+      values (${community.orgId}, 'scheduling.multi_division', false, 'test')
+      on conflict (org_id, feature_key) do update set bool_value = false`;
+    await invalidateOrgEntitlements(community.orgId);
     const free = await seedBoard(community);
     const divisions = [
       lineUp(free.alpha, await divisionSeq(free.alpha.id), free.courts.court1, 0),

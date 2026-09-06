@@ -19,7 +19,6 @@ import { PASS_CREDIT_GRANT } from "@/lib/pricing-cards";
 import { sql } from "@/lib/db";
 import {
   type OrgAddon,
-  PLUS_DIFFERENTIATOR_VOCAB,
   type PricedPlan,
   type Rung,
   type RungCaps,
@@ -31,7 +30,6 @@ import {
   orgAddonRiderFaults,
   passCreditGrantFaults,
   passDurationFaults,
-  plusDifferentiatorFaults,
   productNameQuantityFaults,
   retiredRunCapFaults,
   riderRateFaults,
@@ -59,14 +57,9 @@ const capFor = async (feature: string, plan: string): Promise<number | null> => 
   return row!.int_value;
 };
 
-/** A boolean grant. A MISSING row denies (lib/entitlements.ts resolver), so
- *  absent reads as false — unlike capFor, where absent is a matrix bug. */
-const grants = async (feature: string, plan: string): Promise<boolean> => {
-  const [row] = await sql<{ bool_value: boolean | null }[]>`
-    select bool_value from plan_entitlements
-    where plan_key = ${plan} and feature_key = ${feature}`;
-  return row?.bool_value === true;
-};
+// The `grants()` helper that used to sit here (a boolean read where a MISSING
+// row denies, unlike `capFor` where absent is a matrix bug) went with the three
+// deleted Pro Plus tests below — they were its only callers.
 
 const seed = stripePlans as unknown as Record<string, unknown>;
 const entries = describedEntries(seed);
@@ -117,7 +110,19 @@ const quantifiedProducts: QuantifiedProduct[] = [
   })),
 ];
 
-const plusDescription = stripePlans.plans.find((p) => p.key === "pro_plus")!.product.description;
+// `plusDescription` USED TO LIVE HERE, and its removal is the point.
+//
+//   const plusDescription = stripePlans.plans.find(p => p.key === "pro_plus")!.product.description;
+//
+// W2 T4 deleted `pro_plus` from the seed, so `.find()` returned undefined and
+// the `!` threw AT MODULE SCOPE. The whole file then collected ZERO tests —
+// which the JSON reporter reports as 0 failures, not as an error. This file is
+// the only caller of `passCreditGrantFaults`, so the per-rung pass-credit
+// change shipped with no running witness at all while the suite looked clean.
+//
+// The three tests that read it are gone with it (see below). Nothing replaces
+// them: they asserted a description for a plan that no longer has one, and
+// `enterprise` has no seed product to describe — it is not purchasable.
 
 // ─────────────────────────────────────────────────────────────────────────────
 // The guards, against the real seed.
@@ -130,7 +135,29 @@ describe("stripe-plans.json names no retired feature and no false pass permanenc
   it("scans every described section in the file, including ones added later", () => {
     const walked = new Set(entries.map((e) => e.section));
     expect([...walked].sort()).toEqual(describedSections(seed).sort());
-    expect(entries.length).toBeGreaterThan(10);
+
+    // The count floor, DERIVED from the seed rather than typed. A literal
+    // `expect(entries.length).toBeGreaterThan(10)` stood here and went stale
+    // the moment W2 deleted two seed entries (the `pro_plus` plan and its
+    // `extra_org_pro_plus` rider) — an anti-vacuity floor that is itself a
+    // magic number rots exactly like the copy it exists to guard, and the
+    // obvious repair is to lower the number, which guards less each time.
+    //
+    // Per-section equality is also strictly stronger than any total: a walk
+    // that dropped one product out of `packs` still clears a total floor.
+    const describedInSeed = new Map<string, number>();
+    for (const section of describedSections(seed)) {
+      const list = (seed[section] ?? []) as unknown[];
+      describedInSeed.set(
+        section,
+        list.filter((e) => !!e && typeof e === "object" && "product" in e).length,
+      );
+    }
+    expect(describedInSeed.size, "no described sections at all").toBeGreaterThan(0);
+    for (const [section, expected] of describedInSeed) {
+      expect(expected, `${section} carries no described products`).toBeGreaterThan(0);
+      expect(entries.filter((e) => e.section === section).length, section).toBe(expected);
+    }
   });
 
   // …and every field a buyer reads, not just the one the walk happened to
@@ -164,7 +191,7 @@ describe("stripe-plans.json names no retired feature and no false pass permanenc
     expect(passDurationFaults(passRungs)).toEqual([]);
   });
 
-  it("every Event Pass rung states the flat one-time credit grant, and only that", () => {
+  it("every Event Pass rung states ITS OWN one-time credit grant, and only that", () => {
     expect(passCreditGrantFaults(passRungs)).toEqual([]);
   });
 
@@ -175,7 +202,12 @@ describe("stripe-plans.json names no retired feature and no false pass permanenc
     const shape = passRungs.map(({ description }) =>
       description
         .replace(/\b\d+\s+(entrants|divisions)\b/gi, "N $1")
-        .replace(/\bunlimited\s+/gi, "N "),
+        .replace(/\bunlimited\s+/gi, "N ")
+        // W2 T5: the credit top-up is now a SIZE too — it is priced by rung —
+        // so it is normalised alongside the caps. Without this the rule would
+        // read two honest per-rung figures as "the copy diverged"; with it, a
+        // difference in the WORDS around the number is still caught.
+        .replace(/\+\d+\s+AI\s+credits\b/gi, "+N AI credits"),
     );
     expect(new Set(shape).size, `rung copy diverged:\n${shape.join("\n")}`).toBe(1);
   });
@@ -218,7 +250,12 @@ describe.skipIf(!HAS_DB)("stripe-plans.json quotes the numbers the matrix enforc
   // that copy rather than a stylistic one, and PASS_CREDIT_GRANT its single
   // source.
   it("neither rung carries a monthly credit allowance in the matrix", async () => {
-    expect(PASS_CREDIT_GRANT).toBe(25);
+    // W2 T5: the one-time grant is per rung (25 on M, 35 on L — W2 T12 re-cut L
+    // from 50). "One-time" is still what makes "monthly" a false word here, and
+    // the absence of a `ai.credits.monthly` row is still what makes
+    // PASS_CREDIT_GRANT its single source — what moved is that there are now
+    // two sources, one per rung.
+    expect(PASS_CREDIT_GRANT).toEqual({ event_pass: 25, event_pass_l: 35 });
     for (const { key } of passRungs) {
       const [row] = await sql<{ int_value: number | null }[]>`
         select int_value from plan_entitlements
@@ -227,54 +264,32 @@ describe.skipIf(!HAS_DB)("stripe-plans.json quotes the numbers the matrix enforc
     }
   });
 
-  it("Pro Plus claims no differentiator that Pro already has", async () => {
-    const proGrants: Record<string, boolean> = {};
-    const plusGrants: Record<string, boolean> = {};
-    for (const [feature] of PLUS_DIFFERENTIATOR_VOCAB) {
-      proGrants[feature] = await grants(feature, "pro");
-      plusGrants[feature] = await grants(feature, "pro_plus");
-    }
-    expect(plusDifferentiatorFaults(plusDescription, proGrants, plusGrants)).toEqual([]);
-  });
-
-  // The int-shaped half of the same "Everything in Pro, plus…" claim.
-  it("Pro Plus's unlimited-scale claim is unlimited on Plus and capped on Pro", async () => {
-    for (const [word, feature] of [
-      ["members", "members.max"],
-      ["teams", "teams.max"],
-      ["clubs", "clubs.max"],
-    ] as const) {
-      if (!new RegExp(`\\b${word}\\b`, "i").test(plusDescription)) continue;
-      expect(await capFor(feature, "pro_plus"), `${feature}: Plus must be unlimited`).toBeNull();
-      expect(await capFor(feature, "pro"), `${feature}: Pro must be capped`).not.toBeNull();
-    }
-  });
-
-  // A superlative is a claim about every OTHER plan too, so it is checked
-  // against every other plan — not just against Pro Plus's own number.
-  it("Pro Plus's 'largest credit grant' claim is the matrix's strict maximum", async () => {
-    // Presence half: Plus's real, live AI differentiator is the wallet size, so
-    // the description has to carry it. Its absence is a fault, not a style.
-    expect(plusDescription, "Pro Plus must state its AI credit differentiator").toMatch(
-      /\bAI\s+credit/i,
-    );
-    if (!/\b(largest|biggest|most|highest|greatest)\b[^,.;]{0,40}credit/i.test(plusDescription)) {
-      return;
-    }
-    const rows = await sql<{ plan_key: string; int_value: number | null }[]>`
-      select plan_key, int_value from plan_entitlements
-      where feature_key = 'ai.credits.monthly'`;
-    expect(rows.length, "no monthly credit rows to compare against").toBeGreaterThan(1);
-    const plusRow = rows.find((r) => r.plan_key === "pro_plus");
-    expect(plusRow?.int_value, "pro_plus has no monthly credit row").toBeTypeOf("number");
-    for (const row of rows) {
-      if (row.plan_key === "pro_plus") continue;
-      expect(
-        plusRow!.int_value!,
-        `"largest" is false: ${row.plan_key} grants ${row.int_value}`,
-      ).toBeGreaterThan(row.int_value ?? Number.POSITIVE_INFINITY);
-    }
-  });
+  // THREE TESTS WERE DELETED HERE by W2 (entitlements v18, V393), all three
+  // reading the retired `pro_plus` product description out of the seed:
+  //
+  //   • "Pro Plus claims no differentiator that Pro already has"
+  //   • "Pro Plus's unlimited-scale claim is unlimited on Plus and capped on Pro"
+  //   • "Pro Plus's 'largest credit grant' claim is the matrix's strict maximum"
+  //
+  // They are DELETED rather than repointed at `enterprise`, and the reason is
+  // not that the tier changed name. Enterprise has no `stripe-plans.json`
+  // entry at all — design §4 makes it a Contact-us conversation, never a
+  // priced, self-serve SKU — so there is no seed description for any of the
+  // three to read. A guard over a description that does not exist would pass
+  // vacuously, which is worse than its absence.
+  //
+  // The mechanism each one proved is NOT lost:
+  //   • the differentiator-frame logic kept its own pure rewording proof
+  //     further down this file until W2, when `plusDifferentiatorFaults` was
+  //     deleted with the plan — the identical question survives as
+  //     `crossCardExclusivityFaults` over `EXCLUSIVE_CLAIM_VOCAB` in
+  //     pricing-cards.test.ts, asked of every card rather than one tier;
+  //   • "quotes its own live organisation allowance" below still walks every
+  //     plan the seed DOES carry;
+  //   • the credit-superlative check has nothing left to guard: no surviving
+  //     seed description claims a credit superlative. If Enterprise ever gains
+  //     public copy, that copy needs this check rebuilt against it — recorded
+  //     as owed in the v18 _INDEX.md.
 
   // Every plan description quotes its group ceiling in prose. That number is
   // `orgs.max_owned`, and exceeding it is a PURCHASE (the extra-org add-on,
@@ -410,21 +425,40 @@ describe("the guards survive a rewording, not just a revert", () => {
     }
   });
 
-  it("catches a missing, drifted, or recurring credit grant", () => {
-    const honest = "…and a one-time +25 AI credits added to your wallet.";
+  it("catches a missing, drifted, other-rung's, or recurring credit grant", () => {
+    const mGrant = PASS_CREDIT_GRANT.event_pass;
+    const lGrant = PASS_CREDIT_GRANT.event_pass_l;
+    const honest = `…and a one-time +${mGrant} AI credits added to your wallet.`;
     expect(passCreditGrantFaults([{ key: M, description: honest }])).toEqual([]);
 
     expect(passCreditGrantFaults([{ key: M, description: "…realtime scoreboard." }])).toEqual([
-      `${M}: does not state the +25 AI credit grant`,
+      `${M}: does not state the +${mGrant} AI credit grant`,
     ]);
-    // Drift, and the rung-keyed grant PASS_CREDIT_GRANT must never become.
+    // THE OTHER RUNG'S NUMBER. This case used to read "the rung-keyed grant
+    // PASS_CREDIT_GRANT must never become" — W2 T5 made it exactly that, so the
+    // same fixture now proves the opposite rule: M's copy quoting L's figure is
+    // the likeliest real defect, because L's description was written by copying
+    // M's.
     expect(
-      passCreditGrantFaults([{ key: M, description: "…and a one-time +50 AI credits." }]).join(" "),
-    ).toContain("quotes 50 AI credits");
+      passCreditGrantFaults([
+        { key: M, description: `…and a one-time +${lGrant} AI credits.` },
+      ]).join(" "),
+    ).toContain(`quotes ${lGrant} AI credits, but the grant is ${mGrant}`);
+    // …and its mirror, which the flat rule could not express at all.
+    expect(
+      passCreditGrantFaults([
+        { key: "event_pass_l", description: `…and a one-time +${mGrant} AI credits.` },
+      ]).join(" "),
+    ).toContain(`quotes ${mGrant} AI credits, but the grant is ${lGrant}`);
+    // A rung with no declared grant is a fault in its own right — otherwise it
+    // would be the one product this rule exempts.
+    expect(
+      passCreditGrantFaults([{ key: "event_pass_xl", description: honest }]).join(" "),
+    ).toContain("no credit grant is declared for this rung");
     // The inverse claim: right number, wrong cadence.
     expect(
       passCreditGrantFaults([
-        { key: M, description: "…and +25 AI credits every month while it runs." },
+        { key: M, description: `…and +${mGrant} AI credits every month while it runs.` },
       ]).join(" "),
     ).toContain("recurring");
   });
@@ -463,7 +497,7 @@ describe("the guards survive a rewording, not just a revert", () => {
   });
 
   it("catches a credit grant misquoted in a NAME", () => {
-    const honest = "…and a one-time +25 AI credits added to your wallet.";
+    const honest = `…and a one-time +${PASS_CREDIT_GRANT.event_pass} AI credits added to your wallet.`;
     expect(
       passCreditGrantFaults([
         { key: M, name: "Seazn Club Event Pass — 250 AI credits", description: honest },
@@ -581,61 +615,18 @@ describe("the guards survive a rewording, not just a revert", () => {
     ).toContain("does not quote its live entrant cap (128)");
   });
 
-  it("catches a Pro Plus differentiator Pro already has, however it is phrased", () => {
-    // The live matrix, as this file's DB tests read it: scheduling.ai is true
-    // on EVERY plan, so it can never be a Pro Plus differentiator.
-    const proGrants = {
-      "scheduling.ai": true,
-      "officials.auto": false,
-      "api.write": false,
-      "support.priority": false,
-    };
-    const plusGrants = {
-      "scheduling.ai": true,
-      "officials.auto": true,
-      "api.write": true,
-      "support.priority": true,
-    };
-    const honest =
-      "Everything in Pro, plus automatic officials assignment, write API access and priority support. Covers up to 10 organisations.";
-    expect(plusDifferentiatorFaults(honest, proGrants, plusGrants)).toEqual([]);
-
-    for (const reworded of [
-      "Everything in Pro, plus AI-assisted scheduling and priority support.",
-      "Everything in Pro, plus AI-powered scheduling.",
-      "Everything in Pro, plus AI schedule building.",
-    ]) {
-      expect(plusDifferentiatorFaults(reworded, proGrants, plusGrants), reworded).toContain(
-        "pro_plus: sells scheduling.ai as a differentiator, but Pro already grants it",
-      );
-    }
-
-    // A claim Pro Plus does not actually grant, caught from the other side.
-    expect(
-      plusDifferentiatorFaults("Everything in Pro, plus write API access.", proGrants, {
-        ...plusGrants,
-        "api.write": false,
-      }),
-    ).toEqual(["pro_plus: claims api.write, but Pro Plus does not grant it"]);
-
-    // Dropping the frame disables the scope — a fault in itself.
-    expect(
-      plusDifferentiatorFaults("Now with AI-assisted scheduling.", proGrants, plusGrants),
-    ).toEqual(['pro_plus: no "Everything in Pro, plus" frame — nothing to scope the claims to']);
-
-    // fix round 1 — the positive backstop for an all-negative list: a reword
-    // that keeps the frame but phrases every claim outside the vocabulary
-    // would have the guard examine NOTHING and report clean.
-    expect(
-      plusDifferentiatorFaults(
-        "Everything in Pro, plus a bigger allowance and nicer colours.",
-        proGrants,
-        plusGrants,
-      ),
-    ).toEqual([
-      "pro_plus: names no recognised differentiator — the vocabulary has gone stale and this guard examined nothing",
-    ]);
-  });
+  // The "Everything in Pro, plus …" rewording proof lived here and was DELETED
+  // in W2 (entitlements v18) with `plusDifferentiatorFaults`. It ran on fixture
+  // strings rather than the seed, so nothing about it was vacuous — but the
+  // frame it scoped to belongs to a plan V393 removed from `plans`, from
+  // `stripe-plans.json` and from `/pricing`, and a guard kept alive on fixtures
+  // alone guards a sentence nobody can write any more.
+  //
+  // The question it asked — does this copy sell as exclusive something a
+  // cheaper plan already grants? — survives as `crossCardExclusivityFaults`
+  // over `EXCLUSIVE_CLAIM_VOCAB` (the same four-entry list, renamed) in
+  // pricing-cards.test.ts, where it is asked of every card that still exists
+  // and kept non-vacuous by the Pro card's `officials.auto` bullet.
 
   // N1. The claim and the arithmetic are checked against each other, so the
   // guard reds whichever of the two moves.
@@ -644,7 +635,7 @@ describe("the guards survive a rewording, not just a revert", () => {
     // fault (the guard says so, and config/__tests__/stripe-plans.test.ts covers
     // it in depth) — supplying only one would drown the rate signal in three
     // "no price point" faults.
-    const points = (amount: number) => ({ eur: amount, gbp: amount, inr: amount, aud: amount });
+    const points = (amount: number) => ({ eur: amount, gbp: amount, inr: amount });
     const priced = (description: string, base: number, rider: number): PricedPlan[] => [
       {
         key: "pro",
@@ -693,7 +684,7 @@ describe("the guards survive a rewording, not just a revert", () => {
   // and the only way a DELETED add-on can be caught is if the guard also walks
   // the plans. Both directions are asserted.
   it("catches an extra-organisation add-on that drifts off its rider", () => {
-    const points = (amount: number) => ({ eur: amount, gbp: amount, inr: amount, aud: amount });
+    const points = (amount: number) => ({ eur: amount, gbp: amount, inr: amount });
     const plans: PricedPlan[] = [
       {
         key: "pro",

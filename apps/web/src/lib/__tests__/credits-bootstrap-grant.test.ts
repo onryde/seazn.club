@@ -34,6 +34,17 @@ import { balance, grantMonthlyForAllWallets, walletIdFor } from "@/lib/credits";
 const HAS_DB = !!process.env.DATABASE_URL;
 const uniq = () => randomUUID().slice(0, 8);
 
+/** Community's `ai.credits.monthly`, READ from the live matrix — the bootstrap
+ *  grant is whatever the matrix says, and a typed number (V320 10 -> V393 5)
+ *  turns this suite red for the wrong reason on every re-tune. */
+async function communityRate(): Promise<number> {
+  const [row] = await sql<{ int_value: number | null }[]>`
+    select int_value from plan_entitlements
+     where plan_key = 'community' and feature_key = 'ai.credits.monthly'`;
+  expect(row?.int_value, "community must carry an ai.credits.monthly row").toBeTypeOf("number");
+  return row!.int_value!;
+}
+
 async function makeUser(): Promise<string> {
   const [{ id }] = await sql<{ id: string }[]>`
     insert into users (email, display_name, email_verified)
@@ -50,31 +61,32 @@ afterAll(async () => {
 });
 
 describe.skipIf(!HAS_DB)("createOrgForUser — AI credit wallet bootstrap grant", () => {
-  it("a freshly-created Community org has 10 credits immediately (no 402 on first AI attempt)", async () => {
+  it("a freshly-created Community org has its monthly credits immediately (no 402 on first AI attempt)", async () => {
     const userId = await makeUser();
     const org = await createOrgForUser(userId, "Fresh Org");
 
     const walletId = await walletIdFor(org.id);
-    expect(await balance(walletId)).toBe(10);
+    expect(await balance(walletId)).toBe(await communityRate());
   });
 
   it("the daily cron run in the same calendar month is a no-op for the bootstrap-granted wallet", async () => {
     const userId = await makeUser();
     const org = await createOrgForUser(userId, "Fresh Org Two");
     const walletId = await walletIdFor(org.id);
-    expect(await balance(walletId)).toBe(10);
+    const flat = await communityRate();
+    expect(await balance(walletId)).toBe(flat);
 
     await grantMonthlyForAllWallets();
 
     // Same idempotency key (`monthly:${walletId}:${period}`) as the bootstrap
-    // call, so the balance stays 10, not 20.
+    // call, so the balance stays at one month's allowance, never doubled.
     //
-    // Since #390 it stays 10 for a BETTER reason than it used to. The cron no
+    // Since #390 it stays put for a BETTER reason than it used to. The cron no
     // longer opens this wallet at all: the sweep's `not exists` anti-join sees
     // the bootstrap grant's key for this period and never selects the row, so
     // there is no per-wallet resolve, no advisory lock and no transaction to
     // discover the no-op inside. The outcome asserted here is unchanged —
     // that is the point — but the work behind it is gone.
-    expect(await balance(walletId)).toBe(10);
+    expect(await balance(walletId)).toBe(flat);
   });
 });

@@ -15,6 +15,7 @@ import {
 } from "@seazn/engine/import";
 import { withTenant } from "@/lib/db";
 import { HttpError, PaymentRequiredError } from "@/lib/errors";
+import { bulkImportRowsReason } from "@/lib/feature-copy";
 import { assertWithinLimit, getLimit, hasFeature, withinLimit } from "@/lib/entitlements";
 import { cacheGet, cacheSet } from "@/lib/cache";
 import type { AuthCtx } from "@/server/api-v1/auth";
@@ -118,13 +119,25 @@ export async function createImport(
   const rows = input.pinDivision
     ? parsed.map((r) => ({ ...r, divisionSlug: input.pinDivision!.slug }))
     : parsed;
-  // The per-file row cap is `import.bulk`, an int limit resolved from the LIVE
-  // plan catalog — do not restate its value here. This comment used to say
-  // "Community capped at 20 rows/file"; the catalog has since moved to 50, and
-  // the stale number outlived the fact by long enough to be quoted back as
-  // truth. One authority per fact: `plan_entitlements` is it.
+  // Jul3/01 §7: an int limit on `import.bulk`, per FILE — unlimited files, a
+  // capped number of rows in each. Resolved from the LIVE plan catalog; do not
+  // restate its value here. This comment said "Community capped at 20 rows/file"
+  // and had been wrong since V319 raised the cap to 50 — the stale number
+  // outlived the fact long enough to be quoted back as truth. One authority per
+  // fact: `plan_entitlements` is it.
+  //
+  // The refusal carries the cap it was refused BY. `featureReason` can only see
+  // the key (lib/http.ts and server/api-v1/http.ts both build `reason` from it),
+  // and both envelopes spread `extra` AFTER `reason`, so handing the sentence in
+  // through `extra` is what lets the paywall quote the real number instead of a
+  // third hardcoded copy of it.
   const quota = await withinLimit(auth.orgId, "import.bulk", rows.length);
-  if (!quota.ok) throw new PaymentRequiredError("import.bulk");
+  if (!quota.ok) {
+    throw new PaymentRequiredError("import.bulk", {
+      limit: quota.limit,
+      reason: bulkImportRowsReason(quota.limit),
+    });
+  }
   const config = ImportConfig.parse(input.config ?? {});
 
   return withTenant(auth.orgId, async (tx) => {

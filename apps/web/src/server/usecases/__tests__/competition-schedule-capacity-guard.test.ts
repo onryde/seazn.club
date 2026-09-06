@@ -101,13 +101,13 @@ import { balance, recordPackPurchase, walletIdFor } from "@/lib/credits";
 const HAS_DB = !!process.env.DATABASE_URL;
 const TZ = "UTC";
 
-/** pro_plus (scheduling.ai + scheduling.multi_division) with a funded wallet
- *  — the SAME shape competition-schedule-ai-route.test.ts's seedPlusOrg
- *  builds, duplicated rather than imported (test files in this directory
- *  don't share helpers across files). */
-async function seedPlusOrg(): Promise<AuthCtx> {
+/** A paid (pro) org with a funded wallet — the SAME shape
+ *  competition-schedule-ai-route.test.ts's seedPaidOrg builds, duplicated
+ *  rather than imported (test files in this directory don't share helpers
+ *  across files). */
+async function seedPaidOrg(): Promise<AuthCtx> {
   const { auth } = await seedOrg("community");
-  await setOrgPlan(auth.orgId, "pro_plus");
+  await setOrgPlan(auth.orgId, "pro");
   await invalidateOrgEntitlements(auth.orgId);
   await recordPackPurchase(await walletIdFor(auth.orgId), 100, `seed-${randomUUID()}`);
   return auth;
@@ -294,7 +294,7 @@ afterAll(async () => {
 
 describe.skipIf(!HAS_DB)("aiPlanForCompetition — D2 capacity guard (per kept division)", () => {
   it("aggregates: BOTH impossible divisions are named in ONE 422, not just the first", async () => {
-    const auth = await seedPlusOrg();
+    const auth = await seedPaidOrg();
     const walletId = await walletIdFor(auth.orgId);
     const before = await balance(walletId);
     const { competitionId, divisions } = await seedCompetition(auth, "BothTight", [
@@ -323,7 +323,7 @@ describe.skipIf(!HAS_DB)("aiPlanForCompetition — D2 capacity guard (per kept d
   });
 
   it("names ONLY the impossible division when the other is comfortable (not a blanket refusal)", async () => {
-    const auth = await seedPlusOrg();
+    const auth = await seedPaidOrg();
     const walletId = await walletIdFor(auth.orgId);
     const before = await balance(walletId);
     const { competitionId, divisions } = await seedCompetition(auth, "OneTight", [
@@ -348,7 +348,7 @@ describe.skipIf(!HAS_DB)("aiPlanForCompetition — D2 capacity guard (per kept d
   });
 
   it("proceeds (reaches the AI compile) when every kept division is comfortable", async () => {
-    const auth = await seedPlusOrg();
+    const auth = await seedPaidOrg();
     const { competitionId, divisions } = await seedCompetition(auth, "AllRoomy", [
       { name: "Alpha", config: OK_CONFIG },
       { name: "Bravo", config: OK_CONFIG },
@@ -383,7 +383,7 @@ describe.skipIf(!HAS_DB)("aiPlanForCompetition — D2 capacity guard (per kept d
 
 describe.skipIf(!HAS_DB)("aiPlanForCompetition — D2 capacity guard forcedDemand (fixture_on_date floor, wave1 followup)", () => {
   it("a fixture_on_date rule nailing more fixtures onto one day than it holds is impossible, even though TOTAL supply is ample", async () => {
-    const auth = await seedPlusOrg();
+    const auth = await seedPaidOrg();
     const walletId = await walletIdFor(auth.orgId);
     const before = await balance(walletId);
     const { competitionId, divisions } = await seedCompetition(auth, "Floored", [
@@ -413,7 +413,7 @@ describe.skipIf(!HAS_DB)("aiPlanForCompetition — D2 capacity guard forcedDeman
   });
 
   it("the paired control — the SAME board with no forcing rule — reaches the AI compile (total supply alone is comfortable)", async () => {
-    const auth = await seedPlusOrg();
+    const auth = await seedPaidOrg();
     const { competitionId, divisions } = await seedCompetition(auth, "NotFloored", [
       { name: "Alpha", config: TWO_DAY_ROOMY_CONFIG },
       { name: "Bravo", config: OK_CONFIG },

@@ -91,7 +91,14 @@ export const CreateCompetition = z
      *  `competitions.max_active` slot for good. Required here, and non-nullable
      *  on PATCH — a nullable patch would reopen the same door. */
     ends_on: z.iso.date(),
-    visibility: Visibility.default("private"),
+    /** PUBLIC BY DEFAULT (entitlements v18 W2 T15/F, owner ruling
+     *  2026-09-03). A competition nobody can see is a competition that does
+     *  not grow the product, and the organiser who wanted private says so.
+     *  The public-dashboard cap does NOT refuse a create over this default —
+     *  `createCompetition` degrades to private instead (see its comment), so
+     *  flipping the default cannot start 402ing callers who never asked for a
+     *  public one. */
+    visibility: Visibility.default("public"),
     branding: z.record(z.string(), z.unknown()).default({}),
     /** Doc 15 §1 "Showcase on seazn.club" — opt-in at create time; requires
      *  public visibility, same rule as PATCH. Omitted = false. */
@@ -151,6 +158,75 @@ export const Competition = z.object({
   /** doc 10 §2.4 — true when over-quota after a downgrade (read-only). */
   frozen: z.boolean().optional(),
 });
+
+/**
+ * The create-time public-dashboard degrade, stated in the RESPONSE (T20,
+ * reviewer pass 3, 2026-09-03).
+ *
+ * V396 made competitions public by default and, at `dashboard.public.max`,
+ * made a create DEGRADE to private rather than 402 (T15/F, owner ruling
+ * 2026-09-03). The degrade was invisible: a 201 came back carrying something
+ * other than what was asked for, and the only way to notice was to diff the
+ * returned row against the request — which exactly one client did. A 201 that
+ * silently substitutes a different resource is wrong for every consumer, so
+ * the substitution is now NAMED, with the cap that caused it.
+ *
+ * Two properties this shape is chosen for:
+ *
+ *   * A caller that IGNORES it is still not misled — both create responses
+ *     also carry the visibility that was actually applied, so the resource
+ *     representation is truthful on its own. This note is the explicit
+ *     signal, never the only one.
+ *   * The cap travels WITH the note (`limit` + `reason`, built by
+ *     `publicDashboardsReason`) rather than being restated in copy, for the
+ *     same reason the 402 does it: the flat sentence in feature-copy.ts said
+ *     "one public dashboard at a time" through caps of 1, 3 and 2.
+ *
+ * ABSENT when nothing was degraded — never `false`/null-filled, so
+ * `if (res.public_quota_degraded)` is the whole client-side test and a
+ * consumer is never trained to ignore a field that is usually there.
+ */
+export const PublicQuotaDegraded = z.object({
+  feature_key: z.literal("dashboard.public.max"),
+  /** What the caller asked for. `unlisted` is here because it consumes a slot
+   *  too — `public_competitions_v` serves an unlisted competition the same
+   *  dashboard it serves a public one, so the cap counts both (owner ruling
+   *  2026-09-05, see PUBLICLY_READABLE_VISIBILITIES in usecases/competitions.ts).
+   *  A note that could only ever say "public" would misreport an unlisted
+   *  request back to the client that made it. */
+  requested_visibility: z.enum(["public", "unlisted"]),
+  applied_visibility: z.literal("private"),
+  /** The resolved cap, null when unlimited. */
+  limit: z.number().int().nullable(),
+  /** Same sentence the 402 carries — `publicDashboardsReason(limit)`. */
+  reason: z.string(),
+  /** TRUE when the caller also asked to be listed on the seazn.club showcase
+   *  and that opt-in was dropped with the visibility.
+   *
+   *  Two substitutions happen on a degraded create and only one used to be
+   *  reported. Showcase rides visibility — a private competition cannot be
+   *  showcased, so `discoverable` is forced false — and a caller who asked for
+   *  `{visibility: "public", discoverable: true}`, PASSED the `discovery.listed`
+   *  entitlement check, and got a 201 had no way to learn the second half did
+   *  not happen. They would reasonably believe their competition is on the
+   *  showcase.
+   *
+   *  Optional and only ever present as `true`, matching this object's own
+   *  rule about absent-not-false: a consumer must not be trained to ignore a
+   *  field that is usually there. */
+  discoverable_dropped: z.literal(true).optional(),
+});
+export type PublicQuotaDegraded = z.infer<typeof PublicQuotaDegraded>;
+
+/** POST /competitions' 201 body: the competition, plus the degrade note when
+ *  the public-dashboard cap turned a requested public create private. Only
+ *  the CREATE response can carry it — a later GET/list of the same row has no
+ *  request to have degraded — which is why this is a separate schema rather
+ *  than an optional field on `Competition`. */
+export const CreatedCompetition = Competition.extend({
+  public_quota_degraded: PublicQuotaDegraded.optional(),
+});
+export type CreatedCompetition = z.infer<typeof CreatedCompetition>;
 
 // ---------------------------------------------------------------------------
 // Divisions
@@ -939,7 +1015,10 @@ export const CreateFromTemplate = z
     name: z.string().min(1).max(200),
     starts_on: z.iso.date().nullish(),
     ends_on: z.iso.date(),
-    visibility: Visibility.default("private"),
+    /** Public by default, same ruling and same degrade as CreateCompetition —
+     *  the two create paths must not disagree about what an omitted
+     *  visibility means. */
+    visibility: Visibility.default("public"),
   })
   .superRefine(checkDateOrder);
 export type CreateFromTemplate = z.infer<typeof CreateFromTemplate>;
@@ -951,6 +1030,18 @@ export const FromTemplateResult = z.object({
   /** So the wizard can navigate straight to the created competition page —
    *  same pattern the blank-form wizard already uses off its own POST. */
   slug: Slug,
+  /** The visibility that was ACTUALLY applied (T20). `createCompetition`
+   *  returns the whole row, so its caller could always diff requested against
+   *  created; this result carried no visibility at all, which is why the
+   *  template gallery — the DEFAULT create path, the one `/competitions/new`
+   *  opens on — redirected unconditionally into a silently private
+   *  competition whose public link 404s. */
+  visibility: Visibility,
+  /** Present ONLY when the public-dashboard cap turned this create private —
+   *  the same note POST /competitions carries, deliberately the same field
+   *  name and the same shape so one concept has one name on both create
+   *  paths. */
+  public_quota_degraded: PublicQuotaDegraded.optional(),
   divisions: z.array(TemplateDivisionResultS),
   templateKey: z.string(),
   templateVersion: z.number().int(),
@@ -1116,7 +1207,17 @@ export const EventImportRequest = z.object({
       ]),
       events: z.array(
         z.object({
-          type: z.string().min(1).refine((t) => t !== "core.void", {
+          // `.max(100)` mirrors `AppendEventRequest.type` above, and is not
+          // decoration. It was the one unbounded string in this request, in
+          // the shape that carries up to `IMPORT_CAPS.eventsPerCall` (10,000)
+          // of them per body — so the BATCH door stood wider than the
+          // single-append door it batches. Nothing downstream narrows it
+          // either: `score_events.type` is `text`, and a type the engine does
+          // not know is refused by VALUE, at the fold, after the whole string
+          // has travelled through resolution and into the report. The two
+          // bounds are pinned equal by `schemas.test.ts`, so a change to one
+          // that forgets the other is a red rather than a silent re-widening.
+          type: z.string().min(1).max(100).refine((t) => t !== "core.void", {
             message: "core.void cannot be imported",
           }),
           payload: z.record(z.string(), z.unknown()).default({}),

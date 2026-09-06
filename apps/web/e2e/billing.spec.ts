@@ -53,7 +53,7 @@ test.describe.serial("billing", () => {
     // The Event Pass purchases section renders NOTHING for an org that holds no
     // pass — an empty money card on every free org's billing page would read as
     // a charge. This is the negative half of U12, whose positive half (a real
-    // $29 purchase, named and receipted) lives in e2e/event-pass.spec.ts.
+    // test-mode purchase, named and receipted) lives in e2e/event-pass.spec.ts.
     await expect(page.locator("[data-pass-purchases]")).toHaveCount(0);
   });
 

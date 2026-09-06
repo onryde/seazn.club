@@ -76,6 +76,46 @@ async function seedDivision(ctx: Ctx): Promise<DivCtx> {
   return { compId, divisionId, stageId, entrantA, entrantB };
 }
 
+/**
+ * A competition of its own, with ONE upcoming fixture inside the digest's
+ * next-7-days window and uniquely-named entrants. Enough on its own to make
+ * `digestForOrg` produce an enriched post, and the entrant names are what a
+ * scoped digest either does or does not print — so a competition the org may
+ * not auto-publish about is visible in the body or it is not, with no
+ * standings/stats machinery in between.
+ */
+async function seedUpcomingCompetition(
+  ctx: Ctx,
+  label: string,
+): Promise<{ compId: string; homeName: string; awayName: string }> {
+  const suffix = randomUUID().slice(0, 8);
+  const homeName = `${label} Home ${suffix}`;
+  const awayName = `${label} Away ${suffix}`;
+  const [{ id: compId }] = await sql<{ id: string }[]>`
+    insert into competitions (org_id, name, slug, visibility, created_by)
+    values (${ctx.orgId}, ${label}, ${"cup-" + suffix}, 'public', ${ctx.userId}) returning id`;
+  const [{ id: divisionId }] = await sql<{ id: string }[]>`
+    insert into divisions (competition_id, org_id, name, slug, sport_key, variant_key, config, module_version)
+    values (${compId}, ${ctx.orgId}, ${label + " Singles"}, ${"singles-" + suffix}, 'badminton', 'default',
+      ${sql.json(BADMINTON_CFG as never)}, ${badminton.version})
+    returning id`;
+  const [{ id: stageId }] = await sql<{ id: string }[]>`
+    insert into stages (division_id, org_id, seq, kind, name)
+    values (${divisionId}, ${ctx.orgId}, 1, 'league', 'League') returning id`;
+  const [{ id: home }] = await sql<{ id: string }[]>`
+    insert into entrants (division_id, org_id, kind, display_name, seed)
+    values (${divisionId}, ${ctx.orgId}, 'individual', ${homeName}, 1) returning id`;
+  const [{ id: away }] = await sql<{ id: string }[]>`
+    insert into entrants (division_id, org_id, kind, display_name, seed)
+    values (${divisionId}, ${ctx.orgId}, 'individual', ${awayName}, 2) returning id`;
+  await sql`
+    insert into fixtures (stage_id, division_id, org_id, round_no, seq_in_round,
+      home_entrant_id, away_entrant_id, status, scheduled_at)
+    values (${stageId}, ${divisionId}, ${ctx.orgId}, 1, 1, ${home}, ${away}, 'scheduled',
+            now() + interval '2 days')`;
+  return { compId, homeName, awayName };
+}
+
 /** Real score_events via the live scoring path (not a raw-SQL fake) so
  *  recomputePlayerStats has genuine ledger data to fold — a directly-seeded
  *  player_stat_snapshots row would be wiped by the very first recompute,
@@ -155,9 +195,73 @@ describe.skipIf(!HAS_DB)("weekly digest (P3 / D7)", () => {
     expect(listed.filter((p) => p.kind === "weekly_digest")).toHaveLength(1);
   });
 
-  it("requires news.auto — 402s on a community org", async () => {
-    const ctx = await seedOrg("community");
+  it("requires news.auto — 402s when the org is denied the key", async () => {
+    // A DENY override beats both the plan and a pass (`resolve`'s precedence),
+    // so it is the lever that proves the door shuts for a PRO org, which no
+    // plan row can do. Same 402, same key, whether the refusal comes from the
+    // override or (since V396) from a plain Free org's empty scope.
+    const ctx = await seedOrg("pro");
+    // The org must OWN a competition for a refusal to be possible: the door is
+    // "you may auto-publish about none of your competitions", and an org with
+    // none has nothing to be refused about (see `newsAutoCompetitionScope`).
+    await seedUpcomingCompetition(ctx, "Denied Cup");
+    await sql`
+      insert into org_entitlement_overrides (org_id, feature_key, bool_value, reason)
+      values (${ctx.orgId}, 'news.auto', false, 'test')`;
+    await invalidateOrgEntitlements(ctx.orgId);
     await expect(generateWeeklyDigest(ctx.auth, ctx.orgId)).rejects.toMatchObject({ status: 402 });
+  });
+
+  it("402s a plain community org — V396 made news.auto paid again", async () => {
+    // V393 freed the key and this case asserted a digest; V396 (entitlements
+    // v18 W2 T15, owner ruling 2026-09-03) re-gated it. The refusal now comes
+    // from `newsAutoCompetitionScope` resolving to an EMPTY set rather than
+    // from a bare `requireFeature`, which is what lets the pass case below
+    // succeed on the same plan.
+    const ctx = await seedOrg("community");
+    await seedUpcomingCompetition(ctx, "Free Cup");
+    await expect(generateWeeklyDigest(ctx.auth, ctx.orgId)).rejects.toMatchObject({
+      status: 402,
+      featureKey: "news.auto",
+    });
+  });
+
+  it("402s a community org that owns NO competitions at all — total === 0 was a hole", async () => {
+    // T20 finding 1 (reviewer pass 3, 2026-09-03). The button guard read
+    // `scope.total > 0 && scope.allowed.length === 0`, so an org with nothing
+    // at all skipped the refusal and minted a `weekly_digest` on Free. A
+    // comment five lines above the sweep's own check claimed the two "cannot
+    // answer differently"; they did, in exactly this case.
+    //
+    // The paired over-refusal guard is "an org with no activity at all still
+    // gets a draft from the button" below: that org is PRO with zero
+    // competitions, so a fix that simply refuses on an empty `allowed` set
+    // would show a paywall to someone who has already paid. With no
+    // competitions there can be no pass either (a pass is FK'd to a
+    // competition row), so the plan answer is the whole answer here.
+    const ctx = await seedOrg("community");
+    await expect(generateWeeklyDigest(ctx.auth, ctx.orgId)).rejects.toMatchObject({
+      status: 402,
+      featureKey: "news.auto",
+    });
+  });
+
+  it("a community org holding an Event Pass gets a digest, scoped to that competition", async () => {
+    // The digest is an ORG-level artefact and a pass buys ONE competition, so
+    // the entitlement question is a SET, not a boolean. Both halves are pinned:
+    // the passed competition appears, and a second competition in the same org
+    // — which the org is NOT entitled to auto-publish about — does not.
+    const ctx = await seedOrg("community");
+    const passed = await seedUpcomingCompetition(ctx, "Passed Cup");
+    const unpassed = await seedUpcomingCompetition(ctx, "Unpassed Cup");
+    await sql`
+      insert into competition_passes (competition_id, org_id, pass_key)
+      values (${passed.compId}, ${ctx.orgId}, 'event_pass')`;
+    await invalidateOrgEntitlements(ctx.orgId);
+    const post = await generateWeeklyDigest(ctx.auth, ctx.orgId);
+    expect(post.kind).toBe("weekly_digest");
+    expect(post.bodyMd).toContain(passed.homeName);
+    expect(post.bodyMd).not.toContain(unpassed.homeName);
   });
 
   it("two consecutive presses create two independent, non-deduped drafts", async () => {

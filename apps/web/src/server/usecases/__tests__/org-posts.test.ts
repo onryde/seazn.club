@@ -160,9 +160,14 @@ async function seedDecidedFixture(
  * RESOLVED, not hardcoded true. Passing a literal would turn the community-org
  * case below into a test of its own argument: the point of that case is that a
  * community org RESOLVES to false, so the resolution has to be real.
+ *
+ * WITH the competition id, mirroring what `refreshNews` now does: V396 made
+ * `news.auto` pass-lifted (false on Free, granted on both Event Pass rungs), so
+ * an org-wide resolve here would answer a different question from the one
+ * production asks and the pass case below could not exist.
  */
-async function draft(ctx: Ctx, fixtureId: string): Promise<void> {
-  const newsAuto = await hasFeature(ctx.orgId, "news.auto");
+async function draft(ctx: Ctx, fixtureId: string, competitionId?: string): Promise<void> {
+  const newsAuto = await hasFeature(ctx.orgId, "news.auto", competitionId);
   await withTenant(ctx.orgId, (tx) => draftPostsForDecidedFixture(tx, fixtureId, newsAuto));
 }
 
@@ -470,12 +475,48 @@ describe.skipIf(!HAS_DB)("org-posts auto-drafts", () => {
     expect(untouched.autoSource?.stale).toBe(false);
   });
 
-  it("does not draft for a community org even if the toggle reads true", async () => {
+  it("does not draft for an org DENIED news.auto, even if the toggle reads true", async () => {
+    // A DENY override beats both the plan AND a pass (`resolve`'s precedence),
+    // which is what makes it the right lever: it proves the probe is honoured
+    // even where an entitled org would draft. (V393 freed the key and V396
+    // re-gated it; the override case is unaffected by either.)
     const ctx = await seedOrg("community");
+    await sql`
+      insert into org_entitlement_overrides (org_id, feature_key, bool_value, reason)
+      values (${ctx.orgId}, 'news.auto', false, 'test')`;
+    await invalidateOrgEntitlements(ctx.orgId);
     const div = await seedDivision(ctx, { autoPosts: true });
     const fx = await seedDecidedFixture(ctx, div);
     await draft(ctx, fx);
     expect(await listPosts(ctx.auth, ctx.orgId)).toEqual([]);
+  });
+
+  it("does NOT draft for a plain community org — V396 made news.auto paid again", async () => {
+    // V393 freed this key and this case asserted a draft; V396 (entitlements
+    // v18 W2 T15, owner ruling 2026-09-03) re-gated it as one of the three
+    // share loops. Asserted on the RESOLVED value through the real probe, not
+    // on the matrix row.
+    const ctx = await seedOrg("community");
+    const div = await seedDivision(ctx, { autoPosts: true });
+    const fx = await seedDecidedFixture(ctx, div);
+    await draft(ctx, fx, div.compId);
+    expect(await listPosts(ctx.auth, ctx.orgId)).toEqual([]);
+  });
+
+  it("DOES draft for a community org holding an Event Pass on that competition", async () => {
+    // The grant the owner kept when the loops went paid, driven end to end.
+    // `news.auto` carries its `event_pass` row already (V112), so the only way
+    // this can fail is the resolve dropping the competition id — which is what
+    // `pass-scoping-guard.test.ts` guards and `refreshNews` now supplies.
+    const ctx = await seedOrg("community");
+    const div = await seedDivision(ctx, { autoPosts: true });
+    await sql`
+      insert into competition_passes (competition_id, org_id, pass_key)
+      values (${div.compId}, ${ctx.orgId}, 'event_pass')`;
+    await invalidateOrgEntitlements(ctx.orgId);
+    const fx = await seedDecidedFixture(ctx, div);
+    await draft(ctx, fx, div.compId);
+    expect(await listPosts(ctx.auth, ctx.orgId)).not.toEqual([]);
   });
 
   it("drafts a round recap when the last fixture of a round is decided", async () => {

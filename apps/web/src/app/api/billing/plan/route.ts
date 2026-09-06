@@ -1,9 +1,10 @@
 import { z } from "zod";
 import { handler } from "@/lib/http";
 import { applyPlanChange, requireBillingOwner } from "@/server/usecases/billing-manage";
+import { PURCHASABLE_PLAN_KEYS } from "@/lib/types";
 
 const schema = z.object({
-  plan_key: z.enum(["pro", "pro_plus"]),
+  plan_key: z.enum(PURCHASABLE_PLAN_KEYS),
   interval: z.enum(["monthly", "annual"]),
   proration_date: z.number().int().positive(),
 });

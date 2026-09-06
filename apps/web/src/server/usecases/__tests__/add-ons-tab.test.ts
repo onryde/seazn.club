@@ -17,6 +17,11 @@ import { setOrgPlan } from "@/lib/__tests__/_billing-group";
 import { invalidateOrgEntitlements } from "@/lib/entitlements";
 import { MAX_EXTRA_ORGS } from "../extra-orgs";
 import { getAddOnsTab } from "../add-ons-tab";
+import stripePlans from "@/config/stripe-plans.json";
+
+/** The org-addon rider catalog, straight from the seed the tab itself prices
+ *  from — so a reprice moves this test instead of breaking it. */
+const orgAddonSeed = stripePlans.org_addons;
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
@@ -99,29 +104,64 @@ describe.skipIf(!HAS_DB)("getAddOnsTab", () => {
     expect(view.orgCap).toBe(5);
   });
 
-  it("pro_plus prices independently of pro", async () => {
+  // Was "pro_plus prices independently of pro", asserting a hardcoded cap of
+  // 10 for the second paid tier. V393 deleted that tier, and the property is
+  // repointed rather than deleted: what it really proved is that the tab reads
+  // the org's OWN plan row after a plan change, instead of caching the plan it
+  // was first seeded on. Community -> Pro exercises exactly that, and the caps
+  // are now READ from the matrix, so the case keeps working when they move
+  // again (this file already had 10 typed in it from a cap that had moved).
+  it("re-reads the cap from the org's own plan after a plan change", async () => {
+    const capFor = async (plan: string) => {
+      const [row] = await sql<{ int_value: number | null }[]>`
+        select int_value from plan_entitlements
+        where plan_key = ${plan} and feature_key = 'orgs.max_owned'`;
+      expect(row, `${plan} must carry an orgs.max_owned row`).toBeDefined();
+      return row!.int_value;
+    };
+    const [communityCap, proCap] = await Promise.all([capFor("community"), capFor("pro")]);
+    // Anti-vacuity: the whole case turns on the two caps DIFFERING. Equal
+    // values would satisfy both assertions below whether or not the tab
+    // re-read anything.
+    expect(proCap).not.toBe(communityCap);
+
     const { auth } = await seedOrg("community");
-    await setOrgPlan(auth.orgId, "pro_plus");
+    expect((await getAddOnsTab(auth.orgId, auth.userId, "usd")).orgCap).toBe(communityCap);
+
+    await setOrgPlan(auth.orgId, "pro");
     await invalidateOrgEntitlements(auth.orgId);
     const view = await getAddOnsTab(auth.orgId, auth.userId, "usd");
-    expect(view.planKey).toBe("pro_plus");
-    expect(view.orgCap).toBe(10);
+    expect(view.planKey).toBe("pro");
+    expect(view.orgCap).toBe(proCap);
   });
 
   // ── the cases the healthy fixtures above cannot fail on ──────────────────
 
-  it("quotes the rider's MONTHLY SKU price, per plan and per currency", async () => {
-    const pro = await seedOrg("pro");
-    expect((await getAddOnsTab(pro.auth.orgId, pro.auth.userId, "usd")).priceMinor).toBe(900);
-    expect((await getAddOnsTab(pro.auth.orgId, pro.auth.userId, "gbp")).priceMinor).toBe(700);
+  // The per-plan half of this case is gone with `pro_plus` — v18 leaves ONE
+  // priced rider tier, so "never quote one plan's rate on the other" has no
+  // second rate to confuse it with. The per-CURRENCY half is the half that was
+  // always the more dangerous one, and it survives intact.
+  //
+  // Amounts are READ from the seed, not retyped: they were 900/700 here and
+  // W2's reprice moved them to 600/400, so a literal is a guaranteed future
+  // red that says nothing about the tab. Reading the seed is not a tautology
+  // for the property under test — the risk is `amountFor`'s
+  // `currency_options?.[c] ?? unit_amount`, which SILENTLY serves the USD
+  // number under a foreign symbol when a currency is missing. That is a wrong
+  // price with no error, and the assertion that catches it is that the two
+  // differ, not what either one is.
+  it("quotes the rider's MONTHLY SKU price in the currency asked for", async () => {
+    const rider = orgAddonSeed.find((e) => e.plan_key === "pro");
+    expect(rider, "stripe-plans.json has no pro extra-org rider to price").toBeDefined();
+    const usdMinor = rider!.price.unit_amount;
+    const gbpMinor = rider!.price.currency_options?.gbp;
+    expect(gbpMinor, "the pro rider has no gbp set point — amountFor would serve the USD amount")
+      .toBeTypeOf("number");
+    expect(gbpMinor, "gbp must be its own set point, not a copy of usd").not.toBe(usdMinor);
 
-    const plus = await seedOrg("community");
-    await setOrgPlan(plus.auth.orgId, "pro_plus");
-    await invalidateOrgEntitlements(plus.auth.orgId);
-    expect((await getAddOnsTab(plus.auth.orgId, plus.auth.userId, "usd")).priceMinor).toBe(1900);
-    // The gap between the two rates is what stops "Pro + riders" undercutting
-    // Pro Plus, so the tab must never quote one plan's rate on the other.
-    expect((await getAddOnsTab(plus.auth.orgId, plus.auth.userId, "gbp")).priceMinor).toBe(1600);
+    const pro = await seedOrg("pro");
+    expect((await getAddOnsTab(pro.auth.orgId, pro.auth.userId, "usd")).priceMinor).toBe(usdMinor);
+    expect((await getAddOnsTab(pro.auth.orgId, pro.auth.userId, "gbp")).priceMinor).toBe(gbpMinor);
   });
 
   it("shows what the group BOUGHT while dunning degrades what it may add", async () => {

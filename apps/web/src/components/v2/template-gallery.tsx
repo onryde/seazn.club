@@ -25,6 +25,11 @@ import { apiV1, ApiV1Error } from "@/lib/client-v1";
 import { Modal } from "@/components/modal";
 import { CompetitionWizard } from "@/components/v2/competition-wizard";
 import { UpgradeGate } from "@/components/upgrade-gate";
+import {
+  publicDashboardGain,
+  PUBLIC_DASHBOARD_FEATURE,
+  type PublicDashboardUpgrade,
+} from "@/lib/public-dashboard-upgrade";
 import { doubleElimFormatReason } from "@/lib/feature-copy";
 import { DateTimeField } from "@/components/v2/shared/datetime-field";
 import { routes } from "@/lib/routes";
@@ -252,10 +257,15 @@ export function TemplateDetailSheet({
   orgSlug,
   template,
   onClose,
+  publicDashboardUpgrade,
 }: {
   orgSlug: string;
   template: CompetitionTemplate;
   onClose: () => void;
+  /** What the next plan up hosts for `dashboard.public.max` — see the blank
+   *  wizard's own prop for why this is required and handed down rather than
+   *  read here. */
+  publicDashboardUpgrade: PublicDashboardUpgrade | null;
 }) {
   const msg = useT();
   const router = useRouter();
@@ -264,6 +274,13 @@ export function TemplateDetailSheet({
   const [endsOn, setEndsOn] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [paywall, setPaywall] = useState<{ feature: string; reason?: string } | null>(null);
+  // Set when the public-dashboard cap turned this create private (T20). NOT an
+  // error — the competition exists — so it replaces the form with a note and a
+  // way onward, exactly as the blank wizard does, instead of redirecting into a
+  // competition whose public link 404s.
+  const [degraded, setDegraded] = useState<
+    { name: string; slug: string; limit: number | null } | null
+  >(null);
   const [busy, setBusy] = useState(false);
   const progressionLines = templateProgressionLines(msg, template);
 
@@ -284,7 +301,16 @@ export function TemplateDetailSheet({
     }
     setBusy(true);
     try {
-      const created = await apiV1<{ slug: string }>("/api/v1/competitions/from-template", {
+      // The response shape is spelled out inline rather than imported from
+      // `@/server/api-v1/schemas`: this is a "use client" file, and a VALUE
+      // import of that module drags the gRPC placement client into the browser
+      // bundle (see the module header). Only the two fields this component
+      // acts on are named.
+      const created = await apiV1<{
+        slug: string;
+        visibility: string;
+        public_quota_degraded?: { feature_key: string; limit: number | null };
+      }>("/api/v1/competitions/from-template", {
         method: "POST",
         json: {
           template_key: template.key,
@@ -294,6 +320,17 @@ export function TemplateDetailSheet({
           ends_on: endsOn,
         },
       });
+      // ONE signal, the explicit one. Diffing `visibility` against the request
+      // would be a second guard covering for the first, and two guards covering
+      // for each other are each untested.
+      if (created.public_quota_degraded) {
+        setDegraded({
+          name: name.trim(),
+          slug: created.slug,
+          limit: created.public_quota_degraded.limit,
+        });
+        return;
+      }
       router.push(routes.competition(orgSlug, created.slug));
     } catch (err) {
       const nextPaywall = paywallFromError(err, template);
@@ -305,6 +342,58 @@ export function TemplateDetailSheet({
     } finally {
       setBusy(false);
     }
+  }
+
+  // The create SUCCEEDED — so the "Use this template" button goes with the
+  // form, for the same reason the blank wizard drops its own: leaving an armed
+  // create button under a competition that already exists is how the same event
+  // gets created twice.
+  if (degraded) {
+    // What the next plan up hosts, or null when there is nothing honest to say
+    // (lib/public-dashboard-upgrade.ts).
+    const capsGain = publicDashboardGain(degraded.limit, publicDashboardUpgrade);
+    return (
+      <Modal
+        title={msg("comp.wizard.publicDegraded.title")}
+        onClose={onClose}
+        size="lg"
+        footer={
+          <button
+            type="button"
+            data-testid="template-degraded-continue"
+            onClick={() => router.push(routes.competition(orgSlug, degraded.slug))}
+            className="btn btn-primary min-h-11"
+          >
+            {msg("comp.wizard.publicDegraded.continue")}
+          </button>
+        }
+      >
+        {/* Same testid and the same three `comp.wizard.publicDegraded.*` keys
+            (title/body/continue) the blank wizard renders — one message,
+            already translated into all four locales, not a second copy of it
+            written for the majority path. */}
+        <div className="space-y-4" data-testid="public-quota-degraded">
+          <p className="text-sm leading-relaxed text-slate-600">
+            {msg("comp.wizard.publicDegraded.body", { name: degraded.name })}
+          </p>
+          {/* Same two `…publicDegraded.caps*` keys the blank wizard renders,
+              for the same reason: the organiser is one tap from a paywall and
+              nothing here was telling them how big the gap is. */}
+          {degraded.limit !== null && (
+            <p className="text-sm font-medium text-slate-700" data-testid="public-quota-caps">
+              {capsGain !== null && publicDashboardUpgrade
+                ? msg("comp.wizard.publicDegraded.caps", {
+                    limit: degraded.limit,
+                    plan: publicDashboardUpgrade.plan,
+                    upgrade: capsGain,
+                  })
+                : msg("comp.wizard.publicDegraded.capsOwn", { limit: degraded.limit })}
+            </p>
+          )}
+          <UpgradeGate feature={PUBLIC_DASHBOARD_FEATURE} />
+        </div>
+      </Modal>
+    );
   }
 
   return (
@@ -421,17 +510,26 @@ export function TemplateDetailSheet({
 export function TemplateGallery({
   orgSlug,
   templates,
+  publicDashboardUpgrade,
 }: {
   orgSlug: string;
   /** The catalog, passed down from the Server Component page — see the
    *  module header for why this can't be a direct catalog.ts import here. */
   templates: CompetitionTemplate[];
+  /** `dashboard.public.max` on the next plan up, read from `plan_entitlements`
+   *  by the page. Handed to BOTH create paths — the template sheet and the
+   *  blank wizard degrade identically, and a figure that reached only one of
+   *  them would be worse than none at all. */
+  publicDashboardUpgrade: PublicDashboardUpgrade | null;
 }) {
   const msg = useT();
   const [mode, setMode] = useState<"gallery" | "blank">("gallery");
   const [detailKey, setDetailKey] = useState<string | null>(null);
 
-  if (mode === "blank") return <CompetitionWizard orgSlug={orgSlug} />;
+  if (mode === "blank")
+    return (
+      <CompetitionWizard orgSlug={orgSlug} publicDashboardUpgrade={publicDashboardUpgrade} />
+    );
 
   const selected = detailKey ? templates.find((t) => t.key === detailKey) ?? null : null;
 
@@ -460,7 +558,12 @@ export function TemplateGallery({
         </button>
       </div>
       {selected && (
-        <TemplateDetailSheet orgSlug={orgSlug} template={selected} onClose={() => setDetailKey(null)} />
+        <TemplateDetailSheet
+          orgSlug={orgSlug}
+          template={selected}
+          onClose={() => setDetailKey(null)}
+          publicDashboardUpgrade={publicDashboardUpgrade}
+        />
       )}
     </div>
   );

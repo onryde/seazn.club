@@ -1,11 +1,23 @@
-// v17 gap #293: the extra-organisation recurring add-on ($9/mo Pro, $19/mo
-// Pro Plus -> +1 orgs.max_owned per unit, GROUP-WIDE). The webhook
+// v17 gap #293: the extra-organisation recurring add-on ($9/mo Pro -> +1
+// orgs.max_owned per unit, GROUP-WIDE). The webhook
 // (syncOrgAddonsForSubscription) is the SINGLE writer of the org_addons row;
 // these tests drive it against real Postgres and assert on the resolver
 // (getLimit / groupOrgLimit), mirroring extra-seat-addon.test.ts.
 //
 // Task 3 adds the other half: the PURCHASE usecase (setExtraOrgs), which
 // mutates Stripe ONLY, plus the >= 25 total-allowance staff alert.
+//
+// Entitlements v18 (V393) deleted the `pro_plus` plan from both `plans` and
+// `plan_entitlements` — `PlanKey` is now community|pro|enterprise, and
+// `enterprise` has no entry in stripe-plans.json and no Stripe price (staff
+// comp only, never self-serve). `pro` is therefore the ONLY priced org-addon
+// tier left. Tests that used to drive a REAL tier change (Pro <-> Pro Plus)
+// now simulate "a rider stranded on a price that is not the plan's current
+// one" with a SYNTHETIC stale price id on a `pro` group instead — see
+// STALE_PRICE_ID below. That is not a coverage downgrade:
+// `convergeOrgAddonPrices` compares `item.price.id` against the resolved
+// target price id, never the tier that produced the old id, so a synthetic
+// stale id exercises the identical branch a genuine cross-tier mismatch did.
 //
 // Real Postgres required; skipped without DATABASE_URL.
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -46,9 +58,9 @@ const {
   // quantity it writes back can never come from a stale event snapshot.
   itemRetrieveSpy: vi.fn(),
   repriceAlertSpy: vi.fn(async () => true),
-  // Typed with the resolver's args so a test can answer PER LOOKUP KEY (Task 4b
-  // needs pro and pro_plus to resolve to different live price ids); the default
-  // implementation ignores them.
+  // Typed with the resolver's args so a test can answer PER LOOKUP KEY (Task
+  // 4b's `describe` block resolves every lookup key to its own live price id,
+  // via its local `livePriceFor`); the default implementation ignores them.
   pricesListSpy: vi.fn<
     (args: { lookup_keys: string[]; limit?: number }) => Promise<{ data: { id: string }[] }>
   >(async () => ({ data: [{ id: "price_org_addon" }] })),
@@ -125,7 +137,7 @@ async function makeUser(): Promise<string> {
 }
 
 async function makeGroupOrg(
-  planKey: "pro" | "pro_plus",
+  planKey: "pro",
 ): Promise<{ orgId: string; walletId: string }> {
   const org = await createOrgForUser(await makeUser(), `Org Addon ${planKey} ${uniq()}`);
   await setOrgPlan(org.id, planKey);
@@ -136,7 +148,7 @@ async function makeGroupOrg(
 /** A group that looks BILLED: a live Stripe subscription id on the group row,
  *  and the payer gate stubbed to hand setExtraOrgs this exact group. */
 async function makeBilledGroupOrg(
-  planKey: "pro" | "pro_plus",
+  planKey: "pro",
 ): Promise<{ orgId: string; walletId: string; stripeSubId: string }> {
   const { orgId, walletId } = await makeGroupOrg(planKey);
   const stripeSubId = `sub_stripe_${uniq()}`;
@@ -202,21 +214,62 @@ function subWith(items: Stripe.SubscriptionItem[]): Stripe.Subscription {
 }
 
 let proBase: number;
-let proPlusBase: number;
 /** What the resolver DEGRADES to — dunning, an incomplete first payment and a
  *  suspended org all read this plan. The floor must never. */
 let communityBase: number;
 const proEntry = ORG_ADDONS.find((e) => e.planKey === "pro")!;
-const proPlusEntry = ORG_ADDONS.find((e) => e.planKey === "pro_plus")!;
+
+/**
+ * A price id that carries a REAL, recognised org-addon `lookup_key`
+ * (`proEntry.lookupKey`, the only priced tier left after entitlements v18
+ * deleted `pro_plus`) but is deliberately NOT the id
+ * `resolveOrgAddonPriceId("pro")` currently resolves to — i.e. a rider
+ * stranded on a superseded rate. `convergeOrgAddonPrices` and its callers
+ * compare `item.price.id` against the resolved target id, never the tier
+ * that produced the old id (see `billing-events.ts`'s
+ * `item.price?.id === expectedPriceId` check), so this literal exercises the
+ * identical "needs re-pricing" branch a genuine Pro <-> Pro Plus mismatch
+ * used to. Never resolved by `pricesListSpy` — only ever compared against by
+ * id — so any string that differs from `livePriceFor(proEntry.lookupKey)`
+ * works.
+ */
+const STALE_PRICE_ID = "price_stale_superseded_rate";
+
+/**
+ * A rider item that is recognised as an org-addon (`isOrgAddonItem`) purely
+ * through its METADATA stamp, not its `lookup_key` — the same shape
+ * `transfer_lookup_key` leaves behind (see the "stamps an item that T2 still
+ * recognises" test below). Used where the mismatch has to be invisible to a
+ * LOOKUP-KEY comparison specifically: `setExtraOrgs`'s `survivor` search
+ * (`extra-orgs.ts`) matches on `item.price?.lookup_key === addon.lookupKey`,
+ * not on price id, so a stale item with a real (matching) lookup_key would
+ * be found as the survivor and merely quantity-updated — never replaced.
+ * With only one priced tier left there is no second real lookup_key to
+ * mismatch against, so a null lookup_key plus the metadata fallback is what
+ * stands in for "this item predates the plan's current price" everywhere a
+ * test needs `setExtraOrgs` to delete-and-recreate rather than update.
+ */
+function staleOrgAddonItem(
+  id: string,
+  quantity: number,
+  priceId: string = STALE_PRICE_ID,
+): { id: string; quantity: number; price: { id: string; lookup_key: null }; metadata: Record<string, string> } {
+  return {
+    id,
+    quantity,
+    price: { id: priceId, lookup_key: null },
+    metadata: { feature_key: "orgs.max_owned" },
+  };
+}
 
 beforeAll(async () => {
   if (!HAS_DB) return;
-  // Plan bases are READ, never hard-coded (V314 seeded pro 5 / pro_plus 10).
+  // Plan bases are READ, never hard-coded (V314 seeded pro 5; V393 dropped
+  // pro_plus from the catalog entirely).
   const rows = await sql<{ plan_key: string; int_value: number | null }[]>`
     select plan_key, int_value from plan_entitlements
-     where feature_key = 'orgs.max_owned' and plan_key in ('pro', 'pro_plus', 'community')`;
+     where feature_key = 'orgs.max_owned' and plan_key in ('pro', 'community')`;
   proBase = rows.find((r) => r.plan_key === "pro")?.int_value ?? 0;
-  proPlusBase = rows.find((r) => r.plan_key === "pro_plus")?.int_value ?? 0;
   communityBase = rows.find((r) => r.plan_key === "community")?.int_value ?? 0;
 });
 
@@ -247,15 +300,6 @@ describe.skipIf(!HAS_DB)("extra-org add-on — webhook sync -> resolver", () => 
       select target_org_id, feature_key from org_addons where wallet_id = ${walletId}`;
     expect(row?.target_org_id).toBeNull();
     expect(row?.feature_key).toBe("orgs.max_owned");
-  });
-
-  it("a pro_plus org-addon item prices/lifts independently of pro's", async () => {
-    const { orgId, walletId } = await makeGroupOrg("pro_plus");
-    await syncOrgAddonsForSubscription(
-      subWith([orgAddonItem(`si_${uniq()}`, proPlusEntry.lookupKey, 2)]),
-      walletId,
-    );
-    expect(await getLimit(orgId, "orgs.max_owned")).toBe(proPlusBase + 2);
   });
 
   it("removal freezes the row (freeze-not-delete) and the cap drops back", async () => {
@@ -493,20 +537,6 @@ describe.skipIf(!HAS_DB)("extra-org purchase — setExtraOrgs mutates Stripe onl
     );
   });
 
-  it("resolves the PRO PLUS price for a pro_plus group, not pro's", async () => {
-    const { stripeSubId } = await makeBilledGroupOrg("pro_plus");
-    retrieveSpy.mockResolvedValueOnce({ id: stripeSubId, items: { data: [] } });
-
-    await setExtraOrgs(1);
-
-    expect(pricesListSpy).toHaveBeenCalledWith(
-      expect.objectContaining({ lookup_keys: [proPlusEntry.lookupKey] }),
-    );
-    expect(pricesListSpy).not.toHaveBeenCalledWith(
-      expect.objectContaining({ lookup_keys: [proEntry.lookupKey] }),
-    );
-  });
-
   it("raising an existing item prorates now; lowering waits for renewal", async () => {
     const { stripeSubId } = await makeBilledGroupOrg("pro");
     const existing = { id: "si_existing", quantity: 2, price: { lookup_key: proEntry.lookupKey } };
@@ -694,18 +724,19 @@ describe.skipIf(!HAS_DB)("extra-org allowance alert — at purchase time", () =>
     );
   });
 
-  it("alerts a pro_plus group at FEWER extras — the threshold is the total, not the rider", async () => {
-    vi.stubEnv("STAFF_ALERT_EMAIL", "ops@seazn.test");
-    const { stripeSubId } = await makeBilledGroupOrg("pro_plus");
-    retrieveSpy.mockResolvedValueOnce({ id: stripeSubId, items: { data: [] } });
-
-    await setExtraOrgs(ORG_ALLOWANCE_ALERT_THRESHOLD - proPlusBase);
-
-    await vi.waitFor(() => expect(allowanceAlertSpy).toHaveBeenCalledTimes(1));
-    expect(allowanceAlertSpy).toHaveBeenCalledWith(
-      expect.objectContaining({ planKey: "pro_plus", baseCap: proPlusBase }),
-    );
-  });
+  // "alerts a pro_plus group at FEWER extras" (a second, higher-base tier
+  // reaching the threshold with fewer purchased riders) is DELETED, not
+  // repointed: entitlements v18 left `pro` as the only priced org-addon tier
+  // (`enterprise` has no self-serve price and `shouldAlertOnOrgAllowance`
+  // stays silent on its unlimited NULL cap — see "stays silent on an
+  // unlimited plan" above), so there is no second FINITE base left to
+  // discriminate against. The property itself — "the threshold is on the
+  // TOTAL, not the extras count" — is still fully pinned as a pure-function
+  // case above ("fires only when a PURCHASE lands the total allowance...",
+  // baseCap 5 vs 10), and the sibling integration test right above this one
+  // already proves setExtraOrgs' alert reads a REAL baseCap from
+  // plan_entitlements; a second integration case with no second real base
+  // would only repeat that with the same number.
 
   it("stays silent one organisation below the threshold — the purchase is never blocked either", async () => {
     vi.stubEnv("STAFF_ALERT_EMAIL", "ops@seazn.test");
@@ -835,9 +866,11 @@ describe.skipIf(!HAS_DB)("extra-org usage floor — you cannot cancel what you a
     vi.unstubAllEnvs();
   });
 
-  /** A pro_plus group holding `total` live orgs, with `extras` purchased
-   *  riders already on its Stripe subscription AND in `org_addons`. Pro Plus
-   *  (base 10) keeps the fixture small: 11 orgs is one over the base.
+  /** A pro group holding `total` live orgs, with `extras` purchased riders
+   *  already on its Stripe subscription AND in `org_addons`. entitlements v18
+   *  deleted `pro_plus` (previously used here to keep the fixture small with
+   *  a base of 10); Pro's base of 5 works the same way, just with smaller
+   *  numbers — `proBase + 1` is one org over the base regardless.
    *
    *  The DB row is not decoration. The floor is
    *  `totalBonus - grantedBonus` — purchased capacity, with admin comps taken
@@ -851,7 +884,7 @@ describe.skipIf(!HAS_DB)("extra-org usage floor — you cannot cancel what you a
    *  Stripe-paid rows (billing-events.ts, `ORG_ADDON_FEATURE_KEY` /
    *  `ORG_ADDON_DELTA_EACH`, `target_org_id` null, status 'active'). */
   async function groupInUse(total: number, extras: number) {
-    const { orgId, walletId, stripeSubId } = await makeBilledGroupOrg("pro_plus");
+    const { orgId, walletId, stripeSubId } = await makeBilledGroupOrg("pro");
     await addFillerOrgs(walletId, total - 1);
     // V324's unique index is on `stripe_item_id` ALONE, so a literal reused
     // across tests does not collide loudly — it MOVES the previous test's row
@@ -869,7 +902,7 @@ describe.skipIf(!HAS_DB)("extra-org usage floor — you cannot cancel what you a
     const addonItem = {
       id: addonItemId,
       quantity: extras,
-      price: { id: "price_addon", lookup_key: proPlusEntry.lookupKey },
+      price: { id: "price_addon", lookup_key: proEntry.lookupKey },
     };
     // items.data[0] is the PLAN item, as it is in production — syncGroupQuantity
     // reads that one, setExtraOrgs finds the add-on by lookup_key.
@@ -880,7 +913,7 @@ describe.skipIf(!HAS_DB)("extra-org usage floor — you cannot cancel what you a
           {
             id: "si_plan",
             quantity: total,
-            price: { id: "price_plan", billing_scheme: "tiered", lookup_key: "seazn_pro_plus_monthly" },
+            price: { id: "price_plan", billing_scheme: "tiered", lookup_key: "seazn_pro_monthly" },
           },
           ...(extras > 0 ? [addonItem] : []),
         ],
@@ -890,10 +923,10 @@ describe.skipIf(!HAS_DB)("extra-org usage floor — you cannot cancel what you a
   }
 
   it("refuses to reduce below the organisations the group is actually using", async () => {
-    // 11 live orgs on a base of 10: exactly one org is standing on the rider,
-    // and that rider is an ACTIVE org_addons row, as it is in production.
-    const { walletId } = await groupInUse(proPlusBase + 1, 1);
-    expect(await extraOrgsInUse(walletId, "pro_plus", 1)).toBe(1);
+    // proBase + 1 live orgs: exactly one org is standing on the rider, and
+    // that rider is an ACTIVE org_addons row, as it is in production.
+    const { walletId } = await groupInUse(proBase + 1, 1);
+    expect(await extraOrgsInUse(walletId, "pro", 1)).toBe(1);
 
     await expect(setExtraOrgs(0)).rejects.toMatchObject({ status: 423 });
 
@@ -909,17 +942,17 @@ describe.skipIf(!HAS_DB)("extra-org usage floor — you cannot cancel what you a
     // 'active' one does NOT. Without both, widening the granted status set to
     // include 'active' subtracts every purchased rider, the floor collapses to
     // 0, and "buy, create org #11, cancel, keep it for ever" is back.
-    const { walletId } = await groupInUse(proPlusBase + 1, 1);
+    const { walletId } = await groupInUse(proBase + 1, 1);
     const [row] = await sql<{ qty: number; status: string }[]>`
       select qty, status from org_addons
        where wallet_id = ${walletId} and feature_key = 'orgs.max_owned'`;
     expect(row).toMatchObject({ qty: 1, status: "active" });
-    expect(await extraOrgsInUse(walletId, "pro_plus", 1)).toBe(1);
+    expect(await extraOrgsInUse(walletId, "pro", 1)).toBe(1);
   });
 
   it("allows a reduction to exactly what is in use (the boundary, not one past it)", async () => {
-    const { walletId, addonItemId } = await groupInUse(proPlusBase + 1, 2);
-    expect(await extraOrgsInUse(walletId, "pro_plus", 2)).toBe(1);
+    const { walletId, addonItemId } = await groupInUse(proBase + 1, 2);
+    expect(await extraOrgsInUse(walletId, "pro", 2)).toBe(1);
 
     const result = await setExtraOrgs(1);
 
@@ -931,7 +964,7 @@ describe.skipIf(!HAS_DB)("extra-org usage floor — you cannot cancel what you a
   });
 
   it("increases are never refused, however many organisations the group holds", async () => {
-    const { addonItemId } = await groupInUse(proPlusBase + 1, 1);
+    const { addonItemId } = await groupInUse(proBase + 1, 1);
 
     await expect(setExtraOrgs(5)).resolves.toMatchObject({ extraOrgs: 5 });
     expect(itemUpdateSpy).toHaveBeenCalledWith(addonItemId, {
@@ -941,13 +974,13 @@ describe.skipIf(!HAS_DB)("extra-org usage floor — you cannot cancel what you a
   });
 
   it("DETACH THEN REDUCE: the real exit works, so nobody is trapped paying for ever", async () => {
-    const { walletId, stripeSubId, addonItemId } = await groupInUse(proPlusBase, 1);
-    // A twelfth… eleventh org, owned by a real user so it can be detached
+    const { walletId, stripeSubId, addonItemId } = await groupInUse(proBase, 1);
+    // One extra org over the base, owned by a real user so it can be detached
     // (filler orgs have no owner member and detach refuses those on purpose).
     const leaverOwner = await makeUser();
     const leaver = await createOrgForUser(leaverOwner, `Org Addon Leaver ${uniq()}`);
     await sql`update organizations set subscription_id = ${walletId} where id = ${leaver.id}`;
-    expect(await extraOrgsInUse(walletId, "pro_plus", 1)).toBe(1);
+    expect(await extraOrgsInUse(walletId, "pro", 1)).toBe(1);
     await expect(setExtraOrgs(0)).rejects.toMatchObject({ status: 423 });
 
     // The documented way out — the real usecase, not a hand-written UPDATE.
@@ -955,17 +988,17 @@ describe.skipIf(!HAS_DB)("extra-org usage floor — you cannot cancel what you a
 
     // The group is back inside its plan's own cap, so the rider is now
     // genuinely optional and cancelling it is allowed.
-    expect(await extraOrgsInUse(walletId, "pro_plus", 1)).toBe(0);
+    expect(await extraOrgsInUse(walletId, "pro", 1)).toBe(0);
     retrieveSpy.mockResolvedValue({
       id: stripeSubId,
       items: {
         data: [
           {
             id: "si_plan",
-            quantity: proPlusBase,
-            price: { id: "price_plan", billing_scheme: "tiered", lookup_key: "seazn_pro_plus_monthly" },
+            quantity: proBase,
+            price: { id: "price_plan", billing_scheme: "tiered", lookup_key: "seazn_pro_monthly" },
           },
-          { id: addonItemId, quantity: 1, price: { id: "price_addon", lookup_key: proPlusEntry.lookupKey } },
+          { id: addonItemId, quantity: 1, price: { id: "price_addon", lookup_key: proEntry.lookupKey } },
         ],
       },
     });
@@ -975,19 +1008,19 @@ describe.skipIf(!HAS_DB)("extra-org usage floor — you cannot cancel what you a
   });
 
   it("an ADMIN-COMPED rider is not counted as usage — a comped group is never forced to buy", async () => {
-    // 11 orgs on a base of 10, ONE purchased rider and one staff comp. The
-    // purchased rider matters: with none, the clamp would answer 0 whatever the
-    // comp arithmetic did, and this test would prove nothing.
-    const { walletId, addonItemId } = await groupInUse(proPlusBase + 1, 1);
+    // proBase + 1 orgs, ONE purchased rider and one staff comp. The purchased
+    // rider matters: with none, the clamp would answer 0 whatever the comp
+    // arithmetic did, and this test would prove nothing.
+    const { walletId, addonItemId } = await groupInUse(proBase + 1, 1);
     // SPEC-3 staff comp: status='granted', no stripe_item_id. It is what is
-    // holding org #11 up, so it must lower the floor, or this group is told to
-    // buy a rider for capacity it was given.
+    // holding the extra org up, so it must lower the floor, or this group is
+    // told to buy a rider for capacity it was given.
     await sql`
       insert into org_addons (wallet_id, target_org_id, feature_key, delta_each, qty, status)
       values (${walletId}, null, 'orgs.max_owned', 1, 1, 'granted')`;
 
     // Without the comp this is 1; the comp is the only reason it is 0.
-    expect(await extraOrgsInUse(walletId, "pro_plus", 1)).toBe(0);
+    expect(await extraOrgsInUse(walletId, "pro", 1)).toBe(0);
     await expect(setExtraOrgs(0)).resolves.toMatchObject({ extraOrgs: 0 });
     expect(itemDelSpy).toHaveBeenCalledWith(addonItemId, { proration_behavior: "none" });
   });
@@ -995,7 +1028,7 @@ describe.skipIf(!HAS_DB)("extra-org usage floor — you cannot cancel what you a
   it("never traps a group whose plan has no orgs.max_owned row at all", async () => {
     // Unknown base => no floor. Refusing on the basis of a cap we cannot read
     // would be the one unrecoverable outcome, so this fails OPEN.
-    const { walletId } = await groupInUse(proPlusBase + 1, 1);
+    const { walletId } = await groupInUse(proBase + 1, 1);
     expect(await extraOrgsInUse(walletId, `no_such_plan_${uniq()}`, 1)).toBe(0);
   });
 });
@@ -1022,47 +1055,40 @@ describe.skipIf(!HAS_DB)("extra-org item reconciliation — tier changes and dup
     price: { id: `price_${id}`, lookup_key: lookupKey },
   });
 
-  // FINDING A. isOrgAddonItem matches BOTH tiers' lookup keys, so an item
-  // bought on Pro is still "an org add-on" after the group upgrades to Pro
-  // Plus. Reusing it would bill $9 per extra for ever on a $19 plan — the
-  // exact "Pro + extras undercuts Pro Plus" arbitrage the two rates exist to
-  // close, reached by upgrading rather than by staying put.
-  it("re-prices when the group upgraded Pro -> Pro Plus: the $9 item is replaced, not reused", async () => {
-    const { stripeSubId } = await makeBilledGroupOrg("pro_plus");
+  // FINDING A, as it stood with two priced tiers: isOrgAddonItem matches ANY
+  // tier's lookup key, so an item bought at the OLD rate was still "an org
+  // add-on" after a tier change and would otherwise be reused at the stale
+  // price for ever — the "Pro + extras undercuts Pro Plus" arbitrage the two
+  // rates existed to close.
+  //
+  // Entitlements v18 deleted `pro_plus`, so there is no second real tier left
+  // to drive a genuine cross-tier mismatch with (see STALE_PRICE_ID's doc
+  // comment). `setExtraOrgs`'s `survivor` search matches on
+  // `item.price?.lookup_key === addon.lookupKey` (extra-orgs.ts), not on
+  // price id, so the stand-in has to be `staleOrgAddonItem` — a real
+  // recognised org-addon (via its metadata stamp) whose `lookup_key` is null,
+  // the same shape `transfer_lookup_key` drift leaves behind — rather than
+  // `STALE_PRICE_ID` alone. Originally two tests (Pro -> Pro Plus and the
+  // mirror Pro Plus -> Pro); collapsed to one, since the code takes the
+  // identical delete+recreate branch either way and a second copy with only
+  // the (now nonexistent) tier names swapped proved nothing further.
+  it("re-prices an item stranded on a superseded rate: it is replaced, not reused", async () => {
+    const { stripeSubId } = await makeBilledGroupOrg("pro");
     retrieveSpy.mockResolvedValue({
       id: stripeSubId,
-      items: { data: [planItem, addonItem("si_old_pro", proEntry.lookupKey, 2)] },
+      items: { data: [planItem, staleOrgAddonItem("si_old_rate", 2)] },
     });
 
     await setExtraOrgs(3);
 
-    expect(itemDelSpy).toHaveBeenCalledWith("si_old_pro", {
-      proration_behavior: "create_prorations",
-    });
-    expect(pricesListSpy).toHaveBeenCalledWith(
-      expect.objectContaining({ lookup_keys: [proPlusEntry.lookupKey] }),
-    );
-    expect(itemCreateSpy).toHaveBeenCalledWith(expect.objectContaining({ quantity: 3 }));
-    // The bug was that this branch ran instead, keeping the old rate for ever.
-    expect(itemUpdateSpy).not.toHaveBeenCalled();
-  });
-
-  it("re-prices the mirror case Pro Plus -> Pro, so a downgrade stops overcharging", async () => {
-    const { stripeSubId } = await makeBilledGroupOrg("pro");
-    retrieveSpy.mockResolvedValue({
-      id: stripeSubId,
-      items: { data: [planItem, addonItem("si_old_plus", proPlusEntry.lookupKey, 1)] },
-    });
-
-    await setExtraOrgs(1);
-
-    expect(itemDelSpy).toHaveBeenCalledWith("si_old_plus", {
+    expect(itemDelSpy).toHaveBeenCalledWith("si_old_rate", {
       proration_behavior: "create_prorations",
     });
     expect(pricesListSpy).toHaveBeenCalledWith(
       expect.objectContaining({ lookup_keys: [proEntry.lookupKey] }),
     );
-    expect(itemCreateSpy).toHaveBeenCalledWith(expect.objectContaining({ quantity: 1 }));
+    expect(itemCreateSpy).toHaveBeenCalledWith(expect.objectContaining({ quantity: 3 }));
+    // The bug was that this branch ran instead, keeping the old rate for ever.
     expect(itemUpdateSpy).not.toHaveBeenCalled();
   });
 
@@ -1526,14 +1552,16 @@ describe.skipIf(!HAS_DB)("extra-org tier swap — today's non-atomic window", ()
   });
 
   it("a create that fails AFTER the delete leaves the group with no rider (follow-up: items[])", async () => {
-    const { stripeSubId } = await makeBilledGroupOrg("pro_plus");
-    // Upgraded group still carrying the Pro-priced rider: a swap, not an update.
+    const { stripeSubId } = await makeBilledGroupOrg("pro");
+    // Group still carrying a rider stranded on a superseded rate: a swap, not
+    // an update. See STALE_PRICE_ID's doc comment — entitlements v18 left no
+    // second real tier to drive this mismatch with genuinely.
     retrieveSpy.mockResolvedValue({
       id: stripeSubId,
       items: {
         data: [
           { id: "si_plan", quantity: 1, price: { id: "price_plan", billing_scheme: "tiered" } },
-          { id: "si_old_pro", quantity: 2, price: { id: "price_old", lookup_key: proEntry.lookupKey } },
+          staleOrgAddonItem("si_old_pro", 2, "price_old"),
         ],
       },
     });
@@ -1565,15 +1593,16 @@ describe.skipIf(!HAS_DB)("extra-org tier change — an unsynced catalog must not
   });
 
   it("refuses 503 WITHOUT deleting the item it could not replace", async () => {
-    const { stripeSubId } = await makeBilledGroupOrg("pro_plus");
-    // The group upgraded, so the Pro-priced item is not the survivor and must
-    // be swapped — but the replacement price does not exist in this account.
+    const { stripeSubId } = await makeBilledGroupOrg("pro");
+    // The rider is stranded on a superseded rate, so it is not the survivor
+    // and must be swapped — but the replacement price does not exist in this
+    // account.
     retrieveSpy.mockResolvedValue({
       id: stripeSubId,
       items: {
         data: [
           { id: "si_plan", quantity: 1, price: { id: "price_plan", billing_scheme: "tiered" } },
-          { id: "si_old_pro", quantity: 2, price: { id: "price_old", lookup_key: proEntry.lookupKey } },
+          staleOrgAddonItem("si_old_pro", 2, "price_old"),
         ],
       },
     });
@@ -1587,13 +1616,13 @@ describe.skipIf(!HAS_DB)("extra-org tier change — an unsynced catalog must not
   });
 
   it("resolves the price BEFORE deleting, so the swap order is resolve -> delete -> create", async () => {
-    const { stripeSubId } = await makeBilledGroupOrg("pro_plus");
+    const { stripeSubId } = await makeBilledGroupOrg("pro");
     retrieveSpy.mockResolvedValue({
       id: stripeSubId,
       items: {
         data: [
           { id: "si_plan", quantity: 1, price: { id: "price_plan", billing_scheme: "tiered" } },
-          { id: "si_old_pro", quantity: 2, price: { id: "price_old", lookup_key: proEntry.lookupKey } },
+          staleOrgAddonItem("si_old_pro", 2, "price_old"),
         ],
       },
     });
@@ -1679,7 +1708,10 @@ describe.skipIf(!HAS_DB)("extra-org rider prices converge on a PLAN change (webh
     dupA = `si_dup_a_${uniq()}`;
     dupB = `si_dup_b_${uniq()}`;
     seatId = `si_seat_${uniq()}`;
-    // Resolve by lookup key, so pro and pro_plus resolve to DIFFERENT ids.
+    // Resolve by lookup key. Only `proEntry.lookupKey` is ever asked for now
+    // (the only priced tier left), so this always answers the same live id —
+    // `riderItem`'s explicit `priceId` override is what puts a rider on a
+    // DIFFERENT (stale) one.
     pricesListSpy.mockImplementation(async (args: { lookup_keys: string[] }) => ({
       data: [{ id: livePriceFor(args.lookup_keys[0]!) }],
     }));
@@ -1716,8 +1748,10 @@ describe.skipIf(!HAS_DB)("extra-org rider prices converge on a PLAN change (webh
 
   /** A rider item as the webhook sees it, also registered as its live Stripe
    *  state. `priceId` defaults to the live price for that lookup key (i.e.
-   *  already converged); pass one explicitly to model an item stranded on
-   *  another tier's price, or on a superseded one. */
+   *  already converged); pass `STALE_PRICE_ID` (or any other id) explicitly
+   *  to model a rider stranded on a superseded price — the stand-in for what
+   *  used to be "on another tier's real price" before entitlements v18
+   *  deleted `pro_plus`. */
   const riderItem = (
     id: string,
     lookupKey: string,
@@ -1772,17 +1806,24 @@ describe.skipIf(!HAS_DB)("extra-org rider prices converge on a PLAN change (webh
       },
     }) as unknown as Stripe.Event;
 
-  it("pro -> pro_plus: the $9 rider is re-priced, keeping its item id, qty and cap", async () => {
-    const { orgId, walletId, stripeSubId } = await makeBilledGroupOrg("pro_plus");
-    // The state right after an upgrade: the group row says pro_plus, the rider
-    // item is still on the Pro price it was bought at.
-    const stranded = riderItem(riderId, proEntry.lookupKey, 3);
+  // Originally two tests (Pro -> Pro Plus and the mirror Pro Plus -> Pro,
+  // each asserting the OTHER tier's real price as the target). Entitlements
+  // v18 deleted `pro_plus`, and `convergeOrgAddonPrices` compares
+  // `item.price.id` against the resolved target — never the tier the old id
+  // came from — so both directions exercised the identical branch; collapsed
+  // to one, driven with `STALE_PRICE_ID` in place of a genuine second tier's
+  // price (see its doc comment).
+  it("a rider stranded on a superseded rate is re-priced, keeping its item id, qty and cap", async () => {
+    const { orgId, walletId, stripeSubId } = await makeBilledGroupOrg("pro");
+    // A rider still on whatever rate it was bought at, before the plan's
+    // current price existed under that id.
+    const stranded = riderItem(riderId, proEntry.lookupKey, 3, STALE_PRICE_ID);
     await processStripeEvent(updatedEvent(stripeSubId, walletId, [stranded]));
 
     // Moved onto the CURRENT plan's price…
     expect(itemUpdateSpy).toHaveBeenCalledTimes(1);
     expect(itemUpdateSpy).toHaveBeenCalledWith(riderId, {
-      price: livePriceFor(proPlusEntry.lookupKey),
+      price: livePriceFor(proEntry.lookupKey),
       // NOT optional: Stripe resets quantity to 1 on a price change unless it
       // is restated (billing/subscriptions/change-price). Omitting it would cut
       // a 3-rider group to 1 and revoke two organisations of paid capacity.
@@ -1801,24 +1842,8 @@ describe.skipIf(!HAS_DB)("extra-org rider prices converge on a PLAN change (webh
     expect(rows[0]!.qty).toBe(3);
     expect(rows[0]!.status).toBe("active");
     // A re-price is a RATE change, never a capacity change.
-    expect(await getLimit(orgId, "orgs.max_owned")).toBe(proPlusBase + 3);
-    expect(await groupOrgLimit(walletId)).toBe(proPlusBase + 3);
-  });
-
-  it("pro_plus -> pro: re-prices the overcharge direction too", async () => {
-    const { walletId, stripeSubId } = await makeBilledGroupOrg("pro");
-    await convergeOrgAddonPrices(
-      subFor(stripeSubId, [planItem, riderItem(riderId, proPlusEntry.lookupKey, 2)]),
-      walletId,
-    );
-    expect(pricesListSpy).toHaveBeenCalledWith(
-      expect.objectContaining({ lookup_keys: [proEntry.lookupKey] }),
-    );
-    expect(itemUpdateSpy).toHaveBeenCalledWith(riderId, {
-      price: livePriceFor(proEntry.lookupKey),
-      quantity: 2,
-      proration_behavior: "create_prorations",
-    });
+    expect(await getLimit(orgId, "orgs.max_owned")).toBe(proBase + 3);
+    expect(await groupOrgLimit(walletId)).toBe(proBase + 3);
   });
 
   it("a superseded price object (lookup_key transferred away) is moved to the live one", async () => {
@@ -1854,8 +1879,8 @@ describe.skipIf(!HAS_DB)("extra-org rider prices converge on a PLAN change (webh
   });
 
   it("CONVERGES, does not loop: the event our own update produces writes nothing", async () => {
-    const { walletId, stripeSubId } = await makeBilledGroupOrg("pro_plus");
-    const items = [planItem, riderItem(riderId, proEntry.lookupKey, 2)];
+    const { walletId, stripeSubId } = await makeBilledGroupOrg("pro");
+    const items = [planItem, riderItem(riderId, proEntry.lookupKey, 2, STALE_PRICE_ID)];
     const sub = subFor(stripeSubId, items);
 
     await convergeOrgAddonPrices(sub, walletId);
@@ -1917,7 +1942,7 @@ describe.skipIf(!HAS_DB)("extra-org rider prices converge on a PLAN change (webh
   });
 
   it("an unsynced catalog is LOGGED, never thrown — the row sync still runs", async () => {
-    const { walletId, stripeSubId } = await makeBilledGroupOrg("pro_plus");
+    const { walletId, stripeSubId } = await makeBilledGroupOrg("pro");
     pricesListSpy.mockResolvedValue({ data: [] }); // resolveOrgAddonPriceId 503s
     const logged = vi.spyOn(log, "error").mockImplementation(() => {});
 
@@ -1944,13 +1969,15 @@ describe.skipIf(!HAS_DB)("extra-org rider prices converge on a PLAN change (webh
   });
 
   it("a failing Stripe update is LOGGED, never thrown — the row sync still runs", async () => {
-    const { walletId, stripeSubId } = await makeBilledGroupOrg("pro_plus");
+    const { walletId, stripeSubId } = await makeBilledGroupOrg("pro");
     itemUpdateSpy.mockRejectedValue(new Error("stripe is having a day"));
     const logged = vi.spyOn(log, "error").mockImplementation(() => {});
 
     await expect(
       processStripeEvent(
-        updatedEvent(stripeSubId, walletId, [riderItem(riderId, proEntry.lookupKey, 2)]),
+        updatedEvent(stripeSubId, walletId, [
+          riderItem(riderId, proEntry.lookupKey, 2, STALE_PRICE_ID),
+        ]),
       ),
     ).resolves.toBeUndefined();
 
@@ -1965,12 +1992,12 @@ describe.skipIf(!HAS_DB)("extra-org rider prices converge on a PLAN change (webh
   });
 
   it("never touches the plan item or a seat item", async () => {
-    const { orgId, walletId, stripeSubId } = await makeBilledGroupOrg("pro_plus");
+    const { orgId, walletId, stripeSubId } = await makeBilledGroupOrg("pro");
     await convergeOrgAddonPrices(
       subFor(stripeSubId, [
         planItem,
         seatItem(seatId, orgId, 5),
-        riderItem(riderId, proEntry.lookupKey, 1),
+        riderItem(riderId, proEntry.lookupKey, 1, STALE_PRICE_ID),
       ]),
       walletId,
     );
@@ -1983,13 +2010,13 @@ describe.skipIf(!HAS_DB)("extra-org rider prices converge on a PLAN change (webh
     // hold two items on one subscription at the same price — so re-pricing BOTH
     // would fail the second call for nothing. Tidying the shape is the purchase
     // path's job; the webhook's job is that the RATE is right.
-    const { walletId, stripeSubId } = await makeBilledGroupOrg("pro_plus");
+    const { walletId, stripeSubId } = await makeBilledGroupOrg("pro");
     const logged = vi.spyOn(log, "error").mockImplementation(() => {});
     await convergeOrgAddonPrices(
       subFor(stripeSubId, [
         planItem,
-        riderItem(dupA, proEntry.lookupKey, 1),
-        riderItem(dupB, proEntry.lookupKey, 1),
+        riderItem(dupA, proEntry.lookupKey, 1, STALE_PRICE_ID),
+        riderItem(dupB, proEntry.lookupKey, 1, STALE_PRICE_ID),
       ]),
       walletId,
     );
@@ -2001,7 +2028,7 @@ describe.skipIf(!HAS_DB)("extra-org rider prices converge on a PLAN change (webh
     // a human or a purchase consolidates it, and nothing here retries.
     expect(repriceAlertSpy).toHaveBeenCalledTimes(1);
     expect(repriceAlertSpy).toHaveBeenCalledWith(
-      expect.objectContaining({ itemId: dupB, expectedPriceId: livePriceFor(proPlusEntry.lookupKey) }),
+      expect.objectContaining({ itemId: dupB, expectedPriceId: livePriceFor(proEntry.lookupKey) }),
     );
   });
 
@@ -2010,15 +2037,15 @@ describe.skipIf(!HAS_DB)("extra-org rider prices converge on a PLAN change (webh
   // assertion never made. It pins the PAYLOAD REWRITE; the test after it pins
   // the order.
   it("rewrites the event payload with the post-update item, so no stale item reaches the sync", async () => {
-    const { walletId, stripeSubId } = await makeBilledGroupOrg("pro_plus");
+    const { walletId, stripeSubId } = await makeBilledGroupOrg("pro");
     const event = updatedEvent(stripeSubId, walletId, [
-      riderItem(riderId, proEntry.lookupKey, 2),
+      riderItem(riderId, proEntry.lookupKey, 2, STALE_PRICE_ID),
     ]);
     await processStripeEvent(event);
 
     const items = (event.data.object as Stripe.Subscription).items.data;
     const rider = items.find((it) => it.id === riderId)!;
-    expect(rider.price.id).toBe(livePriceFor(proPlusEntry.lookupKey));
+    expect(rider.price.id).toBe(livePriceFor(proEntry.lookupKey));
     expect(rider.quantity).toBe(2);
   });
 
@@ -2029,7 +2056,7 @@ describe.skipIf(!HAS_DB)("extra-org rider prices converge on a PLAN change (webh
     // handleSubscriptionChanged and the row is already there — which is the
     // reversal this test exists to catch, and which mutating the payload
     // (the test above) cannot see at all.
-    const { walletId, stripeSubId } = await makeBilledGroupOrg("pro_plus");
+    const { walletId, stripeSubId } = await makeBilledGroupOrg("pro");
     let rowExistedAtUpdateTime: boolean | null = null;
     itemUpdateSpy.mockImplementation(
       async (id: string, params: { price: string; quantity: number }) => {
@@ -2046,7 +2073,9 @@ describe.skipIf(!HAS_DB)("extra-org rider prices converge on a PLAN change (webh
     );
 
     await processStripeEvent(
-      updatedEvent(stripeSubId, walletId, [riderItem(riderId, proEntry.lookupKey, 2)]),
+      updatedEvent(stripeSubId, walletId, [
+        riderItem(riderId, proEntry.lookupKey, 2, STALE_PRICE_ID),
+      ]),
     );
 
     expect(itemUpdateSpy).toHaveBeenCalledTimes(1);
@@ -2066,9 +2095,10 @@ describe.skipIf(!HAS_DB)("extra-org rider prices converge on a PLAN change (webh
   // -------------------------------------------------------------------------
 
   it("STALE EVENT: re-reads the live quantity, so an out-of-order delivery cannot shrink the rider", async () => {
-    const { orgId, walletId, stripeSubId } = await makeBilledGroupOrg("pro_plus");
-    // E1: the upgrade event, emitted when the group held 2 riders.
-    const stale = riderItem(riderId, proEntry.lookupKey, 2);
+    const { orgId, walletId, stripeSubId } = await makeBilledGroupOrg("pro");
+    // E1: the earlier event, emitted when the group held 2 riders on a
+    // superseded rate.
+    const stale = riderItem(riderId, proEntry.lookupKey, 2, STALE_PRICE_ID);
     // E2 already happened: the customer bought 3 more, so Stripe holds 5 — and
     // on a price the event has never seen, which is what lets the success log
     // below be checked for WHICH price it reports.
@@ -2093,7 +2123,7 @@ describe.skipIf(!HAS_DB)("extra-org rider prices converge on a PLAN change (webh
     // 5, never the payload's 2. Sending 2 would revoke three organisations of
     // paid capacity — and because Stripe is authoritative, nothing would undo it.
     expect(itemUpdateSpy).toHaveBeenCalledWith(riderId, {
-      price: livePriceFor(proPlusEntry.lookupKey),
+      price: livePriceFor(proEntry.lookupKey),
       quantity: 5,
       proration_behavior: "create_prorations",
     });
@@ -2102,7 +2132,7 @@ describe.skipIf(!HAS_DB)("extra-org rider prices converge on a PLAN change (webh
     const [row] = await sql<{ qty: number }[]>`
       select qty from org_addons where stripe_item_id = ${riderId}`;
     expect(row?.qty).toBe(5);
-    expect(await getLimit(orgId, "orgs.max_owned")).toBe(proPlusBase + 5);
+    expect(await getLimit(orgId, "orgs.max_owned")).toBe(proBase + 5);
   });
 
   it("STALE EVENT: a rider already converged by a newer delivery is left alone — AND the row follows Stripe", async () => {
@@ -2111,12 +2141,12 @@ describe.skipIf(!HAS_DB)("extra-org rider prices converge on a PLAN change (webh
     // where this branch used to go wrong. `setExtraOrgs` sells AND re-prices in
     // one go (Task 3), so "someone got there first" means Stripe holds a NEW
     // quantity as well as the new price — and the event still says the old one.
-    const { orgId, walletId, stripeSubId } = await makeBilledGroupOrg("pro_plus");
-    const stale = riderItem(riderId, proEntry.lookupKey, 2);
+    const { orgId, walletId, stripeSubId } = await makeBilledGroupOrg("pro");
+    const stale = riderItem(riderId, proEntry.lookupKey, 2, STALE_PRICE_ID);
     liveItems[riderId] = {
       ...(liveItems[riderId] as object),
       quantity: 5,
-      price: { id: livePriceFor(proPlusEntry.lookupKey), lookup_key: proPlusEntry.lookupKey },
+      price: { id: livePriceFor(proEntry.lookupKey), lookup_key: proEntry.lookupKey },
     };
 
     await processStripeEvent(updatedEvent(stripeSubId, walletId, [stale]));
@@ -2133,7 +2163,7 @@ describe.skipIf(!HAS_DB)("extra-org rider prices converge on a PLAN change (webh
     const [row] = await sql<{ qty: number }[]>`
       select qty from org_addons where stripe_item_id = ${riderId}`;
     expect(row?.qty).toBe(5);
-    expect(await getLimit(orgId, "orgs.max_owned")).toBe(proPlusBase + 5);
+    expect(await getLimit(orgId, "orgs.max_owned")).toBe(proBase + 5);
   });
 
   // Round 3: the publish moved to the READ, so EVERY exit after it leaves the
@@ -2143,8 +2173,8 @@ describe.skipIf(!HAS_DB)("extra-org rider prices converge on a PLAN change (webh
   // remember it.
 
   it("STALE EVENT: a REJECTED update still leaves the row on the live quantity", async () => {
-    const { orgId, walletId, stripeSubId } = await makeBilledGroupOrg("pro_plus");
-    const stale = riderItem(riderId, proEntry.lookupKey, 2);
+    const { orgId, walletId, stripeSubId } = await makeBilledGroupOrg("pro");
+    const stale = riderItem(riderId, proEntry.lookupKey, 2, STALE_PRICE_ID);
     liveItems[riderId] = { ...(liveItems[riderId] as object), quantity: 5 };
     // The currency class this suite already covers: Stripe refuses the swap.
     itemUpdateSpy.mockRejectedValue(
@@ -2166,24 +2196,24 @@ describe.skipIf(!HAS_DB)("extra-org rider prices converge on a PLAN change (webh
     const [row] = await sql<{ qty: number }[]>`
       select qty from org_addons where stripe_item_id = ${riderId}`;
     expect(row?.qty).toBe(5);
-    expect(await getLimit(orgId, "orgs.max_owned")).toBe(proPlusBase + 5);
+    expect(await getLimit(orgId, "orgs.max_owned")).toBe(proBase + 5);
   });
 
   it("STALE EVENT: a rider Stripe has already emptied is CANCELED, not left billing a cap", async () => {
-    const { orgId, walletId, stripeSubId } = await makeBilledGroupOrg("pro_plus");
+    const { orgId, walletId, stripeSubId } = await makeBilledGroupOrg("pro");
     // Two events, because freeze-not-delete needs a row to freeze. First the
     // rider exists and is correctly priced, so the row is written the ordinary
     // way and the cap goes up.
     await processStripeEvent(
-      updatedEvent(stripeSubId, walletId, [riderItem(riderId, proPlusEntry.lookupKey, 2)]),
+      updatedEvent(stripeSubId, walletId, [riderItem(riderId, proEntry.lookupKey, 2)]),
     );
-    expect(await getLimit(orgId, "orgs.max_owned")).toBe(proPlusBase + 2);
+    expect(await getLimit(orgId, "orgs.max_owned")).toBe(proBase + 2);
 
-    // Now a STALE delivery: the event still remembers 2 riders on the old Pro
-    // price, but Stripe has since been emptied to 0. The mismatched price is
+    // Now a STALE delivery: the event still remembers 2 riders on a superseded
+    // rate, but Stripe has since been emptied to 0. The mismatched price is
     // what carries it past the steady-state exit and into the live read.
     vi.clearAllMocks();
-    const stale = riderItem(riderId, proEntry.lookupKey, 2);
+    const stale = riderItem(riderId, proEntry.lookupKey, 2, STALE_PRICE_ID);
     liveItems[riderId] = { ...(liveItems[riderId] as object), quantity: 0 };
 
     await processStripeEvent(updatedEvent(stripeSubId, walletId, [stale]));
@@ -2196,7 +2226,7 @@ describe.skipIf(!HAS_DB)("extra-org rider prices converge on a PLAN change (webh
     const [row] = await sql<{ qty: number; status: string }[]>`
       select qty, status from org_addons where stripe_item_id = ${riderId}`;
     expect(row?.status).toBe("canceled");
-    expect(await getLimit(orgId, "orgs.max_owned")).toBe(proPlusBase);
+    expect(await getLimit(orgId, "orgs.max_owned")).toBe(proBase);
   });
 
   it("STALE EVENT: the DUPLICATE that loses the claim still gets its row from Stripe", async () => {
@@ -2206,9 +2236,9 @@ describe.skipIf(!HAS_DB)("extra-org rider prices converge on a PLAN change (webh
     // closed in round 3. It now sits after the read and the publish, which costs
     // nothing extra: this branch only runs for duplicates, is already inside the
     // round trips, and already alerts.
-    const { orgId, walletId, stripeSubId } = await makeBilledGroupOrg("pro_plus");
-    const winner = riderItem(dupA, proEntry.lookupKey, 1);
-    const loser = riderItem(dupB, proEntry.lookupKey, 2);
+    const { orgId, walletId, stripeSubId } = await makeBilledGroupOrg("pro");
+    const winner = riderItem(dupA, proEntry.lookupKey, 1, STALE_PRICE_ID);
+    const loser = riderItem(dupB, proEntry.lookupKey, 2, STALE_PRICE_ID);
     // Stripe holds 7 on the loser, on a price the event has never seen — so the
     // alert and the log can be checked for WHICH price they report.
     liveItems[dupB] = {
@@ -2240,7 +2270,7 @@ describe.skipIf(!HAS_DB)("extra-org rider prices converge on a PLAN change (webh
     const [row] = await sql<{ qty: number }[]>`
       select qty from org_addons where stripe_item_id = ${dupB}`;
     expect(row?.qty).toBe(7);
-    expect(await getLimit(orgId, "orgs.max_owned")).toBe(proPlusBase + 1 + 7);
+    expect(await getLimit(orgId, "orgs.max_owned")).toBe(proBase + 1 + 7);
   });
 
   // Round 5: the CLAIM itself was uncovered. Every test above drove
@@ -2255,9 +2285,9 @@ describe.skipIf(!HAS_DB)("extra-org rider prices converge on a PLAN change (webh
     // A is on the target price at qty 0 — which still occupies that price in
     // Stripe — and takes the steady-state exit, which never sets the claim. So
     // the scan is the only thing that records it.
-    const { walletId, stripeSubId } = await makeBilledGroupOrg("pro_plus");
-    const a = riderItem(dupA, proPlusEntry.lookupKey, 0);
-    const b = riderItem(dupB, proEntry.lookupKey, 2);
+    const { walletId, stripeSubId } = await makeBilledGroupOrg("pro");
+    const a = riderItem(dupA, proEntry.lookupKey, 0);
+    const b = riderItem(dupB, proEntry.lookupKey, 2, STALE_PRICE_ID);
     liveItems[dupB] = { ...(liveItems[dupB] as object), quantity: 9 };
     const logged = vi.spyOn(log, "error").mockImplementation(() => {});
 
@@ -2280,12 +2310,12 @@ describe.skipIf(!HAS_DB)("extra-org rider prices converge on a PLAN change (webh
     // the target, so the opening scan claims nothing and only the live read can
     // discover that A is already there. This is the benefit round 4 advertised
     // in a comment and left unpinned.
-    const { walletId, stripeSubId } = await makeBilledGroupOrg("pro_plus");
-    const a = riderItem(dupA, proEntry.lookupKey, 1);
-    const b = riderItem(dupB, proEntry.lookupKey, 3);
+    const { walletId, stripeSubId } = await makeBilledGroupOrg("pro");
+    const a = riderItem(dupA, proEntry.lookupKey, 1, STALE_PRICE_ID);
+    const b = riderItem(dupB, proEntry.lookupKey, 3, STALE_PRICE_ID);
     liveItems[dupA] = {
       ...(liveItems[dupA] as object),
-      price: { id: livePriceFor(proPlusEntry.lookupKey), lookup_key: proPlusEntry.lookupKey },
+      price: { id: livePriceFor(proEntry.lookupKey), lookup_key: proEntry.lookupKey },
     };
     const logged = vi.spyOn(log, "error").mockImplementation(() => {});
 
@@ -2302,16 +2332,16 @@ describe.skipIf(!HAS_DB)("extra-org rider prices converge on a PLAN change (webh
     // payload claims the target for A, but A has since moved off it and B is
     // the item Stripe now has on it. A stale claim must not turn B — precisely
     // the item that is already correct — into a duplicate alert.
-    const { walletId, stripeSubId } = await makeBilledGroupOrg("pro_plus");
-    const a = riderItem(dupA, proPlusEntry.lookupKey, 1);
-    const b = riderItem(dupB, proEntry.lookupKey, 4);
+    const { walletId, stripeSubId } = await makeBilledGroupOrg("pro");
+    const a = riderItem(dupA, proEntry.lookupKey, 1);
+    const b = riderItem(dupB, proEntry.lookupKey, 4, STALE_PRICE_ID);
     liveItems[dupA] = {
       ...(liveItems[dupA] as object),
       price: { id: "price_a_moved_away", lookup_key: proEntry.lookupKey },
     };
     liveItems[dupB] = {
       ...(liveItems[dupB] as object),
-      price: { id: livePriceFor(proPlusEntry.lookupKey), lookup_key: proPlusEntry.lookupKey },
+      price: { id: livePriceFor(proEntry.lookupKey), lookup_key: proEntry.lookupKey },
     };
     const logged = vi.spyOn(log, "error").mockImplementation(() => {});
 
@@ -2326,8 +2356,8 @@ describe.skipIf(!HAS_DB)("extra-org rider prices converge on a PLAN change (webh
   });
 
   it("an item deleted between emission and processing is a benign race, not an alert", async () => {
-    const { walletId, stripeSubId } = await makeBilledGroupOrg("pro_plus");
-    const item = riderItem(riderId, proEntry.lookupKey, 2);
+    const { walletId, stripeSubId } = await makeBilledGroupOrg("pro");
+    const item = riderItem(riderId, proEntry.lookupKey, 2, STALE_PRICE_ID);
     const gone = Object.assign(new Error("No such subscription item"), {
       code: "resource_missing",
     });
@@ -2351,7 +2381,7 @@ describe.skipIf(!HAS_DB)("extra-org rider prices converge on a PLAN change (webh
   // -------------------------------------------------------------------------
 
   it("ALERTS staff when the catalog cannot name a price, with the identifiers to act on", async () => {
-    const { walletId, stripeSubId } = await makeBilledGroupOrg("pro_plus");
+    const { walletId, stripeSubId } = await makeBilledGroupOrg("pro");
     pricesListSpy.mockResolvedValue({ data: [] }); // stripe:sync never run here
     const logged = vi.spyOn(log, "error").mockImplementation(() => {});
 
@@ -2367,10 +2397,10 @@ describe.skipIf(!HAS_DB)("extra-org rider prices converge on a PLAN change (webh
         subscriptionId: walletId,
         stripeSubscriptionId: stripeSubId,
         // The plan is KNOWN here — resolveOrgAddonPriceId throws after the plan
-        // row has been read — and it is what tells a responder whether to
-        // expect the $9 or the $19 SKU. "unknown" is reserved for the case
-        // where the plan read itself is what failed.
-        planKey: "pro_plus",
+        // row has been read — and it is what tells a responder which plan's
+        // rider price to expect. "unknown" is reserved for the case where the
+        // plan read itself is what failed.
+        planKey: "pro",
       }),
     );
   });
@@ -2379,7 +2409,7 @@ describe.skipIf(!HAS_DB)("extra-org rider prices converge on a PLAN change (webh
     // An out-of-order delivery names a price the item has since left. The
     // payload is a snapshot; `live` is the truth, and `currentPriceId` is the
     // field a responder acts on.
-    const { walletId, stripeSubId } = await makeBilledGroupOrg("pro_plus");
+    const { walletId, stripeSubId } = await makeBilledGroupOrg("pro");
     const stale = riderItem(riderId, proEntry.lookupKey, 2, "price_the_event_remembers");
     liveItems[riderId] = {
       ...(liveItems[riderId] as object),
@@ -2400,7 +2430,7 @@ describe.skipIf(!HAS_DB)("extra-org rider prices converge on a PLAN change (webh
     // The rider prices carry currency_options for eur/gbp/inr/aud. A group
     // whose subscription currency is outside that set has the item update
     // rejected outright, and the group then sits on the wrong rate for ever.
-    const { walletId, stripeSubId } = await makeBilledGroupOrg("pro_plus");
+    const { walletId, stripeSubId } = await makeBilledGroupOrg("pro");
     itemUpdateSpy.mockRejectedValue(
       Object.assign(
         new Error(
@@ -2415,7 +2445,9 @@ describe.skipIf(!HAS_DB)("extra-org rider prices converge on a PLAN change (webh
     // Never throws: a rejected currency must not fail the whole webhook.
     await expect(
       processStripeEvent(
-        updatedEvent(stripeSubId, walletId, [riderItem(riderId, proEntry.lookupKey, 2)]),
+        updatedEvent(stripeSubId, walletId, [
+          riderItem(riderId, proEntry.lookupKey, 2, STALE_PRICE_ID),
+        ]),
       ),
     ).resolves.toBeUndefined();
 
@@ -2427,8 +2459,8 @@ describe.skipIf(!HAS_DB)("extra-org rider prices converge on a PLAN change (webh
       expect.objectContaining({
         subscriptionId: walletId,
         itemId: riderId,
-        currentPriceId: livePriceFor(proEntry.lookupKey),
-        expectedPriceId: livePriceFor(proPlusEntry.lookupKey),
+        currentPriceId: STALE_PRICE_ID,
+        expectedPriceId: livePriceFor(proEntry.lookupKey),
         reason: expect.stringContaining("currency"),
       }),
     );
@@ -2441,7 +2473,7 @@ describe.skipIf(!HAS_DB)("extra-org rider prices converge on a PLAN change (webh
 
   it("stays silent when STAFF_ALERT_EMAIL is unset — the gate comes before the send", async () => {
     vi.stubEnv("STAFF_ALERT_EMAIL", "");
-    const { walletId, stripeSubId } = await makeBilledGroupOrg("pro_plus");
+    const { walletId, stripeSubId } = await makeBilledGroupOrg("pro");
     pricesListSpy.mockResolvedValue({ data: [] });
     const logged = vi.spyOn(log, "error").mockImplementation(() => {});
 
@@ -2453,7 +2485,7 @@ describe.skipIf(!HAS_DB)("extra-org rider prices converge on a PLAN change (webh
   });
 
   it("a failing ALERT can never be what breaks the webhook", async () => {
-    const { walletId, stripeSubId } = await makeBilledGroupOrg("pro_plus");
+    const { walletId, stripeSubId } = await makeBilledGroupOrg("pro");
     pricesListSpy.mockResolvedValue({ data: [] });
     repriceAlertSpy.mockRejectedValue(new Error("resend is down"));
     const logged = vi.spyOn(log, "error").mockImplementation(() => {});
@@ -2494,7 +2526,7 @@ describe.skipIf(!HAS_DB)("extra-org rider prices converge on a PLAN change (webh
     // Stripe emits a final `updated` carrying status canceled just before
     // `deleted`. Re-pricing an item on a dead subscription fails, and alerting
     // about a group that is leaving anyway is noise, not signal.
-    const { walletId, stripeSubId } = await makeBilledGroupOrg("pro_plus");
+    const { walletId, stripeSubId } = await makeBilledGroupOrg("pro");
     const logged = vi.spyOn(log, "error").mockImplementation(() => {});
     const sub = subFor(stripeSubId, [planItem, riderItem(riderId, proEntry.lookupKey, 2)]);
     (sub as { status?: string }).status = "canceled";

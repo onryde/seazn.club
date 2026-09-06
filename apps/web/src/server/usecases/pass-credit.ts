@@ -289,9 +289,9 @@ export async function groupAlreadyRedeemed(subscriptionId: string): Promise<bool
  * out. Every failure mode is an outcome instead, so the caller (and the tests)
  * can see WHICH rule declined rather than just "no credit".
  *
- * Plan scope ("Pro and Pro Plus") is the caller's: `checkoutSchema.plan_key` is
- * `z.enum(["pro", "pro_plus"])`, so the only route that calls this cannot ask
- * for anything else.
+ * Plan scope is the caller's: `checkoutSchema.plan_key` is
+ * `z.enum(PURCHASABLE_PLAN_KEYS)` — "pro" only, post entitlements v18 — so
+ * the only route that calls this cannot ask for anything else.
  */
 export async function creditPassTowardSubscription(orgId: string): Promise<PassCreditResult> {
   const pass = await mostRecentPass(orgId);

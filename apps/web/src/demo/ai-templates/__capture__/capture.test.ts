@@ -376,12 +376,17 @@ describe.skipIf(!CAPTURING || !HAS_DB)("capture a real architect run", () => {
         assertCaptureDatabase();
         loadAnthropicKeyIfAbsent();
 
-        // pro_plus is the only plan holding BOTH gates a template can need —
-        // `scheduling.ai` and, for the joint template, `scheduling.multi_division`.
-        // The wallet is resolved after the plan, because `setOrgPlan` may mint
-        // the subscription that IS the wallet id.
+        // `pro` — and the old reason for the plan flip is gone twice over.
+        // This said pro_plus was "the only plan holding BOTH gates a template
+        // can need"; V393 (entitlements v18) DELETED that plan from `plans`, so
+        // the write was an FK violation waiting for the next capture run, and
+        // both gates it named (`scheduling.ai`, `scheduling.multi_division`) now
+        // resolve true on every plan including community. The flip stays only
+        // so a capture runs on a realistic paid org. The wallet is resolved
+        // after the plan, because `setOrgPlan` may mint the subscription that IS
+        // the wallet id.
         const { auth } = await seedOrg("community");
-        await setOrgPlan(auth.orgId, "pro_plus");
+        await setOrgPlan(auth.orgId, "pro");
         await invalidateOrgEntitlements(auth.orgId);
         await grantCredits(await walletIdFor(auth.orgId), CAPTURE_CREDITS);
 

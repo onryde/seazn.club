@@ -74,9 +74,19 @@ type Tx = postgres.TransactionSql;
 
 export const REGISTRATION_TOKEN_PREFIX = "rg_";
 
-/** The platform cut for THIS org + competition (v3/07 §2 fee row): per-org
- *  override → `registration.fee_percent` entitlement (pro 2, event-pass 5) →
- *  the admin-set platform default (spec §1). */
+/** The platform cut for THIS org + competition (v3/07 §2 fee row), resolved in
+ *  order: per-org override → the plan's `registration.fee_percent` entitlement
+ *  → the admin-set platform default (spec §1).
+ *
+ *  No rate is written here on purpose. The ladder lives in `plan_entitlements`
+ *  and this function reads it, so a number in this comment is a copy that can
+ *  only drift — and had: it read "pro 2, event-pass 5" from V310 until V398
+ *  re-cut the ladder underneath it. To learn the live rates, query that table
+ *  or read the newest migration that writes `registration.fee_percent`.
+ *
+ *  `<= 0` falls through to the default alongside `null` on purpose: a plan row
+ *  of 0 means "this plan sets no rate", never "this plan is free" — the same
+ *  reading `effectiveFeePercentFor` below depends on for its lock check. */
 export async function feePercentFor(orgId: string, competitionId?: string): Promise<number> {
   const pct = await getLimit(orgId, "registration.fee_percent", competitionId);
   return pct == null || pct <= 0 ? platformFeeDefault() : pct;

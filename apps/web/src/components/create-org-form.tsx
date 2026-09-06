@@ -7,6 +7,7 @@ import { api } from "@/lib/client";
 import { useMsg } from "@/components/i18n/dict-provider";
 import { asCurrency, formatMinor } from "@/lib/currency";
 import { planSellsExtraOrg } from "@/lib/org-addon-plans";
+import { planLabel } from "@/lib/plan-label";
 import { routes } from "@/lib/routes";
 import type { MessageKey } from "@/lib/messages";
 
@@ -141,12 +142,6 @@ function groupLabel(g: CreateOrgGroup, msg: Msg): string {
     name: names[0],
     count: rest,
   });
-}
-
-/** Plan name for a bill's subline in the picker (e.g. "Pro Plus", "Pro"). */
-function planLabel(plan: string): string {
-  if (plan === "pro_plus") return "Pro Plus";
-  return plan.charAt(0).toUpperCase() + plan.slice(1);
 }
 
 /**

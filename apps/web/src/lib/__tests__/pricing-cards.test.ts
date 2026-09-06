@@ -1,28 +1,119 @@
 import { afterAll, describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import {
-  FREE_FEATURES,
-  PASS_FEATURES,
-  PLUS_CARD_FEATURES,
-  PLUS_COMING_SOON,
-  PRO_FEATURES,
+  FREE_CARD_BULLETS,
+  PASS_CARD_BULLETS,
+  PRO_CARD_BULLETS,
   PASS_CREDIT_GRANT,
+  cardBullets,
   ticketTiers,
+  type CardBullet,
 } from "../pricing-cards";
-import { SUPPORTED_CURRENCIES, lowestCreditPackAmount, passPrice } from "../currency";
+import type { MatrixData } from "@/lib/pricing-matrix";
+import enMarketing from "@/dictionaries/en/marketing.json";
+import {
+  HIDDEN_PASS_KEYS,
+  PASS_KEYS,
+  SELLABLE_PASS_KEYS,
+  SUPPORTED_CURRENCIES,
+  formatMinor,
+  lowestCreditPackAmount,
+  passPrice,
+} from "../currency";
 import stripePlans from "@/config/stripe-plans.json";
 import {
   BOUNDED_SCOPE_GRAMMAR,
   FALSE_PASS_PERMANENCE_PATTERNS,
   type FeatureGrants,
-  PLUS_DIFFERENTIATOR_VOCAB,
+  EXCLUSIVE_CLAIM_VOCAB,
   localeCreditLeadershipFaults,
-  localePlusDifferentiatorFaults,
   wholeNumber,
 } from "@/lib/copy-truth";
 import { sql } from "@/lib/db";
 
 const HAS_DB = !!process.env.DATABASE_URL;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// THE CARDS, RENDERED
+//
+// W2 (entitlements v18) moved the three bullet arrays into the four locale
+// dictionaries and made every figure they quote an interpolation from
+// `plan_entitlements` — /es/pricing was serving English bullets under a Spanish
+// crossover sentence, and five of those bullets' values had just changed.
+//
+// Nothing in THIS file changes shape as a result. The rules below judge what a
+// buyer READS, so they are pointed at the rendered ENGLISH — the same strings
+// they always were, produced by the same code the page runs. That is a
+// STRONGER pin than before, not a weaker one: `cardMatrixFaults` now reds if a
+// bullet's placeholder is wired to the wrong `plan_entitlements` row, which was
+// previously unrepresentable because the number was typed in by hand.
+//
+// The es/fr/nl side is `lib/__tests__/pricing-card-i18n.test.ts` (source scan +
+// four-locale rules) and the rendered /es page in
+// `app/[lang]/(marketing)/pricing/__tests__/pricing-page.test.tsx`.
+// ─────────────────────────────────────────────────────────────────────────────
+
+const EN = enMarketing as Record<string, string>;
+
+/** `{feature: {plan: int}}` in the shape `cardBullets` reads. */
+const matrixOf = (rows: Record<string, Record<string, number | null>>): MatrixData => {
+  const out: MatrixData = {};
+  for (const [feature, plans] of Object.entries(rows)) {
+    out[feature] = {};
+    for (const [plan, int_value] of Object.entries(plans)) {
+      out[feature]![plan] = { bool_value: null, int_value };
+    }
+  }
+  return out;
+};
+
+/**
+ * The rows the card bullets interpolate, at their live values.
+ *
+ * A fixture rather than a query, because most of the rules in this file run
+ * WITHOUT a database (CI sets `DATABASE_URL`; a laptop often does not) and the
+ * approved-wording gate has to have something to compare. It is not a second
+ * source of truth: "the matrix these guards render the cards from is the live
+ * one" below reads every cell back out of `plan_entitlements` and reds on any
+ * drift, and it also reds if a bullet starts reading a row this fixture does
+ * not declare.
+ *
+ * `competitions.max_active` is NULL on pro — unlimited, the one figure the Pro
+ * card states as a word rather than a number.
+ */
+const FIXTURE_MATRIX: MatrixData = matrixOf({
+  "competitions.max_active": { community: 3, pro: null },
+  "divisions.per_competition.max": { community: 4, event_pass: 10, pro: 20 },
+  "entrants.per_division.max": { community: 64, event_pass: 128, pro: 256 },
+  "registration.fee_percent": { community: 5, event_pass: 4, pro: 2 },
+});
+
+/**
+ * Surface name -> the export it renders from.
+ *
+ * The EXPORTS were renamed in W2 (`FREE_FEATURES` held sentences;
+ * `FREE_CARD_BULLETS` holds keys). The SURFACE names did not change, and they
+ * are what every fault message in this file says — "PRO_FEATURES: promises
+ * dashboard.theme, but pro does not grant it" names the Pro card, not a
+ * binding. Written down rather than derived so renaming an export reds here
+ * instead of quietly leaving a card unexamined.
+ */
+const CARD_SOURCE: Record<string, string> = {
+  FREE_FEATURES: "FREE_CARD_BULLETS",
+  PASS_FEATURES: "PASS_CARD_BULLETS",
+  PRO_FEATURES: "PRO_CARD_BULLETS",
+};
+
+const renderCards = (matrix: MatrixData): Record<string, readonly string[]> => ({
+  FREE_FEATURES: cardBullets(EN, FREE_CARD_BULLETS, matrix),
+  PASS_FEATURES: cardBullets(EN, PASS_CARD_BULLETS, matrix),
+  PRO_FEATURES: cardBullets(EN, PRO_CARD_BULLETS, matrix),
+});
+
+const LIVE_CARD_BULLETS: Record<string, readonly string[]> = renderCards(FIXTURE_MATRIX);
+const FREE_FEATURES = LIVE_CARD_BULLETS.FREE_FEATURES!;
+const PASS_FEATURES = LIVE_CARD_BULLETS.PASS_FEATURES!;
+const PRO_FEATURES = LIVE_CARD_BULLETS.PRO_FEATURES!;
 
 afterAll(async () => {
   if (!HAS_DB) return;
@@ -34,26 +125,31 @@ afterAll(async () => {
 
 describe("pricing cards", () => {
   it("stub bullets are drawn from the shared /pricing arrays (drift guard)", () => {
-    const [community, pass, pro] = ticketTiers("usd");
+    const [community, pass, pro] = ticketTiers("usd", EN, FIXTURE_MATRIX);
     expect(community!.bullets.every((b) => FREE_FEATURES.includes(b))).toBe(true);
     expect(pass!.bullets.every((b) => PASS_FEATURES.includes(b))).toBe(true);
     expect(pro!.bullets.every((b) => PRO_FEATURES.includes(b))).toBe(true);
     expect(community!.bullets.length).toBeGreaterThanOrEqual(3);
   });
   it("prices come from lib/currency (multi-currency stays correct)", () => {
-    const [, passUsd, proUsd] = ticketTiers("usd");
-    expect(passUsd!.price).toBe("$29");
-    expect(proUsd!.price).toBe("$19");
+    // Formatted from the SEED's own points, not from amounts typed here — W3
+    // moved every price onto a charm point and a typed pair would red on the
+    // next legitimate reprice while pinning nothing about the formatting or
+    // the currency routing this case exists for.
+    const [, passUsd, proUsd] = ticketTiers("usd", EN, FIXTURE_MATRIX);
+    expect(passUsd!.price).toBe(formatMinor(passPrice("usd", "event_pass"), "usd"));
+    expect(proUsd!.price).toBe(formatMinor(stripePlans.plans[0]!.prices.monthly.unit_amount, "usd"));
     expect(proUsd!.period).toBe("/mo");
-    const [, passInr] = ticketTiers("inr");
-    expect(passInr!.price).not.toBe("$29");
+    const [, passInr] = ticketTiers("inr", EN, FIXTURE_MATRIX);
+    expect(passInr!.price).not.toBe(passUsd!.price);
+    expect(passInr!.price).toContain("₹");
   });
   // v17 #294: the home stub still leads with M's price, because M is what the
   // lowest rung costs — but with two rungs on sale that figure is a FLOOR, not
-  // the price. Unprefixed it reads as "an Event Pass costs $29", which is
+  // the price. Unprefixed it reads as "an Event Pass costs $15", which is
   // false for half the product. Community has no prefix: Free really is free.
   it("marks the Event Pass price as a floor, and only that one", () => {
-    const [community, pass, pro] = ticketTiers("usd");
+    const [community, pass, pro] = ticketTiers("usd", EN, FIXTURE_MATRIX);
     expect(pass!.prefix, "the pass is a ladder, so its price is a 'from'").toBeTruthy();
     expect(community!.prefix).toBeUndefined();
     expect(pro!.prefix).toBeUndefined();
@@ -62,9 +158,11 @@ describe("pricing cards", () => {
   /**
    * FIX ROUND 2 — the add-on line quoted a HARDCODED "$10" in all four locales
    * while every other price on /pricing goes through `formatMinor(…, currency)`
-   * behind the CurrencySwitcher. The seed's cheapest pack is eur 900 / gbp 800 /
-   * aud 1500 / inr 79900, so the literal was false in FOUR of five currencies —
-   * exactly the defect #191 was filed for on the pass copy.
+   * behind the CurrencySwitcher. The seed's cheapest pack was eur 900 / gbp 800 /
+   * aud 1500 / inr 79900 when that was written — AUD has since been dropped and
+   * the INR packs re-anchored to 39900 — so the literal was false in FOUR of the
+   * five currencies of the day, exactly the defect #191 was filed for on the
+   * pass copy.
    *
    * Pinned to the SEED, not to a number: the floor is the smallest amount in the
    * switched currency, so adding a cheaper pack moves the advertised "from".
@@ -100,7 +198,7 @@ describe("pricing cards", () => {
    * carries, it must still make the bounded claim.
    */
   it("the home Event Pass stub still says what bounds the pass", () => {
-    const [, pass] = ticketTiers("usd");
+    const [, pass] = ticketTiers("usd", EN, FIXTURE_MATRIX);
     expect(pass!.bullets.some((b) => BOUNDED_SCOPE_GRAMMAR.test(b)), pass!.bullets.join(" | ")).toBe(
       true,
     );
@@ -110,7 +208,7 @@ describe("pricing cards", () => {
   });
 
   it("only the Event Pass glows", () => {
-    expect(ticketTiers("usd").map((t) => Boolean(t.glow))).toEqual([false, true, false]);
+    expect(ticketTiers("usd", EN, FIXTURE_MATRIX).map((t) => Boolean(t.glow))).toEqual([false, true, false]);
   });
 
   // v17 (SPEC-6 A1): the graded per-division run cap became the credit wallet
@@ -123,9 +221,19 @@ describe("pricing cards", () => {
 
   // The Event Pass credit grant is a one-time top-up with NO ai.credits.monthly
   // row in plan_entitlements, so pricing-cards is its single source. Pin it so
-  // the card copy and the (future) wallet grant can't silently diverge.
-  it("the Event Pass card quotes the +25 one-time credit grant", () => {
-    expect(PASS_CREDIT_GRANT).toBe(25);
+  // the card copy and the wallet grant can't silently diverge.
+  //
+  // Entitlements v18 W2 T5 (design R9): PER RUNG — 25 on M, 35 on L (W2 T12
+  // re-cut L from 50 alongside Pro's monthly grant, owner ruling 2026-09-03).
+  // The pin is both figures AND their inequality: a Record whose two values
+  // were equal would satisfy every rung-keyed read in the codebase while
+  // restoring exactly the flat grant this wave retired.
+  it("the Event Pass card quotes a one-time credit grant per rung — 25 on M, 35 on L", () => {
+    expect(PASS_CREDIT_GRANT).toEqual({ event_pass: 25, event_pass_l: 35 });
+    expect(PASS_CREDIT_GRANT.event_pass_l).toBeGreaterThan(PASS_CREDIT_GRANT.event_pass);
+    // Every rung the product can sell has a grant — no rung falls through to a
+    // default, because there is deliberately no default to fall through to.
+    expect(Object.keys(PASS_CREDIT_GRANT).sort()).toEqual([...PASS_KEYS].sort());
   });
 
   // v17 #294 — the L rung's $59 price point, per-currency, alongside M's. Both
@@ -133,12 +241,18 @@ describe("pricing cards", () => {
   // array stripe-sync seeds Stripe from, so a quoted price cannot drift from
   // the price object Stripe holds for that rung.
   it("passPrice resolves both Event Pass rungs, keyed by passKey", () => {
-    expect(passPrice("usd", "event_pass")).toBe(2900);
-    expect(passPrice("usd", "event_pass_l")).toBe(5900);
-    expect(passPrice("gbp", "event_pass_l")).toBe(4900);
-    expect(passPrice("eur", "event_pass_l")).toBe(5900);
-    expect(passPrice("inr", "event_pass_l")).toBe(449900);
-    expect(passPrice("aud", "event_pass_l")).toBe(8900);
+    // Both rungs read from the seed rather than typed: the claim is that
+    // `passKey` picks the right ENTRY and `currency` the right point inside it.
+    const bySeedKey = (key: string) => stripePlans.passes.find((p) => p.key === key)!.price;
+    const m = bySeedKey("event_pass");
+    const l = bySeedKey("event_pass_l");
+    expect(passPrice("usd", "event_pass")).toBe(m.unit_amount);
+    expect(passPrice("usd", "event_pass_l")).toBe(l.unit_amount);
+    expect(passPrice("gbp", "event_pass_l")).toBe(l.currency_options.gbp);
+    expect(passPrice("eur", "event_pass_l")).toBe(l.currency_options.eur);
+    expect(passPrice("inr", "event_pass_l")).toBe(l.currency_options.inr);
+    // The rungs must be priced apart, or "keyed by passKey" is unwitnessable.
+    expect(m.unit_amount).not.toBe(l.unit_amount);
   });
 
   // `passKey` is REQUIRED (no default), so a surface that forgets the rung is a
@@ -199,24 +313,24 @@ interface ApprovedBullets {
 const APPROVED_CARD_BULLETS: ApprovedBullets[] = [
   {
     array: "FREE_FEATURES",
-    why: "the Community card on /pricing (and, sliced, the home ticket stub). Numbers pinned to the live matrix by CARD_SURFACES below: competitions.max_active, divisions.per_competition.max, entrants.per_division.max and registration.fee_percent, all on plan_key 'community'. The remaining bullets name capabilities community genuinely has (registration.paid, discovery.listed, dashboard.public.max >= 1).",
+    why: "the Community card on /pricing (and, sliced, the home ticket stub). Numbers pinned to the live matrix by CARD_SURFACES below: competitions.max_active, divisions.per_competition.max, entrants.per_division.max and registration.fee_percent, all on plan_key 'community'. The remaining bullets name capabilities community genuinely has (registration.paid, discovery.listed, dashboard.public.max >= 1). W2 (entitlements v18, V393): bullet 1 read '10 active competitions' against a cap V393 re-cut to 3 — the card oversold the free tier threefold. It quotes NO share loop: V396 (owner ruling 2026-09-03) made dashboard.player_profiles, embeds.enabled and news.auto paid on Free, so a bullet naming any of them would sell what the resolver now refuses. W2 ALSO MOVED THIS CARD INTO THE DICTIONARIES: the bullets are `pricing.<card>.f*` keys in all four locales and every figure above is INTERPOLATED from the row named beside it in lib/pricing-cards.ts, so the approved text below is what `cardBullets` renders in English from the live matrix rather than a sentence anybody typed. A number can no longer disagree with its row; the WORDS are what this entry pins.",
     bullets: [
-      "10 active competitions, 4 divisions",
+      "3 active competitions, 4 divisions",
       "64 entrants per division",
       "League, groups + knockout & swiss formats",
-      "Online registration & entry fees (8% fee)",
+      "Online registration & entry fees (5% fee)",
       "Live standings & public dashboard",
       "Listed on the seazn.club showcase",
     ],
   },
   {
     array: "PASS_FEATURES",
-    why: "the Event Pass card on /pricing (and, sliced, the home ticket stub). Bullet 1 is the pass's DURATION — V328/V334 `org_has_feature` drop the pass arm once the competition is archived/completed or 7 days past ends_on, so it is bounded, not permanent; that is asserted by passBulletDurationFaults. Bullet 2 carries BOTH rungs' caps and bullet 4 the fee, all pinned to the live matrix by CARD_SURFACES below: divisions.per_competition.max and entrants.per_division.max on event_pass AND event_pass_l (L's entrant cap is null, so the copy must say 'unlimited'), registration.fee_percent on event_pass, and community's registration.fee_percent for the 'not 8%' comparison. Bullets 3 and 5-7 name boolean grants (formats.advanced, exports.branded, dashboard.player_profiles, sponsors.*, realtime) that the pass lifts off community.",
+    why: "the Event Pass card on /pricing (and, sliced, the home ticket stub). Bullet 1 is the pass's DURATION — V328/V334 `org_has_feature` drop the pass arm once the competition is archived/completed or 7 days past ends_on, so it is bounded, not permanent; that is asserted by passBulletDurationFaults. BULLET 2 CHANGED 2026-09-05 (owner decision: the L rung comes off sale): it read '10 divisions, 128 entrants each — 20 divisions & 512 entrants on L' and now reads M's ceilings alone, because the second half advertised a size with no checkout behind it. Re-read against the code before re-pinning: plan_entitlements gives event_pass 10 divisions and 128 entrants per division, and registration.fee_percent is 4 on event_pass against 5 on community (V398's additive ladder 5/4/2/1) — both still pinned to the live matrix by CARD_SURFACES below, which now names only the rungs in SELLABLE_PASS_KEYS. The withdrawn rung's own numbers are still checked where that is a claim about the SEED rather than about copy (pricing-matrix.test.ts, entitlements-sql-parity.test.ts), so the dormant matrix cannot rot; capClaimFaults still faults any surface that calls a numeric cap unlimited, which is the rule L's own cap needed after V393 gave it a real 512. Bullets 3 and 5-7 name boolean grants (formats.advanced, exports.branded, dashboard.player_profiles, sponsors.*, realtime) that the pass lifts off community. W2 ALSO MOVED THIS CARD INTO THE DICTIONARIES: the bullets are `pricing.<card>.f*` keys in all four locales and every figure above is INTERPOLATED from the row named beside it in lib/pricing-cards.ts, so the approved text below is what `cardBullets` renders in English from the live matrix rather than a sentence anybody typed. A number can no longer disagree with its row; the WORDS are what this entry pins.",
     bullets: [
       "Upgrades ONE competition while it runs",
-      "10 divisions, 128 entrants each — 20 & unlimited on L",
+      "10 divisions, 128 entrants each",
       "Advanced formats — double elim, ladders",
-      "5% platform fee on entry fees, not 8%",
+      "4% platform fee on entry fees, not 5%",
       "Branded exports & public player cards",
       "Sponsor tiers & paid sponsorship packages",
       "Realtime scoreboard & slideshow",
@@ -224,66 +338,29 @@ const APPROVED_CARD_BULLETS: ApprovedBullets[] = [
   },
   {
     array: "PRO_FEATURES",
-    why: "the Pro card on /pricing (and, sliced, the home ticket stub). Pinned to the live matrix by CARD_SURFACES below: competitions.max_active and divisions.per_competition.max are null on pro, so 'Unlimited competitions & divisions' must stay literally true; entrants.per_division.max is 256 and registration.fee_percent is 2. The capability bullets are boolean pro grants (stats.player, scoring.device_links, api.access, exports, dashboard.branding for the badge, discipline.enforced, news.auto, officials.marks). It must NOT claim a pro_plus-only feature — crossCardExclusivityFaults judges that against the rows. W1 (entitlements v18, owner ruling 2026-08-30): bullet 4 was 'Ball-by-ball & rally scoring, player stats'. V390 deleted scoring.ball_by_ball and scoring.rally_by_rally from plan_entitlements — recording detail is free on every plan — so two thirds of that sentence pointed at no row and sold Community something it already has. Only stats.player survives of the three, and it is what the bullet now names.",
+    why: "the Pro card on /pricing (and, sliced, the home ticket stub). Pinned to the live matrix by CARD_SURFACES below: competitions.max_active is null on pro but divisions.per_competition.max is 20 since V393, so the one bullet that covered both rows had to split into 'Unlimited competitions, 20 divisions each'; entrants.per_division.max is 256 and registration.fee_percent is 2. The capability bullets are boolean pro grants (stats.player, scoring.device_links, api.access, exports, dashboard.theme for the club colours (V396 took badge removal off Pro, so the badge bullet became false, and V397 split the accent colour onto its own Pro key — that is what replaced it), officials.auto (V393 brought it down from the deleted Pro Plus), discipline.enforced, news.auto, officials.marks). It must NOT claim a pro_plus-only feature — crossCardExclusivityFaults judges that against the rows. W1 (entitlements v18, owner ruling 2026-08-30): bullet 4 was 'Ball-by-ball & rally scoring, player stats'. V390 deleted scoring.ball_by_ball and scoring.rally_by_rally from plan_entitlements — recording detail is free on every plan — so two thirds of that sentence pointed at no row and sold Community something it already has. Only stats.player survives of the three, and it is what the bullet now names. W2 ALSO MOVED THIS CARD INTO THE DICTIONARIES: the bullets are `pricing.<card>.f*` keys in all four locales and every figure above is INTERPOLATED from the row named beside it in lib/pricing-cards.ts, so the approved text below is what `cardBullets` renders in English from the live matrix rather than a sentence anybody typed. A number can no longer disagree with its row; the WORDS are what this entry pins.",
     bullets: [
-      "Unlimited competitions & divisions",
+      "Unlimited competitions, 20 divisions each",
       "256 entrants per division",
       "Entry fees at a 2% platform fee",
       "Player stats & scorecards",
       "Officials, exports, API keys, device links",
-      "Remove the “Powered by Seazn” badge",
+      "Your club colours on public pages & slideshow",
       "Suspensions & discipline tracking",
-      "Rate your match officials",
+      "Auto officials assignment & ratings",
       "Auto-drafted result posts",
     ],
   },
-  {
-    array: "PLUS_CARD_FEATURES",
-    why: "the Pro Plus card on /pricing, read under the `pricing.plus.note` frame 'Everything in Pro, plus…' — so every bullet asserts EXCLUSIVITY and must name something the lower plans lack. Pinned to the live matrix by CARD_SURFACES below (members.max / teams.max / clubs.max are null on pro_plus, registration.fee_percent is 1) and by localePlusDifferentiatorFaults (officials.auto, api.write, support.priority are pro_plus-only) and localeCreditLeadershipFaults (ai.credits.monthly 10/60/200, so 'largest' is the matrix's own ordering). scheduling.ai is granted on EVERY plan key and must never appear here. THE TEXT IS DICTIONARY-BACKED: this array pins count and order, `pricing.plus.f1-f5` is what renders.",
-    bullets: [
-      "Unlimited members, teams & clubs",
-      "1% platform fee on entry fees",
-      "Largest monthly AI credit grant",
-      "Auto officials assignment",
-      "Write API access & priority support",
-    ],
-  },
-  {
-    // ── FIX ROUND 1 (I3): this block was covered by NOTHING ──────────────────
-    // `PLUS_COMING_SOON`, `pricing.plus.soon1-8` and `pricing.plus.soonLabel`
-    // were outside every rule, and the previous round's "pins every card array"
-    // assertion listed exactly two arrays — codifying the omission structurally
-    // rather than merely forgetting it. Measured: flipping `soonLabel` to
-    // "Included now" reclassifies EIGHT undelivered features as shipped and the
-    // whole suite stayed green.
-    //
-    // There is no matrix row to pin this to — availability is not in
-    // plan_entitlements, and SPEC-1 §9 deliberately seeds `domains.custom` on
-    // pro_plus while the DNS product is unbuilt (`pricing-matrix.ts` never
-    // renders that row). So the gate IS the guard here, which is precisely the
-    // case the inventory shape exists for.
-    array: "PLUS_COMING_SOON",
-    why: "the ROADMAP under the Pro Plus card — SPEC-1 §6 requires these to read as ambition and never as a paywall, and §9 keeps `domains.custom` seeded-but-unshipped. Nothing in plan_entitlements records shipped-ness, so this pin and `pricing.plus.soonLabel` (pinned in _approved-dictionary-copy.ts, four locales) are the ONLY thing standing between a one-word edit and eight undelivered features being advertised as live. Re-approving an entry here means confirming the feature is still unbuilt, and moving one out means deleting it from this list in the same commit that ships it. THE TEXT IS DICTIONARY-BACKED: `pricing.plus.soon1-8` renders; this array pins count and order.",
-    bullets: [
-      "Multi-org command centre",
-      "Shared templates & branding across orgs",
-      "Cross-competition analytics",
-      "Custom domain & white-label",
-      "SSO / SAML",
-      "SLA & dedicated support",
-      "Data export & warehouse",
-      "Bulk & scheduled automation",
-    ],
-  },
+  // The `PLUS_CARD_FEATURES` and `PLUS_COMING_SOON` entries were DELETED here in
+  // W2 (entitlements v18) with the arrays themselves — see the note in
+  // lib/pricing-cards.ts. Both described the Pro Plus card, a card `/pricing`
+  // stopped rendering and a plan V393 deleted from `plans`. The roadmap
+  // inventory was the only thing standing between a one-word edit and eight
+  // undelivered features reading as shipped, and that argument still holds for
+  // the `pricing.plus.soon1-8` DICTIONARY keys — which is why those stay
+  // approved in `_approved-dictionary-copy.ts` (four locales) rather than
+  // following the arrays out. Nothing renders them; pruning them is W3's.
 ];
-
-const LIVE_CARD_BULLETS: Record<string, readonly string[]> = {
-  FREE_FEATURES,
-  PASS_FEATURES,
-  PRO_FEATURES,
-  PLUS_CARD_FEATURES,
-  PLUS_COMING_SOON,
-};
 
 /**
  * The gate, as a pure fault-returning function so "prove it by rewording" is a
@@ -486,7 +563,17 @@ interface CardSurface {
 }
 
 /** Every rung the Event Pass card sells out of ONE bullet list. */
-const PASS_RUNGS = ["event_pass", "event_pass_l"];
+/** The rungs the Event Pass CARD sells — the sellable set, not every rung
+ *  (owner decision 2026-09-05 took the L rung off sale).
+ *
+ *  These entries judge SHIPPED COPY, so their subject is what the card offers.
+ *  Keeping a withdrawn rung here would red the card for a rung it no longer
+ *  mentions, which is a false alarm about a real page. The dormant rung's own
+ *  matrix is still checked, in the two places where that is a claim about the
+ *  SEED rather than about copy: `entitlements-sql-parity.test.ts`'s
+ *  full-outer-join diff (every key must exist on both rungs, with exactly two
+ *  documented overrides) and `pricing-matrix.test.ts`'s live-ladder cases. */
+const PASS_RUNGS = [...SELLABLE_PASS_KEYS];
 
 const CARD_SURFACES: CardSurface[] = [
   {
@@ -523,28 +610,40 @@ const CARD_SURFACES: CardSurface[] = [
       { feature: "divisions.per_competition.max", plan: "event_pass", says: (n) => new RegExp(`\\b${n}\\s+divisions\\b`, "i") },
       { feature: "entrants.per_division.max", plan: "event_pass", says: (n) => new RegExp(`\\b${n}\\s+entrants\\s+each\\b`, "i") },
       { feature: "registration.fee_percent", plan: "event_pass", betterWhen: "lower", says: (n) => new RegExp(`\\b${n}%\\s+platform\\s+fee\\b`, "i") },
-      // BOTH RUNGS share this one bullet, so both must charge what it quotes.
-      // Fix round 2: L's fee was card-guarded by nothing — moving it 5 -> 8 red
-      // only the help article, never the card selling it.
-      { feature: "registration.fee_percent", plan: "event_pass_l", betterWhen: "lower", says: (n) => new RegExp(`\\b${n}%\\s+platform\\s+fee\\b`, "i") },
-      // The comparator the same bullet makes: "…not 8%". It is a claim about
+      // The `event_pass_l` twin of the line above was DROPPED on 2026-09-05
+      // with the rung's sale. It existed because one bullet sold both rungs, so
+      // both had to charge what it quoted (fix round 2: L's fee was card-guarded
+      // by nothing — moving it 5 -> 8 red only the help article, never the card
+      // selling it). The card no longer sells L, so the claim is no longer a
+      // claim about L; L's own 4% is pinned against the matrix by
+      // `pricing-matrix.test.ts`'s fee-ladder case and by the help article's
+      // fee table, whose `FEE_LADDER_PLAN_KEYS["Event Pass"]` still names both
+      // rungs.
+      // The comparator the same bullet makes: "…not 5%". It is a claim about
       // COMMUNITY's rate sitting on the pass card, and it goes stale the moment
       // community's fee moves — which is exactly what F5 of the battery did.
       { feature: "registration.fee_percent", plan: "community", says: (n) => new RegExp(`\\bnot\\s+${n}%`, "i") },
-      // Both rungs. The L rung's entrant cap is NULL, so the copy has to say so
-      // in words — a null cap with a number beside it is M's ceiling sold to an
-      // L buyer, the defect v17 #294 was filed for.
-      { feature: "divisions.per_competition.max", plan: "event_pass_l", says: (n) => new RegExp(`\\b${n}\\s*&\\s*unlimited\\b`, "i") },
-      {
-        feature: "entrants.per_division.max",
-        plan: "event_pass_l",
-        says: (n) => new RegExp(`\\b${n}\\s+entrants\\b[^.]{0,20}\\bon\\s+L\\b`, "i"),
-        unlimited: /\bunlimited\s+on\s+L\b/i,
-      },
+      // The two `event_pass_l` CAP claims went with the rung's sale on
+      // 2026-09-05. They pinned the "— 20 divisions & 512 entrants on L" half
+      // of bullet 2, and that half is gone from the copy: the card would
+      // otherwise advertise, in figures, a size no checkout will sell.
+      //
+      // Worth keeping the history, because it is the shape to restore if the
+      // rung goes back on sale rather than one to reinvent: L's entrant cap was
+      // NULL, so the copy said so in words (a null cap with a number beside it
+      // is M's ceiling sold to an L buyer, the defect v17 #294 was filed for);
+      // V393 then gave L a real 512, and the divisions half — pinned until then
+      // by a single `20 & unlimited` regex reading BOTH rungs out of one phrase
+      // — could not survive the word going away. Each rung's number ended up
+      // matched on its own, scoped to "on L" so M's figures could not satisfy
+      // it. `capClaimFaults` still faults any surface that calls a numeric cap
+      // unlimited, whichever rung it is about.
     ],
-    // BOTH RUNGS. This card sells M and L out of one bullet list, so a
-    // capability that goes false on `event_pass_l` alone still misleads an L
-    // buyer — fresh probe G1, missed when these named `event_pass` only.
+    // Every rung the card SELLS — `PASS_RUNGS` above, which is the sellable
+    // set. A capability that went false on a rung this list sells still
+    // misleads a buyer (fresh probe G1, missed when these named `event_pass`
+    // only); one that goes false on a withdrawn rung misleads nobody, because
+    // nothing on this card is offering it.
     booleans: [
       { feature: "formats.advanced", plans: PASS_RUNGS, says: /\badvanced formats\b/i },
       { feature: "formats.double_elim", plans: PASS_RUNGS, says: /\bdouble elim\b/i },
@@ -570,10 +669,14 @@ const CARD_SURFACES: CardSurface[] = [
         unlimited: /\bunlimited\s+competitions\b/i,
       },
       {
+        // V393 capped Pro at 20 divisions per competition; `competitions.max_active`
+        // is still null. The bullet that covered both rows with one "Unlimited
+        // competitions & divisions" therefore had to split, and the `unlimited`
+        // alternative goes with it — leaving it would let the word satisfy a
+        // row that now holds a number.
         feature: "divisions.per_competition.max",
         plan: "pro",
         says: (n) => new RegExp(`\\b${n}\\s+divisions\\b`, "i"),
-        unlimited: /\bunlimited\s+competitions\s*&\s*divisions\b/i,
       },
       { feature: "entrants.per_division.max", plan: "pro", says: (n) => new RegExp(`\\b${n}\\s+entrants\\s+per\\s+division\\b`, "i") },
       { feature: "registration.fee_percent", plan: "pro", betterWhen: "lower", says: (n) => new RegExp(`\\b${n}%\\s+platform\\s+fee\\b`, "i") },
@@ -590,58 +693,30 @@ const CARD_SURFACES: CardSurface[] = [
       // and `officials.marks` were missed when only two of the four were pinned.
       { feature: "exports", plans: ["pro"], says: /\bofficials, exports\b/i },
       { feature: "officials.marks", plans: ["pro"], says: /\bofficials, exports\b/i },
-      // The badge bullet IS `dashboard.branding` — the same row SPEC-1 §5 ticked
-      // for the pass in error. Pro has it; the pass does not.
-      { feature: "dashboard.branding", plans: ["pro"], says: /\bremove the “powered by seazn” badge\b/i },
+      // WAS the badge bullet, `dashboard.branding`. V396 (W2 T15) made badge
+      // removal enterprise-only — Pro carries the badge now — so that claim
+      // became false on the card selling it, which is exactly the falsehood
+      // class this rule was built for. V397 split the accent COLOUR onto
+      // `dashboard.theme`, which Pro does grant, and that is the bullet's
+      // subject now.
+      { feature: "dashboard.theme", plans: ["pro"], says: /\byour club colours on public pages\b/i },
       { feature: "discipline.enforced", plans: ["pro"], says: /\bsuspensions & discipline tracking\b/i },
-      { feature: "officials.marks", plans: ["pro"], says: /\brate your match officials\b/i },
+      // ONE bullet, TWO rows. V393 brought `officials.auto` down from the
+      // deleted Pro Plus to Pro, so the Pro card can say it for the first time
+      // — and `crossCardExclusivityFaults` needs at least one card to make a
+      // claim its vocabulary recognises, or that rule examines nothing.
+      { feature: "officials.auto", plans: ["pro"], says: /\bauto officials assignment\b/i },
+      { feature: "officials.marks", plans: ["pro"], says: /\bauto officials assignment & ratings\b/i },
       { feature: "news.auto", plans: ["pro"], says: /\bauto-drafted result posts\b/i },
     ],
   },
-  {
-    array: "PLUS_CARD_FEATURES",
-    plan: "pro_plus",
-    claims: [
-      // Three separate rows behind one bullet. Pinned one by one, because
-      // "Unlimited members, teams & clubs" is three claims and any one of them
-      // can go false on its own.
-      { feature: "members.max", plan: "pro_plus", exclusiveAgainst: ["pro"], says: (n) => new RegExp(`\\b${n}\\b[^.]{0,40}\\bmembers\\b`, "i"), unlimited: /\bunlimited\b[^.]{0,40}\bmembers\b/i },
-      { feature: "teams.max", plan: "pro_plus", exclusiveAgainst: ["pro"], says: (n) => new RegExp(`\\b${n}\\b[^.]{0,40}\\bteams\\b`, "i"), unlimited: /\bunlimited\b[^.]{0,40}\bteams\b/i },
-      { feature: "clubs.max", plan: "pro_plus", exclusiveAgainst: ["pro"], says: (n) => new RegExp(`\\b${n}\\b[^.]{0,40}\\bclubs\\b`, "i"), unlimited: /\bunlimited\b[^.]{0,40}\bclubs\b/i },
-      { feature: "registration.fee_percent", plan: "pro_plus", betterWhen: "lower", says: (n) => new RegExp(`\\b${n}%\\s+platform\\s+fee\\b`, "i") },
-      // The Plus card quotes no entrant number — it inherits Pro's via the
-      // "Everything in Pro, plus…" frame, which `containmentFaults` enforces.
-      // Declared here so the frame's promise is anchored to a row rather than
-      // to nobody: pro_plus's cap is null, and if it ever became a number the
-      // containment rule reds against Pro's 256.
-      {
-        feature: "entrants.per_division.max",
-        plan: "pro_plus",
-        says: (n) => new RegExp(`\\b${n}\\s+entrants\\b`, "i"),
-        unlimited: /\bunlimited\b[^.]{0,40}\b(members|teams|clubs)\b/i,
-      },
-    ],
-    booleans: [
-      { feature: "officials.auto", plans: ["pro_plus"], says: /\bauto officials assignment\b/i },
-      { feature: "api.write", plans: ["pro_plus"], says: /\bwrite API access\b/i },
-      { feature: "support.priority", plans: ["pro_plus"], says: /\bpriority support\b/i },
-      // The "clubs" in "Unlimited members, teams & clubs" is a capability as
-      // well as a cap: `clubs.max` being null means nothing if `clubs.hierarchy`
-      // is off (fresh probe G5).
-      { feature: "clubs.hierarchy", plans: ["pro_plus"], says: /\bclubs\b/i },
-    ],
-    unclaimed: {
-      "Largest monthly AI credit grant":
-        "a COMPARATIVE over `ai.credits.monthly` (10 / 60 / 200), not a grant this card either has or lacks. Asserted by localeCreditLeadershipFaults against the numbers, in all four locales, which is the only rule shape that can judge 'largest'.",
-    },
-  },
-  {
-    array: "PLUS_COMING_SOON",
-    plan: null,
-    claims: [],
-    noMatrixClaims:
-      "the roadmap quotes no number and sells no plan. Its claim is AVAILABILITY, which plan_entitlements does not record — SPEC-1 §9 deliberately seeds `domains.custom` on pro_plus while the DNS product is unbuilt, so the rows would say 'shipped' about a feature that is not. Guarded by the approved-bullet inventory and by the four-locale pin on `pricing.plus.soonLabel`, and by nothing else, on purpose.",
-  },
+  // The `PLUS_CARD_FEATURES` and `PLUS_COMING_SOON` surfaces were DELETED here
+  // in W2 (entitlements v18), with the arrays. Between them they declared nine
+  // claims against `pro_plus` rows, and V393 deleted every one of those rows —
+  // so the guards went on reporting five live falsehoods ("promises
+  // support.priority, but pro_plus does not grant it") about a card nobody can
+  // open. A guard whose subject is gone does not go quiet; it goes loud about
+  // nothing, and buries the ones still telling the truth.
 ];
 
 /**
@@ -971,99 +1046,14 @@ function cardBulletAttributionFaults(
   return faults;
 }
 
-/**
- * ── "EVERYTHING IN PRO, PLUS…" IS A CONTAINMENT CLAIM (fix round 2, blocking 4) ──
- *
- * `pricing.plus.note` asserts pro_plus ⊇ pro. `exclusiveAgainst` guarded only
- * the direction where a LOWER plan catches up; the direction where the HIGHER
- * plan loses something was unguarded entirely. Measured 0/3: dropping
- * `competitions.max_active`, `divisions.per_competition.max` or
- * `dashboard.branding` on pro_plus leaves the PRO CARD, one column to the left,
- * still promising them — and the frame above the Plus card still claiming Pro
- * Plus has everything Pro does.
- *
- * Judged against the rows in both shapes:
- *  - an INT allowance: `null` (unlimited) contains everything, otherwise the
- *    higher plan's number must be at least the lower plan's;
- *  - a BOOLEAN grant: if the lower plan has it, the higher plan must too.
- *
- * Derived from what the lower card actually CLAIMS, not from the whole matrix —
- * the frame promises "everything in Pro", and Pro is what the Pro card sells.
- */
-function containmentFaults(
-  surfaces: CardSurface[],
-  matrix: Matrix,
-  rows: RowsByFeature,
-  frame: { higher: string; lower: string },
-): string[] {
-  const faults: string[] = [];
-  const lowerSurface = surfaces.find((s) => s.plan === frame.lower);
-  if (!lowerSurface) {
-    return [`no card sells ${frame.lower} — the containment frame is scoped to nothing`];
-  }
-  let checked = 0;
-
-  for (const claim of lowerSurface.claims) {
-    if (claim.plan !== frame.lower) continue;
-    const lower = matrix[claim.feature]?.[frame.lower];
-    const higher = matrix[claim.feature]?.[frame.higher];
-    if (lower === undefined || higher === undefined) {
-      faults.push(
-        `${claim.feature}: the Pro card claims it but ${lower === undefined ? frame.lower : frame.higher} has no row — containment cannot be judged`,
-      );
-      continue;
-    }
-    checked += 1;
-    // A COST contains the lower plan's by being no greater; an ALLOWANCE by
-    // being no smaller. Getting this wrong reported pro 2% / pro_plus 1% — the
-    // correct arrangement — as a broken containment claim.
-    if (claim.betterWhen === "lower") {
-      if (lower !== null && higher !== null && higher > lower) {
-        faults.push(
-          `"Everything in ${frame.lower}, plus…" is false: ${frame.lower} charges ${lower} ${claim.feature} but ${frame.higher} charges ${higher}`,
-        );
-      }
-      continue;
-    }
-    if (higher === null) continue; // unlimited contains everything
-    if (lower === null) {
-      faults.push(
-        `"Everything in ${frame.lower}, plus…" is false: ${frame.lower} has unlimited ${claim.feature} but ${frame.higher} caps it at ${higher}`,
-      );
-    } else if (higher < lower) {
-      faults.push(
-        `"Everything in ${frame.lower}, plus…" is false: ${frame.lower} allows ${lower} ${claim.feature} but ${frame.higher} allows only ${higher}`,
-      );
-    }
-  }
-
-  for (const claim of lowerSurface.booleans ?? []) {
-    if (!claim.plans.includes(frame.lower)) continue;
-    const lower = rows[claim.feature]?.[frame.lower];
-    const higher = rows[claim.feature]?.[frame.higher];
-    if (!lower || !higher) {
-      faults.push(`${claim.feature}: no row on ${!lower ? frame.lower : frame.higher} — containment cannot be judged`);
-      continue;
-    }
-    checked += 1;
-    if (claim.atLeast !== undefined) {
-      if (higher.int !== null && (lower.int === null || higher.int < lower.int)) {
-        faults.push(
-          `"Everything in ${frame.lower}, plus…" is false: ${frame.lower} allows ${lower.int ?? "unlimited"} ${claim.feature} but ${frame.higher} allows only ${higher.int}`,
-        );
-      }
-      continue;
-    }
-    if (lower.bool === true && higher.bool !== true) {
-      faults.push(
-        `"Everything in ${frame.lower}, plus…" is false: the ${frame.lower} card promises ${claim.feature} and ${frame.higher} does not grant it`,
-      );
-    }
-  }
-
-  if (checked === 0) faults.push("no claim on the lower card resolved a row — containment examined nothing");
-  return faults;
-}
+// `containmentFaults` was DELETED here in W2 (entitlements v18). It judged the
+// "Everything in Pro, plus…" frame in the direction nobody else guarded — a
+// HIGHER plan quietly losing something the card one column left still promises
+// — and it was scoped to `pricing.plus.note`, a frame `/pricing` no longer
+// renders for a plan V393 deleted. Enterprise is a Contact-us strip, not a
+// column that claims to contain Pro, so there is no superset frame left to
+// enforce. If W3 gives the enterprise strip a "everything in Pro, plus…"
+// sentence, this rule is what it owes.
 
 /**
  * FIX ROUND 1 (I4) — THE CARDS, AGAINST EACH OTHER.
@@ -1077,8 +1067,11 @@ function containmentFaults(
  * exclusive.
  *
  * Judged against the ROWS, not against a banned phrase, so it falls silent the
- * day a migration grants the feature lower down — the same negative case
- * `localePlusDifferentiatorFaults` is built around.
+ * day a migration grants the feature lower down — and that is exactly what
+ * happened. V393 deleted Pro Plus and moved `officials.auto` down to Pro, so
+ * the Pro card now carries that bullet and this rule reports it clean. The
+ * probe below still reds when the grant is taken away underneath it, which is
+ * the only thing that makes the silence mean anything.
  */
 function crossCardExclusivityFaults(
   surfaces: CardSurface[],
@@ -1092,7 +1085,7 @@ function crossCardExclusivityFaults(
     const bullets = live[surface.array];
     if (!bullets) continue;
     const joined = bullets.join(". ");
-    for (const [feature, claim] of PLUS_DIFFERENTIATOR_VOCAB) {
+    for (const [feature, claim] of EXCLUSIVE_CLAIM_VOCAB) {
       if (!claim.test(joined)) continue;
       recognised += 1;
       const row = grants[feature];
@@ -1107,7 +1100,8 @@ function crossCardExclusivityFaults(
       }
     }
   }
-  // Anti-vacuity. The Plus card matches three entries today; a vocabulary that
+  // Anti-vacuity. The Pro card matches one entry today (`officials.auto`,
+  // brought down from the deleted Pro Plus by V393); a vocabulary that
   // stopped matching anything would have this rule examine nothing and report
   // clean, which is how five guards in this wave were found inert.
   if (recognised === 0) {
@@ -1134,19 +1128,36 @@ describe("the /pricing card bullets say what plan_entitlements enforces", () => 
    * gap. `FREE_FEATURES`, `PRO_FEATURES` and the whole `PLUS_COMING_SOON`
    * roadmap were outside every rule in the file.
    *
-   * The list is now derived from the module's own exports rather than typed out
-   * again, so a sixth array added to `pricing-cards.ts` reds here until someone
+   * The list is derived from the module's own exports rather than typed out
+   * again, so an array added to `pricing-cards.ts` reds here until someone
    * decides whether it makes a claim.
+   *
+   * FIVE became THREE in W2 (entitlements v18): `PLUS_CARD_FEATURES` and
+   * `PLUS_COMING_SOON` went with the Pro Plus card. The count is asserted as
+   * well as derived, for the reason it always was — deriving both sides from
+   * the same exports makes this a tautology, and the number is what catches an
+   * array being quietly DROPPED as well as one being added.
    */
   it("pins every card array pricing-cards.ts exports", async () => {
     const cards: Record<string, unknown> = await import("../pricing-cards");
+    // W2: the exports hold BULLET DESCRIPTORS (a dictionary key plus the
+    // `plan_entitlements` rows its placeholders read), not sentences. The
+    // filter moved with them — the previous "array of strings" test would have
+    // found NOTHING after the change and reported `exportedArrays.length` as 0,
+    // which is why the count is asserted rather than only the set.
     const exportedArrays = Object.entries(cards)
-      .filter(([, v]) => Array.isArray(v) && v.every((x) => typeof x === "string"))
+      .filter(
+        ([, v]) =>
+          Array.isArray(v) &&
+          v.length > 0 &&
+          v.every((x) => !!x && typeof x === "object" && typeof (x as CardBullet).key === "string"),
+      )
       .map(([k]) => k)
       .sort();
-    expect(exportedArrays.length, "found no string arrays — the module's shape changed").toBe(5);
-    expect(APPROVED_CARD_BULLETS.map((e) => e.array).sort()).toEqual(exportedArrays);
-    expect(CARD_SURFACES.map((s) => s.array).sort()).toEqual(exportedArrays);
+    expect(exportedArrays.length, "found no bullet arrays — the module's shape changed").toBe(3);
+    expect(Object.values(CARD_SOURCE).sort()).toEqual(exportedArrays);
+    expect(APPROVED_CARD_BULLETS.map((e) => e.array).sort()).toEqual(Object.keys(CARD_SOURCE).sort());
+    expect(CARD_SURFACES.map((s) => s.array).sort()).toEqual(Object.keys(CARD_SOURCE).sort());
     for (const entry of APPROVED_CARD_BULLETS) {
       expect(entry.why.length, `${entry.array} has no source-of-truth note`).toBeGreaterThan(40);
       expect(entry.bullets.length, `${entry.array} has no bullets`).toBeGreaterThan(3);
@@ -1158,38 +1169,14 @@ describe("the /pricing card bullets say what plan_entitlements enforces", () => 
     expect(passBulletDurationFaults(PASS_FEATURES)).toEqual([]);
   });
 
-  /**
-   * PLUS_CARD_FEATURES IS THE ENGLISH MIRROR, NOT THE RENDERED TEXT.
-   *
-   * `/pricing` renders `t(d, "pricing.plus.f{i+1}")` and uses the array only for
-   * the count and the order (page.tsx:402). Nothing pinned the two together
-   * before this wave, so an edit to the array alone would change no pixel and an
-   * edit to `en/marketing.json` alone would leave the array lying. Both are
-   * "the Pro Plus card"; they must be one string.
-   */
-  it("mirrors the en dictionary the card actually renders, key for key", () => {
-    const en: Record<string, string> = JSON.parse(
-      readFileSync("src/dictionaries/en/marketing.json", "utf8"),
-    );
-    expect(PLUS_CARD_FEATURES).toEqual(
-      PLUS_CARD_FEATURES.map((_, i) => en[`pricing.plus.f${i + 1}`]),
-    );
-    // FIX ROUND 1 (I3): the roadmap is a mirror of exactly the same shape, and
-    // was not pinned either. Same failure mode — editing `soon4` alone would
-    // leave the array lying, and editing the array alone would change no pixel.
-    expect(PLUS_COMING_SOON).toEqual(
-      PLUS_COMING_SOON.map((_, i) => en[`pricing.plus.soon${i + 1}`]),
-    );
-    // …and the frame those bullets are read under, which is what makes each one
-    // a claim of exclusivity. A reword that drops it would leave the
-    // differentiator rules with nothing to scope to.
-    expect(en["pricing.plus.note"]).toMatch(/Everything\s+in\s+Pro,\s*plus/i);
-    // The roadmap's own frame. Without it the eight items below read as shipped
-    // features of the tier they sit under.
-    expect(en["pricing.plus.soonLabel"], "the roadmap label must state futurity").toBe(
-      "Coming soon",
-    );
-  });
+  // The "mirrors the en dictionary the card actually renders" test was DELETED
+  // here in W2 (entitlements v18). It pinned `PLUS_CARD_FEATURES` against
+  // `pricing.plus.f1-5` and `PLUS_COMING_SOON` against `pricing.plus.soon1-8`,
+  // and the arrays are gone with the Pro Plus card. The three cards that remain
+  // (`FREE_FEATURES`, `PASS_FEATURES`, `PRO_FEATURES`) are rendered from the
+  // arrays THEMSELVES — /pricing passes them straight to the card components —
+  // so there is no second copy to drift from, which is why they never had a
+  // mirror test and do not gain one now.
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1206,26 +1193,38 @@ describe("the card-bullet guards survive a rewording", () => {
    *  same shape as config/__tests__/stripe-plans.test.ts uses. */
   const PRE_FIX: Record<string, readonly string[]> = {
     PASS_FEATURES: ["Upgrades ONE competition, forever", ...PASS_FEATURES.slice(1)],
-    PLUS_CARD_FEATURES: [
-      ...PLUS_CARD_FEATURES.slice(0, 2),
-      "AI-assisted scheduling",
-      ...PLUS_CARD_FEATURES.slice(3),
+    // W2 (entitlements v18): the two bullets THIS wave replaced, so the gate is
+    // proved against copy that actually shipped rather than only against the
+    // one a much older task removed.
+    PRO_FEATURES: [
+      "Unlimited competitions & divisions",
+      ...PRO_FEATURES.slice(1, 5),
+      "Remove the “Powered by Seazn” badge",
+      ...PRO_FEATURES.slice(6),
     ],
+    FREE_FEATURES: ["10 active competitions, 4 divisions", ...FREE_FEATURES.slice(1)],
   };
 
   it("reds on the exact copy this task replaced", () => {
     const faults = approvedBulletFaults(APPROVED_CARD_BULLETS, PRE_FIX).join("\n");
     expect(faults).toContain("PASS_FEATURES[0]");
     expect(faults).toContain("Upgrades ONE competition, forever");
-    expect(faults).toContain("PLUS_CARD_FEATURES[2]");
-    expect(faults).toContain("AI-assisted scheduling");
+    // The Pro card's two W2 falsehoods: a division cap V393 set to 20 sold as
+    // unlimited, and badge removal V396 moved to enterprise still promised.
+    expect(faults).toContain("PRO_FEATURES[0]");
+    expect(faults).toContain("Unlimited competitions & divisions");
+    expect(faults).toContain("PRO_FEATURES[5]");
+    expect(faults).toContain("Remove the “Powered by Seazn” badge");
+    // …and the Community card overselling the free tier threefold.
+    expect(faults).toContain("FREE_FEATURES[0]");
+    expect(faults).toContain("10 active competitions");
   });
 
   // The gate is not a snapshot of the array: it must red when an approved array
   // stops existing, or renaming the export silently switches the gate off.
   it("reds when an approved array is renamed out from under it", () => {
     expect(approvedBulletFaults(APPROVED_CARD_BULLETS, { PASS_FEATURES }).join(" ")).toContain(
-      "PLUS_CARD_FEATURES: approved but no such export",
+      "PRO_FEATURES: approved but no such export",
     );
     expect(approvedBulletFaults([], LIVE_CARD_BULLETS)).toEqual([
       "the approved-bullet inventory is empty — this gate examines nothing",
@@ -1233,13 +1232,13 @@ describe("the card-bullet guards survive a rewording", () => {
   });
 
   // …and a bullet APPENDED, which changes no approved string at all.
-  it("reds on a sixth Pro Plus bullet nobody approved", () => {
+  it("reds on an extra Pro bullet nobody approved", () => {
     expect(
       approvedBulletFaults(APPROVED_CARD_BULLETS, {
         ...LIVE_CARD_BULLETS,
-        PLUS_CARD_FEATURES: [...PLUS_CARD_FEATURES, "AI-powered scheduling"],
+        PRO_FEATURES: [...PRO_FEATURES, "AI-powered scheduling"],
       }).join(" "),
-    ).toContain("6 bullets on disk, 5 approved");
+    ).toContain("10 bullets on disk, 9 approved");
   });
 
   // The vocabulary half, on permanence claims written fresh — none of these is
@@ -1347,10 +1346,15 @@ describe("the card-bullet guards survive a rewording", () => {
   });
 
   /**
-   * The same measurement for the Pro Plus bullet, whose falsehood is not a
-   * permanence claim at all: ten fresh ways to sell AI scheduling as a Pro Plus
-   * differentiator. The gate reds on all ten; `PLUS_DIFFERENTIATOR_VOCAB` — the
-   * shared claim vocabulary — is the secondary net and is measured beside it.
+   * The same measurement for a falsehood that is not a permanence claim at all:
+   * ten fresh ways to sell AI scheduling as something a paid plan adds. The gate
+   * reds on all ten; `EXCLUSIVE_CLAIM_VOCAB` — the shared claim vocabulary — is
+   * the secondary net and is measured beside it.
+   *
+   * Moved from the Pro Plus card to the PRO card in W2, because that card is
+   * gone and the falsehood is not: `scheduling.ai` is true on every plan key
+   * there is, so selling it as something Pro adds is exactly as untrue as
+   * selling it as something Pro Plus added.
    */
   const FRESH_AI_SCHEDULING = [
     "Smart fixture generation",
@@ -1370,11 +1374,7 @@ describe("the card-bullet guards survive a rewording", () => {
       (line) =>
         approvedBulletFaults(APPROVED_CARD_BULLETS, {
           ...LIVE_CARD_BULLETS,
-          PLUS_CARD_FEATURES: [
-            ...PLUS_CARD_FEATURES.slice(0, 2),
-            line,
-            ...PLUS_CARD_FEATURES.slice(3),
-          ],
+          PRO_FEATURES: [...PRO_FEATURES.slice(0, 3), line, ...PRO_FEATURES.slice(4)],
         }).length === 0,
     );
     expect(FRESH_AI_SCHEDULING.length).toBe(10);
@@ -1415,32 +1415,129 @@ describe.skipIf(!HAS_DB)("plan-card copy quotes the numbers the matrix enforces"
 
   const LOCALES = ["en", "fr", "es", "nl"];
 
+  /**
+   * ── THE FIXTURE IS NOT A SECOND SOURCE OF TRUTH ──────────────────────────
+   *
+   * `FIXTURE_MATRIX` is what the DB-free rules in this file render the cards
+   * from, so a stale cell there would quietly re-approve stale copy — exactly
+   * the failure the whole file exists to prevent, moved one level up. Every
+   * cell is read back out of `plan_entitlements`.
+   *
+   * And the coverage runs the OTHER way too: a bullet that starts interpolating
+   * a row the fixture does not declare would render with that bullet DROPPED
+   * (`cardBullets` suppresses what it cannot fill), so the approved-wording gate
+   * would silently stop examining it. That is the shape this repo has shipped
+   * five times — a hand-written list that stops covering something — so the
+   * declaration is checked, not assumed.
+   */
+  it("the matrix these guards render the cards from is the live one", async () => {
+    const drift: string[] = [];
+    for (const [feature, plans] of Object.entries(FIXTURE_MATRIX)) {
+      for (const [plan, cell] of Object.entries(plans)) {
+        const live = await capFor(feature, plan);
+        if (live !== cell.int_value) {
+          drift.push(`${plan}/${feature}: fixture ${cell.int_value}, matrix ${live}`);
+        }
+      }
+    }
+    expect(drift, "FIXTURE_MATRIX has drifted from plan_entitlements").toEqual([]);
+
+    const declared = new Set(
+      [...FREE_CARD_BULLETS, ...PASS_CARD_BULLETS, ...PRO_CARD_BULLETS].flatMap((b) =>
+        Object.values(b.vars ?? {}).map(([feature, plan]) => `${feature}/${plan}`),
+      ),
+    );
+    expect(declared.size, "no bullet interpolates anything — the numbers went back into the copy").toBe(10);
+    const covered = new Set(
+      Object.entries(FIXTURE_MATRIX).flatMap(([feature, plans]) =>
+        Object.keys(plans).map((plan) => `${feature}/${plan}`),
+      ),
+    );
+    expect(
+      [...declared].filter((d) => !covered.has(d)),
+      "read by a card bullet but absent from FIXTURE_MATRIX — that bullet renders as nothing here",
+    ).toEqual([]);
+  });
+
+  /**
+   * ── AND THE CARDS ARE RE-RENDERED FROM THE LIVE MATRIX ───────────────────
+   *
+   * These three read the caps out of `plan_entitlements` and then assert the
+   * rendered bullet quotes them — end to end, through the same `cardBullets`
+   * the page calls, with no fixture in the path. Before W2 they could only
+   * check that a hand-typed number happened to match; now they check that the
+   * placeholder is wired to the row it claims to be. Point `{entrants}` at
+   * `divisions.per_competition.max` and these red.
+   */
+  const liveCards = async (): Promise<Record<string, readonly string[]>> => {
+    const rows = await sql<
+      { plan_key: string; feature_key: string; int_value: number | null }[]
+    >`
+      select plan_key, feature_key, int_value from plan_entitlements
+      where feature_key = any(${Object.keys(FIXTURE_MATRIX)})`;
+    const live: MatrixData = {};
+    for (const r of rows) {
+      (live[r.feature_key] ??= {})[r.plan_key] = { bool_value: null, int_value: r.int_value };
+    }
+    return renderCards(live);
+  };
+
   it("the Community card quotes the live entrant and competition caps", async () => {
     const entrants = await capFor("entrants.per_division.max", "community");
     const comps = await capFor("competitions.max_active", "community");
-    const bullets = FREE_FEATURES.join(" | ");
+    const divisions = await capFor("divisions.per_competition.max", "community");
+    const bullets = (await liveCards()).FREE_FEATURES!.join(" | ");
     expect(bullets).toContain(`${entrants} entrants per division`);
     expect(bullets).toMatch(new RegExp(`\\b${comps} active competitions?\\b`));
+    expect(bullets).toMatch(new RegExp(`\\b${divisions} divisions\\b`));
   });
 
   it("the Event Pass card quotes the live pass entrant cap", async () => {
     const entrants = await capFor("entrants.per_division.max", "event_pass");
-    expect(PASS_FEATURES.join(" | ")).toContain(`${entrants} entrants each`);
+    expect((await liveCards()).PASS_FEATURES!.join(" | ")).toContain(`${entrants} entrants each`);
   });
 
   it("the Pro card quotes the live pro entrant cap", async () => {
     const entrants = await capFor("entrants.per_division.max", "pro");
-    expect(PRO_FEATURES.join(" | ")).toContain(`${entrants} entrants per division`);
+    expect((await liveCards()).PRO_FEATURES!.join(" | ")).toContain(`${entrants} entrants per division`);
+  });
+
+  /**
+   * …and the two platform-fee rates the Event Pass card COMPARES.
+   *
+   * The bullet is "4% platform fee on entry fees, not 5%" — a saving, not a
+   * rate. Quoting only the pass's own would survive community's moving and stop
+   * being a saving at all, which is why the bullet reads two rows and this
+   * asserts both. V398 re-cut that ladder once already.
+   */
+  it("the Event Pass card quotes BOTH live fee rates, its own and the one it beats", async () => {
+    const passFee = await capFor("registration.fee_percent", "event_pass");
+    const communityFee = await capFor("registration.fee_percent", "community");
+    expect(passFee, "the pass fee must undercut community, or the bullet is not a saving").toBeLessThan(
+      communityFee!,
+    );
+    const cards = await liveCards();
+    expect(cards.PASS_FEATURES!.join(" | ")).toContain(`${passFee}% platform fee`);
+    expect(cards.PASS_FEATURES!.join(" | ")).toContain(`not ${communityFee}%`);
+    expect(cards.FREE_FEATURES!.join(" | ")).toContain(`(${communityFee}% fee)`);
+    expect(cards.PRO_FEATURES!.join(" | ")).toContain(
+      `${await capFor("registration.fee_percent", "pro")}% platform fee`,
+    );
   });
 
   // v17 (SPEC-6 A1): the /pricing card credit lines render the live
   // `ai.credits.monthly` value straight off plan_entitlements (no hardcoded
-  // second source). This pins the wireframe numbers (10 / 60 / 200) so a matrix
-  // move surfaces as a failing test rather than silent marketing drift.
-  it("plan_entitlements grants the credit-line numbers the cards quote (10 / 60 / 200)", async () => {
-    expect(await capFor("ai.credits.monthly", "community")).toBe(10);
-    expect(await capFor("ai.credits.monthly", "pro")).toBe(60);
-    expect(await capFor("ai.credits.monthly", "pro_plus")).toBe(200);
+  // second source). This pins the numbers so a matrix move surfaces as a
+  // failing test rather than as silent marketing drift.
+  //
+  // W2 (entitlements v18) re-cut all three: community 10 -> 5 and pro 60 -> 35
+  // (V393), pro 35 -> 25 (V395), and the 200 belonged to `pro_plus`, a plan
+  // V393 deleted — enterprise carries 500. LITERALS on purpose: reading them
+  // back out of the same table the cards read would make this a tautology.
+  it("plan_entitlements grants the credit-line numbers the cards quote (5 / 25 / 500)", async () => {
+    expect(await capFor("ai.credits.monthly", "community")).toBe(5);
+    expect(await capFor("ai.credits.monthly", "pro")).toBe(25);
+    expect(await capFor("ai.credits.monthly", "enterprise")).toBe(500);
   });
 
   // The in-app billing panel is a SECOND hand-written copy of the same claims,
@@ -1537,14 +1634,25 @@ describe.skipIf(!HAS_DB)("plan-card copy quotes the numbers the matrix enforces"
    * …and `billing.pro.f1`, whose exemption reason claimed it was "pinned against
    * competitions.max_active / divisions.per_competition.max". Nothing asserted
    * it: null -> 10 redded no panel rule, and "500 competitions & divisions" was
-   * green. Both rows are NULL on pro, so the claim is the WORD, not a number —
-   * and a number appearing at all is the defect.
+   * green.
+   *
+   * W2 (entitlements v18) is the case that rule was written for and never saw:
+   * V393 capped `divisions.per_competition.max` on pro at 20 while
+   * `competitions.max_active` stayed null, so ONE of the two rows the sentence
+   * covered stopped being unlimited. The old assertion — "say unlimited, and
+   * carry no digit at all" — would have to be WEAKENED to accept the truth,
+   * which is the signal that it was asserting the wrong thing: it pinned the
+   * shape of a sentence rather than the two rows underneath it.
+   *
+   * Now each row is judged on its own. The word is required for the row that is
+   * genuinely unlimited, the number for the row that is not, and a digit is no
+   * longer forbidden — it is REQUIRED, and required to be the live one.
    */
-  it("billing.pro.f1 says unlimited only while both rows are unlimited", async () => {
+  it("billing.pro.f1 says unlimited for the unlimited row and quotes the cap for the capped one", async () => {
     const comps = await capFor("competitions.max_active", "pro");
     const divisions = await capFor("divisions.per_competition.max", "pro");
     expect(comps, "pro competitions.max_active").toBeNull();
-    expect(divisions, "pro divisions.per_competition.max").toBeNull();
+    expect(divisions, "pro divisions.per_competition.max").not.toBeNull();
     const UNLIMITED: Record<string, RegExp> = {
       en: /\bunlimited\b/i,
       es: /\bilimitad/i,
@@ -1553,10 +1661,14 @@ describe.skipIf(!HAS_DB)("plan-card copy quotes the numbers the matrix enforces"
     };
     for (const locale of LOCALES) {
       const value = dict(locale)["billing.pro.f1"]!;
-      expect(value, `${locale} f1: must say unlimited`).toMatch(UNLIMITED[locale]!);
-      // A cap that has arrived shows up as a digit. Both rows being null is what
-      // licenses the word, so any number here contradicts it.
-      expect(value, `${locale} f1: quotes a number while both rows are unlimited`).not.toMatch(/\d/);
+      expect(value, `${locale} f1: must say unlimited (competitions)`).toMatch(UNLIMITED[locale]!);
+      quotesCap(value, divisions, `${locale} f1 divisions.per_competition.max`);
+      // …and it must not quote the OTHER row's absence as a number. Pro's
+      // competition cap is null; any second figure here would be one.
+      expect(
+        (value.match(/\d+/g) ?? []).filter((d) => d !== String(divisions)),
+        `${locale} f1: quotes a figure no row backs`,
+      ).toEqual([]);
     }
   });
 
@@ -1567,37 +1679,60 @@ describe.skipIf(!HAS_DB)("plan-card copy quotes the numbers the matrix enforces"
   // across en/fr/es/nl, so the digits are checkable without reading the prose
   // around them — the same reasoning the four-locale tests above rely on.
 
-  it("the /pricing FAQ answer names the L rung's live caps and its price", async () => {
-    const divisions = await capFor("divisions.per_competition.max", "event_pass_l");
-    expect(divisions).toBe(20);
-    for (const locale of LOCALES) {
-      const answer = marketing(locale)["pricing.faq.eventPass.a"];
-      expect(answer, `${locale}: no answer`).toBeTruthy();
-      // Whole token: `toContain("20")` was satisfied by "200 divisions".
-      quotesCap(answer, divisions, `${locale}: L's division cap`);
-      // The price must be INTERPOLATED, never written down: `{passL}` is
-      // substituted with the switched currency at render time, so a hardcoded
-      // "$59" here would show dollars to a GBP visitor — the exact bug #191
-      // was filed for on the M rung's copy.
-      expect(answer, `${locale}: interpolated L price`).toContain("{passL}");
+  it("the /pricing FAQ answer names the live caps and price of the rung ON SALE", async () => {
+    // Was "…names the L rung's live caps and its price". Owner decision
+    // 2026-09-05 took L off sale, so the answer describes the rung a reader can
+    // actually buy — and this asks the same question of that rung, plus the
+    // negative that stops the narrowing from being a way to stop looking.
+    for (const rung of SELLABLE_PASS_KEYS) {
+      const divisions = await capFor("divisions.per_competition.max", rung);
+      const entrants = await capFor("entrants.per_division.max", rung);
+      for (const locale of LOCALES) {
+        const answer = marketing(locale)["pricing.faq.eventPass.a"];
+        expect(answer, `${locale}: no answer`).toBeTruthy();
+        // Whole token: `toContain("20")` was satisfied by "200 divisions".
+        quotesCap(answer, divisions, `${locale}: ${rung}'s division cap`);
+        quotesCap(answer, entrants, `${locale}: ${rung}'s entrant cap`);
+        // The price must be INTERPOLATED, never written down: `{pass}` is
+        // substituted with the switched currency at render time, so a hardcoded
+        // "$11.99" here would show dollars to a GBP visitor — the exact bug
+        // #191 was filed for on this rung's copy.
+        expect(answer, `${locale}: interpolated price`).toContain("{pass}");
+      }
     }
+    // The withdrawn rung's price token must be GONE, or the page would still
+    // interpolate a price for a size it does not sell. `{passL}` no longer
+    // exists in `faqVars` either, so a leftover token would render literally.
+    for (const locale of LOCALES) {
+      expect(marketing(locale)["pricing.faq.eventPass.a"], locale).not.toContain("{passL}");
+    }
+    expect(HIDDEN_PASS_KEYS.length).toBeGreaterThan(0);
   });
 
   // GAP B from T3's sweep: this tip said "64 entrants per division" while the
   // live matrix has said 128 since V319 — a PRE-EXISTING content bug, wrong by
   // half, independent of the L rung. Pinning it against the matrix is what
   // stops it recurring; naming L is what this wave adds.
-  it("the Event Pass tip quotes the live M entrant cap and L's ceiling", async () => {
-    const mEntrants = await capFor("entrants.per_division.max", "event_pass");
-    const lDivisions = await capFor("divisions.per_competition.max", "event_pass_l");
+  it("the Event Pass tip quotes the live caps of the rung on sale, and no other's", async () => {
     const communityEntrants = await capFor("entrants.per_division.max", "community");
-    expect(mEntrants).toBe(128);
     for (const locale of LOCALES) {
       const body = dict(locale)["tips.billing.event-pass.body"];
       expect(body, `${locale}: no tip body`).toBeTruthy();
-      // Whole tokens: `toContain("128")` was satisfied by "1280 entrants".
-      quotesCap(body, mEntrants, `${locale}: M entrant cap`);
-      quotesCap(body, lDivisions, `${locale}: L division cap`);
+      for (const rung of SELLABLE_PASS_KEYS) {
+        // Whole tokens: `toContain("128")` was satisfied by "1280 entrants".
+        quotesCap(body, await capFor("entrants.per_division.max", rung), `${locale}: ${rung} entrants`);
+        quotesCap(body, await capFor("divisions.per_competition.max", rung), `${locale}: ${rung} divisions`);
+      }
+      // The tip sits directly beside the buy link, so a withdrawn rung's
+      // figures in it are an offer (owner decision 2026-09-05).
+      for (const rung of HIDDEN_PASS_KEYS) {
+        expect(body, `${locale}: ${rung}'s entrant cap is off sale`).not.toMatch(
+          wholeNumber((await capFor("entrants.per_division.max", rung))!),
+        );
+        expect(body, `${locale}: ${rung}'s division cap is off sale`).not.toMatch(
+          wholeNumber((await capFor("divisions.per_competition.max", rung))!),
+        );
+      }
       // The bug itself: the tip must never quote COMMUNITY's cap as the
       // pass's. The tip describes only what the pass grants, so this figure
       // has no legitimate reason to appear in it.
@@ -1607,18 +1742,31 @@ describe.skipIf(!HAS_DB)("plan-card copy quotes the numbers the matrix enforces"
     }
   });
 
-  it("the Event Pass help article presents both rungs with their live caps", async () => {
+  it("the Event Pass help article presents the rung on sale with its live caps", async () => {
     const article = readFileSync("content/help/billing/event-pass.md", "utf8");
-    const mEntrants = await capFor("entrants.per_division.max", "event_pass");
-    const mDivisions = await capFor("divisions.per_competition.max", "event_pass");
-    const lDivisions = await capFor("divisions.per_competition.max", "event_pass_l");
-    expect(await capFor("entrants.per_division.max", "event_pass_l"), "L is unlimited").toBeNull();
-    expect(article).toContain(`**${mEntrants} entrants**`);
-    expect(article).toContain(`**${mDivisions} divisions**`);
-    expect(article).toContain(`**${lDivisions} divisions**`);
-    // The article's own name for L's null cap. Without it a reader comparing
-    // the two sizes has no reason to pay the difference.
-    expect(article.toLowerCase()).toContain("unlimited entrants");
+    for (const rung of SELLABLE_PASS_KEYS) {
+      expect(article).toContain(`**${await capFor("entrants.per_division.max", rung)} entrants**`);
+      expect(article).toContain(
+        `**${await capFor("divisions.per_competition.max", rung)} divisions**`,
+      );
+    }
+    // The flagship M-vs-L comparison table went with the L rung's sale
+    // (2026-09-05): this article is the loudest place the withdrawn size was
+    // described, and its 512-entrant row is the whole reason a reader would ask
+    // for it. So the negative is checked at the same strength as the positive.
+    for (const rung of HIDDEN_PASS_KEYS) {
+      expect(article, `${rung}'s entrant cap`).not.toContain(
+        `${await capFor("entrants.per_division.max", rung)} entrants`,
+      );
+      expect(article, `${rung}'s division cap`).not.toContain(
+        `${await capFor("divisions.per_competition.max", rung)} divisions`,
+      );
+    }
+    // V393 gave L a real 512-entrant cap where it had been null, and the
+    // article said "unlimited entrants" for as long as the row was null. That
+    // word must not come back for ANY rung — an uncapped claim over a numeric
+    // cap is the same defect whichever size it is made about.
+    expect(article.toLowerCase(), "no rung is uncapped").not.toContain("unlimited entrants");
     // Same 64-for-128 defect as the tip, in the "Can I buy a pass on top of
     // Pro?" answer, which compared Pro's 256 against "the pass's 64".
     expect(article).not.toMatch(/pass(?:'s|es)?\s+64\b/i);
@@ -1633,7 +1781,7 @@ describe.skipIf(!HAS_DB)("plan-card copy quotes the numbers the matrix enforces"
   // Pinned the same way as its billing-section siblings: against the live
   // matrix, and against the shape of the defect (a ceiling attributed to "a
   // pass" with no rung beside it).
-  it("the add-a-division article gives BOTH rungs, at their live caps", async () => {
+  it("the add-a-division article gives the rung on sale, at its live caps", async () => {
     const md = readFileSync("content/help/getting-started/add-a-division.md", "utf8");
     /** One `**Question?**` line — the answers are scoped so a figure that
      *  belongs to the divisions answer cannot satisfy the entrants one. */
@@ -1643,32 +1791,68 @@ describe.skipIf(!HAS_DB)("plan-card copy quotes the numbers the matrix enforces"
     const entrants = answer("How many entrants");
     expect(entrants, "no entrants answer").toBeTruthy();
     expect(entrants).toContain(`**${await capFor("entrants.per_division.max", "community")}**`);
-    expect(entrants).toContain(`**${await capFor("entrants.per_division.max", "event_pass")}**`);
     expect(entrants).toContain(`**${await capFor("entrants.per_division.max", "pro")}**`);
-    // L's cap is NULL in the matrix, so the article has to say so in words.
-    expect(await capFor("entrants.per_division.max", "event_pass_l"), "L is unlimited").toBeNull();
-    expect(entrants.toLowerCase()).toContain("no limit at all");
 
     const divisions = answer("How many divisions");
     expect(divisions, "no divisions answer").toBeTruthy();
     expect(divisions).toContain(`**${await capFor("divisions.per_competition.max", "community")}**`);
-    expect(divisions).toContain(
-      `**${await capFor("divisions.per_competition.max", "event_pass")}**`,
-    );
-    expect(divisions).toContain(
-      `**${await capFor("divisions.per_competition.max", "event_pass_l")}**`,
-    );
+    // Pro's own division cap, and it is not decoration: this answer said "as
+    // many as you like on Pro" until 2026-09-05, which V393 had made false when
+    // it capped Pro at 20 — a pre-existing overclaim, found while sweeping the
+    // L rung out of this line and fixed in the same edit.
+    expect(divisions).toContain(`**${await capFor("divisions.per_competition.max", "pro")}**`);
 
-    // THE defect, in both answers: a ceiling handed to "an Event Pass" / "a
-    // pass" with no size beside it states one rung's limit as the product's.
-    // Requiring both size letters in each answer is what the pre-fix text
-    // fails — it named neither.
+    for (const rung of SELLABLE_PASS_KEYS) {
+      expect(entrants).toContain(`**${await capFor("entrants.per_division.max", rung)}**`);
+      expect(divisions).toContain(`**${await capFor("divisions.per_competition.max", rung)}**`);
+    }
+    // The withdrawn rung's ceilings are what a reader would come here to find,
+    // so they are exactly what must be gone (owner decision 2026-09-05). L's
+    // entrant cap was NULL and this answer said so in words ("no limit at
+    // all"); V393 made it 512, and the words stayed wrong for a wave — so the
+    // uncapped phrasing is still banned as well as the number.
+    //
+    // The NUMBER can only be asserted absent where it belongs to the hidden
+    // rung ALONE. L's division cap is 20 and so is Pro's, which this answer
+    // legitimately quotes — a bare `not.toMatch(20)` would fail on the correct
+    // text and the obvious repair would be to delete the check. So the figure
+    // is skipped where it collides, and the rung's own NAME carries the
+    // assertion instead: naming a size is how this answer attributed a ceiling
+    // to a rung in the first place.
+    for (const rung of HIDDEN_PASS_KEYS) {
+      for (const [feature, line, what] of [
+        ["entrants.per_division.max", entrants, "entrant"],
+        ["divisions.per_competition.max", divisions, "division"],
+      ] as const) {
+        const cap = await capFor(feature, rung);
+        const shared = (
+          await Promise.all(
+            ["community", "pro", ...SELLABLE_PASS_KEYS].map((p) => capFor(feature, p)),
+          )
+        ).includes(cap);
+        if (!shared) expect(line, `${rung}'s ${what} cap`).not.toMatch(wholeNumber(cap!));
+      }
+      // Unconditional, and it is what makes the skip above safe.
+      expect(divisions, `${rung} must not be named`).not.toMatch(/\*\*L\*\*/);
+      expect(entrants, `${rung} must not be named`).not.toMatch(/\*\*L\*\*/);
+    }
+    // Anti-vacuity: at least one hidden cap really was unique, so the loop
+    // above is not skipping every case it has.
+    expect(await capFor("entrants.per_division.max", "event_pass_l")).not.toBe(
+      await capFor("entrants.per_division.max", "pro"),
+    );
+    expect(entrants.toLowerCase(), "no rung is uncapped").not.toContain("no limit at all");
+
+    // THE defect this pair was written for: a ceiling handed to "an Event
+    // Pass" / "a pass" with no plan beside it states one offer's limit as the
+    // product's. Each answer must therefore attribute its pass figure — it is
+    // the link to the pass article that carries that here, since there is one
+    // size to name.
     for (const [name, line] of [
       ["entrants", entrants],
       ["divisions", divisions],
     ] as const) {
-      expect(line, `${name}: names the M rung`).toMatch(/\*\*M\*\*/);
-      expect(line, `${name}: names the L rung`).toMatch(/\*\*L\*\*/);
+      expect(line, `${name}: attributes its pass figure`).toContain("/help/billing/event-pass");
     }
   });
 
@@ -1694,19 +1878,31 @@ describe.skipIf(!HAS_DB)("plan-card copy quotes the numbers the matrix enforces"
       return end === -1 ? rest : rest.slice(0, end);
     };
 
-    it("gives each Event Pass rung its own live caps, and neither the other's", async () => {
-      const mEntrants = await capFor("entrants.per_division.max", "event_pass");
-      const mDivisions = await capFor("divisions.per_competition.max", "event_pass");
-      const lDivisions = await capFor("divisions.per_competition.max", "event_pass_l");
-      expect(await capFor("entrants.per_division.max", "event_pass_l"), "L is unlimited").toBeNull();
-
+    it("gives the Event Pass section the live caps of the rung on sale, and no other's", async () => {
       const pass = section("Event Pass");
-      expect(pass, "M's entrant cap").toContain(`**${mEntrants} entrants**`);
-      expect(pass, "M's division cap").toContain(`**${mDivisions} divisions**`);
-      expect(pass, "L's division cap").toContain(`**${lDivisions} divisions**`);
-      // L's null cap has to be SAID, or a reader has no reason to pay the
-      // difference between the two sizes.
-      expect(pass.toLowerCase(), "L's null entrant cap").toContain("unlimited entrants");
+      for (const rung of SELLABLE_PASS_KEYS) {
+        expect(pass, `${rung}'s entrant cap`).toContain(
+          `**${await capFor("entrants.per_division.max", rung)} entrants**`,
+        );
+        expect(pass, `${rung}'s division cap`).toContain(
+          `**${await capFor("divisions.per_competition.max", rung)} divisions**`,
+        );
+      }
+      // The section is scoped to the pass, so a withdrawn rung's ceilings can
+      // only be there because the article is still selling it — Pro's own
+      // numbers live in the Pro section (owner decision 2026-09-05).
+      for (const rung of HIDDEN_PASS_KEYS) {
+        expect(pass, `${rung}'s entrant cap`).not.toContain(
+          `${await capFor("entrants.per_division.max", rung)} entrants`,
+        );
+        expect(pass, `${rung}'s division cap`).not.toContain(
+          `${await capFor("divisions.per_competition.max", rung)} divisions`,
+        );
+      }
+      // V393 gave L a real 512-entrant cap where it had been null; the word
+      // must not come back for any rung.
+      expect(pass.toLowerCase(), "no rung is uncapped").not.toContain("unlimited entrants");
+      expect(HIDDEN_PASS_KEYS.length).toBeGreaterThan(0);
     });
 
     it("never describes the pass with Community's entrant cap — the bug that lived here", async () => {
@@ -1730,17 +1926,19 @@ describe.skipIf(!HAS_DB)("plan-card copy quotes the numbers the matrix enforces"
           `${entrants} entrants per division`,
         );
       }
-      // Pro Plus's cap is NULL in the matrix, so the article must say so in
-      // words rather than print a number.
-      expect(await capFor("entrants.per_division.max", "pro_plus")).toBeNull();
-      expect(section("Pro Plus").toLowerCase()).toContain("unlimited entrants per division");
+      // Enterprise's cap is NULL in the matrix, so the article must say so in
+      // words rather than print a number. It was Pro Plus's section until W2;
+      // V393 deleted that plan and enterprise took its place at the top of the
+      // ladder (design §4 — a Contact-us tier, not a priced one).
+      expect(await capFor("entrants.per_division.max", "enterprise")).toBeNull();
+      expect(section("Enterprise").toLowerCase()).toContain("unlimited entrants per division");
     });
 
     it("quotes the live monthly credit allowances", async () => {
       // The same three numbers the /pricing cards render live. Here they are
       // hand-written prose, in a table-shaped sentence, four plans deep.
       const md = article();
-      for (const plan of ["community", "pro", "pro_plus"]) {
+      for (const plan of ["community", "pro", "enterprise"]) {
         const credits = await capFor("ai.credits.monthly", plan);
         quotesCap(md, credits, `${plan} credits`);
       }
@@ -1757,7 +1955,7 @@ describe.skipIf(!HAS_DB)("plan-card copy quotes the numbers the matrix enforces"
       const rows: Array<[string, number | null]> = [
         ["Community", await fee("community")],
         ["Pro", await fee("pro")],
-        ["Pro Plus", await fee("pro_plus")],
+        ["Enterprise", await fee("enterprise")],
       ];
       for (const [label, pct] of rows) {
         expect(md, `${label} fee row`).toContain(`| ${label} | ${pct}% |`);
@@ -1773,15 +1971,17 @@ describe.skipIf(!HAS_DB)("plan-card copy quotes the numbers the matrix enforces"
     });
   });
 
-  // ── v17 gap wave 7 (#299): the Pro Plus card, against the matrix ───────────
+  // ── The boolean grants behind the capability bullets ──────────────────────
   //
-  // Every bullet on that card is read under "Everything in Pro, plus…", so each
-  // asserts the lower plans do NOT have the thing. Judged against the rows, not
-  // against a banned phrase — note the negative case in
-  // `localePlusDifferentiatorFaults`: if a migration ever made `scheduling.ai`
-  // pro_plus-only the claim becomes TRUE and the guard must fall silent. A rule
-  // that fired unconditionally would satisfy every requirement of this task and
-  // be wrong the day the matrix moved.
+  // The three tests that lived here — "the Pro Plus card claims only
+  // differentiators Pro Plus actually has", its pre-fix probe, and "the AI
+  // claim the card does make is the one the credit rows back" — were DELETED in
+  // W2 (entitlements v18) with the card they judged. What they were protecting
+  // is not lost: `crossCardExclusivityFaults` below asks the same question of
+  // every card that still exists, and `localeCreditLeadershipFaults` survives
+  // in copy-truth.ts with the leading plan as an ARGUMENT (it hardcoded
+  // `pro_plus`, which V393 deleted), exercised by dictionary-copy-truth.test.ts
+  // against the live ordering — enterprise 500 > pro 25 > community 5.
 
   const boolGrants = async (features: string[]): Promise<FeatureGrants> => {
     const rows = await sql<{ feature_key: string; plan_key: string; bool_value: boolean | null }[]>`
@@ -1793,68 +1993,19 @@ describe.skipIf(!HAS_DB)("plan-card copy quotes the numbers the matrix enforces"
     return out;
   };
 
-  /** The card as one value: its bullets, joined so a claim cannot reach across
-   *  two of them (every window in the vocabulary stops at sentence punctuation). */
-  const plusCardValue = () => [
-    { locale: "en" as const, key: "PLUS_CARD_FEATURES", value: PLUS_CARD_FEATURES.join(". ") },
-  ];
-
-  // THE DEFECT, stated the way the matrix states it. "AI-assisted scheduling"
-  // was sold as what you get for moving up to Pro Plus while `scheduling.ai` was
-  // true on every plan key including community — the differentiator was worth
-  // exactly nothing.
+  // `scheduling.ai` is granted on EVERY plan key there is, which is why no card
+  // may sell it as something a plan adds. Asserted as the whole set rather than
+  // key by key: a plan APPEARING (enterprise, V393) or DISAPPEARING (pro_plus,
+  // same migration) is exactly the change that would make a per-key spot check
+  // read as clean.
   it("scheduling.ai is granted on every plan, so it differentiates nothing", async () => {
     expect((await boolGrants(["scheduling.ai"]))["scheduling.ai"]).toEqual({
       community: true,
+      enterprise: true,
       event_pass: true,
       event_pass_l: true,
       pro: true,
-      pro_plus: true,
     });
-  });
-
-  it("the Pro Plus card claims only differentiators Pro Plus actually has", async () => {
-    const grants = await boolGrants([
-      "scheduling.ai",
-      "officials.auto",
-      "api.write",
-      "support.priority",
-    ]);
-    expect(localePlusDifferentiatorFaults(plusCardValue(), grants, ["community", "pro"])).toEqual([]);
-    // …and the same guard on the PRE-FIX bullet, so this test fails without the
-    // copy change rather than merely passing beside it.
-    expect(
-      localePlusDifferentiatorFaults(
-        [{ locale: "en", key: "pre-fix", value: "AI-assisted scheduling. Auto officials assignment" }],
-        grants,
-        ["community", "pro"],
-      ).join(" "),
-    ).toContain("sells scheduling.ai as a Pro Plus differentiator, but community already grants it");
-  });
-
-  // The replacement claim, judged as the COMPARATIVE it is: true only while
-  // pro_plus's `ai.credits.monthly` is strictly greater than every other plan's.
-  it("the AI claim the card does make is the one the credit rows back", async () => {
-    const rows = await sql<{ plan_key: string; int_value: number | null }[]>`
-      select plan_key, int_value from plan_entitlements
-      where feature_key = 'ai.credits.monthly'`;
-    const credits = Object.fromEntries(rows.map((r) => [r.plan_key, r.int_value]));
-    expect(credits.community).toBe(10);
-    expect(credits.pro).toBe(60);
-    expect(credits.pro_plus).toBe(200);
-    expect(localeCreditLeadershipFaults(plusCardValue(), credits)).toEqual([]);
-    // Paired both ways. Deleting the claim must red — an absence rule alone
-    // would be happiest with a card that says nothing about AI at all.
-    expect(
-      localeCreditLeadershipFaults(
-        [{ locale: "en", key: "pre-fix", value: "AI-assisted scheduling" }],
-        credits,
-      ),
-    ).toEqual(["en pre-fix: never claims the largest monthly AI credit grant"]);
-    // …and it must stop being true if the matrix ever moves.
-    expect(
-      localeCreditLeadershipFaults(plusCardValue(), { ...credits, pro: 500 }).join(" "),
-    ).toContain("but pro_plus grants 200");
   });
 
   // ── FIX ROUND 1 (I2 / I4): every card number against its row ───────────────
@@ -1862,7 +2013,10 @@ describe.skipIf(!HAS_DB)("plan-card copy quotes the numbers the matrix enforces"
   /** The live matrix, for exactly the features the claim tables name. */
   const cardMatrix = async (): Promise<Matrix> => {
     const features = [...new Set(CARD_SURFACES.flatMap((s) => s.claims.map((c) => c.feature)))];
-    expect(features.length, "the claim tables name no features").toBeGreaterThan(4);
+    // Four features, and it is the count that matters: the Pro Plus card's own
+    // claims (members.max / teams.max / clubs.max) left with it in W2, so this
+    // floor moved down by three. Anything lower means a claim table was emptied.
+    expect(features.length, "the claim tables name no features").toBeGreaterThanOrEqual(4);
     const rows = await sql<{ feature_key: string; plan_key: string; int_value: number | null }[]>`
       select feature_key, plan_key, int_value from plan_entitlements
       where feature_key = any(${features})`;
@@ -1891,22 +2045,27 @@ describe.skipIf(!HAS_DB)("plan-card copy quotes the numbers the matrix enforces"
       [feature]: { ...live[feature], [plan]: value },
     });
     const cases: Array<[string, Matrix, string]> = [
-      ["members.max null -> 500", moved("members.max", "pro_plus", 500), "card claims UNLIMITED members.max, but the matrix caps pro_plus at 500"],
       ["competitions.max_active null -> 3", moved("competitions.max_active", "pro", 3), "card claims UNLIMITED competitions.max_active, but the matrix caps pro at 3"],
-      ["pro_plus fee 1 -> 3", moved("registration.fee_percent", "pro_plus", 3), "does not quote the live pro_plus/registration.fee_percent (3)"],
       ["community fee 8 -> 12", moved("registration.fee_percent", "community", 12), "does not quote the live community/registration.fee_percent (12)"],
       ["event_pass fee 5 -> 7", moved("registration.fee_percent", "event_pass", 7), "does not quote the live event_pass/registration.fee_percent (7)"],
       ["pro fee 2 -> 4", moved("registration.fee_percent", "pro", 4), "does not quote the live pro/registration.fee_percent (4)"],
       ["community divisions 4 -> 2", moved("divisions.per_competition.max", "community", 2), "does not quote the live community/divisions.per_competition.max (2)"],
+      ["community comps 3 -> 7", moved("competitions.max_active", "community", 7), "does not quote the live community/competitions.max_active (7)"],
       ["community entrants 64 -> 16", moved("entrants.per_division.max", "community", 16), "does not quote the live community/entrants.per_division.max (16)"],
       ["pro entrants 256 -> 64", moved("entrants.per_division.max", "pro", 64), "does not quote the live pro/entrants.per_division.max (64)"],
-      ["L's entrant cap stops being unlimited", moved("entrants.per_division.max", "event_pass_l", 300), "card claims UNLIMITED entrants.per_division.max, but the matrix caps event_pass_l at 300"],
-      ["teams.max null -> 40", moved("teams.max", "pro_plus", 40), "card claims UNLIMITED teams.max, but the matrix caps pro_plus at 40"],
-      // Fresh probe G6, from the OTHER side: the lower plan catches up, so the
-      // bullet stops differentiating while every string stays true.
-      ["pro members.max 15 -> unlimited", moved("members.max", "pro", null), "sells unlimited members.max as a differentiator, but pro is unlimited too"],
-      ["pro teams.max 40 -> unlimited", moved("teams.max", "pro", null), "sells unlimited teams.max as a differentiator, but pro is unlimited too"],
-      ["clubs.max null -> 20", moved("clubs.max", "pro_plus", 20), "card claims UNLIMITED clubs.max, but the matrix caps pro_plus at 20"],
+      ["pro divisions 20 -> 6", moved("divisions.per_competition.max", "pro", 6), "does not quote the live pro/divisions.per_competition.max (6)"],
+      // The two `event_pass_l` probes here died with the rung's sale
+      // (2026-09-05): the card no longer claims L's caps, so moving them can
+      // no longer make the card false and a probe expecting a fault would be
+      // asserting the opposite of the truth. Both directions the pass card can
+      // still be wrong in are covered by the two rows above — the entry rung's
+      // fee, and the caps it quotes — plus the entrant/division probes below.
+      ["pass entrants 128 -> 300", moved("entrants.per_division.max", "event_pass", 300), "does not quote the live event_pass/entrants.per_division.max (300)"],
+      ["pass divisions 10 -> 12", moved("divisions.per_competition.max", "event_pass", 12), "does not quote the live event_pass/divisions.per_competition.max (12)"],
+      // …and the UNLIMITED direction, which the deleted Pro Plus probes used to
+      // carry alone. Pro's competition cap is the only null a card still calls
+      // unlimited, so it is the one that keeps that branch exercised.
+      ["pro competitions null -> 40", moved("competitions.max_active", "pro", 40), "card claims UNLIMITED competitions.max_active, but the matrix caps pro at 40"],
     ];
     for (const [label, matrix, expected] of cases) {
       expect(cardMatrixFaults(CARD_SURFACES, LIVE_CARD_BULLETS, matrix).join(" | "), label).toContain(
@@ -1915,10 +2074,12 @@ describe.skipIf(!HAS_DB)("plan-card copy quotes the numbers the matrix enforces"
     }
     // A DELETED row must be a fault, not "unlimited". `?? null` would have read
     // a vanished feature key as an unlimited allowance and certified the card.
-    const withoutMembers = { ...live };
-    delete withoutMembers["members.max"];
-    expect(cardMatrixFaults(CARD_SURFACES, LIVE_CARD_BULLETS, withoutMembers).join(" | ")).toContain(
-      "plan_entitlements has no pro_plus/members.max row",
+    // W2 made this the LIVE case rather than the hypothetical one: V393 and
+    // V395 between them deleted five feature keys outright.
+    const withoutEntrants = { ...live };
+    delete withoutEntrants["entrants.per_division.max"];
+    expect(cardMatrixFaults(CARD_SURFACES, LIVE_CARD_BULLETS, withoutEntrants).join(" | ")).toContain(
+      "plan_entitlements has no community/entrants.per_division.max row",
     );
     // …and an empty matrix must not read as clean.
     expect(cardMatrixFaults(CARD_SURFACES, LIVE_CARD_BULLETS, {}).join(" | ")).toContain(
@@ -1931,7 +2092,7 @@ describe.skipIf(!HAS_DB)("plan-card copy quotes the numbers the matrix enforces"
     // decision. This is what stopped the roadmap being silently uncovered.
     expect(
       cardMatrixFaults(
-        [{ array: "PLUS_COMING_SOON", plan: null, claims: [] }, ...CARD_SURFACES],
+        [{ array: "FREE_FEATURES", plan: null, claims: [] }, ...CARD_SURFACES],
         LIVE_CARD_BULLETS,
         live,
       ).join(" | "),
@@ -1988,20 +2149,29 @@ describe.skipIf(!HAS_DB)("plan-card copy quotes the numbers the matrix enforces"
       [feature]: { ...rows[feature], [plan]: { ...rows[feature]![plan]!, ...patch } },
     });
     for (const [feature, plan, patch, expected] of [
-      ["dashboard.branding", "pro", { bool: false }, "PRO_FEATURES: promises dashboard.branding, but pro does not grant it"],
+      // WAS `dashboard.branding`. V396 made badge removal enterprise-only and
+      // V397 split the accent colour onto `dashboard.theme`, so the Pro card's
+      // visual claim is the colour and this probe follows it.
+      ["dashboard.theme", "pro", { bool: false }, "PRO_FEATURES: promises dashboard.theme, but pro does not grant it"],
       ["realtime", "event_pass", { bool: false }, "PASS_FEATURES: promises realtime, but event_pass does not grant it"],
       // THE L RUNG — fresh probe G1. The card sells both rungs from one list, so
-      // a capability lost on L alone still misleads an L buyer.
-      ["formats.advanced", "event_pass_l", { bool: false }, "PASS_FEATURES: promises formats.advanced, but event_pass_l does not grant it"],
-      ["sponsors.monetize", "event_pass_l", { bool: false }, "PASS_FEATURES: promises sponsors.monetize, but event_pass_l does not grant it"],
+      // These two probed `event_pass_l` while the card sold both rungs — a
+      // capability lost on L alone misled an L buyer. With the rung off sale
+      // (2026-09-05) the card makes no claim about it, so they are repointed at
+      // the rung the card DOES sell rather than deleted: the failure they exist
+      // for — a bullet promising a boolean the plan behind it does not grant —
+      // is unchanged, only its subject moved.
+      ["formats.advanced", "event_pass", { bool: false }, "PASS_FEATURES: promises formats.advanced, but event_pass does not grant it"],
+      ["sponsors.monetize", "event_pass", { bool: false }, "PASS_FEATURES: promises sponsors.monetize, but event_pass does not grant it"],
       ["api.access", "pro", { bool: false }, "PRO_FEATURES: promises api.access, but pro does not grant it"],
       // Fresh probes G2 / G4 / G5 — bullets that were simply not enumerated.
       ["exports", "pro", { bool: false }, "PRO_FEATURES: promises exports, but pro does not grant it"],
       ["registration.enabled", "community", { bool: false }, "FREE_FEATURES: promises registration.enabled, but community does not grant it"],
-      ["clubs.hierarchy", "pro_plus", { bool: false }, "PLUS_CARD_FEATURES: promises clubs.hierarchy, but pro_plus does not grant it"],
       ["discovery.listed", "community", { bool: false }, "FREE_FEATURES: promises discovery.listed, but community does not grant it"],
       ["news.auto", "pro", { bool: false }, "PRO_FEATURES: promises news.auto, but pro does not grant it"],
-      ["support.priority", "pro_plus", { bool: false }, "PLUS_CARD_FEATURES: promises support.priority, but pro_plus does not grant it"],
+      // V393 brought `officials.auto` down to Pro; the Pro card says so, so it
+      // owes a probe like every other capability bullet.
+      ["officials.auto", "pro", { bool: false }, "PRO_FEATURES: promises officials.auto, but pro does not grant it"],
       // Fresh probe G3 — an INT-shaped capability. No boolean moves at all.
       ["dashboard.public.max", "community", { int: 0 }, "FREE_FEATURES: promises dashboard.public.max, but community allows only 0"],
     ] as Array<[string, string, Partial<EntitlementRow>, string]>) {
@@ -2017,10 +2187,10 @@ describe.skipIf(!HAS_DB)("plan-card copy quotes the numbers the matrix enforces"
     expect(
       cardBooleanFaults(
         CARD_SURFACES,
-        { ...LIVE_CARD_BULLETS, PRO_FEATURES: PRO_FEATURES.filter((b) => !/badge/i.test(b)) },
+        { ...LIVE_CARD_BULLETS, PRO_FEATURES: PRO_FEATURES.filter((b) => !/colours/i.test(b)) },
         rows,
       ).join(" | "),
-    ).toContain("the copy this dashboard.branding pin describes is gone");
+    ).toContain("the copy this dashboard.theme pin describes is gone");
     // …and a deleted row is a fault, not a pass.
     const withoutNews = { ...rows };
     delete withoutNews["news.auto"];
@@ -2138,65 +2308,6 @@ describe.skipIf(!HAS_DB)("plan-card copy quotes the numbers the matrix enforces"
     expect(faults(LIVE_CARD_BULLETS, empty)).toContain("has an empty exemption reason");
   });
 
-  /**
-   * The frame above the Pro Plus card, judged in the direction nobody guarded.
-   *
-   * "Everything in Pro, plus…" asserts pro_plus ⊇ pro. `exclusiveAgainst` only
-   * ever checked a lower plan catching UP; a higher plan losing something left
-   * the Pro card one column left still promising it. Measured 0/3.
-   */
-  it("Pro Plus really does contain everything the Pro card promises", async () => {
-    const matrix = await cardMatrix();
-    const rows = await capabilityRows();
-    const frame = { higher: "pro_plus", lower: "pro" };
-    expect(containmentFaults(CARD_SURFACES, matrix, rows, frame)).toEqual([]);
-
-    // The frame it is scoped to must actually be on the page, or this rule is
-    // asserting containment nothing claims.
-    const en: Record<string, string> = JSON.parse(
-      readFileSync("src/dictionaries/en/marketing.json", "utf8"),
-    );
-    expect(en["pricing.plus.note"]).toMatch(/Everything\s+in\s+Pro,\s*plus/i);
-
-    // THE REVIEWER'S THREE, each dropping something on pro_plus while the Pro
-    // card goes on promising it.
-    const drop = (feature: string, value: number | null): Matrix => ({
-      ...matrix,
-      [feature]: { ...matrix[feature], pro_plus: value },
-    });
-    expect(
-      containmentFaults(CARD_SURFACES, drop("competitions.max_active", 3), rows, frame).join(" | "),
-    ).toContain("pro has unlimited competitions.max_active but pro_plus caps it at 3");
-    expect(
-      containmentFaults(CARD_SURFACES, drop("divisions.per_competition.max", 4), rows, frame).join(" | "),
-    ).toContain("pro has unlimited divisions.per_competition.max but pro_plus caps it at 4");
-    expect(
-      containmentFaults(CARD_SURFACES, drop("entrants.per_division.max", 64), rows, frame).join(" | "),
-    ).toContain("pro allows 256 entrants.per_division.max but pro_plus allows only 64");
-    // …and the COST direction, which must red when the higher plan charges more.
-    expect(
-      containmentFaults(CARD_SURFACES, drop("registration.fee_percent", 5), rows, frame).join(" | "),
-    ).toContain("pro charges 2 registration.fee_percent but pro_plus charges 5");
-
-    // …and the boolean shape: dashboard.branding is the badge bullet on the Pro
-    // card, and it is the row SPEC-1 §5 once ticked for the pass in error.
-    const revoked: RowsByFeature = {
-      ...rows,
-      "dashboard.branding": { ...rows["dashboard.branding"], pro_plus: { bool: false, int: null } },
-    };
-    expect(containmentFaults(CARD_SURFACES, matrix, revoked, frame).join(" | ")).toContain(
-      "the pro card promises dashboard.branding and pro_plus does not grant it",
-    );
-
-    // Anti-vacuity, both ways.
-    expect(containmentFaults(CARD_SURFACES, {}, {}, frame).join(" | ")).toContain(
-      "containment cannot be judged",
-    );
-    expect(containmentFaults([], matrix, rows, frame)).toEqual([
-      "no card sells pro — the containment frame is scoped to nothing",
-    ]);
-  });
-
   it("no card claims a feature its own plan does not grant", async () => {
     const grants = await boolGrants([
       "scheduling.ai",
@@ -2205,44 +2316,72 @@ describe.skipIf(!HAS_DB)("plan-card copy quotes the numbers the matrix enforces"
       "support.priority",
     ]);
     expect(crossCardExclusivityFaults(CARD_SURFACES, LIVE_CARD_BULLETS, grants)).toEqual([]);
-    // THE PROBE: the Pro card gaining the Plus card's exclusivity bullet. Every
-    // existing string stays true; the two cards simply contradict each other.
+    // THE PROBE, repointed in W2. It used to append "Auto officials assignment"
+    // to the Pro card — a contradiction while `officials.auto` was Pro Plus's
+    // exclusive. V393 granted that key to Pro, so the Pro card now says it and
+    // the sentence is TRUE; the probe would assert a fault that must not exist.
+    // `api.write` is the key that plays the old role: enterprise-only, and
+    // enterprise is a Contact-us strip rather than a card.
     expect(
       crossCardExclusivityFaults(
         CARD_SURFACES,
-        { ...LIVE_CARD_BULLETS, PRO_FEATURES: [...PRO_FEATURES, "Auto officials assignment"] },
+        { ...LIVE_CARD_BULLETS, PRO_FEATURES: [...PRO_FEATURES, "Write API access"] },
         grants,
       ).join(" | "),
-    ).toContain("the pro card claims officials.auto, but pro does not grant it");
+    ).toContain("the pro card claims api.write, but pro does not grant it");
     // …and the negative case: if a migration granted it to pro, saying so on the
-    // Pro card becomes true and this rule must fall silent.
+    // Pro card becomes true and this rule must fall silent. That is not
+    // hypothetical any more — it is exactly what happened to `officials.auto`,
+    // which the shipped Pro card now claims and this rule reports clean.
     expect(
       crossCardExclusivityFaults(
         CARD_SURFACES,
-        { ...LIVE_CARD_BULLETS, PRO_FEATURES: [...PRO_FEATURES, "Auto officials assignment"] },
-        { ...grants, "officials.auto": { ...grants["officials.auto"], pro: true } },
+        { ...LIVE_CARD_BULLETS, PRO_FEATURES: [...PRO_FEATURES, "Write API access"] },
+        { ...grants, "api.write": { ...grants["api.write"], pro: true } },
       ),
     ).toEqual([]);
-    // Anti-vacuity: the rule must be examining something. The Plus card matches
-    // three vocabulary entries today.
+    // Anti-vacuity: the rule must be examining something. Exactly ONE card
+    // matches the vocabulary today — the Pro card's `officials.auto` bullet —
+    // where the deleted Plus card used to match three, so this rule is one
+    // reword away from examining nothing and the backstop matters more, not
+    // less, than it did.
     expect(
       crossCardExclusivityFaults(
         CARD_SURFACES,
-        { ...LIVE_CARD_BULLETS, PLUS_CARD_FEATURES: ["More of everything"] },
+        { ...LIVE_CARD_BULLETS, PRO_FEATURES: ["More of everything"] },
         grants,
       ),
     ).toEqual(["no card matched any differentiator vocabulary — this rule examined nothing"]);
   });
 
-  it("the shared pass bullet names both rungs' division caps", async () => {
-    const mDivisions = await capFor("divisions.per_competition.max", "event_pass");
-    const lDivisions = await capFor("divisions.per_competition.max", "event_pass_l");
+  it("the pass bullet names the division cap of every rung on sale, and no other", async () => {
+    // Was "…names both rungs' division caps": the bullet read
+    // "10 divisions, 128 entrants each — 20 divisions & 512 entrants on L".
+    // With L off sale (2026-09-05) that second half advertised a size with no
+    // checkout behind it, so it went.
     const bullets = PASS_FEATURES.join(" | ");
-    // Both whole tokens. "10 divisions" is also a substring of "110 divisions",
-    // so the unit noun does not save the left boundary.
-    expect(bullets, "M's division cap, as a whole number").toMatch(
-      new RegExp(`${wholeNumber(mDivisions!).source}\\s+divisions`),
-    );
-    quotesCap(bullets, lDivisions, "L's ceiling is what the second rung sells");
+    for (const rung of SELLABLE_PASS_KEYS) {
+      const divisions = await capFor("divisions.per_competition.max", rung);
+      // A whole token. "10 divisions" is also a substring of "110 divisions",
+      // so the unit noun does not save the left boundary.
+      expect(bullets, `${rung}'s division cap, as a whole number`).toMatch(
+        new RegExp(`${wholeNumber(divisions!).source}\\s+divisions`),
+      );
+    }
+    // …and the withdrawn rung's ceiling is not still being sold. Its numbers
+    // are the whole reason someone would want it, so they are exactly what must
+    // not survive on the card.
+    for (const rung of HIDDEN_PASS_KEYS) {
+      const divisions = await capFor("divisions.per_competition.max", rung);
+      const entrants = await capFor("entrants.per_division.max", rung);
+      expect(bullets, `${rung}'s division cap is off sale`).not.toMatch(
+        new RegExp(`${wholeNumber(divisions!).source}\\s+divisions`),
+      );
+      expect(bullets, `${rung}'s entrant cap is off sale`).not.toMatch(wholeNumber(entrants!));
+      // Anti-vacuity: the two rungs' caps really differ, so "does not quote L"
+      // is not satisfied by L and M holding the same number.
+      expect(divisions).not.toBe(await capFor("divisions.per_competition.max", "event_pass"));
+    }
+    expect(HIDDEN_PASS_KEYS.length).toBeGreaterThan(0);
   });
 });

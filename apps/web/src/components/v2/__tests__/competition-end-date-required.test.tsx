@@ -82,7 +82,13 @@ beforeEach(() => {
 });
 
 const mountWizard = () =>
-  renderIsland(CompetitionWizard, { orgSlug: "riverside" }, expandFields);
+  renderIsland(
+    CompetitionWizard,
+    // The public-dashboard upgrade figure is required (see the component)
+    // but irrelevant here — these tests never reach the degrade card.
+    { orgSlug: "riverside", publicDashboardUpgrade: null },
+    expandFields,
+  );
 
 describe("CompetitionWizard — create requires an end date (#376)", () => {
   const mount = mountWizard;

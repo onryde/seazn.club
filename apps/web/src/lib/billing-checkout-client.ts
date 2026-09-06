@@ -6,6 +6,7 @@
 // Stripe's embedded spinner loading forever with nothing to render.
 
 import type { PassKey } from "@/lib/currency";
+import type { PurchasablePlanKey } from "@/lib/types";
 import { orgScopeHeaders } from "@/lib/org-scope";
 
 export type CheckoutSecretResult =
@@ -61,9 +62,12 @@ async function fetchClientSecret(
 }
 
 /** POST /api/billing/checkout and return the client_secret, or a display error.
- *  Never throws — a rejected fetch or a non-ok body maps to `{ ok: false }`. */
+ *  Never throws — a rejected fetch or a non-ok body maps to `{ ok: false }`.
+ *  `plan` is `PurchasablePlanKey` (entitlements v18: "pro" only) — the same
+ *  set `checkoutSchema` validates server-side — rather than an independent
+ *  `"pro" | "pro_plus"` literal that used to happen to match it. */
 export async function fetchCheckoutClientSecret(
-  plan: "pro" | "pro_plus",
+  plan: PurchasablePlanKey,
   interval: "monthly" | "annual",
   fetchFn: typeof fetch = fetch,
 ): Promise<CheckoutSecretResult> {

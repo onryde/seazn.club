@@ -1,4 +1,5 @@
 import { ENTITLEMENT_DOMAINS } from "@/lib/entitlement-domains";
+import { ALL_PLAN_KEYS } from "@/lib/currency";
 
 export interface AdminEntRow {
   feature_key: string;
@@ -33,14 +34,15 @@ export interface AdminEntSection { slug: string; features: AdminEntFeature[] }
  * three had to move together or an operator would get a column they cannot
  * save (page widened, enum not) or a plan they cannot see at all (enum
  * widened, page not). Importing this everywhere makes a new plan key one edit.
+ *
+ * Entitlements v18: derived from `lib/currency.ts`'s `ALL_PLAN_KEYS` — every
+ * plan in the database, `enterprise` included, because staff need to see and
+ * edit every row even though it is never sold. `lib/pricing-matrix.ts`'s
+ * `PRICING_PLAN_KEYS` derives from the SAME list, filtered to the four
+ * purchasable columns — one union, so a plan added to it can't be forgotten
+ * on either surface.
  */
-export const ADMIN_PLAN_KEYS = [
-  "community",
-  "event_pass",
-  "event_pass_l",
-  "pro",
-  "pro_plus",
-] as const;
+export const ADMIN_PLAN_KEYS = ALL_PLAN_KEYS;
 
 export type AdminPlanKey = (typeof ADMIN_PLAN_KEYS)[number];
 
@@ -52,7 +54,7 @@ export const ADMIN_PLAN_LABEL: Record<AdminPlanKey, string> = {
   event_pass: "Event Pass M",
   event_pass_l: "Event Pass L",
   pro: "Pro",
-  pro_plus: "Pro Plus",
+  enterprise: "Enterprise",
 };
 
 const PLANS = ADMIN_PLAN_KEYS;
@@ -60,9 +62,12 @@ const PLANS = ADMIN_PLAN_KEYS;
 function render(cell: AdminEntRow | undefined): string {
   if (!cell) return "—";
   if (cell.bool_value !== null) {
-    // Dual-value keys (import.bulk carries a bool AND an int cap) show both.
-    // No number here on purpose — the caps live in `plan_entitlements` and
-    // differ per plan; the "20" this comment used to name had already moved.
+    // Dual-value keys (import.bulk carries a bool AND a row cap) show both.
+    // The figure is deliberately not named here: it moved to 50 in V319 and this
+    // comment carried the old 20 for a year, alongside two further copies of it
+    // that W2 T12 had to correct — and main removed the same number
+    // independently while that was happening. The caps live in
+    // `plan_entitlements`, differ per plan, and belong nowhere else.
     if (cell.bool_value && cell.int_value !== null) return `true (${cell.int_value})`;
     return cell.bool_value ? "true" : "false";
   }

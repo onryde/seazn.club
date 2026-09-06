@@ -27,6 +27,16 @@ vi.mock("next/headers", () => ({
 }));
 
 import { sql } from "@/lib/db";
+import { HIDDEN_PASS_KEYS, SELLABLE_PASS_KEYS } from "@/lib/currency";
+
+/** The rungs the probe reported as sellable, as a LIST. The probe joins them
+ *  with "+", so every substring assertion over that field is ambiguous in both
+ *  directions — see the comment at the one call site that matters. */
+const sellableOf = (html: string): string[] => {
+  const m = /sellable:([a-z_+]+)/.exec(html);
+  if (!m) throw new Error("the probe rendered no sellable field");
+  return m[1] === "none" ? [] : m[1]!.split("+");
+};
 import { invalidateSlugCache } from "@/server/slug-resolve";
 import {
   usePassActive,
@@ -148,29 +158,32 @@ describe.skipIf(!HAS_DB)("competition layout provides Event Pass state", () => {
     expect(otherId).not.toBe(rig.compId);
   });
 
-  // v17 #327 rewrote what "a paid plan" means here. It used to mean "no pass is
-  // offered at all", on the premise that Pro was a superset of every rung. The L
-  // rung ended that: L lifts Pro's 256-entrant ceiling, so a Pro org is offered
-  // L — and ONLY L. These four cases therefore assert on `sellable`, which is
-  // the sharper discriminator: a plan that resolved as COMMUNITY would report
-  // both rungs, so "event_pass_l" alone proves the resolver read Pro AND that
-  // the $29 rung is not on sale to them.
-  it("offers a Pro org the L rung only — never the $29 pass it already covers", async () => {
+  // v17 #327 rewrote what "a paid plan" means here, and the 2026-09-05 decision
+  // rewrote it back. #327's premise was that Pro is NOT a superset of every
+  // rung — L lifts Pro's 256-entrant ceiling — so a Pro org was offered L and
+  // only L. With L off sale the one rung that exceeds Pro cannot be sold, so a
+  // Pro org is offered nothing and the gate reports `paid_plan` again.
+  //
+  // The discriminator survives the change, which is what keeps these four cases
+  // worth having: an org the resolver read as COMMUNITY reports
+  // `sellable:event_pass state:none`, so `state:paid_plan` still proves the
+  // resolver saw a paid plan and not just an empty ladder.
+  it("offers a Pro org nothing — the only rung that beats Pro is off sale", async () => {
     const rig = await seed();
     await sql`update subscriptions set plan_key = 'pro', status = 'active'
               where id = (select subscription_id from organizations where id = ${rig.orgId})`;
     const html = await renderLayout(rig.orgSlug, rig.compSlug);
     expect(html).toContain("pass:false");
-    expect(html).toContain("sellable:event_pass_l");
-    expect(html).toContain("state:none");
+    expect(html).toContain("sellable:none");
+    expect(html).toContain("state:paid_plan");
   });
 
-  it("offers NOTHING to Pro Plus, which really is a superset", async () => {
-    // The case the four below were always about, now that Pro is not it: Pro
-    // Plus caps nothing either rung lifts, so no pass is for sale and the gate
+  it("offers NOTHING to Enterprise, which really is a superset", async () => {
+    // The case the four below were always about, now that Pro is not it:
+    // Enterprise caps nothing either rung lifts, so no pass is for sale and the gate
     // goes quiet exactly as it did before #327.
     const rig = await seed();
-    await sql`update subscriptions set plan_key = 'pro_plus', status = 'active'
+    await sql`update subscriptions set plan_key = 'enterprise', status = 'active'
               where id = (select subscription_id from organizations where id = ${rig.orgId})`;
     const html = await renderLayout(rig.orgSlug, rig.compSlug);
     expect(html).toContain("sellable:none");
@@ -183,7 +196,7 @@ describe.skipIf(!HAS_DB)("competition layout provides Event Pass state", () => {
     const rig = await seed();
     await sql`update subscriptions set plan_key = 'pro', status = 'trialing'
               where id = (select subscription_id from organizations where id = ${rig.orgId})`;
-    expect(await renderLayout(rig.orgSlug, rig.compSlug)).toContain("sellable:event_pass_l");
+    expect(await renderLayout(rig.orgSlug, rig.compSlug)).toContain("state:paid_plan");
   });
 
   it("reads a STAFF-COMPED org whose comp has not lapsed as paid", async () => {
@@ -195,7 +208,7 @@ describe.skipIf(!HAS_DB)("competition layout provides Event Pass state", () => {
               set plan_key = 'pro', status = 'active', stripe_subscription_id = null,
                   comped_until = now() + interval '30 days'
               where id = (select subscription_id from organizations where id = ${rig.orgId})`;
-    expect(await renderLayout(rig.orgSlug, rig.compSlug)).toContain("sellable:event_pass_l");
+    expect(await renderLayout(rig.orgSlug, rig.compSlug)).toContain("state:paid_plan");
   });
 
   it("reads past_due INSIDE the 14-day grace as paid", async () => {
@@ -203,7 +216,7 @@ describe.skipIf(!HAS_DB)("competition layout provides Event Pass state", () => {
     await sql`update subscriptions
               set plan_key = 'pro', status = 'past_due', status_changed_at = now()
               where id = (select subscription_id from organizations where id = ${rig.orgId})`;
-    expect(await renderLayout(rig.orgSlug, rig.compSlug)).toContain("sellable:event_pass_l");
+    expect(await renderLayout(rig.orgSlug, rig.compSlug)).toContain("state:paid_plan");
   });
 
   it("reports 'none' for a LAPSED comp — the pass genuinely lifts them again", async () => {
@@ -239,7 +252,7 @@ describe.skipIf(!HAS_DB)("competition layout provides Event Pass state", () => {
     const rig = await seed();
     await sql`insert into competition_passes (competition_id, org_id)
               values (${rig.compId}, ${rig.orgId})`;
-    await sql`update subscriptions set plan_key = 'pro_plus', status = 'active'
+    await sql`update subscriptions set plan_key = 'enterprise', status = 'active'
               where id = (select subscription_id from organizations where id = ${rig.orgId})`;
     const html = await renderLayout(rig.orgSlug, rig.compSlug);
     // The row is still reported honestly; the gate state is not.
@@ -349,7 +362,7 @@ describe.skipIf(!HAS_DB)("competition layout provides Event Pass state", () => {
     expect(html).toContain("rung:null");
     expect(html).toContain("state:closed");
     // Nothing is for sale past the line, so the rung column may not advertise
-    // one. Before the change this read `event_pass+event_pass_l`.
+    // one. Before #376 this read the whole ladder.
     expect(html).toContain("sellable:none");
   });
 
@@ -390,15 +403,26 @@ describe.skipIf(!HAS_DB)("competition layout provides Event Pass state", () => {
     const html = await renderLayout(rig.orgSlug, rig.compSlug);
     expect(html).toContain("reason:null");
     expect(html).toContain("state:none");
-    expect(html).toContain("sellable:event_pass+event_pass_l");
+    // The rungs ON SALE, enumerated from the authority — the whole ladder used
+    // to be here (`event_pass+event_pass_l`), and reading the authority instead
+    // of a literal is what moves this line the day a rung goes back on sale.
+    //
+    // EXTRACTED and compared whole, never `toContain`: the probe prints the
+    // rungs joined with "+", so `toContain("sellable:event_pass")` is satisfied
+    // by "sellable:event_pass+event_pass_l" — the exact string this assertion
+    // exists to reject — and `not.toContain("sellable:event_pass_l")` is
+    // satisfied by it too, because the hidden rung is not at the start of the
+    // list. Both halves would have passed on the unfixed page.
+    expect(sellableOf(html)).toEqual([...SELLABLE_PASS_KEYS]);
+    for (const hidden of HIDDEN_PASS_KEYS) expect(sellableOf(html)).not.toContain(hidden);
   });
 
   it("prefers 'paid_plan' over a closed competition with no pass", async () => {
-    // The plan still wins over everything: a Pro Plus org's gate was closed by
+    // The plan still wins over everything: an Enterprise org's gate was closed by
     // its PLAN's ceiling, and `closed` would name the wrong limit.
     const rig = await seed();
     await sql`update competitions set status = 'completed' where id = ${rig.compId}`;
-    await sql`update subscriptions set plan_key = 'pro_plus', status = 'active'
+    await sql`update subscriptions set plan_key = 'enterprise', status = 'active'
               where id = (select subscription_id from organizations where id = ${rig.orgId})`;
     const html = await renderLayout(rig.orgSlug, rig.compSlug);
     expect(html).toContain("pass:false");

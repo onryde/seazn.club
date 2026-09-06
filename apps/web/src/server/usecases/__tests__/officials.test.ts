@@ -46,7 +46,7 @@ const GENERIC_CONFIG = {
   progressScore: false,
 };
 
-async function seedOrg(plan: "community" | "pro" | "pro_plus" = "pro"): Promise<{ auth: AuthCtx }> {
+async function seedOrg(plan: "community" | "pro" | "enterprise" = "pro"): Promise<{ auth: AuthCtx }> {
   const suffix = randomUUID().slice(0, 8);
   const [{ id: orgId }] = await sql<{ id: string }[]>`
     insert into organizations (name, slug) values (${"Off " + suffix}, ${"off-" + suffix})
@@ -131,7 +131,7 @@ afterAll(async () => {
 describe.skipIf(!HAS_DB)("officials assignment (Jul3/02)", () => {
   it("auto-proposes, applies, caches, and ledgers the assignment", async () => {
     // officials.auto is a Pro Plus feature since V290 (hard move, no grandfather)
-    const { auth } = await seedOrg("pro_plus");
+    const { auth } = await seedOrg("pro");
     const { division, fixtures } = await seedScheduledDivision(auth);
     await createOfficial(auth, {
       display_name: "Ref One",
@@ -185,7 +185,7 @@ describe.skipIf(!HAS_DB)("officials assignment (Jul3/02)", () => {
   // Task 10 (v4/03 §10): an AI-sourced apply stamps its provenance (trimmed
   // instruction) into the officials_assigned event; a plain apply carries none.
   it("stamps the ai block into officials_assigned when present, omits it otherwise", async () => {
-    const { auth } = await seedOrg("pro_plus");
+    const { auth } = await seedOrg("pro");
     const { division, fixtures } = await seedScheduledDivision(auth);
     await createOfficial(auth, {
       display_name: "Ref One",
@@ -256,7 +256,7 @@ describe.skipIf(!HAS_DB)("officials assignment (Jul3/02)", () => {
   });
 
   it("team-as-referee is never assigned to its own fixture", async () => {
-    const { auth } = await seedOrg("pro_plus");
+    const { auth } = await seedOrg("pro");
     const { division, fixtures, entrants } = await seedScheduledDivision(auth);
     // one team-ref official belonging to entrant A — plays in 3 of 6 fixtures
     await createOfficial(auth, {
@@ -290,7 +290,7 @@ describe.skipIf(!HAS_DB)("officials assignment (Jul3/02)", () => {
   });
 
   it("maxPerDay caps on the ORG's calendar day, not the UTC day (#448)", async () => {
-    const { auth } = await seedOrg("pro_plus");
+    const { auth } = await seedOrg("pro");
     // An org west of Greenwich: a Saturday evening there is already Sunday UTC.
     await sql`
       update organizations set timezone = 'America/Los_Angeles' where id = ${auth.orgId}`;
@@ -345,7 +345,7 @@ describe.skipIf(!HAS_DB)("officials assignment (Jul3/02)", () => {
   });
 
   it("locked assignments survive apply; re-apply keeps them", async () => {
-    const { auth } = await seedOrg("pro_plus");
+    const { auth } = await seedOrg("pro");
     const { division, fixtures } = await seedScheduledDivision(auth);
     const ref = await createOfficial(auth, {
       display_name: "Pinned",
@@ -520,7 +520,7 @@ describe.skipIf(!HAS_DB)("non-member official fixture access rule", () => {
 // emailed a blank "where" line regardless of its real venue_id/court_id.
 describe.skipIf(!HAS_DB)("P9: assignment-notice email carries the live venue/court name", () => {
   it("uses the resolved venue/court name, not a disagreeing frozen venue/court_label", async () => {
-    const { auth } = await seedOrg("pro_plus");
+    const { auth } = await seedOrg("pro");
     const { fixtures } = await seedScheduledDivision(auth);
     const venue = await createVenue(auth, { name: "Live Notice Venue", sort: 0 });
     const court = await createCourt(auth, venue.id, { name: "Live Notice Court", sort: 0, tags: [] });
@@ -562,7 +562,7 @@ describe.skipIf(!HAS_DB)("P9: assignment-notice email carries the live venue/cou
 // resolve the SAME slot label every other surface already shows for it.
 describe.skipIf(!HAS_DB)("F5/Task 9: assignment digest resolves slot labels, not bare TBD", () => {
   it("uses the resolved slot label for a day-one fixture with unresolved entrants", async () => {
-    const { auth } = await seedOrg("pro_plus");
+    const { auth } = await seedOrg("pro");
     const { fixtures } = await seedScheduledDivision(auth);
     const fixtureId = fixtures[0]!.id;
     // Day-one placeholder: null entrant ids with a real home_slot_label

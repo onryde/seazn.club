@@ -1,5 +1,25 @@
 import { test, expect } from "@playwright/test";
-import { apiJson, TAG, grantCompetitionPassSql, competitionPath } from "./helpers";
+import {
+  apiJson,
+  TAG,
+  grantCompetitionPassSql,
+  competitionPath,
+  planCapSql,
+  planFlagSql,
+} from "./helpers";
+// Prices from the seed, never from a literal — this file has carried a stale
+// one through two reprices already. The two RUNG lists come from here for a
+// harder reason: `SELLABLE_PASS_KEYS` in src/lib/currency.ts is the authority
+// (owner decision 2026-09-05 took the L rung off sale), but a VALUE import of
+// it drags the app's bare `stripe-plans.json` import into Playwright's ESM
+// loader, which refuses the JSON and makes this whole spec collect ZERO TESTS —
+// silently, in the usual runner output. See e2e/price-kit.ts's header.
+import {
+  HIDDEN_PASS_RUNGS,
+  SELLABLE_PASS_RUNGS,
+  passLabel,
+  proAnnualPerMonthLabel,
+} from "./price-kit";
 
 // PROMPT-36 (v3/07): pricing page renders three offers from plan_entitlements
 // with a working currency switcher and zero "Business"; the in-competition
@@ -21,56 +41,93 @@ test.describe("pricing page v3", () => {
       await page.goto("/pricing");
       const matrix = page.locator("[data-pricing-matrix]");
       await expect(matrix).toBeVisible();
-      // Column headers come from the plans; rows from plan_entitlements. The
-      // Event Pass is TWO columns since v17 #294 — "Event Pass M" and "Event
-      // Pass L" — so the pass heading is asserted at both sizes.
-      for (const col of ["Community", "Event Pass M", "Event Pass L", "Pro"]) {
-        await expect(matrix.locator("thead")).toContainText(col);
-      }
-      await expect(matrix.locator("tbody")).toContainText("Entrants per division");
-      // Straight from plan_entitlements: 64 / 128 / ∞ / 256. V319 raised
-      // Community 32 → 64 and the Event Pass 64 → 128, so the old 32 appears
-      // nowhere in this row — asserting it fails against the live matrix.
-      const entrantsRow = matrix.locator("tr", { hasText: "Entrants per division" });
-      await expect(entrantsRow).toContainText("64");
-      await expect(entrantsRow).toContainText("128");
-      await expect(entrantsRow).toContainText("256");
-      // V341: L's cap is NULL — unlimited. This ∞ is the figure the L rung is
-      // sold on, and the one an L buyer would be misquoted if the table still
-      // had a single pass column.
-      await expect(entrantsRow).toContainText("∞");
 
-      // The rest of what V310/V311 repackaged, on the page that sells it.
-      // These are the rows this branch MOVED, so a matrix drift shows up here
-      // before a buyer finds it (task 22).
-      // Cell 0 of every row is the feature LABEL (a <td>, not a <th>), so the
-      // plan columns start at 1. The order is lib/pricing-matrix's
-      // PRICING_PLAN_KEYS: community, event pass M, event pass L, pro, pro
-      // plus. v17 #294 inserted L at index 2, shifting pro and pro plus right.
-      const cell = (label: string, plan: 0 | 1 | 2 | 3 | 4) =>
-        matrix.locator("tr", { hasText: label }).locator("td").nth(plan + 1);
-      // Divisions per competition: community 4, M 10, L 20 — the two rungs'
-      // own ceilings, and one of only two rows where they differ at all.
-      await expect(cell("Divisions per competition", 0)).toHaveText("4");
-      await expect(cell("Divisions per competition", 1)).toHaveText("10");
-      await expect(cell("Divisions per competition", 2)).toHaveText("20");
-      // Entrants: the other. L renders ∞ where M renders its 128 cap.
-      await expect(cell("Entrants per division", 1)).toHaveText("128");
-      await expect(cell("Entrants per division", 2)).toHaveText("∞");
-      // The fee ladder — flat across the rungs by decision (#294): L buys a
-      // bigger event, never a cheaper cut.
-      await expect(cell("Platform fee on entry fees", 0)).toContainText("8%");
-      await expect(cell("Platform fee on entry fees", 1)).toContainText("5%");
-      await expect(cell("Platform fee on entry fees", 2)).toContainText("5%");
-      await expect(cell("Platform fee on entry fees", 3)).toContainText("2%");
-      // V308 added player profiles to the pass columns — BOTH of them, since
-      // V341 derives L's matrix from M's.
-      await expect(cell("Public player profiles", 0)).toHaveText("—");
-      await expect(cell("Public player profiles", 1)).toHaveText("✓");
-      await expect(cell("Public player profiles", 2)).toHaveText("✓");
-      // …and V310 made `branding` free on EVERY plan, so the community cell
-      // must NOT be a dash. Re-gating it would be a silent takeaway.
-      await expect(cell("Custom branding", 0)).toHaveText("✓");
+      // THE COLUMN SET, read out of the DOM rather than counted. `<th>` carries
+      // `data-pricing-column` with the plan key, so this compares the rendered
+      // set against the authority instead of a list typed here — and the
+      // ordinals below stop being positions somebody has to keep in step.
+      //
+      // It used to assert "Event Pass M" and "Event Pass L" as headings. The L
+      // rung came off sale on 2026-09-05, which removed a column and shifted
+      // Pro left; every hardcoded index in this block was silently about the
+      // wrong plan for as long as that went unnoticed. Nothing here is an index
+      // any more.
+      const columns = await matrix.locator("thead th[data-pricing-column]").evaluateAll((els) =>
+        els.map((el) => el.getAttribute("data-pricing-column")!),
+      );
+      expect(columns).toEqual(["community", ...SELLABLE_PASS_RUNGS, "pro"]);
+      for (const hidden of HIDDEN_PASS_RUNGS) expect(columns).not.toContain(hidden);
+      expect(HIDDEN_PASS_RUNGS.length).toBeGreaterThan(0);
+
+      /** One value cell, addressed by PLAN rather than by ordinal. Cell 0 of a
+       *  row is the feature label (a `<td>`), so the plan columns start at 1. */
+      const cell = (label: string, plan: string) =>
+        matrix
+          .locator("tr", { hasText: label })
+          .locator("td")
+          .nth(columns.indexOf(plan) + 1);
+
+      /** THE RESOLVER'S OWN FALL-THROUGH, mirrored: a key a PASS rung has no
+       *  row for resolves to the community plan's, so the table renders
+       *  community's value in that column (`cellAt` in lib/pricing-matrix.ts).
+       *  Reading the rung's own row alone would expect a dash where the page
+       *  correctly prints a tick. */
+      const isPassColumn = (plan: string) =>
+        ([...SELLABLE_PASS_RUNGS, ...HIDDEN_PASS_RUNGS] as readonly string[]).includes(plan);
+
+      /** The cap as the page renders it: a number, ∞ for a null int_value
+       *  (UNLIMITED), and an em dash for no row at all. Three outcomes, because
+       *  collapsing the last two lets "∞" satisfy a plan with no such grant. */
+      const capText = async (feature: string, plan: string): Promise<string> => {
+        let value = await planCapSql(feature, plan);
+        if (value === undefined && isPassColumn(plan)) value = await planCapSql(feature, "community");
+        return value === undefined ? "—" : value === null ? "∞" : String(value);
+      };
+
+      /** …and the same fall-through for a boolean row. */
+      const flagText = async (feature: string, plan: string): Promise<string> => {
+        let value = await planFlagSql(feature, plan);
+        if (value === undefined && isPassColumn(plan)) value = await planFlagSql(feature, "community");
+        return value === true ? "✓" : "—";
+      };
+
+      await expect(matrix.locator("tbody")).toContainText("Entrants per division");
+
+      // Every figure below is READ FROM plan_entitlements. They were literals,
+      // and the literals had already gone stale twice on this branch alone —
+      // V393 gave the pass rungs new caps and V398 re-cut the whole fee ladder,
+      // both after these lines were written. A pricing table that quotes the
+      // matrix has to be ASSERTED against the matrix, or the test is a second,
+      // slower copy of the same guess.
+      for (const plan of columns) {
+        await expect(cell("Divisions per competition", plan), `divisions/${plan}`).toHaveText(
+          await capText("divisions.per_competition.max", plan),
+        );
+        await expect(cell("Entrants per division", plan), `entrants/${plan}`).toHaveText(
+          await capText("entrants.per_division.max", plan),
+        );
+        await expect(cell("Platform fee on entry fees", plan), `fee/${plan}`).toContainText(
+          `${await capText("registration.fee_percent", plan)}%`,
+        );
+      }
+      // …and the two rows that carry a TICK rather than a number, which is a
+      // different renderer and its own failure mode.
+      for (const [label, feature] of [
+        ["Public player profiles", "dashboard.player_profiles"],
+        ["Custom branding", "branding"],
+      ] as const) {
+        for (const plan of columns) {
+          await expect(cell(label, plan), `${feature}/${plan}`).toHaveText(
+            await flagText(feature, plan),
+          );
+        }
+      }
+      // Anti-vacuity: the entrants row must actually DIFFER across the columns,
+      // or every assertion above is satisfied by one number repeated.
+      const entrants = await Promise.all(
+        columns.map((p) => capText("entrants.per_division.max", p)),
+      );
+      expect(new Set(entrants).size).toBeGreaterThan(1);
 
       // The dark Business plan never surfaces on marketing pages (v3/03 §6).
       expect(await page.locator("body").innerText()).not.toContain("Business");
@@ -79,10 +136,15 @@ test.describe("pricing page v3", () => {
       await expect(page.locator("[data-annual-toggle]")).toHaveAttribute("aria-checked", "true");
       await expect(page.locator("main")).toContainText("$");
       await page.locator("[data-currency-switcher]").selectOption("gbp");
-      // Annual framing renders round(annual/12): Pro GBP 12500/12 → £10.42.
-      // (Repriced by the Pro $19 + 30%-annual change — the old £33 was Pro
-      // Plus monthly, which now sits behind the PlusReveal disclosure.)
-      await expect(page.locator("main")).toContainText("£10.42", { timeout: 15_000 });
+      // Annual framing renders `round(annual / 12)`, formatted. DERIVED, not
+      // typed: this figure has been wrong twice already — £33 (which was Pro
+      // Plus monthly, not an annual twelfth) then £10.42 (correct until the
+      // charm reprice moved the annual point). `proAnnualPerMonthLabel` is the
+      // page's own derivation, the one marketing/pricing/page.tsx hands
+      // ProPriceCard, so the expectation now moves with the seed.
+      await expect(page.locator("main")).toContainText(proAnnualPerMonthLabel("gbp"), {
+        timeout: 15_000,
+      });
     } finally {
       await ctx.close();
     }
@@ -151,7 +213,10 @@ test.describe.serial("event pass gate (community org)", () => {
     await page.getByRole("button", { name: "Create division" }).click();
     const gate = page.locator("[data-pass-gate]").first();
     await expect(gate).toBeVisible({ timeout: 20_000 });
-    await expect(gate.locator("[data-pass-cta]")).toContainText("$29");
+    // The CTA quotes the floor of what this org can actually buy — M, on a
+    // community plan. Its negative pair is the `data-pass-owned` assertion at
+    // the foot of this test, which needs this same string to mean anything.
+    await expect(gate.locator("[data-pass-cta]")).toContainText(passLabel("event_pass"));
     const passHref = await gate.locator("[data-pass-cta]").getAttribute("href");
     // The gate appends `?feature=<key>` so the upgrade page can render its
     // ceiling state; anchor on the path, not the whole string.
@@ -208,7 +273,10 @@ test.describe.serial("event pass gate (community org)", () => {
     // `grantCompetitionPassSql` grants M, and since v17 #294 this card names
     // the rung rather than the product family.
     await expect(owned).toContainText("Event Pass M active");
-    await expect(owned).not.toContainText("$29");
+    // The negative half of the CTA assertion above, and only meaningful
+    // because it names the string this very test watched the page render
+    // before the pass landed. A retired price passes here unconditionally.
+    await expect(owned).not.toContainText(passLabel("event_pass"));
     await expect(page.locator("[data-pass-cta]")).toHaveCount(0);
 
     const sibling = await apiJson<{ id: string }>(request, "/api/v1/competitions", "POST", { ends_on: "2030-12-31",

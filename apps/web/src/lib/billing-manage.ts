@@ -322,7 +322,7 @@ export interface DiscountSummary {
   description: string;
 }
 
-const DISCOUNT_SYMBOL: Record<string, string> = { usd: "$", eur: "€", gbp: "£", aud: "A$", inr: "₹" };
+const DISCOUNT_SYMBOL: Record<string, string> = { usd: "$", eur: "€", gbp: "£", inr: "₹" };
 
 interface CouponShape {
   id: string;
