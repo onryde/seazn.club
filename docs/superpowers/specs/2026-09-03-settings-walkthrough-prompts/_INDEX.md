@@ -762,6 +762,40 @@ ones W2 deliberately excluded as irreversible against the shared Pro user.
   out of scope for that task's one-line fix (ruled: no added locking); needs
   its own small fix (an `organizations` row lock mirroring `role/route.ts`)
   in a future wave.
+- **F12: Case 9 (`settings-entitlement-gates.spec.ts:315-374`) proves a
+  narrower contract than its name claims.** Its comment says org2 becomes
+  "what the active-org cookie points at" after the explicit
+  `POST /api/orgs/active {org_id: org2.orgId}` call — but `POST /api/orgs`
+  (`api/orgs/route.ts:29`) already calls `setActiveOrgId` on creation, so
+  org2 is active the instant it's seeded and the explicit switch call is a
+  no-op. It wouldn't matter even if it weren't: `/o/{orgSlug}` pages are
+  gated by `requireOrgPage`, whose own comment (`server/page-auth.ts:6-8`)
+  states the design intent directly — "the `/o` tree authorises from the
+  URL ... the `seazn_org` cookie no longer decides what a page shows" — and
+  `/api/v1/orgs/{id}/...` routes take `orgId` from the path
+  (`server/api-v1/auth.ts:210`), never the cookie either. So neither the
+  page navigation nor the `POST /api/v1/orgs/{org2.orgId}/sponsors`
+  assertion in this test can be affected by whether the switch call ran,
+  no-opped, or broke. All it actually proves: `POST /api/orgs/active`
+  accepts a snake_case body and returns 200 — real, but not "switching
+  enforces the gap on the new org." Found by the final whole-branch review.
+  Fix needs design work (find a surface that genuinely reads the
+  active-org cookie under `/o` or `/api/v1`, or force org1 active first and
+  assert a real before/after transition) — not a mechanical patch, hence
+  deferred rather than fixed in this wave.
+- **F13: `TABS` (`settings-support.ts`) is an inert seam.** Task 1 built it
+  as a shared interface ("imported from the app's own `SETTINGS_TABS`" per
+  the plan, though shipped as a type-only-import-typed literal — see the
+  W3-verified-facts section above) and Task 2's own brief said it "consumes
+  Task 1's `seedMemberIdentity`, `expectGate`, `TABS`" — but grepping the
+  whole tree, `TABS` has exactly one reference outside its own module: a
+  smoke test that checks it equals a hardcoded literal duplicating its own
+  definition. None of the three new matrix spec files import it; each
+  hardcodes the specific tab string it needs. Found by the final
+  whole-branch review — same shape as AGENTS.md's failure class 1 (an inert
+  seam), just in test infrastructure rather than product code. Fix: either
+  wire a real per-tab consumer into whichever future wave next touches this
+  matrix, or strike the "consumes TABS" claim from future briefs.
 
 ### W3 Task 5 — the mutation sweep: 7/7 killed, all restores byte-identical
 
