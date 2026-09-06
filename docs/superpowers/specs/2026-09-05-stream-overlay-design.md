@@ -28,11 +28,31 @@ CricHeroes sells a per-match "Score Ticker" for OBS or vMix, cricket only.
 
 ## Decisions locked (owner, 2026-09-05)
 
-1. **Both themes ship.** A "Broadcast bar" (TV lower third) and B "Corner bug"
-   (the pad's own stadium-night tile). Style is a query parameter on the
-   overlay URL, never a database column. Per-sport default as product owner:
-   cricket opens on the bar, every other sport on the bug. The club switches
-   in the panel. Owner reverses by naming the other letter.
+1. **Both themes ship, and themes are a REGISTRY.** A "Broadcast bar" (TV
+   lower third) and B "Corner bug" (the pad's own stadium-night tile). Style is
+   a query parameter on the overlay URL, never a database column. Per-sport
+   default as product owner: cricket opens on the bar, every other sport on the
+   bug. The club switches in the panel. Owner reverses by naming the other
+   letter.
+
+   **Amended 2026-09-06 by the owner, on Q7:** *"we will have multiple theme
+   per sports so make it abstract and use can choose for now apply the default
+   one."* Themes are therefore **not a two-value union**. They are entries in
+   `OVERLAY_THEMES` (`apps/web/src/components/overlay/theme-registry.ts`), each
+   an `OverlayThemeDef { id, labelKey, component, sports }`, where `sports` is
+   `"all"` or the exact `sport_key` values the theme is designed for. `bar` and
+   `bug` are the two entries on day one; **a third theme is one registry entry
+   plus one component**, never an edit to the route, the panel or the
+   projection. Three functions are the whole contract: `defaultThemeFor(sportKey)`
+   (cricket `bar`, everything else `bug` — the same rule, now named),
+   `themesForSport(sportKey)` (what the console offers, and the ONE filter, so
+   the panel and the route cannot disagree), and `resolveTheme(styleParam,
+   sportKey)`, which validates against the registry AND the entry's `sports`
+   and falls back to the sport's default on anything unknown, misspelt or
+   unsuitable — **never throwing**, because an OBS browser source cannot be
+   asked to correct a typo mid-match. Nothing about the two shipped themes
+   changes: `_THEMES.md` §3 is theme `bar`, §4 is theme `bug`, and a future
+   theme is a new section of that sheet in the same shape.
 2. **Per match, from the division fixtures tab** (owner vocabulary "Fixture
    Console" = the division page's `?tab=fixtures`, `stages-panel.tsx`, not
    `fixture-console.tsx`). An inline expander on the fixture row, the same
@@ -107,8 +127,11 @@ CricHeroes sells a per-match "Score Ticker" for OBS or vMix, cricket only.
 ### 1. Overlay route
 
 `apps/web/src/app/overlay/fixtures/[fixtureId]/page.tsx` with a sibling
-`layout.tsx`. Query: `style=bar|bug` (default per sport, decision 1),
-`lang=<locale>` (default: the org's locale as the public page resolves it).
+`layout.tsx`. Query: `style=<themeId>` — any id in `OVERLAY_THEMES`, resolved
+by `resolveTheme(style, sportKey)` and defaulting per sport (decision 1); an
+unknown, misspelt or sport-unsuitable id renders the sport's default at HTTP
+200 rather than erroring or 404ing. `lang=<locale>` (default: the org's locale
+as the public page resolves it).
 
 - Layout: a nested segment layout (the root layout owns the only `<html>`
   and `<body>`; nested layouts here return a `<div>`), which renders a
@@ -137,7 +160,10 @@ CricHeroes sells a per-match "Score Ticker" for OBS or vMix, cricket only.
   subscribe-or-poll logic lifted out of `LiveScore` into
   `components/public-site/use-live-fixture.ts`; `LiveScore` is repointed to
   the hook in the same change so there is one transport. The stage renders
-  `<OverlayBar>` or `<OverlayBug>` from `overlayModel(...)`.
+  `OVERLAY_THEMES[style].component` from `overlayModel(...)` — a registry
+  lookup, not a branch over two components, so registering a theme does not
+  edit the stage (decision 1, as amended). Only the theme's **id** crosses the
+  server/client boundary; the component is resolved on the client side of it.
 - Canvas: the overlay is authored at 1920×1080 and scaled to the viewport with
   `transform: scale(min(vw/1920, vh/1080))` from the top-left, so OBS at 1080p
   renders 1:1 and the console preview at 320 px wide renders the same
@@ -175,6 +201,14 @@ typed into the component.
 
 ### 3. Theme
 
+Two different things share the word "theme" here, and the plan must keep them
+apart: the **sport palette** (`sportThemeStyle(sportKey)`, eleven palettes,
+described below) and the **overlay theme** (`bar`, `bug`, … — the registry of
+decision 1, `components/overlay/theme-registry.ts`). They compose: any theme,
+any sport. A theme is a composition and a set of `.ovl-*` classes; a palette is
+the seven custom properties those classes read. Neither knows about the other,
+which is what lets one registry entry serve all eleven sports.
+
 The overlay root receives `sportThemeStyle(sportKey)` exactly as the pad root
 does, so a skin with no override (cricket) inherits the product defaults and
 the eleven palettes stay one authority. The overlay's own classes read
@@ -196,10 +230,15 @@ gains the column so the public page can read it.
 
 Validation lives in one zod schema `streamUrlSchema` (`lib/stream-url.ts`):
 `new URL()` must parse, protocol `https:`, hostname exactly one of
-`www.youtube.com`, `youtube.com`, `youtu.be`, `www.facebook.com`,
-`facebook.com`, `fb.watch`, `www.twitch.tv`, `twitch.tv`, `kick.com`,
-`www.kick.com`. Exact hostname comparison, never a prefix or substring test
-(memory: prefix check is not origin validation). Empty string clears the link.
+`www.youtube.com`, `youtube.com`, `youtu.be`, `m.youtube.com`,
+`www.facebook.com`, `facebook.com`, `fb.watch`, `www.twitch.tv`, `twitch.tv`,
+`kick.com`, `www.kick.com` — eleven names since owner answer 16 (Q5,
+2026-09-06: *"Agree"*), which added `m.youtube.com` because that is what the
+YouTube phone app's share sheet produces and a club pasting it had done nothing
+wrong. Exact hostname comparison, never a prefix or substring test (memory:
+prefix check is not origin validation) — the addition is ONE name, not a
+`youtube.com` suffix rule, and `m.youtube.com.evil.example` stays rejected.
+Empty string clears the link.
 
 **The public payload also gains the three fields a scorebug needs** (owner,
 2026-09-06, on Q1: *"we can add it as required"*), as the first task of W1
@@ -249,9 +288,13 @@ sport key nor any entitlement, so the division page
 `entitled={await hasFeature(auth.orgId, "embeds.enabled")}` at `:785`.
 Content, per the "Organiser console" artboards:
 
-- Style tabs "Broadcast bar" / "Corner bug" (default per sport), with a live
-  preview that is the overlay component itself at reduced scale on the
-  fixture's own current data.
+- Style tabs rendered FROM the registry — `themesForSport(division.sport_key)`,
+  one tab per suitable theme in registry order, each labelled from its
+  `labelKey` in all four locales, opening on `defaultThemeFor(sport_key)`. A
+  theme registered tomorrow appears in the console with no edit to the panel;
+  today that is "Broadcast bar" / "Corner bug". Beside them, a live preview
+  that is the overlay component itself at reduced scale on the fixture's own
+  current data.
 - Overlay link (read-only, copy button), built from the fixture id and the
   selected style.
 - Three numbered steps (it is a sequence): add a Browser source in OBS with
@@ -310,7 +353,7 @@ mutation check in the plan).
 ## Data flow
 
 ```
-scorer pad ─► ledger ─► existing state_changed ping ─► overlay page refetch ─► overlayModel ─► bar | bug
+scorer pad ─► ledger ─► existing state_changed ping ─► overlay page refetch ─► overlayModel ─► OVERLAY_THEMES[style].component
                                                         (poll every 15 s when not entitled to realtime)
 organiser panel ─► PUT /fixtures/[id]/stream ─► fixtures.stream_url ─► public match page "Watch live"
 OBS ─► renders overlay page as a browser source over the camera ─► YouTube / Facebook / Twitch
@@ -397,7 +440,7 @@ with `pnpm i18n:gen-keys` regenerated. Sentence case, plain verbs
   green and its behaviour identical (poll interval, debounce, decided
   templates); the seven-width `mobile.spec.ts` projects on the fixtures tab
   stay green with the new toggle folded in.
-- Visual gate: screenshots of bar and bug for cricket, football, tennis and
+- Visual gate: screenshots of every REGISTERED theme (today `bar` and `bug`) for cricket, football, tennis and
   volleyball at 1920×1080, and the panel at 320, 768 and 1280, attached to
   the PR; the images must exist and differ per sport.
 
@@ -409,6 +452,8 @@ with `pnpm i18n:gen-keys` regenerated. Sentence case, plain verbs
   kinds, visual gate. Lands after desk W1 merges (rebase).
 - **PR2 (step two):** moments and the cricket batter line, after spectator W1
   merges. Own plan, keyed on W1's shipped model.
+- **PR3 (last):** sponsor logos (owner answer 20 / Q9). Its own wave, scheduled
+  after W1 and W2, not designed in this spec.
 - Gates per PR: reviewer pass on the branch before merge (never skip the
   review loop), JSON-reporter vitest counts pasted back, `rtk proxy` lint,
   smoke on the PR, e2e via `workflow_dispatch pr=<n>` before merge, visual
@@ -420,6 +465,12 @@ Server-side video, phone-only streaming with a burned-in score, embedding the
 stream on the seazn match page, a pricing decision, a standings or fixtures
 ticker for OBS, sponsor logos on the overlay, multi-language switching inside
 one stream.
+
+**Sponsor logos have since been scheduled rather than dropped** (owner answer
+20 / Q9, 2026-09-06: *"ok for own wave as put it last"*): they become their own
+wave, **LAST in the programme, after W1 and W2**, and are not designed here. W1
+and W2 reserve no slot and leave no seam for them — sizing, placement and
+per-tier rules belong to that wave.
 
 ## False-premise watch list (re-pin against the tree before building on any)
 

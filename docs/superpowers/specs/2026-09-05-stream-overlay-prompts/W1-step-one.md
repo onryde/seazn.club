@@ -132,7 +132,11 @@ marked (re-pinned), and is re-pinned before an edit regardless.
      (`lib/entitlements.ts:454`); either null → `notFound()`. Passes `initial:
      { status, summary, outcome }`, `sportKey = division.sport_key` (`data.ts:180`),
      `entrantNames`, `realtime` (already in the return, `:689`) and the resolved
-     `style` (`?style=bar|bug`, default by R2; anything else → default) and
+     theme (`?style=<themeId>`, resolved by `resolveTheme(styleParam,
+     sportKey)` against `OVERLAY_THEMES`; an unknown, misspelt or
+     sport-unsuitable id falls back to `defaultThemeFor(sportKey)` and never
+     throws — owner answer on Q7, 2026-09-06: themes are a REGISTRY, not a
+     two-value union, so a new theme is one entry plus one component) and
      `lang` (`toLocale`, `lib/i18n-constants.ts:42`) to the stage.
    - `apps/web/src/components/overlay/overlay-stage.tsx` (client): calls
      `useLiveFixture`, builds `overlayModel(...)`, renders `<OverlayBar>` or
@@ -169,7 +173,7 @@ marked (re-pinned), and is re-pinned before an edit regardless.
    "embeds.enabled")}` at `:785`. Content per the "Organiser console" artboards:
    style tabs (default per R2; `role=tablist`) above a live preview that is
    `<OverlayStage>` itself at reduced scale on the row's own fixture; read-only
-   overlay link `<origin>/overlay/fixtures/<id>?style=<bar|bug>` with a copy
+   overlay link `<origin>/overlay/fixtures/<id>?style=<themeId>` with a copy
    button (`embed.*` precedent); three NUMBERED steps (Browser source at
    1920×1080 · drag above the camera, background is transparent · start
    streaming and paste the link below); stream-link input + "Save link" calling

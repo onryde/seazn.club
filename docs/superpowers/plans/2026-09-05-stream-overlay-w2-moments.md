@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** The overlay reacts to the match. A SIX, FOUR or OUT in cricket, a GOAL or card in football / hockey / ice hockey, an ACE, a break / set / match point and a set won in the racket sports, and a set won in volleyball each raise a slab in the sport's own colour beside the bug (or under the bar), hold four seconds, fold away, and queue behind one another. The cricket bar's second band carries the batters at the crease and the bowler's figures. Nothing fires on load or reconnect; nothing fires twice; every name passes the public-site consent resolver; a sport whose module declares no such event renders nothing, by construction.
+**Goal:** The overlay reacts to the match. A SIX, FOUR or OUT in cricket, a GOAL or card in football / hockey / ice hockey, an ACE, a break / set / match point and a set won in the racket sports, and a set point, match point or set won in volleyball (owner answer 21 / Q10) each raise a slab in the sport's own colour beside the bug (or under the bar), hold four seconds, fold away, and queue behind one another. The cricket bar's second band carries the batters at the crease and the bowler's figures. Nothing fires on load or reconnect; nothing fires twice; every name passes the public-site consent resolver; a sport whose module declares no such event renders nothing, by construction.
 
 **Architecture:** One additive field on the public fixture payload — `recent: RecentEvent[]`, the last eight void-resolved ledger events with their raw engine type, sequence number, a consent-resolved minimal payload and, for the racket sports, a server-derived `setWon` / `pointState` annotation computed by replaying the module through the real fold and probing "would the next point win the game / set / match" (the engine is the authority; no set rule is retyped). A pure client projection `momentsFor(sportKey, recent, sinceSeq, msg)` turns it into `OverlayMoment[]` through a per-sport allowlist keyed by the module's declared event types. The stage tracks the highest sequence it has seen, starting at the initial payload's tip, so OBS opening mid-stream replays nothing. A FIFO queue reducer drives one slab component whose motion is `transform` / `opacity` only. The cricket line is a client projection of spectator W1's `match_centre.cricket.live` (primary) with a precisely named server fallback.
 
@@ -43,6 +43,7 @@ Copied from the spec and the programme rules; every task brief restates the ones
 - **e2e runs on push to `main` only.** Before merge use `workflow_dispatch` on `.github/workflows/e2e.yml` with the `pr` input; smoke runs on PRs only. Read `e2e.yml` itself before believing either sentence.
 - **Worktree discipline.** All work in `.claude/worktrees/stream-overlay` on `feat/stream-overlay`; prefix shell commands with `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/stream-overlay &&` in the same call; never `git stash` (the stash stack is shared with the main checkout); commit with `/usr/bin/git commit -o <paths>` so the shared index cannot sweep a sibling's files in (`-o` fails with "pathspec did not match" on a NEW file: `/usr/bin/git add <new-file>` first, as its own plain call, then commit; the session's guard also refuses heredocs, `eval`, sourcing and `&&` chains that include git, so every git call is one plain command).
 - **No redirect built from `req.url`** anywhere in this programme (base-commit health note in `_INDEX.md`): W2 adds no route; the existing public route returns JSON.
+- **Sponsor logos are NOT in W2** (owner answer 20 / Q9, 2026-09-06: *"ok for own wave as put it last"*) — they are their own wave, scheduled LAST in the programme, after W1 and W2. The slab is the only thing that appears beside the bug or under the bar in this wave; reserve no space and leave no seam for a logo, because a reserved-but-empty slot is an inert seam and that wave owns sizing, placement and the per-tier rules.
 - **Phone composition rules do not apply to the overlay canvas** (authored at 1920×1080, scaled), but the organiser panel's live preview renders the same component at reduced scale, so the slab must not overflow the 1920×1080 stage at any moment length: `max-width` on the slab, `truncate` with `min-w-0` on its text.
 
 ---
@@ -500,7 +501,7 @@ Allowlist (from the modules' declarations read 2026-09-05; the parity test below
 | icehockey | `icehockey.goal` → GOAL; `icehockey.suspension.start` → PENALTY, line = the class label (minor, bench_minor, double_minor, major, misconduct → caution; game_misconduct, match → dismissal) | — |
 | tennis | `tennis.point` with `kind === "ace"` → ACE (led) | `pointState.fresh`: break → BREAK POINT, set → SET POINT, match → MATCH POINT (led); `setWon` → SET {n}, line "{short} {home}–{away}" |
 | badminton, tabletennis | — (the rally carries no shot kind) | `pointState.fresh`: set → GAME POINT, match → MATCH POINT; `setWon` → GAME {n} (unit from `GAME_UNIT_SPORTS`) |
-| volleyball | — | `setWon` → SET {n} only (spec allowlist; see the product-owner note in Self-review) |
+| volleyball | — | `pointState.fresh`: set → SET POINT, match → MATCH POINT; `setWon` → SET {n} — **owner answer 21 (Q10), 2026-09-06: "Ok"**. Same probe as the racket sports; the spec's set-won-only line is superseded |
 | boardgame, carrom, generic | none | none |
 
 Sides' short names: `momentsFor` takes `sides: [string, string]` (the `short` W1's `overlayModel` already computes) so the set-won line can say who.
@@ -584,7 +585,15 @@ describe("racket sports (derived)", () => {
     // ledger driven to 30–40 on home serve (break, fresh) → 40–40 (nothing) → Ad away (break, fresh again) — two break-point moments, seqs differ
   });
   it("tennis: a set point that is also match point reads MATCH POINT only", () => {});
-  it("badminton: 20–19 → GAME POINT (unit from GAME_UNIT_SPORTS); game won → GAME 1; volleyball: set point yields nothing, set won → SET 1", () => {});
+  it("badminton: 20–19 → GAME POINT (unit from GAME_UNIT_SPORTS); game won → GAME 1", () => {});
+  it("volleyball: 24–23 → SET POINT, a set point that also wins the match → MATCH POINT, set won → SET 1 (owner answer 21 / Q10)", () => {
+    // Drive a real volleyball ledger through buildOverlayRecent to 24–23 and
+    // assert `overlay.moment.setPoint` — NOT `gamePoint`: the differential that
+    // proves the unit comes from GAME_UNIT_SPORTS rather than from "it is a
+    // set-based sport". Then a fifth-set 14–13 for MATCH POINT, and the set
+    // close for SET 1. A test that only asserted "some moment fires" would
+    // pass with badminton's keys wired in by mistake.
+  });
   it("a non-fresh pointState yields nothing even with a new seq", () => {
     // hand-typed recent is acceptable for this NEGATIVE case: [{ seq: 12, type: "tennis.point", at: "", payload: {}, derived: { pointState: { kind: "match", side: 0, fresh: false } } }] → []
   });
@@ -642,8 +651,6 @@ const setWon: MomentRule = (ev, { msg, sportKey, sides }) => {
   const s = ev.derived?.setWon; if (!s) return null;
   return { kind: "setWon", headline: msg(GAME_UNIT.has(sportKey) ? "overlay.moment.gameWon" : "overlay.moment.setWon", { n: s.set }), line: msg("overlay.moment.setWonLine", { short: sides[s.winner], home: s.home, away: s.away }), tone: "led", seq: ev.seq };
 };
-const setPointOnly = (rules: Record<string, MomentRule>) => rules;
-
 export const MOMENT_RULES = {
   cricket: { "cricket.ball": ball, "cricket.superover.ball": ball },
   football: { "football.goal": goal, "football.card": card("colour") },
@@ -652,7 +659,12 @@ export const MOMENT_RULES = {
   tennis: { "tennis.point": ace, "derived.pointState": pointState, "derived.setWon": setWon },
   badminton: { "derived.pointState": pointState, "derived.setWon": setWon },
   tabletennis: { "derived.pointState": pointState, "derived.setWon": setWon },
-  volleyball: setPointOnly({ "derived.setWon": setWon }),
+  // Owner answer 21 (Q10), 2026-09-06: "Ok". Volleyball gets set point and
+  // match point alongside its set-won moment, on the SAME `pointState` probe
+  // the racket sports use — `GAME_UNIT_SPORTS` does not contain volleyball, so
+  // `pointState` picks `overlay.moment.setPoint` (not gamePoint) and `setWon`
+  // picks `overlay.moment.setWon` (not gameWon) with no per-sport branch.
+  volleyball: { "derived.pointState": pointState, "derived.setWon": setWon },
   boardgame: {}, carrom: {}, generic: {},
 } as const satisfies Record<string, Record<string, MomentRule>>;
 
@@ -1053,7 +1065,7 @@ it("placeholders match across locales", () => { /* for each key with {x} in en, 
 |---|---|
 | "public payload to carry the last few events with their type and sequence number" | 1 |
 | "per-event-type template set W1 derives from each module's event schemas, filtered by a per-sport allowlist" | 2 (raw types + `MOMENT_RULES`; parity test against `eventSchemas`) |
-| "cricket boundary four and six, wicket; football goal and card; hockey and ice hockey goal and card; racket sports ace where the module records it, break point, set point, match point, set won; volleyball set won" | 2 (table); 1 (derived `pointState`/`setWon`) |
+| "cricket boundary four and six, wicket; football goal and card; hockey and ice hockey goal and card; racket sports ace where the module records it, break point, set point, match point, set won; volleyball set point, match point and set won (owner answer 21 / Q10 — the spec said set won only)" | 2 (table + its own volleyball test); 1 (derived `pointState`/`setWon`) |
 | "diffs the sequence to fire once per event" | 2 (`sinceSeq` exclusive) + 4 (`seenRef` from the initial tip) |
 | "slab in the sport's LED colour (dismissal red for wickets, caution yellow for cards) attached to the bug or under the bar" | 4 (tones → `--sport-*`, `.ovl-slab--bar/bug`) |
 | "holds four seconds, queues if another arrives" | 4 (reducer; e2e order test) |
@@ -1093,4 +1105,4 @@ it("placeholders match across locales", () => { /* for each key with {x} in en, 
 - Break / set / match point are STATES, not recorded events; they are derived server-side by probing the fold with a synthetic next point rather than by retyping set rules, and fire only on the `fresh` transition. No `/recent` endpoint: `recent` rides the existing public fixture payload so it shares one cache and one invalidation.
 - `recent` excludes `core.*` and lineup events (none is a moment); the window is taken after `resolveVoids`.
 
-**Product-owner recommendation (not a ruling; put it to the owner):** volleyball's set point and match point cost nothing extra — the probe already computes them for every set-based kernel — and a volleyball broadcast that shows "SET POINT" reads as finished where one that shows only "SET 2" reads as a scoreboard. Value: parity across the four racket/net sports for one allowlist line. Recommend enabling `"derived.pointState": pointState` for volleyball in W2; the spec as written says set won only, so it ships as written unless the owner says otherwise.
+**~~Product-owner recommendation~~ — ACCEPTED, owner answer 21 (Q10), 2026-09-06: "Ok".** The recommendation was: volleyball's set point and match point cost nothing extra (the probe already computes them for every set-based kernel), and a volleyball broadcast that shows "SET POINT" reads as finished where one showing only "SET 2" reads as a scoreboard — parity across the four racket/net sports for one allowlist line. **Applied:** volleyball's entry in `MOMENT_RULES` (Task 2 Step 3) is now `{ "derived.pointState": pointState, "derived.setWon": setWon }`, the allowlist table row says so, and Task 2 Step 1 carries its own test asserting `setPoint` (not `gamePoint`) and `matchPoint`. The spec's "set won only" line for volleyball is superseded by this answer; `_INDEX.md` records it.

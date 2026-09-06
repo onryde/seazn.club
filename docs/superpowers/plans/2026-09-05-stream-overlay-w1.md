@@ -4,7 +4,7 @@
 
 **Goal:** Ship the transparent per-fixture overlay page, its pure projection, the stream-link write path and the organiser panel, so a club can put seazn's live score inside its own OBS broadcast for every sport the engine scores.
 
-**Architecture:** One client transport (`useLiveFixture`, lifted out of `LiveScore`) feeds one pure projection (`overlayModel`) that eleven sports share; two presentational skins (`OverlayBar`, `OverlayBug`) render it at a native 1920×1080 canvas scaled with `transform: scale(min(vw/1920, vh/1080))`, themed by `sportThemeStyle(sportKey)` so the overlay inherits the pad's own palettes. A new `fixtures.stream_url` column, appended to `public_fixtures_v`, is written by `PUT /api/v1/fixtures/{id}/stream` and read by the public match page's "Watch live" link; both the overlay route and the organiser panel are gated server-side on the `streaming.overlay` entitlement, which no plan grants.
+**Architecture:** One client transport (`useLiveFixture`, lifted out of `LiveScore`) feeds one pure projection (`overlayModel`) that eleven sports share; a THEME REGISTRY (`OVERLAY_THEMES`, owner answer 18 / Q7) whose two day-one entries are the presentational skins `OverlayBar` and `OverlayBug` renders it at a native 1920×1080 canvas scaled with `transform: scale(min(vw/1920, vh/1080))`, themed by `sportThemeStyle(sportKey)` so the overlay inherits the pad's own palettes. A new `fixtures.stream_url` column, appended to `public_fixtures_v`, is written by `PUT /api/v1/fixtures/{id}/stream` and read by the public match page's "Watch live" link; both the overlay route and the organiser panel are gated server-side on the `streaming.overlay` entitlement, which no plan grants.
 
 **Tech Stack:** Next.js (App Router, RSC + client islands), React 19.2.4, TypeScript, Tailwind v4 + `app/globals.css` custom properties, Zod 4, postgres.js + Flyway migrations, vitest (`environment: "node"`), Playwright, `scripts/smoke.ts`.
 
@@ -35,6 +35,8 @@
 - **Task numbering (owner answers, 2026-09-06).** The four answers folded in below added ONE task, and it is numbered **Task 0** deliberately: Tasks 1–8 keep the numbers that `_INDEX.md`, `_STATE.md`, the W1 prompt's scopes and the W2 plan already cite, so no cross-reference anywhere moved. Execution order is 0, 1, 2, 3, 4, 5, 6, 7, 8.
 - **Transport (owner answer 14 / Q3): "we are using supabase realtime."** The overlay subscribes to the SAME Supabase private channel the public match page uses — no second transport, no overlay-only poll interval. `/api/v1/public/fixtures/[id]/realtime-token` 403s without the `realtime` entitlement and the client then falls back to the 15 s poll, which on a live broadcast is a score that lags the picture. So the test org's override row grants **both** `streaming.overlay` and `realtime` (Task 4), and Task 4's test asserts both. Whether every plan that eventually grants one must grant the other is a PRICING-time decision, deferred alongside Q4 — do not encode that coupling in code.
 - **The hiding gate is the per-organisation entitlement override row (owner answer 17 / Q14)** — not a request header (a browser cannot set one on a navigation and OBS sends none), not a preview cookie, not an environment flag. A viewer whose org does not hold `streaming.overlay` gets exactly three things: `notFound()` (404) on `/overlay/fixtures/[id]`, no panel on the division page, and nothing on `/pricing`. No task in this plan may invent a second gate.
+- **Themes are a REGISTRY, not a two-value union (owner answer 18 / Q7):** *"we will have multiple theme per sports so make it abstract and use can choose for now apply the default one."* `OVERLAY_THEMES` (`components/overlay/theme-registry.ts`, Task 5 Steps 6a–6d) keys an `OverlayThemeDef` by `ThemeId` and holds `bar` and `bug` on day one. **A third theme is one registry entry plus one component** — never an edit to the route (Task 5's page passes `resolveTheme(...).id` and nothing else), never an edit to the panel (Task 6's tabs map over `themesForSport(sportKey)`), never an edit to the model (Task 2 does not know a theme exists). `?style=<themeId>` is validated against the registry AND against the entry's `sports`; an unknown, misspelt or unsuitable id falls back to `defaultThemeFor(sportKey)` and **never throws**, because an OBS browser source cannot be asked to correct a typo mid-match. The per-sport default is exactly what it was — cricket `bar`, every other sport `bug` — but it now lives in one named function instead of an inline boolean. No task may reintroduce a `"bar" | "bug"` union, an `overlayStyleFor`, or a `props.style === "bar" ? … : …` branch.
+- **Sponsor logos are not in this wave, and not in W2 (owner answer 20 / Q9: *"ok for own wave as put it last"*).** They become their own wave, scheduled LAST in the programme, after W1 and W2. Nothing in this plan designs, reserves a slot for, or leaves a seam for them — a reserved-but-empty slab is an inert seam, and the sizing, placement and per-tier rules are that wave's job.
 - Do NOT touch: `components/v2/scorepad/**` (read `sport-theme.ts`, import from it, never edit), the engine **except the four additions Task 0 makes and nothing else** (`cricket.ts`'s `summary().detail.innings[].ballsLimit`; `football.ts`'s and `sports/period/kernel.ts`'s `summary().detail.clock`; `core/position.ts`'s `clockValue` reader; football's `coarsen` carrying `at` through, which §9.6 requires once the clock is a summary fact) — every other engine file, and every other field of those summaries, stays off-limits, `components/v2/fixture-console.tsx`, `ENTITLEMENT_DOMAINS`, other keys' matrix rows, any pricing surface, `LiveScore`'s render and `Props`, `proxy.ts` CSP, `app/embed/**`, `app/slideshow/**`, `.github/workflows/e2e.yml`, and anything in `stages-panel.tsx` beyond one import plus one conditional line (R11).
 
 ## File Structure
@@ -57,7 +59,7 @@
 | `apps/web/src/lib/overlay-model.ts` | Create | Pure projection `overlayModel(input): OverlayModel`; `overlayStartLabel(iso, locale, tz)`; type-only `OverlayMoment` slot for W2. |
 | `apps/web/src/lib/__tests__/overlay-model.test.ts` | Create | Eleven sports folded through real modules; empty / decided / led truth table. |
 | `apps/web/src/lib/stream-url.ts` | Create | `streamUrlSchema` — https + exact-hostname allowlist, `""` → `null`. |
-| `apps/web/src/lib/__tests__/stream-url.test.ts` | Create | Ten accepted hosts; the six rejections named in the prompt. |
+| `apps/web/src/lib/__tests__/stream-url.test.ts` | Create | Eleven accepted hosts (R16's ten plus `m.youtube.com`, owner answer 16 / Q5); the rejections named in the prompt, look-alike hosts included. |
 | `db/migration/deltas/V392__fixture_stream_url.sql` | Create | Column + check + full `public_fixtures_v` redefinition with `stream_url` last. |
 | `db/migration/deltas/V393__streaming_overlay_entitlement.sql` | Create | `streaming.overlay` `false` on every plan key. |
 | `apps/web/src/server/public-site/data.ts` | Modify (`:206`, `:711-716`, new export after `:747`) | `PublicFixture.stream_url`; the fixture SELECT gains it; `publicFixtureSlugs(fixtureId)`. |
@@ -72,9 +74,11 @@
 | `apps/web/src/lib/__tests__/entitlement-streaming-overlay.test.ts` | Create | `ENTITLEMENT_DOMAINS` does NOT list the key; DB-backed override flip. |
 | `apps/web/src/app/overlay/fixtures/[fixtureId]/layout.tsx` | Create | Nested `<div>` layout: transparent `html, body`, Barlow mount, cookie banner suppressed. |
 | `apps/web/src/app/overlay/fixtures/[fixtureId]/page.tsx` | Create | Server: slug resolve → `getPublicFixture` → `hasFeature` → `notFound()`; `robots: { index: false }`. |
-| `apps/web/src/components/overlay/overlay-stage.tsx` | Create | Client island: hook + model + scale + the three motions + `ovl-moment-slot`. |
-| `apps/web/src/components/overlay/overlay-bar.tsx` | Create | Theme A per `_THEMES.md` §3. |
-| `apps/web/src/components/overlay/overlay-bug.tsx` | Create | Theme B per `_THEMES.md` §4. |
+| `apps/web/src/components/overlay/theme-registry.ts` | Create | `OverlayThemeDef`, `ThemeId`, `OVERLAY_THEMES`, `defaultThemeFor`, `themesForSport`, `resolveTheme` — the ONE authority for which themes exist, which sports they suit and which one a sport opens on (owner answer 18 / Q7). |
+| `apps/web/src/components/overlay/__tests__/theme-registry.test.ts` | Create | Valid id resolves; unknown id falls back; sport-unsuitable id falls back; the fallback is the SPORT's default, not a constant. |
+| `apps/web/src/components/overlay/overlay-stage.tsx` | Create | Client island: hook + model + scale + the three motions + `ovl-moment-slot`; renders `OVERLAY_THEMES[props.style].component`. |
+| `apps/web/src/components/overlay/overlay-bar.tsx` | Create | Theme A (registry entry `bar`) per `_THEMES.md` §3. |
+| `apps/web/src/components/overlay/overlay-bug.tsx` | Create | Theme B (registry entry `bug`) per `_THEMES.md` §4. |
 | `apps/web/src/app/globals.css` | Modify (append after `:1022`) | `.ovl-*` rules + the three keyframes + the reduced-motion block. |
 | `apps/web/src/components/cookie-consent.tsx` | Modify (`:84` + a `usePathname` guard) | `data-testid="cookie-consent"`, and RENDERS NOTHING under `/overlay/` (owner answer 13). |
 | `apps/web/src/components/__tests__/cookie-consent-overlay-segment.test.tsx` | Create | The guard, driven through the component — plus its positive pair. |
@@ -110,6 +114,88 @@
 > change DURING a match can only ride on `ScoreSummary`. The venue zone does not
 > change during a match, so it rides on the server-rendered payload instead and
 > touches no engine file.
+
+---
+
+> ### ⚠️ FINDING (owner answer 19 / Q16) — the folded state ALREADY carries both in-match numbers. Read before executing a single step of this task.
+>
+> **Verified in the tree 2026-09-06, not inferred.** The owner's Q16 answer is
+> that the overlay gets its own DATA PATH inside the app: an overlay endpoint
+> calls `foldFixture(tx, fixtureId)`
+> (`apps/web/src/server/engine-db/fold.ts:58`, already called by
+> `server/usecases/admin-fixture-config.ts`) and projects an overlay-shaped
+> payload, using the engine rather than changing it. The question this note
+> answers is the only one that decides whether Task 0's engine edits are needed
+> at all: **does the folded state actually carry (a) football's period/clock and
+> (b) cricket's balls remaining?**
+>
+> **It carries both.** `foldFixture` returns `FoldedFixture`
+> (`fold.ts:17-28`), and its `state` field is the module's **whole** folded
+> state — `foldMatch(sportModule, cfg, lineups, envelopes)` (`fold.ts:130`),
+> folded over the **fine**, void-resolved envelope stream, never over `coarsen`.
+> `summary` sits beside it as one projection of that state, not as a limit on it.
+>
+> - **(a) Football's period and clock — YES.** `FootballState`
+>   (`packages/engine/src/sports/football/football.ts:563`) carries
+>   `phase: Phase` (`:566`), `periods: PeriodRecord[]` (`:570`, each
+>   `{ phase, home, away, addedMinutes? }`, declared `:556-561`) and
+>   `asOf?: GameTime` (`:599`), written by the fold at `:2525`
+>   (`return { ...swept, asOf: at }`). `GameTime` is
+>   `{ period: string; elapsed: DurationSeconds }` (`core/time.ts:51-55`).
+>   `footballPosition(state)` (`football.ts:730`) already reads `state.asOf`
+>   (`:735`, `:739`) and already applies the staleness guard — that is the
+>   *existing* reader Task 0 was going to re-expose through `summary`.
+> - **(b) Cricket's balls remaining — YES.** `InningsState`
+>   (`packages/engine/src/sports/cricket/cricket.ts:432-447`) carries
+>   `legalBalls` (`:436`) and `ballsLimit: number | null` (`:440` — "quota at
+>   this point (revise updates it)"), and `CricketState.innings` (`:463`) is the
+>   array of them; `CricketState.quota` (`:465`) and `revisedTarget` (`:466`)
+>   are there too. Balls remaining is `ballsLimit − legalBalls` on the current
+>   innings — arithmetic over two fields the fold already holds.
+> - **`coarsen` is not on this path at all.** `grep -a "coarsen" apps/web/src`
+>   returns **zero** matches, and `foldFixture` folds `envelopes`/`resolveVoids(envelopes)`
+>   — the fine stream. The §9.6 "coarse fold ≡ fine fold" property
+>   (`packages/engine/src/testkit/conformance.ts:243-252`) is only exposed by
+>   putting the clock into `ScoreSummary`, which is precisely what Q15 costed at
+>   days and a golden re-baseline.
+>
+> **Therefore, plainly: Task 0's engine edits are unnecessary.** `clockValue` in
+> `core/position.ts`, `detail.clock` in `football.ts` and `sports/period/kernel.ts`,
+> `detail.innings[].ballsLimit` in `cricket.ts`, football's `coarsen` carrying
+> `at`, and the regeneration of four golden corpora under `REBASELINE_GOLDEN=1`
+> all exist only to smuggle two numbers through `ScoreSummary` because the live
+> transport carries `{ status, summary, outcome }` and nothing else
+> (`live-score-data.ts:7-23`). An overlay endpoint over `foldFixture` reads them
+> directly, changes no engine file, and closes Q15 as option (d) — no engine
+> edit, no §9.6 exposure, no re-baseline.
+>
+> **Steps 2–13 below are left IN PLACE and marked SUPERSEDED pending the owner's
+> confirmation.** Do not delete them and do not rewrite this task: the main
+> session decides. What replaces them, if the owner confirms, is a new task —
+> *"the overlay endpoint"* — owning:
+> 1. `GET /api/v1/public/fixtures/{id}/overlay` (or an equivalent server read),
+>    entitlement-gated exactly as Task 5's page is, calling `foldFixture` inside
+>    `withTenant`/a read transaction and projecting an overlay payload:
+>    `{ status, summary, outcome }` **plus** `clock` (from `footballPosition` /
+>    `periodPosition` on the folded state) and `chaseBalls` (from
+>    `ballsLimit − legalBalls`).
+> 2. **Task 1's transport, which is the real cost and is NOT free.**
+>    `useLiveFixture` fetches `/api/v1/public/fixtures/${id}`
+>    (`live-score-data.ts:30-32`) and `LiveScore` shares it. The overlay would
+>    need that hook to be generic over its fetcher, or a sibling
+>    `useOverlayFixture` on the same subscribe-or-poll body — an honest cost to
+>    weigh against Task 0, not a reason to keep Task 0.
+> 3. The Supabase realtime ping is unchanged: it says "something changed", and
+>    whichever endpoint is refetched then re-folds.
+>
+> **What is NOT superseded.** Step 1 and the `venueTz` work
+> (`getPublicFixture` + `resolveVenueTz`, `public-fixture-venue-tz.test.ts`) are
+> untouched by this finding: the venue zone is a row on the fixture's payload,
+> not a folded number, it touches no engine file, and it is owed either way.
+> Mutation check `g` in the Self-review stands; `h`, `i` and `j` fall with the
+> steps they guard.
+
+---
 
 **Files:**
 - Create (Test): `apps/web/src/server/public-site/__tests__/public-fixture-venue-tz.test.ts`
@@ -1753,7 +1839,7 @@ export function overlayStartLabel(iso: string | null, locale: string, tz: string
 **Interfaces:**
 - Consumes: `requireResourceAuth(req: Request, kind: "fixture", id: string, scope: "write"): Promise<AuthCtx>` (`server/api-v1/auth.ts:352`); `v1`, `parseBody` from `@/server/api-v1/http`; `withTenant(orgId, fn)` and `sql` from `@/lib/db`; `HttpError` from `@/lib/errors`; `fireDivisionRevalidate(divisionId: string, competitionId?: string): void` (`server/public-site/revalidate.ts:14`).
 - Produces:
-  - `export const STREAM_HOSTS: readonly string[]` (the ten hostnames, R16)
+  - `export const STREAM_HOSTS: readonly string[]` (the **eleven** hostnames — R16's ten plus `m.youtube.com`, owner answer 16 / Q5: *"Agree"*. R16 was written before that answer and says ten; this plan wins, and `_INDEX.md` records the widening.)
   - `export const streamUrlSchema: z.ZodType<string | null, string | null>` — parses `string | null`, returns `string | null`
   - `export function isStreamUrl(value: string): boolean`
   - `export const PutFixtureStream` / `export type PutFixtureStream = { streamUrl: string | null }` (schemas.ts)
@@ -1776,6 +1862,10 @@ const ACCEPTED = [
   "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
   "https://youtube.com/live/abc123",
   "https://youtu.be/abc123",
+  // Owner answer 16 (Q5): "Agree". A club that copies the link out of the
+  // YouTube phone app pastes this host, did nothing wrong, and was being told
+  // its own link was invalid. A real YouTube host, so the widening is exact.
+  "https://m.youtube.com/watch?v=abc123",
   "https://www.facebook.com/clubpage/videos/123",
   "https://facebook.com/clubpage/live",
   "https://fb.watch/aBc-1/",
@@ -1792,17 +1882,24 @@ const REJECTED: [string, string][] = [
   ["https://notyoutube.com/x", "an allowed host as a SUFFIX of the host is not the host"],
   ["javascript:alert(1)", "not https"],
   ["http://www.youtube.com/x", "http is refused even on an allowed host"],
-  ["https://m.youtube.com/x", "m. is not on the list (open question for the owner)"],
+  // `m.youtube.com` is now ACCEPTED (owner answer 16 / Q5) and has moved to
+  // the list above. Its LOOK-ALIKE stays rejected here, which is the pair that
+  // proves the widening added one exact hostname rather than a `youtube.com`
+  // suffix rule — delete this row and the widening is indistinguishable from
+  // an `endsWith` that would also accept `m.youtube.com.evil.example`.
+  ["https://m.youtube.com.evil.example/x", "the new host as a PREFIX of the host is still not the host"],
+  ["https://mm.youtube.com/x", "a near-miss subdomain of an allowed host is not on the list"],
   [" https://youtube.com", "a leading space is not trimmed into validity"],
   ["https://user:pass@www.youtube.com/x", "credentials in the authority"],
   ["not a url at all", "unparseable"],
 ];
 
 describe("STREAM_HOSTS", () => {
-  it("is exactly the ten hostnames R16 names, and nothing else", () => {
+  it("is exactly the eleven hostnames — R16's ten plus m.youtube.com — and nothing else", () => {
     expect([...STREAM_HOSTS].sort()).toEqual([
-      "facebook.com", "fb.watch", "kick.com", "twitch.tv", "www.facebook.com",
-      "www.kick.com", "www.twitch.tv", "www.youtube.com", "youtu.be", "youtube.com",
+      "facebook.com", "fb.watch", "kick.com", "m.youtube.com", "twitch.tv",
+      "www.facebook.com", "www.kick.com", "www.twitch.tv", "www.youtube.com",
+      "youtu.be", "youtube.com",
     ]);
   });
 });
@@ -1853,6 +1950,10 @@ export const STREAM_HOSTS = [
   "www.youtube.com",
   "youtube.com",
   "youtu.be",
+  // Owner answer 16 (Q5), 2026-09-06: "Agree". YouTube's mobile host — what
+  // the phone app's share sheet produces. Exact hostname like every other
+  // entry; it widens the set by ONE name, not by a `youtube.com` suffix rule.
+  "m.youtube.com",
   "www.facebook.com",
   "facebook.com",
   "fb.watch",
@@ -1864,7 +1965,7 @@ export const STREAM_HOSTS = [
 
 const ALLOWED = new Set<string>(STREAM_HOSTS);
 
-/** True when `value` is an https URL whose hostname is EXACTLY one of the ten.
+/** True when `value` is an https URL whose hostname is EXACTLY one of the eleven.
  *  Credentials in the authority are refused too — a link a club pastes into a
  *  public page must not carry a username. */
 export function isStreamUrl(value: string): boolean {
@@ -1894,7 +1995,7 @@ export const streamUrlSchema = z
 ```
 
 - [ ] **Step 4: Run — expect PASS.** `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/stream-overlay/apps/web && npx vitest run src/lib/__tests__/stream-url.test.ts --reporter=json --outputFile=/tmp/ovl-w1/t3a-green.json`
-  Expected: `numFailedTests: 0`, `numTotalTests: 24` (10 accepted + 10 rejected + 4).
+  Expected: `numFailedTests: 0`, `numTotalTests: 26` (11 accepted + 11 rejected + 4).
 
 - [ ] **Step 5: Mutation check (a) — delete the hostname comparison.** Change `return ALLOWED.has(url.hostname);` to `return true;`, re-run Step 4. Expected red: all ten `rejects …` cases for the https ones — `expected [Function] to throw an error`. Restore and re-run to green. Record "mutant (a) killed by stream-url.test.ts › rejects https://evil.example/www.youtube.com".
 
@@ -2318,6 +2419,8 @@ on conflict (plan_key, feature_key) do update
 - Modify: `apps/web/src/server/public-site/data.ts` — new export after `getPublicFixture` (`:747`)
 - Create: `apps/web/src/app/overlay/fixtures/[fixtureId]/layout.tsx`
 - Create: `apps/web/src/app/overlay/fixtures/[fixtureId]/page.tsx`
+- Create: `apps/web/src/components/overlay/theme-registry.ts` (owner answer 18 / Q7)
+- Create (Test): `apps/web/src/components/overlay/__tests__/theme-registry.test.ts`
 - Create: `apps/web/src/components/overlay/overlay-stage.tsx`
 - Create: `apps/web/src/components/overlay/overlay-bar.tsx`
 - Create: `apps/web/src/components/overlay/overlay-bug.tsx`
@@ -2333,8 +2436,8 @@ on conflict (plan_key, feature_key) do update
 - Consumes: `getPublicFixture(orgSlug, compSlug, divSlug, fixtureId)` (`data.ts:689`); `hasFeature` (`entitlements.ts:454`); `getDictionary(locale, "public"): Promise<Dict>` (`lib/i18n.ts:77`); `t(dict, key, vars)` (`lib/i18n-runtime.ts:30`); `toLocale` (`lib/i18n-constants.ts:42`); `decidedOutcomeTemplates(m: MsgFn)` (`scoring-vocab.ts:1320`) with `msgFor(locale, key, vars)` (`messages-i18n.ts:24`); `sportThemeStyle(skinKey): CSSProperties | undefined` (`sport-theme.ts:557`), `sportThemeAttr(skinKey): string | undefined` (`:553`), `resolveSportPalette(skinKey): SportPalette` (`:515`), `SPORT_TOKENS` (`:77`); `useLiveFixture` (Task 1); `overlayModel`, `OverlayModel`, `OverlaySideInput` (Task 2).
 - Produces:
   - `export async function publicFixtureSlugs(fixtureId: string): Promise<{ orgSlug: string; compSlug: string; divSlug: string } | null>` (`data.ts`)
-  - `export type OverlayStyle = "bar" | "bug"` and `export function overlayStyleFor(sportKey: string, requested: string | undefined): OverlayStyle` (`overlay-stage.tsx`)
-  - `export interface OverlayStageProps { fixtureId: string; initial: LiveFixtureData; realtime: boolean; sportKey: string; style: OverlayStyle; sides: [OverlaySideInput, OverlaySideInput]; startLabel: string | null; dict: Record<string, string>; decidedTemplates: DecidedOutcomeTemplates; fit?: boolean }`
+  - `theme-registry.ts` (owner answer 18 / Q7) — `export type ThemeId = "bar" | "bug"`; `export interface OverlayThemeDef { id: ThemeId; labelKey: string; component: ComponentType<{ model: OverlayModel; tick: [boolean, boolean] }>; sports: "all" | readonly string[] }`; `export const OVERLAY_THEMES: Record<ThemeId, OverlayThemeDef>`; `export function defaultThemeFor(sportKey: string): ThemeId`; `export function themesForSport(sportKey: string): readonly OverlayThemeDef[]`; `export function resolveTheme(styleParam: string | undefined, sportKey: string): OverlayThemeDef`; `export function resolveThemeFrom(themes: Readonly<Record<string, OverlayThemeDef>>, styleParam: string | undefined, sportKey: string, fallback: ThemeId): OverlayThemeDef` (the injectable body `resolveTheme` delegates to — exported ONLY so the suitability branch is reachable in a test, see Step 6a)
+  - `export interface OverlayStageProps { fixtureId: string; initial: LiveFixtureData; realtime: boolean; sportKey: string; style: ThemeId; sides: [OverlaySideInput, OverlaySideInput]; startLabel: string | null; dict: Record<string, string>; decidedTemplates: DecidedOutcomeTemplates; fit?: boolean }`
   - `export function OverlayStage(props: OverlayStageProps): JSX.Element`
   - `export function OverlayBar(props: { model: OverlayModel; tick: [boolean, boolean] }): JSX.Element`
   - `export function OverlayBug(props: { model: OverlayModel; tick: [boolean, boolean] }): JSX.Element`
@@ -2772,6 +2875,232 @@ export default function OverlayLayout({ children }: { children: React.ReactNode 
 }
 ```
 
+> **Owner answer 18 (Q7), 2026-09-06 — the ruling this task is now built on.**
+> *"we will have multiple theme per sports so make it abstract and use can choose
+> for now apply the default one."* Not the yes/no that was asked; a design change.
+> Themes stop being a two-value union and become a REGISTRY. Steps 6a–6d below
+> build it, Step 7's page resolves through it, Step 8's stage renders
+> `theme.component` instead of branching, and Task 6's tabs map over it. The two
+> shipped themes do not change: `bar` is `_THEMES.md` §3, `bug` is §4, and
+> cricket still opens on `bar` while every other sport opens on `bug`.
+
+- [ ] **Step 6a: Write the failing registry test.** Create `apps/web/src/components/overlay/__tests__/theme-registry.test.ts`:
+
+```ts
+// The theme registry (owner answer 18 / Q7). Four claims, and the fourth is
+// the one that matters: the fallback is the SPORT'S default, not a constant.
+//
+// THE TRAP THIS FILE IS WRITTEN AROUND. On day one BOTH shipped themes are
+// `sports: "all"`, so a suitability test written against `OVERLAY_THEMES`
+// alone cannot witness the `sports` filter at all — it would pass with the
+// filter deleted, and mutant (l) would survive. The probe registry below is
+// what makes that branch reachable; it is not a mirror, because the FUNCTION
+// under test is the shipped one and only its input table is local.
+import { describe, expect, it } from "vitest";
+import {
+  OVERLAY_THEMES,
+  defaultThemeFor,
+  resolveTheme,
+  resolveThemeFrom,
+  themesForSport,
+  type OverlayThemeDef,
+} from "../theme-registry";
+
+// A stand-in component; the registry never renders here.
+const Noop = () => null;
+
+/** A registry with a sport-RESTRICTED entry, which the shipped one has none of
+ *  today. `cricketOnly` suits cricket and nothing else. */
+const PROBE: Record<string, OverlayThemeDef> = {
+  bar: { ...OVERLAY_THEMES.bar },
+  bug: { ...OVERLAY_THEMES.bug },
+  cricketOnly: {
+    id: "bar", // id is the registry KEY's type; the probe reuses a real one
+    labelKey: "stream.tab.bar",
+    component: Noop,
+    sports: ["cricket"],
+  },
+};
+
+describe("defaultThemeFor", () => {
+  it("opens cricket on the bar and every other sport on the bug", () => {
+    expect(defaultThemeFor("cricket")).toBe("bar");
+    for (const key of ["football", "tennis", "badminton", "volleyball", "generic"]) {
+      expect(defaultThemeFor(key), key).toBe("bug");
+    }
+  });
+
+  it("returns a theme that actually suits that sport — a default nothing offers is unreachable", () => {
+    for (const key of ["cricket", "football", "tennis", "boardgame", "carrom", "generic"]) {
+      const offered = themesForSport(key).map((t) => t.id);
+      expect(offered, key).toContain(defaultThemeFor(key));
+    }
+  });
+});
+
+describe("resolveTheme", () => {
+  it("resolves a valid id — including one that is NOT that sport's default", () => {
+    // Both directions, or "valid id resolves" is indistinguishable from
+    // "everything falls back to the default and cricket's happens to be bar".
+    expect(resolveTheme("bar", "cricket").id).toBe("bar");
+    expect(resolveTheme("bug", "cricket").id).toBe("bug");
+    expect(resolveTheme("bar", "football").id).toBe("bar");
+    expect(resolveTheme("bug", "football").id).toBe("bug");
+  });
+
+  it("falls back on an unknown or misspelt id, and never throws", () => {
+    for (const bad of [undefined, "", " ", "BAR", "bugg", "corner-bug", "../etc", "__proto__", "toString"]) {
+      expect(() => resolveTheme(bad, "football")).not.toThrow();
+      expect(resolveTheme(bad, "football").id, String(bad)).toBe("bug");
+    }
+  });
+
+  it("falls back when the requested theme does not list the fixture's sport", () => {
+    // The probe's `cricketOnly` suits cricket only; football must not get it.
+    expect(resolveThemeFrom(PROBE, "cricketOnly", "cricket", defaultThemeFor("cricket")).sports).toEqual(["cricket"]);
+    expect(resolveThemeFrom(PROBE, "cricketOnly", "football", defaultThemeFor("football")).id).toBe("bug");
+  });
+
+  it("falls back to THE SPORT'S default, not to a hardcoded one", () => {
+    // The differential case. Same bad input, two sports, two answers — a
+    // `return OVERLAY_THEMES.bug` fallback passes every other test in this file.
+    expect(resolveTheme("nonsense", "cricket").id).toBe("bar");
+    expect(resolveTheme("nonsense", "football").id).toBe("bug");
+    expect(resolveThemeFrom(PROBE, "cricketOnly", "cricket", "bar").id).not.toBe("bug");
+  });
+});
+
+describe("themesForSport — the console and the route read ONE filter", () => {
+  it("offers only themes that suit the sport, and every offered theme resolves back to itself", () => {
+    for (const key of ["cricket", "football", "tennis", "volleyball", "boardgame", "generic"]) {
+      const offered = themesForSport(key);
+      expect(offered.length, key).toBeGreaterThan(0);
+      for (const theme of offered) {
+        expect(theme.sports === "all" || theme.sports.includes(key), `${key}/${theme.id}`).toBe(true);
+        // The seam: a theme the panel shows must be one the route accepts.
+        expect(resolveTheme(theme.id, key).id, `${key}/${theme.id}`).toBe(theme.id);
+      }
+    }
+  });
+
+  it("every registered theme carries a label key, and the registry is what the dictionary gate scans", () => {
+    for (const theme of Object.values(OVERLAY_THEMES)) {
+      expect(theme.labelKey, theme.id).toMatch(/^stream\.tab\./);
+      expect(typeof theme.component, theme.id).toBe("function");
+    }
+    // Both shipped themes today; a third makes this a 3.
+    expect(Object.keys(OVERLAY_THEMES).sort()).toEqual(["bar", "bug"]);
+  });
+});
+```
+
+- [ ] **Step 6b: Run it — expect red.** `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/stream-overlay/apps/web && npx vitest run src/components/overlay/__tests__/theme-registry.test.ts --reporter=json --outputFile=/tmp/ovl-w1/t5-reg-red.json`
+  Expected: collection failure — `Failed to resolve import "../theme-registry"`, `numTotalTests: 0`.
+
+- [ ] **Step 6c: Write the registry.** Create `apps/web/src/components/overlay/theme-registry.ts`:
+
+```ts
+// The overlay's theme registry (owner answer 18 / Q7, 2026-09-06:
+// "we will have multiple theme per sports so make it abstract and use can
+// choose for now apply the default one").
+//
+// ONE authority for three facts: which themes exist, which sports each suits,
+// and which one a sport opens on. Adding a theme is ONE entry here plus ONE
+// component file — the route, the panel and the model are never edited for a
+// theme again. `overlay-model.ts` does not import this file and must not: the
+// projection is theme-agnostic, which is what lets eleven sports and N themes
+// meet in one model.
+//
+// NOT a `"use client"` module, deliberately. It imports two client components,
+// so it becomes part of the client graph where a client component imports it;
+// the SERVER page imports only `resolveTheme` and reads `.id` off the result,
+// never `.component`, so no component reference crosses the RSC boundary as a
+// prop. The stage does the component lookup on the client side of the line.
+import type { ComponentType } from "react";
+import type { OverlayModel } from "@/lib/overlay-model";
+import { OverlayBar } from "./overlay-bar";
+import { OverlayBug } from "./overlay-bug";
+
+/** Every theme id the overlay can serve. Declared as an explicit union rather
+ *  than derived with `keyof typeof OVERLAY_THEMES`, for two reasons: the page,
+ *  the stage's props and the panel's state all need to NAME this type without
+ *  importing the registry's value graph, and an explicit union makes a typo'd
+ *  registry key a compile error instead of silently widening `ThemeId`. */
+export type ThemeId = "bar" | "bug";
+
+export interface OverlayThemeDef {
+  id: ThemeId;
+  /** `ui` namespace, e.g. `stream.tab.bar`. The panel renders it through
+   *  `useMsg` in all four locales; the dictionary coverage test finds it here
+   *  because `components/overlay` is one of its SCAN_DIRS. Never English. */
+  labelKey: string;
+  component: ComponentType<{ model: OverlayModel; tick: [boolean, boolean] }>;
+  /** `"all"`, or the exact `sport_key` values this theme is designed for. A
+   *  theme is offered in the console and accepted by the route only where this
+   *  says so — one filter, so the two cannot disagree. */
+  sports: "all" | readonly string[];
+}
+
+export const OVERLAY_THEMES: Record<ThemeId, OverlayThemeDef> = {
+  bar: { id: "bar", labelKey: "stream.tab.bar", component: OverlayBar, sports: "all" },
+  bug: { id: "bug", labelKey: "stream.tab.bug", component: OverlayBug, sports: "all" },
+};
+
+/** Which theme a sport OPENS on. Unchanged from decision 1 — cricket's chase
+ *  and two-innings score want the lower third, a set or period score wants the
+ *  tile — but it is one named function now, not a boolean inside the resolver,
+ *  so a future per-sport default is one line here. */
+export function defaultThemeFor(sportKey: string): ThemeId {
+  return sportKey === "cricket" ? "bar" : "bug";
+}
+
+function suits(theme: OverlayThemeDef, sportKey: string): boolean {
+  return theme.sports === "all" || theme.sports.includes(sportKey);
+}
+
+/** What the console offers for this fixture, in registry order. */
+export function themesForSport(sportKey: string): readonly OverlayThemeDef[] {
+  return Object.values(OVERLAY_THEMES).filter((theme) => suits(theme, sportKey));
+}
+
+/** The body, with the registry injected. Exported ONLY so a test can pass a
+ *  registry that HAS a sport-restricted theme: both shipped themes are
+ *  `sports: "all"`, so the suitability branch is otherwise unreachable and
+ *  deleting it would go unnoticed (Step 6d, mutant (l)). Production callers
+ *  use `resolveTheme`. */
+export function resolveThemeFrom(
+  themes: Readonly<Record<string, OverlayThemeDef>>,
+  styleParam: string | undefined,
+  sportKey: string,
+  fallback: ThemeId,
+): OverlayThemeDef {
+  // `Object.hasOwn`, not `themes[styleParam]`: `?style=toString` would
+  // otherwise reach a prototype member and pass the truthiness check.
+  const requested =
+    styleParam && Object.hasOwn(themes, styleParam) ? themes[styleParam] : undefined;
+  if (requested && suits(requested, sportKey)) return requested;
+  return OVERLAY_THEMES[fallback];
+}
+
+/**
+ * The one resolver. An unknown, misspelt or sport-unsuitable `?style=` falls
+ * back to the sport's default and NEVER throws: the caller is an OBS browser
+ * source in the middle of a live broadcast, and it cannot be asked to correct
+ * a typo. A 404 or an exception here would take a club off air over a query
+ * string.
+ */
+export function resolveTheme(styleParam: string | undefined, sportKey: string): OverlayThemeDef {
+  return resolveThemeFrom(OVERLAY_THEMES, styleParam, sportKey, defaultThemeFor(sportKey));
+}
+```
+
+- [ ] **Step 6d: Run — expect PASS, then run the two mutants.** `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/stream-overlay/apps/web && npx vitest run src/components/overlay/__tests__/theme-registry.test.ts --reporter=json --outputFile=/tmp/ovl-w1/t5-reg-green.json`
+  Expected: `numFailedTests: 0`, `numTotalTests: 8` (2 + 4 + 2).
+  Then, one at a time, restoring and re-running to green after each:
+  - **Mutant (l) — delete the `sports` filter.** Change `if (requested && suits(requested, sportKey)) return requested;` to `if (requested) return requested;`. Expected red: `falls back when the requested theme does not list the fixture's sport` — `expected 'bar' to be 'bug'`. If this mutant SURVIVES, the probe registry is wrong, not the code.
+  - **Mutant (m) — throw on an unknown id.** Replace the fallback `return OVERLAY_THEMES[fallback];` with `throw new Error("unknown theme");`. Expected red: `falls back on an unknown or misspelt id, and never throws` — nine `not.toThrow()` failures — and `falls back to THE SPORT'S default, not to a hardcoded one`.
+  - **Mutant (n) — hardcode the fallback.** Replace `defaultThemeFor(sportKey)` in `resolveTheme` with `"bug"`. Expected red: `falls back to THE SPORT'S default, not to a hardcoded one` — `expected 'bug' to be 'bar'`. This is the mutant the per-sport default exists for; without the cricket/football differential row it survives.
+
 - [ ] **Step 7: Write the page.** Create `apps/web/src/app/overlay/fixtures/[fixtureId]/page.tsx`:
 
 ```tsx
@@ -2791,7 +3120,8 @@ import { toLocale } from "@/lib/i18n-constants";
 import { msgFor } from "@/lib/messages-i18n";
 import { decidedOutcomeTemplates } from "@/lib/scoring-vocab";
 import { overlayStartLabel } from "@/lib/overlay-model";
-import { OverlayStage, overlayStyleFor } from "@/components/overlay/overlay-stage";
+import { OverlayStage } from "@/components/overlay/overlay-stage";
+import { resolveTheme } from "@/components/overlay/theme-registry";
 
 export const metadata: Metadata = { robots: { index: false, follow: false } };
 
@@ -2856,7 +3186,12 @@ export default async function OverlayPage({
       initial={{ status: fixture.status, summary: fixture.summary, outcome: fixture.outcome }}
       realtime={realtime}
       sportKey={division.sport_key}
-      style={overlayStyleFor(division.sport_key, style)}
+      // Owner answer 18 (Q7): resolved against the REGISTRY, and only the id
+      // crosses to the client — never the theme's `component`, which would be
+      // a React element type travelling as an RSC prop. An unknown, misspelt
+      // or sport-unsuitable `?style=` lands on this sport's default rather
+      // than erroring: an OBS browser source cannot fix a typo mid-match.
+      style={resolveTheme(style, division.sport_key).id}
       sides={sides}
       startLabel={startLabel}
       dict={dict}
@@ -2886,25 +3221,21 @@ import type { LiveFixtureData } from "@/components/public-site/live-score-data";
 import { overlayModel, type OverlayModel, type OverlaySideInput } from "@/lib/overlay-model";
 import { t } from "@/lib/i18n-runtime";
 import type { DecidedOutcomeTemplates } from "@/lib/scoring-vocab";
-import { OverlayBar } from "./overlay-bar";
-import { OverlayBug } from "./overlay-bug";
-
-export type OverlayStyle = "bar" | "bug";
-
-/** R2: cricket opens on the bar, every other sport on the bug; an unknown
- *  `?style=` value falls to that default rather than erroring — a broken query
- *  string must never take a club off air. */
-export function overlayStyleFor(sportKey: string, requested: string | undefined): OverlayStyle {
-  if (requested === "bar" || requested === "bug") return requested;
-  return sportKey === "cricket" ? "bar" : "bug";
-}
+// Owner answer 18 (Q7): the stage knows the REGISTRY, not two components. It
+// imports neither `overlay-bar` nor `overlay-bug` — registering a third theme
+// must not touch this file, and an import here would be exactly that edit.
+import { OVERLAY_THEMES, type ThemeId } from "./theme-registry";
 
 export interface OverlayStageProps {
   fixtureId: string;
   initial: LiveFixtureData;
   realtime: boolean;
   sportKey: string;
-  style: OverlayStyle;
+  /** A registry id, already resolved server-side by `resolveTheme` (Step 6c).
+   *  The stage never validates: by the time a value reaches this prop it has
+   *  been through the resolver, and a `ThemeId` that is not a registry key is
+   *  a compile error. */
+  style: ThemeId;
   sides: [OverlaySideInput, OverlaySideInput];
   startLabel: string | null;
   /** The `public` namespace, en-merged server-side. A plain object, so the
@@ -2970,6 +3301,11 @@ export function OverlayStage(props: OverlayStageProps) {
     return () => window.removeEventListener("resize", measure);
   }, [props.fit]);
 
+  // The registry lookup, and the ONLY place a theme becomes a component. A
+  // `props.style === "bar" ? <OverlayBar/> : <OverlayBug/>` branch is what the
+  // owner's answer replaces: a third theme would have had to edit it.
+  const Theme = OVERLAY_THEMES[props.style].component;
+
   return (
     <div className={props.fit ? "ovl-fit" : undefined}>
       <div
@@ -2980,11 +3316,7 @@ export function OverlayStage(props: OverlayStageProps) {
         className={`ovl-canvas ovl-label${model.live ? "" : " ovl-static"}`}
         style={{ ...sportThemeStyle(props.sportKey), transform: `scale(${scale})` }}
       >
-        {props.style === "bar" ? (
-          <OverlayBar model={model} tick={tick} />
-        ) : (
-          <OverlayBug model={model} tick={tick} />
-        )}
+        <Theme model={model} tick={tick} />
         {/* W2's slab attaches here (R4). Empty and unstyled in W1. */}
         <div data-testid="ovl-moment-slot" />
       </div>
@@ -3213,14 +3545,45 @@ describe("overlay contrast", () => {
 - Modify (generated): `apps/web/src/lib/i18n-keys.ts`
 
 **Interfaces:**
-- Consumes: `useMsg(): (key: MessageKey, vars?) => string` (`components/i18n/dict-provider.tsx:113`); `streamUrlSchema` (Task 3); `OverlayStage`, `overlayStyleFor`, `OverlayStyle` (Task 5); `fetchLiveFixture` (`live-score-data.ts:30`); `decidedOutcomeTemplates` — NOT available client-side with a dictionary, so the panel passes a templates object built from `useMsg` (a `MsgFn`, ui keys — the same call the server makes).
+- Consumes: `useMsg(): (key: MessageKey, vars?) => string` (`components/i18n/dict-provider.tsx:113`); `streamUrlSchema` (Task 3); `OverlayStage` (Task 5 Step 8) and `themesForSport`, `defaultThemeFor`, `ThemeId` from `@/components/overlay/theme-registry` (Task 5 Step 6c — the panel reads the REGISTRY, so a theme registered tomorrow appears in the console with no edit to this file); `fetchLiveFixture` (`live-score-data.ts:30`); `decidedOutcomeTemplates` — NOT available client-side with a dictionary, so the panel passes a templates object built from `useMsg` (a `MsgFn`, ui keys — the same call the server makes).
 - Produces:
   - `export interface FixtureStreamPanelProps { fixtureId: string; sportKey: string; homeName: string; awayName: string; homeEntrantId: string; awayEntrantId: string; initialStreamUrl: string | null }`
   - `export function FixtureStreamPanel(props: FixtureStreamPanelProps): JSX.Element`
   - `StagesPanel` `Props` gains `sportKey: string; streamingEntitled: boolean`
   - `FixtureLine`'s prop object gains `sportKey: string; streamingEntitled: boolean`
 
-> **Ruling applied (wave prompt scope 6, over the spec):** the toggle's gate is `canEdit && streamingEntitled` — **not** the schedule toggle's `fixture.status === "scheduled"`. A club pastes the replay link after the final whistle, so copying that gate would hide the panel exactly when it is wanted.
+> **Ruling applied (owner answer 17 / Q6, 2026-09-06: "Agree"; wave prompt scope 6, over the spec):** the toggle's gate is `canEdit && streamingEntitled` and **nothing else** — in particular **NOT** the schedule toggle's `fixture.status === "scheduled"`, which sits on the very next line of the same row and is the obvious thing to copy.
+>
+> **Why, in the owner's terms:** the replay link is worth as much to a club as the live one, and a club attaches it AFTER the final whistle — when the fixture is `completed`, not `scheduled`. A status gate would hide the control at exactly the moment it is wanted, and there is no other surface that can set `stream_url`. The cost of keeping it open is one more button on a row, behind an entitlement no customer holds today, so the blast radius is zero.
+>
+> **Pinned by a test, not by this paragraph** (Step 3a below): the panel toggle is asserted present on a **decided** fixture, and absent when either half of the real gate is false. A gate that is only stated in prose is a gate nothing kills.
+
+- [ ] **Step 3a: Pin the gate — the panel opens at EVERY status.** Add to `apps/web/src/components/v2/__tests__/` (the directory Step 6 already runs), a static-markup test over `FixtureLine`'s gate. `apps/web` vitest is `environment: "node"`, so this is a render-to-markup assertion, not a click:
+
+```ts
+// Owner answer 17 (Q6): the stream toggle is gated on `canEdit &&
+// streamingEntitled` ONLY. A club attaches the REPLAY link after the final
+// whistle, so a `status === "scheduled"` gate — the one the schedule-edit
+// button beside it uses — would hide the control exactly when it is wanted.
+//
+// The decided row is the case that matters: every other status would pass
+// even with the wrong gate copied in, because `scheduled` is the default in
+// most fixtures a test builds.
+it.each(["scheduled", "in_play", "completed", "forfeit", "abandoned"])(
+  "the stream toggle is present at status %s when canEdit && streamingEntitled",
+  (status) => { /* render FixtureLine with this status; expect
+                   `fixture-stream-toggle` in the markup */ },
+);
+
+it("is absent when the org is not entitled, at a status where it would otherwise show", () => {
+  // streamingEntitled: false, status: "completed" — the NEGATIVE pair, so
+  // "present at every status" cannot pass by the control being unconditional.
+});
+
+it("is absent when canEdit is false, at the same status", () => {});
+```
+
+  If `FixtureLine` is not directly mountable in this suite, assert the same three facts through `stream-overlay.spec.ts` in Task 8 instead and record WHICH here — but do not drop the decided-status row: it is the whole point of the ruling.
 
 - [ ] **Step 1: Add the panel copy in all four locales.** `apps/web/src/dictionaries/en/ui.json` (the `embed.*` block at `:419-421` is the copy-button precedent):
 
@@ -3347,8 +3710,18 @@ import { useMsg } from "@/components/i18n/dict-provider";
 import { streamUrlSchema } from "@/lib/stream-url";
 import { fetchLiveFixture, type LiveFixtureData } from "@/components/public-site/live-score-data";
 import { decidedOutcomeTemplates } from "@/lib/scoring-vocab";
-import { OverlayStage, overlayStyleFor, type OverlayStyle } from "@/components/overlay/overlay-stage";
-import { messages } from "@/lib/messages";
+import { OverlayStage } from "@/components/overlay/overlay-stage";
+// Owner answer 18 (Q7): the tabs come FROM the registry, filtered to this
+// fixture's sport. A theme registered tomorrow appears here with no edit to
+// this file — which is the whole point, and is why there is no `bar`/`bug`
+// literal below.
+import { defaultThemeFor, themesForSport, type ThemeId } from "@/components/overlay/theme-registry";
+// `MessageKey` is the generated `ui` key union. `OverlayThemeDef.labelKey` is a
+// plain `string` on purpose — the registry is imported by the SERVER page too,
+// and typing it as `MessageKey` would tie a route-side module to the generated
+// catalogue. The one narrowing cast lives here, at the single call site, and
+// the dictionary-coverage test is what proves every registered key exists.
+import { messages, type MessageKey } from "@/lib/messages";
 
 export interface FixtureStreamPanelProps {
   fixtureId: string;
@@ -3364,7 +3737,11 @@ const EMPTY: LiveFixtureData = { status: "scheduled", summary: null, outcome: nu
 
 export function FixtureStreamPanel(props: FixtureStreamPanelProps) {
   const msg = useMsg();
-  const [style, setStyle] = useState<OverlayStyle>(() => overlayStyleFor(props.sportKey, undefined));
+  // "for now apply the default one" (owner answer 18): the panel OPENS on the
+  // sport's default. The organiser's choice from here is a link, not stored
+  // state — the club picks a theme by which URL it pastes into OBS.
+  const [style, setStyle] = useState<ThemeId>(() => defaultThemeFor(props.sportKey));
+  const themes = themesForSport(props.sportKey);
   const [url, setUrl] = useState(props.initialStreamUrl ?? "");
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -3419,7 +3796,7 @@ export function FixtureStreamPanel(props: FixtureStreamPanelProps) {
     }
   }
 
-  const tab = (value: OverlayStyle, label: string, testid: string) => (
+  const tab = (value: ThemeId, label: string, testid: string) => (
     <button
       type="button"
       role="tab"
@@ -3444,9 +3821,16 @@ export function FixtureStreamPanel(props: FixtureStreamPanelProps) {
       </p>
       <p className="mt-1 text-xs text-slate-500">{msg("stream.lead")}</p>
 
+      {/* One tab per REGISTERED theme that suits this sport, in registry
+          order. The testid is derived from the id (`stream-tab-<id>`), so the
+          e2e's `stream-tab-bar` / `stream-tab-bug` selectors are unchanged and
+          a future theme gets its own without a naming decision. The label is
+          `theme.labelKey` through `useMsg`, so it lands in all four locales
+          and the dictionary-coverage gate finds the literal in the registry. */}
       <div role="tablist" className="mt-3 flex gap-2 max-md:flex-col">
-        {tab("bar", msg("stream.tab.bar"), "stream-tab-bar")}
-        {tab("bug", msg("stream.tab.bug"), "stream-tab-bug")}
+        {themes.map((theme) =>
+          tab(theme.id, msg(theme.labelKey as MessageKey), `stream-tab-${theme.id}`),
+        )}
       </div>
 
       {/* The REAL component at 1/3 scale over a pitch-green stand-in, so the
@@ -3678,8 +4062,9 @@ export function FixtureStreamPanel(props: FixtureStreamPanelProps) {
           court header (spec §7); do not build a header here.
           `rel="noopener"` is not optional: the href is organiser-supplied, and
           `target="_blank"` without it hands the opened tab a `window.opener`
-          handle to this page. The host is already restricted to the ten-name
-          allowlist server-side (R16); this is the second, independent guard. */}
+          handle to this page. The host is already restricted to the eleven-name
+          allowlist server-side (R16 + owner answer 16); this is the second,
+          independent guard. */}
       {fixture.stream_url ? (
         <p className="mb-4">
           <a
@@ -3911,7 +4296,13 @@ test.describe("stream overlay", () => {
 
     await page.goto(`/overlay/fixtures/${rig.fixtureId}?style=bug`);
     await expect(page.getByTestId("ovl-root")).toHaveAttribute("data-style", "bug");
-    await page.goto(`/overlay/fixtures/${rig.fixtureId}?style=carousel`);
+    // An id that is not a registry key. It must render the sport's default —
+    // 200, not 404, and not a stack trace: `resolveTheme` never throws
+    // (owner answer 18 / Q7), because an OBS browser source cannot be asked to
+    // fix a typo mid-match. This is the only place the no-throw guarantee is
+    // proven END TO END rather than in a unit; the unit cannot see the route.
+    const res = await page.goto(`/overlay/fixtures/${rig.fixtureId}?style=carousel`);
+    expect(res?.status(), "an unknown style is served, never refused").toBe(200);
     await expect(page.getByTestId("ovl-root"), "cricket's default is the bar (R2)").toHaveAttribute("data-style", "bar");
     await anon.close();
   });
@@ -4102,6 +4493,11 @@ import { activeOrg, addEntrantsViaApi, apiJson, createStageAndGenerate, invalida
 
 const DIR = process.env.OVL_DIR;
 const SPORTS = ["cricket", "football", "tennis", "volleyball"] as const;
+// The registry's ids, typed out rather than imported: this spec runs under
+// Playwright and `theme-registry.ts` pulls in two React client components.
+// It is therefore a LIST THAT CAN GO STALE — when a theme is registered, add
+// it here in the same change, or the visual gate silently stops photographing
+// a shipped theme (owner answer 18 / Q7).
 const STYLES = ["bar", "bug"] as const;
 const hashes = new Map<string, string>();
 
@@ -4204,6 +4600,10 @@ test("captures the organiser panel at 320, 768 and 1280", async ({ page }) => {
 | Owner answer 13 (Q2) — no consent banner on the overlay segment | 5 (Steps 4a, 4b), 8 (the e2e absence + cookie assertions) |
 | Owner answer 14 (Q3) — Supabase realtime, override grants both keys | Global Constraints, 4 |
 | Owner answer 17 (Q14) — the override row IS the hiding gate | Global Constraints, 4, 5 (the `notFound()` gate) |
+| Owner answer 16 (Q5) — `m.youtube.com` on the host allowlist | 3 (`STREAM_HOSTS`, the accepted row, and the look-alike rejections that keep it exact) |
+| Owner answer 17 (Q6) — the stream panel opens at EVERY fixture status | 6 (the ruling paragraph and Step 3a's decided-status row + both negative pairs) |
+| Owner answer 18 (Q7) — themes are a REGISTRY, not a union | Global Constraints, 5 (Steps 6a–6d build it; 7 resolves through it; 8 renders `theme.component`), 6 (tabs map over `themesForSport`) |
+| Owner answer 19 (Q16) — one service, overlay data path over `foldFixture` | 0 (the FINDING at the head — the folded state already carries both in-match numbers; Steps 2–13 marked superseded pending the owner) |
 | Spec §1 Overlay route (layout, page, canvas, stage) / prompt scope 5 | 5 |
 | Spec §2 Projection (`OverlayModel`, `overlayModel`) / prompt scope 2 | 2 |
 | Spec §3 Theme (`sportThemeStyle`, seven tokens, `.ovl-*`) / `_THEMES.md` §1–§4 | 5 |
@@ -4242,6 +4642,9 @@ test("captures the organiser panel at 320, 768 and 1280", async ({ page }) => {
 | d | `use-live-fixture.ts`: `if (!live || subscribed) return;` → `if (subscribed) return;` | `use-live-fixture.test.tsx` › `never arms a poll for a fixture that is already decided at mount` |
 | e | `overlay/.../page.tsx`: delete the `hasFeature` guard | `stream-overlay.spec.ts` › `the entitlement gate opens and closes the route, in both directions` (e2e only — no unit can see it) |
 | f | `overlay-bar.tsx`: remove ` ovl-tick` from the score `className` | `stream-overlay.spec.ts` › `a new event changes the score in place, ticks only the side that moved, and never navigates` |
+| l | `theme-registry.ts` `resolveThemeFrom`: delete the `sports` filter — `if (requested && suits(requested, sportKey))` → `if (requested)` | `theme-registry.test.ts` › `falls back when the requested theme does not list the fixture's sport` — `expected 'bar' to be 'bug'`. **Only the PROBE registry can kill this**: both shipped themes are `sports: "all"`, so a test written against `OVERLAY_THEMES` alone would survive the mutation. A surviving (l) means the probe is wrong, not the code (Task 5 Step 6d) |
+| m | `theme-registry.ts` `resolveThemeFrom`: `return OVERLAY_THEMES[fallback];` → `throw new Error("unknown theme")` | `theme-registry.test.ts` › `falls back on an unknown or misspelt id, and never throws` — nine `not.toThrow()` failures. This is the mutant that stands for "an OBS browser source cannot be asked to fix a typo mid-match" (Task 5 Step 6d) |
+| n | `theme-registry.ts` `resolveTheme`: `defaultThemeFor(sportKey)` → `"bug"` | `theme-registry.test.ts` › `falls back to THE SPORT'S default, not to a hardcoded one` — `expected 'bug' to be 'bar'`. Without the cricket/football differential row this mutant survives every other assertion in the file |
 | extra | `V392`: drop `stream_url` from the view redefinition | `fixture-stream-url.test.ts` › `writes the link … and it arrives on the PUBLIC view`, and smoke's `the saved link arrives on the PUBLIC fixture JSON (the seam)` |
 | extra | `entitlement-domains.ts`: add `"streaming.overlay"` to any section | `entitlement-streaming-overlay.test.ts` › `is in NO ENTITLEMENT_DOMAINS section` |
 
@@ -4252,10 +4655,12 @@ A surviving mutant is a missing test, not a note. Run each one, restore, and re-
 1. **Entrant short name (watch-list 6) — RESOLVED to the fallback.** `public_entrants_v` (`V350__person_tombstone_views.sql:18-47`) exposes `display_name` and a `team_display` blob of `club_id/club_name/logo_path/colors`; `teams.short_name` (`V206:5`) never reaches it. `shortCode` therefore always takes the three-letter branch, and `ui.stream.codeNote` tells the organiser so.
 2. **CLOSED by owner answer 12 (2026-09-06) — venue timezone for `startLabel`.** Was: "formatted in UTC, no IANA zone on `PublicFixture`". Now Task 0 puts `venueTz` on `getPublicFixture` via `resolveVenueTz`, and `overlayStartLabel` formats with it. W1 **deviation 4 is closed**; nothing is owed here.
 3. **CLOSED by owner answer 12 (2026-09-06) — `header.clock` (football family), and the cricket chase line.** Was: "no elapsed-time field exists on the public `ScoreSummary.detail`" and "the chase reads 'Need 45', not 'Need 45 off 45'". Task 0 adds `detail.clock` (from the engine's own `footballPosition`/`periodPosition`) and `detail.innings[].ballsLimit`. W1 **deviations 4 and 6, and the unpinned football clock, are all closed by the owner's answers** — the only thing this wave still owes on them is the §9.6 obligation Task 0 Steps 10–12 carry. `_STATE.md`'s copy of the eight-deviation list is a SEPARATE file and is not edited by this plan; whoever updates `_INDEX.md` at PR time strikes 4 and 6 there.
-4. **`m.youtube.com`.** Not on R16's ten. The unit test asserts it is REJECTED and says so; if the owner wants mobile share links accepted, it is a one-line addition to `STREAM_HOSTS` plus a test row.
+4. **CLOSED by owner answer 16 (Q5), 2026-09-06 — `m.youtube.com`.** Was: "not on R16's ten; the unit test asserts it is REJECTED". The owner answered *"Agree"*, so it is the eleventh entry in `STREAM_HOSTS` with its own accepted row, and two look-alike rejections (`m.youtube.com.evil.example`, `mm.youtube.com`) were added in the same edit so the widening stays an exact-hostname addition rather than a suffix rule. **R16 in `_RULES.md` still says ten and is now stale** — whoever updates `_INDEX.md` at PR time records the widening there; this plan does not edit `_RULES.md`.
 5. **Barlow double-mount (watch-list 7).** Verified in Task 5 Step 12 by reading the built CSS and the network tab, not by assumption.
 6. **`V3_SKINS` = every `sport_key` a division can carry (watch-list 8).** Task 2's sweep asserts eleven keys; run `select distinct sport_key from divisions` on the ovl DB and diff before the PR — a division on a twelfth key would render the generic composition, which is a designed state but should be a KNOWN one.
 7. **`WALKTHROUGH_SPECS` after the rebase (R9).** Absent at base `997ad225b`; present on `main` since PR #723 (`01ea4a455`). Task 8 Step 13 re-greps and registers both specs in the same commit rather than assuming either way.
 8. **The one conflict the owner's answers CREATE, recorded rather than quietly resolved:** Global Constraints say "do NOT touch the engine", and Task 0 does — `cricket.ts`, `football.ts`, `sports/period/kernel.ts` and `core/position.ts`. It is unavoidable: the live transport carries `{ status, summary, outcome }` and nothing else (`live-score-data.ts:7-23`), so a number that must change DURING a match can only ride on `ScoreSummary`. The alternative considered and rejected was reading `match_states.state` server-side and grafting the two numbers onto the payload outside the engine — no engine edit and no §9.6 exposure, but a SECOND authority for the chase denominator and for the clock's staleness guard, which this repo's standing rules punish harder. The carve-out is written into the constraint itself so it cannot widen.
-9. **Conflicts with the wave prompt, listed for `_INDEX.md`:** the hook's return type (object, not bare `LiveFixtureData` — `LiveScore` renders `subscribed`); `OverlayMsg` instead of `MsgFn` (`MessageKey` is the `ui` catalog, the overlay's copy is `public`); `decidedTemplates` as a fourth model input (one authority for the decided sentence); `startLabel` formatted by the server; W2's plan names `apps/web/e2e/stream-overlay.spec.ts` while the W1 prompt's R9 puts it under `e2e/walkthrough/` — the W1 prompt wins and W2 re-pins.
+9. **Themes are a registry (owner answer 18 / Q7) — recorded so the review checks the ABSTRACTION, not just the two themes.** The claim W1 now makes is "a third theme is one registry entry plus one component". It is provable, and the reviewer should prove it rather than take it: add a throwaway third entry, confirm it appears in the panel's tabs and resolves on the route, and confirm that neither `page.tsx`, `overlay-stage.tsx` nor `fixture-stream-panel.tsx` needed an edit — then delete it. A registry nothing has ever been added to is a registry whose claim is untested. (The one honest caveat: the `ThemeId` union is declared in the registry file, so a third theme is two lines in ONE file, not one. That is deliberate — see the type's comment in Task 5 Step 6c — and it is still no edit outside the registry.)
+10. **The registry's `sports` filter has no production user on day one.** Both shipped themes are `sports: "all"`. Designed, not an oversight, but it means the filter's ONLY cover is the probe registry in `theme-registry.test.ts`. If a later wave deletes that probe as "redundant", mutant (l) stops being killable and the filter silently becomes decoration.
+11. **Conflicts with the wave prompt, listed for `_INDEX.md`:** the hook's return type (object, not bare `LiveFixtureData` — `LiveScore` renders `subscribed`); `OverlayMsg` instead of `MsgFn` (`MessageKey` is the `ui` catalog, the overlay's copy is `public`); `decidedTemplates` as a fourth model input (one authority for the decided sentence); `startLabel` formatted by the server; W2's plan names `apps/web/e2e/stream-overlay.spec.ts` while the W1 prompt's R9 puts it under `e2e/walkthrough/` — the W1 prompt wins and W2 re-pins. **And two the owner's later answers create, where the OWNER wins over both the prompt and the spec:** the wave prompt and the spec both describe `style=bar|bug` as a two-value query parameter with a per-sport default, which owner answer 18 (Q7) replaces with the registry; and R16's ten-host allowlist, which owner answer 16 (Q5) widens to eleven. Neither `_RULES.md` nor `W1-step-one.md` is edited by this plan — `_INDEX.md` records both supersessions at PR time.
 

@@ -69,6 +69,15 @@ text, 3:1 for the LED bar. Slab text is board-on-LED and is tested too.
 
 ## 3. Theme A — Broadcast bar (`?style=bar`)
 
+> **This section IS registry entry `bar`** (owner answer 18 / Q7, 2026-09-06 —
+> themes are a registry, not a two-value union): `{ id: "bar", labelKey:
+> "stream.tab.bar", component: OverlayBar, sports: "all" }` in `OVERLAY_THEMES`
+> (`apps/web/src/components/overlay/theme-registry.ts`). A future theme is a
+> NEW SECTION of this sheet in the same shape — inset, band, type scale,
+> per-sport cell table — paired with one registry entry and one component.
+> Nothing below changes, and nothing below is per-sport: the sport enters
+> through the palette (§2), never through the theme.
+
 Anchored bottom, full width. Two stacked bands, one shadow, radius 6 px.
 
 ```
@@ -107,6 +116,15 @@ Per-sport content of the bar (W1 unless marked W2):
 An empty detail band is not rendered; the main band keeps its radius.
 
 ## 4. Theme B — Corner bug (`?style=bug`)
+
+> **This section IS registry entry `bug`** (owner answer 18 / Q7): `{ id: "bug",
+> labelKey: "stream.tab.bug", component: OverlayBug, sports: "all" }` in
+> `OVERLAY_THEMES`. §3 and §4 are the registry's two entries on day one and its
+> only content; the registry is the index, this sheet is the values. A third
+> theme adds a §4a here in this same shape and one entry there — never an edit
+> to the route, the panel or the projection. If a theme is ever designed for a
+> subset of sports, that is the entry's `sports` field, and this sheet says
+> which sports in its own preamble.
 
 Anchored top-left. Width 480, radius 12, one shadow. The pad's own
 "stadium-night tile", so the stream matches the app.

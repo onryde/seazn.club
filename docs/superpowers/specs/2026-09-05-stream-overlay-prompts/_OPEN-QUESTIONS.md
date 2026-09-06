@@ -367,7 +367,38 @@ resilience (hold the last known score, reconnect quietly, never a white
 frame), not by a second service that has the same deploy problem. Owed as a
 step in the W1 overlay-route task.
 
-## Q15. The football clock costs an engine change and a golden re-baseline — NEW, blocks Task 0
+## ~~Q15~~ CLOSED 2026-09-06 — the cost was an artefact of the wrong data path
+
+**The correction I issued was itself over-cautious, and the owner's own
+question dissolved it.** The engine change, the `coarsen` change and the
+golden re-baseline are all unnecessary. Verified in the tree, not inferred:
+
+- `foldFixture` returns `foldMatch(sportModule, cfg, lineups, envelopes)`
+  (`apps/web/src/server/engine-db/fold.ts:130`) — the module's whole state
+  over the FINE stream.
+- Football's state already carries `phase`, `periods` and `asOf`
+  (`packages/engine/src/sports/football/football.ts:566,570,599`, written at
+  `:2525`), which is the clock.
+- Cricket's innings state already carries `legalBalls` and `ballsLimit`
+  (`packages/engine/src/sports/cricket/cricket.ts:436,440`), which is the
+  balls remaining.
+- `grep -arn "coarsen" apps/web/src` returns **zero**. The web app never
+  coarsens anything, so the dual-fidelity conformance property is nowhere near
+  this path and cannot be broken by it.
+
+The whole cost existed only because the numbers were assumed to have to ride
+on the shared public summary. An overlay endpoint over `foldFixture` uses the
+engine instead of changing it. **Nothing in `packages/engine` is touched by
+this programme.** Task 0's Steps 2–13 are marked superseded pending the
+owner's confirmation; Step 1, the venue time zone, is NOT superseded and
+stands as written.
+
+**One real cost the swap carries, recorded so it is not a surprise:**
+`useLiveFixture` fetches `/api/v1/public/fixtures/${id}`
+(`live-score-data.ts:30`) and is shared with `LiveScore`, so the overlay needs
+that hook made generic over its fetcher, or a sibling hook. Small, and named.
+
+## Q15 (original text, kept for the record — CLOSED above). The football clock costs an engine change and a golden re-baseline
 
 **This corrects a cost I gave the owner.** When Q1 was put to the owner I
 said the three payload fields were "one additive payload extension plus its

@@ -143,9 +143,11 @@ and finding is stated as value to one of these two.
   preview renders the SAME component, never a picture.
 - **R16 — Stream links: exact hostname, https only, anchor only.**
   `streamUrlSchema` (`lib/stream-url.ts`): `new URL()` parses, protocol
-  `https:`, hostname `===` one of `www.youtube.com`, `youtube.com`, `youtu.be`,
-  `www.facebook.com`, `facebook.com`, `fb.watch`, `www.twitch.tv`, `twitch.tv`,
-  `kick.com`, `www.kick.com`. Never a prefix or substring test (memory: a prefix
+  `https:`, hostname `===` one of `www.youtube.com`, `youtube.com`,
+  `m.youtube.com` (owner answer on Q5, 2026-09-06 — a link copied from the
+  YouTube phone app), `youtu.be`, `www.facebook.com`, `facebook.com`,
+  `fb.watch`, `www.twitch.tv`, `twitch.tv`, `kick.com`, `www.kick.com` —
+  eleven. Never a prefix or substring test (memory: a prefix
   check is not origin validation — `/\evil.com` was an open redirect once).
   Empty string clears. Rendered only as `<a href target="_blank"
   rel="noopener">`; never an iframe here; CSP `frame-src` untouched.
