@@ -260,37 +260,105 @@ describe.skipIf(!HAS_DB)("F3 Task 5 (5a) — getStageRosterDrift", () => {
   // the round-1 sit-out ("Active, but not on a fixture yet") and cleared on
   // its own once round 2 gave them a real fixture (docs/superpowers/specs/
   // 2026-09-02-competition-desk-prompts/_INDEX.md, "W3 item 6").
-  it("an odd-entrant swiss stage does not report its own sit-out as roster drift", async () => {
+  //
+  // REVISED after round-1 review (2026-09-06): the first attempt suppressed
+  // an unplaced entrant whose `created_at` predated the stage's latest round
+  // — a heuristic reviewed as CRITICAL, because `entrants` has no
+  // `updated_at` and `patchEntrant` applies no active-division lock, so a
+  // withdraw-then-reinstate leaves that heuristic no way to tell a genuinely
+  // drifted entrant from a legitimate sit-out. See `getStageRosterDrift`'s
+  // comment in `../stages.ts` for the full reasoning: round membership alone
+  // (without swissGen ever persisting a bye reference) cannot safely
+  // distinguish the two, so a round-1-only sit-out is now reported exactly
+  // like any other unplaced entrant — this test pins that as the documented,
+  // safety-first trade, and that it still self-clears once round 2 gives the
+  // entrant a real fixture (via the plain, unmodified `referencedIds` check —
+  // no swiss-specific code needed for that half).
+  it("round 1's swiss sit-out is unplaced like any other unreferenced entrant, and clears once round 2 places it", async () => {
     const { auth } = await seedOrg();
-    const { divisionId } = await seedDivision(auth, ["A", "B", "C", "D", "E"]); // 5 — ODD on purpose
+    const { divisionId, entrantByName } = await seedDivision(auth, ["A", "B", "C", "D", "E"]); // 5 — ODD
     const [stage] = await createStages(auth, divisionId, {
       seq: 1, kind: "swiss", name: "Swiss", config: {}, progression: null,
     });
-    const { fixtures } = await generateStageFixtures(auth, stage!.id);
-    expect(fixtures.length).toBe(2); // 5 entrants -> 2 pairings, 1 sits out
+    const round1 = await generateStageFixtures(auth, stage!.id);
+    expect(round1.fixtures.length).toBe(2); // 5 entrants -> 2 pairings, 1 sits out
+    const round1Ids = new Set(round1.fixtures.flatMap((f) => [f.home_entrant_id, f.away_entrant_id]));
+    const sitOutId = [...entrantByName.values()].find((id) => !round1Ids.has(id))!;
 
-    const drift = await getStageRosterDrift(auth, stage!.id);
-    expect(drift.unplaced).toEqual([]);
+    const afterRound1 = await getStageRosterDrift(auth, stage!.id);
+    expect(afterRound1.unplaced.map((e) => e.id)).toEqual([sitOutId]);
+
+    await startDivision(auth, divisionId); // stage already has fixtures — does not regenerate
+    for (const f of round1.fixtures) await decideFixture(auth, f.id);
+    const round2 = await generateStageFixtures(auth, stage!.id);
+    expect(round2.fixtures.some((f) => f.home_entrant_id === sitOutId || f.away_entrant_id === sitOutId)).toBe(
+      true,
+    );
+
+    const afterRound2 = await getStageRosterDrift(auth, stage!.id);
+    expect(afterRound2.unplaced).toEqual([]);
   });
 
-  // The fix must be SPECIFIC to the round-1 sit-out, not a blanket amnesty
-  // for every unreferenced entrant on a swiss stage — a late registration
-  // after Generate is exactly the case `unplaced` exists to catch, and it
-  // must still be caught even while a legitimate sit-out is also present.
-  it("...but a swiss stage still reports a genuine late registration, alongside a legitimate sit-out", async () => {
+  // Rebuilt per round-1 review finding 2: the original version simulated
+  // "genuine late registration" with a bare `createEntrants` call after
+  // Generate, which bypasses the active-division lock a real late add hits
+  // post-start (`entrants.ts` — /entrants 422s "tournament has started" once
+  // `startDivision` has run). Reproduced the way the product actually
+  // produces an unreferenced-but-active entrant instead: `patchEntrant` to
+  // "withdrawn" BEFORE Generate ever runs (so the entrant is excluded from
+  // the pairing pool entirely), then back to "registered" with no
+  // regenerate — the same four-line pattern this file already uses for its
+  // ghost cases, applied before generation instead of after. Also proves the
+  // fix is SPECIFIC, not a blanket amnesty: a legitimate round-1 sit-out
+  // (among the entrants that were never withdrawn) is flagged ALONGSIDE the
+  // reinstated one, not instead of it.
+  it("a swiss stage reports a genuine reinstated-late-registration entrant, alongside a legitimate sit-out", async () => {
     const { auth } = await seedOrg();
-    const { divisionId } = await seedDivision(auth, ["A", "B", "C", "D", "E"]);
+    const { divisionId, entrantByName } = await seedDivision(auth, ["A", "B", "C", "D", "E", "F"]);
     const [stage] = await createStages(auth, divisionId, {
       seq: 1, kind: "swiss", name: "Swiss", config: {}, progression: null,
     });
-    await generateStageFixtures(auth, stage!.id); // round 1: 2 fixtures, one of the five sits out
 
-    const added = await createEntrants(auth, divisionId, [
-      { kind: "individual", display_name: "F", seed: 6, members: [] },
-    ]);
+    await patchEntrant(auth, entrantByName.get("F")!, { status: "withdrawn" });
+    await startDivision(auth, divisionId); // auto-generates round 1 over A-E only (5 — ODD)
+    await patchEntrant(auth, entrantByName.get("F")!, { status: "registered" }); // reinstated, no regenerate
+
+    const round1Rows = await sql<{ home_entrant_id: string | null; away_entrant_id: string | null }[]>`
+      select home_entrant_id, away_entrant_id from fixtures where stage_id = ${stage!.id}`;
+    const round1Ids = new Set(round1Rows.flatMap((r) => [r.home_entrant_id, r.away_entrant_id]));
+    const naturalSitOutId = ["A", "B", "C", "D", "E"]
+      .map((n) => entrantByName.get(n)!)
+      .find((id) => !round1Ids.has(id))!;
 
     const drift = await getStageRosterDrift(auth, stage!.id);
-    expect(drift.unplaced.map((e) => e.id)).toEqual([added[0]!.id]);
+    expect(new Set(drift.unplaced.map((e) => e.id))).toEqual(new Set([entrantByName.get("F"), naturalSitOutId]));
+  });
+
+  // Round-1 review finding 1's exact repro, verbatim: withdraw before round
+  // 1, reinstate AFTER round 2 exists. The original `created_at` heuristic
+  // silently swallowed this forever (worse once the round cap is hit —
+  // Generate can't fix it either); it must flag.
+  it("finding 1 regression: withdraw before round 1, reinstate after round 2 — must still flag", async () => {
+    const { auth } = await seedOrg();
+    const { divisionId, entrantByName } = await seedDivision(auth, ["A", "B", "C", "D", "E"]);
+    const [stage] = await createStages(auth, divisionId, {
+      seq: 1, kind: "swiss", name: "Swiss", config: {}, progression: null,
+    });
+
+    await patchEntrant(auth, entrantByName.get("E")!, { status: "withdrawn" });
+    await startDivision(auth, divisionId); // round 1 auto-generated over A-D only (4 — EVEN, no bye)
+
+    const round1 = await sql<{ id: string }[]>`select id from fixtures where stage_id = ${stage!.id}`;
+    expect(round1.length).toBe(2); // A-B, C-D — no bye, E excluded entirely
+    for (const f of round1) await decideFixture(auth, f.id);
+
+    const round2 = await generateStageFixtures(auth, stage!.id); // still over A-D — E stays withdrawn
+    expect(round2.created).toBe(2); // A-D repaired for round 2, no bye — E never in the pool at all
+
+    await patchEntrant(auth, entrantByName.get("E")!, { status: "registered" }); // reinstated AFTER round 2
+
+    const drift = await getStageRosterDrift(auth, stage!.id);
+    expect(drift.unplaced.map((e) => e.id)).toEqual([entrantByName.get("E")]);
   });
 });
 

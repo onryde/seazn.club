@@ -603,21 +603,55 @@ the sat-out entrant has ANY fixture in the stage, they drop out of
 `unplaced` on their own. The flag is transient, not standing, for the reason
 the query's shape predicted.
 
-**Fix shipped.** Narrow, in `getStageRosterDrift` (`server/usecases/
-stages.ts`), not a banner re-word and not a `roster-drift-eligibility.ts`
-exclusion (both were the fallback if the narrow fix proved unworkable; it
-didn't). For a swiss stage only, an active entrant already registered
-(`entrants.created_at`) before the stage's most-recently-generated round
-(`max(fixtures.created_at)` for the stage) is excluded from `unplaced` even
-if still unreferenced — they were necessarily part of that round's pairing
-pool, so an unreferenced result there is `pairRound`'s own bye pick, not
-roster drift. An entrant registered AFTER the latest round (a genuine late
-add, never through a Generate call) is unaffected and still flagged,
-proven by a dedicated test that seeds both a legitimate sit-out and a real
-late registration in the same stage and asserts `unplaced` names only the
-latter. Tests: `__tests__/stage-roster-drift.test.ts`, two new cases under
-"F3 Task 5 (5a) — getStageRosterDrift"; mutation-confirmed (revert the fix
-locally → exactly and only those two cases redden, 18 total unchanged).
+**Fix shipped, round 1 (`created_at` heuristic) — WITHDRAWN after review,
+CRITICAL finding.** The first fix excluded from `unplaced`, for a swiss
+stage only, any active entrant already registered (`entrants.created_at`)
+before `max(fixtures.created_at)` for the stage. Review found this silently
+and PERMANENTLY hides a genuine, reachable drift case: `entrants` has no
+`updated_at` and `patchEntrant` (entrants.ts) applies no active-division
+lock, so withdrawing an entrant before Generate and reinstating it later
+leaves zero timestamp trace — the reinstated entrant's `created_at` still
+predates the round, so the heuristic wrongly suppressed it forever (worse
+once the stage's round cap is hit — Generate can't fix it either). The
+banner exists to catch exactly this; over-suppressing is worse than the
+miscopy it replaced.
+
+**Fix shipped, round 2 — round-membership-derived, not time-derived.**
+Ruling: derive the sit-out from round membership (a stored fact — which
+fixture, which round, references this entrant), not creation time (a
+heuristic standing in for one). Worked out precisely by set algebra, that
+rule is provably identical to the plain stage-wide `referencedIds` check for
+every stage kind including swiss — "referenced in an earlier round" can only
+ever be true for an entrant the stage-wide check has *already* excluded, so
+the "suppress" half can never independently fire. Net, honest effect: the
+`created_at` heuristic is removed with no swiss-specific replacement.
+`getStageRosterDrift` now treats every stage kind identically again. A
+round-1-only sit-out is reported exactly like any other unplaced entrant —
+transient, self-clearing the moment a later round gives it a real fixture,
+via the same unmodified `referencedIds` check — rather than being suppressed
+on sight. That is a deliberate safety trade, not a silent regression: it
+gives up the brief's original "suppress immediately" requirement in exchange
+for closing the reinstated-entrant hole completely, because round membership
+alone cannot tell a legitimate round-1 sit-out apart from a withdrawn-then-
+reinstated ghost — `swissGen` maps only `round.pairings`, never writing a
+bye-fixture row (unlike knockout, which represents a bye as a real row, home
+set / away null), so a legitimate sit-out leaves no "I was considered, I sat
+out" trace. **Recommended follow-up, not done here (bigger, structural,
+needs its own sign-off):** teach `swissGen` to persist a real bye reference
+per round, the way knockout already does — that would make "referenced in an
+earlier round" a genuinely true fact instead of an always-empty one, and
+would let a round-1 sit-out be suppressed immediately without reopening the
+reinstatement hole.
+
+Tests: `__tests__/stage-roster-drift.test.ts`, three cases under "F3 Task 5
+(5a) — getStageRosterDrift": (1) a round-1 sit-out is unplaced like any
+other unreferenced entrant and clears at round 2; (2) a genuine reinstated
+late registration is flagged alongside a legitimate round-1 sit-out (proves
+the fix doesn't over- or under-flag); (3) the reviewer's exact repro —
+withdraw before round 1, reinstate after round 2 — must still flag.
+Mutation-confirmed: reintroducing the `created_at` heuristic locally reddens
+exactly and only these three cases, 19 total unchanged, all 16 pre-existing
+cases stay green.
 
 ## W3 planning — false premises found (2026-09-06)
 
