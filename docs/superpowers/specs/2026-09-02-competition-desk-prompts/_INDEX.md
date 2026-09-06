@@ -594,64 +594,40 @@ coverage for it.
 
 **CONFIRMED — driven in a browser, 2026-09-06 (Task 1).** A 5-entrant
 progression-less Swiss stage, round 1 generated: the banner rendered exactly
-as predicted, `data-roster-drift-state="unplaced"`,
-`"Active, but not on a fixture yet: <round-1 sit-out's name>"`. Both round-1
-fixtures decided, round 2 generated (the sit-out now plays, a different
-entrant sits out round 2) — the banner disappeared entirely
-(`roster-drift-banner` count 0), confirming `referenced` is stage-wide: once
+as predicted, `"Active, but not on a fixture yet: <round-1 sit-out's name>"`.
+Both round-1 fixtures decided, round 2 generated (the sit-out now plays) —
+the banner disappeared entirely, confirming `referenced` is stage-wide: once
 the sat-out entrant has ANY fixture in the stage, they drop out of
-`unplaced` on their own. The flag is transient, not standing, for the reason
-the query's shape predicted.
+`unplaced` on their own. The flag is transient, not standing.
 
-**Fix shipped, round 1 (`created_at` heuristic) — WITHDRAWN after review,
-CRITICAL finding.** The first fix excluded from `unplaced`, for a swiss
-stage only, any active entrant already registered (`entrants.created_at`)
-before `max(fixtures.created_at)` for the stage. Review found this silently
-and PERMANENTLY hides a genuine, reachable drift case: `entrants` has no
-`updated_at` and `patchEntrant` (entrants.ts) applies no active-division
-lock, so withdrawing an entrant before Generate and reinstating it later
-leaves zero timestamp trace — the reinstated entrant's `created_at` still
-predates the round, so the heuristic wrongly suppressed it forever (worse
-once the stage's round cap is hit — Generate can't fix it either). The
-banner exists to catch exactly this; over-suppressing is worse than the
-miscopy it replaced.
+**Status: NOT FIXED. Ships as tests plus documentation, zero net behaviour
+change.** Two suppression predicates were tried and both failed, for
+different reasons: (1) excluding an unplaced entrant whose `created_at`
+predated the stage's latest round — reviewed out as CRITICAL, because
+`entrants` has no `updated_at` and `patchEntrant` applies no
+active-division lock, so withdrawing an entrant before Generate and
+reinstating it later leaves zero timestamp trace, and the heuristic
+silently and permanently hid that genuine drift case forever; (2) deriving
+the same exclusion from round membership instead — reviewed out as provably
+vacuous (by set algebra, not merely suspected), because `swissGen` never
+writes a fixture row for the byed entrant at all (unlike knockout, which
+represents a bye as a real row), so there is no "I was considered, I sat
+out" fact stored anywhere to suppress on. Both attempts are gone from the
+code; `getStageRosterDrift` is back to its plain pre-Task-1 stage-wide
+computation for every stage kind, unchanged.
 
-**Fix shipped, round 2 — round-membership-derived, not time-derived.**
-Ruling: derive the sit-out from round membership (a stored fact — which
-fixture, which round, references this entrant), not creation time (a
-heuristic standing in for one). Worked out precisely by set algebra, that
-rule is provably identical to the plain stage-wide `referencedIds` check for
-every stage kind including swiss — "referenced in an earlier round" can only
-ever be true for an entrant the stage-wide check has *already* excluded, so
-the "suppress" half can never independently fire. Net, honest effect: the
-`created_at` heuristic is removed with no swiss-specific replacement.
-`getStageRosterDrift` now treats every stage kind identically again. A
-round-1-only sit-out is reported exactly like any other unplaced entrant —
-transient, self-clearing the moment a later round gives it a real fixture,
-via the same unmodified `referencedIds` check — rather than being suppressed
-on sight. That is a deliberate safety trade, not a silent regression: it
-gives up the brief's original "suppress immediately" requirement in exchange
-for closing the reinstated-entrant hole completely, because round membership
-alone cannot tell a legitimate round-1 sit-out apart from a withdrawn-then-
-reinstated ghost — `swissGen` maps only `round.pairings`, never writing a
-bye-fixture row (unlike knockout, which represents a bye as a real row, home
-set / away null), so a legitimate sit-out leaves no "I was considered, I sat
-out" trace. **Recommended follow-up, not done here (bigger, structural,
-needs its own sign-off):** teach `swissGen` to persist a real bye reference
-per round, the way knockout already does — that would make "referenced in an
-earlier round" a genuinely true fact instead of an always-empty one, and
-would let a round-1 sit-out be suppressed immediately without reopening the
-reinstatement hole.
-
-Tests: `__tests__/stage-roster-drift.test.ts`, three cases under "F3 Task 5
-(5a) — getStageRosterDrift": (1) a round-1 sit-out is unplaced like any
-other unreferenced entrant and clears at round 2; (2) a genuine reinstated
-late registration is flagged alongside a legitimate round-1 sit-out (proves
-the fix doesn't over- or under-flag); (3) the reviewer's exact repro —
-withdraw before round 1, reinstate after round 2 — must still flag.
-Mutation-confirmed: reintroducing the `created_at` heuristic locally reddens
-exactly and only these three cases, 19 total unchanged, all 16 pre-existing
-cases stay green.
+**The real fix — swissGen persisting a real bye reference per round, the
+way knockout already does — is OUT of this wave, its own scoped follow-up.**
+Pricing (recorded so the next session does not re-derive it): ~6–10 source
+files. `competition.ts`'s decided-fixture fold is shared by every stage
+kind, not swiss-only. `card-stats.ts` counts a forfeited bye in `total` but
+not in `played`, so the division ledger would read "N-1 of N played"
+permanently for that round — a real regression, not a rounding quirk. A
+swiss-emitted `award` outcome breaks the bracket-only invariant F6
+confirmed. `__tests__/stage-roster-drift.test.ts`'s "KNOWN DEFECT" case
+(under "F3 Task 5 (5a) — getStageRosterDrift") characterises the live
+defect and is EXPECTED to invert once that follow-up ships — that inversion
+is the fix landing, not a regression.
 
 ## W3 planning — false premises found (2026-09-06)
 

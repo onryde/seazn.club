@@ -253,28 +253,36 @@ describe.skipIf(!HAS_DB)("F3 Task 5 (5a) — getStageRosterDrift", () => {
 
   // Task 1 (W3) — swiss's pairRound puts an odd round's sat-out entrant in a
   // `bye` field the generator never maps to a fixture row (swissGen maps only
-  // round.pairings — packages/engine/src/scheduling/swiss.ts). Stage-wide
-  // `unplaced` used to read that entrant exactly like a genuine late
-  // registration and fire the roster-drift banner on a division where
-  // nothing had gone wrong — confirmed live in a browser: the banner named
-  // the round-1 sit-out ("Active, but not on a fixture yet") and cleared on
-  // its own once round 2 gave them a real fixture (docs/superpowers/specs/
-  // 2026-09-02-competition-desk-prompts/_INDEX.md, "W3 item 6").
+  // round.pairings — packages/engine/src/scheduling/swiss.ts). This is the
+  // LIVE DEFECT the whole task exists to fix, characterised here rather than
+  // fixed: confirmed live in a browser, a round-1 sit-out reads exactly like
+  // a genuine late registration and fires the roster-drift banner on a
+  // division where nothing had gone wrong ("Active, but not on a fixture
+  // yet"), self-clearing only once round 2 gives them a real fixture.
   //
-  // REVISED after round-1 review (2026-09-06): the first attempt suppressed
-  // an unplaced entrant whose `created_at` predated the stage's latest round
-  // — a heuristic reviewed as CRITICAL, because `entrants` has no
-  // `updated_at` and `patchEntrant` applies no active-division lock, so a
-  // withdraw-then-reinstate leaves that heuristic no way to tell a genuinely
-  // drifted entrant from a legitimate sit-out. See `getStageRosterDrift`'s
-  // comment in `../stages.ts` for the full reasoning: round membership alone
-  // (without swissGen ever persisting a bye reference) cannot safely
-  // distinguish the two, so a round-1-only sit-out is now reported exactly
-  // like any other unplaced entrant — this test pins that as the documented,
-  // safety-first trade, and that it still self-clears once round 2 gives the
-  // entrant a real fixture (via the plain, unmodified `referencedIds` check —
-  // no swiss-specific code needed for that half).
-  it("round 1's swiss sit-out is unplaced like any other unreferenced entrant, and clears once round 2 places it", async () => {
+  // CORRECT behaviour would suppress this entrant from `unplaced` the moment
+  // round 1 sits them out, not wait for round 2. Two attempts at that
+  // suppression were tried and reviewed out (2026-09-06, W3 item 6 in
+  // _INDEX.md): a `created_at` heuristic that silently and permanently hid a
+  // genuine, reachable roster-drift case (withdraw before Generate, reinstate
+  // after — `entrants` has no `updated_at`, `patchEntrant` has no
+  // active-division lock, so that leaves zero trace); and a round-membership
+  // rule that is provably vacuous, because `swissGen` never writes a fixture
+  // row for the byed entrant at all (unlike knockout, which represents a bye
+  // as a real row) — there is no "I was considered, I sat out" fact stored
+  // anywhere to suppress on. The real fix (swissGen persisting a bye
+  // reference per round) is now a separate, scoped follow-up outside this
+  // task — see _INDEX.md for the pricing and the shared-fold blast radius
+  // that ruled it out of this wave.
+  //
+  // This test is a CHARACTERISATION test, not a spec for desired behaviour —
+  // do not read its expected value as correct. When the follow-up ships,
+  // THIS ASSERTION IS EXPECTED TO INVERT (round 1's sit-out will no longer
+  // appear in `unplaced`); that inversion is the fix landing, not a
+  // regression to chase down. Do not weaken, delete, or "fix" this test
+  // without first shipping that follow-up — it is the only thing pinning
+  // the live defect's exact shape so nobody re-derives it from scratch.
+  it("KNOWN DEFECT: an odd-swiss round-1 sit-out is currently flagged as unplaced — see _INDEX.md item 6", async () => {
     const { auth } = await seedOrg();
     const { divisionId, entrantByName } = await seedDivision(auth, ["A", "B", "C", "D", "E"]); // 5 — ODD
     const [stage] = await createStages(auth, divisionId, {
