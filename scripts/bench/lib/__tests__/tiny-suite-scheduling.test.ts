@@ -510,6 +510,64 @@ describe("runTinySuite — engine artifact and delta", () => {
       rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  // -------------------------------------------------------------------------
+  // T7d — a leg whose divisions DISAGREE about the actual engine
+  // -------------------------------------------------------------------------
+
+  it("a leg whose divisions disagree about the actual engine still writes ONE artifact, keyed by the REQUESTED engine", async () => {
+    // The exact shape the first live run proved: `--engine optimized`, and
+    // `d-badminton` (one fixture) proves `already_optimal` and comes back
+    // `greedy` while `d-tiny` in the SAME leg comes back `optimized`. Before
+    // T7d the artifact was keyed by the derived SOLE actual engine across the
+    // leg — undefined here — so nothing was ever written and a warning fired
+    // instead.
+    const dir = mkdtempSync(path.join(tmpdir(), "bench-b04-engine-disagree-"));
+    try {
+      const { report } = await run({
+        engine: "optimized",
+        reportDir: dir,
+        runId: "disagree",
+        schedule: {
+          solverEngine: "optimized",
+          solverOverrideByStageId: {
+            "stage-badminton-league": { engine: "greedy", status: "already_optimal" },
+          },
+        },
+      });
+
+      // T7d's OTHER half: `already_optimal` no longer reds the engine
+      // assertion, so the run stays green and no "could not write" warning
+      // fires.
+      expect(report.gate).toBe("green");
+      expect((report.warnings ?? []).join(" ")).not.toContain("no engine artifact written");
+
+      // Keyed by the REQUESTED engine, not a (nonexistent) sole actual one.
+      expect(readdirSync(path.join(dir, "disagree"))).toEqual(["engine-optimized.json"]);
+      const raw = JSON.parse(
+        readFileSync(path.join(dir, "disagree", "engine-optimized.json"), "utf8"),
+      ) as {
+        requestedEngine: string;
+        engine?: string;
+        divisions: { divisionRef: string; actualEngine?: string }[];
+      };
+      expect(raw.requestedEngine).toBe("optimized");
+      // No single agreed engine across the leg, so the leg-level summary is
+      // absent rather than a coin toss.
+      expect(raw.engine).toBeUndefined();
+      // The per-division truth survives — this is what makes the
+      // disagreement legible at all.
+      expect(raw.divisions.find((d) => d.divisionRef === "d-tiny")?.actualEngine).toBe("optimized");
+      expect(raw.divisions.find((d) => d.divisionRef === "d-badminton")?.actualEngine).toBe("greedy");
+
+      // `--engine both` must still be able to compute a delta once a sibling
+      // greedy leg exists — the file THIS leg wrote is a valid half of that
+      // pair, not a malformed one.
+      expect(report.engineDelta?.note).toContain("one leg is not a comparison");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });
 
 // ---------------------------------------------------------------------------

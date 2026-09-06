@@ -503,6 +503,60 @@ describe("runScheduleLayer — the engine assertion", () => {
     expect(rCrossed.outcomes[0].errors.join(" ")).toMatch(/expected greedy.*got optimized/i);
   });
 
+  // ---------------------------------------------------------------------------
+  // T7d — `already_optimal` is a PROOF, not a fallback
+  // ---------------------------------------------------------------------------
+
+  it("T7d: optimized requested, greedy actual, already_optimal status — NO error", async () => {
+    // `BuildStatus.already_optimal` (`packages/engine/src/scheduling/build.ts`):
+    // every tier completed and none could beat the greedy seed. The optimizer
+    // RAN and PROVED it — the board coming back `engine: "greedy"` is the
+    // proof's own conclusion, not a sign the solver was skipped. The first
+    // live run hit exactly this on a one-fixture division.
+    const { transport } = fakeTransport({
+      divisions: {
+        "div-a": {
+          fixturesAfter: PLACED(),
+          auto: { solver: { ...OK_SOLVER, engine: "greedy", status: "already_optimal" } },
+        },
+      },
+    });
+
+    const r = await runScheduleLayer(layer({ transport, engine: "optimized" }));
+
+    expect(r.outcomes[0].errors).toEqual([]);
+    expect(r.outcomes[0].actualEngine).toBe("greedy");
+    expect(r.outcomes[0].solverStatus).toBe("already_optimal");
+  });
+
+  it("T7d: optimized requested, greedy actual, NO status at all — still an error", async () => {
+    // The pair to the case above and to `solver_unavailable`, below: without
+    // this the fix is indistinguishable from deleting the assertion. An
+    // absent status is not a proof of anything, and the message must still
+    // name the engine mismatch.
+    const { transport } = fakeTransport({
+      divisions: {
+        "div-a": {
+          auto: {
+            solver: {
+              engine: "greedy",
+              tiers_completed: 4,
+              tiers_total: 4,
+              budget_expired: false,
+              elapsed_ms: 12,
+              moved: 1,
+            },
+          },
+        },
+      },
+    });
+
+    const r = await runScheduleLayer(layer({ transport, engine: "optimized" }));
+
+    expect(r.outcomes[0].errors.join(" ")).toMatch(/expected optimized.*got greedy.*status=absent/i);
+    expect(r.outcomes[0].solverStatus).toBeUndefined();
+  });
+
   it("--engine both asserts nothing about the engine", async () => {
     const { transport } = fakeTransport({
       divisions: {

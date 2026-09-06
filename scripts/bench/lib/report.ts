@@ -313,15 +313,22 @@ export const CrossDivisionCourtClashReport = z.object({
 });
 export type CrossDivisionCourtClashReport = z.infer<typeof CrossDivisionCourtClashReport>;
 
-/** `EngineSnapshot` (`schedule.ts`) as it comes back off disk. */
+/** `EngineSnapshot` (`schedule.ts`) as it comes back off disk.
+ *
+ *  `engine` (the leg-level summary) is OPTIONAL (T7d): absent exactly when
+ *  the leg's own divisions disagreed about which engine actually ran, which
+ *  is a real, legitimate shape — see each division's own `actualEngine`. */
 export const EngineSnapshotReport = z.object({
   runId: z.string(),
   requestedEngine: z.enum(REQUESTED_ENGINES),
-  engine: z.enum(ACTUAL_ENGINES),
+  engine: z.enum(ACTUAL_ENGINES).optional(),
   divisions: z
     .array(
       z.object({
         divisionRef: z.string(),
+        /** THIS division's own resolved engine — separate from the leg-level
+         *  `engine` above, and the two can legitimately disagree. */
+        actualEngine: z.enum(ACTUAL_ENGINES).optional(),
         metrics: ScheduleMetricsReport.optional(),
         solverStatus: z.string().optional(),
         notSearchedReason: z.string().optional(),

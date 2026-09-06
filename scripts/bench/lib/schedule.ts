@@ -321,6 +321,13 @@ export interface ScheduleLayerResult {
  *  verdict to state. */
 export interface EngineSnapshotDivision {
   divisionRef: string;
+  /** T7d: THIS division's own resolved engine — `ScheduleOutcome.actualEngine`
+   *  verbatim. The engine is resolved PER DIVISION (a one-fixture division can
+   *  prove `already_optimal` and come back `greedy` while its sibling in the
+   *  SAME leg runs the full solver), so the leg-level `EngineSnapshot.engine`
+   *  below cannot carry this on its own — it is absent exactly when divisions
+   *  disagree. This field is what makes that disagreement legible at all. */
+  actualEngine?: ActualEngine;
   metrics?: ScheduleMetricsOut;
   solverStatus?: string;
   notSearchedReason?: string;
@@ -340,7 +347,16 @@ export interface EngineSnapshot {
    *  is how a leg lands in a directory its sibling never looks in. */
   runId: string;
   requestedEngine: RequestedEngine;
-  engine: ActualEngine;
+  /** T7d: the SOLE actual engine across this leg's divisions, when they
+   *  agreed — `undefined` when they did not, rather than a coin toss recorded
+   *  as a fact. This field is a convenience summary, never the leg's
+   *  identity: the identity is `requestedEngine`, and it is what the artifact
+   *  FILE is named after (`writeEngineArtifact`'s caller). A leg's divisions
+   *  disagreeing about the actual engine is a real, legitimate shape (the
+   *  first live run proved it on a one-fixture division) and must not stop
+   *  the artifact from being written — see each division's own `actualEngine`
+   *  for the per-division truth this field cannot state. */
+  engine?: ActualEngine;
   divisions: readonly EngineSnapshotDivision[];
 }
 
@@ -1037,6 +1053,26 @@ function readSolver(
 
   // `both` asserts NOTHING about the engine — and nothing else is relaxed.
   if (requested === "both" || requested === solver.engine) return;
+  // T7d: an `optimized` request is ALSO satisfied when the optimizer ran,
+  // every tier completed, and it PROVED the greedy seed could not be beaten —
+  // `BuildStatus.already_optimal` (`packages/engine/src/scheduling/build.ts`),
+  // in its own words: "Every tier that ran completed, and none of them could
+  // improve on the greedy seed. A PROOF, not an opinion." The board returned
+  // is `engine: "greedy"` because the greedy board IS the answer, not because
+  // the solver was skipped — that is a successful optimized leg, not a
+  // fallback. The first live run hit exactly this on a one-fixture division:
+  // nothing to improve on, so the ladder proved it in one step.
+  //
+  // Every OTHER greedy result under an `optimized` request still errors:
+  // `solver_unavailable` (placement down — `_RULES.md` §2's false green,
+  // the whole reason this assertion exists), `not_searched` (never asked),
+  // `verifier_rejected`, `solver_busy`, and an ABSENT status all fall through
+  // to the error below rather than being read as a proof they are not. And
+  // this is never relaxed the other way: a `greedy` request that got
+  // `optimized` back is still wrong, unconditionally.
+  if (requested === "optimized" && solver.engine === "greedy" && solver.status === "already_optimal") {
+    return;
+  }
   sink.error(
     `expected ${requested} engine, got ${solver.engine} ` +
       `(solver.status=${solver.status ?? "absent"}, not_searched_reason=${solver.not_searched_reason ?? "absent"}) — ` +
@@ -1061,7 +1097,19 @@ function readSolver(
  *  `payload` is `unknown` because the caller composes it AFTER the checker and
  *  the certificate have run — `runScheduleLayer` has no verdict to state. The
  *  shape it should carry is `EngineSnapshot`, declared in this module (ruling
- *  R3) because the writer owns the shape it writes. */
+ *  R3) because the writer owns the shape it writes.
+ *
+ *  T7d: the `engine` argument identifies the LEG and MUST be the REQUESTED
+ *  engine (`RequestedEngine` — `tiny.ts`'s own `--engine`), never a value
+ *  derived from what actually happened. `tiny.ts` used to key this off the
+ *  SOLE actual engine across a leg's divisions, and that broke the first time
+ *  a real run's divisions disagreed (one proved `already_optimal` and came
+ *  back `greedy`, its sibling ran the full solver in the SAME `--engine
+ *  optimized` leg) — there was no sole value, so nothing was written at all.
+ *  A leg's identity is what was ASKED for, not what came back; using the
+ *  derived value here was itself the "two resolution points for one
+ *  identity" trap this comment warns about elsewhere, just relocated to this
+ *  call site instead of the writer. */
 export async function writeEngineArtifact(
   reportDir: string,
   runId: string,

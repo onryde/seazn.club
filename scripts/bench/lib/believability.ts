@@ -446,13 +446,16 @@ function divisionOf(value: unknown): EngineSnapshotDivision | undefined {
   const metrics = metricsOf(value.metrics);
   const mode = modeOf(value.mode);
   const verdict = verdictOf(value.verdict);
-  const { solverStatus, notSearchedReason, budgetExpired, tiersCompleted, tiersTotal } = value;
+  const { solverStatus, notSearchedReason, budgetExpired, tiersCompleted, tiersTotal, actualEngine } = value;
 
   return {
     divisionRef,
     blockingCount,
     unplacedCount,
     wallMs,
+    // T7d: THIS division's own engine, separate from the leg-level `engine`
+    // `asSnapshot` reads below — the two can legitimately disagree.
+    ...(actualEngine === "greedy" || actualEngine === "optimized" ? { actualEngine } : {}),
     ...(metrics === undefined ? {} : { metrics }),
     ...(typeof solverStatus === "string" ? { solverStatus } : {}),
     ...(typeof notSearchedReason === "string" ? { notSearchedReason } : {}),
@@ -480,13 +483,19 @@ function divisionOf(value: unknown): EngineSnapshotDivision | undefined {
  *  turn every real two-leg run's delta into "not a readable EngineSnapshot" —
  *  silently deleting design §2.1's headline run-level measurement — which is
  *  why the suite reads all three members back rather than only the one the
- *  fixtures found convenient. */
+ *  fixtures found convenient.
+ *
+ *  `engine` (the leg-level summary) is OPTIONAL, unlike `requestedEngine`
+ *  (T7d): it is absent exactly when the leg's own divisions disagreed about
+ *  which engine actually ran, which is a real, legitimate shape and not a
+ *  malformed artifact. When PRESENT it is still validated against the closed
+ *  two-member set — a stray third value is still rejected. */
 function asSnapshot(value: unknown): EngineSnapshot | undefined {
   if (!isRecord(value)) return undefined;
   const { runId, requestedEngine, engine, divisions } = value;
   if (typeof runId !== "string" || runId.length === 0) return undefined;
   if (requestedEngine !== "optimized" && requestedEngine !== "greedy" && requestedEngine !== "both") return undefined;
-  if (engine !== "greedy" && engine !== "optimized") return undefined;
+  if (engine !== undefined && engine !== "greedy" && engine !== "optimized") return undefined;
   if (!Array.isArray(divisions)) return undefined;
   const out: EngineSnapshotDivision[] = [];
   for (const d of divisions) {
@@ -494,7 +503,7 @@ function asSnapshot(value: unknown): EngineSnapshot | undefined {
     if (division === undefined) return undefined;
     out.push(division);
   }
-  return { runId, requestedEngine, engine, divisions: out };
+  return { runId, requestedEngine, ...(engine === undefined ? {} : { engine }), divisions: out };
 }
 
 /** One metric field off a snapshot division, re-checked at the point of use.

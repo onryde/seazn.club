@@ -72,6 +72,15 @@ export interface FakeScheduleOptions {
    *  the `engine` it passes to `runTinySuite`. */
   solverEngine?: "greedy" | "optimized";
   solverStatus?: string;
+  /** Per-STAGE override of `solverEngine`/`solverStatus`, keyed by the stage
+   *  id the fake's `/generate` route minted (e.g. `"stage-badminton-league"`).
+   *  T7d: the live bench proved one leg's divisions can legitimately DISAGREE
+   *  about which engine actually ran — a one-fixture division proves
+   *  `already_optimal` and comes back `greedy` while its sibling in the SAME
+   *  leg runs the full solver. The uniform `solverEngine`/`solverStatus`
+   *  knobs above answer every stage identically and cannot reproduce that
+   *  shape. Falls back to them for any stage not named here. */
+  solverOverrideByStageId?: Readonly<Record<string, { engine?: "greedy" | "optimized"; status?: string }>>;
   /** Drop this key from the config `schedule-settings` echoes back, modelling
    *  a product build that does not have the knob the pack declared. */
   dropSettingsKey?: string;
@@ -552,6 +561,7 @@ export function makeScheduleWorld(options: FakeScheduleOptions = {}): FakeSchedu
       ...(options.metricsOverride ?? {}),
     };
 
+    const solverOverride = options.solverOverrideByStageId?.[stageId];
     return {
       assignments,
       conflicts: [],
@@ -560,8 +570,8 @@ export function makeScheduleWorld(options: FakeScheduleOptions = {}): FakeSchedu
         ? {}
         : {
             solver: {
-              engine: options.solverEngine ?? "optimized",
-              status: options.solverStatus ?? "ok",
+              engine: solverOverride?.engine ?? options.solverEngine ?? "optimized",
+              status: solverOverride?.status ?? options.solverStatus ?? "ok",
               mode: "build",
             },
           }),

@@ -1704,6 +1704,11 @@ export async function runTinySuite(
 
       engineSnapshotDivisions.push({
         divisionRef: ref,
+        // T7d: THIS division's own resolved engine — the engine is resolved
+        // PER DIVISION, so this is what makes a leg whose divisions disagreed
+        // legible even though the leg-level `engine` field below cannot state
+        // a single value for it.
+        ...(outcome.actualEngine === undefined ? {} : { actualEngine: outcome.actualEngine }),
         ...(outcome.metrics === undefined ? {} : { metrics: outcome.metrics }),
         ...(outcome.solverStatus === undefined ? {} : { solverStatus: outcome.solverStatus }),
         ...(outcome.notSearchedReason === undefined
@@ -1870,26 +1875,33 @@ export async function runTinySuite(
       );
     }
 
-    // The engine artifact — one file per LEG (ruling R3). Written only when
-    // the caller resolved a report directory AND a run id: `bench.ts` always
-    // does, and a unit test that supplies neither gets no disk write at all
-    // rather than a file under a guessed path.
+    // The engine artifact — one file per LEG (ruling R3), keyed by the
+    // REQUESTED engine (T7d). Written only when the caller resolved a report
+    // directory AND a run id: `bench.ts` always does, and a unit test that
+    // supplies neither gets no disk write at all rather than a file under a
+    // guessed path.
+    //
+    // T7d: this used to be keyed by `legEngine` — the derived, SOLE actual
+    // engine across this leg's divisions — which is `undefined`, and so wrote
+    // NOTHING, the first time a real run's divisions legitimately disagreed
+    // (`d-badminton`, one fixture, proved `already_optimal` and came back
+    // `greedy` while `d-tiny` in the SAME `--engine optimized` leg came back
+    // `optimized`). A leg's identity is what was ASKED for, never what
+    // happened to come back — `engine` (this suite's own `--engine`) is
+    // always exactly one value, so it can always name the file. The
+    // per-division truth that `legEngine` could not carry lives on each
+    // `EngineSnapshotDivision.actualEngine` instead; the leg-level
+    // `EngineSnapshot.engine` field is still set when the divisions agreed,
+    // and left absent — not a coin toss — when they did not.
     if (input.reportDir !== undefined && input.runId !== undefined) {
-      if (legEngine === undefined) {
-        warnings.push(
-          "tiny: no engine artifact written — this run's divisions did not report ONE actual engine between them, " +
-            "and `engine-<engine>.json` cannot be named for a leg that ran two",
-        );
-      } else {
-        const snapshot: EngineSnapshot = {
-          runId: input.runId,
-          requestedEngine: engine,
-          engine: legEngine,
-          divisions: engineSnapshotDivisions,
-        };
-        const file = await writeEngineArtifact(input.reportDir, input.runId, legEngine, snapshot);
-        log.info({ file, engine: legEngine }, "tiny: engine artifact written");
-      }
+      const snapshot: EngineSnapshot = {
+        runId: input.runId,
+        requestedEngine: engine,
+        ...(legEngine === undefined ? {} : { engine: legEngine }),
+        divisions: engineSnapshotDivisions,
+      };
+      const file = await writeEngineArtifact(input.reportDir, input.runId, engine, snapshot);
+      log.info({ file, requestedEngine: engine, legEngine }, "tiny: engine artifact written");
       // ONCE, after the division loop — `assessEngineDelta` is a RUN-level
       // fact (its own doc comment says so). Called per division it would be
       // emitted N times, each copy listing every OTHER division's refs in
