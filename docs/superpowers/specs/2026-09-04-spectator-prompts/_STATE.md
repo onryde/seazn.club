@@ -7,12 +7,13 @@
 > spectator worktree; its "RESUME HERE" block carries per-task detail). Update this file at
 > every handoff; it is committed, the ledger is not.
 
-**Last updated:** 2026-09-06 05:4x London.
+**Last updated:** 2026-09-06 07:xx London (post-rebase).
 
 ## Where things live
 
-- Branch `feat/spectator-surface`, worktree `.claude/worktrees/spectator` (locked). Base
-  `11a1407f1` (origin/main at rebase). NOT pushed, NO PR — the owner has not asked for one.
+- Branch `feat/spectator-surface`, worktree `.claude/worktrees/spectator` (locked). REBASED onto
+  origin/main ca016e25c on 2026-09-06 (86 commits, no conflicts; keys/OpenAPI regenerate with
+  zero drift; tsc clean; engine gates 594/594). NOT pushed, NO PR — the owner has not asked for one.
 - Design of record: `../2026-09-04-spectator-surface-design.md`. Rules: `_RULES.md`.
   Rulings/false premises: `_INDEX.md`. Design system: `_DESIGN.md` (being written).
 - Plans: W1 `../../plans/2026-09-04-spectator-w1-match-centre.md` (18 tasks, executing);
@@ -39,7 +40,7 @@
 | 18 pad More sheet + first line e2e | complete, reviewed; cherry-picked as 57793bf53 cab4536d3 c14c76e50 (eight labels ×4 locales; line-entry e2e `test.fixme` until the console mount fix — OWNER DECISION 1 open; public-page assertion owed to Task 15). Branch verified: scorepad 2556/0, engine 400/400, tsc 0 | branch |
 | 9 API + realtime | complete, reviewed; cherry-picked as e5a053034 (`match-centre-load.ts` loader for both call sites; parity test; OpenAPI response schema added). Branch verified: public-site 575/0, tsc 0, parity OK, zero regen drift | branch |
 | 14 page wiring | complete, reviewed (approved with owed items); cherry-picked as 061d87f19; follow-ups 14b (5181a7090, reviewed) and 14c (ecde79afe: metadata templates + set scoreboard words; committed by the orchestrator after the agent stalled thrice; reviewed in the final review) DONE — the fixture page has no hardcoded English left except the OG image's baked "VS" (spec: untouched) | branch |
-| 15 walkthrough e2e | IN FLIGHT in an isolated lane (reset 061d87f19); env t15 (server); notes `task-15-contract-notes.md`; registers in WALKTHROUGH_SPECS at Task 16's rebase | lane |
+| 15 walkthrough e2e | two commits ON THE BRANCH (f5d7e2471, f72c1609a — the agent committed in the spectator worktree; they rode the rebase); the agent continues here: WALKTHROUGH_SPECS registration (wiring test red until then), runs ×2, mobile per project, screens, report, t15 down | branch (in progress) |
 | 16 gates + R11 visual sign-off + final review + `_INDEX.md` | not started | — |
 | 19 console mount fix (owner ruling 17) | complete, reviewed (approved with owed teardown — confirmed down); cherry-picked as 28d18cce8; mount fix live-proven; the line-entry e2e stays fixme'd until Task 20 | branch |
 | 20 single-aspect player lines (product-owner ruling, same goal as 17) | complete, reviewed (1 fix round); cherry-picked as 443fea686 f0d1d453f — the line-entry walkthrough passes for real (3 cases); `PadField.group` in the engine; no schema/reducer change | branch |
