@@ -10,10 +10,15 @@ import {
   proPrice,
   type Currency,
 } from "@/lib/currency";
+import { ORG_ADDONS, orgAddonPriceMinor } from "@/lib/org-addons";
+import { ORG_ADDON_PLAN_KEYS } from "@/lib/org-addon-plans";
 import {
   HIDDEN_PASS_RUNGS,
+  ORG_ADDON_RIDER_PLANS,
   SELLABLE_PASS_RUNGS,
   money,
+  orgAddonLabel,
+  orgAddonMinor,
   passMinor,
   proMinor,
   passLabel,
@@ -124,5 +129,35 @@ describe("e2e/price-kit mirrors lib/currency", () => {
     // hidden, or both assertions above are about empty arrays.
     expect(SELLABLE_PASS_RUNGS.length).toBeGreaterThan(0);
     expect(HIDDEN_PASS_RUNGS.length).toBeGreaterThan(0);
+  });
+
+  // The extra-organisation rider (v17 gap #293). Mirrored here for TWO reasons
+  // at once — `lib/org-addons.ts` opens with `import "server-only"` and pulls
+  // the seed in as a bare JSON import — so `settings-add-ons-drive.spec.ts`
+  // could not quote the price it asserts without this kit.
+  it("prices the extra-organisation rider exactly as the Add-ons tab does", () => {
+    for (const currency of SUPPORTED_CURRENCIES) {
+      for (const entry of ORG_ADDONS) {
+        expect(orgAddonMinor(entry.planKey, currency), `${entry.planKey} ${currency}`).toBe(
+          orgAddonPriceMinor(entry.planKey, currency),
+        );
+        // The RENDERED string, because the stepper asserts prose, not a number.
+        expect(orgAddonLabel(entry.planKey, currency)).toBe(
+          formatMinor(orgAddonPriceMinor(entry.planKey, currency)!, currency),
+        );
+      }
+      // The null branch, guarded rather than assumed. `orgAddonPriceMinor`
+      // returns null — not 0 — for a plan with no rider SKU, and 0 would read
+      // to a customer as a free add-on. Community is the live case: the tab
+      // renders `addOns.communityNotice` instead of a stepper on the strength
+      // of exactly this answer.
+      expect(orgAddonMinor("community", currency)).toBeNull();
+      expect(orgAddonPriceMinor("community", currency)).toBeNull();
+    }
+    // Anti-vacuity for the loop above: the seed really does sell a rider
+    // somewhere, or every assertion in it is about an empty list.
+    expect(ORG_ADDONS.length).toBeGreaterThan(0);
+    expect(ORG_ADDON_RIDER_PLANS).toEqual([...ORG_ADDON_PLAN_KEYS]);
+    expect(ORG_ADDON_RIDER_PLANS).not.toContain("community");
   });
 });
