@@ -243,10 +243,25 @@ export async function makeCricketDivision(
   if (!div.data) throw new Error(`division ${opts.name} -> ${div.status} ${JSON.stringify(div.error)}`);
   const divId = div.data.id;
   const cfg = await apiJson<{ config: Record<string, unknown> }>(request, `/api/v1/divisions/${divId}`);
+  // The t20 preset's own defaults (maxOversPerBowler: 4, minOversForResult: 5
+  // -- cricket.ts:3256/:73) assume a 20-over innings. A shrunk division (the
+  // "Consent" division below plays 12 balls -- 2 overs -- to keep its
+  // deterministic script short) leaves those defaults BOTH exceeding the
+  // innings length, which cricket.ts's own refinements reject outright
+  // (`"maxOversPerBowler exceeds the innings length"` /
+  // `"minOversForResult exceeds the innings length"`, cricket.ts:117-135) --
+  // discovered live via a ZodError 500 ("Something went wrong") on the
+  // Consent division's public page once match A's own seed bug (above) no
+  // longer masked it by failing the suite first. Deriving both from the
+  // ACTUAL innings length here keeps every division (48-ball and 12-ball
+  // alike) internally consistent without every caller having to know this.
+  const oversInInnings = Math.max(1, Math.floor(opts.ballsPerInnings / 6));
   await setDivisionConfigSql(divId, {
     ...(cfg.data?.config ?? {}),
     ballsPerInnings: opts.ballsPerInnings,
     playersPerSide: opts.playersPerSide,
+    maxOversPerBowler: oversInInnings,
+    minOversForResult: 0,
   });
   return divId;
 }
