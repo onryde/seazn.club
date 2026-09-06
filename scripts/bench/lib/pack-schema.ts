@@ -860,8 +860,8 @@ function assertCourtHoursDoNotOverlap(
       (a, b) => a.row.openMin - b.row.openMin || a.idx - b.idx,
     );
     for (let i = 1; i < sorted.length; i++) {
-      const cur = sorted[i]!;
-      const prev = sorted[i - 1]!;
+      const cur = sorted[i];
+      const prev = sorted[i - 1];
       if (cur.row.openMin < prev.row.closeMin) {
         ctx.addIssue({
           code: "custom",

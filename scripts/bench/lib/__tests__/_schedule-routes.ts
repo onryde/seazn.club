@@ -137,8 +137,12 @@ export interface FakeScheduleWorld {
     exceptions: readonly { date: string; closed: boolean; open_min: number | null; close_min: number | null }[],
   ): void;
   /** `undefined` means "not one of my routes" — the caller falls through to
-   *  its own handlers. */
-  handle(method: string, routePath: string, body: unknown): unknown | undefined;
+   *  its own handlers. Spelled `unknown` rather than `unknown | undefined`:
+   *  `unknown` already admits `undefined`, and the union form is a lint error
+   *  (`no-redundant-type-constituents`) precisely because it reads as a
+   *  narrowing that is not one. The convention lives in this comment, which
+   *  is the only place it can live. */
+  handle(method: string, routePath: string, body: unknown): unknown;
 }
 
 const MINUTE_MS = 60_000;
@@ -253,7 +257,7 @@ export function makeScheduleWorld(options: FakeScheduleOptions = {}): FakeSchedu
       // ---- PUT /api/v1/orgs/{id}/courts/{courtId}/calendar --------------
       const calendarMatch = /^\/api\/v1\/orgs\/[^/]+\/courts\/([^/]+)\/calendar$/.exec(routePath);
       if (method === "PUT" && calendarMatch !== null) {
-        const courtId = calendarMatch[1]!;
+        const courtId = calendarMatch[1];
         const hours = isRecord(body) && Array.isArray(body.hours) ? body.hours : [];
         const exceptions = isRecord(body) && Array.isArray(body.exceptions) ? body.exceptions : [];
         world.setCourtCalendar(
@@ -267,7 +271,7 @@ export function makeScheduleWorld(options: FakeScheduleOptions = {}): FakeSchedu
       // ---- PUT /api/v1/divisions/{id}/schedule-settings -----------------
       const settingsMatch = /^\/api\/v1\/divisions\/([^/]+)\/schedule-settings$/.exec(routePath);
       if (method === "PUT" && settingsMatch !== null) {
-        const divisionId = settingsMatch[1]!;
+        const divisionId = settingsMatch[1];
         const sent = isRecord(body) && isRecord(body.config) ? body.config : {};
         const tz = isRecord(body) && typeof body.tz === "string" ? body.tz : "UTC";
         const persisted: Record<string, unknown> = { ...sent };
@@ -281,7 +285,7 @@ export function makeScheduleWorld(options: FakeScheduleOptions = {}): FakeSchedu
       // owned by each caller) never falls in here.
       const patchMatch = /^\/api\/v1\/fixtures\/([^/]+)$/.exec(routePath);
       if (method === "PATCH" && patchMatch !== null) {
-        const row = fixtures.get(patchMatch[1]!);
+        const row = fixtures.get(patchMatch[1]);
         if (row === undefined) throw new Error(`fake schedule world: PATCH unknown fixture ${patchMatch[1]}`);
         if (isRecord(body)) {
           if (typeof body.scheduled_at === "string") row.scheduled_at = body.scheduled_at;
@@ -294,7 +298,7 @@ export function makeScheduleWorld(options: FakeScheduleOptions = {}): FakeSchedu
       // ---- GET /api/v1/divisions/{id}/fixtures --------------------------
       const listMatch = /^\/api\/v1\/divisions\/([^/]+)\/fixtures$/.exec(routePath);
       if (method === "GET" && listMatch !== null) {
-        const divisionId = listMatch[1]!;
+        const divisionId = listMatch[1];
         return [...fixtures.values()]
           .filter((f) => f.division_id === divisionId)
           .sort((a, b) => a.round_no - b.round_no || a.id.localeCompare(b.id))
@@ -304,7 +308,7 @@ export function makeScheduleWorld(options: FakeScheduleOptions = {}): FakeSchedu
       // ---- POST /api/v1/stages/{id}/schedule/auto -----------------------
       const autoMatch = /^\/api\/v1\/stages\/([^/]+)\/schedule\/auto$/.exec(routePath);
       if (method === "POST" && autoMatch !== null) {
-        return autoResponse(autoMatch[1]!);
+        return autoResponse(autoMatch[1]);
       }
 
       // ---- POST /api/v1/stages/{id}/schedule/apply ----------------------
@@ -471,7 +475,7 @@ export function makeScheduleWorld(options: FakeScheduleOptions = {}): FakeSchedu
         court:
           courts.length === 0
             ? "court-unset"
-            : courts[options.doubleBookCourt === true ? 0 : slotInDay % courts.length]!,
+            : courts[options.doubleBookCourt === true ? 0 : slotInDay % courts.length],
       };
     }
 

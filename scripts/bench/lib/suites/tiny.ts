@@ -844,8 +844,8 @@ export function crossDivisionCourtClashes(
   const out: CrossDivisionCourtClash[] = [];
   for (let i = 0; i < placed.length; i += 1) {
     for (let j = i + 1; j < placed.length; j += 1) {
-      const a = placed[i]!;
-      const b = placed[j]!;
+      const a = placed[i];
+      const b = placed[j];
       // SAME DIVISION IS NOT THIS RULE'S BUSINESS — see the block comment.
       if (a.divisionRef === b.divisionRef) continue;
       if (a.courtId !== b.courtId) continue;
@@ -1825,7 +1825,7 @@ export async function runTinySuite(
     // board that really exists.
     if (officialsAutoApplied > 0 && officialsByFixtureId.size > 0) {
       for (let i = 0; i < scheduling.length; i += 1) {
-        const row = scheduling[i]!;
+        const row = scheduling[i];
         const board = boardByRef.get(row.divisionRef);
         const constraints = constraintsByRef.get(row.divisionRef);
         if (board === undefined || constraints === undefined) continue;

@@ -74,7 +74,6 @@ import type {
   CheckerFindingKind,
   CheckerReport,
   EncodedConstraints,
-  EncodedHardRule,
 } from "./board.ts";
 
 // ---------------------------------------------------------------------------
