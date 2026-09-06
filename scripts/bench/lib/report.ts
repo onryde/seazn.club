@@ -157,6 +157,19 @@ export const UncheckedConstraintReport = z.object({ type: z.string(), reason: z.
 export type UncheckedConstraintReport = z.infer<typeof UncheckedConstraintReport>;
 
 /**
+ * T7b — the OPPOSITE direction from `UncheckedConstraintReport`: a rule this
+ * build fully MODELS but which the board it just judged gave nothing to
+ * compare (an empty blackout list, a rest floor of zero, a court with no
+ * hours). Same `{ ..., reason }` idiom as `unchecked` deliberately, so a
+ * reader meets one convention rather than two — `rule` rather than `type`
+ * because the thing named is one of `checker.ts`'s own eight rules (`Rule 1`
+ * .. `Rule 8`, with `2a`/`2b`/`2c` for its three independently-vacuous
+ * operands), not a pack-declared knob.
+ */
+export const UnexercisedRuleReport = z.object({ rule: z.string(), reason: z.string() });
+export type UnexercisedRuleReport = z.infer<typeof UnexercisedRuleReport>;
+
+/**
  * `CheckerReport`, verbatim.
  *
  * `unchecked` travels WITH `clean` and is rendered beside it (design
@@ -164,11 +177,18 @@ export type UncheckedConstraintReport = z.infer<typeof UncheckedConstraintReport
  * constraints and found nothing wrong is reporting "clean" about four
  * constraints, and a report that prints the verdict without the list lets that
  * read as six.
+ *
+ * `unexercised` (T7b) travels with it for the same reason, in the other
+ * direction: a rule can be fully modelled, run, and still find nothing
+ * because the board gave it zero candidates — a court with no hours, a rest
+ * floor of zero. Both fields are required, never optional, so a caller cannot
+ * populate one and quietly drop the other.
  */
 export const CheckerVerdictReport = z.object({
   clean: z.boolean(),
   findings: z.array(CheckerFindingReport).readonly(),
   unchecked: z.array(UncheckedConstraintReport).readonly(),
+  unexercised: z.array(UnexercisedRuleReport).readonly(),
 });
 export type CheckerVerdictReport = z.infer<typeof CheckerVerdictReport>;
 
@@ -687,16 +707,56 @@ function renderSchedulingSection(report: BenchReport): string {
   return lines.join("\n");
 }
 
+function renderUncheckedLines(unchecked: readonly UncheckedConstraintReport[]): string[] {
+  if (unchecked.length === 0) {
+    return ["- Unchecked constraints: none — every declared constraint was modelled."];
+  }
+  const lines = [`- Unchecked constraints (${unchecked.length}) — "clean" above does NOT cover these:`];
+  for (const u of unchecked) lines.push(`  - \`${u.type}\`: ${u.reason}`);
+  return lines;
+}
+
 /**
- * The checker's verdict AND its `unchecked` list, in one place.
+ * T7b — the OPPOSITE direction from `unchecked`: a rule this build DOES
+ * model, but which had nothing on THIS board to judge. Its own renderer
+ * (rather than folding into `renderUncheckedLines`) because it is reused at
+ * BOTH checker call sites below — unlike `unchecked`, which is encode-time
+ * and identical for a division's two checker runs, `unexercised` is a
+ * per-run fact and rule 7 (officials) is exactly the rule the post-officials
+ * re-check (F-T6-2) exists to move from unexercised to exercised.
+ */
+function renderUnexercisedLines(unexercised: readonly UnexercisedRuleReport[]): string[] {
+  if (unexercised.length === 0) {
+    return ["- Unexercised rules: none — every modelled rule had something to judge."];
+  }
+  const lines = [
+    `- Unexercised rules (${unexercised.length}) — modelled, but nothing on this board exercised them:`,
+  ];
+  for (const u of unexercised) lines.push(`  - \`${u.rule}\`: ${u.reason}`);
+  return lines;
+}
+
+/** Renders one `CheckerVerdictReport`'s `unchecked` AND `unexercised` lists,
+ *  together — the primary verdict's own caveats (design §1.4/§3.3, extended
+ *  by T7b). The post-officials verdict (F-T6-2) renders `unexercised` alone,
+ *  via `renderUnexercisedLines` directly — see that function's own note. */
+function renderCheckerCaveats(checker: CheckerVerdictReport): string[] {
+  return [...renderUncheckedLines(checker.unchecked), ...renderUnexercisedLines(checker.unexercised)];
+}
+
+/**
+ * The checker's verdict AND its `unchecked`/`unexercised` lists, in one place.
  *
- * The two are rendered TOGETHER and that is the requirement, not a layout
- * choice (design §1.4/§3.3): "checker clean" is a claim about the constraints
- * the checker actually modelled, and a pack can declare knobs it does not
- * model. Printing the verdict without the list lets a reader take "clean" for
- * "every declared constraint was verified" — the exact false clean this whole
- * layer exists to prevent. So a division with an empty `unchecked` says so
- * explicitly rather than rendering nothing.
+ * All three are rendered TOGETHER and that is the requirement, not a layout
+ * choice (design §1.4/§3.3, extended by T7b): "checker clean" is a claim
+ * about the constraints the checker actually modelled AND about the rules
+ * that actually had something to judge — a pack can declare knobs it does not
+ * model, and a modelled rule can still find nothing because the board gave it
+ * no candidates. Printing the verdict without either list lets a reader take
+ * "clean" for "every declared constraint was fully verified" — the exact
+ * false clean this whole layer exists to prevent. So a division with an empty
+ * `unchecked` or an empty `unexercised` says so explicitly rather than
+ * rendering silence.
  */
 function renderCheckerSection(report: BenchReport): string {
   const rows = scheduledDivisions(report).filter(({ division }) => division.checker !== undefined);
@@ -709,14 +769,7 @@ function renderCheckerSection(report: BenchReport): string {
       `### ${suite} / ${d.divisionRef} — ${checker.clean ? "CLEAN" : `${checker.findings.length} FINDING(S)`}`,
       "",
     );
-    if (checker.unchecked.length === 0) {
-      lines.push("- Unchecked constraints: none — every declared constraint was modelled.");
-    } else {
-      lines.push(
-        `- Unchecked constraints (${checker.unchecked.length}) — "clean" above does NOT cover these:`,
-      );
-      for (const u of checker.unchecked) lines.push(`  - \`${u.type}\`: ${u.reason}`);
-    }
+    lines.push(...renderCheckerCaveats(checker));
     for (const f of checker.findings) lines.push(`- ${renderFinding(f)}`);
 
     // F-T6-2 — the SECOND verdict, on the board as it stands after officials
@@ -732,6 +785,11 @@ function renderCheckerSection(report: BenchReport): string {
             ? " (unchanged)"
             : ` (CHANGED from ${checker.clean ? "clean" : "dirty"} — officials auto-assign is what moved it)`),
       );
+      // `unexercised` only, never `unchecked` — see `renderUnexercisedLines`'s
+      // own note on why this run's list can legitimately differ from the
+      // first one's (rule 7 is exactly the rule this second pass exists to
+      // move from unexercised to exercised) while `unchecked` cannot.
+      lines.push(...renderUnexercisedLines(after.unexercised));
       for (const f of after.findings) lines.push(`- ${renderFinding(f)}`);
     }
     lines.push("");

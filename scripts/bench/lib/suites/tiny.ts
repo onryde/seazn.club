@@ -1684,6 +1684,7 @@ export async function runTinySuite(
                 clean: checker.clean,
                 findings: checker.findings,
                 unchecked: checker.unchecked,
+                unexercised: checker.unexercised,
               },
             }),
         ...(certificate === undefined
@@ -1844,6 +1845,7 @@ export async function runTinySuite(
             clean: after.clean,
             findings: after.findings,
             unchecked: after.unchecked,
+            unexercised: after.unexercised,
           },
           red: row.red || !after.clean,
           reasons,

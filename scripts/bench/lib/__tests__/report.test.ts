@@ -366,6 +366,15 @@ function divisionSchedule(
       clean: true,
       findings: [],
       unchecked: [{ type: "gapMinutes", reason: "not modelled by the bench checker" }],
+      // T7b — a real division always leaves rule 5 unexercised on `_tiny`
+      // (its own comment: no `not_before`/`not_after` is declared), so this
+      // default mirrors that rather than an empty list nothing can witness.
+      unexercised: [
+        {
+          rule: "Rule 5 — not_before / not_after",
+          reason: "no not_before/not_after hard rule matched a placed fixture's scope",
+        },
+      ],
     },
     certificate: {
       branch: "SKIPPED_NO_HISTORY",
@@ -435,13 +444,38 @@ describe("renderMarkdown — B04 scheduling sections", () => {
     expect(section.indexOf("CLEAN")).toBeLessThan(section.indexOf("gapMinutes"));
   });
 
+  // -----------------------------------------------------------------------
+  // T7b — the OPPOSITE direction: a rule the checker DOES model, but which
+  // had nothing on this board to judge.
+  // -----------------------------------------------------------------------
+
+  it("renders the checker's UNEXERCISED list BESIDE its verdict too", () => {
+    const md = renderMarkdown(scheduledReport([divisionSchedule()]));
+    const section = md.slice(md.indexOf("## Checker"));
+    expect(section).toContain("CLEAN");
+    expect(section).toContain("Unexercised rules (1)");
+    expect(section).toContain("`Rule 5 — not_before / not_after`");
+    // Same section as the verdict, same requirement as `unchecked` above —
+    // one cannot be read without the other.
+    expect(section.indexOf("CLEAN")).toBeLessThan(section.indexOf("Rule 5"));
+  });
+
   it("says so explicitly when NOTHING was left unchecked, rather than rendering silence", () => {
     const md = renderMarkdown(
       scheduledReport([
-        divisionSchedule({ checker: { clean: true, findings: [], unchecked: [] } }),
+        divisionSchedule({ checker: { clean: true, findings: [], unchecked: [], unexercised: [] } }),
       ]),
     );
     expect(md).toContain("Unchecked constraints: none");
+  });
+
+  it("says so explicitly when NOTHING was left unexercised, rather than rendering silence", () => {
+    const md = renderMarkdown(
+      scheduledReport([
+        divisionSchedule({ checker: { clean: true, findings: [], unchecked: [], unexercised: [] } }),
+      ]),
+    );
+    expect(md).toContain("Unexercised rules: none");
   });
 
   it("names every checker finding, with both fixtures of a pairwise breach", () => {
@@ -459,6 +493,7 @@ describe("renderMarkdown — B04 scheduling sections", () => {
               },
             ],
             unchecked: [],
+            unexercised: [],
           },
           red: true,
           reasons: ["d-tiny: checker findings = 1 (court_double_booking)"],
@@ -627,9 +662,12 @@ describe("report schema round-trip — B04", () => {
     const onDisk: unknown = JSON.parse(await readFile(written.jsonPath, "utf8"));
     const reparsed = BenchReport.parse(onDisk);
     expect(reparsed).toEqual(JSON.parse(JSON.stringify(report)));
-    // And specifically the two fields whose loss would be invisible:
+    // And specifically the fields whose loss would be invisible:
     const row = (reparsed.suites[0]?.scheduling ?? [])[0];
     expect(row?.checker?.unchecked).toHaveLength(1);
+    // T7b — the opposite direction survives the round-trip too.
+    expect(row?.checker?.unexercised).toHaveLength(1);
+    expect(row?.checker?.unexercised[0]?.rule).toBe("Rule 5 — not_before / not_after");
     expect(row?.metrics?.placed).toBe(5);
   });
 });
@@ -656,6 +694,12 @@ describe("renderMarkdown — the post-officials checker verdict (F-T6-2)", () =>
               },
             ],
             unchecked: [],
+            // T7b — rule 7 (officials) went from unexercised to exercised
+            // (and dirty) once officials auto-assign landed: the SAME
+            // division's primary verdict below still carries "Rule 5" in its
+            // own `unexercised`, so the two lists must render INDEPENDENTLY,
+            // never as one shared list.
+            unexercised: [],
           },
           red: true,
           reasons: ["d-tiny: checker findings AFTER officials auto-assign = 1"],
@@ -665,17 +709,22 @@ describe("renderMarkdown — the post-officials checker verdict (F-T6-2)", () =>
     const section = md.slice(md.indexOf("## Checker"));
     // The first verdict is still there…
     expect(section).toContain("CLEAN");
-    // …and the second is beside it, labelled as a CHANGE.
+    // …with ITS OWN unexercised rule (rule 5, from the default fixture)…
+    expect(section).toContain("Unexercised rules (1)");
+    expect(section).toContain("`Rule 5 — not_before / not_after`");
+    // …and the second is beside it, labelled as a CHANGE, with a DIFFERENT
+    // (here, empty) unexercised list of its own.
     expect(section).toContain("After officials auto-assign — 1 FINDING(S)");
     expect(section).toContain("CHANGED from clean");
     expect(section).toContain("`official_double_booking` [fx-1, fx-2]");
+    expect(section).toContain("Unexercised rules: none — every modelled rule had something to judge.");
   });
 
   it("says '(unchanged)' when the second pass agrees — a silent second pass is one nobody can tell ran", () => {
     const md = renderMarkdown(
       scheduledReport([
         divisionSchedule({
-          checkerAfterOfficials: { clean: true, findings: [], unchecked: [] },
+          checkerAfterOfficials: { clean: true, findings: [], unchecked: [], unexercised: [] },
         }),
       ]),
     );
