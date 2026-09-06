@@ -34,10 +34,10 @@
 | 10, 11 shell + summary tab + live-score localisation | complete, reviewed | branch (lane B picks) |
 | 12, 13 scorecard / commentary / timeline / sets / info tabs | complete, reviewed | branch (lane C picks) |
 | 17 engine enriched band-2 lines | complete, reviewed (514bd2176 + fix 1a1849454: snapshot regenerated, golden corpus 28→30 streams) | branch |
-| 6 `buildMatchCentre` | complete, reviewed (3 fix rounds); cherry-picked as 1dced1192 557e967d0 d70675739 85297f5e0. Follow-up 8b IN FLIGHT: 14 builder keys missing from the dictionaries (coverage test red on the branch until it lands) | branch |
+| 6 `buildMatchCentre` | complete, reviewed (3 fix rounds); cherry-picked as 1dced1192 557e967d0 d70675739 85297f5e0. Follow-up 8b (14 builder keys ×4 locales) complete + reviewed: 8e9e8cc8d; coverage test green | branch |
 | 8 dictionaries + coverage test | complete, reviewed; cherry-picked onto the branch as 45ed8c2e9 edd8de9d0 d1c333e5f (result keys by engine METHOD + tie/no_result/draw with `{winner}` `{margin}`; `GLYPH_CLASSES` single source; parity both ways). Branch verified: public-site 545/0, tsc 0, i18n parity OK | branch |
 | 18 pad More sheet + first line e2e | complete, reviewed; cherry-picked as 57793bf53 cab4536d3 c14c76e50 (eight labels ×4 locales; line-entry e2e `test.fixme` until the console mount fix — OWNER DECISION 1 open; public-page assertion owed to Task 15). Branch verified: scorepad 2556/0, engine 400/400, tsc 0 | branch |
-| 9 API + realtime | IN FLIGHT in an isolated lane (reset c14c76e50 + Task 6's lane commits); env t9; notes `task-9-contract-notes.md`; adds the parity test and retires `BUILDER_ONLY_KEYS` | lane |
+| 9 API + realtime | implementer DONE (lane commit 823dc839f in `agent-a5601c04626c322e9`; `match-centre-load.ts` loader for both call sites; parity test 6/6; OpenAPI response schema added; DB suite 116/116); task review IN FLIGHT; NOT yet cherry-picked (expect dictionary conflicts with 8b — resolve OURS) | lane |
 | 14 page wiring | not started (after 6, 8, 9; retires `BUILDER_ONLY_KEYS`) | — |
 | 15 walkthrough e2e | not started (owes the public-page assertion of Task 18's enriched line; testids `mc-over-<innings>.<over>`, `mc-ball-<innings>.<over>.<ball>`) | — |
 | 16 gates + R11 visual sign-off + final review + `_INDEX.md` | not started | — |
