@@ -38,8 +38,12 @@ export interface InfoTabProps {
   data: LiveFixtureData;
 }
 
+// `min-h-11` is the 44px mobile tap-target floor — these three read as buttons
+// and were 38px tall at every width. `inline-flex items-center` is not
+// cosmetic here: `min-height` does not apply to an inline box, so on a plain
+// `<a>` the class would compile, ship, and change nothing.
 const LINK_CLASS =
-  "rounded-lg border border-zinc-200/80 px-3 py-2 text-[13px] font-medium hover:bg-surface";
+  "inline-flex min-h-11 items-center rounded-lg border border-zinc-200/80 px-3 py-2 text-[13px] font-medium hover:bg-surface";
 
 export function InfoTab({ doc, dict }: InfoTabProps): ReactNode {
   const { rows, calendarHref, divisionHref, competitionHref } = doc.info;

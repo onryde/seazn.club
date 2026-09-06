@@ -216,7 +216,10 @@ export function CommentaryTab({ doc, dict }: CommentaryTabProps): ReactNode {
           type="button"
           data-testid="mc-load-earlier"
           onClick={() => setVisible((n) => n + OVER_WINDOW)}
-          className="rounded-xl border border-zinc-200/80 px-3 py-2 text-[13px] font-medium hover:bg-surface"
+          // `min-h-11` — the 44px mobile tap-target floor; `py-2` alone left
+          // this at 38px. `inline-flex items-center justify-center` so the
+          // label centres in the taller box instead of sitting at the top.
+          className="inline-flex min-h-11 items-center justify-center rounded-xl border border-zinc-200/80 px-3 py-2 text-[13px] font-medium hover:bg-surface"
         >
           {t(dict, "matchCentre.loadEarlier")}
         </button>

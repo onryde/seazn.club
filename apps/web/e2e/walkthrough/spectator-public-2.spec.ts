@@ -919,3 +919,74 @@ test("badge chips hold the WIDEST abbreviation the ladder produces, at 320 and 1
     await anon.close();
   }
 });
+
+// ---------------------------------------------------------------------------
+// 10. tap targets — every CONTROL, not just the tabs
+// ---------------------------------------------------------------------------
+//
+// The width sweep above already pins the tab rail at 44px. Nothing pinned
+// anything else, and an audit of the live pages found four controls under the
+// floor at every width, phone included: "Share on WhatsApp" at 34px, "Load
+// earlier overs" and both Info links at 38px. Three of the four were styled
+// with `py-*` alone, which sets padding and lets a 13px line box decide the
+// height.
+//
+// WHAT THIS SWEEPS, and why it is not simply "every anchor": the 44px floor is
+// for things a finger aims at. An anchor inside a sentence — a breadcrumb, the
+// footer's "Run your own free" — is exempt by convention and would make this
+// assertion unpassable without shipping 44px-tall prose links. The split used
+// here is the one the DOM already makes: a control that has been styled as a
+// button is not `display: inline`. That is a property of the thing under test
+// rather than a list of testids, so a control added later is swept without
+// anyone remembering to add it here.
+test("tap targets: every button-shaped control in the match centre clears 44px at 320", async ({ browser }) => {
+  test.setTimeout(Math.max(60_000, COURT_CARD_TIMEOUT_MS + 40_000));
+  const path = publicFixturePath(orgSlug, compSlug, liveDivSlug, matchA);
+  const anon = await anonPage(browser, { width: 320, height: 900 });
+  await anon.goto(path, { waitUntil: "load" });
+  await expect(anon.getByTestId("mc-court-card")).toBeVisible({ timeout: COURT_CARD_TIMEOUT_MS });
+
+  const tabIds = await anon
+    .locator('[role="tab"]')
+    .evaluateAll((els) => els.map((el) => el.getAttribute("data-testid")).filter(Boolean));
+  expect(tabIds.length, "at least one tab must render").toBeGreaterThan(0);
+
+  const undersized: string[] = [];
+  let swept = 0;
+  for (const tabId of tabIds) {
+    await anon.getByTestId(tabId as string).click();
+    await anon.waitForTimeout(200);
+
+    const found = await anon.locator("main button, main a").evaluateAll((els) =>
+      els
+        .filter((el) => {
+          const cs = getComputedStyle(el);
+          if (cs.display === "inline") return false; // prose link — exempt
+          if (cs.visibility === "hidden" || cs.display === "none") return false;
+          const r = el.getBoundingClientRect();
+          return r.width >= 1 && r.height >= 1;
+        })
+        .map((el) => {
+          const r = el.getBoundingClientRect();
+          return {
+            id:
+              el.getAttribute("data-testid") ??
+              `${el.tagName.toLowerCase()}:"${(el.textContent || "").trim().slice(0, 20)}"`,
+            h: Math.round(r.height),
+            w: Math.round(r.width),
+          };
+        }),
+    );
+    swept += found.length;
+    for (const c of found) {
+      if (c.h < 44) undersized.push(`${tabId}: ${c.id} is ${c.w}x${c.h}`);
+    }
+  }
+
+  // The sweep must have SEEN something, or an empty result would pass as
+  // silently as a clean one — a selector that matches nothing satisfies every
+  // "none of them are too short" assertion ever written.
+  expect(swept, "the sweep found no button-shaped controls at all — check the selector").toBeGreaterThan(0);
+  expect(undersized, `controls under the 44px tap-target floor at 320px:\n${undersized.join("\n")}`).toEqual([]);
+  await anon.close();
+});
