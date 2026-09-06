@@ -450,10 +450,6 @@ test("widths 320 vs 1280: control-set diff, every tab reachable, 44px tab hit ta
   // (match A's seed bug, fixed above) before serial execution ever
   // reached this test. The assertion below is left intact, unweakened, so
   // this test starts passing again on its own once tab-rail.tsx is fixed.
-  test.fixme(
-    true,
-    "match-centre tab rail buttons are ~32px tall at 320px (tab-rail.tsx py-1.5 + text-sm), below the 44px minimum tap target -- file/fix belongs to the match-centre (Task 10) owner",
-  );
   const matchAPath = publicFixturePath(orgSlug, compSlug, liveDivSlug, matchA);
   const anon = await anonPage(browser, { width: 320, height: 568 });
   await anon.goto(matchAPath, { waitUntil: "load" });
@@ -485,6 +481,41 @@ test("widths 320 vs 1280: control-set diff, every tab reachable, 44px tab hit ta
 });
 
 // ---------------------------------------------------------------------------
+// 5b. tab deep link — `?tab=` is read client-side (Task 14d) and still
+// selects the right tab on an anonymous, cold visit; an unknown value falls
+// back to the document's first tab rather than rendering blank or crashing.
+// ---------------------------------------------------------------------------
+
+test("tab deep link: ?tab=scorecard lands on Scorecard; an unknown ?tab=nope falls back to the first tab", async ({
+  browser,
+}) => {
+  const matchAPath = publicFixturePath(orgSlug, compSlug, liveDivSlug, matchA);
+  const anon = await anonPage(browser, { width: 320, height: 568 });
+
+  await anon.goto(`${matchAPath}?tab=scorecard`, { waitUntil: "load" });
+  await expect(anon.getByTestId("mc-court-card")).toBeVisible({ timeout: 20_000 });
+  await expect(anon.getByTestId("mc-tab-scorecard"), "the scorecard tab must end up selected").toHaveAttribute(
+    "aria-selected",
+    "true",
+    { timeout: 10_000 },
+  );
+  await expect(anon.locator('[role="tab"][aria-selected="true"]'), "exactly one tab is ever selected").toHaveCount(1);
+  await expect(anon.getByTestId("mc-tab-panel-scorecard")).toBeVisible();
+
+  // An unknown `?tab=` value is not a valid tab id -- `initialTab` falls
+  // back to `tabs[0]` (match-centre.tsx) rather than rendering nothing.
+  await anon.goto(`${matchAPath}?tab=nope`, { waitUntil: "load" });
+  await expect(anon.getByTestId("mc-court-card")).toBeVisible({ timeout: 20_000 });
+  await expect(anon.getByTestId("mc-tab-summary"), "an unknown tab falls back to the first tab").toHaveAttribute(
+    "aria-selected",
+    "true",
+    { timeout: 10_000 },
+  );
+  await expect(anon.locator('[role="tab"][aria-selected="true"]'), "exactly one tab is ever selected").toHaveCount(1);
+  await expect(anon.getByTestId("mc-tab-panel-summary")).toBeVisible();
+});
+
+// ---------------------------------------------------------------------------
 // 6. axe — zero serious/critical at 320
 // ---------------------------------------------------------------------------
 
@@ -505,10 +536,6 @@ test("axe: the match centre at 320 has zero serious/critical violations", async 
   //      per stat card).
   // The assertion below is left intact, unweakened, so this test starts
   // passing again on its own once those two styles are fixed.
-  test.fixme(
-    true,
-    "two SERIOUS color-contrast violations at 320: mc-updated-at (text-court-muted/70 on bg-court, 4.09:1) and the bowling-figure labels (text-ink-muted/80 on bg-surface, 3.45:1), both short of WCAG AA's 4.5:1 -- fix belongs to the match-centre (Task 10) owner",
-  );
   const matchAPath = publicFixturePath(orgSlug, compSlug, liveDivSlug, matchA);
   const anon = await anonPage(browser, { width: 320, height: 568 });
   await anon.goto(matchAPath, { waitUntil: "load" });

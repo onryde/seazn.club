@@ -192,7 +192,12 @@ function TopPerformers({ performers, dict }: { performers: TopPerformerT[]; dict
           </div>
           <p className="mt-1 min-w-0 truncate font-display text-base font-semibold text-ink">{p.person.name}</p>
           <p className="text-sm text-ink-muted">{p.line}</p>
-          {p.detail ? <p className="text-xs text-ink-muted/80">{p.detail}</p> : null}
+          {/* Defect round 15b: the `/80` opacity on `text-ink-muted` measured
+              3.45:1 on `bg-surface` (axe SERIOUS, walkthrough evidence) —
+              short of WCAG AA's 4.5:1. `text-ink-muted` alone (no modifier,
+              ≈4.6:1 on white per glyphs.tsx:12) clears the bar — no new
+              colour, just drop the /80. */}
+          {p.detail ? <p className="text-xs text-ink-muted">{p.detail}</p> : null}
         </div>
       ))}
     </div>

@@ -258,6 +258,26 @@ describe("SummaryTab — cricket", () => {
     expect(html).not.toContain('data-testid="mc-live-block"'); // negative; the live-doc test above is its positive pair
   });
 
+  // Defect round 15b — axe measured the top-performer detail line ("SR …",
+  // "Econ …" in the real product; `finalDoc`'s fixture detail strings here)
+  // at 3.45:1 on `bg-surface` (walkthrough evidence), short of WCAG AA's
+  // 4.5:1 — the `/80` opacity stacked on `text-ink-muted`'s own colour. This
+  // workspace has no jsdom, so contrast itself can't be computed here (the
+  // e2e `axe: …` test in spectator-public-2.spec.ts measures the real
+  // ratio) — this pins the CLASS the fix depends on: no opacity modifier,
+  // the same unmodified token used one line above for `p.line` (`text-sm
+  // text-ink-muted`, not flagged) and documented at ≈4.6:1 on white
+  // (glyphs.tsx:12).
+  it("a top performer's detail line uses the unmodified text-ink-muted token — no stacked opacity modifier", () => {
+    const html = renderToStaticMarkup(<SummaryTab doc={finalDoc} dict={dict} data={liveFixtureFor(finalDoc)} />);
+    const detailMatches = [...html.matchAll(/<p class="([^"]*)">(?:6 fours, 3 sixes|4 overs)<\/p>/g)];
+    expect(detailMatches.length).toBe(2); // one per top performer (batter + bowler)
+    for (const m of detailMatches) {
+      expect(m[1]).toMatch(/(^|\s)text-ink-muted(\s|$)/);
+      expect(m[1]).not.toContain("text-ink-muted/");
+    }
+  });
+
   it("the fall-of-wickets rail is a focusable, labelled list, with the label's real VALUE from the dictionary", () => {
     const html = renderToStaticMarkup(<SummaryTab doc={cricketDoc} dict={dict} data={liveFixtureFor(cricketDoc)} />);
     expect(html).toContain('data-testid="mc-fow-1"');

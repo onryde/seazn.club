@@ -124,6 +124,23 @@ describe("CourtCard", () => {
     expect(html).toContain("Updated 5s ago");
   });
 
+  // Defect round 15b — axe measured `mc-updated-at` at 4.09:1 on `bg-court`
+  // (walkthrough evidence), short of WCAG AA's 4.5:1: an extra `/70` opacity
+  // was stacked on top of `text-court-muted`'s own embedded alpha. This
+  // workspace has no jsdom, so contrast itself can't be computed here (the
+  // e2e `axe: …` test in spectator-public-2.spec.ts measures the real
+  // ratio) — this pins the CLASS the fix depends on: no opacity modifier on
+  // `text-court-muted`, the same unmodified token `mc-status-line` and
+  // `mc-rate-line` already use above (neither flagged by axe).
+  it("mc-updated-at uses the unmodified text-court-muted token — no stacked opacity modifier", () => {
+    const header: MatchCentreHeaderT = { ...liveHeader, updatedAt: new Date().toISOString() };
+    const html = renderToStaticMarkup(<CourtCard header={header} dict={dict} />);
+    const updatedAtClass = html.match(/data-testid="mc-updated-at" class="([^"]*)"/)?.[1];
+    expect(updatedAtClass).toBeTruthy();
+    expect(updatedAtClass).toMatch(/(^|\s)text-court-muted(\s|$)/);
+    expect(updatedAtClass).not.toContain("text-court-muted/");
+  });
+
   // Review fix round 2 (Task 10 deferred minor) — the freshness line is a
   // "how stale is the LIVE score" signal; a decided/scheduled/other page's
   // `updatedAt` is just whenever the document was last built, so showing it

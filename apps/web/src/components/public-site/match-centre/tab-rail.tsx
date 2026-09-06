@@ -20,6 +20,20 @@
 //   jsdom to dispatch a real KeyboardEvent against); the static test here
 //   only pins the id/aria-controls PAIRING `handleKeyDown` and a browser's
 //   own Tab-key focus order rely on.
+//
+// Defect round 15b (walkthrough evidence: `spectator-public-2.spec.ts`'s
+// `widths 320 vs 1280…` test, `boundingBox()` measured ~32px at 320) — R11
+// needs a REAL 44px tap target, and `boundingBox()` measures the paint box
+// of the element carrying `data-testid`, not any pseudo-element overlay, so
+// the fix has to grow the `<button>` itself, not just extend its hit-test
+// area. Per `_DESIGN.md` P2 ("the pill keeps its look, the button carries
+// the hit area"): the `<button>` (role=tab, data-testid, the real hit
+// target) is now `min-h-11 flex items-center justify-center` — 44px tall,
+// invisible — wrapping an inner `<span>` that carries the ORIGINAL pill
+// visual classes verbatim (`rounded-full … shadow-sm`, minus `shrink-0`,
+// which moves to the button since that's what needs to not shrink in the
+// scrolling flex row). The 32px pill still LOOKS the same, centred inside
+// the taller, transparent hit target.
 import { useRef } from "react";
 import type { Dict as PublicDict } from "@/lib/i18n-constants";
 import { t } from "@/lib/i18n-runtime";
@@ -32,9 +46,12 @@ export interface TabRailProps {
   dict: PublicDict;
 }
 
-const ACTIVE_CLASS = "shrink-0 rounded-full bg-accent px-4 py-1.5 text-sm font-semibold text-accent-ink shadow-sm";
-const INACTIVE_CLASS =
-  "shrink-0 rounded-full px-4 py-1.5 text-sm font-medium text-ink-muted transition hover:bg-accent-soft hover:text-accent-strong";
+// The BUTTON is the 44px hit target (R11); the pill's visual look lives on
+// the inner span, unchanged from before this round.
+const TAB_BUTTON_CLASS = "shrink-0 flex min-h-11 items-center justify-center";
+const ACTIVE_PILL_CLASS = "rounded-full bg-accent px-4 py-1.5 text-sm font-semibold text-accent-ink shadow-sm";
+const INACTIVE_PILL_CLASS =
+  "rounded-full px-4 py-1.5 text-sm font-medium text-ink-muted transition hover:bg-accent-soft hover:text-accent-strong";
 
 export function TabRail({ tabs, active, onChange, dict }: TabRailProps) {
   const buttonRefs = useRef<Partial<Record<MatchCentreTabIdT, HTMLButtonElement | null>>>({});
@@ -76,9 +93,11 @@ export function TabRail({ tabs, active, onChange, dict }: TabRailProps) {
             data-testid={`mc-tab-${tab}`}
             aria-selected={isActive}
             onClick={() => onChange(tab)}
-            className={isActive ? ACTIVE_CLASS : INACTIVE_CLASS}
+            className={TAB_BUTTON_CLASS}
           >
-            {t(dict, `matchCentre.tab.${tab}`)}
+            <span className={isActive ? ACTIVE_PILL_CLASS : INACTIVE_PILL_CLASS}>
+              {t(dict, `matchCentre.tab.${tab}`)}
+            </span>
           </button>
         );
       })}

@@ -20,6 +20,17 @@
 //   "public."-prefix bug shipped past every existing testid-only assertion.
 // - IMPORTANT 7 — one test pins the id/aria-controls PAIRING every tab must
 //   carry for the panel it opens.
+//
+// Defect round 15b — the walkthrough's `elementFromPoint`/`boundingBox()`
+// hit-target check measures the PAINT box of the element carrying the
+// testid (the `<button>`), never a descendant, so the 44px fix had to grow
+// the button itself rather than only extend its hit-test area (a `::before`
+// overlay would not move `boundingBox()` at all). The pill's visual classes
+// moved to an inner `<span>`, unchanged from before this round; the button
+// now carries a separate, plain `min-h-11` layout class. The class-pair test
+// below is rewritten to pin BOTH: the button's 44px hit-area class (same for
+// both tabs) and the inner span's untouched pill class (still the one
+// difference between active/inactive).
 import { describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import en from "@/dictionaries/en/public.json";
@@ -64,8 +75,16 @@ describe("TabRail — accented/quiet pill classes (shipped vocabulary, tabs.tsx:
     const html = renderToStaticMarkup(
       <TabRail tabs={["summary", "scorecard"]} active="summary" onChange={() => {}} dict={dict} />,
     );
-    const activeClass = html.match(/data-testid="mc-tab-summary" aria-selected="true" class="([^"]*)"/)?.[1];
-    const inactiveClass = html.match(/data-testid="mc-tab-scorecard" aria-selected="false" class="([^"]*)"/)?.[1];
+    // The pill's visual class now lives on the INNER span (defect round
+    // 15b) — captured as whatever immediately follows the button's own
+    // opening tag, so this still proves the span belongs to THIS button,
+    // not just that a matching class string exists somewhere on the page.
+    const activeClass = html.match(
+      /data-testid="mc-tab-summary" aria-selected="true" class="[^"]*"><span class="([^"]*)"/,
+    )?.[1];
+    const inactiveClass = html.match(
+      /data-testid="mc-tab-scorecard" aria-selected="false" class="[^"]*"><span class="([^"]*)"/,
+    )?.[1];
     expect(activeClass).toBeTruthy();
     expect(inactiveClass).toBeTruthy();
 
@@ -75,10 +94,38 @@ describe("TabRail — accented/quiet pill classes (shipped vocabulary, tabs.tsx:
     expect(inactiveClass).toContain("bg-accent-soft"); // present, but only inside hover:bg-accent-soft
     expect(inactiveClass).not.toMatch(/(^|\s)bg-accent(\s|$)/); // no RESTING bg-accent class
 
-    // The shipped vocabulary itself (tabs.tsx:30-31), verbatim.
-    expect(activeClass).toBe("shrink-0 rounded-full bg-accent px-4 py-1.5 text-sm font-semibold text-accent-ink shadow-sm");
+    // The shipped pill vocabulary itself (tabs.tsx:30-31), verbatim, minus
+    // `shrink-0` — which moved to the button (§ below), since the pill is no
+    // longer the flex item the scrolling rail shrinks/grows.
+    expect(activeClass).toBe("rounded-full bg-accent px-4 py-1.5 text-sm font-semibold text-accent-ink shadow-sm");
     expect(inactiveClass).toBe(
-      "shrink-0 rounded-full px-4 py-1.5 text-sm font-medium text-ink-muted transition hover:bg-accent-soft hover:text-accent-strong",
+      "rounded-full px-4 py-1.5 text-sm font-medium text-ink-muted transition hover:bg-accent-soft hover:text-accent-strong",
     );
+  });
+
+  // Defect round 15b — R11's 44px tap-target floor (walkthrough evidence:
+  // `boundingBox()` measured ~32px at 320px). `boundingBox()` measures the
+  // PAINT box of the element carrying the testid (the button), so the fix
+  // has to be a real class on the BUTTON, not a pseudo-element trick a
+  // measurement tool can't see. Both tabs get the SAME hit-area class —
+  // only the inner pill differs by active state (test above).
+  it("every tab BUTTON (not just the pill) carries a 44px min-height hit area, identical whether active or inactive", () => {
+    const html = renderToStaticMarkup(
+      <TabRail tabs={["summary", "scorecard"]} active="summary" onChange={() => {}} dict={dict} />,
+    );
+    const activeButtonClass = html.match(/data-testid="mc-tab-summary" aria-selected="true" class="([^"]*)"/)?.[1];
+    const inactiveButtonClass = html.match(/data-testid="mc-tab-scorecard" aria-selected="false" class="([^"]*)"/)?.[1];
+    expect(activeButtonClass).toBeTruthy();
+    expect(inactiveButtonClass).toBeTruthy();
+    expect(activeButtonClass).toMatch(/(^|\s)min-h-11(\s|$)/);
+    expect(inactiveButtonClass).toMatch(/(^|\s)min-h-11(\s|$)/);
+    // Identical hit-area class regardless of active state — the 44px floor
+    // is not a cosmetic that only the selected tab gets.
+    expect(activeButtonClass).toBe(inactiveButtonClass);
+    // The button itself carries NONE of the pill's visual classes any
+    // more — that would double the background/shape on the enlarged box,
+    // the exact thing P2 rules out ("the pill keeps its look").
+    expect(activeButtonClass).not.toContain("bg-accent");
+    expect(activeButtonClass).not.toContain("rounded-full");
   });
 });

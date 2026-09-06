@@ -149,7 +149,13 @@ export function CourtCard({ header, dict }: CourtCardProps) {
         {inPlay ? (
           <p
             data-testid="mc-updated-at"
-            className="mt-3 text-[11px] text-court-muted/70"
+            // Defect round 15b: the extra `/70` opacity stacked on top of
+            // `text-court-muted`'s own embedded alpha measured 4.09:1 on
+            // `bg-court` — short of WCAG AA's 4.5:1 (axe SERIOUS, walkthrough
+            // evidence). `text-court-muted` alone (no modifier, same token
+            // `mc-status-line`/`mc-rate-line` already use unmodified above)
+            // measures well above 4.5:1 — no new colour, just drop the /70.
+            className="mt-3 text-[11px] text-court-muted"
             suppressHydrationWarning
           >
             {t(dict, "matchCentre.updatedAgo", { seconds })}
