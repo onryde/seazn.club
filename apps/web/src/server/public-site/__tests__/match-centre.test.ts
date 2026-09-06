@@ -14,6 +14,7 @@ import { makeEnvelope } from "@seazn/engine/testkit";
 import { registry as engineRegistry, type AnySportModule } from "@seazn/engine/sport";
 import { cricket, deriveCricketScorecard, type DismissalKind } from "@seazn/engine/sports/cricket";
 import { football, FootballCfg } from "@seazn/engine/sports/football";
+import { tennis } from "@seazn/engine/sports/tennis";
 import {
   BALL_GLYPH_KINDS,
   DISMISSAL_KINDS,
@@ -577,6 +578,89 @@ describe("buildMatchCentre — cricket", () => {
         input({ sportKey: "football", cfg: FootballCfg.parse({}), events: [], fixture: F({ status: "scheduled" }) }),
       );
       expect(doc.info.rows.find((r) => r.label.key === "matchCentre.info.scoredAs")).toBeUndefined();
+    });
+  });
+
+  // R11 fix round, C10 — the tennis court card showed the sets score
+  // ("0 / 0") but dropped the LIVE games score of the set in progress
+  // ("0-0"), which appeared only in the Summary tab's per-set breakdown
+  // table below. The fix carries it into `header.subLines`, the schema's
+  // OWN pre-existing "beside the score" slot (`match-centre-schema.ts`'s
+  // comment: `subLines: … // "(8.0)" | null`) — never recomputed, read off
+  // the SAME `setsView`/`setBreakdown` derivation the Summary tab's
+  // `SetScoreboard` already reads.
+  describe("header.subLines — the live games score beside a set-based sport's score (R11 fix round, C10)", () => {
+    it("a tennis fixture with an OPEN (unclosed) set carries that set's games score per side, in parens", () => {
+      const doc = buildMatchCentre(
+        input({
+          sportKey: "tennis",
+          cfg: tennis.configSchema.parse({}),
+          events: [],
+          fixture: F({
+            status: "in_play",
+            summary: {
+              headline: "0 — 0 (2–1)",
+              perSide: [
+                { entrantId: "home", line: "0" },
+                { entrantId: "away", line: "0" },
+              ],
+              detail: { sets: [{ home: 2, away: 1, closed: false }] },
+            },
+          }),
+        }),
+      );
+      expect(doc.header.subLines).toEqual(["(2)", "(1)"]);
+      // Positive pair — the SETS score is untouched, still the sets-won line.
+      expect(doc.header.scoreLines).toEqual(["0", "0"]);
+    });
+
+    it("a tennis fixture with EVERY set closed (no live set in progress) carries no subLine — nothing to show", () => {
+      const doc = buildMatchCentre(
+        input({
+          sportKey: "tennis",
+          cfg: tennis.configSchema.parse({}),
+          events: [],
+          fixture: F({
+            status: "decided",
+            summary: {
+              headline: "2 — 0",
+              perSide: [
+                { entrantId: "home", line: "2" },
+                { entrantId: "away", line: "0" },
+              ],
+              detail: { sets: [{ home: 6, away: 3, closed: true }, { home: 6, away: 4, closed: true }] },
+            },
+          }),
+        }),
+      );
+      expect(doc.header.subLines).toEqual([null, null]);
+    });
+
+    it("cricket (a DIFFERENT `detail` shape entirely — no `sets` array) is UNAFFECTED — subLines stays [null, null]", () => {
+      const doc = buildMatchCentre(input({ sportKey: "cricket", fixture: F({ status: "scheduled" }) }));
+      expect(doc.header.subLines).toEqual([null, null]);
+    });
+
+    it("football (a PERIODS breakdown, not a sets one) carries no subLine either — this fix is scoped to `kind: 'sets'`", () => {
+      const doc = buildMatchCentre(
+        input({
+          sportKey: "football",
+          cfg: FootballCfg.parse({}),
+          events: [],
+          fixture: F({
+            status: "in_play",
+            summary: {
+              headline: "1 — 0",
+              perSide: [
+                { entrantId: "home", line: "1" },
+                { entrantId: "away", line: "0" },
+              ],
+              detail: { periods: [{ phase: "1H", home: 1, away: 0 }] },
+            },
+          }),
+        }),
+      );
+      expect(doc.header.subLines).toEqual([null, null]);
     });
   });
 

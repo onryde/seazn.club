@@ -570,10 +570,37 @@ function rateLineOf(live: CricketLive): string | null {
   return live.rrr === null ? crr : `${crr} · RRR ${fmt2(live.rrr)}`;
 }
 
+/**
+ * R11 fix round, C10 — the tennis court card carried the sets score
+ * ("0 / 0") but dropped the LIVE games score of the set in progress; that
+ * "0-0" showed up only in the Summary tab's per-set breakdown table below.
+ * `subLines` is the schema's OWN pre-existing "beside the score" slot
+ * (`match-centre-schema.ts`: `subLines: … // "(8.0)" | null`), never wired
+ * up by `buildHeader` before this — populated here from the SAME
+ * `setsView` the Summary tab's `SetScoreboard` already reads (`buildSets`,
+ * `./timeline.ts`), never recomputed. Scoped to `kind: "sets"` (tennis,
+ * volleyball, badminton, …) — a `"periods"` breakdown (football, hockey)
+ * has no single "current set" to carry, and cricket's `detail` has no
+ * `sets` array at all, so `setsView` is `null` for it and this returns
+ * `[null, null]` unconditionally, same as before this fix. The open set is
+ * the engine's own `closedMask` entry, never inferred from "the last one"
+ * (the same reasoning `sets-tab.tsx`'s own note 3 already states for the
+ * Sets tab).
+ */
+function liveSubLines(setsView: SetsViewT | null): [string | null, string | null] {
+  if (setsView === null || setsView.kind !== "sets") return [null, null];
+  const last = setsView.closedMask.length - 1;
+  if (last < 0 || setsView.closedMask[last]) return [null, null];
+  const home = setsView.rows[0][last];
+  const away = setsView.rows[1][last];
+  return [home === null || home === undefined ? null : `(${home})`, away === null || away === undefined ? null : `(${away})`];
+}
+
 function buildHeader(
   fixture: PublicFixture,
   sides: [SideT, SideT],
   card: CricketScorecard | null,
+  setsView: SetsViewT | null,
   venueTz: string,
   locale: string,
   now: Date,
@@ -629,7 +656,7 @@ function buildHeader(
     status,
     sides,
     scoreLines,
-    subLines: [null, null],
+    subLines: liveSubLines(setsView),
     battingIndex,
     statusLine,
     rateLine,
@@ -819,7 +846,7 @@ export function buildMatchCentre(input: MatchCentreInput): MatchCentreDocT {
     band = effectiveBand(events, sportModule, cfg);
   }
 
-  const header = buildHeader(fixture, sides, card, venueTz, locale, now);
+  const header = buildHeader(fixture, sides, card, setsView, venueTz, locale, now);
   const info = buildInfoView(fixture, card, sides, formatLabel, stage, hrefs, venueTz, locale, band);
 
   return {
