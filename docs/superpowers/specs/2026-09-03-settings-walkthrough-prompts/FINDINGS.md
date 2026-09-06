@@ -51,6 +51,8 @@ So during any Stripe failure, a paying customer opening `/o/{slug}/settings/bill
 
 **Reproduction:** seed an org with `setOrgSubscriptionSql(orgId, { plan_key: "pro", status: "active", stripe_subscription_id: "sub_e2e_x" })`, leave `stripe_customer_id` null, open `/o/{slug}/settings/billing` as the payer. Observe: Cancel subscription visible, no promo box, no card section, no invoice list, no error message. The null-customer case (never subscribed to Stripe) is legitimate to show this way; the identical rendering for a genuine Stripe failure is the defect.
 
+**Sharper than first reported (Task 3 reviewer):** `settings/billing/page.tsx:425-426` also gates `RetryPaymentButton` on `overview?.hasOpenInvoice`, and `:435` gates `PlanIntervalSwitcher` on `overview?.interval`. So during a Stripe outage, a `past_due` payer specifically loses the ability to retry their payment — the one control that could get them out of the state — while Cancel subscription, the one destructive control, is the only money control left standing.
+
 **Status:** open, not fixed this wave. `getBillingOverview` should distinguish "no customer" from "fetch failed" (e.g. rethrow or return a tagged error the page can show), and the page should surface a visible error state rather than silently rendering the empty-customer UI. Worth a W8 fix given the money-adjacent surface; an owner call on whether it moves earlier per ruling 7's precedent.
 
 ### F6 (real, pre-existing, low/medium) — the cancel dialog and promo box are hardcoded English

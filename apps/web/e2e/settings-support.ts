@@ -92,14 +92,15 @@ export async function seedSettingsOrg(
   };
 
   if ((opts.plan ?? "pro") === "pro") {
-    // DEFENSIVE, and doing no work today — say so plainly, because a later
-    // session that believes this line is earning its keep will not notice the
-    // day it silently starts to. `createOrgForUser` already inserts a fresh
-    // `subscriptions` row per org, so the group is this org's own before the
-    // split runs and the split is a no-op. It is kept for the V309 shape, in
-    // which a new org joined its creator's EXISTING group — under which the
-    // plan flip below would drag every sibling on that bill, the shared Pro
-    // org included.
+    // NOT a no-op (corrected 2026-09-06, W4 Task 3 review) — `splitOrgIntoOwnGroupSql`
+    // (helpers.ts:1158-1166) unconditionally mints a NEW `subscriptions` row and
+    // deletes the old one, even though `createOrgForUser` already gave this org
+    // its own group. This is why a `"pro"`-seeded org has NO credit history: the
+    // bootstrap grant lives on the row this call just replaced. What IS a no-op
+    // here is only the cross-org drag this call exists to prevent: for the V309
+    // shape, a new org joined its creator's EXISTING group, under which the plan
+    // flip below would drag every sibling on that bill, the shared Pro org
+    // included. Kept for that reason, not because it does nothing.
     await splitOrgIntoOwnGroupSql(seeded.orgId);
     // `setOrgPlanBySql` takes a TARGET OBJECT, not a bare id (helpers.ts —
     // `{ orgId?, email? }`), and when given `orgId` it resolves that org's
