@@ -369,14 +369,6 @@ export async function closeOpenContexts(): Promise<void> {
   }
 }
 
-export async function shot(page: Page, name: string, width: number): Promise<void> {
-  const original = page.viewportSize();
-  await page.setViewportSize({ width, height: Math.max(720, width) });
-  await page.waitForTimeout(250); // settle CSS transitions (Task 14's own "two active tab pills" fix)
-  await page.screenshot({ path: join(OUT, `${name}-${width}.png`), fullPage: true });
-  if (original) await page.setViewportSize(original);
-}
-
 /** Fix round 1 (task-15-review.md I4) — reuses the REAL pinned
  *  `screenshotAtWidths` (`../helpers.ts`), never a parallel reimplementation
  *  (one authority per behaviour), then copies its output out of Playwright's

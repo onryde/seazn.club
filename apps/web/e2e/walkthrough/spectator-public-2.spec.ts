@@ -546,7 +546,9 @@ test("axe: the match centre at 320 has zero serious/critical violations", async 
 });
 
 // ---------------------------------------------------------------------------
-// 7. screens — every tab at 320/1280, the page at 768
+// 7. screens — every tab at 320/768/1280 for match A (live) and the tennis
+//    fixture (match B, "final", is shot from spectator-public.spec.ts
+//    instead — it's seeded in a different competition there)
 // ---------------------------------------------------------------------------
 
 test("screens: every tab at 320/768/1280 for match A (live) and the tennis fixture", async ({ browser }, testInfo) => {
@@ -579,7 +581,7 @@ test("screens: every tab at 320/768/1280 for match A (live) and the tennis fixtu
 });
 
 // ---------------------------------------------------------------------------
-// 8. locale — MUST run last: flips the ORG's own default_locale to French,
+// 8. locale — MUST run last: flips a French-locale org's default_locale,
 // which affects every fixture under it.
 // ---------------------------------------------------------------------------
 
@@ -587,33 +589,86 @@ test("screens: every tab at 320/768/1280 for match A (live) and the tennis fixtu
 // `REVALIDATE_FAST` seconds (data.ts:138, currently 30) tagged by division —
 // `setOrgLocaleSql` below writes `organizations.default_locale` straight
 // through SQL (the fast, sanctioned way to REACH a state per R7/R10's own
-// setup convention) with no matching `revalidateTag` call, so the very next
-// request can still serve the stale (English) cached read. A real org owner
-// flipping locale through the actual settings UI would go through a
-// mutation that revalidates the tag; this raw-SQL shortcut does not. Budget
-// the wait from that same constant (never a flat guess) rather than
+// setup convention) with no matching `revalidateTag` call, so a request
+// against an ALREADY-CACHED division could still serve a stale read. A real
+// org owner flipping locale through the actual settings UI would go through
+// a mutation that revalidates the tag; this raw-SQL shortcut does not.
+// Budget the wait from that same constant (never a flat guess) rather than
 // hardcoding a number that would silently drift if REVALIDATE_FAST changes.
+// Kept as a safety net even though THIS test's own division (below) has
+// never been read publicly before the flip, so the cache should be cold and
+// the very first poll should already see French.
 const LOCALE_CACHE_BUDGET_MS = 30_000 /* data.ts REVALIDATE_FAST, seconds->ms */ + 20_000; // safety margin
 
 test("locale: a French-locale org renders French tab labels and status words, English literals absent", async ({
   browser,
-  page,
+  request,
 }) => {
-  test.setTimeout(LOCALE_CACHE_BUDGET_MS + 30_000);
-  const org = await activeOrg(page);
-  await setOrgLocaleSql(org.id, "fr");
-  const matchAPath = publicFixturePath(orgSlug, compSlug, liveDivSlug, matchA);
+  test.setTimeout(LOCALE_CACHE_BUDGET_MS + 60_000);
+  // Fix round 2 (task-15-rereview, New Issue #1): this test used to flip
+  // the SHARED walkthrough org's `default_locale` -- the same org
+  // `spectator-public.spec.ts` reads via its own `activeOrg()`. CI runs the
+  // `walkthrough` project at `--workers=3` with `fullyParallel: true`
+  // (`e2e.yml:206`, `playwright.config.ts:126,164-168`), so that file could
+  // read the org mid-flip. A dedicated org -- created and activated here,
+  // read by NOTHING else -- makes the mutation invisible to any other file
+  // regardless of scheduling, rather than merely narrowing the window.
+  const localeOrg = await apiJson<{ id: string; slug: string }>(request, "/api/orgs", "POST", {
+    name: `Spectator Locale ${TAG}`,
+  });
+  if (!localeOrg.data) throw new Error(`locale org -> ${localeOrg.status} ${JSON.stringify(localeOrg.error)}`);
+  const activated = await apiJson(request, "/api/orgs/active", "POST", { org_id: localeOrg.data.id });
+  expect(activated.status, `activate locale org -> ${activated.status}`).toBeLessThan(300);
+
+  const localeComp = await apiJson<{ id: string; slug: string }>(request, "/api/v1/competitions", "POST", {
+    name: `Locale Walkthrough ${TAG}`,
+    ends_on: "2026-12-31",
+    visibility: "public",
+  });
+  if (!localeComp.data) throw new Error(`locale competition -> ${localeComp.status} ${JSON.stringify(localeComp.error)}`);
+  // Minimal band-3 fixture (same recipe mobile.spec.ts's own public
+  // match-centre fixture uses): toss before core.start, then ONE
+  // `cricket.ball` -- enough real batting/over data to put every tab
+  // (Summary/Scorecard/Commentary/Info) on the page, which is what this
+  // test needs to check every tab's own label.
+  const localeDivId = await makeCricketDivision(request, localeComp.data.id, {
+    name: `Locale ${TAG}`,
+    ballsPerInnings: 12,
+    playersPerSide: 2,
+  });
+  const localeDivSlug = await divisionSlug(request, localeDivId);
+  const localeTeams = await makeTeams(request, localeDivId, [
+    { name: `Locale Home ${TAG}`, names: [`Locale Home 1 ${TAG}`, `Locale Home 2 ${TAG}`] },
+    { name: `Locale Away ${TAG}`, names: [`Locale Away 1 ${TAG}`, `Locale Away 2 ${TAG}`] },
+  ]);
+  const [localeHome, localeAway] = localeTeams as [Team, Team];
+  const { fixtureIds: localeFixtures } = await createStageAndGenerate(request, localeDivId);
+  await apiJson(request, `/api/v1/divisions/${localeDivId}/start`, "POST");
+  const localeFixtureId = localeFixtures[0]!;
+  await startCricketMatch(request, localeFixtureId, localeTeams, localeHome);
+  await mustPost(request, localeFixtureId, "cricket.ball", {
+    over: 0,
+    ballInOver: 1,
+    striker: localeHome.order[0],
+    nonStriker: localeHome.order[1],
+    bowler: localeAway.order[0],
+    runs: { bat: 4 },
+    boundary: 4,
+  });
+
+  await setOrgLocaleSql(localeOrg.data.id, "fr");
+  const localeFixturePath = publicFixturePath(localeOrg.data.slug, localeComp.data.slug, localeDivSlug, localeFixtureId);
   const anon = await anonPage(browser, { width: 1280, height: 900 });
-  await anon.goto(matchAPath, { waitUntil: "load" });
+  await anon.goto(localeFixturePath, { waitUntil: "load" });
   await expect(anon.getByTestId("mc-court-card")).toBeVisible({ timeout: 20_000 });
 
   // Poll by RE-NAVIGATING (a plain `expect.poll` on the existing DOM would
-  // never see a locale change baked into server-rendered HTML) until the
-  // cached read expires and the French copy appears.
+  // never see a locale change baked into server-rendered HTML) -- see the
+  // cache comment above for why this should resolve on its first iteration.
   await expect
     .poll(
       async () => {
-        await anon.goto(matchAPath, { waitUntil: "load" });
+        await anon.goto(localeFixturePath, { waitUntil: "load" });
         return anon.getByTestId("mc-tab-summary").textContent();
       },
       { timeout: LOCALE_CACHE_BUDGET_MS, intervals: [2_000] },
@@ -637,5 +692,5 @@ test("locale: a French-locale org renders French tab labels and status words, En
   // standing rule: only assert a negative where the strings genuinely
   // differ). "Sets" is identical in both locales (see en/fr public.json) —
   // no negative assertion is possible for it, so none is made.
-  await setOrgLocaleSql(org.id, "en");
+  await setOrgLocaleSql(localeOrg.data.id, "en");
 });

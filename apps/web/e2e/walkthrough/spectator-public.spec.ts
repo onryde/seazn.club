@@ -336,8 +336,22 @@ test("cricket match A: the anonymous match centre updates live as the real pad a
   // showing the page-load-stale document at this point (tens of seconds
   // into the test by now), that number would be large, not small.
   const updatedAtAfter = await anon320.getByTestId("mc-updated-at").textContent();
-  const secondsAfter = Number(updatedAtAfter?.match(/(\d+)s ago/)?.[1]);
-  expect(Number.isFinite(secondsAfter), `mc-updated-at did not parse as "Updated Ns ago": ${updatedAtAfter}`).toBe(true);
+  // Fix round 2 (task-15-rereview, New Issue #1): `/(\d+)s ago/` only
+  // matches the ENGLISH string. Every `matchCentre.updatedAgo` dictionary
+  // entry carries exactly one `{seconds}` placeholder and no other digits
+  // (en "Updated {seconds}s ago", fr "Mis à jour il y a {seconds}s", es
+  // "Actualizado hace {seconds}s", nl "Bijgewerkt {seconds}s geleden") --
+  // reading the key's own shape, the first integer anywhere in the label is
+  // locale-agnostic. This file never itself changes locale, but a sibling
+  // walkthrough file does (spectator-public-2.spec.ts's own locale test),
+  // and both now run under CI's real multi-worker scheduling -- matching
+  // only the English word "ago" was a real cross-file flake vector even
+  // though this file's OWN org is no longer shared with that test (fix
+  // round 2 also gave the locale test its own dedicated org); parsing
+  // locale-agnostically removes the coupling to WHICH locale happens to be
+  // active at all, rather than relying on isolation being perfect forever.
+  const secondsAfter = Number(updatedAtAfter?.match(/(\d+)/)?.[1]);
+  expect(Number.isFinite(secondsAfter), `mc-updated-at did not parse a number: ${updatedAtAfter}`).toBe(true);
   expect(secondsAfter, "mc-updated-at must show a FRESH elapsed time right after the update, not the page-load-old one").toBeLessThan(
     10,
   );
