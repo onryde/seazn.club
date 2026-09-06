@@ -592,3 +592,35 @@ turns on it (suppress a Swiss sit-out from `unplaced` vs. re-word the banner
 vs. exclude swiss in `roster-drift-eligibility.ts`). Settle it by driving an
 odd-entrant Swiss stage in a browser across two rounds before choosing.
 A read is not a run.
+
+## W3 planning — false premises found (2026-09-06)
+
+Recorded, not blockers. Both were found while writing the two plans; both would
+have been built wrong from the ruling text alone.
+
+1. **"Compute proposal" is not a control.** Owner ruling 11 lists seven pieces
+   of stage chrome to move to the rail. Six exist. `propose()` is a private
+   closure INSIDE `autoScheduleStage` in `stages-panel.tsx` — the same handler
+   as the auto-schedule CTA — and is never exposed as its own button. PR A
+   moves six controls and must not invent a seventh.
+2. **The rail extraction has an in-code constraint written against it.**
+   `stages-panel.tsx` (the comment above the `useCapacityReportsByStage` call)
+   states that the auto-schedule button "has to stay a DIRECT part of this
+   component's own render output; see the hook's own header for why a per-stage
+   child component broke pre-existing tests that locate it by testid". So
+   `stage-rail.tsx` is PRESENTATIONAL: the panel keeps the single
+   `useCapacityReportsByStage` subscription and passes each stage's verdict
+   down as a plain prop. A rail that calls the hook itself is the shape that
+   already failed once.
+
+Two smaller facts the plans depend on, verified against the tree rather than
+assumed:
+
+- **The band's data is already queried.** `competition-desk.ts`'s fixture query
+  already selects `coalesce(e.n,0)::int as event_count` and `e.started_at` from
+  a `score_events` subquery. T2 exposes existing rows on the type; it does not
+  add a query.
+- **Only `stage-auto-schedule`, `stage-auto-schedule-blocked`,
+  `stage-unscheduled-count`, `roster-drift-banner` and `roster-drift-rebuild`
+  exist as testids** in the stage-chrome region. Generate, Complete and Delete
+  carry none, so PR A adds them and breaks no existing locator.
