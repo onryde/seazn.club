@@ -159,6 +159,16 @@ const DATA: MatrixData = {
     community: cell(23, true),
     pro: cell(40, true),
   },
+  // W3 fix round 2, item 3: the one row where every purchasable-plan cell is
+  // dashed. Values mirror the live matrix exactly (checked directly against
+  // `entw3`'s plan_entitlements, 2026-09-06): denied on every self-serve plan,
+  // granted only on enterprise, which is why it earns the routing note below
+  // rather than reading as a flat "no" with nowhere to send the reader.
+  "api.write": {
+    community: cell(null, false),
+    pro: cell(null, false),
+    enterprise: cell(null, true),
+  },
 };
 
 // Keys with NO pass row in the fixture above — competitions.max_active,
@@ -367,6 +377,14 @@ describe("buildPricingSections — the /pricing pivot", () => {
     }
   });
 
+  // W3 fix round 2, item 6 (controller extension): the fees row must disclose
+  // that our cut is ADDITIVE — V398 made the percentage pure margin, so the
+  // club's connected account also pays Stripe's own processing on top. Same
+  // noteKey mechanism `orgsRow` already uses, not a second facility.
+  it("carries the additive-fee disclosure note on the fees row", () => {
+    expect(row("pricing.matrix.fees").noteKey).toBe("pricing.matrix.fees.note");
+  });
+
   // dashboard.player_profiles is a row the Event Pass lifts that /pricing used
   // to omit entirely (classed as vestigial — see the banned-list test below);
   // it is a live gate, so the matrix has to price it. The AI run cap row that
@@ -413,6 +431,74 @@ describe("buildPricingSections — the /pricing pivot", () => {
     for (const key of banned) {
       expect(labelKeys.some((lk) => lk.includes(key))).toBe(false);
     }
+  });
+});
+
+// W3 fix round 2, item 3: "Write API access" is the one row of 56 where every
+// purchasable-plan cell reads "—" — the single self-serve-unreachable feature
+// (design §4: only `api.write` qualifies). It reads as a flat "no" with no
+// hint that anyone can get it. DERIVED from the matrix — a row qualifies when
+// every PRICING_PLAN_KEYS plan denies it AND enterprise grants it — never a
+// hardcoded "api.write" check, so a key becoming (or ceasing to be)
+// enterprise-only later moves the treatment with it automatically.
+describe("enterprise-only rows get a routing note, derived from the matrix (W3 fix round 2)", () => {
+  it("api.write — denied everywhere purchasable, granted only on enterprise — carries the note", () => {
+    const rows = buildPricingSections(DATA).flatMap((s) => s.rows);
+    const apiWrite = rows.find((r) => r.labelKey === "pricing.matrix.api.write")!;
+    expect(apiWrite, "the row must exist").toBeTruthy();
+    // The premise, read from the fixture rather than assumed.
+    for (const plan of PRICING_PLAN_KEYS) expect(apiWrite.cells[plan], plan).toBe("—");
+    expect(apiWrite.noteKey).toBe("pricing.matrix.enterpriseOnly.note");
+  });
+
+  it("does not tag a row enterprise-only just because it is enterprise-only AND some plan also grants it", () => {
+    // A row every self-serve plan denies but ALSO enterprise denies is a plain
+    // "no", not a routing opportunity — no plan sells it. A row where a
+    // purchasable plan already grants it is reachable by buying, so it must
+    // not print a Contact-us note either.
+    const data: MatrixData = {
+      "api.write": {
+        community: { bool_value: false, int_value: null },
+        // Now Pro grants it too — reachable without Enterprise.
+        event_pass: { bool_value: false, int_value: null },
+        pro: { bool_value: true, int_value: null },
+        enterprise: { bool_value: true, int_value: null },
+      },
+    };
+    const row = buildPricingSections(data)
+      .flatMap((s) => s.rows)
+      .find((r) => r.labelKey === "pricing.matrix.api.write")!;
+    expect(row.noteKey).toBeUndefined();
+  });
+
+  it("does not tag a row nobody grants at all — enterprise denies it too", () => {
+    const data: MatrixData = {
+      "api.write": {
+        community: { bool_value: false, int_value: null },
+        pro: { bool_value: false, int_value: null },
+        enterprise: { bool_value: false, int_value: null },
+      },
+    };
+    const row = buildPricingSections(data)
+      .flatMap((s) => s.rows)
+      .find((r) => r.labelKey === "pricing.matrix.api.write")!;
+    expect(row.noteKey).toBeUndefined();
+  });
+
+  it("is exactly one row of the whole table — not a blanket treatment", () => {
+    const rows = buildPricingSections(DATA).flatMap((s) => s.rows);
+    const noted = rows.filter((r) => r.noteKey === "pricing.matrix.enterpriseOnly.note");
+    expect(noted.map((r) => r.labelKey)).toEqual(["pricing.matrix.api.write"]);
+  });
+
+  it("leaves the orgs.max_owned and fees rows' own notes untouched", () => {
+    const rows = buildPricingSections(DATA).flatMap((s) => s.rows);
+    expect(rows.find((r) => r.labelKey === "pricing.matrix.orgs.max_owned")?.noteKey).toBe(
+      "pricing.matrix.orgs.max_owned.note",
+    );
+    expect(rows.find((r) => r.labelKey === "pricing.matrix.fees")?.noteKey).toBe(
+      "pricing.matrix.fees.note",
+    );
   });
 });
 

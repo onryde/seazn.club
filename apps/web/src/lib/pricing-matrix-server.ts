@@ -12,6 +12,13 @@ import { PRICING_PLAN_KEYS, type MatrixData } from "@/lib/pricing-matrix";
  * the two surfaces to quote different caps for the same plan — the exact drift
  * `PRICING_PLAN_KEYS` was made a single list to prevent.
  *
+ * ALSO reads `enterprise`, despite it never being a `/pricing` COLUMN (design
+ * §4: it is the Contact-us strip, not a priced offer). `buildPricingSections`'s
+ * `isEnterpriseOnlyFeature` (W3 fix round 2, item 3) needs it to derive which
+ * rows are self-serve-unreachable and route to that strip with a note — a
+ * derivation that has nothing to read without the row. It never becomes a
+ * rendered COLUMN: `PRICING_PLAN_KEYS` still governs which plans get a `<td>`.
+ *
  * Callers fail soft (`.catch(() => ({}))`): the DB may be unreachable at build,
  * and a marketing page must still render. `cardBullets` drops a bullet whose
  * figures it cannot read rather than printing a hole.
@@ -22,7 +29,7 @@ export async function loadPricingMatrix(): Promise<MatrixData> {
   >`
     select plan_key, feature_key, bool_value, int_value
     from plan_entitlements
-    where plan_key = any(${[...PRICING_PLAN_KEYS]})`;
+    where plan_key = any(${[...PRICING_PLAN_KEYS, "enterprise"]})`;
   const data: MatrixData = {};
   for (const r of rows) {
     (data[r.feature_key] ??= {})[r.plan_key] = {

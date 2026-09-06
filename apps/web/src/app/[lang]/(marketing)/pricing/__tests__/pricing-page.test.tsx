@@ -221,6 +221,67 @@ describe("/pricing's Event Pass ticket sells only the rung that is on sale", () 
   });
 });
 
+// ── W3 fix round 2, item 1: the crossover paragraph is unreadable at 84px
+// (two-up phone columns). Owner-specified shape: the stub's two slots stack
+// as full-width row cards on every width the stub grid ever renders at
+// (phone AND the narrow desktop stub column) — never a 2-up phone
+// comparison. `crossoverStubLine` is truthy against the default LIVE fixture
+// (community/pro fee rows both present), so this render exercises the
+// two-slot case the bug lived in.
+describe("/pricing's Event Pass stub: row cards, not a 2-up phone comparison (W3 fix round 2)", () => {
+  it("never renders the stub's two slots as a 2-up grid — always one column", async () => {
+    const { markup } = await render();
+    expect(markup, "the crossover slot must actually be present for this case").toContain(
+      "data-pass-crossover",
+    );
+    const gridClass = /class="([^"]*)"[^>]*>\s*<div[^>]*data-pass-stub-slot="m"/.exec(
+      markup,
+    )?.[1];
+    expect(gridClass, "the stub's grid wrapper").toBeTruthy();
+    expect(gridClass).toContain("grid-cols-1");
+    expect(gridClass).not.toContain("grid-cols-2");
+  });
+
+  it("keeps the price and its per-event suffix on one line", async () => {
+    const { markup } = await render();
+    const priceMatch = /<p[^>]*data-pass-price[^>]*>([\s\S]*?)<\/p>/.exec(markup);
+    expect(priceMatch, "the price line").not.toBeNull();
+    expect(priceMatch![0]).toMatch(/class="[^"]*\bwhitespace-nowrap\b[^"]*"/);
+    // Positive pair: the price AND its suffix are both actually inside it.
+    const inner = priceMatch![1]!.replace(/<[^>]*>/g, "").trim();
+    expect(inner).toContain(M_PRICE);
+    expect(inner).toContain((enMarketing as Record<string, string>)["pricing.pass.per"]!.trim());
+  });
+});
+
+// ── W3 fix round 2, item 2: "Size M" / "Event Pass M" name a distinction no
+// customer can act on with one sellable rung. Both surfaces read "Event
+// Pass" now; the crossover sentence's OWN naming of the rung (M_RUNG,
+// asserted elsewhere in this file) is untouched — that is a different claim
+// entirely (which rung the comparator's numbers are about), not a size
+// contrast with an L nobody can buy.
+describe("/pricing names the pass plainly — no rung suffix on a selling surface (W3 fix round 2)", () => {
+  it("the ticket stub's price card reads \"Event Pass\", never \"Size M\"", async () => {
+    const { markup } = await render();
+    const label = /data-pass-stub-slot="m"[^>]*>\s*<p[^>]*>([\s\S]*?)<\/p>/
+      .exec(markup)?.[1]
+      ?.replace(/<[^>]*>/g, "")
+      .trim();
+    expect(label).toBe("Event Pass");
+  });
+
+  it("the comparison table's Event Pass column header carries no rung suffix", async () => {
+    const label = (enMarketing as Record<string, string>)["pricing.table.pass"]!;
+    expect(label).toBe("Event Pass");
+  });
+
+  it("never prints \"Size\" or a bare rung letter beside the pass name anywhere on the page", async () => {
+    const { plain } = await render();
+    expect(plain).not.toMatch(/\bSize M\b/);
+    expect(plain).not.toContain("Event Pass M");
+  });
+});
+
 describe("/pricing's comparison table has no column for a rung nobody can buy", () => {
   const columns = (markup: string): string[] =>
     [...markup.matchAll(/data-pricing-column="([^"]+)"/g)].map((m) => m[1]!);
@@ -352,6 +413,49 @@ describe("/pricing's fee pills are derived, never typed", () => {
   });
 });
 
+// ── W3 fix round 2, item 6: a dedicated Platform fee FAQ entry, naming
+// per-plan rates DERIVED from the live matrix (never typed) and stating the
+// fee is ADDITIVE to Stripe's own processing — something no copy on the page
+// stated before this. Names no specific Stripe rate (that is Stripe's to
+// change).
+describe("/pricing's FAQ has a dedicated Platform fee entry (W3 fix round 2, item 6)", () => {
+  it("names all three live rates and states the fee is additive to Stripe's own", async () => {
+    const { plain } = await render();
+    const question = (enMarketing as Record<string, string>)["pricing.faq.platformFee.q"]!;
+    const answerTemplate = (enMarketing as Record<string, string>)["pricing.faq.platformFee.a"]!;
+    expect(plain, "the question").toContain(question);
+    // The three LIVE rates (5/4/2, per the LIVE fixture) actually reach the
+    // page, in the order the answer names them — not typed here.
+    expect(plain).toMatch(/5%.{0,60}4%.{0,60}2%/s);
+    // Additive, not instead of — the finding item 6 exists for.
+    expect(answerTemplate.toLowerCase()).toMatch(/on top of|in addition|additive/);
+    // Never pins a Stripe rate — checked on the SOURCE dictionary string, not
+    // the rendered page, so a coincidental nearby "%" from an unrelated FAQ
+    // answer can't produce a false pass or a false fail. The only digits this
+    // answer may contain are the three {…Fee} placeholders, which are OUR
+    // rates; Stripe's own rate is never named.
+    expect(answerTemplate.replace(/\{[a-zA-Z]+\}/g, ""), "a bare digit outside a placeholder").not.toMatch(
+      /\d/,
+    );
+  });
+
+  it("suppresses the entry rather than printing an unfilled placeholder if a rate cannot be read", async () => {
+    const { plain } = await render(LIVE.filter((r) => r.feature_key !== "registration.fee_percent"));
+    expect(plain, "an unfilled placeholder must never reach the page").not.toMatch(/\{[a-z]\w*Fee\}/i);
+    expect(plain).not.toContain(
+      (enMarketing as Record<string, string>)["pricing.faq.platformFee.q"],
+    );
+  });
+
+  it("is registered in FAQ_KEYS — a dictionary key nothing renders is an inert seam", async () => {
+    const { plain } = await render();
+    // A run of the answer's own static prose that carries no placeholder —
+    // proves the KEY is wired into FAQ_KEYS and actually rendered, not just
+    // present in the dictionary.
+    expect(plain).toContain("Connect your club's Stripe account and payouts go straight to the club");
+  });
+});
+
 // ── The comparison surfaces: a table at ≥768, a per-plan accordion at 320 —
 // same `sections` data, two renderers.
 describe("/pricing's table and its 320 accordion agree, row for row", () => {
@@ -407,6 +511,29 @@ describe("/pricing's table and its 320 accordion agree, row for row", () => {
       }
       expect(checked, `${plan}: nothing was actually compared`).toBeGreaterThan(3);
     }
+  });
+
+  // W3 fix round 2 (items 3 + 6): a row's noteKey used to render only in the
+  // ≥768 table — the 320 accordion built its own `<dt>` with no note at all,
+  // which would have made the fees row's additive-fee disclosure and the
+  // enterprise-only routing note both INVISIBLE on a phone. `rule 22`-shaped:
+  // a class-scan cannot see this, only a render can.
+  it("renders a row's note on the phone accordion too, not just the ≥768 table", async () => {
+    const { markup } = await render();
+    // React escapes `'` as `&#x27;` in raw markup — unescape before comparing,
+    // same as `render()`'s own `plain` field does for the whole page.
+    const unescape = (s: string) => s.replace(/&#x27;|&#39;/g, "'");
+    const noteText = (enMarketing as Record<string, string>)["pricing.matrix.fees.note"]!;
+
+    const tableMatch = /<table[^>]*data-pricing-matrix[^>]*>([\s\S]*?)<\/table>/.exec(markup);
+    expect(tableMatch, "the table itself").not.toBeNull();
+    expect(unescape(tableMatch![1]!), "the table already carries the note").toContain(noteText);
+
+    const accordionMatch = /data-pricing-accordion[\s\S]*$/.exec(markup)?.[0];
+    expect(accordionMatch, "the accordion itself").toBeTruthy();
+    expect(unescape(accordionMatch!), "the accordion must carry the same note").toContain(
+      noteText,
+    );
   });
 });
 

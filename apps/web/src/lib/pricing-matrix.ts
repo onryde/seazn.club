@@ -189,9 +189,18 @@ function competitionsRow(data: MatrixData): PricingRow {
   };
 }
 
+/**
+ * V398 made our percentage pure margin: the club's own connected Stripe
+ * account still pays Stripe's own processing cost on top of it, and no copy
+ * on the page said so before this note (W3 fix round 2, item 6 — the same
+ * disclosure the new `pricing.faq.platformFee` FAQ entry states in full;
+ * this is the row a buyer actually forms the number from, so it carries the
+ * qualifier too, not just the FAQ three sections down).
+ */
 function feesRow(data: MatrixData): PricingRow {
   return {
     labelKey: "pricing.matrix.fees",
+    noteKey: "pricing.matrix.fees.note",
     cells: cellsFor((plan) => feeCell(data, plan)),
   };
 }
@@ -212,6 +221,22 @@ function orgsRow(data: MatrixData): PricingRow {
   };
 }
 
+/**
+ * Whether a feature is reachable by NO purchasable plan and IS granted on
+ * enterprise — the self-serve-unreachable class (design §4: today just
+ * `api.write`). DERIVED from the matrix, never a hardcoded key list: a key
+ * that becomes enterprise-only later gets the routing note automatically,
+ * and one that stops being enterprise-only loses it the same way.
+ *
+ * Only meaningful for a boolean row — `cellFormatter`'s caller below gates
+ * this on `fmt === boolCell`, so an int row (a cap, not a yes/no) can never
+ * pick it up even if `enterprise` happened to carry a truthy int value.
+ */
+function isEnterpriseOnlyFeature(data: MatrixData, feature: string): boolean {
+  if (data[feature]?.enterprise?.bool_value !== true) return false;
+  return PRICING_PLAN_KEYS.every((plan) => cellAt(data, feature, plan)?.bool_value !== true);
+}
+
 function buildRow(data: MatrixData, feature: string): PricingRow {
   if (feature === "competitions.max_active") return competitionsRow(data);
   if (feature === "orgs.max_owned") return orgsRow(data);
@@ -219,8 +244,17 @@ function buildRow(data: MatrixData, feature: string): PricingRow {
   // registration.fee_percent into the honest "fees" row instead.
   if (feature === "registration.paid") return feesRow(data);
   const fmt = cellFormatter(feature);
+  // The routing note (W3 fix round 2, item 3): of 56 rows, exactly one today
+  // has every purchasable cell dashed with nowhere for the reader to go —
+  // reusing the same noteKey mechanism `orgsRow` and `feesRow` already use,
+  // never a second rendering path.
+  const noteKey =
+    fmt === boolCell && isEnterpriseOnlyFeature(data, feature)
+      ? "pricing.matrix.enterpriseOnly.note"
+      : undefined;
   return {
     labelKey: `pricing.matrix.${feature}`,
+    ...(noteKey ? { noteKey } : {}),
     cells: cellsFor((plan) => fmt(cellAt(data, feature, plan))),
   };
 }

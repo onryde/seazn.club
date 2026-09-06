@@ -546,6 +546,43 @@ export const APPROVED_DICTIONARY_COPY: ApprovedValue[] = [
       nl: "Elke extra organisatie kost hoogstens de helft van het basistarief en krijgt het inschrijfkostenpercentage van je abonnement",
     },
   },
+  // W3 fix round 2, item 6 (controller extension): the fees row's own
+  // footnote, added alongside the new pricing.faq.platformFee entry — the fee
+  // pills and this row are where a buyer actually forms the percentage
+  // number, so the additive disclosure belongs here too, not just three
+  // sections down in the FAQ. V398 made our cut pure margin, so the club's
+  // connected Stripe account still pays Stripe's own processing fees on top;
+  // no copy anywhere on the page said so before this note. Deliberately names
+  // no Stripe rate — that is Stripe's to change.
+  {
+    file: "marketing",
+    key: "pricing.matrix.fees.note",
+    why: "that the platform-fee percentage is ADDITIVE — charged on top of Stripe's own processing fees, not instead of them. Source of truth: V398 (the fee ladder became pure platform margin) and the design doc's note that competitors state this explicitly and we did not. Names no specific Stripe rate, which is Stripe's to change.",
+    text: {
+      en: "Our cut, charged on top of Stripe's processing fees",
+      es: "Nuestra comisión, además de las tarifas de procesamiento de Stripe",
+      fr: "Notre commission, en plus des frais de traitement de Stripe",
+      nl: "Onze commissie, boven op de verwerkingskosten van Stripe",
+    },
+  },
+  // W3 fix round 2, item 6: the dedicated Platform fee FAQ entry — the FAQ
+  // covered these rates today only inside "Can I charge entry fees?", which
+  // nobody scans looking for the fee, and no copy on the page stated the
+  // additive relationship to Stripe's own processing at all. All three rates
+  // are interpolated live (see the note on pricing.matrix.fees.note above);
+  // the WORDS are the claim being pinned — that the fee is additive, and
+  // which plan pays which rate.
+  {
+    file: "marketing",
+    key: "pricing.faq.platformFee.a",
+    why: "the platform-fee entry: names the three live rates (registration.fee_percent on community/event_pass/pro, V398: 5/4/2) and states plainly that our cut sits ON TOP of Stripe's own processing fees rather than replacing them. Rendered only when all three rates are readable (app/[lang]/(marketing)/pricing/page.tsx's platformFeeReadable) — an unreadable rate suppresses the whole entry rather than printing an unfilled placeholder. Names no specific Stripe rate, which is Stripe's to change.",
+    text: {
+      en: "It's {communityFee}% on Community, {passFee}% with an Event Pass, {proFee}% on Pro — charged on your paid entry fees. It's additive, not instead of Stripe: your club's connected Stripe account still pays Stripe's own processing fees on every charge, on top of our cut. Connect your club's Stripe account and payouts go straight to the club.",
+      es: "Es del {communityFee}% en Community, {passFee}% con un Event Pass, {proFee}% en Pro — se cobra sobre tus cuotas de inscripción pagadas. Es una comisión adicional, no sustituye a la de Stripe: la cuenta de Stripe conectada de tu club sigue pagando sus propias comisiones de procesamiento en cada cobro, además de la nuestra. Conecta la cuenta de Stripe de tu club y los pagos van directos al club.",
+      fr: "C'est {communityFee} % sur Community, {passFee} % avec un Event Pass, {proFee} % sur Pro — prélevé sur vos frais d'inscription payants. C'est une commission qui s'ajoute à celle de Stripe, pas à sa place : le compte Stripe connecté de votre club paie toujours ses propres frais de traitement à chaque paiement, en plus de notre commission. Connectez le compte Stripe de votre club et les paiements vont directement au club.",
+      nl: "Dat is {communityFee}% op Community, {passFee}% met een Event Pass, {proFee}% op Pro — geheven op je betaalde inschrijfgelden. Het komt boven op Stripe, niet in plaats daarvan: het gekoppelde Stripe-account van je club betaalt nog steeds Stripe's eigen verwerkingskosten bij elke betaling, boven op onze commissie. Koppel het Stripe-account van je club en uitbetalingen gaan rechtstreeks naar de club.",
+    },
+  },
   {
     file: "ui",
     key: "orgNew.bill.addToExistingHint",

@@ -58,12 +58,20 @@ const CELL_TONE: Record<PricingPlanKey, string> = {
 // carries a Contact-us strip under the table (`pricing.enterprise.*`) for
 // the above-Pro conversation; a proper FAQ entry for it is W3's redesign,
 // not restored here as a stopgap.
+// W3 fix round 2 (item 6): `platformFee` is a DEDICATED entry — the existing
+// `fees` answer only covers the rates inside "Can I charge entry fees?",
+// which nobody scans looking for the fee itself. Rendered CONDITIONALLY
+// (see `platformFeeReadable` below): its rates are interpolated live from
+// the same matrix the fee pills and comparison table read, and absence must
+// suppress the entry rather than print an unfilled `{communityFee}`
+// placeholder.
 const FAQ_KEYS = [
   "card",
   "eventPass",
   "upgraded",
   "trialEnd",
   "fees",
+  "platformFee",
   "groups",
   "currencies",
   "annual",
@@ -203,6 +211,14 @@ export default async function PricingPage({
   // the same rule the old ladder followed for a cap it did not have.
   const proFeePercent = feePercent("pro");
   const passFeePercent = feePercent(offeredRung.key);
+  // W3 fix round 2 (item 6): the three live rates the new Platform fee FAQ
+  // entry names — read once here so the FAQ, the fee pills and the crossover
+  // comparator can never quote different numbers for the same plan.
+  const communityFeePercent = feePercent("community");
+  const platformFeeReadable =
+    typeof communityFeePercent === "number" &&
+    typeof passFeePercent === "number" &&
+    typeof proFeePercent === "number";
   const crossoverMinor = feeCrossoverMinor({
     passMinor: offeredRung.amountMinor,
     proMonthlyMinor: proPrice("monthly", currency),
@@ -248,6 +264,12 @@ export default async function PricingPage({
     pass: passLabel,
     pro: proMonthly,
     proAnnual: formatMinor(proPrice("annual", currency), currency),
+    // Read only by `pricing.faq.platformFee.a`, and only rendered when
+    // `platformFeeReadable` is true (see the FAQ_KEYS filter below) — the
+    // `?? 0` here is unreachable in practice, never a rendered "0%".
+    communityFee: communityFeePercent ?? 0,
+    passFee: passFeePercent ?? 0,
+    proFee: proFeePercent ?? 0,
   };
 
   // Most matrix cells are locale-free literals (numbers, ∞, ✓, —); only the
@@ -302,7 +324,7 @@ export default async function PricingPage({
                 ))}
                 <li
                   data-rail-footer
-                  className="w-full px-3 py-2 text-xs leading-snug text-[#a99ad4] sm:col-span-full"
+                  className="col-span-full px-3 py-2 text-xs leading-snug text-[#a99ad4]"
                 >
                   {t(d, PRICING_RAIL_FOOTER_KEY)}
                 </li>
@@ -356,21 +378,29 @@ export default async function PricingPage({
                       <span className="md:block">ADMIT ONE COMPETITION</span>
                     </p>
 
-                    <div
-                      className={`grid gap-3 md:grid-cols-1 md:gap-4 ${
-                        crossoverStubLine ? "grid-cols-2" : "grid-cols-1"
-                      }`}
-                    >
+                    {/* W3 fix round 2 (item 1): ALWAYS one column. With the L
+                        rung off sale, slot 2 is the crossover PARAGRAPH, not a
+                        second short price — a 2-up phone layout squeezed it
+                        into an 84px column and produced 22 wrapped lines. Two
+                        full-width row cards, stacked, at every width this stub
+                        grid renders at (phone AND the narrow desktop stub
+                        column) — never a side-by-side comparison. */}
+                    <div className="grid grid-cols-1 gap-3 md:gap-4">
                       <div
                         className="rounded-xl border border-[#3b2a6e] bg-black/25 px-3.5 py-3"
                         data-pass-stub-slot="m"
                       >
                         <p className="mk-cond text-[12.5px] font-semibold tracking-[0.22em] text-lime-400">
-                          {t(d, "pricing.pass.stub.size", {
-                            rung: t(d, PASS_RUNG_MARKETING_KEY[offeredRung.key]),
-                          })}
+                          {t(d, "pricing.pass.stub.label")}
                         </p>
-                        <p className="mk-cond mt-0.5 text-[2.25rem] font-bold leading-[0.95] text-cream">
+                        {/* W3 fix round 2 (item 1): `whitespace-nowrap` keeps
+                            the price and its "/ event" qualifier on one
+                            line — it used to orphan onto its own line two
+                            lines below the number. */}
+                        <p
+                          data-pass-price
+                          className="mk-cond mt-0.5 whitespace-nowrap text-[2.25rem] font-bold leading-[0.95] text-cream"
+                        >
                           {passLabel}
                           <span className="text-sm font-normal text-[#bdb4e2]">
                             {t(d, "pricing.pass.per")}
@@ -675,7 +705,14 @@ export default async function PricingPage({
                                   className="flex items-center justify-between gap-3 py-1.5"
                                   data-pricing-accordion-row={r.labelKey}
                                 >
-                                  <dt className="min-w-0 text-slate-600">{t(d, r.labelKey)}</dt>
+                                  <dt className="min-w-0 text-slate-600">
+                                    {t(d, r.labelKey)}
+                                    {r.noteKey && (
+                                      <span className="mt-0.5 block text-xs font-normal text-slate-500">
+                                        {t(d, r.noteKey)}
+                                      </span>
+                                    )}
+                                  </dt>
                                   <dd className={`shrink-0 font-medium ${CELL_TONE[plan]}`}>
                                     {cellText(r.cells[plan])}
                                   </dd>
@@ -699,7 +736,7 @@ export default async function PricingPage({
                 {t(d, "pricing.faq.heading")}
               </h2>
               <div className="space-y-6">
-                {FAQ_KEYS.map((k) => (
+                {FAQ_KEYS.filter((k) => k !== "platformFee" || platformFeeReadable).map((k) => (
                   <div key={k} className="card p-6">
                     <h3 className="mb-2 font-semibold text-slate-800">
                       {t(d, `pricing.faq.${k}.q`)}

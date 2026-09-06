@@ -232,6 +232,99 @@ describe("feature-copy V290", () => {
   });
 });
 
+// W3 fix round 2, item 4 — TWO SIBLINGS of the `pricing.pass.f3` defect
+// (fix round 1): `formats.double_elim` is true on COMMUNITY (V393's growth
+// cell), so a sentence attributing it to "Pro" is false regardless of which
+// noun it uses. `FEATURE_REASONS["formats.double_elim"]` said "a Pro
+// FORMAT" — one word away from the "a Pro feature" phrasing
+// `freeClaimFaults`'s `PRO_ATTRIBUTION` already catches, so it evaded the
+// guard entirely. `doubleElimFormatReason("page_playoff")` carried the exact
+// same false attribution, in the exact same file, two lines below.
+//
+// The evasion, not just the string, is the finding: a vocabulary keyed to
+// one noun is one synonym from useless. These prove the WIDENED vocabulary
+// catches "format" and "perk" (a THIRD sibling found while widening —
+// `discovery.featured` said "is a Pro perk", also unreachable to the old
+// pattern) with synthetic fixtures, independent of whatever
+// `FEATURE_REASONS` happens to say today.
+describe("PRO_ATTRIBUTION vocabulary — feature/format/perk cannot evade freeClaimFaults (W3 fix round 2, item 4)", () => {
+  // A synthetic row COMMUNITY GRANTS — any "is a Pro <noun>" claim about it
+  // must fault, whichever noun the sentence happens to use.
+  const grantedByCommunity = {
+    "synthetic.key": { community: { bool: true, int: null }, pro: { bool: true, int: null } },
+  };
+
+  it("catches 'is a Pro format', not just 'is a Pro feature'", () => {
+    const faults = freeClaimFaults(
+      [{ key: "synthetic.key", text: "This is a Pro format." }],
+      grantedByCommunity,
+    );
+    expect(faults).toEqual(["synthetic.key: calls it a Pro feature, but community already grants it"]);
+  });
+
+  it("catches 'is a Pro perk' too — the exact word discovery.featured already ships", () => {
+    // Asserts the EXACT fault, not merely "some fault" — a single
+    // non-attributing reason also trips `freeClaimFaults`'s OWN anti-vacuity
+    // floor ("no reason attributed a plan…"), which would satisfy a bare
+    // `.length > 0` check whether or not "perk" was actually recognised. Only
+    // the specific "calls it a Pro feature" message proves recognition.
+    const faults = freeClaimFaults(
+      [{ key: "synthetic.key", text: "This is a Pro perk." }],
+      grantedByCommunity,
+    );
+    expect(faults).toEqual(["synthetic.key: calls it a Pro feature, but community already grants it"]);
+  });
+
+  it("catches plural 'are Pro formats' too — the exact shape formats.advanced's own (true) reason uses", () => {
+    // `formats.advanced`'s live reason reads "…are Pro formats." (plural, no
+    // article) and must still be RECOGNISED as an attribution — proven here
+    // against a row community wrongly grants, so recognition is what makes
+    // this fault, not the anti-vacuity floor (see the comment above).
+    const faults = freeClaimFaults(
+      [{ key: "synthetic.key", text: "Fancy things are Pro formats." }],
+      grantedByCommunity,
+    );
+    expect(faults).toEqual(["synthetic.key: calls it a Pro feature, but community already grants it"]);
+  });
+
+  it("does not fire on prose naming neither noun", () => {
+    // Paired with a SECOND reason that does attribute, so the anti-vacuity
+    // floor above does not itself become the only fault in the array —
+    // isolating what the vocabulary alone decided about the first key.
+    const faults = freeClaimFaults(
+      [
+        { key: "synthetic.key", text: "This is switched off for this organisation." },
+        { key: "other.key", text: "This is a Pro feature." },
+      ],
+      {
+        ...grantedByCommunity,
+        "other.key": { community: { bool: false, int: null }, pro: { bool: true, int: null } },
+      },
+    );
+    expect(faults.some((f) => f.startsWith("synthetic.key")), faults.join(" | ")).toBe(false);
+  });
+
+  it("FEATURE_REASONS['formats.double_elim'] no longer attributes Pro at all", () => {
+    expect(FEATURE_REASONS["formats.double_elim"]).not.toMatch(/\bPro\b/);
+  });
+
+  it("doubleElimFormatReason('page_playoff') no longer attributes Pro at all", () => {
+    expect(doubleElimFormatReason("page_playoff")).not.toMatch(/\bPro\b/);
+  });
+
+  // A FOURTH sibling, found BY the widening itself, not briefed: once "are
+  // Pro formats" is recognised as an attribution, `formats.advanced`'s own
+  // (otherwise-correct) reason turns out to have the SAME W2-era gap the
+  // twelve "is a Pro feature" reasons were fixed for — it never named the
+  // Event Pass, which grants `formats.advanced` on both rungs live (checked
+  // directly against `entw3`'s plan_entitlements, 2026-09-06). Invisible
+  // before this round because the old vocabulary never recognised the
+  // sentence as an attribution at all.
+  it("FEATURE_REASONS['formats.advanced'] names the Event Pass — both rungs grant it too", () => {
+    expect(FEATURE_REASONS["formats.advanced"]).toMatch(/event pass/i);
+  });
+});
+
 // Bug fix (2026-08-18): the "League + Playoffs" template's Pro gate read
 // "Double-elimination brackets are a Pro format." even though its only
 // gated stage is a Page playoff (kind "page_playoff"), not an actual

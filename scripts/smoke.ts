@@ -13251,12 +13251,15 @@ async function marketingSuite(): Promise<void> {
   const phtml = await pricing.text();
   check("pricing: 200", pricing.status === 200);
   check("pricing: sport rail shipped", renderedAttr(phtml, "data-pricing-rail"));
+  // W3 fix round 2, item 5: carrom folded into "Board games" — nine slots,
+  // never its own. See lib/pricing-rail.ts's PRICING_RAIL_COVERAGE.
   for (const sport of [
     "football", "cricket", "tennis", "badminton", "tabletennis",
-    "volleyball", "hockey", "icehockey", "carrom", "boardgame",
+    "volleyball", "hockey", "icehockey", "boardgame",
   ]) {
     check(`pricing: rail slot ${sport}`, phtml.includes(`data-rail-sport="${sport}"`));
   }
+  check("pricing: no rail slot for carrom", !phtml.includes('data-rail-sport="carrom"'));
   check("pricing: rail foot line shipped", renderedAttr(phtml, "data-rail-footer"));
   check("pricing: no rail slot for generic", !phtml.includes('data-rail-sport="generic"'));
   check("pricing: Event Pass ticket stub shipped", renderedAttr(phtml, "data-pass-stub"));
@@ -13269,6 +13272,17 @@ async function marketingSuite(): Promise<void> {
   );
   check("pricing: 320 accordion shipped", renderedAttr(phtml, "data-pricing-accordion"));
   check("pricing: no retired 'Pro Plus' copy", !phtml.includes("Pro Plus"));
+  // W3 fix round 2, item 2: one sellable rung leaves no L to contrast
+  // against — "Size M" / "Event Pass M" are gone from every selling surface.
+  check("pricing: no 'Size M' / 'Event Pass M' rung suffix", !phtml.includes("Event Pass M"));
+  // W3 fix round 2, item 3: the enterprise-only row routes to Contact-us
+  // rather than reading as a flat "no".
+  check("pricing: enterprise-only row carries its routing note", phtml.includes("Enterprise only"));
+  // W3 fix round 2, item 6: the dedicated Platform fee FAQ entry.
+  check(
+    "pricing: dedicated Platform fee FAQ entry shipped",
+    phtml.includes("platform fee") && phtml.includes("on top of"),
+  );
 }
 
 async function funnelSuite(): Promise<void> {

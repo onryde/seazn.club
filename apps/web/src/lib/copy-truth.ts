@@ -837,7 +837,27 @@ export interface PaywallReason {
 }
 
 /**
- * "…is a Pro feature", "needs a Pro plan", "upgrade to Pro".
+ * The noun class a "this belongs to a paid tier" sentence actually uses in
+ * this codebase — not just "feature".
+ *
+ * W3 fix round 2 (item 4): `FEATURE_REASONS["formats.double_elim"]` read
+ * "Double-elimination brackets are a Pro FORMAT" — one word away from the "a
+ * Pro feature" phrasing `PRO_ATTRIBUTION` matched, which is exactly how it
+ * evaded `freeClaimFaults` while community had granted the row since V393.
+ * Widening to "format" ALONE would have been the same mistake with a
+ * shorter fuse: `discovery.featured` ships "is a Pro PERK" today, matched by
+ * neither the old pattern nor a "feature|format" one — found only by reading
+ * every noun this file's own copy actually uses, which is the check the
+ * item's finding demands rather than "add the one word that just bit us".
+ * `plan`/`tier`/`add-on` are included on the same reasoning even though no
+ * shipped sentence currently uses them: a vocabulary sized to today's copy is
+ * the same fragility one wave later.
+ */
+const PAID_TIER_NOUN = "(?:features?|formats?|perks?|plans?|tiers?|add-ons?)";
+
+/**
+ * "…is a Pro feature", "…are Pro formats", "needs a Pro plan", "upgrade to
+ * Pro".
  *
  * DELIBERATELY NOT "needs a bigger plan". That is a QUOTA sentence — the
  * allowance is used up — and every quota key legitimately has a community
@@ -845,9 +865,23 @@ export interface PaywallReason {
  * `divisions.per_competition.max`, `stages.per_division.max` and `import.bulk`
  * as falsehoods on this guard's first run. A cap sentence says "you have used
  * yours", not "this belongs to Pro".
+ *
+ * Two shapes for the noun clause, not one: "is a/an Pro NOUN" (singular, with
+ * article — "is a Pro feature") and "is/are Pro NOUN(s)" (no article, either
+ * number — "are Pro formats"). `formats.advanced`'s own TRUE reason uses the
+ * second shape ("Americano, ladders … are Pro formats"), which is why both
+ * have to be recognised: a vocabulary that only matched the false claim's
+ * shape and not the true claim's own would be an accident of which sentence
+ * happened to get fixed first, not a rule.
  */
-export const PRO_ATTRIBUTION =
-  /\b(?:is|are)\s+(?:a|an)\s+(?:Pro|paid)\s+feature\b|\b(?:is|are)\s+on\s+Pro\b|\bneeds?\s+(?:a\s+)?Pro\s+plan\b|\bupgrade\s+to\s+Pro\b/i;
+export const PRO_ATTRIBUTION = new RegExp(
+  String.raw`\b(?:is|are)\s+(?:a|an)\s+(?:Pro|paid)\s+${PAID_TIER_NOUN}\b` +
+    String.raw`|\b(?:is|are)\s+Pro\s+${PAID_TIER_NOUN}\b` +
+    String.raw`|\b(?:is|are)\s+on\s+Pro\b` +
+    String.raw`|\bneeds?\s+(?:a\s+)?Pro\s+plan\b` +
+    String.raw`|\bupgrade\s+to\s+Pro\b`,
+  "i",
+);
 // "…is on Pro and the Event Pass" was added 2026-09-05 with the twelve reasons
 // that now name both plans. Without it those sentences match no PAID
 // attribution at all, so a trailing contrast clause ("…the flat partner strip
@@ -877,8 +911,16 @@ export const PRO_ATTRIBUTION =
  */
 export const PASS_ATTRIBUTION = /\bevent\s+pass\b/i;
 
-export const ENTERPRISE_ATTRIBUTION =
-  /\b(?:is|are)\s+(?:a|an)\s+Enterprise\s+feature\b|\bneeds?\s+(?:an\s+)?Enterprise\s+plan\b/i;
+// Same noun-class widening as `PRO_ATTRIBUTION`, and the same reasoning: an
+// Enterprise attribution keyed to "feature" alone is one synonym from the
+// identical evasion, even though no shipped Enterprise sentence has used a
+// different noun yet.
+export const ENTERPRISE_ATTRIBUTION = new RegExp(
+  String.raw`\b(?:is|are)\s+(?:a|an)\s+Enterprise\s+${PAID_TIER_NOUN}\b` +
+    String.raw`|\b(?:is|are)\s+Enterprise\s+${PAID_TIER_NOUN}\b` +
+    String.raw`|\bneeds?\s+(?:an\s+)?Enterprise\s+plan\b`,
+  "i",
+);
 
 /** "…works on every plan", "free on every plan", "included on every plan". */
 export const FREE_ATTRIBUTION =

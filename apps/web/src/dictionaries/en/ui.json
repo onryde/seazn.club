@@ -1209,7 +1209,7 @@
   "upgrade.limit.divisions": "Divisions in this competition",
   "upgrade.limit.entrants": "Entrants per division",
   "upgrade.limit.fee": "Platform fee on card entry fees",
-  "upgrade.limit.formats": "Advanced formats — double elimination, ladders, americano",
+  "upgrade.limit.formats": "Advanced formats — ladders, americano",
   "upgrade.limit.realtime": "Realtime scoreboard and slideshow",
   "upgrade.limit.exports": "Branded PDF and XLSX exports",
   "upgrade.limit.profiles": "Public player profiles",

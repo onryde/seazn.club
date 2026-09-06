@@ -180,6 +180,14 @@ const FAQ_EXEMPT: Record<string, string> = {
   "pricing.faq.card.a": "about payment details; its 'free forever' is Community's, and true",
   "pricing.faq.trialEnd.a": "about the trial ending; makes no pass-duration claim",
   "pricing.faq.fees.a": "about the fee ladder; a rate claim, guarded by the help-tree fee-lock rules",
+  // W3 fix round 2, item 6: the dedicated Platform fee entry — no pass-
+  // duration claim, so it sits beside pricing.faq.fees.a here rather than on
+  // FAQ_PASS_SCOPED. Its own rate claim (three live percentages, and that the
+  // fee is additive to Stripe's own) is pinned in APPROVED_DICTIONARY_COPY
+  // instead, the same mechanism pricing.faq.fees.a's neighbour rate claims
+  // already use.
+  "pricing.faq.platformFee.a":
+    "the dedicated platform-fee entry — no pass-duration claim, so it is not on FAQ_PASS_SCOPED. Its rate/additive claim is pinned verbatim in APPROVED_DICTIONARY_COPY instead, the same mechanism pricing.matrix.orgs.max_owned.note and pricing.pass.crossover already use",
   "pricing.faq.groups.a":
     "about billing groups — makes no pass-duration claim, but IS scanned for the half-rate claim via HALF_CLAIM_KEYS (its bare 'half your plan's rate' was live for two rounds)",
   "pricing.faq.currencies.a": "about currency pinning",
@@ -1025,8 +1033,15 @@ describe.skipIf(!HAS_DB)("the four-locale dictionaries say what the resolver enf
     // Pass ticket's stub, which quotes the same caps under new keys
     // (`pricing.pass.stub.caps` / `.capsUnlimited`) plus the new
     // `pricing.card.feePill` the Free/Pro cards both print. Net -15 keys.
+    // 296 -> 300: W3 fix round 2 (item 6, controller extension) added
+    // `pricing.matrix.fees.note`, the fees row's own additive-fee disclosure
+    // — the same "full sentence quoting a rate, not a row label" shape
+    // `orgs.max_owned.note` already is.
+    // 300 -> 304: same round, item 6's main ask — the dedicated
+    // `pricing.faq.platformFee.a` entry, naming three live rates and the
+    // same additive disclosure. Net +2 keys.
     // A count, not a floor, so a DELETED pin reds too.
-    expect(APPROVED_DICTIONARY_COPY.length * DICTIONARY_LOCALES.length).toBe(296);
+    expect(APPROVED_DICTIONARY_COPY.length * DICTIONARY_LOCALES.length).toBe(304);
     // Every entry must say what it claims and what decides it — a pin with no
     // `why` is a snapshot, and a snapshot teaches the next editor to re-record
     // rather than to re-check.
@@ -1135,9 +1150,20 @@ describe.skipIf(!HAS_DB)("the four-locale dictionaries say what the resolver enf
       why: "a full sentence in the matrix quoting the extra-organisation rate — pinned by task 7 and scanned by HALF_CLAIM_KEYS; it is emphatically not a row label",
     },
     {
-      match: /^pricing\.(?!matrix\.orgs\.max_owned\.note$)(matrix|table)\./,
+      // W3 fix round 2, item 6 (controller extension): the fees row's own
+      // note discloses that the platform-fee percentage is ADDITIVE — charged
+      // on top of Stripe's own processing fees, which V398's pure-margin
+      // model made true and no copy on the page stated before this. The same
+      // "full sentence quoting a rate, not a row label" shape
+      // orgs.max_owned.note already is, so it is pinned the same way.
+      match: /^pricing\.matrix\.fees\.note$/,
+      pinned: true,
+      why: "states that the platform fee is ADDITIVE to Stripe's own processing fees, not instead of it — a claim about how the two costs stack, which is exactly the sentence a buyer reading only the row's percentage would miss",
+    },
+    {
+      match: /^pricing\.(?!matrix\.(orgs\.max_owned|fees)\.note$)(matrix|table)\./,
       pinned: false,
-      why: "row labels and column headers of the comparison table. Every VALUE in that table is rendered live from plan_entitlements by lib/pricing-matrix.ts, so the labels name features rather than asserting anything about them. This rule once swallowed pricing.matrix.orgs.max_owned.note, a full sentence quoting a rate, so the exempt side is now scanned by the claim vocabularies too",
+      why: "row labels and column headers of the comparison table. Every VALUE in that table is rendered live from plan_entitlements by lib/pricing-matrix.ts, so the labels name features rather than asserting anything about them. This rule once swallowed pricing.matrix.orgs.max_owned.note, a full sentence quoting a rate, so the exempt side is now scanned by the claim vocabularies too — pricing.matrix.fees.note is excluded the same way and for the same reason. pricing.matrix.enterpriseOnly.note stays IN this bucket: 'Enterprise only — talk to us' routes the reader, it asserts no checkable rate or grant, which is the same shape pricing.enterprise.link already is",
     },
     {
       match: /^pricing\.final\.subhead$/,
@@ -1163,12 +1189,15 @@ describe.skipIf(!HAS_DB)("the four-locale dictionaries say what the resolver enf
       why: "tier names, button labels and state text — they identify a card, they do not describe what it grants",
     },
     {
-      // `ladderNote` retired with the M/L ladder UI (R14); `stub\.size` is its
-      // ticket-era replacement — "Size {rung}" identifies the stub slot, it
-      // does not claim anything the caps/credits lines beside it do not.
-      match: /^pricing\.(community\.note|pass\.(rung\.\w|stub\.size)|addons\.label)$/,
+      // `ladderNote` retired with the M/L ladder UI (R14); `stub\.size` was
+      // its ticket-era replacement ("Size {rung}") and is ITSELF retired here
+      // (W3 fix round 2, item 2 — the owner ruling that "Size M" names a
+      // distinction no customer can act on with one sellable rung). Renamed
+      // to `stub\.label`, now a plain "Event Pass" with no rung reference at
+      // all — still a sub-label identifying the stub slot, nothing more.
+      match: /^pricing\.(community\.note|pass\.(rung\.\w|stub\.label)|addons\.label)$/,
       pinned: false,
-      why: "sub-labels: the rung letters (M / L), the stub's size label and the add-ons heading. The claims they introduce are pinned on the keys that make them",
+      why: "sub-labels: the rung letters (M / L), the stub's price-card label and the add-ons heading. The claims they introduce are pinned on the keys that make them",
     },
     {
       // R14: the box-office board. Sport NAMES, translated, and a foot line
@@ -2607,6 +2636,44 @@ describe.skipIf(!HAS_DB)("the four-locale dictionaries match plan_entitlements",
     expect(localePaidOverclaimFaults(preFix, lifted).join(" | ")).not.toContain(
       "sells formats.double_elim",
     );
+  });
+
+  // ── W3 fix round 2, item 4: `upgrade.limit.formats` (ui.json) carried the
+  // IDENTICAL "double elimination" false differentiator, on the upgrade
+  // page's own comparison row — same defect, different surface, found while
+  // fixing pricing.pass.f3 and owed to this round. Same guard, extended to
+  // ui.json: `localePaidOverclaimFaults` takes any `LocalisedValue[]`, so
+  // this is the same function reading a second file's key, not a second
+  // mechanism.
+  it("upgrade.limit.formats no longer oversells formats.double_elim, in all four locales", async () => {
+    const grants = await grantsFor(["formats.double_elim", "formats.advanced"]);
+    expect(localePaidOverclaimFaults(across("ui", "upgrade.limit.formats"), grants)).toEqual([]);
+  });
+
+  it("…and the pre-fix 'double elimination' wording on upgrade.limit.formats reds in every locale", async () => {
+    const grants = await grantsFor(["formats.double_elim", "formats.advanced"]);
+    // The shipped strings, verbatim, before this fix (W3 fix round 2).
+    const preFix: LocalisedValue[] = (
+      [
+        ["en", "Advanced formats — double elimination, ladders, americano"],
+        ["es", "Formatos avanzados — doble eliminación, escaleras, americano"],
+        ["fr", "Formats avancés — double élimination, échelles, americano"],
+        ["nl", "Geavanceerde formats — dubbele eliminatie, ladders, americano"],
+      ] as Array<[DictionaryLocale, string]>
+    ).map(([locale, value]) => ({ locale, key: "upgrade.limit.formats", value }));
+
+    const faults = localePaidOverclaimFaults(preFix, grants).join(" | ");
+    for (const locale of DICTIONARY_LOCALES) {
+      expect(faults, `${locale}: the double-elim claim must red`).toContain(
+        `${locale} upgrade.limit.formats: sells formats.double_elim as a paid differentiator, but community already grants it`,
+      );
+      // DISCRIMINATING: the same string also names "americano" and
+      // "ladders"/"escaleras"/"échelles" (formats.advanced), which community
+      // genuinely does NOT grant — that half must stay silent.
+      expect(faults, `${locale}: the americano/ladders half must NOT red`).not.toContain(
+        `${locale} upgrade.limit.formats: sells formats.advanced`,
+      );
+    }
   });
 });
 

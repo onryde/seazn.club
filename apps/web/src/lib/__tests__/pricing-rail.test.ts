@@ -8,6 +8,7 @@ import { describe, expect, it } from "vitest";
 import {
   PRICING_RAIL_SPORTS,
   PRICING_RAIL_FOOTER_KEY,
+  PRICING_RAIL_COVERAGE,
   pricingRailKey,
 } from "@/lib/pricing-rail";
 import { SPORT_KEY } from "@/lib/scoring-vocab";
@@ -24,14 +25,9 @@ const DICTS: Record<string, Record<string, string>> = {
 };
 
 describe("the pricing rail's sport set", () => {
-  it("equals the catalogue's non-generic sports — none missing, none stale", () => {
-    const catalogue = Object.keys(SPORT_KEY)
-      .filter((k) => k !== "generic")
-      .sort();
-    expect([...PRICING_RAIL_SPORTS].sort()).toEqual(catalogue);
-    // Anti-vacuity: this is a real, non-empty comparison, not two empty arrays
-    // agreeing with each other.
-    expect(catalogue.length).toBeGreaterThan(0);
+  it("has exactly nine slots — carrom folded into board games, 3x3 clean", () => {
+    expect(PRICING_RAIL_SPORTS.length).toBe(9);
+    expect(PRICING_RAIL_SPORTS as readonly string[]).not.toContain("carrom");
   });
 
   it("never lists generic as a rail sport — it is the board's foot line", () => {
@@ -46,6 +42,50 @@ describe("the pricing rail's sport set", () => {
     const sorted = [...PRICING_RAIL_SPORTS].sort();
     expect(PRICING_RAIL_SPORTS).not.toEqual(sorted);
     expect(PRICING_RAIL_SPORTS[0]).toBe("football");
+  });
+});
+
+// A rail slot is a DEVICE, not a 1:1 sport list any more — carrom folds into
+// "Board games" (owner: carrom is covered by that slot, so it does not need
+// its own). Equality against the catalogue would break the day a sport is
+// deliberately folded, so the guard is a COVERAGE MAP asserted in both
+// directions: every catalogue sport is covered by some rail entry, and every
+// rail entry is reachable from at least one catalogue sport. Neither a new
+// sport nor a dead rail slot can hide behind the other.
+describe("the pricing rail's sport coverage map", () => {
+  const catalogue = Object.keys(SPORT_KEY)
+    .filter((k) => k !== "generic")
+    .sort();
+
+  it("covers every catalogue sport — none missing, none stale", () => {
+    expect(Object.keys(PRICING_RAIL_COVERAGE).sort()).toEqual(catalogue);
+    // Anti-vacuity: a real, non-empty comparison.
+    expect(catalogue.length).toBeGreaterThan(0);
+  });
+
+  it("maps every covered sport to a rail entry that actually exists", () => {
+    for (const [sport, rail] of Object.entries(PRICING_RAIL_COVERAGE)) {
+      expect(PRICING_RAIL_SPORTS as readonly string[], sport).toContain(rail);
+    }
+  });
+
+  it("makes every rail entry reachable from at least one catalogue sport", () => {
+    const reached = new Set(Object.values(PRICING_RAIL_COVERAGE));
+    for (const rail of PRICING_RAIL_SPORTS) {
+      expect(reached.has(rail), `${rail} has no sport pointing at it`).toBe(true);
+    }
+  });
+
+  it("folds carrom into board games, not its own slot", () => {
+    expect(PRICING_RAIL_COVERAGE.carrom).toBe("boardgame");
+  });
+
+  it("maps every other sport to itself", () => {
+    for (const sport of catalogue.filter((s) => s !== "carrom")) {
+      expect(PRICING_RAIL_COVERAGE[sport as keyof typeof PRICING_RAIL_COVERAGE], sport).toBe(
+        sport,
+      );
+    }
   });
 });
 

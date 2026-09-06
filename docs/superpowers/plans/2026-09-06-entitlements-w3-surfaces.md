@@ -265,3 +265,76 @@ defect. en disagreed with es/fr/nl until it was restored from the pre-mutation
 backup. The rule that follows: when mutating a file whose fix is not yet
 committed, restore from an explicit backup taken before the mutation, never from
 git, and re-read the value afterwards rather than assuming the restore ran.
+
+## Product-owner round, 2026-09-06 — six fixes, and one commercial ruling
+
+Owner asked for a product-owner pass on the built page and delegated the open
+question. Each item below was measured against the RUNNING product, not read
+off the code.
+
+| # | Fix | Evidence |
+|---|---|---|
+| 1 | Crossover becomes stacked full-width ROW CARDS at phone width | 253 chars in an 84px column = 22 lines; slot 428px tall; ticket 1200px on a 640px screen; buy CTA at y=1392 |
+| 2 | "Size M" / "Event Pass M" lose the rung suffix on selling surfaces | L is off sale; the suffix exists only to contrast with a rung nobody can buy |
+| 3 | `Write API access` row gets a derived Contact-us note | 1 of 56 rows has every purchasable cell dashed |
+| 4 | Two remaining "double elimination" falsehoods, + widened guard vocabulary | `FEATURE_REASONS` evaded `freeClaimFaults` by saying "a Pro format" not "a Pro feature" |
+| 5 | Carrom folded into Board games; rows evened to 3×3 | owner direction; 9 entries divide evenly |
+| 6 | Platform fee FAQ, stating the fee is ADDITIVE | no copy on the page says so today |
+
+### Two of these change a guard's SHAPE rather than its strictness
+
+**Item 4's lesson is the durable one: a guard keyed to one noun is one synonym
+from useless.** `freeClaimFaults` matches "a Pro feature"; the surviving
+falsehood said "a Pro format" and walked straight past it. The vocabulary, not
+the rule, was the weak part — which is exactly the risk flagged when the
+paid-overclaim rule was written a round earlier, now demonstrated.
+
+**Item 5 must not weaken the rail guard to a subset check.** Set equality
+against the catalogue is what stops a newly-added sport silently never
+appearing on the rail. Removing carrom breaks equality, and the lazy repair
+(subset) would delete the protection entirely. It becomes an explicit COVERAGE
+MAP instead — every catalogue sport is either named on the rail or deliberately
+mapped to an entry that covers it (`carrom → boardgame`), asserted in both
+directions so neither a new sport nor a dead rail entry can hide.
+
+### Ruling — the additive platform fee IS disclosed (controller decision)
+
+The owner delegated this one explicitly ("you decide as a product owner"), so it
+is recorded as a CONTROLLER decision, not an owner ruling.
+
+V398 made our percentage pure margin: the club's connected account bears
+Stripe's own processing cost. Nothing on `/pricing` says so, so a club reading
+"2% on Pro" budgets 2% and pays roughly 2% + Stripe's cut — on a $2,000
+competition, ~$40 planned against ~$105 actual.
+
+**Disclosed, for a commercial reason as much as an honest one.** Our rate is now
+a small platform take rather than a blended payments cost, and saying so makes
+2% legible as what it is. Competitors already quote it explicitly ("2.5% on top
+of Stripe", "1% plus standard Stripe processing"); printing a bare 2% beside
+their explicit 2.5%+ wins the glance and loses the first invoice, in a
+word-of-mouth market whose growth thesis is clubs telling other clubs.
+
+**Counter-argument, stated and overruled:** a bare rate reads better at a
+glance. A rate that is not the rate is worse than an unattractive true one.
+
+**Bounded deliberately:** the copy never quotes a Stripe rate — that is Stripe's
+to change, and pinning it is a copy-truth fault waiting to happen. It lands in
+two places, both reusing the EXISTING `noteKey` row-note mechanism rather than a
+second one: the FAQ entry, and a note under the matrix's own "Platform fee on
+entry fees" row, which is where a buyer actually forms the number. The card fee
+pills are left alone — too tight, and already carried by the other two.
+
+### Rebase, 2026-09-06 — what landing on W4 revealed
+
+Rebased onto `aabb701ea` (settings-walkthrough W4). Clean, no conflicts, Flyway
+tail still V398 with no duplicate numbers.
+
+- **s-w's Task 3 testids ARE on main**: `billing-manage.tsx` 6,
+  `operator-console.tsx` 3. Task 3 of this wave anchors on those rather than on
+  text, which removes the copy-rewrite risk outright.
+- W4's only overlap with this wave's surface is one line in
+  `org-registration-currency.tsx`. No dictionary, pricing, copy-truth or
+  feature-copy collision.
+- **The role-name anchors to preserve are FIVE sites, not four** — the earlier
+  count in this file missed `billing.spec.ts:167`. Corrected here rather than
+  left to be rediscovered.

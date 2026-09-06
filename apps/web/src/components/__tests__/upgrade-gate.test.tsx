@@ -42,6 +42,7 @@ import {
 import type { PassLockReason } from "@/lib/entitlements";
 import { DictProvider } from "@/components/i18n/dict-provider";
 import { t } from "@/lib/i18n-runtime";
+import { featureReason } from "@/lib/feature-copy";
 import uiEn from "@/dictionaries/en/ui.json";
 import type { Dict } from "@/lib/i18n-constants";
 
@@ -763,6 +764,10 @@ describe("UpgradeGate — reason override", () => {
   it("falls back to featureReason(feature) when no override is passed (every pre-existing call site)", () => {
     pathname = "/o/riverside/settings/billing";
     const html = render(<UpgradeGate feature="formats.double_elim" />);
-    expect(html).toContain("Double-elimination brackets are a Pro format.");
+    // Derived from the live map, not typed here — W3 fix round 2 reworded
+    // this entry (community grants `formats.double_elim` too, so "a Pro
+    // format" was false); pinning the STRING would have made this test the
+    // thing standing in the way of that correction.
+    expect(html).toContain(featureReason("formats.double_elim"));
   });
 });

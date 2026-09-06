@@ -926,27 +926,22 @@ body {
    ticket on a light page, for the upgrade flow) — this one is CREAM on NIGHT,
    inside its own night "counter" section, per the mockup. */
 
-/* The board: ten sports in hairline-ruled slots. A different DEVICE at each
-   width, not one narrowed (pricing-rail-notes.md) — a wrapping printed ribbon
-   at 320, a 5×2 grid at 768, ten across from 1280. `divide-*` draws the
-   hairlines so the same markup works in both the flex-wrap ribbon and the
-   grid, rather than a `:not(:last-child)` border hack tied to one layout. */
+/* The board: nine sports in hairline-ruled slots (carrom folded into "Board
+   games", W3 fix round 2 — see lib/pricing-rail.ts's PRICING_RAIL_COVERAGE).
+   A 3x3 grid below 1280 (even rows, replacing the old ragged flex-wrap
+   ribbon), nine across from 1280 — a different DEVICE per width band, not one
+   narrowed (pricing-rail-notes.md). `divide-*` draws the hairlines, which
+   keeps working unchanged across both column counts. */
 .pr-board {
-  display: flex;
-  flex-wrap: wrap;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 .pr-board > li {
   border-color: rgb(124 58 237 / 0.35);
 }
-@media (min-width: 768px) {
-  .pr-board {
-    display: grid;
-    grid-template-columns: repeat(5, minmax(0, 1fr));
-  }
-}
 @media (min-width: 1280px) {
   .pr-board {
-    grid-template-columns: repeat(10, minmax(0, 1fr));
+    grid-template-columns: repeat(9, minmax(0, 1fr));
   }
 }
 
