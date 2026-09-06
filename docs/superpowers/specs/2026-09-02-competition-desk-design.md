@@ -300,17 +300,22 @@ restates them so a reader of the design alone is not misled.
   desktop-only, and W3 folds it afterwards (ruling 13). Rulings 6 and 7 hold.
 - **ADDED — the odd-Swiss roster-drift miscopy** joins the wave (ruling 12).
 
-### PR A — W2 tail, desktop only (ruling 13)
+### Tasks 2-5 — the rail, desktop only (rulings 13 and 18)
 
 Build `components/v2/desk/stage-rail.tsx` and the `lg:` two-column `1fr 280px`
 split; move Add match, Generate/Pair next, Complete stage, Delete stage,
 Required court tags, auto-schedule and Compute proposal off the sheet and onto
 it. Closes ruling 11 and current-state finding 6 ("actions in six places").
-Merges before W3 begins, because W3 folds what it builds.
+Built before anything folds it (task 10), because the desktop composition has
+to settle first. **Ruling 18 (2026-09-06): this ships as ONE PR, not two** —
+the owner superseded the PR A / PR B split. Ruling 13's substance is unchanged;
+it is now task order inside one branch. Accepted cost: a desktop-only rail
+never exists in production, and one review pass covers `stages-panel.tsx`,
+`page.tsx`, the desk usecase, a new endpoint and four dictionaries at once.
 
-### PR B — W3 proper
+### Tasks 1 and 6-10 — the band and the phone composition
 
-**T1 — the odd-Swiss sit-out miscopy (item 6), FIRST.** It runs first because
+**Task 1 — the odd-Swiss sit-out miscopy (item 6), FIRST.** It runs first because
 it is the only task whose SHAPE is unknown. `swiss.ts`'s `pairRound` puts the
 sat-out entrant in a `bye` field; `stages.ts`'s `swissGen` maps only
 `round.pairings`, so that entrant gets no fixture row at all, and roster drift —
@@ -323,7 +328,7 @@ from `unplaced`, re-word the banner, or add swiss to
 excludes only ladder and americano). Ruling 17. `stage-roster-drift.test.ts`
 has ZERO swiss cases today — its green is not coverage here.
 
-**T2 — the band's producer, ONE authority (ruling 16).** `getCompetitionDesk`
+**Task 6 — the band's producer, ONE authority (ruling 16).** `getCompetitionDesk`
 today returns `in_play: number` and a single `next` pointer per division, and
 no in-play fixture list exists anywhere. It gains that list — per fixture:
 entrants, score, event count (for "NO SCORE"), division, kickoff. The new
@@ -334,7 +339,7 @@ A coverage test asserts route files and that table match 1:1, so drift is
 CI-red. Rejected: a client-only band fetching on mount, which would make the
 server-rendered pill and the client band two authorities for one fact.
 
-**T3 — the band.** `components/v2/desk/in-play-band.tsx`, mounted in the slot
+**Task 7 — the band.** `components/v2/desk/in-play-band.tsx`, mounted in the slot
 W1 reserved between the tools row and "Needs you". Night ground, `--sport-led`
 numerals built FRESH (the token exists in `globals.css`; no LED-numeral
 component does), one card per in-play fixture across divisions, one dashed
@@ -343,17 +348,17 @@ component does), one card per in-play fixture across divisions, one dashed
 `setInterval` while the pill says in play, cleared otherwise — matching
 `live-score.tsx` and `run-elapsed.tsx`; this repo has no query library.
 
-**T4 — breakpoint unification (ruling 15).** The masthead and
+**Task 8 — breakpoint unification (ruling 15).** The masthead and
 `run-sheet-row.tsx` move `sm:` (640) → `md:` (768), matching the ledger and the
 repo-wide `max-md:` / `md:hidden` convention. Today at 768 the ledger is a card
 while the run sheet is already a desktop row.
 
-**T5 — two-line run-sheet rows (A3).** `run-sheet-row.tsx` is already
+**Task 9 — two-line run-sheet rows (A3).** `run-sheet-row.tsx` is already
 mobile-first (`flex-col`, collapsing via `sm:contents`); this recomposes that
 stack into two deliberate lines, not the three reflowed ones W2's gate
 photographed at 320.
 
-**T6 — the rail fold.** PR A's rail becomes a bottom sheet below `md:`, opened
+**Task 10 — the rail fold.** Tasks 2-5's rail becomes a bottom sheet below `md:`, opened
 by a floating "Stage tools" button, reusing `components/modal.tsx`'s existing
 bottom-sheet-under-`sm` pattern (`rounded-t-2xl`, `max-h-[85dvh]`,
 `sheet-handle`) rather than inventing one.
@@ -376,7 +381,7 @@ bottom-sheet-under-`sm` pattern (`rounded-t-2xl`, `max-h-[85dvh]`,
   wave exists to break, not a side effect of it.
 - Run the WHOLE `mobile.spec.ts`, never a `-g` slice, at 320 and 768; a red
   count in that file is a floor, not a total (it is `mode: "serial"`).
-- **T4 changes the 640–767 band, which NO width project covers** (the matrix is
+- **Task 8 changes the 640-767 band, which NO width project covers** (the matrix is
   320/360/375/390/430/768/834). W3 owes a check at ~700 that its own gates are
   structurally blind to.
 - Screenshots at 1280 / 768 / 320 for both pages in all four phases, images

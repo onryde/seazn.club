@@ -100,6 +100,15 @@ interchangeable with these. Never carry either to a peer session as the other.
     add swiss to `ROSTER_DRIFT_INELIGIBLE_KINDS`). Rejected: excluding swiss
     up front, which would silence the banner for a genuine mid-stage roster
     change — the case it exists for.
+18. **W3 ships as ONE PR, not two** (2026-09-06). Owner: "make it single PR",
+    superseding the PR A / PR B split I had recommended under ruling 13.
+    Ruling 13's SUBSTANCE is unchanged — the rail is still built desktop-only
+    before anything folds it — but it is now task order inside one branch
+    rather than two merges. Stated cost the owner accepted: a desktop-only
+    rail never exists in production, and one review pass covers
+    `stages-panel.tsx`, `page.tsx`, the desk usecase, a new endpoint and four
+    dictionaries at once. Plan: `plans/2026-09-06-competition-desk-w3.md`,
+    ten tasks, branch `feat/competition-desk-w3-band-and-phone`.
 
 ## Decisions made by this plan, not the owner (W2)
 
@@ -601,8 +610,8 @@ have been built wrong from the ruling text alone.
 1. **"Compute proposal" is not a control.** Owner ruling 11 lists seven pieces
    of stage chrome to move to the rail. Six exist. `propose()` is a private
    closure INSIDE `autoScheduleStage` in `stages-panel.tsx` — the same handler
-   as the auto-schedule CTA — and is never exposed as its own button. PR A
-   moves six controls and must not invent a seventh.
+   as the auto-schedule CTA — and is never exposed as its own button. The
+   rail tasks move six controls and must not invent a seventh.
 2. **The rail extraction has an in-code constraint written against it.**
    `stages-panel.tsx` (the comment above the `useCapacityReportsByStage` call)
    states that the auto-schedule button "has to stay a DIRECT part of this
@@ -623,4 +632,4 @@ assumed:
 - **Only `stage-auto-schedule`, `stage-auto-schedule-blocked`,
   `stage-unscheduled-count`, `roster-drift-banner` and `roster-drift-rebuild`
   exist as testids** in the stage-chrome region. Generate, Complete and Delete
-  carry none, so PR A adds them and breaks no existing locator.
+  carry none, so task 2 adds them and breaks no existing locator.
