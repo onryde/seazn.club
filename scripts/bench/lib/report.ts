@@ -22,6 +22,28 @@ type SolverMode = NonNullable<ScheduleOutcome["mode"]>;
 export const GateStatus = z.enum(["green", "red"]);
 export type GateStatus = z.infer<typeof GateStatus>;
 
+/**
+ * T7e — `SuiteReport.gate`'s own vocabulary, a THIRD, non-green value beyond
+ * the run-level `GateStatus`: "skipped" is a `--keep` short circuit that
+ * skipped seeding AND scheduling entirely (`tiny.ts`'s `lookup.kind ===
+ * "reuse"` branch). Before this, that branch returned the literal `"green"` —
+ * the same value a run that actually scheduled, checked and certified a board
+ * reports — so a reader (and `gateOf`) could not tell "this passed" from
+ * "nothing was measured this run". That is exactly the failure class B04
+ * exists to catch everywhere else (`CheckerReport.unexercised` is the same
+ * idea one layer down): a clean verdict must never be able to mean "checked
+ * nothing".
+ *
+ * A SEPARATE schema from `GateStatus`, not a widening of it, because the
+ * run-level `BenchReport.gate` stays a closed two-value CI-exit-code signal
+ * (`bench.ts`'s `gate === "red" ? 1 : 0`) — the distinction that matters at
+ * that level is pass/fail, and `gateOf` below folds "skipped" into "red"
+ * there. The finer "why didn't this pass" distinction belongs on the suite,
+ * where a reader can see the warning that explains it.
+ */
+export const SuiteGateStatus = z.enum(["green", "red", "skipped"]);
+export type SuiteGateStatus = z.infer<typeof SuiteGateStatus>;
+
 export const PhaseTimings = z.object({
   seedMs: z.number().optional(),
   scheduleMs: z.number().optional(),
@@ -373,7 +395,7 @@ export type EngineDeltaSection = z.infer<typeof EngineDeltaSection>;
 
 export const SuiteReport = z.object({
   suite: z.string(),
-  gate: GateStatus,
+  gate: SuiteGateStatus,
   timings: PhaseTimings,
   /** Whether `--keep`'s data was left in place (true) or `--wipe` was
    *  requested (false) — a run's own intent, so a reader of a committed
@@ -468,10 +490,17 @@ export function resolveRunId(cliArg: string | undefined, gitSha: string): string
 }
 
 /** Any gate red — a pre-flight refusal or any suite's own gate — reds the
- *  whole run. Timings and solver telemetry never factor in here. */
+ *  whole run. Timings and solver telemetry never factor in here.
+ *
+ *  T7e: a suite gate of `"skipped"` reds the run too, same as `"red"` — the
+ *  check is "anything not green", never "anything specifically red". A run
+ *  that skipped seeding and scheduling (a `--keep` short circuit) has not
+ *  passed anything, and folding it into `"green"` here would be the exact
+ *  bare-green-on-nothing-measured defect this function exists to prevent,
+ *  just relocated from the suite level to the run level. */
 export function gateOf(report: Pick<BenchReport, "preflight" | "suites">): GateStatus {
   if (!report.preflight.ok) return "red";
-  return report.suites.some((s) => s.gate === "red") ? "red" : "green";
+  return report.suites.some((s) => s.gate !== "green") ? "red" : "green";
 }
 
 export interface WrittenReport {

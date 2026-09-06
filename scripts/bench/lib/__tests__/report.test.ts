@@ -145,6 +145,37 @@ describe("report schema round-trip", () => {
     const bad = { ...fullReport(), gate: "purple" } as unknown as BenchReportType;
     await expect(writeReport(dir, bad)).rejects.toThrow();
   });
+
+  // T7e — `SuiteReport.gate` (unlike the run-level `BenchReport.gate`) accepts
+  // a third value, "skipped": a `--keep` short circuit that skipped seeding
+  // AND scheduling. Round-tripped here (not only asserted by `gateOf`/render
+  // tests) because `writeReport` PARSES before it writes — the schema is the
+  // real gate on whether this value can reach report.json at all, and
+  // `BenchReport.parse` rejecting "skipped" is exactly the pre-fix failure
+  // this test is written to catch.
+  it("round-trips a suite gate of \"skipped\", distinct from the run-level green/red", async () => {
+    const dir = await tempDir();
+    const base = fullReport();
+    const report: BenchReportType = {
+      ...base,
+      suites: [
+        {
+          ...(base.suites[0] as BenchReportType["suites"][number]),
+          gate: "skipped",
+          warnings: ["tiny: --keep reused existing seed — seeding and scheduling skipped this run"],
+        },
+      ],
+      gate: "red",
+    };
+
+    const written = await writeReport(dir, report);
+    const onDisk: unknown = JSON.parse(await readFile(written.jsonPath, "utf8"));
+    const reparsed = BenchReport.parse(onDisk);
+    expect(reparsed).toEqual(JSON.parse(JSON.stringify(report)));
+    // The run-level `BenchReport.gate` stays the CLOSED two-value set — only
+    // the per-suite gate carries the third state.
+    expect(reparsed.gate).toBe("red");
+  });
 });
 
 describe("resolveRunId", () => {
@@ -188,6 +219,19 @@ describe("gateOf", () => {
       }),
     ).toBe("green");
   });
+
+  // T7e — a `--keep` short circuit that skipped seeding AND scheduling must
+  // never read as an overall pass. `SuiteReport.gate: "skipped"` is a third,
+  // non-green value precisely so this cannot be mistaken for the run having
+  // measured anything.
+  it("is red when any suite gate is skipped — a run that measured nothing has not passed", () => {
+    expect(
+      gateOf({
+        preflight: { ok: true, refusals: [], placement: { status: "live", detail: "" } },
+        suites: [{ suite: "_tiny", gate: "skipped", timings: {} }],
+      }),
+    ).toBe("red");
+  });
 });
 
 describe("renderMarkdown", () => {
@@ -202,6 +246,23 @@ describe("renderMarkdown", () => {
     const report = { ...fullReport(), suites: [] };
     const md = renderMarkdown(report);
     expect(md).toContain("(none ran)");
+  });
+
+  // T7e — the whole point of the third gate value: a reader scanning the
+  // suite header must see SKIPPED, never GREEN, for a `--keep` short circuit
+  // that measured nothing. This is the render-side half of the fix; the gate
+  // computation half is `gateOf`'s "is red when any suite gate is skipped"
+  // test above.
+  it("renders a skipped suite's header as SKIPPED, not GREEN", () => {
+    const base = fullReport();
+    const suite = { ...(base.suites[0] as BenchReportType["suites"][number]) };
+    const report: BenchReportType = {
+      ...base,
+      suites: [{ ...suite, gate: "skipped", warnings: ["tiny: --keep reused existing seed"] }],
+    };
+    const md = renderMarkdown(report);
+    expect(md).toContain(`### ${suite.suite} — SKIPPED`);
+    expect(md).not.toContain(`### ${suite.suite} — GREEN`);
   });
 
   // B02 — a suite may be GREEN and still have something to say. Stage 0 names

@@ -1178,15 +1178,26 @@ export async function runTinySuite(
       timings.seedMs = Math.round(performance.now() - seedStart);
       warnings.push(
         `tiny: --keep reused existing seed (org ${existing.orgId}, competition ${existing.competitionId}) — ` +
-          `pack hash unchanged, seeding and scheduling skipped this run`,
+          `pack hash unchanged, seeding and scheduling skipped this run. No board, no checker, no certificate and ` +
+          `no engine artifact were produced. Pass --wipe for any leg that must actually schedule (required for the ` +
+          `second leg of the two-engine bench protocol — see B04-handoff-2026-09-05.md).`,
       );
       log.info(
         { orgId: existing.orgId, competitionId: existing.competitionId },
         "tiny: --keep short-circuited — reusing a prior run's seed",
       );
+      // T7e: NEVER "green" here. This leg scheduled nothing, checked nothing
+      // and certified nothing — the same class of false pass B04 exists to
+      // catch in the PRODUCT (`CheckerReport.unexercised`), just found in the
+      // bench's own reporting instead. A bare "green" on `actual=n/a` is
+      // exactly what the first live run's leg B produced, and it read as a
+      // clean pass at a glance. "skipped" is a third, non-green `gate` value
+      // (`report.ts`'s `SuiteGateStatus`) that `gateOf` folds into the run-
+      // level "red" — the warning above says why, but the gate itself is what
+      // makes the short circuit impossible to miss.
       return {
         suite: "_tiny",
-        gate: "green",
+        gate: "skipped",
         timings,
         keep,
         solver: { requestedEngine: engine },

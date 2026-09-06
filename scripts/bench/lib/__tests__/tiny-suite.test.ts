@@ -760,7 +760,14 @@ describe("runTinySuite — --keep idempotence (T4)", () => {
       packPath, // the SAME pack content — same hash
       transport: server.transport,
     });
-    expect(report2.gate).toBe("green");
+    // T7e: a short circuit that skipped seeding AND scheduling must never
+    // report a bare green — that is exactly what the first live run's leg B
+    // did (schedule/checker/certificate all skipped, gate GREEN). "skipped"
+    // is a third, non-green `SuiteReport.gate` value; `gateOf` folds it into
+    // the run-level "red" so the whole run cannot silently pass on a leg that
+    // measured nothing.
+    expect(report2.gate).toBe("skipped");
+    expect(report2.gate).not.toBe("green");
     expect((report2.warnings ?? []).join(" | ")).toContain("--keep reused existing seed");
     // The load-bearing assertion: still exactly ONE competition ever created.
     expect(competitionPosts(server.calls)).toHaveLength(1);

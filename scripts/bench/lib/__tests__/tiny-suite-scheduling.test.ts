@@ -571,6 +571,77 @@ describe("runTinySuite — engine artifact and delta", () => {
 });
 
 // ---------------------------------------------------------------------------
+// T7e — a `--keep` short circuit must not fabricate a delta, and must not
+// disturb a sibling leg's own artifact
+// ---------------------------------------------------------------------------
+
+describe("runTinySuite — a --keep short circuit and the engine artifact/delta", () => {
+  it("a skipped second leg writes NO artifact, reports no delta of its own, and leaves leg A's file untouched", async () => {
+    // The exact shape the first live run produced: leg A (placement up,
+    // `--engine optimized`) ran for real and wrote `engine-optimized.json`;
+    // leg B (placement torn down, `--engine greedy`) found the SAME pack hash
+    // under the SAME `--keep` org and short-circuited before writing anything
+    // — and, pre-T7e, reported the same bare "green" leg A did. This proves
+    // the fix end to end through the real write/read pipeline, not only
+    // against `assessEngineDelta`'s own hand-built fixtures.
+    const dir = mkdtempSync(path.join(tmpdir(), "bench-b04-engine-skip-"));
+    try {
+      const runId = "shared-run";
+      // ONE fake server shared across both invocations — its `competitions`
+      // array is what lets leg B's `findExistingSeed` see leg A's row, the
+      // same device `tiny-suite.test.ts`'s own `--keep` idempotence tests use.
+      const server = makeFakeServer();
+
+      const legA = await runTinySuite({
+        base: "http://bench.example",
+        engine: "optimized",
+        keep: true,
+        log: silent,
+        cliEntry: "admin",
+        packPath: TINY_PACK_PATH,
+        transport: server.transport,
+        reportDir: dir,
+        runId,
+      });
+      expect(legA.gate).toBe("green");
+      expect(readdirSync(path.join(dir, runId))).toEqual(["engine-optimized.json"]);
+
+      const legB = await runTinySuite({
+        base: "http://bench.example",
+        engine: "greedy",
+        keep: true,
+        log: silent,
+        cliEntry: "admin",
+        packPath: TINY_PACK_PATH, // SAME pack content — same hash — same org
+        transport: server.transport,
+        reportDir: dir,
+        runId, // the SAME run directory as leg A, exactly like two real legs
+      });
+
+      // The gate fix: never a bare green on a leg that measured nothing.
+      expect(legB.gate).toBe("skipped");
+      expect(legB.gate).not.toBe("green");
+
+      // The skipped leg wrote NOTHING — no `engine-greedy.json` appeared, and
+      // leg A's own file is exactly as it was. A short circuit that still
+      // wrote SOME artifact (even an empty-looking one) would let a later
+      // `--engine both` leg read it as a real leg and compute a delta out of
+      // a run that never scheduled anything.
+      expect(readdirSync(path.join(dir, runId))).toEqual(["engine-optimized.json"]);
+      const untouchedRaw = readFileSync(path.join(dir, runId, "engine-optimized.json"), "utf8");
+      expect(JSON.parse(untouchedRaw)).toMatchObject({ runId, requestedEngine: "optimized" });
+
+      // The skipped leg's OWN report carries no delta at all — it never
+      // reached the point in `runTinySuite` that calls `assessEngineDelta`,
+      // so there is nothing to accidentally fabricate a comparison out of.
+      expect(legB.engineDelta).toBeUndefined();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
 // The pack-derived facts, driven directly
 // ---------------------------------------------------------------------------
 
