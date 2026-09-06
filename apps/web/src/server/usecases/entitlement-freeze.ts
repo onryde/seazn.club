@@ -12,11 +12,7 @@ type Tx = postgres.TransactionSql;
 
 // Competition statuses that count against `competitions.max_active`. A draft
 // IS an active slot — it is work in progress the org is holding open.
-export const ACTIVE_COMPETITION_STATUSES = [
-  "draft",
-  "published",
-  "live",
-] as const;
+export const ACTIVE_COMPETITION_STATUSES = ["draft", "published", "live"] as const;
 
 /**
  * Competition statuses that count against `dashboard.public.max` — the SAME
@@ -262,9 +258,7 @@ async function loadCandidates(tx: Tx): Promise<FreezeCandidate[]> {
  * is gone rather than fixed so the trap cannot be re-set; callers inside a
  * transaction resolve the set first and use `assertNotFrozen` below.
  */
-export async function frozenCompetitionIds(
-  orgId: string,
-): Promise<Set<string>> {
+export async function frozenCompetitionIds(orgId: string): Promise<Set<string>> {
   const limit = await getLimit(orgId, "competitions.max_active");
   if (limit === null) return new Set();
   const run = async (t: Tx): Promise<Set<string>> => {
@@ -295,10 +289,7 @@ export async function frozenCompetitionIds(
  * needs an id the transaction has not read yet, and the entity's own 404 still
  * fires first (an unknown id is never a member of the set).
  */
-export function assertNotFrozen(
-  frozen: ReadonlySet<string>,
-  competitionId: string,
-): void {
+export function assertNotFrozen(frozen: ReadonlySet<string>, competitionId: string): void {
   if (frozen.has(competitionId)) {
     throw new PaymentRequiredError("competitions.max_active");
   }
@@ -333,10 +324,8 @@ export async function assertCompetitionNotFrozen(
 export async function frozenMemberIds(orgId: string): Promise<Set<string>> {
   const limit = await getLimit(orgId, "members.max");
   if (limit === null) return new Set();
-  const rows = await withTenant(
-    orgId,
-    (tx) =>
-      tx<{ user_id: string; role: string; created_at: string }[]>`
+  const rows = await withTenant(orgId, (tx) =>
+    tx<{ user_id: string; role: string; created_at: string }[]>`
       select user_id, role, created_at from org_members
       where org_id = ${orgId} and role <> 'scorer'`,
   );
@@ -352,10 +341,7 @@ export async function frozenMemberIds(orgId: string): Promise<Set<string>> {
 }
 
 /** 402 when this member's seat is frozen (doc 10 §2.4) — call on write auth. */
-export async function assertMemberNotFrozen(
-  orgId: string,
-  userId: string,
-): Promise<void> {
+export async function assertMemberNotFrozen(orgId: string, userId: string): Promise<void> {
   const frozen = await frozenMemberIds(orgId);
   if (frozen.has(userId)) throw new PaymentRequiredError("members.max");
 }

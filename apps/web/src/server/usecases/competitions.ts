@@ -5,32 +5,16 @@ import "server-only";
 import { z } from "zod";
 import { sql, withTenant } from "@/lib/db";
 import { HttpError, PaymentRequiredError } from "@/lib/errors";
-import {
-  invalidateOrgEntitlements,
-  requireFeature,
-  withinLimit,
-} from "@/lib/entitlements";
+import { invalidateOrgEntitlements, requireFeature, withinLimit } from "@/lib/entitlements";
 import { publicDashboardsReason } from "@/lib/feature-copy";
 import { captureServer } from "@/lib/posthog-server";
 import { EVENTS, type AnalyticsEvent } from "@/lib/analytics-events";
 import { log } from "@/server/logger";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { page, type ListQuery, type Page } from "@/server/api-v1/http";
-import {
-  CompetitionStatus,
-  type CreateCompetition,
-  type PatchCompetition,
-  type PublicQuotaDegraded,
-} from "@/server/api-v1/schemas";
-import {
-  fireDiscoveryRevalidate,
-  invalidateDiscoveryCache,
-} from "@/server/public-site/revalidate";
-import {
-  ONBOARDING_EARN,
-  REFERRAL_WELCOME_EARN,
-  tryEarnGrant,
-} from "@/lib/credits";
+import { CompetitionStatus, type CreateCompetition, type PatchCompetition, type PublicQuotaDegraded } from "@/server/api-v1/schemas";
+import { fireDiscoveryRevalidate, invalidateDiscoveryCache } from "@/server/public-site/revalidate";
+import { ONBOARDING_EARN, REFERRAL_WELCOME_EARN, tryEarnGrant } from "@/lib/credits";
 import { invalidateSlugCache } from "@/server/slug-resolve";
 import {
   assertCompetitionNotFrozen,
@@ -66,19 +50,8 @@ export interface CompetitionRow {
 }
 
 const COLS = [
-  "id",
-  "org_id",
-  "name",
-  "slug",
-  "description",
-  "starts_on",
-  "ends_on",
-  "visibility",
-  "branding",
-  "status",
-  "created_at",
-  "discoverable",
-  "discovery",
+  "id", "org_id", "name", "slug", "description", "starts_on", "ends_on",
+  "visibility", "branding", "status", "created_at", "discoverable", "discovery",
 ] as const;
 
 // Slug helpers moved to ./slugs (PROMPT-30) \u2014 re-exported for existing importers.
@@ -96,12 +69,8 @@ export { slugify } from "./slugs";
  *  the product tour's centered welcome card, which would otherwise land on
  *  top of the org-home empty-state CTA on a brand-new org). */
 export async function hasAnyCompetitions(auth: AuthCtx): Promise<boolean> {
-  const rows = await withTenant(
-    auth.orgId,
-    (tx) =>
-      tx<
-        { exists: boolean }[]
-      >`select exists(select 1 from competitions) as exists`,
+  const rows = await withTenant(auth.orgId, (tx) =>
+    tx<{ exists: boolean }[]>`select exists(select 1 from competitions) as exists`,
   );
   return rows[0]?.exists ?? false;
 }
@@ -134,10 +103,7 @@ export async function listCompetitions(
           order by created_at desc, id desc limit ${query.limit + 1}`,
   );
   const frozen = await frozenCompetitionIds(auth.orgId);
-  return page(
-    rows.map((r) => ({ ...r, frozen: frozen.has(r.id) })),
-    query.limit,
-  );
+  return page(rows.map((r) => ({ ...r, frozen: frozen.has(r.id) })), query.limit);
 }
 
 // Doc 10 §1: `competitions.max_active` — draft/published/live competitions
@@ -154,11 +120,7 @@ export async function listCompetitions(
 // — reused, not restated, so the two can never disagree about the boundary.
 export async function assertActiveQuota(auth: AuthCtx): Promise<void> {
   const count = await countActiveCompetitions(auth.orgId);
-  const { ok } = await withinLimit(
-    auth.orgId,
-    "competitions.max_active",
-    count + 1,
-  );
+  const { ok } = await withinLimit(auth.orgId, "competitions.max_active", count + 1);
   if (!ok) throw new PaymentRequiredError("competitions.max_active");
 }
 
@@ -190,10 +152,7 @@ export async function assertActiveQuota(auth: AuthCtx): Promise<void> {
  * DEGRADE rather than refuse (T15/F, owner ruling 2026-09-03) while the patch
  * path still 402s.
  */
-export async function withinPublicQuota(
-  auth: AuthCtx,
-  excludeId?: string,
-): Promise<{ ok: boolean; limit: number | null }> {
+export async function withinPublicQuota(auth: AuthCtx, excludeId?: string): Promise<{ ok: boolean; limit: number | null }> {
   const count = await countPublicDashboards(auth.orgId, excludeId);
   return withinLimit(auth.orgId, "dashboard.public.max", count + 1);
 }
@@ -204,10 +163,7 @@ export async function withinPublicQuota(
  *  the export — no longer calls it. Kept exported alongside
  *  `withinPublicQuota` so the boolean and asserting forms stay one pair with
  *  one visibility. */
-export async function assertPublicQuota(
-  auth: AuthCtx,
-  excludeId?: string,
-): Promise<void> {
+export async function assertPublicQuota(auth: AuthCtx, excludeId?: string): Promise<void> {
   const { ok, limit } = await withinPublicQuota(auth, excludeId);
   // The cap travels WITH the refusal rather than being restated in copy: the
   // flat sentence in `feature-copy.ts` said "one public dashboard at a time"
@@ -289,10 +245,7 @@ export async function resolveCreateVisibility(
  *  funnel too. P4 review (2026-08-13) finding 1: an earlier draft of the
  *  template path called no emitter at all, so a feature built to lower
  *  friction to a first competition could not be measured doing it. */
-export async function fireCompetitionCreated(
-  auth: AuthCtx,
-  visibility: string,
-): Promise<void> {
+export async function fireCompetitionCreated(auth: AuthCtx, visibility: string): Promise<void> {
   await captureServer({
     event: EVENTS.COMPETITION_CREATED,
     distinctId: auth.userId ?? `org:${auth.orgId}`,
@@ -315,10 +268,7 @@ export async function fireCompetitionCreated(
  *  second one it missed, of exactly two (the other is patchCompetition's
  *  transition-into-public case below, unaffected — a template never PATCHes
  *  during instantiation). */
-export async function fireCompetitionMadePublic(
-  auth: AuthCtx,
-  competitionId: string,
-): Promise<void> {
+export async function fireCompetitionMadePublic(auth: AuthCtx, competitionId: string): Promise<void> {
   await captureServer({
     event: EVENTS.COMPETITION_MADE_PUBLIC,
     distinctId: auth.userId ?? `org:${auth.orgId}`,
@@ -361,10 +311,7 @@ export async function createCompetition(
   if (input.discoverable === true) {
     await requireFeature(auth.orgId, "discovery.listed");
     if (input.visibility !== "public") {
-      throw new HttpError(
-        422,
-        "Only public competitions can be showcased on seazn.club",
-      );
+      throw new HttpError(422, "Only public competitions can be showcased on seazn.club");
     }
   }
   const discoverable = !degraded && input.discoverable === true;
@@ -372,10 +319,7 @@ export async function createCompetition(
     // The insert is shared by both slug paths so the generated one can be
     // RETRIED against the unique index — `q` is the savepoint the retry rolls
     // back to, and must be used in place of `tx` inside it.
-    const insert = async (
-      slug: string,
-      q: postgres.TransactionSql,
-    ): Promise<CompetitionRow> => {
+    const insert = async (slug: string, q: postgres.TransactionSql): Promise<CompetitionRow> => {
       const [row] = await q<CompetitionRow[]>`
         insert into competitions (org_id, name, slug, description, starts_on, ends_on,
                                   visibility, branding, discoverable, created_by)
@@ -393,10 +337,8 @@ export async function createCompetition(
       if (RESERVED_ENTITY_SLUGS.has(input.slug)) {
         throw new HttpError(422, `slug '${input.slug}' is reserved`);
       }
-      const [existing] =
-        await tx`select 1 from competitions where slug = ${input.slug}`;
-      if (existing)
-        throw new HttpError(409, `slug '${input.slug}' is already in use`);
+      const [existing] = await tx`select 1 from competitions where slug = ${input.slug}`;
+      if (existing) throw new HttpError(409, `slug '${input.slug}' is already in use`);
       created = await insert(input.slug, tx);
     } else {
       created = await withUniqueSlug(
@@ -405,8 +347,7 @@ export async function createCompetition(
           base: slugify(input.name),
           constraint: SLUG_CONSTRAINT.competitions,
           taken: async (s) => {
-            const [taken] =
-              await tx`select 1 from competitions where slug = ${s}`;
+            const [taken] = await tx`select 1 from competitions where slug = ${s}`;
             return !!taken;
           },
         },
@@ -467,10 +408,7 @@ export async function createCompetition(
 // costs one extra round trip and cannot self-deadlock. Same phase boundary
 // autoSchedule documents: transaction for the read, no pooled connection held
 // for the unbounded work.
-export async function getCompetition(
-  auth: AuthCtx,
-  id: string,
-): Promise<CompetitionRow> {
+export async function getCompetition(auth: AuthCtx, id: string): Promise<CompetitionRow> {
   const row = await withTenant(auth.orgId, async (tx) => {
     const [found] = await tx<CompetitionRow[]>`
       select ${tx(COLS)} from competitions where id = ${id}`;
@@ -576,8 +514,7 @@ export async function patchCompetition(
   }
   // Doc 15 §5: listing is free on every tier, but the gate stays server-side
   // so a plan without the key (or a staff override) can switch it off.
-  if (patch.discoverable === true)
-    await requireFeature(auth.orgId, "discovery.listed");
+  if (patch.discoverable === true) await requireFeature(auth.orgId, "discovery.listed");
   // Presentation depth is the paid layer (doc 15 §1): tagline/hero → 402.
   if (patch.discovery?.tagline || patch.discovery?.hero_image_path) {
     await requireFeature(auth.orgId, "discovery.branding");
@@ -593,22 +530,14 @@ export async function patchCompetition(
       }
       const [taken] = await tx`
         select 1 from competitions where slug = ${patch.slug} and id <> ${id}`;
-      if (taken)
-        throw new HttpError(409, `slug '${patch.slug}' is already in use`);
+      if (taken) throw new HttpError(409, `slug '${patch.slug}' is already in use`);
     }
     const [before] = await tx<
-      {
-        visibility: string;
-        discoverable: boolean;
-        status: string;
-        name: string;
-        slug: string;
-      }[]
+      { visibility: string; discoverable: boolean; status: string; name: string; slug: string }[]
     >`
       select visibility, discoverable, status, name, slug from competitions where id = ${id}`;
     if (!before) throw new HttpError(404, "competition not found");
-    if (patch.status && patch.status !== before.status)
-      statusChangedTo = patch.status;
+    if (patch.status && patch.status !== before.status) statusChangedTo = patch.status;
     oldVisibility = before.visibility;
     // Growth-loop gate (SPEC-5 §2, v17 gap #296): count divisions here, in
     // the same tenant tx, only when the patch might trigger the earn grants
@@ -623,23 +552,15 @@ export async function patchCompetition(
     const effective = { ...patch };
     // Rename regenerates the slug (v3/01 §2); the old slug keeps redirecting
     // via slug_history, so links and QR codes survive.
-    const regenerating =
-      !patch.slug && !!patch.name && patch.name !== before.name;
+    const regenerating = !patch.slug && !!patch.name && patch.name !== before.name;
     const nextVisibility = patch.visibility ?? before.visibility;
     // Hard coupling (doc 15 §1): never leak a non-public competition to
     // discovery. Turning it on needs `public`; dropping visibility
     // auto-disables it in the SAME tx.
     if (effective.discoverable === true && nextVisibility !== "public") {
-      throw new HttpError(
-        422,
-        "Only public competitions can be showcased on seazn.club",
-      );
+      throw new HttpError(422, "Only public competitions can be showcased on seazn.club");
     }
-    if (
-      nextVisibility !== "public" &&
-      before.discoverable &&
-      effective.discoverable !== false
-    ) {
+    if (nextVisibility !== "public" && before.discoverable && effective.discoverable !== false) {
       effective.discoverable = false;
     }
 
@@ -686,10 +607,7 @@ export async function patchCompetition(
           // for a rename that did not happen.
           (slug, sp) => {
             previousSlug = null;
-            return update(
-              slug === before.slug ? effective : { ...effective, slug },
-              sp,
-            );
+            return update(slug === before.slug ? effective : { ...effective, slug }, sp);
           },
         )
       : await update(effective, tx);
@@ -709,13 +627,7 @@ export async function patchCompetition(
     const discoveryTouched =
       before.discoverable !== row.discoverable ||
       (row.discoverable &&
-        Boolean(
-          patch.discovery ??
-          patch.name ??
-          patch.starts_on ??
-          patch.ends_on ??
-          patch.status,
-        ));
+        Boolean(patch.discovery ?? patch.name ?? patch.starts_on ?? patch.ends_on ?? patch.status));
     return { row, discoveryTouched };
   });
   // v17 #287: ANY competition write can move status/ends_on, which the Event
@@ -736,13 +648,7 @@ export async function patchCompetition(
   }
   // A rename busts the cached slug resolution (old + new key) — outside the
   // tx, same reasoning as the discovery invalidation above.
-  if (previousSlug)
-    await invalidateSlugCache(
-      "competition",
-      auth.orgId,
-      previousSlug,
-      row.slug,
-    );
+  if (previousSlug) await invalidateSlugCache("competition", auth.orgId, previousSlug, row.slug);
   // Lifecycle events (feature 1): tournament start/finish. Pure helper so
   // the rule is unit-tested without a DB (mirrors shouldFireMadePublic).
   const lifecycleEvent = competitionLifecycleEvent(statusChangedTo);
@@ -780,26 +686,16 @@ export async function patchCompetition(
       const [orgRow] = await sql<{ referred_by_org_id: string | null }[]>`
         select referred_by_org_id from organizations where id = ${auth.orgId}`;
       if (orgRow?.referred_by_org_id) {
-        await tryEarnGrant(
-          auth.orgId,
-          "referral_welcome",
-          REFERRAL_WELCOME_EARN,
-        );
+        await tryEarnGrant(auth.orgId, "referral_welcome", REFERRAL_WELCOME_EARN);
       }
     } catch (err) {
-      log.error(
-        { err, orgId: auth.orgId },
-        "competitions: growth earn grants failed",
-      );
+      log.error({ err, orgId: auth.orgId }, "competitions: growth earn grants failed");
     }
   }
   return row;
 }
 
-export async function deleteCompetition(
-  auth: AuthCtx,
-  id: string,
-): Promise<void> {
+export async function deleteCompetition(auth: AuthCtx, id: string): Promise<void> {
   return withTenant(auth.orgId, async (tx) => {
     // Guard: no deleting a competition with recorded play (ledger is precious).
     const [scored] = await tx`
@@ -808,10 +704,7 @@ export async function deleteCompetition(
       join divisions d on d.id = f.division_id
       where d.competition_id = ${id} limit 1`;
     if (scored) {
-      throw new HttpError(
-        409,
-        "competition has recorded score events — archive it instead",
-      );
+      throw new HttpError(409, "competition has recorded score events — archive it instead");
     }
     // Money guards (payments-hardening spec P0-1): a delete would CASCADE
     // paid registrations, the Event Pass, and comp-scoped sponsorship —
@@ -825,10 +718,7 @@ export async function deleteCompetition(
     const [pass] = await tx`
       select 1 from competition_passes where competition_id = ${id} limit 1`;
     if (pass) {
-      throw new HttpError(
-        409,
-        "competition has an Event Pass — archive it instead",
-      );
+      throw new HttpError(409, "competition has an Event Pass — archive it instead");
     }
     const [liveMoney] = await tx`
       select 1 from registrations r
@@ -866,8 +756,7 @@ export async function deleteCompetition(
       delete from sponsor_orders o
       using sponsor_packages p
       where p.id = o.package_id and p.competition_id = ${id}`;
-    const deleted =
-      await tx`delete from competitions where id = ${id} returning id`;
+    const deleted = await tx`delete from competitions where id = ${id} returning id`;
     if (deleted.length === 0) throw new HttpError(404, "competition not found");
   });
 }
