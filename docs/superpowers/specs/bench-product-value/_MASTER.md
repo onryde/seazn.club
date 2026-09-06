@@ -3,7 +3,7 @@
 One page to sequence ACROSS programmes. Session content lives in each
 programme's own `_INDEX.md` + prompts — never duplicated here. Update
 this file whenever a programme's status or a cross-gate changes.
-Last updated: 2026-08-27.
+Last updated: 2026-09-06.
 
 ## The four active programmes
 
@@ -12,7 +12,7 @@ Last updated: 2026-08-27.
 | ScoringPad v2 (#407) | `../2026-08-06-scoringpad-v2-prompts/_INDEX.md` | S1–S13, L1–L3 | S1–S9 done; S10 in flight; S11–S13, L-lane open |
 | Release-2 scheduling | `../2026-08-12-release2-prompts/_INDEX.md` | C0–C8 | C0 done; C1 in flight; C2–C8 open |
 | Product portfolio (D1–D7) | `portfolio-prompts/_INDEX.md` | P1–P11 | authored; build-gated per session (owner green-light) |
-| Scheduler bench | `bench-prompts/_INDEX.md` | B00–B18 (+B03r, B16) | gate open; B00 done 2026-08-26; B01 merged #658; B03r/B16 (registration + customer journey) gated on RS010 |
+| Scheduler bench | `bench-prompts/_INDEX.md` | B00–B18 (+B03r, B16) | gate open; **B00–B04 all merged** (B04 = #731 `6e70c7270`, 2026-09-06); **B05 next**, ungated but needs an owner green-light; B16 still gated (B03r, B05, B06) |
 | Registration redesign | `../2026-08-16-registration-redesign-prompts/_INDEX.md` | RS001–RS011 | RS001–RS006 merged; RS007–RS011 + RS010 open |
 | Format progression | `../2026-08-17-format-progression-prompts/_INDEX.md` | F1–F5 | F1 + F2 authored (F1 also planned); F3–F5 written after F2 **merges**. **F1 waits for L3/#414** (shared `stages.ts`) |
 
