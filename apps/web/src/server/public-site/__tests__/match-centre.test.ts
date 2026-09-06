@@ -636,6 +636,42 @@ describe("buildMatchCentre — cricket", () => {
       expect(doc.header.subLines).toEqual([null, null]);
     });
 
+    // The open set is whichever one the ENGINE'S mask says is open, and this
+    // is the case that tells the two readings apart: an open set followed by
+    // a closed one. Reading `closedMask[length - 1]` answers "everything is
+    // closed" and drops the live score; scanning for the first `false` finds
+    // it. No sport emits this ordering today — a set closes before the next
+    // opens — which is exactly why the first draft's positional read looked
+    // correct and why this test has to construct the mask rather than wait
+    // for a fixture to produce one. What is being pinned is the contract the
+    // function claims to follow, not a match anyone will play.
+    it("the OPEN set is the one the engine's mask marks open, not the last column — an open set followed by a closed one still reports", () => {
+      const doc = buildMatchCentre(
+        input({
+          sportKey: "tennis",
+          cfg: tennis.configSchema.parse({}),
+          events: [],
+          fixture: F({
+            status: "in_play",
+            summary: {
+              headline: "0 — 0",
+              perSide: [
+                { entrantId: "home", line: "0" },
+                { entrantId: "away", line: "0" },
+              ],
+              detail: {
+                sets: [
+                  { home: 6, away: 4, closed: false },
+                  { home: 2, away: 1, closed: true },
+                ],
+              },
+            },
+          }),
+        }),
+      );
+      expect(doc.header.subLines).toEqual(["(6)", "(4)"]);
+    });
+
     it("cricket (a DIFFERENT `detail` shape entirely — no `sets` array) is UNAFFECTED — subLines stays [null, null]", () => {
       const doc = buildMatchCentre(input({ sportKey: "cricket", fixture: F({ status: "scheduled" }) }));
       expect(doc.header.subLines).toEqual([null, null]);

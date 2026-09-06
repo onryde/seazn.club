@@ -441,10 +441,24 @@ describe("teamShortOf / personShortCandidates / disambiguatedShorts (R11 fix rou
     expect([home, away]).toEqual(["SMI1", "SMI2"]);
   });
 
+  // Two long surnames sharing their first four letters: every rung inside the
+  // chip collides, so this lands on the tie-break rather than on an eight-
+  // character surname. Pinned by value, because "short" and "different" were
+  // both true of ANDERSEN/ANDERSON and it was still the defect.
+  it("disambiguatedShorts: surnames that collide for longer than the badge is wide fall to the tie-break, never to the full surname", () => {
+    const [home, away] = disambiguatedShorts(
+      { name: "John Andersen", isPerson: true },
+      { name: "John Anderson", isPerson: true },
+    );
+    expect(home).toBe("AND1");
+    expect(away).toBe("AND2");
+    expect(personShortCandidates("John Andersen")).not.toContain("ANDERSEN");
+  });
+
   // The badge chips are `h-6 w-6` (24x24px) with `items-center justify-center`
   // and no `truncate`, so EVERY resolved pair owes a short label, not just the
   // pairs someone thought to name above. One case per rung of the ladder,
-  // including the two degenerate ones that reach the tie-break.
+  // including the degenerate ones that reach the tie-break.
   it("disambiguatedShorts: every colliding shape resolves inside the badge chip's width, not just the named ones", () => {
     const pairs: Array<[string, string]> = [
       ["Player One", "Player Two"],
@@ -453,6 +467,16 @@ describe("teamShortOf / personShortCandidates / disambiguatedShorts (R11 fix rou
       ["John Smith", "John Smith"],
       ["Wolfeschlegelsteinhausenbergerdorff", "Wolfeschlegelsteinhausenbergerdorff"],
       ["Ann-Marie de la Cruz", "Ann-Marie de la Cruz"],
+      // Two long surnames sharing a four-letter prefix. This pair is the one
+      // the re-review caught: the ladder's terminal rungs went out unsliced,
+      // so it resolved to ANDERSEN/ANDERSON — eight characters, and this very
+      // test would have vouched for it.
+      ["John Andersen", "John Anderson"],
+      ["Maria Fernandez-Garcia", "Marco Fernandez-Garrido"],
+      // A name whose surname is one letter, and a single-word name — the two
+      // shapes where the early rungs cannot reach three characters at all.
+      ["Kim Y", "Lee Y"],
+      ["Ronaldinho", "Ronaldo"],
     ];
     for (const [nameA, nameB] of pairs) {
       const [home, away] = disambiguatedShorts({ name: nameA, isPerson: true }, { name: nameB, isPerson: true });

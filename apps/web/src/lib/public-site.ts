@@ -448,6 +448,18 @@ function compactWord(word: string): string {
   return word.replace(/[^\p{L}\p{N}]/gu, "").toUpperCase();
 }
 
+/**
+ * How wide a badge label may be. The chips these labels land in are `h-6 w-6`
+ * — 24x24px, `items-center justify-center`, no `truncate` — in
+ * `timeline-tab.tsx`'s `SideBadge` and `sets-tab.tsx`'s row badge, so anything
+ * wider does not shrink or clip: it spills out of the box. Four characters is
+ * the widest the ladder's own early rungs already produce (`surname.slice(0,
+ * 4)`, `first.slice(0, 2) + surname.slice(0, 2)`), which is what makes it the
+ * ceiling rather than an invented number. If those chips ever grow, this
+ * constant and their classes move together.
+ */
+const BADGE_MAX_CHARS = 4;
+
 /** The existing team-style rule, unchanged by C9: first three compacted
  *  letters of the whole name ("Blazers" -> "BLA"). */
 export function teamShortOf(name: string): string {
@@ -459,7 +471,8 @@ export function teamShortOf(name: string): string {
  * Ordered, increasingly specific abbreviations for a PERSON's name — surname
  * first (how a spectator actually tells two players apart), then initial +
  * surname, widening only as far as needed to disambiguate two entrants that
- * would otherwise render identically. Never empty.
+ * would otherwise render identically. Never empty, and never wider than
+ * `BADGE_MAX_CHARS` — see the note on `add`.
  */
 export function personShortCandidates(name: string): string[] {
   const words = name
@@ -481,8 +494,19 @@ export function personShortCandidates(name: string): string[] {
   // shared first-and-last-word pair still differs.
   const middle = words.length > 2 ? words.slice(1, -1).join("") : "";
   const out: string[] = [];
+  // Every rung is clamped to the chip, not just the early ones. The re-review
+  // of this round caught the three terminal rungs going out unsliced — the
+  // full surname, the full middle words, the whole compacted name — which
+  // resolved "John Andersen" against "John Anderson" as ANDERSEN/ANDERSON,
+  // eight characters in the same 24x24px box the ladder's early rungs are
+  // sized for. A candidate wider than the box does not disambiguate anything:
+  // it renders as overflow whatever it says. So the ladder ends at the box,
+  // and a pair that collides through every rung inside it falls to
+  // `disambiguatedShorts`'s positional tie-break — which stays legible, and
+  // is honest that the two names are indistinguishable at this width.
   const add = (s: string) => {
-    if (s.length > 0 && !out.includes(s)) out.push(s);
+    const clamped = s.slice(0, BADGE_MAX_CHARS);
+    if (clamped.length > 0 && !out.includes(clamped)) out.push(clamped);
   };
   add(surname.slice(0, 3));
   if (words.length > 1) add(`${first.slice(0, 1)}${surname.slice(0, 2)}`);

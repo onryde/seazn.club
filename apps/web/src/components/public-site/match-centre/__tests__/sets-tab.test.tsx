@@ -234,6 +234,12 @@ describe("SetsTab", () => {
     expect(html).toContain("H1");
     expect(html).toContain("H2");
     expect(html).not.toContain("Period 1");
+    // The caption's own fallback arm, which moving the map into
+    // `sets-vocabulary.ts` left unasserted: with no `unit` there is nothing
+    // BUT the shape to answer with, so a periods-shaped legacy document still
+    // captions "Periods". Anchored — "Periods" also appears in the region's
+    // `aria-label`, which is the same string and would mask a broken caption.
+    expect(html).toContain(`>${en["matchCentre.periods"]}<`);
   });
 
   it("the caption distinguishes sets from periods", () => {

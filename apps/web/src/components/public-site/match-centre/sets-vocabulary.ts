@@ -11,7 +11,13 @@
 // is what the schema branches on. `unit` says what a column is CALLED. They
 // are not interchangeable: every `unit` here appears under `kind: "sets"`
 // except `period`, and `timeline.ts`'s `buildSets` is the producer of both.
-export type SetsUnit = "set" | "game" | "period";
+import type { SetsViewT } from "@/server/public-site/match-centre-schema";
+
+// Derived from the schema, never re-typed: `SetsView.unit` is a zod enum, and
+// a hand-written copy of it here would keep compiling on the day a sport adds
+// a unit — leaving this map silently missing an arm. `NonNullable` because the
+// field is optional and the absence case is the fallback below, not a member.
+export type SetsUnit = NonNullable<SetsViewT["unit"]>;
 
 export const SETS_LABEL_KEY: Record<SetsUnit, string> = {
   set: "matchCentre.sets",
