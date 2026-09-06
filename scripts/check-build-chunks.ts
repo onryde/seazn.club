@@ -115,13 +115,14 @@ if (manifestFiles.length === 0) {
 const loadManifest = (file: string): { route: string; manifest: ClientReferenceManifest } => {
   const src = readFileSync(file, "utf8");
   const sandbox: RSCGlobal = {};
+  // eslint-disable-next-line @typescript-eslint/no-implied-eval, @typescript-eslint/no-unsafe-call -- deliberate, for the reason given directly above: a manifest chunk is a bare `globalThis.__RSC_MANIFEST[route] = {...}` assignment with no export, so it is executed against a throwaway sandbox rather than imported.
   new Function("globalThis", src)(sandbox);
   const routes = Object.keys(sandbox.__RSC_MANIFEST ?? {});
   if (routes.length !== 1) {
     throw new Error(`${file}: expected exactly one __RSC_MANIFEST route key, found ${routes.length}`);
   }
-  const route = routes[0]!;
-  return { route, manifest: sandbox.__RSC_MANIFEST![route]! };
+  const route = routes[0];
+  return { route, manifest: sandbox.__RSC_MANIFEST![route] };
 };
 
 // `/_next/static/chunks/x.js` (clientModules) and `static/chunks/x.js`

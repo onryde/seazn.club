@@ -255,7 +255,7 @@ function tiersDiffer(
 ): boolean {
   if (live.length !== wanted.length) return true;
   return wanted.some(
-    (t, i) => !sameUpTo(live[i]!.up_to, t.up_to) || live[i]!.unit_amount !== amount(t),
+    (t, i) => !sameUpTo(live[i].up_to, t.up_to) || live[i].unit_amount !== amount(t),
   );
 }
 

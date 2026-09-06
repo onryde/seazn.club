@@ -76,7 +76,16 @@ async function raw(
     if (m[2] === "") delete s.cookies[m[1]];
     else s.cookies[m[1]] = m[2];
   }
+  // Two disables, one cause: `res.json()` is `any`, and this is the single
+  // boundary the whole file's `call()` chain hangs off. Typing it here means
+  // giving `call()` a non-`any` return, which reds ~18k lines of untyped member
+  // access at tsc — a real piece of work, deliberately not this change's. The
+  // three seed/repro scripts with the same shape are relaxed per-file in
+  // eslint.config.mjs; smoke.ts is pinned to these two lines instead so every
+  // other unsafe-any in it still errors.
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
   const json = await res.json().catch(() => ({ ok: false, error: "no json" }));
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
   return { status: res.status, json };
 }
 
@@ -90,7 +99,8 @@ let pass = 0;
 let fail = 0;
 const check = (label: string, cond: boolean) => {
   console.log(`${cond ? "PASS" : "FAIL"}  ${label}`);
-  cond ? pass++ : fail++;
+  if (cond) pass++;
+  else fail++;
 };
 async function expectFail(label: string, fn: () => Promise<unknown>) {
   try {
@@ -1148,7 +1158,7 @@ async function f5RemainderExportLocaleSuite(): Promise<void> {
       role_keys: ["referee"],
     }),
   );
-  await v1(s, `/api/v1/fixtures/${gen.fixtures[0]!.id}/officials`, "PATCH", {
+  await v1(s, `/api/v1/fixtures/${gen.fixtures[0].id}/officials`, "PATCH", {
     set: [{ official_id: official.id, role_key: "referee", locked: false }],
   });
   const rota = await fetch(`${BASE}/api/v1/divisions/${div.id}/exports/officials_rota?format=pdf`, {
@@ -1302,8 +1312,8 @@ async function personMergeSuite(): Promise<void> {
     "#404: the absorbed person carries a live suspension before the merge",
     banned.status === 201 &&
       before.length === 1 &&
-      before[0]!.personId === dupe.id &&
-      before[0]!.reason === REASON,
+      before[0].personId === dupe.id &&
+      before[0].reason === REASON,
   );
 
   // --- The queue ranks the pair and shows its working.
@@ -1358,9 +1368,9 @@ async function personMergeSuite(): Promise<void> {
   check(
     "#404: the merge preserves the suspension, repointed to the survivor",
     after.length === 1 &&
-      after[0]!.personId === keep.id &&
-      after[0]!.reason === REASON &&
-      after[0]!.matchesTotal === 2,
+      after[0].personId === keep.id &&
+      after[0].reason === REASON &&
+      after[0].matchesTotal === 2,
   );
 
   // --- The merge is durable, not a toast the panel forgets on reload.
@@ -1392,7 +1402,7 @@ async function personMergeSuite(): Promise<void> {
       restoredIds.includes(keep.id) &&
       restoredIds.includes(dupe.id) &&
       restoredBans.length === 1 &&
-      restoredBans[0]!.personId === dupe.id,
+      restoredBans[0].personId === dupe.id,
   );
 
   const undoTwice = await v1(owner, `/api/v1/persons/merges/${result.merge_id}/reverse`, "POST", {
@@ -1549,8 +1559,8 @@ async function p72Suite(): Promise<void> {
     "p72: a community card division with Connect OFF reads payments_unavailable",
     brokeInfo.status === 200 &&
       brokeDivs.length === 1 &&
-      brokeDivs[0]!.open === false &&
-      brokeDivs[0]!.closed_reason === "payments_unavailable",
+      brokeDivs[0].open === false &&
+      brokeDivs[0].closed_reason === "payments_unavailable",
   );
 
   // Connect LIVE → the same free-plan org's card division is OPEN: paid intake
@@ -1575,8 +1585,8 @@ async function p72Suite(): Promise<void> {
     "p72: with Connect live a community card division is OPEN (registration.paid is free-tier)",
     okInfo.status === 200 &&
       okDivs.length === 1 &&
-      okDivs[0]!.open === true &&
-      okDivs[0]!.closed_reason === null,
+      okDivs[0].open === true &&
+      okDivs[0].closed_reason === null,
   );
 
   // === CRON: the hourly stuck-webhook sweep (Task 12/P1-7). ===
@@ -1726,7 +1736,7 @@ async function smokePlanMatrix(): Promise<void> {
         role_keys: ["referee"],
       }),
     );
-    await v1(owner, `/api/v1/fixtures/${feedFixtures[0]!.id}/officials`, "PATCH", {
+    await v1(owner, `/api/v1/fixtures/${feedFixtures[0].id}/officials`, "PATCH", {
       set: [{ official_id: official.id, role_key: "referee", locked: false }],
     });
     const offInvite = await v1(owner, `/api/v1/officials/${official.id}/invite`, "POST", {
@@ -1737,7 +1747,7 @@ async function smokePlanMatrix(): Promise<void> {
     await call(officialSession, `/api/claims/${offToken}/accept`, "POST");
     const offAccept = await v1(
       officialSession,
-      `/api/v1/me/assigned-fixtures/${feedFixtures[0]!.id}/response`,
+      `/api/v1/me/assigned-fixtures/${feedFixtures[0].id}/response`,
       "PATCH",
       {
         response: "accepted",
@@ -1748,10 +1758,10 @@ async function smokePlanMatrix(): Promise<void> {
       `matrix/${key}: the official sees their duty in the officiating lane`,
       offAccept.status === 200 && Array.isArray(offDuties) && offDuties.length > 0,
     );
-    const offState = await v1(officialSession, `/api/v1/fixtures/${feedFixtures[0]!.id}/state`);
+    const offState = await v1(officialSession, `/api/v1/fixtures/${feedFixtures[0].id}/state`);
     const offScore = await v1(
       officialSession,
-      `/api/v1/fixtures/${feedFixtures[0]!.id}/events`,
+      `/api/v1/fixtures/${feedFixtures[0].id}/events`,
       "POST",
       {
         expected_seq: v1data<{ last_seq: number }>(offState).last_seq,
@@ -1776,10 +1786,10 @@ async function smokePlanMatrix(): Promise<void> {
     const scorerAssigned = v1data<unknown[]>(
       await v1(scorerSession, "/api/v1/me/assigned-fixtures"),
     );
-    const scorerState = await v1(scorerSession, `/api/v1/fixtures/${feedFixtures[1]!.id}/state`);
+    const scorerState = await v1(scorerSession, `/api/v1/fixtures/${feedFixtures[1].id}/state`);
     const scorerScore = await v1(
       scorerSession,
-      `/api/v1/fixtures/${feedFixtures[1]!.id}/events`,
+      `/api/v1/fixtures/${feedFixtures[1].id}/events`,
       "POST",
       {
         expected_seq: v1data<{ last_seq: number }>(scorerState).last_seq,
@@ -2323,7 +2333,7 @@ async function passGrantsSuite(): Promise<void> {
       await v1(s, `/api/v1/stages/${stage.id}/generate`, "POST"),
     ).fixtures;
     await v1(s, `/api/v1/divisions/${div.id}/start`, "POST");
-    board[key] = { divId: div.id, fixtureId: fixtures[0]!.id };
+    board[key] = { divId: div.id, fixtureId: fixtures[0].id };
   }
 
   // === entrants.per_division.max — community 64, pass 128 (V319) ==========
@@ -2361,7 +2371,7 @@ async function passGrantsSuite(): Promise<void> {
   // max probe just below needs. The "AI credits stay at the community figure
   // org-wide, unaffected by the pass" half of this story is covered by the
   // org-wide entitlements check further down (`ai.credits.monthly === 10`).
-  const passAiDiv = await mkDiv(passComp.id, "AI Five");
+  await mkDiv(passComp.id, "AI Five");
 
   // === divisions.per_competition.max — community 4, pass 10 (V319) =========
   // The sibling (no pass) already holds two divisions (Board, Entrant Cap);
@@ -2431,6 +2441,7 @@ async function passGrantsSuite(): Promise<void> {
     const wb = new ExcelJS.Workbook();
     await wb.xlsx.load(await res.arrayBuffer());
     const cells: string[] = [];
+    // eslint-disable-next-line @typescript-eslint/no-base-to-string -- exceljs CellValue includes object arms; this sheet's column 1 is text and the assertion compares text, so the existing stringification is kept rather than swapped for `.text`, which formats dates and numbers differently.
     wb.worksheets[0]?.eachRow((row) => cells.push(String(row.getCell(1).value ?? "")));
     return cells;
   };
@@ -2881,7 +2892,7 @@ async function passRungLSuite(): Promise<void> {
     proDivisionsOk,
   );
 
-  const proDivId = proDivIds[0]!;
+  const proDivId = proDivIds[0];
   const pro256 = await v1(
     pro,
     `/api/v1/divisions/${proDivId}/entrants`,
@@ -3023,9 +3034,9 @@ async function clubsSuite(): Promise<void> {
     "clubs pro: squad saved with the quick-added captain (#7)",
     squad.status === 200 &&
       members.length === 1 &&
-      members[0]!.person_id === personId &&
-      members[0]!.is_captain === true &&
-      members[0]!.squad_number === 7,
+      members[0].person_id === personId &&
+      members[0].is_captain === true &&
+      members[0].squad_number === 7,
   );
 
   // Enroll the team → the entrant roster is a ONE-TIME snapshot of the squad;
@@ -3054,7 +3065,7 @@ async function clubsSuite(): Promise<void> {
   const enrolled = await v1(pro, `/api/v1/divisions/${syncDivId}/entrants`, "POST", [
     { kind: "team", team_id: teamId, members: [] },
   ]);
-  const entrantId = v1data<{ id: string }[]>(enrolled)[0]!.id;
+  const entrantId = v1data<{ id: string }[]>(enrolled)[0].id;
   const seeded = await v1(pro, `/api/v1/entrants/${entrantId}`);
   check(
     "clubs pro: enrollment seeded the roster from the squad (snapshot of 1)",
@@ -3086,7 +3097,7 @@ async function clubsSuite(): Promise<void> {
   ]);
   const soloSync = await v1(
     pro,
-    `/api/v1/entrants/${v1data<{ id: string }[]>(solo)[0]!.id}/roster/sync`,
+    `/api/v1/entrants/${v1data<{ id: string }[]>(solo)[0].id}/roster/sync`,
     "POST",
     {},
   );
@@ -3280,8 +3291,8 @@ async function extraOrgAddonSuite(): Promise<void> {
     const [orgRow] = await db<{ wallet_id: string }[]>`
       select coalesce(subscription_id::text, id::text) as wallet_id
         from organizations where id = ${auth.org_id}`;
-    const payerUserId = ownerRow!.id;
-    const walletId = orgRow!.wallet_id;
+    const payerUserId = ownerRow.id;
+    const walletId = orgRow.wallet_id;
 
     // Fill the group to the Pro Plus cap of 10 — nine more organisations on the
     // same subscription, owned by the payer. Both caps must read "at 10": the
@@ -3295,8 +3306,8 @@ async function extraOrgAddonSuite(): Promise<void> {
                 ${payerUserId}, ${walletId})
         returning id`;
       await db`insert into org_members (org_id, user_id, role)
-               values (${seeded!.id}, ${payerUserId}, 'owner')`;
-      fillIds.push(seeded!.id);
+               values (${seeded.id}, ${payerUserId}, 'owner')`;
+      fillIds.push(seeded.id);
     }
     const [groupSize] = await db<{ n: number }[]>`
       select count(*)::int as n from organizations where subscription_id = ${walletId}`;
@@ -3334,7 +3345,7 @@ async function extraOrgAddonSuite(): Promise<void> {
       select id from users where email = ${nonPayerEmail}`;
     for (const id of fillIds) {
       await db`insert into org_members (org_id, user_id, role)
-               values (${id}, ${npRow!.id}, 'owner')`;
+               values (${id}, ${npRow.id}, 'owner')`;
     }
     const npBlocked = await raw(nonPayer, "/api/orgs", "POST", { name: `NP Org ${tag}` });
     check(
@@ -3497,7 +3508,7 @@ async function addonChurnWebhookSuite(): Promise<void> {
       const [row] = await db<{ wallet_id: string }[]>`
         select coalesce(subscription_id::text, id::text) as wallet_id
           from organizations where id = ${orgId}`;
-      const walletId = row!.wallet_id;
+      const walletId = row.wallet_id;
       await db`
         update subscriptions
            set stripe_subscription_id = ${`sub_smoke_${label}_${tag}`},
@@ -3651,7 +3662,7 @@ async function passLockEnforcementSuite(): Promise<void> {
     // Creating the tenth is itself legal (nine active + this one = the cap).
     const ids: string[] = [];
     for (let i = 0; i < COMMUNITY_COMP_CAP; i++) ids.push((await mkComp(`Lock Quota ${i}`)).id);
-    const passed = ids[COMMUNITY_COMP_CAP - 1]!;
+    const passed = ids[COMMUNITY_COMP_CAP - 1];
     await grantPass(orgId, passed, "event_pass");
     check(
       `pass lock/quota: fixture built — ${COMMUNITY_COMP_CAP} live competitions on a community org, the last one passed`,
@@ -3788,7 +3799,7 @@ async function playerAccountsSuite(admin: Session, orgId: string): Promise<void>
     `/api/v1/stages/${v1data<{ id: string }>(stage).id}/generate`,
     "POST",
   );
-  const fixture = v1data<{ fixtures: { id: string; fixture_no: number }[] }>(gen).fixtures[0]!;
+  const fixture = v1data<{ fixtures: { id: string; fixture_no: number }[] }>(gen).fixtures[0];
   await v1(admin, `/api/v1/divisions/${divData.id}/start`, "POST");
   const fixturePath = `/o/${orgSlug}/c/${compData.slug}/d/${divData.slug}/f/${fixture.fixture_no}`;
 
@@ -3980,7 +3991,7 @@ async function officialOnboardingSuite(
       name: "Court 9",
     }),
   );
-  await v1(admin, `/api/v1/fixtures/${fixtures[0]!.id}`, "PATCH", {
+  await v1(admin, `/api/v1/fixtures/${fixtures[0].id}`, "PATCH", {
     scheduled_at: kickoff,
     court_id: onboardCourt.id,
   });
@@ -3991,7 +4002,7 @@ async function officialOnboardingSuite(
     role_keys: ["referee"],
   });
   const offId = v1data<{ id: string }>(off).id;
-  await v1(admin, `/api/v1/fixtures/${fixtures[0]!.id}/officials`, "PATCH", {
+  await v1(admin, `/api/v1/fixtures/${fixtures[0].id}/officials`, "PATCH", {
     set: [{ official_id: offId, role_key: "referee", locked: false }],
   });
 
@@ -4004,7 +4015,7 @@ async function officialOnboardingSuite(
     "off invite mints through the person-claim rail",
     invite.status === 201 && claimUrl.includes("/claim/pc_"),
   );
-  const token = claimUrl.split("/claim/")[1]!;
+  const token = claimUrl.split("/claim/")[1];
   const claimPage = await fetch(`${BASE}/claim/${token}`);
   const claimHtml = await claimPage.text();
   check(
@@ -4035,7 +4046,7 @@ async function officialOnboardingSuite(
   // Accept; then decline a second assignment with a reason → organiser flag.
   const acceptRes = await v1(
     ref,
-    `/api/v1/me/assigned-fixtures/${fixtures[0]!.id}/response`,
+    `/api/v1/me/assigned-fixtures/${fixtures[0].id}/response`,
     "PATCH",
     {
       response: "accepted",
@@ -4045,27 +4056,27 @@ async function officialOnboardingSuite(
     "off accept lands",
     acceptRes.status === 200 && v1data<{ response: string }>(acceptRes).response === "accepted",
   );
-  await v1(admin, `/api/v1/fixtures/${fixtures[1]!.id}/officials`, "PATCH", {
+  await v1(admin, `/api/v1/fixtures/${fixtures[1].id}/officials`, "PATCH", {
     set: [{ official_id: offId, role_key: "referee", locked: false }],
   });
-  await v1(ref, `/api/v1/me/assigned-fixtures/${fixtures[1]!.id}/response`, "PATCH", {
+  await v1(ref, `/api/v1/me/assigned-fixtures/${fixtures[1].id}/response`, "PATCH", {
     response: "declined",
     decline_reason: "smoke clash",
   });
-  const flagged = await v1(admin, `/api/v1/fixtures/${fixtures[1]!.id}`);
+  const flagged = await v1(admin, `/api/v1/fixtures/${fixtures[1].id}`);
   const flaggedOfficials =
     v1data<{ officials: { response?: string; decline_reason?: string }[] }>(flagged).officials ??
     [];
   check(
     "off decline flags on the organiser read (no auto-reassign)",
     flaggedOfficials.length === 1 &&
-      flaggedOfficials[0]!.response === "declined" &&
-      flaggedOfficials[0]!.decline_reason === "smoke clash",
+      flaggedOfficials[0].response === "declined" &&
+      flaggedOfficials[0].decline_reason === "smoke clash",
   );
   // accepted → declined is refused (ask the organiser)
   const illegal = await v1(
     ref,
-    `/api/v1/me/assigned-fixtures/${fixtures[0]!.id}/response`,
+    `/api/v1/me/assigned-fixtures/${fixtures[0].id}/response`,
     "PATCH",
     {
       response: "declined",
@@ -4092,9 +4103,9 @@ async function officialOnboardingSuite(
     "off accepted fixture reachable via My Matches",
     myMatches.status === 200 && myMatches.body.includes(`Whistle A ${tag}`),
   );
-  const offState = await v1(ref, `/api/v1/fixtures/${fixtures[0]!.id}/state`);
+  const offState = await v1(ref, `/api/v1/fixtures/${fixtures[0].id}/state`);
   check("off accepted official reads fixture state (non-member door)", offState.status === 200);
-  const offScore = await v1(ref, `/api/v1/fixtures/${fixtures[0]!.id}/events`, "POST", {
+  const offScore = await v1(ref, `/api/v1/fixtures/${fixtures[0].id}/events`, "POST", {
     expected_seq: v1data<{ last_seq: number }>(offState).last_seq,
     type: "generic.result",
     payload: { p1Score: 2, p2Score: 1 },
@@ -4106,7 +4117,7 @@ async function officialOnboardingSuite(
   // 404'd non-members (an accepted official is usually a non-member), so the
   // page-level door stayed shut even though the API passed.
   const offFixNo = v1data<{ fixture_no: number }>(
-    await v1(admin, `/api/v1/fixtures/${fixtures[0]!.id}`),
+    await v1(admin, `/api/v1/fixtures/${fixtures[0].id}`),
   ).fixture_no;
   const offConsole = await html(
     ref,
@@ -4238,11 +4249,11 @@ async function officialOnboardingSuite(
       name: "Court 5",
     }),
   );
-  await v1(admin, `/api/v1/fixtures/${busyFixtures[0]!.id}`, "PATCH", {
+  await v1(admin, `/api/v1/fixtures/${busyFixtures[0].id}`, "PATCH", {
     scheduled_at: busyKickoff,
     court_id: busyCourt.id,
   });
-  await v1(admin, `/api/v1/fixtures/${busyFixtures[0]!.id}/officials`, "PATCH", {
+  await v1(admin, `/api/v1/fixtures/${busyFixtures[0].id}/officials`, "PATCH", {
     set: [{ official_id: busyOffId, role_key: "referee", locked: false }],
   });
 
@@ -4279,7 +4290,7 @@ async function officialOnboardingSuite(
 async function marksReportsSuite(
   admin: Session,
   proOrgId: string,
-  proOrgSlug: string,
+  _proOrgSlug: string,
 ): Promise<void> {
   // The fixture_officials surrogate id is never exposed by the API (the
   // console reads it server-side); the smoke reads it over its own connection,
@@ -4349,7 +4360,7 @@ async function marksReportsSuite(
     );
     const fx = v1data<{ fixtures: { id: string }[] }>(
       await v1(owner, `/api/v1/stages/${stage.id}/generate`, "POST"),
-    ).fixtures[0]!.id;
+    ).fixtures[0].id;
     await v1(owner, `/api/v1/divisions/${div.id}/start`, "POST");
     const offId = v1data<{ id: string }>(
       await v1(owner, "/api/v1/officials", "POST", {
@@ -4366,7 +4377,7 @@ async function marksReportsSuite(
     const inv = await v1(owner, `/api/v1/officials/${offId}/invite`, "POST", {
       email: refEmail,
     });
-    const token = (v1data<{ claim_url: string }>(inv).claim_url ?? "").split("/claim/")[1]!;
+    const token = (v1data<{ claim_url: string }>(inv).claim_url ?? "").split("/claim/")[1];
     await call(ref, `/api/claims/${token}/accept`, "POST");
     await v1(ref, `/api/v1/me/assigned-fixtures/${fx}/response`, "PATCH", {
       response: "accepted",
@@ -4422,7 +4433,7 @@ async function marksReportsSuite(
   // ---- Free path (fresh community owner) ----
   const commOwner = newSession();
   await signIn(commOwner, `markscomm_${tag}@example.com`);
-  const commOrgId = ((await call(commOwner, "/api/orgs")) as { id: string }[])[0]!.id;
+  const commOrgId = ((await call(commOwner, "/api/orgs")) as { id: string }[])[0].id;
   const free = await decidedFixtureWithOfficial(commOwner, commOrgId, "Free");
   const freeFoId = await foId(free.fx, free.offId);
   commOwner.cookies["seazn_org"] = commOrgId;
@@ -4487,7 +4498,7 @@ async function newsSuite(admin: Session, proOrgId: string, proOrgSlug: string): 
   );
   const fx = v1data<{ fixtures: { id: string }[] }>(
     await v1(admin, `/api/v1/stages/${stage.id}/generate`, "POST"),
-  ).fixtures[0]!.id;
+  ).fixtures[0].id;
   await v1(admin, `/api/v1/divisions/${div.id}/start`, "POST");
   const st = v1data<{ last_seq: number }>(await v1(admin, `/api/v1/fixtures/${fx}/state`));
   await v1(admin, `/api/v1/fixtures/${fx}/events`, "POST", {
@@ -4496,7 +4507,7 @@ async function newsSuite(admin: Session, proOrgId: string, proOrgSlug: string): 
     payload: { p1Score: 3, p2Score: 1 },
   });
 
-  const drafts = v1data<{ id: string; kind: string; auto_source: unknown | null }[]>(
+  const drafts = v1data<{ id: string; kind: string; auto_source: unknown }[]>(
     await v1(admin, `/api/v1/orgs/${proOrgId}/posts?status=draft`),
   );
   const auto = drafts.find((d) => d.kind === "result" && d.auto_source);
@@ -4595,7 +4606,7 @@ async function newsSuite(admin: Session, proOrgId: string, proOrgSlug: string): 
   // ---- Free path (fresh community owner) ----
   const commOwner = newSession();
   await signIn(commOwner, `newscomm_${tag}@example.com`);
-  const commOrg = ((await call(commOwner, "/api/orgs")) as { id: string; slug: string }[])[0]!;
+  const commOrg = ((await call(commOwner, "/api/orgs")) as { id: string; slug: string }[])[0];
   commOwner.cookies["seazn_org"] = commOrg.id;
 
   const manual = await v1(commOwner, `/api/v1/orgs/${commOrg.id}/posts`, "POST", {
@@ -4826,7 +4837,7 @@ async function v6SportsSuite(admin: Session): Promise<void> {
     `/api/v1/stages/${v1data<{ id: string }>(tstage).id}/generate`,
     "POST",
   );
-  const tfx = v1data<{ fixtures: { id: string }[] }>(tgen).fixtures[0]!.id;
+  const tfx = v1data<{ fixtures: { id: string }[] }>(tgen).fixtures[0].id;
   await v1(admin, `/api/v1/divisions/${tdivId}/start`, "POST");
   let seq = v1data<{ seq: number }>(
     await v1(admin, `/api/v1/fixtures/${tfx}/events`, "POST", {
@@ -4841,7 +4852,7 @@ async function v6SportsSuite(admin: Session): Promise<void> {
       await v1(admin, `/api/v1/fixtures/${tfx}/events`, "POST", {
         expected_seq: seq,
         type: "tennis.point",
-        payload: { by: tents[0]!.id },
+        payload: { by: tents[0].id },
       }),
     ).seq;
   }
@@ -4870,7 +4881,7 @@ async function v6SportsSuite(admin: Session): Promise<void> {
       await v1(admin, `/api/v1/fixtures/${tfx}/events`, "POST", {
         expected_seq: seq,
         type: "tennis.point",
-        payload: { by: tents[0]!.id },
+        payload: { by: tents[0].id },
       }),
     ).seq;
   }
@@ -4909,7 +4920,7 @@ async function v6SportsSuite(admin: Session): Promise<void> {
   });
   const istageId = v1data<{ id: string }>(istage).id;
   const igen = await v1(admin, `/api/v1/stages/${istageId}/generate`, "POST");
-  const ifx = v1data<{ fixtures: { id: string }[] }>(igen).fixtures[0]!.id;
+  const ifx = v1data<{ fixtures: { id: string }[] }>(igen).fixtures[0].id;
   await v1(admin, `/api/v1/divisions/${idivId}/start`, "POST");
   const iceSend = async (type: string, payload: unknown) => {
     iceSeq = v1data<{ seq: number }>(
@@ -4925,24 +4936,24 @@ async function v6SportsSuite(admin: Session): Promise<void> {
   // Power play: minor on the Kings → 5v4 chip visible to an anonymous
   // public read (PROMPT-50 free path), PP goal, scorer releases the minor.
   await iceSend("icehockey.suspension.start", {
-    by: ients[1]!.id,
+    by: ients[1].id,
     class: "minor",
   });
   const anon = newSession();
   const pub = await v1(anon, `/api/v1/public/fixtures/${ifx}`);
   const pubDetail = v1data<{ summary: { detail?: { strength?: string } } }>(pub).summary.detail;
   check("v6 public scorebug carries the 5v4 strength chip", pubDetail?.strength === "5v4");
-  await iceSend("icehockey.goal", { by: ients[0]!.id, kind: "pp" });
+  await iceSend("icehockey.goal", { by: ients[0].id, kind: "pp" });
   await iceSend("icehockey.suspension.end", {
-    by: ients[1]!.id,
+    by: ients[1].id,
     class: "minor",
   });
   // Level it, run out regulation, win in sudden-death OT.
-  await iceSend("icehockey.goal", { by: ients[1]!.id });
+  await iceSend("icehockey.goal", { by: ients[1].id });
   await iceSend("icehockey.period.advance", { to: "P2" });
   await iceSend("icehockey.period.advance", { to: "P3" });
   await iceSend("icehockey.period.advance", { to: "FT" });
-  await iceSend("icehockey.goal", { by: ients[0]!.id });
+  await iceSend("icehockey.goal", { by: ients[0].id });
   const idone = await v1(admin, `/api/v1/fixtures/${ifx}/state`);
   check(
     "v6 icehockey OT decides with (OT) headline",
@@ -4953,8 +4964,8 @@ async function v6SportsSuite(admin: Session): Promise<void> {
   const irows = v1data<{ rows: { entrantId: string; points: number }[] }>(istandings).rows;
   check(
     "v6 icehockey standings pay OT points 2/1 (Event Code §219)",
-    irows.find((r) => r.entrantId === ients[0]!.id)?.points === 2 &&
-      irows.find((r) => r.entrantId === ients[1]!.id)?.points === 1,
+    irows.find((r) => r.entrantId === ients[0].id)?.points === 2 &&
+      irows.find((r) => r.entrantId === ients[1].id)?.points === 1,
   );
 }
 
@@ -5053,7 +5064,7 @@ async function timedFixture(
   return {
     divisionId: div.id,
     entrantIds: ents.map((e) => e.id),
-    fixtureId: gen.fixtures[0]!.id,
+    fixtureId: gen.fixtures[0].id,
   };
 }
 
@@ -5169,9 +5180,9 @@ async function w4aTimeModelSuite(admin: Session): Promise<void> {
   check(
     "w4a icehockey minor derives expiresAt = start + 2:00",
     iceOpen.suspensions.length === 1 &&
-      iceOpen.suspensions[0]!.side === "away" &&
-      sameStamp(iceOpen.suspensions[0]!.startedAt, stamp("P1", 100)) &&
-      sameStamp(iceOpen.suspensions[0]!.expiresAt, stamp("P1", 220)),
+      iceOpen.suspensions[0].side === "away" &&
+      sameStamp(iceOpen.suspensions[0].startedAt, stamp("P1", 100)) &&
+      sameStamp(iceOpen.suspensions[0].expiresAt, stamp("P1", 220)),
   );
   // A penalty shot AWARDED is the neutral stamped event here: it touches no
   // score and no suspension, so the sweep is the only thing that can move the
@@ -5193,7 +5204,7 @@ async function w4aTimeModelSuite(admin: Session): Promise<void> {
   check(
     "w4a icehockey second minor is running with 70s still to serve",
     iceSecond.suspensions.length === 1 &&
-      sameStamp(iceSecond.suspensions[0]!.expiresAt, stamp("P1", 520)),
+      sameStamp(iceSecond.suspensions[0].expiresAt, stamp("P1", 520)),
   );
   await iceLedger.send("icehockey.goal", { by: home, kind: "pp", at: stamp("P1", 450) });
   const iceReleased = await iceLedger.fold<IceFold>();
@@ -5213,7 +5224,7 @@ async function w4aTimeModelSuite(admin: Session): Promise<void> {
   check(
     "w4a icehockey minor at 19:10 carries its remainder into P2 (expiresAt P2 70)",
     iceCarry.suspensions.length === 1 &&
-      sameStamp(iceCarry.suspensions[0]!.expiresAt, stamp("P2", 70)),
+      sameStamp(iceCarry.suspensions[0].expiresAt, stamp("P2", 70)),
   );
   await iceLedger.send("icehockey.period.advance", { to: "P2", at: stamp("P1", 1200) });
   const iceWhistle = await iceLedger.fold<IceFold>();
@@ -5221,7 +5232,7 @@ async function w4aTimeModelSuite(admin: Session): Promise<void> {
     "w4a icehockey the P1 whistle does NOT sweep a penalty owed in P2",
     iceWhistle.phase === "P2" &&
       iceWhistle.suspensions.length === 1 &&
-      sameStamp(iceWhistle.suspensions[0]!.expiresAt, stamp("P2", 70)),
+      sameStamp(iceWhistle.suspensions[0].expiresAt, stamp("P2", 70)),
   );
   await iceLedger.send("icehockey.set_piece", { by: home, kind: "ps", at: stamp("P2", 50) });
   const iceStillShort = await iceLedger.fold<IceFold>();
@@ -5263,7 +5274,7 @@ async function w4aTimeModelSuite(admin: Session): Promise<void> {
       { kind: "team", display_name: `Window City ${tag}`, seed: 2 },
     ],
   });
-  const roversId = foot.entrantIds[0]!;
+  const roversId = foot.entrantIds[0];
   await v1(admin, `/api/v1/fixtures/${foot.fixtureId}/lineups/${roversId}`, "PUT", {
     slots: squad.map((personId, i) => ({
       person_id: personId,
@@ -5294,7 +5305,7 @@ async function w4aTimeModelSuite(admin: Session): Promise<void> {
   check(
     "w4a football sin bin at 10:00 derives a 10-minute expiry and clears the pitch",
     (footBinned.squads[binSide].sinBin ?? []).length === 1 &&
-      sameStamp(footBinned.squads[binSide].sinBin![0]!.expiresAt, stamp("H1", 1200)) &&
+      sameStamp(footBinned.squads[binSide].sinBin![0].expiresAt, stamp("H1", 1200)) &&
       !footBinned.squads[binSide].onPitch.includes(p1),
   );
 
@@ -5436,13 +5447,13 @@ async function w4aTimeModelSuite(admin: Session): Promise<void> {
   check(
     "w4a tennis an MTO is stamped in S1, charged to a side and credited to a player",
     tenFirst.length === 1 &&
-      tenFirst[0]!.kind === "medical" &&
-      tenFirst[0]!.set === 1 &&
-      tenFirst[0]!.by === "home" &&
-      tenFirst[0]!.person === treated &&
-      sameStamp(tenFirst[0]!.at, stamp("S1", 120)) &&
-      tenFirst[0]!.overCount === undefined &&
-      tenFirst[0]!.overran === undefined,
+      tenFirst[0].kind === "medical" &&
+      tenFirst[0].set === 1 &&
+      tenFirst[0].by === "home" &&
+      tenFirst[0].person === treated &&
+      sameStamp(tenFirst[0].at, stamp("S1", 120)) &&
+      tenFirst[0].overCount === undefined &&
+      tenFirst[0].overran === undefined,
   );
   // The SECOND MTO in the same set is beyond `count: 1`. Shipped rule (§5.4):
   // RECORDED and flagged, never refused — so the 201 is half the assertion.
@@ -5458,8 +5469,8 @@ async function w4aTimeModelSuite(admin: Session): Promise<void> {
     "w4a tennis a second MTO past the allowance is RECORDED with overCount, not refused",
     tenSecond.status === 201 &&
       tenOverCount.length === 2 &&
-      tenOverCount[1]!.overCount === true &&
-      tenOverCount[1]!.overran === undefined,
+      tenOverCount[1].overCount === true &&
+      tenOverCount[1].overran === undefined,
   );
   // `overran` is the other, independent flag: no count declared for `other`,
   // so a long break trips the duration allowance and nothing else.
@@ -5473,8 +5484,8 @@ async function w4aTimeModelSuite(admin: Session): Promise<void> {
   check(
     "w4a tennis an over-long break records overran, independently of overCount",
     tenOverran.length === 3 &&
-      tenOverran[2]!.overran === true &&
-      tenOverran[2]!.overCount === undefined,
+      tenOverran[2].overran === true &&
+      tenOverran[2].overCount === undefined,
   );
   // A stamped interruption survives a SET boundary: the fold derives `set` from
   // its own index, so S2 is only legal once set 1 has actually been banked.
@@ -5488,9 +5499,9 @@ async function w4aTimeModelSuite(admin: Session): Promise<void> {
   check(
     "w4a tennis a toilet break after the set summary is filed in S2, set 2",
     tenSet2.length === 4 &&
-      tenSet2[3]!.kind === "toilet" &&
-      tenSet2[3]!.set === 2 &&
-      sameStamp(tenSet2[3]!.at, stamp("S2", 60)),
+      tenSet2[3].kind === "toilet" &&
+      tenSet2[3].set === 2 &&
+      sameStamp(tenSet2[3].at, stamp("S2", 60)),
   );
 
   // === FREE path — the W4a time model on a COMMUNITY org. ===
@@ -5566,7 +5577,7 @@ async function w4aTimeModelSuite(admin: Session): Promise<void> {
       freeFoot.fixtureId,
       "football.sinbin.start",
       "scoring.match_timeline",
-      { by: freeFoot.entrantIds[0]!, at: stamp("H1", 600) },
+      { by: freeFoot.entrantIds[0], at: stamp("H1", 600) },
     ],
     [
       "tabletennis expedite",
@@ -5580,7 +5591,7 @@ async function w4aTimeModelSuite(admin: Session): Promise<void> {
       freeTen.fixtureId,
       "tennis.interruption",
       "scoring.rally_by_rally",
-      { kind: "medical", by: freeTen.entrantIds[0]!, at: stamp("S1", 60) },
+      { kind: "medical", by: freeTen.entrantIds[0], at: stamp("S1", 60) },
     ],
   );
   const freeLedgers = new Map<string, ReturnType<typeof ledger>>();
@@ -5608,7 +5619,7 @@ async function w4aTimeModelSuite(admin: Session): Promise<void> {
   freeLedgers.set(freeIce.fixtureId, freeIceLedger);
   await freeIceLedger.send("core.start", {});
   const freeSuspension = await freeIceLedger.send("icehockey.suspension.start", {
-    by: freeIce.entrantIds[1]!,
+    by: freeIce.entrantIds[1],
     class: "minor",
     at: stamp("P1", 100),
   });
@@ -5709,7 +5720,7 @@ async function cricketDlsSuite(): Promise<void> {
     ],
   });
   const aLedger = ledger(owner, a.fixtureId);
-  const aBatFirst = a.entrantIds[0]!;
+  const aBatFirst = a.entrantIds[0];
   await aLedger.send("cricket.toss", { wonBy: aBatFirst, elected: "bat" });
   await aLedger.send("core.start", {});
   await aLedger.send("cricket.innings.summary", {
@@ -5753,7 +5764,7 @@ async function cricketDlsSuite(): Promise<void> {
     ],
   });
   const bLedger = ledger(owner, b.fixtureId);
-  const bBatFirst = b.entrantIds[0]!;
+  const bBatFirst = b.entrantIds[0];
   await bLedger.send("cricket.toss", { wonBy: bBatFirst, elected: "bat" });
   await bLedger.send("core.start", {});
   // 60/2 off the full 60-ball quota, then the chase reaches 30/4 off 30 before
@@ -6218,7 +6229,7 @@ async function oneTrialSuite(): Promise<void> {
         from subscriptions s
         join organizations o on o.subscription_id = s.id
         where o.id = ${orgId}`;
-      return row!;
+      return row;
     } finally {
       await db.end();
     }
@@ -6680,7 +6691,7 @@ async function scheduleCourtRemovalGuardSuite(): Promise<void> {
   const gen = v1data<{ fixtures: { id: string }[] }>(
     await v1(free, `/api/v1/stages/${stage.id}/generate`, "POST"),
   );
-  const fixtureId = gen.fixtures[0]!.id;
+  const fixtureId = gen.fixtures[0].id;
 
   const putCourts = (courts: string[]) =>
     v1(free, `/api/v1/divisions/${div.id}/schedule-settings`, "PUT", {
@@ -6700,7 +6711,7 @@ async function scheduleCourtRemovalGuardSuite(): Promise<void> {
   await v1(free, `/api/v1/fixtures/${fixtureId}`, "PATCH", { schedule_locked: true });
 
   const refused = await putCourts([guardCourt1.id]);
-  const refusedMsg = (refused.json.error as { message?: string } | undefined)?.message ?? "";
+  const refusedMsg = (refused.json.error)?.message ?? "";
   check(
     "schedule court-removal guard: dropping a court with a pinned fixture is refused (409, names the court + reason)",
     refused.status === 409 && /Court 2/.test(refusedMsg) && /pinned/i.test(refusedMsg),
@@ -6776,6 +6787,7 @@ async function capacityPrecheckSuite(): Promise<void> {
 
   await putSettings([{ from: "2026-08-01T09:00:00.000Z", to: "2026-08-01T10:00:00.000Z" }]); // 1h -> 1 slot
   const impossible = await v1(free, `/api/v1/stages/${stage.id}/schedule/auto`, "POST", { only_unlocked: true });
+  // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion -- eslint reads this as unnecessary and tsc does not: the shared error type carries no `capacity_report`, so deleting the assertion fails `tsc -p tsconfig.scripts.json --noEmit` with TS2339. Verified 2026-09-06.
   const impossibleErr = impossible.json.error as { code?: string; capacity_report?: { verdict?: string } } | undefined;
   check(
     "capacity precheck: an arithmetically-impossible board is refused 422 CAPACITY_IMPOSSIBLE with a report",
@@ -6818,7 +6830,7 @@ async function templateInstantiationSuite(): Promise<void> {
     "template instantiation: slam128 creates one division with one knockout stage, stamped provenance",
     created.templateKey === "slam128" &&
       created.divisions.length === 1 &&
-      created.divisions[0]!.stages.length === 1,
+      created.divisions[0].stages.length === 1,
   );
 
   const divisions = v1data<{ id: string; sport_key: string }[]>(
@@ -6826,7 +6838,7 @@ async function templateInstantiationSuite(): Promise<void> {
   );
   check(
     "template instantiation: normal flow continues — GET divisions returns the template's tennis division",
-    divisions.length === 1 && divisions[0]!.sport_key === "tennis",
+    divisions.length === 1 && divisions[0].sport_key === "tennis",
   );
 
   const gated = await v1(free, "/api/v1/competitions/from-template", "POST", {
@@ -6837,7 +6849,7 @@ async function templateInstantiationSuite(): Promise<void> {
   check(
     "template instantiation: americano-night is refused 402 PAYMENT_REQUIRED on a free session, through the real route",
     gated.status === 402 &&
-      (gated.json.error as { code?: string } | undefined)?.code === "PAYMENT_REQUIRED",
+      (gated.json.error)?.code === "PAYMENT_REQUIRED",
   );
 
   // P7/D1b (T5) — multi-stage instantiation: t20-super8 (group -> Super 8 ->
@@ -6868,10 +6880,10 @@ async function templateInstantiationSuite(): Promise<void> {
     "template instantiation: t20-super8 creates one division with 3 stages, zero fixtures at birth (no format-lock on arrival)",
     t20Created.templateKey === "t20-super8" &&
       t20Created.divisions.length === 1 &&
-      t20Created.divisions[0]!.stages.length === 3 &&
-      t20Created.divisions[0]!.stages.every((s) => s.fixtureCount === 0),
+      t20Created.divisions[0].stages.length === 3 &&
+      t20Created.divisions[0].stages.every((s) => s.fixtureCount === 0),
   );
-  const t20DivisionId = t20Created.divisions[0]!.id;
+  const t20DivisionId = t20Created.divisions[0].id;
 
   type SlotLabelWire = { key: string; params: Record<string, unknown> } | null;
   const t20Stages = v1data<{ id: string; kind: string; name: string; seq: number }[]>(
@@ -6936,7 +6948,7 @@ async function templateInstantiationSuite(): Promise<void> {
   check(
     "template instantiation: t20-super8 (3 stages) is refused 402 on a community session — stage count alone trips it, same free session already used for the americano-night check above",
     t20Gated.status === 402 &&
-      (t20Gated.json.error as { code?: string } | undefined)?.code === "PAYMENT_REQUIRED",
+      (t20Gated.json.error)?.code === "PAYMENT_REQUIRED",
   );
 }
 
@@ -7003,7 +7015,7 @@ async function stageProgressionSuite(): Promise<void> {
   }>(await v1(free, `/api/v1/stages/${koId}/generate`, "POST"));
   check(
     "stage progression: setup-timing KO generates 1 fully-TBD fixture before the group stage runs at all",
-    koGen.created === 1 && koGen.fixtures[0]!.home_entrant_id === null,
+    koGen.created === 1 && koGen.fixtures[0].home_entrant_id === null,
   );
   // P6 (D4b task A) fix round 1 — smoke coverage for the data contract every
   // localized renderer this task wired depends on: a real server, real DB,
@@ -7012,8 +7024,8 @@ async function stageProgressionSuite(): Promise<void> {
   // descriptor (this seeding — 2 pools, top 1 each — always produces
   // slot.winner_group), never null and never a hand-built string.
   {
-    const home = koGen.fixtures[0]!.home_slot_label;
-    const away = koGen.fixtures[0]!.away_slot_label;
+    const home = koGen.fixtures[0].home_slot_label;
+    const away = koGen.fixtures[0].away_slot_label;
     check(
       "stage progression: the TBD KO fixture's home/away slot labels are real {key,params} descriptors (V360/V362, not a raw string)",
       home?.key === "slot.winner_group" &&
@@ -7032,9 +7044,9 @@ async function stageProgressionSuite(): Promise<void> {
   // legitimately falls back to its greedy path; that fallback surviving
   // cleanly is exactly the claim, not a solved-optimal board.
   {
-    const koFixtureIdPreBuild = koGen.fixtures[0]!.id;
-    const homeLabelBefore = koGen.fixtures[0]!.home_slot_label;
-    const awayLabelBefore = koGen.fixtures[0]!.away_slot_label;
+    const koFixtureIdPreBuild = koGen.fixtures[0].id;
+    const homeLabelBefore = koGen.fixtures[0].home_slot_label;
+    const awayLabelBefore = koGen.fixtures[0].away_slot_label;
     const buildVenue = v1data<{ id: string }>(
       await v1(free, `/api/v1/orgs/${freeOrgId}/venues`, "POST", { name: `DTX Build ${tag}` }),
     );
@@ -7057,7 +7069,7 @@ async function stageProgressionSuite(): Promise<void> {
     }>(await v1(free, `/api/v1/stages/${koId}/schedule/auto`, "POST", { only_unlocked: false, mode: "build" }));
     check(
       "day-one BUILD: the fully-TBD KO fixture is schedulable — BUILD proposes it a slot, same as any real fixture",
-      koBuild.assignments.length === 1 && koBuild.assignments[0]!.fixture_id === koFixtureIdPreBuild,
+      koBuild.assignments.length === 1 && koBuild.assignments[0].fixture_id === koFixtureIdPreBuild,
     );
     await v1(free, `/api/v1/stages/${koId}/schedule/apply`, "POST", {
       assignments: koBuild.assignments.map((a) => ({
@@ -7142,8 +7154,8 @@ async function stageProgressionSuite(): Promise<void> {
   // already exercised.
   const [q0, q1] = proposal.computed.qualifiers;
   const swapEdits = [
-    { destinationSlot: q0!.destinationSlot, entrantId: q1!.entrantId },
-    { destinationSlot: q1!.destinationSlot, entrantId: q0!.entrantId },
+    { destinationSlot: q0.destinationSlot, entrantId: q1.entrantId },
+    { destinationSlot: q1.destinationSlot, entrantId: q0.entrantId },
   ];
 
   // "confirm": fills the TBD fixture through the same fillSlot pathway
@@ -7166,19 +7178,19 @@ async function stageProgressionSuite(): Promise<void> {
   check(
     "stage progression: confirm fills both KO slots",
     confirmed.filled === 2 &&
-      confirmed.fixtures[0]!.home_entrant_id !== null &&
-      confirmed.fixtures[0]!.away_entrant_id !== null,
+      confirmed.fixtures[0].home_entrant_id !== null &&
+      confirmed.fixtures[0].away_entrant_id !== null,
   );
   // The panel's edit-in-place actually took effect — the SWAPPED entrant
   // landed in each slot, not the engine's computed default.
   {
-    const fixture = confirmed.fixtures[0]!;
-    const [side0, side1] = [q0!.destinationSlot.split(":")[1], q1!.destinationSlot.split(":")[1]];
+    const fixture = confirmed.fixtures[0];
+    const [side0, side1] = [q0.destinationSlot.split(":")[1], q1.destinationSlot.split(":")[1]];
     const landedForQ0Slot = side0 === "home" ? fixture.home_entrant_id : fixture.away_entrant_id;
     const landedForQ1Slot = side1 === "home" ? fixture.home_entrant_id : fixture.away_entrant_id;
     check(
       "stage progression: confirm honours the panel's edit-in-place override — the SWAPPED entrant lands, not the computed one",
-      landedForQ0Slot === q1!.entrantId && landedForQ1Slot === q0!.entrantId,
+      landedForQ0Slot === q1.entrantId && landedForQ1Slot === q0.entrantId,
     );
   }
   // P6 (D4b task A) fix round 1 — the schema comment's "Cleared on fill"
@@ -7187,13 +7199,13 @@ async function stageProgressionSuite(): Promise<void> {
   // could show ALONGSIDE the real entrant name.
   check(
     "stage progression: filling a slot clears its label — never lingers next to the real entrant name",
-    confirmed.fixtures[0]!.home_slot_label === null && confirmed.fixtures[0]!.away_slot_label === null,
+    confirmed.fixtures[0].home_slot_label === null && confirmed.fixtures[0].away_slot_label === null,
   );
 
   // "next stage playable": the now-real fixture accepts a score exactly like
   // any other — the scoring guard's WRONG_PHASE only ever fired while it was
   // still TBD, and that window has closed.
-  const koFixtureId = confirmed.fixtures[0]!.id;
+  const koFixtureId = confirmed.fixtures[0].id;
   const koState = v1data<{ last_seq: number }>(await v1(free, `/api/v1/fixtures/${koFixtureId}/state`));
   const koScore = await v1(free, `/api/v1/fixtures/${koFixtureId}/events`, "POST", {
     expected_seq: koState.last_seq,
@@ -7300,7 +7312,7 @@ async function stageRosterDriftSuite(): Promise<void> {
   );
   const gen2 = v1data<{ fixtures: { id: string }[] }>(await v1(free, `/api/v1/stages/${stage2.id}/generate`, "POST"));
   await v1(free, `/api/v1/divisions/${div2.id}/start`, "POST");
-  const f2 = gen2.fixtures[0]!;
+  const f2 = gen2.fixtures[0];
   const state2 = v1data<{ last_seq: number }>(await v1(free, `/api/v1/fixtures/${f2.id}/state`));
   await v1(free, `/api/v1/fixtures/${f2.id}/events`, "POST", {
     expected_seq: state2.last_seq,
@@ -7365,7 +7377,7 @@ async function scheduleHealthSuite(): Promise<void> {
 
   // BEFORE any schedule exists: 409, typed code.
   const before = await v1(free, `/api/v1/stages/${stage.id}/schedule/health`, "GET");
-  const beforeErr = before.json.error as { code?: string } | undefined;
+  const beforeErr = before.json.error;
   check(
     "schedule health: refuses 409 SCHEDULE_NOT_APPLIED before any fixture is scheduled",
     before.status === 409 && beforeErr?.code === "SCHEDULE_NOT_APPLIED",
@@ -7504,12 +7516,12 @@ async function scheduleHealthSuite(): Promise<void> {
   check(
     "joint schedule health: the SCHEDULED division's stage reports status=ready with all 5 metrics",
     jointDiv1?.stages.length === 1 &&
-      jointDiv1.stages[0]!.status === "ready" &&
+      jointDiv1.stages[0].status === "ready" &&
       (jointDiv1.stages[0] as { metrics: unknown[] }).metrics.length === 5,
   );
   check(
     "joint schedule health: the UNSCHEDULED division's stage reports status=empty, not a thrown error for the whole call",
-    jointDiv2?.stages.length === 1 && jointDiv2.stages[0]!.status === "empty",
+    jointDiv2?.stages.length === 1 && jointDiv2.stages[0].status === "empty",
   );
 
   // THE cross-check (coordinator's explicit ask): the scheduled stage's
@@ -7705,8 +7717,8 @@ async function scheduleRoundOrderDeltaGateSuite(): Promise<void> {
     await v1(free, `/api/v1/stages/${stage.id}/generate`, "POST"),
   );
   check("round order: generate produced a 4-entrant round robin (6 fixtures)", gen.fixtures.length === 6);
-  const round1Id = gen.fixtures[0]!.id;
-  const laterRoundId = gen.fixtures[gen.fixtures.length - 1]!.id;
+  const round1Id = gen.fixtures[0].id;
+  const laterRoundId = gen.fixtures[gen.fixtures.length - 1].id;
 
   const T0 = Date.UTC(2026, 10, 2, 9, 0);
   const at = (minutes: number) => new Date(T0 + minutes * 60_000).toISOString();
@@ -7747,7 +7759,7 @@ async function scheduleRoundOrderDeltaGateSuite(): Promise<void> {
   // straight onto `error` — `error: { code, message, ...extra }` — not
   // nested under an `.extra` key, so `conflicts` sits at `error.conflicts`.
   const refusedConflicts =
-    (refused.json.error as { conflicts?: { code?: string; blocking?: boolean }[] } | undefined)
+    (refused.json.error)
       ?.conflicts ?? [];
   check(
     "round order: dragging the later round before an untouched round-1 sibling is REFUSED (409, warn.order, blocking)",
@@ -8001,7 +8013,7 @@ async function competitionScheduleApplyRoundOrderSuite(): Promise<void> {
         // every other Alpha fixture, including round 3's (still at
         // `at(last*30)` from `alphaClean` above), stays right where it is
         // and is never named here.
-        assignments: [{ fixture_id: alpha.fixtureIds[0]!, scheduled_at: at(24 * 60), court_id: jointCourt1.id }],
+        assignments: [{ fixture_id: alpha.fixtureIds[0], scheduled_at: at(24 * 60), court_id: jointCourt1.id }],
       },
     ],
     source: "ai",
@@ -8926,7 +8938,7 @@ async function seedRealRegistrationCart(
   return {
     owner,
     orgId,
-    regId: out.entries[0]!.registration_id,
+    regId: out.entries[0].registration_id,
     groupId: out.group_id,
     currency: out.currency,
     feePercent,
@@ -9270,7 +9282,7 @@ async function seedPaidRegistration(competitionId: string, divisionId: string): 
     await sql`
       insert into registrations
         (group_id, division_id, status, display_name, amount_cents, answers)
-      values (${group!.id}, ${divisionId}, 'paid', 'Smoke Payer', 2000, '{}')`;
+      values (${group.id}, ${divisionId}, 'paid', 'Smoke Payer', 2000, '{}')`;
   } finally {
     await sql.end();
   }
@@ -9296,7 +9308,7 @@ async function seedPaidSponsorOrder(orgId: string, competitionId: string): Promi
     await sql`
       insert into sponsor_orders
         (org_id, package_id, sponsor_name, sponsor_email, amount_cents, currency, status, paid_at)
-      values (${orgId}, ${pkg!.id}, 'Smoke Sponsor', 'sponsor@x.test', 25000, 'gbp', 'paid', now())`;
+      values (${orgId}, ${pkg.id}, 'Smoke Sponsor', 'sponsor@x.test', 25000, 'gbp', 'paid', now())`;
   } finally {
     await sql.end();
   }
@@ -9537,7 +9549,7 @@ async function seedPlannableAiDivision(
   label: string,
   startAt: string | null = "2026-10-01T09:00:00.000Z",
 ): Promise<{ compId: string; divId: string; stageId: string }> {
-  const plannableOrgId = s.cookies["seazn_org"]!;
+  const plannableOrgId = s.cookies["seazn_org"];
   const plannableVenue = v1data<{ id: string }>(
     await v1(s, `/api/v1/orgs/${plannableOrgId}/venues`, "POST", { name: `${label} Venue ${tag}` }),
   );
@@ -9624,7 +9636,7 @@ async function seedBracketAiDivision(
    *  configured/assigned by literally. */
   courtIds: [string, string];
 }> {
-  const bracketOrgId = s.cookies["seazn_org"]!;
+  const bracketOrgId = s.cookies["seazn_org"];
   const bracketVenue = v1data<{ id: string }>(
     await v1(s, `/api/v1/orgs/${bracketOrgId}/venues`, "POST", { name: `${label} Venue ${tag}` }),
   );
@@ -10006,7 +10018,7 @@ async function schedulingConstraintsSuite(): Promise<void> {
   // `winner_to_fixture` is not on the v1 wire, so the identification is checked
   // rather than trusted — the apply gate below names the dependent itself, and
   // that check asserts it is this same id.
-  const dependent = [...round2].sort((a, b) => a.seq_in_round - b.seq_in_round)[0]!;
+  const dependent = [...round2].sort((a, b) => a.seq_in_round - b.seq_in_round)[0];
   //
   // THIS CHECK USED TO ASSERT A VIOLATION WAS REPORTED, and the premise it rested
   // on was greedy's. `gapMinutes: 0` packs round 2 straight onto the court a semi
@@ -10116,10 +10128,10 @@ async function schedulingConstraintsSuite(): Promise<void> {
   }
   const cupBoard = (round2At: string) => ({
     assignments: [
-      { fixture_id: semis[0]!.id, scheduled_at: "2026-11-05T09:00:00.000Z", court_id: courtA.id },
-      { fixture_id: semis[1]!.id, scheduled_at: "2026-11-05T09:00:00.000Z", court_id: courtB.id },
-      { fixture_id: round2[0]!.id, scheduled_at: round2At, court_id: courtA.id },
-      { fixture_id: round2[1]!.id, scheduled_at: round2At, court_id: courtB.id },
+      { fixture_id: semis[0].id, scheduled_at: "2026-11-05T09:00:00.000Z", court_id: courtA.id },
+      { fixture_id: semis[1].id, scheduled_at: "2026-11-05T09:00:00.000Z", court_id: courtB.id },
+      { fixture_id: round2[0].id, scheduled_at: round2At, court_id: courtA.id },
+      { fixture_id: round2[1].id, scheduled_at: round2At, court_id: courtB.id },
     ],
   });
   const validateCup = async (): Promise<ScheduleConflictLite[]> =>
@@ -10148,13 +10160,13 @@ async function schedulingConstraintsSuite(): Promise<void> {
       new Set(tightRows.map((r) => r.fixture_id)).size === 1 &&
       // The gate names the dependent from the feed edges themselves, so this is
       // also what turns surface 1's generator-order guess into a checked fact.
-      tightRows[0]!.fixture_id === dependent.id &&
+      tightRows[0].fixture_id === dependent.id &&
       tightRows.every((r) => r.blocking === false && r.rule === "H8"),
   );
   const tightReport = idsWithCode(await validateCup(), "warn.instruction");
   check(
     "#452 board report: the same durable rule shows on the board's own report (#447)",
-    tightReport.size === 1 && tightReport.has(tightRows[0]!.fixture_id),
+    tightReport.size === 1 && tightReport.has(tightRows[0].fixture_id),
   );
 
   // The twin: 11:00 is 90 minutes after the semis end, clearing the 60-min rule.
@@ -10231,8 +10243,8 @@ async function schedulingConstraintsSuite(): Promise<void> {
     poolFixtures
       .filter((f) => f.pool_id === p)
       .sort((a, b) => a.round_no - b.round_no || a.seq_in_round - b.seq_in_round);
-  const strictPool = poolIds[0]!;
-  const laxPool = poolIds[1]!;
+  const strictPool = poolIds[0];
+  const laxPool = poolIds[1];
   const sf = ofPool(strictPool);
   const lf = ofPool(laxPool);
 
@@ -10288,7 +10300,7 @@ async function schedulingConstraintsSuite(): Promise<void> {
       .sort((a, b) => a - b);
     let min = Infinity;
     for (let i = 1; i < times.length; i++) {
-      min = Math.min(min, (times[i]! - (times[i - 1]! + MATCH_MS)) / 60000);
+      min = Math.min(min, (times[i] - (times[i - 1] + MATCH_MS)) / 60000);
     }
     return min;
   };
@@ -10310,12 +10322,12 @@ async function schedulingConstraintsSuite(): Promise<void> {
   // and its absence is what proves the reported set is the PAIR and not the pool.
   const poolBoard = (strictSecond: string, laxSecond: string) => ({
     assignments: [
-      { fixture_id: sf[0]!.id, scheduled_at: at("09:00"), court_id: courtA.id },
-      { fixture_id: sf[1]!.id, scheduled_at: strictSecond, court_id: courtA.id },
-      { fixture_id: sf[2]!.id, scheduled_at: at("14:00"), court_id: courtA.id },
-      { fixture_id: lf[0]!.id, scheduled_at: at("09:00"), court_id: courtB.id },
-      { fixture_id: lf[1]!.id, scheduled_at: laxSecond, court_id: courtB.id },
-      { fixture_id: lf[2]!.id, scheduled_at: at("14:00"), court_id: courtB.id },
+      { fixture_id: sf[0].id, scheduled_at: at("09:00"), court_id: courtA.id },
+      { fixture_id: sf[1].id, scheduled_at: strictSecond, court_id: courtA.id },
+      { fixture_id: sf[2].id, scheduled_at: at("14:00"), court_id: courtA.id },
+      { fixture_id: lf[0].id, scheduled_at: at("09:00"), court_id: courtB.id },
+      { fixture_id: lf[1].id, scheduled_at: laxSecond, court_id: courtB.id },
+      { fixture_id: lf[2].id, scheduled_at: at("14:00"), court_id: courtB.id },
     ],
   });
   const validatePools = async (): Promise<ScheduleConflictLite[]> =>
@@ -10337,24 +10349,24 @@ async function schedulingConstraintsSuite(): Promise<void> {
     "#452 pools/apply: a POOL-keyed rest BINDS — 60 min inside a 90-min pool is short (#446)",
     shortRes.status === 200 &&
       shortApply?.applied === 6 &&
-      shortRest.has(sf[0]!.id) &&
-      shortRest.has(sf[1]!.id),
+      shortRest.has(sf[0].id) &&
+      shortRest.has(sf[1].id),
   );
   check(
     // The `??` precedence this replaced resolved the lax pool to 0 and dropped
     // the division rule entirely, so this pair came back clean.
     "#452 pools/apply: an explicit pool `0` ADDS NOTHING — the 30-min division floor still bites (#459)",
-    shortRest.has(lf[0]!.id) && shortRest.has(lf[1]!.id),
+    shortRest.has(lf[0].id) && shortRest.has(lf[1].id),
   );
   check(
     "#452 pools/apply: ...and only the two short PAIRS are rested, not the whole pool",
-    shortRest.size === 4 && !shortRest.has(sf[2]!.id) && !shortRest.has(lf[2]!.id),
+    shortRest.size === 4 && !shortRest.has(sf[2].id) && !shortRest.has(lf[2].id),
   );
   const shortReport = idsWithCode(await validatePools(), "warn.rest");
   check(
     "#452 pools/board report: the board's own report names the same four cards",
     shortReport.size === 4 &&
-      [sf[0]!, sf[1]!, lf[0]!, lf[1]!].every((f) => shortReport.has(f.id)),
+      [sf[0], sf[1], lf[0], lf[1]].every((f) => shortReport.has(f.id)),
   );
 
   // The twin. Strict pool at exactly 90 (a floor is `<`, so equal is legal), lax
@@ -10371,8 +10383,8 @@ async function schedulingConstraintsSuite(): Promise<void> {
     "#452 pools/apply: the pool rule is SILENT at exactly its 90 minutes (raises the floor, #459)",
     clearRes.status === 200 &&
       clearApply?.applied === 6 &&
-      !clearRest.has(sf[0]!.id) &&
-      !clearRest.has(sf[1]!.id),
+      !clearRest.has(sf[0].id) &&
+      !clearRest.has(sf[1].id),
   );
   check(
     "#452 pools/apply: the 90-min pool rule does NOT leak onto the other pool (60 clears its 30)",
@@ -10385,16 +10397,16 @@ async function schedulingConstraintsSuite(): Promise<void> {
   // does after a drag is re-validate, and that is what is asserted here: the
   // drag is real (it moves the card and it is not refused, because rest never
   // blocks), and the pool rule follows the card in both directions.
-  await v1(s, `/api/v1/fixtures/${sf[1]!.id}`, "PATCH", {
+  await v1(s, `/api/v1/fixtures/${sf[1].id}`, "PATCH", {
     scheduled_at: at("10:30"),
     court_id: courtA.id,
   });
   const draggedIn = idsWithCode(await validatePools(), "warn.rest");
   check(
     "#452 pools/drag: dragging a card inside its pool's 90-min rest surfaces on re-validate (#446)",
-    draggedIn.size === 2 && draggedIn.has(sf[0]!.id) && draggedIn.has(sf[1]!.id),
+    draggedIn.size === 2 && draggedIn.has(sf[0].id) && draggedIn.has(sf[1].id),
   );
-  await v1(s, `/api/v1/fixtures/${sf[1]!.id}`, "PATCH", {
+  await v1(s, `/api/v1/fixtures/${sf[1].id}`, "PATCH", {
     scheduled_at: at("11:00"),
     court_id: courtA.id,
   });
@@ -10647,7 +10659,7 @@ async function autoScheduleSuite(): Promise<void> {
   // ======================================================================
   // 2. REFLOW — the repair solver, with a pin it may not touch
   // ======================================================================
-  const pinnedId = generated[0]!.id;
+  const pinnedId = generated[0].id;
   await v1(s, `/api/v1/fixtures/${pinnedId}`, "PATCH", { schedule_locked: true });
   const pinnedBefore = await fixtureSlot(pinnedId);
   // Empty every UNLOCKED slot. Over an already-legal board the repair solver is
@@ -10852,7 +10864,7 @@ async function autoScheduleSuite(): Promise<void> {
   // makespan floor nor the court balance, so a solver honouring it can still
   // reach the optimum. An unmoved locked card is then a freeze being respected
   // rather than a solver with nowhere to put it.
-  const lockedId = generated[0]!.id;
+  const lockedId = generated[0].id;
   await v1(s, `/api/v1/fixtures/${lockedId}`, "PATCH", { schedule_locked: true });
   const lockedBefore = await fixtureSlot(lockedId);
 
@@ -11145,11 +11157,11 @@ async function placementOptimizedSuite(): Promise<void> {
   ];
   const fixtureIds: string[] = [];
   for (let r = 0; r < ROUNDS.length; r++) {
-    for (const [a, b] of ROUNDS[r]!) {
+    for (const [a, b] of ROUNDS[r]) {
       const added = v1data<{ fixture_id: string }>(
         await v1(s, `/api/v1/stages/${stage.id}/fixtures`, "POST", {
-          home_entrant_id: entrants[a]!.id,
-          away_entrant_id: entrants[b]!.id,
+          home_entrant_id: entrants[a].id,
+          away_entrant_id: entrants[b].id,
           round_no: r + 1,
         }),
       );
@@ -11289,8 +11301,8 @@ async function placementPerCourtBlackoutSuite(): Promise<void> {
   ] as [number, number][]) {
     const added = v1data<{ fixture_id: string }>(
       await v1(s, `/api/v1/stages/${stage.id}/fixtures`, "POST", {
-        home_entrant_id: entrants[home]!.id,
-        away_entrant_id: entrants[away]!.id,
+        home_entrant_id: entrants[home].id,
+        away_entrant_id: entrants[away].id,
         round_no: 1,
       }),
     );
@@ -11841,7 +11853,7 @@ async function v4AiSuite(admin: Session, proOrgId: string, proOrgSlug: string): 
         refinedRes.status === 200 &&
           tbdIds.size === 2 &&
           placedTbd.length === 2 &&
-          placedTbd[0]!.scheduled_at !== placedTbd[1]!.scheduled_at,
+          placedTbd[0].scheduled_at !== placedTbd[1].scheduled_at,
       );
       check(
         // The solver's own report is the evidence that the repair happened here
@@ -11994,7 +12006,7 @@ async function seedJointAiCompetition(
   s: Session,
   label: string,
 ): Promise<{ compId: string; divIds: string[]; courtIds: [string, string] }> {
-  const jointAiOrgId = s.cookies["seazn_org"]!;
+  const jointAiOrgId = s.cookies["seazn_org"];
   const jointAiVenue = v1data<{ id: string }>(
     await v1(s, `/api/v1/orgs/${jointAiOrgId}/venues`, "POST", { name: `${label} Venue ${tag}` }),
   );
@@ -12119,7 +12131,7 @@ async function jointAiSuite(): Promise<void> {
     await setPlan(orgId, "pro_plus", s);
     const { compId, divIds } = await seedJointAiCompetition(s, "Joint AI");
     const instruction = "keep both divisions off each other's courts and finish by 6pm";
-    const rung_overrides = { [divIds[0]!]: 2, [divIds[1]!]: 3 };
+    const rung_overrides = { [divIds[0]]: 2, [divIds[1]]: 3 };
 
     // ---- One division is not a joint run: refused before the limiter ----
     const single = await v1(s, `/api/v1/competitions/${compId}/schedule/ai-plan`, "POST", {
@@ -12129,7 +12141,7 @@ async function jointAiSuite(): Promise<void> {
     check(
       "#350 joint/gate: a one-division joint request is refused 400 AI_PLAN_SINGLE_DIVISION (no discount arbitrage)",
       single.status === 400 &&
-        (single.json.error as { code?: string } | undefined)?.code === "AI_PLAN_SINGLE_DIVISION",
+        (single.json.error)?.code === "AI_PLAN_SINGLE_DIVISION",
     );
 
     // ---- Insufficient balance: refused BEFORE the model, not after ----
@@ -12359,7 +12371,7 @@ async function proPlusSuite(): Promise<void> {
     }),
   );
   const gen = await v1(owner, `/api/v1/stages/${stage.id}/generate`, "POST");
-  const fixtureId = v1data<{ fixtures: { id: string }[] }>(gen).fixtures[0]!.id;
+  const fixtureId = v1data<{ fixtures: { id: string }[] }>(gen).fixtures[0].id;
   await v1(owner, `/api/v1/divisions/${div.id}/start`, "POST");
 
   // (a) Community: officials are ungated on every plan (#253, V319 —
@@ -13400,7 +13412,7 @@ async function courtHoursSuite(): Promise<void> {
       runB?.metrics?.placed === 1 &&
         runBAssignments.length === 1 &&
         (() => {
-          const start = minutesOfDay(runBAssignments[0]!.scheduled_at);
+          const start = minutesOfDay(runBAssignments[0].scheduled_at);
           return start >= 9 * 60 && start + 30 <= 17 * 60;
         })(),
     );
@@ -13510,7 +13522,7 @@ async function courtHoursSuite(): Promise<void> {
     const { divisionId } = await makeDivision("Court Hours S6", ["Ash", "Bay"]);
     const { stageId, fixtureIds } = await makeLeagueAndGenerate(divisionId);
     check("court hours S6: 2-entrant round robin generated 1 fixture", fixtureIds.length === 1);
-    const fixtureId = fixtureIds[0]!;
+    const fixtureId = fixtureIds[0];
 
     // Get it to `scheduled` status first — moveFixture's MOVABLE_STATUS gate
     // refuses to move a timetable for a fixture that was never placed at
@@ -13602,8 +13614,8 @@ async function courtHoursSuite(): Promise<void> {
     ];
     const fixtureIds: string[] = [];
     for (let i = 0; i < pairs.length; i++) {
-      const [a, b] = pairs[i]!;
-      fixtureIds.push(await addAdHocFixture(stageId, entrantIds[a]!, entrantIds[b]!, i + 1));
+      const [a, b] = pairs[i];
+      fixtureIds.push(await addAdHocFixture(stageId, entrantIds[a], entrantIds[b], i + 1));
     }
     check(
       "court hours S7: 4 entrant-disjoint ad-hoc fixtures created (no rest/overlap interference)",
@@ -13669,7 +13681,7 @@ async function courtHoursSuite(): Promise<void> {
     const fixtureIds: string[] = [];
     for (let i = 0; i < 7; i++) {
       fixtureIds.push(
-        await addAdHocFixture(stageId, entrantIds[2 * i]!, entrantIds[2 * i + 1]!, i + 1),
+        await addAdHocFixture(stageId, entrantIds[2 * i], entrantIds[2 * i + 1], i + 1),
       );
     }
     check(
@@ -13977,7 +13989,7 @@ async function schedRegV3Suite(
   const gen = v1data<{ fixtures: { id: string }[] }>(
     await v1(admin, `/api/v1/stages/${stage.id}/generate`, "POST"),
   );
-  const fixture = gen.fixtures[0]!.id;
+  const fixture = gen.fixtures[0].id;
 
   const board = await html(admin, `/o/${proOrgSlug}/c/${comp.slug}/schedule`);
   check(
@@ -14097,6 +14109,7 @@ async function schedRegV3Suite(
     await wb.xlsx.load(bytes);
     const cells: string[] = [];
     wb.worksheets[0]?.eachRow((row) =>
+      // eslint-disable-next-line @typescript-eslint/no-base-to-string -- same as above: text cells, text assertion, behaviour preserved.
       row.eachCell((cell) => cells.push(String(cell.value ?? ""))),
     );
     return cells.join(" | ");
@@ -14388,7 +14401,7 @@ async function schedRegV3Suite(
   const fGen = v1data<{ fixtures: { id: string }[] }>(
     await v1(free, `/api/v1/stages/${fStage.id}/generate`, "POST", {}),
   );
-  await v1(free, `/api/v1/fixtures/${fGen.fixtures[0]!.id}`, "PATCH", {
+  await v1(free, `/api/v1/fixtures/${fGen.fixtures[0].id}`, "PATCH", {
     scheduled_at: new Date(Date.now() + 24 * 60 * 60_000).toISOString(),
   });
   const runSheet = await html(free, `/o/${freeOrg.slug}/c/${fComp.slug}/d/${fDiv.slug}?tab=fixtures`);
@@ -14435,7 +14448,7 @@ async function schedRegV3Suite(
 // competitionEnd with no URL override — smoke has no browser, so it only
 // ever sees whatever day the SSR'd page opens on by default.
 async function boardRedesignSuite(admin: Session, orgSlug: string): Promise<void> {
-  const redesignOrgId = admin.cookies["seazn_org"]!;
+  const redesignOrgId = admin.cookies["seazn_org"];
   const redesignVenue = v1data<{ id: string }>(
     await v1(admin, `/api/v1/orgs/${redesignOrgId}/venues`, "POST", {
       name: `Board Redesign Venue ${tag}`,
@@ -14501,7 +14514,7 @@ async function boardRedesignSuite(admin: Session, orgSlug: string): Promise<void
   );
   // Court B, same time — outside the court-A-scoped blackout — so a real
   // FixtureBlock renders on the initial page load for the pin-icon check.
-  await v1(admin, `/api/v1/fixtures/${genA.fixtures[0]!.id}`, "PATCH", {
+  await v1(admin, `/api/v1/fixtures/${genA.fixtures[0].id}`, "PATCH", {
     scheduled_at: "2026-10-05T09:00:00.000Z",
     court_id: redesignCourtB.id,
   });
@@ -14771,8 +14784,8 @@ async function v1Suite(admin: Session, orgId: string, orgSlug: string): Promise<
     // Same instant, DIFFERENT court — the only defect is the human. Whichever
     // of the two real courts the solver put the anchor on, the OTHER one is
     // what proves this — not a hardcoded id that might collide with it.
-    const anchor = assignments[0]!;
-    const sharer = assignments[2]!;
+    const anchor = assignments[0];
+    const sharer = assignments[2];
     const otherCourtId = anchor.court_id === v1Court1.id ? v1Court9.id : v1Court1.id;
     const clash = await v1(admin, `/api/v1/fixtures/${sharer.fixture_id}`, "PATCH", {
       scheduled_at: anchor.scheduled_at,
@@ -15149,7 +15162,7 @@ async function jul3Suite(admin: Session, orgId: string, orgSlug: string): Promis
   ).fixtures;
   await v1(admin, `/api/v1/divisions/${divId}/start`, "POST");
 
-  const officialId = v1data<{ id: string }[]>(officials)[0]!.id;
+  const officialId = v1data<{ id: string }[]>(officials)[0].id;
   // V290 moved officials.auto up to Pro Plus (approved hard move, no grandfather).
   // This suite runs on a plain Pro org, so the auto-propose path now 402s here —
   // the ALLOWED path moved to smokePlanMatrix's pro_plus persona, so coverage of
@@ -15162,7 +15175,7 @@ async function jul3Suite(admin: Session, orgId: string, orgSlug: string): Promis
     auto.status === 402 &&
       (auto.json.error as { feature_key?: string } | undefined)?.feature_key === "officials.auto",
   );
-  const patchOff = await v1(admin, `/api/v1/fixtures/${fixtures[0]!.id}/officials`, "PATCH", {
+  const patchOff = await v1(admin, `/api/v1/fixtures/${fixtures[0].id}/officials`, "PATCH", {
     set: [{ official_id: officialId, role_key: "referee", locked: false }],
   });
   check("jul3 officials manual assign", patchOff.status === 200);
@@ -15174,7 +15187,7 @@ async function jul3Suite(admin: Session, orgId: string, orgSlug: string): Promis
   const jul3Court = v1data<{ id: string }>(
     await v1(admin, `/api/v1/orgs/${orgId}/venues/${jul3Venue.id}/courts`, "POST", { name: "C1" }),
   );
-  await v1(admin, `/api/v1/fixtures/${fixtures[0]!.id}`, "PATCH", {
+  await v1(admin, `/api/v1/fixtures/${fixtures[0].id}`, "PATCH", {
     scheduled_at: "2026-07-20T09:00:00.000Z",
     court_id: jul3Court.id,
   });
@@ -15222,8 +15235,8 @@ async function jul3Suite(admin: Session, orgId: string, orgSlug: string): Promis
   // -- PROMPT-25: manual rank override ----------------------------------
   const override = await v1(admin, `/api/v1/stages/${stageId}/standings/override`, "POST", {
     rows: [
-      { entrant_id: entrants[2]!.id, rank: 3, reason: "placement game" },
-      { entrant_id: entrants[3]!.id, rank: 4, reason: "placement game" },
+      { entrant_id: entrants[2].id, rank: 3, reason: "placement game" },
+      { entrant_id: entrants[3].id, rank: 4, reason: "placement game" },
     ],
   });
   check("jul3 rank override (Pro tiebreakers.custom)", override.status === 200);
@@ -15407,7 +15420,7 @@ async function divisionLifecycleSuite(admin: Session, proOrgId: string): Promise
     `/api/v1/stages/${v1data<{ id: string }>(stage).id}/generate`,
     "POST",
   );
-  const fixtureId = v1data<{ fixtures: { id: string }[] }>(gen).fixtures[0]!.id;
+  const fixtureId = v1data<{ fixtures: { id: string }[] }>(gen).fixtures[0].id;
   await v1(admin, `/api/v1/divisions/${divId}/start`, "POST");
   await v1(admin, `/api/v1/fixtures/${fixtureId}/events`, "POST", {
     expected_seq: 0,
@@ -15484,7 +15497,7 @@ async function gapSuite(admin: Session, org1Id: string, proOrgId: string): Promi
     `/api/v1/stages/${v1data<{ id: string }>(stage).id}/generate`,
     "POST",
   );
-  const fixtureId = v1data<{ fixtures: { id: string }[] }>(gen).fixtures[0]!.id;
+  const fixtureId = v1data<{ fixtures: { id: string }[] }>(gen).fixtures[0].id;
   await v1(admin, `/api/v1/divisions/${divId}/start`, "POST");
 
   // --- Device links (Pro): mint once, token opens the scoring door alone ---
@@ -15544,7 +15557,7 @@ async function gapSuite(admin: Session, org1Id: string, proOrgId: string): Promi
   // malformed payload, none of which is the ownership refusal. This is the
   // difference between "scoring detail is free" and "open scoring", and smoke
   // is the only gate that sees it before a merge (e2e runs on push to main).
-  const dlOtherFixtureId = v1data<{ fixtures: { id: string }[] }>(gen).fixtures[1]!.id;
+  const dlOtherFixtureId = v1data<{ fixtures: { id: string }[] }>(gen).fixtures[1].id;
   const dlOtherBefore = v1data<{ last_seq: number }>(
     await v1(admin, `/api/v1/fixtures/${dlOtherFixtureId}/state`),
   ).last_seq;
@@ -15642,7 +15655,7 @@ async function gapSuite(admin: Session, org1Id: string, proOrgId: string): Promi
     "gap viewer sees assigned fixtures",
     vAssigned.status === 200 && v1data<unknown[]>(vAssigned).length > 0,
   );
-  const vFixture = v1data<{ fixtures: { id: string }[] }>(gen).fixtures[1]!.id;
+  const vFixture = v1data<{ fixtures: { id: string }[] }>(gen).fixtures[1].id;
   const vState = await v1(gapViewer, `/api/v1/fixtures/${vFixture}/state`);
   const vEvent = await v1(gapViewer, `/api/v1/fixtures/${vFixture}/events`, "POST", {
     expected_seq: v1data<{ last_seq: number }>(vState).last_seq,
@@ -15751,7 +15764,7 @@ async function gapSuite(admin: Session, org1Id: string, proOrgId: string): Promi
     `/api/v1/stages/${v1data<{ id: string }>(fStage).id}/generate`,
     "POST",
   );
-  const fFixture = v1data<{ fixtures: { id: string }[] }>(fGen).fixtures[0]!.id;
+  const fFixture = v1data<{ fixtures: { id: string }[] }>(fGen).fixtures[0].id;
   const fDl = await v1(free, `/api/v1/fixtures/${fFixture}/device-links`, "POST", { label: "X" });
   check(
     "gap device links Pro-gated (402 on community)",
@@ -16038,7 +16051,7 @@ async function v3ContentApiSuite(
   // ---- FREE PATH ------------------------------------------------------
   const free = newSession();
   const freeVer = await signIn(free, `content_free_${tag}@example.com`);
-  const freeOrgId = freeVer.org_id as string;
+  const freeOrgId = freeVer.org_id;
   const freeOrgs = (await call(free, "/api/orgs")) as {
     id: string;
     slug: string;
@@ -16137,7 +16150,7 @@ async function disciplineSuite(
       { kind: "team", display_name: `City ${tag}`, seed: 2 },
     ]),
   );
-  const rovers = ents[0]!.id;
+  const rovers = ents[0].id;
 
   // Enable rules (FA default shape) — 5 yellows → 1 match.
   const put = await v1(admin, `/api/v1/divisions/${div.id}/discipline-rules`, "PUT", {
@@ -16232,7 +16245,7 @@ async function disciplineSuite(
     id: string;
     slug: string;
   }[];
-  const freeOrg = freeOrgs[0]!;
+  const freeOrg = freeOrgs[0];
   const freeComp = v1data<{ id: string; slug: string }>(
     await v1(free, "/api/v1/competitions", "POST", { ends_on: "2030-12-31",
       name: `Free Disc ${tag}`,
@@ -16311,8 +16324,8 @@ async function playerStatsSuite(admin: Session, proOrgId: string): Promise<void>
       { kind: "team", display_name: `Blues ${tag}`, seed: 2, members: [{ person_id: keeper.id }] },
     ]),
   );
-  const homeId = ents[0]!.id;
-  const awayId = ents[1]!.id;
+  const homeId = ents[0].id;
+  const awayId = ents[1].id;
   const stage = v1data<{ id: string }>(
     await v1(admin, `/api/v1/divisions/${div.id}/stages`, "POST", {
       seq: 1,
@@ -16326,7 +16339,7 @@ async function playerStatsSuite(admin: Session, proOrgId: string): Promise<void>
   check("stats: football fixture generated", fixtures.length >= 1);
   await v1(admin, `/api/v1/divisions/${div.id}/start`, "POST");
 
-  const fixtureId = fixtures[0]!.id;
+  const fixtureId = fixtures[0].id;
   // The engine's `applyGoal` rejects an explicit scorer who is not on the
   // pitch — both sides need a real lineup, not just the scoring one.
   await v1(admin, `/api/v1/fixtures/${fixtureId}/lineups/${homeId}`, "PUT", {
@@ -16399,7 +16412,7 @@ async function playerStatsSuite(admin: Session, proOrgId: string): Promise<void>
       { kind: "individual", display_name: `Bo E ${tag}`, seed: 2, members: [{ person_id: bo.id }] },
     ]),
   );
-  const homeEntrantId = fbEnts[0]!.id;
+  const homeEntrantId = fbEnts[0].id;
   const fbStage = v1data<{ id: string }>(
     await v1(admin, `/api/v1/divisions/${fbDiv.id}/stages`, "POST", {
       seq: 1,
@@ -16413,7 +16426,7 @@ async function playerStatsSuite(admin: Session, proOrgId: string): Promise<void>
   check("stats: badminton fixture generated", fbFixtures.length >= 1);
   await v1(admin, `/api/v1/divisions/${fbDiv.id}/start`, "POST");
 
-  const fbFixtureId = fbFixtures[0]!.id;
+  const fbFixtureId = fbFixtures[0].id;
   // No lineup PUT anywhere in this half — the entrant-fallback path is keyed
   // on entrant_members, not on-pitch lineups; setting one would prove the
   // wrong mechanism.
@@ -16494,8 +16507,8 @@ async function careerRollupSuite(
       { kind: "team", display_name: `Strikers ${tag}`, seed: 2, members: [{ person_id: opponentId }] },
     ]),
   );
-  const home2 = ents2[0]!.id;
-  const away2 = ents2[1]!.id;
+  const home2 = ents2[0].id;
+  const away2 = ents2[1].id;
   const stage2 = v1data<{ id: string }>(
     await v1(admin, `/api/v1/divisions/${div2.id}/stages`, "POST", { seq: 1, kind: "league", name: "League" }),
   );
@@ -16504,7 +16517,7 @@ async function careerRollupSuite(
   ).fixtures;
   check("career: second football fixture generated", fx2.length >= 1);
   await v1(admin, `/api/v1/divisions/${div2.id}/start`, "POST");
-  const fixture2 = fx2[0]!.id;
+  const fixture2 = fx2[0].id;
 
   // GK on the starting sheet is all the keeper fold needs — no
   // core.lineup.position event is required to make this person the keeper.
@@ -16657,13 +16670,13 @@ async function footballDecidedSequenceSuite(admin: Session, proOrgId: string): P
       { kind: "team", display_name: `Seq Away ${tag}`, seed: 2, members: [] },
     ]),
   );
-  const homeId = ents[0]!.id;
+  const homeId = ents[0].id;
   const stage = v1data<{ id: string }>(
     await v1(admin, `/api/v1/divisions/${div.id}/stages`, "POST", { seq: 1, kind: "league", name: "League" }),
   );
   const fx = v1data<{ fixtures: { id: string }[] }>(
     await v1(admin, `/api/v1/stages/${stage.id}/generate`, "POST"),
-  ).fixtures[0]!.id;
+  ).fixtures[0].id;
   await v1(admin, `/api/v1/divisions/${div.id}/start`, "POST");
 
   // A raw, NON-retrying post — deliberately not `appendScoreEvent` (see the
@@ -16791,7 +16804,7 @@ async function scorePadV2AppendSuite(admin: Session, proOrgId: string): Promise<
     );
     const fx = v1data<{ fixtures: { id: string }[] }>(
       await v1(s, `/api/v1/stages/${stage.id}/generate`, "POST"),
-    ).fixtures[0]!.id;
+    ).fixtures[0].id;
     await v1(s, `/api/v1/divisions/${div.id}/start`, "POST");
 
     // THE append: one event, the exact wire shape use-pad-pipeline.ts's own
@@ -16831,7 +16844,7 @@ async function scorePadV2AppendSuite(admin: Session, proOrgId: string): Promise<
   // the same append door — tier 0 carries no entitlement, so no plan flip. ----
   const freeOwner = newSession();
   await signIn(freeOwner, `scorepadfree_${tag}@example.com`);
-  const freeOrgId = ((await call(freeOwner, "/api/orgs")) as { id: string }[])[0]!.id;
+  const freeOrgId = ((await call(freeOwner, "/api/orgs")) as { id: string }[])[0].id;
   await decideOneFixture(freeOwner, freeOrgId, "Free");
 }
 
@@ -16892,7 +16905,7 @@ async function footballFidelityGateSuite(admin: Session, proOrgId: string): Prom
     // at all, regardless of entitlement.
     const started = await appendScoreEvent(s, fx.fixtureId, "core.start", {});
     check(`fidelity gate ${label}: core.start accepted (201)`, started.status === 201);
-    return { fixtureId: fx.fixtureId, homeId: fx.entrantIds[0]! };
+    return { fixtureId: fx.fixtureId, homeId: fx.entrantIds[0] };
   };
 
   // ---- Pro: band 3 (football.shot) reachable ----
@@ -16914,7 +16927,7 @@ async function footballFidelityGateSuite(admin: Session, proOrgId: string): Prom
   // paywall the owner removed on 2026-08-30.
   const freeOwner = newSession();
   await signIn(freeOwner, `fidelitygatefree_${tag}@example.com`);
-  const freeOrgId = ((await call(freeOwner, "/api/orgs")) as { id: string }[])[0]!.id;
+  const freeOrgId = ((await call(freeOwner, "/api/orgs")) as { id: string }[])[0].id;
   const free = await shotFixture(freeOwner, freeOrgId, "Free");
   const freeShot = await appendScoreEvent(freeOwner, free.fixtureId, "football.shot", {
     by: free.homeId,
@@ -17009,10 +17022,10 @@ async function cricketBothLanesSuite(admin: Session, proOrgId: string): Promise<
       },
     ],
   });
-  await v1(admin, `/api/v1/fixtures/${ball.fixtureId}/lineups/${ball.entrantIds[0]!}`, "PUT", {
+  await v1(admin, `/api/v1/fixtures/${ball.fixtureId}/lineups/${ball.entrantIds[0]}`, "PUT", {
     slots: [a1, a2].map((n, i) => ({ person_id: personIds[n], order_no: i + 1 })),
   });
-  await v1(admin, `/api/v1/fixtures/${ball.fixtureId}/lineups/${ball.entrantIds[1]!}`, "PUT", {
+  await v1(admin, `/api/v1/fixtures/${ball.fixtureId}/lineups/${ball.entrantIds[1]}`, "PUT", {
     slots: [b1, b2].map((n, i) => ({ person_id: personIds[n], order_no: i + 1 })),
   });
   const ballLedger = ledger(admin, ball.fixtureId);
@@ -17271,7 +17284,7 @@ async function setPlan(orgId: string, plan: string, owner: Session): Promise<voi
                ${plan}, 'active'
           from organizations o where o.id = ${orgId}
         returning id`;
-      await sql`update organizations set subscription_id = ${group!.id} where id = ${orgId}`;
+      await sql`update organizations set subscription_id = ${group.id} where id = ${orgId}`;
     }
   } finally {
     await sql.end();
@@ -17530,7 +17543,7 @@ main()
     process.exit(fail === 0 ? 0 : 1);
   })
   .catch(async (e) => {
-    console.error("ERROR:", e.message);
+    console.error("ERROR:", e instanceof Error ? e.message : String(e));
     await cleanup(tag);
     console.log(`${pass} passed, ${fail} failed`);
     process.exit(1);
@@ -17569,7 +17582,7 @@ async function v13Suite(admin: Session, proOrgId: string, proOrgSlug: string): P
   const badgedRow = v1data<
     { badge_url: string | null; id: string }[] | { badge_url: string | null; id: string }
   >(badged);
-  const badgedOne = Array.isArray(badgedRow) ? badgedRow[0]! : badgedRow;
+  const badgedOne = Array.isArray(badgedRow) ? badgedRow[0] : badgedRow;
   check(
     "v13 badge_url echoed on the created entrant",
     badgedOne.badge_url === "https://flags.example/mex.png",
@@ -17582,7 +17595,7 @@ async function v13Suite(admin: Session, proOrgId: string, proOrgSlug: string): P
       display_name: `${name} ${tag}`,
     });
     const data = v1data<{ id: string }[] | { id: string }>(row);
-    others.push(Array.isArray(data) ? data[0]!.id : data.id);
+    others.push(Array.isArray(data) ? data[0].id : data.id);
   }
   const league = await v1(admin, `/api/v1/divisions/${div.id}/stages`, "POST", {
     seq: 1,
@@ -17594,7 +17607,7 @@ async function v13Suite(admin: Session, proOrgId: string, proOrgSlug: string): P
   await v1(admin, `/api/v1/divisions/${div.id}/start`, "POST");
   const adhoc = await v1(admin, `/api/v1/stages/${leagueId}/fixtures`, "POST", {
     home_entrant_id: badgedOne.id,
-    away_entrant_id: others[0]!,
+    away_entrant_id: others[0],
   });
   check("v13 addFixture on a league stage (201)", adhoc.status === 201);
   const adhocId = v1data<{ fixture_id: string }>(adhoc).fixture_id;
@@ -17632,7 +17645,7 @@ async function v13Suite(admin: Session, proOrgId: string, proOrgSlug: string): P
   });
   const koId = v1data<{ id: string }>(ko).id;
   const kgen = await v1(admin, `/api/v1/stages/${koId}/generate`, "POST");
-  const kf = v1data<{ fixtures: { id: string }[] }>(kgen).fixtures[0]!;
+  const kf = v1data<{ fixtures: { id: string }[] }>(kgen).fixtures[0];
   await v1(admin, `/api/v1/divisions/${kdiv.id}/start`, "POST");
   await v1(admin, `/api/v1/fixtures/${kf.id}/events`, "POST", {
     expected_seq: 0,
@@ -17740,7 +17753,7 @@ async function v13Suite(admin: Session, proOrgId: string, proOrgSlug: string): P
   });
   check("entrant-shapes: single-person individual accepted (201)", esSolo.status === 201);
   const esSoloRow = v1data<{ display_name: string }[] | { display_name: string }>(esSolo);
-  const esSoloOne = Array.isArray(esSoloRow) ? esSoloRow[0]! : esSoloRow;
+  const esSoloOne = Array.isArray(esSoloRow) ? esSoloRow[0] : esSoloRow;
   check(
     "entrant-shapes: display_name echoed on the created individual",
     esSoloOne.display_name === `Magnus ${tag}`,
@@ -18115,8 +18128,8 @@ async function eventImportSuite(): Promise<void> {
     ]),
   );
   const personOfEntrant = new Map([
-    [entrants[0]!.id, home.id],
-    [entrants[1]!.id, away.id],
+    [entrants[0].id, home.id],
+    [entrants[1].id, away.id],
   ]);
 
   const stage = v1data<{ id: string }>(
@@ -18133,8 +18146,8 @@ async function eventImportSuite(): Promise<void> {
     "event-import: two entrants in one league stage generate exactly one fixture",
     fixtures.length === 1,
   );
-  const fixtureId = fixtures[0]!.id;
-  const homeEntrantId = fixtures[0]!.home_entrant_id!;
+  const fixtureId = fixtures[0].id;
+  const homeEntrantId = fixtures[0].home_entrant_id!;
   const homePersonId = personOfEntrant.get(homeEntrantId);
 
   // Starts the DIVISION only — appends no core.start to any fixture, so the
@@ -18195,7 +18208,7 @@ async function eventImportSuite(): Promise<void> {
   );
 
   // --- an auto-draft news post exists ---
-  const drafts = v1data<{ id: string; kind: string; auto_source: unknown | null }[]>(
+  const drafts = v1data<{ id: string; kind: string; auto_source: unknown }[]>(
     await v1(owner, `/api/v1/orgs/${orgId}/posts?status=draft`),
   );
   check(
@@ -18396,7 +18409,7 @@ async function registrationOpenFlowSuite(): Promise<void> {
   check(
     "open flow: the auto-confirmed entry materialises a real entrant (entrant_id resolves to a row)",
     freeConfirmedList.some(
-      (r) => r.id === freeOut.entries[0]!.registration_id && !!r.entrant_id,
+      (r) => r.id === freeOut.entries[0].registration_id && !!r.entrant_id,
     ),
   );
 
@@ -18441,7 +18454,7 @@ async function registrationOpenFlowSuite(): Promise<void> {
     manualSubmitted.status === 201 && manualOut.entries[0]?.status === "pending",
   );
 
-  const manualRegId = manualOut.entries[0]!.registration_id;
+  const manualRegId = manualOut.entries[0].registration_id;
   type ApproveOut = { status: string; entrant_id: string | null };
   const approved = await v1(owner, `/api/v1/registrations/${manualRegId}/approve`, "POST");
   const approvedData = v1data<ApproveOut>(approved);
@@ -18543,7 +18556,7 @@ async function registrationWaitlistPromoteSuite(): Promise<void> {
     "waitlist: the next submit into a full division waitlists — never refused, never silently confirmed",
     second.entries[0]?.status === "waitlisted",
   );
-  const secondId = second.entries[0]!.registration_id;
+  const secondId = second.entries[0].registration_id;
 
   const waitlistRows = v1data<{ id: string; waitlist_position: number | null }[]>(
     await v1(owner, `/api/v1/divisions/${div.id}/registrations?status=waitlisted`),
@@ -18688,9 +18701,9 @@ async function registrationTeamOpsSuite(): Promise<void> {
     "team ops: a team entry confirms immediately (auto/free) and mints a join_code",
     teamA.entries[0]?.status === "confirmed" && !!teamA.entries[0]?.join_code,
   );
-  const teamAId = teamA.entries[0]!.registration_id;
-  const teamBId = teamB.entries[0]!.registration_id;
-  const joinCode = teamA.entries[0]!.join_code!;
+  const teamAId = teamA.entries[0].registration_id;
+  const teamBId = teamB.entries[0].registration_id;
+  const joinCode = teamA.entries[0].join_code!;
 
   const soloOut = v1data<SubmitOut>(
     await v1(newSession(), `/api/v1/public/orgs/${orgSlug}/competitions/${comp.slug}/register`, "POST", {
@@ -18711,7 +18724,7 @@ async function registrationTeamOpsSuite(): Promise<void> {
     "team ops: a free-agent solo sign-up on an auto/free division confirms too — never held on a team slot",
     soloOut.entries[0]?.status === "confirmed",
   );
-  const soloId = soloOut.entries[0]!.registration_id;
+  const soloId = soloOut.entries[0].registration_id;
 
   // --- JOIN: a second player self-joins team A via its join_code ---
   type JoinOut = { registration_id: string; player_id: string; consent_status: string };
@@ -18879,9 +18892,9 @@ async function registrationSelfLinkAndConsentSuite(): Promise<void> {
   );
   check(
     "self-link (#402): one signed-in registrant across two divisions resolves to ONE persons row, not two",
-    myPersons.length === 1 && myPersons[0]!.full_name === fullName,
+    myPersons.length === 1 && myPersons[0].full_name === fullName,
   );
-  const personId = myPersons[0]!.id;
+  const personId = myPersons[0].id;
 
   type PublicEntrantsOut = { entrants: { display_name: string }[] };
   const divAEntrantsUrl =
@@ -18909,7 +18922,7 @@ async function registrationSelfLinkAndConsentSuite(): Promise<void> {
   // suite submitted, not a hand-typed guess, so a future change to that
   // format moves this assertion with it.
   const parts = fullName.trim().split(/\s+/);
-  const expectedMasked = `${parts[0]} ${parts[parts.length - 1]!.slice(0, 1)}.`;
+  const expectedMasked = `${parts[0]} ${parts[parts.length - 1].slice(0, 1)}.`;
   const afterEntrants = v1data<PublicEntrantsOut>(await v1(newSession(), divAEntrantsUrl));
   check(
     `consent: after opting out, the SAME public entrant list masks the name to "${expectedMasked}" — not the full name`,

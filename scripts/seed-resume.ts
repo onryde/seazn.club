@@ -13,7 +13,7 @@
  * competition seed had drifted from it.
  */
 
-export type ApiCall = (path: string, method?: string, body?: unknown) => Promise<any>;
+export type ApiCall = (path: string, method?: string, body?: unknown) => Promise<unknown>;
 
 /** A plan cap is a SKIP for a seed run, not an abort — accounts seeded before
  *  a PLAN change routinely sit at their caps. */
@@ -29,7 +29,7 @@ export async function findOrCreateCompetition(
   body: Record<string, unknown>,
 ): Promise<{ id: string } | null> {
   const list = await call("/api/v1/competitions?limit=100");
-  const existing = ((list.items ?? list) as { id: string; name: string }[]).find(
+  const existing = (((list as { items?: unknown }).items ?? list) as { id: string; name: string }[]).find(
     (c) => c.name === name,
   );
   if (existing) {

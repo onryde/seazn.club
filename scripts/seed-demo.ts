@@ -407,7 +407,7 @@ interface GenFx {
 /** Decide fixtures round by round, refetching feeds (brackets fill as rounds decide). */
 async function playStage(stageId: string, sport: string, variant: string, ratio: number) {
   const gen = await call(`/api/v1/stages/${stageId}/generate`, "POST");
-  let fixtures: GenFx[] = gen.fixtures;
+  const fixtures: GenFx[] = gen.fixtures;
   const total = fixtures.length;
   const target = Math.ceil(total * ratio);
   let played = 0;
@@ -799,7 +799,7 @@ async function main() {
                  'pro', 'active'
             from organizations o where o.id = ${org.id}
           returning id`;
-        await sql`update organizations set subscription_id = ${group!.id} where id = ${org.id}`;
+        await sql`update organizations set subscription_id = ${group.id} where id = ${org.id}`;
       }
       await sql.end();
       console.log("subscription set to pro/active");
@@ -1448,7 +1448,7 @@ async function playStageAfterStart(
 ) {
   const gen = await call(`/api/v1/stages/${stageId}/generate`, "POST");
   await call(`/api/v1/divisions/${divId}/start`, "POST");
-  let fixtures: GenFx[] = gen.fixtures;
+  const fixtures: GenFx[] = gen.fixtures;
   const total = fixtures.length;
   const target = Math.ceil(total * ratio);
   let played = 0;

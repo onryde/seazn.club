@@ -82,8 +82,8 @@ function parseSquads(wikitext: string): Record<string, Player[]> {
     const name = heads[i][1].trim();
     const code = NAME_TO_CODE[name];
     if (!code) continue;
-    const start = heads[i].index! + heads[i][0].length;
-    const end = i + 1 < heads.length ? heads[i + 1].index! : wikitext.length;
+    const start = heads[i].index + heads[i][0].length;
+    const end = i + 1 < heads.length ? heads[i + 1].index : wikitext.length;
     const block = wikitext.slice(start, end);
     const players: Player[] = [];
     for (const m of block.matchAll(/{{\s*nat fs g player\s*\|([^]*?)}}\s*(?:\n|$)/gi)) {
