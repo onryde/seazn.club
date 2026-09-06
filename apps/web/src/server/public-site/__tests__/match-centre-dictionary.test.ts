@@ -255,11 +255,23 @@ const BAND_LEVELS: readonly string[] = ["0", "1", "2", "3"];
  * task's own parity test can import and retire members of this list as its
  * renderer starts naming them for real — a member still here after that
  * lands is a genuine gap, not a false positive this list is excusing.
+ *
+ * Task 9 retirement — `match-centre-parity.test.ts` now scans
+ * `match-centre.ts`'s own source directly (rather than this file's
+ * broader renderer-side scan) and proves two of the original five members
+ * are real, emitted, translated keys: `matchCentre.chase.need`
+ * (`buildHeader`'s chase-line) and `matchCentre.status.startsAt`
+ * (`buildHeader`'s scheduled-status line) — both literal double-quoted
+ * strings in `match-centre.ts`, both now present in all four
+ * `public.json` files. Retired from this list accordingly. The remaining
+ * three (`chase.needFrom`, `rate.crr`, `rate.rrr`) stay: nothing in
+ * `match-centre.ts` or any renderer emits them — `rateLineOf` builds a
+ * plain, already-formatted string ("CRR 8.44 · RRR 9.71") with no
+ * dictionary key at all, and no `needFrom`-shaped chase line exists
+ * anywhere in the builder. A genuine gap if a future task expects them.
  */
 export const BUILDER_ONLY_KEYS = [
-  "matchCentre.chase.need",
   "matchCentre.chase.needFrom",
-  "matchCentre.status.startsAt",
   "matchCentre.rate.crr",
   "matchCentre.rate.rrr",
 ] as const;

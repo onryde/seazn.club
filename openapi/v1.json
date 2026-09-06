@@ -49754,7 +49754,1908 @@
                     "ok": {
                       "const": true
                     },
-                    "data": {},
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "type": "string",
+                          "format": "uuid",
+                          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                        },
+                        "division_id": {
+                          "type": "string",
+                          "format": "uuid",
+                          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                        },
+                        "stage_id": {
+                          "type": "string",
+                          "format": "uuid",
+                          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                        },
+                        "pool_id": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "format": "uuid",
+                              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "round_no": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "seq_in_round": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "home_entrant_id": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "format": "uuid",
+                              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "away_entrant_id": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "format": "uuid",
+                              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "home_slot_label": {
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "key": {
+                                  "type": "string"
+                                },
+                                "params": {
+                                  "type": "object",
+                                  "propertyNames": {
+                                    "type": "string"
+                                  },
+                                  "additionalProperties": {}
+                                }
+                              },
+                              "required": [
+                                "key",
+                                "params"
+                              ],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "away_slot_label": {
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "key": {
+                                  "type": "string"
+                                },
+                                "params": {
+                                  "type": "object",
+                                  "propertyNames": {
+                                    "type": "string"
+                                  },
+                                  "additionalProperties": {}
+                                }
+                              },
+                              "required": [
+                                "key",
+                                "params"
+                              ],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "scheduled_at": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "venue": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "court_label": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "venue_name": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "court_name": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "status": {
+                          "type": "string",
+                          "enum": [
+                            "scheduled",
+                            "in_play",
+                            "decided",
+                            "finalized",
+                            "abandoned",
+                            "forfeited",
+                            "cancelled"
+                          ]
+                        },
+                        "outcome": {
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "kind": {
+                                  "type": "string"
+                                },
+                                "winner": {
+                                  "type": "string"
+                                },
+                                "loser": {
+                                  "type": "string"
+                                },
+                                "method": {
+                                  "type": "string"
+                                }
+                              },
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "summary": {
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "headline": {
+                                  "type": "string"
+                                },
+                                "perSide": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "object",
+                                    "properties": {
+                                      "entrantId": {
+                                        "type": "string"
+                                      },
+                                      "line": {
+                                        "type": "string"
+                                      }
+                                    },
+                                    "required": [
+                                      "entrantId",
+                                      "line"
+                                    ],
+                                    "additionalProperties": false
+                                  }
+                                },
+                                "detail": {}
+                              },
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "last_seq": {
+                          "anyOf": [
+                            {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "match_centre": {
+                          "type": "object",
+                          "properties": {
+                            "fixtureId": {
+                              "type": "string"
+                            },
+                            "sportKey": {
+                              "type": "string"
+                            },
+                            "header": {
+                              "type": "object",
+                              "properties": {
+                                "live": {
+                                  "type": "boolean"
+                                },
+                                "status": {
+                                  "type": "string",
+                                  "enum": [
+                                    "scheduled",
+                                    "in_play",
+                                    "decided",
+                                    "other"
+                                  ]
+                                },
+                                "sides": {
+                                  "type": "array",
+                                  "prefixItems": [
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "entrantId": {
+                                          "type": "string"
+                                        },
+                                        "name": {
+                                          "type": "string"
+                                        },
+                                        "short": {
+                                          "type": "string"
+                                        },
+                                        "colour": {
+                                          "anyOf": [
+                                            {
+                                              "type": "string"
+                                            },
+                                            {
+                                              "type": "null"
+                                            }
+                                          ]
+                                        },
+                                        "badgeUrl": {
+                                          "anyOf": [
+                                            {
+                                              "type": "string"
+                                            },
+                                            {
+                                              "type": "null"
+                                            }
+                                          ]
+                                        }
+                                      },
+                                      "required": [
+                                        "entrantId",
+                                        "name",
+                                        "short",
+                                        "colour",
+                                        "badgeUrl"
+                                      ],
+                                      "additionalProperties": false
+                                    },
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "entrantId": {
+                                          "type": "string"
+                                        },
+                                        "name": {
+                                          "type": "string"
+                                        },
+                                        "short": {
+                                          "type": "string"
+                                        },
+                                        "colour": {
+                                          "anyOf": [
+                                            {
+                                              "type": "string"
+                                            },
+                                            {
+                                              "type": "null"
+                                            }
+                                          ]
+                                        },
+                                        "badgeUrl": {
+                                          "anyOf": [
+                                            {
+                                              "type": "string"
+                                            },
+                                            {
+                                              "type": "null"
+                                            }
+                                          ]
+                                        }
+                                      },
+                                      "required": [
+                                        "entrantId",
+                                        "name",
+                                        "short",
+                                        "colour",
+                                        "badgeUrl"
+                                      ],
+                                      "additionalProperties": false
+                                    }
+                                  ]
+                                },
+                                "scoreLines": {
+                                  "type": "array",
+                                  "prefixItems": [
+                                    {
+                                      "anyOf": [
+                                        {
+                                          "type": "string"
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    },
+                                    {
+                                      "anyOf": [
+                                        {
+                                          "type": "string"
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    }
+                                  ]
+                                },
+                                "subLines": {
+                                  "type": "array",
+                                  "prefixItems": [
+                                    {
+                                      "anyOf": [
+                                        {
+                                          "type": "string"
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    },
+                                    {
+                                      "anyOf": [
+                                        {
+                                          "type": "string"
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    }
+                                  ]
+                                },
+                                "battingIndex": {
+                                  "anyOf": [
+                                    {
+                                      "anyOf": [
+                                        {
+                                          "type": "number",
+                                          "const": 0
+                                        },
+                                        {
+                                          "type": "number",
+                                          "const": 1
+                                        }
+                                      ]
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "statusLine": {
+                                  "anyOf": [
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "key": {
+                                          "type": "string"
+                                        },
+                                        "params": {
+                                          "type": "object",
+                                          "propertyNames": {
+                                            "type": "string"
+                                          },
+                                          "additionalProperties": {
+                                            "anyOf": [
+                                              {
+                                                "type": "string"
+                                              },
+                                              {
+                                                "type": "number"
+                                              }
+                                            ]
+                                          }
+                                        }
+                                      },
+                                      "required": [
+                                        "key"
+                                      ],
+                                      "additionalProperties": false
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "rateLine": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "updatedAt": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "live",
+                                "status",
+                                "sides",
+                                "scoreLines",
+                                "subLines",
+                                "battingIndex",
+                                "statusLine",
+                                "rateLine",
+                                "updatedAt"
+                              ],
+                              "additionalProperties": false
+                            },
+                            "tabs": {
+                              "minItems": 1,
+                              "type": "array",
+                              "items": {
+                                "type": "string",
+                                "enum": [
+                                  "summary",
+                                  "scorecard",
+                                  "commentary",
+                                  "timeline",
+                                  "sets",
+                                  "info"
+                                ]
+                              }
+                            },
+                            "cricket": {
+                              "anyOf": [
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "band": {
+                                      "anyOf": [
+                                        {
+                                          "type": "number",
+                                          "const": 0
+                                        },
+                                        {
+                                          "type": "number",
+                                          "const": 1
+                                        },
+                                        {
+                                          "type": "number",
+                                          "const": 2
+                                        },
+                                        {
+                                          "type": "number",
+                                          "const": 3
+                                        }
+                                      ]
+                                    },
+                                    "toss": {
+                                      "anyOf": [
+                                        {
+                                          "type": "object",
+                                          "properties": {
+                                            "key": {
+                                              "type": "string"
+                                            },
+                                            "params": {
+                                              "type": "object",
+                                              "propertyNames": {
+                                                "type": "string"
+                                              },
+                                              "additionalProperties": {
+                                                "anyOf": [
+                                                  {
+                                                    "type": "string"
+                                                  },
+                                                  {
+                                                    "type": "number"
+                                                  }
+                                                ]
+                                              }
+                                            }
+                                          },
+                                          "required": [
+                                            "key"
+                                          ],
+                                          "additionalProperties": false
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    },
+                                    "innings": {
+                                      "type": "array",
+                                      "items": {
+                                        "type": "object",
+                                        "properties": {
+                                          "number": {
+                                            "type": "number"
+                                          },
+                                          "side": {
+                                            "type": "object",
+                                            "properties": {
+                                              "entrantId": {
+                                                "type": "string"
+                                              },
+                                              "name": {
+                                                "type": "string"
+                                              },
+                                              "short": {
+                                                "type": "string"
+                                              },
+                                              "colour": {
+                                                "anyOf": [
+                                                  {
+                                                    "type": "string"
+                                                  },
+                                                  {
+                                                    "type": "null"
+                                                  }
+                                                ]
+                                              },
+                                              "badgeUrl": {
+                                                "anyOf": [
+                                                  {
+                                                    "type": "string"
+                                                  },
+                                                  {
+                                                    "type": "null"
+                                                  }
+                                                ]
+                                              }
+                                            },
+                                            "required": [
+                                              "entrantId",
+                                              "name",
+                                              "short",
+                                              "colour",
+                                              "badgeUrl"
+                                            ],
+                                            "additionalProperties": false
+                                          },
+                                          "isSuperOver": {
+                                            "type": "boolean"
+                                          },
+                                          "total": {
+                                            "type": "object",
+                                            "properties": {
+                                              "runs": {
+                                                "type": "number"
+                                              },
+                                              "wickets": {
+                                                "type": "number"
+                                              },
+                                              "overs": {
+                                                "type": "string"
+                                              },
+                                              "runRate": {
+                                                "anyOf": [
+                                                  {
+                                                    "type": "string"
+                                                  },
+                                                  {
+                                                    "type": "null"
+                                                  }
+                                                ]
+                                              }
+                                            },
+                                            "required": [
+                                              "runs",
+                                              "wickets",
+                                              "overs",
+                                              "runRate"
+                                            ],
+                                            "additionalProperties": false
+                                          },
+                                          "extrasLine": {
+                                            "anyOf": [
+                                              {
+                                                "type": "string"
+                                              },
+                                              {
+                                                "type": "null"
+                                              }
+                                            ]
+                                          },
+                                          "batting": {
+                                            "type": "array",
+                                            "items": {
+                                              "type": "object",
+                                              "properties": {
+                                                "person": {
+                                                  "type": "object",
+                                                  "properties": {
+                                                    "personId": {
+                                                      "type": "string"
+                                                    },
+                                                    "name": {
+                                                      "type": "string"
+                                                    },
+                                                    "masked": {
+                                                      "type": "boolean"
+                                                    }
+                                                  },
+                                                  "required": [
+                                                    "personId",
+                                                    "name",
+                                                    "masked"
+                                                  ],
+                                                  "additionalProperties": false
+                                                },
+                                                "runs": {
+                                                  "type": "number"
+                                                },
+                                                "balls": {
+                                                  "type": "number"
+                                                },
+                                                "fours": {
+                                                  "anyOf": [
+                                                    {
+                                                      "type": "number"
+                                                    },
+                                                    {
+                                                      "type": "null"
+                                                    }
+                                                  ]
+                                                },
+                                                "sixes": {
+                                                  "anyOf": [
+                                                    {
+                                                      "type": "number"
+                                                    },
+                                                    {
+                                                      "type": "null"
+                                                    }
+                                                  ]
+                                                },
+                                                "strikeRate": {
+                                                  "anyOf": [
+                                                    {
+                                                      "type": "string"
+                                                    },
+                                                    {
+                                                      "type": "null"
+                                                    }
+                                                  ]
+                                                },
+                                                "dismissal": {
+                                                  "type": "object",
+                                                  "properties": {
+                                                    "key": {
+                                                      "type": "string"
+                                                    },
+                                                    "params": {
+                                                      "type": "object",
+                                                      "propertyNames": {
+                                                        "type": "string"
+                                                      },
+                                                      "additionalProperties": {
+                                                        "anyOf": [
+                                                          {
+                                                            "type": "string"
+                                                          },
+                                                          {
+                                                            "type": "number"
+                                                          }
+                                                        ]
+                                                      }
+                                                    }
+                                                  },
+                                                  "required": [
+                                                    "key"
+                                                  ],
+                                                  "additionalProperties": false
+                                                },
+                                                "notOut": {
+                                                  "type": "boolean"
+                                                }
+                                              },
+                                              "required": [
+                                                "person",
+                                                "runs",
+                                                "balls",
+                                                "fours",
+                                                "sixes",
+                                                "strikeRate",
+                                                "dismissal",
+                                                "notOut"
+                                              ],
+                                              "additionalProperties": false
+                                            }
+                                          },
+                                          "didNotBat": {
+                                            "type": "array",
+                                            "items": {
+                                              "type": "object",
+                                              "properties": {
+                                                "personId": {
+                                                  "type": "string"
+                                                },
+                                                "name": {
+                                                  "type": "string"
+                                                },
+                                                "masked": {
+                                                  "type": "boolean"
+                                                }
+                                              },
+                                              "required": [
+                                                "personId",
+                                                "name",
+                                                "masked"
+                                              ],
+                                              "additionalProperties": false
+                                            }
+                                          },
+                                          "bowling": {
+                                            "type": "array",
+                                            "items": {
+                                              "type": "object",
+                                              "properties": {
+                                                "person": {
+                                                  "type": "object",
+                                                  "properties": {
+                                                    "personId": {
+                                                      "type": "string"
+                                                    },
+                                                    "name": {
+                                                      "type": "string"
+                                                    },
+                                                    "masked": {
+                                                      "type": "boolean"
+                                                    }
+                                                  },
+                                                  "required": [
+                                                    "personId",
+                                                    "name",
+                                                    "masked"
+                                                  ],
+                                                  "additionalProperties": false
+                                                },
+                                                "overs": {
+                                                  "type": "string"
+                                                },
+                                                "maidens": {
+                                                  "anyOf": [
+                                                    {
+                                                      "type": "number"
+                                                    },
+                                                    {
+                                                      "type": "null"
+                                                    }
+                                                  ]
+                                                },
+                                                "runs": {
+                                                  "type": "number"
+                                                },
+                                                "wickets": {
+                                                  "type": "number"
+                                                },
+                                                "economy": {
+                                                  "anyOf": [
+                                                    {
+                                                      "type": "string"
+                                                    },
+                                                    {
+                                                      "type": "null"
+                                                    }
+                                                  ]
+                                                },
+                                                "wides": {
+                                                  "anyOf": [
+                                                    {
+                                                      "type": "number"
+                                                    },
+                                                    {
+                                                      "type": "null"
+                                                    }
+                                                  ]
+                                                },
+                                                "noBalls": {
+                                                  "anyOf": [
+                                                    {
+                                                      "type": "number"
+                                                    },
+                                                    {
+                                                      "type": "null"
+                                                    }
+                                                  ]
+                                                }
+                                              },
+                                              "required": [
+                                                "person",
+                                                "overs",
+                                                "maidens",
+                                                "runs",
+                                                "wickets",
+                                                "economy",
+                                                "wides",
+                                                "noBalls"
+                                              ],
+                                              "additionalProperties": false
+                                            }
+                                          },
+                                          "fallOfWickets": {
+                                            "type": "array",
+                                            "items": {
+                                              "type": "object",
+                                              "properties": {
+                                                "wicket": {
+                                                  "type": "number"
+                                                },
+                                                "runs": {
+                                                  "type": "number"
+                                                },
+                                                "over": {
+                                                  "type": "string"
+                                                },
+                                                "batter": {
+                                                  "type": "object",
+                                                  "properties": {
+                                                    "personId": {
+                                                      "type": "string"
+                                                    },
+                                                    "name": {
+                                                      "type": "string"
+                                                    },
+                                                    "masked": {
+                                                      "type": "boolean"
+                                                    }
+                                                  },
+                                                  "required": [
+                                                    "personId",
+                                                    "name",
+                                                    "masked"
+                                                  ],
+                                                  "additionalProperties": false
+                                                }
+                                              },
+                                              "required": [
+                                                "wicket",
+                                                "runs",
+                                                "over",
+                                                "batter"
+                                              ],
+                                              "additionalProperties": false
+                                            }
+                                          },
+                                          "partnerships": {
+                                            "type": "array",
+                                            "items": {
+                                              "type": "object",
+                                              "properties": {
+                                                "batters": {
+                                                  "type": "array",
+                                                  "prefixItems": [
+                                                    {
+                                                      "type": "object",
+                                                      "properties": {
+                                                        "personId": {
+                                                          "type": "string"
+                                                        },
+                                                        "name": {
+                                                          "type": "string"
+                                                        },
+                                                        "masked": {
+                                                          "type": "boolean"
+                                                        }
+                                                      },
+                                                      "required": [
+                                                        "personId",
+                                                        "name",
+                                                        "masked"
+                                                      ],
+                                                      "additionalProperties": false
+                                                    },
+                                                    {
+                                                      "type": "object",
+                                                      "properties": {
+                                                        "personId": {
+                                                          "type": "string"
+                                                        },
+                                                        "name": {
+                                                          "type": "string"
+                                                        },
+                                                        "masked": {
+                                                          "type": "boolean"
+                                                        }
+                                                      },
+                                                      "required": [
+                                                        "personId",
+                                                        "name",
+                                                        "masked"
+                                                      ],
+                                                      "additionalProperties": false
+                                                    }
+                                                  ]
+                                                },
+                                                "runs": {
+                                                  "type": "number"
+                                                },
+                                                "balls": {
+                                                  "type": "number"
+                                                },
+                                                "wicket": {
+                                                  "anyOf": [
+                                                    {
+                                                      "type": "number"
+                                                    },
+                                                    {
+                                                      "type": "string",
+                                                      "const": "unbroken"
+                                                    }
+                                                  ]
+                                                }
+                                              },
+                                              "required": [
+                                                "batters",
+                                                "runs",
+                                                "balls",
+                                                "wicket"
+                                              ],
+                                              "additionalProperties": false
+                                            }
+                                          },
+                                          "overs": {
+                                            "type": "array",
+                                            "items": {
+                                              "type": "object",
+                                              "properties": {
+                                                "number": {
+                                                  "type": "number"
+                                                },
+                                                "bowler": {
+                                                  "anyOf": [
+                                                    {
+                                                      "type": "object",
+                                                      "properties": {
+                                                        "personId": {
+                                                          "type": "string"
+                                                        },
+                                                        "name": {
+                                                          "type": "string"
+                                                        },
+                                                        "masked": {
+                                                          "type": "boolean"
+                                                        }
+                                                      },
+                                                      "required": [
+                                                        "personId",
+                                                        "name",
+                                                        "masked"
+                                                      ],
+                                                      "additionalProperties": false
+                                                    },
+                                                    {
+                                                      "type": "null"
+                                                    }
+                                                  ]
+                                                },
+                                                "glyphs": {
+                                                  "type": "array",
+                                                  "items": {
+                                                    "type": "string"
+                                                  }
+                                                },
+                                                "runs": {
+                                                  "type": "number"
+                                                },
+                                                "wickets": {
+                                                  "type": "number"
+                                                },
+                                                "scoreAfter": {
+                                                  "type": "string"
+                                                },
+                                                "lines": {
+                                                  "type": "array",
+                                                  "items": {
+                                                    "type": "object",
+                                                    "properties": {
+                                                      "key": {
+                                                        "type": "string"
+                                                      },
+                                                      "params": {
+                                                        "type": "object",
+                                                        "propertyNames": {
+                                                          "type": "string"
+                                                        },
+                                                        "additionalProperties": {
+                                                          "anyOf": [
+                                                            {
+                                                              "type": "string"
+                                                            },
+                                                            {
+                                                              "type": "number"
+                                                            }
+                                                          ]
+                                                        }
+                                                      }
+                                                    },
+                                                    "required": [
+                                                      "key"
+                                                    ],
+                                                    "additionalProperties": false
+                                                  }
+                                                }
+                                              },
+                                              "required": [
+                                                "number",
+                                                "bowler",
+                                                "glyphs",
+                                                "runs",
+                                                "wickets",
+                                                "scoreAfter",
+                                                "lines"
+                                              ],
+                                              "additionalProperties": false
+                                            }
+                                          }
+                                        },
+                                        "required": [
+                                          "number",
+                                          "side",
+                                          "isSuperOver",
+                                          "total",
+                                          "extrasLine",
+                                          "batting",
+                                          "didNotBat",
+                                          "bowling",
+                                          "fallOfWickets",
+                                          "partnerships",
+                                          "overs"
+                                        ],
+                                        "additionalProperties": false
+                                      }
+                                    },
+                                    "live": {
+                                      "anyOf": [
+                                        {
+                                          "type": "object",
+                                          "properties": {
+                                            "striker": {
+                                              "anyOf": [
+                                                {
+                                                  "type": "object",
+                                                  "properties": {
+                                                    "personId": {
+                                                      "type": "string"
+                                                    },
+                                                    "name": {
+                                                      "type": "string"
+                                                    },
+                                                    "masked": {
+                                                      "type": "boolean"
+                                                    }
+                                                  },
+                                                  "required": [
+                                                    "personId",
+                                                    "name",
+                                                    "masked"
+                                                  ],
+                                                  "additionalProperties": false
+                                                },
+                                                {
+                                                  "type": "null"
+                                                }
+                                              ]
+                                            },
+                                            "nonStriker": {
+                                              "anyOf": [
+                                                {
+                                                  "type": "object",
+                                                  "properties": {
+                                                    "personId": {
+                                                      "type": "string"
+                                                    },
+                                                    "name": {
+                                                      "type": "string"
+                                                    },
+                                                    "masked": {
+                                                      "type": "boolean"
+                                                    }
+                                                  },
+                                                  "required": [
+                                                    "personId",
+                                                    "name",
+                                                    "masked"
+                                                  ],
+                                                  "additionalProperties": false
+                                                },
+                                                {
+                                                  "type": "null"
+                                                }
+                                              ]
+                                            },
+                                            "bowler": {
+                                              "anyOf": [
+                                                {
+                                                  "type": "object",
+                                                  "properties": {
+                                                    "personId": {
+                                                      "type": "string"
+                                                    },
+                                                    "name": {
+                                                      "type": "string"
+                                                    },
+                                                    "masked": {
+                                                      "type": "boolean"
+                                                    }
+                                                  },
+                                                  "required": [
+                                                    "personId",
+                                                    "name",
+                                                    "masked"
+                                                  ],
+                                                  "additionalProperties": false
+                                                },
+                                                {
+                                                  "type": "null"
+                                                }
+                                              ]
+                                            },
+                                            "batters": {
+                                              "type": "array",
+                                              "items": {
+                                                "type": "object",
+                                                "properties": {
+                                                  "person": {
+                                                    "type": "object",
+                                                    "properties": {
+                                                      "personId": {
+                                                        "type": "string"
+                                                      },
+                                                      "name": {
+                                                        "type": "string"
+                                                      },
+                                                      "masked": {
+                                                        "type": "boolean"
+                                                      }
+                                                    },
+                                                    "required": [
+                                                      "personId",
+                                                      "name",
+                                                      "masked"
+                                                    ],
+                                                    "additionalProperties": false
+                                                  },
+                                                  "runs": {
+                                                    "type": "number"
+                                                  },
+                                                  "balls": {
+                                                    "type": "number"
+                                                  },
+                                                  "fours": {
+                                                    "anyOf": [
+                                                      {
+                                                        "type": "number"
+                                                      },
+                                                      {
+                                                        "type": "null"
+                                                      }
+                                                    ]
+                                                  },
+                                                  "sixes": {
+                                                    "anyOf": [
+                                                      {
+                                                        "type": "number"
+                                                      },
+                                                      {
+                                                        "type": "null"
+                                                      }
+                                                    ]
+                                                  },
+                                                  "strikeRate": {
+                                                    "anyOf": [
+                                                      {
+                                                        "type": "string"
+                                                      },
+                                                      {
+                                                        "type": "null"
+                                                      }
+                                                    ]
+                                                  },
+                                                  "dismissal": {
+                                                    "type": "object",
+                                                    "properties": {
+                                                      "key": {
+                                                        "type": "string"
+                                                      },
+                                                      "params": {
+                                                        "type": "object",
+                                                        "propertyNames": {
+                                                          "type": "string"
+                                                        },
+                                                        "additionalProperties": {
+                                                          "anyOf": [
+                                                            {
+                                                              "type": "string"
+                                                            },
+                                                            {
+                                                              "type": "number"
+                                                            }
+                                                          ]
+                                                        }
+                                                      }
+                                                    },
+                                                    "required": [
+                                                      "key"
+                                                    ],
+                                                    "additionalProperties": false
+                                                  },
+                                                  "notOut": {
+                                                    "type": "boolean"
+                                                  }
+                                                },
+                                                "required": [
+                                                  "person",
+                                                  "runs",
+                                                  "balls",
+                                                  "fours",
+                                                  "sixes",
+                                                  "strikeRate",
+                                                  "dismissal",
+                                                  "notOut"
+                                                ],
+                                                "additionalProperties": false
+                                              }
+                                            },
+                                            "bowling": {
+                                              "type": "array",
+                                              "items": {
+                                                "type": "object",
+                                                "properties": {
+                                                  "person": {
+                                                    "type": "object",
+                                                    "properties": {
+                                                      "personId": {
+                                                        "type": "string"
+                                                      },
+                                                      "name": {
+                                                        "type": "string"
+                                                      },
+                                                      "masked": {
+                                                        "type": "boolean"
+                                                      }
+                                                    },
+                                                    "required": [
+                                                      "personId",
+                                                      "name",
+                                                      "masked"
+                                                    ],
+                                                    "additionalProperties": false
+                                                  },
+                                                  "overs": {
+                                                    "type": "string"
+                                                  },
+                                                  "maidens": {
+                                                    "anyOf": [
+                                                      {
+                                                        "type": "number"
+                                                      },
+                                                      {
+                                                        "type": "null"
+                                                      }
+                                                    ]
+                                                  },
+                                                  "runs": {
+                                                    "type": "number"
+                                                  },
+                                                  "wickets": {
+                                                    "type": "number"
+                                                  },
+                                                  "economy": {
+                                                    "anyOf": [
+                                                      {
+                                                        "type": "string"
+                                                      },
+                                                      {
+                                                        "type": "null"
+                                                      }
+                                                    ]
+                                                  },
+                                                  "wides": {
+                                                    "anyOf": [
+                                                      {
+                                                        "type": "number"
+                                                      },
+                                                      {
+                                                        "type": "null"
+                                                      }
+                                                    ]
+                                                  },
+                                                  "noBalls": {
+                                                    "anyOf": [
+                                                      {
+                                                        "type": "number"
+                                                      },
+                                                      {
+                                                        "type": "null"
+                                                      }
+                                                    ]
+                                                  }
+                                                },
+                                                "required": [
+                                                  "person",
+                                                  "overs",
+                                                  "maidens",
+                                                  "runs",
+                                                  "wickets",
+                                                  "economy",
+                                                  "wides",
+                                                  "noBalls"
+                                                ],
+                                                "additionalProperties": false
+                                              }
+                                            },
+                                            "thisOver": {
+                                              "type": "array",
+                                              "items": {
+                                                "type": "string"
+                                              }
+                                            },
+                                            "partnership": {
+                                              "anyOf": [
+                                                {
+                                                  "type": "string"
+                                                },
+                                                {
+                                                  "type": "null"
+                                                }
+                                              ]
+                                            },
+                                            "lastWicket": {
+                                              "anyOf": [
+                                                {
+                                                  "type": "object",
+                                                  "properties": {
+                                                    "key": {
+                                                      "type": "string"
+                                                    },
+                                                    "params": {
+                                                      "type": "object",
+                                                      "propertyNames": {
+                                                        "type": "string"
+                                                      },
+                                                      "additionalProperties": {
+                                                        "anyOf": [
+                                                          {
+                                                            "type": "string"
+                                                          },
+                                                          {
+                                                            "type": "number"
+                                                          }
+                                                        ]
+                                                      }
+                                                    }
+                                                  },
+                                                  "required": [
+                                                    "key"
+                                                  ],
+                                                  "additionalProperties": false
+                                                },
+                                                {
+                                                  "type": "null"
+                                                }
+                                              ]
+                                            }
+                                          },
+                                          "required": [
+                                            "striker",
+                                            "nonStriker",
+                                            "bowler",
+                                            "batters",
+                                            "bowling",
+                                            "thisOver",
+                                            "partnership",
+                                            "lastWicket"
+                                          ],
+                                          "additionalProperties": false
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    },
+                                    "topPerformers": {
+                                      "type": "array",
+                                      "items": {
+                                        "type": "object",
+                                        "properties": {
+                                          "role": {
+                                            "type": "string",
+                                            "enum": [
+                                              "batter",
+                                              "bowler"
+                                            ]
+                                          },
+                                          "person": {
+                                            "type": "object",
+                                            "properties": {
+                                              "personId": {
+                                                "type": "string"
+                                              },
+                                              "name": {
+                                                "type": "string"
+                                              },
+                                              "masked": {
+                                                "type": "boolean"
+                                              }
+                                            },
+                                            "required": [
+                                              "personId",
+                                              "name",
+                                              "masked"
+                                            ],
+                                            "additionalProperties": false
+                                          },
+                                          "side": {
+                                            "type": "object",
+                                            "properties": {
+                                              "entrantId": {
+                                                "type": "string"
+                                              },
+                                              "name": {
+                                                "type": "string"
+                                              },
+                                              "short": {
+                                                "type": "string"
+                                              },
+                                              "colour": {
+                                                "anyOf": [
+                                                  {
+                                                    "type": "string"
+                                                  },
+                                                  {
+                                                    "type": "null"
+                                                  }
+                                                ]
+                                              },
+                                              "badgeUrl": {
+                                                "anyOf": [
+                                                  {
+                                                    "type": "string"
+                                                  },
+                                                  {
+                                                    "type": "null"
+                                                  }
+                                                ]
+                                              }
+                                            },
+                                            "required": [
+                                              "entrantId",
+                                              "name",
+                                              "short",
+                                              "colour",
+                                              "badgeUrl"
+                                            ],
+                                            "additionalProperties": false
+                                          },
+                                          "line": {
+                                            "type": "string"
+                                          },
+                                          "detail": {
+                                            "anyOf": [
+                                              {
+                                                "type": "string"
+                                              },
+                                              {
+                                                "type": "null"
+                                              }
+                                            ]
+                                          }
+                                        },
+                                        "required": [
+                                          "role",
+                                          "person",
+                                          "side",
+                                          "line",
+                                          "detail"
+                                        ],
+                                        "additionalProperties": false
+                                      }
+                                    }
+                                  },
+                                  "required": [
+                                    "band",
+                                    "toss",
+                                    "innings",
+                                    "live",
+                                    "topPerformers"
+                                  ],
+                                  "additionalProperties": false
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "timeline": {
+                              "anyOf": [
+                                {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "object",
+                                    "properties": {
+                                      "seq": {
+                                        "type": "number"
+                                      },
+                                      "at": {
+                                        "anyOf": [
+                                          {
+                                            "type": "string"
+                                          },
+                                          {
+                                            "type": "null"
+                                          }
+                                        ]
+                                      },
+                                      "marker": {
+                                        "anyOf": [
+                                          {
+                                            "type": "string"
+                                          },
+                                          {
+                                            "type": "null"
+                                          }
+                                        ]
+                                      },
+                                      "sideIndex": {
+                                        "anyOf": [
+                                          {
+                                            "anyOf": [
+                                              {
+                                                "type": "number",
+                                                "const": 0
+                                              },
+                                              {
+                                                "type": "number",
+                                                "const": 1
+                                              }
+                                            ]
+                                          },
+                                          {
+                                            "type": "null"
+                                          }
+                                        ]
+                                      },
+                                      "text": {
+                                        "type": "object",
+                                        "properties": {
+                                          "key": {
+                                            "type": "string"
+                                          },
+                                          "params": {
+                                            "type": "object",
+                                            "propertyNames": {
+                                              "type": "string"
+                                            },
+                                            "additionalProperties": {
+                                              "anyOf": [
+                                                {
+                                                  "type": "string"
+                                                },
+                                                {
+                                                  "type": "number"
+                                                }
+                                              ]
+                                            }
+                                          }
+                                        },
+                                        "required": [
+                                          "key"
+                                        ],
+                                        "additionalProperties": false
+                                      },
+                                      "emphasis": {
+                                        "type": "string",
+                                        "enum": [
+                                          "normal",
+                                          "score",
+                                          "strong"
+                                        ]
+                                      }
+                                    },
+                                    "required": [
+                                      "seq",
+                                      "at",
+                                      "marker",
+                                      "sideIndex",
+                                      "text",
+                                      "emphasis"
+                                    ],
+                                    "additionalProperties": false
+                                  }
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "sets": {
+                              "anyOf": [
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "kind": {
+                                      "type": "string",
+                                      "enum": [
+                                        "sets",
+                                        "periods"
+                                      ]
+                                    },
+                                    "unit": {
+                                      "type": "string",
+                                      "enum": [
+                                        "set",
+                                        "game",
+                                        "period"
+                                      ]
+                                    },
+                                    "columns": {
+                                      "type": "array",
+                                      "items": {
+                                        "type": "string"
+                                      }
+                                    },
+                                    "columnLabels": {
+                                      "type": "array",
+                                      "items": {
+                                        "type": "string"
+                                      }
+                                    },
+                                    "rows": {
+                                      "type": "array",
+                                      "prefixItems": [
+                                        {
+                                          "type": "array",
+                                          "items": {
+                                            "anyOf": [
+                                              {
+                                                "type": "string"
+                                              },
+                                              {
+                                                "type": "null"
+                                              }
+                                            ]
+                                          }
+                                        },
+                                        {
+                                          "type": "array",
+                                          "items": {
+                                            "anyOf": [
+                                              {
+                                                "type": "string"
+                                              },
+                                              {
+                                                "type": "null"
+                                              }
+                                            ]
+                                          }
+                                        }
+                                      ]
+                                    },
+                                    "closedMask": {
+                                      "type": "array",
+                                      "items": {
+                                        "type": "boolean"
+                                      }
+                                    }
+                                  },
+                                  "required": [
+                                    "kind",
+                                    "columns",
+                                    "rows",
+                                    "closedMask"
+                                  ],
+                                  "additionalProperties": false
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "info": {
+                              "type": "object",
+                              "properties": {
+                                "rows": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "object",
+                                    "properties": {
+                                      "label": {
+                                        "type": "object",
+                                        "properties": {
+                                          "key": {
+                                            "type": "string"
+                                          },
+                                          "params": {
+                                            "type": "object",
+                                            "propertyNames": {
+                                              "type": "string"
+                                            },
+                                            "additionalProperties": {
+                                              "anyOf": [
+                                                {
+                                                  "type": "string"
+                                                },
+                                                {
+                                                  "type": "number"
+                                                }
+                                              ]
+                                            }
+                                          }
+                                        },
+                                        "required": [
+                                          "key"
+                                        ],
+                                        "additionalProperties": false
+                                      },
+                                      "value": {
+                                        "type": "object",
+                                        "properties": {
+                                          "key": {
+                                            "type": "string"
+                                          },
+                                          "params": {
+                                            "type": "object",
+                                            "propertyNames": {
+                                              "type": "string"
+                                            },
+                                            "additionalProperties": {
+                                              "anyOf": [
+                                                {
+                                                  "type": "string"
+                                                },
+                                                {
+                                                  "type": "number"
+                                                }
+                                              ]
+                                            }
+                                          }
+                                        },
+                                        "required": [
+                                          "key"
+                                        ],
+                                        "additionalProperties": false
+                                      }
+                                    },
+                                    "required": [
+                                      "label",
+                                      "value"
+                                    ],
+                                    "additionalProperties": false
+                                  }
+                                },
+                                "calendarHref": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "divisionHref": {
+                                  "type": "string"
+                                },
+                                "competitionHref": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "rows",
+                                "calendarHref",
+                                "divisionHref",
+                                "competitionHref"
+                              ],
+                              "additionalProperties": false
+                            },
+                            "derivedComplete": {
+                              "default": true,
+                              "type": "boolean"
+                            }
+                          },
+                          "required": [
+                            "fixtureId",
+                            "sportKey",
+                            "header",
+                            "tabs",
+                            "cricket",
+                            "timeline",
+                            "sets",
+                            "info",
+                            "derivedComplete"
+                          ],
+                          "additionalProperties": false
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "division_id",
+                        "stage_id",
+                        "pool_id",
+                        "round_no",
+                        "seq_in_round",
+                        "home_entrant_id",
+                        "away_entrant_id",
+                        "home_slot_label",
+                        "away_slot_label",
+                        "scheduled_at",
+                        "venue",
+                        "court_label",
+                        "venue_name",
+                        "court_name",
+                        "status",
+                        "outcome",
+                        "summary",
+                        "last_seq",
+                        "match_centre"
+                      ],
+                      "additionalProperties": false
+                    },
                     "requestId": {
                       "type": "string",
                       "format": "uuid"
@@ -49763,7 +51664,201 @@
                 },
                 "example": {
                   "ok": true,
-                  "data": {},
+                  "data": {
+                    "id": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
+                    "division_id": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
+                    "stage_id": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
+                    "pool_id": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
+                    "round_no": -9007199254740991,
+                    "seq_in_round": -9007199254740991,
+                    "home_entrant_id": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
+                    "away_entrant_id": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
+                    "home_slot_label": {
+                      "key": "example",
+                      "params": {}
+                    },
+                    "away_slot_label": {
+                      "key": "example",
+                      "params": {}
+                    },
+                    "scheduled_at": "example",
+                    "venue": "example",
+                    "court_label": "example",
+                    "venue_name": "example",
+                    "court_name": "example",
+                    "status": "scheduled",
+                    "outcome": {
+                      "kind": "example",
+                      "winner": "example",
+                      "loser": "example",
+                      "method": "example"
+                    },
+                    "summary": {
+                      "headline": "example",
+                      "perSide": [
+                        {
+                          "entrantId": "example",
+                          "line": "example"
+                        }
+                      ],
+                      "detail": null
+                    },
+                    "last_seq": -9007199254740991,
+                    "match_centre": {
+                      "fixtureId": "example",
+                      "sportKey": "example",
+                      "header": {
+                        "live": true,
+                        "status": "scheduled",
+                        "sides": [
+                          null
+                        ],
+                        "scoreLines": [
+                          null
+                        ],
+                        "subLines": [
+                          null
+                        ],
+                        "battingIndex": 0,
+                        "statusLine": {
+                          "key": "example",
+                          "params": {}
+                        },
+                        "rateLine": "example",
+                        "updatedAt": "example"
+                      },
+                      "tabs": [
+                        "summary"
+                      ],
+                      "cricket": {
+                        "band": 0,
+                        "toss": {
+                          "key": "example",
+                          "params": {}
+                        },
+                        "innings": [
+                          {
+                            "number": 1,
+                            "side": {
+                              "entrantId": null,
+                              "name": null,
+                              "short": null,
+                              "colour": null,
+                              "badgeUrl": null
+                            },
+                            "isSuperOver": true,
+                            "total": {
+                              "runs": null,
+                              "wickets": null,
+                              "overs": null,
+                              "runRate": null
+                            },
+                            "extrasLine": null,
+                            "batting": [
+                              null
+                            ],
+                            "didNotBat": [
+                              null
+                            ],
+                            "bowling": [
+                              null
+                            ],
+                            "fallOfWickets": [
+                              null
+                            ],
+                            "partnerships": [
+                              null
+                            ],
+                            "overs": [
+                              null
+                            ]
+                          }
+                        ],
+                        "live": {
+                          "striker": null,
+                          "nonStriker": null,
+                          "bowler": null,
+                          "batters": [
+                            null
+                          ],
+                          "bowling": [
+                            null
+                          ],
+                          "thisOver": [
+                            null
+                          ],
+                          "partnership": null,
+                          "lastWicket": null
+                        },
+                        "topPerformers": [
+                          {
+                            "role": "batter",
+                            "person": {
+                              "personId": null,
+                              "name": null,
+                              "masked": null
+                            },
+                            "side": {
+                              "entrantId": null,
+                              "name": null,
+                              "short": null,
+                              "colour": null,
+                              "badgeUrl": null
+                            },
+                            "line": "example",
+                            "detail": null
+                          }
+                        ]
+                      },
+                      "timeline": [
+                        {
+                          "seq": 1,
+                          "at": "example",
+                          "marker": "example",
+                          "sideIndex": null,
+                          "text": {
+                            "key": "example",
+                            "params": {}
+                          },
+                          "emphasis": "normal"
+                        }
+                      ],
+                      "sets": {
+                        "kind": "sets",
+                        "unit": "set",
+                        "columns": [
+                          "example"
+                        ],
+                        "columnLabels": [
+                          "example"
+                        ],
+                        "rows": [
+                          null
+                        ],
+                        "closedMask": [
+                          true
+                        ]
+                      },
+                      "info": {
+                        "rows": [
+                          {
+                            "label": {
+                              "key": "example",
+                              "params": {}
+                            },
+                            "value": {
+                              "key": "example",
+                              "params": {}
+                            }
+                          }
+                        ],
+                        "calendarHref": "example",
+                        "divisionHref": "example",
+                        "competitionHref": "example"
+                      },
+                      "derivedComplete": true
+                    }
+                  },
                   "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
                 }
               }

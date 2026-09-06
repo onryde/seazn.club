@@ -198,7 +198,7 @@ export const ROUTES: RouteSpec[] = [
   { path: "/public/orgs/{orgSlug}/competitions/{slug}/divisions/{divisionSlug}/schedule", method: "get", summary: "Public schedule", tag: "public", public: true },
   { path: "/public/orgs/{orgSlug}/competitions/{slug}/divisions/{divisionSlug}/standings", method: "get", summary: "Public standings", tag: "public", public: true },
   { path: "/public/orgs/{orgSlug}/competitions/{slug}/divisions/{divisionSlug}/entrants", method: "get", summary: "Public entrants (consent-filtered)", tag: "public", public: true },
-  { path: "/public/fixtures/{id}", method: "get", summary: "Public live fixture summary", tag: "public", public: true },
+  { path: "/public/fixtures/{id}", method: "get", summary: "Public live fixture summary", tag: "public", public: true, response: S.PublicFixtureSummary },
   { path: "/public/fixtures/{id}/realtime-token", method: "get", summary: "Realtime subscriber token (403 unless the org has the realtime entitlement)", tag: "public", public: true },
   { path: "/public/discovery", method: "get", summary: "Discovery directory (doc 15 §4): opted-in public competitions, cursor-paginated", tag: "public", public: true, query: { sport: { schema: { type: "string" } }, country: { schema: { type: "string" } }, status: { schema: { type: "string", enum: ["live", "upcoming"] } }, q: { schema: { type: "string" } }, cursor: { schema: { type: "string" } }, limit: { schema: { type: "integer", minimum: 1, maximum: 48 } } } },
   // Registration & entry fees (doc 16 §1.1, PROMPT-20a)

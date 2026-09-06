@@ -19,6 +19,13 @@ import { HardConstraint, type ConflictDetailKind } from "@seazn/engine/schedulin
 // resolution, so a `@/...` import throws ERR_MODULE_NOT_FOUND there even
 // though it resolves fine under tsc/Next.js/vitest.
 import { isValidCutoffDay, REASON_MIN, REASON_MAX } from "../../lib/registration-rules.ts";
+// Task 9 (spectator surface W1) — the match-centre document schema, reused
+// verbatim as `PublicFixtureSummary.match_centre`'s type below rather than
+// restated: match-centre-schema.ts is pure Zod with no imports beyond zod
+// itself (verified by reading it), so it is safe for the standalone OpenAPI
+// generator script the same way this whole file is — relative import, `.ts`
+// extension, same reasoning as `registration-rules.ts` above.
+import { MatchCentreDoc } from "../public-site/match-centre-schema.ts";
 
 // ---------------------------------------------------------------------------
 // Common
@@ -4724,5 +4731,68 @@ export const CourtCalendar = z.object({
    *  the number to the edit — the venues panel's copy says "now falls
    *  outside these hours" — must read this one, not the total. */
   newlyStrandedFixtureCount: z.number().int(),
+});
+
+// ---------------------------------------------------------------------------
+// Public — GET /public/fixtures/{id}
+// ---------------------------------------------------------------------------
+
+/**
+ * Task 9 (spectator surface W1) — the response the route actually returns
+ * had NO `response:` schema in `openapi.ts`'s route table at all (a recorded
+ * false premise from the W2 draft, confirmed by reading `openapi.ts` — the
+ * `/public/fixtures/{id}` row carried no `response` field before this task);
+ * this is the first one. Shaped to match `usecases/public.ts`'s
+ * `publicFixture` return EXACTLY — the same `Pick<PublicFixture, …>` plus
+ * `venue_name`/`court_name` (`withCourtVenueName`'s own derived fields) plus
+ * `match_centre` (this task's addition). `outcome`/`summary` mirror
+ * `PublicFixture`'s own loose shape (public-site/data.ts) rather than
+ * `Fixture.outcome`'s bare `z.unknown()` above — the public route's outcome
+ * carries `method`, which that broader admin-facing schema does not attempt
+ * to type.
+ */
+export const PublicFixtureOutcome = z
+  .object({
+    kind: z.string().optional(),
+    winner: z.string().optional(),
+    loser: z.string().optional(),
+    method: z.string().optional(),
+  })
+  .nullable();
+
+export const PublicFixtureSummarySchema = z
+  .object({
+    headline: z.string().optional(),
+    perSide: z.array(z.object({ entrantId: z.string(), line: z.string() })).optional(),
+    detail: z.unknown().optional(),
+  })
+  .nullable();
+
+export const PublicFixtureSummary = z.object({
+  id: Uuid,
+  division_id: Uuid,
+  stage_id: Uuid,
+  pool_id: Uuid.nullable(),
+  round_no: z.number().int(),
+  seq_in_round: z.number().int(),
+  home_entrant_id: Uuid.nullable(),
+  away_entrant_id: Uuid.nullable(),
+  home_slot_label: SlotLabelRef,
+  away_slot_label: SlotLabelRef,
+  scheduled_at: z.string().nullable(),
+  // LEGACY, read-only — frozen since the P9 venues/courts cutover (same
+  // fields `Fixture` above documents at length); `venue_name`/`court_name`
+  // below are what a consumer should render.
+  venue: z.string().nullable(),
+  court_label: z.string().nullable(),
+  venue_name: z.string().nullable(),
+  court_name: z.string().nullable(),
+  status: Fixture.shape.status,
+  outcome: PublicFixtureOutcome,
+  summary: PublicFixtureSummarySchema,
+  last_seq: z.number().int().nullable(),
+  /** Task 9 — the match-centre view model, built by the SAME loader the
+   *  page's own data fetch (`getPublicFixture`) uses. */
+  match_centre: MatchCentreDoc,
 });
 export type MergeLog = z.infer<typeof MergeLog>;

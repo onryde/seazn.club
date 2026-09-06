@@ -23,6 +23,8 @@ import { msgFor } from "@/lib/messages-i18n";
 import type { MessageKey } from "@/lib/messages";
 import type { SlotLabel } from "@/server/usecases/stage-seeding";
 import { anyOptedOut, resolvePersonDisplayName } from "@/lib/name-display";
+import { loadMatchCentre } from "./match-centre-load";
+import type { MatchCentreDocT } from "./match-centre-schema";
 
 /**
  * `{count}`-pluralized org-default-locale copy — the `public-site/data.ts`
@@ -710,6 +712,11 @@ export async function getPublicFixture(
   fixture: PublicFixture;
   entrantNames: Record<string, string>;
   realtime: boolean;
+  /** Task 9 — the match-centre view model, built by the SAME `loadMatchCentre`
+   *  the poll endpoint (`GET /api/v1/public/fixtures/{id}`, usecase
+   *  `publicFixture`) uses, so the page's first paint and every subsequent
+   *  poll (Task 10's client hook) render the exact same document shape. */
+  matchCentre: MatchCentreDocT;
 } | null> {
   if (!/^[0-9a-f-]{36}$/i.test(fixtureId)) return null;
   const shell = await getPublicCompetition(orgSlug, compSlug);
@@ -744,10 +751,40 @@ export async function getPublicFixture(
       const [rt] = await sql<{ realtime: boolean }[]>`
         select org_has_feature(${shell.org.id}, 'realtime', ${shell.competition.id})
                as realtime`;
+      // Task 9 — the division's own tz override (V305 venue lane; org
+      // timezone is `shell.org`'s own row, read separately below since
+      // `PublicOrg` does not carry it — see `resolveVenueTz`'s doc comment
+      // for why venue tz is never inherited from a personal/browser lane).
+      const [tzRow] = await sql<{ division_tz: string | null; org_tz: string | null }[]>`
+        select ss.tz as division_tz, o.timezone as org_tz
+        from divisions d
+        left join schedule_settings ss on ss.division_id = d.id
+        left join organizations o on o.id = d.org_id
+        where d.id = ${division.id}`;
+      const [stageRow] = await sql<{ name: string }[]>`
+        select name from stages where id = ${fixture.stage_id}`;
+      const locale = toLocale(shell.org.default_locale);
+      const basePath = `/shared/${shell.org.slug}/${shell.competition.slug}/${division.slug}`;
+      const matchCentre = await loadMatchCentre(sql, fixture, {
+        orgTz: tzRow?.org_tz ?? null,
+        division: {
+          sportKey: division.sport_key,
+          moduleVersion: division.module_version,
+          formatLabel: division.variant_key,
+          tz: tzRow?.division_tz ?? null,
+          youth: division.youth ?? false,
+          playerNameDisplay: division.player_name_display ?? null,
+        },
+        locale,
+        hrefs: { division: basePath, competition: `/shared/${shell.org.slug}/${shell.competition.slug}`, calendar: null },
+        stage: stageRow ? { name: stageRow.name, roundLabel: null } : null,
+        slotLabelLookup: (key: MessageKey, vars?: Record<string, string | number>) => msgFor(locale, key, vars),
+      });
       return {
         fixture,
         entrantNames: Object.fromEntries(names.map((n) => [n.id, n.display_name])),
         realtime: rt?.realtime === true,
+        matchCentre,
       };
     },
     ["pub-fixture", fixtureId],

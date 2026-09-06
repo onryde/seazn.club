@@ -230,5 +230,11 @@
   "term.short.OT": "OT",
   "term.short.OT1": "OT1",
   "term.short.OT2": "OT2",
-  "term.short.SHOOTOUT": "SO"
+  "term.short.SHOOTOUT": "SO",
+  "matchCentre.ball.runs": "{over} · {bowler} · {runs} carrera(s)",
+  "matchCentre.ball.wide": "{over} · {bowler} · Wide +{runs}",
+  "matchCentre.ball.noball": "{over} · {bowler} · No-ball +{runs}",
+  "matchCentre.ball.bye": "{over} · {bowler} · {runs} bye(s)",
+  "matchCentre.ball.legbye": "{over} · {bowler} · {runs} leg bye(s)",
+  "matchCentre.ball.penalty": "{over} · {bowler} · {runs} carrera(s) de penalización"
 }
