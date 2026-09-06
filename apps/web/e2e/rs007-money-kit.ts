@@ -103,11 +103,23 @@ export async function claimConnectAccount(orgId: string): Promise<ConnectClaim> 
   return { priorId, orgId };
 }
 
-/** Give the fixture back and release the lock. Safe to call with a null claim
- *  so a `finally` block never has to guard it. */
-export async function releaseConnectAccount(claim: ConnectClaim | null): Promise<void> {
+/** Give the fixture back and release the lock, RETURNING what holds the
+ *  account afterwards — read on the lock connection, BEFORE `pg_advisory_unlock`,
+ *  so the value is taken inside the exclusion window this lock exists to
+ *  provide. A caller that instead re-reads on its own connection after this
+ *  resolves is racing every worker queued behind it, and can see the NEXT
+ *  claimant rather than the org it just handed the account back to.
+ *
+ *  Null when nothing holds it, and null when there was no lock to release.
+ *
+ *  Safe to call with a null claim so a `finally` block never has to guard it:
+ *  a `claimConnectAccount` that throws after taking the lock but before its
+ *  UPDATEs land still needs the unlock, and an unconditional call is what
+ *  delivers it. */
+export async function releaseConnectAccount(claim: ConnectClaim | null): Promise<string | null> {
   const sql = lockSql;
-  if (!sql) return;
+  if (!sql) return null;
+  let holder: string | null = null;
   try {
     if (claim) {
       await sql`
@@ -121,6 +133,7 @@ export async function releaseConnectAccount(claim: ConnectClaim | null): Promise
           where id = ${claim.priorId}`;
       }
       const back = await sql`select id from organizations where stripe_account_id = ${CONNECT_ACCOUNT}`;
+      holder = (back[0]?.id as string | undefined) ?? null;
       console.log(
         `RESTORE>>> fixture now held by ${(back[0]?.id as string) ?? "NOBODY"} (expected ${claim.priorId})`,
       );
@@ -130,6 +143,7 @@ export async function releaseConnectAccount(claim: ConnectClaim | null): Promise
     lockSql = null;
     await sql.end({ timeout: 5 });
   }
+  return holder;
 }
 
 // ---------------------------------------------------------------------------

@@ -260,18 +260,28 @@ interface SponsorRow {
  * instead of seizing the account mid-run — and an exclusion only excludes if
  * every claimant waits on the SAME lock. A local copy opts out of it. This
  * matters concretely rather than in principle: the `walkthrough` project does
- * not set `fullyParallel: false` and CI runs it with `--workers=3`, and four
- * files now contend for this one account (`registration-connect.spec.ts`, the
- * two rs007 specs, and this one). The symptom of losing that race is a Stripe
- * "missing destination" error hundreds of lines from its cause.
+ * not set `fullyParallel: false` (that is the separate `serial` project,
+ * playwright.config.ts:169-175 — this one inherits the file's
+ * `fullyParallel: true`) and CI runs it with `--workers=3`, while four files
+ * contend for this one account. THREE of the four now queue on the kit's lock
+ * — the two rs007 specs and this one. `registration-connect.spec.ts` is the
+ * holdout: it still carries its own file-local UNLOCKED copy (:60, :72, :91),
+ * so it can still seize the account out from under any of the other three. A
+ * follow-up, deliberately not fixed here. The symptom of losing that race is a
+ * Stripe "missing destination" error hundreds of lines from its cause.
  *
  * Equally deliberately NOT `helpers.ts`'s `setOrgConnectSql`: that writes a
  * fabricated `acct_e2e_<id>` (helpers.ts:542) which Stripe rejects as a
  * transfer destination, so the Checkout Session in leg 2 would never mint.
  *
- * The kit's `releaseConnectAccount` returns `void` and logs `RESTORE>>>`, so
- * the restoration assertion below reads the row back for itself through the
- * kit's `withDb` rather than trusting a return value or a log line.
+ * The restoration assertion below is fed by `releaseConnectAccount`'s RETURN
+ * value, which the kit reads on the lock connection before unlocking. An
+ * earlier version of this file re-read the row itself on a fresh `withDb`
+ * connection AFTER the release resolved — outside the exclusion window, so a
+ * worker queued on the lock could claim the account in the gap and the
+ * assertion would report a hand-back failure against a fixture that was handed
+ * back correctly. The read has to happen under the lock, and only the kit can
+ * do it there.
  */
 
 // ---------------------------------------------------------------------------
@@ -282,9 +292,10 @@ let org: SeededOrg;
 /** The kit's claim handle (`{ priorId, orgId }`), or null on a skipped run
  *  where the account was never taken. */
 let claim: ConnectClaim | null = null;
-/** Whatever held the fixture after `afterAll` handed it back, READ BACK from
- *  the database — captured so the assertion can run AFTER every other cleanup
- *  step, never instead of one. */
+/** Whatever held the fixture after `afterAll` handed it back, as reported by
+ *  `releaseConnectAccount` from a read taken on the LOCK connection before the
+ *  unlock — captured so the assertion can run AFTER every other cleanup step,
+ *  never instead of one, without the value going stale in the meantime. */
 let restoredHolder: string | null = null;
 let restoreRan = false;
 
@@ -328,18 +339,14 @@ test.afterAll(async ({ request }: { request: APIRequestContext }) => {
   // fixture must be detached BEFORE the org is released, or a soft-deleted org
   // keeps the account forever. Every step is independently guarded so one
   // failure cannot strand the next.
-  if (claim) {
-    await releaseConnectAccount(claim);
-    // The kit hands the account back and logs it, but returns void — so what
-    // actually holds the account now is read back here rather than taken on
-    // trust. The assertion's source is this query, not the kit's say-so.
-    restoredHolder = await withDb(async (sql) => {
-      const back = await sql`
-        select id from organizations where stripe_account_id = ${CONNECT_ACCOUNT}`;
-      return (back[0]?.id as string | undefined) ?? null;
-    });
-    restoreRan = true;
-  }
+  //
+  // UNCONDITIONAL, per the kit's contract: a `claimConnectAccount` that threw
+  // after taking the lock but before its UPDATEs landed still holds the lock,
+  // and only an unguarded call releases it. The returned holder is read on the
+  // lock connection before the unlock, so no worker queued behind us can make
+  // it stale between the hand-back and the assertion.
+  restoredHolder = await releaseConnectAccount(claim);
+  if (claim) restoreRan = true;
   for (const id of strayEventIds) {
     await withDb((sql) => sql`delete from billing_events where id = ${id}`).catch(() => {});
   }
