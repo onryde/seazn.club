@@ -168,6 +168,27 @@ describe("a voided row says WHY it is struck through", () => {
     expect(html).toContain("Bravo");
     expect(html).toContain(messages["runsheet.sub.awaitingDraw"]);
   });
+
+  // F5 (W2 walkthrough gate 1): the report's own screenshot — a TIMED row
+  // reading "Awaiting draw" and offering "Score" at the same time, a promise
+  // the fixture cannot keep since neither side is named yet. The sub-line
+  // half of this was already correct (the test above); this is the ACTION
+  // half, at its real call site — a test of the pure ladder alone
+  // (`fixture-row-action.test.ts`) cannot see whether the row actually wires
+  // `awaitingDraw` through to it.
+  it("F5: a TIMED, undrawn fixture never offers Score or Assign scorer — it reads View", () => {
+    const html = rowHtml(fx({ home_entrant_id: null, home_slot_label: null }));
+    expect(rowAction(html)).toBe("view");
+    expect(html).toContain(messages["runsheet.action.view"]);
+    expect(html).not.toContain(messages["runsheet.action.score"]);
+  });
+
+  // The POSITIVE pair: an UNTIMED, undrawn fixture still offers Set time —
+  // pre-scheduling a bracket round's slot ahead of the draw is unaffected.
+  it("F5: an UNTIMED, undrawn fixture still offers Set time, not View", () => {
+    const html = rowHtml(fx({ home_entrant_id: null, home_slot_label: null, scheduled_at: null }));
+    expect(rowAction(html)).toBe("set_time");
+  });
 });
 
 // ---------------------------------------------------------------------------

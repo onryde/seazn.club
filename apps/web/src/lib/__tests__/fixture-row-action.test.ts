@@ -29,6 +29,7 @@ function row(over: Partial<RowActionInput> = {}): RowActionInput {
     canEdit: true,
     tz: TZ,
     nowMs: NOW,
+    awaitingDraw: false,
     ...over,
   };
 }
@@ -74,6 +75,40 @@ describe("fixtureRowAction — the enumerated table", () => {
 
   it("an unknown status never crashes and never invites scoring", () => {
     expect(fixtureRowAction(row({ status: "teleported" })).kind).toBe("view");
+  });
+});
+
+// F5 (W2 walkthrough gate 1): a TIMED bracket fixture whose entrants are still
+// undrawn read "Awaiting draw" as its sub-line and offered "Score" as its
+// action — a promise the fixture cannot keep, since neither side is named.
+describe("fixtureRowAction — an undrawn fixture (F5)", () => {
+  it("a timed, awaiting-draw fixture is VIEW, never score or assign_scorer", () => {
+    expect(fixtureRowAction(row({ awaitingDraw: true })).kind).toBe("view");
+    expect(fixtureRowAction(row({ awaitingDraw: true, hasOfficials: false })).kind).toBe("view");
+  });
+
+  // The POSITIVE pair: the SAME input with entrants resolved reaches the
+  // ladder's ordinary rules — the awaiting-draw branch is what changed the
+  // outcome above, not something else about this fixture shape.
+  it("the identical fixture WITHOUT awaiting-draw reaches score/assign_scorer as before", () => {
+    expect(fixtureRowAction(row({ awaitingDraw: false })).kind).toBe("score");
+    expect(fixtureRowAction(row({ awaitingDraw: false, hasOfficials: false })).kind).toBe(
+      "assign_scorer",
+    );
+  });
+
+  // An untimed, undrawn fixture still offers `set_time` — pre-scheduling a
+  // bracket round's slot ahead of the draw that fills it is an ordinary
+  // organiser action, and nothing about this finding criticises it.
+  it("an UNTIMED awaiting-draw fixture still offers set_time — pre-draw scheduling is unaffected", () => {
+    expect(fixtureRowAction(row({ awaitingDraw: true, scheduledAt: null })).kind).toBe("set_time");
+  });
+
+  // SETTLED still wins over awaiting-draw — a decided match with a TBD-labelled
+  // loser (a walkover recorded before the other semi finished) is a result,
+  // not a match still waiting on its draw.
+  it("a DECIDED awaiting-draw fixture is still a result, not view", () => {
+    expect(fixtureRowAction(row({ awaitingDraw: true, status: "decided" })).kind).toBe("result");
   });
 });
 
@@ -231,6 +266,7 @@ describe("hasAssignedScorer — the officials cache is response-bearing", () => 
         canEdit: true,
         tz: TZ,
         nowMs: NOW,
+        awaitingDraw: false,
       }),
     ).toEqual({ kind: "assign_scorer" });
     // ...and the same row with an accepted official does NOT — the pair is what
@@ -243,6 +279,7 @@ describe("hasAssignedScorer — the officials cache is response-bearing", () => 
         canEdit: true,
         tz: TZ,
         nowMs: NOW,
+        awaitingDraw: false,
       }),
     ).toEqual({ kind: "score" });
   });

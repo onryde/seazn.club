@@ -193,6 +193,11 @@ export function RunSheetRow({
   // so a length test reads "fully staffed" on the exact fixture whose scorer
   // has just said no. The whole argument lives on that function.
   const hasOfficials = hasAssignedScorer(fixture.officials);
+  // F5 (W2 walkthrough gate 1): computed once, fed to BOTH the ladder (so the
+  // action can never invite scoring/assigning a scorer for a match nobody has
+  // named yet) and the sub-line below (so the label and the action can never
+  // disagree about which fixtures are still undrawn).
+  const awaitingDraw = fixture.home_entrant_id === null || fixture.away_entrant_id === null;
   const action: RowAction = fixtureRowAction({
     status: fixture.status,
     scheduledAt: fixture.scheduled_at,
@@ -200,6 +205,7 @@ export function RunSheetRow({
     canEdit,
     tz,
     nowMs,
+    awaitingDraw,
   });
 
   // C3: copied verbatim from FixtureLine's own derivation — never reinvented.
@@ -245,7 +251,7 @@ export function RunSheetRow({
   //  - otherwise an unresolved entrant ("Awaiting draw") is the more
   //    fundamental blocker than "no scorer yet" — an organiser cannot assign a
   //    scorer to a match that doesn't know who is playing yet.
-  const awaitingDraw = fixture.home_entrant_id === null || fixture.away_entrant_id === null;
+  //    (`awaitingDraw` computed once, above, alongside `action` — see there.)
   const subLine: string | null = voided
     ? [fixtureStatusLabel(msg, fixture.status), decided].filter((p): p is string => Boolean(p)).join(" · ")
     : decided !== null

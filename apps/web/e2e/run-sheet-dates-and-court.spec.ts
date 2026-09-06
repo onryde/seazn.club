@@ -303,6 +303,86 @@ test.describe("bracket round sections carry the round's calendar date", () => {
 });
 
 // ---------------------------------------------------------------------------
+// F5 (W2 walkthrough gate 1): a TIMED bracket fixture whose entrants are
+// still undrawn ("Winner of R1·N" vs "Winner of R1·N") read "Awaiting draw"
+// as its sub-line and offered "Score" as its action at the same time — a
+// promise the fixture cannot keep, since neither side is named yet.
+// ---------------------------------------------------------------------------
+test.describe("a timed, undrawn bracket fixture never offers Score (F5)", () => {
+  test("the final, scheduled ahead of the semis being played, reads View — not Score", async ({
+    page,
+    request,
+  }) => {
+    const suffix = Math.random().toString(36).slice(2, 6);
+    const comp = await apiJson<{ id: string; slug: string }>(
+      request,
+      "/api/v1/competitions",
+      "POST",
+      { ends_on: "2030-12-31", name: `RunSheetF5 ${TAG}-${suffix}`, visibility: "private" },
+    );
+    const div = await apiJson<{ id: string; slug: string }>(
+      request,
+      `/api/v1/competitions/${comp.data!.id}/divisions`,
+      "POST",
+      {
+        name: "Cup",
+        sport_key: "generic",
+        variant_key: "score",
+        config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
+      },
+    );
+    const divisionId = div.data!.id;
+    await addEntrantsViaApi(request, divisionId, ["S1", "S2", "S3", "S4"]);
+    const stage = await apiJson<{ id: string }>(
+      request,
+      `/api/v1/divisions/${divisionId}/stages`,
+      "POST",
+      { seq: 1, kind: "knockout", name: "Cup" },
+    );
+    const { courts } = await seedVenueWithCourts(request, [`F5 Court ${suffix}`]);
+    await apiJson(request, `/api/v1/divisions/${divisionId}/schedule-settings`, "PUT", {
+      config: {
+        startAt: "2026-09-20T10:00:00.000Z",
+        matchMinutes: 30,
+        gapMinutes: 0,
+        courts: [courts[0]!.id],
+        perEntrantMinRest: 0,
+        blackouts: [],
+        sessionWindows: [],
+      },
+      tz: "UTC",
+    });
+    const gen = await apiJson<{ fixtures: { id: string; round_no: number; fixture_no: number }[] }>(
+      request,
+      `/api/v1/stages/${stage.data!.id}/generate`,
+      "POST",
+    );
+    await apiJson(request, `/api/v1/divisions/${divisionId}/start`, "POST");
+
+    // Schedule the FINAL ahead of time — an ordinary organiser action, and
+    // exactly the shape F2's own test proves stays in its round section —
+    // WITHOUT playing either semi, so its entrants are still "Winner of
+    // R1·N" placeholders.
+    const final = gen.data!.fixtures.find((f) => f.round_no === 2)!;
+    await apiJson(request, `/api/v1/fixtures/${final.id}`, "PATCH", {
+      scheduled_at: "2026-09-21T09:00:00.000Z",
+      court_id: courts[0]!.id,
+    });
+
+    const org = await activeOrg(page);
+    await page.goto(`/o/${org.slug}/c/${comp.data!.slug}/d/${div.data!.slug}?tab=fixtures`);
+    const finalRow = page.locator(`[data-fixture-no="${final.fixture_no}"]`);
+    await expect(finalRow).toBeVisible();
+    // POSITIVE PAIR: the row really is the undrawn final, not an empty locator.
+    await expect(finalRow).toContainText(UI.en["runsheet.sub.awaitingDraw"]!);
+    await expect(finalRow.locator("[data-row-action]")).toHaveAttribute("data-row-action", "view");
+    await expect(finalRow.locator('[data-row-action="score"]')).toHaveCount(0);
+    await expect(finalRow.locator('[data-row-action="assign_scorer"]')).toHaveCount(0);
+    await expect(finalRow).toContainText(UI.en["runsheet.action.view"]!);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // R35 — the court picker inside the inline editor.
 //
 // The whole point of this test is the round trip. A `useState` that never
