@@ -604,8 +604,24 @@ function sameConfigValue(sent: unknown, kept: unknown): boolean {
 class Sink {
   readonly errors: string[] = [];
   readonly findings: CheckerFinding[] = [];
+  /** Declared and assigned separately, NOT as a constructor parameter
+   *  property. `node --experimental-strip-types` is how the bench actually
+   *  runs (`package.json`'s `bench:scheduler`), and a parameter property is
+   *  one of the constructs it refuses outright:
+   *  `ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX: TypeScript parameter property is not
+   *  supported in strip-only mode`. Stripping types can only DELETE
+   *  annotations; a parameter property has to SYNTHESISE an assignment, which
+   *  is a transform, so there is nothing for strip-only mode to do.
+   *
+   *  This is the same hole the bench's "no TS `enum`" rule already covers, and
+   *  it cost a whole wave: vitest transpiles properly, so 1150 tests and a
+   *  clean `tsc` all passed against a module the real entrypoint could not
+   *  load at all. Nothing but running `bench:scheduler` can see it. */
+  private readonly divisionRef: string;
 
-  constructor(private readonly divisionRef: string) {}
+  constructor(divisionRef: string) {
+    this.divisionRef = divisionRef;
+  }
 
   /** Reportable, but with no member of the closed `CheckerFindingKind` union
    *  to carry it — a driver-level refusal rather than a board breach. */
