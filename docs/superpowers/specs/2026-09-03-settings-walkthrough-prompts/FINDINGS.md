@@ -112,3 +112,19 @@ Found: the final whole-branch review's fix round, while gating W5's own calls to
 `invalidateOrgEntitlements` (`e2e/helpers.ts`) flips an org's owner to superadmin, makes two `fetch` calls, then flips the owner back — and never checks either fetch's response status. A failed invalidation (a dropped connection, a 5xx) is silent: the caller proceeds believing the cache was cleared when it was not.
 
 **Status:** open, not fixed. Three existing specs already call this helper as written, so a fix belongs to the helper itself, not to any one caller — out of scope for this wave, which only needed to stop calling it where it bought nothing. Recorded so W8 (or whichever wave next touches `helpers.ts`) can add the status checks without re-discovering the gap from scratch.
+
+## W6
+
+F-numbers continue W5's sequence so every id in this file stays unique.
+
+### F11 (documentation only, not exploitable) — `dailyHoursToWindows`'s malformed-HHMM guard is dead code
+
+Found: Task 1, `settings-schedule-drive.spec.ts`, while mutation-testing case #17's coverage before deciding whether it owed a new unit test.
+
+`dailyHoursToWindows` (`apps/web/src/lib/schedule-board.ts:191-192`) runs two guards in sequence: `if (!HHMM.test(fromHHMM) || !HHMM.test(toHHMM)) return null;` (line 191), then `if (fromHHMM >= toHHMM) return null;` (line 192). Mutating line 191 to `if (false) return null;` and rerunning `schedule-board.test.ts`'s existing 19-case suite left it **19/19 green** — no test distinguishes the guard's presence from its absence.
+
+The reason is a coincidence that holds for every reachable call shape, not just the suite's own cases: any malformed HH:MM string sorts in a way that makes the SECOND guard (line 192, a plain JS string comparison) independently return null too — `"9am" >= "6pm"` is `true` because `'9' > '6'`, and an empty string (the half-filled case — one play-hours field left at the real `<option value="">` `datetime-field.tsx` always renders) sorts before any non-empty one, so `fromHHMM >= toHHMM` is `true` there as well. Separately, any malformed value also re-hits an identical `/^\d{2}:\d{2}$/` regex one level down in `isoFromZonedParts` (`zoned-datetime.ts:37`) before a window is ever produced, since `days` defaults to 14 whenever `endIso` is `null` and the day loop always runs at least once. There is no way to observe a different RETURN VALUE by deleting line 191, for any malformed or half-filled input this codebase can produce.
+
+Verified rather than assumed: mutating line 192 instead (the genuine inversion check) reddened 1/19 tests on the exact `"18:00","09:00"`/`"09:00","09:00"` cases — confirming line 192 is the load-bearing guard and line 191 is the redundant one, not that the suite is blind to guards generally.
+
+**Status:** recorded, not fixed. Dead code, no behavioral risk — line 191 is redundant with a deeper check inside `isoFromZonedParts`, not a missing check with a live consequence. Removing it is optional cleanup whenever `schedule-board.ts` is next touched, not a defect fix. Full mutation-testing trace: `.superpowers/sdd/2026-09-07-settings-walkthrough-w6/task-1-report.md`, "Case #17: unit test vs. the one browser assertion".

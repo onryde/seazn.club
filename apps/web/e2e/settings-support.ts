@@ -395,3 +395,60 @@ export async function releaseCompetition(request: APIRequestContext, id: string)
   if (!id) return;
   await apiJson(request, `/api/v1/competitions/${id}`, "DELETE");
 }
+
+// ---------------------------------------------------------------------------
+// Divisions (W6) — one per TEST (never per file), for the division `settings`/
+// `constraints` schedule tabs under `/o/{org}/c/{comp}/d/{div}/schedule`.
+// ---------------------------------------------------------------------------
+
+export interface SeededDivision {
+  id: string;
+  slug: string;
+}
+
+/**
+ * A division inside a seeded competition, minimal generic/score shape — the
+ * same `sport_key`/`variant_key` combo `registration-connect.spec.ts:147-150`
+ * already proves works, so this wave is not the first to rely on it.
+ *
+ * Unlike {@link seedCompetition}, this needs NO active-org cookie move:
+ * `POST /api/v1/competitions/{id}/divisions` resolves auth from the
+ * COMPETITION resource (`requireResourceAuth(req, "competition", id,
+ * "write")`, `divisions/route.ts`), not from the `seazn_org` cookie — so a
+ * per-test `request` fixture works directly, no jar juggling required.
+ */
+export async function seedDivision(
+  request: APIRequestContext,
+  competitionId: string,
+  opts: { name?: string } = {},
+): Promise<SeededDivision> {
+  const created = await apiJson<{ id: string; slug: string }>(
+    request,
+    `/api/v1/competitions/${competitionId}/divisions`,
+    "POST",
+    {
+      name: opts.name ?? `W6 Division ${TAG}-${Math.random().toString(36).slice(2, 6)}`,
+      sport_key: "generic",
+      variant_key: "score",
+      config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
+    },
+  );
+  if (!created.data) {
+    throw new Error(
+      `seedDivision: POST .../divisions failed (${created.status}) ${JSON.stringify(created.error)}`,
+    );
+  }
+  return created.data;
+}
+
+/**
+ * `DELETE /api/v1/divisions/{id}` (confirmed against `divisions/[id]/route.ts`
+ * and `deleteDivision`, `usecases/divisions.ts`) hard-deletes a setup-state
+ * division with a 204 — no fixtures, no results, no live card payments, which
+ * is exactly the state every division this file seeds is in. Safe to call on
+ * one already deleted: `apiJson` resolves on any status, so a 404 is not a
+ * throw. */
+export async function releaseDivision(request: APIRequestContext, id: string): Promise<void> {
+  if (!id) return;
+  await apiJson(request, `/api/v1/divisions/${id}`, "DELETE");
+}

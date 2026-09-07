@@ -20,10 +20,10 @@ check expressed as a client `disabled` prop, and `apps/web` vitest is
 | --- | --- | --- |
 | W1 | `/admin/settings` + 4 legacy redirects; `setOwnerStaffRoleSql` ships with it | **DONE** — 6 tasks, 5 fix rounds, all reviews clean |
 | W2 | `/o/{org}/settings` 7 tabs — drive+persist (sponsors CRUD half) | **MERGED** — PR #720, squashed to `997ad225b`, all 11 CI checks green |
-| W3 | `/o/{org}/settings` 7 tabs — gating matrix + first mutation sweep | **IN PLANNING** — see the W3 section below |
-| W4 | `settings/{connect,credits,add-ons}`, billing's uncovered panels, sponsor monetize half | **DONE** — 4 tasks + final review, all clean; measured +53.5s against the old single ceiling, now resolved by owner ruling 8 (see below) |
-| W5 | Competition settings — frozen, visibility, discoverable | **IMPLEMENTATION DONE** — 2 tasks + whole-branch final review; fix round 1 in progress (2 Important, 4 Minor). Branch `feat/settings-walkthrough-w5` |
-| W6 | Division schedule + constraints — full bounds table | Not started |
+| W3 | `/o/{org}/settings` 7 tabs — gating matrix + first mutation sweep | **MERGED** — PR #732, squashed to `bb025fd26`. Row was never updated at merge time; see the W3 section below for the full task/mutation record |
+| W4 | `settings/{connect,credits,add-ons}`, billing's uncovered panels, sponsor monetize half | **MERGED** — PR #736, squashed to `aabb701ea`; measured +53.5s against the old single ceiling, resolved by owner ruling 8 (see below) |
+| W5 | Competition settings — frozen, visibility, discoverable | **MERGED** — PR #737, squashed to `ff73d6278`, all 8 e2e jobs green. Fast-path cost: 14.9s (both spec files together, serial-sum via JSON reporter) |
+| W6 | Division schedule + constraints — full bounds table | **READY FOR PR** — 2 tasks, 1 task-level fix round (Task 1's afterAll leak guard, `fd3adffb8`), final whole-branch review clean after 1 fix round; worktree `.claude/worktrees/settings-w6`, branch `feat/settings-walkthrough-w6` |
 | W7 | Division registration settings — partial-save, money bounds | Not started |
 | W8 | Fix wave + programme review + second mutation sweep | Not started |
 
@@ -74,6 +74,14 @@ the other.
    two kinds of test do not shrink the same way (one is compute-bound, the
    other network-bound). W5 onward reports against BOTH buckets separately,
    not a single total.
+
+**Fast-path bucket running total** (measured, updated per wave — real-money
+bucket unchanged at 16.9s since W4, no wave since has added a Stripe leg):
+W1-W4 ~94-100s + W5's 14.9s + W6's ~20.3s (Task 1 ~12.5s + Task 2 ~7.8s) ≈
+**129-135s**. No ceiling has been set on this bucket yet (ruling 8 widened it
+once to absorb W1-W4's overrun rather than fixing a number) — W7-W8 report
+against this running total; if it needs a number, that is a fresh owner call,
+not one this session makes unilaterally.
 
 ## Recommendations I made (NOT owner rulings)
 
@@ -1215,6 +1223,110 @@ throwaway org, not the shared one.**
 sole owner whose org has **no other members** — `:157-158` deletes the
 membership unconditionally, leaving the organisation row with zero members and
 no owner.
+
+## W6 — READY FOR PR (2026-09-07)
+
+Worktree `.claude/worktrees/settings-w6`, branch `feat/settings-walkthrough-w6`,
+based on `ff73d6278` — main WITH W5 merged (PR #737, all 8 e2e jobs green).
+
+**W5 is CLOSED.** Everything above is either shipped or recorded as a
+follow-up. Do not re-derive it.
+
+### Scope
+
+Division schedule + constraints tabs
+(`/o/{org}/c/{comp}/d/{div}/schedule`), zero e2e coverage before this wave.
+Design register cases #15 (`matchMinutes` 0/1441), #16
+(`gapMinutes`/`perEntrantMinRest`/`constraints.restMin` negative), #17 (the
+play-hours client gate), #18's division half (`endAt < startAt`, and a
+`blackouts`/`sessionWindows` window with `to < from`), and #22 (courts above
+the 50 cap). Two tasks, two files:
+
+1. **`settings-schedule-drive.spec.ts`** (Task 1) — UI drive+persist across
+   the settings/constraints tabs, plus case #17's client-only gate. Also
+   appended `SeededDivision`/`seedDivision`/`releaseDivision` to
+   `settings-support.ts`, which Task 2 reused directly.
+2. **`settings-schedule-bounds.spec.ts`** (Task 2) — the numeric/order bounds
+   table, entirely `APIRequestContext`, no browser round trip anywhere in the
+   file.
+
+Cases #15/#16/#17/#18 (division half)/#22 are all closed by this wave.
+
+### Finding — every refusal on this endpoint is 400, not 422
+
+The plan's own code snippets asserted `.toBe(422)` throughout every bounds
+test. Reading `v1Inner` (`server/api-v1/http.ts`) directly: a `ZodError` from
+`parseBody`'s `schema.parse(raw)` propagates untouched into a `400
+VALIDATION` response — there is no route-local catch anywhere in
+`schedule-settings/route.ts` that remaps it to 422, and this is the
+codebase-wide convention (`v1Inner`), not specific to this one endpoint. Two
+existing unit tests already pin the same convention
+(`competitions/__tests__/create-auth-order.test.ts:86`,
+`divisions/[id]/publish-schedule/__tests__/route-auth-order.test.ts:114`).
+`checkInstantOrder`'s `ctx.addIssue` calls (the order-check cases, #18) are
+folded into the same `.parse()` call, so they get the identical 400/VALIDATION
+treatment, not a distinct status.
+
+Mutation-tested, not just read: reverting one assertion to the plan's
+original `.toBe(422)` and rerunning against the live server produced
+`Expected: 422 / Received: 400` — a real, right-reason failure, confirming
+the deviation was load-bearing. **Had this file shipped with the plan's
+snippets verbatim, every test in it would have been red on real code.**
+Flagged explicitly for any future wave that copies this plan's snippet
+style against a `ZodError`-backed `/api/v1` refusal.
+
+### The tz omit-means-untouched test, strengthened against a vacuous pass
+
+The console has offered no timezone control since V305 — every save from the
+settings panel omits `tz`. The design register's "an omitted `tz` leaves the
+division's stored zone untouched" contract is only non-vacuously provable
+against a division that already carries its OWN override; on a freshly
+seeded division (no override), "untouched" and "reverted to the org/UTC
+default" read identically as `"UTC"`, so a naive version of this test would
+pass whether or not the omit-means-untouched code path actually ran. Task 1's
+shipped test pre-seeds a real zone with a scripted `PUT … { config: {}, tz:
+"Europe/Madrid" }` before ever loading the page, drives the settings-tab save
+with `tz` never touched by the UI (there is no control for it), and asserts
+the GET afterward still reads `"Europe/Madrid"` — a genuine before/after
+proof, not a same-default coincidence.
+
+### Case #18's client-side halves are unwitnessed — same shape as #17, not tested here
+
+`settings-panel.tsx`'s `datesError` guard (the `startAt`/`endAt` order check
+ahead of the PUT) and `constraints-panel.tsx`'s `blackoutRowError` (the
+per-row `to < from` check in the blackout editor) are the client-only twins
+of case #18's server-side refusals this wave proved. Case #17 proved its
+own client gate is genuinely wired — not just that the pure function
+returns the right value in isolation, but that the panel's `save()` early
+return before the `PUT` is real — by mutating the guard itself and watching
+the browser test redden. Case #18 as shipped proves only the SERVER half
+(the bounds file is `APIRequestContext`-only, no `page`); neither
+`datesError` nor `blackoutRowError` has an equivalent browser-level proof in
+this wave. Recorded rather than silently left implicit: a future wave's job
+if the controller ever prioritises it, not a defect in what shipped.
+
+### Final whole-branch review — 3 fixes, all closed in one pass
+
+The review that closed this wave found 3 load-bearing gaps, all fixed in a
+single follow-up pass rather than a new task: this documentation update;
+`case #18` extended to also PUT a `sessionWindows` entry with `to < from`
+(`checkInstantOrder` loops over BOTH `blackouts` and `sessionWindows` in one
+`[key, rows]` tuple — the shipped test drove only the `blackouts` arm, so
+`sessionWindows`'s own tuple membership and its `WINDOW_ENDS_BEFORE_STARTS`/
+path assertion were completely unproven); and `case #17` extended to also
+drive the half-filled play-hours state (one field a valid time, the other
+left at the real empty `<option value="">` `datetime-field.tsx`'s
+`kind="time"` select always renders), since the test's own title claimed
+"half-filled or inverted" while the body only ever drove the inverted pair.
+Full detail: `.superpowers/sdd/2026-09-07-settings-walkthrough-w6/final-review-fix-report.md`.
+
+Also recorded as an F-entry (`FINDINGS.md`, documentation-only, not fixed —
+dead code, no behavioral risk): Task 1's mutation testing found
+`dailyHoursToWindows`'s top-level malformed-HHMM guard
+(`schedule-board.ts:191`) is redundant with a deeper regex check inside
+`isoFromZonedParts` for every reachable call shape — deleting the guard does
+not change the function's return value for any malformed or half-filled
+input this codebase can produce.
 
 ## False premises found
 
