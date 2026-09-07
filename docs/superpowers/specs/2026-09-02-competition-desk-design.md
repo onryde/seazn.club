@@ -503,3 +503,62 @@ vs. dictionaries+help; W2: run sheet vs. stage rail is NOT disjoint — both edi
 every implementer; gate rerun by the orchestrator with the JSON reporter and
 `.testResults[].name` confirmed under the worktree path. Merge sign-off is
 per-screen verdicts from screenshots, not "CI green".
+
+---
+
+## Amendment 6 (2026-09-07) — the desktop rail is RETIRED; the stage card stacks
+
+Owner-approved after driving the built surface. **This supersedes Tasks 2-5's
+`lg:`/`md:` two-column `1fr 280px` split above.** Read this before proposing a
+column layout for the stage card again — the two-column version SHIPPED, was
+looked at, and was rejected on measurement.
+
+**What changed.** No grid. The stage card is stacked full-width blocks at every
+width: title row, then an actions toolbar on its OWN row, then court tags, then
+the unscheduled count. Below `md:` the whole rail still folds into the bottom
+sheet behind a "Stage tools" trigger — Task 10 is UNCHANGED and was signed off.
+
+**Why, with the numbers, because the reasoning is what stops this being
+re-derived.** The rail set the card's height and the body had nothing to fill it
+with: measured `body=262px rail=262px content=99px` — **VOID=163px, 62% of the
+card**, on every active stage. The first fix attempted was to give the body
+content (a progress bar plus a counts line). It reached 99px against a 262px
+rail and the void stayed at 163px. **A column whose height is set by its
+neighbour cannot be filled by summary content** — that is the lesson, not "the
+body needed more". Stacking took the void to **1px**.
+
+**Ruling 11 is still honoured.** It required the six controls out of a crowded
+stage HEADER; they now sit on a dedicated toolbar row beneath the title, not
+beside it. Putting them back on the title line would re-create the crowding
+ruling 11 exists to remove — that is the constraint, not the column.
+
+**The progress bar was built and then REMOVED (owner ruling, 2026-09-07).** It
+earns its place only on MIXED state; with everything scheduled it renders as a
+solid full-width block carrying the most visual weight on a card whose job is
+the actions beneath it. The counts line ("24 to schedule", zero clauses
+suppressed, `plural()`) carries the same information in words. Do not
+reintroduce the bar because this document's history mentions stage progress —
+`stages-panel-progress.test.tsx` holds a positive absence guard against exactly
+that.
+
+**Auto-schedule LEFT this page deliberately.** The `stage-auto-schedule` CTA and
+`stage-auto-schedule-blocked` are gone from the stage card; scheduling belongs on
+the Schedule page, where `ScheduleBoard` owns the full flow including
+`AutoScheduleMode` and its confirm gate. The unscheduled COUNT stays as
+information and links there. Removing the action did not strand the capability —
+that was checked before the removal, not after.
+
+**Each stage card carries "View N fixtures", filtering the run sheet to that
+stage.** The run sheet remains ONE chronological list — on match day fixtures
+interleave across stages and the clock is the spine. Fixtures are NOT nested
+under stage cards; this control navigates, it does not duplicate. Note the sheet
+already renders each BRACKET stage as its own round-sectioned block, so for those
+the control declutters and jumps rather than reveals. The copy is deliberately
+NOT forked for that case.
+
+**Two sticky headers may not share one offset.** The day header (`bg-slate-200`)
+and the bracket round header (`bg-slate-50`) were both `sticky top-14`. Removing
+the `overflow-hidden` that had been breaking sticky positioning freed both to
+pin at the same 56px line. Bracket headers now offset below the day header when a
+day block exists, and keep `top-14` when there is none, so a bracket-only
+division gains no unearned gap.

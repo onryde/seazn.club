@@ -87,6 +87,8 @@ function sheetHtml(
         hrefFor={(f) => `/f/${f.fixture_no}`}
         filter={filter}
         onFilter={() => {}}
+        stageId={null}
+        onStageFilter={() => {}}
       />
     </DictProvider>,
   );

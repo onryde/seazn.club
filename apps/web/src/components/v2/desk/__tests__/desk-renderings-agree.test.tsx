@@ -364,7 +364,7 @@ describe("enumeration 2: the five renderings agree on every reachable phase/atte
 
     it("5: the start-locks tip shows only while nothing has been played", () => {
       const html = renderToStaticMarkup(
-        <StagesPanel divisionId="d1" divisionSeq={5} competitionId="c1" orgSlug="org" compSlug="comp" divSlug="div"
+        <StagesPanel divisionId="d1" competitionId="c1" orgSlug="org" compSlug="comp" divSlug="div"
           stages={r.shape.stages.map((s) => ({ id: s.id, seq: s.seq, kind: "league", name: s.name, config: {}, progression: null, status: s.status }))}
           fixtures={r.shape.fixtures.map((f, i) => ({
             id: f.id, stage_id: f.stageId, pool_id: null, round_no: 1, seq_in_round: i + 1, fixture_no: i + 1,

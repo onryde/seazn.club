@@ -89,15 +89,20 @@ test("capacity precheck: impossible config shows the card + disabled Solve + a r
   // than one is the expected shape, and a bare locator trips strict mode.
   await expect(card.getByText(/Add 1 day|Add 1 Court|Shorten matches/).first()).toBeVisible();
 
-  // The disabled Solve button + reason lives on the OTHER page — the
-  // fixtures/stages console, not the Settings tab. The tab MUST be named:
-  // the bare division path renders Entrants, where this button does not
-  // exist at all, which reads as "disabled" but is really "not found".
+  // Owner ruling (Task 2, "remove auto-schedule from the fixtures page"):
+  // the Solve action no longer lives on the fixtures/stages console at all
+  // — scheduling is Schedule-page-only now (ScheduleBoard/AutoScheduleMode),
+  // so there is nothing left to disable here. This spec used to assert a
+  // disabled `stage-auto-schedule` button + blocked-reason line on THIS
+  // page; both are gone from stages-panel.tsx along with the CTA. What
+  // remains true and worth pinning here: the fixtures page still surfaces
+  // the unscheduled count as INFORMATION (kept per owner ruling — "the
+  // fact", not "the action") and it leads to the Schedule page rather than
+  // acting in place.
   await page.goto(await divisionPath(page.request, divisionId, "?tab=fixtures"));
-  const solveButton = page.getByTestId("stage-auto-schedule");
-  await expect(solveButton).toBeVisible({ timeout: 20_000 });
-  await expect(solveButton).toBeDisabled();
-  await expect(page.getByTestId("stage-auto-schedule-blocked")).toBeVisible();
+  const unscheduledLink = page.getByTestId("stage-unscheduled-count");
+  await expect(unscheduledLink).toBeVisible({ timeout: 20_000 });
+  await expect(unscheduledLink.locator("..")).toHaveAttribute("href", new RegExp(`/schedule$`));
 
   // Server is the authority, not just the UI (acceptance criteria) — the
   // SAME impossibility is refused at the API even if a client bypassed the
@@ -109,7 +114,7 @@ test("capacity precheck: impossible config shows the card + disabled Solve + a r
   expect(refused.error?.code).toBe("CAPACITY_IMPOSSIBLE");
 });
 
-test("capacity precheck: applying a suggestion clears the block and enables Solve", async ({ page, request }) => {
+test("capacity precheck: applying a suggestion clears the block", async ({ page, request }) => {
   const { divisionId } = await seedTightRoundRobin(request);
 
   await page.goto(await divisionPath(page.request, divisionId, "/schedule?tab=settings"));
@@ -130,9 +135,8 @@ test("capacity precheck: applying a suggestion clears the block and enables Solv
   // new stored config).
   await expect(page.locator('[data-capacity-verdict="impossible"]')).toHaveCount(0, { timeout: 20_000 });
 
-  // And the OTHER page's Solve button is enabled again. Same tab caveat as
-  // the first test — without ?tab=fixtures this lands on Entrants.
-  await page.goto(await divisionPath(page.request, divisionId, "?tab=fixtures"));
-  await expect(page.getByTestId("stage-auto-schedule")).toBeEnabled({ timeout: 20_000 });
-  await expect(page.getByTestId("stage-auto-schedule-blocked")).toHaveCount(0);
+  // Owner ruling (Task 2): there is no more "Solve button re-enabled" to
+  // check on the fixtures page — the Solve action lives on the Schedule
+  // page only now, and this spec's job stops at the Settings-tab card,
+  // which is the surface this test actually verifies.
 });

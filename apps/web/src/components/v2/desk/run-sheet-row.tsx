@@ -52,8 +52,9 @@ export const SCHEDULE_ERROR_FALLBACK_KEY = "schedule.error.failed" satisfies Mes
  *
  *   SEQ_CONFLICT   — unreachable HERE. `assertFreshSeq` returns immediately
  *                    when `expected_seq` is undefined (schedule.ts), and this
- *                    editor never sends one. `stages-panel.tsx`'s
- *                    `autoScheduleStage` does, and handles it itself.
+ *                    editor never sends one. `use-board-actions.ts`'s
+ *                    `autoRun` does (Schedule page auto-schedule), and
+ *                    handles it itself.
  *   the two 422s   — "the division schedule is locked" and "fixture is
  *                    <status> — decided fixtures are immutable" both arrive as
  *                    the GENERIC code "ERROR" (`statusCode(422)` in

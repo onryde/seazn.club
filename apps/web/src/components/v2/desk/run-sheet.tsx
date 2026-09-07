@@ -47,6 +47,8 @@ export function RunSheet({
   hrefFor,
   filter,
   onFilter,
+  stageId,
+  onStageFilter,
   boardSlotOptions,
   onRescheduled,
 }: {
@@ -81,6 +83,19 @@ export function RunSheet({
   hrefFor: (fixture: RunSheetFixture) => string;
   filter: RunSheetFilter;
   onFilter: (filter: RunSheetFilter) => void;
+  /** Owner-approved "Option 2" (competition desk W3, on top of Option B) —
+   *  a SECOND, ORTHOGONAL filter dimension: which stage's fixtures to show,
+   *  or `null` for every stage. Deliberately not folded into
+   *  `RunSheetFilter` (that union stays exactly `"today" | "needs_result" |
+   *  "unscheduled" | "all"`) — a stage id is not one more value of "what
+   *  kind of row", it is a second axis a row must ALSO satisfy, and a
+   *  fixture can be BOTH "needs_result" and "in stage X" at once. Set from
+   *  each stage card's "View N fixtures" control (stages-panel.tsx); its
+   *  own clear affordance lives in the chip row below (`run-sheet-stage-
+   *  filter`), per owner ruling — the chip row is where a person looks to
+   *  clear a filter, not a separate, easier-to-miss control. */
+  stageId: string | null;
+  onStageFilter: (stageId: string | null) => void;
   boardSlotOptions?: string[];
   onRescheduled?: () => void;
 }) {
@@ -98,6 +113,28 @@ export function RunSheet({
 
   const stageById = new Map(stages.map((s) => [s.id, s] as const));
   const today = dayKeyInTz(nowMs, tz);
+
+  // Ruling C-3 (controller, real-data reproduction): the day header and a
+  // bracket round header both stick at the SAME `top: 56px` offset. Under
+  // block flow they cannot occupy that offset at the identical instant —
+  // a day header's own stuck window is bounded by its own `<section>`'s
+  // box, and it provably releases before the next section's header ever
+  // reaches 56px (verified live: the release point tracks the day
+  // section's own bottom edge exactly, not some larger ancestor, across
+  // four different day/bracket size ratios) — but the day header IS a
+  // long-lived, genuinely "wider grouping" element next to a bracket
+  // round's own, and the owner wants them stacked deliberately rather than
+  // reasoned about as merely non-colliding. When this sheet has at least
+  // one day block, every bracket round header gets pushed DOWN by exactly
+  // the day header's own height (`top-14` + 30px = `top-[86px]`), so if a
+  // day header and a bracket header are ever both visible near the top of
+  // the viewport, they stack (day above, bracket below) instead of sharing
+  // a slot — belt-and-braces on top of the structural guarantee above.
+  // A division with NO day block (single bracket stage, the common case)
+  // keeps its round headers at the ordinary `top-14` — there is no day
+  // header for them to stack under, and reserving the extra 30px
+  // unconditionally would open an empty band under nav for no reason.
+  const hasDayBlock = blocks.some((b) => b.kind === "day");
 
   // F3 (W2 walkthrough gate 1): only the unscheduled/settled groups need a
   // stage name — day and bracket blocks already identify their own stage in
@@ -146,7 +183,15 @@ export function RunSheet({
   //
   // ORDER is the whole fix: `all` still wins, so a bracket round never hides the
   // bye that explains its missing fourth fixture; every work filter now drops it.
+  //
+  // The STAGE dimension (`stageId`) is checked FIRST, ahead of even `all` —
+  // it is a second, orthogonal axis a row must ALSO satisfy, not one more
+  // value of the `RunSheetFilter` ladder below it. A bye belonging to a
+  // stage the organiser has filtered away must not survive under "all"
+  // either, so this cannot reuse the `all`-wins-first ordering the TYPE
+  // filter uses for byes — it runs before that ladder even starts.
   const keep = (f: RunSheetFixture): boolean => {
+    if (stageId !== null && f.stage_id !== stageId) return false;
     if (filter === "all") return true;
     if (isBye(f)) return false;
     if (filter === "needs_result") return needsResult(f);
@@ -157,10 +202,16 @@ export function RunSheet({
 
   // Filter counts read over EVERY block's fixtures, unfiltered — a filter's
   // own count must not shrink just because it is the one currently selected.
+  // They DO narrow to `stageId` when a stage filter is active — same
+  // reasoning as `keep` above: the count an organiser sees on "Needs
+  // result" while filtered to one stage should be that stage's own count,
+  // matching what clicking it would actually show, not the whole
+  // division's.
   let needsResultCount = 0;
   let unscheduledCount = 0;
   for (const block of blocks) {
     for (const f of fixturesOf(block)) {
+      if (stageId !== null && f.stage_id !== stageId) continue;
       if (isBye(f)) continue;
       if (needsResult(f)) needsResultCount++;
       if (isUnscheduled(f)) unscheduledCount++;
@@ -236,16 +287,43 @@ export function RunSheet({
         .filter((r) => r.fixtures.length > 0);
       if (roundsWithRows.length === 0) return null;
       return (
-        <section key={block.stageId} data-run-sheet-block="bracket" className="card overflow-hidden">
-          {roundsWithRows.map((r) => {
+        // Fix (controller ruling C-1, pre-existing from W2 — see the
+        // `run-sheet` div's own comment for the full argument): NO
+        // `overflow-hidden` here either. This section's sticky round
+        // headers need their SCROLLING ancestor to be the actual page, and
+        // this section — like the outer div — never scrolls internally,
+        // so any `overflow` value here that is not `visible` pins every
+        // header 56px into whichever row happens to occupy that band,
+        // permanently, rather than tracking the viewport. `rounded-2xl`
+        // alone (no clip) still rounds this section's OWN border/shadow —
+        // that rendering does not depend on overflow at all. The one thing
+        // overflow-hidden WAS doing here — stopping the first round
+        // header's `bg-slate-50` from squaring off past this section's own
+        // rounded top corner — moves onto that header directly, below
+        // (`rounded-t-2xl`, first round only — every other round header
+        // sits well inside the section's flat area and was never at risk).
+        <section key={block.stageId} data-run-sheet-block="bracket" className="card">
+          {roundsWithRows.map((r, i) => {
             // R34 — the round's calendar date, the one thing a bracket row's
             // `HH:mm`-only time cell cannot say. `null` on an untimed round, so
             // the header simply reads as it did before.
             const dates = roundDateLabel(r.fixtures, tz, locale);
             return (
             <div key={r.round}>
-              {/* F4 — same nav-collision fix as the day header above. */}
-              <header className="sticky top-14 z-10 border-b border-slate-100 bg-slate-50 px-4 py-2">
+              {/* F4 — same nav-collision fix as the day header above.
+                  `rounded-t-2xl` on the FIRST round only (see the section's
+                  own comment above) — replaces the clipping
+                  `overflow-hidden` used to do for this one corner.
+                  Ruling C-3 — `top-[86px]` (56 + the day header's own
+                  30px) whenever this sheet ALSO has a day block, so the
+                  two headers stack deliberately instead of sharing
+                  `top-14`; `hasDayBlock`'s own comment above has the full
+                  reasoning. Both literal class strings are written out in
+                  full so Tailwind's JIT scanner can see them — a
+                  template-built class name would not compile. */}
+              <header
+                className={`sticky ${hasDayBlock ? "top-[86px]" : "top-14"} z-10 border-b border-slate-100 bg-slate-50 px-4 py-2 ${i === 0 ? "rounded-t-2xl" : ""}`}
+              >
                 <h4 className="text-xs font-medium uppercase tracking-wide text-slate-500">
                   {stage ? `${stage.name} — ` : ""}
                   {bracketRoundLabel(msg, stage?.kind ?? "knockout", r.round, allStageFixtures)}
@@ -367,7 +445,37 @@ export function RunSheet({
   const renderedBlocks = blocks.map(renderBlock).filter((node): node is React.ReactElement => node !== null);
 
   return (
-    <div data-testid="run-sheet" className="card overflow-hidden">
+    // Fix (competition desk W3, controller ruling C-1) — `overflow-hidden`
+    // REMOVED. This is pre-existing from W2 (`run-sheet.tsx` has zero
+    // commits in `origin/main..HEAD` before this fix; W3 did not introduce
+    // it), but fixing the sticky group headers below means touching it.
+    //
+    // `overflow: hidden` on ANY ancestor makes that ancestor the CONTAINING
+    // BLOCK a `position: sticky` descendant sticks to — not the viewport,
+    // regardless of whether that ancestor ever actually scrolls. This div
+    // (and the bracket `<section>` below) never scroll internally — the
+    // PAGE does — so a sticky child inside either one just sat at a fixed
+    // `top: 56px` offset from ITS OWN box, permanently, never tracking the
+    // page's scroll position at all. Measured: at `scrollY = 0`, a bracket
+    // round header already sat 56px into its section, overlapping a row by
+    // 33px — not "about to stick", already wrong, at rest.
+    //
+    // It was there for ONE reason: clipping a child's square-cornered
+    // background so it cannot bleed past this div's own `rounded-2xl`
+    // corners. The only child with a background that could ever sit AT
+    // those corners is the FIRST/LAST rendered thing — and the first is
+    // UNCONDITIONALLY the filter bar just below (`border-b`, no `bg-*`,
+    // transparent — nothing to clip at the top edge, ever, regardless of
+    // which block kind renders first beneath it), and the last is always
+    // either a `<li>` row (`run-sheet-row.tsx`, no background of its own)
+    // or a bracket `<section>` that already carries its own `rounded-2xl`
+    // (so it has no square corner to bleed in the first place). Nothing
+    // else in this tree sits flush against this div's own edges, so
+    // dropping the clip here is not a compromise — it costs nothing this
+    // render actually produces. See the bracket `<section>` below for the
+    // one place that DID need a replacement (`rounded-t-2xl` on the first
+    // round header specifically, not blanket clipping).
+    <div data-testid="run-sheet" className="card">
       <div className="flex flex-wrap items-center gap-3 border-b border-slate-100 px-4 py-3">
         <div data-testid="run-sheet-filter" className="flex flex-wrap gap-1.5">
           {filters.map((f) => (
@@ -385,6 +493,31 @@ export function RunSheet({
               {f.count !== undefined && <span className="ml-1 text-slate-500">{f.count}</span>}
             </button>
           ))}
+          {/* Owner-approved "Option 2" — the stage filter's own clear
+              affordance, in the SAME chip row the four type filters live
+              in (owner ruling: "the existing chip row is where a person
+              will look to clear it, so make the active stage filter
+              legible there rather than hidden"). Mounted only while a
+              stage filter is active — never a permanent, mostly-inert chip.
+              Its own visible text carries the accessible name (stage name,
+              user-typed — never grammatically combined with a verb that
+              would need to agree with it, R13/W3's own standing rule); the
+              `sr-only` span appends "Clear filter" so a screen reader's
+              announcement reads as an action, not just a label. */}
+          {stageId !== null && (
+            <button
+              type="button"
+              data-testid="run-sheet-stage-filter"
+              onClick={() => onStageFilter(null)}
+              className="flex min-h-11 items-center gap-1.5 rounded-full bg-purple-100 px-3 text-xs font-medium text-purple-800 hover:bg-purple-200"
+            >
+              <span>
+                {msg("runsheet.stageFilter.label")}: {stageById.get(stageId)?.name ?? stageId}
+              </span>
+              <span aria-hidden="true">✕</span>
+              <span className="sr-only">{msg("runsheet.stageFilter.clearAria")}</span>
+            </button>
+          )}
         </div>
         <div className="flex-1" />
         <p className="text-xs text-slate-500" data-testid="tz-caption">
@@ -393,7 +526,17 @@ export function RunSheet({
       </div>
 
       {renderedBlocks.length > 0 ? (
-        renderedBlocks
+        // Owner request — the sheet's internal blocks (day groups, bracket
+        // sections, unscheduled, settled) get real separation instead of
+        // sitting edge to edge: the SAME `space-y-6` (24px) rhythm the stage
+        // cards above already use, not a third value invented for this one
+        // spot. Tailwind's `space-y-*` is pure `margin-top` on every child
+        // but the first — no positioning/overflow side effect, so it cannot
+        // reopen ruling C-1 (the sticky headers' containing-block fix) on
+        // its own; verified live (scroll sweep, both coarse and fine
+        // granularity) that the sticky handoffs below still land cleanly
+        // after this change — see the task report.
+        <div className="space-y-6">{renderedBlocks}</div>
       ) : (
         // Fix round 1, CRITICAL 1: every block existed but the ACTIVE FILTER
         // reduced every one of them to zero rows — the same vacuous shape
@@ -414,11 +557,22 @@ export function RunSheet({
               filter: filters.find((f) => f.value === filter)?.label ?? filter,
             })}
           </p>
-          {filter !== "all" && (
+          {/* Owner-approved "Option 2" — also clears the STAGE filter, not
+              just the type filter: gated on either being active, so a page
+              filtered to one stage with `filter === "all"` (an empty
+              combination — that stage genuinely has no fixtures matching
+              nothing else, edge case) still gets a working way back, and
+              clicking it clears both dimensions at once rather than
+              leaving the organiser one tap short of the unfiltered
+              sheet. */}
+          {(filter !== "all" || stageId !== null) && (
             <button
               type="button"
               data-testid="run-sheet-empty-show-all"
-              onClick={() => onFilter("all")}
+              onClick={() => {
+                onFilter("all");
+                onStageFilter(null);
+              }}
               className="btn btn-ghost mt-3 min-h-11 px-3 text-xs"
             >
               {msg("runsheet.filter.all")}

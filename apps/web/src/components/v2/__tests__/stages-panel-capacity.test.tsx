@@ -1,6 +1,5 @@
-import { describe, expect, it, vi } from "vitest";
-import { renderToStaticMarkup } from "react-dom/server";
-import { capacityGateBlocks, capacityRequestForStage, StagesPanel } from "@/components/v2/stages-panel";
+import { describe, expect, it } from "vitest";
+import { capacityGateBlocks, capacityRequestForStage } from "@/components/v2/stages-panel";
 import type { UseCapacityReportResult } from "@/lib/use-capacity-report";
 import type { CapacityReport } from "@seazn/engine/scheduling/capacity";
 import type { Venue } from "@/components/v2/shared/court-multi-picker";
@@ -41,13 +40,6 @@ function orgVenues(): Venue[] {
     },
   ];
 }
-
-// StagesPanel calls useRouter()/useConfirm() synchronously during render
-// (not just from effects) — same mocks stages-panel-auto-schedule-seq.test.tsx
-// uses to render this exact component bare, no DictProvider (see that file's
-// own header: useMsg/useLocaleOrDefault degrade gracefully without one here).
-vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: () => {}, push: () => {} }) }));
-vi.mock("@/components/ui/confirm-provider", () => ({ useConfirm: () => async () => false }));
 
 // D2 capacity pre-check, per-stage (the "Auto-schedule remaining" button's
 // disabled condition). Pure — `scheduleSettings` arrives via a useEffect
@@ -254,60 +246,14 @@ describe("capacityGateBlocks", () => {
   });
 });
 
-// Finding 6: this file lacked the "no synchronous client-side fallback
-// computation" regression guard settings-panel-capacity.test.tsx:214-241 has
-// for SettingsPanel. Same technique: renderToStaticMarkup never fires an
-// effect (component-ui-i18n memory), so `scheduleSettings` can never have
-// loaded and `capacityByStage` can never hold anything by the time this
-// render completes — if a future change reintroduces a synchronous
-// capacity computation anywhere in this component (bypassing the fetch
-// entirely), this is what would start failing.
-describe("StagesPanel — no client-side fallback computation", () => {
-  const STAGE = { id: "s1", seq: 0, kind: "league", name: "League", config: {}, progression: null, status: "active" };
-  // Many UNSCHEDULED fixtures — enough demand to have flipped an old-style
-  // local computation to "impossible" — so the pinned unscheduled section
-  // (and its auto-schedule CTA) actually renders; a render with nothing in
-  // it would make this guard vacuously true.
-  const FIXTURES = Array.from({ length: 12 }, (_, i) => ({
-    id: `f${i}`,
-    stage_id: "s1",
-    pool_id: null,
-    round_no: 1,
-    seq_in_round: i + 1,
-    fixture_no: i + 1,
-    home_entrant_id: "e1",
-    away_entrant_id: "e2",
-    scheduled_at: null,
-    venue: null,
-    court_label: null,
-    status: "scheduled",
-    outcome: null,
-  }));
-  const baseProps = {
-    divisionId: "d1",
-    divisionSeq: 1,
-    competitionId: "c1",
-    orgSlug: "org",
-    compSlug: "comp",
-    divSlug: "div",
-    stages: [STAGE],
-    fixtures: FIXTURES,
-    entrantNames: { e1: "Alpha", e2: "Bravo" },
-    canEdit: true,
-    tz: "UTC",
-    orgTz: "UTC",
-    canExport: false,
-  } as unknown as Parameters<typeof StagesPanel>[0];
-
-  it("renders the auto-schedule CTA never disabled, and the blocked-reason line never at all — the verdict can only ever arrive via useCapacityReportsByStage's effect+fetch", () => {
-    const html = renderToStaticMarkup(<StagesPanel {...baseProps} />);
-    expect(html).toContain('data-testid="stage-auto-schedule"'); // sanity: the scenario is meaningful, not vacuous
-    expect(html).not.toContain('data-testid="stage-auto-schedule-blocked"');
-    // The disabled attribute is omitted entirely by React for a `false`
-    // boolean prop — assert its literal absence right after the CTA's own
-    // testid rather than a substring search (a *different* button on the
-    // page being disabled must not make this pass for the wrong reason).
-    const ctaOpenTag = html.slice(html.indexOf('data-testid="stage-auto-schedule"') - 200, html.indexOf('data-testid="stage-auto-schedule"') + 200);
-    expect(ctaOpenTag).not.toContain("disabled");
-  });
-});
+// Finding 6 (retired — Task 2, "remove auto-schedule from the fixtures
+// page"): this described a "no synchronous client-side fallback computation"
+// regression guard for the Auto-schedule CTA's disabled/blocked-reason
+// rendering. That CTA, `capacityByStage`, and the `useCapacityReportsByStage`
+// subscription that fed it are all gone from StagesPanel now — scheduling
+// lives on the Schedule page only (owner ruling). The whole subject this
+// guard existed to protect no longer renders anywhere in this component, so
+// it is deleted deliberately rather than weakened or kept vacuously true.
+// `capacityRequestForStage`/`capacityGateBlocks` above remain: pure,
+// independently useful mapping/predicate functions with their own direct
+// coverage, unaffected by the CTA's removal.

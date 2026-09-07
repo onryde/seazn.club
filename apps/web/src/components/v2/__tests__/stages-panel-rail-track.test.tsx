@@ -12,25 +12,26 @@ vi.mock("@/components/ui/confirm-provider", () => ({
 // Competition Desk W3 Task 5, fix round 1 (Ruling T5-A, controller finding):
 // `<StageRail>` returns `null` outright when `!canEdit` (stage-rail.tsx's
 // own guard), but Task 5's grid wrapper put it in a FIXED
-// `lg:grid-cols-[1fr_280px]` track — a grid track reserves its column
-// whether or not the child renders into it, unlike the old flex header a
-// null child claimed zero space in. Left unconditional, every non-editing
-// viewer got a permanent blank 280px strip (plus the 24px gap) to the right
-// of each stage card at `lg` and above — a regression against the
-// pre-Task-5 layout, not a pre-existing quirk. This is the THIRD instance of
-// the same root cause in this wave (the court-tags editor,
-// stages-panel-court-tags-viewer.test.tsx, Task 3; the unscheduled-count
-// badge, stages-panel-unscheduled-heading.test.tsx, Task 4; now the column
-// itself): anything keyed to the rail has to account for the rail rendering
-// nothing for a non-editing viewer.
+// `grid-cols-[1fr_280px]` track — a grid track reserves its column whether
+// or not the child renders into it, unlike the old flex header a null
+// child claimed zero space in. Left unconditional, every non-editing
+// viewer got a permanent blank 280px strip (plus the gap) to the right of
+// each stage card at `md` and above.
 //
-// Fix: the two-column track class is CONDITIONAL on `canEdit` — a
-// non-editing viewer gets a plain single-column body that claims the full
-// card width; an editing viewer is unchanged. Node-environment vitest has no
-// DOM/layout, so this asserts the class string itself (same idiom as
-// stages-panel-court-tags-viewer.test.tsx) rather than a measured width —
-// the `lg` two-column geometry itself stays proven by the Task 5 e2e in
-// run-sheet.spec.ts, which runs as an editing viewer only.
+// SUPERSEDED — "Option B" (controller measurement, owner sign-off session,
+// rejecting the two-column layout entirely): the grid track this test used
+// to check for CONDITIONAL-on-`canEdit` presence is now gone outright, for
+// BOTH viewers. It was never the void's real cause on its own — the
+// column's fixed 280px track forced the whole CARD to whatever height the
+// rail needed (equal-height grid-row stretch), measured
+// `body=262px rail=262px content=99px VOID=163px` at 1280, 62% empty, and
+// no amount of body content could ever have closed that gap. The fix is
+// architectural: `stages-panel.tsx` no longer wraps `stage-sheet`/
+// `stage-rail` in ANY grid — both are ordinary stacked, full-width blocks,
+// so this file's own regression coverage is now "neither viewer gets a
+// column", not "only an editor does".
+const twoColumnTrack = /grid-cols-\[1fr_280px\]/;
+
 const STAGE = {
   id: "s1",
   seq: 0,
@@ -55,16 +56,23 @@ const baseProps = {
   canExport: false,
 };
 
-const twoColumnTrack = /lg:grid-cols-\[1fr_280px\]/;
-
-describe("StagesPanel — the stage body's two-column track (fix round 1, Ruling T5-A)", () => {
-  it("does NOT reserve the rail's 280px column for a viewer who cannot edit", () => {
+describe("StagesPanel — the stage body has no two-column track for either viewer (Option B retires Ruling T5-A's grid)", () => {
+  it("does NOT reserve a 280px rail column for a viewer who cannot edit", () => {
     const html = renderToStaticMarkup(<StagesPanel {...baseProps} canEdit={false} />);
     expect(html).not.toMatch(twoColumnTrack);
   });
 
-  it("still reserves the two-column track for an editor, where the rail actually renders", () => {
+  it("does NOT reserve a 280px rail column for an editor either — Option B removed it for everyone", () => {
     const html = renderToStaticMarkup(<StagesPanel {...baseProps} canEdit />);
-    expect(html).toMatch(twoColumnTrack);
+    expect(html).not.toMatch(twoColumnTrack);
+  });
+
+  it("both viewers render the same stage-sheet/stage-rail testids regardless — the grid wrapper is gone, not the divs", () => {
+    const editorHtml = renderToStaticMarkup(<StagesPanel {...baseProps} canEdit />);
+    const viewerHtml = renderToStaticMarkup(<StagesPanel {...baseProps} canEdit={false} />);
+    for (const html of [editorHtml, viewerHtml]) {
+      expect(html).toContain('data-testid="stage-sheet"');
+      expect(html).toContain('data-testid="stage-rail"');
+    }
   });
 });
