@@ -784,6 +784,47 @@ test("case #18: an end before the start is refused both in one body (400, issue 
     const afterSingle = await readComp(request, comp.id);
     expect(afterSingle.ends_on, "the in-order single-date patch must apply").toBe("2027-09-01");
     expect(afterSingle.starts_on, "and must leave the start where it was").toBe("2027-01-01");
+
+    // (d) THE BOUNDARY. A ONE-DAY competition — merged start EQUAL to merged
+    // end — is a supported product state, and every case above misses it: the
+    // four inversions are all strictly ordered and the two positives are all
+    // months apart, so `mergedEnds < mergedStarts` had never been evaluated on
+    // an equal pair. Widening it to `<=` therefore survived the entire suite,
+    // including the four-mutant shape sweep, while silently refusing every
+    // single-day event (review finding, W8 T4).
+    //
+    // `competition-settings.tsx` makes the state reachable on purpose: the end
+    // input carries `min={form.starts_on}` and HTML `min` is INCLUSIVE, and the
+    // client's own pre-check at `save()` is a strict `<`. So the form offers
+    // the same-day pick and the server must take it.
+    //
+    // Stored right now: starts_on = 2027-01-01, ends_on = 2027-09-01.
+    const sameDay = await patchComp(request, comp.id, { ends_on: "2027-01-01" });
+    expect(
+      sameDay.status,
+      `a one-day competition must be allowed, not refused: ${JSON.stringify(v1Error(sameDay))}`,
+    ).toBe(200);
+    const afterSameDay = await readComp(request, comp.id);
+    expect(afterSameDay.starts_on, "the one-day competition keeps its start").toBe("2027-01-01");
+    expect(afterSameDay.ends_on, "and ends the SAME day, not the day before").toBe("2027-01-01");
+
+    // (e) the same boundary one layer up. `checkDateOrder` (zod) carries its
+    // OWN `<`, and (d) cannot reach it — (d) sends one date, so the superRefine
+    // has nothing to compare. This is the shape the FORM actually sends for a
+    // one-day event (`competition-settings.tsx` always sends both dates), so a
+    // `<`->`<=` slip in the schema would 400 the real user path while the
+    // use-case guard stayed innocent. Two comparators, two requests.
+    const sameDayPair = await patchComp(request, comp.id, {
+      starts_on: "2028-03-05",
+      ends_on: "2028-03-05",
+    });
+    expect(
+      sameDayPair.status,
+      `an equal pair in ONE body must be allowed: ${JSON.stringify(v1Error(sameDayPair))}`,
+    ).toBe(200);
+    const afterSameDayPair = await readComp(request, comp.id);
+    expect(afterSameDayPair.starts_on).toBe("2028-03-05");
+    expect(afterSameDayPair.ends_on).toBe("2028-03-05");
   } finally {
     await releaseCompetition(request, comp.id);
   }
