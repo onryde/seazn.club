@@ -128,7 +128,22 @@ export function SetsTab({ doc, dict }: SetsTabProps): ReactNode {
                     // rather than "false" so the attribute is simply absent.
                     data-open={open ? "true" : undefined}
                     title={longLabelFor(i)}
-                    className={`w-10 px-0.5 text-right font-medium tabular-nums ${
+                    // Owner design round (D) — mono, like every other figure
+                    // on this surface. This tab is the SCORE TABLE for every
+                    // sport that is not cricket (tennis "Sets", football
+                    // "Periods", and so on), so leaving it in the body face
+                    // gave four of five sports the untreated look.
+                    // `text-[9px]` and NO tracking, and the width arithmetic is
+                    // the reason. `w-10` less `px-0.5` leaves a 36px content
+                    // box; Geist Mono advances ~0.6em, so "GAME 1" (6 glyphs)
+                    // needs exactly 36px at 10px — zero slack, and the
+                    // `tracking-wide` this round first shipped wrapped it onto
+                    // two lines at 390. Widening the column is the wrong lever:
+                    // tennis can carry five of them, and 5 × `w-12` starves the
+                    // name column to ~48px at 320. Table notation is exempt
+                    // from the 14px uppercase floor (_DESIGN §10), and 9px is
+                    // the size the performer chip already uses.
+                    className={`w-10 px-0.5 text-right font-mono text-[9px] font-medium uppercase tabular-nums ${
                       open ? "text-accent" : "text-ink-muted"
                     }`}
                   >
@@ -171,7 +186,7 @@ export function SetsTab({ doc, dict }: SetsTabProps): ReactNode {
                     data-testid={`mc-sets-cell-${rowIndex}-${i}`}
                     // `px-0.5`: `box-sizing: border-box` puts padding INSIDE
                     // the `w-10`, and `px-1` left only 32px for the digits.
-                    className="px-0.5 text-right tabular-nums"
+                    className="px-0.5 text-right font-mono tabular-nums"
                   >
                     {/* An en dash, never blank: a missing cell and a zero must
                         not look the same. */}
