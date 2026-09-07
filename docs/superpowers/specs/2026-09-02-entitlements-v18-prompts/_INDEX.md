@@ -423,6 +423,12 @@ items to W1, so nothing below is owed by anyone else.
 
 Each needs a task and an owner. Nothing here is fixed by W1.
 
+> **Re-verified at the W3 boundary, 2026-09-07 (W3 merged as `4d00ad9de`,
+> PR #741). FOUR items below have since CLOSED and two pins are wrong.**
+> Read `W4-owed-work.md` beside this file BEFORE acting on anything here:
+> it marks items 6 (first half), 8, 9 and 10 closed with the evidence,
+> corrects item 4's file path, and adds the three items W3 leaves owed.
+
 0. **W3 entry gate — baseline the distribution the growth reversal gives up.**
    W2 put player profiles, embeds and auto posts back behind the paywall on an
    explicit owner ruling, reversing the PLG position recorded higher in this file.
@@ -462,7 +468,9 @@ Each needs a task and an owner. Nothing here is fixed by W1.
    including `finalize`, `lineups`, `api-keys` and most `orgs/[id]/…` writes.
    Fixing one route is not the job; deciding the ordering rule is.
 4. **Cross-fixture device-link 403s are UNMETERED.** In `requireFixtureActor`
-   (`auth.ts` — grep `This device link is for a different fixture`) the
+   (`server/api-v1/auth.ts` — NOT `server/auth.ts`, corrected 2026-09-07;
+   grep `This device link is for a different fixture`; the file's single
+   `rateLimit(` call is at `:260`) the
    ownership throw happens BEFORE the `rateLimit("dlv1:…", {max: 10,
    windowSeconds: 1})` call, which only runs on the success path for
    `intent === "score"`. `auth.ts` contains exactly one `rateLimit(` call and
@@ -479,7 +487,7 @@ Each needs a task and an owner. Nothing here is fixed by W1.
    `storageState: await consentedAnonymousState()` from
    `e2e/scorepad-a11y-kit.ts`; each needs its own spec re-run to be honest.
 
-6. **W2 deleted `pro-plus-tier.spec.ts` (505 lines, 10 tests) and
+6. **[HALF CLOSED 2026-09-07 — `pricing-v18.spec.ts` shipped in W3 and ran for the first time; `enterprise-gate.spec.ts` is STILL OWED, see W4-owed-work.md N1]** **W2 deleted `pro-plus-tier.spec.ts` (505 lines, 10 tests) and
    `pricing-pro-plus.spec.ts` (49 lines, 2 tests), and the replacements are
    owed to W3** — `pricing-v18.spec.ts` and `enterprise-gate.spec.ts` (owner
    ruling 2026-09-03, W2 plan decision 6). Both files were deleted whole and
@@ -547,7 +555,7 @@ Each needs a task and an owner. Nothing here is fixed by W1.
    `planKeyForPrice` would likewise resolve an orphaned price id to a `plans`
    row this wave deleted.
 
-8. **`scripts/smoke.ts` still seeds a `pro_plus` subscription at EIGHT sites,
+8. **[CLOSED 2026-09-07 — all eight `pro_plus` sites are now comments; no seed writes survive]** **`scripts/smoke.ts` still seeds a `pro_plus` subscription at EIGHT sites,
    and no typecheck can see it.** `tsc -p tsconfig.scripts.json` exits 0 with
    all eight present, because `setPlan`'s plan argument is a plain `string`,
    not `PlanKey` — so V393 left this entirely to a runtime FK violation
@@ -590,7 +598,7 @@ Each needs a task and an owner. Nothing here is fixed by W1.
    the `dashboard.player_profiles` pair — V393 grants profiles on Community, so
    the unpassed sibling renders 200 where the old check demanded a 404.
 
-9. **The Stripe seed's `event_pass_l` description tells buyers the entrant cap
+9. **[CLOSED 2026-09-07 — `plan-copy-truth.test.ts` passes; the collect failure is repaired]** **The Stripe seed's `event_pass_l` description tells buyers the entrant cap
    is "unlimited". It is 512.** `capClaimFaults` catches it, and the fault is
    live right now: `plan-copy-truth.test.ts` fails with `event_pass_l: does not
    quote its live entrant cap (512)`.
@@ -606,7 +614,7 @@ Each needs a task and an owner. Nothing here is fixed by W1.
    collect is repaired; the copy fault it exposes is real and belongs to the
    copy sweep (`stripe-plans.json` product descriptions + `capClaimFaults`).
 
-10. **V393 SOLD FIVE FEATURES ON THE EVENT PASS THAT A PASS HOLDER CANNOT
+10. **[CLOSED 2026-09-07 — both guards pass; the competition ids were threaded and the guard file was NOT edited, so it was fixed rather than weakened]** **V393 SOLD FIVE FEATURES ON THE EVENT PASS THAT A PASS HOLDER CANNOT
     REACH.** This is a live product defect, not a test to retire, and it is the
     highest-value thing the T7/T9 sweep found. `pass-scoping-guard.test.ts`
     ("Event Pass grants are resolved with a competition in scope") is RED with
