@@ -1223,10 +1223,17 @@ export const ORG_PRICE_SWEEP_ALERT_CAP = 10;
  * cover a group that went stale before the alert existed, or one whose alert
  * was missed. This is what covers those.
  *
- * The invariant is load-bearing rather than cosmetic: $9 on pro and $19 on
- * pro_plus is what stops "Pro + riders" undercutting Pro Plus. A rider stuck on
- * the pro price under a pro_plus plan IS that arbitrage; stuck the other way it
- * is an overcharge. Either way it is a money fault, not a tidiness one.
+ * The invariant is load-bearing rather than cosmetic, though not for the reason
+ * originally written here. That reason was a TIER ARBITRAGE — $9 on pro against
+ * $19 on pro_plus, with a rider stuck on the cheaper price letting "Pro +
+ * riders" undercut Pro Plus. Entitlements v18 (V393) retired `pro_plus`, so
+ * there is one purchasable plan and one rider rate, and no arbitrage is
+ * reachable.
+ *
+ * What remains is the plainer fault and it is still money: a rider left on a
+ * price its plan no longer charges bills that rate for as long as nobody looks,
+ * over- or under-charging by whatever the two prices differ by. Nothing
+ * schedules a retry, so "for as long as nobody looks" is the operative clause.
  *
  * IT DOES NOT RE-PRICE, and that is the deliberate half of #332's third
  * question. A sweep that repaired would be a BULK billing mutation — every
