@@ -18,7 +18,14 @@ import { expect, type APIRequestContext, type Browser, type BrowserContext, type
 import { apiJson, screenshotAtWidths, setDivisionConfigSql } from "./helpers";
 import { consentedAnonymousState } from "./scorepad-a11y-kit";
 
-export const OUT = join(import.meta.dirname, "..", "__screens__", "spectator-w1", "walkthrough");
+// `.` not `..`: this module lives at `e2e/` root, NOT in `e2e/walkthrough/`.
+// It was moved out of that directory because Playwright's WALKTHROUGH pattern
+// matches every file in it, so a helper there is classified as a test file and
+// breaks collection for the whole project. The move silently relocated THIS
+// path too — screenshots landed in `apps/web/__screens__/` beside `e2e/`,
+// leaving the committed goldens in `e2e/__screens__/` untouched and a green
+// run writing 48 files nobody would have diffed.
+export const OUT = join(import.meta.dirname, "__screens__", "spectator-w1", "walkthrough");
 
 // ---------------------------------------------------------------------------
 // generic event helpers (adapted from w0-spectator-capture.spec.ts)
