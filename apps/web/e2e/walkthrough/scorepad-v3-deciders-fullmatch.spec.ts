@@ -371,12 +371,34 @@ test("R3.5 — cricket: undo a super-over ball, then undo the result the super o
   expect(decided.status, "the super over never decided the match").toBe("decided");
 
   await page.reload();
-  // The pad is GONE by design once decided (F15/F16) — the console is the only
-  // surface left, and it is the one that must still offer the way back.
-  await expect(pad(page)).toHaveCount(0);
+  // OWNER RULING 17 (2026-09-06) SUPERSEDES F15/F16 HERE. This used to assert
+  // `pad(page)` had count 0 — "the pad is GONE by design once decided". The
+  // ruling is that "a decided fixture keeps the pad's post-phase panel when
+  // the sport module declares post-phase actions, so band-2 player lines can
+  // be entered after the result", implemented as `shouldMountPad`
+  // (`fixture-console.tsx`) — mount when not decided, OR when `padSpec.panels`
+  // contains a `phase: "post"` panel. Cricket declares one, so the pad stays.
+  //
+  // This assertion was NOT updated when the ruling shipped, and nothing caught
+  // it: the same branch had put a non-spec helper inside `e2e/walkthrough/`,
+  // which made the whole walkthrough project fail to COLLECT, so this file had
+  // not run at all. The count is therefore pinned to what the ruling requires,
+  // not flipped from 0 to 1 to go green.
+  await expect(pad(page), "ruling 17: cricket declares a post-phase panel, so the pad stays").toHaveCount(1);
+  // …and it must be the POST-phase pad, not the live one. Without this, the
+  // assertion above would pass just as happily if a decided fixture kept its
+  // full scoring surface — which is the actual defect worth fearing here, and
+  // the one a bare `toHaveCount(1)` cannot see.
+  await expect(
+    tile(page, "run1"),
+    "a decided fixture is still offering live scoring tiles — the pad mounted, but not in its post phase",
+  ).toHaveCount(0);
   const undoLast = page.getByRole("button", { name: /Void last entry/ });
   await expect(undoLast, "a decided super over left no way to undo the result").toBeVisible();
-  await shot(page, "undo", "decided-by-super-over-pad-gone");
+  // Renamed with the assertion above: the pad is no longer gone (ruling 17),
+  // and a screenshot called "pad-gone" would be a second thing telling the
+  // next reader the superseded story.
+  await shot(page, "undo", "decided-by-super-over-post-phase-pad");
 
   await undoLast.click();
   await expect.poll(async () => (await fixtureState(page.request, fx.fixtureId)).status, { timeout: 20_000 })
