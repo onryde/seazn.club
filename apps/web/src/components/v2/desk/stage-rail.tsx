@@ -59,7 +59,13 @@
 // first). `sheetId` is derived from `stage.id` (already unique, already a
 // prop) rather than `useId()`, for the same reason — no hook this component
 // does not already have.
+import { useEffect, useRef } from "react";
 import { useMsg } from "@/components/i18n/dict-provider";
+// Reused, never restated: `modal.tsx` already owns this repo's definition of
+// "what is focusable" and its pure Tab-wrap rule. The phone sheet cribbed that
+// component's bottom-sheet CSS; review finding M4 was that it cribbed ONLY the
+// CSS, so the behaviour comes from the same place the look did.
+import { FOCUSABLE_SELECTOR, nextTrapFocus } from "@/components/modal";
 
 interface StageRow {
   id: string;
@@ -152,6 +158,51 @@ export function StageRail({
   // beyond `useMsg`.
   const sheetId = `stage-rail-sheet-${stage.id}`;
 
+  // Review finding M4. Below `md` this sheet BEHAVES modally — a
+  // `fixed inset-0` backdrop swallows every tap on the page behind it — but it
+  // declared none of a modal's contract: no Escape, no focus move, no trap, no
+  // restore. A keyboard organiser at 320 pressed "Stage tools" and left focus
+  // on a trigger now buried under a 40% scrim, then tabbed into a page they
+  // could neither see nor click. The behaviour comes from `modal.tsx` (the
+  // same place the CSS did) rather than a second copy of the rule.
+  //
+  // Gated on matchMedia, NOT on a class: at >= 768 the sheet is an ordinary
+  // inline block and there is no backdrop, so trapping focus inside it would
+  // be wrong — and `open` can genuinely still be true there, when a phone
+  // sheet is left open across a resize. These hooks sit ABOVE the `!canEdit`
+  // early return because hooks cannot be called conditionally.
+  const sheetRef = useRef<HTMLDivElement>(null);
+  const toggleRef = useRef(onToggleOpen);
+  useEffect(() => {
+    toggleRef.current = onToggleOpen;
+  });
+  useEffect(() => {
+    if (!open || typeof window === "undefined") return;
+    if (!window.matchMedia("(max-width: 767.98px)").matches) return;
+    const sheet = sheetRef.current;
+    const restore = document.activeElement as HTMLElement | null;
+    const focusables = (): HTMLElement[] =>
+      Array.from(sheet?.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR) ?? []);
+    if (!sheet?.contains(document.activeElement)) focusables()[0]?.focus();
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        toggleRef.current(stage.id);
+        return;
+      }
+      if (e.key !== "Tab") return;
+      const target = nextTrapFocus(focusables(), document.activeElement as HTMLElement | null, e.shiftKey);
+      if (target) {
+        e.preventDefault();
+        target.focus();
+      }
+    };
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("keydown", onKey);
+      restore?.focus?.();
+    };
+  }, [open, stage.id]);
+
   // A non-editing viewer's answer to "what do they see at 320 / at 1280?"
   // (owner sign-off question, Task 10): NOTHING new, at either width — this
   // guard runs BEFORE the trigger/backdrop/sheet JSX below, so `!canEdit`
@@ -199,6 +250,7 @@ export function StageRail({
         <div
           className="fixed inset-0 z-30 bg-slate-900/40 md:hidden"
           onClick={() => onToggleOpen(stage.id)}
+          data-testid="stage-rail-backdrop"
           aria-hidden="true"
         />
       )}
@@ -211,10 +263,9 @@ export function StageRail({
           block REGARDLESS of `open`, so a phone sheet left open across a
           resize renders as an ordinary full-width stacked block ("Option
           B" below — no more grid column to speak of), never a leftover
-          overlay. `tabIndex`/`role`/`aria-label` are UNCONDITIONAL
-          (AGENTS.md #23) — tabindex cannot be varied by media query, and
-          this region owes a keyboard stop whenever it actually IS the
-          scrollable one (below `md`, open).
+          overlay. `tabIndex`/`role`/`aria-label` are gated on `open` — see
+          the m10 note on the attributes themselves for why that satisfies
+          AGENTS.md #23 rather than breaking it.
 
           Fix round 1 (controller measurement, owner sign-off session):
           `md:py-4`, not `md:p-0`. `.card` (globals.css) carries no padding
@@ -265,11 +316,30 @@ export function StageRail({
           much-wider content box; D3 was retracted (flex slack in a 248px
           row, not a misalignment) and is not chased further here. */}
       <div
+        ref={sheetRef}
         id={sheetId}
         data-testid="stage-rail-sheet"
-        role="region"
-        aria-label={msg("schedule.stageTools")}
-        tabIndex={0}
+        // Every one of these varies by the `open` PROP — JS state, not a media
+        // query — so AGENTS.md #23's "tabindex cannot be varied by media query"
+        // is satisfied: at a given width the answer never changes with the
+        // viewport, only with what the organiser did.
+        //
+        // Review finding m10. They used to be UNCONDITIONAL, on the reading
+        // that #23 owes a scrollable region a tab stop "whether it is open or
+        // not". But this div is scrollable in exactly ONE state: open, below
+        // `md` (`overflow-y-auto` lives in the open branch of the className
+        // below; the closed branch is `hidden`, and `md:` resets to
+        // `md:overflow-visible` at every width above). Unconditional therefore
+        // bought nothing where the rule aims and cost real usability where it
+        // does not: on a division with five stages, a DESKTOP keyboard user
+        // walked five extra tab stops through non-scrolling blocks, and a
+        // screen reader's landmark list carried five entries all named "Stage
+        // tools". Gated on `open`, the tab stop exists precisely while the box
+        // it belongs to can scroll.
+        role={open ? "dialog" : undefined}
+        aria-modal={open || undefined}
+        aria-label={open ? msg("schedule.stageTools") : undefined}
+        tabIndex={open ? 0 : undefined}
         className={[
           "min-w-0",
           open

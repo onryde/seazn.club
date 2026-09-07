@@ -16,7 +16,7 @@ const fixture = (stageId: string, o: Partial<{ id: string; status: string; fixtu
   court_id: null, court_name: null, status: "scheduled", outcome: null, ...o,
 });
 const baseProps = {
-  divisionId: "d1", divisionSeq: 5, competitionId: "c1", orgSlug: "org", compSlug: "comp", divSlug: "div",
+  divisionId: "d1", competitionId: "c1", orgSlug: "org", compSlug: "comp", divSlug: "div",
   stages: [stage()], fixtures: [fixture("s1")], entrantNames: { e1: "Alpha", e2: "Bravo" },
   canEdit: true, tz: "UTC", orgTz: "UTC", canExport: false,
   viewerPlan: "community" as const,

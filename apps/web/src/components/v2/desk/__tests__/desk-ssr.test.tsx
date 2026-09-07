@@ -8,6 +8,7 @@ import { DivisionLedger } from "@/components/v2/desk/division-ledger";
 import { resolvePhase, resolveAttention, ATTENTION_SEVERITY, type Attention, type PhaseInput } from "@/lib/division-phase";
 import { statusLine } from "@/lib/division-status-line";
 import { competitionPhase, type CompetitionDesk, type DeskDivision } from "@/server/usecases/competition-desk";
+import type { DeskInPlayFixture } from "@/server/usecases/competition-desk";
 
 // `division_id` is test-scaffolding only — production's own DeskDivision has
 // no such field (competition-desk.ts's minor fix: it was dead there, since
@@ -23,16 +24,39 @@ const div = (o: Partial<TestDivision> = {}): TestDivision => ({
 // Task 6: none of this file's cases exercise `in_play_fixtures`/`up_next`
 // (they predate both fields) — every desk() / deskOf() fixture below gets
 // the honest empty/null default, same as a competition with nothing live.
+// Review finding m8: `competition-desk.ts` documents (and
+// `competition-desk.test.ts` pins) `in_play === in_play_fixtures.length`
+// ALWAYS. These fixtures used to pair a non-zero `in_play` with an empty
+// `in_play_fixtures`, which no consumer in these two files reads today but
+// which is an impossible desk — the next consumer that trusts the documented
+// invariant would be exercised against a shape the producer cannot emit. The
+// list is now derived FROM the count, so the two can never drift apart here.
+const inPlayFixtures = (n: number, divisionId = "d1"): DeskInPlayFixture[] =>
+  Array.from({ length: n }, (_, i) => ({
+    id: `ip${i + 1}`,
+    division_id: divisionId,
+    division_name: "Premier Division",
+    home: "Alpha",
+    away: "Bravo",
+    fixture_no: i + 1,
+    event_count: 0,
+    headline: null,
+    started_at: null,
+  }));
+
 const desk = (d: TestDivision, inPlay = 0, now = "2026-09-05T09:00:00Z"): CompetitionDesk => {
   const { division_id, ...rest } = d;
-  return { in_play: inPlay, in_play_fixtures: [], up_next: null, divisions: new Map([[division_id, rest]]), now };
+  return {
+    in_play: inPlay, in_play_fixtures: inPlayFixtures(inPlay, division_id), up_next: null,
+    divisions: new Map([[division_id, rest]]), now,
+  };
 };
 /** competitionPhase's own ladder needs more than one division to prove the
  *  "earliest across divisions" and "match_day beats a dated fixture
  *  elsewhere" steps — `desk()` above only ever seeds one. */
 const deskOf = (divisions: TestDivision[], inPlay = 0, now = "2026-09-05T09:00:00Z"): CompetitionDesk => ({
   in_play: inPlay,
-  in_play_fixtures: [],
+  in_play_fixtures: inPlayFixtures(inPlay, divisions[0]?.division_id ?? "d1"),
   up_next: null,
   divisions: new Map(divisions.map(({ division_id, ...rest }) => [division_id, rest])), now,
 });

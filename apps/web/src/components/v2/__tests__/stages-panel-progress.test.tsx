@@ -94,7 +94,6 @@ const MIXED_FIXTURES = [
 
 const PROPS = {
   divisionId: "d1",
-  divisionSeq: 5,
   competitionId: "c1",
   orgSlug: "org",
   compSlug: "comp",
@@ -155,6 +154,12 @@ describe("stage card body — fixtures progress (owner-approved 'Option A')", ()
   // this test never touched) is what the tests around it still cover.
   it("stage-progress-bar no longer renders at all — the bar was removed, not merely emptied", () => {
     const html = renderToStaticMarkup(<StagesPanel {...PROPS} />);
+    // Review m5: the positive half. Without it a StagesPanel that rendered
+    // NOTHING satisfies the absence below, and this test passes on a panel
+    // that has stopped working entirely.
+    expect(html, "the panel rendered no progress line at all — nothing was measured").toContain(
+      'data-testid="stage-progress-counts"',
+    );
     expect(html).not.toContain('data-testid="stage-progress-bar"');
   });
 
@@ -188,6 +193,11 @@ describe("stage card body — fixtures progress (owner-approved 'Option A')", ()
 
   it("does not render a 'Next: ...' line — the brief's own explicit exclusion", () => {
     const html = renderToStaticMarkup(<StagesPanel {...PROPS} />);
+    // Review m5: the positive half — the destination control the brief kept
+    // IS on the page, so an empty render cannot satisfy the exclusion below.
+    expect(html, "the panel rendered no stage controls at all — nothing was measured").toContain(
+      'data-testid="stage-view-fixtures"',
+    );
     expect(html.toLowerCase()).not.toMatch(/\bnext:/);
   });
 });

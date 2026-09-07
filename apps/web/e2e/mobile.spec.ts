@@ -1079,6 +1079,31 @@ test("competition desk: the tool row is a phone composition below md, not the de
     expect(tabletSet, "no disclosure at this width").not.toMatch(/More/);
   }
   await expectNoHorizontalScroll(page);
+
+  // Review finding m4 — the 640-767 band, which NO width project covers.
+  // The design doc flagged it explicitly when Task 8 unified this row's
+  // breakpoint from `sm:` (640) onto `md:` (768): the run-sheet row got its
+  // own `{ width: 700 }` leg, the masthead tool row did not. The failure that
+  // leaves open is a real one and completely silent — put `DeskToolsMore`
+  // back on `sm:hidden` while the labelled tools stay `max-md:hidden` and a
+  // small tablet gets NEITHER set, a competition masthead with no tools at
+  // all, with every gate in this matrix green.
+  //
+  // Reloaded rather than merely resized: on a phone project the fold above is
+  // left OPEN, and an open fold puts its own copies of Settings/Slideshow
+  // back into the row's control set — which would make the "not inline"
+  // assertion below read the wrong state.
+  await page.setViewportSize({ width: 700, height: 900 });
+  await page.reload({ waitUntil: "load" });
+  await dismissCookieBanner(page);
+  const bandSet = (await rowControlSet()).join(" | ");
+  console.log("desk tool row at 700px:", bandSet);
+  await expect(more, "at 700 (below md) the phone disclosure must be present").toBeVisible();
+  await expect(schedule, "at 700 the primary must still be there").toBeVisible();
+  expect(bandSet, "at 700 the row keeps a labelled More control").toMatch(/More/);
+  expect(bandSet, "at 700 the inline Settings tile must not be back — that is the desktop row").not.toMatch(/Settings/);
+  expect(bandSet, "at 700 the inline Slideshow tile must not be back").not.toMatch(/Slideshow/);
+  await expectNoHorizontalScroll(page);
 });
 
 // R3.5 review round 1 (2026-08-26, finding 4) — split out of "console
@@ -3213,6 +3238,14 @@ test("P6 task B fix round 3 (Critical 1): regenerating a stage that already has 
   await page.goto(await divisionPath(page.request, regenDivisionId, "?tab=fixtures"), { waitUntil: "load" });
 
   const groupCard = page.locator("section.card", { hasText: "Groups" }).first();
+  // Competition desk W3: below `md` the stage's edit controls fold into a
+  // bottom sheet behind `stage-rail-trigger`; at >= 768 the rail is inline and
+  // the trigger itself is `md:hidden`. OPEN the fold rather than weakening the
+  // assertion below — the control still exists and must still be reachable.
+  // Gate the open on the TOGGLE being visible, never on a width literal:
+  // clicking a hidden control throws.
+  const railTrigger = groupCard.getByTestId("stage-rail-trigger");
+  if (await railTrigger.isVisible()) await railTrigger.click();
   const generateBtn = groupCard.getByRole("button", { name: "Generate fixtures" });
   await expect(generateBtn).toBeVisible();
 

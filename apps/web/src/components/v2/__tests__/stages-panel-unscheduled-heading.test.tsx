@@ -106,7 +106,6 @@ const FIXTURES = [
 
 const PROPS = {
   divisionId: "d1",
-  divisionSeq: 5,
   competitionId: "c1",
   orgSlug: "org",
   compSlug: "comp",

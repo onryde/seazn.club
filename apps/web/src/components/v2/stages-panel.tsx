@@ -45,20 +45,14 @@ import { courtDisplayName, type BoardConfig } from "@/components/v2/board/types"
 // picker, which had no production render site once the run sheet replaced
 // that row, and went with it (court placement lives on the schedule board —
 // fix round 1, IMPORTANT 6).
-import { flattenCourts, resolveCourtNames } from "@/components/v2/shared/court-multi-picker";
+import { resolveCourtNames } from "@/components/v2/shared/court-multi-picker";
 // P9: the BOARD-side Venue (no `hours`/`exceptions`) — this panel shows
 // courts, it never reads a calendar. See court-multi-picker.tsx.
 import type { Venue } from "@/components/v2/shared/court-multi-picker";
 import { zonedTimeInput } from "@/lib/zoned-datetime";
-// D2 capacity pre-check — client-safe leaf only, see capacity-input.ts's
-// header for why this file must never reach @seazn/engine/scheduling (the
-// solver barrel) or capacity-guard.ts (server-only). P10 §4/Task 6: the
-// verdict itself no longer comes from a local capacityInputForFixtures +
-// assessCapacity call — see useCapacityReport's own header for why — this
-// file only builds the WIRE BODY the hook sends, which still needs
-// dayKeyInTz/ymdAddDays/zonedTimeToUtc for the window math.
-import { dayKeyInTz, ymdAddDays, zonedTimeToUtc } from "@seazn/engine/scheduling/tz";
-import { type CapacityRequest, type UseCapacityReportResult } from "@/lib/use-capacity-report";
+// W3 item 6 — one definition of "this swiss stage is between rounds, not
+// drifted", shared with the page's tests rather than restated in each.
+import { swissAwaitingPairing } from "@/lib/roster-drift-eligibility";
 // Competition Desk W2 (Task 4) — the run sheet's grouping builder + the
 // component that renders it. `isBye` (and, inside `buildRunSheet` itself,
 // `BRACKET_STAGE_KINDS`) are the SINGLE authorities now (R2a/R10,
@@ -323,118 +317,16 @@ export function boardSlotOptionsFor(
   }
 }
 
-/** What `capacityRequestForStage` hands to `useCapacityReportsByStage` for
- *  one stage — `null` when there is nothing to even ask the server yet
- *  (settings not loaded, or incomplete). A thin alias of the hook's own
- *  general-purpose `CapacityRequest`, kept under this panel's established
- *  name for its own test file and callers. */
-export type CapacityStageRequest = CapacityRequest;
-
-/**
- * D2 capacity pre-check gate (review fix, Finding 2): the Auto-schedule
- * button's `disabled` condition and the "blocked reason" line below it now
- * SHARE this one predicate — they used to inline the same expression twice,
- * which is how they could have silently drifted. FAILS OPEN: a check that
- * could not complete (`.failed` — useCapacityReport's own doc comment) never
- * blocks, even when the last report it ever received said "impossible".
- * Before this fix, a real fetch failure (500, network drop, a 4xx schema
- * rejection) was swallowed identically to a superseded abort, so `.report`
- * kept returning that OLD verdict forever — an actionable control frozen
- * with no visible reason. Solve is hard-blocked ONLY on a genuinely FRESH
- * `impossible` verdict (owner ruling); a stale guess, whether merely
- * catching up (`.stale`) or actually broken (`.failed`), is not one — a
- * catching-up check still gates on the last KNOWN verdict (unchanged), but
- * a broken one must not.
- */
-export function capacityGateBlocks(cap: UseCapacityReportResult | undefined): boolean {
-  if (cap?.failed) return false;
-  return cap?.report?.verdict === "impossible";
-}
-
-/**
- * D2 capacity pre-check for ONE stage (P10 §4/Task 6): pure, exported so it
- * is unit-testable with hand-built inputs directly, matching the ORIGINAL
- * capacityForStage's own reasoning — `scheduleSettings.config` arrives via
- * a `useEffect` fetch (`renderToStaticMarkup` never fires effects — see
- * component-ui-i18n memory), so a render-level test cannot exercise this.
- *
- * No longer computes a verdict itself — see useCapacityReport's own header
- * for why the report can only come from the server now. This function's
- * whole job is the MAPPING: which fixtures belong to this stage, and the
- * wire-shaped config to send alongside them. `null` covers both "nothing
- * to assess" (no bounded window — the actual skip is useCapacityReport's
- * own job, see `hasAssessableWindow`) and "settings haven't loaded yet" —
- * the button must stay enabled either way, matching "client hint, server
- * authority": an unloaded precheck must never read as a false
- * "impossible".
- *
- * `venues` (review fix, finding 5): defaulted to `[]` so every pre-existing
- * caller/test keeps compiling unchanged. Real callers should always pass the
- * panel's own `venues` prop — see the courts fallback below.
- */
-export function capacityRequestForStage(
-  stageId: string,
-  fixtures: readonly Pick<FixtureRow, "id" | "stage_id" | "status" | "home_entrant_id" | "away_entrant_id" | "pool_id">[],
-  config: DivisionScheduleSettings["config"] | undefined,
-  orgTz: string,
-  venues: readonly Venue[] = [],
-): CapacityStageRequest {
-  if (config === undefined || config.matchMinutes === undefined || config.gapMinutes === undefined) return null;
-  const movable = fixtures.filter((f) => f.stage_id === stageId && f.status === "scheduled");
-  // `id` is free (FixtureRow above already carries it) and lets an `id`-kind
-  // fixture_on_date/fixture_on_weekday selector resolve into a forcedDemand
-  // floor server-side too. `extKey`/`winnerTo` (CapacityFixtureInput's other
-  // two RuleFixture-identity fields, capacity-input.ts) are NOT available
-  // here — `FixtureRow` never fetches `ext_key`/`winner_to_fixture`, and
-  // neither is even in the public API schema — so a `terminal`/`ext_key`
-  // selector cannot resolve and stays undercounted on this card. Same
-  // "client hint, server authority" split as demandCap.
-  return {
-    fixtures: movable.map((f) => ({
-      home: f.home_entrant_id ?? undefined,
-      away: f.away_entrant_id ?? undefined,
-      poolId: f.pool_id ?? undefined,
-      id: f.id,
-    })),
-    config: {
-      // Review fix (finding 5): `ScheduleConfig.courts` defaults to `[]` and
-      // is never nullish, so `?? ["Court 1"]` never actually fired in the
-      // real app — a division that never configured courts sent `courts:
-      // []` -> supply 0 -> verdict "impossible" -> Auto-schedule wrongly
-      // disabled, even though the server build falls back to every
-      // non-archived org court. Same effectiveCourts fallback
-      // settings-panel.tsx's capacityRequestFromDraft already uses, reused
-      // rather than a second implementation of "which courts count as
-      // unconstrained" — and the `["Court 1"]` literal is gone: it was also
-      // a guaranteed 400 against CapacityPrecheckInput's `z.uuid()` schema
-      // had it ever reached the wire.
-      courts:
-        config.courts && config.courts.length > 0
-          ? config.courts
-          : flattenCourts(venues).map((c) => c.id),
-      sessionWindows: (config.sessionWindows ?? []).map((w) => ({ from: Date.parse(w.from), to: Date.parse(w.to) })),
-      blackouts: (config.blackouts ?? []).map((b) => ({
-        ...(b.court !== undefined ? { court: b.court } : {}),
-        from: Date.parse(b.from),
-        to: Date.parse(b.to),
-      })),
-      matchMinutes: config.matchMinutes,
-      gapMinutes: config.gapMinutes,
-      perEntrantMinRest: config.perEntrantMinRest ?? 0,
-      window:
-        config.startAt || config.endAt
-          ? {
-              from: config.startAt
-                ? zonedTimeToUtc(dayKeyInTz(Date.parse(config.startAt), orgTz), "00:00", orgTz)
-                : -Infinity,
-              to: config.endAt
-                ? zonedTimeToUtc(ymdAddDays(dayKeyInTz(Date.parse(config.endAt), orgTz), 1), "00:00", orgTz)
-                : Infinity,
-            }
-          : undefined,
-    },
-  };
-}
+// Review finding m3: `CapacityStageRequest`, `capacityGateBlocks` and
+// `capacityRequestForStage` lived here, and were DELETED with this wave.
+// They were the Auto-schedule CTA's D2 capacity pre-check; Task 2 moved
+// scheduling off the fixtures page entirely (owner ruling), which left all
+// three exported, commented as if live, and called by nothing but their own
+// test file. `stages-panel-capacity.test.tsx` went with them — it existed
+// solely for these two functions, so keeping it would have been ~80 lines of
+// tests guarding code no screen can reach. `git log -- apps/web/src/components/v2/stages-panel.tsx`
+// has the full implementations if the pre-check is ever wanted on the
+// Schedule page, where the control now lives.
 
 
 export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divSlug, stages, fixtures, entrantNames, venues = [], rosterDrift = {}, canEdit, tz, orgTz, canExport, phase, matchMinutes = DEFAULT_MATCH_MINUTES, viewerPlan }: Props) {
@@ -921,12 +813,32 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
                     there is nothing actionable left to show. */}
                 {canEdit && stage.status !== "complete" && hasDrift && drift && (
                   <div
-                    className="border-b border-dashed border-amber-200 bg-amber-50 px-4 py-3"
+                    className={
+                      swissAwaitingPairing(stage.kind, drift)
+                        ? "border-b border-dashed border-slate-200 bg-slate-50 px-4 py-3"
+                        : "border-b border-dashed border-amber-200 bg-amber-50 px-4 py-3"
+                    }
                     data-testid="roster-drift-banner"
-                    data-roster-drift-state={drift.ghosts.length > 0 ? "ghosts" : "unplaced"}
+                    data-roster-drift-state={
+                      drift.ghosts.length > 0
+                        ? "ghosts"
+                        : swissAwaitingPairing(stage.kind, drift)
+                          ? "swiss-awaiting-pairing"
+                          : "unplaced"
+                    }
                   >
-                    <p className="text-xs font-semibold text-amber-900">
-                      {msg("progression.rosterDrift.heading")}
+                    <p
+                      className={
+                        swissAwaitingPairing(stage.kind, drift)
+                          ? "text-xs font-semibold text-slate-800"
+                          : "text-xs font-semibold text-amber-900"
+                      }
+                    >
+                      {msg(
+                        swissAwaitingPairing(stage.kind, drift)
+                          ? "progression.rosterDrift.swissHeading"
+                          : "progression.rosterDrift.heading",
+                      )}
                     </p>
                     {drift.ghosts.length > 0 && (
                       <p className="mt-1 text-xs text-amber-800">
@@ -935,22 +847,49 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
                       </p>
                     )}
                     {drift.unplaced.length > 0 && (
-                      <p className="mt-1 text-xs text-amber-800">
-                        {msg("progression.rosterDrift.unplacedLabel")}{" "}
+                      <p
+                        className={
+                          swissAwaitingPairing(stage.kind, drift)
+                            ? "mt-1 text-xs text-slate-700"
+                            : "mt-1 text-xs text-amber-800"
+                        }
+                      >
+                        {msg(
+                          swissAwaitingPairing(stage.kind, drift)
+                            ? "progression.rosterDrift.swissLabel"
+                            : "progression.rosterDrift.unplacedLabel",
+                        )}{" "}
                         {drift.unplaced.map((e) => e.display_name).join(", ")}
                       </p>
                     )}
-                    <button
-                      type="button"
-                      data-testid="roster-drift-rebuild"
-                      disabled={busy !== null}
-                      onClick={() => void rebuildStage(stage.id)}
-                      className="btn btn-danger mt-2 min-h-11 px-3 py-1.5 text-xs"
-                    >
-                      {busy === stage.id
-                        ? msg("progression.rosterDrift.rebuilding")
-                        : msg("progression.rosterDrift.rebuildCta")}
-                    </button>
+                    {swissAwaitingPairing(stage.kind, drift) && (
+                      <p className="mt-1 text-xs text-slate-600">{msg("progression.rosterDrift.swissNote")}</p>
+                    )}
+                    {/* No destructive remedy for a swiss stage that is merely
+                        between rounds. "Rebuild fixtures" deletes the round
+                        and regenerates it — which, on an odd roster, sits
+                        somebody out again (so the banner returns) while
+                        discarding the officials, team sheets and device links
+                        attached to those fixtures. Offering that as the fix
+                        for a stage where nothing is wrong is the defect W3
+                        item 6 was chartered to remove; `Generate` for the
+                        next round is the real call to action, and it already
+                        renders in the rail above. Ghosts still get the
+                        button: a withdrawn entrant named on a live fixture IS
+                        drift, on swiss exactly as anywhere else. */}
+                    {!swissAwaitingPairing(stage.kind, drift) && (
+                      <button
+                        type="button"
+                        data-testid="roster-drift-rebuild"
+                        disabled={busy !== null}
+                        onClick={() => void rebuildStage(stage.id)}
+                        className="btn btn-danger mt-2 min-h-11 px-3 py-1.5 text-xs"
+                      >
+                        {busy === stage.id
+                          ? msg("progression.rosterDrift.rebuilding")
+                          : msg("progression.rosterDrift.rebuildCta")}
+                      </button>
+                    )}
                   </div>
                 )}
 
@@ -1063,6 +1002,17 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
                     data-testid="stage-view-fixtures"
                     onClick={() => {
                       setStageFilter(stage.id);
+                      // ...and clear the TYPE filter in the same gesture.
+                      // The label counts `stageFixtures.length`, which is the
+                      // whole stage — but `keep()` in run-sheet.tsx ANDs the
+                      // stage dimension with the type ladder, and on match day
+                      // `filter` initialises to "today". A knockout stage
+                      // playing tomorrow therefore advertised "View 12
+                      // fixtures" and delivered "No fixtures match Today":
+                      // the control promised 12 and showed 0. Sending the
+                      // organiser somewhere empty is worse than not offering
+                      // the trip, so the control makes its own label true.
+                      setFilter("all");
                       requestAnimationFrame(() => {
                         document
                           .querySelector('[data-testid="run-sheet"]')

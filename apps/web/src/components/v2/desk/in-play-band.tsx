@@ -112,7 +112,21 @@ function InPlayCard({ fx, dict }: { fx: DeskInPlayFixture; dict: Dict }): React.
       </p>
       <p className="truncate text-sm font-medium">{fx.home ?? "—"}</p>
       <p className="truncate text-sm font-medium">{fx.away ?? "—"}</p>
-      {fx.event_count === 0 ? (
+      {/* Review finding M1. This slot used to print `fx.event_count` in the
+          LED numerals — the ledger's DEPTH, not the score. It only ever rises
+          and never resets between games, so a badminton match 37 rallies in
+          showed a large green `37` where its scoreline belongs, and a
+          `score`-variant fixture at 2-1 showed `3`: wrong, and plausible
+          enough to be believed. The number now comes from
+          `match_states.summary->>'headline'` — the same field
+          `listFixtureHeadlines` reads, which the design doc named as this
+          slot's source.
+
+          NO SCORE covers both "nothing recorded yet" (`event_count === 0`,
+          the original predicate, kept) and "recording, but this engine
+          publishes no headline". Printing nothing beats printing a number
+          that is not the score. */}
+      {fx.event_count === 0 || !fx.headline ? (
         <p className="mt-1 font-mono text-xs font-bold uppercase tracking-wide text-red-400">
           {t(dict, "desk.band.noScore")}
         </p>
@@ -121,10 +135,10 @@ function InPlayCard({ fx, dict }: { fx: DeskInPlayFixture; dict: Dict }): React.
         // with the repo's own `--sport-led` token (globals.css), never a
         // hand-picked green.
         <p
-          className="mt-1 font-mono text-2xl font-bold tabular-nums"
+          className="mt-1 truncate font-mono text-2xl font-bold tabular-nums"
           style={{ color: "var(--sport-led)" }}
         >
-          {fx.event_count}
+          {fx.headline}
         </p>
       )}
     </div>

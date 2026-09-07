@@ -69,6 +69,13 @@ export interface DeskInPlayFixture {
   away: string | null;
   fixture_no: number;
   event_count: number;
+  /** The live scoreline for the band's scoreboard slot. NULL means "no score
+   *  to show" — the band prints NO SCORE rather than substituting a number
+   *  that is not one. Review finding M1: this slot used to render
+   *  `event_count`, the ledger depth, which rises monotonically and never
+   *  resets between games, so a badminton match 37 rallies in showed a large
+   *  green `37` where its score belongs. */
+  headline: string | null;
   started_at: string | null;
 }
 
@@ -150,6 +157,10 @@ type FixtureRaw = {
   home: string | null;
   away: string | null;
   event_count: number;
+  /** The live scoreline, from `match_states.summary->>'headline'` — the same
+   *  field `listFixtureHeadlines` reads. NULL when the fixture has no match
+   *  state yet, or its engine publishes no headline. */
+  headline: string | null;
   /** When core.start was recorded — the fixture's REAL kick-off. `fixtures`
    *  has no such column (V214), and `scheduled_at` is a plan, not an event. */
   started_at: string | Date | null;
@@ -258,10 +269,21 @@ export async function getCompetitionDesk(
       ? await tx<FixtureRaw[]>`
           select f.id, f.division_id, f.status, f.scheduled_at, f.fixture_no, f.stage_id,
                  h.display_name as home, a.display_name as away,
-                 coalesce(e.n, 0)::int as event_count, e.started_at
+                 coalesce(e.n, 0)::int as event_count, e.started_at,
+                 ms.summary->>'headline' as headline
             from fixtures f
             left join entrants h on h.id = f.home_entrant_id
             left join entrants a on a.id = f.away_entrant_id
+            -- Review finding M1: the band's scoreboard slot was rendering
+            -- event_count -- a ledger depth that only ever rises and never
+            -- resets between games -- as though it were the score. The design
+            -- doc (W1) named listFixtureHeadlines as the source; that function
+            -- is division-scoped and this query is competition-wide, so the
+            -- same match_states.summary headline field it reads is joined
+            -- here instead of paying a second, per-division round trip.
+            -- NOTE: no backticks in this comment. It lives inside a JS tagged
+            -- template literal, where a backtick ENDS the SQL string.
+            left join match_states ms on ms.fixture_id = f.id
             left join (
               -- BLOCKER (review 7, round J). Two things were wrong here, and
               -- together they made BOTH live-recording attentions unreachable
@@ -434,6 +456,7 @@ export async function getCompetitionDesk(
         away: x.away,
         fixture_no: x.fixture_no,
         event_count: x.event_count,
+        headline: x.headline,
         started_at: x.started_at === null ? null : new Date(x.started_at).toISOString(),
       });
     }

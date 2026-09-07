@@ -320,7 +320,23 @@ export function RunSheet({
                   `top-14`; `hasDayBlock`'s own comment above has the full
                   reasoning. Both literal class strings are written out in
                   full so Tailwind's JIT scanner can see them — a
-                  template-built class name would not compile. */}
+                  template-built class name would not compile.
+
+                  Review finding m2, OPEN and deliberately not fixed here.
+                  The 30 in that 86 is the day header's height ASSUMED at one
+                  line (`px-4 py-1.5 text-xs border-y`). `DayHeading` prints
+                  date + venue + count, so at 320 with a real venue name it
+                  can wrap to two lines (~46px) and this header would then
+                  overlap the day header it is supposed to stack under, by
+                  the difference. Not reproduced: it needs a division holding
+                  BOTH a day block and a bracket block, with a placed venue,
+                  driven at 320 — the two live sticky tests
+                  (run-sheet.spec.ts) both seed a bracket-only division, so
+                  the mixed case has never been scrolled at any width. The
+                  real repair is to stop assuming the height (measure it into
+                  a CSS custom property and use `calc()`), which is more than
+                  a cosmetic Minor is worth mid-branch. Recorded rather than
+                  guessed at. */}
               <header
                 className={`sticky ${hasDayBlock ? "top-[86px]" : "top-14"} z-10 border-b border-slate-100 bg-slate-50 px-4 py-2 ${i === 0 ? "rounded-t-2xl" : ""}`}
               >
@@ -536,7 +552,26 @@ export function RunSheet({
         // its own; verified live (scroll sweep, both coarse and fine
         // granularity) that the sticky handoffs below still land cleanly
         // after this change — see the task report.
-        <div className="space-y-6">{renderedBlocks}</div>
+        // Review finding m1 — the arbitrary variant is the whole fix for the
+        // one case the `overflow-hidden` removal above got wrong. That
+        // argument said the last rendered thing is "always either a `<li>`
+        // row (no background of its own) or a bracket `<section>` that
+        // already carries its own `rounded-2xl`". There is a third: the NOW
+        // rule is a `<li>` WITH a background (`bg-lime-50`, square corners,
+        // run-sheet.tsx's `NowRule`), and `filteredNowIndex` returns
+        // `rows.length` — i.e. the rule renders LAST inside its `<ul>` —
+        // whenever no fixture in the day is still ahead. End of a match day
+        // on a fully-scheduled division (nothing unscheduled, nothing
+        // settled-untimed, so the day block really is the last block) put a
+        // lime bar squarely over the card's own rounded bottom corners.
+        //
+        // Scoped, deliberately, with `>section:last-child`: a NOW rule that
+        // ends a day block with LATER days still to come must stay square,
+        // or a rounded lime bar appears in the middle of the sheet. That is
+        // why this is a CSS descendant rule on the last block rather than a
+        // `last:` utility on `NowRule` itself, which cannot tell the two
+        // apart.
+        <div className="space-y-6 [&>section:last-child>ul>li:last-child]:rounded-b-2xl">{renderedBlocks}</div>
       ) : (
         // Fix round 1, CRITICAL 1: every block existed but the ACTIVE FILTER
         // reduced every one of them to zero rows — the same vacuous shape

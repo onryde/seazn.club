@@ -12,6 +12,7 @@ const fixture = (o: Partial<DeskInPlayFixture> = {}): DeskInPlayFixture => ({
   away: "Summit CC",
   fixture_no: 1,
   event_count: 0,
+  headline: null,
   started_at: "2026-09-06T09:00:00Z",
   ...o,
 });
@@ -35,20 +36,47 @@ describe("InPlayBand", () => {
   // The point of this test is the COUNT, not mere presence: a band that
   // prints "NO SCORE" on every card (or never removes it) would also
   // satisfy a bare `toContain`.
-  it("prints NO SCORE for an in-play fixture with an empty ledger, and the score otherwise", () => {
+  it("prints NO SCORE for an in-play fixture with an empty ledger, and the SCORELINE otherwise", () => {
     const fixtureWithZeroEvents = fixture({ id: "f1", event_count: 0 });
-    const fixtureWithEvents = fixture({ id: "f2", event_count: 3, home: "Harbour CC", away: "Dockside AC" });
+    // 21-18 is a scoreline; 3 is a ledger depth. The distinction is the whole
+    // point of review finding M1 — this test was previously titled "and the
+    // score otherwise" while asserting `toContain(">3<")` on the `event_count`
+    // it had just handed the component, so it named the defect it was
+    // protecting (AGENTS.md failure class 4). The expected value must be
+    // something an event count could never produce, or the test cannot
+    // witness the regression it exists for.
+    const fixtureWithScore = fixture({
+      id: "f2",
+      event_count: 37,
+      headline: "21-18",
+      home: "Harbour CC",
+      away: "Dockside AC",
+    });
     const html = renderToStaticMarkup(
       <InPlayBand
         competitionId="c1"
-        initial={{ inPlay: [fixtureWithZeroEvents, fixtureWithEvents], upNext: null }}
+        initial={{ inPlay: [fixtureWithZeroEvents, fixtureWithScore], upNext: null }}
         dict={en}
       />,
     );
     expect(html).toContain(en["desk.band.noScore"]);
     expect(html.split(en["desk.band.noScore"] as string).length - 1).toBe(1);
-    // The scored fixture prints its event count instead of NO SCORE.
-    expect(html).toContain(">3<");
+    expect(html, "the scoreline is not rendered").toContain(">21-18<");
+    // And the ledger depth is NOWHERE on the card. Without this the component
+    // could render both and still satisfy the assertion above.
+    expect(html, "the ledger event count leaked into the card").not.toContain(">37<");
+  });
+
+  it("prints NO SCORE when the fixture is being recorded but its engine publishes no headline", () => {
+    // `event_count > 0` alone used to be enough to light the scoreboard slot,
+    // which is how a non-score got in there. A recording fixture with no
+    // headline must print NO SCORE rather than substitute anything.
+    const recordingNoHeadline = fixture({ id: "f1", event_count: 12, headline: null });
+    const html = renderToStaticMarkup(
+      <InPlayBand competitionId="c1" initial={{ inPlay: [recordingNoHeadline], upNext: null }} dict={en} />,
+    );
+    expect(html).toContain(en["desk.band.noScore"]);
+    expect(html, "the ledger event count was printed as a score").not.toContain(">12<");
   });
 
   it("renders one card per in-play fixture, across divisions", () => {

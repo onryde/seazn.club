@@ -104,14 +104,26 @@ describe("run sheet — internal block spacing", () => {
     // `space-y-6` div elsewhere on the page (`stages-panel.tsx` uses the
     // same class for its own card list).
     const afterCaption = html.slice(html.indexOf('data-testid="tz-caption"'));
-    expect(afterCaption).toMatch(/^[^<]*<\/p><\/div><div class="space-y-6">/);
+    // `space-y-6[ "]`, not `space-y-6">`: review m1 added a second utility to
+    // this same wrapper (an arbitrary variant rounding the LAST block's last
+    // row, so the NOW rule cannot square off the card's bottom corners). The
+    // anchor that matters — this wrapper sits immediately after the caption's
+    // own closing tags — is unchanged; only "space-y-6 is the whole class
+    // attribute" is relaxed, since that was never the property under test.
+    expect(afterCaption).toMatch(/^[^<]*<\/p><\/div><div class="space-y-6[ "]/);
   });
 
   it("a single-block sheet still renders inside the space-y-6 wrapper (harmless with one child)", () => {
     const oneBlockFixtures = [fx(1, "s1", { scheduled_at: DAY_ISO })];
     const html = sheetHtml(oneBlockFixtures);
     const afterCaption = html.slice(html.indexOf('data-testid="tz-caption"'));
-    expect(afterCaption).toMatch(/^[^<]*<\/p><\/div><div class="space-y-6">/);
+    // `space-y-6[ "]`, not `space-y-6">`: review m1 added a second utility to
+    // this same wrapper (an arbitrary variant rounding the LAST block's last
+    // row, so the NOW rule cannot square off the card's bottom corners). The
+    // anchor that matters — this wrapper sits immediately after the caption's
+    // own closing tags — is unchanged; only "space-y-6 is the whole class
+    // attribute" is relaxed, since that was never the property under test.
+    expect(afterCaption).toMatch(/^[^<]*<\/p><\/div><div class="space-y-6[ "]/);
   });
 
   it("the empty-filter state does NOT get the space-y-6 treatment — that div is a single centered message, not a block list", () => {

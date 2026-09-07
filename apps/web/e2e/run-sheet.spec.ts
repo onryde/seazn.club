@@ -1686,18 +1686,33 @@ test("Task 10: the stage rail folds into a bottom sheet at 320, one stage's shee
     "stage 2's control became visible when only stage 1's trigger was tapped — nothing opened it",
   ).not.toBeVisible();
 
-  // ---- open stage 2's sheet: it becomes visible, and stage 1's CLOSES —
-  // the actual contract (`openRailFor`, a shared single value, same shape
-  // as the pre-existing `addingTo`), proven directly rather than assumed.
+  // ---- close it the way a PERSON has to. An open sheet mounts a
+  // `fixed inset-0 z-30` backdrop that covers the whole viewport, the other
+  // stage's trigger included, so "tap trigger 2 while sheet 1 is open" is an
+  // interaction the UI does not permit: the tap lands on the backdrop. The
+  // first version of this test drove it anyway and hung until the 60s budget
+  // died (CI run 34142421718, `locator.click: Test timeout of 60000ms
+  // exceeded`) — a real finding about the fold, surfacing as a timeout.
+  // The backdrop's own onClick calls the same `onToggleOpen(stage.id)`, so
+  // dismissing is the documented way out.
+  const backdrop = page.getByTestId("stage-rail-backdrop");
+  await expect(backdrop, "an open sheet rendered no backdrop — nothing can dismiss it").toBeVisible();
+  await backdrop.click({ position: { x: 10, y: 10 } }); // review m6: the CENTRE can sit under the sheet
+  await expect(generate1, "tapping the backdrop did not close stage 1's sheet").not.toBeVisible();
+  await expect(backdrop, "the backdrop outlived the sheet it belongs to").toHaveCount(0);
+
+  // ---- now stage 2 opens, and stage 1 stays shut.
   await trigger2.click();
   await expect(generate2, "stage 2's control did not become visible after tapping ITS OWN trigger").toBeVisible();
   await expect(
     generate1,
-    "stage 1's control is still visible after stage 2's sheet opened — openRailFor did not close it",
+    "stage 1's control came back when stage 2's sheet opened — only one sheet may be open",
   ).not.toBeVisible();
 
-  // ---- and stage 1 re-opens correctly, closing stage 2 again — proves the
-  // shared value toggles both ways, not just "second stage always wins".
+  // ---- and back again, so this proves a toggle rather than "the second
+  // stage always wins".
+  await page.getByTestId("stage-rail-backdrop").click({ position: { x: 10, y: 10 } });
+  await expect(generate2, "tapping the backdrop did not close stage 2's sheet").not.toBeVisible();
   await trigger1.click();
   await expect(generate1, "stage 1's control did not become visible after re-tapping its trigger").toBeVisible();
   await expect(generate2, "stage 2's control is still visible after stage 1's sheet re-opened").not.toBeVisible();
@@ -1787,10 +1802,11 @@ test("Task 10: at md and up the Stage tools trigger is absent and the rail is vi
 });
 
 // W3 Task 10 — axe, scoped to the open sheet at 320: a new scrolling region
-// owes an unconditional tabindex/role/name or axe reds SERIOUS on
-// `scrollable-region-focusable` (AGENTS.md #23) — cannot be media-query
-// gated, so this has to be checked with the sheet actually open, the one
-// state where it can actually overflow.
+// owes a tabindex/role/name or axe reds SERIOUS on
+// `scrollable-region-focusable` (AGENTS.md #23). They cannot be gated on a
+// MEDIA QUERY; they are gated on the `open` prop (review m10), which is JS
+// state — so open at 320 is exactly the state that has to be checked, and it
+// is also the only state in which this box can overflow at all.
 test("Task 10: axe — the open stage-tools sheet at 320 has no serious/critical violations", async ({
   page,
   request,
@@ -2013,15 +2029,30 @@ test("Task 10 controller round: the stage card body carries the fixtures-progres
   expect(countsText, "played clause missing").toContain(UI_EN["schedule.progress.played.one"]);
   expect(countsText, "to-schedule clause missing").toMatch(/to schedule/);
 
+  // NOT a "taller than 234px" assertion. 234px was the height the RETIRED
+  // 280px rail forced on this body while the body itself had nothing in it —
+  // it is the defect's number, not a floor to clear. Option B made the card
+  // content-sized, so a body that is now SHORTER than 234px is the fix
+  // working, and asserting `> 234` made this test fail on a correct build
+  // (CI run 34142421718: `stage-sheet height 129px`). The void itself is
+  // measured properly by this file's own "Option B: the card's content height
+  // closes the void" test, which compares card height against stacked content
+  // height — that is where the layout claim belongs.
+  //
+  // What THIS test uniquely owns is the browser-only half: the counts line is
+  // really PAINTED, not merely present in the markup. `stages-panel-progress
+  // .test.tsx` runs in vitest's node environment and cannot tell those apart.
+  const countsBox = await counts.boundingBox();
+  console.log("Task 10 controller round — stage-progress-counts box:", countsBox);
+  expect(countsBox, "progress counts line has no box — present in markup but not painted").not.toBeNull();
+  expect(countsBox!.height, "progress counts line painted with zero height").toBeGreaterThan(0);
+  expect(countsBox!.width, "progress counts line painted with zero width").toBeGreaterThan(0);
   const sheetBox = await sheet.boundingBox();
-  console.log("Task 10 controller round — stage-sheet box (was 814x234 of nothing pre-fix):", sheetBox);
   expect(sheetBox, "stage-sheet has no box").not.toBeNull();
-  // Not a pixel-exact height assertion (content-driven, and will move again
-  // the moment any sibling copy changes) — the fact worth pinning is that
-  // the body's bounding box is no longer bounded purely by the empty
-  // 234px the controller measured pre-fix; the counts line alone still
-  // adds real height even with the bar gone.
-  expect(sheetBox!.height, `stage-sheet height ${sheetBox!.height}px looks like the old empty body`).toBeGreaterThan(234);
+  expect(
+    countsBox!.height,
+    "the counts line is taller than the body that contains it — the body is not sized by its content",
+  ).toBeLessThanOrEqual(sheetBox!.height);
 
   await expectNoHorizontalScroll(page);
 });
@@ -2212,4 +2243,228 @@ test("court-tags trigger opens a modal containing the editor body, and clears th
   await expect(dialog, "modal did not close").toBeHidden();
 
   await expectNoHorizontalScroll(page);
+});
+
+// ---------------------------------------------------------------------------
+// Review finding M2 — "View N fixtures" must make its own label true.
+//
+// The control set ONLY the stage filter. The type filter is separate state and
+// initialises to "today" on a match-day division, and run-sheet.tsx's keep()
+// ANDs the two. So a stage whose fixtures are NOT today advertised "View 3
+// fixtures", the organiser tapped it, and the sheet said "No fixtures match
+// Today": promised 3, delivered 0. Sending someone somewhere empty is worse
+// than not offering the trip.
+//
+// This is invisible to the unit suite twice over: apps/web vitest is
+// environment:"node" so the onClick never runs, and the existing
+// run-sheet-stage-filter.test.tsx drives <RunSheet> directly with an explicit
+// `filter` prop, which is precisely the coupling the defect lives in.
+// ---------------------------------------------------------------------------
+test("Review M2: tapping 'View N fixtures' shows N fixtures, even when the sheet opened on Today", async ({
+  page,
+  request,
+}) => {
+  const { divisionId, fixtureIds } = await seedRunSheetDivision(request);
+  expect(fixtureIds.length, "seed produced no fixtures — setup failed, not the filter").toBeGreaterThanOrEqual(2);
+
+  // The division must be STARTED, or `resolvePhase`'s rung 1
+  // (`divisionStatus === "setup"` ⇒ setting_up, division-phase.ts) short-
+  // circuits every later rung and the sheet opens on "All" — which is
+  // exactly how the first run of this test failed, at its own guard below
+  // rather than by passing vacuously.
+  const started = await apiJson(request, `/api/v1/divisions/${divisionId}/start`, "POST");
+  expect(started.status, `division start failed: ${JSON.stringify(started.error)}`).toBeLessThan(300);
+
+  // One fixture TODAY: that is what puts the division in the match_day phase,
+  // which is what makes the type filter initialise to "today". Every other
+  // fixture is pushed to a date that filter excludes, so an un-cleared type
+  // filter can only ever show fewer than the label promises.
+  const today = new Date();
+  today.setUTCHours(12, 0, 0, 0);
+  await setFixtureScheduledAtSql(fixtureIds[0]!, today.toISOString());
+  const future = new Date(today.getTime() + 7 * 24 * 60 * 60 * 1000);
+  for (const id of fixtureIds.slice(1)) await setFixtureScheduledAtSql(id, future.toISOString());
+
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.goto(await divisionPath(request, divisionId, "?tab=fixtures"));
+  await dismissCookieBanner(page);
+
+  // The sheet really did open filtered — without this the test proves nothing,
+  // because a sheet that opened on "All" would pass the assertions below in
+  // both the fixed and the broken build.
+  const todayChip = page.getByTestId("run-sheet-filter").locator('[data-filter="today"]');
+  await expect(todayChip, "no Today chip — this division is not in the match-day phase").toBeVisible();
+  await expect(
+    todayChip,
+    "the run sheet did not open on Today, so this test cannot witness the defect",
+  ).toHaveAttribute("aria-pressed", "true");
+
+  const viewFixtures = page.getByTestId("stage-view-fixtures").first();
+  await expect(viewFixtures, "the View N fixtures control did not render").toBeVisible();
+  const label = (await viewFixtures.textContent()) ?? "";
+  const promised = Number(/(\d+)/.exec(label)?.[1]);
+  expect(promised, `could not read a count out of "${label}"`).toBeGreaterThanOrEqual(2);
+
+  await viewFixtures.click();
+
+  // The label's promise, kept: N rows, and not the empty state.
+  const runSheet = page.getByTestId("run-sheet");
+  await expect(
+    runSheet.getByTestId("run-sheet-empty"),
+    `"View ${promised} fixtures" landed the organiser on an empty run sheet`,
+  ).toHaveCount(0);
+  await expect
+    .poll(
+      async () => runSheet.locator("li[data-fixture-no]").count(),
+      { message: `the sheet shows fewer rows than the "${label.trim()}" control promised` },
+    )
+    .toBe(promised);
+});
+
+// ---------------------------------------------------------------------------
+// Review finding M4 — the phone Stage-tools sheet behaves modally (a
+// full-viewport backdrop eats every tap behind it) but declared none of a
+// modal's contract. No unit test can see any of this: apps/web vitest is
+// environment:"node", so focus() is vacuous there (a class-scan test stays
+// green while the real behaviour is absent), and the existing axe scan is
+// scoped with .include('[data-testid="stage-rail-sheet"]'), which excludes the
+// backdrop and focus behaviour entirely.
+// ---------------------------------------------------------------------------
+test("Review M4: the phone Stage tools sheet closes on Escape and gives focus back to its trigger", async ({
+  page,
+  request,
+}) => {
+  const { divisionId, fixtureIds } = await seedRunSheetDivision(request);
+  expect(fixtureIds.length, "seed produced no fixtures — setup failed, not the sheet").toBeGreaterThanOrEqual(1);
+
+  await page.setViewportSize({ width: 320, height: 900 });
+  await page.goto(await divisionPath(request, divisionId, "?tab=fixtures"));
+  await dismissCookieBanner(page);
+
+  const trigger = page.getByTestId("stage-rail-trigger").first();
+  const sheet = page.getByTestId("stage-rail-sheet").first();
+  const generate = page.getByTestId("stage-generate").first();
+  await expect(trigger, "no Stage tools trigger at 320").toBeVisible();
+
+  await trigger.click();
+  await expect(generate, "the sheet did not open").toBeVisible();
+
+  // Open, it is a dialog and it says so — a screen reader is told the rest of
+  // the page is inert, which is what the backdrop already enforces visually.
+  await expect(sheet, "the open sheet is not exposed as a dialog").toHaveAttribute("role", "dialog");
+  await expect(sheet, "the open sheet does not claim modality").toHaveAttribute("aria-modal", "true");
+
+  // Focus moved INTO the sheet on open. Without this the organiser is left on
+  // a trigger buried under the scrim, and Tab walks the page behind it.
+  await expect
+    .poll(
+      async () => sheet.evaluate((el) => el.contains(document.activeElement)),
+      { message: "focus stayed outside the sheet when it opened" },
+    )
+    .toBe(true);
+
+  await page.keyboard.press("Escape");
+  await expect(generate, "Escape did not close the sheet").not.toBeVisible();
+  await expect(
+    page.getByTestId("stage-rail-backdrop"),
+    "the backdrop outlived the sheet Escape closed",
+  ).toHaveCount(0);
+
+  // ...and focus came back to where it started, not to <body>.
+  await expect
+    .poll(
+      async () => trigger.evaluate((el) => el === document.activeElement),
+      { message: "focus was not restored to the Stage tools trigger after Escape" },
+    )
+    .toBe(true);
+
+  // Closed, it sheds all of it (review m10): no dialog role, no landmark name
+  // and NO tab stop — the box only scrolls while it is open, so a closed one
+  // is dead weight in the tab order and a duplicate entry in the landmark
+  // list, once per stage. The positive half of this pair is above: open, all
+  // three are present.
+  await expect(sheet, "the closed sheet still claims a role").not.toHaveAttribute("role", /.*/);
+  await expect(sheet, "the closed sheet is still a tab stop").not.toHaveAttribute("tabindex", /.*/);
+  await expect(sheet, "the closed sheet is still a named landmark").not.toHaveAttribute("aria-label", /.*/);
+});
+
+// ---------------------------------------------------------------------------
+// Review finding m1 — the NOW rule at the very bottom of the sheet.
+//
+// C-1 removed the card's `overflow-hidden` (sticky headers need the PAGE as
+// their containing block) on the argument that nothing square-cornered can
+// ever sit at the card's bottom edge. `NowRule` is the exception:
+// `bg-lime-50`, square corners, and `filteredNowIndex` places it LAST in the
+// `<ul>` once no fixture in the day is still ahead.
+//
+// No unit test can see this — apps/web vitest is environment:"node", and a
+// class-scan would pass on a class that never wins the cascade — so the
+// assertion below is on COMPUTED style, from a browser, in the state that
+// produces it: every fixture of the division timed EARLIER TODAY, which
+// leaves one day block, no unscheduled pile, no settled-untimed pile, and
+// therefore a day block that is the last thing in the card.
+// ---------------------------------------------------------------------------
+test("Review m1: the NOW rule does not square off the run sheet's bottom corners", async ({ page, request }) => {
+  // Same zone trick the day-grouping case uses: real "now" is local midday
+  // there, so "an hour ago" is unambiguously the SAME local day and this
+  // case behaves identically at every hour of the real clock.
+  const tz = middayZoneFor(Date.now());
+  const { divisionId, fixtureIds } = await seedRunSheetDivision(request, { tz });
+  expect(fixtureIds.length, "seed produced no fixtures — setup failed, not the corners").toBeGreaterThanOrEqual(2);
+
+  // EVERY fixture in the past, today. Nothing ahead ⇒ the NOW rule renders
+  // after the last row rather than between two of them; nothing untimed ⇒
+  // no unscheduled block follows the day block.
+  const past = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+  for (const id of fixtureIds) await setFixtureScheduledAtSql(id, past);
+
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.goto(await divisionPath(request, divisionId, "?tab=fixtures"));
+  await dismissCookieBanner(page);
+
+  const sheet = page.getByTestId("run-sheet");
+  const now = sheet.getByTestId("run-sheet-now");
+  await expect(now, "no NOW rule rendered — nothing was measured").toHaveCount(1);
+
+  // The state this test exists for, asserted rather than assumed: the rule
+  // really is the last element in the sheet. Without this the radius check
+  // below passes vacuously on a mid-sheet rule that was never supposed to
+  // be rounded.
+  const isLast = await now.evaluate((el) => {
+    const card = el.closest('[data-testid="run-sheet"]');
+    const all = card ? Array.from(card.querySelectorAll("li, section")) : [];
+    return all.length > 0 && all[all.length - 1] === el;
+  });
+  expect(isLast, "the NOW rule is not the last element in the sheet — this case did not set up").toBe(true);
+
+  const radii = await now.evaluate((el) => {
+    const cs = getComputedStyle(el);
+    const card = el.closest('[data-testid="run-sheet"]') as HTMLElement;
+    return {
+      ruleLeft: cs.borderBottomLeftRadius,
+      ruleRight: cs.borderBottomRightRadius,
+      cardLeft: getComputedStyle(card).borderBottomLeftRadius,
+      cardRight: getComputedStyle(card).borderBottomRightRadius,
+    };
+  });
+  console.log("m1 NOW-rule corner radii:", JSON.stringify(radii));
+  // Held to the CARD's own radius, read live — not to a literal, so changing
+  // `.card` moves this expectation with it instead of leaving it pinning
+  // yesterday's 16px.
+  expect(parseFloat(radii.cardLeft), "the run-sheet card has no rounded corners to protect").toBeGreaterThan(0);
+  expect(radii.ruleLeft, "the NOW rule squares off the card's bottom-left corner").toBe(radii.cardLeft);
+  expect(radii.ruleRight, "the NOW rule squares off the card's bottom-right corner").toBe(radii.cardRight);
+
+  // The DIFFERENTIAL half, and the reason this is a CSS descendant rule
+  // rather than a `last:` utility on `NowRule` itself: a row in the middle of
+  // the same list must stay SQUARE. Without this the assertions above would
+  // also pass on a blanket "round every row", which would put a rounded step
+  // into every day block on the sheet — and it is what proves the radius
+  // above comes from this rule rather than from something ambient.
+  const midRadius = await sheet
+    .locator("li[data-fixture-no]")
+    .first()
+    .evaluate((el) => getComputedStyle(el).borderBottomLeftRadius);
+  console.log("m1 mid-list row radius:", midRadius);
+  expect(parseFloat(midRadius), "a mid-list row must stay square — the rounding is scoped to the last block").toBe(0);
 });

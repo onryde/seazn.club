@@ -11,6 +11,7 @@ import { leadingAttention,
   type Attention, type DivisionPhase, type DrawDoor, type PhaseFixture, type PhaseInput, type PhaseStage,
 } from "@/lib/division-phase";
 import { competitionPhase, type CompetitionDesk, type DeskDivision } from "@/server/usecases/competition-desk";
+import type { DeskInPlayFixture } from "@/server/usecases/competition-desk";
 
 vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: vi.fn(), push: vi.fn() }) }));
 vi.mock("@/components/ui/confirm-provider", () => ({ useConfirm: () => vi.fn(async () => false) }));
@@ -282,6 +283,26 @@ describe("enumeration 2: the five renderings agree on every reachable phase/atte
     }
   });
 
+// Review finding m8: `competition-desk.ts` documents (and
+// `competition-desk.test.ts` pins) `in_play === in_play_fixtures.length`
+// ALWAYS. These fixtures used to pair a non-zero `in_play` with an empty
+// `in_play_fixtures`, which no consumer in these two files reads today but
+// which is an impossible desk — the next consumer that trusts the documented
+// invariant would be exercised against a shape the producer cannot emit. The
+// list is now derived FROM the count, so the two can never drift apart here.
+const inPlayFixtures = (n: number, divisionId = "d1"): DeskInPlayFixture[] =>
+  Array.from({ length: n }, (_, i) => ({
+    id: `ip${i + 1}`,
+    division_id: divisionId,
+    division_name: "Premier Division",
+    home: "Alpha",
+    away: "Bravo",
+    fixture_no: i + 1,
+    event_count: 0,
+    headline: null,
+    started_at: null,
+  }));
+
   describe.each(resolved.map((r) => [r.shape.why, r] as const))("%s", (_why, r) => {
     const red = r.attention.find((a) => ATTENTION_SEVERITY[a.kind] === "red");
 
@@ -289,10 +310,12 @@ describe("enumeration 2: the five renderings agree on every reachable phase/atte
       const rowPill = renderToStaticMarkup(
         <PhasePill dict={en} phase={r.phase} inPlay={r.desk.in_play} attention={r.attention} />,
       );
-      // Task 6: this file's cases don't exercise in_play_fixtures/up_next —
-      // the honest empty/null default, same as nothing live right now.
+      // Task 6: this file's cases don't exercise the band itself — but the
+      // fixture list is DERIVED from the count (see `inPlayFixtures`), never
+      // an empty array beside a non-zero one (review m8).
       const desk: CompetitionDesk = {
-        in_play: r.desk.in_play, in_play_fixtures: [], up_next: null, divisions: new Map([["d1", r.desk]]), now: NOW,
+        in_play: r.desk.in_play, in_play_fixtures: inPlayFixtures(r.desk.in_play), up_next: null,
+        divisions: new Map([["d1", r.desk]]), now: NOW,
       };
       const cp = competitionPhase(desk);
       // Review 7, Minor 9: this rendered the masthead with `attention={[]}`,
@@ -348,7 +371,7 @@ describe("enumeration 2: the five renderings agree on every reachable phase/atte
     it("4: a red attention always has a Needs-you row of the same kind, with an action", () => {
       const items = needsYouItems(
         en,
-        { in_play: r.desk.in_play, in_play_fixtures: [], up_next: null, divisions: new Map([["d1", r.desk]]), now: NOW },
+        { in_play: r.desk.in_play, in_play_fixtures: inPlayFixtures(r.desk.in_play), up_next: null, divisions: new Map([["d1", r.desk]]), now: NOW },
         [{ id: "d1", name: "Premier", slug: "premier" }], "org", "comp", "en",
       );
       // registrations_waiting is aggregated to ONE competition-level row, so

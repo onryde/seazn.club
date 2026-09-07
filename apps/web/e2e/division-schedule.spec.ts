@@ -118,7 +118,15 @@ test("the run sheet groups fixtures by day and prints them in the competition tz
   await expect(page.getByText("To schedule in this stage")).toBeVisible();
   // ...and the sheet's own division-wide heading is still there, distinct.
   await expect(page.getByText("Not yet scheduled")).toBeVisible();
-  await expect(page.getByRole("button", { name: "Auto-schedule remaining" })).toBeVisible();
+  // Owner ruling (competition desk W3, "remove auto-schedule from the fixtures
+  // page"): the "Auto-schedule remaining" CTA no longer exists here at all —
+  // scheduling lives on the Schedule page, which owns the full
+  // `AutoScheduleMode` flow. What this page keeps is the FACT (the unscheduled
+  // count) wrapped in a link to where the action moved, so the assertion is
+  // repointed at that rather than deleted.
+  const unscheduledLink = page.getByTestId("stage-unscheduled-count");
+  await expect(unscheduledLink).toBeVisible();
+  await expect(unscheduledLink.locator("..")).toHaveAttribute("href", /\/schedule$/);
 
   // Inline "Set time" (item 5, re-aimed — fix round 1) -> notice grows an
   // Undo that restores the slot. The ONLY unscheduled fixture is the one
@@ -221,5 +229,10 @@ test("a division with an END date and no start date still renders its fixtures t
   // The page rendered its own content — not a boundary, not a blank shell.
   // Copy changed by max-effort review finding 11 (see the note above).
   await expect(page.getByText("To schedule in this stage")).toBeVisible();
-  await expect(page.getByRole("button", { name: "Auto-schedule remaining" })).toBeVisible();
+  // Same owner ruling as the first test in this file: the CTA is gone from the
+  // fixtures page; the unscheduled count and its link to /schedule are what
+  // remain true and worth pinning.
+  const unscheduledLink = page.getByTestId("stage-unscheduled-count");
+  await expect(unscheduledLink).toBeVisible();
+  await expect(unscheduledLink.locator("..")).toHaveAttribute("href", /\/schedule$/);
 });
