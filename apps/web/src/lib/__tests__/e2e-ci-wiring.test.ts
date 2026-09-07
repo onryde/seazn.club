@@ -226,6 +226,14 @@ const WALKTHROUGH_SPECS: string[] = [
   // render and 403, and the date-order refusal (case #18).
   "settings-competition-gates.spec.ts",
 
+  // Settings W6 — the division `settings`/`constraints` schedule tabs
+  // (`/o/{org}/c/{comp}/d/{div}/schedule`), zero e2e coverage before this
+  // wave: matchMinutes/gapMinutes/perEntrantMinRest and startAt/endAt
+  // drive+persist, the `tz` omit-means-untouched contract, the constraints
+  // tab's noBackToBack toggle, and case #17 (the play-hours client-side
+  // guard that blocks the PUT before it ever fires).
+  "settings-schedule-drive.spec.ts",
+
   // The directory — the organiser's own records, driven through the screens
   // that own them: club import caps, the import paywall preview, officials'
   // roles against the upgrade gate, player identity and its duplicate queue,
