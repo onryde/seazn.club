@@ -105,6 +105,32 @@ export const APPROVED_PLANS_PASS: ApprovedParagraph[] = [
  *   two-bullet size ladder and its "sized with the pass" credit sentence.
  *   Same sources, same figures.
  *
+ * RE-PINNED AGAIN 2026-09-07 — four surfaces, two per article, owner-approved
+ * before the swap (entitlements v18 W3).
+ *
+ *   TWO were a FALSE PAID CLAIM, and they are the reason this is not a tidy-up.
+ *   Both articles sold the pass as carrying "advanced formats including double
+ *   elimination". Read against `plan_entitlements`: `formats.double_elim` is
+ *   bool_value TRUE on community and has been since V393 — the format is free,
+ *   and the pass was being credited with something every organiser already
+ *   has. Replaced with "americano and ladders", which is `formats.advanced`,
+ *   FALSE on community and true on both pass rungs, so the sentence now names
+ *   what the money actually buys. This is the identical defect W3 fixed in
+ *   `pricing.pass.f3`; the dictionaries have a guard for it
+ *   (`localePaidOverclaimFaults`) and `content/help/**` did not, because that
+ *   guard scans the four locale files and this tree has none. A matrix-backed
+ *   guard now covers the billing articles too — see help-copy-truth.test.ts,
+ *   "billing help does not sell a format community already grants".
+ *
+ *   TWO were the retired rung letter on a SELLING surface: plans.md's Event
+ *   Pass bullet and event-pass.md's price-table header both read "Event Pass M
+ *   — $11.99". The owner took the L rung off sale on 2026-09-05 and the suffix
+ *   off every selling surface with it; `/pricing` and `/upgrade` were done in
+ *   that wave and in `ad73763ca`, and the help tree still named a size that
+ *   appears nowhere a reader can reach it. Figures re-read against
+ *   `plan_entitlements` and unchanged (event_pass: 128 entrants, 10 divisions,
+ *   4% against community's 5%).
+ *
  * Nothing about a pass a customer already HOLDS changed: the "Event Pass M
  * active" marker, the receipt, and the pass's own grants are untouched, and the
  * rung is dormant in `plan_entitlements` rather than deleted.
@@ -114,7 +140,7 @@ export const APPROVED_EVENT_PASS_INVENTORY: string[] = [
   "74fb0e84d81cf750",
   "7b44a9ceda103f3a",
   "0f6590c1fd0b70ad",
-  "3d07b637e0fcd0db",
+  "7d2b6bb67fc828d2",
   "9906a08781bbfbc3",
   "c8038bc5e87faf21",
   "d0495741c4edb2b5",
@@ -130,7 +156,7 @@ export const APPROVED_EVENT_PASS_INVENTORY: string[] = [
   "1b57ba96756ac962",
   "fcd1bcb9b15230dd",
   "9cdc77f8e4467e2c",
-  "4ebceeab83e6a5bf",
+  "f8a66461cb7b0535",
   "adede976a539f9fa",
   "219ccaea5a3878ae",
   "6feca5577c55cf2b",
@@ -203,8 +229,8 @@ export const APPROVED_PLANS_INVENTORY: string[] = [
   "1e9a3c2b4d3941d7",
   "e5ac72886c19cefc",
   "8ee85036b1264382",
-  "249e25ab9983cc87",
-  "cde930076d641e8b",
+  "c315a996027a99ea",
+  "9a4d219f071cc7fb",
   "f7c7084faf0e9fab",
   "d5a0df90dfe35a6c",
   "01b10f014d674ec5",

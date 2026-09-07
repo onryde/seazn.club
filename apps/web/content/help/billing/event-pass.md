@@ -8,7 +8,7 @@ An **Event Pass** upgrades one competition while it runs — bigger limits, the 
 
 ## The pass
 
-| | Event Pass M — $11.99 |
+| | Event Pass — $11.99 |
 |---|---|
 | Entrants per division | 128 |
 | Divisions in the competition | Up to 10 |
@@ -29,7 +29,7 @@ For the competition it covers, and every division inside it:
 - **Public player cards** — entrants get their public profile pages.
 - **Sponsor tiers and paid packages** — Title / Gold / Silver / Partner grouping, per-competition placement, and selling priced sponsorship by card ([sponsors](/help/sharing/sponsors)).
 - **The realtime scoreboard and slideshow** — live scores turn over on the venue screen *and* on the competition's public spectator pages, so your audience follows along live, not just your own noticeboard.
-- **Advanced formats**, including double elimination.
+- **Advanced formats** — americano and ladders.
 - **AI credits**, once, added to your organisation's wallet when the pass is bought — **+25 AI credits**, to spend on scheduling the event ([AI Schedule](/help/scheduling/ai-scheduling)).
 
 ## What it doesn't include

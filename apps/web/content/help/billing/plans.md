@@ -12,9 +12,9 @@ Run real competitions, free: 3 active competitions, 4 divisions in each, 3 team 
 
 One-time upgrade for a single competition, while that competition is still running, without a subscription:
 
-- **Event Pass M — $11.99**: **128 entrants** per division, up to **10 divisions**.
+- **Event Pass — $11.99**: **128 entrants** per division, up to **10 divisions**.
 
-It carries branded exports, public player cards, sponsor tiers and paid packages, the realtime scoreboard and slideshow, advanced formats including double elimination, and a **4% platform fee** on entry fees instead of 5%, plus a one-time top-up of **+25 AI credits**. A competition holds one pass and keeps it.
+It carries branded exports, public player cards, sponsor tiers and paid packages, the realtime scoreboard and slideshow, advanced formats — americano and ladders — and a **4% platform fee** on entry fees instead of 5%, plus a one-time top-up of **+25 AI credits**. A competition holds one pass and keeps it.
 
 Your brand **colour** is not part of it — that stays Pro. A passed competition doesn't count against your active-competition limit. Right for the tournament that comes round rarely enough that a running subscription doesn't pay for itself. It doesn't carry to the next edition. [What the pass buys, in full](/help/billing/event-pass).
 
