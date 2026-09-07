@@ -73,7 +73,6 @@ function panelHtml(venues: Venue[] | undefined): string {
   return renderToStaticMarkup(
     <StagesPanel
       divisionId="d1"
-      divisionSeq={5}
       competitionId="c1"
       orgSlug="org"
       compSlug="comp"

@@ -62,6 +62,7 @@ export const ROUTES: RouteSpec[] = [
   { path: "/competitions/{id}", method: "get", summary: "Get a competition", tag: "competitions", response: S.Competition },
   { path: "/competitions/{id}", method: "patch", summary: "Update a competition", tag: "competitions", request: S.PatchCompetition, response: S.Competition, errors: [409] },
   { path: "/competitions/{id}", method: "delete", summary: "Delete a competition (no recorded play)", tag: "competitions", response: z.object({ deleted: z.boolean() }), errors: [409] },
+  { path: "/competitions/{id}/desk", method: "get", summary: "Get a competition desk summary", tag: "competitions", response: S.CompetitionDesk },
   // Divisions
   { path: "/competitions/{id}/divisions", method: "get", summary: "List divisions", tag: "divisions", response: z.array(S.Division) },
   { path: "/competitions/{id}/divisions", method: "post", summary: "Create a division (pins sport module version)", tag: "divisions", request: S.CreateDivision, response: S.Division, status: 201, errors: [409, 422] },

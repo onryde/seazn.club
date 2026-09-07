@@ -784,4 +784,187 @@ describe.skipIf(!HAS_DB)("getCompetitionDesk", () => {
       expect(d.needs_draw_stage).toBeNull();
     });
   });
+
+  // Task 6 (W3, spec §"Task 6 — the band's producer"): the in-play fixture
+  // list the live band renders from, and the "up next" pointer beside it.
+  // Both are derived from rows `getCompetitionDesk` already fetches — no
+  // second query.
+  describe("Task 6: in_play_fixtures and up_next", () => {
+    // Fix round 1, Major 1 + Minor 3: the ORIGINAL version of this test
+    // seeded fixture_no 1's kickoff before fixture_no 2's, which happens to
+    // be the SAME order the unsorted query already returns rows in (no
+    // ORDER BY — physical/insertion order, which tracks fixture_no
+    // ascending). Deleting the production `.sort()` call still passed
+    // 32/32, because the "already in the right order" coincidence hid the
+    // fact that nothing was asserting the comparator itself. Fixed by
+    // making the SEEDED kickoff order the OPPOSITE of fixture_no order —
+    // fixture_no 2 kicks off first, fixture_no 1 kicks off second — so a
+    // deleted (or reversed) sort produces a visibly wrong answer instead of
+    // an accidentally-right one. Minor 3 (a zero-coverage "nulls last"
+    // branch) is folded in as a third fixture, forced in_play with no
+    // core.start at all.
+    it("carries every in-play fixture, ordered by kickoff (not insertion order), nulls last, with its event count", async () => {
+      const { auth } = await seedOrg();
+      const { competitionId, divisionId } = await seedDivision(auth, 4);
+      const [stage] = await createStages(auth, divisionId, {
+        seq: 1, kind: "league", name: "League", config: {}, progression: null,
+      });
+      await generateStageFixtures(auth, stage!.id);
+      await sql`update divisions set status = 'active' where id = ${divisionId}`;
+      const rows = await sql<{ id: string }[]>`select id from fixtures where division_id = ${divisionId} order by fixture_no`;
+      // The three `update fixtures ...` statements below run in FIXTURE_NO
+      // order (1, 2, 3) deliberately — that is what determines the table's
+      // own physical/scan order under Postgres MVCC (an UPDATE writes a new
+      // tuple version, appended in write order), and the unsorted query has
+      // no ORDER BY of its own. If this matched the CORRECT kickoff order
+      // too, a deleted `.sort()` would pass by coincidence, same failure
+      // mode fix round 1 found — so the kickoff order (driven by WHEN each
+      // fixture's `core.start` is inserted, below) is deliberately made to
+      // DISAGREE with this statement order.
+      await sql`update fixtures set status = 'in_play', scheduled_at = now() - interval '5 minutes' where id = ${rows[0]!.id}`;
+      await sql`update fixtures set status = 'in_play', scheduled_at = now() - interval '10 minutes' where id = ${rows[1]!.id}`;
+      // fixture_no 3: forced in_play by raw SQL only, no core.start at all —
+      // the reachable production shape the sort's own comment names.
+      // started_at stays null and must sort LAST regardless of kickoff
+      // order (Minor 3).
+      await sql`update fixtures set status = 'in_play', scheduled_at = now() - interval '1 minute' where id = ${rows[2]!.id}`;
+
+      // Kickoff (`core.start`) order is the OPPOSITE of the fixtures-table
+      // write order above: fixture_no 2's core.start is recorded FIRST (so
+      // it kicked off earliest), fixture_no 1's SECOND — with a DIFFERENT
+      // event count from fixture 2's zero (the "NO SCORE" case a later task
+      // renders in red), so a single sample could not witness either an
+      // ordering bug or a per-row mapping bug.
+      await sql`
+        insert into score_events (fixture_id, org_id, seq, type, payload)
+        values (${rows[1]!.id}, ${auth.orgId}, 0, 'core.start', '{}')`;
+      await sql`
+        insert into score_events (fixture_id, org_id, seq, type, payload)
+        values (${rows[0]!.id}, ${auth.orgId}, 0, 'core.start', '{}')`;
+      await sql`
+        insert into score_events (fixture_id, org_id, seq, type, payload)
+        values (${rows[0]!.id}, ${auth.orgId}, 1, 'generic.result', '{"p1Score":1,"p2Score":0}')`;
+
+      const desk = await getCompetitionDesk(auth, competitionId);
+      // Sorted by kickoff: fixture 2 (earliest), fixture 1 (later), fixture
+      // 3 (null, last) — NOT [1, 2, 3], the natural query/insertion order.
+      expect(desk.in_play_fixtures.map((f) => f.fixture_no)).toEqual([2, 1, 3]);
+      expect(desk.in_play_fixtures[0]?.event_count).toBe(0);
+      expect(desk.in_play_fixtures[1]?.event_count).toBe(1);
+      expect(desk.in_play_fixtures[2]?.started_at).toBeNull();
+      // The last assertion matters most: it pins the new list against the
+      // scalar the pill already renders, so the two cannot drift into two
+      // authorities for one fact.
+      expect(desk.in_play).toBe(desk.in_play_fixtures.length);
+    });
+
+    // Fix round 1, Major 2: the ORIGINAL version of this test used only TWO
+    // divisions, one of which was excluded outright (in-play), so
+    // `upNextCandidates` only ever held ONE element and the comparator was
+    // never actually exercised — reversing it still passed 32/32. Fixed
+    // with a THIRD division: two genuine (non-in-play) candidates, with the
+    // one created FIRST (so it iterates first in getCompetitionDesk's `out`
+    // Map, per divisions.ts's `order by created_at, id`) given the LATER
+    // date, and the one created SECOND given the SOONER date — so the
+    // correct answer depends on the comparator actually comparing, not on
+    // "whichever division iterates first wins".
+    it("up_next is the soonest not-yet-started fixture across every division, never one already in play", async () => {
+      const { auth } = await seedOrg();
+      const { competitionId, divisionId: d1 } = await seedDivision(auth, 4);
+      const division2 = await createDivision(auth, competitionId, {
+        name: "Second",
+        slug: "second",
+        sport_key: "generic",
+        variant_key: "score",
+        config: GENERIC_CONFIG,
+      });
+      await createEntrants(
+        auth,
+        division2.id,
+        Array.from({ length: 4 }, (_, i) => ({
+          kind: "individual" as const,
+          display_name: `S${i + 1}`,
+          seed: i + 1,
+          members: [],
+        })),
+      );
+      const division3 = await createDivision(auth, competitionId, {
+        name: "Third",
+        slug: "third",
+        sport_key: "generic",
+        variant_key: "score",
+        config: GENERIC_CONFIG,
+      });
+      await createEntrants(
+        auth,
+        division3.id,
+        Array.from({ length: 4 }, (_, i) => ({
+          kind: "individual" as const,
+          display_name: `T${i + 1}`,
+          seed: i + 1,
+          members: [],
+        })),
+      );
+
+      const [stage1] = await createStages(auth, d1, {
+        seq: 1, kind: "league", name: "League", config: {}, progression: null,
+      });
+      await generateStageFixtures(auth, stage1!.id);
+      await sql`update divisions set status = 'active' where id = ${d1}`;
+      const [stage2] = await createStages(auth, division2.id, {
+        seq: 1, kind: "league", name: "League", config: {}, progression: null,
+      });
+      await generateStageFixtures(auth, stage2!.id);
+      await sql`update divisions set status = 'active' where id = ${division2.id}`;
+      const [stage3] = await createStages(auth, division3.id, {
+        seq: 1, kind: "league", name: "League", config: {}, progression: null,
+      });
+      await generateStageFixtures(auth, stage3!.id);
+      await sql`update divisions set status = 'active' where id = ${division3.id}`;
+
+      const rows1 = await sql<{ id: string }[]>`select id from fixtures where division_id = ${d1} order by fixture_no`;
+      // Division 1's earliest fixture is IN PLAY right now — its own `next`
+      // is that live fixture, and it must NOT surface as up_next (that
+      // fixture already has its own card in in_play_fixtures). It also
+      // contributes ZERO candidates to the comparator below.
+      await sql`update fixtures set status = 'in_play', scheduled_at = now() - interval '5 minutes' where id = ${rows1[0]!.id}`;
+
+      const rows2 = await sql<{ id: string }[]>`select id from fixtures where division_id = ${division2.id} order by fixture_no`;
+      // Division 2 (created SECOND — iterates BEFORE division 3) gets the
+      // LATER date.
+      const later = new Date(Date.now() + 2 * 24 * 60 * 60 * 1000);
+      later.setMilliseconds(0);
+      await sql`update fixtures set scheduled_at = ${later.toISOString()} where id = ${rows2[0]!.id}`;
+
+      const rows3 = await sql<{ id: string }[]>`select id from fixtures where division_id = ${division3.id} order by fixture_no`;
+      // Division 3 (created THIRD — iterates AFTER division 2) gets the
+      // SOONER date. It must still win: the comparator, not iteration
+      // order, decides.
+      const sooner = new Date(Date.now() + 1 * 24 * 60 * 60 * 1000);
+      sooner.setMilliseconds(0);
+      await sql`update fixtures set scheduled_at = ${sooner.toISOString()} where id = ${rows3[0]!.id}`;
+
+      const desk = await getCompetitionDesk(auth, competitionId);
+      expect(desk.up_next).not.toBeNull();
+      // Unlike the pre-existing `next` field (see G1's `Date.parse` compare
+      // above — postgres.js returns timestamptz as `Date`, not `string`),
+      // `up_next.scheduled_at` is normalised to a real ISO string by
+      // getCompetitionDesk, so this is a strict string comparison.
+      expect(desk.up_next?.scheduled_at).toBe(sooner.toISOString());
+      expect(desk.up_next?.in_play).toBe(false);
+    });
+
+    // Fix round 1, Minor 4: the only `up_next === null` values in this
+    // suite before this case were hand-built literals in
+    // desk-ssr.test.tsx/desk-renderings-agree.test.tsx, which bypass the
+    // derivation entirely. This drives it through the REAL code path: a
+    // division with no stage has no fixtures at all, so it offers no
+    // candidate and `upNextCandidates[0] ?? null` falls through to null.
+    it("up_next is null when no division has a dated, not-yet-started fixture", async () => {
+      const { auth } = await seedOrg();
+      const { competitionId } = await seedDivision(auth, 4);
+      const desk = await getCompetitionDesk(auth, competitionId);
+      expect(desk.up_next).toBeNull();
+    });
+  });
 });

@@ -20,7 +20,7 @@ const STAGE = {
   config: {}, progression: null, status: "active",
 };
 const baseProps = {
-  divisionId: "d1", divisionSeq: 5, competitionId: "c1", orgSlug: "org", compSlug: "comp", divSlug: "div",
+  divisionId: "d1", competitionId: "c1", orgSlug: "org", compSlug: "comp", divSlug: "div",
   stages: [STAGE],
   entrantNames: { e1: "Alpha", e2: "Bravo" },
   canEdit: true,

@@ -63,11 +63,24 @@ export async function Nav({ orgSlug }: { orgSlug?: string } = {}) {
   // already the sole shrink target and was already fully collapsed, so the
   // 4th link just pushed "Sign out" past the viewport instead of wrapping or
   // shrinking. isPlayer is the only thing that adds a 4th link, so it's the
-  // only case that needs the later reveal; the common 3-link header is
-  // unchanged (still `sm:inline`, confirmed to hold at every matrix width).
+  // only case that needs the later reveal; the common 3-link header was left
+  // on `sm:inline`, "confirmed to hold at every matrix width" — a claim the
+  // next paragraph corrects.
   // Applied uniformly to all four labels — icons-together or labels-together,
   // never a mismatched partial collapse.
-  const navLabelClass = isPlayer ? "hidden lg:inline" : "hidden sm:inline";
+  //
+  // Competition desk W3 (review m4's own new 700px leg): the 3-link case did
+  // NOT hold at every width — only at every MATRIX width. The seven projects
+  // are 320/360/375/390/430/768/834, so nothing has ever loaded this header
+  // between 640 and 767, which is exactly where `sm:inline` turns three
+  // labels back on. Measured on the competition page at 700: the gantry needs
+  // ~749px and "Sign out" is clipped 49px past the viewport — the identical
+  // failure #516 fixed for the 4-link case, in the band its own fix did not
+  // cover. Same remedy, one breakpoint later: labels return at `md` (768),
+  // the first width anything actually verifies. No matrix width changes
+  // behaviour (below 640 was already icons; 768 and up still shows labels),
+  // so this closes a live clipping defect without moving any gate.
+  const navLabelClass = isPlayer ? "hidden lg:inline" : "hidden md:inline";
   // Tour targets editor flows (rename org, create competition) — viewers skip it.
   const canTour =
     !!user && !!activeOrg && (EDITOR_ROLES as readonly string[]).includes(activeOrg.role);
@@ -138,9 +151,11 @@ export async function Nav({ orgSlug }: { orgSlug?: string } = {}) {
                 wrap points that would hit the exact "Sign out" failure fix
                 round 1 found, invisibly to every automated check here. */}
             <nav className="flex shrink-0 items-center gap-0.5">
-              {/* Labels collapse to icons under `sm` (navLabelClass: `lg` for
-                  the 4-link dual-role case, #516 above) — aria-label keeps
-                  the accessible name either way (axe link-name, v3/11 gap 11). */}
+              {/* Labels collapse to icons under `md` (navLabelClass: `lg` for
+                  the 4-link dual-role case, #516 above; `md` rather than the
+                  original `sm` since W3 measured the 640-767 band no width
+                  project covers) — aria-label keeps the accessible name
+                  either way (axe link-name, v3/11 gap 11). */}
               <Link
                 href={activeOrg ? routes.orgHome(activeOrg.slug) : "/orgs/new"}
                 aria-label={t(dict, "nav.dashboard")}

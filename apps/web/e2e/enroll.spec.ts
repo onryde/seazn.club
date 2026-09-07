@@ -9,8 +9,10 @@ test("enroll an existing team into a division via the UI", async ({ page }) => {
   const up = await page.request.post("/api/v1/imports", {
     multipart: { file: { name: "p.csv", mimeType: "text/csv", buffer: Buffer.from(csv) } },
   });
+  expect(up.status(), `import upload failed: ${await up.text()}`).toBeLessThan(300);
   const importId = ((await up.json()) as { data: { importId: string } }).data.importId;
-  await page.request.post(`/api/v1/imports/${importId}/commit`, { data: {} });
+  const committed = await page.request.post(`/api/v1/imports/${importId}/commit`, { data: {} });
+  expect(committed.status(), `import COMMIT failed: ${await committed.text()}`).toBeLessThan(300);
 
   // A competition + division to enroll into.
   const comp = (await apiJson<{ id: string }>(page.request, "/api/v1/competitions", "POST", { ends_on: "2030-12-31",
@@ -51,10 +53,46 @@ test("enroll an existing team into a division via the UI", async ({ page }) => {
   // badge, team has no own logo — the resolved logo map must fall through).
   await expect(cell.locator('img[src*="enroll-crest.png"]')).toBeVisible();
 
-  // Clubs W1 regression 2: first-time enrollment seeded the roster from the
-  // team's squad — the imported player is already on the entrant.
+  // Clubs W1 regression 2, REWRITTEN — the assertion here was
+  // `page.getByText(\`Ada \${TAG}\`)`, page-wide and unscoped, under a comment
+  // claiming "first-time enrollment seeded the roster from the team's squad".
+  // It never checked that. Read off the database after a failing run
+  // (competition-desk W3): every team this spec has ever created has ZERO
+  // `team_members` rows and its entrant ZERO `entrant_members` — in the runs
+  // where this passed as much as the ones where it failed. A CSV with no
+  // Division column plans `club.create`/`team.create`/`person.create` and
+  // nothing else (`executePlan`, imports.ts: `roster.add` writes
+  // `entrant_members` and needs an entrant; NOTHING in that file writes
+  // `team_members`), so there is no squad for enrollment to seed from and the
+  // roster is correctly empty.
+  //
+  // What made the old assertion pass was the ADD-PLAYER SUGGESTIONS below the
+  // roster: `entrants-panel.tsx` renders `persons.filter(...).slice(0, 6)`,
+  // so with a small directory "+ Ada <TAG>" happened to be on screen and a
+  // page-wide `getByText` matched it. Add four more people to the org — which
+  // is all a neighbouring spec in the same shard has to do — and Ada falls off
+  // the six, and this test fails 40 lines from the thing it was really
+  // depending on. That is how it failed: the roster it names was empty either
+  // way.
+  //
+  // So it now asserts what is actually true and load-bearing: the imported
+  // player reached the org directory and is REACHABLE for this entrant,
+  // found through the picker's own search rather than by hoping for a slot in
+  // a six-item list. Whether a directory-only import should also seed the
+  // TEAM's squad is a product question, and an open one — it is recorded for
+  // the owner rather than frozen here as either an expectation or a silent
+  // pass.
   await cell.getByRole("button", { name: new RegExp(`Riverside U12 ${TAG}`) }).click();
-  await expect(page.getByText(`Ada ${TAG}`)).toBeVisible();
+  // One roster editor is open, so the picker's own input identifies it — a
+  // `filter({ hasText })` wrapper matched an inner div that does not contain
+  // the input and sat there to the test budget.
+  const find = page.getByPlaceholder("Find player…");
+  await expect(find, "the roster editor did not open").toBeVisible();
+  await find.fill(`Ada ${TAG}`);
+  await expect(
+    page.getByRole("button", { name: new RegExp(`Ada ${TAG}`) }),
+    "the imported player is not offered for this entrant's roster",
+  ).toBeVisible();
 });
 
 // Enrollment snapshots the squad ONCE; players added to the squad afterwards

@@ -1,11 +1,14 @@
 "use client";
 
 // Fixture console per stage (PROMPT-15 task 1, rebuilt per v3/04 §3): rounds
-// grouped with date ranges, competition-timezone rendering, pinned
-// unscheduled section with an auto-schedule CTA, "Now playing" strip, inline
-// reschedule with undo, bye/void ghost rows, sticky round headers on mobile,
-// print via the DocModel timetable export. Scoring lives on the fixture page.
-import { useEffect, useMemo, useRef, useState } from "react";
+// grouped with date ranges, competition-timezone rendering, a pinned
+// unscheduled count (Task 2, "remove auto-schedule from the fixtures page" —
+// the count now LEADS to the Schedule page instead of acting in place;
+// scheduling itself lives there, see ScheduleBoard/AutoScheduleMode), "Now
+// playing" strip, inline reschedule with undo, bye/void ghost rows, sticky
+// round headers on mobile, print via the DocModel timetable export. Scoring
+// lives on the fixture page.
+import { useEffect, useMemo, useState } from "react";
 import Link from "@/components/ui/console-link";
 import { useRouter } from "next/navigation";
 import { routes } from "@/lib/routes";
@@ -14,7 +17,7 @@ import { UpgradeGate } from "@/components/upgrade-gate";
 import type { ViewerPlan } from "@/lib/viewer-plan";
 import { useConfirm } from "@/components/ui/confirm-provider";
 import { TipCallout } from "@/components/ui/tip";
-import { useLocaleOrDefault, useMsg } from "@/components/i18n/dict-provider";
+import { useLocaleOrDefault, useMsg, useMsgPlural } from "@/components/i18n/dict-provider";
 import { seedingErrorMessage } from "@/lib/seeding-error";
 import type { Locale } from "@/lib/i18n-constants";
 import type { MessageKey } from "@/lib/messages";
@@ -28,9 +31,9 @@ import { resolveSlotLabel } from "@/lib/slot-label";
 import { roundRoleFor, roundRoleLabel } from "@/lib/round-role-label";
 import { parseRoundRoleKey } from "@seazn/engine/competition";
 import { TagChipInput } from "@/components/ui/tag-chip-input";
+import { Modal } from "@/components/modal";
 import type { SlotLabel } from "@/server/usecases/stage-seeding";
 import { DocumentsMenu } from "@/components/v2/board/documents-menu";
-import { ScheduleResultStrip } from "@/components/v2/board/result-strip";
 import { DateTimeField } from "./shared/datetime-field";
 import { boardSlotTimes } from "./shared/time-options";
 import { windowsToDailyHours } from "@/lib/schedule-board";
@@ -42,27 +45,14 @@ import { courtDisplayName, type BoardConfig } from "@/components/v2/board/types"
 // picker, which had no production render site once the run sheet replaced
 // that row, and went with it (court placement lives on the schedule board —
 // fix round 1, IMPORTANT 6).
-import { flattenCourts, resolveCourtNames } from "@/components/v2/shared/court-multi-picker";
+import { resolveCourtNames } from "@/components/v2/shared/court-multi-picker";
 // P9: the BOARD-side Venue (no `hours`/`exceptions`) — this panel shows
 // courts, it never reads a calendar. See court-multi-picker.tsx.
 import type { Venue } from "@/components/v2/shared/court-multi-picker";
 import { zonedTimeInput } from "@/lib/zoned-datetime";
-import type { z } from "zod";
-import type { ApplyScheduleRequest, ScheduleMetrics, ScheduleSolverInfo } from "@/server/api-v1/schemas";
-// D2 capacity pre-check — client-safe leaf only, see capacity-input.ts's
-// header for why this file must never reach @seazn/engine/scheduling (the
-// solver barrel) or capacity-guard.ts (server-only). P10 §4/Task 6: the
-// verdict itself no longer comes from a local capacityInputForFixtures +
-// assessCapacity call — see useCapacityReport's own header for why — this
-// file only builds the WIRE BODY the hook sends, which still needs
-// dayKeyInTz/ymdAddDays/zonedTimeToUtc for the window math.
-import { dayKeyInTz, ymdAddDays, zonedTimeToUtc } from "@seazn/engine/scheduling/tz";
-import {
-  useCapacityReportsByStage,
-  type CapacityReportConfig,
-  type CapacityRequest,
-  type UseCapacityReportResult,
-} from "@/lib/use-capacity-report";
+// W3 item 6 — one definition of "this swiss stage is between rounds, not
+// drifted", shared with the page's tests rather than restated in each.
+import { swissAwaitingPairing } from "@/lib/roster-drift-eligibility";
 // Competition Desk W2 (Task 4) — the run sheet's grouping builder + the
 // component that renders it. `isBye` (and, inside `buildRunSheet` itself,
 // `BRACKET_STAGE_KINDS`) are the SINGLE authorities now (R2a/R10,
@@ -70,6 +60,10 @@ import {
 // this file's own former copies are deleted below.
 import { buildRunSheet, isBye, type RunSheetFixture } from "@/lib/run-sheet-groups";
 import { RunSheet, type RunSheetFilter } from "@/components/v2/desk/run-sheet";
+// Competition Desk W3 (Task 2) — the stage rail takes the three header
+// action controls (Generate/Complete/Delete). See stage-rail.tsx's own
+// header for why it stays presentational (props only, no data hook).
+import { StageRail } from "@/components/v2/desk/stage-rail";
 
 type Msg = (key: MessageKey, vars?: Record<string, string | number>) => string;
 
@@ -173,14 +167,6 @@ interface RosterDrift {
 
 interface Props {
   divisionId: string;
-  /** The division's event-ledger head (`DivisionRow.seq`, gap 10) at render
-   *  time — this panel's `autoScheduleStage` (#pins-ui, owner ruling
-   *  2026-08-12) sends it as `expected_seq` on the apply, exactly as the
-   *  board's own optimistic-concurrency token does. Without it a lock toggled
-   *  while the solve was running was silently overwritten by the stale
-   *  proposal (`assertFreshSeq` no-ops on an absent token) — this panel never
-   *  held the division's watermark before, so it never had anything to send. */
-  divisionSeq: number;
   /** Competition id — the Admit tickets export is competition-scoped. */
   competitionId: string;
   orgSlug: string;
@@ -331,122 +317,27 @@ export function boardSlotOptionsFor(
   }
 }
 
-/** What `capacityRequestForStage` hands to `useCapacityReportsByStage` for
- *  one stage — `null` when there is nothing to even ask the server yet
- *  (settings not loaded, or incomplete). A thin alias of the hook's own
- *  general-purpose `CapacityRequest`, kept under this panel's established
- *  name for its own test file and callers. */
-export type CapacityStageRequest = CapacityRequest;
-
-/**
- * D2 capacity pre-check gate (review fix, Finding 2): the Auto-schedule
- * button's `disabled` condition and the "blocked reason" line below it now
- * SHARE this one predicate — they used to inline the same expression twice,
- * which is how they could have silently drifted. FAILS OPEN: a check that
- * could not complete (`.failed` — useCapacityReport's own doc comment) never
- * blocks, even when the last report it ever received said "impossible".
- * Before this fix, a real fetch failure (500, network drop, a 4xx schema
- * rejection) was swallowed identically to a superseded abort, so `.report`
- * kept returning that OLD verdict forever — an actionable control frozen
- * with no visible reason. Solve is hard-blocked ONLY on a genuinely FRESH
- * `impossible` verdict (owner ruling); a stale guess, whether merely
- * catching up (`.stale`) or actually broken (`.failed`), is not one — a
- * catching-up check still gates on the last KNOWN verdict (unchanged), but
- * a broken one must not.
- */
-export function capacityGateBlocks(cap: UseCapacityReportResult | undefined): boolean {
-  if (cap?.failed) return false;
-  return cap?.report?.verdict === "impossible";
-}
-
-/**
- * D2 capacity pre-check for ONE stage (P10 §4/Task 6): pure, exported so it
- * is unit-testable with hand-built inputs directly, matching the ORIGINAL
- * capacityForStage's own reasoning — `scheduleSettings.config` arrives via
- * a `useEffect` fetch (`renderToStaticMarkup` never fires effects — see
- * component-ui-i18n memory), so a render-level test cannot exercise this.
- *
- * No longer computes a verdict itself — see useCapacityReport's own header
- * for why the report can only come from the server now. This function's
- * whole job is the MAPPING: which fixtures belong to this stage, and the
- * wire-shaped config to send alongside them. `null` covers both "nothing
- * to assess" (no bounded window — the actual skip is useCapacityReport's
- * own job, see `hasAssessableWindow`) and "settings haven't loaded yet" —
- * the button must stay enabled either way, matching "client hint, server
- * authority": an unloaded precheck must never read as a false
- * "impossible".
- *
- * `venues` (review fix, finding 5): defaulted to `[]` so every pre-existing
- * caller/test keeps compiling unchanged. Real callers should always pass the
- * panel's own `venues` prop — see the courts fallback below.
- */
-export function capacityRequestForStage(
-  stageId: string,
-  fixtures: readonly Pick<FixtureRow, "id" | "stage_id" | "status" | "home_entrant_id" | "away_entrant_id" | "pool_id">[],
-  config: DivisionScheduleSettings["config"] | undefined,
-  orgTz: string,
-  venues: readonly Venue[] = [],
-): CapacityStageRequest {
-  if (config === undefined || config.matchMinutes === undefined || config.gapMinutes === undefined) return null;
-  const movable = fixtures.filter((f) => f.stage_id === stageId && f.status === "scheduled");
-  // `id` is free (FixtureRow above already carries it) and lets an `id`-kind
-  // fixture_on_date/fixture_on_weekday selector resolve into a forcedDemand
-  // floor server-side too. `extKey`/`winnerTo` (CapacityFixtureInput's other
-  // two RuleFixture-identity fields, capacity-input.ts) are NOT available
-  // here — `FixtureRow` never fetches `ext_key`/`winner_to_fixture`, and
-  // neither is even in the public API schema — so a `terminal`/`ext_key`
-  // selector cannot resolve and stays undercounted on this card. Same
-  // "client hint, server authority" split as demandCap.
-  return {
-    fixtures: movable.map((f) => ({
-      home: f.home_entrant_id ?? undefined,
-      away: f.away_entrant_id ?? undefined,
-      poolId: f.pool_id ?? undefined,
-      id: f.id,
-    })),
-    config: {
-      // Review fix (finding 5): `ScheduleConfig.courts` defaults to `[]` and
-      // is never nullish, so `?? ["Court 1"]` never actually fired in the
-      // real app — a division that never configured courts sent `courts:
-      // []` -> supply 0 -> verdict "impossible" -> Auto-schedule wrongly
-      // disabled, even though the server build falls back to every
-      // non-archived org court. Same effectiveCourts fallback
-      // settings-panel.tsx's capacityRequestFromDraft already uses, reused
-      // rather than a second implementation of "which courts count as
-      // unconstrained" — and the `["Court 1"]` literal is gone: it was also
-      // a guaranteed 400 against CapacityPrecheckInput's `z.uuid()` schema
-      // had it ever reached the wire.
-      courts:
-        config.courts && config.courts.length > 0
-          ? config.courts
-          : flattenCourts(venues).map((c) => c.id),
-      sessionWindows: (config.sessionWindows ?? []).map((w) => ({ from: Date.parse(w.from), to: Date.parse(w.to) })),
-      blackouts: (config.blackouts ?? []).map((b) => ({
-        ...(b.court !== undefined ? { court: b.court } : {}),
-        from: Date.parse(b.from),
-        to: Date.parse(b.to),
-      })),
-      matchMinutes: config.matchMinutes,
-      gapMinutes: config.gapMinutes,
-      perEntrantMinRest: config.perEntrantMinRest ?? 0,
-      window:
-        config.startAt || config.endAt
-          ? {
-              from: config.startAt
-                ? zonedTimeToUtc(dayKeyInTz(Date.parse(config.startAt), orgTz), "00:00", orgTz)
-                : -Infinity,
-              to: config.endAt
-                ? zonedTimeToUtc(ymdAddDays(dayKeyInTz(Date.parse(config.endAt), orgTz), 1), "00:00", orgTz)
-                : Infinity,
-            }
-          : undefined,
-    },
-  };
-}
+// Review finding m3: `CapacityStageRequest`, `capacityGateBlocks` and
+// `capacityRequestForStage` lived here, and were DELETED with this wave.
+// They were the Auto-schedule CTA's D2 capacity pre-check; Task 2 moved
+// scheduling off the fixtures page entirely (owner ruling), which left all
+// three exported, commented as if live, and called by nothing but their own
+// test file. `stages-panel-capacity.test.tsx` went with them — it existed
+// solely for these two functions, so keeping it would have been ~80 lines of
+// tests guarding code no screen can reach. `git log -- apps/web/src/components/v2/stages-panel.tsx`
+// has the full implementations if the pre-check is ever wanted on the
+// Schedule page, where the control now lives.
 
 
-export function StagesPanel({ divisionId, divisionSeq, competitionId, orgSlug, compSlug, divSlug, stages, fixtures, entrantNames, venues = [], rosterDrift = {}, canEdit, tz, orgTz, canExport, phase, matchMinutes = DEFAULT_MATCH_MINUTES, viewerPlan }: Props) {
+export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divSlug, stages, fixtures, entrantNames, venues = [], rosterDrift = {}, canEdit, tz, orgTz, canExport, phase, matchMinutes = DEFAULT_MATCH_MINUTES, viewerPlan }: Props) {
   const msg = useMsg();
+  // Owner-approved redesign, "Option A" (Task 10 follow-up) — the stage
+  // card body's fixtures-progress summary, below. `useMsgPlural`, the
+  // non-throwing sibling of `usePlural` (dict-provider.tsx) and `useMsg`'s
+  // own counterpart: this component is rendered bare (no `<DictProvider>`)
+  // by several of this file's own unit tests, so the throwing `usePlural`
+  // would red all of them for an unrelated reason.
+  const msgPlural = useMsgPlural();
   // Only for Intl.ListFormat in attachmentWarning below — the rebuild
   // confirm dialog joins its "this also clears …" list per locale. The
   // non-throwing reader on purpose: this panel is rendered bare (no
@@ -470,15 +361,6 @@ export function StagesPanel({ divisionId, divisionSeq, competitionId, orgSlug, c
     for (const v of venues) for (const c of v.courts) for (const t of c.tags) counts.set(t, (counts.get(t) ?? 0) + 1);
     return [...counts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).map(([tag]) => tag);
   }, [venues]);
-  // Optimistic-concurrency token (v3/11 gap 10), mirroring use-board-actions
-  // .ts's `seqRef` for this panel's one division: the ref is what
-  // `autoScheduleStage` reads/bumps between writes, resynced from the prop on
-  // every server refresh so a write right after `router.refresh()` lands
-  // never races a value that predates it.
-  const divisionSeqRef = useRef(divisionSeq);
-  useEffect(() => {
-    divisionSeqRef.current = divisionSeq;
-  }, [divisionSeq]);
   const [error, setError] = useState<string | null>(null);
   const [paywallFeature, setPaywallFeature] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null); // stage id in flight
@@ -493,18 +375,15 @@ export function StagesPanel({ divisionId, divisionSeq, competitionId, orgSlug, c
   const [undoable, setUndoable] = useState(false);
   // PROMPT-66: stage id whose inline "Add match" form is open.
   const [addingTo, setAddingTo] = useState<string | null>(null);
-  /** Board quality + solver telemetry from the last "Auto-schedule remaining"
-   *  run, for the same result strip the board renders (Task 12).
-   *
-   *  This entry point hits the SAME endpoint the board does, so Task 9's report
-   *  arrives here too. Rendering it on one surface and discarding it on the other
-   *  is the asymmetry that made an organiser's answer depend on which page they
-   *  happened to start from. Null whenever the wire did not carry the blocks —
-   *  the strip stays away rather than reporting zeros. */
-  const [lastRun, setLastRun] = useState<{
-    metrics: ScheduleMetrics;
-    solver: ScheduleSolverInfo;
-  } | null>(null);
+  // Task 10 — stage id whose phone "Stage tools" bottom sheet is open.
+  // Owned here, not as a local `useState` inside `<StageRail>` (stage-
+  // rail.tsx's own header explains why: `expandWithHooks`, the test harness
+  // two unrelated unit tests already walk `<StageRail>` through, is
+  // deliberately read-only and throws on any stateful hook). Same
+  // shared-single-value shape as `addingTo` just above — only one stage's
+  // sheet can usefully be open at a time, since a second open sheet would be
+  // a second `position:fixed` overlay stacked on the first.
+  const [openRailFor, setOpenRailFor] = useState<string | null>(null);
   // Board slots for the fixture "When" / add-match "When" fields (quarter-
   // hour-time-select design). This panel doesn't otherwise hold the
   // division's schedule config, so it's fetched once here; a failed fetch or
@@ -528,40 +407,21 @@ export function StagesPanel({ divisionId, divisionSeq, competitionId, orgSlug, c
   }, [divisionId, canEdit]);
   const boardSlotOptions = boardSlotOptionsFor(scheduleSettings, orgTz);
 
-  // D2 capacity pre-check: per STAGE (matching the scope of the button below
-  // and of the server guard on /stages/{id}/schedule/auto), from whatever
-  // `scheduleSettings` the effect above already fetched — no second fetch.
-  const capacityRequestByStage = useMemo(() => {
-    const byStage = new Map<string, CapacityStageRequest>();
-    for (const stage of stages) {
-      byStage.set(
-        stage.id,
-        capacityRequestForStage(stage.id, fixtures, scheduleSettings?.config, orgTz, venues),
-      );
-    }
-    return byStage;
-  }, [scheduleSettings, stages, fixtures, orgTz, venues]);
-  // The verdict itself is read live off ONE useCapacityReportsByStage
-  // subscription (not one useCapacityReport call per stage — the button
-  // below has to stay a DIRECT part of this component's own render output;
-  // see the hook's own header for why a per-stage child component broke
-  // pre-existing tests that locate it by testid).
-  const capacityByStage = useCapacityReportsByStage(divisionId, capacityRequestByStage);
-
   // Competition Desk W2 (Task 4) — the run sheet's own filter segment. Its
   // DEFAULT is spec: "Today" on a match day, else "All" — read once at
   // mount, same as every other `useState` initializer here; Task 7 replaces
   // this local state with the `?filter=` URL param without touching
   // `<RunSheet>`'s own `filter`/`onFilter` props.
   const [filter, setFilter] = useState<RunSheetFilter>(phase === "match_day" ? "today" : "all");
+  // Owner-approved "Option 2" (on top of Option B) — which stage the run
+  // sheet below is filtered to, or `null` for every stage. A SECOND,
+  // orthogonal dimension from `filter` above, never folded into
+  // `RunSheetFilter` — see `<RunSheet>`'s own `stageId` prop doc for why.
+  // Set from a stage card's own "View N fixtures" control, below.
+  const [stageFilter, setStageFilter] = useState<string | null>(null);
 
   async function undoLast() {
     setError(null);
-    // The strip describes a board. Undo puts a DIFFERENT board back, so every
-    // number on it — length, spread, "18 of 22 scheduled" — stops being true of
-    // what the organiser is looking at. Same rule the board's own hook follows:
-    // every write clears the report.
-    setLastRun(null);
     try {
       await apiV1(`/api/v1/divisions/${divisionId}/undo`, { method: "POST", json: {} });
       setNotice(msg("schedule.notice.undone"));
@@ -572,105 +432,11 @@ export function StagesPanel({ divisionId, divisionSeq, competitionId, orgSlug, c
     }
   }
 
-  // "Auto-schedule remaining" (v3/04 §3 item 3) — the board's propose+apply
-  // pair for one stage, launched from the pinned unscheduled section. A
-  // SECOND, independent implementation of the same propose+apply pair
-  // use-board-actions.ts's `autoRun` runs for the board — see that file for
-  // why the shape below (a `solve`/`applyOnce`/`propose` split, one silent
-  // retry on SEQ_CONFLICT) is not shared code: same defect, same owner
-  // ruling, two call sites the brief scoped separately.
-  async function autoScheduleStage(stageId: string) {
-    setError(null);
-    setNotice(null);
-    setLastRun(null);
-    setBusy(stageId);
-    try {
-      type Proposal = {
-        // P9: INFERRED from the schema the server validates against. A hand
-        // written wire type is an assertion `apiV1<T>` never checks — that is
-        // exactly how the board's apply shipped `court_label` and 400'd every
-        // Auto-schedule run for the whole cutover.
-        assignments: z.infer<typeof ApplyScheduleRequest>["assignments"];
-        metrics?: ScheduleMetrics;
-        solver?: ScheduleSolverInfo;
-      };
-      const solve = () =>
-        apiV1<Proposal>(`/api/v1/stages/${stageId}/schedule/auto`, {
-          method: "POST",
-          json: { only_unlocked: true },
-        });
-
-      const applyOnce = (assignments: Proposal["assignments"], expectedSeq: number | undefined) =>
-        apiV1<{ applied: number }>(`/api/v1/stages/${stageId}/schedule/apply`, {
-          method: "POST",
-          json: { assignments, source: "auto", expected_seq: expectedSeq },
-        });
-
-      // BEFORE the empty-proposal check, not after. This CTA fires from the
-      // UNSCHEDULED section, so "the solver could place none of them" is the
-      // ordinary shape of a bad run here — and it is exactly the run whose
-      // report the organiser needs. Capturing after the check would hide the
-      // strip on the only board that has to explain itself.
-      const propose = async (): Promise<Proposal | null> => {
-        const out = await solve();
-        // OPTIONAL even though Task 9 populates both: a cached response, or a
-        // server one deploy behind, carries neither, and a strip of zeros is
-        // a worse answer than no strip.
-        if (out.metrics && out.solver) setLastRun({ metrics: out.metrics, solver: out.solver });
-        if (out.assignments.length === 0) {
-          setNotice(msg("schedule.notice.nothingToSchedule"));
-          return null;
-        }
-        return out;
-      };
-
-      const out = await propose();
-      if (!out) return;
-
-      let expectedSeq = divisionSeqRef.current;
-      let applied: { applied: number };
-      try {
-        applied = await applyOnce(out.assignments, expectedSeq);
-      } catch (err) {
-        if (!(err instanceof ApiV1Error) || err.code !== "SEQ_CONFLICT") throw err;
-        // #pins-ui, owner ruling 2026-08-12 — same treatment as the board's
-        // autoRun: the lock toggled mid-solve, so silently re-solve ONCE
-        // against the fresh board and apply THAT, rather than force the stale
-        // (possibly now-illegal) proposal through or surface an error the
-        // organiser did nothing to cause. `current_seq` rides on the 409
-        // itself (server/api-v1/http.ts) — no need to wait on
-        // `router.refresh()` to repopulate this panel's props first.
-        expectedSeq = typeof err.extra.current_seq === "number" ? err.extra.current_seq : expectedSeq;
-        const retryOut = await propose();
-        if (!retryOut) return;
-        // A SECOND SEQ_CONFLICT here is NOT caught — it propagates to the
-        // outer catch and surfaces normally. Exactly one automatic retry.
-        applied = await applyOnce(retryOut.assignments, expectedSeq);
-      }
-      divisionSeqRef.current = (expectedSeq ?? 0) + 1;
-      setNotice(msg("schedule.notice.placed", { n: applied.applied }));
-      setUndoable(true);
-      router.refresh();
-    } catch (err) {
-      if (err instanceof ApiV1Error && err.code === "PAYMENT_REQUIRED") {
-        setPaywallFeature(String(err.extra.feature_key ?? ""));
-      } else {
-        setError(err instanceof Error ? err.message : msg("schedule.error.failed"));
-      }
-    } finally {
-      setBusy(null);
-    }
-  }
-
   async function act(stageId: string, action: "generate" | "complete" | "delete") {
     setError(null);
     setPaywallFeature(null);
     setNotice(null);
     setWarning(null);
-    // Generate/complete/delete all change which cards exist, so the last run's
-    // "18 of 22 scheduled" is about a different stage. Cleared for the same
-    // reason as `undoLast` above.
-    setLastRun(null);
     setBusy(stageId);
     try {
       if (action === "delete") {
@@ -739,7 +505,6 @@ export function StagesPanel({ divisionId, divisionSeq, competitionId, orgSlug, c
     setPaywallFeature(null);
     setNotice(null);
     setWarning(null);
-    setLastRun(null);
     setBusy(stageId);
     try {
       const out = await apiV1<{ created: number; existing: number; removed: number }>(
@@ -810,10 +575,6 @@ export function StagesPanel({ divisionId, divisionSeq, competitionId, orgSlug, c
           )}
         </p>
       )}
-      {/* Directly under the green "Placed N matches" line, as on the board: the
-          strip is the QUALIFICATION of that line. The notice counts what the
-          apply wrote; only this says what the solver could not do. */}
-      {lastRun && <ScheduleResultStrip metrics={lastRun.metrics} solver={lastRun.solver} />}
       {paywallFeature && <UpgradeGate feature={paywallFeature} viewerPlan={viewerPlan} />}
       {/* Precondition-not-met (amber, actionable) — never the green success
           banner: "Générer les matchs" did nothing because the entrants can't
@@ -890,9 +651,11 @@ export function StagesPanel({ divisionId, divisionSeq, competitionId, orgSlug, c
         .sort((a, b) => a.seq - b.seq)
         .map((stage) => {
         const stageFixtures = fixtures.filter((f) => f.stage_id === stage.id);
-        // Pinned unscheduled section (v3/04 §3 item 3): count + CTA stay here
-        // until Task 5 moves them to the rail; the row LIST itself now
-        // renders once, division-wide, in the `<RunSheet>` mounted below.
+        // Pinned unscheduled section (v3/04 §3 item 3): count + CTA now live
+        // on `<StageRail>` (Task 4, fix round 1 — see stage-rail.tsx's own
+        // header for the harness fix that made this possible) — this is only
+        // the count itself; the row LIST renders once, division-wide, in the
+        // `<RunSheet>` mounted below.
         //
         // `isUnscheduledFixture`, never a fourth hand-written copy of the same
         // two clauses (max-effort review, finding 11 — "three numbers describe
@@ -906,6 +669,83 @@ export function StagesPanel({ divisionId, divisionSeq, competitionId, orgSlug, c
             isUnscheduledFixture({ status: f.status, scheduledAt: f.scheduled_at }) &&
             !isBye(toRunSheetFixture(f)),
         );
+        // Owner-approved redesign, "Option A" (Task 10 follow-up) — the
+        // stage card BODY used to say nothing beyond the header (measured:
+        // 814x234px of nothing but a title and a rule). This computes the
+        // fixtures-progress COUNTS line below, from data already fetched
+        // here (`stageFixtures`, per-fixture `status`) — no new query, no
+        // new prop drilling. Byes excluded throughout, the SAME
+        // `!isBye(toRunSheetFixture(f))` guard `unscheduled` above already
+        // uses — the two counts must never disagree about what counts as a
+        // real fixture. `played` is `decided`/`finalized` only — `in_play`
+        // gets its OWN clause below (never folded into "played"), and the
+        // three VOID statuses (`VOID_STATUSES`, this file, below) fall into
+        // neither: a cancelled/abandoned/forfeited fixture is not "to
+        // schedule" (`isUnscheduledFixture` already excludes it by
+        // requiring `status === "scheduled"`) and is not "played" (no
+        // result), so it renders in neither of the counts line's clauses —
+        // scoped deliberately to the three clauses the brief names, not a
+        // fourth invented one.
+        //
+        // Owner ruling (this round, "remove the progress bar, keep the
+        // counts line"): a solid-bar-plus-visual-weight summary earned its
+        // place only while it could show MIXED state — with every fixture
+        // scheduled it rendered as a full-width block that said nothing the
+        // text below did not say better, on a card whose real job is the
+        // actions beneath it. The void Option A was built to fill is closed
+        // by Option B's stacking, not by the bar, so removing it does not
+        // reopen that gap. `stagePlayed`/`stageInPlay` below now feed ONLY
+        // the counts line; `stageNonByeCount` also still gates the whole
+        // block below (an all-bye stage renders neither the counts nor,
+        // formerly, the bar).
+        const stagePlayed = stageFixtures.filter(
+          (f) => ["decided", "finalized"].includes(f.status) && !isBye(toRunSheetFixture(f)),
+        );
+        const stageInPlay = stageFixtures.filter(
+          (f) => f.status === "in_play" && !isBye(toRunSheetFixture(f)),
+        );
+        const stageNonByeCount = stageFixtures.filter((f) => !isBye(toRunSheetFixture(f))).length;
+        // Fix round 2 (Ruling T4-B, CRITICAL finding): built ONCE per stage
+        // — same rule the comment on `courtTagsEditor` below states for
+        // itself — then placed in exactly one of two mutually exclusive
+        // positions: passed to `<StageRail>` as `unscheduledBadgeSlot` (only
+        // actually renders when `canEdit`, the rail's own early-return
+        // guard) or inline below when `!canEdit`. This badge carried NO
+        // `canEdit` gate in its pre-rail position (`unscheduled.length > 0`
+        // was its only condition — see the run sheet's own chip a few
+        // centimetres below, which every viewer reads regardless of role),
+        // so routing it unconditionally through the rail would have
+        // silently hidden it from every non-editing viewer — the identical
+        // regression Ruling T3-A fixed for `courtTagsEditor` one task ago.
+        // `null` when there is nothing unscheduled, matching the former
+        // `unscheduled.length > 0` gate byte-for-byte.
+        //
+        // Owner request (competition desk W3) — "remove the ACTION, keep
+        // the FACT": the auto-schedule CTA that used to sit beside this
+        // badge is gone (scheduling now belongs on the Schedule page,
+        // `ScheduleBoard` at `d/[divSlug]/schedule`, which already owns the
+        // full `AutoScheduleMode` flow). The badge itself is now a LINK
+        // there instead of static text, so a viewer with unscheduled
+        // fixtures has somewhere to act, even though this page itself no
+        // longer offers the action in place. `min-h-11` — this is now an
+        // interactive control, not a label, so it owes the same tap floor
+        // every other rail control does.
+        const unscheduledBadge =
+          unscheduled.length > 0 ? (
+            <Link
+              href={routes.divisionSchedule(orgSlug, compSlug, divSlug)}
+              className="flex min-h-11 items-center gap-1 text-xs font-semibold text-slate-700 hover:text-purple-700"
+            >
+              {msg("schedule.unscheduled.title")}
+              <span
+                data-testid="stage-unscheduled-count"
+                className="rounded-full bg-slate-200 px-1.5 text-[11px] font-medium text-slate-700"
+              >
+                {unscheduled.length}
+              </span>
+              <span aria-hidden="true">→</span>
+            </Link>
+          ) : null;
         // Mirrors the server guard (deleteStage) EXACTLY: only the last stage
         // in the graph, and only when it owns no played fixtures. No "keep one
         // stage" rule — the server deletes the sole stage of a pure League too,
@@ -919,238 +759,357 @@ export function StagesPanel({ divisionId, divisionSeq, competitionId, orgSlug, c
         // no-op read for the common case.
         const drift = rosterDrift[stage.id];
         const hasDrift = Boolean(drift && (drift.ghosts.length > 0 || drift.unplaced.length > 0));
+        // Fix round 1 (controller ruling): built ONCE per stage, then placed
+        // in exactly one of two positions below — never both, never a second
+        // call with duplicated props (that is how the two copies would drift
+        // apart later). `StageRail` already returns null outright when
+        // `!canEdit`, so handing it this element unconditionally is safe: the
+        // rail only actually renders it when `canEdit` is true. When
+        // `canEdit` is false the rail renders nothing at all, so this same
+        // element is rendered inline instead, where it used to live before
+        // Task 3 — an ACTION belongs on the rail, INFORMATION (a non-editing
+        // viewer's read-only view of the stage's court-tag requirements)
+        // belongs beside what it describes.
+        const courtTagsEditor = (
+          <StageCourtTagsEditor stageId={stage.id} canEdit={canEdit} suggestions={courtTagSuggestions} msg={msg} />
+        );
         return (
           <div key={stage.id} className="space-y-6">
           <section className="card overflow-hidden">
-            <header className="flex flex-wrap items-center gap-3 border-b border-slate-100 px-4 py-3">
-              <h3 className="text-sm font-semibold text-slate-800">
-                {stage.seq}. {stage.name}
-              </h3>
-              <span className="chip">{stage.kind.replace(/_/g, " ")}</span>
-              <span className={`badge ${stageStatusStyle(stage.status)}`}>{stageStatusLabel(msg, stage.status)}</span>
-              <div className="flex-1" />
-              {canEdit && stage.status !== "complete" && (
-                <>
+            {/* Competition Desk W3 Task 5 introduced a two-column desktop
+                layout here — `stage-sheet` beside a 280px `stage-rail`
+                column — RETIRED by "Option B" (controller measurement,
+                owner sign-off session, superseding Task 5/Ruling T5-A and
+                Task 10's own first round): a 280px column stacking five
+                items (toolbar, progress bar, court tags, unscheduled
+                badge+CTA) forced the CARD to whatever height the RAIL
+                needed (CSS equal-height grid-row stretch), and no amount of
+                body content could ever close that gap — measured
+                `body=262px rail=262px content=99px VOID=163px`, 62% empty,
+                at 1280. No body content short of a fixture list could have
+                fixed it; the fix is architectural, not a bigger body.
+                `stage-sheet` and `stage-rail` are now two ordinary STACKED
+                blocks (this file's own DOM order — sheet, then rail), full
+                card width at every size, `md:` and up included. Card height
+                is now content height; there is no column, therefore no
+                void. */}
+              <div data-testid="stage-sheet" className="min-w-0">
+                <header className="flex flex-wrap items-center gap-3 border-b border-slate-100 px-4 py-3">
+                  <h3 className="text-sm font-semibold text-slate-800">
+                    {stage.seq}. {stage.name}
+                  </h3>
+                  <span className="chip">{stage.kind.replace(/_/g, " ")}</span>
+                  <span className={`badge ${stageStatusStyle(stage.status)}`}>{stageStatusLabel(msg, stage.status)}</span>
+                </header>
+
+                {/* F3 Task 5 (5a/5b) — the board no longer matches the roster:
+                    a withdrawn entrant is still named on a fixture, an added
+                    entrant has none yet, or both. Reuses the house "needs
+                    attention" treatment (progression-panel.tsx's amber
+                    border/background + data-* state hook), never auto-run —
+                    the organiser presses Rebuild. Gated the same as Generate/
+                    Complete just above: once the stage is complete the rebuild
+                    would always refuse (every fixture has a result by then), so
+                    there is nothing actionable left to show. */}
+                {canEdit && stage.status !== "complete" && hasDrift && drift && (
+                  <div
+                    className={
+                      swissAwaitingPairing(stage.kind, drift)
+                        ? "border-b border-dashed border-slate-200 bg-slate-50 px-4 py-3"
+                        : "border-b border-dashed border-amber-200 bg-amber-50 px-4 py-3"
+                    }
+                    data-testid="roster-drift-banner"
+                    data-roster-drift-state={
+                      drift.ghosts.length > 0
+                        ? "ghosts"
+                        : swissAwaitingPairing(stage.kind, drift)
+                          ? "swiss-awaiting-pairing"
+                          : "unplaced"
+                    }
+                  >
+                    <p
+                      className={
+                        swissAwaitingPairing(stage.kind, drift)
+                          ? "text-xs font-semibold text-slate-800"
+                          : "text-xs font-semibold text-amber-900"
+                      }
+                    >
+                      {msg(
+                        swissAwaitingPairing(stage.kind, drift)
+                          ? "progression.rosterDrift.swissHeading"
+                          : "progression.rosterDrift.heading",
+                      )}
+                    </p>
+                    {drift.ghosts.length > 0 && (
+                      <p className="mt-1 text-xs text-amber-800">
+                        {msg("progression.rosterDrift.ghostsLabel")}{" "}
+                        {drift.ghosts.map((e) => e.display_name).join(", ")}
+                      </p>
+                    )}
+                    {drift.unplaced.length > 0 && (
+                      <p
+                        className={
+                          swissAwaitingPairing(stage.kind, drift)
+                            ? "mt-1 text-xs text-slate-700"
+                            : "mt-1 text-xs text-amber-800"
+                        }
+                      >
+                        {msg(
+                          swissAwaitingPairing(stage.kind, drift)
+                            ? "progression.rosterDrift.swissLabel"
+                            : "progression.rosterDrift.unplacedLabel",
+                        )}{" "}
+                        {drift.unplaced.map((e) => e.display_name).join(", ")}
+                      </p>
+                    )}
+                    {swissAwaitingPairing(stage.kind, drift) && (
+                      <p className="mt-1 text-xs text-slate-600">{msg("progression.rosterDrift.swissNote")}</p>
+                    )}
+                    {/* No destructive remedy for a swiss stage that is merely
+                        between rounds. "Rebuild fixtures" deletes the round
+                        and regenerates it — which, on an odd roster, sits
+                        somebody out again (so the banner returns) while
+                        discarding the officials, team sheets and device links
+                        attached to those fixtures. Offering that as the fix
+                        for a stage where nothing is wrong is the defect W3
+                        item 6 was chartered to remove; `Generate` for the
+                        next round is the real call to action, and it already
+                        renders in the rail above. Ghosts still get the
+                        button: a withdrawn entrant named on a live fixture IS
+                        drift, on swiss exactly as anywhere else. */}
+                    {!swissAwaitingPairing(stage.kind, drift) && (
+                      <button
+                        type="button"
+                        data-testid="roster-drift-rebuild"
+                        disabled={busy !== null}
+                        onClick={() => void rebuildStage(stage.id)}
+                        className="btn btn-danger mt-2 min-h-11 px-3 py-1.5 text-xs"
+                      >
+                        {busy === stage.id
+                          ? msg("progression.rosterDrift.rebuilding")
+                          : msg("progression.rosterDrift.rebuildCta")}
+                      </button>
+                    )}
+                  </div>
+                )}
+
+                {/* PROMPT-66: inline ad-hoc match form (replay / friendly / tie-breaker).
+                    Competition Desk W3 Task 3 — only the OPEN TRIGGER moved onto
+                    StageRail (data-testid="stage-add-match"); this form stays
+                    mounted here, deliberately, because it reads `boardSlotOptions`
+                    below, which also feeds `<RunSheet>` further down this file.
+                    Do not move this form to "finish" the rail move — that would
+                    fork `boardSlotOptions` into two derivations. */}
+                {addingTo === stage.id && (
+                  <AddMatchForm
+                    msg={msg}
+                    stageId={stage.id}
+                    entrantNames={entrantNames}
+                    boardSlotOptions={boardSlotOptions}
+                    onDone={() => {
+                      setAddingTo(null);
+                      router.refresh();
+                    }}
+                    onCancel={() => setAddingTo(null)}
+                  />
+                )}
+
+                {/* Fix round 2 (Ruling T4-B) — a non-editing viewer gets no
+                    StageRail at all (it returns null outright for !canEdit), so
+                    their read of "how many fixtures still need a time" has to
+                    live here instead, where it always did before this task
+                    moved the CTA onto the rail. Same `unscheduledBadge` element
+                    as the rail's slot above — never construct a second one.
+                    Same pattern Ruling T3-A already set for `courtTagsEditor`
+                    just below. */}
+                {!canEdit && unscheduledBadge}
+
+                {/* Owner-approved redesign, "Option A" — the body's fixtures-
+                    progress counts line. Renders for a stage that HAS
+                    fixtures (guarded on `stageNonByeCount > 0`, not merely
+                    `stageFixtures.length > 0`, so a stage that is somehow
+                    all-bye falls through safely); a stage with none keeps
+                    the existing "no fixtures yet" message just below,
+                    unchanged, never both.
+
+                    Owner ruling (this round): the bar that used to sit
+                    above this line is GONE — it only earned its place while
+                    it could show mixed state, and with every fixture
+                    scheduled it rendered as a solid full-width block that
+                    said nothing this text does not say better, carrying the
+                    most visual weight on a card whose real job is the
+                    actions below it. The void Option A built the bar to
+                    fill was closed by Option B's stacking, not by the bar,
+                    so its removal reopens nothing. This line remains the
+                    card's one statement of where the stage is up to. */}
+                {stageFixtures.length > 0 && stageNonByeCount > 0 && (
+                  <div className="px-4 py-3" data-testid="stage-progress">
+                    {/* Suppress any clause whose count is zero (_RULES.md:
+                        "an empty cell is not information" — this programme
+                        has already shipped "· 0 in play" on every settled
+                        row once). Counted through `plural()`
+                        (`msgPlural`/`useMsgPlural`) — this programme has
+                        shipped "1 fixtures" five times; never a bare
+                        `${n} played`. */}
+                    {(() => {
+                      const clauses = [
+                        stagePlayed.length > 0 ? msgPlural("schedule.progress.played", stagePlayed.length) : null,
+                        stageInPlay.length > 0 ? msgPlural("schedule.progress.inPlay", stageInPlay.length) : null,
+                        unscheduled.length > 0 ? msgPlural("schedule.progress.toSchedule", unscheduled.length) : null,
+                      ].filter((s): s is string => s !== null);
+                      return clauses.length > 0 ? (
+                        // `mt-1.5` retired with the bar above it — this
+                        // line is now the wrapper's only child, and the
+                        // wrapper's own `py-3` already supplies its top
+                        // spacing; keeping the margin would just add an
+                        // unintended extra 6px nobody asked for.
+                        <p className="text-xs text-slate-500" data-testid="stage-progress-counts">
+                          {clauses.join(" · ")}
+                        </p>
+                      ) : null;
+                    })()}
+                  </div>
+                )}
+
+                {/* Owner-approved "Option 2" (on top of Option B) — "why are
+                    we not showing the fixtures in each stage?" answered as
+                    NAVIGATION, not a second copy: the run sheet stays the
+                    ONE list (Task 4 ruling, restated below), and this is a
+                    destination control that filters it to this stage. Copy
+                    reads as a destination ("View N fixtures"), never a bare
+                    statistic — `plural()` (`msgPlural`) throughout, this
+                    programme's own repeat offender ("1 fixtures", five
+                    times). `stageFixtures.length` — the count already in
+                    hand here, never re-derived. Gated on `> 0` alone (not
+                    `stageNonByeCount`, unlike the progress bar above): a
+                    bye is still a real row the run sheet renders, so a
+                    stage whose only fixture is a bye still has something to
+                    view.
+
+                    Click sets `stageFilter` (this component's own state,
+                    threaded to `<RunSheet>` as `stageId`) and scrolls the
+                    sheet into view — `requestAnimationFrame` + a
+                    `document.querySelector` on `run-sheet`'s own stable
+                    testid, the SAME "jump to" idiom `schedule-board.tsx`'s
+                    `jumpTo` already uses, rather than inventing a second
+                    one. The sheet may be several stage cards below the
+                    fold, especially on a division with many stages — a
+                    state change with no scroll would leave the organiser
+                    looking at an unchanged screen. */}
+                {stageFixtures.length > 0 && (
                   <button
                     type="button"
-                    disabled={busy !== null}
+                    data-testid="stage-view-fixtures"
                     onClick={() => {
-                      // P6/D4b task B, scope item 2 — REVERSED (fix round 3,
-                      // Critical 1, whole-branch review): this click used to
-                      // be gated behind a "you'll lose N fixtures" confirm
-                      // dialog whenever stageFixtures.length > 0. That
-                      // premise was never checked against the code and is
-                      // false — generateStageFixtures (stages.ts) is
-                      // ADDITIVE ONLY. It builds `byKey` from the stage's
-                      // existing fixtures and inserts only the generated
-                      // rows missing from it (stages.ts:997-1031); any
-                      // existing fixture that no longer matches the current
-                      // rules is left in place, untouched, not discarded.
-                      // The repo's only `delete from fixtures` are
-                      // history.ts's checkpoint restore and a demo seed —
-                      // neither is this code path. So the dialog blocked a
-                      // routine, safe action (an organiser adding a late
-                      // entrant, then clicking Generate again) behind a
-                      // false data-loss warning.
-                      //
-                      // Deliberately NOT replaced with a truthful-but-vague
-                      // "this won't remove stale fixtures" disclaimer either:
-                      // there is no client-side way to tell whether any
-                      // existing fixture actually IS stale (that diff is
-                      // engine-only, server-side, out of this task's scope —
-                      // same reason the old dialog computed a client-side
-                      // "blast radius" instead of the real diff in the first
-                      // place). A disclaimer with no computed fact behind it
-                      // would just be new boilerplate to click through on
-                      // every regenerate, forever, in place of one that
-                      // named specific (if wrong) numbers. Regeneration is
-                      // simply a normal, unguarded action now, same as the
-                      // common first-generate case always was.
-                      void act(stage.id, "generate");
+                      setStageFilter(stage.id);
+                      // ...and clear the TYPE filter in the same gesture.
+                      // The label counts `stageFixtures.length`, which is the
+                      // whole stage — but `keep()` in run-sheet.tsx ANDs the
+                      // stage dimension with the type ladder, and on match day
+                      // `filter` initialises to "today". A knockout stage
+                      // playing tomorrow therefore advertised "View 12
+                      // fixtures" and delivered "No fixtures match Today":
+                      // the control promised 12 and showed 0. Sending the
+                      // organiser somewhere empty is worse than not offering
+                      // the trip, so the control makes its own label true.
+                      setFilter("all");
+                      requestAnimationFrame(() => {
+                        document
+                          .querySelector('[data-testid="run-sheet"]')
+                          ?.scrollIntoView({ block: "start", behavior: "smooth" });
+                      });
                     }}
-                    className="btn btn-ghost px-3 py-1.5 text-xs"
+                    className="flex min-h-11 w-full items-center gap-1 px-4 py-2 text-left text-xs font-semibold text-purple-700 hover:text-purple-800"
                   >
-                    {busy === stage.id
-                      ? msg("schedule.working")
-                      : stage.kind === "swiss"
-                        ? msg("schedule.pairNext")
-                        : msg("schedule.generate")}
+                    {msgPlural("schedule.stage.viewFixtures", stageFixtures.length)}
+                    <span aria-hidden="true">→</span>
                   </button>
-                  {ADHOC_STAGE_KINDS.has(stage.kind) && stageFixtures.length > 0 && (
-                    <button
-                      type="button"
-                      disabled={busy !== null}
-                      onClick={() => setAddingTo(addingTo === stage.id ? null : stage.id)}
-                      className="btn btn-ghost px-3 py-1.5 text-xs"
-                    >
-                      {msg("stage.addMatch.button")}
-                    </button>
-                  )}
-                  {stageFixtures.length > 0 && (
-                    <button
-                      type="button"
-                      disabled={busy !== null}
-                      onClick={() => act(stage.id, "complete")}
-                      className="btn btn-primary px-3 py-1.5 text-xs"
-                    >
-                      {msg("schedule.complete")}
-                    </button>
-                  )}
-                </>
-              )}
-              {canEdit && deletable && (
-                <button
-                  type="button"
-                  disabled={busy !== null}
-                  onClick={async () => {
-                    const ok = await confirmDialog({
-                      title: msg("confirm.deleteStage.title"),
-                      body: msg("confirm.deleteStage.body", { name: stage.name }),
-                      confirmLabel: msg("confirm.deleteStage.label"),
-                      tone: "danger",
-                    });
-                    if (ok) void act(stage.id, "delete");
+                )}
+
+                {/* Every fixture list that used to render here — the round-
+                    grouped non-bracket list AND the bracket stage's own
+                    round-sectioned sibling sections — is gone. Both now render
+                    ONCE, division-wide, in the `<RunSheet>` mounted below the
+                    stage loop (Competition Desk W2, Task 4, steps 5+6). This
+                    card keeps only the "no fixtures generated yet" message. */}
+                {stageFixtures.length === 0 && (
+                  <p className="px-4 py-4 text-sm text-slate-500">
+                    {canEdit ? msg("schedule.noFixtures.can") : msg("schedule.noFixtures.view")}
+                  </p>
+                )}
+
+                {/* Fix round 1 — a non-editing viewer gets no StageRail at all
+                    (it returns null outright for !canEdit), so their read-only
+                    view of the court-tag requirements has to live here instead,
+                    where it always did before Task 3 moved the editing path onto
+                    the rail. Same `courtTagsEditor` element as the rail's slot
+                    above — never construct a second one. */}
+                {!canEdit && courtTagsEditor}
+              </div>
+
+              {/* "Option B" — `stage-rail` is now a STACKED block below
+                  `stage-sheet` (DOM order), not a side column. Deliberate
+                  ordering trade-off: the target composition the controller
+                  sketched puts the action-button toolbar ABOVE the progress
+                  bar (which lives in `stage-sheet`, just above); this build
+                  keeps the progress bar in its EXISTING position instead
+                  (before the toolbar) rather than moving it. Moving it would
+                  mean passing it into `<StageRail>` as a THIRD slot
+                  (`courtTagsSlot`/`unscheduledBadgeSlot`'s own pattern) so it
+                  could sit between the toolbar and `courtTagsSlot` — but
+                  `<StageRail>` is called EXACTLY ONCE (one trigger, one
+                  sheet) and decision 2 ("the phone bottom sheet STAYS
+                  exactly as it is") is non-negotiable: a slot rendered
+                  inside `<StageRail>`'s own sheet div would be invisible on
+                  phone until the sheet is tapped, which the progress bar
+                  never was. Reordering purely visually (CSS `order`) would
+                  need `stage-sheet` and `stage-rail` to be direct siblings
+                  in ONE flex container (`display:contents` on both, or a
+                  full merge) — a bigger, riskier change than this round
+                  costs, given mobile pixel-parity is the harder constraint
+                  to break. The toolbar still gets its own dedicated
+                  full-width row (decision 1) and the column is still gone;
+                  only the toolbar/progress-bar RELATIVE order differs from
+                  the sketch. Flagged for the controller to re-review if
+                  exact interleaving turns out to matter to the owner. */}
+              <div data-testid="stage-rail" className="min-w-0">
+                <StageRail
+                  stage={stage}
+                  canEdit={canEdit}
+                  busy={busy}
+                  fixtureCount={stageFixtures.length}
+                  deletable={deletable}
+                  onAct={(stageId, action) => {
+                    void act(stageId, action);
                   }}
-                  className="btn btn-danger px-3 py-1.5 text-xs"
-                >
-                  {msg("schedule.delete")}
-                </button>
-              )}
-            </header>
-
-            {/* F3 Task 5 (5a/5b) — the board no longer matches the roster:
-                a withdrawn entrant is still named on a fixture, an added
-                entrant has none yet, or both. Reuses the house "needs
-                attention" treatment (progression-panel.tsx's amber
-                border/background + data-* state hook), never auto-run —
-                the organiser presses Rebuild. Gated the same as Generate/
-                Complete just above: once the stage is complete the rebuild
-                would always refuse (every fixture has a result by then), so
-                there is nothing actionable left to show. */}
-            {canEdit && stage.status !== "complete" && hasDrift && drift && (
-              <div
-                className="border-b border-dashed border-amber-200 bg-amber-50 px-4 py-3"
-                data-testid="roster-drift-banner"
-                data-roster-drift-state={drift.ghosts.length > 0 ? "ghosts" : "unplaced"}
-              >
-                <p className="text-xs font-semibold text-amber-900">
-                  {msg("progression.rosterDrift.heading")}
-                </p>
-                {drift.ghosts.length > 0 && (
-                  <p className="mt-1 text-xs text-amber-800">
-                    {msg("progression.rosterDrift.ghostsLabel")}{" "}
-                    {drift.ghosts.map((e) => e.display_name).join(", ")}
-                  </p>
-                )}
-                {drift.unplaced.length > 0 && (
-                  <p className="mt-1 text-xs text-amber-800">
-                    {msg("progression.rosterDrift.unplacedLabel")}{" "}
-                    {drift.unplaced.map((e) => e.display_name).join(", ")}
-                  </p>
-                )}
-                <button
-                  type="button"
-                  data-testid="roster-drift-rebuild"
-                  disabled={busy !== null}
-                  onClick={() => void rebuildStage(stage.id)}
-                  className="btn btn-danger mt-2 min-h-11 px-3 py-1.5 text-xs"
-                >
-                  {busy === stage.id
-                    ? msg("progression.rosterDrift.rebuilding")
-                    : msg("progression.rosterDrift.rebuildCta")}
-                </button>
+                  onDelete={(s) => {
+                    void (async () => {
+                      const ok = await confirmDialog({
+                        title: msg("confirm.deleteStage.title"),
+                        body: msg("confirm.deleteStage.body", { name: s.name }),
+                        confirmLabel: msg("confirm.deleteStage.label"),
+                        tone: "danger",
+                      });
+                      if (ok) void act(s.id, "delete");
+                    })();
+                  }}
+                  addingTo={addingTo}
+                  onToggleAddMatch={(stageId) => setAddingTo(addingTo === stageId ? null : stageId)}
+                  open={openRailFor === stage.id}
+                  onToggleOpen={(stageId) => setOpenRailFor(openRailFor === stageId ? null : stageId)}
+                  adhoc={ADHOC_STAGE_KINDS.has(stage.kind)}
+                  // #622 — court tags editor moves onto the rail (Task 3). Stays
+                  // constructed HERE, not inside StageRail: it reads
+                  // `courtTagSuggestions` off this panel's own `venues` prop, and
+                  // the rail keeps owning no data of its own (see stage-rail.tsx's
+                  // own comment on why). `StageRail` only actually renders this
+                  // slot when `canEdit` is true (its own early-return guard) — the
+                  // `!canEdit` inline placement above is what a non-editing viewer
+                  // sees instead.
+                  courtTagsSlot={courtTagsEditor}
+                  unscheduledBadgeSlot={unscheduledBadge}
+                />
               </div>
-            )}
-
-            {/* PROMPT-66: inline ad-hoc match form (replay / friendly / tie-breaker). */}
-            {addingTo === stage.id && (
-              <AddMatchForm
-                msg={msg}
-                stageId={stage.id}
-                entrantNames={entrantNames}
-                boardSlotOptions={boardSlotOptions}
-                onDone={() => {
-                  setAddingTo(null);
-                  router.refresh();
-                }}
-                onCancel={() => setAddingTo(null)}
-              />
-            )}
-
-            {/* Pinned unscheduled section (item 3) — count + auto CTA. */}
-            {unscheduled.length > 0 && (
-              <div className="border-b border-dashed border-slate-200 bg-slate-50/60 px-4 py-3">
-                <div className="flex flex-wrap items-center gap-2">
-                  {/* Finding 11: this heading and the run sheet's own
-                      "Not yet scheduled" sat on the same screen as a word-for-
-                      word transposition — and in fr/es/nl they were the SAME
-                      words in the same order. It now names its SCOPE ("in this
-                      stage"), which is the one thing that made the two numbers
-                      reconcilable; the sheet's heading is unchanged. Both go
-                      when Task 5 moves this CTA to the rail. */}
-                  <p className="text-xs font-semibold text-slate-700">
-                    {msg("schedule.unscheduled.title")}
-                    <span
-                      data-testid="stage-unscheduled-count"
-                      className="ml-1.5 rounded-full bg-slate-200 px-1.5 text-[11px] font-medium text-slate-700"
-                    >
-                      {unscheduled.length}
-                    </span>
-                  </p>
-                  {canEdit && stage.status !== "complete" && (
-                    <button
-                      type="button"
-                      data-testid="stage-auto-schedule"
-                      disabled={busy !== null || capacityGateBlocks(capacityByStage.get(stage.id))}
-                      onClick={() => void autoScheduleStage(stage.id)}
-                      className="btn btn-primary min-h-11 px-3 py-1 text-xs"
-                    >
-                      {busy === stage.id ? msg("schedule.working") : msg("schedule.unscheduled.cta")}
-                    </button>
-                  )}
-                </div>
-                {/* D2 capacity pre-check (owner ruling: Solve hard-blocked
-                    ONLY on a genuinely FRESH "impossible" — "tight" is
-                    advisory and never blocks, and per the review fix above,
-                    neither does a check that FAILED to run at all). The full
-                    card with bars/suggestions lives on the Settings tab;
-                    this is just the reason the button here is disabled —
-                    same shared `capacityGateBlocks` predicate the button's
-                    own `disabled` reads, so the two can never disagree. */}
-                {capacityGateBlocks(capacityByStage.get(stage.id)) && (
-                  <p data-testid="stage-auto-schedule-blocked" className="mt-1.5 text-xs text-red-600">
-                    {msg("schedule.capacity.blockedReason")}
-                  </p>
-                )}
-                {/* The row LIST that used to render here (FixtureLine per
-                    fixture) is gone — the run sheet's own "Not yet
-                    scheduled" group, mounted once below, division-wide,
-                    shows every one of these rows with a "Set time" action.
-                    This header keeps only the count + CTA + capacity reason
-                    until Task 5 moves them to the stage rail. */}
-              </div>
-            )}
-
-            {/* Every fixture list that used to render here — the round-
-                grouped non-bracket list AND the bracket stage's own
-                round-sectioned sibling sections — is gone. Both now render
-                ONCE, division-wide, in the `<RunSheet>` mounted below the
-                stage loop (Competition Desk W2, Task 4, steps 5+6). This
-                card keeps only the "no fixtures generated yet" message. */}
-            {stageFixtures.length === 0 && (
-              <p className="px-4 py-4 text-sm text-slate-500">
-                {canEdit ? msg("schedule.noFixtures.can") : msg("schedule.noFixtures.view")}
-              </p>
-            )}
-
-            {/* #622 — sits with the stage's other settings, last in the card so
-                it never pushes the fixture list below the fold. */}
-            <StageCourtTagsEditor
-              stageId={stage.id}
-              canEdit={canEdit}
-              suggestions={courtTagSuggestions}
-              msg={msg}
-            />
           </section>
           </div>
         );
@@ -1181,6 +1140,8 @@ export function StagesPanel({ divisionId, divisionSeq, competitionId, orgSlug, c
         hrefFor={(f) => routes.fixture(orgSlug, compSlug, divSlug, f.fixture_no)}
         filter={filter}
         onFilter={setFilter}
+        stageId={stageFilter}
+        onStageFilter={setStageFilter}
         boardSlotOptions={boardSlotOptions}
         onRescheduled={() => {
           setNotice(msg("schedule.rescheduled"));
@@ -1729,8 +1690,21 @@ export function StageCourtTagsEditor({
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
+  // Owner request (competition desk W3, on top of Option B) — the collapsed
+  // summary row becomes a real button that opens a modal; the fetch itself
+  // stays gated on `open && !loaded` for an EDITING viewer, byte for byte
+  // (brief: "still loads on open"). A non-editing viewer gets no button and
+  // no modal at all (see the render branch below) — they have no `open` to
+  // set, so `!open` alone would never fetch anything and the current value
+  // the brief requires them to see would never load. `canEdit` widens the
+  // gate for exactly that case: `!open && canEdit` is the skip condition
+  // (identical to the old `!open` when `canEdit` is true, since `open` can
+  // only ever become true through the button THIS component itself renders
+  // only when `canEdit`); when `canEdit` is false the skip condition drops
+  // to `false`, so this fetches once on mount instead, same effect-cleanup
+  // shape as before.
   useEffect(() => {
-    if (!open || loaded) return;
+    if (loaded || (!open && canEdit)) return;
     let cancelled = false;
     apiV1<{
       stage_id: string;
@@ -1755,7 +1729,7 @@ export function StageCourtTagsEditor({
     return () => {
       cancelled = true;
     };
-  }, [open, loaded, stageId, msg]);
+  }, [open, loaded, canEdit, stageId, msg]);
 
   /** A role key becomes text in exactly one place repo-wide (round-role-label
    *  .ts). An unparseable key is rendered RAW rather than hidden: the server
@@ -1799,116 +1773,177 @@ export function StageCourtTagsEditor({
     }
   }
 
+  // Owner request — a non-editing viewer gets no button and no modal at
+  // all, just the current value as plain text. `StageRail` already returns
+  // `null` for `!canEdit`, so THIS component's own `!canEdit` mount is the
+  // one place a non-editing viewer's read of "what does this stage
+  // require?" comes from (stages-panel.tsx's `{!canEdit && courtTagsEditor}`
+  // fallback, same "built once, one of two mutually exclusive spots"
+  // contract Ruling T3-A set for this exact element). An early return here
+  // is safe — every hook above has already run unconditionally, so this
+  // branches on JSX only, never a hook. Byte-identical `data-testid`, so a
+  // reader locating the value does not care which branch rendered it.
+  if (!canEdit) {
+    return (
+      <div className="border-t border-slate-100 px-4 py-3" data-testid="stage-court-tags">
+        <p className="text-xs font-semibold text-slate-700">
+          {msg("stagetags.title")}
+          {loaded && <span className="ml-1 font-normal text-slate-500">· {summary}</span>}
+        </p>
+      </div>
+    );
+  }
+
   return (
     <div className="border-t border-slate-100 px-4 py-3" data-testid="stage-court-tags">
+      {/* Owner request, competition desk W3 (on top of Option B) — a real
+          button, not the old 248x16px inline-disclosure summary row (well
+          under the 44px tap floor). Shows the label AND the current value
+          together ("Required court tags · Any court") so it reads as a
+          setting at a glance, matching what the collapsed row already
+          showed once loaded — `{loaded && ...}` is byte-identical to the
+          old inline version, never re-derived. Opens a MODAL instead of
+          expanding inline; the editor body inside is untouched. */}
       <button
         type="button"
+        data-testid="stage-court-tags-trigger"
+        // `setOpen(!open)`, not `setOpen(true)` — matches the OLD inline
+        // disclosure's own toggle semantics and keeps this button usable as
+        // BOTH open and close for anything driving it directly (the modal
+        // itself covers the trigger visually once open, in a real browser,
+        // so a genuine second CLICK can never reach it there — this is a
+        // no-op for real users, not a UX change; it only matters for a
+        // caller that fires `onClick` programmatically, e.g. a test).
         onClick={() => setOpen(!open)}
         aria-expanded={open}
-        className="flex w-full min-w-0 items-baseline gap-2 text-left text-xs font-semibold text-slate-700"
+        className="flex min-h-11 w-full min-w-0 items-center gap-1.5 text-left text-xs font-semibold text-slate-700 hover:text-slate-900"
       >
         <span>{msg("stagetags.title")}</span>
-        {loaded && <span className="min-w-0 truncate font-normal text-slate-500">{summary}</span>}
+        {loaded && <span className="min-w-0 truncate font-normal text-slate-500">· {summary}</span>}
+        <span aria-hidden="true" className="ml-auto shrink-0 text-slate-400">
+          ›
+        </span>
       </button>
 
       {open && (
-        // Everything stacks by default and only spreads out from `sm:` up —
-        // the panel's own narrow-width idiom (FixtureLine, line ~1589). At
-        // 320px nothing sits side by side, so nothing forces a page scroll.
-        <div className="mt-3 flex flex-col gap-3">
-          {loading && <p className="text-xs text-slate-500">{msg("stagetags.loading")}</p>}
-          {loaded && (
-            <>
-              <p className="text-xs text-slate-500">{msg("stagetags.desc")}</p>
-              <TagChipInput
-                value={stageTags}
-                onChange={setStageTags}
-                suggestions={suggestions}
-                disabled={!canEdit}
-                label={msg("stagetags.stageLabel")}
-                placeholder={msg("tags.placeholder")}
-                addLabel={msg("tags.add")}
-                removeLabelFor={(tag) => msg("tags.remove", { tag })}
-                suggestionsLabel={msg("tags.suggestions")}
-              />
+        // Reuse `components/modal.tsx` rather than a third bottom-sheet
+        // variant (brief), EXACTLY as it ships — controller ruling C-2: a
+        // first attempt moved modal.tsx's own `sm:` breakpoint to `md:`
+        // ("scoped to this one file"), and the full suite caught it anyway
+        // (`pass-checkout-parity.test.tsx`) — `Modal` is also imported by
+        // `billing-actions.tsx`, `buy-credits.tsx`, `admin-credits-
+        // panel.tsx`, `registration-hub-config-panel.tsx` and `template-
+        // gallery.tsx`, so moving its OWN breakpoint is the same product-
+        // wide blast radius as moving the shared `.modal-overlay`/
+        // `.sheet-handle` CSS classes would have been — a different route
+        // to an identical reach, not a smaller one. Ruling 15 ("unify on
+        // `md:`") governs the DESK, not every shared primitive it happens
+        // to reach. So this modal stays `sm:`-breakpointed like every
+        // other `<Modal>` in the product; the difference between a sheet
+        // under 640px and one under 768px is not worth a product-wide
+        // change for this one popup. Title is the same "Required court
+        // tags" the trigger button shows, so the modal header and the
+        // control that opened it read as the same setting. `onClose` just
+        // flips `open` back — `loaded`/`stageTags`/
+        // `rounds` all stay in this component's own state, so reopening
+        // shows whatever was last edited, exactly like the old inline
+        // expand/collapse never re-fetched either.
+        <Modal title={msg("stagetags.title")} onClose={() => setOpen(false)}>
+          <div className="flex flex-col gap-3">
+            {loading && <p className="text-xs text-slate-500">{msg("stagetags.loading")}</p>}
+            {loaded && (
+              <>
+                <p className="text-xs text-slate-500">{msg("stagetags.desc")}</p>
+                <TagChipInput
+                  value={stageTags}
+                  onChange={setStageTags}
+                  suggestions={suggestions}
+                  disabled={!canEdit}
+                  label={msg("stagetags.stageLabel")}
+                  placeholder={msg("tags.placeholder")}
+                  addLabel={msg("tags.add")}
+                  removeLabelFor={(tag) => msg("tags.remove", { tag })}
+                  suggestionsLabel={msg("tags.suggestions")}
+                />
 
-              <div className="flex flex-col gap-3 border-t border-dashed border-slate-200 pt-3">
-                <p className="text-xs font-semibold text-slate-700">{msg("stagetags.rounds.heading")}</p>
-                {availableRoles.length === 0 && rounds.length === 0 ? (
-                  <p className="text-xs text-slate-500">{msg("stagetags.rounds.none")}</p>
-                ) : (
-                  <>
-                    {rounds.map((row, i) => (
-                      <div key={row.round_role} className="flex flex-col gap-2">
-                        <div className="flex flex-wrap items-baseline gap-2">
-                          <span className="text-xs font-medium text-slate-700">{roleLabel(row.round_role)}</span>
-                          {canEdit && (
-                            <button
-                              type="button"
-                              className="btn btn-ghost px-2 py-1 text-xs"
-                              onClick={() => setRounds(rounds.filter((_, j) => j !== i))}
-                            >
-                              {msg("stagetags.rounds.remove")}
-                            </button>
-                          )}
+                <div className="flex flex-col gap-3 border-t border-dashed border-slate-200 pt-3">
+                  <p className="text-xs font-semibold text-slate-700">{msg("stagetags.rounds.heading")}</p>
+                  {availableRoles.length === 0 && rounds.length === 0 ? (
+                    <p className="text-xs text-slate-500">{msg("stagetags.rounds.none")}</p>
+                  ) : (
+                    <>
+                      {rounds.map((row, i) => (
+                        <div key={row.round_role} className="flex flex-col gap-2">
+                          <div className="flex flex-wrap items-baseline gap-2">
+                            <span className="text-xs font-medium text-slate-700">{roleLabel(row.round_role)}</span>
+                            {canEdit && (
+                              <button
+                                type="button"
+                                className="btn btn-ghost px-2 py-1 text-xs"
+                                onClick={() => setRounds(rounds.filter((_, j) => j !== i))}
+                              >
+                                {msg("stagetags.rounds.remove")}
+                              </button>
+                            )}
+                          </div>
+                          <TagChipInput
+                            value={row.required_court_tags}
+                            onChange={(next) =>
+                              setRounds(rounds.map((r, j) => (j === i ? { ...r, required_court_tags: next } : r)))
+                            }
+                            suggestions={suggestions}
+                            disabled={!canEdit}
+                            label={msg("stagetags.rounds.tagsLabel", { round: roleLabel(row.round_role) })}
+                            placeholder={msg("tags.placeholder")}
+                            addLabel={msg("tags.add")}
+                            removeLabelFor={(tag) => msg("tags.remove", { tag })}
+                            suggestionsLabel={msg("tags.suggestions")}
+                          />
                         </div>
-                        <TagChipInput
-                          value={row.required_court_tags}
-                          onChange={(next) =>
-                            setRounds(rounds.map((r, j) => (j === i ? { ...r, required_court_tags: next } : r)))
-                          }
-                          suggestions={suggestions}
-                          disabled={!canEdit}
-                          label={msg("stagetags.rounds.tagsLabel", { round: roleLabel(row.round_role) })}
-                          placeholder={msg("tags.placeholder")}
-                          addLabel={msg("tags.add")}
-                          removeLabelFor={(tag) => msg("tags.remove", { tag })}
-                          suggestionsLabel={msg("tags.suggestions")}
-                        />
-                      </div>
-                    ))}
-                    {canEdit && unusedRoles.length > 0 && (
-                      // Adding a round is a one-tap select, not a select+button
-                      // pair: the choice IS the action, and a second control
-                      // would be one more thing to fit at 320px.
-                      <label className="label flex flex-col gap-1 text-xs">
-                        {msg("stagetags.rounds.add")}
-                        <select
-                          className="input min-h-11 w-full py-1.5 text-sm"
-                          value=""
-                          onChange={(e) => {
-                            if (e.target.value === "") return;
-                            setRounds([...rounds, { round_role: e.target.value, required_court_tags: [] }]);
-                          }}
-                        >
-                          <option value="" />
-                          {unusedRoles.map((role) => (
-                            <option key={role} value={role}>
-                              {roleLabel(role)}
-                            </option>
-                          ))}
-                        </select>
-                      </label>
-                    )}
-                  </>
-                )}
-              </div>
+                      ))}
+                      {canEdit && unusedRoles.length > 0 && (
+                        // Adding a round is a one-tap select, not a select+button
+                        // pair: the choice IS the action, and a second control
+                        // would be one more thing to fit at 320px.
+                        <label className="label flex flex-col gap-1 text-xs">
+                          {msg("stagetags.rounds.add")}
+                          <select
+                            className="input min-h-11 w-full py-1.5 text-sm"
+                            value=""
+                            onChange={(e) => {
+                              if (e.target.value === "") return;
+                              setRounds([...rounds, { round_role: e.target.value, required_court_tags: [] }]);
+                            }}
+                          >
+                            <option value="" />
+                            {unusedRoles.map((role) => (
+                              <option key={role} value={role}>
+                                {roleLabel(role)}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                      )}
+                    </>
+                  )}
+                </div>
 
-              {canEdit && (
-                <button
-                  type="button"
-                  disabled={saving}
-                  onClick={() => void save()}
-                  className="btn btn-primary min-h-11 w-full px-3 py-1.5 text-xs sm:w-auto sm:self-start"
-                >
-                  {saving ? msg("schedule.working") : msg("stagetags.save")}
-                </button>
-              )}
-            </>
-          )}
-          {notice !== null && <p className="text-xs text-green-700">{notice}</p>}
-          {error !== null && <p className="text-xs text-red-600">{error}</p>}
-        </div>
+                {canEdit && (
+                  <button
+                    type="button"
+                    disabled={saving}
+                    onClick={() => void save()}
+                    className="btn btn-primary min-h-11 w-full px-3 py-1.5 text-xs md:w-auto md:self-start"
+                  >
+                    {saving ? msg("schedule.working") : msg("stagetags.save")}
+                  </button>
+                )}
+              </>
+            )}
+            {notice !== null && <p className="text-xs text-green-700">{notice}</p>}
+            {error !== null && <p className="text-xs text-red-600">{error}</p>}
+          </div>
+        </Modal>
       )}
     </div>
   );

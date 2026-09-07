@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { test, expect, type APIRequestContext } from "@playwright/test";
+import { test, expect, type APIRequestContext, type Locator } from "@playwright/test";
 import { TAG, apiJson, activeOrg, seedVenueWithCourts, addEntrantsViaApi } from "./helpers";
 // The AUTHORITY for what a day label looks like, imported rather than
 // hand-typed: the assertions below must move when the format moves, and must
@@ -39,6 +39,43 @@ const UI = Object.fromEntries(
     ) as Record<string, string>,
   ]),
 ) as Record<(typeof LOCALES)[number], Record<string, string>>;
+
+/**
+ * W3 Task 9 fix round 1, Major finding. The run-sheet row now carries the
+ * meta/round text (and, when set, the court name embedded in it) in TWO
+ * paragraphs below `md` — one `hidden md:block` (desktop), one `md:hidden`
+ * (phone, combined with the result sub-line) — "one DOM, branched", the
+ * repo-wide phone-composition idiom `run-sheet-row.tsx` uses.
+ *
+ * `expect(row).toContainText(x)` reads `Element.textContent`, which does
+ * NOT respect `display:none` — it finds `x` whichever copy holds it, hidden
+ * or not, so it silently stopped proving "the entrant/court/status is on
+ * screen" the moment that duplication landed, without this file's own
+ * assertions or line count ever changing. This is the exact mirror of the
+ * `mobile.spec.ts` P6-task-B bug fixed alongside this: there the hidden
+ * copy made `toBeVisible()` FAIL (a loud false red); here it makes
+ * `toContainText` PASS (a silent false green that never announces itself).
+ *
+ * This spec's tests all run at the `parallel` project's fixed 1280px
+ * viewport (Desktop Chrome default, no per-test `setViewportSize` override
+ * in this file) — `md:` and up, where exactly ONE copy of any given piece
+ * of text is ever visible by construction (the `hidden`/`md:hidden` pair is
+ * mutually exclusive at every width), so scoping to the visible copy here
+ * is strictly correct, never a weaker assertion than the one it replaces.
+ *
+ * Scoped to `p`/`a`/`button` specifically, not a bare `:visible` — the row
+ * `<li>` itself and its wrapper `<div>`s are also `:visible` and also
+ * "contain" the text somewhere in their subtree (via `hasText`'s substring
+ * match), so an untyped selector would resolve right back to an ancestor
+ * that says nothing about which LEAF actually shows it — the same
+ * disambiguation `mobile.spec.ts:3180`'s `p:visible` fix already needed.
+ */
+async function expectVisibleText(row: Locator, text: string): Promise<void> {
+  await expect(
+    row.locator("p:visible, a:visible, button:visible", { hasText: text }).first(),
+    `"${text}" is not visible on screen in this row (a hidden copy may carry it, which textContent cannot tell apart)`,
+  ).toBeVisible();
+}
 
 /** A league division whose fixtures all land on ONE venue-zone day, so the run
  *  sheet renders exactly one `kind: "day"` block to read the header off. */
@@ -374,11 +411,11 @@ test.describe("a timed, undrawn bracket fixture never offers Score (F5)", () => 
     const finalRow = page.locator(`[data-fixture-no="${final.fixture_no}"]`);
     await expect(finalRow).toBeVisible();
     // POSITIVE PAIR: the row really is the undrawn final, not an empty locator.
-    await expect(finalRow).toContainText(UI.en["runsheet.sub.awaitingDraw"]!);
+    await expectVisibleText(finalRow, UI.en["runsheet.sub.awaitingDraw"]!);
     await expect(finalRow.locator("[data-row-action]")).toHaveAttribute("data-row-action", "view");
     await expect(finalRow.locator('[data-row-action="score"]')).toHaveCount(0);
     await expect(finalRow.locator('[data-row-action="assign_scorer"]')).toHaveCount(0);
-    await expect(finalRow).toContainText(UI.en["runsheet.action.view"]!);
+    await expectVisibleText(finalRow, UI.en["runsheet.action.view"]!);
   });
 });
 
@@ -408,7 +445,7 @@ test.describe("the inline editor's per-fixture court picker", () => {
     await page.goto(url);
 
     const row = page.locator(`[data-fixture-no="${target.fixture_no}"]`);
-    await expect(row).toContainText(c1!.name);
+    await expectVisibleText(row, c1!.name);
     await row.getByTestId("run-sheet-edit-time").click();
 
     const select = row.getByTestId("fixture-court-select");
@@ -422,7 +459,7 @@ test.describe("the inline editor's per-fixture court picker", () => {
     await row.getByRole("button", { name: "Save", exact: true }).click();
 
     // The row reflects it...
-    await expect(row).toContainText(c2!.name);
+    await expectVisibleText(row, c2!.name);
     // ...and so does the SERVER, which is the half a local `useState` fakes.
     await expect
       .poll(async () => {
@@ -438,7 +475,7 @@ test.describe("the inline editor's per-fixture court picker", () => {
     // cache that agrees with a write that never landed.
     await page.reload();
     const row2 = page.locator(`[data-fixture-no="${target.fixture_no}"]`);
-    await expect(row2).toContainText(c2!.name);
+    await expectVisibleText(row2, c2!.name);
     await row2.getByTestId("run-sheet-edit-time").click();
     await expect(row2.getByTestId("fixture-court-select")).toHaveValue(c2!.id);
 

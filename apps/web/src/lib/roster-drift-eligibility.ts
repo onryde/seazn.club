@@ -22,3 +22,30 @@ export const ROSTER_DRIFT_INELIGIBLE_KINDS = new Set(["ladder", "americano"]);
 export function isRosterDriftEligible(stage: { kind: string; progression: unknown }): boolean {
   return stage.progression === null && !ROSTER_DRIFT_INELIGIBLE_KINDS.has(stage.kind);
 }
+
+/**
+ * A swiss stage that is simply BETWEEN ROUNDS, not drifted (W3 item 6).
+ *
+ * Swiss pairs one round at a time, so "active entrant with no fixture" is its
+ * normal resting state: the odd-roster bye every round, and any entrant added
+ * before the next round is generated. `getStageRosterDrift` cannot tell that
+ * apart from real drift — `swissGen` writes no row for a byed entrant, so
+ * there is no stored "considered, sat out" fact to key on — and two attempts
+ * to guess it (a `created_at` heuristic, a round-membership rule) were
+ * reviewed out as unsound. The signal therefore stays, and the PRESENTATION
+ * changes: this predicate marks the case where the only evidence is
+ * `unplaced`, on a swiss stage, so the banner can say what is actually
+ * happening and withhold a remedy that would destroy the round.
+ *
+ * Deliberately NOT `ROSTER_DRIFT_INELIGIBLE_KINDS` (the design doc's option
+ * 3): ineligibility suppresses BOTH halves, taking ghost detection with it. A
+ * withdrawn entrant still named on a live fixture is drift on a swiss stage
+ * exactly as anywhere else, so any ghost keeps the full warning and the
+ * rebuild button.
+ */
+export function swissAwaitingPairing(
+  kind: string,
+  drift: { ghosts: readonly unknown[]; unplaced: readonly unknown[] },
+): boolean {
+  return kind === "swiss" && drift.ghosts.length === 0 && drift.unplaced.length > 0;
+}

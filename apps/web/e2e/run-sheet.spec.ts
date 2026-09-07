@@ -1,4 +1,4 @@
-import { test, expect, type Page } from "@playwright/test";
+import { test, expect, type Page, type Locator } from "@playwright/test";
 import AxeBuilder from "@axe-core/playwright";
 import {
   TAG,
@@ -10,7 +10,15 @@ import {
   setZoneSplitSql,
   setDateTime,
   expectNoHorizontalScroll,
+  addEntrantsViaApi,
+  seedVenueWithCourts,
 } from "./helpers";
+// The repo's one cookie-banner dismissal — idempotent no-op under the authed
+// `page` fixture (consent is already pre-dismissed into AUTH_STATE), but
+// Task 9's brief calls it out explicitly: a fresh phone context is the one
+// place it actually matters, so every width loop below calls it anyway
+// rather than assuming the storageState always covers the surface driving.
+import { dismissCookieBanner } from "./scorepad-a11y-kit";
 // Same authority the row itself uses (`zoned-datetime.ts`, #448) — the
 // expected instant below is DERIVED from the two zones, not typed as a
 // constant, so the case still witnesses the regression if either zone
@@ -1186,4 +1194,1277 @@ test("fix round 5: an in-play or settled row's time is not an affordance, but a 
   // THE CONTROL: the same page, the same division, a movable row — the
   // affordance is there.
   await expect(page.locator(`[data-fixture-no="${nos[2]}"]`).getByTestId("run-sheet-edit-time")).toHaveCount(1);
+});
+
+// Competition Desk W3 Task 5 gave the rail an actual desktop COLUMN
+// (`lg:grid`, later `md:grid`) — RETIRED by "Option B" (controller
+// measurement, owner sign-off session): the column forced the card to
+// whatever height the rail needed (equal-height grid-row stretch), and
+// measured 62% empty at 1280 (`body=262px rail=262px content=99px
+// VOID=163px`). `stages-panel.tsx` no longer wraps `[data-testid="stage-
+// sheet"]`/`[data-testid="stage-rail"]` in a grid — both are ordinary
+// STACKED blocks now, full card width at every size. This test used to be
+// named for the column it measured; it now measures the column's absence.
+//
+// The "no stage-chrome control leaks into the sheet" sweep is UNCHANGED and
+// still the load-bearing half of this test: every action control still
+// lives in the rail and only the rail, never inside `stage-sheet`, whether
+// the two sit side by side or stacked. `roster-drift-banner`/
+// `roster-drift-rebuild` are DELIBERATELY excluded from the sweep (same
+// ruling as Task 5's own): they are per-stage STATE about the fixtures
+// below, not an action on the stage, and stay in the sheet by design —
+// sweeping them up would fail correctly for the wrong reason.
+//
+// Task 2 ("remove auto-schedule from the fixtures page") retired
+// `stage-auto-schedule` from `STAGE_CHROME_TESTIDS` below — the rail no
+// longer renders that testid at all, ever, so leaving it in the sweep would
+// only ever assert 0 === 0 (an entry no mutation could kill, AGENTS.md
+// rule 3). Five real testids remain, not six.
+//
+// Run as an EDITING viewer (also this dispatch's ruling): for a
+// non-editing viewer `<StageRail>` returns `null` outright and two of the
+// six controls legitimately render INLINE in the sheet instead (see
+// stages-panel.tsx's own `!canEdit && unscheduledBadge` / `!canEdit &&
+// courtTagsEditor` fallbacks) — asserting "none in the sheet" for that
+// viewer would be asserting the wrong thing. Every spec in this file
+// already runs as the org owner who created the division through the API
+// under `AUTH_STATE` (`seedRunSheetDivision`'s own `apiJson` calls), so this
+// is already an editing viewer's page with no extra login step needed.
+const STAGE_CHROME_TESTIDS = [
+  "stage-generate",
+  "stage-complete",
+  "stage-delete",
+  "stage-add-match",
+  "stage-unscheduled-count",
+] as const;
+
+test("desktop (Option B): the stage rail stacks BELOW the fixtures sheet — no column, no void — and no stage-chrome control leaks into the sheet", async ({
+  page,
+  request,
+}) => {
+  // The default league stage from `seedRunSheetDivision`: unscheduled
+  // fixtures (nothing scheduled yet), the sole stage (deletable), status
+  // not complete, an adhoc kind (league) — the state that makes every one
+  // of the six testids actually render, so the "none in the sheet" sweep
+  // below witnesses a real move rather than a vacuous scan over controls
+  // nothing ever built.
+  const { divisionId, fixtureIds } = await seedRunSheetDivision(request);
+  expect(fixtureIds.length, "seed produced no fixtures — setup failed, not the layout").toBeGreaterThanOrEqual(1);
+
+  // Fixed viewport, deliberately, rather than trusting the project's own
+  // default: the geometry assertion below has to mean "at 1280", not
+  // "whatever this project happens to be sized at today".
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.goto(await divisionPath(request, divisionId, "?tab=fixtures"));
+
+  const sheet = page.getByTestId("stage-sheet").first();
+  const rail = page.getByTestId("stage-rail").first();
+  await expect(sheet, "stage-sheet did not render — nothing was measured").toBeVisible();
+  await expect(rail, "stage-rail did not render — nothing was measured").toBeVisible();
+
+  const sheetBox = await sheet.boundingBox();
+  const railBox = await rail.boundingBox();
+  console.log("Option B geometry — stage-sheet box:", sheetBox, "| stage-rail box:", railBox);
+  expect(sheetBox, "stage-sheet has no box — not laid out").not.toBeNull();
+  expect(railBox, "stage-rail has no box — not laid out").not.toBeNull();
+  // STACKED, not side by side: the rail's top is at or below the sheet's
+  // bottom (a small negative tolerance covers sub-pixel/collapsed-margin
+  // rounding, never a margin big enough to hide a real two-column layout).
+  expect(
+    railBox!.y,
+    `rail y=${railBox!.y} is not at/below sheet y=${sheetBox!.y} + height=${sheetBox!.height} (still two-column, not stacked)`,
+  ).toBeGreaterThan(sheetBox!.y + sheetBox!.height - 4);
+  // No column: the rail spans (close to) the same width as the sheet —
+  // neither is squeezed into a narrow side track. A generous tolerance
+  // (40px) covers each box's own internal padding without accepting a
+  // genuine ~280px column back in.
+  expect(
+    Math.abs(railBox!.width - sheetBox!.width),
+    `rail width=${railBox!.width} and sheet width=${sheetBox!.width} disagree by more than 40px — looks like a column, not full-width stacking`,
+  ).toBeLessThan(40);
+
+  // PRINT WHAT WAS SEEN beside the gate (_RULES.md): where each of the five
+  // stage-chrome testids actually landed, so a pass here is legible as
+  // "found in the rail, absent from the sheet" and not just a bare boolean.
+  const presence: Record<string, { onPage: number; inRail: number; inSheet: number }> = {};
+  for (const testid of STAGE_CHROME_TESTIDS) {
+    presence[testid] = {
+      onPage: await page.locator(`[data-testid="${testid}"]`).count(),
+      inRail: await rail.locator(`[data-testid="${testid}"]`).count(),
+      inSheet: await sheet.locator(`[data-testid="${testid}"]`).count(),
+    };
+  }
+  console.log("Option B stage-chrome testid placement:", JSON.stringify(presence));
+
+  // Non-vacuous sweep: at least one of the five really rendered somewhere on
+  // the page — otherwise "none of them are in the sheet" would be trivially
+  // true of a page that built none of them at all.
+  const totalOnPage = Object.values(presence).reduce((n, p) => n + p.onPage, 0);
+  expect(
+    totalOnPage,
+    "none of the five stage-chrome testids rendered at all — the sweep below would be vacuous",
+  ).toBeGreaterThan(0);
+
+  for (const testid of STAGE_CHROME_TESTIDS) {
+    expect(presence[testid]!.inSheet, `${testid} leaked into the sheet subtree`).toBe(0);
+    // Whatever DID render is fully accounted for inside the rail — never a
+    // third copy sitting somewhere else on the page.
+    expect(presence[testid]!.inRail, `${testid}: rail count does not match page-wide count`).toBe(
+      presence[testid]!.onPage,
+    );
+  }
+});
+
+// W3 Task 8 — unify the phone breakpoint on `md:` (768), not `sm:` (640).
+// Ruling 15: the ledger switches at `md:`, while the masthead and this row
+// used to switch at `sm:` — at 768 the ledger was already a card while the
+// run sheet was already a desktop row, i.e. the two disagreed about where
+// "phone" ends. 768 already reads as one line under EITHER breakpoint (768
+// >= 640 and >= 768), so it cannot witness this change by itself — the case
+// that actually distinguishes `sm:` from `md:` is 700 (>= 640, < 768), a
+// width no e2e project covers (the seven-width matrix is
+// 320/360/375/390/430/768/834 — nothing in 641-767). Before this task the
+// row read `sm:flex-row`, so 700 rendered ONE LINE (wrong: an organiser
+// scrolling faster than 768px still had the entrant name and the action
+// sharing a row it should not); after, `md:flex-row`, so 700 stays STACKED.
+test("Task 8: the run-sheet row is one line at 768 and still stacked at 700 (md, not sm)", async ({
+  page,
+  request,
+}) => {
+  const { divisionId, fixtureIds } = await seedRunSheetDivision(request);
+  expect(fixtureIds.length, "seed produced no fixtures — setup failed, not the row").toBeGreaterThanOrEqual(1);
+  const target = fixtureIds[0]!;
+  const fixtureNo = (await apiJson<{ fixture_no: number }>(request, `/api/v1/fixtures/${target}`)).data!.fixture_no;
+  // A future, still-`scheduled` time so `canEditFixtureTime` renders the time
+  // cell as a button (`run-sheet-edit-time`, same setup `fixtureRowAction`'s
+  // own test above uses) — the element this test measures against the
+  // action column.
+  await setFixtureScheduledAtSql(target, "2030-06-15T09:00:00.000Z");
+
+  for (const { width, stacked } of [
+    { width: 768, stacked: false },
+    { width: 700, stacked: true },
+  ]) {
+    await page.setViewportSize({ width, height: 900 });
+    await page.goto(await divisionPath(request, divisionId, "?tab=fixtures"));
+    const sheet = page.getByTestId("run-sheet");
+    await expect(sheet).toBeVisible();
+    const row = page.locator(`[data-fixture-no="${fixtureNo}"]`);
+    await expect(row).toHaveCount(1);
+    const timeCell = row.getByTestId("run-sheet-edit-time");
+    const action = row.locator("[data-row-action]").first();
+    await expect(timeCell, `no editable time cell at ${width}px — setup did not produce the state under test`).toBeVisible();
+    await expect(action, `no action element at ${width}px — setup did not produce the state under test`).toBeVisible();
+    const timeBox = await timeCell.boundingBox();
+    const actionBox = await action.boundingBox();
+    // PRINT WHAT WAS SEEN beside the gate (_RULES.md) — a width gate cannot
+    // otherwise tell you it measured the wrong page state.
+    console.log(`Task 8 row geometry at ${width}px — time cell box:`, timeBox, "| action box:", actionBox);
+    expect(timeBox, `time cell has no box at ${width}px`).not.toBeNull();
+    expect(actionBox, `action has no box at ${width}px`).not.toBeNull();
+    const deltaY = Math.abs(actionBox!.y - timeBox!.y);
+    if (stacked) {
+      expect(
+        deltaY,
+        `expected the row STACKED at ${width}px (action well below the time cell), saw deltaY=${deltaY}`,
+      ).toBeGreaterThan(20);
+    } else {
+      expect(
+        deltaY,
+        `expected the row ONE LINE at ${width}px (time cell and action share a y), saw deltaY=${deltaY}`,
+      ).toBeLessThan(6);
+    }
+  }
+});
+
+// W3 Task 9 (A3) — the phone run-sheet row becomes two deliberate lines.
+//
+// Before this, the phone row reflowed into THREE lines below `md` (meta,
+// name, action) — a FOURTH whenever a fixture actually carried a result or
+// "no scorer yet" sub-line, which the seeded state below does on purpose, so
+// the merge this task makes is actually exercised. Design of record (W3
+// spec, "Tasks 1 and 6-10"): "the acceptance criterion for the phone work is
+// a CONTROL-SET DIFF... W2's gate measured them byte-identical (71 controls,
+// diff empty) — that equality is the groomed-shrink signature this wave
+// exists to break, not a side effect of it." A box-size or screenshot
+// comparison cannot witness that; only a diff of the live DOM's visible
+// parts can.
+test("Task 9: the phone run-sheet row is two deliberate lines, and its control set differs from desktop's", async ({
+  page,
+  request,
+}) => {
+  // `middayZoneFor` (this file, above): the venue zone this seed's "today"
+  // check runs in. Puts ~12h of headroom either side of the UTC day
+  // boundary around the `scheduled_at` set below, the same reasoning the
+  // day-grouping case at the top of this file already needed once.
+  const { divisionId, fixtureIds } = await seedRunSheetDivision(request, { tz: middayZoneFor(Date.now()) });
+  expect(fixtureIds.length, "seed produced no fixtures — setup failed, not the row").toBeGreaterThanOrEqual(1);
+  const target = fixtureIds[0]!;
+  const targetInfo = await apiJson<{ fixture_no: number; home_entrant_id: string | null }>(
+    request,
+    `/api/v1/fixtures/${target}`,
+  );
+  const fixtureNo = targetInfo.data!.fixture_no;
+  const homeEntrantId = targetInfo.data!.home_entrant_id;
+  expect(homeEntrantId, "seeded fixture has no home entrant — cannot rename it, not what this case tests").not.toBeNull();
+
+  // A realistic long entrant name, not a short placeholder — the scorepad
+  // phone-composition wave's own regression (a single missing `min-w-0` on
+  // the ancestor chain put 106px of overflow on the page at 320-390) was
+  // visible ONLY with a name this long and only in a browser.
+  const LONG_NAME = "Bartholomew Alexander Weatherstonehaugh Jr.";
+  expect(LONG_NAME.length, "fixture setup: this case needs the realistic 43-char name the brief calls for").toBe(43);
+  const renamed = await apiJson(request, `/api/v1/entrants/${homeEntrantId}`, "PATCH", { display_name: LONG_NAME });
+  expect(renamed.status, `renaming the entrant failed: ${JSON.stringify(renamed.error)}`).toBeLessThan(300);
+
+  // Scheduled TODAY with no officials assigned — `fixtureRowAction`'s branch
+  // 6, the ONE ladder state that populates the result-shaped sub-line
+  // ("No scorer yet") alongside a real action ("Assign scorer"). A fixture
+  // with neither would leave line 2 carrying only the meta text, and could
+  // not witness the meta+sub-line MERGE this task makes.
+  await setFixtureScheduledAtSql(target, new Date(Date.now() + 5 * 60_000).toISOString());
+
+  // The row's visible parts — every visible `a[href]`/`button`/`p` inside
+  // it, as `tag:text`, in BOTH forms: `order` is GEOMETRIC reading order
+  // (y-centre then x — never DOM order, since CSS is what composes a phone
+  // row) for the report to show what a reader actually sees; `bag` is the
+  // same list SORTED, for the membership+repeats comparison the acceptance
+  // criterion gates on.
+  //
+  // The gate reads `bag`, not `order`, because `order` has a real, harmless
+  // tie this row's OWN desktop layout already contains and Task 9 does not
+  // touch: `items-center` puts the action button's centre exactly on the
+  // entrant column's MIDDLE line (measured: time/name/action all centre at
+  // y=857 on a seeded row, meta 18px above, sub-line 18px below), so at
+  // 1280 the action sorts ahead of the sub-line by x — a tie-break, not a
+  // compositional fact. Gating on `order` flagged that tie as "the sets
+  // already differ" against the UNCHANGED baseline the first time this was
+  // run (see the task report), which would make the gate pass without the
+  // fix ever landing — the "guard nothing kills" shape. `bag` is immune to
+  // it: today the exact same five strings render at both widths (same bag,
+  // different tie-broken order); after the fix, hiding the meta/sub-line
+  // paragraphs on phone and replacing them with ONE combined string is a
+  // genuine four-vs-five MEMBERSHIP change no tie-break can produce.
+  const rowControlSet = (fno: number): Promise<{ order: string[]; bag: string[] }> =>
+    page.evaluate((fixtureNoArg) => {
+      const root = document.querySelector<HTMLElement>(`[data-fixture-no="${fixtureNoArg}"]`);
+      if (root === null) return { order: ["(row absent)"], bag: ["(row absent)"] };
+      const isVisible = (el: HTMLElement) => {
+        const r = el.getBoundingClientRect();
+        const cs = getComputedStyle(el);
+        return r.width > 0 && r.height > 0 && cs.visibility !== "hidden" && cs.display !== "none";
+      };
+      const items = Array.from(root.querySelectorAll<HTMLElement>("a[href], button, p"))
+        .filter(isVisible)
+        .map((el) => {
+          const r = el.getBoundingClientRect();
+          const text = (el.innerText || el.textContent || "").replace(/\s+/g, " ").trim();
+          return { tag: el.tagName.toLowerCase(), text, yCenter: Math.round(r.top + r.height / 2), x: Math.round(r.left) };
+        })
+        .filter((i) => i.text !== "");
+      const order = [...items].sort((a, b) => a.yCenter - b.yCenter || a.x - b.x).map((i) => `${i.tag}:${i.text}`);
+      const bag = [...order].sort();
+      return { order, bag };
+    }, fno);
+
+  const sets: Record<number, { order: string[]; bag: string[] }> = {};
+  for (const width of [320, 1280]) {
+    await page.setViewportSize({ width, height: 900 });
+    await page.goto(await divisionPath(request, divisionId, "?tab=fixtures"));
+    await dismissCookieBanner(page);
+    const sheet = page.getByTestId("run-sheet");
+    await expect(sheet, `run sheet did not render at ${width}px`).toBeVisible();
+    const row = page.locator(`[data-fixture-no="${fixtureNo}"]`);
+    await expect(row, `seeded row did not render at ${width}px`).toHaveCount(1);
+    sets[width] = await rowControlSet(fixtureNo);
+  }
+  // PRINT WHAT WAS SEEN beside the gate (_RULES.md) — this dump IS the
+  // baseline/after-fix measurement the task report has to carry.
+  console.log("Task 9 row control set at 320px: ", JSON.stringify(sets[320]));
+  console.log("Task 9 row control set at 1280px:", JSON.stringify(sets[1280]));
+
+  // THE ACCEPTANCE CRITERION (design of record, quoted above): the phone and
+  // desktop composition must be a genuinely different set of visible parts.
+  // Non-vacuous first — an empty-vs-empty "difference" would trivially
+  // satisfy the inequality below without proving anything.
+  expect(sets[320]!.bag.length, "phone control set is empty — nothing was measured").toBeGreaterThan(0);
+  expect(sets[1280]!.bag.length, "desktop control set is empty — nothing was measured").toBeGreaterThan(0);
+  expect(
+    sets[320]!.bag,
+    "the 320px and 1280px control sets must DIFFER — see the printed sets above; equal sets mean the phone row is the desktop row shrunk, not composed",
+  ).not.toEqual(sets[1280]!.bag);
+
+  // ---- geometry at 320: exactly two lines ---------------------------------
+  await page.setViewportSize({ width: 320, height: 900 });
+  await page.goto(await divisionPath(request, divisionId, "?tab=fixtures"));
+  await dismissCookieBanner(page);
+  const row320 = page.locator(`[data-fixture-no="${fixtureNo}"]`);
+  await expect(row320, "seeded row did not render at 320px").toHaveCount(1);
+
+  const nameLink = row320.locator("a", { hasText: LONG_NAME.slice(0, 12) }).first();
+  const action = row320.locator("[data-row-action]").first();
+  const timeEl = row320.getByTestId("run-sheet-edit-time");
+  await expect(nameLink, "no entrant name link at 320px — setup did not produce the state under test").toBeVisible();
+  await expect(action, "no action element at 320px — setup did not produce the state under test").toBeVisible();
+  await expect(
+    timeEl,
+    "no editable time cell at 320px — setup did not reach canEditFixtureTime, not what this case tests",
+  ).toBeVisible();
+
+  // The two-line ceiling, DERIVED live from the row's own computed styles —
+  // never a hardcoded pixel constant, which goes stale the moment the type
+  // scale or the tap-target floor moves (the "flat literal beside a derived
+  // boundary" shape Ruling T8-C, above in mobile.spec.ts, exists to prevent).
+  const geometry = await row320.evaluate((li) => {
+    const num = (v: string) => parseFloat(v) || 0;
+    const outer = li.firstElementChild as HTMLElement | null; // the flex-col wrapper
+    const nameEl = li.querySelector("a[href]") as HTMLElement | null;
+    const actionEl = li.querySelector("[data-row-action]") as HTMLElement | null;
+    const liCs = getComputedStyle(li);
+    const outerCs = outer ? getComputedStyle(outer) : null;
+    return {
+      liHeight: li.getBoundingClientRect().height,
+      lineHeight: nameEl ? num(getComputedStyle(nameEl).lineHeight) : 20,
+      actionMinHeight: actionEl ? num(getComputedStyle(actionEl).minHeight) : 44,
+      rowGap: outerCs ? num(outerCs.rowGap || outerCs.gap) : 8,
+      padY: num(liCs.paddingTop) + num(liCs.paddingBottom),
+    };
+  });
+  console.log("Task 9 geometry at 320px:", JSON.stringify(geometry));
+  // Each of the two lines is at least as tall as its own control's declared
+  // tap floor (line 1's time button, line 2's action button both carry
+  // `min-h-11`) or its text line-height, whichever is taller — plus the
+  // row's own gap and padding. A small rounding tolerance (2px) covers
+  // sub-pixel layout, never a margin big enough to hide a real third line.
+  const ceiling = geometry.padY + geometry.rowGap + 2 * Math.max(geometry.lineHeight, geometry.actionMinHeight) + 2;
+  expect(
+    geometry.liHeight,
+    `row height ${geometry.liHeight}px exceeds the derived two-line ceiling ${ceiling}px — the row is reflowing into more than two lines`,
+  ).toBeLessThanOrEqual(ceiling);
+
+  // Line 2 shares a visual line: the combined meta/sub-line text and the
+  // action's own box must sit at (roughly) the same y-centre.
+  // `p:visible`, not a bare `p`: the desktop-only copy of this text
+  // (`hidden md:block`) is still IN THE DOM at 320px (one DOM, branched —
+  // never a second phone tree) and its exact "No scorer yet" is a
+  // substring of the phone paragraph's combined "Round 1 · No scorer yet",
+  // so an unscoped `hasText` match is a strict-mode violation on two nodes.
+  const line2Text = row320.locator("p:visible", { hasText: UI_EN["runsheet.sub.noScorer"]! });
+  await expect(line2Text, "no phone line-2 text at 320px — the merge did not render").toBeVisible();
+  const line2Box = await line2Text.boundingBox();
+  const actionBox = await action.boundingBox();
+  expect(line2Box, "line-2 text has no box").not.toBeNull();
+  expect(actionBox, "action has no box").not.toBeNull();
+  const line2CenterY = line2Box!.y + line2Box!.height / 2;
+  const actionCenterY = actionBox!.y + actionBox!.height / 2;
+  console.log("Task 9 line-2 y-centres — text:", line2CenterY, "| action:", actionCenterY);
+  expect(
+    Math.abs(line2CenterY - actionCenterY),
+    "the action and the line-2 sub-line text do not share a visual line",
+  ).toBeLessThan(8);
+
+  // ---- hit-test, not box measurement (AGENTS.md #2/#10, this file's own
+  // "fix round 4" case above): `boundingBox()` reports paint, not hit area —
+  // a control can measure 44px and still be untappable under an overlay. ----
+  const hitTest = async (locator: Locator): Promise<string> => {
+    // `elementFromPoint` is VIEWPORT-relative and returns null for anything
+    // below the fold, which reads as "untappable" when it only means
+    // "off-screen" — this file's own "fix round 4" case above hit exactly
+    // this and scrolls first for the same reason.
+    await locator.scrollIntoViewIfNeeded();
+    const box = await locator.boundingBox();
+    if (box === null) return "(no box)";
+    return locator.evaluate(
+      (el, [x, y]) => {
+        const hit = document.elementFromPoint(x as number, y as number);
+        if (hit === null) return "(nothing)";
+        return hit === el || el.contains(hit) ? "self" : hit.tagName.toLowerCase();
+      },
+      [box.x + box.width / 2, box.y + box.height / 2],
+    );
+  };
+  const hits = {
+    time: await hitTest(timeEl),
+    name: await hitTest(nameLink),
+    action: await hitTest(action),
+  };
+  console.log("Task 9 hit-test at 320px:", JSON.stringify(hits));
+  for (const [control, result] of Object.entries(hits)) {
+    expect(result, `${control}'s own centre must hit itself or a child, got "${result}"`).toBe("self");
+  }
+
+  // ---- no clipping, even with the 43-character name ----------------------
+  await expectNoHorizontalScroll(page);
+  await expectRunSheetNotClipped(page, "Task 9 two-line row at 320px, 43-char entrant name");
+});
+
+// W3 Task 10 — the stage rail folds into a bottom sheet on phones.
+//
+// Tasks 2-4 moved every stage-header action control onto `<StageRail>`;
+// Task 5 gave it a desktop column (`stage-rail`, this file's own Task 5
+// test above). Below `md` that column has nowhere to go — this task folds
+// it behind a floating "Stage tools" trigger that opens a bottom sheet,
+// cribbing `components/modal.tsx`'s bottom-sheet CSS pattern (brief) but
+// moving its breakpoint from `sm:` to `md:` per ruling 15 (this file's own
+// Task 8 test above already unified the run-sheet row on the same
+// breakpoint).
+//
+// THE ONE THING THIS WAVE KEEPS GETTING WRONG (brief, verbatim): StageRail
+// returns `null` for `!canEdit`, so anything keyed to it vanishes for a
+// non-editing viewer unless built once and placed in exactly one spot. The
+// trigger/sheet here are both INSIDE `<StageRail>`'s own early-return guard
+// (stage-rail.tsx), so a non-editing viewer gets neither — same contract
+// Tasks 3/4/5 already rely on, never re-derived.
+//
+// Two stages, deliberately (brief's own warning: "if the panel mounts one
+// rail per stage, opening the first leaves the others' controls boxless").
+// `open` is owned by `stages-panel.tsx`'s own `openRailFor` — a SHARED
+// single value, same shape as the pre-existing `addingTo` (only one stage's
+// inline "Add match" form opens at a time) — never a local `useState`
+// inside `<StageRail>` (that was tried first and reverted: it reddened
+// `stages-panel-auto-schedule-seq.test.tsx` / `-result-strip.test.tsx`,
+// both of which walk `<StageRail>` through `expandWithHooks`, a
+// deliberately read-only test-hook dispatcher — stage-rail.tsx's own header
+// has the full account). A shared value is also the right UX here, not
+// merely a workaround: a second open sheet would be a second
+// `position:fixed` overlay stacked on the first. So this test proves the
+// ACTUAL contract — opening stage 2's sheet closes stage 1's — rather than
+// the independence an instance-local `useState` would have given; either
+// way, a test that opens only stage 1 and asserts on stage 2 would see
+// stage 2 "boxless" (brief's own phrase), so both are opened and checked.
+test("Task 10: the stage rail folds into a bottom sheet at 320, one stage's sheet open at a time", async ({
+  page,
+  request,
+}) => {
+  const { divisionId, fixtureIds } = await seedRunSheetDivision(request);
+  expect(fixtureIds.length, "seed produced no fixtures — setup failed, not the fold").toBeGreaterThanOrEqual(1);
+  // A second, independent stage — no progression, no generated fixtures.
+  // `stage.status !== "complete"` is StageRail's own gate for `stage-generate`
+  // (stage-rail.tsx), and a freshly created stage is `pending`, so this is
+  // enough to make a SECOND rail render real controls without needing a
+  // second round of fixture generation.
+  const second = await apiJson<{ id: string }>(request, `/api/v1/divisions/${divisionId}/stages`, "POST", {
+    seq: 2,
+    kind: "league",
+    name: "Consolation",
+    config: {},
+  });
+  expect(second.status, `second stage creation failed: ${JSON.stringify(second.error)}`).toBeLessThan(300);
+
+  await page.setViewportSize({ width: 320, height: 900 });
+  await page.goto(await divisionPath(request, divisionId, "?tab=fixtures"));
+  await dismissCookieBanner(page);
+
+  const rails = page.getByTestId("stage-rail");
+  await expect(rails, "expected one stage-rail per stage — two stages were seeded").toHaveCount(2);
+  const rail1 = rails.nth(0);
+  const rail2 = rails.nth(1);
+
+  const generate1 = rail1.getByTestId("stage-generate");
+  const generate2 = rail2.getByTestId("stage-generate");
+  const trigger1 = rail1.getByTestId("stage-rail-trigger");
+  const trigger2 = rail2.getByTestId("stage-rail-trigger");
+
+  // ---- before any tap: controls ATTACHED but not visible, trigger visible.
+  // `toBeAttached`, not `toBeVisible`, on the folded controls (brief) —
+  // visibility is exactly what the fold denies; the assertion has to prove
+  // the control still EXISTS, hidden, not that it was never built.
+  await expect(generate1, "stage 1's stage-generate never rendered at all — nothing to fold").toBeAttached();
+  await expect(generate2, "stage 2's stage-generate never rendered at all — nothing to fold").toBeAttached();
+  await expect(generate1, "stage 1's control is visible before any tap — the fold did not happen").not.toBeVisible();
+  await expect(generate2, "stage 2's control is visible before any tap — the fold did not happen").not.toBeVisible();
+  await expect(trigger1, "stage 1's Stage tools trigger is not visible at 320").toBeVisible();
+  await expect(trigger2, "stage 2's Stage tools trigger is not visible at 320").toBeVisible();
+
+  // ---- open stage 1's sheet: every one of ITS controls becomes visible,
+  // and stage 2 stays folded (never opened yet — brief's own "boxless"
+  // warning, witnessed directly rather than assumed).
+  await trigger1.click();
+  await expect(generate1, "stage 1's control did not become visible after tapping ITS OWN trigger").toBeVisible();
+  await expect(
+    generate2,
+    "stage 2's control became visible when only stage 1's trigger was tapped — nothing opened it",
+  ).not.toBeVisible();
+
+  // ---- close it the way a PERSON has to. An open sheet mounts a
+  // `fixed inset-0 z-30` backdrop that covers the whole viewport, the other
+  // stage's trigger included, so "tap trigger 2 while sheet 1 is open" is an
+  // interaction the UI does not permit: the tap lands on the backdrop. The
+  // first version of this test drove it anyway and hung until the 60s budget
+  // died (CI run 34142421718, `locator.click: Test timeout of 60000ms
+  // exceeded`) — a real finding about the fold, surfacing as a timeout.
+  // The backdrop's own onClick calls the same `onToggleOpen(stage.id)`, so
+  // dismissing is the documented way out.
+  const backdrop = page.getByTestId("stage-rail-backdrop");
+  await expect(backdrop, "an open sheet rendered no backdrop — nothing can dismiss it").toBeVisible();
+  await backdrop.click({ position: { x: 10, y: 10 } }); // review m6: the CENTRE can sit under the sheet
+  await expect(generate1, "tapping the backdrop did not close stage 1's sheet").not.toBeVisible();
+  await expect(backdrop, "the backdrop outlived the sheet it belongs to").toHaveCount(0);
+
+  // ---- now stage 2 opens, and stage 1 stays shut.
+  await trigger2.click();
+  await expect(generate2, "stage 2's control did not become visible after tapping ITS OWN trigger").toBeVisible();
+  await expect(
+    generate1,
+    "stage 1's control came back when stage 2's sheet opened — only one sheet may be open",
+  ).not.toBeVisible();
+
+  // ---- and back again, so this proves a toggle rather than "the second
+  // stage always wins".
+  await page.getByTestId("stage-rail-backdrop").click({ position: { x: 10, y: 10 } });
+  await expect(generate2, "tapping the backdrop did not close stage 2's sheet").not.toBeVisible();
+  await trigger1.click();
+  await expect(generate1, "stage 1's control did not become visible after re-tapping its trigger").toBeVisible();
+  await expect(generate2, "stage 2's control is still visible after stage 1's sheet re-opened").not.toBeVisible();
+
+  // ---- control-set diff (brief step 6): stage 1's rail composition at 320
+  // (open) must differ from 1280 — trigger present at 320 and absent at
+  // 1280, the rail's own action controls the other way around. Same "bag of
+  // visible tag:text" idiom Task 9 established for the run-sheet row, above.
+  const railControlSet = (rail: Locator): Promise<string[]> =>
+    rail.evaluate((root) => {
+      const isVisible = (el: HTMLElement) => {
+        const r = el.getBoundingClientRect();
+        const cs = getComputedStyle(el);
+        return r.width > 0 && r.height > 0 && cs.visibility !== "hidden" && cs.display !== "none";
+      };
+      return Array.from(root.querySelectorAll<HTMLElement>("a[href], button, p"))
+        .filter(isVisible)
+        .map((el) => `${el.tagName.toLowerCase()}:${(el.innerText || el.textContent || "").replace(/\s+/g, " ").trim()}`)
+        .filter((s) => !s.endsWith(":"))
+        .sort();
+    });
+  const set320 = await railControlSet(rail1);
+
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.goto(await divisionPath(request, divisionId, "?tab=fixtures"));
+  await dismissCookieBanner(page);
+  const rail1desktop = page.getByTestId("stage-rail").nth(0);
+  await expect(rail1desktop.getByTestId("stage-generate"), "stage 1's control is not visible at 1280 with no tap").toBeVisible();
+  const set1280 = await railControlSet(rail1desktop);
+  console.log("Task 10 stage-rail control set at 320px (open):", JSON.stringify(set320));
+  console.log("Task 10 stage-rail control set at 1280px:      ", JSON.stringify(set1280));
+  expect(set320.length, "320px control set is empty — nothing was measured").toBeGreaterThan(0);
+  expect(set1280.length, "1280px control set is empty — nothing was measured").toBeGreaterThan(0);
+  expect(
+    set320,
+    "the 320px (open) and 1280px control sets must differ — see the printed sets above",
+  ).not.toEqual(set1280);
+  // And, the concrete fact that difference is made of: the trigger exists
+  // only on phone, never at desktop.
+  expect(set320.some((s) => s.includes(UI_EN["schedule.stageTools"]!)), "trigger text missing from the 320px set").toBe(true);
+  expect(set1280.some((s) => s.includes(UI_EN["schedule.stageTools"]!)), "trigger text leaked into the 1280px set").toBe(false);
+
+  await expectNoHorizontalScroll(page);
+});
+
+// W3 Task 10 — the other half of the same criterion: at `md` and up there is
+// no trigger and no tap. `768` (`md`'s own value, ruling 15) and `1280` both
+// gated here. "Option B" (controller measurement, owner sign-off session)
+// retired the two-column grid entirely — `stage-sheet`/`stage-rail` are now
+// stacked full-width blocks at every size, so the geometry check here is
+// "stacked, full width, no void", the same shape this file's own "desktop
+// (Option B)" test above measures at 1280.
+test("Task 10: at md and up the Stage tools trigger is absent and the rail is visible with no tap", async ({
+  page,
+  request,
+}) => {
+  const { divisionId, fixtureIds } = await seedRunSheetDivision(request);
+  expect(fixtureIds.length, "seed produced no fixtures — setup failed, not the layout").toBeGreaterThanOrEqual(1);
+
+  for (const width of [768, 1280]) {
+    await page.setViewportSize({ width, height: 900 });
+    await page.goto(await divisionPath(request, divisionId, "?tab=fixtures"));
+    await dismissCookieBanner(page);
+    const sheet = page.getByTestId("stage-sheet").first();
+    const rail = page.getByTestId("stage-rail").first();
+    await expect(sheet, `stage-sheet did not render at ${width}px`).toBeVisible();
+    await expect(rail, `stage-rail did not render at ${width}px`).toBeVisible();
+    const trigger = rail.getByTestId("stage-rail-trigger");
+    const generate = rail.getByTestId("stage-generate");
+    await expect(trigger, `Stage tools trigger is visible at ${width}px — should be md:hidden`).not.toBeVisible();
+    await expect(generate, `stage-generate is not visible at ${width}px with no tap`).toBeVisible();
+
+    // Option B: stacked (rail below sheet), never side by side, at both
+    // widths — the grid this used to check for is gone entirely, not just
+    // moved to a different breakpoint.
+    const sheetBox = await sheet.boundingBox();
+    const railBox = await rail.boundingBox();
+    console.log(`Task 10 geometry at ${width}px — stage-sheet box:`, sheetBox, "| stage-rail box:", railBox);
+    expect(sheetBox, `stage-sheet has no box at ${width}px`).not.toBeNull();
+    expect(railBox, `stage-rail has no box at ${width}px`).not.toBeNull();
+    expect(
+      railBox!.y,
+      `at ${width}px rail y=${railBox!.y} is not at/below sheet y=${sheetBox!.y} + height=${sheetBox!.height} (still two-column, not stacked)`,
+    ).toBeGreaterThan(sheetBox!.y + sheetBox!.height - 4);
+  }
+  await expectNoHorizontalScroll(page);
+});
+
+// W3 Task 10 — axe, scoped to the open sheet at 320: a new scrolling region
+// owes a tabindex/role/name or axe reds SERIOUS on
+// `scrollable-region-focusable` (AGENTS.md #23). They cannot be gated on a
+// MEDIA QUERY; they are gated on the `open` prop (review m10), which is JS
+// state — so open at 320 is exactly the state that has to be checked, and it
+// is also the only state in which this box can overflow at all.
+test("Task 10: axe — the open stage-tools sheet at 320 has no serious/critical violations", async ({
+  page,
+  request,
+}) => {
+  const { divisionId, fixtureIds } = await seedRunSheetDivision(request);
+  expect(fixtureIds.length, "seed produced no fixtures — setup failed, not the sheet").toBeGreaterThanOrEqual(1);
+
+  await page.setViewportSize({ width: 320, height: 900 });
+  await page.goto(await divisionPath(request, divisionId, "?tab=fixtures"));
+  await dismissCookieBanner(page);
+  const trigger = page.getByTestId("stage-rail-trigger").first();
+  await expect(trigger, "Stage tools trigger is not visible at 320px").toBeVisible();
+  await trigger.click();
+  const sheet = page.getByTestId("stage-rail-sheet").first();
+  await expect(sheet, "the sheet did not open").toBeVisible();
+
+  const axe = await new AxeBuilder({ page }).include('[data-testid="stage-rail-sheet"]').withTags(["wcag2a", "wcag2aa"]).analyze();
+  const blocking = axe.violations.filter((v) => v.impact === "serious" || v.impact === "critical");
+  console.log("Task 10 axe on the open stage-tools sheet:", axe.violations.length, "total,", blocking.length, "blocking");
+  expect(
+    blocking.map((v) => `${v.id} — ${v.nodes[0]?.html}`),
+    "axe serious/critical on the open stage-tools sheet",
+  ).toEqual([]);
+});
+
+// W3 Task 10, controller measurement round — D2 and D4, verified fixed and
+// KEPT under "Option B" (the two-column grid these were measured inside is
+// gone, but the rail's own internal alignment/tap-floor fixes still apply,
+// now at full card width instead of a 280px column):
+//
+//   D2 — the rail's own direct children disagreed on their LEFT edge (a
+//   16px step: action buttons at l855, "Required court tags"/"Auto-schedule
+//   remaining" at l871, both at 1280). Round 1's `md:p-4` on the sheet
+//   double-padded `courtTagsSlot`/`unscheduledBadgeSlot` (which already
+//   carry their own `px-4`) while the action-button row (no padding of its
+//   own) got only the sheet's. Fix: `md:py-4` on the sheet (vertical only),
+//   `md:px-4` moved onto the action-button row — every direct child now
+//   supplies its OWN 16px inset, none of them doubled.
+//
+//   D3 — RETRACTED (controller, same measurement round): the right-edge
+//   near-misses (4-6px) turned out to be flex slack (`123 + 8 + 113 = 244`
+//   in a 248px row), not a misalignment. Not chased here, and this test
+//   asserts no right-edge equality — left-edge (D2) and height (D4) only.
+//
+//   D4 — at 768/834 (device widths in the seven-width matrix) the rail's
+//   own buttons measured 28-30px tall — under the 44px tap floor; only
+//   `stage-auto-schedule` carried `min-h-11`. Fix: `min-h-11` on every rail
+//   button, unconditionally (not gated by the sheet or any breakpoint).
+//
+//   Task 2 ("remove auto-schedule from the fixtures page") retired the CTA
+//   this test's third witness used to be. The unscheduled-count row is its
+//   own separate direct-child group of the rail (same `px-4` row the CTA
+//   used to share — stage-rail.tsx's own `unscheduledBadgeSlot` comment),
+//   still real, still always-rendering for this seed, and still carries
+//   `min-h-11` — so it stands in as the third witness for BOTH D2 and D4
+//   without weakening either check.
+test("Task 10 controller round: the rail's direct children share one left edge, and every control clears the 44px floor, at 1280 and 768", async ({
+  page,
+  request,
+}) => {
+  const { divisionId, fixtureIds } = await seedRunSheetDivision(request);
+  expect(fixtureIds.length, "seed produced no fixtures — setup failed, not the layout").toBeGreaterThanOrEqual(1);
+
+  for (const width of [1280, 768]) {
+    await page.setViewportSize({ width, height: 900 });
+    await page.goto(await divisionPath(request, divisionId, "?tab=fixtures"));
+    await dismissCookieBanner(page);
+
+    const rail = page.getByTestId("stage-rail").first();
+    await expect(rail, `stage-rail did not render at ${width}px`).toBeVisible();
+
+    // The three direct-child groups the controller measured: the first
+    // action button, the court-tags trigger, and the unscheduled-count link
+    // (formerly the auto-schedule CTA's own row) — all real controls a
+    // fresh seeded league stage actually renders (no synthetic state
+    // needed: unscheduled fixtures by default -> the link renders;
+    // `StageCourtTagsEditor`'s trigger always renders).
+    const generate = rail.getByTestId("stage-generate");
+    const courtTagsTrigger = rail.getByTestId("stage-court-tags").getByRole("button").first();
+    // The testid sits on the inner count `<span>`; `..` climbs to the `<a>`
+    // itself — the actual flex item whose own left edge the row's `px-4`
+    // positions, matching how `generate`/`courtTagsTrigger` above are also
+    // measured on the interactive element itself, not an outer wrapper.
+    const unscheduledLink = rail.getByTestId("stage-unscheduled-count").locator("..");
+    await expect(generate, `stage-generate not visible at ${width}px`).toBeVisible();
+    await expect(courtTagsTrigger, `court-tags trigger not visible at ${width}px`).toBeVisible();
+    await expect(unscheduledLink, `stage-unscheduled-count link not visible at ${width}px`).toBeVisible();
+
+    const [generateBox, courtTagsBox, unscheduledBox] = await Promise.all([
+      generate.boundingBox(),
+      courtTagsTrigger.boundingBox(),
+      unscheduledLink.boundingBox(),
+    ]);
+    console.log(
+      `D2/D3 geometry at ${width}px — generate:`, generateBox,
+      "| court-tags trigger:", courtTagsBox,
+      "| unscheduled-count link:", unscheduledBox,
+    );
+    expect(generateBox, `generate has no box at ${width}px`).not.toBeNull();
+    expect(courtTagsBox, `court-tags trigger has no box at ${width}px`).not.toBeNull();
+    expect(unscheduledBox, `unscheduled-count link has no box at ${width}px`).not.toBeNull();
+
+    // D2 — ONE left edge across all three, within a small rounding
+    // tolerance (sub-pixel layout), never a margin big enough to hide a
+    // real 16px step.
+    const lefts = [generateBox!.x, courtTagsBox!.x, unscheduledBox!.x];
+    const maxLeftDelta = Math.max(...lefts) - Math.min(...lefts);
+    expect(
+      maxLeftDelta,
+      `rail children do not share a left edge at ${width}px — lefts were ${JSON.stringify(lefts)}`,
+    ).toBeLessThan(2);
+
+    // D4 — every one of the three clears the 44px floor.
+    for (const [name, box] of [
+      ["stage-generate", generateBox],
+      ["court-tags trigger", courtTagsBox],
+      ["stage-unscheduled-count link", unscheduledBox],
+    ] as const) {
+      expect(box!.height, `${name} is ${box!.height}px tall at ${width}px — under the 44px tap floor`).toBeGreaterThanOrEqual(44);
+    }
+  }
+
+  await expectNoHorizontalScroll(page);
+});
+
+// "Option B" (controller measurement, owner sign-off session) — the
+// headline defect that killed "Option A": a two-column grid forced the CARD
+// to whatever height the 280px RAIL column needed (CSS equal-height
+// grid-row stretch), measured `body=262px rail=262px content=99px
+// VOID=163px` — 62% of the card empty at 1280, and no amount of body
+// content could ever have closed it. The fix removed the grid entirely
+// (stages-panel.tsx); this measures the actual claim — "no column, no
+// void" — directly: the card's own height against the height its stacked
+// content (`stage-sheet` then `stage-rail`, DOM order) actually occupies.
+test("Option B: the card's content height closes the void (no more empty column) at 1280 and 768", async ({
+  page,
+  request,
+}) => {
+  const { divisionId, fixtureIds } = await seedRunSheetDivision(request);
+  expect(fixtureIds.length, "seed produced no fixtures — setup failed, not the void check").toBeGreaterThanOrEqual(1);
+
+  for (const width of [1280, 768]) {
+    await page.setViewportSize({ width, height: 1200 });
+    await page.goto(await divisionPath(request, divisionId, "?tab=fixtures"));
+    await dismissCookieBanner(page);
+
+    const sheet = page.getByTestId("stage-sheet").first();
+    const rail = page.getByTestId("stage-rail").first();
+    // The stage's own `<section className="card ...">` — no testid of its
+    // own, but `stage-sheet` is a direct child of it (stages-panel.tsx), so
+    // its immediate parent IS the card.
+    const card = sheet.locator("xpath=..");
+    await expect(sheet, `stage-sheet not visible at ${width}px`).toBeVisible();
+    await expect(rail, `stage-rail not visible at ${width}px`).toBeVisible();
+    await expect(card, `card wrapper not found at ${width}px`).toBeVisible();
+
+    const cardBox = await card.boundingBox();
+    const sheetBox = await sheet.boundingBox();
+    const railBox = await rail.boundingBox();
+    expect(cardBox, `card has no box at ${width}px`).not.toBeNull();
+    expect(sheetBox, `stage-sheet has no box at ${width}px`).not.toBeNull();
+    expect(railBox, `stage-rail has no box at ${width}px`).not.toBeNull();
+
+    // Content bottom = the rail's own bottom edge — sheet then rail, DOM
+    // order, Option B's whole point (never a column, always a stack).
+    const contentBottom = railBox!.y + railBox!.height;
+    const contentHeight = contentBottom - cardBox!.y;
+    const voidPx = cardBox!.height - contentHeight;
+    console.log(
+      `Option B void-check at ${width}px — card height=${cardBox!.height}px, content height=${contentHeight}px, void=${voidPx}px`,
+      "| sheet:", sheetBox, "| rail:", railBox,
+    );
+    expect(
+      voidPx,
+      `card is ${voidPx}px taller than its own stacked content at ${width}px — the column's void is back`,
+    ).toBeLessThan(20);
+  }
+
+  await expectNoHorizontalScroll(page);
+});
+
+// The progress counts line itself (kept from "Option A" — the owner did
+// not object to the information, only to the two-column layout it could
+// never fill on its own; see the "Option B" void-check test above for the
+// layout half of the fix). Owner ruling (this round): the BAR that used to
+// sit above this line is gone — it only earned its place while it could
+// show mixed state, and a solid full-width block once every fixture was
+// scheduled said nothing this text does not say better. This test's own
+// subject survives that removal unchanged: it proves the counts line
+// renders in a real browser (not just the node-environment unit suite,
+// `stages-panel-progress.test.tsx`, which cannot see real layout) and that
+// the stage body is still not the 814x234px empty cell the controller
+// originally measured, now on the strength of the counts line alone.
+test("Task 10 controller round: the stage card body carries the fixtures-progress counts, not an empty cell", async ({
+  page,
+  request,
+}) => {
+  const { divisionId, fixtureIds } = await seedRunSheetDivision(request);
+  expect(fixtureIds.length, "seed produced no fixtures — setup failed, not the body").toBeGreaterThanOrEqual(1);
+  // Play one fixture so the counts line has more than one clause to show —
+  // a division fresh off generate is ALL unscheduled, which would pass a
+  // vacuous "the body isn't 234px" check without proving the multi-clause
+  // composition renders correctly.
+  const target = fixtureIds[0]!;
+  await setFixtureScheduledAtSql(target, "2026-09-10T10:00:00.000Z");
+  await setFixtureStatusSql(target, "decided");
+
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.goto(await divisionPath(request, divisionId, "?tab=fixtures"));
+  await dismissCookieBanner(page);
+
+  const sheet = page.getByTestId("stage-sheet").first();
+  await expect(sheet, "stage-sheet did not render").toBeVisible();
+  await expect(sheet.getByTestId("stage-progress-bar"), "the progress bar was removed this round — it must never come back").toHaveCount(0);
+  const counts = sheet.getByTestId("stage-progress-counts");
+  await expect(counts, "no progress counts line rendered in the stage body").toBeVisible();
+  const countsText = await counts.textContent();
+  console.log("Task 10 controller round — progress counts text:", countsText);
+  expect(countsText, "progress counts line is empty").toBeTruthy();
+  expect(countsText, "played clause missing").toContain(UI_EN["schedule.progress.played.one"]);
+  expect(countsText, "to-schedule clause missing").toMatch(/to schedule/);
+
+  // NOT a "taller than 234px" assertion. 234px was the height the RETIRED
+  // 280px rail forced on this body while the body itself had nothing in it —
+  // it is the defect's number, not a floor to clear. Option B made the card
+  // content-sized, so a body that is now SHORTER than 234px is the fix
+  // working, and asserting `> 234` made this test fail on a correct build
+  // (CI run 34142421718: `stage-sheet height 129px`). The void itself is
+  // measured properly by this file's own "Option B: the card's content height
+  // closes the void" test, which compares card height against stacked content
+  // height — that is where the layout claim belongs.
+  //
+  // What THIS test uniquely owns is the browser-only half: the counts line is
+  // really PAINTED, not merely present in the markup. `stages-panel-progress
+  // .test.tsx` runs in vitest's node environment and cannot tell those apart.
+  const countsBox = await counts.boundingBox();
+  console.log("Task 10 controller round — stage-progress-counts box:", countsBox);
+  expect(countsBox, "progress counts line has no box — present in markup but not painted").not.toBeNull();
+  expect(countsBox!.height, "progress counts line painted with zero height").toBeGreaterThan(0);
+  expect(countsBox!.width, "progress counts line painted with zero width").toBeGreaterThan(0);
+  const sheetBox = await sheet.boundingBox();
+  expect(sheetBox, "stage-sheet has no box").not.toBeNull();
+  expect(
+    countsBox!.height,
+    "the counts line is taller than the body that contains it — the body is not sized by its content",
+  ).toBeLessThanOrEqual(sheetBox!.height);
+
+  await expectNoHorizontalScroll(page);
+});
+
+// Competition desk W3, controller ruling C-1 — the sticky bracket round
+// header overlap. PRE-EXISTING FROM W2: `run-sheet.tsx` has zero commits in
+// `origin/main..HEAD` before this fix (verified twice, per the controller) —
+// W3 did not cause this, but fixing it means W3 now touches a file it
+// otherwise never would.
+//
+// Cause (controller diagnosis, verified against the source before fixing):
+// the round header was `sticky top-14 z-10` inside a bracket `<section
+// class="card overflow-hidden">`, itself inside `<div data-testid="run-
+// sheet" class="card overflow-hidden">`. `overflow: hidden` makes an
+// ancestor the CONTAINING BLOCK a sticky descendant sticks to, not the
+// viewport — and neither ancestor here ever scrolls internally (the PAGE
+// does), so the header sat at a fixed 56px offset from its own box,
+// permanently, overlapping whatever row occupied that band — even at
+// `scrollY = 0`, before any scrolling happened at all. Fix: both
+// `overflow-hidden`s removed; the ONE thing they were doing beyond breaking
+// sticky (clipping the first round header's own background so it does not
+// square off past the section's rounded top corner) moves onto that one
+// header directly (`rounded-t-2xl`, first round only).
+//
+// Ruling C-1 (verify by measurement, not by eye): TWO checks, not one — a
+// fix that merely stops the overlap by deleting the sticky would also pass
+// a naive "no overlap" scan, so this file's own second test scrolls the
+// page and asserts the header is STILL on screen, pinned to its group.
+test.describe("run sheet: sticky bracket round header no longer overlaps a row (controller ruling C-1)", () => {
+  async function seedKnockout(request: import("@playwright/test").APIRequestContext) {
+    const comp = await apiJson<{ id: string }>(request, "/api/v1/competitions", "POST", {
+      ends_on: "2030-12-31",
+      name: `RunSheet Sticky E2E ${TAG}`,
+      visibility: "private",
+    });
+    const compId = comp.data!.id;
+    const div = await apiJson<{ id: string }>(request, `/api/v1/competitions/${compId}/divisions`, "POST", {
+      name: "Cup",
+      sport_key: "generic",
+      variant_key: "score",
+      config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
+    });
+    const divisionId = div.data!.id;
+    // 8 entrants -> quarters(4) + semis(2) + final(1), three round headers
+    // and enough rows to make the page genuinely scrollable — a 4-entrant
+    // (one header) bracket would not exercise "scroll past the first
+    // header" at all.
+    await addEntrantsViaApi(request, divisionId, ["S1", "S2", "S3", "S4", "S5", "S6", "S7", "S8"]);
+    const { courts } = await seedVenueWithCourts(request, ["Sticky Court"]);
+    const settings = await apiJson(request, `/api/v1/divisions/${divisionId}/schedule-settings`, "PUT", {
+      config: {
+        startAt: "2026-09-20T10:00:00.000Z",
+        matchMinutes: 30,
+        gapMinutes: 15,
+        courts: [courts[0]!.id],
+        perEntrantMinRest: 0,
+        blackouts: [],
+        sessionWindows: [],
+      },
+      tz: "UTC",
+    });
+    expect(settings.status, `schedule-settings PUT failed: ${JSON.stringify(settings.error)}`).toBeLessThan(300);
+    const { fixtureIds } = await createStageAndGenerate(request, divisionId, { kind: "knockout", name: "Cup" });
+    expect(fixtureIds.length, "an 8-entrant knockout is 4+2+1 = 7 fixtures").toBe(7);
+    await apiJson(request, `/api/v1/divisions/${divisionId}/start`, "POST");
+    return { divisionId };
+  }
+
+  test("zero overlaps between any round header and any row, at 1280", async ({ page, request }) => {
+    const { divisionId } = await seedKnockout(request);
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await page.goto(await divisionPath(request, divisionId, "?tab=fixtures"));
+    await dismissCookieBanner(page);
+
+    const sheet = page.getByTestId("run-sheet");
+    await expect(sheet, "run-sheet did not render").toBeVisible();
+    const headers = sheet.locator('[data-run-sheet-block="bracket"] header.sticky');
+    const headerCount = await headers.count();
+    expect(headerCount, "expected 3 round headers (quarters/semis/final)").toBe(3);
+    const rows = sheet.locator('[data-run-sheet-block="bracket"] li[data-fixture-no]');
+    const rowCount = await rows.count();
+    expect(rowCount, "expected 7 rows (4+2+1)").toBe(7);
+
+    const headerBoxes = await Promise.all(
+      Array.from({ length: headerCount }, (_, i) => headers.nth(i).boundingBox()),
+    );
+    const rowBoxes = await Promise.all(Array.from({ length: rowCount }, (_, i) => rows.nth(i).boundingBox()));
+    console.log("C-1 overlap scan — header boxes:", JSON.stringify(headerBoxes));
+    console.log("C-1 overlap scan — row boxes:", JSON.stringify(rowBoxes));
+
+    const overlaps: string[] = [];
+    headerBoxes.forEach((h, hi) => {
+      expect(h, `header ${hi} has no box`).not.toBeNull();
+      rowBoxes.forEach((r, ri) => {
+        expect(r, `row ${ri} has no box`).not.toBeNull();
+        // Vertical overlap test: two boxes overlap unless one is entirely
+        // above the other.
+        const verticallyClear = h!.y + h!.height <= r!.y || r!.y + r!.height <= h!.y;
+        if (!verticallyClear) overlaps.push(`header ${hi} overlaps row ${ri} (h=${JSON.stringify(h)}, r=${JSON.stringify(r)})`);
+      });
+    });
+    expect(overlaps, `overlaps found:\n${overlaps.join("\n")}`).toEqual([]);
+
+    await expectNoHorizontalScroll(page);
+  });
+
+  test("the round header still sticks to the viewport when the page is actually scrolled — not merely un-overlapping", async ({
+    page,
+    request,
+  }) => {
+    const { divisionId } = await seedKnockout(request);
+    // A short viewport, deliberately: forces the page to be genuinely
+    // scrollable regardless of how tall the stage cards above the run
+    // sheet happen to render.
+    await page.setViewportSize({ width: 1280, height: 700 });
+    await page.goto(await divisionPath(request, divisionId, "?tab=fixtures"));
+    await dismissCookieBanner(page);
+
+    const sheet = page.getByTestId("run-sheet");
+    await expect(sheet, "run-sheet did not render").toBeVisible();
+    const firstHeader = sheet.locator('[data-run-sheet-block="bracket"] header.sticky').first();
+    await expect(firstHeader, "first round header did not render").toBeVisible();
+
+    // Scroll the FIRST header out of its natural in-flow position — well
+    // past where it would sit unscrolled — then confirm it is still ON
+    // SCREEN, near the top of the viewport (pinned), rather than having
+    // scrolled away with its round. `scrollIntoView` on the header itself
+    // would trivially "fix" this by construction; scroll the LAST row of
+    // the LAST round instead, forcing real page movement past the first
+    // header's natural position.
+    const lastRow = sheet.locator('[data-run-sheet-block="bracket"] li[data-fixture-no]').last();
+    await lastRow.scrollIntoViewIfNeeded();
+
+    const box = await firstHeader.boundingBox();
+    console.log("C-1 sticky-on-scroll — first header box after scrolling to the last row:", JSON.stringify(box));
+    expect(box, "first header has no box after scrolling — it scrolled away instead of sticking").not.toBeNull();
+    // "Still on screen, pinned near its stick point" — top-14 (56px) from
+    // the viewport top, generous tolerance for the app nav bar's own
+    // height and sub-pixel layout, but nowhere close to having scrolled
+    // off past the top of the viewport (a negative or wildly displaced y
+    // would mean it did not stick).
+    expect(box!.y, `header y=${box!.y} is not pinned near the top of the viewport — it did not stick`).toBeGreaterThanOrEqual(0);
+    expect(box!.y, `header y=${box!.y} is too far down to be "stuck" — it looks like it never left its normal flow position`).toBeLessThan(
+      120,
+    );
+
+    await expectNoHorizontalScroll(page);
+  });
+});
+
+// Owner request (competition desk W3, on top of Option B) — "Required court
+// tags" becomes a real button (>= 44px) that opens a modal
+// (components/modal.tsx, reused), replacing the old 248x16px inline
+// disclosure. Driven through a real browser — apps/web vitest has no DOM,
+// so it cannot see the button's real tap height or that a genuine modal
+// dialog opened; that half is unit-tested instead
+// (stages-panel-court-tags-modal.test.tsx).
+test("court-tags trigger opens a modal containing the editor body, and clears the 44px floor", async ({
+  page,
+  request,
+}) => {
+  const { divisionId, fixtureIds } = await seedRunSheetDivision(request);
+  expect(fixtureIds.length, "seed produced no fixtures — setup failed, not the modal").toBeGreaterThanOrEqual(1);
+
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.goto(await divisionPath(request, divisionId, "?tab=fixtures"));
+  await dismissCookieBanner(page);
+
+  const trigger = page.getByTestId("stage-court-tags-trigger").first();
+  await expect(trigger, "court-tags trigger button did not render").toBeVisible();
+  const triggerBox = await trigger.boundingBox();
+  console.log("court-tags trigger box:", JSON.stringify(triggerBox));
+  expect(triggerBox, "trigger has no box").not.toBeNull();
+  expect(triggerBox!.height, `trigger is ${triggerBox!.height}px tall — under the 44px tap floor`).toBeGreaterThanOrEqual(44);
+
+  await trigger.click();
+  const dialog = page.getByRole("dialog");
+  await expect(dialog, "modal did not open").toBeVisible();
+  // The editor body, exactly as it was inline before — round-role heading,
+  // the "no rounds yet" copy for a stage with none configured (this seed's
+  // default state), not a placeholder or a stripped-down summary.
+  await expect(dialog).toContainText(UI_EN["stagetags.rounds.heading"]!);
+
+  // Close via the modal's own "×" — the trigger's toggle semantics stay
+  // available for programmatic callers (unit tests), but a real user closes
+  // through the dialog itself.
+  await page.getByRole("button", { name: "Close" }).click();
+  await expect(dialog, "modal did not close").toBeHidden();
+
+  await expectNoHorizontalScroll(page);
+});
+
+// ---------------------------------------------------------------------------
+// Review finding M2 — "View N fixtures" must make its own label true.
+//
+// The control set ONLY the stage filter. The type filter is separate state and
+// initialises to "today" on a match-day division, and run-sheet.tsx's keep()
+// ANDs the two. So a stage whose fixtures are NOT today advertised "View 3
+// fixtures", the organiser tapped it, and the sheet said "No fixtures match
+// Today": promised 3, delivered 0. Sending someone somewhere empty is worse
+// than not offering the trip.
+//
+// This is invisible to the unit suite twice over: apps/web vitest is
+// environment:"node" so the onClick never runs, and the existing
+// run-sheet-stage-filter.test.tsx drives <RunSheet> directly with an explicit
+// `filter` prop, which is precisely the coupling the defect lives in.
+// ---------------------------------------------------------------------------
+test("Review M2: tapping 'View N fixtures' shows N fixtures, even when the sheet opened on Today", async ({
+  page,
+  request,
+}) => {
+  const { divisionId, fixtureIds } = await seedRunSheetDivision(request);
+  expect(fixtureIds.length, "seed produced no fixtures — setup failed, not the filter").toBeGreaterThanOrEqual(2);
+
+  // The division must be STARTED, or `resolvePhase`'s rung 1
+  // (`divisionStatus === "setup"` ⇒ setting_up, division-phase.ts) short-
+  // circuits every later rung and the sheet opens on "All" — which is
+  // exactly how the first run of this test failed, at its own guard below
+  // rather than by passing vacuously.
+  const started = await apiJson(request, `/api/v1/divisions/${divisionId}/start`, "POST");
+  expect(started.status, `division start failed: ${JSON.stringify(started.error)}`).toBeLessThan(300);
+
+  // One fixture TODAY: that is what puts the division in the match_day phase,
+  // which is what makes the type filter initialise to "today". Every other
+  // fixture is pushed to a date that filter excludes, so an un-cleared type
+  // filter can only ever show fewer than the label promises.
+  const today = new Date();
+  today.setUTCHours(12, 0, 0, 0);
+  await setFixtureScheduledAtSql(fixtureIds[0]!, today.toISOString());
+  const future = new Date(today.getTime() + 7 * 24 * 60 * 60 * 1000);
+  for (const id of fixtureIds.slice(1)) await setFixtureScheduledAtSql(id, future.toISOString());
+
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.goto(await divisionPath(request, divisionId, "?tab=fixtures"));
+  await dismissCookieBanner(page);
+
+  // The sheet really did open filtered — without this the test proves nothing,
+  // because a sheet that opened on "All" would pass the assertions below in
+  // both the fixed and the broken build.
+  const todayChip = page.getByTestId("run-sheet-filter").locator('[data-filter="today"]');
+  await expect(todayChip, "no Today chip — this division is not in the match-day phase").toBeVisible();
+  await expect(
+    todayChip,
+    "the run sheet did not open on Today, so this test cannot witness the defect",
+  ).toHaveAttribute("aria-pressed", "true");
+
+  const viewFixtures = page.getByTestId("stage-view-fixtures").first();
+  await expect(viewFixtures, "the View N fixtures control did not render").toBeVisible();
+  const label = (await viewFixtures.textContent()) ?? "";
+  const promised = Number(/(\d+)/.exec(label)?.[1]);
+  expect(promised, `could not read a count out of "${label}"`).toBeGreaterThanOrEqual(2);
+
+  await viewFixtures.click();
+
+  // The label's promise, kept: N rows, and not the empty state.
+  const runSheet = page.getByTestId("run-sheet");
+  await expect(
+    runSheet.getByTestId("run-sheet-empty"),
+    `"View ${promised} fixtures" landed the organiser on an empty run sheet`,
+  ).toHaveCount(0);
+  await expect
+    .poll(
+      async () => runSheet.locator("li[data-fixture-no]").count(),
+      { message: `the sheet shows fewer rows than the "${label.trim()}" control promised` },
+    )
+    .toBe(promised);
+});
+
+// ---------------------------------------------------------------------------
+// Review finding M4 — the phone Stage-tools sheet behaves modally (a
+// full-viewport backdrop eats every tap behind it) but declared none of a
+// modal's contract. No unit test can see any of this: apps/web vitest is
+// environment:"node", so focus() is vacuous there (a class-scan test stays
+// green while the real behaviour is absent), and the existing axe scan is
+// scoped with .include('[data-testid="stage-rail-sheet"]'), which excludes the
+// backdrop and focus behaviour entirely.
+// ---------------------------------------------------------------------------
+test("Review M4: the phone Stage tools sheet closes on Escape and gives focus back to its trigger", async ({
+  page,
+  request,
+}) => {
+  const { divisionId, fixtureIds } = await seedRunSheetDivision(request);
+  expect(fixtureIds.length, "seed produced no fixtures — setup failed, not the sheet").toBeGreaterThanOrEqual(1);
+
+  await page.setViewportSize({ width: 320, height: 900 });
+  await page.goto(await divisionPath(request, divisionId, "?tab=fixtures"));
+  await dismissCookieBanner(page);
+
+  const trigger = page.getByTestId("stage-rail-trigger").first();
+  const sheet = page.getByTestId("stage-rail-sheet").first();
+  const generate = page.getByTestId("stage-generate").first();
+  await expect(trigger, "no Stage tools trigger at 320").toBeVisible();
+
+  await trigger.click();
+  await expect(generate, "the sheet did not open").toBeVisible();
+
+  // Open, it is a dialog and it says so — a screen reader is told the rest of
+  // the page is inert, which is what the backdrop already enforces visually.
+  await expect(sheet, "the open sheet is not exposed as a dialog").toHaveAttribute("role", "dialog");
+  await expect(sheet, "the open sheet does not claim modality").toHaveAttribute("aria-modal", "true");
+
+  // Focus moved INTO the sheet on open. Without this the organiser is left on
+  // a trigger buried under the scrim, and Tab walks the page behind it.
+  await expect
+    .poll(
+      async () => sheet.evaluate((el) => el.contains(document.activeElement)),
+      { message: "focus stayed outside the sheet when it opened" },
+    )
+    .toBe(true);
+
+  await page.keyboard.press("Escape");
+  await expect(generate, "Escape did not close the sheet").not.toBeVisible();
+  await expect(
+    page.getByTestId("stage-rail-backdrop"),
+    "the backdrop outlived the sheet Escape closed",
+  ).toHaveCount(0);
+
+  // ...and focus came back to where it started, not to <body>.
+  await expect
+    .poll(
+      async () => trigger.evaluate((el) => el === document.activeElement),
+      { message: "focus was not restored to the Stage tools trigger after Escape" },
+    )
+    .toBe(true);
+
+  // Closed, it sheds all of it (review m10): no dialog role, no landmark name
+  // and NO tab stop — the box only scrolls while it is open, so a closed one
+  // is dead weight in the tab order and a duplicate entry in the landmark
+  // list, once per stage. The positive half of this pair is above: open, all
+  // three are present.
+  await expect(sheet, "the closed sheet still claims a role").not.toHaveAttribute("role", /.*/);
+  await expect(sheet, "the closed sheet is still a tab stop").not.toHaveAttribute("tabindex", /.*/);
+  await expect(sheet, "the closed sheet is still a named landmark").not.toHaveAttribute("aria-label", /.*/);
+});
+
+// ---------------------------------------------------------------------------
+// Review finding m1 — the NOW rule at the very bottom of the sheet.
+//
+// C-1 removed the card's `overflow-hidden` (sticky headers need the PAGE as
+// their containing block) on the argument that nothing square-cornered can
+// ever sit at the card's bottom edge. `NowRule` is the exception:
+// `bg-lime-50`, square corners, and `filteredNowIndex` places it LAST in the
+// `<ul>` once no fixture in the day is still ahead.
+//
+// No unit test can see this — apps/web vitest is environment:"node", and a
+// class-scan would pass on a class that never wins the cascade — so the
+// assertion below is on COMPUTED style, from a browser, in the state that
+// produces it: every fixture of the division timed EARLIER TODAY, which
+// leaves one day block, no unscheduled pile, no settled-untimed pile, and
+// therefore a day block that is the last thing in the card.
+// ---------------------------------------------------------------------------
+test("Review m1: the NOW rule does not square off the run sheet's bottom corners", async ({ page, request }) => {
+  // Same zone trick the day-grouping case uses: real "now" is local midday
+  // there, so "an hour ago" is unambiguously the SAME local day and this
+  // case behaves identically at every hour of the real clock.
+  const tz = middayZoneFor(Date.now());
+  const { divisionId, fixtureIds } = await seedRunSheetDivision(request, { tz });
+  expect(fixtureIds.length, "seed produced no fixtures — setup failed, not the corners").toBeGreaterThanOrEqual(2);
+
+  // EVERY fixture in the past, today. Nothing ahead ⇒ the NOW rule renders
+  // after the last row rather than between two of them; nothing untimed ⇒
+  // no unscheduled block follows the day block.
+  const past = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+  for (const id of fixtureIds) await setFixtureScheduledAtSql(id, past);
+
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.goto(await divisionPath(request, divisionId, "?tab=fixtures"));
+  await dismissCookieBanner(page);
+
+  const sheet = page.getByTestId("run-sheet");
+  const now = sheet.getByTestId("run-sheet-now");
+  await expect(now, "no NOW rule rendered — nothing was measured").toHaveCount(1);
+
+  // The state this test exists for, asserted rather than assumed: the rule
+  // really is the last element in the sheet. Without this the radius check
+  // below passes vacuously on a mid-sheet rule that was never supposed to
+  // be rounded.
+  const isLast = await now.evaluate((el) => {
+    const card = el.closest('[data-testid="run-sheet"]');
+    const all = card ? Array.from(card.querySelectorAll("li, section")) : [];
+    return all.length > 0 && all[all.length - 1] === el;
+  });
+  expect(isLast, "the NOW rule is not the last element in the sheet — this case did not set up").toBe(true);
+
+  const radii = await now.evaluate((el) => {
+    const cs = getComputedStyle(el);
+    const card = el.closest('[data-testid="run-sheet"]') as HTMLElement;
+    return {
+      ruleLeft: cs.borderBottomLeftRadius,
+      ruleRight: cs.borderBottomRightRadius,
+      cardLeft: getComputedStyle(card).borderBottomLeftRadius,
+      cardRight: getComputedStyle(card).borderBottomRightRadius,
+    };
+  });
+  console.log("m1 NOW-rule corner radii:", JSON.stringify(radii));
+  // Held to the CARD's own radius, read live — not to a literal, so changing
+  // `.card` moves this expectation with it instead of leaving it pinning
+  // yesterday's 16px.
+  expect(parseFloat(radii.cardLeft), "the run-sheet card has no rounded corners to protect").toBeGreaterThan(0);
+  expect(radii.ruleLeft, "the NOW rule squares off the card's bottom-left corner").toBe(radii.cardLeft);
+  expect(radii.ruleRight, "the NOW rule squares off the card's bottom-right corner").toBe(radii.cardRight);
+
+  // The DIFFERENTIAL half, and the reason this is a CSS descendant rule
+  // rather than a `last:` utility on `NowRule` itself: a row in the middle of
+  // the same list must stay SQUARE. Without this the assertions above would
+  // also pass on a blanket "round every row", which would put a rounded step
+  // into every day block on the sheet — and it is what proves the radius
+  // above comes from this rule rather than from something ambient.
+  const midRadius = await sheet
+    .locator("li[data-fixture-no]")
+    .first()
+    .evaluate((el) => getComputedStyle(el).borderBottomLeftRadius);
+  console.log("m1 mid-list row radius:", midRadius);
+  expect(parseFloat(midRadius), "a mid-list row must stay square — the rounding is scoped to the last block").toBe(0);
 });

@@ -106,7 +106,6 @@ const FIXTURES = [
 
 const PROPS = {
   divisionId: "d1",
-  divisionSeq: 5,
   competitionId: "c1",
   orgSlug: "org",
   compSlug: "comp",
@@ -156,5 +155,22 @@ describe("one fact, counted once — the stage badges and the sheet's chip agree
 
   it("and that total is the authority's, not a second predicate's", () => {
     expect(chipCount(html)).toBe(expected.length);
+  });
+});
+
+// Fix round 2 (Ruling T4-B, CRITICAL finding): moving the count onto
+// `<StageRail>` (Task 4) means the rail's own `!canEdit -> return null`
+// guard would silently swallow this badge for a non-editing viewer — it
+// carried NO `canEdit` gate in its pre-rail position, only
+// `unscheduled.length > 0`. The identical regression Ruling T3-A already
+// fixed for `courtTagsEditor`; same fix here, same file.
+describe("Fix round 2 (Ruling T4-B) — a non-editing viewer still sees the unscheduled count", () => {
+  it("renders stage-unscheduled-count even when canEdit is false", () => {
+    const html = renderToStaticMarkup(<StagesPanel {...PROPS} canEdit={false} />);
+    expect(
+      stageCounts(html).length,
+      "no per-stage unscheduled badge rendered for a non-editing viewer",
+    ).toBeGreaterThan(0);
+    expect(stageCounts(html)).toEqual([3, 1]);
   });
 });

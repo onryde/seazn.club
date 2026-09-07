@@ -11,6 +11,7 @@ import { leadingAttention,
   type Attention, type DivisionPhase, type DrawDoor, type PhaseFixture, type PhaseInput, type PhaseStage,
 } from "@/lib/division-phase";
 import { competitionPhase, type CompetitionDesk, type DeskDivision } from "@/server/usecases/competition-desk";
+import type { DeskInPlayFixture } from "@/server/usecases/competition-desk";
 
 vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: vi.fn(), push: vi.fn() }) }));
 vi.mock("@/components/ui/confirm-provider", () => ({ useConfirm: () => vi.fn(async () => false) }));
@@ -282,6 +283,26 @@ describe("enumeration 2: the five renderings agree on every reachable phase/atte
     }
   });
 
+// Review finding m8: `competition-desk.ts` documents (and
+// `competition-desk.test.ts` pins) `in_play === in_play_fixtures.length`
+// ALWAYS. These fixtures used to pair a non-zero `in_play` with an empty
+// `in_play_fixtures`, which no consumer in these two files reads today but
+// which is an impossible desk — the next consumer that trusts the documented
+// invariant would be exercised against a shape the producer cannot emit. The
+// list is now derived FROM the count, so the two can never drift apart here.
+const inPlayFixtures = (n: number, divisionId = "d1"): DeskInPlayFixture[] =>
+  Array.from({ length: n }, (_, i) => ({
+    id: `ip${i + 1}`,
+    division_id: divisionId,
+    division_name: "Premier Division",
+    home: "Alpha",
+    away: "Bravo",
+    fixture_no: i + 1,
+    event_count: 0,
+    headline: null,
+    started_at: null,
+  }));
+
   describe.each(resolved.map((r) => [r.shape.why, r] as const))("%s", (_why, r) => {
     const red = r.attention.find((a) => ATTENTION_SEVERITY[a.kind] === "red");
 
@@ -289,7 +310,13 @@ describe("enumeration 2: the five renderings agree on every reachable phase/atte
       const rowPill = renderToStaticMarkup(
         <PhasePill dict={en} phase={r.phase} inPlay={r.desk.in_play} attention={r.attention} />,
       );
-      const desk: CompetitionDesk = { in_play: r.desk.in_play, divisions: new Map([["d1", r.desk]]), now: NOW };
+      // Task 6: this file's cases don't exercise the band itself — but the
+      // fixture list is DERIVED from the count (see `inPlayFixtures`), never
+      // an empty array beside a non-zero one (review m8).
+      const desk: CompetitionDesk = {
+        in_play: r.desk.in_play, in_play_fixtures: inPlayFixtures(r.desk.in_play), up_next: null,
+        divisions: new Map([["d1", r.desk]]), now: NOW,
+      };
       const cp = competitionPhase(desk);
       // Review 7, Minor 9: this rendered the masthead with `attention={[]}`,
       // so the file written to make five renderings AGREE did not exercise the
@@ -342,8 +369,11 @@ describe("enumeration 2: the five renderings agree on every reachable phase/atte
     });
 
     it("4: a red attention always has a Needs-you row of the same kind, with an action", () => {
-      const items = needsYouItems(en, { in_play: r.desk.in_play, divisions: new Map([["d1", r.desk]]), now: NOW },
-        [{ id: "d1", name: "Premier", slug: "premier" }], "org", "comp", "en");
+      const items = needsYouItems(
+        en,
+        { in_play: r.desk.in_play, in_play_fixtures: inPlayFixtures(r.desk.in_play), up_next: null, divisions: new Map([["d1", r.desk]]), now: NOW },
+        [{ id: "d1", name: "Premier", slug: "premier" }], "org", "comp", "en",
+      );
       // registrations_waiting is aggregated to ONE competition-level row, so
       // it is keyed differently by design; every other kind is per division.
       for (const a of r.attention) {
@@ -357,7 +387,7 @@ describe("enumeration 2: the five renderings agree on every reachable phase/atte
 
     it("5: the start-locks tip shows only while nothing has been played", () => {
       const html = renderToStaticMarkup(
-        <StagesPanel divisionId="d1" divisionSeq={5} competitionId="c1" orgSlug="org" compSlug="comp" divSlug="div"
+        <StagesPanel divisionId="d1" competitionId="c1" orgSlug="org" compSlug="comp" divSlug="div"
           stages={r.shape.stages.map((s) => ({ id: s.id, seq: s.seq, kind: "league", name: s.name, config: {}, progression: null, status: s.status }))}
           fixtures={r.shape.fixtures.map((f, i) => ({
             id: f.id, stage_id: f.stageId, pool_id: null, round_no: 1, seq_in_round: i + 1, fixture_no: i + 1,
@@ -413,8 +443,11 @@ describe("the needs_draw action names a button the seed-proposal panel is showin
       played: 6, total: 6, unscheduled: 0, in_play: 0, entrants: 4, next: null,
       needs_draw_stage: { name: "Finals" }, fixture_names: {}, display_tz: TZ,
     };
-    const items = needsYouItems(en, { in_play: 0, divisions: new Map([["d1", desk]]), now: NOW },
-      [{ id: "d1", name: "Premier", slug: "premier" }], "org", "comp", "en");
+    const items = needsYouItems(
+      en,
+      { in_play: 0, in_play_fixtures: [], up_next: null, divisions: new Map([["d1", desk]]), now: NOW },
+      [{ id: "d1", name: "Premier", slug: "premier" }], "org", "comp", "en",
+    );
     const label = items.find((i) => i.kind === "needs_draw")?.action.label;
     expect(label, `no needs_draw row for the ${door} door`).toBeTruthy();
 

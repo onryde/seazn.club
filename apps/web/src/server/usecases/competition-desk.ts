@@ -55,6 +55,30 @@ export interface DeskDivision {
   display_tz: string;
 }
 
+/** W3 Task 6 — one row of the in-play band, built entirely from fields the
+ *  fixture query already selects (`f.id, f.division_id, ... h.display_name
+ *  as home, a.display_name as away, coalesce(e.n,0)::int as event_count,
+ *  e.started_at`, see the query below): no second query. `division_name`
+ *  is the one field the fixture query doesn't carry — it comes from the
+ *  `divisions` list this function already has in hand too. */
+export interface DeskInPlayFixture {
+  id: string;
+  division_id: string;
+  division_name: string;
+  home: string | null;
+  away: string | null;
+  fixture_no: number;
+  event_count: number;
+  /** The live scoreline for the band's scoreboard slot. NULL means "no score
+   *  to show" — the band prints NO SCORE rather than substituting a number
+   *  that is not one. Review finding M1: this slot used to render
+   *  `event_count`, the ledger depth, which rises monotonically and never
+   *  resets between games, so a badminton match 37 rallies in showed a large
+   *  green `37` where its score belongs. */
+  headline: string | null;
+  started_at: string | null;
+}
+
 export interface CompetitionDesk {
   // `org_tz` used to sit here. Deleted in fix round F (minor 1): it had ZERO
   // production consumers, and a dormant SECOND zone authority on the very type
@@ -63,6 +87,21 @@ export interface CompetitionDesk {
   // both bucketed and printed in — and that is the only zone this type owes
   // anyone. Same argument round E used to delete `court_label`.
   in_play: number;
+  /** Every in-play fixture across every division, ordered by kickoff
+   *  (`started_at` ascending, nulls last — a fixture forced in play by raw
+   *  SQL with no real `core.start` sorts after every one that has actually
+   *  kicked off). Built from the SAME per-division `rows` this function
+   *  already filters to compute `in_play` above, so the count and the list
+   *  can never drift into two authorities for one fact (spec's "one shape,
+   *  two doors"; `desk.in_play === desk.in_play_fixtures.length` always). */
+  in_play_fixtures: DeskInPlayFixture[];
+  /** The soonest `next` across every division, EXCLUDING a division whose own
+   *  `next` is the fixture currently in play — that fixture already has its
+   *  own card in `in_play_fixtures`, and "up next" (the band's one dashed
+   *  card, design doc §W3) means genuinely not yet started. Derived from the
+   *  same per-division `next` (`resolveDivisionNext` below) every row in
+   *  `divisions` already carries. */
+  up_next: DeskNextFixture | null;
   divisions: Map<string, DeskDivision>;
   /** Same instant every division's phase was resolved against (SSR-stable).
    *  `competitionPhase` filters on it too, so the masthead's "earliest next
@@ -118,6 +157,10 @@ type FixtureRaw = {
   home: string | null;
   away: string | null;
   event_count: number;
+  /** The live scoreline, from `match_states.summary->>'headline'` — the same
+   *  field `listFixtureHeadlines` reads. NULL when the fixture has no match
+   *  state yet, or its engine publishes no headline. */
+  headline: string | null;
   /** When core.start was recorded — the fixture's REAL kick-off. `fixtures`
    *  has no such column (V214), and `scheduled_at` is a plan, not an event. */
   started_at: string | Date | null;
@@ -226,10 +269,21 @@ export async function getCompetitionDesk(
       ? await tx<FixtureRaw[]>`
           select f.id, f.division_id, f.status, f.scheduled_at, f.fixture_no, f.stage_id,
                  h.display_name as home, a.display_name as away,
-                 coalesce(e.n, 0)::int as event_count, e.started_at
+                 coalesce(e.n, 0)::int as event_count, e.started_at,
+                 ms.summary->>'headline' as headline
             from fixtures f
             left join entrants h on h.id = f.home_entrant_id
             left join entrants a on a.id = f.away_entrant_id
+            -- Review finding M1: the band's scoreboard slot was rendering
+            -- event_count -- a ledger depth that only ever rises and never
+            -- resets between games -- as though it were the score. The design
+            -- doc (W1) named listFixtureHeadlines as the source; that function
+            -- is division-scoped and this query is competition-wide, so the
+            -- same match_states.summary headline field it reads is joined
+            -- here instead of paying a second, per-division round trip.
+            -- NOTE: no backticks in this comment. It lives inside a JS tagged
+            -- template literal, where a backtick ENDS the SQL string.
+            left join match_states ms on ms.fixture_id = f.id
             left join (
               -- BLOCKER (review 7, round J). Two things were wrong here, and
               -- together they made BOTH live-recording attentions unreachable
@@ -300,6 +354,7 @@ export async function getCompetitionDesk(
   const nowIso = now.toISOString();
   const out = new Map<string, DeskDivision>();
   let inPlayTotal = 0;
+  const inPlayFixtures: DeskInPlayFixture[] = [];
   for (const d of divisions) {
     const s = stats.get(d.id);
     const st = settings.find((x) => x.division_id === d.id);
@@ -389,8 +444,22 @@ export async function getCompetitionDesk(
     };
     const attention = resolveAttention(input);
     const needsDraw = attention.find((a) => a.kind === "needs_draw");
-    const inPlay = rows.filter((x) => x.status === "in_play").length;
+    const inPlayRows = rows.filter((x) => x.status === "in_play");
+    const inPlay = inPlayRows.length;
     inPlayTotal += inPlay;
+    for (const x of inPlayRows) {
+      inPlayFixtures.push({
+        id: x.id,
+        division_id: x.division_id,
+        division_name: d.name,
+        home: x.home,
+        away: x.away,
+        fixture_no: x.fixture_no,
+        event_count: x.event_count,
+        headline: x.headline,
+        started_at: x.started_at === null ? null : new Date(x.started_at).toISOString(),
+      });
+    }
     const fixture_names: DeskDivision["fixture_names"] = {};
     for (const x of rows) fixture_names[x.id] = { home: x.home, away: x.away, fixture_no: x.fixture_no };
     out.set(d.id, {
@@ -411,6 +480,33 @@ export async function getCompetitionDesk(
       display_tz: displayTz,
     });
   }
+  // Ordered by kickoff ascending, nulls last: a fixture forced in_play by raw
+  // SQL (or set live before the scorer ever posts core.start — reachable
+  // production shape, not just a test artifact) has no started_at and sorts
+  // after every fixture that has genuinely kicked off.
+  inPlayFixtures.sort((a, b) => {
+    if (a.started_at === b.started_at) return 0;
+    if (a.started_at === null) return 1;
+    if (b.started_at === null) return -1;
+    return a.started_at < b.started_at ? -1 : 1;
+  });
+  // "Up next": the soonest across every division's own `next`, but only
+  // among divisions whose next fixture has NOT yet started — an in-play
+  // division's `next` already has its own card in `in_play_fixtures` above.
+  // Sorted by Date.parse, same style as resolveDivisionNext's own sort above:
+  // `next.scheduled_at` round-trips through postgres.js as a `Date`, not a
+  // `string`, despite its declared type (lib/db.ts's timestamptz comment) —
+  // existing consumers (nextFutureAt, competitionPhase's `dated` sort) work
+  // around this via Date.parse/relational coercion, but `up_next` is a new
+  // field, so its `scheduled_at` is normalised to a real ISO string here
+  // rather than carrying the same latent mistype forward.
+  const upNextCandidates = [...out.values()]
+    .map((d) => d.next)
+    .filter((n): n is DeskNextFixture & { scheduled_at: string } => n !== null && !n.in_play && n.scheduled_at !== null)
+    .sort((a, b) => Date.parse(a.scheduled_at) - Date.parse(b.scheduled_at));
+  const upNextPicked = upNextCandidates[0] ?? null;
+  const upNext: DeskNextFixture | null =
+    upNextPicked === null ? null : { ...upNextPicked, scheduled_at: new Date(upNextPicked.scheduled_at).toISOString() };
   log.info(
     {
       event: "competition_desk_built",
@@ -421,7 +517,7 @@ export async function getCompetitionDesk(
     },
     "competition_desk_built",
   );
-  return { in_play: inPlayTotal, divisions: out, now: nowIso };
+  return { in_play: inPlayTotal, in_play_fixtures: inPlayFixtures, up_next: upNext, divisions: out, now: nowIso };
 }
 
 /** The competition-level pill's phase: either a ranked/counted state, or a

@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
+import en from "@/dictionaries/en/ui.json";
 import {
   StagesPanel,
   attachmentWarning,
@@ -27,7 +28,7 @@ const STAGE = {
   config: {}, progression: null, status: "active",
 };
 const baseProps = {
-  divisionId: "d1", divisionSeq: 5, competitionId: "c1", orgSlug: "org", compSlug: "comp", divSlug: "div",
+  divisionId: "d1", competitionId: "c1", orgSlug: "org", compSlug: "comp", divSlug: "div",
   stages: [STAGE],
   fixtures: [],
   entrantNames: { e1: "Alpha", e2: "Bravo" },
@@ -72,6 +73,54 @@ describe("StagesPanel — roster-drift banner (F3 Task 5)", () => {
   it("hides the banner when rosterDrift is omitted entirely (optional prop, default {})", () => {
     const html = renderToStaticMarkup(<StagesPanel {...baseProps} />);
     expect(html).not.toMatch(banner);
+  });
+
+  // W3 item 6 (review finding M3). Swiss pairs ONE ROUND AT A TIME, so an
+  // active entrant with no fixture is its normal resting state -- the
+  // odd-roster bye every round, and any entrant added before the next round
+  // is generated. The old banner told the organiser their fixtures did not
+  // match their roster, named the player who sat out by design, and offered a
+  // btn-danger "Rebuild fixtures" whose effect is to delete the round,
+  // regenerate it (sitting somebody out again, so the banner returns) and
+  // discard the officials, team sheets and device links attached to it.
+  const SWISS_STAGE = { ...STAGE, kind: "swiss", name: "Swiss" };
+  const swissProps = { ...baseProps, stages: [SWISS_STAGE] };
+  const rebuild = /data-testid="roster-drift-rebuild"/;
+
+  it("swiss + unplaced-only: says it is waiting for the next round, and offers NO destructive rebuild", () => {
+    const html = renderToStaticMarkup(<StagesPanel {...swissProps} rosterDrift={UNPLACED_DRIFT} />);
+    // Positive pair first: without this, every assertion below is satisfied by
+    // a banner that did not render at all.
+    expect(html, "no banner rendered -- the absences below prove nothing").toMatch(banner);
+    expect(html).toContain("New Nadia");
+    expect(html).toMatch(/data-roster-drift-state="swiss-awaiting-pairing"/);
+    expect(html, "the destructive rebuild CTA is still offered on a swiss stage between rounds").not.toMatch(
+      rebuild,
+    );
+    expect(html, "the swiss copy did not render").toContain(en["progression.rosterDrift.swissHeading"]);
+    // Anchored on the entity-free half of "Fixtures don't match the roster":
+    // React escapes the apostrophe to &#x27;, so a `toContain` on the raw
+    // dictionary string never matches -- which would make this NEGATIVE
+    // assertion pass in every state, including the one it exists to catch.
+    expect(html, "the false alarm copy is still shown").not.toContain("match the roster");
+  });
+
+  // The fix is SPECIFIC, not "swiss never drifts". A ghost -- a withdrawn
+  // entrant still named on a live fixture -- is wrong on swiss exactly as
+  // anywhere else, and keeps both the warning and the remedy.
+  it("swiss + a ghost: keeps the full warning AND the rebuild button", () => {
+    const html = renderToStaticMarkup(<StagesPanel {...swissProps} rosterDrift={GHOST_DRIFT} />);
+    expect(html).toMatch(banner);
+    expect(html).toMatch(/data-roster-drift-state="ghosts"/);
+    expect(html, "a real ghost lost its remedy on a swiss stage").toMatch(rebuild);
+    expect(html, "the real warning copy is missing").toContain("match the roster");
+  });
+
+  it("a NON-swiss stage with the same unplaced-only drift is untouched -- warning and rebuild both stay", () => {
+    const html = renderToStaticMarkup(<StagesPanel {...baseProps} rosterDrift={UNPLACED_DRIFT} />);
+    expect(html).toMatch(/data-roster-drift-state="unplaced"/);
+    expect(html, "the league stage lost its rebuild CTA").toMatch(rebuild);
+    expect(html, "the real warning copy is missing").toContain("match the roster");
   });
 
   it("hides the banner from viewers (canEdit=false), even with real drift", () => {

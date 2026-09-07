@@ -1145,6 +1145,55 @@ export const Fixture = z.object({
   conditional: z.boolean().optional(),
 });
 
+// ---------------------------------------------------------------------------
+// Competition desk (W3 Task 6): the in-play band's producer, served bare by
+// GET /competitions/{id}/desk (usecases/competition-desk.ts's
+// `getCompetitionDesk`, "one shape, two doors" — the SSR page reads the same
+// function directly). Mirrors that module's exported interfaces field for
+// field.
+// ---------------------------------------------------------------------------
+
+export const DeskInPlayFixture = z.object({
+  id: Uuid,
+  division_id: Uuid,
+  division_name: z.string(),
+  home: z.string().nullable(),
+  away: z.string().nullable(),
+  fixture_no: z.number().int(),
+  event_count: z.number().int(),
+  started_at: z.string().nullable(),
+});
+
+/** competition-desk.ts's `DeskNextFixture` (`Omit<NextFixture, "court_label">`) —
+ *  no existing schema to reuse: `NextFixture` (card-stats.ts) has never
+ *  crossed the wire before this route. */
+export const DeskNextFixture = z.object({
+  home: z.string().nullable(),
+  away: z.string().nullable(),
+  scheduled_at: z.string().nullable(),
+  in_play: z.boolean(),
+});
+
+export const CompetitionDesk = z.object({
+  in_play: z.number().int(),
+  // Ordered by kickoff ascending, nulls last — see getCompetitionDesk. The
+  // SAME rows `in_play` above counts: `in_play === in_play_fixtures.length`
+  // always (competition-desk.test.ts's Task 6 case pins this).
+  in_play_fixtures: z.array(DeskInPlayFixture),
+  up_next: DeskNextFixture.nullable(),
+  // The usecase's own type is `Map<string, DeskDivision>` — a bare Map
+  // serialises to `{}` over JSON (no own enumerable properties), so the
+  // route converts it with `Object.fromEntries` before this schema ever
+  // sees it. Left loosely typed rather than a full `DeskDivision` mirror:
+  // no consumer of this wire contract reads inside `divisions` yet (the W3
+  // band reads only in_play/in_play_fixtures/up_next), and DeskDivision's
+  // own shape (division-phase.ts's `Attention` discriminated union, etc.)
+  // has no established Zod schema to reuse — inventing one is out of this
+  // task's scope.
+  divisions: z.record(z.string(), z.unknown()),
+  now: z.string(),
+});
+
 export const LineupSlotInput = z.object({
   person_id: Uuid,
   slot: z.enum(["starting", "bench"]).default("starting"),

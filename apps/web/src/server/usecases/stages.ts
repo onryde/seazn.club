@@ -1630,6 +1630,51 @@ export async function getStageRosterDrift(auth: AuthCtx, stageId: string): Promi
       select count(*)::int as count from fixtures where stage_id = ${stageId}`;
     if (fixtureCount === 0) return { ghosts: [], unplaced: [], attachments: NO_ATTACHMENTS };
 
+    // Odd-Swiss sit-out (F3 W3 item 6) — REVIEWED AND REVISED (round 1 of
+    // review, 2026-09-06). The first attempt suppressed an unplaced entrant
+    // whose `created_at` predated the stage's latest-generated round's
+    // fixtures — CRITICAL finding: `entrants` has no `updated_at` and
+    // `patchEntrant` (entrants.ts) applies no active-division lock, so
+    // withdraw-then-reinstate (a genuine, reachable roster edit — see the
+    // `patchEntrant(..., {status: "withdrawn"})` cases in this file's own
+    // tests) leaves NO timestamp trace: a reinstated entrant's `created_at`
+    // still predates the round, so that heuristic silently and PERMANENTLY
+    // hid a real drift the banner exists to catch (worse if the stage's
+    // round cap is already hit — Generate can't fix it either).
+    //
+    // The ruling: derive the sit-out from ROUND MEMBERSHIP — a stored fact
+    // (which fixture, which round, references this entrant) — instead of
+    // `created_at`, a heuristic standing in for one. Worked out precisely,
+    // that reduces to exactly the plain stage-wide `referencedIds` check
+    // below, for every stage kind including swiss, and here is the reason
+    // rather than an assertion of it: "referenced by a fixture in an
+    // EARLIER round" can only ever be true for an entrant who is ALREADY
+    // excluded from the unplaced-candidate set by `referencedIds` (which is
+    // stage-wide, not round-scoped) — being referenced in any round at all,
+    // earlier or not, already means `referencedIds.has(id)`. So the
+    // "suppress" half of the round-membership rule can never independently
+    // fire; the "genuine drift, must flag" half is this exact `unplaced`
+    // line. A round-1-ONLY sit-out is stage-wide UNREFERENCED — no earlier
+    // round exists yet to prove it against — which is the identical stored
+    // shape finding 1's reinstated ghost leaves (also stage-wide
+    // unreferenced, also with no round to its name): round membership alone
+    // cannot tell the two apart, because `swissGen` maps only
+    // `round.pairings` (packages/engine/src/scheduling/swiss.ts's
+    // `pairRound` `bye` field is never written to a fixture row at all —
+    // not even a null-opponent one), so a legitimate sit-out leaves no
+    // "I was considered, I sat out" trace to distinguish it from an entrant
+    // who was never considered. Closing that gap safely needs swissGen
+    // itself to persist a bye reference per round (the way knockout already
+    // represents a bye as a real fixture row, home set / away null) — a
+    // bigger, structural change outside a roster-drift-computation fix; see
+    // the W3 item 6 section of _INDEX.md for the follow-up recommendation.
+    //
+    // Net effect: a round-1-only Swiss sit-out is reported exactly like any
+    // other unplaced entrant (transient — it self-clears the moment a later
+    // round gives it a real fixture, via this same `referencedIds` check,
+    // no swiss-specific code needed) rather than being suppressed on sight.
+    // That is a deliberate, safety-first trade documented, not a silent
+    // regression — see `stage-roster-drift.test.ts`'s three swiss cases.
     const [active, referenced] = await Promise.all([
       tx<StageRosterDriftEntrant[]>`
         select id, display_name from entrants

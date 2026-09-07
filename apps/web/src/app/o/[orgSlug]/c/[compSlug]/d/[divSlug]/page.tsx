@@ -616,7 +616,6 @@ export default async function DivisionPage({
             ))}
             <StagesPanel
               divisionId={id}
-              divisionSeq={division.seq}
               competitionId={competition.id}
               orgSlug={orgSlug}
               compSlug={compSlug}
