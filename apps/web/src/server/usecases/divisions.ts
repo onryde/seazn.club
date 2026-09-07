@@ -596,12 +596,19 @@ function isAgeBandCheckViolation(err: unknown): boolean {
 
 // The RS007/V380 cutoff columns' own CHECK (divisions_age_cutoff_check).
 // NOT the same role isAgeBandCheckViolation plays above, and the difference
-// matters: that constraint's second disjunct is NULL when exactly one half is
-// NULL, and `false OR NULL` SATISFIES a CHECK — so a one-sided orphan passes
-// it and this predicate can never fire on the both-or-neither rule at all.
-// The only thing it can catch is a RANGE violation with BOTH halves present
-// (month outside 1-12, day outside 1-31), which the `.min`/`.max` on
-// PatchDivision and the merge-check in patchDivision both sit in front of.
+// matters: when exactly one half is NULL and the PRESENT half is in range,
+// that constraint's second disjunct is NULL, and `false OR NULL` SATISFIES a
+// CHECK — so a one-sided orphan of valid values passes it and this predicate
+// can never fire on the both-or-neither rule at all.
+//
+// What it CAN catch is any PRESENT half outside its own range, one-sided
+// included: `false and NULL` is FALSE, not NULL, so an out-of-range present
+// half collapses the second disjunct rather than nulling it. Verified against
+// the live constraint definition — `(13, null)` and `(null, 32)` refused,
+// `(9, null)` and `(null, 5)` satisfied, `(2, 31)` satisfied (it does not do
+// day-per-month either). PatchDivision's `.min`/`.max` bound every half
+// before it can be sent, so nothing reaches it over /api/v1.
+//
 // Kept as a leak guard on the raw constraint text, not as a race backstop —
 // both-or-neither has no database invariant underneath it (W8/F12).
 // The 422 it raises carries AGE_CUTOFF_BOTH_OR_NEITHER, which is the wrong

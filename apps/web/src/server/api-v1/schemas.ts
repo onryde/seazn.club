@@ -290,16 +290,26 @@ function checkAgeBand(
 //   (month is null and day is null)
 //   or (month between 1 and 12 and day between 1 and 31)
 //
-// and with exactly one side NULL the first disjunct is false while the second
-// is NULL (`null between 1 and 12` is NULL), so the whole predicate is NULL —
-// which SATISFIES a CHECK under SQL's tri-valued logic. A one-sided orphan
-// passes it, always. The only thing that constraint can ever refuse is a
-// RANGE violation with BOTH halves present, which is a third rule neither of
-// the two refinements here states; `isAgeCutoffCheckViolation`
-// (usecases/divisions.ts) maps that to a 422 carrying this sentence, which is
-// the wrong sentence for what actually went wrong — harmless today only
-// because both zod's own `.min`/`.max` below and (on a PATCH) the merge-check
-// sit in front of it, so nothing reaches it over /api/v1.
+// and with exactly one side NULL and the PRESENT half IN RANGE, the first
+// disjunct is false while the second is NULL (`null between 1 and 31` is
+// NULL, and `true and NULL` is NULL), so the whole predicate is NULL — which
+// SATISFIES a CHECK under SQL's tri-valued logic. A one-sided orphan of
+// otherwise-valid values passes it, always.
+//
+// The "in range" qualifier is load-bearing, and getting it wrong is what a
+// W8 T6 re-review caught here: `false and NULL` is FALSE, not NULL, so a
+// one-sided half that is OUT of range collapses the second disjunct to false
+// and IS refused. Verified against this constraint's live definition rather
+// than reasoned about — `(13, null)` and `(null, 32)` REFUSED, `(9, null)`
+// and `(null, 5)` SATISFIED, `(2, 31)` (31 February) SATISFIED.
+//
+// So what the constraint actually refuses is: any PRESENT half outside its
+// own range, one-sided included. That is a third rule neither refinement here
+// states, and it is not day-per-month either. `isAgeCutoffCheckViolation`
+// (usecases/divisions.ts) maps it to a 422 carrying THIS sentence, which is
+// the wrong sentence for a range violation — harmless today only because
+// zod's own `.min`/`.max` below bound every half before it can be sent, so
+// nothing reaches the constraint over /api/v1.
 //
 // Two consequences worth stating plainly. `patchDivision`'s merge-check is
 // the SOLE enforcement point for both-or-neither — there is no database
@@ -392,7 +402,12 @@ export const PatchDivision = z
     age_max: z.number().int().min(0).max(120).nullable(),
     /** RS007/V380: overrides the age band's cutoff date (default 1
      *  January) — school-year age groups commonly run 1 September.
-     *  Both-or-neither (checkAgeCutoff below; DB CHECK backstops it). */
+     *  Both-or-neither via `checkAgeCutoff` below on the body, and
+     *  `patchDivision`'s merge-check on the merged row (W8/F12). Unlike
+     *  age_min/age_max two fields up, the DB CHECK does NOT backstop this
+     *  one — a one-sided orphan satisfies it (`false OR NULL`), so the
+     *  merge-check is the sole enforcement point. Full reasoning at
+     *  AGE_CUTOFF_BOTH_OR_NEITHER above. */
     age_cutoff_month: z.number().int().min(1).max(12).nullable(),
     age_cutoff_day: z.number().int().min(1).max(31).nullable(),
     /** RS007/V380: the retired jsonb "custom rule" note, now a first-class
