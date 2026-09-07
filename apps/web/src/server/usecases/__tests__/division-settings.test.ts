@@ -14,9 +14,13 @@ import { createEntrants } from "../entrants";
 import { createStages, generateStageFixtures, replaceStages } from "../stages";
 
 import { setOrgPlan } from "@/lib/__tests__/_billing-group";
+import { invalidateOrgEntitlements } from "@/lib/entitlements";
 const HAS_DB = !!process.env.DATABASE_URL;
 
-async function seedOwner(): Promise<AuthCtx> {
+/** `plan` defaults to the Pro this file has always seeded; pass "community" for
+ *  the paid-layer gate cases at the bottom, which need an org that genuinely
+ *  lacks the key rather than one carrying a staff deny. */
+async function seedOwner(plan: "pro" | "community" = "pro"): Promise<AuthCtx> {
   const suffix = randomUUID().slice(0, 8);
   const [{ id: userId }] = await sql<{ id: string }[]>`
     insert into users (email, display_name, email_verified)
@@ -25,7 +29,8 @@ async function seedOwner(): Promise<AuthCtx> {
     insert into organizations (name, slug, created_by)
     values (${"V8 Org " + suffix}, ${"v8-org-" + suffix}, ${userId}) returning id`;
   await sql`insert into org_members (org_id, user_id, role) values (${orgId}, ${userId}, 'owner')`;
-  await setOrgPlan(orgId);
+  await setOrgPlan(orgId, plan);
+  await invalidateOrgEntitlements(orgId);
   await sql`
     insert into sports (key, name, module_version, position_catalog)
     values ('generic', 'Generic', '1.0.0', ${sql.json({ groups: [], lineup: { size: 1, benchMax: 0 } })})
@@ -734,6 +739,62 @@ describe.skipIf(!HAS_DB)(
     });
   },
 );
+
+// ---------------------------------------------------------------------------
+// The two paid-layer gates on `patchDivision` (W8 Task 9, finding F21)
+// ---------------------------------------------------------------------------
+
+/**
+ * W8's second mutation sweep found these two `requireFeature` calls
+ * (`divisions.ts`, inside `patchDivision`) had NO test anywhere in the repo
+ * that reddened when they stopped throwing: the sweep mutated each to
+ * `.catch(() => undefined)` and 117 and 141 tests respectively stayed green
+ * across every suite that calls `patchDivision`. The single test that reaches
+ * the `formats.advanced` line (`format-ext.test.ts`'s auto_progress case) runs
+ * on a **pro** org, where the gate passes; `auto_posts` reaches `patchDivision`
+ * only from `e2e/news.spec.ts`, which expects 200 on the shared Pro org.
+ *
+ * Both keys are FALSE on `community` in the live matrix, so this is the state
+ * a real free org is in — no staff deny needed, and a regression would hand
+ * every free org auto-progression and auto-drafted news with no witness.
+ *
+ * Each case carries its POSITIVE pair in the same block: turning the toggle
+ * OFF must stay allowed on the very same org (`divisions.ts`' own comment:
+ * "turning it off is always allowed — a downgraded org can quiet its toggle"),
+ * so a guard that simply refused every write could not satisfy these tests.
+ */
+describe.skipIf(!HAS_DB)("paid-layer gates on patchDivision (W8 F21)", () => {
+  it("refuses auto_progress on a Community org with 402 formats.advanced, while still allowing it OFF", async () => {
+    const owner = await seedOwner("community");
+    const { division } = await rig(owner);
+
+    await expect(patchDivision(owner, division.id, { auto_progress: true })).rejects.toMatchObject({
+      status: 402,
+      featureKey: "formats.advanced",
+    });
+    // A refusal, not a silent no-op: nothing was written on the way past.
+    expect((await getDivision(owner, division.id)).auto_progress).toBe(false);
+
+    // The positive pair. Without it a guard that refused EVERY auto_progress
+    // patch — the over-refusing mutant — would satisfy the assertion above.
+    const off = await patchDivision(owner, division.id, { auto_progress: false });
+    expect(off.auto_progress).toBe(false);
+  });
+
+  it("refuses auto_posts on a Community org with 402 news.auto, while still allowing it OFF", async () => {
+    const owner = await seedOwner("community");
+    const { division } = await rig(owner);
+
+    await expect(patchDivision(owner, division.id, { auto_posts: true })).rejects.toMatchObject({
+      status: 402,
+      featureKey: "news.auto",
+    });
+    expect((await getDivision(owner, division.id)).auto_posts).toBe(false);
+
+    const off = await patchDivision(owner, division.id, { auto_posts: false });
+    expect(off.auto_posts).toBe(false);
+  });
+});
 
 afterAll(async () => {
   if (!HAS_DB) return;
