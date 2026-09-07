@@ -947,6 +947,22 @@ export async function seedBareRegistrationSql(
   });
 }
 
+/** Namespace half of the two-int `pg_advisory_lock(int, int)` used to serialise
+ *  the superadmin borrow below. Arbitrary but fixed, in the style of
+ *  `rs007-money-kit.ts`'s `CONNECT_LOCK_KEY`; it cannot collide with that one
+ *  even if the numbers matched, because Postgres keeps the one-bigint and
+ *  two-int advisory forms in separate lock spaces. */
+const STAFF_BORROW_LOCK_NS = 70070072;
+
+/** A stable signed 32-bit key from an id string — the second half of that
+ *  two-int form, which is what makes the lock per-owner rather than global.
+ *  Collisions only cost a wait, never correctness. */
+function advisoryKey32(id: string): number {
+  let h = 0;
+  for (let i = 0; i < id.length; i++) h = (Math.imul(h, 31) + id.charCodeAt(i)) | 0;
+  return h;
+}
+
 /**
  * Drop an org's server-side entitlement cache (`ent:{org}:*`). SQL-flip
  * helpers mutate entitlement state behind the app's back; on a Redis-backed
@@ -965,6 +981,29 @@ export async function seedBareRegistrationSql(
  * arriving silently. Callers already `await` it, so a throw surfaces in the
  * test that asked for the drop instead of as a wrong-plan assertion later on.
  * Proven by `walkthrough/settings-competition-gates.spec.ts`'s "W8/F10" test.
+ *
+ * THE BORROW IS SERIALISED BY A POSTGRES ADVISORY LOCK (W8 final review). The
+ * privilege borrowed here is not scoped to the org — `users.is_staff` is a
+ * single global row — so two callers landing on the same owner interleave into
+ * a hand-back that arrives mid-flight:
+ *
+ *     A: staff := true → A: POST → B: staff := true (no-op, already true)
+ *     → A: DELETE → A: staff := FALSE → B: DELETE → 401
+ *
+ * SIX root specs call this against the SAME shared auth-state org (counted by
+ * grepping the call site, not the import — `payments-hardening.spec.ts` only
+ * NAMES the helper in a comment, and `directory-kit.ts` re-exports without
+ * calling): five in `parallel` — `scoring-free`, `pass-scope-w2`,
+ * `pass-scope-officials`, `official-marks-reports`,
+ * `scorepad-v3-swap-off-step-enforcement` — plus `public-dashboards`, which
+ * `SERIAL_SPECS` puts in the `serial` project. `parallel` and `walkthrough`
+ * both run `fullyParallel: true` on more than one worker, and locally all
+ * three projects run concurrently in one invocation, so the interleave is
+ * reachable today. Before the F10 fix above it was silent; that fix turned it
+ * into a hard throw, which makes the lock the other half of the same repair.
+ * `rs007-money-kit.ts`'s `claimConnectAccount` takes the same kind of lock for
+ * the same kind of reason (its own docblock: a lock, not a comment saying "run
+ * with --workers=1").
  */
 export async function invalidateOrgEntitlements(
   request: APIRequestContext,
@@ -975,31 +1014,60 @@ export async function invalidateOrgEntitlements(
   // computes a different tag than the setup worker that minted the account.
   const setStaff = (on: boolean) => setOwnerStaffSql(orgId, on);
   const KEY = "e2e.cache.bust";
-  await setStaff(true);
-  try {
-    const setRes = await request.fetch(`/api/admin/orgs/${orgId}/entitlement-override`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      data: { feature_key: KEY, reason: "e2e: drop cached entitlements after SQL flip" },
-    });
-    if (!setRes.ok()) {
-      throw new Error(
-        `invalidateOrgEntitlements: set override failed (${setRes.status()}) for org ${orgId}`,
-      );
+  // `withDb` opens ONE connection (`max: 1`) and holds it for the whole
+  // callback, which is what an advisory lock needs — `pg_advisory_lock` is
+  // SESSION-scoped, so a lock taken on a connection that is then returned to a
+  // pool (or closed) is gone, and the unlock can land on a different backend
+  // as a silent no-op. Everything the borrow does happens inside this callback;
+  // the two `setStaff` calls open their own short-lived connections, which is
+  // fine — nothing holds a ROW lock across the two fetches, so there is no
+  // lock-ordering cycle to deadlock on.
+  await withDb(async (sql) => {
+    // Keyed on the OWNER, not the org: `setOwnerStaffSql` uses the org id only
+    // to pick WHICH `users` row to flip, so the owner is the contended
+    // resource and two different orgs sharing one owner have to serialise too.
+    // Falls back to the org id when there is no owner — nothing to flip, so
+    // any key does, and this keeps the helper's behaviour for a bogus or
+    // already-released org id exactly what it was.
+    const [owner] = await sql<{ user_id: string }[]>`
+      select user_id from org_members where org_id = ${orgId} and role = 'owner'`;
+    const lockKey = advisoryKey32(owner?.user_id ?? orgId);
+    await sql`select pg_advisory_lock(${STAFF_BORROW_LOCK_NS}, ${lockKey})`;
+    try {
+      await setStaff(true);
+      try {
+        const setRes = await request.fetch(`/api/admin/orgs/${orgId}/entitlement-override`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          data: { feature_key: KEY, reason: "e2e: drop cached entitlements after SQL flip" },
+        });
+        if (!setRes.ok()) {
+          throw new Error(
+            `invalidateOrgEntitlements: set override failed (${setRes.status()}) for org ${orgId}`,
+          );
+        }
+        const clearRes = await request.fetch(`/api/admin/orgs/${orgId}/entitlement-override`, {
+          method: "DELETE",
+          headers: { "Content-Type": "application/json" },
+          data: { feature_key: KEY },
+        });
+        if (!clearRes.ok()) {
+          throw new Error(
+            `invalidateOrgEntitlements: clear override failed (${clearRes.status()}) for org ${orgId}`,
+          );
+        }
+      } finally {
+        await setStaff(false);
+      }
+    } finally {
+      // Strictly AFTER the hand-back above — unlocking first would let the next
+      // waiter take the privilege while this one is still giving it back, which
+      // is the interleave the lock exists to prevent. `withDb`'s own
+      // `sql.end()` would release it anyway; this makes the pairing explicit
+      // and releases it before the connection teardown.
+      await sql`select pg_advisory_unlock(${STAFF_BORROW_LOCK_NS}, ${lockKey})`;
     }
-    const clearRes = await request.fetch(`/api/admin/orgs/${orgId}/entitlement-override`, {
-      method: "DELETE",
-      headers: { "Content-Type": "application/json" },
-      data: { feature_key: KEY },
-    });
-    if (!clearRes.ok()) {
-      throw new Error(
-        `invalidateOrgEntitlements: clear override failed (${clearRes.status()}) for org ${orgId}`,
-      );
-    }
-  } finally {
-    await setStaff(false);
-  }
+  });
 }
 
 /** Grant an Event Pass (v3/07 §3) directly — the one-time Stripe checkout

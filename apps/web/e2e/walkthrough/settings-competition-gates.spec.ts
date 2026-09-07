@@ -864,7 +864,18 @@ test("W8/F10: a refused entitlement-cache drop throws, on either half, the happy
   page,
   request,
 }) => {
-  test.setTimeout(budget(0, 0, 0));
+  // The only test in this file that performs a browser SIGNUP. `freshOrg` is a
+  // magic-link `loginUi` (a goto plus a redirect wait) followed by
+  // `POST /api/orgs`, and case (d) adds four more helper round trips on top —
+  // so this is two navs and two seeds, not the zero the first version claimed.
+  // `budget(0, 0, 0)` and the ledger's own suggested `budget(1, 0, 1)` BOTH
+  // evaluate to the 60s floor, so neither expressed the cost (`_RULES.md`
+  // §5.7 / AGENTS.md failure class 20: a flat budget beside a derived cost is
+  // a latent red). Two navs + two seeds computes to 75s. The two sibling specs
+  // that also call `freshOrg` (`directory-clubs-import-limits.spec.ts`,
+  // `directory-import-paywall-preview.spec.ts`) use a flat `120_000` instead;
+  // that is their file-wide convention, and this file's is `budget()`.
+  test.setTimeout(budget(2, 0, 2));
 
   // (a) The REAL server refuses, and the helper says so — no stub in this
   //     half. An org id nothing was seeded under: `setOwnerStaffSql` matches
@@ -948,4 +959,63 @@ test("W8/F10: a refused entitlement-cache drop throws, on either half, the happy
     await ownerIsStaffSql(mine.orgId),
     "the borrowed superadmin must be handed back even when the helper throws — a leaked staff bit is invisible until some unrelated spec's 403 assertion passes for the wrong reason",
   ).toBe(false);
+});
+
+/**
+ * The race the F10 fix above turned from silent into loud (W8 final review).
+ *
+ * `invalidateOrgEntitlements` BORROWS a privilege that is global — the org
+ * owner's `users.is_staff` row — and hands it back in a `finally`. Two callers
+ * on the same owner interleave into a hand-back that lands mid-flight:
+ *
+ *     A: staff := true → A: POST → B: staff := true (no-op, already true)
+ *     → A: DELETE → A: staff := FALSE → B: DELETE → 401
+ *
+ * Before W8 that 401 was swallowed; F10's fix makes it a hard throw, so the
+ * interleave stopped being invisible and started being a flake. Six root specs
+ * call this helper against the SAME shared auth-state org — five in `parallel`
+ * (`scoring-free`, `pass-scope-w2`, `pass-scope-officials`,
+ * `official-marks-reports`, `scorepad-v3-swap-off-step-enforcement`) plus
+ * `public-dashboards`, which `SERIAL_SPECS` routes to the `serial` project —
+ * and `parallel` and `walkthrough` both run `fullyParallel: true` on more than
+ * one worker, with all three projects running concurrently in a local
+ * invocation.
+ *
+ * The fix is a Postgres advisory lock around the whole borrow, keyed on the
+ * owner whose bit is being flipped (`rs007-money-kit.ts`'s Connect fixture
+ * takes the same kind of lock for the same kind of reason). This test is what
+ * fails without it: the stub holds each fetch open long enough that two
+ * unserialised borrows are guaranteed to overlap, so the recorded order reads
+ * `ABAB` rather than `AABB`.
+ *
+ * No browser, no server, no seeded org — the org id is one nothing was seeded
+ * under, so both `setOwnerStaffSql` statements match zero rows and the only
+ * thing under test is the mutual exclusion itself.
+ */
+test("W8/F10: two concurrent entitlement-cache drops on one org serialize instead of stealing each other's superadmin", async ({}) => {
+  test.setTimeout(budget(0, 0, 0));
+
+  const seq: string[] = [];
+  /** Each fetch takes long enough that an unlocked second caller is certain to
+   *  start its own POST before the first caller's DELETE returns. */
+  const HOLD_MS = 60;
+  const slow = (tag: string): APIRequestContext =>
+    ({
+      fetch: async () => {
+        seq.push(tag);
+        await new Promise((r) => setTimeout(r, HOLD_MS));
+        return { ok: () => true, status: () => 200 };
+      },
+    }) as unknown as APIRequestContext;
+
+  const contested = randomUUID();
+  await Promise.all([
+    invalidateOrgEntitlements(slow("A"), contested),
+    invalidateOrgEntitlements(slow("B"), contested),
+  ]);
+
+  expect(
+    seq.join(""),
+    "each borrow must hold the owner's staff bit for BOTH of its calls — an interleaved ABAB means the first caller's restore lands while the second is still using the privilege, and the second's DELETE 401s",
+  ).toMatch(/^(AABB|BBAA)$/);
 });
