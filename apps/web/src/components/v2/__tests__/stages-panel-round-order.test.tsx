@@ -29,6 +29,7 @@ const baseProps = {
   // Governing venue clock (#448) — display `tz` may diverge from it.
   orgTz: "UTC",
   canExport: false,
+  viewerPlan: "community" as const,
 };
 
 // Mirrors the reported Autumn Cup 2026 data: Tour 1 = Jul 21, Tour 2 = Jul

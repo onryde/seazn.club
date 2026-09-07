@@ -32,7 +32,12 @@ const official = (over: Partial<DirectoryOfficial>): DirectoryOfficial => ({
 function render(officials: DirectoryOfficial[], canEdit = true) {
   return renderToStaticMarkup(
     <DictProvider dict={en as never} locale="en">
-      <OfficialsDirectoryPanel officials={officials} canEdit={canEdit} rolesMultiAllowed />
+      <OfficialsDirectoryPanel
+        officials={officials}
+        canEdit={canEdit}
+        rolesMultiAllowed
+        viewerPlan="community"
+      />
     </DictProvider>,
   );
 }

@@ -56,6 +56,7 @@ describe("FixtureConsole SSR determinism", () => {
           },
         ]}
         canEdit={false}
+        viewerPlan="community"
       />,
     );
     // Sanity: the sections that used to embed times are actually rendered.

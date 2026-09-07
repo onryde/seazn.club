@@ -7,6 +7,8 @@ import Link from "@/components/ui/console-link";
 import { BackLink } from "@/components/back-link";
 import { Nav } from "@/components/nav";
 import { requirePageAuth } from "@/server/page-auth";
+import { orgPlanKey } from "@/lib/entitlements";
+import { viewerPlanFrom } from "@/lib/viewer-plan";
 import { getClub } from "@/server/usecases/clubs";
 import { HttpError } from "@/lib/errors";
 import { resolveLocale } from "@/lib/resolve-locale";
@@ -30,6 +32,7 @@ export default async function ClubHubPage({
   const [{ id }, { tab: rawTab }] = await Promise.all([params, searchParams]);
   const tab: Tab = (TABS as readonly string[]).includes(rawTab ?? "") ? (rawTab as Tab) : "overview";
   const { auth, canEdit } = await requirePageAuth();
+  const viewerPlan = viewerPlanFrom(await orgPlanKey(auth.orgId));
   const locale = await resolveLocale();
   const ui = await getDictionary(locale, "ui");
   const club = await getClub(auth, id).catch((err) => {
@@ -99,6 +102,10 @@ export default async function ClubHubPage({
             }}
             canEdit={canEdit}
             storageBase={storageBase}
+            // The club hub is reached from the Directory, not from an org
+            // route — this page resolves a club by id, never an org, so
+            // there is no plan to resolve here (v18 W3-B rule C).
+            viewerPlan={viewerPlan}
           />
         )}
 
@@ -119,6 +126,7 @@ export default async function ClubHubPage({
             }}
             canEdit={canEdit}
             storageBase={storageBase}
+            viewerPlan={viewerPlan}
           />
         )}
 

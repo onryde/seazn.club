@@ -12,6 +12,7 @@ import { useRouter } from "next/navigation";
 import Link from "@/components/ui/console-link";
 import { apiV1, ApiV1Error } from "@/lib/client-v1";
 import { UpgradeGate } from "@/components/upgrade-gate";
+import type { ViewerPlan } from "@/lib/viewer-plan";
 import { useMsg, useLocale } from "@/components/i18n/dict-provider";
 import { OfficialAvatar } from "@/components/v2/officials-shared";
 import { fmtTime, fmtZoneAbbrev } from "@/lib/format";
@@ -94,6 +95,7 @@ export function OfficialsPanel({
   foIdByAssignment = {},
   marksByFoId = {},
   reportsByFixture = {},
+  viewerPlan,
 }: {
   divisionId: string;
   officials: Official[];
@@ -118,6 +120,7 @@ export function OfficialsPanel({
   marksByFoId?: Record<string, number>;
   /** fixture_id → submitted reports (drawer). */
   reportsByFixture?: Record<string, FixtureReportLite[]>;
+  viewerPlan: ViewerPlan;
 }) {
   const msg = useMsg();
   const locale = useLocale();
@@ -216,7 +219,7 @@ export function OfficialsPanel({
         )}
       </div>
 
-      {paywallFeature && <UpgradeGate feature={paywallFeature} />}
+      {paywallFeature && <UpgradeGate feature={paywallFeature} viewerPlan={viewerPlan} />}
       {error && <p className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-600">{error}</p>}
 
       {/* compact read-only roster strip (v11.1): full roster management —
@@ -583,6 +586,7 @@ export function OfficialsPanel({
         marksByFoId={marksByFoId}
         reportsByFixture={reportsByFixture}
         venueTz={venueTz}
+        viewerPlan={viewerPlan}
       />
     </section>
   );
@@ -600,6 +604,7 @@ function RateOfficials({
   marksByFoId,
   reportsByFixture,
   venueTz,
+  viewerPlan,
 }: {
   fixtures: FixtureLite[];
   marksEnabled: boolean;
@@ -607,6 +612,7 @@ function RateOfficials({
   marksByFoId: Record<string, number>;
   reportsByFixture: Record<string, FixtureReportLite[]>;
   venueTz: string;
+  viewerPlan: ViewerPlan;
 }) {
   const msg = useMsg();
   const rateable = fixtures.filter(
@@ -617,7 +623,7 @@ function RateOfficials({
     <div className="card space-y-4 p-4" data-testid="rate-officials">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <h3 className="text-sm font-semibold text-slate-900">{msg("officials.rate.heading")}</h3>
-        {!marksEnabled && <UpgradeGate feature="officials.marks" compact />}
+        {!marksEnabled && <UpgradeGate feature="officials.marks" compact viewerPlan={viewerPlan} />}
       </div>
       <ul className="space-y-4">
         {rateable.map((f) => (
@@ -634,7 +640,11 @@ function RateOfficials({
                         {o.name} <span className="text-slate-400">{o.role}</span>
                       </span>
                       {foId && marksEnabled ? (
-                        <MarkControl fixtureOfficialId={foId} initialMark={marksByFoId[foId] ?? null} />
+                        <MarkControl
+                          fixtureOfficialId={foId}
+                          initialMark={marksByFoId[foId] ?? null}
+                          viewerPlan={viewerPlan}
+                        />
                       ) : !marksEnabled ? (
                         <span className="text-xs text-slate-400">{msg("officials.rate.locked")}</span>
                       ) : null}

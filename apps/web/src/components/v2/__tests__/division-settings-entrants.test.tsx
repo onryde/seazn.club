@@ -52,6 +52,7 @@ function renderSettings(
       entrantModelSource={overrides.entrantModelSource ?? "sport"}
       autoPosts={false}
       canAutoPost={false}
+      viewerPlan="community"
     />,
   );
 }

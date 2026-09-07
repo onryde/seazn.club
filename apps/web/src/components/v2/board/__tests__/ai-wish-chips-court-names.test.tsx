@@ -114,6 +114,7 @@ const consoleProps: Parameters<typeof AiConsole>[0] = {
   scheduleFrozen: false,
   onClose: () => {},
   courtNames: COURT_NAMES,
+  viewerPlan: "community",
 };
 
 const briefStepProps: Parameters<typeof BriefStep>[0] = {

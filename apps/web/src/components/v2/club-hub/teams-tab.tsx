@@ -10,6 +10,7 @@ import { useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { apiV1, ApiV1Error } from "@/lib/client-v1";
 import { UpgradeGate } from "@/components/upgrade-gate";
+import type { ViewerPlan } from "@/lib/viewer-plan";
 import { useConfirm } from "@/components/ui/confirm-provider";
 import { useMsg } from "@/components/i18n/dict-provider";
 import { TeamSquadPanel } from "./team-squad-editor";
@@ -44,6 +45,7 @@ export function TeamsTab({
   club,
   canEdit,
   storageBase,
+  viewerPlan,
 }: {
   club: {
     id: string;
@@ -54,6 +56,7 @@ export function TeamsTab({
   };
   canEdit: boolean;
   storageBase: string;
+  viewerPlan: ViewerPlan;
 }) {
   const msg = useMsg();
   const router = useRouter();
@@ -62,7 +65,7 @@ export function TeamsTab({
 
   return (
     <div className="space-y-5">
-      {paywall && <UpgradeGate feature={paywall} />}
+      {paywall && <UpgradeGate feature={paywall} viewerPlan={viewerPlan} />}
       {error && (
         <p role="alert" className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-600">
           {error}
@@ -96,6 +99,7 @@ export function TeamsTab({
                 onError={setError}
                 onPaywall={setPaywall}
                 onChanged={() => router.refresh()}
+                viewerPlan={viewerPlan}
               />
             ))}
           </ul>
@@ -177,6 +181,7 @@ function TeamDetailRow({
   onError,
   onPaywall,
   onChanged,
+  viewerPlan,
 }: {
   team: HubTeam;
   clubLogoPath: string | null;
@@ -185,6 +190,7 @@ function TeamDetailRow({
   onError: (msg: string) => void;
   onPaywall: (feature: string) => void;
   onChanged: () => void;
+  viewerPlan: ViewerPlan;
 }) {
   const msg = useMsg();
   const confirmDialog = useConfirm();
@@ -330,7 +336,7 @@ function TeamDetailRow({
       )}
       {open && (
         <div className="px-2 pb-2 pl-6">
-          <TeamSquadPanel teamId={team.id} canEdit={canEdit} />
+          <TeamSquadPanel teamId={team.id} canEdit={canEdit} viewerPlan={viewerPlan} />
         </div>
       )}
     </li>

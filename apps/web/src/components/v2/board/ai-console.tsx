@@ -17,6 +17,7 @@ import { useMsg, usePlural } from "@/components/i18n/dict-provider";
 import { isRung, type Rung } from "@/lib/ai-rung";
 import type { MessageKey } from "@/lib/messages";
 import { UpgradeGate } from "@/components/upgrade-gate";
+import type { ViewerPlan } from "@/lib/viewer-plan";
 import { PlanBadge } from "@/components/plan-badge";
 import type { Currency } from "@/lib/currency";
 import { AiOutOfCredits } from "./ai-out-of-credits";
@@ -381,6 +382,7 @@ export function AiConsole({
   onPulse,
   entrantNames = {},
   courtNames = {},
+  viewerPlan,
 }: {
   divisionId: string;
   /** The division seq the board rendered at — the optimistic-concurrency token
@@ -436,6 +438,7 @@ export function AiConsole({
   /** Fired when the trace flags a repair — the board pulses these fixture ids
    *  red on the grid for ~1.5s (design §0.3). */
   onPulse?: (fixtureIds: string[]) => void;
+  viewerPlan: ViewerPlan;
 }) {
   const msg = useMsg();
   const pathname = usePathname();
@@ -1017,7 +1020,7 @@ export function AiConsole({
       )}
     </div>
   ) : (
-    <UpgradeGate feature="scheduling.ai" />
+    <UpgradeGate feature="scheduling.ai" viewerPlan={viewerPlan} />
   );
 
   return (

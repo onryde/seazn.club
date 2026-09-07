@@ -78,7 +78,13 @@ const renderConstraints = (
 ) =>
   renderToStaticMarkup(
     <DictProvider dict={dict} locale={locale}>
-      <ConstraintsPanel divisionId="d1" initialSettings={initialSettings} canEdit orgTz="Europe/London" />
+      <ConstraintsPanel
+        divisionId="d1"
+        initialSettings={initialSettings}
+        canEdit
+        orgTz="Europe/London"
+        viewerPlan="community"
+      />
     </DictProvider>,
   );
 

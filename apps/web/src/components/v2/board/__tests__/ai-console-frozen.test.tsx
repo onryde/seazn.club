@@ -45,6 +45,7 @@ const props: Parameters<typeof AiConsole>[0] = {
   fixtures: [],
   scheduleFrozen: false,
   onClose: () => {},
+  viewerPlan: "community",
 };
 
 const render = (scheduleFrozen: boolean) =>

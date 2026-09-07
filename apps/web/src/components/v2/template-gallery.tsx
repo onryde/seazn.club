@@ -25,6 +25,7 @@ import { apiV1, ApiV1Error } from "@/lib/client-v1";
 import { Modal } from "@/components/modal";
 import { CompetitionWizard } from "@/components/v2/competition-wizard";
 import { UpgradeGate } from "@/components/upgrade-gate";
+import type { ViewerPlan } from "@/lib/viewer-plan";
 import {
   publicDashboardGain,
   PUBLIC_DASHBOARD_FEATURE,
@@ -258,6 +259,7 @@ export function TemplateDetailSheet({
   template,
   onClose,
   publicDashboardUpgrade,
+  viewerPlan,
 }: {
   orgSlug: string;
   template: CompetitionTemplate;
@@ -266,6 +268,7 @@ export function TemplateDetailSheet({
    *  wizard's own prop for why this is required and handed down rather than
    *  read here. */
   publicDashboardUpgrade: PublicDashboardUpgrade | null;
+  viewerPlan: ViewerPlan;
 }) {
   const msg = useT();
   const router = useRouter();
@@ -390,7 +393,7 @@ export function TemplateDetailSheet({
                 : msg("comp.wizard.publicDegraded.capsOwn", { limit: degraded.limit })}
             </p>
           )}
-          <UpgradeGate feature={PUBLIC_DASHBOARD_FEATURE} />
+          <UpgradeGate feature={PUBLIC_DASHBOARD_FEATURE} viewerPlan={viewerPlan} />
         </div>
       </Modal>
     );
@@ -500,7 +503,9 @@ export function TemplateDetailSheet({
           </div>
         )}
 
-        {paywall && <UpgradeGate feature={paywall.feature} reason={paywall.reason} />}
+        {paywall && (
+          <UpgradeGate feature={paywall.feature} reason={paywall.reason} viewerPlan={viewerPlan} />
+        )}
         {error && <p className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-600">{error}</p>}
       </form>
     </Modal>
@@ -511,6 +516,7 @@ export function TemplateGallery({
   orgSlug,
   templates,
   publicDashboardUpgrade,
+  viewerPlan,
 }: {
   orgSlug: string;
   /** The catalog, passed down from the Server Component page — see the
@@ -521,6 +527,7 @@ export function TemplateGallery({
    *  blank wizard degrade identically, and a figure that reached only one of
    *  them would be worse than none at all. */
   publicDashboardUpgrade: PublicDashboardUpgrade | null;
+  viewerPlan: ViewerPlan;
 }) {
   const msg = useT();
   const [mode, setMode] = useState<"gallery" | "blank">("gallery");
@@ -528,7 +535,11 @@ export function TemplateGallery({
 
   if (mode === "blank")
     return (
-      <CompetitionWizard orgSlug={orgSlug} publicDashboardUpgrade={publicDashboardUpgrade} />
+      <CompetitionWizard
+        orgSlug={orgSlug}
+        publicDashboardUpgrade={publicDashboardUpgrade}
+        viewerPlan={viewerPlan}
+      />
     );
 
   const selected = detailKey ? templates.find((t) => t.key === detailKey) ?? null : null;
@@ -563,6 +574,7 @@ export function TemplateGallery({
           template={selected}
           onClose={() => setDetailKey(null)}
           publicDashboardUpgrade={publicDashboardUpgrade}
+          viewerPlan={viewerPlan}
         />
       )}
     </div>

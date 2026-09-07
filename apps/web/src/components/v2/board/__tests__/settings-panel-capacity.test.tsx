@@ -235,6 +235,7 @@ describe("SettingsPanel — no client-side fallback computation", () => {
           MOVABLE("f5", "B", "D"),
           MOVABLE("f6", "C", "D"),
         ]}
+        viewerPlan="community"
       />,
     );
     expect(html).not.toContain("data-capacity-verdict");

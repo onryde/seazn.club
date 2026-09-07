@@ -225,6 +225,7 @@ const renderSheet = (template: CompetitionTemplate, dict: Dict = enUi as Dict, l
         template={template}
         onClose={() => {}}
         publicDashboardUpgrade={null}
+        viewerPlan="community"
       />
     </DictProvider>,
   );

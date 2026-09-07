@@ -8,6 +8,7 @@
 import { useEffect, useState } from "react";
 import { apiV1, ApiV1Error } from "@/lib/client-v1";
 import { UpgradeGate } from "@/components/upgrade-gate";
+import type { ViewerPlan } from "@/lib/viewer-plan";
 import { useMsg } from "@/components/i18n/dict-provider";
 // RS011 review fix 1: `setTeamSquad` (server/usecases/teams.ts) computes
 // `eligibility_warnings` — one entry per enrolled division whose roster
@@ -308,7 +309,15 @@ export function TeamSquadEditor({
 /** Self-fetching squad editor: loads the team's saved squad + the org person
  *  directory, then renders the editor. Used by the hub Teams tab and Task 7's
  *  thin directory list so callers don't have to prime the data. */
-export function TeamSquadPanel({ teamId, canEdit }: { teamId: string; canEdit: boolean }) {
+export function TeamSquadPanel({
+  teamId,
+  canEdit,
+  viewerPlan,
+}: {
+  teamId: string;
+  canEdit: boolean;
+  viewerPlan: ViewerPlan;
+}) {
   const msg = useMsg();
   const [squad, setSquad] = useState<SquadMember[] | null>(null);
   const [persons, setPersons] = useState<PersonLite[]>([]);
@@ -348,7 +357,7 @@ export function TeamSquadPanel({ teamId, canEdit }: { teamId: string; canEdit: b
   if (squad === null) return <p className="text-xs text-slate-400">{msg("clubs.team.loadingSquad")}</p>;
   return (
     <>
-      {paywall && <UpgradeGate feature={paywall} />}
+      {paywall && <UpgradeGate feature={paywall} viewerPlan={viewerPlan} />}
       {error && <p className="text-xs text-red-600">{error}</p>}
       <TeamSquadEditor
         teamId={teamId}

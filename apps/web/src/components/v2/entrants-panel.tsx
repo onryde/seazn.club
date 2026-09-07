@@ -9,6 +9,7 @@ import type { EffectiveEntrantModel, EntrantKind } from "@seazn/engine/sport";
 import { apiV1, ApiV1Error } from "@/lib/client-v1";
 import { resolveEntrantBadge } from "@/lib/entrant-badge";
 import { UpgradeGate } from "@/components/upgrade-gate";
+import type { ViewerPlan } from "@/lib/viewer-plan";
 import { useConfirm } from "@/components/ui/confirm-provider";
 import { useMsg } from "@/components/i18n/dict-provider";
 import type { MessageKey } from "@/lib/messages";
@@ -131,6 +132,7 @@ interface Props {
   /** Active suspensions per entrant id (SPEC-1) — red chip on the entrant row.
    *  Empty/absent for non-entitled orgs or non-card sports. */
   suspensions?: Record<string, { personName: string; remaining: number }[]>;
+  viewerPlan: ViewerPlan;
 }
 
 // Load the whole org persons directory once (cursor-paged) — org rosters are
@@ -160,6 +162,7 @@ export function EntrantsPanel({
   eligibility,
   entrantModel,
   suspensions = {},
+  viewerPlan,
 }: Props) {
   const msg = useMsg();
   const router = useRouter();
@@ -443,7 +446,7 @@ export function EntrantsPanel({
         />
       )}
 
-      {paywallFeature && <UpgradeGate feature={paywallFeature} />}
+      {paywallFeature && <UpgradeGate feature={paywallFeature} viewerPlan={viewerPlan} />}
       {error && (
         <p className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-600">{error}</p>
       )}

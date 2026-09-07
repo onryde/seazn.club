@@ -105,6 +105,7 @@ function consoleHtml(home: SideInfo, away: SideInfo): string {
       initialState={live}
       initialEvents={[{ ...GOAL, payload: { by: home.id } }]}
       canEdit
+      viewerPlan="community"
     />,
   );
 }
@@ -178,6 +179,7 @@ describe("the console renders people, not entry labels (D-6)", () => {
         initialState={live}
         initialEvents={[GOAL]}
         canEdit
+        viewerPlan="community"
       />,
     );
     expect(html).toContain("Ada Okonkwo");
@@ -241,6 +243,7 @@ describe("the forfeit picker, opened (D-6)", () => {
       } satisfies LiveState,
       initialEvents: [GOAL],
       canEdit: true,
+      viewerPlan: "community",
     });
     const el = console_
       .tree()

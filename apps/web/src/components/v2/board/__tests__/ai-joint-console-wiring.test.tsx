@@ -233,6 +233,7 @@ function mount(divisions: JointDivision[] = DIVISIONS, extra: Partial<ConsolePro
     currency: "usd" as const,
     fixtures: [],
     onClose: () => {},
+    viewerPlan: "community" as const,
     ...extra,
   } as ConsoleProps);
 }
@@ -1020,6 +1021,7 @@ describe("a stale board is pulled before the recovery button can charge for it a
       fixtures: [],
       onClose: () => {},
       onRefetch,
+      viewerPlan: "community" as const,
     } as ConsoleProps));
 
     const ctx = await planned({ onRefetch });

@@ -7,6 +7,7 @@ import { useCallback, useEffect, useState } from "react";
 import { apiV1, ApiV1Error } from "@/lib/client-v1";
 import { UpgradeGate } from "@/components/upgrade-gate";
 import { useMsg } from "@/components/i18n/dict-provider";
+import type { ViewerPlan } from "@/lib/viewer-plan";
 
 interface Metric {
   key: string;
@@ -30,11 +31,13 @@ interface Board {
 export function StatsPanel({
   divisionId,
   publicBase = null,
+  viewerPlan,
 }: {
   divisionId: string;
   /** PROMPT-65: `/shared/{org}/{comp}` when the competition is public —
    *  consented rows link to the player profile. */
   publicBase?: string | null;
+  viewerPlan: ViewerPlan;
 }) {
   const msg = useMsg();
   const [board, setBoard] = useState<Board | null>(null);
@@ -72,7 +75,7 @@ export function StatsPanel({
     return () => clearTimeout(t);
   }, [load]);
 
-  if (paywall) return <UpgradeGate feature={paywall} />;
+  if (paywall) return <UpgradeGate feature={paywall} viewerPlan={viewerPlan} />;
   if (error) return <p className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-600">{error}</p>;
   if (loading && !board) return <p className="text-sm text-slate-500">{msg("stats.loading")}</p>;
   if (!board) return null;

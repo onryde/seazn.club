@@ -54,6 +54,7 @@ interface PanelProps {
   divisionId: string;
   scheduleLocked: boolean;
   canEdit: boolean;
+  viewerPlan: "community";
 }
 type Island = ReturnType<typeof renderIsland<PanelProps>>;
 
@@ -62,6 +63,7 @@ const render = (): Island =>
     divisionId: "d1",
     scheduleLocked: false,
     canEdit: true,
+    viewerPlan: "community",
   });
 
 const settle = async () => {

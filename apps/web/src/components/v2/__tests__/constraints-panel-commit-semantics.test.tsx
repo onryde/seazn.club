@@ -69,6 +69,7 @@ function panelProps(config: Record<string, unknown>) {
     initialSettings: { division_id: "d1", config },
     canEdit: true,
     orgTz: "Pacific/Auckland",
+    viewerPlan: "community" as const,
   };
 }
 

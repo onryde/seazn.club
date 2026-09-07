@@ -115,6 +115,7 @@ function baseProps() {
       band: 0 as const,
       identity: { recordedBy: null, deviceLinkId: null },
     },
+    viewerPlan: "community" as const,
   };
 }
 

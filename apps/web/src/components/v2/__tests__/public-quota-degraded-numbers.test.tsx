@@ -95,7 +95,11 @@ async function createWith(tree: () => ReactElement[]): Promise<void> {
 const PRO: PublicDashboardUpgrade = { plan: "Pro", limit: 10 };
 
 const mountWizard = (upgrade: PublicDashboardUpgrade | null) =>
-  renderIsland(CompetitionWizard, { orgSlug: "riverside", publicDashboardUpgrade: upgrade });
+  renderIsland(CompetitionWizard, {
+    orgSlug: "riverside",
+    publicDashboardUpgrade: upgrade,
+    viewerPlan: "community",
+  });
 
 const leaguePlayoff = getTemplate("league-playoff");
 if (!leaguePlayoff) throw new Error("league-playoff missing from the catalog");
@@ -106,6 +110,7 @@ const mountSheet = (upgrade: PublicDashboardUpgrade | null) =>
     template: leaguePlayoff,
     onClose: () => {},
     publicDashboardUpgrade: upgrade,
+    viewerPlan: "community",
   });
 
 beforeEach(() => {

@@ -514,3 +514,111 @@ Merge bar the owner set: CI green, **all 8 e2e legs** green, a local unit sweep
 with real counts, and per-screen verdicts. Note a PR gets **smoke only** — e2e
 triggers on push-to-main, so `workflow_dispatch -f pr=<n>` is the only pre-merge
 e2e a feature branch can get.
+
+## 2026-09-07 — three more commits, and what each cost to prove
+
+### `ad73763ca` — `/upgrade` was still selling a size that no longer exists
+
+The 2026-09-05 ruling took the rung suffix off every SELLING surface, and
+`/pricing` was done in that wave. `/upgrade` kept it in three places because
+its selling surfaces read the HOLD-side maps: the primary CTA ("Buy the pass —
+M"), the price card's class stamp, and the comparison column header.
+
+`rungNamingRequired(sellableCount)` moved out of `pricing-crossover.test.ts` —
+where it was a local copy — into `lib/pass-ladder.ts`, and `offeredRungName`
+applies it. Callers pass `SELLABLE_PASS_KEYS.length`, so the letter returns on
+its own if a second rung goes back on sale.
+
+**The catalogue's count, never the reader's.** `passLadderOptions` filters to
+the rungs THIS org may still buy (#327), so a Pro org can be shown one option
+out of two on sale. That is a one-org view of a two-rung product and the letter
+still belongs. Reading `options.length` would have dropped it there.
+
+**The HOLD side is untouched, and the asymmetry is the design.**
+`PASS_RUNG_NAME_KEY` and `passActiveLabel` stay complete over `PassKey`: L is
+off sale but rows holding it are live. So a held L column reads "Event Pass L"
+while the offered column reads plain "Event Pass" — L is the rung that needs
+distinguishing FROM the one on sale, and `columns` never carries both at once.
+
+`upgrade.compare.pass` was deleted; its one reader is gone and it duplicated
+`upgrade.rung.m` byte for byte.
+
+### `92eb5bd50` — the paywall stopped answering "Go Pro" to an org on Pro
+
+W3-B's first half, competition-scoped. No new signal was needed:
+`usePassGateState()` already resolves `paid_plan` and already puts it ahead of
+every other arm, so `held`/`ended`/`closed` are unreachable for a paying org
+and the three cards above get `planCovers: false` by construction.
+
+Slate card, no `<PlanBadge>` (it names the tier the FEATURE belongs to, so
+"PRO ✦" above a reader on Pro reads as the thing being sold), and the compact
+pill points at the mailto — billing was the old destination and is no better,
+being the page that lists the plan they hold.
+
+### `beyondPlanCopyFaults` — why it is keyed on plan NAMES, not English grammar
+
+The index's guard obligation is "any W3 change to how a paywall names a plan
+extends the copy rules in the same commit". `PRO_ATTRIBUTION` and its siblings
+are English SYNTAX (`is a Pro feature`, `upgrade to Pro`) and would have passed
+`es`/`fr`/`nl` vacuously. Plan names are untranslated proper nouns in this
+product — `upgrade.rung.m` is "Event Pass M" in all four — so `ANY_PLAN_NAME`
+is locale-robust where a grammar rule is not.
+
+`freeClaimFaults` itself gained no row, deliberately: it judges whether a
+paywall REASON oversells a key the matrix already grants, which is a question
+about the MATRIX. No reason changed; what changed is which CTA a reader is
+offered, which is a question about the READER.
+
+## Findings worth carrying forward
+
+**A test that dies under every mutant is dying for its own reason.** One
+assertion I added referenced an out-of-scope `dictEn` and threw, faking a kill
+on two mutants it could not reach. The tell was the same test appearing as
+killer for four unrelated mutants. Check the killer LIST, not just the count.
+
+**Two mutants survived the first sweep and both were badges.** Nothing asserted
+`<PlanBadge>`'s absence. The probe now renders the component itself rather than
+typing "Pro ✦", so a relabelled badge moves the assertion with it, and the
+non-paying control asserts the badge IS present — without that pair, "the paid
+card has no badge" is satisfied by a badge that renders for nobody.
+
+**A one-character label cannot be asserted absent.** Restoring the unconditional
+"M" size stamp left all 84 tests green: every `not.toContain("M")` shape is
+either vacuous or matches half the page. The stamp now carries
+`data-pass-rung-stamp` so its absence is assertable at all.
+
+**Derived assertions cannot witness a mutation to the thing they derive from.**
+Every `/upgrade` and `/pricing` assertion calls
+`rungNamingRequired(SELLABLE_PASS_KEYS.length)` — the same call production
+makes — so a mutation to the predicate moves the expectation with it.
+`pass-rung-naming.test.ts` pins the truth table against LITERAL counts, and
+pins `SELLABLE_PASS_KEYS.length === 1` as the anchor that stops those derived
+assertions quietly asserting the other branch.
+
+**The pass/plan gate is a live comparison, not a plan check.** Reproducing the
+beyond-plan card by lowering Pro's division cap produced the OLD two-path card
+offering a Pro org the pass — which looked like a defect and was not.
+`passExceedsPlan` compares `plan_entitlements` both ways, so crippling one side
+correctly reopens a sale for a product we do not sell. Both sides have to move
+together to reach the real dead end.
+
+**The scout's numbers, for the record.** The index's "87 call sites" counted
+comments and tests. The real shape is 34 production files, 22 of them mounted
+DIRECTLY by a server page and 9 one client hop below — not the deep cascade
+`ai-out-of-credits.tsx`'s own comment feared. Eight files sit outside
+`app/o/[orgSlug]` (`app/clubs/[id]`, `app/directory`, `app/import`) and those
+routes have NO org in server scope, which is the real justification for the
+required prop: a provider mounted on the org layout would miss them silently.
+
+## Still owed
+
+| Scope item | State |
+|---|---|
+| W3-B step B — the `viewerPlan` prop across 34 files | IN FLIGHT |
+| `viewer-plan-coverage.test.ts` — pins which files may pass `"unknown"` | OWED, referenced by two comments already |
+| Billing settings | NOT STARTED |
+| Emails (`lib/email.ts` still hardcodes `"$9 Pro / $19 Pro Plus"`) | NOT STARTED |
+| Help tree | NOT STARTED |
+| `enterprise-gate.spec.ts` | DOES NOT EXIST |
+| Division tab rail @320 | NOT STARTED |
+| Playwright + smoke — still NEVER RUN | NOT STARTED |

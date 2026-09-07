@@ -114,7 +114,7 @@ function findDialogElement(tree: ReturnType<ReturnType<typeof renderIsland>["tre
 }
 
 async function mountWithPreview() {
-  const island = renderIsland(ImportWizard, {});
+  const island = renderIsland(ImportWizard, { viewerPlan: "community" });
   const file = new File(["name\nVet Player"], "roster.csv", { type: "text/csv" });
   (
     propsOf(findFileInput(island.tree())).onChange as (

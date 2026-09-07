@@ -11,6 +11,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { gridStepMinutes } from "@seazn/engine/scheduling/grid-step";
 import { UpgradeGate } from "@/components/upgrade-gate";
+import type { ViewerPlan } from "@/lib/viewer-plan";
 import { Tip } from "@/components/ui/tip";
 import { ConfirmDialog } from "@/components/v2/confirm-dialog";
 import { apiV1 } from "@/lib/client-v1";
@@ -466,6 +467,7 @@ interface Props {
       { courts: string[]; tz: string; crossPersonClash?: "warn" | "hard" }
     >;
   };
+  viewerPlan: ViewerPlan;
 }
 
 /** Advance a YYYY-MM-DD key by n days (noon anchor dodges DST/midnight edges). */
@@ -501,6 +503,7 @@ export function ScheduleBoard({
   showSettings = true,
   officialsWithBlackout = 0,
   competition,
+  viewerPlan,
   ...props
 }: Props) {
   const msg = useMsg();
@@ -1109,7 +1112,7 @@ export function ScheduleBoard({
         {announce}
       </p>
 
-      {actions.paywall && <UpgradeGate feature={actions.paywall} />}
+      {actions.paywall && <UpgradeGate feature={actions.paywall} viewerPlan={viewerPlan} />}
       {actions.notice && (
         <p className="rounded-md bg-emerald-50 px-3 py-2 text-sm text-emerald-700">{actions.notice}</p>
       )}
@@ -1792,6 +1795,7 @@ export function ScheduleBoard({
           onApplied={() => router.refresh()}
           onRefetch={() => router.refresh()}
           onProposalChange={setAiProposal}
+          viewerPlan={viewerPlan}
         />
       )}
 
@@ -1826,6 +1830,7 @@ export function ScheduleBoard({
             }
           }}
           onPulse={pulse}
+          viewerPlan={viewerPlan}
         />
       )}
 
@@ -1848,6 +1853,7 @@ export function ScheduleBoard({
             router.refresh();
           }}
           onError={(err) => actions.setError(settingsErrorText(err, locale, msg("boardset.error")))}
+          viewerPlan={viewerPlan}
         />
       )}
     </div>

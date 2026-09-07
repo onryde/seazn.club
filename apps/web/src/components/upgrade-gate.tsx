@@ -20,6 +20,7 @@ import {
   PASS_LOCK_REASON_KEY,
 } from "@/lib/pass-ladder";
 import { PASS_FEATURES } from "@/lib/pass-features";
+import { planAlreadyHeld, type ViewerPlan } from "@/lib/viewer-plan";
 import { routes } from "@/lib/routes";
 import { useDict, useMsg } from "@/components/i18n/dict-provider";
 import { t } from "@/lib/i18n-runtime";
@@ -60,6 +61,25 @@ interface Props {
    * feature key alone).
    */
   reason?: string;
+  /**
+   * The plan the VIEWER's org already holds (v18 W3-B).
+   *
+   * REQUIRED, and that is the whole design. `featurePlan(feature)` is a pure
+   * function of the key and cannot tell "you need Pro" from "you have Pro", so
+   * the answer has to come from the call site — and an OPTIONAL prop is
+   * exactly how such a figure quietly stops arriving at some of them. Making
+   * it required means `tsc` enumerates every paywall in the app instead of a
+   * reviewer trying to.
+   *
+   * `"unknown"` exists for a route that genuinely cannot answer, and NO
+   * production call site passes it today. Three were expected to —
+   * app/directory, app/clubs/[id], app/import — and all three turned out to
+   * hold an `auth.orgId` from `requirePageAuth()`, so they resolve the real
+   * plan like everywhere else. A site that CAN answer and passes "unknown"
+   * anyway is the one failure this prop cannot catch by itself, which is why
+   * `viewer-plan-coverage.test.ts` asserts the production count stays zero.
+   */
+  viewerPlan: ViewerPlan;
 }
 
 /**
@@ -234,6 +254,7 @@ export function UpgradeGate({
   href = "/settings/billing",
   compact = false,
   reason: reasonOverride,
+  viewerPlan,
 }: Props) {
   const reason = reasonOverride ?? featureReason(feature);
   const pathname = usePathname();
@@ -270,7 +291,7 @@ export function UpgradeGate({
    * the org bought the most we sell without a conversation — which is exactly
    * the fact "Go Pro" was contradicting.
    */
-  const planCovers = gate === "paid_plan";
+  const planCovers = planAlreadyHeld(viewerPlan, gate);
   const liftable = PASS_FEATURES.has(feature);
   // Only an org that can still BENEFIT from a pass is offered one.
   const passHref = liftable && gate === "none" ? passHrefFromPath(pathname, feature) : null;

@@ -7,6 +7,7 @@ import { useState } from "react";
 import { Check, Code2, Copy } from "lucide-react";
 import { UpgradeGate } from "@/components/upgrade-gate";
 import { useMsg } from "@/components/i18n/dict-provider";
+import type { ViewerPlan } from "@/lib/viewer-plan";
 
 const WIDGETS = [
   { key: "standings", label: "Standings" },
@@ -31,9 +32,11 @@ function snippetFor(divisionId: string, widget: string): string {
 export function EmbedSnippet({
   divisionId,
   entitled,
+  viewerPlan,
 }: {
   divisionId: string;
   entitled: boolean;
+  viewerPlan: ViewerPlan;
 }) {
   const msg = useMsg();
   const [widget, setWidget] = useState<string>("standings");
@@ -49,7 +52,7 @@ export function EmbedSnippet({
 
       {!entitled ? (
         <div className="mt-3">
-          <UpgradeGate feature="embeds.enabled" compact />
+          <UpgradeGate feature="embeds.enabled" compact viewerPlan={viewerPlan} />
         </div>
       ) : (
         <>

@@ -53,6 +53,7 @@ function render(locale: Locale, dict: Dict): string {
         constraintsAllowed
         venueCap="Court"
         orgTz={ORG_TZ}
+        viewerPlan="community"
       />
     </DictProvider>,
   );
@@ -225,6 +226,7 @@ describe("division schedule settings — date/time inputs use the shared DateTim
           constraintsAllowed
           venueCap="Court"
           orgTz={ORG_TZ}
+          viewerPlan="community"
         />
       </DictProvider>,
     );

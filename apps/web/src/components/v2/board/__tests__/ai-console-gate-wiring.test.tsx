@@ -128,6 +128,7 @@ const props: Parameters<typeof AiConsole>[0] = {
   fixtures: [],
   scheduleFrozen: false,
   onClose: () => {},
+  viewerPlan: "community",
 };
 
 /** The mount GETs, answered so the console settles; every POST is the test's

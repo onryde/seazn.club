@@ -31,7 +31,14 @@ vi.mock("@/lib/db", () => ({
     return h.fail ? Promise.reject(new Error("db down")) : Promise.resolve(h.rows);
   },
 }));
-vi.mock("@/server/page-auth", () => ({ requireOrgPage: async () => ({ canEdit: true }) }));
+vi.mock("@/server/page-auth", () => ({
+  requireOrgPage: async () => ({ auth: { orgId: "org1" }, canEdit: true }),
+}));
+// v18 W3-B: the page also resolves the viewer's plan for <TemplateGallery>.
+// Mocked directly (not through the `sql` stub above) so it does not perturb
+// `h.calls`, which this file's own assertions pin to the entitlements-matrix
+// query alone.
+vi.mock("@/lib/entitlements", () => ({ orgPlanKey: async () => "community" }));
 vi.mock("next/navigation", () => ({
   redirect: () => {
     throw new Error("redirected");

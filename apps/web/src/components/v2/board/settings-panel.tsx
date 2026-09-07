@@ -17,6 +17,7 @@ import { useRouter } from "next/navigation";
 import { RestFloorNote, restFloorNoteShown } from "@/components/v2/rest-floor-note";
 import { apiV1 } from "@/lib/client-v1";
 import { UpgradeGate } from "@/components/upgrade-gate";
+import type { ViewerPlan } from "@/lib/viewer-plan";
 import { dailyHoursToWindows, windowsToDailyHours } from "@/lib/schedule-board";
 import { divisionEndBounds, divisionStartBounds, type CompetitionWindow } from "@/lib/date-order";
 import {
@@ -192,6 +193,7 @@ export function StandaloneScheduleSettings(props: {
     away_entrant_id: string | null;
     pool_id: string | null;
   }[];
+  viewerPlan: ViewerPlan;
 }) {
   const msg = useMsg();
   const locale = useLocale();
@@ -235,6 +237,7 @@ export function SettingsPanel({
   onSaved,
   onError,
   fixtures = [],
+  viewerPlan,
 }: {
   divisionId: string;
   config: BoardConfig;
@@ -270,6 +273,7 @@ export function SettingsPanel({
   defaultOpen?: boolean;
   onSaved: () => void;
   onError: (err: unknown) => void;
+  viewerPlan: ViewerPlan;
 }) {
   const msg = useMsg();
   const [open, setOpen] = useState(defaultOpen);
@@ -500,7 +504,7 @@ export function SettingsPanel({
         venueLabel={venue}
       />
 
-      {constrained && <UpgradeGate feature="scheduling.constraints" compact />}
+      {constrained && <UpgradeGate feature="scheduling.constraints" compact viewerPlan={viewerPlan} />}
 
       <div className="grid gap-4 sm:grid-cols-2">
         {/* DateTimeField owns the whole <label>, so each hint moves from inside

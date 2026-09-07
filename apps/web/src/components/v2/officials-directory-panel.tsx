@@ -10,6 +10,7 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { apiV1, ApiV1Error } from "@/lib/client-v1";
 import { UpgradeGate } from "@/components/upgrade-gate";
+import type { ViewerPlan } from "@/lib/viewer-plan";
 import { useConfirm } from "@/components/ui/confirm-provider";
 import { useMsg } from "@/components/i18n/dict-provider";
 import { OfficialAvatar, OfficialInviteForm, RoleChipPicker } from "@/components/v2/officials-shared";
@@ -31,12 +32,14 @@ export function OfficialsDirectoryPanel({
   officials,
   canEdit,
   rolesMultiAllowed,
+  viewerPlan,
 }: {
   officials: DirectoryOfficial[];
   canEdit: boolean;
   /** Pro entitlement `officials.roles_multi` (v11.1): free plan picks one
    *  role; the chip picker enforces this client-side to match the server. */
   rolesMultiAllowed: boolean;
+  viewerPlan: ViewerPlan;
 }) {
   const msg = useMsg();
   const router = useRouter();
@@ -89,7 +92,7 @@ export function OfficialsDirectoryPanel({
 
   return (
     <div className="space-y-4">
-      {paywallFeature && <UpgradeGate feature={paywallFeature} />}
+      {paywallFeature && <UpgradeGate feature={paywallFeature} viewerPlan={viewerPlan} />}
       {error && <p className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-600">{error}</p>}
 
       <div className="card space-y-3 p-4">
@@ -218,7 +221,7 @@ export function OfficialsDirectoryPanel({
                 {openRow?.id === o.id && (
                   <div className="mt-3 border-t border-slate-100 pt-3">
                     {openRow.mode === "marks" ? (
-                      <MarksSummaryBlock officialId={o.id} />
+                      <MarksSummaryBlock officialId={o.id} viewerPlan={viewerPlan} />
                     ) : openRow.mode === "invite" ? (
                       <OfficialInviteForm
                         officialId={o.id}
@@ -240,6 +243,7 @@ export function OfficialsDirectoryPanel({
                           })
                         }
                         onClose={() => setOpenRow(null)}
+                        viewerPlan={viewerPlan}
                       />
                     )}
                   </div>
@@ -288,6 +292,7 @@ export function OfficialsDirectoryPanel({
               onChange={setRoles}
               suggestions={ALL_OFFICIAL_ROLES}
               multiAllowed={rolesMultiAllowed}
+              viewerPlan={viewerPlan}
             />
             <button type="submit" className="btn btn-primary w-full sm:w-auto" disabled={busy}>
               {msg("officials.add")}
@@ -307,12 +312,14 @@ function OfficialRolesEditor({
   busy,
   onSave,
   onClose,
+  viewerPlan,
 }: {
   initial: string[];
   multiAllowed: boolean;
   busy: boolean;
   onSave: (roleKeys: string[]) => void;
   onClose: () => void;
+  viewerPlan: ViewerPlan;
 }) {
   const msg = useMsg();
   const [roles, setRoles] = useState<string[]>(initial.length ? initial : ["referee"]);
@@ -323,6 +330,7 @@ function OfficialRolesEditor({
         onChange={setRoles}
         suggestions={ALL_OFFICIAL_ROLES}
         multiAllowed={multiAllowed}
+        viewerPlan={viewerPlan}
       />
       <div className="flex items-center gap-2">
         <button

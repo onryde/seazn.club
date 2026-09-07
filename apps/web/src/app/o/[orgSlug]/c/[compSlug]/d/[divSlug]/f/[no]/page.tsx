@@ -24,7 +24,8 @@ import {
 import { listFixtureAvailability } from "@/server/usecases/me";
 import { CheckinQr } from "@/components/v2/checkin-qr";
 import { FixtureOfficialsStrip } from "@/components/v2/fixture-officials-strip";
-import { hasFeature } from "@/lib/entitlements";
+import { hasFeature, orgPlanKey } from "@/lib/entitlements";
+import { viewerPlanFrom } from "@/lib/viewer-plan";
 import { suspensionsForFixture } from "@/server/usecases/discipline";
 import { sql } from "@/lib/db";
 // S13/#422 W11 — the v2 scoring pad, resolved server-side unconditionally
@@ -57,7 +58,11 @@ export default async function FixturePage({
     listFixtureAvailability(auth, id),
     getScheduleSettings(auth, fixture.division_id),
   ]);
-  const competition = await getCompetition(auth, division.competition_id);
+  const [competition, planKey] = await Promise.all([
+    getCompetition(auth, division.competition_id),
+    orgPlanKey(auth.orgId),
+  ]);
+  const viewerPlan = viewerPlanFrom(planKey);
   const sportModule = resolveModule(division.sport_key, division.module_version);
   // R7 B2 — the catalog that governs THIS division, not the module's
   // static one: a competition's config moves the starting size (football
@@ -215,6 +220,7 @@ export default async function FixturePage({
             fixture.status !== "finalized" &&
             fixture.status !== "cancelled"
           }
+          viewerPlan={viewerPlan}
         />
       </main>
     </>

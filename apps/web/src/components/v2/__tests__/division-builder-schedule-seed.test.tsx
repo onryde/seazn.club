@@ -62,6 +62,7 @@ function render(constraintsAllowed: boolean, venues: Venue[] = []): string {
         sports={SPORTS}
         venues={venues}
         constraintsAllowed={constraintsAllowed}
+        viewerPlan="community"
       />
     </DictProvider>,
   );

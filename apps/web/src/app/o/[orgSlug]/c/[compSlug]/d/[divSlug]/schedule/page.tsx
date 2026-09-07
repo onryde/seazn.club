@@ -19,7 +19,8 @@ import { getScheduleSettings } from "@/server/usecases/schedule";
 // MovePanel's court-id -> name lookup — see ScheduleBoard's own
 // `courtNamesById` comment.
 import { listVenues } from "@/server/usecases/venues";
-import { hasFeature } from "@/lib/entitlements";
+import { hasFeature, orgPlanKey } from "@/lib/entitlements";
+import { viewerPlanFrom } from "@/lib/viewer-plan";
 import { preferredCurrency } from "@/lib/currency-server";
 import { withTenant } from "@/lib/db";
 import { ScheduleBoard } from "@/components/v2/schedule-board";
@@ -118,6 +119,7 @@ export default async function DivisionSchedulePage({
     busy,
     currency,
     venues,
+    planKey,
   ] = await Promise.all([
     getCompetition(auth, division.competition_id),
     listStages(auth, id),
@@ -141,7 +143,9 @@ export default async function DivisionSchedulePage({
     // but a fixture placed before its court was archived still needs that
     // court's NAME to render, and without it the board showed a bare uuid.
     listVenues(auth, { includeArchived: true }),
+    orgPlanKey(auth.orgId),
   ]);
+  const viewerPlan = viewerPlanFrom(planKey);
 
   // P9: the board gets court IDENTITY and display only. `listVenues` rows
   // carry every court's weekly `hours` and dated `exceptions` — the Directory
@@ -283,7 +287,7 @@ export default async function DivisionSchedulePage({
           <>
             {!boardEditable && canEdit && !billingFrozen && (
               <div className="mb-4">
-                <UpgradeGate feature="scheduling.board" compact />
+                <UpgradeGate feature="scheduling.board" compact viewerPlan={viewerPlan} />
               </div>
             )}
             {/* #385: the AI rung weights and token budgets, resolved HERE —
@@ -318,6 +322,7 @@ export default async function DivisionSchedulePage({
               venues={boardVenues}
               showSettings={false}
               officialsWithBlackout={new Set(blackouts.map((b) => b.official_id)).size}
+              viewerPlan={viewerPlan}
             />
             </RungConfigProvider>
           </>
@@ -382,6 +387,7 @@ export default async function DivisionSchedulePage({
           foIdByAssignment={foIdByAssignment}
           marksByFoId={marksByFoId}
           reportsByFixture={reportsByFixture}
+          viewerPlan={viewerPlan}
         />
         )}
 
@@ -404,6 +410,7 @@ export default async function DivisionSchedulePage({
             // unconditionally above (every tab, not gated like the
             // officials-only reads) — no new query for this.
             fixtures={fixtures}
+            viewerPlan={viewerPlan}
           />
         )}
 
@@ -420,6 +427,7 @@ export default async function DivisionSchedulePage({
           // settings tabs already get above — resolves the blackout scope
           // picker's court ids to names instead of the uuids it showed before.
           venues={boardVenues}
+          viewerPlan={viewerPlan}
         />
         )}
 
@@ -428,6 +436,7 @@ export default async function DivisionSchedulePage({
           divisionId={id}
           scheduleLocked={division.schedule_locked}
           canEdit={canEdit && !billingFrozen}
+          viewerPlan={viewerPlan}
         />
         )}
       </main>

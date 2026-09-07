@@ -115,6 +115,7 @@ const baseProps = (): LaunchProps => ({
   canEdit: true,
   fixtures: FIXTURES,
   entrantNames: { e1: "Alpha", e2: "Bravo" },
+  viewerPlan: "community",
 });
 
 const flush = () => new Promise((resolve) => setTimeout(resolve, 0));

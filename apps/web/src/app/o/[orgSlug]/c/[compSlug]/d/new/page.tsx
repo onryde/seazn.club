@@ -5,7 +5,8 @@ import { requireCompetitionPage } from "@/server/page-auth";
 import { routes } from "@/lib/routes";
 import { getCompetition } from "@/server/usecases/competitions";
 import { withTenant } from "@/lib/db";
-import { hasFeature } from "@/lib/entitlements";
+import { hasFeature, orgPlanKey } from "@/lib/entitlements";
+import { viewerPlanFrom } from "@/lib/viewer-plan";
 import { archivedSlotsExplainRefusal } from "@/server/usecases/division-slots";
 import { DivisionBuilder, type SportOption } from "@/components/v2/division-builder";
 // P9 scope item 5: org venues+courts feed the Scheduling step's court
@@ -22,7 +23,7 @@ export default async function NewDivisionPage({
   const { auth, canEdit } = page;
   const id = page.competition.id;
   if (!canEdit) redirect(routes.competition(orgSlug, compSlug));
-  const [competition, constraintsAllowed, explainArchivedSlots, venues] = await Promise.all([
+  const [competition, constraintsAllowed, explainArchivedSlots, venues, planKey] = await Promise.all([
     getCompetition(auth, id),
     // A multi-venue schedule seed is Pro (doc 12 §5) — gate the list in the
     // wizard rather than letting the settings PUT 402 after create.
@@ -38,7 +39,9 @@ export default async function NewDivisionPage({
     archivedSlotsExplainRefusal(auth, id),
     // P9 scope item 5: the Scheduling step's court multi-picker.
     listVenues(auth),
+    orgPlanKey(auth.orgId),
   ]);
+  const viewerPlan = viewerPlanFrom(planKey);
 
   // Sport catalog + variant presets (system rows are tenant-readable, org
   // presets scoped by RLS — doc 07).
@@ -80,6 +83,7 @@ export default async function NewDivisionPage({
           competitionWindow={{ startsOn: competition.starts_on, endsOn: competition.ends_on }}
           constraintsAllowed={constraintsAllowed}
           archivedSlotsExplainRefusal={explainArchivedSlots}
+          viewerPlan={viewerPlan}
         />
       </main>
     </>

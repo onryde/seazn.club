@@ -55,6 +55,7 @@ function mount(archivedSlotsExplainRefusal: boolean) {
     divisions: ARCHIVED,
     canEdit: true,
     archivedSlotsExplainRefusal,
+    viewerPlan: "community",
   });
 }
 

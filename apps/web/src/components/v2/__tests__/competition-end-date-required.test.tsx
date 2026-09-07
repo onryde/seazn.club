@@ -86,7 +86,7 @@ const mountWizard = () =>
     CompetitionWizard,
     // The public-dashboard upgrade figure is required (see the component)
     // but irrelevant here — these tests never reach the degrade card.
-    { orgSlug: "riverside", publicDashboardUpgrade: null },
+    { orgSlug: "riverside", publicDashboardUpgrade: null, viewerPlan: "community" },
     expandFields,
   );
 
@@ -205,6 +205,7 @@ describe("CompetitionSettings — the end date is changeable, not removable (#37
       orgId: "o1",
       canEdit: true,
       discoveryBranding: false,
+      viewerPlan: "community",
     });
 
   it("still PATCHes a CHANGED end date", async () => {

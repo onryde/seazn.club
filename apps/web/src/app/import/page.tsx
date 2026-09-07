@@ -5,13 +5,19 @@ import Link from "next/link";
 import { BackLink } from "@/components/back-link";
 import { Nav } from "@/components/nav";
 import { requirePageAuth } from "@/server/page-auth";
+import { orgPlanKey } from "@/lib/entitlements";
+import { viewerPlanFrom } from "@/lib/viewer-plan";
 import { ImportWizard } from "@/components/v2/import-wizard";
 import { resolveLocale } from "@/lib/resolve-locale";
 import { getDictionary, t } from "@/lib/i18n";
 import { DictProvider } from "@/components/i18n/dict-provider";
 
 export default async function ImportPage() {
-  await requirePageAuth();
+  const { auth } = await requirePageAuth();
+  // Every paywall states the viewer's plan (v18 W3-B). This page had
+  // discarded the auth it was already awaiting; `requirePageAuth()` always
+  // resolves an org, so there is nothing here that cannot answer.
+  const viewerPlan = viewerPlanFrom(await orgPlanKey(auth.orgId));
   const locale = await resolveLocale();
   const ui = await getDictionary(locale, "ui");
 
@@ -33,7 +39,9 @@ export default async function ImportPage() {
             {t(ui, "import.desc.post")}
           </p>
         </div>
-        <ImportWizard />
+        {/* Bulk import is a global tool, not org-scoped in server scope here
+            (v18 W3-B rule C) — "unknown" is the honest answer. */}
+        <ImportWizard viewerPlan={viewerPlan} />
       </main>
     </DictProvider>
   );

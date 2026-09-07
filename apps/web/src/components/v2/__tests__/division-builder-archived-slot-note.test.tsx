@@ -67,6 +67,7 @@ function mount(archivedSlotsExplainRefusal: boolean) {
     sports: SPORTS,
     constraintsAllowed: true,
     archivedSlotsExplainRefusal,
+    viewerPlan: "community",
   });
 }
 

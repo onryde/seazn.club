@@ -128,6 +128,7 @@ const props: Parameters<typeof AiConsole>[0] = {
   fixtures: [],
   scheduleFrozen: false,
   onClose: () => {},
+  viewerPlan: "community",
 };
 
 const mountAnswers: Record<string, unknown> = { "/api/v1/officials": [] };

@@ -58,7 +58,10 @@ vi.mock("@/server/usecases/entrants", () => ({ listEntrants: vi.fn(async () => [
 vi.mock("@/server/usecases/schedule", () => ({
   getScheduleSettings: vi.fn(async () => ({ config: {}, tz: "UTC" })),
 }));
-vi.mock("@/lib/entitlements", () => ({ hasFeature: vi.fn(async () => true) }));
+vi.mock("@/lib/entitlements", () => ({
+  hasFeature: vi.fn(async () => true),
+  orgPlanKey: vi.fn(async () => "community"),
+}));
 vi.mock("@/server/usecases/teams", () => ({ listEntrantLogoUrls: vi.fn(async () => ({})) }));
 vi.mock("@/server/engine-db", () => ({
   resolveModule: vi.fn(() => ({

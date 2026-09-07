@@ -11,6 +11,8 @@ import { TEMPLATE_CATALOG } from "@/server/templates/catalog";
 import { sql } from "@/lib/db";
 import { featurePlan } from "@/lib/feature-copy";
 import { planLabel } from "@/lib/plan-label";
+import { orgPlanKey } from "@/lib/entitlements";
+import { viewerPlanFrom } from "@/lib/viewer-plan";
 import {
   PUBLIC_DASHBOARD_FEATURE,
   type PublicDashboardUpgrade,
@@ -47,13 +49,14 @@ export default async function NewCompetitionPage({
   params: Promise<{ orgSlug: string }>;
 }) {
   const { orgSlug } = await params;
-  const { canEdit } = await requireOrgPage(orgSlug);
+  const { auth, canEdit } = await requireOrgPage(orgSlug);
   if (!canEdit) redirect(routes.orgHome(orgSlug));
   const locale = await resolveLocale();
   const dict = await getDictionary(locale, "ui");
   // Fails soft: the create form must render even when the matrix read does
   // not, and `null` here suppresses only the upgrade figure.
   const upgrade = await publicDashboardUpgrade().catch(() => null);
+  const viewerPlan = viewerPlanFrom(await orgPlanKey(auth.orgId));
 
   return (
     <main className="mx-auto max-w-4xl px-4 py-8" data-tour="competition-wizard">
@@ -64,6 +67,7 @@ export default async function NewCompetitionPage({
         orgSlug={orgSlug}
         templates={TEMPLATE_CATALOG}
         publicDashboardUpgrade={upgrade}
+        viewerPlan={viewerPlan}
       />
     </main>
   );

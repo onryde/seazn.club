@@ -55,6 +55,7 @@ function consoleHtml(stream: readonly (readonly [string, unknown])[]): string {
       canEdit
       recorderNames={{}}
       audit={null}
+      viewerPlan="community"
     />,
   );
 }

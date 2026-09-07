@@ -51,6 +51,7 @@ function mount() {
     compSlug: "comp",
     sports: SPORTS,
     constraintsAllowed: true,
+    viewerPlan: "community",
   });
 }
 

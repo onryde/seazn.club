@@ -60,6 +60,7 @@ function consoleHtml(stream: readonly (readonly [string, unknown])[]): string {
       canEdit
       recorderNames={{}}
       audit={null}
+      viewerPlan="community"
     />,
   );
 }
@@ -105,6 +106,7 @@ describe("fixture-console header — cricket pre-innings noise (R7 follow-ups it
         canEdit
         recorderNames={{}}
         audit={null}
+        viewerPlan="community"
       />,
     );
     expect(html).toMatch(/font-mono text-2xl/);

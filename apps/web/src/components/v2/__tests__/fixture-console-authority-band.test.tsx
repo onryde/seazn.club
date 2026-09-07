@@ -116,6 +116,7 @@ function consoleHtml(
         entitlements: {},
         identity: { recordedBy: "user-1", deviceLinkId: null },
       }}
+      viewerPlan="community"
     />,
   );
 }

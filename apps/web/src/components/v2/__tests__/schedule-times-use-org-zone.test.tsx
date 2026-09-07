@@ -103,6 +103,7 @@ describe("blackout windows resolve on the venue clock", () => {
       initialSettings: { division_id: "d1", config: { courts: ["Court 1"], ...config } },
       canEdit: true,
       orgTz: ORG_TZ,
+      viewerPlan: "community" as const,
     };
   }
 
@@ -224,6 +225,7 @@ function settingsProps(over: Partial<BoardConfig> = {}) {
     onError: (err: unknown) => {
       throw err instanceof Error ? err : new Error(String(err));
     },
+    viewerPlan: "community" as const,
   };
 }
 
@@ -328,6 +330,7 @@ describe("both panels name the zone their times are in", () => {
             constraintsAllowed
             venueCap="Court"
             orgTz={ORG_TZ}
+            viewerPlan="community"
           />
         </DictProvider>,
       );
@@ -342,6 +345,7 @@ describe("both panels name the zone their times are in", () => {
             initialSettings={{ division_id: "d1", config: { courts: ["Court 1"] } }}
             canEdit
             orgTz={ORG_TZ}
+            viewerPlan="community"
           />
         </DictProvider>,
       );

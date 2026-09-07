@@ -9,6 +9,7 @@ import { useRouter } from "next/navigation";
 import { apiV1 } from "@/lib/client-v1";
 import { UpgradeGate } from "@/components/upgrade-gate";
 import { useMsg } from "@/components/i18n/dict-provider";
+import type { ViewerPlan } from "@/lib/viewer-plan";
 
 export function initials(name: string): string {
   return name
@@ -184,11 +185,13 @@ export function RoleChipPicker({
   onChange,
   suggestions,
   multiAllowed,
+  viewerPlan,
 }: {
   value: string[];
   onChange: (next: string[]) => void;
   suggestions: string[];
   multiAllowed: boolean;
+  viewerPlan: ViewerPlan;
 }) {
   const msg = useMsg();
   const [custom, setCustom] = useState("");
@@ -254,7 +257,7 @@ export function RoleChipPicker({
           {msg("officials.roleCustomAdd")}
         </button>
       </div>
-      {blocked && <UpgradeGate feature="officials.roles_multi" compact />}
+      {blocked && <UpgradeGate feature="officials.roles_multi" compact viewerPlan={viewerPlan} />}
     </div>
   );
 }

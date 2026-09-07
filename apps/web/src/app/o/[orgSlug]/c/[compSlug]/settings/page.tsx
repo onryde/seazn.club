@@ -11,7 +11,8 @@ import { CompetitionPassEntry } from "@/components/competition-pass-entry";
 import { formatMinor } from "@/lib/currency";
 import { lowestPassRung, passActiveLabels, passEndedReasons } from "@/lib/pass-ladder";
 import { preferredCurrency } from "@/lib/currency-server";
-import { hasFeature } from "@/lib/entitlements";
+import { hasFeature, orgPlanKey } from "@/lib/entitlements";
+import { viewerPlanFrom } from "@/lib/viewer-plan";
 import { sql, withTenant } from "@/lib/db";
 import { checkoutTrialDays } from "@/lib/billing";
 import { resolveLocale } from "@/lib/resolve-locale";
@@ -41,6 +42,7 @@ export default async function CompetitionSettingsPage({
     currency,
     [subRow],
     explainArchivedSlots,
+    planKey,
   ] = await Promise.all([
       getCompetition(auth, id),
       hasFeature(auth.orgId, "discovery.branding"),
@@ -66,7 +68,9 @@ export default async function CompetitionSettingsPage({
       // so this surface owes the same explanation the wizard gives — and the
       // rows doing the charging are the ones this page is about to list.
       archivedSlotsExplainRefusal(auth, id),
+      orgPlanKey(auth.orgId),
     ]);
+  const viewerPlan = viewerPlanFrom(planKey);
   const archivedDivisions = allDivisions.filter((d) => d.archived_at !== null);
   const trialAvailable = checkoutTrialDays(subRow) > 0;
 
@@ -172,8 +176,10 @@ export default async function CompetitionSettingsPage({
               }))}
               canEdit={canEdit}
               archivedSlotsExplainRefusal={explainArchivedSlots}
+              viewerPlan={viewerPlan}
             />
           }
+          viewerPlan={viewerPlan}
         />
       </main>
     </>

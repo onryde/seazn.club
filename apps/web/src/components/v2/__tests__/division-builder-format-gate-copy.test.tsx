@@ -100,6 +100,7 @@ function mount() {
     sports: SPORTS,
     constraintsAllowed: true,
     archivedSlotsExplainRefusal: false,
+    viewerPlan: "community",
   });
 }
 

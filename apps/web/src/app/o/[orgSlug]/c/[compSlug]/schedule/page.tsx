@@ -17,7 +17,8 @@ import { getScheduleSettings } from "@/server/usecases/schedule";
 // headers, the swap button, MovePanel's court select, the settings card's
 // picker). Same call the division board makes — see its own comment.
 import { listVenues } from "@/server/usecases/venues";
-import { hasFeature } from "@/lib/entitlements";
+import { hasFeature, orgPlanKey } from "@/lib/entitlements";
+import { viewerPlanFrom } from "@/lib/viewer-plan";
 import { preferredCurrency } from "@/lib/currency-server";
 import { withTenant } from "@/lib/db";
 import { ScheduleBoard } from "@/components/v2/schedule-board";
@@ -44,7 +45,11 @@ export default async function CompetitionSchedulePage({
   // time means on a single shared grid.
   const orgTz = resolveVenueTz(null, page.org.timezone);
   const id = page.competition.id;
-  const competition = await getCompetition(auth, id);
+  const [competition, planKey] = await Promise.all([
+    getCompetition(auth, id),
+    orgPlanKey(auth.orgId),
+  ]);
+  const viewerPlan = viewerPlanFrom(planKey);
   const locale = await resolveLocale();
   const dict = await getDictionary(locale, "ui");
 
@@ -60,7 +65,7 @@ export default async function CompetitionSchedulePage({
           <h1 className="page-title mb-4">
             {t(dict, "comp.schedule.title", { name: competition.name })}
           </h1>
-          <UpgradeGate feature="scheduling.multi_division" />
+          <UpgradeGate feature="scheduling.multi_division" viewerPlan={viewerPlan} />
         </main>
       </>
     );
@@ -239,6 +244,7 @@ export default async function CompetitionSchedulePage({
           // nothing on the button saying so. Each division already has its own
           // Settings tab, reachable from Directory.
           showSettings={false}
+          viewerPlan={viewerPlan}
         />
         </RungConfigProvider>
       </main>

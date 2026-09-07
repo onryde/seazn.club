@@ -136,13 +136,13 @@ const anchorFor = (key: string, value: string): string =>
  *  production path for an English organiser. */
 const englishMarkup = (scheduleLocked: boolean): string =>
   renderToStaticMarkup(
-    <HistoryPanel divisionId="d1" scheduleLocked={scheduleLocked} canEdit />,
+    <HistoryPanel divisionId="d1" scheduleLocked={scheduleLocked} canEdit viewerPlan="community" />,
   );
 
 const sentinelMarkup = (scheduleLocked: boolean): string =>
   renderToStaticMarkup(
     <DictProvider dict={XX} locale="fr">
-      <HistoryPanel divisionId="d1" scheduleLocked={scheduleLocked} canEdit />
+      <HistoryPanel divisionId="d1" scheduleLocked={scheduleLocked} canEdit viewerPlan="community" />
     </DictProvider>,
   );
 
@@ -268,9 +268,9 @@ describe("HistoryPanel — the Recent edits list names events in the reader's la
       path.endsWith("/history") ? { watermark: 1, seq: 12, events: EVENTS } : [],
     );
     const island = renderIsland(
-      (props: { divisionId: string; scheduleLocked: boolean; canEdit: boolean }) =>
+      (props: { divisionId: string; scheduleLocked: boolean; canEdit: boolean; viewerPlan: "community" }) =>
         HistoryPanel(props),
-      { divisionId: "d1", scheduleLocked: false, canEdit: true },
+      { divisionId: "d1", scheduleLocked: false, canEdit: true, viewerPlan: "community" },
     );
     await new Promise((r) => setTimeout(r, 0));
     await new Promise((r) => setTimeout(r, 0));
@@ -313,9 +313,9 @@ describe("HistoryPanel — the testids the walkthrough specs select on", () => {
       path.endsWith("/history") ? { watermark: 1, seq: 1, events: [] } : CHECKPOINTS,
     );
     const island = renderIsland(
-      (props: { divisionId: string; scheduleLocked: boolean; canEdit: boolean }) =>
+      (props: { divisionId: string; scheduleLocked: boolean; canEdit: boolean; viewerPlan: "community" }) =>
         HistoryPanel(props),
-      { divisionId: "d1", scheduleLocked: false, canEdit: true },
+      { divisionId: "d1", scheduleLocked: false, canEdit: true, viewerPlan: "community" },
     );
     // The mount effect defers via setTimeout(0) and awaits two fetches — two
     // ticks lets both settle, the same margin the eviction-notice suite uses.
