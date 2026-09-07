@@ -3101,7 +3101,7 @@ export function localePassUncoveredFaults(
  * THE VOCABULARY IS DELIBERATELY SMALL, and every entry is commented with why
  * it exists — a wide "any capability word" list is unreviewable and, per the
  * header note over this file, exactly the shape ("A DENYLIST OF PHRASINGS")
- * that lets the same falsehood back in reworded. Two entries only:
+ * that lets the same falsehood back in reworded. Three entries:
  *
  *  - `formats.double_elim`: the phrase THIS TASK'S DEFECT USED ("double elim"
  *    / "double elimination"). Community grants it, so any bullet naming it is
@@ -3115,6 +3115,19 @@ export function localePassUncoveredFaults(
  *    the guard is judging the MATRIX, not pattern-matching a banned word,
  *    because the same shape of entry (a phrase mapped to a feature_key) reds
  *    for one row and stays silent for the other, on the same bullet.
+ *  - `stats.player`: "player stats", the W3-A defect's own phrase (2026-09-06,
+ *    V399). `stats.player` (the per-division RECORD) went free on every plan
+ *    in that migration — the SAME falsehood class `formats.double_elim`
+ *    demonstrated one wave earlier, on the survivor of that fix
+ *    (`pricing.pro.f4` had already been through one rewrite, W1, for a
+ *    DIFFERENT reason, and still carried a claim that went false under it).
+ *    No discriminating sibling entry is needed here the way `formats.advanced`
+ *    pairs with `formats.double_elim`: the still-gated half of the same split,
+ *    `stats.player.career`, is described with a DIFFERENT phrase ("career
+ *    stats") that this pattern does not match at all — the discrimination is
+ *    structural (the two feature keys' example phrases share no words), not a
+ *    second vocabulary entry standing guard over one that would otherwise be
+ *    a blanket ban.
  *
  * ANTI-VACUITY, both halves: `PAID_OVERCLAIM_VOCAB.length === 0` is checked
  * FIRST, before any loop — an empty vocabulary would otherwise fall through
@@ -3145,6 +3158,15 @@ export const PAID_OVERCLAIM_VOCAB: Array<[feature: string, byLocale: Record<Dict
       es: claim(String.raw`\b(americano|escaleras?)\b`),
       fr: claim(String.raw`\b(americano|[ée]chelles?)\b`),
       nl: claim(String.raw`\b(americano|ladders?)\b`),
+    },
+  ],
+  [
+    "stats.player",
+    {
+      en: /\bplayer\s+stats\b/i,
+      es: claim(String.raw`\bestad[ií]sticas\s+de\s+jugador(?:es)?\b`),
+      fr: claim(String.raw`\bstatistiques\s+(?:des?\s+)?joueurs?\b`),
+      nl: claim(String.raw`\bspelers?statistieken\b`),
     },
   ],
 ];

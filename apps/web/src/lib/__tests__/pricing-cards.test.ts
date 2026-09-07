@@ -338,12 +338,12 @@ const APPROVED_CARD_BULLETS: ApprovedBullets[] = [
   },
   {
     array: "PRO_FEATURES",
-    why: "the Pro card on /pricing (and, sliced, the home ticket stub). Pinned to the live matrix by CARD_SURFACES below: competitions.max_active is null on pro but divisions.per_competition.max is 20 since V393, so the one bullet that covered both rows had to split into 'Unlimited competitions, 20 divisions each'; entrants.per_division.max is 256 and registration.fee_percent is 2. The capability bullets are boolean pro grants (stats.player, scoring.device_links, api.access, exports, dashboard.theme for the club colours (V396 took badge removal off Pro, so the badge bullet became false, and V397 split the accent colour onto its own Pro key — that is what replaced it), officials.auto (V393 brought it down from the deleted Pro Plus), discipline.enforced, news.auto, officials.marks). It must NOT claim a pro_plus-only feature — crossCardExclusivityFaults judges that against the rows. W1 (entitlements v18, owner ruling 2026-08-30): bullet 4 was 'Ball-by-ball & rally scoring, player stats'. V390 deleted scoring.ball_by_ball and scoring.rally_by_rally from plan_entitlements — recording detail is free on every plan — so two thirds of that sentence pointed at no row and sold Community something it already has. Only stats.player survives of the three, and it is what the bullet now names. W2 ALSO MOVED THIS CARD INTO THE DICTIONARIES: the bullets are `pricing.<card>.f*` keys in all four locales and every figure above is INTERPOLATED from the row named beside it in lib/pricing-cards.ts, so the approved text below is what `cardBullets` renders in English from the live matrix rather than a sentence anybody typed. A number can no longer disagree with its row; the WORDS are what this entry pins.",
+    why: "the Pro card on /pricing (and, sliced, the home ticket stub). Pinned to the live matrix by CARD_SURFACES below: competitions.max_active is null on pro but divisions.per_competition.max is 20 since V393, so the one bullet that covered both rows had to split into 'Unlimited competitions, 20 divisions each'; entrants.per_division.max is 256 and registration.fee_percent is 2. The capability bullets are boolean pro grants (stats.player.career, scoring.device_links, api.access, exports, dashboard.theme for the club colours (V396 took badge removal off Pro, so the badge bullet became false, and V397 split the accent colour onto its own Pro key — that is what replaced it), officials.auto (V393 brought it down from the deleted Pro Plus), discipline.enforced, news.auto, officials.marks). It must NOT claim a pro_plus-only feature — crossCardExclusivityFaults judges that against the rows. W1 (entitlements v18, owner ruling 2026-08-30): bullet 4 was 'Ball-by-ball & rally scoring, player stats'. V390 deleted scoring.ball_by_ball and scoring.rally_by_rally from plan_entitlements — recording detail is free on every plan — so two thirds of that sentence pointed at no row and sold Community something it already has. Only stats.player survived of the three then. W3-A (2026-09-06, V399) split `stats.player` again: the per-division record it named is now free on every plan too (the SAME falsehood class, one wave later), so bullet 4 was rewritten a second time to name the capability that is genuinely still Pro-only, the cross-division career rollup — its own new key, `stats.player.career`. W2 ALSO MOVED THIS CARD INTO THE DICTIONARIES: the bullets are `pricing.<card>.f*` keys in all four locales and every figure above is INTERPOLATED from the row named beside it in lib/pricing-cards.ts, so the approved text below is what `cardBullets` renders in English from the live matrix rather than a sentence anybody typed. A number can no longer disagree with its row; the WORDS are what this entry pins.",
     bullets: [
       "Unlimited competitions, 20 divisions each",
       "256 entrants per division",
       "Entry fees at a 2% platform fee",
-      "Player stats & scorecards",
+      "Career stats across competitions",
       "Officials, exports, API keys, device links",
       "Your club colours on public pages & slideshow",
       "Suspensions & discipline tracking",
@@ -691,8 +691,14 @@ const CARD_SURFACES: CardSurface[] = [
       // W1 (entitlements v18, owner ruling 2026-08-30): the `scoring.ball_by_ball`
       // and `scoring.rally_by_rally` claims are GONE, not reworded — V390 deleted
       // both rows from `plan_entitlements`, so the Pro card can no longer promise
-      // either. `stats.player` is what is left of that bullet, and it is real.
-      { feature: "stats.player", plans: ["pro"], says: /\bplayer stats\b/i },
+      // either. `stats.player` was what was left of that bullet.
+      //
+      // W3-A (2026-09-06, V399): `stats.player` itself then went free on every
+      // plan (the per-division record) — the SAME falsehood class one wave
+      // later, on the survivor of the first fix. The bullet's subject moved to
+      // `stats.player.career`, the split-off leverage half (the cross-division
+      // rollup), which is what is still genuinely Pro-only.
+      { feature: "stats.player.career", plans: ["pro"], says: /\bcareer stats\b/i },
       { feature: "api.access", plans: ["pro"], says: /\bAPI keys\b/i },
       { feature: "scoring.device_links", plans: ["pro"], says: /\bdevice links\b/i },
       // The same bullet names four things; each is its own row, and `exports`
@@ -715,6 +721,18 @@ const CARD_SURFACES: CardSurface[] = [
       { feature: "officials.marks", plans: ["pro"], says: /\bauto officials assignment & ratings\b/i },
       { feature: "news.auto", plans: ["pro"], says: /\bauto-drafted result posts\b/i },
     ],
+    unclaimed: {
+      // W3-A (2026-09-06): the residue check's lexicon derives "competitions"
+      // from EVERY feature key in plan_entitlements, `competitions.max_active`
+      // included — so bullet 4's own "across competitions" residue matches
+      // that token regardless of context. It is not a claim about the
+      // ACTIVE-COMPETITION CAP row (already claimed, in full, by bullet 1
+      // above): it is the SCOPE of the career rollup this bullet names —
+      // `stats.player.career`'s `personCareerStats` sums across every
+      // division a person has played, which can span many competitions.
+      "across competitions":
+        "scope of the career rollup (stats.player.career), not a claim about the competitions.max_active cap row — the token lexicon cannot tell the two uses of the word apart.",
+    },
   },
   // The `PLUS_CARD_FEATURES` and `PLUS_COMING_SOON` surfaces were DELETED here
   // in W2 (entitlements v18), with the arrays. Between them they declared nine

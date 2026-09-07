@@ -3707,6 +3707,7 @@ export type DictionaryKey =
   | "pricing.matrix.standings.carry_over"
   | "pricing.matrix.standings.custom_points"
   | "pricing.matrix.stats.player"
+  | "pricing.matrix.stats.player.career"
   | "pricing.matrix.support.priority"
   | "pricing.matrix.teams.max"
   | "pricing.matrix.teams.squad_max"

@@ -14,7 +14,8 @@ import { TAG, apiJson, loginUi, grantCompetitionPassSql, invalidateOrgEntitlemen
 // SEAM — proven only by driving it through its real producer and consumer.
 //
 // Three of the five keys are driven here, chosen because their routes need no
-// scoring data to exercise: the leaderboard (`stats.player`, a bool),
+// scoring data to exercise: the career rollup (`stats.player.career`, a bool —
+// W3-A, 2026-09-06, V399, split off `stats.player`; see the block below),
 // `stages.per_division.max` and `schedule.checkpoints.max` (both CAPS, where the
 // pass moves a number rather than opening a door — a bool-only test would leave
 // the `getLimit` call sites unproven at the HTTP layer).
@@ -154,15 +155,54 @@ test.describe("Event Pass grants are reachable over HTTP on the passed competiti
     await grantCompetitionPassSql(orgId, passed.competitionId, "event_pass", page.request);
     await invalidateOrgEntitlements(page.request, orgId);
 
-    // --- stats.player (bool: community false, event_pass true) -------------
-    // RED before the fix: a 402 naming `stats.player` on the competition the
-    // org had just paid to unlock.
+    // --- stats.player (bool, free on every plan since W3-A) ----------------
+    // Was pass-scoped (community false, event_pass true) — RED before that
+    // fix, a 402 naming `stats.player` on the competition the org had just
+    // paid to unlock. W3-A (2026-09-06, V399) froze it true on every plan, so
+    // the per-division RECORD no longer needs a pass at all: rewritten to
+    // prove BOTH divisions read, rather than deleted, so a regression that
+    // re-guards it on plan or pass reds here.
     expect(
       await call(page.request, "GET", `/api/v1/divisions/${passed.divisionId}/stats/players`),
     ).toEqual({ status: 200, featureKey: undefined });
     expect(
       await call(page.request, "GET", `/api/v1/divisions/${plain.divisionId}/stats/players`),
-    ).toEqual({ status: 402, featureKey: "stats.player" });
+    ).toEqual({ status: 200, featureKey: undefined });
+
+    // --- stats.player.career (bool: community false, event_pass true) ------
+    // The leverage half `stats.player` handed off in the W3-A split — this is
+    // what carries the pass-scoped story the block above used to tell. A
+    // person seated ONLY in the unpassed division proves the org-wide leak
+    // direction; one seated in the passed division proves the grant reaches
+    // it. RED before the fix (pre-W3-A) would have named `stats.player`
+    // instead.
+    const passedPerson = await apiJson<{ id: string }>(page.request, "/api/v1/persons", "POST", {
+      full_name: `PW Passed Player ${TAG} ${hex()}`,
+      consent: {},
+    });
+    expect(passedPerson.status, "seed passed-division person").toBe(201);
+    const plainPerson = await apiJson<{ id: string }>(page.request, "/api/v1/persons", "POST", {
+      full_name: `PW Plain Player ${TAG} ${hex()}`,
+      consent: {},
+    });
+    expect(plainPerson.status, "seed plain-division person").toBe(201);
+    const seatEntrant = async (divisionId: string, personId: string, label: string) => {
+      const r = await apiJson(page.request, `/api/v1/divisions/${divisionId}/entrants`, "POST", [
+        { kind: "individual", display_name: label, seed: 1, members: [{ person_id: personId }] },
+      ]);
+      expect(r.status, `seat ${label}`).toBe(201);
+    };
+    await seatEntrant(passed.divisionId, passedPerson.data!.id, "Passed Roster");
+    await seatEntrant(plain.divisionId, plainPerson.data!.id, "Plain Roster");
+
+    expect(
+      (await call(page.request, "GET", `/api/v1/persons/${passedPerson.data!.id}/stats?group=sport`))
+        .status,
+      "career rollup for a person seated in the passed competition",
+    ).toBe(200);
+    expect(
+      await call(page.request, "GET", `/api/v1/persons/${plainPerson.data!.id}/stats?group=sport`),
+    ).toEqual({ status: 402, featureKey: "stats.player.career" });
 
     // --- stages.per_division.max (community 2, event_pass 4) ---------------
     // Each division already holds stage seq 1, so the SECOND stage is inside

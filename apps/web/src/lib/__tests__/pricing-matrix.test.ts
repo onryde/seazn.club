@@ -123,8 +123,19 @@ const DATA: MatrixData = {
     event_pass_l: cell(4),
     pro: cell(2),
   },
-  // V393: the pass now lifts player stats too. Community stays denied.
+  // W3-A (2026-09-06, V399): the per-division RECORD is free on every plan —
+  // community caught up. Kept in the fixture (an all-true row still renders,
+  // same precedent as formats.double_elim) rather than dropped.
   "stats.player": {
+    community: cell(null, true),
+    event_pass: cell(null, true),
+    event_pass_l: cell(null, true),
+    pro: cell(null, true),
+  },
+  // W3-A: the NEW key for the split-off leverage half — the cross-division
+  // CAREER ROLLUP. Carries forward exactly the cells `stats.player` held
+  // before the split (V393: the pass lifts it, community stays denied).
+  "stats.player.career": {
     community: cell(null, false),
     event_pass: cell(null, true),
     event_pass_l: cell(null, true),
@@ -397,14 +408,28 @@ describe("buildPricingSections — the /pricing pivot", () => {
   // went paid — so the two rows now read identically and both sell the pass,
   // which is the third state this case has held and the reason it is written
   // as two explicit expectations rather than a shared one.
-  it("renders profiles and player stats both as pass-lifted", () => {
+  it("renders profiles and the career rollup both as pass-lifted", () => {
+    // W3-A (2026-09-06): `stats.player` (the per-division record) left the
+    // pass-lifted pair here — it is free on every plan now, so the story this
+    // case was built to tell moved onto `stats.player.career`, its split-off
+    // leverage half. `dashboard.player_profiles` is unchanged.
     expect(cells("pricing.matrix.dashboard.player_profiles")).toMatchObject({
       community: "—",
       event_pass: "✓",
       pro: "✓",
     });
-    expect(cells("pricing.matrix.stats.player")).toMatchObject({
+    expect(cells("pricing.matrix.stats.player.career")).toMatchObject({
       community: "—",
+      event_pass: "✓",
+      pro: "✓",
+    });
+  });
+
+  // W3-A: the sibling of the case above. `stats.player` (the RECORD) is now
+  // included on every plan, community included — the split's whole point.
+  it("renders the player-stats record as included on every plan (W3-A)", () => {
+    expect(cells("pricing.matrix.stats.player")).toMatchObject({
+      community: "✓",
       event_pass: "✓",
       pro: "✓",
     });

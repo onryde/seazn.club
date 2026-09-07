@@ -760,7 +760,13 @@ export async function getPublicFixture(
 
 /** PROMPT-65: per-division stat block on the player card. Free at every tier
  *  (locked decision 2026-07-18): visibility is the same consent gate as the
- *  card itself; the leaderboard TABLE stays the Pro surface (stats.player). */
+ *  card itself. The leaderboard TABLE (`publicDivisionStats`,
+ *  usecases/player-stats.ts) used to be described here as "the Pro surface" —
+ *  W3-A (2026-09-06, V399) froze `stats.player` true on every plan, so it is
+ *  free by default too now, gated only by the same explicit
+ *  `org_entitlement_overrides` deny `divisionPlayerStats`/`personStats`
+ *  respect. This profile block's own gate (consent + `dashboard.player_profiles`
+ *  below) is separate and unchanged. */
 export interface PublicPlayerStats {
   division_name: string;
   division_slug: string;

@@ -183,8 +183,11 @@ describe.skipIf(!HAS_DB)("event-import — regression proofs (P11 Task 6)", () =
 
   it("(b) careers day one: divisionPlayerStats/personStats surface an imported fixture's history (read path, no side-effect wait)", async () => {
     const { auth } = await seedOrg();
-    // stats.player is false on `community` (V112__entitlements_v2.sql:60),
-    // the plan every fresh rig org resolves to having no subscription row.
+    // W3-A (2026-09-06, V399): `stats.player` is now true on every plan by
+    // default (community included, the plan every fresh rig org resolves to
+    // having no subscription row), so this grant is redundant — kept rather
+    // than removed, since an explicit override grant is still a legitimate
+    // way to reach the same state and this call proves it stays harmless.
     await grantBool(auth.orgId, "stats.player");
     const { divisionId, fixtureId, homePersonId, awayPersonId } = await startedDivisionWithPersons(auth);
 

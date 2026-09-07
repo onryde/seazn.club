@@ -902,6 +902,18 @@ const KNOWN_POSITIVES: string[] = [
   "double élimination",
   "dubbele eliminatie",
   "americano",
+  // ── W3-A: `localePaidOverclaimFaults`'s THIRD vocabulary entry
+  //    (stats.player) ──
+  //
+  // "player stats" is the phrase THIS TASK'S FIX DELETED from `pricing.pro.f4`
+  // and `tips.billing.event-pass.body` (V399 froze `stats.player` true on
+  // every plan) — same reasoning as the double-elim exemplars above: once the
+  // fix lands, nothing left in the repo matches it, so this static corpus
+  // carries it instead.
+  "player stats",
+  "estadísticas de jugadores",
+  "statistiques des joueurs",
+  "spelersstatistieken",
 ];
 
 // FIX ROUND 4, CI BLOCKER. Round 3 added an `it` that calls `sql` inside this
@@ -2672,6 +2684,103 @@ describe.skipIf(!HAS_DB)("the four-locale dictionaries match plan_entitlements",
       // genuinely does NOT grant — that half must stay silent.
       expect(faults, `${locale}: the americano/ladders half must NOT red`).not.toContain(
         `${locale} upgrade.limit.formats: sells formats.advanced`,
+      );
+    }
+  });
+
+  // ── W3-A (2026-09-06, V399): `pricing.pro.f4` named "player stats" as a Pro
+  // differentiator until `stats.player` (the per-division RECORD) went free
+  // on every plan in the same migration — the SAME falsehood class
+  // `formats.double_elim` demonstrated one wave earlier, this time on a
+  // bullet already rewritten once (W1) for an unrelated reason. Same guard,
+  // a THIRD `PAID_OVERCLAIM_VOCAB` entry (`lib/copy-truth.ts`) rather than a
+  // third mechanism.
+  it("pricing.pro.f4 no longer oversells stats.player, in all four locales", async () => {
+    const grants = await grantsFor(["stats.player", "stats.player.career"]);
+    // The premise, read from the seed rather than asserted from memory.
+    expect(grants["stats.player"]!.community, "W3-A: the record is free everywhere").toBe(true);
+    expect(grants["stats.player.career"]!.community, "the rollup is the real paid lift").toBe(false);
+
+    expect(localePaidOverclaimFaults(across("marketing", "pricing.pro.f4"), grants)).toEqual([]);
+  });
+
+  it("…and the pre-fix 'player stats' wording on pricing.pro.f4 reds in every locale, so that is not silence", async () => {
+    const grants = await grantsFor(["stats.player", "stats.player.career"]);
+    // The shipped strings, verbatim, before this fix (W3-A).
+    const preFix: LocalisedValue[] = (
+      [
+        ["en", "Player stats & scorecards"],
+        ["es", "Estadísticas de jugadores y planillas"],
+        ["fr", "Statistiques des joueurs et feuilles de match"],
+        ["nl", "Spelersstatistieken & scorekaarten"],
+      ] as Array<[DictionaryLocale, string]>
+    ).map(([locale, value]) => ({ locale, key: "pricing.pro.f4", value }));
+
+    const faults = localePaidOverclaimFaults(preFix, grants).join(" | ");
+    for (const locale of DICTIONARY_LOCALES) {
+      expect(faults, `${locale}: the player-stats claim must red`).toContain(
+        `${locale} pricing.pro.f4: sells stats.player as a paid differentiator, but community already grants it`,
+      );
+    }
+
+    // ANTI-VACUITY (see the header comment on `localePaidOverclaimFaults` in
+    // copy-truth.ts): the vocabulary just matched a real, previously shipped
+    // string in every locale, not a fixture invented only for this test.
+    expect(copyTruth.PAID_OVERCLAIM_VOCAB.length).toBeGreaterThan(0);
+
+    // …and it must fall silent the day the matrix moves the other way: if
+    // `stats.player` were ever gated off community again, the pre-fix
+    // sentence would be true about it again.
+    const lifted = {
+      ...grants,
+      "stats.player": { ...grants["stats.player"]!, community: false },
+    };
+    expect(localePaidOverclaimFaults(preFix, lifted).join(" | ")).not.toContain(
+      "sells stats.player",
+    );
+  });
+
+  // ── The SAME defect on a second surface, found while fixing pricing.pro.f4
+  // and owed to the same round (same shape as `upgrade.limit.formats` being
+  // owed alongside `pricing.pass.f3` in W3 fix round 2): the in-app Event
+  // Pass tip (`tips.billing.event-pass.body`, rendered on the upgrade page,
+  // `app/o/[orgSlug]/c/[compSlug]/upgrade/page.tsx`) told a buyer the pass
+  // "adds ... player stats", which stopped being true the moment
+  // `stats.player` went free — the pass still adds the career rollup, not
+  // the per-division record.
+  it("tips.billing.event-pass.body no longer oversells stats.player, in all four locales", async () => {
+    const grants = await grantsFor(["stats.player", "stats.player.career"]);
+    expect(localePaidOverclaimFaults(across("ui", "tips.billing.event-pass.body"), grants)).toEqual([]);
+  });
+
+  it("…and the pre-fix 'player stats' wording on the Event Pass tip reds in every locale", async () => {
+    const grants = await grantsFor(["stats.player", "stats.player.career"]);
+    // The shipped strings, verbatim, before this fix (W3-A).
+    const preFix: LocalisedValue[] = (
+      [
+        [
+          "en",
+          "For this competition only: the pass gives it 128 entrants per division and up to 10 divisions. It adds branded exports, public player cards, player stats, auto officials assignment, discipline tracking, embeds, sponsor packages, the realtime scoreboard, a one-time AI credit top-up and a 4% platform fee instead of 5%. It is not Pro — your brand colour on public pages, API access and your organisation's own limits all stay Pro. A passed competition stops counting against your active-competition limit; the pass doesn't carry to next season's edition.",
+        ],
+        [
+          "es",
+          "Solo para esta competición: el pase le da 128 participantes por división y hasta 10 divisiones. Añade exportaciones con tu marca, fichas públicas de jugador, estadísticas de jugadores, asignación automática de árbitros, seguimiento disciplinario, embeds, paquetes de patrocinio, el marcador en tiempo real, una recarga única de créditos de IA y una comisión de plataforma del 4 % en lugar del 5 %. No es Pro — el color de marca en las páginas públicas, el acceso a la API y los límites de tu propia organización siguen siendo de Pro. Una competición con pase deja de contar para tu límite de competiciones activas; el pase no se transfiere a la edición de la próxima temporada.",
+        ],
+        [
+          "fr",
+          "Pour cette compétition uniquement : le pass lui donne 128 participants par division et jusqu'à 10 divisions. Il ajoute les exports personnalisés, les fiches joueurs publiques, les statistiques des joueurs, l'attribution automatique des officiels, le suivi disciplinaire, les embeds, les packs de sponsoring, le tableau de score en temps réel, une recharge ponctuelle de crédits IA et 4 % de frais de plateforme au lieu de 5 %. Ce n'est pas Pro — votre couleur de marque sur les pages publiques, l'accès API et les limites de votre propre organisation restent réservés à Pro. Une compétition couverte par un pass cesse de compter dans votre limite de compétitions actives ; le pass ne se reporte pas à l'édition de la saison suivante.",
+        ],
+        [
+          "nl",
+          "Alleen voor deze competitie: de pass geeft 128 deelnemers per divisie en tot 10 divisies. Hij voegt gebrande exports, openbare spelerskaarten, spelersstatistieken, automatische toewijzing van officials, tuchtregistratie, embeds, sponsorpakketten, het realtime scorebord, een eenmalige AI-creditbijboeking en 4% platformkosten in plaats van 5% toe. Het is geen Pro — je merkkleur op publieke pagina's, API-toegang en de limieten van je eigen organisatie blijven Pro. Een competitie met een pass telt niet langer mee voor je limiet aan actieve competities; de pass gaat niet mee naar de editie van het volgende seizoen.",
+        ],
+      ] as Array<[DictionaryLocale, string]>
+    ).map(([locale, value]) => ({ locale, key: "tips.billing.event-pass.body", value }));
+
+    const faults = localePaidOverclaimFaults(preFix, grants).join(" | ");
+    for (const locale of DICTIONARY_LOCALES) {
+      expect(faults, `${locale}: the player-stats claim must red`).toContain(
+        `${locale} tips.billing.event-pass.body: sells stats.player as a paid differentiator, but community already grants it`,
       );
     }
   });

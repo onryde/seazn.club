@@ -903,12 +903,12 @@ export const APPROVED_DICTIONARY_COPY: ApprovedValue[] = [
   {
     file: "marketing",
     key: "pricing.pro.f4",
-    why: "the one scoring row that is still Pro-only. It read 'Ball-by-ball & rally scoring, player stats' until W1 (owner ruling 2026-08-30); V390 deleted scoring.ball_by_ball and scoring.rally_by_rally from plan_entitlements, so two thirds of that sentence pointed at no row AND sold Community something it already has. stats.player is the survivor and is what this names.",
+    why: "the one scoring row that is still Pro-only. It read 'Ball-by-ball & rally scoring, player stats' until W1 (owner ruling 2026-08-30); V390 deleted scoring.ball_by_ball and scoring.rally_by_rally from plan_entitlements, so two thirds of that sentence pointed at no row AND sold Community something it already has. stats.player was the survivor. W3-A (2026-09-06, V399) split stats.player again: the per-division record it named is free on every plan too now, so this bullet was rewritten a second time to name the capability that is genuinely still Pro-only — the cross-division career rollup, its own new key stats.player.career.",
     text: {
-      en: "Player stats & scorecards",
-      es: "Estadísticas de jugadores y planillas",
-      fr: "Statistiques des joueurs et feuilles de match",
-      nl: "Spelersstatistieken & scorekaarten",
+      en: "Career stats across competitions",
+      es: "Estadísticas de carrera entre competiciones",
+      fr: "Statistiques de carrière entre compétitions",
+      nl: "Carrièrestatistieken tussen competities",
     },
   },
   {

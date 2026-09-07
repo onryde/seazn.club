@@ -107,10 +107,21 @@ export const FEATURE_REASONS: Record<string, string> = {
   // keep the override wording, because for them an explicit
   // `org_entitlement_overrides` deny really is the only refusal left.
   "cricket.dls": "DLS revised targets are switched off for this organisation — a manual umpire target still works.",
-  // Reads only — `divisionPlayerStats`, `personStats`, `personCareerStats`.
-  // Nothing gates scorecard ENTRY on this key, so that half of the old
-  // sentence described a paywall the code does not have.
-  "stats.player": "Player stats are on Pro and the Event Pass.",
+  // W3-A (2026-09-06): was "Player stats are on Pro and the Event Pass." —
+  // false the moment community caught up (V399 froze `stats.player` true on
+  // every plan, the per-division RECORD: `divisionPlayerStats`, `personStats`,
+  // and now `publicDivisionStats` too). Reads only — nothing gates scorecard
+  // ENTRY on this key. The only refusal left is an explicit
+  // `org_entitlement_overrides` deny, so this reads like every other
+  // override-only reason (`formats.double_elim`, `cricket.dls` above). The
+  // leverage half — the cross-division career rollup — moved to its own key;
+  // see `stats.player.career` below.
+  "stats.player": "Player stats are switched off for this organisation.",
+  // W3-A (2026-09-06): the NEW key for the split-off leverage half —
+  // `personCareerStats` (S9/#418), the cross-division career rollup. Carries
+  // forward the OLD `stats.player` sentence verbatim (it is still Pro + pass,
+  // exactly as `stats.player` was before the split).
+  "stats.player.career": "Career stats across every competition are on Pro and the Event Pass.",
   "scoring.audit_export": "The signed match audit trail download is on Pro and the Event Pass.",
   "discipline.enforced": "Automatic suspension tracking is on Pro and the Event Pass.",
   "tiebreakers.custom": "Custom tiebreaker order is switched off for this organisation.",

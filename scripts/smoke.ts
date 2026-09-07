@@ -2771,13 +2771,13 @@ async function passGrantsSuite(): Promise<void> {
     plainSource.status === 402 && featureKey(plainSource) === "officials.auto",
   );
 
-  // === stats.player — community false, pass true (V393) ====================
-  // W2 T13. This and the two blocks below are the rest of what V393 handed the
-  // pass, and every enforcement site for them used to resolve ORG-WIDE — so the
-  // pass was invisible and the passed competition 402'd on a feature the org
-  // had just paid for. Both directions on the SAME org throughout: a one-sided
-  // check stays green if the grant leaks org-wide, the same $29 hole in the
-  // other direction.
+  // === stats.player — free on every plan since W3-A (2026-09-06, V399) =====
+  // W2 T13 originally proved this pass-scoped (community false, pass true,
+  // V393) — the same shape as the two blocks below. W3-A split it: the
+  // per-division RECORD this endpoint reads is free everywhere now, pass or
+  // no pass, so the "sibling 402s" half of that story is gone. Rewritten to
+  // prove the record reads on BOTH competitions, not deleted, so a
+  // regression that re-guards it on plan or pass reds here.
   const passStats = await v1(s, `/api/v1/divisions/${board.pass.divId}/stats/players`);
   const plainStats = await v1(s, `/api/v1/divisions/${board.plain.divId}/stats/players`);
   check(
@@ -2785,8 +2785,25 @@ async function passGrantsSuite(): Promise<void> {
     passStats.status === 200,
   );
   check(
-    "pass grants/stats: the sibling's leaderboard is refused (402 stats.player) — no leak",
-    plainStats.status === 402 && featureKey(plainStats) === "stats.player",
+    "pass grants/stats: the sibling's leaderboard reads too (200) — W3-A froze stats.player free everywhere",
+    plainStats.status === 200,
+  );
+
+  // === stats.player.career — the leverage half `stats.player` split off ====
+  // (W3-A). `?group=sport` kept the pass-scoped story stats.player used to
+  // tell, on its own key — `person` above is seated in BOTH board divisions,
+  // so this is the happy-path wiring proof (the route reaches
+  // personCareerStats and the passed competition's own gate passes); the
+  // full bidirectional pass-scoping case (a person seated ONLY in the
+  // unpassed competition, refused with the right key) is proven as real
+  // Postgres integration coverage in
+  // server/usecases/__tests__/pass-scope-w2.test.ts, mutation-checked there —
+  // reproducing it here would mean seating a THIRD entrant into a division
+  // this suite has already started, which `createEntrants` refuses.
+  const careerRead = await v1(s, `/api/v1/persons/${person.id}/stats?group=sport`);
+  check(
+    "pass grants/career: the rollup reads for a person seated in the passed competition (200)",
+    careerRead.status === 200,
   );
 
   // === scoring.device_links — community false, pass true (V393) ============
@@ -2903,7 +2920,13 @@ async function passGrantsSuite(): Promise<void> {
       // W2 T13 — the leak half. Threading a competition id into these gates
       // must not turn a competition-scoped grant into an org-wide one: they
       // read TRUE on the passed competition above and FALSE for the org here.
-      flagOff("stats.player") &&
+      //
+      // `stats.player` LEFT this list (W3-A, 2026-09-06, V399): it is true
+      // org-wide now, on every plan — `flagOff("stats.player")` would itself
+      // be false and break this whole chain. `stats.player.career`, the
+      // split-off leverage half, took its place — it is what is still
+      // genuinely denied org-wide here.
+      flagOff("stats.player.career") &&
       flagOff("scoring.device_links") &&
       flagOff("discipline.enforced") &&
       flagOff("officials.auto"),
@@ -15799,9 +15822,13 @@ async function jul3Suite(admin: Session, orgId: string, orgSlug: string): Promis
   );
 
   // -- PROMPT-27: player stats ------------------------------------------
+  // Was "(Pro stats.player)" — the label predates W3-A (2026-09-06, V399),
+  // which froze stats.player free on every plan; the org here is still Pro
+  // (it grants it too, just no longer exclusively) so the assertion itself
+  // is untouched.
   const stats = await v1(admin, `/api/v1/divisions/${divId}/stats/players`);
   check(
-    "jul3 player stats leaderboard (Pro stats.player)",
+    "jul3 player stats leaderboard",
     stats.status === 200 && Array.isArray(v1data<{ rows: unknown[] }>(stats).rows),
   );
 

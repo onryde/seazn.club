@@ -44,7 +44,7 @@ async function seed(): Promise<{ secret: string; personId: string; divisionId: s
   const [{ id: orgId }] = await sql<{ id: string }[]>`
     insert into organizations (name, slug) values (${"Route " + suffix}, ${"route-" + suffix})
     returning id`;
-  await setOrgPlan(orgId, "pro"); // grants BOTH api.access and stats.player
+  await setOrgPlan(orgId, "pro"); // grants api.access, and stats.player.career (the ?group=sport rollup this file tests) — stats.player itself is free on every plan since W3-A
   await invalidateOrgEntitlements(orgId);
   await sql`
     insert into sports (key, name, module_version, position_catalog)

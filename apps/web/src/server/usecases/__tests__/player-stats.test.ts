@@ -18,7 +18,7 @@ import { createStages, generateStageFixtures } from "../stages";
 import { startDivision } from "../schedule";
 import { scoreEvent } from "../scoring";
 import { getLineup, putLineup } from "../fixtures";
-import { divisionPlayerStats, personStats, publicDivisionStats } from "../player-stats";
+import { divisionPlayerStats, personCareerStats, personStats, publicDivisionStats } from "../player-stats";
 
 // S8/#417 — badminton (individual/pair entrants) and volleyball (team
 // entrants) are both on the setbased kernel, which is NOT in the sibling
@@ -364,7 +364,7 @@ describe.skipIf(!HAS_DB)("player statistics (Jul3/07)", () => {
     expect(slot.squad_number).toBe(7);
   });
 
-  it("public leaderboard is consent-filtered; stats gate 402s Community", async () => {
+  it("public leaderboard is consent-filtered", async () => {
     const { auth } = await seedOrg();
     const { comp, division, fixtures, teamA, entrants } = await seedDivision(auth, "public");
     void division;
@@ -385,11 +385,59 @@ describe.skipIf(!HAS_DB)("player statistics (Jul3/07)", () => {
     const names = pub.rows.map((r) => r.name);
     expect(names.some((n) => n.includes("Minor Hidden"))).toBe(false); // initials only
     expect(names.length).toBeGreaterThan(0);
+  });
 
+  // W3-A (2026-09-06, V399): `stats.player` (the per-division record) is free
+  // on every plan now. This used to be the "stats gate 402s Community" half of
+  // the test above — a Free org reading its OWN record was refused while the
+  // public leaderboard for the same org carried no gate at all (see the
+  // inversion test further down). It reads successfully now, same as Pro.
+  it("W3-A: a Free org reads its own division player stats and person stats for free", async () => {
     const { auth: freeAuth } = await seedOrg("community");
-    const { division: freeDiv } = await seedDivision(freeAuth, "private");
+    const { division: freeDiv, teamA } = await seedDivision(freeAuth, "private");
+
+    const stats = await divisionPlayerStats(freeAuth, freeDiv.id, {});
+    expect(stats.rows).toBeDefined();
+
+    const person = await personStats(freeAuth, teamA[0]!.id);
+    expect(person.divisions).toBeDefined();
+  });
+
+  // The career rollup is the leverage half of the split and stays gated.
+  it("W3-A: a Free org is refused the career rollup", async () => {
+    const { auth: freeAuth } = await seedOrg("community");
+    const { teamA } = await seedDivision(freeAuth, "private");
+    await expect(personCareerStats(freeAuth, teamA[0]!.id)).rejects.toMatchObject({
+      featureKey: "stats.player.career",
+    });
+  });
+
+  // THE INVERSION TEST. Before W3-A, `publicDivisionStats` had NO gate at
+  // all while `divisionPlayerStats` refused a Free org outright — the public
+  // saw MORE than the paying customer, on a competition that customer had
+  // not even paid to make public in the first place (V396 makes competitions
+  // public by default). Proven here the other way round: with an EXPLICIT
+  // org override denying `stats.player`, both the signed-in owner's own read
+  // and the anonymous public read must refuse — the public must never see
+  // more than the org itself can.
+  it("W3-A: an org that overrides stats.player off is refused BOTH its own record and the public leaderboard", async () => {
+    const { auth: freeAuth } = await seedOrg("community");
+    const { division: freeDiv, comp: freeComp } = await seedDivision(freeAuth, "public");
+
+    await sql`
+      insert into org_entitlement_overrides (org_id, feature_key, bool_value, reason)
+      values (${freeAuth.orgId}, 'stats.player', false, 'test — W3-A inversion check')
+      on conflict (org_id, feature_key) do update set bool_value = false`;
+    await invalidateOrgEntitlements(freeAuth.orgId);
+
     await expect(divisionPlayerStats(freeAuth, freeDiv.id, {})).rejects.toMatchObject({
       featureKey: "stats.player",
+    });
+
+    const [org] = await sql<{ slug: string }[]>`
+      select slug from organizations where id = ${freeAuth.orgId}`;
+    await expect(publicDivisionStats(org!.slug, freeComp.slug, "open")).rejects.toMatchObject({
+      status: 404,
     });
   });
 });

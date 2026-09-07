@@ -338,3 +338,72 @@ tail still V398 with no duplicate numbers.
 - **The role-name anchors to preserve are FIVE sites, not four** — the earlier
   count in this file missed `billing.spec.ts:167`. Corrected here rather than
   left to be rediscovered.
+
+## Task 2a (W3-A), 2026-09-07 — the split, done
+
+The programme index's premises re-checked against the tree and confirmed
+current: `publicDivisionStats` genuinely had no gate, and the three
+`requireFeature("stats.player")` call sites the index's line numbers had gone
+stale on are exactly `divisionPlayerStats`/`statsReadableDivisions` (×2, one
+for `personStats`) and `personCareerStats` — matching the split the index
+already specified.
+
+**Key-split decision:** a distinct key, `stats.player.career` (design doc §2
+option A, not the "keep one key, recut every string" alternative). V399
+inserts it mirroring `stats.player`'s pre-split cells exactly (community F,
+pro/both pass rungs/enterprise T), then freezes `stats.player` itself T on
+every plan. Chosen over the single-key alternative because the pricing matrix
+needs a row that is HONEST about two different things — the record (now
+universally included) and the rollup (still a real Pro/pass differentiator) —
+and one row cannot say both without a note mechanism heavier than a second
+key. `stats.player` stays in `ENTITLEMENT_DOMAINS` (all-true is still a valid
+row, same precedent as `formats.double_elim`) rather than being deleted from
+the comparison; `stats.player.career` gets its own row right after it.
+
+**Migration:** `db/migration/deltas/V399__stats_player_career_split.sql`.
+`ls db/migration/deltas | tail` was V398 before, V399 after, no duplicate.
+
+**Enforcement:** `divisionPlayerStats`/`personStats` keep their `stats.player`
+gate calls unchanged (now free-by-default, override-denyable, same shape as
+`formats.double_elim`/`cricket.dls`). `personCareerStats` moved to a NEW
+sibling function, `careerReadableDivisions` (gated on `stats.player.career`),
+kept SEPARATE from `statsReadableDivisions` rather than parameterised — the
+pass-scoping guard statically greps for a string-literal second argument to
+`hasFeature`/`requireFeature`, and a shared function taking the key as a
+variable would go invisible to it. `publicDivisionStats` gained the missing
+gate (`stats.player`, per-competition, 404 on deny rather than 402 — no
+payment prompt for an anonymous reader) — this is the inversion fix itself.
+
+**Copy:** `pricing.pro.f4` / `_approved-dictionary-copy.ts` / CARD_SURFACES
+moved from "Player stats & scorecards" to "Career stats across competitions"
+(4 locales); `tips.billing.event-pass.body` (the in-app Event Pass upgrade
+tip) dropped "player stats" for "career stats" (4 locales, config/tips.ts EN
+source + mirror); `FEATURE_REASONS["stats.player"]` reworded to the
+override-only shape, `["stats.player.career"]` added carrying the old
+sentence. `copy-truth.ts`'s `PAID_OVERCLAIM_VOCAB` gained a third entry
+(`stats.player` / "player stats", four locales) with matching
+`dictionary-copy-truth.test.ts` coverage (clean + pre-fix-reds + falls-silent
+cases), mirroring the `formats.double_elim` precedent from Task 1's fix round.
+
+**Findings, not routed around:**
+- The brief's premise that `publicDivisionStats` "has NO entitlement gate at
+  all" was TRUE, confirmed by reading the function, not just the index.
+- `server/public-site/data.ts:761-763`'s comment ("the leaderboard TABLE
+  stays the Pro surface") was the OLD design intent, already stale evidence
+  that the public/authenticated split had drifted from what was documented —
+  updated in place.
+- Three test surfaces beyond the ones named in the dispatch carried the OLD
+  pass-scoped `stats.player` story and would have gone red unchanged:
+  `server/usecases/__tests__/pass-scope-w2.test.ts` (real-Postgres HTTP-usecase
+  pass-scoping suite), `e2e/pass-scope-w2.spec.ts` (its Playwright sibling —
+  not run this task per the environment rule, but read and rewritten so CI
+  does not inherit a stale assertion), and `scripts/smoke.ts` (two blocks: the
+  division-leaderboard pass-scoping check, and one `flagOff("stats.player")`
+  clause in the org-wide-scope check). All four rewritten to prove the NEW
+  split rather than deleted, each redded first against the old code/DB shape
+  to confirm the rewrite is load-bearing.
+- `dictionaries/en/ui.json`'s `billing.pro.f4` / `billing.community.f5` carry
+  the same now-imprecise "player stats" framing on the Settings → Billing
+  page (`app/o/[orgSlug]/settings/billing/page.tsx`) — left untouched, in
+  scope for task 3 (billing settings) per this file's own task order, not a
+  guard failure (no test cross-checks that array against the matrix).

@@ -40,7 +40,7 @@ async function seedOrg(): Promise<{ auth: AuthCtx }> {
   const [{ id: orgId }] = await sql<{ id: string }[]>`
     insert into organizations (name, slug) values (${"Career " + suffix}, ${"career-" + suffix})
     returning id`;
-  await setOrgPlan(orgId, "pro"); // stats.player is Pro-gated
+  await setOrgPlan(orgId, "pro"); // stats.player.career (the rollup this file exercises) is Pro-gated — W3-A split it from stats.player, the now-free per-division record
   await invalidateOrgEntitlements(orgId);
   await sql`
     insert into sports (key, name, module_version, position_catalog)

@@ -10,6 +10,15 @@
 //   stages.per_division.max     4     vs 2
 //   schedule.checkpoints.max    5     vs 2
 //
+// W3-A (2026-09-06, V399) SPLIT `stats.player`: the per-division RECORD
+// (`divisionPlayerStats`, `personStats`) it used to name is free on every
+// plan now, with or without a pass — it left the pass-scoped set entirely,
+// and the two cases below that exercised it were rewritten to prove exactly
+// that (the sibling competition now reads fine too). The leverage half, the
+// cross-division CAREER ROLLUP (`personCareerStats`), kept the row's old
+// shape on its own new key, `stats.player.career` — the table above is
+// otherwise unchanged, it is `stats.player`'s ROLE in it that moved.
+//
 // lib/entitlements.ts only consults `competition_passes` when a competition is
 // in scope (`resolveFromDb`'s `if (competitionId)` branch), so every gate that
 // omitted the third argument made the pass INVISIBLE: a Community org bought a
@@ -272,7 +281,12 @@ describe.skipIf(!HAS_DB)("Event Pass grants resolve against the competition (W2 
     expect(plainSuspensions).toBe(0);
   });
 
-  it("stats.player: the division leaderboard reads on the passed competition and 402s on the sibling", async () => {
+  // W3-A (2026-09-06, V399): was "…reads on the passed competition and 402s
+  // on the sibling" — `stats.player` (the per-division RECORD) left the
+  // pass-scoped set entirely; it is free on every plan now, pass or no pass.
+  // Rewritten to prove exactly that, rather than deleted, so a regression
+  // that re-guards the record on plan or pass reds here.
+  it("stats.player: the division leaderboard is free on BOTH the passed competition and the sibling (W3-A)", async () => {
     const ctx = await seedCommunityOrg();
     const passed = await seedCompetition(ctx, "LB Passed " + uniq());
     await buyPass(ctx.orgId, passed.competitionId);
@@ -281,37 +295,50 @@ describe.skipIf(!HAS_DB)("Event Pass grants resolve against the competition (W2 
     const board = await divisionPlayerStats(ctx.auth, passed.divisionId, {});
     expect(board.rows).toEqual([]);
 
-    await expectPaywall(divisionPlayerStats(ctx.auth, plain.divisionId, {}), "stats.player");
+    // Was `expectPaywall(..., "stats.player")` before W3-A.
+    const sibling = await divisionPlayerStats(ctx.auth, plain.divisionId, {});
+    expect(sibling.rows).toEqual([]);
   });
 
-  it("stats.player: a person card serves the passed competition's divisions and no other", async () => {
+  // W3-A: same split as above, on `personStats`'s two shapes (scoped to one
+  // division, and the unscoped "every division" read).
+  it("stats.player: a person card serves BOTH competitions' divisions, pass or no pass (W3-A)", async () => {
     const ctx = await seedCommunityOrg();
     const passed = await seedCompetition(ctx, "PC Passed " + uniq());
     await buyPass(ctx.orgId, passed.competitionId);
     const plain = await seedCompetition(ctx, "PC Plain " + uniq());
     const person = await makePerson(ctx, "Two Division Player");
 
-    // Asked for the passed division by name: the point is that the call gets
-    // PAST the gate. A named division is always recomputed, and `recompute`
-    // deletes that division's snapshot rows before rebuilding them from
-    // `score_events` — so nothing hand-seeded could survive this call, and the
-    // empty result is the honest expectation for a division with no events.
+    // Asked for the passed division by name. A named division is always
+    // recomputed, and `recompute` deletes that division's snapshot rows
+    // before rebuilding them from `score_events` — so nothing hand-seeded
+    // could survive this call, and the empty result is the honest
+    // expectation for a division with no events.
     const scoped = await personStats(ctx.auth, person, passed.divisionId);
     expect(scoped.divisions).toEqual([]);
 
-    // Asked for the unpassed one by name — the pass lifts ONE competition.
-    await expectPaywall(personStats(ctx.auth, person, plain.divisionId), "stats.player");
+    // Asked for the unpassed one by name — was `expectPaywall(..., "stats.player")`
+    // before W3-A. The record no longer needs a pass at all.
+    const plainScoped = await personStats(ctx.auth, person, plain.divisionId);
+    expect(plainScoped.divisions).toEqual([]);
 
-    // Asked for everything: the unpassed competition's row must not ride along.
-    // Seeded after the recompute above, and the person is rostered nowhere, so
-    // the unscoped read touches the snapshots without rebuilding them.
+    // Asked for everything: BOTH competitions' rows ride along now — before
+    // W3-A the unpassed one was filtered out here, which was the whole point
+    // of `stats.player` being pass-scoped. Seeded after the recomputes above,
+    // and the person is rostered nowhere, so the unscoped read touches the
+    // snapshots without rebuilding them.
     await seedSnapshot(ctx, passed.divisionId, person, "generic", { points: 3 });
     await seedSnapshot(ctx, plain.divisionId, person, "generic", { points: 7 });
     const all = await personStats(ctx.auth, person);
-    expect(all.divisions.map((d) => d.division_id)).toEqual([passed.divisionId]);
+    expect(all.divisions.map((d) => d.division_id).sort()).toEqual(
+      [passed.divisionId, plain.divisionId].sort(),
+    );
   });
 
-  it("stats.player: the career rollup sums the passed competition only, and 402s with no pass in it", async () => {
+  // W3-A: `stats.player.career` is the key that KEPT the pass-scoping story
+  // this whole file is about — the split's leverage half. Unchanged from the
+  // pre-W3-A `stats.player` case apart from the key name in `expectPaywall`.
+  it("stats.player.career: the career rollup sums the passed competition only, and 402s with no pass in it", async () => {
     const ctx = await seedCommunityOrg();
     const passed = await seedCompetition(ctx, "CR Passed " + uniq());
     await buyPass(ctx.orgId, passed.competitionId);
@@ -328,7 +355,7 @@ describe.skipIf(!HAS_DB)("Event Pass grants resolve against the competition (W2 
     // pass covers, so the refusal is the honest answer — and it names the key.
     const outsider = await makePerson(ctx, "Outsider");
     await seedSnapshot(ctx, plain.divisionId, outsider, "football", { goals: 1 });
-    await expectPaywall(personCareerStats(ctx.auth, outsider), "stats.player");
+    await expectPaywall(personCareerStats(ctx.auth, outsider), "stats.player.career");
   });
 
   it("stages.per_division.max: four stages on the passed competition, two on the sibling", async () => {
