@@ -910,7 +910,7 @@ test("competition desk: the division row is a CARD below md and a grid at md, no
 // composition. The gate is a CONTROL-SET diff (membership and reachability),
 // never a comparison of box sizes: a phone view showing the same controls
 // smaller is exactly the defect this asserts against.
-test("competition desk: the tool row is a phone composition below sm, not the desktop row shrunk", async ({
+test("competition desk: the tool row is a phone composition below md, not the desktop row shrunk", async ({
   page,
   request,
 }) => {
@@ -1070,11 +1070,11 @@ test("competition desk: the tool row is a phone composition below sm, not the de
     expect(openedSet.join(" | "), "the fold restores the tools the row dropped").toMatch(/Settings/);
     expect(openedSet.join(" | ")).toMatch(/Slideshow/);
   } else {
-    // 640 and up is UNCHANGED: the labelled row, and no disclosure at all.
+    // 768 and up is UNCHANGED: the labelled row, and no disclosure at all.
     await expect(more, "the phone disclosure must not appear at tablet width").toBeHidden();
     await expect(schedule).toBeVisible();
     const tabletSet = (await rowControlSet()).join(" | ");
-    expect(tabletSet, "the labelled row is unchanged at 640 and up").toMatch(/Settings/);
+    expect(tabletSet, "the labelled row is unchanged at 768 and up").toMatch(/Settings/);
     expect(tabletSet).toMatch(/Slideshow/);
     expect(tabletSet, "no disclosure at this width").not.toMatch(/More/);
   }
