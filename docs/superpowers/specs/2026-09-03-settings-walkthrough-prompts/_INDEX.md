@@ -1330,6 +1330,152 @@ dead code, no behavioral risk): Task 1's mutation testing found
 not change the function's return value for any malformed or half-filled
 input this codebase can produce.
 
+## W8 Task 9 — the second mutation sweep: 5/9 pre-existing gates killed, 4 have NO prover at all
+
+Run against `67d7f0990` on `feat/settings-walkthrough-w8`, environment label
+`w8t1` (prod build on `:3345`, db `seazn_w8t1`). Every line number below was
+re-pinned against THIS tree, not taken from the plan — the plan's table cited
+`divisions.ts:625`/`:631` and this wave's own F12 fix has since moved them to
+`:647`/`:653`. Every file was `cp -p`'d immediately before mutating and `diff`'d
+byte-identical after restoring. Thirteen mutant applications, twelve restores
+(the F1 arm took two sequential operand mutants under one backup); **all twelve
+restore diffs read empty**, and `git status` is clean at the end with zero
+production files touched.
+
+**Every prover was re-derived rather than trusted.** The plan cited a spec for
+gates 1, 2, 3, 8 and 9 and left 4, 5, 6, 7 as "confirm during Task 9". Three of
+the five citations turned out to be wrong, and one of the four unknowns turned
+out to be covered — see "Prover citations that were wrong" below.
+
+**Mutation shape, uniform across all thirteen:** `await requireFeature(…)` →
+`await requireFeature(…).catch(() => undefined)`. It is a true never-throws
+mutant that cannot break parsing or collection, so `numTotalTests` stays
+pinned (checked on every row). A one-shot replace helper refused any anchor
+that did not occur exactly once in the file.
+
+### The five gates a committed test actually kills
+
+| # | File:line | Mutation | Killed by | Observed redden |
+| --- | --- | --- | --- | --- |
+| 2 | `usecases/competitions.ts:517` | `patchCompetition`'s `discovery.listed` never throws | e2e `settings-competition-gates.spec.ts`: "discovery.listed: the form gates nothing at all — the showcase checkbox stays live and the server is the only refusal" | `PATCH /api/v1/competitions/{id} {discoverable:true}` on an org with the key denied answered **200**, expected **402** (spec `:565`). Run: 15 tests, 13 expected / 2 unexpected |
+| 3 | `usecases/competitions.ts:520` | `patchCompetition`'s `discovery.branding` never throws | vitest `usecases/__tests__/discovery.test.ts`: "discovery.branding gates tagline/hero (402); city/country stay free" | `patchCompetition(owner, id, {discovery:{tagline}})` **resolved instead of rejecting** `PaymentRequiredError`. 9 total / 8 passed / 1 failed |
+| 7 | `usecases/registrations.ts:1858` | `putRegistrationSettings`' `registration.paid` never throws | vitest `usecases/__tests__/registrations.test.ts:1900`: "community org can pick the card method, but a registration.paid deny still blocks it" | the save **resolved instead of rejecting**. 300 total / 298 passed / 2 failed (this row plus the scratch row below, which targets the same gate) |
+| 8 | `usecases/sponsors.ts:102` | `assertTierAllowed`'s `sponsors.tiers` never throws | **two provers, both run.** vitest `usecases/__tests__/sponsors.test.ts`: "community: partner org-wide is free; tiers and competition scoping 402"; e2e `settings-entitlement-gates.spec.ts`: "Case 9: switching the active org into one lacking sponsors.tiers enforces the gap on THAT org, not the one left behind" | vitest: **resolved instead of rejecting**, 4 total / 3 passed / 1 failed. e2e: `POST …/sponsors {tier:"gold"}` on org2 answered **201**, expected **402** (spec `:360`) |
+| 9 | `usecases/sponsors.ts:380` | `createSponsorPackage`'s `sponsors.monetize` never throws | vitest `usecases/__tests__/sponsor-checkout.test.ts`: "packages are Pro sponsors.monetize; deactivate is a soft flip" | `createSponsorPackage` on a community org **resolved instead of rejecting** `{status:402}`. 6 total / 5 passed / 1 failed |
+
+Gates 2 and 8 were mutated together in ONE prod build (different usecase files,
+different spec files, different assertions), then restored and rebuilt: the
+positive control after restore is **15 expected / 0 unexpected / 0 flaky**
+across both spec files, exit 0. `BUILD_ID` changed on both rebuilds
+(`sATE3ldIRWIq-Pw9l7tA3` → `t4idmOGg2ebpBg_PKAy_u` → `JFme1TKV6aU5vWQ9vo_i3`), so
+neither run tested a stale bundle.
+
+### The four gates NOTHING in the repo kills — recorded as F21
+
+| # | File:line | Feature key | What was run under the mutant | Result |
+| --- | --- | --- | --- | --- |
+| 1 | `usecases/competitions.ts:312` | `discovery.listed` (create) | disposable scratch spec + `discovery.test.ts` + `public-dashboard-quota.test.ts` | **36 total, 35 passed, 1 failed — the failure is the SCRATCH row.** No committed test reddens |
+| 4 | `usecases/divisions.ts:647` | `formats.advanced` (`auto_progress`) | scratch + `format-ext.test.ts`, `division-settings.test.ts`, `divisions.test.ts`, `officials.test.ts`, `registration-status-read.test.ts`, `slug-hygiene.test.ts`, `slug-invalidation.test.ts` | **117 total, 116 passed, 1 failed — the SCRATCH row** |
+| 5 | `usecases/divisions.ts:653` | `news.auto` (`auto_posts`) | scratch + the same seven plus `schedule-court-candidates.test.ts`, `registration/__tests__/config-panel-roundtrip.test.ts`, `org-posts-digest.test.ts` | **141 total, 140 passed, 1 failed — the SCRATCH row** |
+| 6 | `usecases/registrations.ts:1804` | `registration.enabled` | scratch + `connect-onboarding-gate.test.ts`, `registrations-intake-gate.test.ts`, `registrations.test.ts`, `registration-submit.test.ts` | **300 total, 299 passed, 1 failed — the SCRATCH row** |
+
+**The scratch spec, and why it exists** (W3 Task 5's mutant-6 precedent —
+`e2e/walkthrough/__scratch-mutant6.spec.ts` there,
+`src/server/usecases/__tests__/__scratch-w8t9-gates.test.ts` here; written, run,
+and DELETED before this commit — `git status` after confirms it is gone). Its
+only job is to separate **"this gate is untested"** from **"this gate is
+broken"**. It drives each of the four usecases directly against an org that
+genuinely lacks the key (a plan with no subscription row for
+`formats.advanced`/`news.auto`, which are false on community; an
+`org_entitlement_overrides` deny for `discovery.listed`/`registration.enabled`,
+which are TRUE on every plan) and asserts `{status:402, featureKey}`. Against
+the clean tree it is **5/5 green** — so all four gates (and gate 7's) genuinely
+fire. Under each mutant it is the ONLY thing that reddens.
+
+**How the "no prover" claim is bounded, since absence cannot be proven by
+running one set of files.** Read from the live matrix on this run's database
+(`select feature_key, plan_key, bool_value from plan_entitlements`):
+`discovery.listed` and `registration.enabled` are **TRUE on every plan**, so
+the only way any test can reach their refusal is an explicit
+`org_entitlement_overrides` deny — which must name the key as a string. A
+full-tree grep for each key across `apps/web/src`, `apps/web/e2e` and
+`apps/web/scripts` finds no such deny for `registration.enabled` at all, and
+for `discovery.listed` only `public-dashboard-quota.test.ts` (which GRANTS it)
+and `settings-competition-gates.spec.ts` (which denies it but only PATCHes,
+i.e. gate 2). `formats.advanced` and `news.auto` are false on community, so a
+refusal needs a community org calling `patchDivision` with the field set true:
+`auto_progress` appears in exactly one test call site
+(`format-ext.test.ts:243`, on a **pro** org — `seedOrg()` there defaults to
+`"pro"`), and `auto_posts` reaches `patchDivision` only from
+`e2e/news.spec.ts:38`, which expects **200** on the shared Pro org. Every other
+`auto_posts` in the tree is a direct SQL insert or a `false` fixture value.
+
+### Prover citations that were wrong — corrections to the plan's own §0 table
+
+1. **Gate 7's cited prover is not a prover.** The plan named
+   `settings-registration-bounds.spec.ts` ("W7's card-fee Connect-gate proof
+   already exercises this"). It does not: `requireFeature("registration.paid")`
+   sits INSIDE the `if (method === "stripe")` block, one line BELOW
+   `if (!org.charges_enabled)`, and that spec's card-fee tests assert the
+   **CONNECT_REQUIRED** sentence — they run in a state where the Connect gate
+   answers first and this gate is never reached. The real prover is
+   `usecases/__tests__/registrations.test.ts:1900`, found by the mutation run
+   itself.
+2. **Gate 9's cited prover is not a prover.** `settings-sponsor-monetize.spec.ts`
+   is a happy-path spec; its only `sponsors.monetize` touch is
+   `setBoolEntitlementOverrideSql(orgId, "sponsors.monetize", true)` on a Pro
+   org — a no-op the file's own header comment already flags. Nothing in it can
+   redden on this gate. The real prover is
+   `usecases/__tests__/sponsor-checkout.test.ts`.
+3. **Gate 1 and gate 2 are NOT one gate with one prover.**
+   `settings-competition-gates.spec.ts` proves the PATCH copy (`:517`) and
+   nothing anywhere proves the CREATE copy (`:312`), even though the create
+   path's own source comment says it "follows the exact PATCH rules".
+
+### A method note that cost a wrong conclusion, briefly
+
+`grep … | head -N` inside this toolchain silently truncates, and a truncated
+grep is indistinguishable from an exhaustive one. This task's first pass
+concluded "gate 7 has no prover" from a `head -12`'d grep of
+`registration.paid`; the mutation run produced TWO reds instead of one and
+named `registrations.test.ts` as the second, which is the only reason the
+conclusion was corrected. **A mutation run is a stronger instrument than the
+grep that predicted its outcome** — where they disagree, the run wins. Every
+"no prover" row above was therefore established by running the mutant, never by
+the grep alone; the grep is used only to bound WHICH files needed running.
+
+### This wave's own three new guards, re-confirmed in the same pass
+
+Each was already mutation-proved inside its own task (Task 1: the F1 unlimited
+arm; Task 4: the F8 date-order guard including its comparator boundary; Task 6:
+the F12 cutoff merge-check including the `??` boundary mutant). Folded into this
+sweep as one record:
+
+| Guard | Re-confirmation | Result |
+| --- | --- | --- |
+| **F1** — `settings/add-ons/page.tsx:101`, `view.orgCap === null && !view.addonAvailable` | RE-MUTATED, one operand at a time | Clause 2 dropped (`&& !view.addonAvailable` removed) → "STILL gives the control to a payer whose unlimited cap is a staff override" fails, `expected undefined to be defined`. Clause 1 disabled (`false && …`) → "tells a plan with no ceiling and nothing to sell that there is nothing to add" fails on the missing sentence. **26 total both times**, 25/1 each — two operands, two DIFFERENT killers |
+| **F12** — `usecases/divisions.ts:736`, `patch.age_cutoff_day !== undefined ? … : …` | RE-MUTATED with the boundary mutant a shape-only sweep leaves alive (`?? currentCutoff.age_cutoff_day`) | `division-settings.test.ts` **23 total, 21 passed, 2 failed** — "an explicit null on the DAY is rejected 422 against the stored month" resolves instead of rejecting, and "clearing BOTH cutoff halves to null is still allowed" now throws. Total pinned at 23 |
+| **F8** — `usecases/competitions.ts`, the merged `mergedEnds < mergedStarts` check | Green re-run of its prover file only, NOT re-mutated (Step 3 of the brief asks for re-confirmation without re-mutating; the guard is e2e-only and each mutant costs two prod builds) | `settings-competition-gates.spec.ts` passes inside the 15/15 positive control above, case #18 and its boundary row included. Its seven original kills stand in Task 4's own report |
+
+### Cost, for whoever plans the next sweep
+
+Eleven of the thirteen mutants were proved in **vitest, calling the usecase (or
+rendering the page) directly, with no rebuild** — seconds each, against ~2
+minutes of prod build per mutant in W3's e2e-only sweep. Only gate 2 has an e2e-only prover, and gate 8's
+e2e prover was folded into the same build to keep the walkthrough matrix's own
+claim honest rather than resting on its vitest twin. Two builds total for the
+whole sweep (mutate, then restore), against W3's fourteen. **Rule for the next
+one: mutate a usecase guard in vitest and reserve the prod build for gates whose
+only prover is a spec.** e2e wall clock: 29.8s mutated, 23.3s restored, both
+`--workers=1`, both including the two `auth.setup` deps.
+
+**One environment trap worth writing down:** a walkthrough Playwright run
+launched without `DATABASE_URL` exported fails in `auth.setup.ts` at
+`setOrgPlanBySql` ("DATABASE_URL required for direct DB setup in e2e"), which
+reports as **1 expected / 13 skipped / 1 unexpected** — a shape that reads like
+a mutant kill if the failing test's NAME is not read. `eval "$(seazn-env.sh env
+--label <l>)"` in the same shell call fixes it.
+
 ## False premises found
 
 Recorded so the next session does not re-derive them.
