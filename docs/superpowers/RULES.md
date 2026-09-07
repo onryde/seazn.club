@@ -99,3 +99,62 @@ Regenerate/update if it has.
   the fix would widen the blast radius past the task's stated files, in
   which case stop and escalate rather than silently expanding scope or
   silently ignoring it.
+
+## Owner checklist (2026-09-07)
+
+Owner-given, verbatim. Binding on every design, plan task and dispatch
+brief from this date. A task's acceptance criteria name the rows it
+satisfies; a reviewer checks the rows, not the prose. Three groups.
+
+### VERIFY-AS-CUSTOMER
+
+- Verify visually, always — screenshot before claiming done, don't infer
+  from code/tests alone
+- Show ≥2 UI options before building
+- Mobile-first, never shrink — mobile view designed, not shrunk from desktop
+- Compare control SET (membership/order/repeats), not box size, across widths
+- No horizontal scroll at 320/768/1280 — split on overflow-x (auto/scroll =
+  feature rail, hidden/visible = real clip)
+- Button size, text alignment, text size, cards — check every width, not
+  just desktop
+- Zoom in/out — layout holds at non-100% zoom, not just viewport swaps
+- truncate needs min-w-0 on WHOLE ancestor chain
+- Scrolling rail needs tabindex="0" + role + accessible name
+
+### PRODUCT-OWNER LENS
+
+- Always give a recommendation, framed as product owner — never just
+  present options and stop
+- Recommendation states the OWNER's value/cost, not just "if wrong: X" —
+  ties back to what user/business gets
+- Never file issues/PRs unprompted
+- Review findings → written to disk, not just chat
+- Brainstorm BEFORE e2e/smoke — align on approach first
+- A comment in code is a HYPOTHESIS, not evidence — verify against behavior
+- One authority per fact — second source is a fallback, not a tiebreaker
+- Billing/money claims tested against Stripe SANDBOX, never assumed
+- Surface bench/product gaps to owner rather than silently absorbing them
+- Never carry one session's approval as another's — recommendation goes to
+  the peer, not "owner said X" secondhand
+
+### TEST-CASE DESIGN
+
+- Pin the VALUE a control opens/seeds at, not just that it's reachable
+- Derive expected values from the engine's own declarations, never
+  hand-typed constants
+- Include ≥1 case where right answer differs from the wrong answer's
+  constant, or the test can't witness the regression
+- Ladder/rule tests need an ORDERING-differential case, not just membership
+- Empty-set case must be checked explicitly — it vacuously satisfies most
+  "contains X" rules and silently defaults
+- Negative assertion needs its positive pair (prove both directions)
+- Boundary row can subtract a mutant kill — check it doesn't fake coverage
+- Derived bound is a tautology — don't test a value against itself
+- Mutate the MONEY path specifically — money code needs its own mutant, not
+  incidental coverage
+- Mutate per SURFACE / per UNION MEMBER, not per test — a whole-function
+  mutant can mask an uncovered branch
+- Report mutant KILLER LIST, not just count — a test dying under every
+  mutant fakes kills
+- One sample isn't a parity sweep — enumerate serve/rotation/alternation
+  tables, not one lucky case
