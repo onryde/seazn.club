@@ -128,3 +128,31 @@ The reason is a coincidence that holds for every reachable call shape, not just 
 Verified rather than assumed: mutating line 192 instead (the genuine inversion check) reddened 1/19 tests on the exact `"18:00","09:00"`/`"09:00","09:00"` cases — confirming line 192 is the load-bearing guard and line 191 is the redundant one, not that the suite is blind to guards generally.
 
 **Status:** recorded, not fixed. Dead code, no behavioral risk — line 191 is redundant with a deeper check inside `isoFromZonedParts`, not a missing check with a live consequence. Removing it is optional cleanup whenever `schedule-board.ts` is next touched, not a defect fix. Full mutation-testing trace: `.superpowers/sdd/2026-09-07-settings-walkthrough-w6/task-1-report.md`, "Case #17: unit test vs. the one browser assertion".
+
+## W7
+
+F-numbers continue W6's sequence so every id in this file stays unique.
+
+### F12 (real, low severity — script-only, NOT fixed) — an explicit `null` on ONE half of the age cutoff is accepted, and stores an orphan half
+
+Found: Task 2, `settings-registration-bounds.spec.ts`, while confirming the plan's Step 1 both-or-neither prediction against a running server rather than against `checkAgeCutoff`'s source.
+
+`PATCH /api/v1/divisions/{id}` refuses a single-field cutoff patch when the field carries a VALUE — `{ "age_cutoff_month": 6 }` answers 400 with `AGE_CUTOFF_BOTH_OR_NEITHER`, which is what the wave's own test pins. It does **not** refuse the same shape when the field carries an explicit `null`.
+
+**Reproduction — driven live against the running server (sw7, 2026-09-07), not reasoned about.** With `age_cutoff_month = 9, age_cutoff_day = 1` already stored:
+
+- `PATCH { "age_cutoff_day": null }` → **200**, and the row reads back `age_cutoff_month: 9, age_cutoff_day: null`.
+- `PATCH { "age_cutoff_month": null }` → **200**, and the row reads back `age_cutoff_month: null, age_cutoff_day: 1`.
+
+Both are states the both-or-neither invariant says cannot exist.
+
+**Two guards, and neither can see it.**
+
+1. `checkAgeCutoff` (`api-v1/schemas.ts`) tests `(v.age_cutoff_month != null) !== (v.age_cutoff_day != null)`. `PatchDivision` is `.partial()`, so a field the caller omitted arrives as `undefined` and an explicit null arrives as `null` — and `!=` null collapses the two. For `{ age_cutoff_day: null }` the expression reads `false !== false`, so nothing fires. Unlike `age_min`/`age_max`, which `patchDivision` MERGES against the stored row before deciding (`usecases/divisions.ts`, the RS004 review finding-1 fix), the cutoff pair has no merge step at all — the guard only ever sees the request body.
+2. The DB CHECK cannot backstop it either, for a SQL three-valued-logic reason rather than a missing clause. `divisions_age_cutoff_check` is `((month IS NULL AND day IS NULL) OR ((month >= 1 AND month <= 12) AND (day >= 1 AND day <= 31)))`. With `month = NULL, day = 1` the first disjunct is `false` and the second evaluates to `NULL`; `false OR NULL` is `NULL`, and a CHECK constraint passes on `NULL`. So `isAgeCutoffCheckViolation` (`usecases/divisions.ts:842`) never fires for a half-null row — only for a row that violates the RANGE.
+
+**It carries an F4/F8-shaped false premise on top.** `api-v1/schemas.ts:263-267` states the gap is already covered — "usecases/divisions.ts's isAgeCutoffCheckViolation backstops the READ COMMITTED race a merge-and-validate guard can't see, same pattern as AGE_MAX_BEFORE_MIN/checkAgeBand above". It is not the same pattern: `checkAgeBand` HAS a merge-and-validate guard in the usecase and `checkAgeCutoff` has none, and the CHECK the comment leans on is structurally unable to reject a half-null row. A later session re-deriving this from the comment derives it wrong.
+
+**Consequence, and why it is low severity.** The orphan is not inert: `ageBandEligibilityIssues` (`lib/registration-rules.ts`) resolves the cutoff as `age_cutoff_month ?? 1` / `age_cutoff_day ?? 1`, so a row left at `month = 9, day = null` keeps evaluating ages at **1 September** when the organiser's intent in clearing the day was to return to the 1 January default. (The mirror case, `month = null, day = 1`, resolves to 1 January and is harmless.) It bites only where the division also carries an `age_min`/`age_max`, since that function returns early with no band. And it is script-only from the product: the config panel always sends BOTH fields on every save (`toDivisionPatchBody`, `registration-hub-config-state.ts:129-130`) and its month `<select>` nulls the day whenever the month goes null (`registration-hub-config-panel.tsx:705`). `/api/v1` is a public API, so "the panel never sends it" bounds the blast radius rather than closing it.
+
+**Status:** open, deliberately NOT fixed and NOT asserted against in W7 — the same call F8 records for the same shape. Pinning the 200 would freeze a live bug as the suite's expected value (AGENTS.md failure class 4); asserting the 400 it ought to give would red the branch for a defect this test-only wave did not create; and patching production code mid-wave is outside a test-only wave's remit. The fix is a merge-against-the-stored-row check for the cutoff pair inside `patchDivision`, exactly like the one `age_min`/`age_max` already has, plus correcting the `schemas.ts` comment (and, optionally, rewriting the CHECK as `num_nulls(age_cutoff_month, age_cutoff_day) <> 1` so the constraint can actually hold the invariant). When it lands, its case belongs in `settings-registration-bounds.spec.ts`'s both-or-neither test, where a comment already marks the spot.
