@@ -284,6 +284,56 @@ export const PASS_RUNG_MARKETING_KEY: Record<SellablePassKey, DictionaryKey> = {
 };
 
 /**
+ * Does a rung letter earn its place on a surface that is SELLING a pass?
+ *
+ * A size code is a disambiguator, and it only has a job when there is more
+ * than one size to be confused with. With a single rung on sale, "M" names a
+ * size that appears nowhere else the reader can see — not on `/pricing`'s
+ * ticket stub, not in its matrix column, not on the invoice — and a lone
+ * letter with no sibling reads as a product they have not been shown rather
+ * than as the one they are looking at.
+ *
+ * Takes the COUNT rather than reading `SELLABLE_PASS_KEYS` itself so a test
+ * can drive both directions; every production caller passes
+ * `SELLABLE_PASS_KEYS.length`, so the letter returns on its own the day a
+ * second rung goes back on sale instead of needing four surfaces remembered.
+ *
+ * **The catalogue's count, never the reader's.** `passLadderOptions` filters
+ * to the rungs THIS org may still buy (#327 — on a paid plan, only rungs that
+ * beat it), so a Pro org can be shown one option out of two on sale. That is a
+ * one-org view of a two-rung product, and the letter must still be printed:
+ * the sibling exists on every other surface, which is exactly the confusion
+ * this answers.
+ *
+ * Deliberately `> 1` and not `>= 1`: at zero there is nothing on sale, so
+ * there is no selling surface to name a rung on, and the answer is the same
+ * "no" as at one.
+ *
+ * NOT for surfaces describing a pass the org HOLDS. `PASS_RUNG_NAME_KEY` and
+ * `passActiveLabel` stay complete over `PassKey` for that reason: L is off
+ * sale but rows holding it are live, and a $44.99 buyer reading their own
+ * competition as the $11.99 product is the v17 #294 mis-sale exactly.
+ */
+export function rungNamingRequired(sellableCount: number): boolean {
+  return sellableCount > 1;
+}
+
+/**
+ * What to call a rung being OFFERED — "Event Pass M" while two sizes sell,
+ * plain "Event Pass" while one does.
+ *
+ * The offer/hold split this expresses is the same one `PASS_RUNG_MARKETING_KEY`
+ * draws against `PASS_RUNG_NAME_KEY` above; this is that rule applied to the
+ * in-app buy page, which had been borrowing the hold-side map and so kept
+ * printing a letter after the ruling that removed it from `/pricing`.
+ */
+export function offeredRungName(dict: Dict, rung: PassKey, sellableCount: number): string {
+  return rungNamingRequired(sellableCount)
+    ? t(dict, PASS_RUNG_NAME_KEY[rung])
+    : t(dict, "upgrade.rung.plain");
+}
+
+/**
  * Which localised sentence a failed checkout gets, from the HTTP status alone.
  *
  * The buyer must never be shown the server's own text. Every message

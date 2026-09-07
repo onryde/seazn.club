@@ -22,7 +22,7 @@ import {
   passPrice,
   proPrice,
 } from "../currency";
-import { lowestPricedRung } from "../pass-ladder";
+import { lowestPricedRung, rungNamingRequired } from "../pass-ladder";
 import { sql } from "@/lib/db";
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -253,20 +253,21 @@ describe("the /pricing crossover line states its own assumption, in every locale
     });
 
   /**
-   * Whether the crossing must literally name the rung it is true of.
+   * Whether the crossing must literally name the rung it is true of —
+   * `rungNamingRequired`, IMPORTED from lib/pass-ladder.ts rather than
+   * redeclared here.
    *
-   * Derived from SELLABLE_PASS_KEYS (lib/currency.ts) — never a literal
-   * here — so this flips back on its own the day a second rung returns to
-   * sale, instead of needing this file remembered as one of the places that
-   * ruling touches. True only with MORE THAN ONE rung on sale: that is
-   * exactly when "the pass" is ambiguous between rungs, which is the
-   * defect this guard exists to catch (see the block comment below). With
-   * one rung, or none, there is nothing to disambiguate FROM — naming one
-   * would print a size letter that exists nowhere else on the page (both
-   * the ticket stub and the matrix column header read plain "Event Pass"
-   * with one rung sellable).
+   * It began life as a local copy in this file, and then W3 needed the same
+   * question answered by the in-app buy page (`pass-upgrade.tsx`'s button and
+   * size stamp, `upgrade/page.tsx`'s comparison header) — which is exactly how
+   * two surfaces end up disagreeing about one ruling. Promoted to the module
+   * that owns the ladder; this file keeps its wording, not its own arithmetic.
+   *
+   * Its own truth table is pinned in `pass-rung-naming.test.ts` against
+   * LITERAL counts. That separation matters: every assertion below derives its
+   * expectation from this same predicate, so a mutation to the predicate moves
+   * the expectation with it and none of them could witness it.
    */
-  const rungNamingRequired = (sellableCount: number): boolean => sellableCount > 1;
 
   /**
    * A locale FAULTS if it drops `{pass}` — the crossing is always true of
