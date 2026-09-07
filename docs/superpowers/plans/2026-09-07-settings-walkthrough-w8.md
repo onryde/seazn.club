@@ -41,7 +41,7 @@ wave:
 | F1 | **IN — Task 1** | One branch in one page component's ladder, contained. |
 | F2 | **IN — Task 2** | Copy-only, `plural()` already exists and is used elsewhere in this repo — no new i18n machinery needed. |
 | F3, F4 | **IN — Task 3** | Comment-only, FINDINGS.md's own Status lines say "fix whenever the file is next touched" — this wave touches both files for F1/F8's own reasons, so do it now. |
-| F5 | **IN, SCOPED DOWN — Task 8** | Re-researched below: the full fix (a tagged result type) has THREE production call sites outside the billing page (`pass-credit.ts`, `lib/billing.ts`), not one — bigger than FINDINGS.md's entry implied. W8 ships the safe, contained half (the outage is no longer silent — it is logged) and defers the page's distinct-error-state UI to a follow-up wave, which is a real, recorded scope-down, not a silent partial fix. |
+| F5 | **IN, SCOPED DOWN — Task 8** | **[CORRECTED W8 Task 8 re-review — this cell originally read "the full fix (a tagged result type) has THREE production call sites outside the billing page (`pass-credit.ts`, `lib/billing.ts`), not one". That is FALSE and is retracted.]** `getBillingOverview` has exactly ONE production call site, `app/o/[orgSlug]/settings/billing/page.tsx:128`; `pass-credit.ts` and `lib/billing.ts` only NAME it in JSDoc prose and neither imports it. The full fix is still bigger than FINDINGS.md's entry implied, but for a different reason — it needs a visible distinct-error UI state, four-locale copy for it, a re-gate of `CancelSubscriptionButton`, and a return type separating the function's THREE null producers — not because of a call-site count. W8 ships the safe, contained half (the outage is no longer silent — it is logged) and defers the page's distinct-error-state UI to a follow-up wave, which is a real, recorded scope-down, not a silent partial fix. |
 | F6 | **OUT — defer** | FINDINGS.md's own Status line: "larger than the small mechanical fixes… better suited to a dedicated task" (four locale dictionaries plus a `CANCEL_REASONS` key per reason, on a money-adjacent dialog). Confirmed still true by inspection — untouched by this plan. |
 | F7 | **OUT — defer** | FINDINGS.md's own Status line: "a schema column plus a re-send/copy affordance plus supersede-on-remint, which is a task, not an inline fix." Confirmed still true — no session has scoped this since W4. |
 | F8 | **IN — Task 4** | One merge-check mirroring an existing pattern (`age_min`/`age_max`), one file, one existing test file with the exact spot already marked. |
@@ -80,11 +80,14 @@ task. W8 ships option (a) only (Task 7); F15 and full option (b) are OUT,
 recorded for W8's own follow-up or a dedicated future wave.
 
 **F5's true scope, corrected from FINDINGS.md's estimate.**
-`getBillingOverview` (`apps/web/src/server/usecases/billing-manage.ts:247`)
+`getBillingOverview` (`apps/web/src/server/usecases/billing-manage.ts:248` —
+the `:247` first written here was the JSDoc's closing `*/`, and W8's own
+`log` import then shifted this whole function down one more line)
 has a legitimate early return for "no customer" BEFORE its `try` block
-(`:249`, `if (!sub?.stripe_customer_id) return null;`) — so the `catch {
-return null; }` at the end of the function (confirm current line number; was
-`:316-319` in the finding's own citation) is EXCLUSIVELY the fetch-failed
+(`:250`, `if (!sub?.stripe_customer_id) return null;`; `:249` as first
+written) — so the `catch { return null; }` at the end of the function
+(`:318-321` today; this line originally said "confirm current line number;
+was `:316-319` in the finding's own citation") is EXCLUSIVELY the fetch-failed
 case already, no null-customer conflation inside the catch itself. Good news:
 a fix does not need to disentangle two meanings inside one catch. Bad news:
 `getBillingOverview` has exactly ONE production caller, the billing page
@@ -933,7 +936,7 @@ are UNCHANGED by this task (deliberately, see §0's scope-down).
 - [ ] **Step 1: Read the current catch block exactly**
 
 `apps/web/src/server/usecases/billing-manage.ts` (re-confirm current line —
-was cited around `:316-319`):
+was cited around `:316-319`; it is `:318-321` after W8's own log line):
 
 ```ts
   } catch {
@@ -943,7 +946,8 @@ was cited around `:316-319`):
 ```
 
 Confirm this catch sits AFTER the legitimate `if (!sub?.stripe_customer_id)
-return null;` early return (near the top of the function, `:249`) — the two
+return null;` early return (near the top of the function, `:250`; `:249`
+before W8's log import shifted it) — the two
 `return null`s mean different things at the call site today (no customer vs.
 fetch failed), and this task does NOT disentangle that (see §0) — it only
 makes the fetch-failed case OBSERVABLE.
@@ -1088,8 +1092,10 @@ appear in this branch's diff; (e) confirm Task 7's F15 entry accurately
 describes what Task 7 itself did NOT fix (it should read as a scope
 boundary, not an apology); (f) confirm Task 8's logging addition genuinely
 changes nothing about `getBillingOverview`'s return value or any caller's
-behavior (a `git diff` on the three other call sites should show ZERO
-changes); (g) confirm Task 9's sweep actually ran against the WHOLE affected
+behavior (a `git diff` on the single call site,
+`app/o/[orgSlug]/settings/billing/page.tsx:128`, should show ZERO changes —
+this item originally said "the three other call sites", which do not exist;
+see the F5 row in §0's table); (g) confirm Task 9's sweep actually ran against the WHOLE affected
 spec files (never a `-g` slice, per this programme's own AGENTS.md class 21
 lesson) and that every "no prover found" case was recorded as a finding, not
 silently dropped; (h) this is the programme review — also confirm every
