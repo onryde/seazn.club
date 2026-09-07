@@ -5,7 +5,6 @@ import { DOUBLE_SUBMIT_WINDOW_MS } from "../src/components/v2/scorepad/use-pad-p
 import {
   HIT_TARGET_FLOOR_PX,
   consentedAnonymousState,
-  expectNoCookieBanner,
   floorViolationLines,
   hitTargetFloorReport,
   measureHitTargets,
@@ -210,7 +209,21 @@ test("badminton v3 device link at 320: a drained dock leaves a tappable Partial 
     // is the tightest space in the pad — it already carries #seq, a caption, a
     // provenance line and Void.
     await openDeviceLink(page, secret);
-    await expectNoCookieBanner(page, "anonymous scorer context");
+    // Assert the SEED, not a downstream effect racing something else's own
+    // dismissal — see task-2-report.md, Step 7: `expectNoCookieBanner` here
+    // raced this file's own `openDeviceLink`'s reactive Accept-click (and,
+    // under load, the SSR-visible pad winning against the hydration-gated
+    // banner), so it passed in both the seeded and unseeded states. The
+    // consent keys are deterministic context state — read them directly.
+    const { CONSENT_KEY, CONSENT_VERSION_KEY, COOKIE_POLICY_VERSION } = await import("../src/lib/consent");
+    const seeded = await page.evaluate(
+      ([k, v]) => ({ choice: localStorage.getItem(k), version: localStorage.getItem(v) }),
+      [CONSENT_KEY, CONSENT_VERSION_KEY],
+    );
+    expect(
+      seeded,
+      "the anonymous context did not carry seeded consent, so the banner will mount and race this spec",
+    ).toEqual({ choice: "rejected", version: COOKIE_POLICY_VERSION });
     await rallyWithDrainedDock(page);
 
     // The defect: the rally is on the ledger carrying `wonBy` and nothing else.

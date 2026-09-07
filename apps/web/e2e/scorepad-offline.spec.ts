@@ -3,7 +3,7 @@ import { fileURLToPath } from "node:url";
 import { test, expect, type APIRequestContext, type Page } from "@playwright/test";
 import { apiJson, seedRosteredFixture, expectNoHorizontalScroll, TAG, type RosteredFixture } from "./helpers";
 import { DOUBLE_SUBMIT_WINDOW_MS } from "../src/components/v2/scorepad/use-pad-pipeline";
-import { consentedAnonymousState, expectNoCookieBanner } from "./scorepad-a11y-kit";
+import { consentedAnonymousState } from "./scorepad-a11y-kit";
 
 // S10/#419 W8 — the three acceptance criteria this file proves: the offline
 // queue survives tab death, scoring continues with the network down, and it
@@ -212,7 +212,21 @@ test("tab death mid-queue: the durable queue survives a real reload and drains i
   try {
     const page = await ctx.newPage();
     await openDeviceLink(page, secret);
-    await expectNoCookieBanner(page, "anonymous scorer context");
+    // Assert the SEED, not a downstream effect racing something else's own
+    // dismissal — see task-2-report.md, Step 7: `expectNoCookieBanner` here
+    // raced `openDeviceLink`'s own reactive Accept-click (and, under load,
+    // the SSR-visible scorebug winning against the hydration-gated banner),
+    // so it passed in both the seeded and unseeded states. The consent keys
+    // are deterministic context state — read them directly instead.
+    const { CONSENT_KEY, CONSENT_VERSION_KEY, COOKIE_POLICY_VERSION } = await import("../src/lib/consent");
+    const seeded = await page.evaluate(
+      ([k, v]) => ({ choice: localStorage.getItem(k), version: localStorage.getItem(v) }),
+      [CONSENT_KEY, CONSENT_VERSION_KEY],
+    );
+    expect(
+      seeded,
+      "the anonymous context did not carry seeded consent, so the banner will mount and race this spec",
+    ).toEqual({ choice: "rejected", version: COOKIE_POLICY_VERSION });
 
     const eventsUrl = (url: URL): boolean => url.pathname === `/api/v1/fixtures/${fixture.fixtureId}/events`;
     await page.route(eventsUrl, (route) => route.abort());
