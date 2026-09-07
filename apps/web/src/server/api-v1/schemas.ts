@@ -273,17 +273,42 @@ function checkAgeBand(
 // sees the request BODY only, so it catches the single-request case and
 // answers 400 with an issue on `age_cutoff_day`. Since W8/F12 the SAME
 // sentence is also raised as a 422 by `patchDivision` (usecases/divisions.ts),
-// which merges the patch against the STORED row before deciding, exactly like
-// AGE_MAX_BEFORE_MIN/checkAgeBand above — the constant is exported for that
-// use, so the two layers cannot drift apart. `isAgeCutoffCheckViolation` then
-// maps the DB CHECK to the same 422 as a READ COMMITTED race backstop.
+// which merges the patch against the STORED row before deciding — the
+// constant is exported for that use, so the two layers cannot drift apart.
 //
 // The merge-check is not redundant with this one, and the reason is subtle:
 // `!= null` cannot distinguish an OMITTED field from one set to an explicit
 // `null`, so `{ age_cutoff_day: null }` against a stored month reads
-// `false !== false` here and passes. Nor does the DB CHECK save it — with one
-// side NULL its second disjunct is NULL, and `false OR NULL` satisfies a
-// CHECK — so before F12 that patch answered 200 and stored an orphan half.
+// `false !== false` here and passes. Before F12 that patch answered 200 and
+// stored an orphan half.
+//
+// THE DB CHECK IS NOT A BACKSTOP FOR THIS RULE, and that is where the cutoff
+// pair differs from AGE_MAX_BEFORE_MIN/checkAgeBand above — do not read the
+// two as the same three-layer arrangement. `divisions_age_cutoff_check`
+// (V380) is
+//
+//   (month is null and day is null)
+//   or (month between 1 and 12 and day between 1 and 31)
+//
+// and with exactly one side NULL the first disjunct is false while the second
+// is NULL (`null between 1 and 12` is NULL), so the whole predicate is NULL —
+// which SATISFIES a CHECK under SQL's tri-valued logic. A one-sided orphan
+// passes it, always. The only thing that constraint can ever refuse is a
+// RANGE violation with BOTH halves present, which is a third rule neither of
+// the two refinements here states; `isAgeCutoffCheckViolation`
+// (usecases/divisions.ts) maps that to a 422 carrying this sentence, which is
+// the wrong sentence for what actually went wrong — harmless today only
+// because both zod's own `.min`/`.max` below and (on a PATCH) the merge-check
+// sit in front of it, so nothing reaches it over /api/v1.
+//
+// Two consequences worth stating plainly. `patchDivision`'s merge-check is
+// the SOLE enforcement point for both-or-neither — there is no database
+// invariant underneath it. And READ COMMITTED therefore has a residual this
+// pair cannot close the way the age band closes it: two concurrent PATCHes
+// that each read the pre-commit row can still commit an orphan between them.
+// Known and accepted (W8/F12), not a TODO — closing it needs a constraint
+// that can see the case, e.g. `num_nulls(age_cutoff_month,
+// age_cutoff_day) <> 1`, which is its own migration.
 export const AGE_CUTOFF_BOTH_OR_NEITHER =
   "age_cutoff_month and age_cutoff_day must be set together, or both left null.";
 

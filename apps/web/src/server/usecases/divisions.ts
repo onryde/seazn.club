@@ -56,7 +56,10 @@ export interface DivisionRow {
   category: string | null;
   age_min: number | null;
   age_max: number | null;
-  /** RS007/V380: both-or-neither (DB CHECK `divisions_age_cutoff_check`).
+  /** RS007/V380: both-or-neither — enforced by `checkAgeCutoff` (schemas.ts)
+   *  on the request body and by `patchDivision`'s merge-check below on the
+   *  merged row, NOT by `divisions_age_cutoff_check`, which a one-sided
+   *  orphan satisfies (see that merge-check's own comment).
    *  Null defaults to 1 January of the season-start year
    *  (registration-rules.ts's `ageBandEligibilityIssues`). */
   age_cutoff_month: number | null;
@@ -591,11 +594,18 @@ function isAgeBandCheckViolation(err: unknown): boolean {
   );
 }
 
-// Same precedent, for the RS007/V380 cutoff columns' own CHECK
-// (divisions_age_cutoff_check — both age_cutoff_month/age_cutoff_day or
-// neither). checkAgeCutoff (schemas.ts) catches the common single-request
-// case; this is the READ COMMITTED race backstop, same role
-// isAgeBandCheckViolation plays for the age band above.
+// The RS007/V380 cutoff columns' own CHECK (divisions_age_cutoff_check).
+// NOT the same role isAgeBandCheckViolation plays above, and the difference
+// matters: that constraint's second disjunct is NULL when exactly one half is
+// NULL, and `false OR NULL` SATISFIES a CHECK — so a one-sided orphan passes
+// it and this predicate can never fire on the both-or-neither rule at all.
+// The only thing it can catch is a RANGE violation with BOTH halves present
+// (month outside 1-12, day outside 1-31), which the `.min`/`.max` on
+// PatchDivision and the merge-check in patchDivision both sit in front of.
+// Kept as a leak guard on the raw constraint text, not as a race backstop —
+// both-or-neither has no database invariant underneath it (W8/F12).
+// The 422 it raises carries AGE_CUTOFF_BOTH_OR_NEITHER, which is the wrong
+// sentence for a range violation; unreachable over /api/v1, so left alone.
 const AGE_CUTOFF_CHECK_CONSTRAINT = "divisions_age_cutoff_check";
 function isAgeCutoffCheckViolation(err: unknown): boolean {
   return (
@@ -883,10 +893,16 @@ export async function patchDivision(
       },
     );
   }).catch((err: unknown) => {
-    // Race backstop only — READ COMMITTED means two concurrent PATCHes can
-    // each pass the merge-and-validate guard above against a stale read,
-    // then both write; whichever commits second still hits this CHECK. Must
-    // not leak the raw constraint text either way.
+    // Race backstop for the AGE BAND — READ COMMITTED means two concurrent
+    // PATCHes can each pass the merge-and-validate guard above against a
+    // stale read, then both write; whichever commits second still hits
+    // divisions_age_band_check. Must not leak the raw constraint text.
+    //
+    // The cutoff line below does NOT buy the same thing: a one-sided orphan
+    // satisfies divisions_age_cutoff_check (`false OR NULL`), so the same
+    // race on the cutoff pair commits an orphan and reaches neither line.
+    // That residual is known and accepted (W8/F12) — closing it needs a
+    // constraint that can see the case, e.g. `num_nulls(...) <> 1`.
     if (isAgeBandCheckViolation(err)) throw new HttpError(422, AGE_MAX_BEFORE_MIN);
     if (isAgeCutoffCheckViolation(err)) throw new HttpError(422, AGE_CUTOFF_BOTH_OR_NEITHER);
     throw err;
