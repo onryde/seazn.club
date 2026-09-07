@@ -3,6 +3,7 @@ import { fileURLToPath } from "node:url";
 import { test, expect, type APIRequestContext, type Page } from "@playwright/test";
 import { apiJson, seedRosteredFixture, expectNoHorizontalScroll, TAG, type RosteredFixture } from "./helpers";
 import { DOUBLE_SUBMIT_WINDOW_MS } from "../src/components/v2/scorepad/use-pad-pipeline";
+import { consentedAnonymousState, expectNoCookieBanner } from "./scorepad-a11y-kit";
 
 // S10/#419 W8 — the three acceptance criteria this file proves: the offline
 // queue survives tab death, scoring continues with the network down, and it
@@ -207,10 +208,11 @@ test("tab death mid-queue: the durable queue survives a real reload and drains i
 }) => {
   test.setTimeout(120_000);
   const { fixture, secret } = await setupOfflineFixture(request, "tabdeath");
-  const ctx = await browser.newContext({ storageState: undefined });
+  const ctx = await browser.newContext({ storageState: await consentedAnonymousState() });
   try {
     const page = await ctx.newPage();
     await openDeviceLink(page, secret);
+    await expectNoCookieBanner(page, "anonymous scorer context");
 
     const eventsUrl = (url: URL): boolean => url.pathname === `/api/v1/fixtures/${fixture.fixtureId}/events`;
     await page.route(eventsUrl, (route) => route.abort());
@@ -263,7 +265,7 @@ test("airplane mode: scoring continues offline, an explicit offline state and no
 }) => {
   test.setTimeout(120_000);
   const { fixture, secret } = await setupOfflineFixture(request, "airplane");
-  const ctx = await browser.newContext({ storageState: undefined });
+  const ctx = await browser.newContext({ storageState: await consentedAnonymousState() });
   try {
     const page = await ctx.newPage();
     await openDeviceLink(page, secret);
@@ -298,7 +300,7 @@ test("airplane mode: scoring continues offline, an explicit offline state and no
 test("a 409 mid-drain resyncs against the ledger and completes with no duplicates", async ({ browser, request }) => {
   test.setTimeout(120_000);
   const { fixture, secret } = await setupOfflineFixture(request, "conflict");
-  const ctx = await browser.newContext({ storageState: undefined });
+  const ctx = await browser.newContext({ storageState: await consentedAnonymousState() });
   try {
     const page = await ctx.newPage();
     await openDeviceLink(page, secret);
@@ -362,7 +364,10 @@ test("a 409 mid-drain resyncs against the ledger and completes with no duplicate
 test("the queue-status pill stays fully on-screen at phone width, offline text included", async ({ browser, request }) => {
   test.setTimeout(60_000);
   const { fixture, secret } = await setupOfflineFixture(request, "narrowpill");
-  const ctx = await browser.newContext({ storageState: undefined, viewport: { width: 320, height: 700 } });
+  const ctx = await browser.newContext({
+    storageState: await consentedAnonymousState(),
+    viewport: { width: 320, height: 700 },
+  });
   try {
     const page = await ctx.newPage();
     await openDeviceLink(page, secret);

@@ -4,6 +4,8 @@ import { HOLD_MS } from "../src/components/v2/scorepad/queue";
 import { DOUBLE_SUBMIT_WINDOW_MS } from "../src/components/v2/scorepad/use-pad-pipeline";
 import {
   HIT_TARGET_FLOOR_PX,
+  consentedAnonymousState,
+  expectNoCookieBanner,
   floorViolationLines,
   hitTargetFloorReport,
   measureHitTargets,
@@ -198,13 +200,17 @@ test("badminton v3 device link at 320: a drained dock leaves a tappable Partial 
 }) => {
   test.setTimeout(BUDGET_MS);
   const { fx, secret, homeFirst, homeSecond } = await seedPair(request, "320");
-  const ctx = await browser.newContext({ storageState: undefined, viewport: { width: 320, height: 720 } });
+  const ctx = await browser.newContext({
+    storageState: await consentedAnonymousState(),
+    viewport: { width: 320, height: 720 },
+  });
   try {
     const page = await ctx.newPage();
     // 320 FIRST. The scorer is holding a phone at a venue, and the activity row
     // is the tightest space in the pad — it already carries #seq, a caption, a
     // provenance line and Void.
     await openDeviceLink(page, secret);
+    await expectNoCookieBanner(page, "anonymous scorer context");
     await rallyWithDrainedDock(page);
 
     // The defect: the rally is on the ledger carrying `wonBy` and nothing else.
@@ -360,7 +366,10 @@ test("badminton v3 device link: taking back an amendment mid-hold leaves the ori
 }) => {
   test.setTimeout(BUDGET_MS);
   const { fx, secret } = await seedPair(request, "Cancel");
-  const ctx = await browser.newContext({ storageState: undefined, viewport: { width: 390, height: 844 } });
+  const ctx = await browser.newContext({
+    storageState: await consentedAnonymousState(),
+    viewport: { width: 390, height: 844 },
+  });
   try {
     const page = await ctx.newPage();
     await openDeviceLink(page, secret);
@@ -422,7 +431,10 @@ test("badminton v3 device link: after a RELOAD the scorer can no longer amend th
 }) => {
   test.setTimeout(BUDGET_MS);
   const { fx, secret } = await seedPair(request, "Reload");
-  const ctx = await browser.newContext({ storageState: undefined, viewport: { width: 390, height: 844 } });
+  const ctx = await browser.newContext({
+    storageState: await consentedAnonymousState(),
+    viewport: { width: 390, height: 844 },
+  });
   try {
     const page = await ctx.newPage();
     await openDeviceLink(page, secret);
@@ -468,7 +480,10 @@ test("badminton v3 device link: a partial row that a later rally now sits after 
 }) => {
   test.setTimeout(BUDGET_MS);
   const { fx, secret } = await seedPair(request, "Tail");
-  const ctx = await browser.newContext({ storageState: undefined, viewport: { width: 390, height: 844 } });
+  const ctx = await browser.newContext({
+    storageState: await consentedAnonymousState(),
+    viewport: { width: 390, height: 844 },
+  });
   try {
     const page = await ctx.newPage();
     await openDeviceLink(page, secret);
