@@ -25,7 +25,7 @@ check expressed as a client `disabled` prop, and `apps/web` vitest is
 | W5 | Competition settings — frozen, visibility, discoverable | **MERGED** — PR #737, squashed to `ff73d6278`, all 8 e2e jobs green. Fast-path cost: 14.9s (both spec files together, serial-sum via JSON reporter) |
 | W6 | Division schedule + constraints — full bounds table | **MERGED** — PR #738, squashed to `659568cb9`, all 8 e2e jobs green. Fast-path cost: ~20.3s (Task 1 ~12.5s + Task 2 ~7.8s) |
 | W7 | Division registration settings — partial-save, money bounds | **MERGED** — PR #739, squashed to `cfe97642f`, all 8 e2e jobs green. 2 tasks, 1 task-level fix round (Task 2's `75d77653f`, close registration before releasing the card-fee division), final whole-branch review clean after 1 documentation-only fix round (F13's coverage claim corrected, F14 opened); findings F12-F14. Fast-path cost: ~20-30s (see running total below) |
-| W8 | Fix wave + programme review + second mutation sweep | IN PLANNING — worktree `.claude/worktrees/settings-w8`, branch `feat/settings-walkthrough-w8`; owes F12's fix (schemas.ts merge-against-stored-row check), F14's (a)/(b) decision, plus whichever of F1/F2/F5/F7/F8/F10 the owner elects to fix now vs. defer |
+| W8 | Fix wave + programme review + second mutation sweep | **BRANCH COMPLETE, PR NOT YET RAISED** — worktree `.claude/worktrees/settings-w8`, branch `feat/settings-walkthrough-w8`. 9 tasks, task-level fix rounds throughout, whole-branch review "ready to merge with fixes" and its fix round done. Shipped: **F1, F2, F3+F4, F8, F10 and F12 fixed**; **F14 closed as option (a)** (server-side coverage; (b) superseded by F15); **F5 partially fixed** (the Stripe outage on billing is logged, the page-level distinct-error state deferred); **F21**, a second mutation sweep, with 3 of the 5 unproven entitlement gates it found now covered. **F7 not taken** — a schema column plus a re-send affordance plus supersede-on-remint, a task rather than an inline fix. New and NOT fixed: **F15-F20**, plus F21's two remaining gates; every one has its reason in its own Status line. Fast-path cost: ~+4.8s (see running total below) |
 
 W0 (foundations) was **folded into W1**, and `e2e/settings-support.ts` was cut
 from it. A support module with no consumer is an inert seam: W1's only shared
@@ -80,10 +80,33 @@ bucket unchanged at 16.9s since W4, no wave since has added a Stripe leg):
 W1-W4 ~94-100s + W5's 14.9s + W6's ~20.3s (Task 1 ~12.5s + Task 2 ~7.8s) +
 W7's ~20-30s (Task 1 ~13-23s, which includes a deliberate `SAVE_HOLD_MS`
 1.5s-per-run hold the double-submit test needs + Task 2 ~6.9s wall / 1.2s test
-time across 5 tests) ≈ **149-165s**. No ceiling has been set on this bucket yet
-(ruling 8 widened it once to absorb W1-W4's overrun rather than fixing a
-number) — W8 reports against this running total; if it needs a number, that is
-a fresh owner call, not one this session makes unilaterally.
+time across 5 tests) + W8's **~+4.8s** ≈ **154-170s**. No ceiling has been set
+on this bucket yet (ruling 8 widened it once to absorb W1-W4's overrun rather
+than fixing a number); if it needs a number, that is a fresh owner call, not
+one a session makes unilaterally.
+
+**How W8's +4.8s was measured, and why it is not a whole-file delta.** W8 added
+no new walkthrough spec FILE — it added cases to three existing ones
+(`settings-add-ons-drive`, `settings-competition-gates`,
+`settings-registration-bounds`), so the per-wave method the earlier rows use
+("run the new files, sum `.testResults[].duration`") does not apply. The
+measurement is a paired run of those three files, whole-file,
+`--project=walkthrough --workers=3`, JSON reporter, once with the working tree
+and once with the same three files restored from the branch point `cf7dc84d9`,
+then differenced PER TEST by title. The four genuinely new tests cost **4.49s**
+(F1's unlimited-cap add-ons case 1.94s; the two W8/F10 helper cases 1.84s +
+0.36s; F14(a)'s solo sign-up fee case 0.35s) and the two cases W8 extended and
+retitled grew **+0.26s** (case #18 0.26 → 0.47s; cutoff both-or-neither
+0.37 → 0.42s) — **+4.75s**, rounded to ~4.8s.
+
+**Do NOT read a whole-file delta off a single pair of runs on this machine.**
+Two paired runs an hour apart bracketed the same change at **+11.3s** and
+**−5.4s**, because the 1-minute load average moved between 16 and 158 while
+other sessions built and tested. In the quieter pair EVERY pre-existing test
+came in ~1s faster than its own baseline, which is ambient drift and not a
+speedup W8 delivered. Differencing per test inside one pair is what survives
+that; a file total is not. Real-money bucket unchanged at 16.9s — W8 added no
+Stripe leg.
 
 ## Recommendations I made (NOT owner rulings)
 
