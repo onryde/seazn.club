@@ -269,6 +269,22 @@ test("general fields persist across the reload, and the rename that regenerates 
     // page never processed — and satisfied instantly, before a dialog that was
     // going to open had opened.
     await visibilityRadio(page, "public").click();
+    // Proof that REACT processed the click, before either assertion below is
+    // read. Both of those are satisfiable pre-hydration: the browser checks a
+    // native radio itself, and `toHaveCount(0)` is trivially true while no
+    // handler has run — so a click that beat hydration would pass both while
+    // witnessing nothing, and the `hasYouthDivisions &&` mutant this negative
+    // control exists to kill would survive.
+    //
+    // The showcase opt-in is `disabled={readOnly || form.visibility !==
+    // "public"}` (competition-settings.tsx:355) — CLIENT form state. The
+    // competition is private on the server, so SSR renders it disabled; only a
+    // hydrated React state change can enable it. Same assertion, same purpose,
+    // as the confirm-path case below.
+    await expect(
+      showcase(page),
+      "the click must have reached React, not just the native radio",
+    ).toBeEnabled();
     await expect(
       visibilityRadio(page, "public"),
       "no youth divisions: leaving Private must apply immediately, ungated",

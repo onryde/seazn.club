@@ -152,14 +152,20 @@ async function readComp(request: APIRequestContext, id: string): Promise<Competi
 const patchComp = (request: APIRequestContext, id: string, body: unknown) =>
   apiJson<CompetitionRead>(request, `/api/v1/competitions/${id}`, "PATCH", body);
 
+/** The `^`-anchored form of a dictionary string, for `hasText`. Extracted from
+ *  `field()` so the one assertion that needs the <label> ITSELF rather than its
+ *  input can still go through `L.*` instead of retyping the copy. */
+function startsWith(label: string): RegExp {
+  return new RegExp(`^${label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`);
+}
+
 /** The input inside the wrapping <label> whose copy STARTS WITH `label` —
  *  Task 1's `field()`, kept identical so the two files' selectors read as
  *  siblings. Anchored RegExp rather than `hasText: "…"`, which is a
  *  case-INSENSITIVE SUBSTRING match: `"Name"` also matches the showcase
  *  consent paragraph and blows strict mode. */
 function field(page: Page, label: string) {
-  const anchored = new RegExp(`^${label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`);
-  return page.locator("label").filter({ hasText: anchored }).locator("input");
+  return page.locator("label").filter({ hasText: startsWith(label) }).locator("input");
 }
 
 const showcaseBox = (page: Page) => page.getByRole("checkbox", { name: L.showcase });
@@ -213,6 +219,40 @@ const WIDE_CAP = 9999;
  */
 const overridden = new Set<string>();
 
+/**
+ * `invalidateOrgEntitlements`, but only where it can actually do something.
+ *
+ * The helper has no public invalidation endpoint to ride, so it flips the org
+ * OWNER to superadmin for two fetches and back (`setOwnerStaffSql`,
+ * helpers.ts:961-983). That write lands on a GLOBAL `users` row — the `org_id`
+ * only picks WHICH user — and this file has no `test.use({ storageState })` of
+ * its own, so its owner IS the shared Pro user.
+ *
+ * `settings-admin.spec.ts` is also unscoped and flips the same bit ~11 times
+ * for its own 401/403 assertions. The walkthrough leg runs `--workers=3`
+ * (e2e.yml) and `mode: "default"` only serialises WITHIN a file, so the two
+ * files' superadmin windows overlap: one file's restore-to-false can land
+ * mid-assertion in the other's window. The three existing walkthrough callers
+ * (directory-clubs-import-limits, directory-officials-roles,
+ * directory-import-paywall-preview) all mint their own user first, which is
+ * why this collision is new here rather than pre-existing.
+ *
+ * Local and CI have no Redis on purpose (e2e.yml), so `lib/cache.ts` is inert
+ * and the round-trip buys NOTHING there while the `is_staff` side effect is
+ * paid on every call. Gating on `REDIS_URL` keeps the invalidation on a
+ * Redis-backed target (staging), where the write it pairs with genuinely needs
+ * it, and drops it where it is a no-op. No assertion in this file changes in
+ * either direction: with no Redis there is no cached resolution to drop.
+ *
+ * Note the helper never checks either fetch's response status, so a lost race
+ * fails silently rather than loudly — worth raising for `helpers.ts` itself,
+ * but not this wave's to change: three other specs call it.
+ */
+async function dropEntitlementCache(request: APIRequestContext, orgId: string): Promise<void> {
+  if (!process.env.REDIS_URL) return;
+  await invalidateOrgEntitlements(request, orgId);
+}
+
 async function setCap(
   request: APIRequestContext,
   orgId: string,
@@ -221,7 +261,7 @@ async function setCap(
 ): Promise<void> {
   overridden.add(orgId);
   await setEntitlementOverrideSql(orgId, key, value);
-  await invalidateOrgEntitlements(request, orgId);
+  await dropEntitlementCache(request, orgId);
 }
 
 async function setFlag(
@@ -232,14 +272,16 @@ async function setFlag(
 ): Promise<void> {
   overridden.add(orgId);
   await setBoolEntitlementOverrideSql(orgId, key, value);
-  await invalidateOrgEntitlements(request, orgId);
+  await dropEntitlementCache(request, orgId);
 }
 
 /**
  * Put every key back, after every test, whether or not the test's own
  * `finally` ran.
  *
- * Both halves, always — the SQL write AND the cache drop. `lib/entitlements.ts`
+ * Both halves — the SQL write AND the cache drop, the latter via
+ * `dropEntitlementCache` (a no-op without `REDIS_URL`; see its comment for why
+ * that is safe, and for the shared-user race it exists to avoid). `lib/entitlements.ts`
  * caches each resolution for `ENT_TTL_SECONDS = 300`, and `lib/cache.ts` is
  * fail-open with `REDIS_URL` unset locally, so a spec that writes without
  * invalidating is green on this machine and red only on a Redis-backed target
@@ -260,7 +302,7 @@ test.afterEach(async ({ request }) => {
     await setBoolEntitlementOverrideSql(id, "discovery.branding", true);
     await setBoolEntitlementOverrideSql(id, "discovery.listed", true);
     await setBoolEntitlementOverrideSql(id, "dashboard.theme", true);
-    await invalidateOrgEntitlements(request, id);
+    await dropEntitlementCache(request, id);
   }
   overridden.clear();
 });
@@ -421,7 +463,9 @@ test("discovery.branding: the tagline and hero go disabled, the client then stop
     // The organiser is told WHY, in the label rather than only by the greyed
     // control. Scoped to the tagline's own <label> because "(Pro)" appears
     // more than once on this page.
-    await expect(page.locator("label").filter({ hasText: /^Tagline/ })).toContainText(L.pro);
+    await expect(
+      page.locator("label").filter({ hasText: startsWith(L.tagline) }),
+    ).toContainText(L.pro);
 
     // WHY THE SCRIPTED PATCH BELOW IS NOT REDUNDANT, pinned rather than
     // asserted about. `save()` builds its `discovery` object as
@@ -689,8 +733,12 @@ test("case #18: a PATCH carrying both dates refuses an end before the start, wit
     // NOT asserted here on purpose: pinning the 200 would freeze a live bug as
     // this file's expected value (AGENTS.md failure class 4), and asserting
     // the 400 it ought to give would red the branch for a defect this wave did
-    // not create. Raised to the owner in the W5 Task 2 report instead; when the
-    // use-case guard lands, its case belongs right here.
+    // not create. When the use-case guard lands, its case belongs right here.
+    //
+    // Recorded as **F8** in the programme's findings register
+    // (`docs/superpowers/specs/2026-09-03-settings-walkthrough-prompts/
+    // FINDINGS.md`), which is what W8 plans its fixes from — a comment in one
+    // test body does not reach that far on its own.
   } finally {
     await releaseCompetition(request, comp.id);
   }

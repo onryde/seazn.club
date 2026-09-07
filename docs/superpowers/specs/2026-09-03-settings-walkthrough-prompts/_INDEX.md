@@ -22,7 +22,7 @@ check expressed as a client `disabled` prop, and `apps/web` vitest is
 | W2 | `/o/{org}/settings` 7 tabs — drive+persist (sponsors CRUD half) | **MERGED** — PR #720, squashed to `997ad225b`, all 11 CI checks green |
 | W3 | `/o/{org}/settings` 7 tabs — gating matrix + first mutation sweep | **IN PLANNING** — see the W3 section below |
 | W4 | `settings/{connect,credits,add-ons}`, billing's uncovered panels, sponsor monetize half | **DONE** — 4 tasks + final review, all clean; measured +53.5s against the old single ceiling, now resolved by owner ruling 8 (see below) |
-| W5 | Competition settings — frozen, visibility, discoverable | **IN PLANNING** — worktree `.claude/worktrees/settings-w5`, branch `feat/settings-walkthrough-w5` |
+| W5 | Competition settings — frozen, visibility, discoverable | **IMPLEMENTATION DONE** — 2 tasks + whole-branch final review; fix round 1 in progress (2 Important, 4 Minor). Branch `feat/settings-walkthrough-w5` |
 | W6 | Division schedule + constraints — full bounds table | Not started |
 | W7 | Division registration settings — partial-save, money bounds | Not started |
 | W8 | Fix wave + programme review + second mutation sweep | Not started |
