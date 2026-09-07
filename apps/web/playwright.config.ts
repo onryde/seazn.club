@@ -126,7 +126,12 @@ export default defineConfig({
   fullyParallel: true, // parallel project only — the serial phase runs with --workers=1
   workers: process.env.CI ? 2 : 4,
   retries: process.env.CI ? 1 : 0,
-  reporter: process.env.CI ? [["line"], ["html", { open: "never" }]] : "list",
+  // The JSON report is what CI's money-path check reads. A pass count cannot
+  // answer "did U1 and U16 RUN?" — only the skip count can, and nothing was
+  // emitting one.
+  reporter: process.env.CI
+    ? [["line"], ["html", { open: "never" }], ["json", { outputFile: "playwright-report/results.json" }]]
+    : "list",
   timeout: 60_000,
   expect: { timeout: 15_000 },
   use: {

@@ -574,6 +574,54 @@ jobs:
           PLAYWRIGHT_BASE: http://localhost:3000
           E2E_PARALLEL_SLICE: ${{ matrix.slice }}
 
+      # Distinct from "Connect walkthrough not configured" above: that one
+      # keys on STRIPE_CONNECT_TEST_ACCOUNT and covers the REGISTRATION money
+      # path (settings-sponsor-monetize.spec.ts). This one covers the Event
+      # Pass money path (event-pass.spec.ts) and keys on the JSON report
+      # itself — a pass count cannot tell "U1 and U16 ran and passed" apart
+      # from "U1 and U16 were skipped", and only the skip count can. Runs even
+      # when the test step above failed, so it reports the real cause instead
+      # of being skipped itself and reading as "not applicable".
+      - name: Event Pass money path must have RUN, not skipped
+        if: always() && matrix.project == 'walkthrough'
+        run: |
+          REPORT=apps/web/playwright-report/results.json
+          if [ ! -f "$REPORT" ]; then
+            echo "::error::no JSON report at $REPORT — the money-path check cannot run"
+            exit 1
+          fi
+          node -e '
+            const r = require(process.env.REPORT);
+            const want = ["U1 ·", "U16 ·"];
+            const titles = [];
+            const walk = (s) => {
+              for (const spec of s.specs ?? []) {
+                for (const t of spec.tests ?? []) {
+                  titles.push([spec.title, t.results?.[0]?.status ?? "unknown"]);
+                }
+              }
+              for (const c of s.suites ?? []) walk(c);
+            };
+            for (const s of r.suites ?? []) walk(s);
+            const bad = want.flatMap((w) =>
+              titles.filter(([t]) => t.includes(w))
+                    .filter(([, st]) => st === "skipped" || st === "pending")
+                    .map(([t]) => t));
+            const seen = want.filter((w) => titles.some(([t]) => t.includes(w)));
+            if (seen.length !== want.length) {
+              console.error("::error::money-path tests not found in the report: " +
+                want.filter((w) => !seen.includes(w)).join(", "));
+              process.exit(1);
+            }
+            if (bad.length) {
+              console.error("::error::the Event Pass money path SKIPPED: " + bad.join(" | "));
+              process.exit(1);
+            }
+            console.log("money path ran: " + seen.join(", "));
+          '
+        env:
+          REPORT: apps/web/playwright-report/results.json
+
       - name: Upload Playwright report (on failure)
         if: failure()
         uses: actions/upload-artifact@v4

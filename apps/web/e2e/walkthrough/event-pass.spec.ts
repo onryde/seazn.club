@@ -7,17 +7,17 @@ import {
   expectNoHorizontalScroll,
   mintLoginPathBySql,
   orgGroupIdSql,
-} from "./helpers";
+} from "../helpers";
 // Type-only (erased at build, so no `@/` alias resolution happens at runtime).
 // The wire test at the foot of this file names the rungs and the currency it
 // prices them in; retyping either union here is how a third rung would end up
 // unwitnessed.
-import type { PassKey } from "../src/lib/currency";
+import type { PassKey } from "../../src/lib/currency";
 // Also type-only. Keyed off the real union so a THIRD lock reason is a compile
 // error in the arm table below rather than an arm this file silently never
 // visits — the same discipline the components' own `Record<PassLockReason, …>`
 // props enforce.
-import type { PassLockReason } from "../src/lib/entitlements";
+import type { PassLockReason } from "../../src/lib/entitlements";
 // The one RUNTIME import from the app side, and deliberately not
 // `@/lib/currency`: see e2e/price-kit.ts for why importing that here collects
 // zero tests instead of failing loudly. Every money figure below — rendered or
@@ -29,7 +29,7 @@ import {
   passActiveMarker,
   passLabel,
   passMinor,
-} from "./price-kit";
+} from "../price-kit";
 
 // Event Pass, end to end, through a REAL Stripe test-mode purchase (task 22).
 //
@@ -61,7 +61,7 @@ import {
 //   cd apps/web && npm run build && npx next start -p 3021
 //   set -a; . ./.env.local; set +a
 //   E2E_PROD_TARGET=1 PLAYWRIGHT_BASE=http://localhost:3021 \
-//     npx playwright test --project=parallel e2e/event-pass.spec.ts
+//     npx playwright test e2e/walkthrough/event-pass.spec.ts --project=walkthrough
 //
 // Nothing here skips. A missing key FAILS the run with the line above, because
 // a green suite that quietly stopped buying anything is exactly the failure this
@@ -466,6 +466,16 @@ async function postSignedStripeWebhook(
 }
 
 // ---------------------------------------------------------------------------
+
+// SERIAL, file-wide, and not merely for tidiness: U1 sets `stripeUsable` from
+// a live Stripe probe and U6/U12/U14/U15/U16 each `test.skip(!stripeUsable, …)`
+// on it. That flag is a closure local to each viewport's describe block, and
+// the walkthrough leg runs `--workers=3` under `fullyParallel: true`. Each
+// worker re-evaluates this module independently, so without a serial pin the
+// scheduler is free to hand U1 to one worker and U16 to another whose own copy
+// of `stripeUsable` never left `false` — U16 silently skips and the leg
+// reports green, which is exactly the failure this file exists to end.
+test.describe.configure({ mode: "serial" });
 
 test.beforeAll(() => {
   // A failure, never a skip. See the header.
