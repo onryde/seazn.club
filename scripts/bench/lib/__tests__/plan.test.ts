@@ -515,23 +515,38 @@ const DELTAS_DIR = path.resolve(HERE, "..", "..", "..", "..", "db", "migration",
  *  values (...)` statement in this codebase (checked: V101, V112, V270,
  *  V290, V341, V393 all agree) — so the first quoted literal inside each
  *  parenthesised VALUES row is the plan key. */
-function deriveLivePlanKeysFromMigrations(): ReadonlySet<string> {
-  const files = readdirSync(DELTAS_DIR)
-    .filter((f) => /^V\d+__.+\.sql$/.test(f))
-    .sort((a, b) => Number(a.slice(1, a.indexOf("__"))) - Number(b.slice(1, b.indexOf("__"))));
+function derivePlanKeysFromSql(texts: readonly string[]): ReadonlySet<string> {
   const live = new Set<string>();
-  for (const file of files) {
-    const text = readFileSync(path.join(DELTAS_DIR, file), "utf8");
+  for (const text of texts) {
     for (const stmt of text.matchAll(/insert\s+into\s+plans\s*\([^)]*\)\s*values\s*([\s\S]*?);/gi)) {
       for (const row of stmt[1]!.matchAll(/\(\s*'([^']+)'/g)) {
         live.add(row[1]!);
       }
+    }
+    // An in-place rename (`update plans set key = 'new' where key = 'old'`) is
+    // NOT how any migration in this tree has retired a plan — every one of them
+    // inserts the replacement and deletes the old row. It is handled anyway
+    // because the alternative is a guard whose accompanying prose claims to
+    // cover renames and does not, which is the same class of stale claim this
+    // whole block exists to catch. Its witness is the synthetic-SQL test below,
+    // since no real delta exercises the branch.
+    for (const ren of text.matchAll(
+      /update\s+plans\s+set\s+key\s*=\s*'([^']+)'\s+where\s+key\s*=\s*'([^']+)'/gi,
+    )) {
+      if (live.delete(ren[2]!)) live.add(ren[1]!);
     }
     for (const del of text.matchAll(/delete\s+from\s+plans\s+where\s+key\s*=\s*'([^']+)'/gi)) {
       live.delete(del[1]!);
     }
   }
   return live;
+}
+
+function deriveLivePlanKeysFromMigrations(): ReadonlySet<string> {
+  const files = readdirSync(DELTAS_DIR)
+    .filter((f) => /^V\d+__.+\.sql$/.test(f))
+    .sort((a, b) => Number(a.slice(1, a.indexOf("__"))) - Number(b.slice(1, b.indexOf("__"))));
+  return derivePlanKeysFromSql(files.map((file) => readFileSync(path.join(DELTAS_DIR, file), "utf8")));
 }
 
 // Every plan_key this file's (and dls-gate.test.ts's) "real catalog"
@@ -546,6 +561,21 @@ describe("this suite's \"real catalog\" fixtures stay honest against the live mi
         true,
       );
     }
+  });
+
+  it("the derivation follows an in-place rename, so a renamed plan is not reported as still live under its old key", () => {
+    // The branch no real delta exercises. Without a witness it would be
+    // untested code backing a prose claim — the shape this repo ships most.
+    const renamed = derivePlanKeysFromSql([
+      "insert into plans (key, name, is_public) values ('old_key', 'Old', true);",
+      "update plans set key = 'new_key' where key = 'old_key';",
+    ]);
+    expect(renamed.has("old_key")).toBe(false);
+    expect(renamed.has("new_key")).toBe(true);
+    // A rename of a key that was never inserted adds nothing — the guard
+    // must not invent a plan out of an UPDATE that matched no row.
+    const orphan = derivePlanKeysFromSql(["update plans set key = 'b' where key = 'a';"]);
+    expect(orphan.has("b")).toBe(false);
   });
 
   it("sanity: the derivation actually EXCLUDES a retired plan — pro_plus and business were both inserted then deleted", () => {
