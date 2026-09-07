@@ -15,8 +15,8 @@
 import { copyFileSync } from "node:fs";
 import { join } from "node:path";
 import { expect, type APIRequestContext, type Browser, type BrowserContext, type Page, type TestInfo } from "@playwright/test";
-import { apiJson, screenshotAtWidths, setDivisionConfigSql } from "../helpers";
-import { consentedAnonymousState } from "../scorepad-a11y-kit";
+import { apiJson, screenshotAtWidths, setDivisionConfigSql } from "./helpers";
+import { consentedAnonymousState } from "./scorepad-a11y-kit";
 
 export const OUT = join(import.meta.dirname, "..", "__screens__", "spectator-w1", "walkthrough");
 

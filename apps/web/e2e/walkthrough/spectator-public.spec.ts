@@ -44,7 +44,7 @@ import {
   closeOpenContexts,
   shotAllTabs,
   OUT,
-} from "./spectator-public-helpers";
+} from "../spectator-public-helpers";
 
 test.describe.configure({ mode: "serial" });
 
