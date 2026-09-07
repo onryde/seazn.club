@@ -56,6 +56,26 @@ function fullReport(): BenchReportType {
         // report.json and from report.md with it, silently, and a renderer
         // test alone cannot see that — it renders the in-memory object.
         warnings: ["leaderboards.not_derived @ expected.leaderboards: not checked offline"],
+        // B05 T1 — deliberately all-distinct values (same discipline as
+        // `registrationDivision` below) so a swapped-field mutation
+        // (eventsSent/wallMs, or a finding's status/eventIndex) lands on a
+        // wrong number in a specific cell rather than "some number changed".
+        simulation: {
+          eventsSent: 9,
+          wallMs: 741,
+          eventsPerSecond: 12.15,
+          findings: [
+            {
+              streamKey: '["d-tiny","rr-r2-c1"]',
+              fixtureId: "fx-2",
+              eventIndex: 3,
+              status: 409,
+              code: "SEQ_CONFLICT",
+              message: "expected seq 3 but ledger is at 4",
+              currentSeq: 4,
+            },
+          ],
+        },
       },
     ],
     gate: "green",

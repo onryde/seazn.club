@@ -72,6 +72,35 @@ export const OracleResult = z.object({
 });
 export type OracleResult = z.infer<typeof OracleResult>;
 
+/** B05 T1 — one refusal `simulate.ts` hit while folding a division's streams
+ *  through the live single-event scoring route. Reported, never silently
+ *  retried or dropped (D5): a `SEQ_CONFLICT` (409), an entitlement/feature
+ *  refusal (`PAYMENT_REQUIRED`, 402 — the REAL shape; see `dls-gate.ts`'s own
+ *  header comment on why an entitlement refusal is 402, not 422), or a
+ *  generic 422. */
+export const SimulationFinding = z.object({
+  streamKey: z.string(),
+  fixtureId: z.string(),
+  eventIndex: z.number().int(),
+  status: z.number().int(),
+  code: z.string(),
+  message: z.string(),
+  currentSeq: z.number().int().optional(),
+});
+export type SimulationFinding = z.infer<typeof SimulationFinding>;
+
+/** B05 T1 — the single-event write-path fold's own section: report-only
+ *  throughput (never a gate — the load-sensitive-timing rule, `_RULES.md`
+ *  §1) plus any refusal findings. Kept minimal on purpose: T7 owns the
+ *  report's PRESENTATION and the "which checks had a subject" naming. */
+export const SimulationReport = z.object({
+  eventsSent: z.number().int(),
+  wallMs: z.number(),
+  eventsPerSecond: z.number(),
+  findings: z.array(SimulationFinding).optional(),
+});
+export type SimulationReport = z.infer<typeof SimulationReport>;
+
 /**
  * design §5.3 / §7: an unexpected 4xx/5xx or failed UI step attaches its
  * response body, and (browser-driver only) a screenshot + Playwright trace.
@@ -446,6 +475,11 @@ export const SuiteReport = z.object({
   /** F-T6-3 — the run-level cross-division court gate's findings. RUN-level,
    *  so exactly one list per suite. Absent when it found nothing. */
   crossDivisionCourtClashes: z.array(CrossDivisionCourtClashReport).readonly().optional(),
+  /** B05 T1 — division A's streams folded through the single-event scoring
+   *  route. Absent for a run that never reached the step (no `input.sql`,
+   *  same gating the DLS-gate probe and the player-stats baseline already
+   *  use) or whose division declared no streams at all. */
+  simulation: SimulationReport.optional(),
 });
 export type SuiteReport = z.infer<typeof SuiteReport>;
 

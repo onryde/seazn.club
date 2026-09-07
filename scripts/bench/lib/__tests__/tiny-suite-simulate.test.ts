@@ -1,30 +1,28 @@
-// B03 T6b — proves `runTinySuite` actually DRIVES the player-stats baseline
-// end to end against the REAL committed `_tiny.json` pack: removing the
-// `if (input.sql !== undefined) { ... readPlayerStatsBaseline(...) ... }`
-// block in `lib/suites/tiny.ts`, or the `competitionVisibility` passthrough
-// it feeds into `seedSuite`, reds a test here (AGENTS.md recurring-failure
-// class 1 — "the inert seam"; the same acceptance criteria T7's own
-// `tiny-suite-plan.test.ts` was built to satisfy for the DLS-gate probe).
+// B05 T1 — proves `runTinySuite` actually DRIVES division A's streams
+// through the single-event scoring route end to end against the REAL
+// committed `_tiny.json` pack: removing the
+// `if (input.sql !== undefined) { ... simulateDivisionStreams(...) ... }`
+// block in `lib/suites/tiny.ts` reds a test here (AGENTS.md recurring-
+// failure class 1 — "the inert seam", which is this whole task's reason to
+// exist: `seed.ts`'s `bindStreamFixtures` has resolved every stream's real
+// fixture id since B03 and NOTHING ever read `.events` until now).
 //
 // A fresh, self-contained fake — same "minimize blast radius outside what
-// THIS task owns" precedent `tiny-suite-plan.test.ts`'s own header comment
+// THIS task owns" precedent `tiny-suite-stats.test.ts`'s own header comment
 // gives for not extending `tiny-suite.test.ts`'s shared `makeFakeServer()`.
-// This fake's `request()` surface is copied from `tiny-suite-plan.test.ts`'s
-// own `fakeServer` (same generic legs/ext_key derivation, needed because
-// `input.sql` present ALSO drives the DLS-gate probe and officials seam
-// unconditionally — there is no way to exercise T6b's own gating without
-// the whole surface answering), extended with the stats-baseline routes
-// this task adds: `GET /api/orgs`, `GET /api/v1/divisions/{id}` (bare —
-// the division's slug read-back), `GET /api/v1/persons/{id}/stats`,
-// `GET /api/v1/divisions/{id}/stats/players`, and the public route.
+// This one is `tiny-suite-stats.test.ts`'s own `fakeServer` COPIED VERBATIM
+// (its `request()` surface already answers everything `input.sql` present
+// unconditionally drives — the DLS-gate probe, officials/claims seeding —
+// against the real `_tiny.json` pack), with exactly one addition: a
+// `conflictAt` knob on `raw()` so one test can prove a refusal actually
+// reaches `report.errors`/`report.gate`, not just `simulate.ts`'s own unit
+// suite (which already covers the fold logic exhaustively).
 import { describe, expect, it } from "vitest";
 import pino from "pino";
 import type { RawResult, Session } from "../http.ts";
 import type { ProbeTransport } from "../dls-gate.ts";
 import type { PlanEntitlementRow, PlanSql } from "../plan.ts";
 import { runTinySuite, TINY_PACK_PATH } from "../suites/tiny.ts";
-// B04 — the seven scheduling endpoints, shared with the other fakes in this
-// directory, so no two of them can disagree about what landed on the board.
 import { makeScheduleWorld } from "./_schedule-routes.ts";
 
 const silent = pino({ level: "silent" });
@@ -39,7 +37,7 @@ function slug(s: string): string {
   return s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
 }
 
-function fakeServer(opts: { statsPlayerGranted: boolean }): {
+function fakeServer(opts: { conflictAt?: { extKey: string; expectedSeq: number } } = {}): {
   transport: ProbeTransport;
   sql: PlanSql;
   calls: RecordedCall[];
@@ -49,6 +47,7 @@ function fakeServer(opts: { statsPlayerGranted: boolean }): {
   const legsByStageId = new Map<string, number>();
   const divisionIdByStageId = new Map<string, string>();
   const fixtureDivisionId = new Map<string, string>();
+  const fixtureExtKeyById = new Map<string, string>();
   const fixtureOfficials = new Map<string, unknown[]>();
   const claimInvites = new Map<string, unknown>();
   let divisionCounter = 0;
@@ -123,7 +122,9 @@ function fakeServer(opts: { statsPlayerGranted: boolean }): {
         const fixtures = Array.from({ length: legs }, (_v, i) => {
           const id = `fx-${++fixtureCounter}`;
           if (divisionId !== undefined) fixtureDivisionId.set(id, divisionId);
-          return { id, ext_key: `rr-r${i + 1}-c1` };
+          const extKey = `rr-r${i + 1}-c1`;
+          fixtureExtKeyById.set(id, extKey);
+          return { id, ext_key: extKey };
         });
         schedule.addFixtures(stageId, fixtures);
         return { fixtures } as unknown as T;
@@ -154,7 +155,6 @@ function fakeServer(opts: { statsPlayerGranted: boolean }): {
         const fixtureId = routePath.split("/")[4]!;
         const set = (body as { set: unknown[] }).set;
         fixtureOfficials.set(fixtureId, set);
-        // B04: onto the BOARD too — see the same note in the other fakes.
         schedule.setOfficials(fixtureId, set);
         return { ok: true } as T;
       }
@@ -172,20 +172,6 @@ function fakeServer(opts: { statsPlayerGranted: boolean }): {
         const personId = routePath.split("/")[4]!;
         return (claimInvites.get(personId) ?? null) as T;
       }
-      // B03 T6b — the stats baseline's own routes.
-      const personStatsMatch = /^\/api\/v1\/persons\/[^/]+\/stats$/.test(routePath);
-      if (method === "GET" && personStatsMatch) {
-        return { divisions: [] } as unknown as T;
-      }
-      if (method === "GET" && /^\/api\/v1\/divisions\/[^/]+\/stats\/players$/.test(routePath)) {
-        return { metrics: [], rows: [], requires_detailed_scoring: false } as unknown as T;
-      }
-      if (method === "GET" && /^\/api\/v1\/public\/orgs\/[^/]+\/competitions\/[^/]+\/divisions\/[^/]+\/stats$/.test(routePath)) {
-        return { rows: [] } as unknown as T;
-      }
-      // Bare `GET /api/v1/divisions/{id}` — the division-slug read-back.
-      // Ordered AFTER every more specific `/divisions/{id}/...` pattern
-      // above so it only ever matches the bare form.
       if (method === "GET" && /^\/api\/v1\/divisions\/[^/]+$/.test(routePath)) {
         return { slug: `slug-${routePath.split("/")[4]}` } as T;
       }
@@ -205,7 +191,7 @@ function fakeServer(opts: { statsPlayerGranted: boolean }): {
       const fixtureId = m[1]!;
       const divisionId = fixtureDivisionId.get(fixtureId);
       const dlsEnabled = divisionId !== undefined && dlsByDivisionId.get(divisionId) === true;
-      const { type, payload } = body as { type: string; payload: { target?: unknown } };
+      const { type, payload, expected_seq } = body as { type: string; payload: { target?: unknown }; expected_seq: number };
       const manualTarget = payload?.target !== undefined;
       const requiresDls = type === "cricket.revise" && dlsEnabled && !manualTarget;
       if (requiresDls && !entitled) {
@@ -214,7 +200,24 @@ function fakeServer(opts: { statsPlayerGranted: boolean }): {
           json: { ok: false, error: { code: "PAYMENT_REQUIRED", message: "nope", feature_key: "cricket.dls" } } as never,
         };
       }
-      return { status: 201, json: { ok: true, data: { seq: 1 } } as never };
+      // B05 T1's own addition: a deliberate SEQ_CONFLICT for exactly one
+      // (extKey, expected_seq) pair, so a wiring test can prove the finding
+      // reaches `report.errors`/`report.gate` — never a silent skip or retry.
+      const extKey = fixtureExtKeyById.get(fixtureId);
+      if (
+        opts.conflictAt !== undefined &&
+        extKey === opts.conflictAt.extKey &&
+        expected_seq === opts.conflictAt.expectedSeq
+      ) {
+        return {
+          status: 409,
+          json: {
+            ok: false,
+            error: { code: "SEQ_CONFLICT", message: "deliberate test conflict", current_seq: expected_seq + 5 },
+          } as never,
+        };
+      }
+      return { status: 201, json: { ok: true, data: { seq: expected_seq + 1 } } as never };
     },
   };
 
@@ -230,17 +233,10 @@ function fakeServer(opts: { statsPlayerGranted: boolean }): {
         return [{ plan_key: "community", bool_value: false }, { plan_key: "pro", bool_value: false }] satisfies PlanEntitlementRow[];
       }
       if (featureKey === "stats.player") {
-        return [
-          { plan_key: "community", bool_value: false },
-          { plan_key: "pro", bool_value: opts.statsPlayerGranted },
-        ] satisfies PlanEntitlementRow[];
+        return [{ plan_key: "community", bool_value: false }, { plan_key: "pro", bool_value: false }] satisfies PlanEntitlementRow[];
       }
       return [];
     },
-    // B05 T0: `chooseGrantingPlanForCapabilities` now filters candidates to
-    // is_public plans — "pro" is the only plan this fixture ever grants
-    // anything to, so it just needs to be marked public to keep resolving
-    // the way it always did.
     async planCandidateInfo(planKeys) {
       return planKeys
         .filter((k) => k === "community" || k === "pro")
@@ -260,109 +256,113 @@ function fakeServer(opts: { statsPlayerGranted: boolean }): {
   return { transport, sql, calls };
 }
 
-describe("runTinySuite — B03 T6b player-stats baseline wiring", () => {
-  it("statsPlayerGranted: drives all three stats routes for real, and reports a passing oracle", async () => {
-    const { transport, sql, calls } = fakeServer({ statsPlayerGranted: true });
+/** Every `POST .../events` call — INCLUDING the DLS-gate probe's own 5
+ *  synthetic `cricket.*` cells, unconditionally driven whenever `input.sql`
+ *  is present (same fake, same `raw()` route). `divisionAEventCalls` below
+ *  is the one that scopes to what THIS task's own fold sent. */
+function eventPostCalls(calls: RecordedCall[]): RecordedCall[] {
+  return calls.filter((c) => c.method === "POST" && /^\/api\/v1\/fixtures\/[^/]+\/events$/.test(c.path));
+}
+
+/** Division A's (`d-tiny`'s) own stream events, scoped away from the DLS-
+ *  gate probe's unconditional `cricket.revise`/`cricket.ball` cells by event
+ *  TYPE — `_tiny.json`'s division-A streams use only `core.*`/`generic.*`
+ *  types, and the probe's cells use only `cricket.*` ones (dls-gate.ts:347-
+ *  397); the two vocabularies never overlap. */
+function divisionAEventCalls(calls: RecordedCall[]): RecordedCall[] {
+  return eventPostCalls(calls).filter((c) => !(c.body as { type: string }).type.startsWith("cricket."));
+}
+
+describe("runTinySuite — B05 T1 division-A stream fold wiring", () => {
+  it("drives real POSTs for every division-A event and reports a populated simulation section", async () => {
+    const { transport, sql, calls } = fakeServer();
 
     const report = await runTinySuite({
       base: "http://bench.example",
       engine: "optimized",
       keep: false,
       log: silent,
-      // B03r tasks 9+10: `_tiny.json` now declares a THIRD division
-      // (`d-registration`) — this file is about the player-stats baseline,
-      // not registration, so `cliEntry: "admin"` keeps it there (also live
-      // coverage of the task's own acceptance criterion: `--entry admin`
-      // needs neither Stripe nor a browser).
       cliEntry: "admin",
       packPath: TINY_PACK_PATH,
       transport,
       sql,
       probeTransport: transport,
-      // B05 T1 — this fake's `raw()` already answers `POST .../fixtures/
-      // {id}/events` generically (201, unless the DLS-gate probe's own
-      // cricket.revise/dls-enabled combination applies), so it doubles as
-      // the simulate step's transport with no further changes.
       simTransport: transport,
     });
 
     expect(report.gate).toBe("green");
-    expect(calls.some((c) => c.method === "GET" && c.path === "/api/orgs")).toBe(true);
-    expect(calls.some((c) => c.method === "GET" && /^\/api\/v1\/divisions\/div-\d+$/.test(c.path))).toBe(true);
-    expect(calls.some((c) => c.method === "GET" && /^\/api\/v1\/persons\/[^/]+\/stats\?division_id=/.test(c.path))).toBe(
-      true,
-    );
-    expect(calls.some((c) => c.method === "GET" && /\/stats\/players$/.test(c.path))).toBe(true);
-    expect(calls.some((c) => c.method === "GET" && c.path.includes("/api/v1/public/orgs/"))).toBe(true);
-    // The competition's visibility was cleared for the public route — see
-    // lib/stats.ts's header comment on why (default 'private' 404s it).
-    // TWO competitions get created (the DLS-gate probe's own throwaway one,
-    // then `_tiny`'s own via `seedSuite`) — `_tiny`'s is the one that never
-    // names itself "Bench DLS Gate Probe ...".
-    const competitionPosts = calls.filter((c) => c.method === "POST" && c.path === "/api/v1/competitions");
-    const tinyCompetitionPost = competitionPosts.find(
-      (c) => !(c.body as { name: string }).name.startsWith("Bench DLS Gate Probe"),
-    );
-    expect((tinyCompetitionPost?.body as { visibility?: string }).visibility).toBe("unlisted");
+    // `_tiny.json`'s division A (`d-tiny`) declares 3 streams with 2, 5 and 2
+    // events — 9 total. Asserted against what the pack ACTUALLY sent (call
+    // count), never a constant typed into this test a second time.
+    const eventCalls = divisionAEventCalls(calls);
+    expect(eventCalls).toHaveLength(9);
+    // And in strictly ascending expected_seq PER FIXTURE — grouped by path
+    // (== fixture), each fixture's own sequence starts at 0 and increments.
+    const byFixture = new Map<string, number[]>();
+    for (const c of eventCalls) {
+      const seqs = byFixture.get(c.path) ?? [];
+      seqs.push((c.body as { expected_seq: number }).expected_seq);
+      byFixture.set(c.path, seqs);
+    }
+    expect(byFixture.size).toBe(3);
+    for (const seqs of byFixture.values()) {
+      expect(seqs).toEqual(seqs.map((_v, i) => i));
+    }
 
-    const oracle = (report.oracles ?? []).find((o) => o.name === "player-stats: baseline");
-    expect(oracle).toBeDefined();
-    expect(oracle?.passed).toBe(true);
+    expect(report.simulation).toBeDefined();
+    expect(report.simulation?.eventsSent).toBe(9);
+    expect(report.simulation?.findings ?? []).toHaveLength(0);
+    expect(report.timings.simMs).toBeDefined();
   });
 
-  it("statsPlayerGranted FALSE: the baseline is SKIPPED (no stats routes called), and the report says why", async () => {
-    const { transport, sql, calls } = fakeServer({ statsPlayerGranted: false });
+  it("without `sql`, the fold never runs — no fixtures/events calls, no simulation section", async () => {
+    const { transport, calls } = fakeServer();
 
     const report = await runTinySuite({
       base: "http://bench.example",
       engine: "optimized",
       keep: false,
       log: silent,
-      // B03r tasks 9+10: `_tiny.json` now declares a THIRD division
-      // (`d-registration`) — this file is about the player-stats baseline,
-      // not registration, so `cliEntry: "admin"` keeps it there (also live
-      // coverage of the task's own acceptance criterion: `--entry admin`
-      // needs neither Stripe nor a browser).
+      cliEntry: "admin",
+      packPath: TINY_PACK_PATH,
+      transport,
+    });
+
+    expect(report.gate).toBe("green");
+    expect(divisionAEventCalls(calls)).toHaveLength(0);
+    expect(report.simulation).toBeUndefined();
+  });
+
+  it("a deliberate SEQ_CONFLICT reaches report.errors and reds the gate — never silently retried", async () => {
+    // `rr-r2-c1` is the 5-event stream; conflict its THIRD event (index 2).
+    const { transport, sql, calls } = fakeServer({ conflictAt: { extKey: "rr-r2-c1", expectedSeq: 2 } });
+
+    const report = await runTinySuite({
+      base: "http://bench.example",
+      engine: "optimized",
+      keep: false,
+      log: silent,
       cliEntry: "admin",
       packPath: TINY_PACK_PATH,
       transport,
       sql,
       probeTransport: transport,
-      // B05 T1 — this fake's `raw()` already answers `POST .../fixtures/
-      // {id}/events` generically (201, unless the DLS-gate probe's own
-      // cricket.revise/dls-enabled combination applies), so it doubles as
-      // the simulate step's transport with no further changes.
       simTransport: transport,
     });
 
-    expect(report.gate).toBe("green");
-    expect(calls.some((c) => c.method === "GET" && c.path === "/api/orgs")).toBe(false);
-    expect(calls.some((c) => c.method === "GET" && /\/stats\/players$/.test(c.path))).toBe(false);
-    expect((report.oracles ?? []).some((o) => o.name === "player-stats: baseline")).toBe(false);
-    expect((report.warnings ?? []).some((w) => w.includes("player-stats baseline skipped"))).toBe(true);
-  });
+    expect(report.gate).toBe("red");
+    expect((report.errors ?? []).some((e) => e.includes("SEQ_CONFLICT"))).toBe(true);
+    expect(report.simulation?.findings).toHaveLength(1);
+    expect(report.simulation?.findings?.[0]).toMatchObject({ code: "SEQ_CONFLICT", status: 409, eventIndex: 2 });
 
-  it("without `sql`: the baseline never runs, and the competition is never sent a visibility override", async () => {
-    const { transport, calls } = fakeServer({ statsPlayerGranted: true });
-
-    const report = await runTinySuite({
-      base: "http://bench.example",
-      engine: "optimized",
-      keep: false,
-      log: silent,
-      // B03r tasks 9+10: `_tiny.json` now declares a THIRD division
-      // (`d-registration`) — this file is about the player-stats baseline,
-      // not registration, so `cliEntry: "admin"` keeps it there (also live
-      // coverage of the task's own acceptance criterion: `--entry admin`
-      // needs neither Stripe nor a browser).
-      cliEntry: "admin",
-      packPath: TINY_PACK_PATH,
-      transport,
-    });
-
-    expect(report.gate).toBe("green");
-    expect(calls.some((c) => c.method === "GET" && c.path === "/api/orgs")).toBe(false);
-    const competitionPost = calls.find((c) => c.method === "POST" && c.path === "/api/v1/competitions");
-    expect(competitionPost?.body && "visibility" in (competitionPost.body as object)).toBe(false);
+    // Never retried: the conflicted fixture's stream stops at expected_seq 2
+    // — nothing sent it twice, and events 3/4 (the two AFTER the conflict in
+    // that same 5-event stream) were never attempted at all.
+    const conflictedFixturePath = divisionAEventCalls(calls).find(
+      (c) => (c.body as { expected_seq: number }).expected_seq === 2,
+    )?.path;
+    const conflictedFixtureCalls = divisionAEventCalls(calls).filter((c) => c.path === conflictedFixturePath);
+    const seqsOnConflictedFixture = conflictedFixtureCalls.map((c) => (c.body as { expected_seq: number }).expected_seq);
+    expect(seqsOnConflictedFixture).toEqual([0, 1, 2]);
   });
 });

@@ -332,6 +332,11 @@ describe("runTinySuite — B03 T7 plan/entitlement-gate wiring", () => {
       transport,
       sql,
       probeTransport: transport,
+      // B05 T1 — this fake's `raw()` already answers `POST .../fixtures/
+      // {id}/events` generically (201, unless the DLS-gate probe's own
+      // cricket.revise/dls-enabled combination applies), so it doubles as
+      // the simulate step's transport with no further changes.
+      simTransport: transport,
     });
 
     expect(report.gate).toBe("green");
@@ -374,6 +379,11 @@ describe("runTinySuite — B03 T7 plan/entitlement-gate wiring", () => {
       transport,
       sql,
       probeTransport: transport,
+      // B05 T1 — this fake's `raw()` already answers `POST .../fixtures/
+      // {id}/events` generically (201, unless the DLS-gate probe's own
+      // cricket.revise/dls-enabled combination applies), so it doubles as
+      // the simulate step's transport with no further changes.
+      simTransport: transport,
     });
 
     expect(report.gate).toBe("green");
@@ -411,6 +421,11 @@ describe("runTinySuite — B03 T7 plan/entitlement-gate wiring", () => {
       transport,
       sql,
       probeTransport: transport,
+      // B05 T1 — this fake's `raw()` already answers `POST .../fixtures/
+      // {id}/events` generically (201, unless the DLS-gate probe's own
+      // cricket.revise/dls-enabled combination applies), so it doubles as
+      // the simulate step's transport with no further changes.
+      simTransport: transport,
     });
 
     expect(report.gate).toBe("green");
@@ -497,6 +512,7 @@ describe("runTinySuite — the post-officials re-check (B04 F-T6-2)", () => {
       transport: server.transport,
       sql: server.sql,
       probeTransport: server.transport,
+      simTransport: server.transport,
     });
     return { report, server };
   }

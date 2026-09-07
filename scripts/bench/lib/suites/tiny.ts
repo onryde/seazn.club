@@ -165,9 +165,11 @@ import type {
   EngineDeltaSection,
   OracleResult,
   RegistrationDivisionReport,
+  SimulationReport,
   SolverResult,
   SuiteReport,
 } from "../report.ts";
+import { simulateDivisionStreams } from "../simulate.ts";
 import type { SelectedDivisionExposure } from "../env.ts";
 import {
   resolveEntryMode,
@@ -460,6 +462,21 @@ export interface TinySuiteInput {
    *  above. Defaults to `dls-gate.ts`'s own `defaultProbeTransport`; a live
    *  run never passes it. Meaningless (never read) when `sql` is omitted. */
   probeTransport?: ProbeTransport;
+  /**
+   * B05 T1 — overridable so a test can drive the division-A stream fold's
+   * OWN HTTP surface through a fake, never `global.fetch`. `ProbeTransport`
+   * (not a bespoke type) because it is exactly the shape `simulate.ts`'s own
+   * `SimTransport` needs — `raw()`, to read back a refusal's real status and
+   * body rather than have `request()` throw it away. Defaults to
+   * `simulate.ts`'s own `defaultSimTransport`; a live run never passes it.
+   * Meaningless (never read) when `sql` is omitted — same gating as
+   * `probeTransport`, and for the same reason: every EXISTING caller that
+   * does not know about this step gets today's behavior unchanged. A
+   * SEPARATE field from `probeTransport` (never falls back to it) — the two
+   * probes are independent, and a test wanting different fakes for each
+   * must be able to say so.
+   */
+  simTransport?: ProbeTransport;
   /** B03r tasks 9+10: `bench.ts`'s `--entry admin|registration` flag,
    *  forwarded through `BenchConfig.entry`/`runSuite`. `undefined` (no flag)
    *  leaves every registration-carrying division on its own pack-declared
@@ -1085,7 +1102,7 @@ export async function runTinySuite(
   const errors: string[] = [];
   const warnings: string[] = [];
   const oracles: OracleResult[] = [];
-  const timings: { seedMs?: number; scheduleMs?: number } = {};
+  const timings: { seedMs?: number; scheduleMs?: number; simMs?: number } = {};
   const registrationReports: RegistrationDivisionReport[] = [];
   /** B04 — one row per division actually driven through the scheduling layer.
    *  Empty for a run that never reached it (stage 0 refused, `--keep` short
@@ -1104,6 +1121,9 @@ export async function runTinySuite(
   let engineDelta: EngineDeltaSection | undefined;
   let conflictCount: number | undefined;
   let solver: Omit<SolverResult, "requestedEngine"> | undefined;
+  /** B05 T1 — set only when the simulate step actually ran (`input.sql`
+   *  present AND division A declared at least one stream). */
+  let simulation: SimulationReport | undefined;
 
   // Stage 0 FIRST, and nothing is created if it refuses: a pack the offline
   // gate rejects would otherwise be seeded over HTTP and report a product
@@ -1992,6 +2012,71 @@ export async function runTinySuite(
       }
     }
 
+    // B05 T1 — the single-event write-path fold (design doc §3 D4): division
+    // A's own streams (`division0` — this file's own "declares exactly one
+    // division" comment above is why that index is always the division the
+    // pack calls A) folded through the LIVE `POST /fixtures/{id}/events`
+    // route, strictly sequential per fixture (`simulate.ts`'s own header
+    // comment). Division B's import path is a SEPARATE task (T2) — this
+    // block touches only `division0`'s streams.
+    //
+    // Gated on `input.sql`, placed AFTER the player-stats baseline above on
+    // purpose: that baseline's own oracle asserts EMPTY rows ("B03 folds no
+    // score events") and would go stale the moment real events land on
+    // division A's fixtures — running the fold first would silently turn a
+    // correct baseline oracle into a wrong one for every future `input.sql`
+    // caller. Ordered AFTER, this step touches nothing the baseline already
+    // read.
+    if (input.sql !== undefined) {
+      const divisionAStreams = pack.streams.filter(
+        (st) => st.divisionRef === division0.ref,
+      );
+      if (divisionAStreams.length > 0) {
+        // `@`-sigilled payload refs (pack-schema.ts header note 6) name
+        // EITHER an entrant or a person — ONE namespace, so merging both
+        // maps is exactly as authoritative as keeping them separate.
+        const refIdByKey = new Map<string, string>([
+          ...seeded.entrantIdByRef,
+          ...seeded.personIdByRef,
+        ]);
+        log.info(
+          { streams: divisionAStreams.length },
+          "tiny: folding division A's streams through the single-event scoring route (B05 T1)",
+        );
+        const sim = await simulateDivisionStreams({
+          base,
+          session: s,
+          streams: divisionAStreams,
+          fixtureIdByKey: seeded.fixtureIdByKey,
+          refIdByKey,
+          ...(input.simTransport === undefined
+            ? {}
+            : { transport: input.simTransport }),
+        });
+        timings.simMs = sim.wallMs;
+        simulation = {
+          eventsSent: sim.eventsSent,
+          wallMs: sim.wallMs,
+          eventsPerSecond: sim.eventsPerSecond,
+          ...(sim.findings.length > 0 ? { findings: [...sim.findings] } : {}),
+        };
+        // D5: a refusal is a FINDING, reported and never silently retried —
+        // and, for `_tiny`'s own real historical stream, also a genuine
+        // product defect (the pack's events are meant to fold cleanly), so
+        // it reds the run rather than staying a quiet report-only note.
+        for (const finding of sim.findings) {
+          errors.push(
+            `simulate: fixture ${finding.fixtureId} (stream ${finding.streamKey}) event #${finding.eventIndex}: ` +
+              `${finding.code} (HTTP ${finding.status}) — ${finding.message}`,
+          );
+        }
+        log.info(
+          { events: sim.eventsSent, ms: sim.wallMs, eventsPerSecond: sim.eventsPerSecond },
+          "suite_simulated",
+        );
+      }
+    }
+
     // B03r tasks 9+10 — registration divisions (design §3/§9), driven
     // separately from seedSuite's admin walk above (see this file's own
     // "Registration wiring" header comment for why).
@@ -2329,5 +2414,6 @@ export async function runTinySuite(
     // on every pre-B04 report would be noise — but never omitted when it
     // fired, because nothing else in the run can see it.
     ...(crossDivisionClashes.length > 0 ? { crossDivisionCourtClashes: crossDivisionClashes } : {}),
+    ...(simulation === undefined ? {} : { simulation }),
   };
 }
