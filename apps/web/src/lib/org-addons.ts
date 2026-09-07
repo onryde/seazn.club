@@ -9,13 +9,28 @@ import stripePlans from "@/config/stripe-plans.json";
 // entitlements SPEC-2 §3/§7). Structurally like lib/seat-addons.ts — a
 // RECURRING line item that rides the billing group's EXISTING subscription as
 // an extra subscription item (one invoice, one cycle, Stripe-native proration,
-// never a second subscription) — but ONE CATALOG ENTRY PER PLAN, because the
-// rate differs by tier ($9 Pro / $19 Pro Plus), where extra_seat has only one
-// flat rate. That difference is load-bearing, not cosmetic: at one flat rate
-// "Pro + extras" would undercut Pro Plus. Every tier still lifts the SAME
-// feature by the SAME amount — only the PRICE differs — so featureKey/deltaEach
-// are pinned ONCE below (ORG_ADDON_FEATURE_KEY/ORG_ADDON_DELTA_EACH), exactly
-// like SEAT_ADDON pins them for its one entry; only the lookup_key varies.
+// never a second subscription) — but the catalog is an array keyed BY PLAN,
+// where extra_seat has a single flat rate.
+//
+// THE CATALOG HOLDS EXACTLY ONE ENTRY TODAY: `pro` (config/stripe-plans.json
+// `org_addons`, lookup_key `seazn_extra_org_pro_monthly`). Entitlements v18
+// (V393) retired `pro_plus`, so there is no second rate and no "one flat rate
+// would let Pro + extras undercut Pro Plus" argument left to make. The other
+// live plans have no rider for their own reasons: `community` because passing
+// the free organisation is an upgrade rather than a purchase, and `enterprise`
+// because V393 made its `orgs.max_owned` unlimited (NULL) — there is no ceiling
+// to lift, so there is nothing to sell. The per-plan SHAPE is kept because a
+// second tier may legitimately price differently if one is ever added back, not
+// because two rates exist now.
+//
+// Rates live in config/stripe-plans.json and are deliberately not restated in
+// prose here — the "$9 / $19" this comment used to quote was stale on both the
+// tier list and the number.
+//
+// Whatever the entries, every one of them lifts the SAME feature by the SAME
+// amount — only the PRICE may differ — so featureKey/deltaEach are pinned ONCE
+// below (ORG_ADDON_FEATURE_KEY/ORG_ADDON_DELTA_EACH), exactly like SEAT_ADDON
+// pins them for its one entry; only the lookup_key varies.
 
 /** One plan's extra-org SKU. The live Stripe price id is NOT here — it is
  *  resolved by lookup_key at request time (no `plans` row, exactly like a seat
@@ -82,8 +97,10 @@ export function isOrgAddonItem(item: Stripe.SubscriptionItem): boolean {
   return item.metadata?.feature_key === ORG_ADDON_FEATURE_KEY;
 }
 
-/** The catalog entry for a plan, or undefined when that plan has no add-on
- *  (community: exceeding a free org is an upgrade, not a purchase). */
+/** The catalog entry for a plan, or undefined when that plan has no add-on —
+ *  today every plan but `pro`. Community, because passing the free organisation
+ *  is an upgrade rather than a purchase; enterprise, because its
+ *  `orgs.max_owned` is unlimited (V393) and there is no ceiling to lift. */
 export function orgAddonForPlan(planKey: string): OrgAddonCatalogEntry | undefined {
   return ORG_ADDONS.find((e) => e.planKey === planKey);
 }
@@ -96,21 +113,27 @@ export function orgAddonForPlan(planKey: string): OrgAddonCatalogEntry | undefin
  * NOT `extraOrgPrice()` (lib/currency.ts), and the difference is a wrong number
  * rather than a stylistic one. That helper reads the PLAN's graduated `up_to:
  * "inf"` tier — what one more organisation costs INSIDE the plan's cap, on the
- * plan's own interval. The two agree monthly and diverge annually: an annual
- * Pro group's existing extra organisations cost 7900/year each, while this
- * rider is 900/MONTH (~10800/year, about 37% more) on a separate monthly
- * cadence. Quoting the tier to an annual group would understate the rider by a
- * third and imply a yearly charge that will arrive monthly.
+ * plan's own interval. The two agree monthly and diverge annually, because the
+ * plan discounts a year paid up front and this rider never does: on today's usd
+ * catalog an annual Pro group's existing extra organisations cost 6399/year
+ * each, while this rider is 699/MONTH (8388/year, about 31% more) on a separate
+ * monthly cadence. Quoting the tier to an annual group would understate the
+ * rider by roughly a quarter and imply a yearly charge that will arrive
+ * monthly. Those figures are config/stripe-plans.json's, quoted only to show
+ * the SIZE of the error — the code reads the file, never these numerals.
  *
- * So the interval is not a parameter: the rider is a monthly recurring price on
- * every plan (`org-addon-catalog-parity.test.ts` pins `interval: "month"` for
- * every entry), and any surface rendering this number must SAY monthly.
+ * So the interval is not a parameter: every catalog entry is a monthly
+ * recurring price (`org-addon-catalog-parity.test.ts` pins `interval: "month"`
+ * for each one), and any surface rendering this number must SAY monthly.
  *
  * Keyed on the group's CURRENT `plan_key`, never on what the customer last
- * paid: a tier change re-prices the rider (`setExtraOrgs` swaps the item onto
- * the new plan's lookup_key), so the old rate is not what they will be billed.
+ * paid. With a single entry in the catalog (`pro`) a plan change can only move
+ * the rider on or off, but `setExtraOrgs` swaps the item onto the new plan's
+ * lookup_key either way — so if a second priced tier is ever added back the
+ * rate follows the plan, and the old rate is not what they will be billed.
  *
- * Returns null when the plan has no rider SKU (community) — the caller has
+ * Returns null when the plan has no rider SKU — today that is every plan except
+ * `pro` (community, enterprise and both event passes), so the caller has
  * nothing to sell and must not render a price at all.
  */
 export function orgAddonPriceMinor(planKey: string, currency: Currency): number | null {
@@ -131,7 +154,7 @@ export function orgAddonPriceMinor(planKey: string, currency: Currency): number 
  * `lookup_key` at request time (mirrors resolveSeatPriceId) — there is no
  * `plans` row to cache it on. 503s (matching every other checkout route) when
  * `stripe:sync` has not yet been run against this Stripe account; 400s when
- * the plan simply has no add-on (community).
+ * the plan simply has no add-on (today: anything but `pro`).
  */
 export async function resolveOrgAddonPriceId(planKey: string): Promise<string> {
   const entry = orgAddonForPlan(planKey);

@@ -26,22 +26,30 @@ export { MAX_EXTRA_ORGS };
 
 /** Total organisations (plan base + purchased extras) at which a purchase
  *  starts a sales conversation (v17 gap #293 Q2, owner decision 2026-07-27).
- *  Base caps are pro 5 / pro_plus 10, so it trips at roughly 20 / 15 extras.
+ *  Only `pro` can buy riders at all today (entitlements v18 retired `pro_plus`;
+ *  enterprise is already unlimited), and its base cap is 5 — so in practice it
+ *  trips at roughly 20 extras.
  *
- *  It is a TOTAL, not a rider count: V314's `orgs.max_owned` seed recorded the
- *  intent that a group of this size "becomes an enterprise conversation rather
- *  than a silent reseller", and that is a statement about how many
- *  organisations exist under one bill — a Pro Plus group reaches it with fewer
- *  purchased riders than a Pro one, which is correct. */
+ *  It is still a TOTAL, not a rider count, and the two only coincide because
+ *  there is one paying tier: V314's `orgs.max_owned` seed recorded the intent
+ *  that a group of this size "becomes an enterprise conversation rather than a
+ *  silent reseller", and that is a statement about how many organisations exist
+ *  under one bill. Read it as "20 riders" and a plan whose base cap is not 5
+ *  would trip at the wrong place. */
 export const ORG_ALLOWANCE_ALERT_THRESHOLD = 25;
 
 /**
  * Add / adjust / remove the extra-organisation recurring add-on for the
  * caller's billing GROUP (v17 gap #293, design/v17-pricing-entitlements
- * SPEC-2 §3/§7). Priced per plan tier ($9/mo Pro, $19/mo Pro Plus — the two
- * rates are load-bearing: one flat rate would let "Pro + extras" undercut Pro
- * Plus); +1 orgs.max_owned per unit, GROUP-WIDE (not scoped to one org, unlike
- * a seat, which lifts one org's members.max).
+ * SPEC-2 §3/§7). +1 orgs.max_owned per unit, GROUP-WIDE (not scoped to one org,
+ * unlike a seat, which lifts one org's members.max).
+ *
+ * Priced per plan by lookup_key, but the catalog holds ONE entry today: `pro`
+ * (config/stripe-plans.json `org_addons`). Entitlements v18 (V393) retired
+ * `pro_plus`, so the "two rates are load-bearing, one flat rate would let Pro +
+ * extras undercut Pro Plus" argument this comment used to make no longer has a
+ * second tier to make it about. The rate itself lives in that config file and
+ * is not restated here.
  *
  * Rides the group's EXISTING Stripe subscription as an extra subscription ITEM
  * (one invoice, one billing cycle, Stripe-native proration) — never a second
@@ -68,7 +76,13 @@ export const ORG_ALLOWANCE_ALERT_THRESHOLD = 25;
  *   401 — not signed in (AuthError, from requireBillingOwner).
  *   403 — signed in, but not this billing group's payer.
  *   409 — the GROUP cannot hold the add-on at all: no live paid subscription,
- *         or a plan with no extra-org SKU. Remedy is "move to Pro / Pro Plus".
+ *         or a plan with no extra-org SKU. Remedy is "move to Pro" — the only
+ *         plan with a rider today. (Enterprise also lands here and must not be
+ *         sent to Pro: its orgs.max_owned is unlimited, so it needs no rider.
+ *         The Add-ons tab renders the unlimited notice rather than the stepper
+ *         for that group — `orgCap === null && !addonAvailable`, add-ons/
+ *         page.tsx — so an enterprise group can only reach this status by
+ *         calling the route directly.)
  *   422 — `count` is not an integer in 0..MAX_EXTRA_ORGS, OR the request body
  *         was unparseable (bad JSON, wrong type, unknown field). Remedy is
  *         "choose a different number"; unreachable from a correct control. The

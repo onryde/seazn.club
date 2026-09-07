@@ -10,8 +10,14 @@ const schema = z.object({ count: z.number() }).strict();
 
 /**
  * POST /api/billing/extra-orgs — add / adjust / remove the recurring
- * extra-organisation add-on ($9/mo Pro, $19/mo Pro Plus, +1 orgs.max_owned
- * each, GROUP-WIDE) for the caller's billing group (v17 gap #293).
+ * extra-organisation add-on (+1 orgs.max_owned each, GROUP-WIDE) for the
+ * caller's billing group (v17 gap #293).
+ *
+ * Sold on `pro` only: config/stripe-plans.json's `org_addons` holds exactly one
+ * entry since entitlements v18 (V393) retired `pro_plus`. The rate lives in
+ * that file and is deliberately not quoted here — the "$9/mo Pro, $19/mo Pro
+ * Plus" this comment used to carry was stale on both counts. Any other plan is
+ * refused 409 inside setExtraOrgs.
  *
  * `count` is the TOTAL the group should hold, not a delta; 0 removes the
  * add-on. Group-payer gated inside setExtraOrgs (requireBillingOwner) — a

@@ -138,14 +138,41 @@ export async function getAddOnsTab(
     // too, and a finite admission cap below it IS a reduction.
     //
     // That second arm is REACHABLE TODAY, not merely future-proofing (measured;
-    // both directions are pinned in add-ons-tab.test.ts). No plan grants
-    // unlimited `orgs.max_owned`, so `orgCap === null` means a staff override
-    // with a null `int_value` — and while that override outranks the plan row
-    // in `resolve()` and therefore SURVIVES dunning (both caps stay unlimited,
-    // nothing to report), `groupOrgLimit`'s every-org-suspended branch reads
-    // `plan_entitlements` directly and explicitly loses per-org overrides. A
-    // suspended group with an unlimited comp therefore has an unlimited receipt
-    // and a finite admission cap, which is exactly what this arm is for.
+    // both directions are pinned in add-ons-tab.test.ts).
+    //
+    // `orgCap === null` DOES NOT MEAN ONE THING, and code reading it elsewhere
+    // must not assume it does. `purchasedCapacity` (lib/billing-group.ts)
+    // answers null from two causes that are both live today:
+    //
+    //   1. a staff `org_entitlement_overrides` row whose `int_value` is null,
+    //      on ANY plan including `pro` — a comped group that is still billed
+    //      monthly for the riders it holds; and
+    //   2. the PLAN's own catalog row being unlimited — `enterprise`, whose
+    //      `plan_entitlements` row for `orgs.max_owned` has had a NULL
+    //      `int_value` since V393 (entitlements v18). The comment that used to
+    //      sit here claimed no plan grants unlimited `orgs.max_owned`; that has
+    //      been false since that migration.
+    //
+    // (It also answers null when the basis has no resolving org at all — a
+    // group whose every organisation is soft-deleted. A rendered settings page
+    // cannot reach that: the org it is rendering for is not soft-deleted.)
+    //
+    // Collapsing the two has cost real defects in both directions: reading it
+    // as "the plan is unlimited" alone took the rider control away from a
+    // comped Pro payer who was there to CANCEL, and reading it as "a staff
+    // override" alone painted an enterprise group the Community upsell (W8 F1
+    // and its review). A UI arm that means "no ceiling to sell against" must
+    // pair it with `!addonAvailable`; see add-ons/page.tsx.
+    //
+    // For THIS field the distinction does not change the answer — an unlimited
+    // receipt of either origin against a finite admission cap is a reduction —
+    // so `capReduced` needs no plan test. Cause 1 additionally survives
+    // dunning: that override outranks the plan row in `resolve()` (both caps
+    // stay unlimited, nothing to report), while `groupOrgLimit`'s
+    // every-org-suspended branch reads `plan_entitlements` directly and
+    // explicitly loses per-org overrides. A suspended group with an unlimited
+    // comp therefore has an unlimited receipt and a finite admission cap, which
+    // is exactly what this arm is for.
     capReduced: admissionCap !== null && (orgCap === null || admissionCap < orgCap),
     liveOrgCount: basis.liveOrgs,
     extraOrgCount,
