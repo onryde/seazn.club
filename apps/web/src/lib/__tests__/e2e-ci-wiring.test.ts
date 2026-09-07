@@ -247,6 +247,12 @@ const WALKTHROUGH_SPECS: string[] = [
   // save cycle (case #24), and the two-endpoint save reporting a genuine half
   // landing — PATCH ok, PUT refused by the plan's entrant cap (case #23).
   "settings-registration-client-guards.spec.ts",
+  // The server half of the same surface (Task 2), API-only: the age-cutoff
+  // bounds matrix on `PATCH /divisions/{id}` — an impossible day per short
+  // month, both-or-neither, the schema's own 1-12/1-31 ranges — and the
+  // card-fee minimum proved on the SERVER with the panel's client gate
+  // bypassed, behind the Connect precondition that gates it.
+  "settings-registration-bounds.spec.ts",
 
   // The directory — the organiser's own records, driven through the screens
   // that own them: club import caps, the import paywall preview, officials'
