@@ -20,10 +20,10 @@ check expressed as a client `disabled` prop, and `apps/web` vitest is
 | --- | --- | --- |
 | W1 | `/admin/settings` + 4 legacy redirects; `setOwnerStaffRoleSql` ships with it | **DONE** — 6 tasks, 5 fix rounds, all reviews clean |
 | W2 | `/o/{org}/settings` 7 tabs — drive+persist (sponsors CRUD half) | **MERGED** — PR #720, squashed to `997ad225b`, all 11 CI checks green |
-| W3 | `/o/{org}/settings` 7 tabs — gating matrix + first mutation sweep | **IN PLANNING** — see the W3 section below |
-| W4 | `settings/{connect,credits,add-ons}`, billing's uncovered panels, sponsor monetize half | **DONE** — 4 tasks + final review, all clean; measured +53.5s against the old single ceiling, now resolved by owner ruling 8 (see below) |
-| W5 | Competition settings — frozen, visibility, discoverable | **IMPLEMENTATION DONE** — 2 tasks + whole-branch final review; fix round 1 in progress (2 Important, 4 Minor). Branch `feat/settings-walkthrough-w5` |
-| W6 | Division schedule + constraints — full bounds table | Not started |
+| W3 | `/o/{org}/settings` 7 tabs — gating matrix + first mutation sweep | **MERGED** — PR #732, squashed to `bb025fd26`. Row was never updated at merge time; see the W3 section below for the full task/mutation record |
+| W4 | `settings/{connect,credits,add-ons}`, billing's uncovered panels, sponsor monetize half | **MERGED** — PR #736, squashed to `aabb701ea`; measured +53.5s against the old single ceiling, resolved by owner ruling 8 (see below) |
+| W5 | Competition settings — frozen, visibility, discoverable | **MERGED** — PR #737, squashed to `ff73d6278`, all 8 e2e jobs green. Fast-path cost: 14.9s (both spec files together, serial-sum via JSON reporter) |
+| W6 | Division schedule + constraints — full bounds table | **IN PLANNING** — worktree `.claude/worktrees/settings-w6`, branch `feat/settings-walkthrough-w6` |
 | W7 | Division registration settings — partial-save, money bounds | Not started |
 | W8 | Fix wave + programme review + second mutation sweep | Not started |
 
@@ -74,6 +74,13 @@ the other.
    two kinds of test do not shrink the same way (one is compute-bound, the
    other network-bound). W5 onward reports against BOTH buckets separately,
    not a single total.
+
+**Fast-path bucket running total** (measured, updated per wave — real-money
+bucket unchanged at 16.9s since W4, no wave since has added a Stripe leg):
+W1-W4 ~94-100s + W5's 14.9s ≈ **109-115s**. No ceiling has been set on this
+bucket yet (ruling 8 widened it once to absorb W1-W4's overrun rather than
+fixing a number) — W6-W8 report against this running total; if it needs a
+number, that is a fresh owner call, not one this session makes unilaterally.
 
 ## Recommendations I made (NOT owner rulings)
 
