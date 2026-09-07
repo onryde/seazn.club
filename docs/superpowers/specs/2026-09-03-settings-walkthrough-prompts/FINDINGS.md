@@ -165,6 +165,31 @@ Found: Task 2, `settings-registration-bounds.spec.ts`. The W7 plan predicted thi
 
 The stored value is inert while the band is absent: `ageBandEligibilityIssues` (`lib/registration-rules.ts`) returns early on `if (division.age_min == null && division.age_max == null) return issues` before the cutoff is ever read, so such a division reports no eligibility issue and applies no rule. It becomes live the moment a band is added, which is the point of allowing the write.
 
-**Not claimed by the spec, and deliberately so.** `ageBandEligibilityIssues` is not reachable from any read this API-only file performs — it runs inside the organiser-side roster gates (`usecases/registration-eligibility.ts`) and needs a person with a `dob` on a roster. Calling the pure function from the spec against a hand-built person would be a fixture on both ends proving only the fixture, so the test asserts the WRITE and the stored row and says in a comment what it does not cover. That predicate's own behaviour for this state is covered where it belongs, in `lib/__tests__/registration-rules.test.ts`.
+**Not claimed by the spec, and deliberately so.** `ageBandEligibilityIssues` is not reachable from any read this API-only file performs — it runs inside the organiser-side roster gates (`usecases/registration-eligibility.ts`) and needs a person with a `dob` on a roster. Calling the pure function from the spec against a hand-built person would be a fixture on both ends proving only the fixture, so the test asserts the WRITE and the stored row and says in a comment what it does not cover.
+
+**And that state is NOT covered by an existing unit test either — corrected here.** An earlier draft of this entry claimed the predicate's behaviour for a bandless division "is covered where it belongs, in `lib/__tests__/registration-rules.test.ts`". That is false: every case in that file's `ageBandEligibilityIssues` describe block (`apps/web/src/lib/__tests__/registration-rules.test.ts:110`) spreads one fixture, `const division = { age_min: 10, age_max: 15 }` — a null band is never exercised anywhere in the file. The CLAIM the entry makes is still true, but its warrant is the source, not a test: `ageBandEligibilityIssues` returns at `apps/web/src/lib/registration-rules.ts:263` (`if (division.age_min == null && division.age_max == null) return issues;`) BEFORE the cutoff is ever read, which is why a bandless cutoff is inert. Adding a null-band case to that describe block is optional cleanup, not a defect fix.
 
 **Status:** recorded, no fix opened, no defect. Documented so a later wave does not re-open the question of whether a bandless cutoff should be refused and answer it wrongly in either direction — the write is intentional and the state is harmless. Distinct from F12 above, which is about the two cutoff HALVES coming apart and is a real defect.
+
+### F14 (documentation only, OPEN item for W8) — `free_agent_fee_cents`'s card-fee minimum has no coverage on either layer, and no client mirror at all
+
+Found: final whole-branch review gap-hunt. The W7 plan's §0 explicitly asked whether the `free_agent_fee_cents` half of the card-fee minimum "is realistically reachable given `allow_free_agents` also requires `entrant_kind: 'team'` … before deciding whether it's worth a second case or a one-line documentation note". Neither happened in W7 — this entry is that note, recorded so W8 inherits the question rather than losing it.
+
+**The guard exists and is a second, independent call site.** `putRegistrationSettings` (`apps/web/src/server/usecases/registrations.ts:1848-1850`) throws the identical string as the main `fee_cents` check:
+
+```ts
+if (method === "stripe" && freeAgentFeeCents !== null && freeAgentFeeCents > 0 && freeAgentFeeCents < 100) {
+  throw new HttpError(422, "Card entry fees must be at least 1.00 (or 0 for free)");
+}
+```
+
+**It sits AHEAD of the Connect gate, unlike the main path.** The `fee_cents` minimum lives inside the `if (method === "stripe")` block at `registrations.ts:1851+`, *after* `!org.charges_enabled` and after `requireFeature(…, "registration.paid")`, which is why W7's card-fee test had to attach a Connect account before it could reach the bound at all. The free-agent check is a standalone `if` above that block, so it fires on an org with no Connect account — a different reachability shape from the one W7 proved, not the same test with a different field.
+
+**It is realistically reachable, not a dead branch.** The preconditions are `entrant_kind: "team"` plus `allow_free_agents: true` (`registrations.ts:1830-1831`, else 422 `allow_free_agents requires entrant_kind 'team'`) plus a non-null `free_agent_fee_cents` (`registrations.ts:1836`, else "a price for something the division does not offer"). All three are ordinary organiser settings on a team division offering solo sign-ups; a sub-1.00 solo price is exactly the mistake the main guard exists to catch.
+
+**Coverage is absent on BOTH layers.**
+
+- Server: `registration-solo-signup-fee.test.ts` covers the field's negative case and a valid 1000, and nothing anywhere in `apps/web/src` or `apps/web/e2e` asserts the 422 for a 1-99 `free_agent_fee_cents`. Every existing assertion on the "Card entry fees must be at least 1.00" string is about `fee_cents`.
+- Client: `validateConfigState` (`apps/web/src/components/registration-hub-config-state.ts:213+`) mirrors `CARD_FEE_CENTS_MIN` for `fee_cents` only — there is no `free_agent_fee_cents` branch in it. So a sub-minimum solo sign-up fee reaches the server with no client-side warning at all, where the main fee is blocked before the network call.
+
+**Status:** OPEN for W8, documentation only in W7 — no fix, no new test, no production change. This is a note about a gap, not a defect report: the server guard is correct and does refuse the write. What W8 owes is a decision between (a) one API-layer case in `settings-registration-bounds.spec.ts` pinning the 422 on the no-Connect path, and (b) a client mirror rule in `validateConfigState` plus its unit case, so the two fee fields warn identically. Both are cheap; (b) is a production change and therefore outside a test-only wave.

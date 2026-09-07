@@ -447,8 +447,15 @@ test("a cutoff with no age band is accepted and stored on its own", async ({ req
     // (`usecases/registration-eligibility.ts`), which need a person with a
     // `dob` on a roster, and calling the pure function here against a
     // hand-built person would be a fixture on both ends proving only the
-    // fixture. Its behaviour for this state is covered where it belongs, by
-    // `lib/__tests__/registration-rules.test.ts`.
+    // fixture.
+    //
+    // Nor is this state covered by an existing unit test: every case in
+    // `lib/__tests__/registration-rules.test.ts`'s `ageBandEligibilityIssues`
+    // describe block (line 110) spreads one fixture, `{ age_min: 10,
+    // age_max: 15 }` — a null band is never exercised there. What makes the
+    // stored cutoff inert is the source, not a test: `registration-rules.ts`
+    // returns at line 263 (`if (division.age_min == null && division.age_max
+    // == null) return issues;`) before the cutoff is ever read.
   } finally {
     await releaseDivision(request, div.id);
   }
