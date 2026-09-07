@@ -16,7 +16,7 @@ import { requireBillingPage } from "@/server/page-auth";
 import { getAddOnsTab } from "@/server/usecases/add-ons-tab";
 import { preferredCurrency } from "@/lib/currency-server";
 import { resolveLocale } from "@/lib/resolve-locale";
-import { getDictionary, t } from "@/lib/i18n";
+import { getDictionary, plural, t } from "@/lib/i18n";
 import { ExtraOrgsControl } from "@/components/extra-orgs-control";
 import { Tip } from "@/components/ui/tip";
 import { SettingsShell, navContext } from "../_components/settings-nav";
@@ -43,9 +43,15 @@ export default async function AddOnsSettingsPage({
   // (`purchasedCapacity`). The resolver's admission cap is allowed to degrade
   // during dunning; a receipt is not. The degradation is said in words below
   // instead, so the page never shows two caps that disagree.
+  //
+  // `plural()`, not `t()`, on the unlimited half (W8 F2). A group that has never
+  // added a second organisation is the commonest one there is, and a flat key
+  // read "Using 1 organisations on this bill". The finite half keeps `t()`: its
+  // sentence carries a cap as well as a count, and "1 of 5 organisations" is
+  // already correct at every count it can hold.
   const capSummary =
     view.orgCap === null
-      ? t(dict, "addOns.cap.summaryUnlimited", { count: view.liveOrgCount })
+      ? plural(dict, "addOns.cap.summaryUnlimited", view.liveOrgCount, locale)
       : t(dict, "addOns.cap.summary", { count: view.liveOrgCount, cap: view.orgCap });
 
   return (

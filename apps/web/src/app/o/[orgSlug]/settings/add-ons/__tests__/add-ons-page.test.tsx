@@ -52,6 +52,11 @@ vi.mock("@/lib/i18n", async () => {
   return {
     getDictionary: async (locale: string) => (locale === "fr" ? fr : en),
     t: runtime.t,
+    // The real `plural` too, and for the same reason: the unlimited summary is
+    // chosen by Intl.PluralRules against the locale the page resolved, and a
+    // stub that always answered `.other` would make the singular case below
+    // vacuous — which is the exact defect that case exists for (W8 F2).
+    plural: runtime.plural,
   };
 });
 
@@ -350,6 +355,23 @@ describe("Add-ons page — the numbers it hands the control", () => {
     const { text } = await render({ orgCap: null, liveOrgCount: 4 });
     expect(text).toContain("Using 4 organisations on this bill");
     expect(text).not.toContain("null");
+  });
+
+  /**
+   * W8 F2. `addOns.cap.summaryUnlimited` was one flat string interpolated by
+   * `t()`, so a group holding a single organisation — much the commonest shape,
+   * since a group starts at one — read "Using 1 organisationS on this bill".
+   *
+   * Asserted at BOTH ends: the singular has to be in the markup, and the plural
+   * form at this count has to be absent. The positive alone is satisfied by a
+   * page that prints both; the negative alone by a page that prints neither.
+   * The case above (four organisations) stays as it is — together they are the
+   * pair that holds `plural()` to a real selection rather than to a constant.
+   */
+  it("counts a single organisation in the singular, not 'Using 1 organisations'", async () => {
+    const { text } = await render({ orgCap: null, liveOrgCount: 1 });
+    expect(text).toContain("Using 1 organisation on this bill");
+    expect(text).not.toContain("Using 1 organisations");
   });
 });
 

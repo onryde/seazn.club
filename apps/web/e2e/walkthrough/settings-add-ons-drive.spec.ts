@@ -661,10 +661,30 @@ test("a group whose plan has no organisation limit is told it has nothing to add
     // renders the right notice for the wrong reason — a cap that turned out
     // finite after all — must not be able to pass this test. A freshly seeded
     // group holds exactly the one organisation it was created with.
+    //
+    // ONE organisation is also the whole of W8 F2. `addOns.cap.summaryUnlimited`
+    // was a single flat key rendered through `t()`, so the commonest group there
+    // is — the one that has never added a second organisation — read "Using 1
+    // organisationS on this bill". The key is now a `.one`/`.other` pair chosen
+    // by `plural()`, and BOTH halves are asserted: the singular has to be on the
+    // screen, and the plural form at this count has to be absent. The positive
+    // alone would pass on a page that rendered both, and the negative alone
+    // would pass on a page that rendered neither.
+    const capOne = ui("addOns.cap.summaryUnlimited.one", { count: 1 });
+    const capOther = ui("addOns.cap.summaryUnlimited.other", { count: 1 });
+    // Anti-vacuity: if a translator ever collapsed the two forms to the same
+    // sentence the pair below would be self-contradicting rather than a test,
+    // and the assertion that failed would point at the page instead of at the
+    // dictionary that caused it.
+    expect(capOne, "the singular and plural forms must actually differ").not.toBe(capOther);
     await expect(
-      page.getByText(ui("addOns.cap.summaryUnlimited", { count: 1 })),
-      "the group really is on the unlimited plan",
+      page.getByText(capOne),
+      "the group really is on the unlimited plan, and its one organisation is counted in the singular",
     ).toBeVisible({ timeout: READ_MS });
+    await expect(
+      page.getByText(capOther),
+      "…never the plural form at a count of one, which is what a flat key rendered",
+    ).toHaveCount(0);
 
     await expect(
       page.getByText(ui("addOns.unlimitedNotice")),
