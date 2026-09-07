@@ -27,6 +27,7 @@
 // the suite runs in the node environment and the gate has no effects.
 import { describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
+import { PlanBadge } from "@/components/plan-badge";
 import type { ReactNode } from "react";
 import { CompetitionPassProvider } from "@/components/competition-pass-provider";
 import { PASS_FEATURES, UpgradeGate } from "@/components/upgrade-gate";
@@ -460,7 +461,11 @@ describe("UpgradeGate — pass ended (v17 gap #301: a locked pass is not 'active
     });
     expect(html).not.toContain("data-pass-ended");
     expect(html).not.toContain("data-pass-owned");
-    expect(html).toContain("See plans &amp; upgrade");
+    // W3-B: the paid arm now renders the beyond-plan card. It used to render
+    // "See plans & upgrade →" — a link to a picker holding the plan this org
+    // is already paying for.
+    expect(html).toContain("data-beyond-plan");
+    expect(html).not.toContain("See plans &amp; upgrade");
   });
 
   it("does not invent an ended pass when a lock reason arrives with no pass row", () => {
@@ -605,7 +610,8 @@ describe("UpgradeGate — competition closed to passes (#376: past the line, nev
       lockReason: "terminal",
     });
     expect(html).not.toContain("data-pass-closed-gate");
-    expect(html).toContain("See plans &amp; upgrade");
+    expect(html).toContain("data-beyond-plan");
+    expect(html).not.toContain("See plans &amp; upgrade");
   });
 
   it("leaves a competition still inside the line offering the pass", () => {
@@ -638,7 +644,22 @@ describe("UpgradeGate — paid plan (D1: any paid plan → Pro path only)", () =
     expect(html).not.toContain(PASS_PRICE);
     expect(html).not.toContain("data-pass-gate");
     expect(html).not.toContain("data-pass-cta");
-    expect(html).toContain("See plans &amp; upgrade");
+    // …and does not answer "Go Pro" to an org already on Pro (W3-B). This is
+    // the dead end the L rung used to cover: L was the only rung above Pro's
+    // entrants ceiling, and with it off sale there is no self-serve route
+    // left, so the only honest next step is a conversation.
+    expect(html).toContain("data-beyond-plan");
+    expect(html).not.toContain("See plans &amp; upgrade");
+    expect(html).toContain("mailto:hello@seazn.club");
+    // The SENTENCE, not just the container: a card carrying the right
+    // attribute over a missing dictionary key renders a lock icon, a reason
+    // and a button with nothing between them, and every assertion above
+    // passes on it. Read through `t` so a reworded string moves this with it.
+    expect(html).toContain(t(uiEn as unknown as Dict, "upgrade.beyondPlan.body"));
+    // No tier badge on the card either, for the same reason as the pill:
+    // "Pro ✦" over a reader on Pro names the thing being sold. Rendered from
+    // the component so a relabelled badge moves this with it.
+    expect(html).not.toContain(renderToStaticMarkup(<PlanBadge feature={LIFTABLE} />));
   });
 
   it("never offers a pass that grants LESS than the plan already held", () => {
@@ -674,22 +695,67 @@ describe("UpgradeGate — paid plan (D1: any paid plan → Pro path only)", () =
     expect(html).not.toMatch(/30 days/);
   });
 
-  it("keeps the paid-plan card identical to the org-level one", () => {
-    // No new state was invented: a paid org inside a competition renders the
-    // same Pro-only card an org-level page has always rendered.
+  it("no longer renders the org-level card — and the org-level one is the KNOWN GAP", () => {
+    // This test used to assert `inComp === orgLevel` byte for byte, under the
+    // heading "no new state was invented". W3-B invents exactly that state on
+    // purpose: a paid org's gate was closed by its PLAN's ceiling, and the card
+    // that says "See plans & upgrade →" points it at a picker containing the
+    // plan it already pays for.
+    //
+    // The org-level arm is deliberately UNCHANGED and this asserts it, because
+    // it is the honest limit of this change rather than an oversight. Outside a
+    // competition there is no CompetitionPassProvider, so the gate has no way
+    // to know the viewer's plan — `usePassGateState()` answers "none", which is
+    // indistinguishable from a community org. Closing it needs the viewer's
+    // plan to reach the gate from the call site (W3-B step B, the required
+    // prop); this test is what will red when that lands, which is the point.
     pathname = "/o/riverside/c/summer-league/d/new";
     const inComp = render(<UpgradeGate feature={LIFTABLE} />, { paidPlan: true });
     pathname = "/o/riverside/settings/billing";
     const orgLevel = render(<UpgradeGate feature={LIFTABLE} />);
-    expect(inComp).toBe(orgLevel);
+
+    expect(inComp).not.toBe(orgLevel);
+    // Both directions, so neither half can be satisfied by the other's shape.
+    expect(inComp).toContain("data-beyond-plan");
+    expect(inComp).toContain("mailto:hello@seazn.club");
+    expect(inComp).not.toContain("See plans &amp; upgrade");
+    expect(orgLevel).not.toContain("data-beyond-plan");
+    expect(orgLevel).toContain("See plans &amp; upgrade");
   });
 
-  it("sends the compact pill to billing rather than the $29 checkout", () => {
+  it("sends the compact pill to the conversation, not to the $29 checkout OR to billing", () => {
+    // Billing was the OLD destination and is no better than the checkout for
+    // this reader: it is the page that lists the plan they hold. The pill has
+    // no room to explain, so its href is the whole message.
     pathname = "/o/riverside/c/summer-league/d/main/schedule";
     const html = render(<UpgradeGate feature={LIFTABLE} compact />, { paidPlan: true });
     expect(html).not.toContain(UPGRADE_HREF);
-    expect(html).toContain('href="/settings/billing"');
+    expect(html).not.toContain('href="/settings/billing"');
+    expect(html).toContain("mailto:hello@seazn.club");
+    expect(html).toContain("data-beyond-plan");
     expect(html).not.toContain("data-pass-owned");
+    // …and no tier badge. <PlanBadge> names the tier the FEATURE belongs to —
+    // "Pro ✦" — which above a reader already on Pro reads as the thing being
+    // sold. Rendered from the component itself rather than typed here, so a
+    // relabelled badge moves this assertion with it; a mutation sweep found
+    // this the one part of the card no test could see.
+    expect(html).not.toContain(renderToStaticMarkup(<PlanBadge feature={LIFTABLE} />));
+  });
+
+  it("keeps the compact pill pointed at billing for an org that is NOT paying", () => {
+    // The control arm for the test above. Without it, "the pill does not link
+    // to billing" is satisfied by a pill that links nowhere useful in any
+    // state, and the change would read as green while breaking every community
+    // org's route to the plan picker.
+    pathname = "/o/riverside/c/summer-league/d/main/schedule";
+    const html = render(<UpgradeGate feature={NOT_LIFTABLE} compact />, { provider: true });
+    expect(html).toContain('href="/settings/billing"');
+    expect(html).not.toContain("data-beyond-plan");
+    expect(html).not.toContain("mailto:hello@seazn.club");
+    // The badge's POSITIVE pair. Without it "the paid pill has no badge" is
+    // satisfied by a badge that renders for nobody, which would strip every
+    // community org of the tier signal the pill exists to give.
+    expect(html).toContain(renderToStaticMarkup(<PlanBadge feature={NOT_LIFTABLE} />));
   });
 
   it("beats a pass row the org still holds", () => {

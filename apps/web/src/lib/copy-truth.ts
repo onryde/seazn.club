@@ -3171,6 +3171,64 @@ export const PAID_OVERCLAIM_VOCAB: Array<[feature: string, byLocale: Record<Dict
   ],
 ];
 
+/**
+ * Every plan name this product prints, in the ONE spelling all four locales
+ * use.
+ *
+ * Untranslated on purpose, and that is what makes this rule locale-robust
+ * rather than an English guard silently passing three dictionaries: "Pro",
+ * "Event Pass" and "Enterprise" are proper nouns here and ship identically in
+ * es/fr/nl (`upgrade.rung.m` is "Event Pass M" in all four). A rule phrased
+ * around English GRAMMAR — `PRO_ATTRIBUTION` and its siblings above — cannot
+ * make that claim, which is why those take a per-locale vocabulary and this
+ * does not.
+ *
+ * Its own constant rather than reusing `PAID_PLAN_NAME`: that one is missing
+ * Enterprise, and widening it would change what several unrelated rules judge.
+ */
+export const ANY_PLAN_NAME = /\b(?:Pro Plus|Pro|Event Pass|Enterprise|Community)\b/i;
+
+/**
+ * The beyond-plan card's sentence — shown ONLY to an org already on a paid
+ * plan, when a gate fired because of that plan's own ceiling (v18 W3-B).
+ *
+ * It must name no plan at all, in any locale. Every other paywall sentence in
+ * this product exists to attribute a capability to a tier; this one is shown
+ * to a reader for whom every such attribution is either something they already
+ * hold ("Pro") or a negotiation a sentence cannot conduct ("Enterprise"). The
+ * failure it guards against is concrete and was the shipped behaviour: the
+ * card said "See plans & upgrade" to an org whose plan was in that list.
+ *
+ * ANTI-VACUITY, both halves. An empty `values` is reported rather than passing
+ * — a rule that examines nothing is the failure mode this file has hit twice —
+ * and so is a call that supplies fewer than the four dictionaries, because a
+ * plan name reaching only `fr` is exactly the shape a locale-blind sweep
+ * misses.
+ */
+export function beyondPlanCopyFaults(values: readonly LocalisedValue[]): string[] {
+  if (values.length === 0) {
+    return ["no beyond-plan copy supplied — this rule would examine nothing"];
+  }
+  const faults: string[] = [];
+  const seen = new Set(values.map((v) => v.locale));
+  for (const locale of DICTIONARY_LOCALES) {
+    if (!seen.has(locale)) faults.push(`${locale}: beyond-plan copy was not supplied`);
+  }
+  for (const { locale, key, value } of values) {
+    if (value.trim() === "") {
+      faults.push(`${locale} ${key}: empty — the card would render a heading over nothing`);
+      continue;
+    }
+    const named = ANY_PLAN_NAME.exec(value);
+    if (named) {
+      faults.push(
+        `${locale} ${key}: names "${named[0]}" to a reader who already holds the top self-serve tier`,
+      );
+    }
+  }
+  return faults;
+}
+
 export function localePaidOverclaimFaults(
   values: LocalisedValue[],
   grants: FeatureGrants,

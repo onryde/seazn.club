@@ -73,6 +73,7 @@ import {
   localeHalfClaimFaults,
   localePassBoundFaults,
   localePassUncoveredFaults,
+  beyondPlanCopyFaults,
   localePaidOverclaimFaults,
   retiredClaimFaults,
   valueClauses,
@@ -2686,6 +2687,57 @@ describe.skipIf(!HAS_DB)("the four-locale dictionaries match plan_entitlements",
         `${locale} upgrade.limit.formats: sells formats.advanced`,
       );
     }
+  });
+
+  // ── W3-B: the beyond-plan card. Shown ONLY to an org already on a paid
+  // plan, when a gate fired because of that plan's own ceiling — the state
+  // that used to render "See plans & upgrade →" pointing at a picker holding
+  // the plan the reader was already paying for.
+  //
+  // Its own rule rather than a row in `localePaidOverclaimFaults`: that guard
+  // asks whether a sentence oversells a key community already grants, which
+  // is a question about the MATRIX. This one is about the READER — every plan
+  // attribution is wrong here regardless of what any row says, because the
+  // reader holds the top self-serve tier.
+  it("the beyond-plan sentence names no plan, in all four locales", () => {
+    expect(beyondPlanCopyFaults(across("ui", "upgrade.beyondPlan.body"))).toEqual([]);
+  });
+
+  it("…and a plan name in ANY ONE locale reds, with the other three silent", () => {
+    const live = across("ui", "upgrade.beyondPlan.body");
+    // The exact failure this exists for, injected into ONE locale: a
+    // locale-blind sweep, or an English-grammar rule, passes this.
+    const salted = live.map((v) =>
+      v.locale === "fr" ? { ...v, value: `${v.value} Passez à Pro.` } : v,
+    );
+    const faults = beyondPlanCopyFaults(salted);
+    expect(faults).toHaveLength(1);
+    expect(faults[0]).toContain("fr upgrade.beyondPlan.body");
+    expect(faults[0]).toContain('names "Pro"');
+  });
+
+  it("…and reports a call that examines nothing rather than passing", () => {
+    // Both anti-vacuity halves. An empty call is the shape this file has been
+    // burned by twice; a short call is the shape a locale-blind sweep takes.
+    expect(beyondPlanCopyFaults([])).toEqual([
+      "no beyond-plan copy supplied — this rule would examine nothing",
+    ]);
+    const enOnly = across("ui", "upgrade.beyondPlan.body").filter((v) => v.locale === "en");
+    const faults = beyondPlanCopyFaults(enOnly).join(" | ");
+    for (const locale of DICTIONARY_LOCALES.filter((l) => l !== "en")) {
+      expect(faults).toContain(`${locale}: beyond-plan copy was not supplied`);
+    }
+    // …and an EMPTY string is not the same as a missing one: it is supplied,
+    // it passes the coverage half, and it renders a card with a blank body.
+    expect(
+      beyondPlanCopyFaults(
+        DICTIONARY_LOCALES.map((locale) => ({
+          locale,
+          key: "upgrade.beyondPlan.body",
+          value: "   ",
+        })),
+      ),
+    ).toHaveLength(DICTIONARY_LOCALES.length);
   });
 
   // ── W3-A (2026-09-06, V399): `pricing.pro.f4` named "player stats" as a Pro

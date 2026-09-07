@@ -5612,6 +5612,7 @@ export type DictionaryKey =
   | "upgrade.active.title"
   | "upgrade.backToCompetition"
   | "upgrade.beyondPlan"
+  | "upgrade.beyondPlan.body"
   | "upgrade.beyondPlanTable"
   | "upgrade.buyCta"
   | "upgrade.buyCtaPlain"

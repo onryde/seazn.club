@@ -1195,6 +1195,7 @@
   "upgrade.owned.nextBody": "Le pass reste attaché à cette compétition quoi que vous fassiez ensuite. Pro apporte les mêmes fonctionnalités à toutes les autres compétitions de {org}, avec 20 divisions dans chacune et aucune limite de compétitions simultanées.",
   "upgrade.credit": "Un Event Pass acheté au cours des 30 derniers jours est intégralement déduit de votre première facture {plan} — une seule fois par groupe de facturation, la première fois qu'il s'abonne.",
   "upgrade.contactUs": "Contactez-nous",
+  "upgrade.beyondPlan.body": "Votre formule inclut déjà tout ce que nous vendons en libre-service. Aller au-delà se fait au cas par cas — dites-nous ce qu’il vous faut.",
   "upgrade.ceiling.title": "L’Event Pass s’arrête ici",
   "upgrade.ceiling.included": "Vous avez utilisé tout ce que l’Event Pass inclut ici.",
   "upgrade.ceiling.notIncluded": "Celle-ci n’est pas incluse dans l’Event Pass.",
