@@ -1,6 +1,14 @@
 import { test, expect, type APIRequestContext, type Page } from "@playwright/test";
 import AxeBuilder from "@axe-core/playwright";
-import enPublic from "../src/dictionaries/en/public.json";
+// `with { type: "json" }` is REQUIRED, not decoration: `apps/web` is
+// "type": "module", so Playwright loads this through Node's ESM loader, which
+// refuses a bare JSON import with `needs an import attribute of "type: json"`.
+// The spec then collects NO TESTS AT ALL and the run reports "No tests found",
+// which reads like a bad path filter rather than a broken import — see
+// `e2e/price-kit.ts`'s own note, and `marketing-ai-demo.spec.ts`, which reads
+// its dictionary with readFileSync for the same reason. Vitest bundles instead
+// of using the loader, which is why the unit suites and tsc were both happy.
+import enPublic from "../src/dictionaries/en/public.json" with { type: "json" };
 import {
   activeOrg,
   addEntrantsViaApi,
