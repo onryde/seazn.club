@@ -186,13 +186,23 @@ insert immediately BEFORE the ownership check at `:255`:
     // key, so a prober cannot exhaust a legitimate scorer's 10/s budget (and
     // vice versa), and no intent gate, because a cross-fixture 403 is equally
     // free to probe at either one.
-    if (!deviceLinkCoversFixture(link, fixtureId)) {
+    const covers = deviceLinkCoversFixture(link, fixtureId);
+    if (!covers) {
       await rateLimit(`dlv1-refuse:${link.id}`, { max: 10, windowSeconds: 1 });
     }
 ```
 
-Leave the existing throw at `:255-256` and the existing grant meter at
-`:259-260` exactly as they are. Do not move the grant meter: three score-intent
+…and change the existing throw at `:255-256` to reuse that result rather than
+asking the predicate twice:
+
+```ts
+    if (!covers) {
+      throw new HttpError(403, "This device link is for a different fixture");
+    }
+```
+
+Ownership still lives in ONE predicate — this only stops calling it twice per
+request. Leave the existing grant meter at `:259-260` exactly as it is. Do not move the grant meter: three score-intent
 callers depend on its current position —
 `apps/web/src/app/api/v1/fixtures/[id]/lineups/[entrantId]/route.ts:28`,
 `.../finalize/route.ts:15`, `.../events/route.ts:15`.
@@ -507,6 +517,20 @@ when the test step failed, so it reports the real cause:
 Do NOT extend the existing `:489-492` Connect warning — it keys on
 `STRIPE_CONNECT_TEST_ACCOUNT` and is about a different money path.
 
+- [ ] **Step 7b: Re-run the wiring guard AFTER the workflow edit**
+
+```bash
+cd apps/web && pnpm vitest run src/lib/__tests__/e2e-ci-wiring.test.ts \
+  --reporter=json --outputFile=/tmp/w4-t3-wiring-2.json
+```
+
+Step 5 ran this before `e2e.yml` was touched. That file also asserts the
+workflow's SHAPE — step ordering around `Start server` (`:477-507`) and an
+exact `refs.length` of 3 on the checkout steps (`:536`) — so a guard that only
+ran before the edit has not policed the edit. Expected: still green. If the
+ref count reds, your new step introduced a `ref:` and the assertion is telling
+you so correctly.
+
 - [ ] **Step 8: Confirm the project assignment changed**
 
 ```bash
@@ -807,18 +831,24 @@ test.describe("save points roll a window rather than refusing", () => {
   for (const plan of ["community", "pro", "event_pass", "event_pass_l", "enterprise"] as const) {
     test(`${plan}: the cap+1th save point evicts the oldest, and nothing 402s`, async ({ request }) => {
       const cap = await planCapSql(CHECKPOINTS, plan);
-      test.skip(cap == null, `${plan} has no ${CHECKPOINTS} row — nothing to bound`);
+      if (cap == null) {
+        // Enterprise is unlimited (null cap, V393:33-35). Assert that rather
+        // than skipping: a skipped row proves nothing, and "unlimited" is a
+        // real claim about the plan that deserves an assertion of its own.
+        expect(plan, `${plan} has a null ${CHECKPOINTS} cap — only enterprise may`).toBe("enterprise");
+        return;
+      }
 
       const rig = await seedOrgOnPlan(plan); // see Step 2
-      for (let i = 0; i < cap! + 1; i++) {
+      for (let i = 0; i < cap + 1; i++) {
         const res = await apiJson(request, "POST", `/api/v1/divisions/${rig.divisionId}/checkpoints`, {
           label: `${TAG}-cp-${i}`,
         });
-        expect(res.status, `save point ${i + 1} of ${cap! + 1} on ${plan}`).toBeLessThan(400);
+        expect(res.status, `save point ${i + 1} of ${cap + 1} on ${plan}`).toBeLessThan(400);
       }
 
       const list = await apiJson(request, "GET", `/api/v1/divisions/${rig.divisionId}/checkpoints`);
-      expect(list.body.items).toHaveLength(cap!);
+      expect(list.body.items).toHaveLength(cap);
       // The ROLL, not merely the count: the first one written is the one gone.
       expect(list.body.items.map((c: { label: string }) => c.label)).not.toContain(`${TAG}-cp-0`);
     });
