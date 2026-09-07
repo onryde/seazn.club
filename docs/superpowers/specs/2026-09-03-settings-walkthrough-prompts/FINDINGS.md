@@ -155,7 +155,11 @@ Both are states the both-or-neither invariant says cannot exist.
 
 **Consequence, and why it is low severity.** The orphan is not inert: `ageBandEligibilityIssues` (`lib/registration-rules.ts`) resolves the cutoff as `age_cutoff_month ?? 1` / `age_cutoff_day ?? 1`, so a row left at `month = 9, day = null` keeps evaluating ages at **1 September** when the organiser's intent in clearing the day was to return to the 1 January default. (The mirror case, `month = null, day = 1`, resolves to 1 January and is harmless.) It bites only where the division also carries an `age_min`/`age_max`, since that function returns early with no band. And it is script-only from the product: the config panel always sends BOTH fields on every save (`toDivisionPatchBody`, `registration-hub-config-state.ts:129-130`) and its month `<select>` nulls the day whenever the month goes null (`registration-hub-config-panel.tsx:705`). `/api/v1` is a public API, so "the panel never sends it" bounds the blast radius rather than closing it.
 
-**Status:** open, deliberately NOT fixed and NOT asserted against in W7 — the same call F8 records for the same shape. Pinning the 200 would freeze a live bug as the suite's expected value (AGENTS.md failure class 4); asserting the 400 it ought to give would red the branch for a defect this test-only wave did not create; and patching production code mid-wave is outside a test-only wave's remit. The fix is a merge-against-the-stored-row check for the cutoff pair inside `patchDivision`, exactly like the one `age_min`/`age_max` already has, plus correcting the `schemas.ts` comment (and, optionally, rewriting the CHECK as `num_nulls(age_cutoff_month, age_cutoff_day) <> 1` so the constraint can actually hold the invariant). When it lands, its case belongs in `settings-registration-bounds.spec.ts`'s both-or-neither test, where a comment already marks the spot.
+**Status: FIXED in W8** (Task 6, commit `d3ca862bd` — the merge-check plus two rounds of comment fixes; the guard itself landed in `1f8332a17`). Not fixed in W7, and the reasoning for deferring it stands as recorded: pinning the 200 would have frozen a live bug as the suite's expected value (AGENTS.md failure class 4), asserting the 400 it ought to give would have reddened the branch for a defect a test-only wave did not create, and patching production code mid-wave was outside that wave's remit.
+
+The fix is the one this entry predicted: `patchDivision` (`usecases/divisions.ts`) now merges the patch against the stored row inside its own tenant transaction, exactly like the `age_min`/`age_max` block beside it, and throws its own `HttpError(422, AGE_CUTOFF_BOTH_OR_NEITHER)`. Note the STATUS: **422** from the use-case, against the **400** `checkAgeCutoff`'s ZodError still gives for a mismatched pair sent in ONE body. Same sentence, two layers, and the status is what says which one caught the request — `settings-registration-bounds.spec.ts`'s both-or-neither test now asserts both, one helper each (`expectCutoffIssue` / `expectCutoffMergeRefusal`), with the read-back that pins the guard's PLACEMENT (a check that ran after the UPDATE would 422 and still have orphaned the row). The `schemas.ts` comment that carried the false "already backstopped" premise was corrected in the same wave.
+
+**Accepted residual, NOT fixed:** there is still no DB backstop for the both-or-neither half specifically — `divisions_age_cutoff_check` only holds the RANGE, and a one-sided orphan satisfies it (`false OR NULL` is NULL, and a CHECK passes on NULL, as this entry sets out above). So a genuine cross-request race — two concurrent PATCHes each reading the same pre-commit row, one supplying the month and the other nulling the day — could in theory still commit an orphan. Low likelihood and script-only from the product (the config panel always sends both halves), so it was accepted rather than closed. The optional rewrite this entry already names — `num_nulls(age_cutoff_month, age_cutoff_day) <> 1` — would close it fully; W8 Task 6 deliberately skipped it because it is a schema migration and this wave's remit was the application-layer guard. Worth an owner call if the API is ever opened to third-party writers. See also **F19** below, a consequence of the guard for divisions that ALREADY carry an orphan.
 
 ### F13 (documented behaviour, not a defect) — an age cutoff with no age band is accepted, and is inert until a band exists
 
@@ -192,4 +196,77 @@ if (method === "stripe" && freeAgentFeeCents !== null && freeAgentFeeCents > 0 &
 - Server: `registration-solo-signup-fee.test.ts` covers the field's negative case and a valid 1000, and nothing anywhere in `apps/web/src` or `apps/web/e2e` asserts the 422 for a 1-99 `free_agent_fee_cents`. Every existing assertion on the "Card entry fees must be at least 1.00" string is about `fee_cents`.
 - Client: `validateConfigState` (`apps/web/src/components/registration-hub-config-state.ts:213+`) mirrors `CARD_FEE_CENTS_MIN` for `fee_cents` only — there is no `free_agent_fee_cents` branch in it. So a sub-minimum solo sign-up fee reaches the server with no client-side warning at all, where the main fee is blocked before the network call.
 
-**Status:** OPEN for W8, documentation only in W7 — no fix, no new test, no production change. This is a note about a gap, not a defect report: the server guard is correct and does refuse the write. What W8 owes is a decision between (a) one API-layer case in `settings-registration-bounds.spec.ts` pinning the 422 on the no-Connect path, and (b) a client mirror rule in `validateConfigState` plus its unit case, so the two fee fields warn identically. Both are cheap; (b) is a production change and therefore outside a test-only wave.
+**Status: CLOSED in W8** (Task 7) — as **option (a)**, the server-side coverage. Documentation only in W7, as recorded: no fix, no new test, no production change there. This was always a note about a gap rather than a defect report — the server guard is correct and does refuse the write — and W8 owed a decision between (a) one API-layer case in `settings-registration-bounds.spec.ts` pinning the 422 on the no-Connect path, and (b) a client mirror rule in `validateConfigState`.
+
+**(a) is done.** `settings-registration-bounds.spec.ts` now carries *"a solo sign-up price below 1.00 is refused ahead of the Connect gate"*, sited immediately ABOVE the `fee_cents` card-fee test because that test is what attaches the shared org's Connect account — the free-agent guard's whole distinguishing property is that it fires WITHOUT one, so it has to run first. It asserts the exact server sentence for 1/50/99, and — the part that makes those rows mean anything — asserts that 100 and 0 fall through to the CONNECT sentence instead, which is what the request does when the guard under test does not fire. Proved by mutation against a running prod build, four mutants, four kills, four DIFFERENT killer assertions: guard disabled (kills the 1/50/99 rows), `> 0` → `>= 0` (kills the 0 row), `< 100` → `< 99` (kills the 99 row), `< 100` → `<= 100` (kills the 100 row).
+
+**(b) is NOT done, and is superseded.** The client-mirror estimate in this entry turned out to be too small: the panel has no render site for the field and cannot even route the refusal it already receives, because the two guards throw an identical sentence. That is recorded separately as **F15** below, which carries the real scope.
+
+## W8
+
+F-numbers continue W7's sequence so every id in this file stays unique.
+
+W8 is the programme's FIX wave, so unlike W4–W7 it both CLOSES entries above and opens new ones. The entries below are what W8's own tasks and reviews found and did NOT fix, each with the reason. A closed entry is recorded in its OWN Status line, not here — read each entry's Status, never this preamble, for whether something is still open.
+
+### F15 (real, low severity, documentation only — NOT fixed) — a `free_agent_fee_cents` 422 renders on the WRONG field
+
+Found: W8 planning research, while scoping F14's option (b).
+
+`ConfigFieldKey` (`apps/web/src/components/registration-hub-save-error.ts`, the union beginning at `:19` and ending on `"allow_free_agents"`) has no `"free_agent_fee_cents"` member, and `MESSAGE_FIELD_PATTERNS` (same file, the table opening at `:84`) carries a single `[/card entry fees must be at least/i, "fee_cents"]` row. That pattern matches BOTH the `fee_cents` guard's and the `free_agent_fee_cents` guard's error string — the two throw an IDENTICAL sentence, `"Card entry fees must be at least 1.00 (or 0 for free)"` — and routes either one unconditionally to `"fee_cents"`. So a real `free_agent_fee_cents` 422 (this wave's own Task 7 proves the server throws it) renders as a field error on `fee_cents`, the WRONG input, rather than on the free-agent fee field, which has no render site to route to anyway.
+
+**Status:** open, not fixed this wave. A real fix needs: adding `"free_agent_fee_cents"` to `ConfigFieldKey` and `ROUTABLE_FIELDS`, a render site in the panel's money section, a `validateConfigState` mirror rule (what F14's own option (b) proposed), and disambiguating `MESSAGE_FIELD_PATTERNS`'s pattern. The client cannot tell the two apart from the message alone, so the fix likely needs the server to throw two distinguishable messages, or the client to infer from which of the two fields is non-null in the outgoing PUT body. Bigger than the "client mirror rule" F14 estimated — recommend a dedicated follow-up task, not an inline fix.
+
+### F16 (real, low severity — NOT fixed) — two more count-boundary strings with no plural rule, the sibling keys F2 did not cover
+
+Found: Task 2's review, immediately after F2's `addOns.cap.summaryUnlimited` fix landed.
+
+F2 split `addOns.cap.summaryUnlimited` into `.one`/`.other`. Its two siblings on the same panel carry the same defect, in states a user reaches:
+
+- **`addOns.cap.summary`, `en`** — `"Using {count} of {cap} organisations on this bill."` A Community group's cap is `1` (`plan_entitlements`: `community` / `orgs.max_owned` / `int_value = 1`, read live), so the ordinary Community rendering is **"Using 1 of 1 organisations on this bill."**
+- **`addOns.cap.summary`, `fr`** — `"{count} organisations utilisées sur {cap} pour cette facture."` French agreement runs off `{count}` here, which is the RIGHT number to agree with; what is missing is the plural rule, so `count = 1` renders **"1 organisations utilisées sur 5"** — noun and past participle both plural for one. `es` (`"Usando {count} de {cap} organizaciones…"`) and `nl` (`"{count} van {cap} organisaties…"`) have the same shape.
+- **`addOns.extraOrg.floorNote`, all four locales** — `en` reads `"You can't go below {min} — that many organisations in this group are standing on an extra organisation. Move one out of the group first."` At `min = 1` — the smallest and most common floor — it renders "that many organisations … **are** standing", plural for one.
+
+**Status:** open, not fixed this wave. The real fix is the same one F2 shipped: a `.one`/`.other` split for BOTH keys, in all four locale dictionaries, with `gen-keys` regenerated. Deferred rather than folded into Task 2 because it is a second and third key with their own copy decisions per locale (French and Dutch agreement differ from English's), not a mechanical repeat of the fix already reviewed. Low severity: cosmetic, and every affected string still communicates the right number.
+
+### F17 (real, low severity, ops-facing — NOT fixed) — the extra-org reprice alert hands on-call a two-rate diagnosis for a one-rate catalog
+
+Found: Task 3's review, while confirming F3/F4's stale-comment sweep had reached every site.
+
+`sendExtraOrgRepriceFailedAlertEmail` (`apps/web/src/lib/email.ts`) describes the failure in terms of a tier ladder that no longer exists, in TWO places:
+
+- the doc comment (`:1127-1129`): *"that group is billing the WRONG RATE — $9 on a Pro Plus plan (the arbitrage the two rates exist to close) or $19 on Pro (an overcharge)"*;
+- the runtime `bodyText` (`:1146-1149`), which is what an on-call engineer actually reads: *"The two rates ($9 Pro / $19 Pro Plus) are load-bearing: left on the Pro price, a Pro Plus group undercuts the tier ladder; left on the Pro Plus price, a Pro group is overcharged."*
+
+The live catalog (`apps/web/src/config/stripe-plans.json`, `org_addons`) holds exactly ONE rider SKU — `extra_org_pro`, `plan_key: "pro"`, `unit_amount: 699`. There is no `pro_plus` tier and no `$19` rate; `$9` is not the Pro rate either. Wrong numbers and a wrong tier count, in the one message whose whole job is to tell someone what to change in the Stripe Dashboard.
+
+Reachable only for `pro`-plan groups: the reprice path early-returns for any plan with no rider SKU, so nothing else can produce this alert. Ops-only, no user-facing surface, no i18n owed.
+
+**Status:** open, not fixed this wave. Both sites need correcting to the single-tier catalog, and the runtime string should be SOURCED from `stripe-plans.json` (via `orgAddonPriceMinor`) rather than restating a literal — restating it is exactly how this claim went stale twice already, which is the same lesson F3's own fix in this wave records. Batched here rather than folded into Task 3 because Task 3's remit was the add-ons *catalog comments*, and this is a runtime string with its own copy decision.
+
+### F18 (real, low severity, test-only — NOT fixed) — the rider's only live-catalog parity check cannot pass
+
+Found: Task 3's review, following F17's thread into the tests that were supposed to catch it.
+
+`apps/web/src/server/usecases/__tests__/extra-org-addon.live.test.ts`'s *"resolves BOTH live rider rates from the catalog, and Pro Plus is the dearer one"* (`:280`) asserts a two-tier catalog that no longer exists. Three separate assertions fail against the live seed, not one:
+
+- `:285` — `expect(ORG_ADDONS.map((e) => e.planKey).sort()).toEqual(["pro", "pro_plus"])`. `ORG_ADDONS` is built from the seed's `org_addons` array (`lib/org-addons.ts:51`), which holds one entry, so this reads `["pro"]`.
+- `:345` — `expect(rates.pro).toBe(900)`. The real rate is `699`.
+- `:346` — `expect(rates.pro_plus).toBe(1_900)`, and `:347`'s `toBeGreaterThan`. `pro_plus` is never populated by the `for (const entry of ORG_ADDONS)` loop above, so the key is `undefined`.
+
+The test's TITLE is stale in the same direction — there is no "BOTH" and no Pro Plus to be dearer than anything.
+
+It is gated `describe.skipIf(!LIVE)` behind `BILLING_LIVE=1` (plus a test-mode key and a `*_test` database), so it never runs in normal CI and nothing is red today. That is the finding: this is the repo's ONLY live-catalog parity check for the rider — the one test that pins `orgAddonPriceMinor`'s seed against what the Stripe account actually holds — and the guarantee is currently unheld, silently.
+
+**Status:** open, not fixed this wave. The repair is modelled two lines above the defect: `:326` and `:339` already derive their expectation from `orgAddonPriceMinor(entry.planKey, currency)` instead of a literal. The fix is to make the flat-rate assertion do the same, drop the `pro_plus` assertions and the ladder inequality entirely (a one-tier catalog has no ladder to arbitrage), correct `:285` to the seed's own membership, and retitle. Cheap, but it needs `BILLING_LIVE=1` against the shared Stripe test account to verify — which is why it is a task of its own rather than a fold-in.
+
+### F19 (real, low severity, script-reachable only — NOT fixed) — a division that already carries an orphaned cutoff half can no longer be saved from the hub at all
+
+Found: Task 6's review, assessing the blast radius of the F12 fix that same task shipped.
+
+A division with exactly one cutoff half set — `age_cutoff_month = 9, age_cutoff_day = null`, say — is the state F12 describes and F12's fix now prevents being CREATED. Rows already in that state (only reachable via a direct script or DB write; the registration hub UI has never sent a one-sided body) become unsaveable from the hub:
+
+- `toDivisionPatchBody` (`registration-hub-config-state.ts:119-124`) returns all six eligibility keys on EVERY save, unconditionally. So the PATCH body always carries both `age_cutoff_month` and `age_cutoff_day`, with whatever the GET loaded into state — for an orphan row, that is `{ age_cutoff_month: 9, age_cutoff_day: null }`.
+- `checkAgeCutoff` (`api-v1/schemas.ts`) reads that body and fires: `(9 != null) !== (null != null)` is `true !== false`. The refusal is the pre-existing **400/VALIDATION** ZodError at path `age_cutoff_day`, live since RS007/V380 and untouched by this wave — not the 422 F12's merge-check added. So the organiser is refused no matter which field they actually meant to change: a name edit, a capacity edit, anything.
+- It is worse when the division also has no age band. `hasAgeBand` (`registration-hub-config-panel.tsx:614`, `state.age_min != null || state.age_max != null`) gates the two cutoff `<select>`s `disabled` (`:699`, `:726`), so the organiser is shown a field error on a control they cannot touch, with no way to complete or clear the pair from the panel.
+
+**Status:** open, not fixed this wave. It is a pre-existing-data problem the F12 fix makes visible rather than a defect the fix introduced — no new orphan can be created now, and the hub could never create one before. Two candidate repairs, and the choice is an owner call rather than an implementer's: (a) a one-off repair script nulling the surviving half of any existing orphan row (a data migration — needs a count of live rows first, which on this database is expected to be zero), or (b) a hub-side fallback in `toDivisionPatchBody` that OMITS an untouched cutoff half instead of always sending both, so an unrelated edit passes through. (b) is the more general fix and the riskier one — omission is how a partial patch loses an intended clear, which is the shape F12 itself was about — so it should not be taken without deciding what "untouched" means for a control the panel has disabled.

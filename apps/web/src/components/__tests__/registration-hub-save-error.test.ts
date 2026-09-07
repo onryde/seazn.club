@@ -77,7 +77,7 @@ describe("mapSaveError — plain-message usecase 422s (finding 2 guard, characte
   // SATISFIES divisions_age_cutoff_check (`false OR NULL`). A mismatched pair
   // in ONE body is a different response entirely — 400 with a zod issue at
   // age_cutoff_day, routed by the issue-path branch, not this table.
-  it("cutoff month/day sent as a mismatched pair — the real schemas.ts constant, not a hand-typed copy", () => {
+  it("cutoff both-or-neither as a 422 from patchDivision's merge-check, NOT the 400 a mismatched pair in one body gets — the real schemas.ts constant, not a hand-typed copy", () => {
     const err = new ApiV1Error(AGE_CUTOFF_BOTH_OR_NEITHER, 422, "ERROR");
     expect(mapSaveError(err)).toEqual({ field: "age_cutoff_day", message: AGE_CUTOFF_BOTH_OR_NEITHER });
   });

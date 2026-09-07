@@ -239,6 +239,36 @@ function cardSettingsBody(feeCents: number): Record<string, unknown> {
 }
 
 /**
+ * The SOLO sign-up price's own card body (W8/F14). `fee_cents` is left at 0
+ * deliberately — the team fee must be a legal value throughout, so the only
+ * thing any row of the matrix below can be refused for is the free-agent
+ * price. 0 clears `fee_cents`' own minimum by its own sentence ("or 0 for
+ * free"), and in any case that check sits BEHIND the Connect gate this test
+ * never opens.
+ *
+ * `entrant_kind: "team"` and `allow_free_agents: true` are both preconditions
+ * of the guard rather than decoration: without them the request is refused
+ * one or two guards earlier ("allow_free_agents requires entrant_kind 'team'"
+ * / "A solo sign-up price only applies where solo sign-ups are allowed"), and
+ * the test would witness the wrong refusal. They travel in the PUT BODY, not
+ * in a preparatory `PATCH /divisions` — `putRegistrationSettings` reads
+ * `input.entrant_kind ?? "individual"` off this very body, and `PatchDivision`
+ * (`api-v1/schemas.ts:386`) has no `entrant_kind` member at all, so such a
+ * PATCH would be a stripped no-op.
+ */
+function freeAgentSettingsBody(freeAgentFeeCents: number): Record<string, unknown> {
+  return {
+    enabled: true,
+    entrant_kind: "team",
+    payment_method: "stripe",
+    fee_cents: 0,
+    allow_free_agents: true,
+    free_agent_fee_cents: freeAgentFeeCents,
+    approval: "auto",
+  };
+}
+
+/**
  * Fully DETACH the fabricated Connect account this file attaches.
  *
  * Copied in shape (not imported — a spec cannot import a spec) from
@@ -543,6 +573,99 @@ test("a cutoff with no age band is accepted and stored on its own", async ({ req
 // ---------------------------------------------------------------------------
 // The card-fee minimum, proved on the server
 // ---------------------------------------------------------------------------
+
+/**
+ * W8/F14 (option a). `free_agent_fee_cents` carries its OWN copy of the card
+ * minimum, and — unlike `fee_cents`' copy asserted in the next test — it sits
+ * AHEAD of the Connect gate: a standalone
+ * `if (method === "stripe" && … > 0 && … < 100)` at `registrations.ts`, above
+ * the `if (method === "stripe") { … }` block that holds `!charges_enabled`,
+ * `requireFeature("registration.paid")` and the `fee_cents` minimum. So it
+ * fires for an org with no Connect account and no paid entitlement, which is
+ * exactly the state this file's shared org is in until the NEXT test attaches
+ * one — hence this test's position immediately above it. Nothing here mutates
+ * Connect state, and the first assertion below fails loudly (rather than
+ * passing on the wrong guard) if the order is ever changed.
+ *
+ * The two guards throw an IDENTICAL sentence, so this test cannot distinguish
+ * them by message; what distinguishes them is the state it runs in — with
+ * charges disabled the `fee_cents` copy is UNREACHABLE, so a
+ * CARD_FEE_MINIMUM here can only have come from the free-agent copy.
+ * Recorded as F15: the client MISROUTES this refusal onto the `fee_cents`
+ * input for the same reason (`registration-hub-save-error.ts`'s one pattern
+ * matches both sentences).
+ */
+test("a solo sign-up price below 1.00 is refused ahead of the Connect gate", async ({
+  request,
+}) => {
+  const div = await seedDivision(request, comp.id, { name: `W8 bounds free-agent-fee ${TAG()}` });
+  try {
+    // The PRECONDITION, witnessed rather than assumed: a legal solo price
+    // (100, the boundary the guard names) clears the free-agent minimum and
+    // is then refused by the Connect gate behind it. Two facts in one
+    // request — charges really are still disabled at this point in the file,
+    // and 100 is NOT refused by the guard under test. Asserting the exact
+    // CONNECT sentence is what makes the pairing meaningful: a bare "422"
+    // would be satisfied by the free-agent guard itself refusing 100.
+    const atMinimum = await putRegistrationSettings(request, div.id, freeAgentSettingsBody(100));
+    expect(
+      atMinimum.status,
+      `free_agent_fee_cents=100: ${JSON.stringify(atMinimum.error)}`,
+    ).toBe(422);
+    expect(
+      atMinimum.error?.message,
+      "free_agent_fee_cents=100 must reach the Connect gate — a CARD_FEE_MINIMUM here means the guard refuses its own boundary",
+    ).toBe(CONNECT_REQUIRED);
+
+    // 0 is the other half of the guard's own sentence ("or 0 for free") — a
+    // team division whose solo entrants pay nothing while the team fee is
+    // charged. `?? null` in the usecase keeps 0 distinct from "unset", so
+    // this row also witnesses that the zero is not being coerced away into
+    // the null branch.
+    const free = await putRegistrationSettings(request, div.id, freeAgentSettingsBody(0));
+    expect(free.status, `free_agent_fee_cents=0: ${JSON.stringify(free.error)}`).toBe(422);
+    expect(
+      free.error?.message,
+      "a free solo sign-up must clear the minimum, not be refused by it",
+    ).toBe(CONNECT_REQUIRED);
+
+    // The matrix itself. Every row here would answer CONNECT_REQUIRED if the
+    // free-agent guard were removed — the two rows above prove that is the
+    // fall-through — so an exact `toBe` on the fee sentence is what witnesses
+    // the guard, and a `toContain` on the shared prefix would not (the client
+    // says the same rule in a different sentence; see CARD_FEE_MINIMUM).
+    for (const feeCents of [1, 50, 99]) {
+      const refused = await putRegistrationSettings(
+        request,
+        div.id,
+        freeAgentSettingsBody(feeCents),
+      );
+      expect(
+        refused.status,
+        `free_agent_fee_cents=${feeCents}: ${JSON.stringify(refused.error)}`,
+      ).toBe(422);
+      expect(refused.error?.message, `free_agent_fee_cents=${feeCents}`).toBe(CARD_FEE_MINIMUM);
+    }
+
+    // Nothing above reached the row. Every request in this test was refused,
+    // so the division still has no `registration_settings` row at all and the
+    // GET answers from DEFAULT_SETTINGS — which is also why the `finally`
+    // needs no closing PUT (a division with no settings row deletes with 204;
+    // see the next test's own note for the case that does not).
+    const unwritten = await apiJson<{
+      payment_method: string;
+      free_agent_fee_cents: number | null;
+    }>(request, `/api/v1/divisions/${div.id}/registration-settings`, "GET");
+    expect(unwritten.status).toBe(200);
+    expect(unwritten.data?.payment_method, "no refused setting may have been stored").toBe(
+      "offline",
+    );
+    expect(unwritten.data?.free_agent_fee_cents, "no refused solo price may have been stored")
+      .toBeNull();
+  } finally {
+    await releaseDivision(request, div.id);
+  }
+});
 
 test("card entry fees are gated on Connect first, then held to the 1.00 minimum server-side", async ({
   request,
