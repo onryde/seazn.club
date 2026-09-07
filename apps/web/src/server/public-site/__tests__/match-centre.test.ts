@@ -360,6 +360,55 @@ describe("buildMatchCentre — cricket", () => {
     expect(h7Entries[0]!.innings).not.toBe(h7Entries[1]!.innings);
   });
 
+  // A SHOOTOUT is football's and ice hockey's win method, not cricket's, and it
+  // was missing from `WIN_METHODS` — so it fell through to `regulation`
+  // ("{winner} won {margin}") with the margin read off the CRICKET card, which
+  // is null for those sports. The court card printed "X won" with a blank
+  // margin and "on penalties" appeared nowhere on the page, while the share
+  // text (a different code path) had it right the whole time. 7 football and 1
+  // ice hockey fixtures in one local database were in exactly that state.
+  it("shootout win -> matchCentre.result.shootout with the tally from summary.detail", () => {
+    const ledger = scriptLedger(DECIDED_BY_RUNS_SCRIPT);
+    const doc = buildMatchCentre(
+      input({
+        events: ledger.events,
+        cfg: ledger.cfg,
+        fixture: decidedFixture(ledger, {
+          outcome: { kind: "win", winner: HOME_SIDE.entrantId, method: "shootout" } as PublicFixture["outcome"],
+          summary: { headline: "", perSide: [], detail: { shootout: { home: 3, away: 0 } } } as never,
+        }),
+      }),
+    );
+    expect(doc.header.statusLine?.key).toBe("matchCentre.result.shootout");
+    expect(doc.header.statusLine?.params?.winner).toBe(HOME_SIDE.name);
+    // The en dash is `shootoutScoreFromDetail`'s house style, shared with
+    // `live-score.tsx` so one match cannot read two ways on two surfaces.
+    expect(doc.header.statusLine?.params?.margin).toBe("3–0");
+  });
+
+  // The tally can be absent (a trimmed projection, a coarse or replayed
+  // summary). Falling back to the generic win line would drop "on penalties",
+  // the ONE thing distinguishing this method — the same mistake
+  // `scoring-vocab.ts`'s `shootoutPlain` exists to prevent, on a second
+  // surface. Without this case the test above passes while the method is still
+  // lost whenever the detail is missing.
+  it("shootout win with NO tally -> matchCentre.result.shootoutPlain, never the generic win line", () => {
+    const ledger = scriptLedger(DECIDED_BY_RUNS_SCRIPT);
+    const doc = buildMatchCentre(
+      input({
+        events: ledger.events,
+        cfg: ledger.cfg,
+        fixture: decidedFixture(ledger, {
+          outcome: { kind: "win", winner: HOME_SIDE.entrantId, method: "shootout" } as PublicFixture["outcome"],
+          summary: { headline: "", perSide: [], detail: {} } as never,
+        }),
+      }),
+    );
+    expect(doc.header.statusLine?.key).toBe("matchCentre.result.shootoutPlain");
+    expect(doc.header.statusLine?.key).not.toBe("matchCentre.result.regulation");
+    expect(doc.header.statusLine?.params?.winner).toBe(HOME_SIDE.name);
+  });
+
   it("final: header status decided, statusLine is the result key with the margin params, live null", () => {
     const ledger = scriptLedger(DECIDED_BY_RUNS_SCRIPT);
     const doc = buildMatchCentre(input({ events: ledger.events, cfg: ledger.cfg, fixture: decidedFixture(ledger) }));

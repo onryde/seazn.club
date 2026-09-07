@@ -131,8 +131,46 @@ export function LiveScoreBody({
   // Server Component cannot react to a client-side data change.
   const shootoutScore = shootoutScoreFromDetail(data.summary?.detail);
   const decidedLine = renderDecidedOutcome(data.outcome, entrantNames, decidedTemplates, shootoutScore);
+
+  // WHEN SUPPRESSION LEAVES NOTHING AT ALL. `summary-tab.tsx` passes
+  // `suppressScorebug` for every non-cricket sport so the court slab is not
+  // painted twice (R11/C7). That is right once there is a set/period breakdown
+  // or a discipline list to fill the panel — and wrong before a ball is
+  // bowled, when those all render null and the scorebug was the only content.
+  // The Summary tab came out COMPLETELY EMPTY: an `<tabpanel "Summary">` with
+  // no children in the accessibility tree, on a page a spectator opened to
+  // find out when the match starts. `scorepad-v3-football.spec.ts` was failing
+  // on exactly that.
+  //
+  // The fix is an EMPTY STATE, not an un-suppressed second scorebug: restoring
+  // the slab here reds the two tests that enforce C7 ("renders EXACTLY ONCE"),
+  // and they are right — the court card above already carries the score and
+  // the status. What was missing is a sentence saying what will appear.
+  //
+  // Two sentences, because they are two different facts: a fixture that has
+  // not started yet will fill in, and one recorded as a result only never
+  // will. _DESIGN §10's rule is that an empty state "says what appears when",
+  // which one generic line cannot do for both.
+  const hasSecondaryContent =
+    (showBreakdown && sideIds.length === 2) || periods !== null || discipline !== null;
+  const emptyStateKey = hasSecondaryContent
+    ? null
+    : decided || data.status === "finalized"
+      ? "matchCentre.empty.noDetail"
+      : inPlay
+        ? null // in play with nothing derived yet: the next poll fills it.
+        : "matchCentre.empty.beforeStart";
+
   return (
     <div className="space-y-4">
+      {suppressScorebug && emptyStateKey !== null ? (
+        <p
+          data-testid="mc-summary-empty"
+          className="rounded-2xl border border-dashed border-zinc-300 px-4 py-6 text-center text-sm text-ink-muted"
+        >
+          {t(activeDict, emptyStateKey)}
+        </p>
+      ) : null}
       {suppressScorebug ? null : (
         <>
       {decidedLine ? <p className="text-base font-semibold text-ink">{decidedLine}</p> : null}

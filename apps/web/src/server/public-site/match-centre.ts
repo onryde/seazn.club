@@ -69,6 +69,10 @@ import {
   type OverLog,
 } from "@seazn/engine/sports/cricket";
 import { resolveLatestModule, resolveModule } from "@/server/engine-db/registry";
+// The ONE reader of `summary.detail.shootout`, shared with `live-score.tsx`'s
+// decided sentence — a second parse of the same jsonb is a second chance to
+// disagree about the same match.
+import { shootoutScoreFromDetail } from "@/lib/scoring-vocab";
 import type { PublicFixture } from "./data";
 import type { PublicPerson } from "./public-lineups";
 import { buildSets, buildTimeline } from "./timeline";
@@ -141,7 +145,16 @@ export const DISMISSAL_KINDS = [...CricketWicket.shape.kind.options, "not_out", 
 // `method` field to key by, and dropping it would leave `resultMsg` emitting
 // a key (`matchCentre.result.forfeit`) that `RESULT_KINDS` does not cover —
 // flagged in the fix-round report for the coordinator/Task 8 to confirm.
-const WIN_METHODS = ["regulation", "dls", "innings", "super_over", "boundary_count"] as const;
+// Every method the header can NAME. The first five are cricket's; `shootout`
+// is football's and ice hockey's, and its absence here was a live defect: an
+// unlisted method fell through to `regulation` ("{winner} won {margin}") with
+// `margin` read off the CRICKET card, which is null for those sports — so the
+// court card printed "X won" with a blank margin and the words "on penalties"
+// appeared nowhere on the page. `summary-tab.tsx` suppresses `LiveScoreBody`'s
+// own decided sentence (R11/C7) on the stated premise that this line already
+// carries it, and for a shootout that premise was false. 7 football and 1 ice
+// hockey fixtures in one local database were in exactly that state.
+const WIN_METHODS = ["regulation", "dls", "innings", "super_over", "boundary_count", "shootout"] as const;
 export const RESULT_KINDS = [...WIN_METHODS, "tie", "no_result", "draw", "forfeit"] as const;
 
 // Hand-pinned from `BallGlyph`'s own declaration (`scorecard-types.ts:39-44`)
@@ -539,6 +552,14 @@ function resultMsg(
         method !== undefined && (WIN_METHODS as readonly string[]).includes(method)
           ? (method as (typeof WIN_METHODS)[number])
           : "regulation";
+      // A shootout with no tally must NOT fall back to the generic win line:
+      // "on penalties" is the one thing that distinguishes this method from
+      // every other, and dropping it is the exact mistake `scoring-vocab.ts`'s
+      // own `shootoutPlain` exists to prevent (F8, R3.5 review). Same rule,
+      // second surface — a coarse or replayed summary carries no tally.
+      if (kind === "shootout" && margin === "") {
+        return { key: "matchCentre.result.shootoutPlain", params: { winner } };
+      }
       return { key: `matchCentre.result.${kind}`, params: { winner, margin } };
     }
     default:
@@ -640,7 +661,27 @@ function buildHeader(
       statusLine = { key: "matchCentre.status.startsAt", params: { when } };
     }
   } else if (status === "decided") {
-    const marginText = typeof card?.result?.margin === "string" ? card.result.margin : null;
+    // The margin has TWO sources, because the two win vocabularies do. Cricket's
+    // comes off its own scorecard (`card.result.margin`, "by 23 runs"); a
+    // shootout's tally is not on any card — it is in the kernel summary's
+    // `detail.shootout`, which is where `LiveScoreBody` already reads it via
+    // the SAME shared `shootoutScoreFromDetail`, and the en dash is that
+    // function's own house style ("3–0"), matched here so one match cannot
+    // read two ways on two surfaces.
+    // Selected BY METHOD, not by whichever source happens to be non-null. A
+    // first cut asked the cricket card first and fell back to the tally, which
+    // reads fine until both exist: a cricket ledger's "by 24 runs" then masks
+    // the shootout score for a fixture decided on penalties. The two margins
+    // belong to two different win vocabularies, so the method picks the source.
+    const shootout = shootoutScoreFromDetail(fixture.summary?.detail);
+    const marginText =
+      fixture.outcome?.method === "shootout"
+        ? shootout !== null
+          ? `${shootout.home}–${shootout.away}`
+          : null
+        : typeof card?.result?.margin === "string"
+          ? card.result.margin
+          : null;
     const cardWinner = card?.result?.winner ?? null;
     statusLine = resultMsg(fixture.outcome, marginText, cardWinner, sides);
   } else if (status === "other") {

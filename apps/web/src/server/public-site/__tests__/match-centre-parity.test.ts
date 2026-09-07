@@ -82,7 +82,12 @@ describe("match-centre parity — every key buildMatchCentre can emit exists in 
   it("the source scan and the exported kind families both found a real vocabulary, not an empty one", () => {
     expect(FIXED_KEYS.length).toBeGreaterThanOrEqual(15);
     expect(DISMISSAL_KINDS.length).toBe(12);
-    expect(RESULT_KINDS.length).toBe(9);
+    // 10 since `shootout` joined `WIN_METHODS`: football's and ice hockey's win
+    // method was missing, so it fell through to `regulation` and the page lost
+    // "on penalties" entirely. Kept EXACT rather than a floor — this number
+    // moving is what forces the four dictionaries to gain the key alongside,
+    // which is the per-locale assertion below.
+    expect(RESULT_KINDS.length).toBe(10);
     expect(BALL_GLYPH_KINDS.length).toBe(7);
     expect(DERIVED_KEYS.length).toBeGreaterThanOrEqual(30);
   });
