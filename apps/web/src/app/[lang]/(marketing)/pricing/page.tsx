@@ -46,10 +46,23 @@ export const dynamic = "force-dynamic";
 
 /** Per-column cell styling. A `Record` so a plan added to PRICING_PLAN_KEYS
  *  without a tone is a compile error, not an unstyled column. Every pass rung
- *  takes the lime the Event Pass card uses — one offer, however many sizes. */
+ *  takes the lime the Event Pass card uses — one offer, however many sizes.
+ *
+ *  THE LIME IS #3f6212, not the #4d7c0f it shipped as. Measured in the browser:
+ *  #4d7c0f on the ticket's cream (#f5f0e8) is 4.40:1, against WCAG 1.4.4's 4.5
+ *  floor for normal text — the "Event Pass" eyebrow is 13px/600, which is not
+ *  large text by any reading (large needs 24px, or 18.66px bold). axe called it
+ *  a SERIOUS violation on the first e2e run this page ever had.
+ *
+ *  It failed by 0.10, and only in one place: of the 99 elements carrying this
+ *  colour, that eyebrow is the only one on the cream — every other sits on
+ *  white, where the same value scores 5.01 and passes. Darkening only the
+ *  eyebrow would have fixed the violation and left the page with two limes a
+ *  shade apart, which reads as a mistake rather than a decision, so the single
+ *  token moved instead. #3f6212 scores 6.24 on the cream and 7.08 on white. */
 const CELL_TONE: Record<PricingPlanKey, string> = {
   community: "text-slate-500",
-  event_pass: "text-[#4d7c0f]",
+  event_pass: "text-[#3f6212]",
   pro: "font-medium text-purple-700",
 };
 
@@ -359,7 +372,7 @@ export default async function PricingPage({
                   {/* head — the promise, above the stub on phone, top of the
                       left column on desktop. */}
                   <div className="pr-pass-head min-w-0 px-6 pb-5 pt-7 sm:px-8 md:pb-0 md:pt-9">
-                    <p className="mk-display mb-2 text-[13px] font-semibold tracking-[0.26em] text-[#4d7c0f]">
+                    <p className="mk-display mb-2 text-[13px] font-semibold tracking-[0.26em] text-[#3f6212]">
                       {t(d, "pricing.pass.name")}
                     </p>
                     <p className="max-w-[48ch] text-[0.9375rem] leading-snug text-[#5a4b78]">
@@ -420,7 +433,16 @@ export default async function PricingPage({
                       </div>
 
                       {crossoverStubLine && (
-                        <div className="rounded-xl border border-[#3b2a6e] bg-black/25 px-3.5 py-3">
+                        // Named like its sibling above so the row-card layout
+                        // is assertable as a RELATIONSHIP between the two
+                        // slots. `data-pass-crossover` is the paragraph
+                        // INSIDE this box and sits 15px in on each side, so a
+                        // test comparing it to the price SLOT measures padding
+                        // and calls it a layout change.
+                        <div
+                          data-pass-stub-slot="crossover"
+                          className="rounded-xl border border-[#3b2a6e] bg-black/25 px-3.5 py-3"
+                        >
                           <p className="mk-cond text-[12.5px] font-semibold tracking-[0.22em] text-lime-400">
                             {t(d, "pricing.table.pro")}
                           </p>
@@ -470,7 +492,7 @@ export default async function PricingPage({
                     <ul className="grid flex-1 content-start gap-x-7 gap-y-3 text-[0.95rem] leading-snug text-[#463a60] sm:grid-cols-2 sm:gap-y-2.5 sm:text-[0.9rem] lg:grid-cols-3">
                       {cardBullets(d, PASS_CARD_BULLETS, matrix).map((f) => (
                         <li key={f} className="flex gap-2.5">
-                          <span aria-hidden className="mt-[3px] shrink-0 text-[#4d7c0f]">
+                          <span aria-hidden className="mt-[3px] shrink-0 text-[#3f6212]">
                             ✓
                           </span>
                           {f}
@@ -500,7 +522,14 @@ export default async function PricingPage({
               <div className="grid gap-6 md:grid-cols-2">
                 {/* Community — a torn counterfoil, cream on the night band. */}
                 <div className="card pr-tear-top flex flex-col p-8 pt-9">
-                  <p className="mb-1 text-xs font-semibold uppercase tracking-wider text-slate-400">
+                  {/* slate-500, not slate-400. #94a3b8 on white is 2.85:1 and
+                      this label is 12px/600 — nowhere near large text — so axe
+                      called it a SERIOUS contrast violation on the first e2e
+                      run this page ever had. slate-500 measures 4.76:1 and
+                      stays the muted eyebrow the accordion wants; slate-600
+                      (7.58:1) reads as a heading and competes with the plan
+                      name underneath it. */}
+                  <p className="mb-1 text-xs font-semibold uppercase tracking-wider text-slate-500">
                     {t(d, "pricing.community.name")}
                   </p>
                   <p className="mb-1 text-4xl font-bold text-slate-900">
@@ -596,7 +625,13 @@ export default async function PricingPage({
                 static, not links, and never gate money. */}
             <div className="rounded-2xl border border-purple-100 bg-purple-50/60 px-6 py-4">
               <div className="flex flex-wrap items-center gap-x-6 gap-y-2 text-sm text-slate-600">
-                <span className="text-xs font-semibold uppercase tracking-wider text-purple-500">
+                {/* purple-600, not purple-500. #a855f7 on white is 3.40:1 and this
+                    eyebrow is 12px/600 — normal text, so the floor is 4.5.
+                    axe caught it on the pricing page's first ever e2e run,
+                    one violation behind the lime and one behind the slate:
+                    each fix uncovered the next, because the assertion prints
+                    a single node per violation. purple-600 is 5.39:1. */}
+                <span className="text-xs font-semibold uppercase tracking-wider text-purple-600">
                   {t(d, "pricing.addons.label")}
                 </span>
                 <span className="flex items-center gap-1.5">
@@ -653,7 +688,7 @@ export default async function PricingPage({
                           <tr>
                             <td
                               colSpan={PRICING_PLAN_KEYS.length + 1}
-                              className="bg-purple-50/60 pt-5 pb-1.5 text-xs font-semibold uppercase tracking-wider text-purple-500"
+                              className="bg-purple-50/60 pt-5 pb-1.5 text-xs font-semibold uppercase tracking-wider text-purple-600"
                             >
                               {t(d, section.labelKey)}
                             </td>

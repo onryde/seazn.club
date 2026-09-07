@@ -30,6 +30,21 @@ test.use({ storageState: { cookies: [], origins: [] } });
 // for the same ESM reason — never re-typed as an independent literal.
 const PRICING_PLAN_KEYS = ["community", ...SELLABLE_PASS_RUNGS, "pro"];
 
+/**
+ * Every failing NODE, not one per violation.
+ *
+ * axe groups all of a rule's failures into a SINGLE violation object — one
+ * `color-contrast` entry with N nodes — so `v.nodes[0]` reports one of them and
+ * hides the rest. On this page that turned a single fix-and-rerun into five:
+ * the lime eyebrow, then a slate label, then a purple one, then the same purple
+ * inside a shared component, then this. Each rebuild revealed the next, and
+ * each looked like "one last thing".
+ */
+const blockingNodes = (results: { violations: Array<{ id: string; impact?: string | null; nodes: Array<{ html: string }> }> }) =>
+  results.violations
+    .filter((v) => v.impact === "serious" || v.impact === "critical")
+    .flatMap((v) => v.nodes.map((n) => `${v.id} — ${n.html}`));
+
 test.describe("pricing v18 — the box office redesign (R14)", () => {
   test("a card per purchasable plan, with its price and a matching comparison column — no click needed", async ({
     page,
@@ -39,7 +54,12 @@ test.describe("pricing v18 — the box office redesign (R14)", () => {
     // The three offers, visible with no interaction: the ticket (Event Pass),
     // Community and Pro.
     await expect(page.locator("[data-pass-stub]")).toBeVisible();
-    await expect(page.getByText(passLabel("event_pass"))).toBeVisible();
+    // Scoped to the PRICE element, not a bare text match. `passLabel` is
+    // "$11.99", and that string legitimately appears three times on this page —
+    // the stub's price, the crossover sentence and the card's summary — so an
+    // unscoped `getByText` is a strict-mode violation rather than a check. It
+    // had never run before this, so nothing had said so.
+    await expect(page.locator("[data-pass-price]")).toContainText(passLabel("event_pass"));
     await expect(page.getByText("Community", { exact: true }).first()).toBeVisible();
     await expect(page.getByText("Pro", { exact: true }).first()).toBeVisible();
 
@@ -165,18 +185,12 @@ test.describe("pricing v18 — the box office redesign (R14)", () => {
   }) => {
     await page.goto("/pricing");
     const desktop = await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa"]).analyze();
-    const desktopBlocking = desktop.violations.filter(
-      (v) => v.impact === "serious" || v.impact === "critical",
-    );
-    expect(desktopBlocking.map((v) => `${v.id} — ${v.nodes[0]?.html}`)).toEqual([]);
+    expect(blockingNodes(desktop)).toEqual([]);
 
     await page.setViewportSize({ width: 320, height: 900 });
     await page.reload();
     const mobile = await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa"]).analyze();
-    const mobileBlocking = mobile.violations.filter(
-      (v) => v.impact === "serious" || v.impact === "critical",
-    );
-    expect(mobileBlocking.map((v) => `${v.id} — ${v.nodes[0]?.html}`)).toEqual([]);
+    expect(blockingNodes(mobile)).toEqual([]);
   });
 
   // W3 fix round 2, item 1: the crossover paragraph was unreadable in an
@@ -194,9 +208,41 @@ test.describe("pricing v18 — the box office redesign (R14)", () => {
 
     const priceBox = await priceSlot.boundingBox();
     expect(priceBox, "the price slot's box").not.toBeNull();
-    // A row card spans (nearly) the full 320-wide viewport, minus the page's
-    // own horizontal padding — a 2-up column would be roughly half this.
-    expect(priceBox!.width).toBeGreaterThan(260);
+
+    // ROW CARDS ARE A RELATIONSHIP, NOT A WIDTH. This asserted
+    // `width > 260` on a 320 viewport, which sounds like "nearly full width"
+    // and is really a guess about the ticket's padding: the stub sits 40px in
+    // on each side, so a correctly stacked slot measures 240 and the check
+    // failed on its first ever run against a page that was doing exactly what
+    // it was built to do.
+    //
+    // What "row card, never 2-up" actually means is a fact about the two
+    // slots: same left edge, same width, one below the other. A 2-up grid
+    // differs on every one of those, and no padding change can make it pass.
+    // The SLOT, not the paragraph inside it: `[data-pass-crossover]` is the
+    // <p>, inset by the box's own 14px padding, so comparing it to the price
+    // SLOT measures padding and reports it as a layout change.
+    const crossoverSlot = page.locator('[data-pass-stub-slot="crossover"]');
+    const crossoverSlotBox = await crossoverSlot.boundingBox();
+    expect(crossoverSlotBox, "the crossover slot's box").not.toBeNull();
+    expect(priceBox!.x, "both slots start at the same left edge").toBeCloseTo(
+      crossoverSlotBox!.x,
+      0,
+    );
+    expect(priceBox!.width, "both slots are the same width").toBeCloseTo(
+      crossoverSlotBox!.width,
+      0,
+    );
+    expect(
+      crossoverSlotBox!.y,
+      "the crossover sits BELOW the price, not beside it",
+    ).toBeGreaterThan(priceBox!.y + priceBox!.height - 1);
+    // …and each still fills its column rather than being a narrow inset: the
+    // slot is the full width of the grid that holds it.
+    const columnWidth = await priceSlot.evaluate(
+      (el) => (el.parentElement as HTMLElement).getBoundingClientRect().width,
+    );
+    expect(priceBox!.width).toBeCloseTo(columnWidth, 0);
 
     // The crossover card sits BELOW the price card (stacked), not beside it.
     if (await crossoverBox.count()) {

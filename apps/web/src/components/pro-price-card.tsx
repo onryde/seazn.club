@@ -84,19 +84,32 @@ export function ProPriceCard({
 
   return (
     <div className="card relative flex flex-col border-purple-400 bg-purple-50 p-8">
-      <p className="mb-1 text-xs font-semibold uppercase tracking-wider text-purple-500">
+      {/* purple-600, not purple-500. #a855f7 on white is 3.40:1 and this
+          eyebrow is 12px/600 — normal text, floor 4.5. Caught by axe on
+          /pricing's first ever e2e run; it lives HERE rather than on that page,
+          which is why two rounds of grepping the page file said the colour was
+          already gone. purple-600 is 5.39:1. */}
+      <p className="mb-1 text-xs font-semibold uppercase tracking-wider text-purple-600">
         {labels.tier}
       </p>
 
       <p className="mb-1 text-4xl font-bold text-purple-900">
         {annual ? annualPerMonth : monthly}
-        <span className="text-lg font-normal text-slate-500">{labels.perMonth}</span>
+        {/* slate-600, not slate-500. This card is `bg-purple-50`, and
+            #64748b on #faf5ff is 4.42:1 — under the 4.5 floor. The same token
+            passes at 4.76 on white, which is why it looks safe until you read
+            it against THIS card's own background. */}
+        <span className="text-lg font-normal text-slate-600">{labels.perMonth}</span>
       </p>
-      <p className="mb-3 text-sm text-slate-500" data-pro-billing-note>
+      <p className="mb-3 text-sm text-slate-600" data-pro-billing-note>
         {annual ? (
           <>
             {labels.annualBilled} —{" "}
-            <span className="font-semibold text-emerald-600" data-pro-annual-saving>
+            {/* emerald-700, not -600. #059669 on this card's purple-50 is
+                3.55:1 at 14px/600 — under the 4.5 floor. The saving is the one
+                number on this card meant to catch the eye, so it was the worst
+                place on the page to be hard to read. emerald-700 is 5.17:1. */}
+            <span className="font-semibold text-emerald-700" data-pro-annual-saving>
               {labels.annualSaving}
             </span>
           </>
