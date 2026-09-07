@@ -230,7 +230,19 @@ export function LiveScoreBody({
           <p className="mb-3 font-display text-sm font-semibold uppercase tracking-[0.18em] text-ink-muted">
             {t(activeDict, "matchCentre.goalsByPeriod")}
           </p>
-          <div className="overflow-x-auto">
+          {/* A scrolling region owes `tabIndex` + a role + an accessible name,
+              or axe reds `scrollable-region-focusable` at SERIOUS impact and a
+              keyboard user cannot reach the columns at all. `tabIndex` cannot
+              be varied by media query, so it is unconditional. Named from the
+              heading directly above rather than a new dictionary key — one
+              string, one translation, and the two can never disagree.
+              (`sets-tab.tsx` already does this; this older file predates it.) */}
+          <div
+            className="overflow-x-auto"
+            tabIndex={0}
+            role="region"
+            aria-label={t(activeDict, "matchCentre.goalsByPeriod")}
+          >
             <table className="w-full border-separate border-spacing-0 tabular-nums">
               <thead>
                 <tr>
@@ -320,7 +332,14 @@ function SetScoreboard({
       <p className="mb-3 font-display text-sm font-semibold uppercase tracking-[0.18em] text-ink-muted">
         {t(dict, "matchCentre.scoreByUnit", { unit: t(dict, `matchCentre.unit.${breakdown.unit}`) })}
       </p>
-      <div className="overflow-x-auto">
+      {/* See the goals-by-period table above: same rule, same reason, and the
+          name comes from this panel's own heading. */}
+      <div
+        className="overflow-x-auto"
+        tabIndex={0}
+        role="region"
+        aria-label={t(dict, "matchCentre.scoreByUnit", { unit: t(dict, `matchCentre.unit.${breakdown.unit}`) })}
+      >
         <table className="w-full border-separate border-spacing-0 tabular-nums">
           <thead>
             <tr>
@@ -328,7 +347,17 @@ function SetScoreboard({
               {breakdown.sets.map((s, i) => (
                 <th
                   key={i}
-                  className={`min-w-14 rounded-t-lg px-3 pb-2 text-center text-xs font-medium uppercase tracking-wide ${
+                  // `whitespace-nowrap`: the OPEN column puts a live-pulse dot
+                  // inside this same inline-flex, and `min-w-14` less `px-3`
+                  // leaves a 32px content box — the dot plus its `gap-1.5`
+                  // takes 12px, so "SET 1" (~34px at 12px) wrapped onto two
+                  // lines. Only the open column has the dot, so only that one
+                  // header was two lines tall while its neighbours were one,
+                  // which is what reads as an alignment fault. This table is
+                  // NOT `table-fixed`, so the column simply takes the width it
+                  // needs; the wrapper below is a real scroll region for the
+                  // case where that no longer fits.
+                  className={`min-w-14 whitespace-nowrap rounded-t-lg px-3 pb-2 text-center text-xs font-medium uppercase tracking-wide ${
                     s.closed ? "text-zinc-400" : "bg-emerald-50 text-emerald-700"
                   }`}
                 >
