@@ -523,7 +523,26 @@ single fact the whole task turns on — do not skip it.
 /usr/bin/git commit -m "test(e2e): the Event Pass money path had never run anywhere"
 ```
 
-- [ ] **Step 10: Dispatch a real CI run and read the skip count**
+- [ ] **Step 10: Mutate the money path specifically**
+
+Incidental coverage is not coverage for code that takes money. Run each mutant,
+record which test names red, then revert:
+
+1. **Delete the pay call.** In the pass-checkout handler, remove the Stripe
+   Checkout Session creation and return a success shape. U1 must red — if it
+   passes, U1 is asserting the gate lifted without money ever moving.
+2. **Break the refund revocation.** Make the refund path leave the pass
+   active. U16 must red; nothing else should.
+3. **Break the credit.** Make an upgrade to Pro leave the pass billable rather
+   than dormant. U14 must red.
+4. **Disarm the new CI check itself.** Force `stripeUsable` false so U6–U16
+   skip. The Step 7 check must FAIL the leg. A skip check that cannot fail is
+   the vacuous gate this task exists to replace.
+
+Report the killer list, not a count — a test that reds under every mutant is
+not evidence of anything.
+
+- [ ] **Step 11: Dispatch a real CI run and read the skip count**
 
 ```bash
 gh workflow run E2E --ref docs/entitlements-w4-handoff
@@ -781,7 +800,11 @@ const CHECKPOINTS = "schedule.checkpoints.max";
 // pro 10, both pass rungs 5, enterprise unlimited — but read them, because
 // V393 already moved one of these under a test that had typed it in.
 test.describe("save points roll a window rather than refusing", () => {
-  for (const plan of ["community", "pro", "event_pass"] as const) {
+  // Enumerate the TABLE, not a sample. One lucky plan is not a parity sweep,
+  // and the rung that moved in V393 (pro 5 -> 10) sat next to three that did
+  // not. `enterprise` is unlimited (null cap) and takes the skip below, which
+  // is itself the assertion that it has no ceiling.
+  for (const plan of ["community", "pro", "event_pass", "event_pass_l", "enterprise"] as const) {
     test(`${plan}: the cap+1th save point evicts the oldest, and nothing 402s`, async ({ request }) => {
       const cap = await planCapSql(CHECKPOINTS, plan);
       test.skip(cap == null, `${plan} has no ${CHECKPOINTS} row — nothing to bound`);
@@ -1031,9 +1054,29 @@ accessibility defect: the division page is already in the axe sweep
 (`mobile.spec.ts:1465`, tags `["wcag2a","wcag2aa"]` at `:1487`, run in all seven
 width projects) and it is green, because axe's `scrollable-region-focusable`
 check passes when the region CONTAINS focusable elements — and this is a `<nav>`
-of `<Link>`s. Do not add a `tabindex`. Second, the source comment at `:500`
-records the design of record: "tabs scroll horizontally with an edge fade —
-never wrap." Wrapping is not an available fix.
+of `<Link>`s.
+
+**This is in tension with the standing rule "a scrolling rail needs
+`tabindex="0"` + role + accessible name", and the tension is resolved in
+opposite directions for its two halves.** The `tabindex` half should NOT be
+applied here: a `<nav>` of links is already keyboard-reachable, and adding a
+tab stop to the container inserts a redundant stop before every link, which is
+worse for the keyboard user the rule exists to protect. The accessible-name
+half SHOULD be applied: the `<nav>` is an unlabelled landmark, a page can carry
+several, and `aria-label` costs nothing and helps. Treat the label as owed
+regardless of what Step 1 finds; treat the `tabindex` as owed only if the
+browser shows keyboard reachability actually failing. **Put this to the owner
+before shipping either** — the rule is theirs, and this is a recommendation
+against part of it, not a licence to ignore it.
+
+Second, the source comment at `:500` cites "v3/02 §3.3: tabs scroll
+horizontally with an edge fade — never wrap". **That document does not exist.**
+No file under `docs/` contains that section or that phrasing; the comment is
+the only source, which makes it a hypothesis rather than a ruling — the same
+shape as this programme's "doc 14" citations that point at nothing. So wrapping
+below `md` is NOT excluded by an owner decision and remains a legitimate option
+if Step 1 finds a defect. Say so when presenting options rather than repeating
+the comment as authority.
 
 - [ ] **Step 1: Drive the product and write down what you SEE**
 
