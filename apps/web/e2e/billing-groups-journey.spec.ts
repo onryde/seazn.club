@@ -293,7 +293,15 @@ test.describe.serial("billing groups — visual workflow", () => {
     );
     try {
       const panel = await openBilling(page, payerOrg);
-      await expect(panel.getByText(/pays for its own subscription/)).toBeVisible();
+      // Scoped to the org this test just made self-paying. Unscoped, the
+      // locator matched TWO rows and died on a strict-mode violation: an
+      // earlier test in this file leaves "Departed" self-paying too, so by 08
+      // the panel legitimately lists two. It passes alone and fails in the
+      // full project every time — the ambiguity is in the assertion, not the
+      // page, and naming the subject is what fixes it.
+      await expect(
+        panel.locator("li").filter({ hasText: `Northside ${TAG}` }).getByText(/pays for its own subscription/),
+      ).toBeVisible();
       // And it is not offerable: no button, so no dialog promising a charge.
       await expect(panel.getByRole("button", { name: `Northside ${TAG}` })).toHaveCount(0);
       await shot(panel, "already-paying-cannot-join");
