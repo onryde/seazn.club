@@ -131,7 +131,7 @@ interface CompetitionRead {
   visibility: string;
   status: string;
   discoverable: boolean;
-  discovery: { tagline?: string | null } | null;
+  discovery: { tagline?: string | null; hero_image_path?: string | null } | null;
   frozen?: boolean;
 }
 
@@ -446,6 +446,25 @@ test("discovery.branding: the tagline and hero go disabled, the client then stop
     expect(
       (await readComp(request, comp.id)).discovery?.tagline ?? null,
       "a refused patch must not write the tagline anyway",
+    ).toBeNull();
+
+    // THE OTHER OPERAND OF THE SAME `||`, and it needs its own PATCH.
+    // `patchCompetition:519` reads `patch.discovery?.tagline ||
+    // patch.discovery?.hero_image_path`. A mutant that deletes the whole
+    // `requireFeature` call kills the tagline case above and says NOTHING
+    // about this disjunct — a union has to be mutated per MEMBER, or the
+    // uncovered branch hides behind the covered one. Nothing else in the tree
+    // sends `hero_image_path` to this route, so dropping the second operand
+    // would hand a paid presentation field to every non-entitled org through
+    // the public API and stay green everywhere.
+    const refusedHero = await patchComp(request, comp.id, {
+      discovery: { hero_image_path: `https://example.invalid/hero-${TAG}.jpg` },
+    });
+    expect(refusedHero.status).toBe(402);
+    expect(v1Error(refusedHero).feature_key).toBe("discovery.branding");
+    expect(
+      (await readComp(request, comp.id)).discovery?.hero_image_path ?? null,
+      "a refused patch must not write the hero image either",
     ).toBeNull();
 
     // The positive half of the pair. Without it a 402 could be coming from
