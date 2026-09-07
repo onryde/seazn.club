@@ -74,7 +74,18 @@ export default async function AddOnsSettingsPage({
         </p>
       )}
 
-      {!view.addonAvailable || view.priceMinor === null ? (
+      {/* UNLIMITED FIRST, and the order is the whole fix (W8 F1). A plan whose
+          `orgs.max_owned` is NULL sells no rider either — there is nothing to
+          sell a group that already has no ceiling — so it ALSO fails
+          `addonAvailable`, and behind the community arm this branch would never
+          be reached. Before it existed, an unlimited customer was told to
+          "Upgrade to buy past the Community limit" one line under a summary
+          that had just said their plan sets no limit. */}
+      {view.orgCap === null ? (
+        <p className="rounded-xl border border-purple-100 bg-purple-50/50 p-4 text-sm text-slate-600">
+          {t(dict, "addOns.unlimitedNotice")}
+        </p>
+      ) : !view.addonAvailable || view.priceMinor === null ? (
         <p className="rounded-xl border border-purple-100 bg-purple-50/50 p-4 text-sm text-slate-600">
           {t(dict, "addOns.communityNotice")}
         </p>

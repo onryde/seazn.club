@@ -154,6 +154,27 @@ async function setGroupCurrency(orgId: string, currency: string | null): Promise
 }
 
 /**
+ * The plan key whose `orgs.max_owned` is NULL — unlimited (W8 F1).
+ *
+ * READ from `plan_entitlements` rather than typed, so a matrix change moves
+ * this test with it instead of leaving it asserting yesterday's plan name
+ * (AGENTS.md failure class 19). Throws when nothing is unlimited: the branch
+ * under test would then be unreachable, and a test that quietly passed on an
+ * unreachable branch is worse than a red one.
+ */
+async function unlimitedOrgCapPlan(): Promise<string> {
+  return withDb(async (sql) => {
+    const rows = await sql<{ plan_key: string }[]>`
+      select plan_key from plan_entitlements
+       where feature_key = 'orgs.max_owned' and int_value is null
+       order by plan_key`;
+    const plan = rows[0]?.plan_key;
+    if (!plan) throw new Error("no plan grants an unlimited orgs.max_owned");
+    return plan;
+  });
+}
+
+/**
  * Give the group a live paid subscription WITHOUT Stripe.
  *
  * `hasLiveSubscription` (lib/subscription-status.ts) is `stripe_subscription_id
@@ -578,6 +599,83 @@ test("…and refuses a live subscription on a plan the catalog sells no rider fo
     ).not.toContain("active paid subscription");
   } finally {
     await releaseSettingsOrg(request, community);
+  }
+});
+
+/**
+ * W8 F1. An UNLIMITED cap is not a Community cap, and the ladder used to
+ * conflate them.
+ *
+ * The plan that sets `orgs.max_owned` to NULL (V393 gave `enterprise` the
+ * design doc's "∞") ALSO has no rider SKU in `stripe-plans.json` — nothing to
+ * sell a group that already has no ceiling — so `getAddOnsTab` answers
+ * `orgCap: null` AND `addonAvailable: false`. Both arms of that pair used to
+ * land on the same first branch as Community, so the page told an unlimited
+ * customer to "Upgrade to buy past the Community limit" one line under a
+ * summary that had just said their plan sets no limit.
+ *
+ * Only a browser can see this: the ladder is JSX in a server component, and
+ * `apps/web` vitest is `environment: "node"`. `add-ons-page.test.tsx` renders
+ * the CONTROL with props handed to it, which proves the control and never
+ * which arm the page picked.
+ */
+test("a group whose plan has no organisation limit is told it has nothing to add, not to upgrade", async ({
+  page,
+  request,
+}: {
+  page: Page;
+  request: APIRequestContext;
+}) => {
+  test.setTimeout(budget(1, 0));
+
+  const plan = await unlimitedOrgCapPlan();
+  // Anti-vacuity, derived from the seed rather than typed: if that plan ever
+  // gained a rider SKU it would stop failing `addonAvailable`, and this case
+  // would no longer be standing on the branch it is named for.
+  expect(
+    ORG_ADDON_RIDER_PLANS,
+    `${plan} must have no rider SKU, or this case no longer applies`,
+  ).not.toContain(plan);
+
+  const unlimited = await seedStray(request, { plan: "community", label: "W8-addons-unlimited" });
+  try {
+    // Two steps, exactly like `makeGroupLive`: `seedSettingsOrg`'s own `plan` is
+    // typed `"community" | "pro"`, and the unlimited plan is not one the product
+    // sells self-serve at all — it is staff-set, so SQL is the only writer there
+    // is. Live subscription too, so this is a paying customer rather than a
+    // half-finished checkout: the branch under test must win ahead of BOTH the
+    // community notice and the no-subscription one.
+    await setOrgSubscriptionSql(unlimited.orgId, {
+      plan_key: plan,
+      status: "active",
+      stripe_subscription_id: `sub_e2e_addons_unl_${unlimited.orgId.slice(0, 8)}`,
+    });
+
+    await page.goto(routes.addOns(unlimited.slug));
+
+    // The summary the notice has to agree with, asserted FIRST: a page that
+    // renders the right notice for the wrong reason — a cap that turned out
+    // finite after all — must not be able to pass this test. A freshly seeded
+    // group holds exactly the one organisation it was created with.
+    await expect(
+      page.getByText(ui("addOns.cap.summaryUnlimited", { count: 1 })),
+      "the group really is on the unlimited plan",
+    ).toBeVisible({ timeout: READ_MS });
+
+    await expect(
+      page.getByText(ui("addOns.unlimitedNotice")),
+      "…so the page says there is nothing here to buy",
+    ).toBeVisible({ timeout: READ_MS });
+    await expect(
+      page.getByText(ui("addOns.communityNotice")),
+      "…and never the Community upsell, which has nothing to sell a group with no ceiling",
+    ).toHaveCount(0);
+    await expect(
+      countField(page),
+      "nor a stepper: a rider cannot raise a cap that is already unlimited",
+    ).toHaveCount(0);
+  } finally {
+    await releaseSettingsOrg(request, unlimited);
   }
 });
 

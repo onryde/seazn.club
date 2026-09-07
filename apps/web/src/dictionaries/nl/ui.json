@@ -813,6 +813,7 @@
   "addOns.cap.summaryUnlimited": "{count} organisaties in gebruik op deze rekening — je abonnement kent geen limiet.",
   "addOns.capReduced": "Organisaties toevoegen is op dit moment gepauzeerd: deze rekening vraagt om aandacht, of een organisatie op deze rekening is geschorst. Bekijk het tabblad Facturering en neem contact op met support als daar alles in orde is. Je kunt de extra organisaties hieronder nog steeds wijzigen of verwijderen.",
   "addOns.communityNotice": "Add-ons zijn beschikbaar bij Pro. Upgrade om voorbij de Community-limiet te gaan.",
+  "addOns.unlimitedNotice": "Je abonnement dekt al onbeperkte organisaties — hier valt niets aan toe te voegen.",
   "addOns.noLiveSubscription": "Extra organisaties vereisen een actief betaald abonnement. Rond eerst het afrekenen af op het tabblad Facturering.",
   "addOns.guestNotice": "Alleen degene die voor deze factureringsgroep betaalt, kan add-ons kopen.",
   "addOns.extraOrg.label": "Extra organisaties",

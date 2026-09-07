@@ -45,6 +45,7 @@ export type DictionaryKey =
   | "addOns.guestNotice"
   | "addOns.intro"
   | "addOns.noLiveSubscription"
+  | "addOns.unlimitedNotice"
   | "americano.court"
   | "americano.failedLoad"
   | "americano.games"
