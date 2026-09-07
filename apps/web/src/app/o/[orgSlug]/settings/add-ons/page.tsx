@@ -74,14 +74,25 @@ export default async function AddOnsSettingsPage({
         </p>
       )}
 
-      {/* UNLIMITED FIRST, and the order is the whole fix (W8 F1). A plan whose
+      {/* UNLIMITED FIRST, and the order is half the fix (W8 F1). A plan whose
           `orgs.max_owned` is NULL sells no rider either — there is nothing to
           sell a group that already has no ceiling — so it ALSO fails
           `addonAvailable`, and behind the community arm this branch would never
           be reached. Before it existed, an unlimited customer was told to
           "Upgrade to buy past the Community limit" one line under a summary
-          that had just said their plan sets no limit. */}
-      {view.orgCap === null ? (
+          that had just said their plan sets no limit.
+
+          BOTH CLAUSES, and the second one is the other half. `orgCap === null`
+          alone is NOT "the plan is unlimited": `purchasedCapacity`
+          (lib/billing-group.ts) answers null for three different states, and a
+          staff `int_value = null` override on a PRO group is one of them
+          (add-ons-tab.test.ts seeds exactly that). Firing on `orgCap` alone
+          would take the control away from a payer who is still billed monthly
+          for riders and is here to cancel them — the invariant stated over the
+          capReduced notice above. Adding `!view.addonAvailable` makes this arm
+          a strict SUBSET of the community arm below, so it can only ever change
+          WHICH NOTICE shows, never whether the control does. */}
+      {view.orgCap === null && !view.addonAvailable ? (
         <p className="rounded-xl border border-purple-100 bg-purple-50/50 p-4 text-sm text-slate-600">
           {t(dict, "addOns.unlimitedNotice")}
         </p>

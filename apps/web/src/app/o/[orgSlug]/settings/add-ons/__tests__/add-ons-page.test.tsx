@@ -97,6 +97,7 @@ async function render(overrides: Partial<AddOnsTabView> = {}) {
 const GUEST = "Only the person who pays for this billing group can buy add-ons.";
 const COMMUNITY = "Add-ons are available on Pro.";
 const NO_LIVE = "Extra organisations need an active paid subscription.";
+const UNLIMITED = "Your plan already covers unlimited organisations";
 const PAUSED =
   "Adding organisations is paused right now — either this bill needs attention or an organisation on it is suspended.";
 
@@ -133,6 +134,50 @@ describe("Add-ons page — who is offered the purchase", () => {
     });
     expect(control).toBeUndefined();
     expect(text).toContain(COMMUNITY);
+  });
+
+  // ── W8 F1: the unlimited arm, and why its predicate needs BOTH halves ────
+  //
+  // The arm sits FIRST in the ladder, so its predicate decides for every state
+  // below it. `orgCap === null` ALONE is not "the plan is unlimited":
+  // `purchasedCapacity` (lib/billing-group.ts) answers null from three
+  // producers, and only one of them is the plan's own catalog row. A staff
+  // `int_value = null` override on a PRO group answers null too — a shape
+  // `add-ons-tab.test.ts` already seeds and pins — and that group may be paying
+  // for riders right now.
+  //
+  // So the pair below is the whole test: same `orgCap: null`, opposite
+  // `addonAvailable`, opposite outcomes. Either case ALONE is satisfied by a
+  // one-clause predicate, which is exactly the bug this pair exists to catch.
+  //
+  // Note the arm can only ever change WHICH NOTICE shows, never whether the
+  // control does: `orgCap === null && !addonAvailable` is a strict subset of
+  // the community arm's `!addonAvailable || priceMinor === null`, which already
+  // withheld the control for every state that reaches it.
+  it("tells a plan with no ceiling and nothing to sell that there is nothing to add", async () => {
+    const { control, text } = await render({
+      planKey: "enterprise",
+      orgCap: null,
+      addonAvailable: false,
+      priceMinor: null,
+      extraOrgCount: 0,
+    });
+    expect(control).toBeUndefined();
+    expect(text).toContain(UNLIMITED);
+    // The defect F1 is named for: an unlimited plan fails `addonAvailable` as
+    // well (nothing to sell a group with no ceiling), so it used to land in the
+    // Community arm and be told to upgrade past a limit it does not have.
+    expect(text).not.toContain(COMMUNITY);
+  });
+
+  it("STILL gives the control to a payer whose unlimited cap is a staff override", async () => {
+    // `orgCap: null` while the plan DOES sell a rider. Withholding the control
+    // here would take the cancel button away from someone still billed monthly
+    // for one — the invariant this page states over its own ladder.
+    const { control, text } = await render({ orgCap: null, addonAvailable: true, extraOrgCount: 2 });
+    expect(control).toBeDefined();
+    expect(text).not.toContain(UNLIMITED);
+    expect(text).not.toContain(COMMUNITY);
   });
 
   it("does NOT offer a group with no live subscription anything to buy", async () => {

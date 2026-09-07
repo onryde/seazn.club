@@ -614,10 +614,14 @@ test("…and refuses a live subscription on a plan the catalog sells no rider fo
  * customer to "Upgrade to buy past the Community limit" one line under a
  * summary that had just said their plan sets no limit.
  *
- * Only a browser can see this: the ladder is JSX in a server component, and
- * `apps/web` vitest is `environment: "node"`. `add-ons-page.test.tsx` renders
- * the CONTROL with props handed to it, which proves the control and never
- * which arm the page picked.
+ * WHICH ARM the ladder picks is pinned in `add-ons-page.test.tsx` — that file
+ * awaits the real page component and walks its element tree, so it does see the
+ * branch, and its `orgCap: null` PAIR (one with a rider on sale, one without)
+ * is what holds this arm's predicate to both of its clauses. What it cannot see
+ * is the rest of the stack: the plan matrix, `getAddOnsTab` (mocked there), the
+ * dictionary reaching a real page, and the copy landing on a real screen. This
+ * case drives all of that against a live database and a built server, and reads
+ * the unlimited plan key out of `plan_entitlements` rather than typing it.
  */
 test("a group whose plan has no organisation limit is told it has nothing to add, not to upgrade", async ({
   page,
