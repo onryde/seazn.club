@@ -104,10 +104,17 @@ test.beforeAll(async ({ browser }) => {
 });
 
 test.afterAll(async ({ browser }) => {
+  // Guarded independently, never `comp.id` as the first line unconditionally:
+  // if `seedCompetition` throws after `seedSettingsOrg` already succeeded,
+  // `comp` stays `undefined` and an unguarded read here would throw before
+  // `releaseSettingsOrg` ever runs — leaking the org (one of the shared Pro
+  // user's five owner slots) for the rest of the leg. Same shape as
+  // `settings-competition-drive.spec.ts:198-202`'s `if (!org) return;`,
+  // extended to two independently-seeded resources.
   const ctx = await browser.newContext();
   try {
-    await releaseCompetition(ctx.request, comp.id);
-    await releaseSettingsOrg(ctx.request, org);
+    if (comp) await releaseCompetition(ctx.request, comp.id);
+    if (org) await releaseSettingsOrg(ctx.request, org);
   } finally {
     await ctx.close();
   }
