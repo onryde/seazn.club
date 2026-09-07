@@ -56,6 +56,11 @@ export interface StatColumn<Row> {
    *  column claiming a fixed width so it can take the remainder. */
   width: string;
   cell: (row: Row) => ReactNode;
+  /** Owner design round (D) — this column FOLDS below `md`: its header and
+   *  cells are `max-md:hidden` and its figure reappears in `phoneSubLine`
+   *  under the name. A fold, never a drop: the same facts are on the phone,
+   *  arranged differently. Columns without it show at every width. */
+  foldAtPhone?: boolean;
 }
 
 export interface StatTableProps<Row> {
@@ -69,6 +74,12 @@ export interface StatTableProps<Row> {
   rowKey: (row: Row, index: number) => string;
   /** Extra attributes per row — e.g. `data-striker`. */
   rowAttrs?: (row: Row) => Record<string, string>;
+  /** Owner design round (D) — the muted line under the NAME, phone only,
+   *  carrying whatever `foldAtPhone` columns removed from the row. Lives in
+   *  the CALLER because its wording is the sport's own notation ("1×4 1×6"),
+   *  and this primitive holds no cricket vocabulary. Supply it whenever any
+   *  column folds, or the phone silently loses those figures. */
+  phoneSubLine?: (row: Row) => ReactNode;
 }
 
 export function StatTable<Row>({
@@ -80,26 +91,42 @@ export function StatTable<Row>({
   nameCell,
   rowKey,
   rowAttrs,
+  phoneSubLine,
 }: StatTableProps<Row>) {
   const nameTitle = t(dict, nameTitleKey);
   return (
-    <table className="w-full table-fixed border-separate border-spacing-0 tabular-nums">
+    // Owner design round (D) — CAPPED MEASURE from `md`. `table-fixed` gives
+    // the name column whatever the numeric columns do not claim, so in a
+    // half-width card at 1280 the name sat at the left edge and its figures at
+    // the right, ~300px apart, which is the exact canyon this round exists to
+    // close. A printout has a fixed character width; the fix is to stop the
+    // ROW stretching, not to re-tune the columns inside it.
+    <table className="w-full table-fixed border-separate border-spacing-0 tabular-nums md:max-w-[28rem]">
       <caption className="sr-only">{t(dict, captionKey)}</caption>
       <thead>
         <tr>
+          {/* Owner design round (D) — this header is now VISIBLE. It was
+              `sr-only`, which left the two stacked tables on a phone reading
+              as one block interrupted by an unexplained second header row
+              (…SR, then O M R W ECON, with nothing saying "Bowling"). Sighted
+              readers were getting less than screen-reader users were. One
+              element carries the text for both now, so the two cannot drift —
+              which is why the `sr-only` twin is gone rather than kept. */}
           <th
             scope="col"
             title={nameTitle}
-            className="pb-1 text-left text-xs font-medium uppercase tracking-wide text-ink-muted"
+            className="pb-1 text-left font-mono text-[10px] font-medium uppercase tracking-wide text-ink-muted"
           >
-            <span className="sr-only">{nameTitle}</span>
+            {nameTitle}
           </th>
           {columns.map((col) => (
             <th
               key={col.abbr}
               scope="col"
               title={t(dict, col.titleKey)}
-              className={`${col.width} pb-1 px-0.5 text-right text-xs font-medium uppercase tracking-wide text-ink-muted`}
+              className={`${col.width} pb-1 px-0.5 text-right font-mono text-[10px] font-medium uppercase tracking-wide text-ink-muted${
+                col.foldAtPhone ? " max-md:hidden" : ""
+              }`}
             >
               {col.abbr}
             </th>
@@ -109,11 +136,27 @@ export function StatTable<Row>({
       <tbody>
         {rows.map((row, i) => (
           <tr key={rowKey(row, i)} {...(rowAttrs ? rowAttrs(row) : {})}>
-            <td data-testid="mc-stat-name-cell" className="pr-2 text-sm font-medium text-zinc-800">
+            <td data-testid="mc-stat-name-cell" className="min-w-0 py-1.5 pr-2 align-top text-sm font-medium text-zinc-800">
               <span className="block truncate">{nameCell(row)}</span>
+              {/* Phone only, and only when the caller folded something. The
+                  `md:hidden` is what stops it printing twice on desktop,
+                  where the same figures already have their own columns. */}
+              {phoneSubLine ? (
+                <span
+                  data-testid="mc-stat-phone-subline"
+                  className="mt-0.5 block truncate font-mono text-[11px] font-normal text-ink-muted md:hidden"
+                >
+                  {phoneSubLine(row)}
+                </span>
+              ) : null}
             </td>
             {columns.map((col) => (
-              <td key={col.abbr} className="px-0.5 text-right text-sm tabular-nums text-zinc-700">
+              <td
+                key={col.abbr}
+                className={`px-0.5 py-1.5 text-right align-top font-mono text-[13px] tabular-nums text-zinc-700${
+                  col.foldAtPhone ? " max-md:hidden" : ""
+                }`}
+              >
                 {col.cell(row)}
               </td>
             ))}

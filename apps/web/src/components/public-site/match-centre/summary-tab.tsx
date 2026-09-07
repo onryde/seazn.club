@@ -105,8 +105,11 @@ function LiveBlock({ live, dict }: { live: LiveBlockT; dict: PublicDict }) {
   const battingColumns: StatColumn<BattingRowT>[] = [
     { abbr: "R", titleKey: "matchCentre.col.runs", width: "w-7", cell: (r) => r.runs },
     { abbr: "B", titleKey: "matchCentre.col.balls", width: "w-7", cell: (r) => r.balls },
-    { abbr: "4s", titleKey: "matchCentre.col.fours", width: "w-7", cell: (r) => r.fours ?? 0 },
-    { abbr: "6s", titleKey: "matchCentre.col.sixes", width: "w-7", cell: (r) => r.sixes ?? 0 },
+    // Owner design round (D) — 4s/6s FOLD below `md` and reappear under the
+    // batter's name via `phoneSubLine`. They are the two least-scanned
+    // figures in the row and the two that were squeezing R/B/SR at 320.
+    { abbr: "4s", titleKey: "matchCentre.col.fours", width: "w-7", foldAtPhone: true, cell: (r) => r.fours ?? 0 },
+    { abbr: "6s", titleKey: "matchCentre.col.sixes", width: "w-7", foldAtPhone: true, cell: (r) => r.sixes ?? 0 },
     { abbr: "SR", titleKey: "matchCentre.col.strikeRate", width: "w-11", cell: (r) => r.strikeRate ?? "—" },
   ];
   const bowlingColumns: StatColumn<BowlingRowT>[] = [
@@ -148,6 +151,11 @@ function LiveBlock({ live, dict }: { live: LiveBlockT; dict: PublicDict }) {
             // which row is on strike; nothing here re-derives it.
             rowAttrs={(row) => ({ "data-striker": String(row.person.personId === live.striker?.personId) })}
             columns={battingColumns}
+            // The two folded columns, restated as cricket's own notation.
+            // NOT localised, for the same reason the column headers are not:
+            // "4s"/"6s" are notation, and this is the same figure wearing the
+            // same abbreviation (`stat-table.tsx`'s "notation, not copy").
+            phoneSubLine={(row) => `${row.fours ?? 0}×4  ${row.sixes ?? 0}×6`}
           />
         ) : null}
         {live.bowling.length > 0 ? (
@@ -162,24 +170,32 @@ function LiveBlock({ live, dict }: { live: LiveBlockT; dict: PublicDict }) {
           />
         ) : null}
       </div>
-      {live.thisOver.length > 0 ? (
-        <div>
-          <p className="mb-1.5 text-xs font-semibold uppercase tracking-[0.18em] text-ink-muted">
-            {t(dict, "matchCentre.thisOver")}
-          </p>
-          <div data-testid="mc-this-over" className="flex flex-wrap gap-1.5">
-            {live.thisOver.map((g, i) => (
-              <Glyph key={i} g={g} />
-            ))}
-          </div>
+      {/* Owner design round (D) — the over and the partnership are one
+          FOOTER ROW, ruled off from the tables above: side by side from `md`,
+          stacked below it. They read as the printout's tally line rather than
+          as two more paragraphs of body copy. */}
+      {live.thisOver.length > 0 || live.partnership ? (
+        <div className="flex flex-col gap-2 border-t border-zinc-200/80 pt-3 md:flex-row md:items-center md:justify-between">
+          {live.thisOver.length > 0 ? (
+            <div className="flex items-center gap-2">
+              <p className="font-mono text-[10px] font-semibold uppercase tracking-[0.18em] text-ink-muted">
+                {t(dict, "matchCentre.thisOver")}
+              </p>
+              <div data-testid="mc-this-over" className="flex flex-wrap gap-1.5">
+                {live.thisOver.map((g, i) => (
+                  <Glyph key={i} g={g} />
+                ))}
+              </div>
+            </div>
+          ) : null}
+          {live.partnership ? (
+            // Plain string, not a `Msg` — the schema's own "no copy" convention
+            // for numbers-and-names composites (same as `header.rateLine`).
+            <p data-testid="mc-partnership-line" className="font-mono text-[11px] uppercase tracking-[0.1em] text-ink-muted">
+              {t(dict, "matchCentre.partnership")} {live.partnership}
+            </p>
+          ) : null}
         </div>
-      ) : null}
-      {live.partnership ? (
-        // Plain string, not a `Msg` — the schema's own "no copy" convention
-        // for numbers-and-names composites (same as `header.rateLine`).
-        <p data-testid="mc-partnership-line" className="text-sm text-ink-muted">
-          {t(dict, "matchCentre.partnership")}: {live.partnership}
-        </p>
       ) : null}
       {live.lastWicket ? (
         <p data-testid="mc-last-wicket" className="text-sm text-ink-muted">
@@ -262,13 +278,17 @@ function PerformerCard({ p, dict }: { p: TopPerformerT; dict: PublicDict }) {
         </p>
       </div>
       <p className="mt-1 min-w-0 truncate font-display text-base font-semibold text-ink">{p.person.name}</p>
-      <p className="text-sm text-ink-muted">{p.line}</p>
+      {/* Owner design round (D) — `line` ("23 (22)", "2/13") and `detail`
+          ("SR 104.5", "Econ 6.5") are pure figures, so they take the mono
+          face like every other number on the tab. The person's NAME above
+          stays in the display face; that contrast is the point. */}
+      <p className="font-mono text-[13px] text-ink-muted">{p.line}</p>
       {/* Defect round 15b: the `/80` opacity on `text-ink-muted` measured
           3.45:1 on `bg-surface` (axe SERIOUS, walkthrough evidence) —
           short of WCAG AA's 4.5:1. `text-ink-muted` alone (no modifier,
           ≈4.6:1 on white per glyphs.tsx:12) clears the bar — no new
           colour, just drop the /80. */}
-      {p.detail ? <p className="text-xs text-ink-muted">{p.detail}</p> : null}
+      {p.detail ? <p className="font-mono text-[11px] text-ink-muted">{p.detail}</p> : null}
     </div>
   );
 }
@@ -308,9 +328,19 @@ function FallOfWicketsRail({ innings, dict }: { innings: InningsT; dict: PublicD
           <span
             key={i}
             role="listitem"
-            className="shrink-0 rounded-full border border-zinc-200 px-3 py-1 text-xs tabular-nums text-zinc-700"
+            className="shrink-0 rounded-full border border-zinc-200 px-3 py-1 text-xs text-zinc-700"
           >
-            {fow.wicket}-{fow.runs} · {fow.batter.name} · {fow.over}
+            {/* Owner design round (D) — the FIGURES take the mono face, the
+                batter's name does not. `tabular-nums` on the whole chip set
+                the name on digit-width spacing too, which is part of why
+                these chips read as one undifferentiated string. */}
+            <span className="font-mono tabular-nums">
+              {fow.wicket}-{fow.runs}
+            </span>
+            {" · "}
+            {fow.batter.name}
+            {" · "}
+            <span className="font-mono tabular-nums">{fow.over}</span>
           </span>
         ))}
       </div>
@@ -341,7 +371,7 @@ function PartnershipsBars({ innings, dict }: { innings: InningsT; dict: PublicDi
                 <span className="min-w-0 truncate">
                   {p.batters[0].name} &amp; {p.batters[1].name}
                 </span>
-                <span className="tabular-nums">{p.runs}</span>
+                <span className="font-mono tabular-nums">{p.runs}</span>
               </div>
               <div className="h-2 rounded-full bg-zinc-100">
                 <div className="h-2 rounded-full bg-accent" style={{ width: `${pct}%` }} />

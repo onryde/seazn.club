@@ -507,14 +507,28 @@ describe("SummaryTab — cricket", () => {
   });
 
   // Review round 2 minor — the NAME column's header needed the SAME
-  // scope="col" + sr-only-text treatment as the numeric headers; a `title`
+  // scope="col" + real-text treatment as the numeric headers; a `title`
   // attribute alone is not reliably announced by a screen reader.
-  it("the NAME column's header also carries scope=col and an sr-only span with real text", () => {
+  //
+  // Owner design round (D) — that text is now VISIBLE rather than `sr-only`.
+  // Two stacked tables on a phone read as one block interrupted by an
+  // unexplained second header row, so sighted readers were getting strictly
+  // less than screen-reader users. The a11y requirement is unchanged and is
+  // still what this asserts: the header carries `scope="col"` and real TEXT
+  // CONTENT, not merely a `title`. Renamed with it — a test called "sr-only
+  // span" that asserts visible text is the failure mode this repo keeps
+  // hitting, where the name and the assertion disagree.
+  it("the NAME column's header carries scope=col and real text content, not just a title", () => {
     const html = renderToStaticMarkup(<SummaryTab doc={cricketDoc} dict={dict} data={liveFixtureFor(cricketDoc)} />);
-    const nameHeaderMatch = html.match(/<th scope="col" title="([^"]*)" class="[^"]*"><span class="sr-only">([^<]*)<\/span><\/th>/);
+    const nameHeaderMatch = html.match(/<th scope="col" title="([^"]*)" class="([^"]*)">([^<]*)<\/th>/);
     expect(nameHeaderMatch).not.toBeNull();
     expect(nameHeaderMatch?.[1]).toBe(dict["matchCentre.col.batter"] as string);
-    expect(nameHeaderMatch?.[2]).toBe(dict["matchCentre.col.batter"] as string);
+    // The text is the announced label AND the visible one — one element, so
+    // the two can never drift apart.
+    expect(nameHeaderMatch?.[3]).toBe(dict["matchCentre.col.batter"] as string);
+    // Pin that it is NOT hidden: `sr-only` here would restore the exact gap
+    // this round closed, and the assertion above passes either way.
+    expect(nameHeaderMatch?.[2]).not.toContain("sr-only");
   });
 
   // Review round 2 minor — the batting StatTable's `batters.length > 0`

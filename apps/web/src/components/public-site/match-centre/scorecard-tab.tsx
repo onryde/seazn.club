@@ -99,8 +99,26 @@ function anyNonNull<T>(rows: readonly T[], pick: (row: T) => number | string | n
 // neighbour's digits rather than widening the table, so the scroll region could
 // not rescue it either. `px-0.5` yields 24 / 28 / 40px content boxes for
 // w-7 / w-8 / w-11. The NAME cell keeps `px-1`: it has room, and it truncates.
-const NUM_CELL = "px-0.5 text-right tabular-nums";
-const HEAD_CELL = "px-0.5 text-right font-medium text-ink-muted";
+// Owner design round (D, extended to the Scorecard) — the figures are set in
+// the mono face, like the Summary tab's live block. `tabular-nums` alone kept
+// the digits on a common advance width but left them in Geist Sans, so a
+// scorecard column read as prose that happened to be numbers. Only the
+// FIGURES and their notation headers change face; names stay in the body face,
+// which is what keeps a name and a number distinguishable at a glance.
+// EXPORTED for `scorecard-tab.test.tsx`'s emphasis test, which used to spell
+// this class string out three times as regex literals. That made a pure
+// restyling (adding `font-mono`) red a test about BOLD-vs-NOT-BOLD, which is a
+// test failing for a reason it has nothing to do with. It now derives its
+// expectation from this constant, so the styling can move without dragging the
+// rule's test with it.
+export const NUM_CELL = "px-0.5 text-right font-mono tabular-nums";
+const HEAD_CELL = "px-0.5 text-right font-mono text-[10px] font-medium uppercase tracking-wide text-ink-muted";
+/** The NAME column's header — batting and bowling both use it. Kept as ONE
+ *  constant because they were two identical literals and the first pass of
+ *  this round changed only the batting one, leaving the bowling table's
+ *  header in the old face directly beside it. */
+const NAME_HEAD_CELL =
+  "px-1 text-left font-mono text-[10px] font-medium uppercase tracking-wide text-ink-muted";
 
 /** A numeric cell that reads as "not recorded" rather than as zero. */
 function Num({
@@ -252,7 +270,7 @@ function BattingTable({
                 one instead starved the numerics to 16-24px each. */}
             <th
               scope="col"
-              className="px-1 text-left font-medium text-ink-muted"
+              className={NAME_HEAD_CELL}
               title={t(dict, "matchCentre.col.batter")}
             >
               {t(dict, "matchCentre.col.batter")}
@@ -314,7 +332,7 @@ function BowlingTable({
             {/* NO width — see the batting table. */}
             <th
               scope="col"
-              className="px-1 text-left font-medium text-ink-muted"
+              className={NAME_HEAD_CELL}
               title={t(dict, "matchCentre.col.bowler")}
             >
               {t(dict, "matchCentre.col.bowler")}
@@ -416,7 +434,7 @@ function Innings({
             </span>
           </span>
         </span>
-        <span className="shrink-0 tabular-nums font-semibold">
+        <span className="shrink-0 font-mono font-semibold tabular-nums">
           {innings.total.runs}/{innings.total.wickets}
           <span className="ml-1 text-[11px] font-normal text-ink-muted">
             ({innings.total.overs})
@@ -434,7 +452,7 @@ function Innings({
           {innings.extrasLine === null ? null : (
             <p data-testid={`mc-extras-${n}`} className="flex justify-between gap-2 px-1 text-[13px]">
               <span className="text-ink-muted">{t(dict, "matchCentre.extras")}</span>
-              <span className="tabular-nums">{innings.extrasLine}</span>
+              <span className="font-mono tabular-nums">{innings.extrasLine}</span>
             </p>
           )}
           <p
@@ -442,7 +460,7 @@ function Innings({
             className="flex justify-between gap-2 border-t border-zinc-200/80 px-1 pt-1 text-[13px] font-semibold"
           >
             <span>{t(dict, "matchCentre.total")}</span>
-            <span className="tabular-nums">
+            <span className="font-mono tabular-nums">
               {innings.total.runs}/{innings.total.wickets} ({innings.total.overs})
               {innings.total.runRate === null ? "" : ` · ${innings.total.runRate}`}
             </span>

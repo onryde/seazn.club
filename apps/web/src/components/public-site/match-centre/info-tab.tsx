@@ -43,7 +43,14 @@ export interface InfoTabProps {
 // cosmetic here: `min-height` does not apply to an inline box, so on a plain
 // `<a>` the class would compile, ship, and change nothing.
 const LINK_CLASS =
-  "inline-flex min-h-11 items-center rounded-lg border border-zinc-200/80 px-3 py-2 text-[13px] font-medium hover:bg-surface";
+  "inline-flex min-h-11 items-center justify-center rounded-lg border border-zinc-200/80 px-3 py-2 text-[13px] font-medium hover:bg-surface md:justify-start";
+
+/** The calendar link takes both phone columns. It is the odd one of three
+ *  whenever it renders at all — Division and Competition always render and
+ *  pair evenly — so a half-width calendar button would leave a gap beside it.
+ *  When `calendarHref` is null the remaining two pair on their own and no
+ *  span is needed anywhere. */
+const CALENDAR_CLASS = `${LINK_CLASS} max-md:col-span-2`;
 
 export function InfoTab({ doc, dict }: InfoTabProps): ReactNode {
   const { rows, calendarHref, divisionHref, competitionHref } = doc.info;
@@ -53,22 +60,44 @@ export function InfoTab({ doc, dict }: InfoTabProps): ReactNode {
         // Two columns even at 320: the labels are short nouns, and one column
         // would push the links below the fold on a phone. Task 15's
         // screenshots are what actually prove they fit.
-        <dl className="grid grid-cols-2 gap-x-3 gap-y-2.5">
+        //
+        // Owner design round (F) — three columns from `md`. The old grid was
+        // two at EVERY width, which left the right half of a 1280 card empty
+        // while the same two columns crushed a long value on a phone.
+        <dl className="grid grid-cols-2 gap-x-4 gap-y-4 md:grid-cols-3 md:gap-x-7 md:gap-y-5">
           {/* See note 1: the order given. */}
-          {rows.map((row, i) => (
-            <div key={i} data-testid={`mc-info-${i}`} className="min-w-0">
-              <dt className="truncate text-[11px] uppercase tracking-[0.14em] text-ink-muted">
-                {t(dict, row.label.key, row.label.params)}
-              </dt>
-              <dd className="text-[13px]">{t(dict, row.value.key, row.value.params)}</dd>
-            </div>
-          ))}
+          {rows.map((row, i) => {
+            const value = t(dict, row.value.key, row.value.params);
+            // A LONG value takes the full width on a phone rather than
+            // wrapping to three ragged lines in a half-width cell. Decided
+            // from the RESOLVED string, so it holds in every locale — a
+            // server-side flag would be pinned to whatever English happened
+            // to be that day. Only below `md`; from `md` the three columns
+            // are wide enough that nothing needs to span.
+            const wide = value.length > 22;
+            return (
+              <div
+                key={i}
+                data-testid={`mc-info-${i}`}
+                className={`min-w-0${wide ? " max-md:col-span-2" : ""}`}
+              >
+                <dt className="truncate text-[11px] uppercase tracking-[0.14em] text-ink-muted">
+                  {t(dict, row.label.key, row.label.params)}
+                </dt>
+                <dd className="text-[13px]">{value}</dd>
+              </div>
+            );
+          })}
         </dl>
       )}
 
-      <div className="flex flex-wrap gap-2">
+      {/* Owner design round (F) — the links are ruled off from the facts and
+          pair up two-across on a phone instead of shrink-wrapping to their
+          text, which left three differently-sized boxes in a ragged row. From
+          `md` they go back to a natural-width flex row. */}
+      <div className="grid grid-cols-2 gap-2 border-t border-zinc-200/80 pt-4 md:flex md:flex-wrap md:border-0 md:pt-0">
         {calendarHref === null ? null : (
-          <a data-testid="mc-info-calendar" href={calendarHref} className={LINK_CLASS}>
+          <a data-testid="mc-info-calendar" href={calendarHref} className={CALENDAR_CLASS}>
             {t(dict, "matchCentre.info.addToCalendar")}
           </a>
         )}

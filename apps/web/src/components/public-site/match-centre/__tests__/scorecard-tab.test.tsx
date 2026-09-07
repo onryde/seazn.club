@@ -68,7 +68,7 @@ import {
   type PersonT,
   type SideT,
 } from "@/server/public-site/match-centre-schema";
-import { ScorecardTab } from "../scorecard-tab";
+import { NUM_CELL, ScorecardTab } from "../scorecard-tab";
 
 // The schema exports the view but not its row types; index rather than
 // hand-copy, so a column added to the schema is a type error here.
@@ -597,16 +597,27 @@ describe("ScorecardTab", () => {
       expect(start, testid).toBeGreaterThan(-1);
       return html.slice(start, html.indexOf("</tr>", start));
     };
+    // The expected class strings are DERIVED from the component's own
+    // `NUM_CELL`, not spelled out here. They used to be three regex literals,
+    // so adding `font-mono` — a pure restyling that changes nothing about
+    // emphasis — reddened this test, which is a test failing for a reason it
+    // is not about. The rule under test is bold-iff-positive; the styling is
+    // the component's business.
+    const esc = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const plainCell = (v: string): RegExp => new RegExp(`<td class="${esc(NUM_CELL)}">${v}</td>`);
+    const boldCell = (v: string): RegExp =>
+      new RegExp(`<td class="${esc(NUM_CELL)} font-semibold">${v}</td>`);
+
     // Stokes took 0 wickets: the W cell renders WITHOUT font-semibold.
     const stokesRow = rowSlice(html, "mc-bowl-p-stokes");
-    expect(stokesRow).toMatch(/<td class="px-0\.5 text-right tabular-nums">0<\/td>/);
+    expect(stokesRow).toMatch(plainCell("0"));
     expect(stokesRow).not.toMatch(/<td class="[^"]*font-semibold[^"]*">0<\/td>/);
     // Khan took 3 wickets: the W cell IS bold — the positive pair.
     const khanRow = rowSlice(html, "mc-bowl-p-khan");
-    expect(khanRow).toMatch(/<td class="px-0\.5 text-right tabular-nums font-semibold">3<\/td>/);
+    expect(khanRow).toMatch(boldCell("3"));
     // R. Sharma scored 62 runs: the R cell IS bold.
     const rohitRow = rowSlice(html, "mc-bat-p-rohit");
-    expect(rohitRow).toMatch(/<td class="px-0\.5 text-right tabular-nums font-semibold">62<\/td>/);
+    expect(rohitRow).toMatch(boldCell("62"));
 
     // A duck (0 runs): the R cell renders WITHOUT font-semibold — the
     // negative pair for the batting side.
@@ -617,7 +628,7 @@ describe("ScorecardTab", () => {
     const duckHtml = renderToStaticMarkup(
       <ScorecardTab doc={doc({ innings: [duckInnings] })} dict={dict} data={data} />,
     );
-    expect(duckHtml).toMatch(/<td class="px-0\.5 text-right tabular-nums">0<\/td>/);
+    expect(duckHtml).toMatch(plainCell("0"));
     expect(duckHtml).not.toMatch(/<td class="[^"]*font-semibold[^"]*">0<\/td>/);
   });
 
