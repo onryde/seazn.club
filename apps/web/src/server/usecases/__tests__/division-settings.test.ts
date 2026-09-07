@@ -219,6 +219,99 @@ describe.skipIf(!HAS_DB)("eligibility columns: category/age_min/age_max (V364/RS
     expect(cleared.age_min).toBeNull();
     expect(cleared.age_max).toBe(20);
   });
+
+  // W8/F12. The cutoff pair gets the same merge-and-validate as the age band
+  // above, for the same reason: `checkAgeCutoff` (schemas.ts) is a
+  // `superRefine` on the request BODY and its `!= null` cannot tell an
+  // OMITTED field from an explicit `null`, so `{ age_cutoff_day: null }`
+  // against a stored month used to answer 200 and store an orphan half.
+  //
+  // The HTTP half of this is `settings-registration-bounds.spec.ts`; these
+  // cases exercise the OTHER caller shape — `patchDivision` called directly,
+  // with no schema parse in front of it, which is what a server action or a
+  // script does. That is also the only layer from which the merged
+  // day-for-month clause is reachable at all (over /api/v1, any body with
+  // both merged halves non-null carried both itself and zod already
+  // day-validated it), so the last case here is the only thing in the tree
+  // that can kill that clause.
+  // One test per merge SIDE, not one test with two assertions: the two sides
+  // are separately reachable and a guard that merged only the month against
+  // the stored row still satisfies the day case. Mutating per operand needs a
+  // distinct test per operand to land on (AGENTS.md failure class 3).
+  it("an explicit null on the DAY is rejected 422 against the stored month", async () => {
+    const owner = await seedOwner();
+    const { division } = await rig(owner);
+    await patchDivision(owner, division.id, { age_cutoff_month: 9, age_cutoff_day: 1 });
+
+    await expect(
+      patchDivision(owner, division.id, { age_cutoff_day: null }),
+    ).rejects.toMatchObject({ status: 422 });
+
+    // The refusal did not half-apply. The guard throws INSIDE the tenant
+    // transaction, so this is asserting the rollback, not merely the status.
+    const fetched = await getDivision(owner, division.id);
+    expect(fetched.age_cutoff_month).toBe(9);
+    expect(fetched.age_cutoff_day).toBe(1);
+  });
+
+  it("an explicit null on the MONTH is rejected 422 against the stored day", async () => {
+    const owner = await seedOwner();
+    const { division } = await rig(owner);
+    await patchDivision(owner, division.id, { age_cutoff_month: 9, age_cutoff_day: 1 });
+
+    await expect(
+      patchDivision(owner, division.id, { age_cutoff_month: null }),
+    ).rejects.toMatchObject({ status: 422 });
+
+    const fetched = await getDivision(owner, division.id);
+    expect(fetched.age_cutoff_month).toBe(9);
+    expect(fetched.age_cutoff_day).toBe(1);
+  });
+
+  // The POSITIVE pair for the case above: a guard that refused every patch
+  // naming a cutoff field would satisfy it. Clearing BOTH halves is a real
+  // organiser edit (back to the 1 January default) and must still land.
+  it("clearing BOTH cutoff halves to null is still allowed", async () => {
+    const owner = await seedOwner();
+    const { division } = await rig(owner);
+    await patchDivision(owner, division.id, { age_cutoff_month: 9, age_cutoff_day: 1 });
+
+    const cleared = await patchDivision(owner, division.id, {
+      age_cutoff_month: null,
+      age_cutoff_day: null,
+    });
+    expect(cleared.age_cutoff_month).toBeNull();
+    expect(cleared.age_cutoff_day).toBeNull();
+  });
+
+  it("an impossible day-for-month is refused even when zod never ran", async () => {
+    const owner = await seedOwner();
+    const { division } = await rig(owner);
+
+    // 31 February. `divisions_age_cutoff_check` (V380) caps the day at 31 and
+    // says nothing about the month it belongs to, so without the use-case
+    // clause this write LANDS — and `ageBandEligibilityIssues` then rolls it
+    // into March at read time, shifting eligibility by days with no error.
+    await expect(
+      patchDivision(owner, division.id, { age_cutoff_month: 2, age_cutoff_day: 31 }),
+    ).rejects.toMatchObject({ status: 422 });
+
+    const fetched = await getDivision(owner, division.id);
+    expect(fetched.age_cutoff_month).toBeNull();
+    expect(fetched.age_cutoff_day).toBeNull();
+
+    // And the boundary the predicate actually turns on: February's own last
+    // day is 28 here by design (`DAYS_IN_MONTH`, registration-rules.ts —
+    // a cutoff is re-evaluated every season, so 29 February is refused for
+    // every year, not just non-leap ones). Without this row, a clause that
+    // rejected the whole month would pass the case above.
+    const accepted = await patchDivision(owner, division.id, {
+      age_cutoff_month: 2,
+      age_cutoff_day: 28,
+    });
+    expect(accepted.age_cutoff_month).toBe(2);
+    expect(accepted.age_cutoff_day).toBe(28);
+  });
 });
 
 // RS007/V380: create-time eligibility columns. The division-creation

@@ -13,9 +13,14 @@ import type { AuthCtx } from "@/server/api-v1/auth";
 import {
   AGE_MAX_BEFORE_MIN,
   AGE_CUTOFF_BOTH_OR_NEITHER,
+  AGE_CUTOFF_DAY_INVALID_FOR_MONTH,
   type CreateDivision,
   type PatchDivision,
 } from "@/server/api-v1/schemas";
+// The SAME day-per-month predicate `checkAgeCutoff` validates the request
+// body with — imported, never re-implemented, so a change to DAYS_IN_MONTH
+// moves both layers together (F12's merge-check below).
+import { isValidCutoffDay } from "@/lib/registration-rules";
 import { captureServer } from "@/lib/posthog-server";
 import { EVENTS } from "@/lib/analytics-events";
 import { assertCompetitionNotFrozen } from "./entitlement-freeze";
@@ -683,6 +688,50 @@ export async function patchDivision(
       const currentIsOverride = currentBand.youth !== deriveYouth(currentBand.age_max);
       if (patch.age_max !== undefined && patch.youth === undefined && !currentIsOverride) {
         effective.youth = deriveYouth(mergedMax);
+      }
+    }
+    // Settings walkthrough F12 — the same merge-and-validate the age band
+    // above gets, for the cutoff pair, and for the same reason.
+    //
+    // `checkAgeCutoff` (api-v1/schemas.ts) is a `superRefine` on the request
+    // BODY, and its `(month != null) !== (day != null)` cannot tell a field
+    // the request OMITTED from one it set to an explicit `null` — `!= null`
+    // is true of both. So `PATCH { age_cutoff_day: null }` against a stored
+    // `age_cutoff_month = 9` read `false !== false`, passed, and wrote the
+    // orphan half the pair is supposed to make impossible (witnessed against
+    // a running server, W7 T2 probe 2026-09-07, in BOTH directions).
+    //
+    // `divisions_age_cutoff_check` (V380) does not backstop it either, which
+    // is what makes this the enforcement point rather than a nicety: with one
+    // side NULL the CHECK's second disjunct evaluates to NULL, and
+    // `false OR NULL` SATISFIES a CHECK. `isAgeCutoffCheckViolation` below
+    // therefore only ever fires on the constraint's RANGE half.
+    //
+    // Note `!== undefined`, not `??`: `??` would collapse an explicit `null`
+    // back onto the stored value and quietly reinstate exactly this bug.
+    if (patch.age_cutoff_month !== undefined || patch.age_cutoff_day !== undefined) {
+      const [currentCutoff] = await tx<
+        { age_cutoff_month: number | null; age_cutoff_day: number | null }[]
+      >`select age_cutoff_month, age_cutoff_day from divisions where id = ${id}`;
+      if (!currentCutoff) throw new HttpError(404, "division not found");
+      const mergedMonth =
+        patch.age_cutoff_month !== undefined ? patch.age_cutoff_month : currentCutoff.age_cutoff_month;
+      const mergedDay =
+        patch.age_cutoff_day !== undefined ? patch.age_cutoff_day : currentCutoff.age_cutoff_day;
+      if ((mergedMonth != null) !== (mergedDay != null)) {
+        throw new HttpError(422, AGE_CUTOFF_BOTH_OR_NEITHER);
+      }
+      // Day-for-month on the MERGED pair. Unreachable over /api/v1 as the
+      // schema stands — every body that survives `checkAgeCutoff` with both
+      // merged halves non-null carried both halves itself, and was therefore
+      // already day-validated there — so this is a guard for the OTHER caller
+      // shape: `patchDivision` is an exported use-case, and a direct caller
+      // (a server action, a script, a future route) gets no zod pass at all.
+      // Proven rather than assumed, and it is not decoration: it is killed by
+      // `division-settings.test.ts`'s "an impossible day-for-month is refused
+      // even when zod never ran", which calls this function directly.
+      if (mergedMonth != null && mergedDay != null && !isValidCutoffDay(mergedMonth, mergedDay)) {
+        throw new HttpError(422, AGE_CUTOFF_DAY_INVALID_FOR_MONTH);
       }
     }
     // Format edits (v8 spec §2): allowed only while no stage owns fixtures,

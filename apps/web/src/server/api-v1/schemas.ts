@@ -269,11 +269,21 @@ function checkAgeBand(
   }
 }
 
-// RS007/V380: the age-band cutoff override — both-or-neither, mirroring the
-// DB CHECK (`divisions_age_cutoff_check`). This catches the common
-// single-request case; usecases/divisions.ts's isAgeCutoffCheckViolation
-// backstops the READ COMMITTED race a merge-and-validate guard can't see,
-// same pattern as AGE_MAX_BEFORE_MIN/checkAgeBand above.
+// RS007/V380: the age-band cutoff override — both-or-neither. This refinement
+// sees the request BODY only, so it catches the single-request case and
+// answers 400 with an issue on `age_cutoff_day`. Since W8/F12 the SAME
+// sentence is also raised as a 422 by `patchDivision` (usecases/divisions.ts),
+// which merges the patch against the STORED row before deciding, exactly like
+// AGE_MAX_BEFORE_MIN/checkAgeBand above — the constant is exported for that
+// use, so the two layers cannot drift apart. `isAgeCutoffCheckViolation` then
+// maps the DB CHECK to the same 422 as a READ COMMITTED race backstop.
+//
+// The merge-check is not redundant with this one, and the reason is subtle:
+// `!= null` cannot distinguish an OMITTED field from one set to an explicit
+// `null`, so `{ age_cutoff_day: null }` against a stored month reads
+// `false !== false` here and passes. Nor does the DB CHECK save it — with one
+// side NULL its second disjunct is NULL, and `false OR NULL` satisfies a
+// CHECK — so before F12 that patch answered 200 and stored an orphan half.
 export const AGE_CUTOFF_BOTH_OR_NEITHER =
   "age_cutoff_month and age_cutoff_day must be set together, or both left null.";
 
@@ -282,12 +292,16 @@ export const AGE_CUTOFF_BOTH_OR_NEITHER =
 // 30 February parsed successfully and silently rolled a month at READ time
 // (ageBandEligibilityIssues, @/lib/registration-rules — `new
 // Date(Date.UTC(...))` normalises an out-of-range day), shifting eligibility
-// by days with no error anywhere. No merge-and-validate/DB-race backstop is
-// needed for this one, unlike age_min/age_max: the both-or-neither check
-// just above already forces month and day to travel together in the SAME
-// request, so this can only ever be evaluated with both present, and either
-// PASSES self-contained or FAILS self-contained — there is no stale-stored-
-// value half to race against.
+// by days with no error anywhere.
+//
+// Over /api/v1 this rule really is self-contained: a body that reaches it
+// with both halves present carries both, and the both-or-neither check just
+// above rejects every body that carries only one — so there is no stale
+// stored half to race against, and the 400 raised here is the whole story.
+// `patchDivision` re-checks it on the MERGED pair anyway (W8/F12), NOT for
+// that case but for the caller shape zod never sees at all: the use-case is
+// exported and a direct caller gets no schema parse. Same predicate
+// (`isValidCutoffDay`), same sentence, 422 instead of 400.
 export const AGE_CUTOFF_DAY_INVALID_FOR_MONTH = "age_cutoff_day is not a valid day for age_cutoff_month.";
 
 function checkAgeCutoff(
