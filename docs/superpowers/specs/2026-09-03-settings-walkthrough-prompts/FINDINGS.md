@@ -17,6 +17,8 @@ An org whose group is on `plan_key = 'enterprise'` with a live subscription rend
 
 **Status:** open, not fixed this wave. `settings/add-ons/page.tsx`'s branch ladder needs a third arm (unlimited-cap tier with no addon SKU) distinct from the Community case. Deferred to W8 per design §10's default (test-only through W7); a small blast-radius fix, so worth an owner call on whether it should move earlier the way ruling 7 moved two W3 findings up.
 
+**W8 note:** a fix commit naming this finding landed on this branch (`6c8e008bf`, originally `0d16fcf23`). Closure and residuals confirmed at the W8 whole-branch review.
+
 ### F2 — `addOns.cap.summaryUnlimited` has no plural rule: "Using 1 organisations"
 
 Found: Task 2, same spec.
@@ -24,6 +26,8 @@ Found: Task 2, same spec.
 `addOns.cap.summaryUnlimited` is `"Using {count} organisations on this bill — your plan sets no limit."` and renders "Using 1 organisations" for a group with exactly one org — the commonest case there is. The sibling `addOns.cap.summary` ("Using {count} of {cap} organisations") reads acceptably at 1, so this is the unlimited-form key specifically. All four locale dictionaries owe the fix (repo i18n rule).
 
 **Status:** open, not fixed this wave. Copy-only, all four dictionaries, no logic change — a good W8 batch item, or earlier if the owner wants small copy fixes to land immediately per ruling 7's precedent.
+
+**W8 note:** a fix commit naming this finding landed on this branch (`0463d1c4e`). Closure and residuals confirmed at the W8 whole-branch review.
 
 ### F3 (documentation only, no product impact) — `org-addons.ts` documents a tier that does not exist
 
@@ -33,6 +37,8 @@ Found: Task 2, while deriving expected prices from the catalog.
 
 **Status:** open. Comment-only fix, no test needed (nothing asserts the stale comment). Cheap enough to fix inline whenever a session next touches this file; not worth a dedicated task. The same stale claim also appears at `apps/web/src/app/api/billing/extra-orgs/route.ts:13` — both sites move together.
 
+**W8 note:** a fix commit naming this finding landed on this branch (`da29a39a5`). Closure and residuals confirmed at the W8 whole-branch review.
+
 ### F4 (documentation only, no product impact, but it is F1's own false premise) — `add-ons-tab.ts` claims no plan grants an unlimited cap
 
 Found: Task 2 reviewer, while confirming F1.
@@ -40,6 +46,8 @@ Found: Task 2 reviewer, while confirming F1.
 `add-ons-tab.ts:141-142` states "No plan grants unlimited `orgs.max_owned`, so `orgCap === null` means a staff override with a null `int_value`" and uses that to argue the `capReduced` second branch is unreachable. `V393__entitlements_v18.sql:25-26,46-48` falsified this when it added the `enterprise` plan with `orgs.max_owned` unlimited — which is the exact mechanism F1's contradictory copy runs through. The `capReduced` logic itself is still correct (the claim is about reachability, not behavior), so this is documentation-only, but a future session re-deriving F1's cause from this comment would derive it wrong.
 
 **Status:** open, same disposition as F3 — comment-only, fix whenever the file is next touched.
+
+**W8 note:** a fix commit naming this finding landed on this branch (`da29a39a5`). Closure and residuals confirmed at the W8 whole-branch review.
 
 ### F5 (real, moderate) — a Stripe outage on `/settings/billing` is indistinguishable from "no customer", and silently drops Cancel's own preconditions
 
@@ -95,6 +103,8 @@ So an inverted pair sent in ONE request is correctly refused 400, while the same
 
 **Status:** open, deliberately NOT fixed and NOT asserted against in W5. Pinning the 200 would freeze a live bug as the suite's expected value (AGENTS.md failure class 4); asserting the 400 it ought to give would red the branch for a defect this wave did not create; and patching production code mid-review is outside a test-only wave's remit (design §10). The fix is a re-check inside `patchCompetition` against the stored row, plus correcting the `schemas.ts` comment. When it lands, its case belongs in `settings-competition-gates.spec.ts` beside the existing full-pair case, where a comment already marks the spot.
 
+**W8 note:** a fix commit naming this finding landed on this branch (`853148f59`, originally `6e58adbd9`). Closure and residuals confirmed at the W8 whole-branch review.
+
 ### F9 (documentation only, assessed NOT exploitable) — `branding` writes are ungated while every read of them is gated
 
 Found: Task 2 and the whole-branch final review, while enumerating `patchCompetition`'s `requireFeature` calls.
@@ -112,6 +122,8 @@ Found: the final whole-branch review's fix round, while gating W5's own calls to
 `invalidateOrgEntitlements` (`e2e/helpers.ts`) flips an org's owner to superadmin, makes two `fetch` calls, then flips the owner back — and never checks either fetch's response status. A failed invalidation (a dropped connection, a 5xx) is silent: the caller proceeds believing the cache was cleared when it was not.
 
 **Status:** open, not fixed. Three existing specs already call this helper as written, so a fix belongs to the helper itself, not to any one caller — out of scope for this wave, which only needed to stop calling it where it bought nothing. Recorded so W8 (or whichever wave next touches `helpers.ts`) can add the status checks without re-discovering the gap from scratch.
+
+**W8 note:** a fix commit naming this finding landed on this branch (`df66be70a`, originally `79e098dc1`). Closure and residuals confirmed at the W8 whole-branch review.
 
 ## W6
 
@@ -133,7 +145,7 @@ Verified rather than assumed: mutating line 192 instead (the genuine inversion c
 
 F-numbers continue W6's sequence so every id in this file stays unique.
 
-### F12 (real, low severity — script-only, NOT fixed) — an explicit `null` on ONE half of the age cutoff is accepted, and stores an orphan half
+### F12 (real, low severity — script-only; FIXED in W8) — an explicit `null` on ONE half of the age cutoff is accepted, and stores an orphan half
 
 Found: Task 2, `settings-registration-bounds.spec.ts`, while confirming the plan's Step 1 both-or-neither prediction against a running server rather than against `checkAgeCutoff`'s source.
 
@@ -159,7 +171,7 @@ Both are states the both-or-neither invariant says cannot exist.
 
 The fix is the one this entry predicted: `patchDivision` (`usecases/divisions.ts`) now merges the patch against the stored row inside its own tenant transaction, exactly like the `age_min`/`age_max` block beside it, and throws its own `HttpError(422, AGE_CUTOFF_BOTH_OR_NEITHER)`. Note the STATUS: **422** from the use-case, against the **400** `checkAgeCutoff`'s ZodError still gives for a mismatched pair sent in ONE body. Same sentence, two layers, and the status is what says which one caught the request — `settings-registration-bounds.spec.ts`'s both-or-neither test now asserts both, one helper each (`expectCutoffIssue` / `expectCutoffMergeRefusal`), with the read-back that pins the guard's PLACEMENT (a check that ran after the UPDATE would 422 and still have orphaned the row). The `schemas.ts` comment that carried the false "already backstopped" premise was corrected in the same wave.
 
-**Accepted residual, NOT fixed:** there is still no DB backstop for the both-or-neither half specifically — `divisions_age_cutoff_check` only holds the RANGE, and a one-sided orphan satisfies it (`false OR NULL` is NULL, and a CHECK passes on NULL, as this entry sets out above). So a genuine cross-request race — two concurrent PATCHes each reading the same pre-commit row, one supplying the month and the other nulling the day — could in theory still commit an orphan. Low likelihood and script-only from the product (the config panel always sends both halves), so it was accepted rather than closed. The optional rewrite this entry already names — `num_nulls(age_cutoff_month, age_cutoff_day) <> 1` — would close it fully; W8 Task 6 deliberately skipped it because it is a schema migration and this wave's remit was the application-layer guard. Worth an owner call if the API is ever opened to third-party writers. See also **F19** below, a consequence of the guard for divisions that ALREADY carry an orphan.
+**Accepted residual, NOT fixed:** there is still no DB backstop for the both-or-neither half specifically — `divisions_age_cutoff_check` only holds the RANGE, and a one-sided orphan satisfies it (`false OR NULL` is NULL, and a CHECK passes on NULL, as this entry sets out above). So a genuine cross-request race — two concurrent PATCHes each reading the same pre-commit row, one supplying the month and the other nulling the day — could in theory still commit an orphan. Low likelihood and script-only from the product (the config panel always sends both halves), so it was accepted rather than closed. The optional rewrite this entry already names would close it — but **as an ADDITIONAL conjunct, not a replacement**: `num_nulls(age_cutoff_month, age_cutoff_day) <> 1` swapped in ALONE would drop the range enforcement the current CHECK carries and start accepting `month = 99, day = 99`. It has to be `AND`ed with the existing `(month IS NULL AND day IS NULL) OR (month BETWEEN 1 AND 12 AND day BETWEEN 1 AND 31)` clause. W8 Task 6 deliberately skipped it either way, because it is a schema migration and this wave's remit was the application-layer guard. Worth an owner call if the API is ever opened to third-party writers. See also **F19** below, a consequence of the guard for divisions that ALREADY carry an orphan.
 
 ### F13 (documented behaviour, not a defect) — an age cutoff with no age band is accepted, and is inert until a band exists
 
@@ -175,7 +187,7 @@ The stored value is inert while the band is absent: `ageBandEligibilityIssues` (
 
 **Status:** recorded, no fix opened, no defect. Documented so a later wave does not re-open the question of whether a bandless cutoff should be refused and answer it wrongly in either direction — the write is intentional and the state is harmless. Distinct from F12 above, which is about the two cutoff HALVES coming apart and is a real defect.
 
-### F14 (documentation only, OPEN item for W8) — `free_agent_fee_cents`'s card-fee minimum has no coverage on either layer, and no client mirror at all
+### F14 (documentation only in W7; CLOSED in W8 as option (a)) — `free_agent_fee_cents`'s card-fee minimum has no coverage on either layer, and no client mirror at all
 
 Found: final whole-branch review gap-hunt. The W7 plan's §0 explicitly asked whether the `free_agent_fee_cents` half of the card-fee minimum "is realistically reachable given `allow_free_agents` also requires `entrant_kind: 'team'` … before deciding whether it's worth a second case or a one-line documentation note". Neither happened in W7 — this entry is that note, recorded so W8 inherits the question rather than losing it.
 
@@ -270,3 +282,21 @@ A division with exactly one cutoff half set — `age_cutoff_month = 9, age_cutof
 - It is worse when the division also has no age band. `hasAgeBand` (`registration-hub-config-panel.tsx:614`, `state.age_min != null || state.age_max != null`) gates the two cutoff `<select>`s `disabled` (`:699`, `:726`), so the organiser is shown a field error on a control they cannot touch, with no way to complete or clear the pair from the panel.
 
 **Status:** open, not fixed this wave. It is a pre-existing-data problem the F12 fix makes visible rather than a defect the fix introduced — no new orphan can be created now, and the hub could never create one before. Two candidate repairs, and the choice is an owner call rather than an implementer's: (a) a one-off repair script nulling the surviving half of any existing orphan row (a data migration — needs a count of live rows first, which on this database is expected to be zero), or (b) a hub-side fallback in `toDivisionPatchBody` that OMITS an untouched cutoff half instead of always sending both, so an unrelated edit passes through. (b) is the more general fix and the riskier one — omission is how a partial patch loses an intended clear, which is the shape F12 itself was about — so it should not be taken without deciding what "untouched" means for a control the panel has disabled.
+
+### F20 (real, low severity, coverage gap — NOT fixed) — the free-agent fee guard's `method === "stripe"` conjunct has no test witness
+
+Found: Task 7's review, reading the mutation sweep that same task ran and noticing which half of the guard it could not reach.
+
+Task 7 mutation-proved the free-agent card-fee guard (`apps/web/src/server/usecases/registrations.ts:1848`) with four kills — but all four move the NUMERIC half of the condition (`> 0`, `< 100`, and the guard as a whole). The `method === "stripe"` conjunct is untested on its own:
+
+```ts
+if (method === "stripe" && freeAgentFeeCents !== null && freeAgentFeeCents > 0 && freeAgentFeeCents < 100) {
+```
+
+Delete that conjunct alone and the guard starts refusing an **offline** division that charges a solo entrant between 0.01 and 0.99 — a legal setting for cash or bank transfer, where Stripe's minimum charge has no bearing. Nothing in the suite reds:
+
+- Task 7's own e2e case only ever sends `payment_method: "stripe"` (the guard's other half is exactly what it exists to reach), so it cannot see this.
+- `registration-solo-signup-fee.test.ts` is the offline fixture — its one seed helper hardcodes `payment_method: "offline"` (`:55`) — but every value it passes for the fee is legal or absent: `1000` (`:110`, `:120`, `:214`), `0` (`:140`), `null` (`:130`, `:237`, `:265`), and `-1` (`:166`, which the negative-value guard above catches first). A 1-99 offline value appears nowhere.
+- Swept by behaviour, not filename: every `free_agent_fee_cents` literal across `apps/web/src` and `apps/web/e2e` is `null`, `0`, `500` (client state only, never reaching this usecase), `1000` or `-1`.
+
+**Status:** open, not fixed this wave. This is a coverage gap, not a defect — the conjunct is correct and does what it should. The fix is one more row: an offline division sending `free_agent_fee_cents` in 1-99 and expecting acceptance, either as a fifth mutation case in the e2e file or (cheaper, and where the offline fixture already lives) an added case in `registration-solo-signup-fee.test.ts`. Recommended as a future task's pickup rather than an inline fold-in, because the e2e file's shared org has Connect attached by the time its last test runs and an offline case has to be sited with that in mind. The general lesson is AGENTS.md failure class 3 applied per-CONJUNCT: a four-mutant sweep of one operand does not test the operand beside it.

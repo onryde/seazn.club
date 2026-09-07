@@ -253,8 +253,16 @@ function cardSettingsBody(feeCents: number): Record<string, unknown> {
  * the test would witness the wrong refusal. They travel in the PUT BODY, not
  * in a preparatory `PATCH /divisions` — `putRegistrationSettings` reads
  * `input.entrant_kind ?? "individual"` off this very body, and `PatchDivision`
- * (`api-v1/schemas.ts:386`) has no `entrant_kind` member at all, so such a
- * PATCH would be a stripped no-op.
+ * (`api-v1/schemas.ts:386`) has no `entrant_kind` member at all.
+ *
+ * Such a PATCH would not merely be ignored, it would be REFUSED:
+ * `PatchDivision` closes `.partial().refine((p) => Object.keys(p).length > 0,
+ * "empty patch")`, and a `.refine` runs on the parsed OUTPUT — which zod has
+ * already stripped of unknown keys. So a body of nothing but `entrant_kind`
+ * parses to `{}` and fails that refinement, giving 400 `VALIDATION` /
+ * "empty patch". Probed against this repo's own zod (4.4.3), not assumed:
+ * `safeParse({ entrant_kind: "team" })` on a `.partial().refine(len > 0)`
+ * object returns `success: false` with a `custom` issue at the root path.
  */
 function freeAgentSettingsBody(freeAgentFeeCents: number): Record<string, unknown> {
   return {
