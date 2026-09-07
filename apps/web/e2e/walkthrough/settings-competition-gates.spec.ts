@@ -14,9 +14,11 @@ import {
   apiJson,
   TAG,
   invalidateOrgEntitlements,
+  ownerIsStaffSql,
   setBoolEntitlementOverrideSql,
   setEntitlementOverrideSql,
 } from "../helpers";
+import { freshOrg } from "../directory-kit";
 import { routes } from "../../src/lib/routes";
 
 /**
@@ -852,10 +854,14 @@ test("case #18: an end before the start is refused both in one body (400, issue 
  * nothing else in this file exercises it in any environment this suite can
  * run in.
  *
- * Three cases, and the third is not decoration — an unconditional `throw`
- * passes both refusal cases and breaks every real caller.
+ * Four cases. The third is not decoration — an unconditional `throw` passes
+ * both refusal cases and breaks every real caller — and the fourth is about
+ * WHERE the throws sit rather than what they test: it is the only one that
+ * reds if they are hoisted out from under the `finally` that gives the
+ * borrowed superadmin back.
  */
-test("W8/F10: a refused entitlement-cache drop throws, on either half, and the happy path still resolves", async ({
+test("W8/F10: a refused entitlement-cache drop throws, on either half, the happy path still resolves, and the borrowed superadmin is handed back anyway", async ({
+  page,
   request,
 }) => {
   test.setTimeout(budget(0, 0, 0));
@@ -912,4 +918,34 @@ test("W8/F10: a refused entitlement-cache drop throws, on either half, and the h
     ),
     "a helper that throws on the happy path breaks all eleven of its callers",
   ).resolves.toBeUndefined();
+
+  // (d) WHERE the throws sit, not just what they test. (a)-(c) all pass an org
+  //     id nothing was seeded under, so the `finally { setStaff(false) }` is a
+  //     zero-row no-op in every one of them: hoist both throws out from under
+  //     the try/finally and all three stay green, with identical messages,
+  //     while the helper leaks superadmin on whichever `users` row it borrowed.
+  //     That is the mutant this case exists for.
+  //
+  //     It needs a REAL org, and — importantly — its own FRESH user. The bit
+  //     is a global `users` row (`setOwnerStaffSql`: the org id only picks
+  //     WHICH user), so asserting on it demands sole ownership of that row.
+  //     This file's seeded `org` belongs to the shared Pro user, which
+  //     `settings-admin.spec.ts` flips ~11 times, concurrently, at the
+  //     walkthrough leg's `--workers=3` — reading that row back would be a
+  //     coin toss AND would reintroduce the contention W5 removed by gating
+  //     `dropEntitlementCache` on `REDIS_URL`. `freshOrg` mints a user nobody
+  //     else touches; the org it leaves behind is inert, like the directory
+  //     specs' own.
+  const mine = await freshOrg(page, "w8f10");
+  await expect(
+    invalidateOrgEntitlements(
+      stub((m) => m !== "DELETE"),
+      mine.orgId,
+    ),
+    "the refusal still has to be reported for a real org",
+  ).rejects.toThrow(/invalidateOrgEntitlements: clear override failed \(503\)/);
+  expect(
+    await ownerIsStaffSql(mine.orgId),
+    "the borrowed superadmin must be handed back even when the helper throws — a leaked staff bit is invisible until some unrelated spec's 403 assertion passes for the wrong reason",
+  ).toBe(false);
 });

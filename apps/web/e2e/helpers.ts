@@ -1296,6 +1296,34 @@ export async function setOwnerStaffRoleSql(
 }
 
 /**
+ * Read the org owner's staff bit back — the pair the two setters above never
+ * had, and the only way to witness that a helper which BORROWS superadmin gave
+ * it back.
+ *
+ * `invalidateOrgEntitlements` flips the bit, throws on a refusal (W8/F10), and
+ * relies on its `finally` to restore. Every assertion available before this
+ * helper existed could see the throw's MESSAGE and nothing else, so moving
+ * those throws out from under the `finally` — leaking superadmin onto the
+ * shared Pro user for the rest of the run — was a change no test could fail
+ * on. A leaked staff bit is invisible until some unrelated spec's 403
+ * assertion passes for the wrong reason, which is the worst way to find it.
+ *
+ * Throws when the org has no owner rather than answering `false`, so a bogus
+ * or already-released org id cannot read as a quiet pass.
+ */
+export async function ownerIsStaffSql(orgId: string): Promise<boolean> {
+  return withDb(async (sql) => {
+    const rows = await sql<{ is_staff: boolean }[]>`
+      select is_staff from users
+        where id in (select user_id from org_members
+                      where org_id = ${orgId} and role = 'owner')`;
+    const row = rows[0];
+    if (!row) throw new Error(`ownerIsStaffSql: org ${orgId} has no owner`);
+    return row.is_staff;
+  });
+}
+
+/**
  * The global platform fee default, read straight off `platform_settings`.
  *
  * SQL rather than `GET /api/admin/settings` on purpose: the route is

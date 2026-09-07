@@ -58,12 +58,36 @@ async function capPublicDashboards(orgId: string, value: number): Promise<void> 
 // cover the case they cannot — a test-level TIMEOUT abandons `finally` — and
 // shipped with only the write, so it fixed the skipped-cleanup half and
 // reintroduced the stale-cache half. Both, or neither.
+//
+// Every id gets its restore ATTEMPTED, and the set is cleared either way. This
+// used to be a straight loop, which was safe only while both halves were
+// incapable of throwing. `invalidateOrgEntitlements` now REPORTS a refused
+// invalidation (W8/F10, helpers.ts) instead of failing open, so a straight
+// loop would abandon the remaining ids' SQL writes AND skip the `clear()` on
+// the first refusal — leaving `dashboard.public.max = 0` behind on an org,
+// which is the precise leak this hook exists to prevent, and, this file being
+// `mode: "serial"`, aborting every test after it as well. So: collect per-id
+// failures, restore everything, clear, and only then rethrow, so the refusal
+// is still LOUD without costing the cleanup it interrupted.
 test.afterEach(async ({ request }) => {
-  for (const id of cappedOrgIds) {
-    await setEntitlementOverrideSql(id, "dashboard.public.max", 50);
-    await invalidateOrgEntitlements(request, id);
+  const failures: string[] = [];
+  try {
+    for (const id of cappedOrgIds) {
+      try {
+        await setEntitlementOverrideSql(id, "dashboard.public.max", 50);
+        await invalidateOrgEntitlements(request, id);
+      } catch (err) {
+        failures.push(`${id}: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+  } finally {
+    cappedOrgIds.clear();
   }
-  cappedOrgIds.clear();
+  if (failures.length > 0) {
+    throw new Error(
+      `afterEach: ${failures.length} entitlement restore(s) failed — ${failures.join("; ")}`,
+    );
+  }
 });
 
 /** The competition the API knows by this name, or fail loudly. */
