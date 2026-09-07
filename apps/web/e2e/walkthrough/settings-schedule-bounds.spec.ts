@@ -237,6 +237,26 @@ test("case #18: PUT refuses endAt before startAt, and a blackout window with to 
     expect(windowIssue?.message, JSON.stringify(issuesOf(window))).toBe(
       WINDOW_ENDS_BEFORE_STARTS,
     );
+
+    // `checkInstantOrder` (`schemas.ts:1516-1525`) loops over BOTH
+    // `blackouts` and `sessionWindows` in one `[key, rows]` tuple — the
+    // blackouts assertion above alone leaves `sessionWindows`'s own tuple
+    // membership (and its own path/message) completely unproven; a typo in
+    // the `"sessionWindows"` literal in that loop would not be caught
+    // without this.
+    const sessionWindow = await putConfig(request, div.id, {
+      sessionWindows: [{ from: "2027-03-01T10:00:00Z", to: "2027-03-01T09:00:00Z" }],
+    });
+    expect(
+      sessionWindow.status,
+      `sessionWindows to<from: ${JSON.stringify(sessionWindow.error)}`,
+    ).toBe(400);
+    const sessionWindowIssue = issuesOf(sessionWindow).find(
+      (i) => i.path.join(".") === "config.sessionWindows.0.to",
+    );
+    expect(sessionWindowIssue?.message, JSON.stringify(issuesOf(sessionWindow))).toBe(
+      WINDOW_ENDS_BEFORE_STARTS,
+    );
   } finally {
     await releaseDivision(request, div.id);
   }

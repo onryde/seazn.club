@@ -238,6 +238,19 @@ test("case #17: half-filled or inverted play hours block the save before any net
     // `dailyHoursToWindows` itself returns null in isolation.
     await expect(page.getByText(L.hoursError)).toBeVisible();
     expect(putFired).toBe(false);
+
+    // Half-filled: one play-hours field set, the other left at "No time" — a
+    // real reachable state, not a hypothetical. `datetime-field.tsx`'s
+    // `kind="time"` select always renders a genuine empty `<option
+    // value="">`, never merely a placeholder, so `selectOption("")` lands on
+    // it. This is the OTHER half of this test's own title ("half-filled or
+    // inverted"): a distinct code path through `dailyHoursToWindows`
+    // (one HHMM string, one empty string) from the fully-inverted pair above.
+    await page.getByTestId("settings-day-start").locator("select").selectOption("10:00");
+    await page.getByTestId("settings-day-end").locator("select").selectOption(""); // half-filled
+    await page.getByRole("button", { name: /^Save/i }).click();
+    await expect(page.getByText(L.hoursError)).toBeVisible();
+    expect(putFired).toBe(false);
   } finally {
     await releaseDivision(request, div.id);
   }
