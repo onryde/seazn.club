@@ -436,6 +436,10 @@ test("a cutoff with no age band is accepted and stored on its own", async ({ req
     expect(read.age_cutoff_month).toBe(9);
     expect(read.age_cutoff_day).toBe(1);
 
+    // Recorded as F13 (`FINDINGS.md`) — a documented behaviour, not a
+    // defect: the write is intentional and the stored value is inert until
+    // a band exists.
+    //
     // What this test does NOT claim: that `ageBandEligibilityIssues`
     // (`@/lib/registration-rules`) reports nothing for such a division. That
     // predicate is not reachable from any read this API-only file performs —
@@ -527,6 +531,28 @@ test("card entry fees are gated on Connect first, then held to the 1.00 minimum 
     );
     expect(stored.data?.fee_cents).toBe(0);
   } finally {
+    // CLOSE registration before releasing, or the release silently does
+    // nothing. This is the only test in the file that lands an accepted PUT,
+    // so it is the only one that leaves a `registration_settings` row — and
+    // the row it leaves is `enabled: true` with `closes_at: null`, which
+    // `assertRegistrationClosed` (`usecases/divisions.ts:365-374`) reads as
+    // OPEN. `DELETE /divisions/{id}` then answers 409 REGISTRATION_OPEN, and
+    // `releaseDivision` (`settings-support.ts`) never checks the status, so
+    // the failure is invisible and the division survives the test.
+    //
+    // Witnessed rather than reasoned about: a probe of this exact shape got
+    // `DELETE -> 409` followed by `GET -> 200` (the division still there),
+    // and the same probe with this closing PUT in place got `DELETE -> 204`
+    // followed by `GET -> 404`. A division that never created a settings row
+    // deletes with 204 either way, which is why the other four tests are
+    // unaffected.
+    //
+    // In the `finally`, not before it, so the close still runs when an
+    // assertion above throws.
+    await putRegistrationSettings(request, div.id, {
+      ...cardSettingsBody(0),
+      enabled: false,
+    });
     await releaseDivision(request, div.id);
   }
 });
