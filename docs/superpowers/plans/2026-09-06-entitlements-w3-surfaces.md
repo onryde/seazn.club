@@ -407,3 +407,110 @@ cases), mirroring the `formats.double_elim` precedent from Task 1's fix round.
   page (`app/o/[orgSlug]/settings/billing/page.tsx`) — left untouched, in
   scope for task 3 (billing settings) per this file's own task order, not a
   guard failure (no test cross-checks that array against the matrix).
+
+## STATE AT 2026-09-07 — read this block first on resuming
+
+**Branch `feat/entitlements-w3-surfaces`, 6 commits on `ff73d6278`, tree clean.**
+
+```
+93e157c7f fix(pricing): the crossover named a size the page no longer sells
+f9046748a feat(stats): free the player record, keep the career rollup paid
+b8f99bcb0 fix(pricing): six product-owner fixes, and a note nothing rendered
+e2b2e8ca4 fix(nav): the phone header wrapped both auth buttons to three lines
+8c4e3a266 fix(pricing): the pass card sold a format Free already has
+4d5fb223b feat(pricing): the box office page R14 draws — rail, ticket, accordion
+```
+
+**Environment (label `entw3`)**: Postgres `:54513` db `seazn_entw3` schema **V399**;
+prod server `:3350`; placement service `:50670`. Bring env vars in with
+`eval "$(~/.claude/skills/seazn-local-env/scripts/seazn-env.sh env --label entw3)"`.
+**The DB has ~6,288 orgs accumulated from suite runs** — watch for the volume
+signature (suites failing on 30s timeouts rather than assertions) and rebuild the
+DB if gates start timing out.
+
+**Latest gates.** `src/lib` + `src/components` + pricing + `src/server`: **7844
+total / 7777 passed / 0 real failures / 674 suites / 0 collect failures / 0
+outside the worktree**. The narrower lib+components+pricing sweep: 3478 / 3453 /
+0 failed / 283 suites. `tsc` clean both configs. `lint:scripts` clean. i18n
+parity 5924 keys × 4 locales.
+
+**`schedule-build-honours-locks.test.ts` reds 4/12 without the placement
+service and passes 12/12 with it** — proven on the same commit, not assumed.
+Start it with `up --label entw3 --placement`.
+
+### Visual sign-off obtained from the owner
+
+`/pricing` at 1280 / 768 / 320 (en + fr), and the marketing header folded, panel
+open, and unfolded. Owner approved the design; the two defects raised at 1280
+(bullet rows stretched 137px against a declared 10px; the crossover printing
+"the M pass") were fixed and re-measured — gaps now 49/50, ticket height 1200 →
+530, zero occurrences of "M pass" / "Size M" / "Event Pass M" on `/pricing`.
+
+Surfaces C and D were signed off by DRIVING them, not on their string diffs:
+`/o/[org]/c/[comp]/upgrade` renders "Advanced formats — ladders, americano" with
+no "double elimination", and the Event Pass tip carries every figure matching the
+live matrix including the new "career stats". Reaching them needs a login —
+mint one by inserting into `login_links` (user_id, token, expires_at 15 min) and
+visiting `/magic-link?token=…`; the tip is gated on `state.kind === "offer"`, so
+an org that already HOLDS a pass will not render it.
+
+## WHAT IS STILL OWED — roughly half the wave
+
+| Scope item (index W3 row) | State |
+|---|---|
+| Pricing page redesign (R14) | **DONE**, signed off |
+| Dictionaries ×4 | done for what has shipped |
+| W3-A `stats.player` split | **DONE**, V399 |
+| **W3-B — `UpgradeGate` plan-awareness** | **NOT STARTED** |
+| **Billing settings** | **NOT STARTED** |
+| **Emails** | **NOT STARTED** |
+| **Help tree** | **NOT STARTED** |
+| **`enterprise-gate.spec.ts`** | **DOES NOT EXIST** |
+| Division tab rail @320 | **NOT STARTED** |
+| "Buy the pass — M" on `/upgrade` | found, **NOT FIXED** |
+
+### W3-B facts, re-derived from the tree 2026-09-07 (the index's pins were stale twice)
+
+- `featurePlan(featureKey)` is `lib/feature-copy.ts:379` and is
+  `ENTERPRISE_FEATURES.has(key) ? "enterprise" : "pro"` — a pure function of the
+  KEY. It cannot distinguish "you need Pro" from "you have Pro".
+- `UpgradeGate`'s `Props` carries `feature`, `href?`, `compact?`, `reason?` and
+  **no viewer-plan prop at all** (`grep -c viewerPlan|currentPlan|orgPlan` = 0).
+- **There are 87 `<UpgradeGate` call sites.** Making the new prop REQUIRED is
+  what forces `tsc` to enumerate them; an optional one is how a figure quietly
+  stops arriving.
+- `components/v2/board/ai-out-of-credits.tsx` already carries a comment about
+  the retired `pro_plus` CTA — it is the named example of a Pro org being sold
+  Pro.
+
+### The "M" that survives on `/upgrade` — four strings, one of them the buy button
+
+Found by driving the page, invisible to every grep run before it. An earlier
+check cleared `/upgrade` by verifying `upgrade.compare.passL` was unreachable
+and never looking at the non-L strings beside it.
+
+| Key | Renders as |
+|---|---|
+| `upgrade.buyCta` | **"Buy the pass — {rung}"** — the primary CTA |
+| `upgrade.rung.sizeM` | the "M" chip beside `$11.99` |
+| `upgrade.rung.m` | "Event Pass M" |
+| `upgrade.compare.pass` | "EVENT PASS M" column header |
+
+Fix them the way the crossover guard was repointed: gate the letter on
+`SELLABLE_PASS_KEYS.length > 1` so it returns by itself if L goes back on sale.
+Owner was told this touches the buy button and did not object.
+
+## THE BIGGEST UNVERIFIED SURFACE — no Playwright or smoke has EVER run
+
+`apps/web/e2e/pricing-v18.spec.ts`, `apps/web/e2e/pass-scope-w2.spec.ts` and the
+`scripts/smoke.ts` additions were written by three different agents and **not one
+of them has been executed**. A spec that fails to collect reports zero tests
+rather than a failure, so "written" is not "passing" and must not be counted as
+coverage. Run them against a prod build before any merge conversation, and run
+the WHOLE spec file rather than a `-g` slice — a filtered sweep selects the
+wrong tests and reports green.
+
+Merge bar the owner set: CI green, **all 8 e2e legs** green, a local unit sweep
+with real counts, and per-screen verdicts. Note a PR gets **smoke only** — e2e
+triggers on push-to-main, so `workflow_dispatch -f pr=<n>` is the only pre-merge
+e2e a feature branch can get.
