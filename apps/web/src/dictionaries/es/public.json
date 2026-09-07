@@ -42,6 +42,7 @@
   "matchCentre.status.postponed": "Aplazado",
   "matchCentre.status.walkover": "Walkover",
   "matchCentre.status.timeTbd": "Hora por confirmar",
+  "matchCentre.status.timeNotRecorded": "Hora no registrada",
   "matchCentre.winner": "Ganador:",
   "matchCentre.updatedAgo": "Actualizado hace {seconds}s",
   "matchCentre.goalsByPeriod": "Goles por periodo",

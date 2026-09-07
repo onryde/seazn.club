@@ -42,6 +42,7 @@
   "matchCentre.status.postponed": "Postponed",
   "matchCentre.status.walkover": "Walkover",
   "matchCentre.status.timeTbd": "Time TBD",
+  "matchCentre.status.timeNotRecorded": "Time not recorded",
   "matchCentre.winner": "Winner:",
   "matchCentre.updatedAgo": "Updated {seconds}s ago",
   "matchCentre.goalsByPeriod": "Goals by period",

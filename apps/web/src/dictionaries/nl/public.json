@@ -42,6 +42,7 @@
   "matchCentre.status.postponed": "Uitgesteld",
   "matchCentre.status.walkover": "Walkover",
   "matchCentre.status.timeTbd": "Tijd NNB",
+  "matchCentre.status.timeNotRecorded": "Tijd niet vastgelegd",
   "matchCentre.winner": "Winnaar:",
   "matchCentre.updatedAgo": "Bijgewerkt {seconds}s geleden",
   "matchCentre.goalsByPeriod": "Doelpunten per periode",

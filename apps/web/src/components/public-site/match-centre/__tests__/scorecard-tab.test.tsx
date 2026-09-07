@@ -805,4 +805,40 @@ describe("ScorecardTab dictionary coverage", () => {
     }
     expect(missing).toEqual([]);
   });
+
+  /**
+   * A band-2 innings often records batting lines and no bowling at all. That
+   * innings used to render "BOWLER  O R W" as a bare header with nothing
+   * under it — visible in `match-b-tab-scorecard-320.png`, and the reason
+   * this guard exists. The `didNotBat` and fall-of-wickets lines beside it in
+   * `scorecard-tab.tsx` already guarded the same way; the two tables did not.
+   *
+   * Both directions are asserted. A header that survives its rows is the
+   * defect; a header that disappears WITH its rows present would be a worse
+   * one, so the positive pair renders the same innings with bowling and
+   * requires the header back.
+   */
+  it("an innings with no bowling rows renders no bowling table — not a bare header", () => {
+    const noBowling: CricketInningsViewT = { ...coarseInnings, bowling: [] };
+    const html = render(doc({ innings: [noBowling] }));
+    // The innings itself must still be there — this hides an empty table, it
+    // does not hide the innings.
+    expect(html).toContain(`data-testid="mc-innings-${noBowling.number}"`);
+    expect(html).not.toContain(`aria-label="${HOME.name} — bowling"`);
+
+    // Positive pair: with a bowling row, the header and region come back.
+    const withBowling = render(doc({ innings: [coarseInnings] }));
+    expect(withBowling).toContain(`aria-label="${HOME.name} — bowling"`);
+  });
+
+  it("an innings with no batting rows renders no batting table — not a bare header", () => {
+    const noBatting: CricketInningsViewT = { ...coarseInnings, batting: [] };
+    const html = render(doc({ innings: [noBatting] }));
+    expect(html).toContain(`data-testid="mc-innings-${noBatting.number}"`);
+    expect(html).not.toContain(`aria-label="${AWAY.name} — batting"`);
+    // The BOWLING table is untouched by the batting guard — the two are
+    // independent, and a guard that took both out would pass a test asserting
+    // only the absence above.
+    expect(html).toContain(`aria-label="${HOME.name} — bowling"`);
+  });
 });

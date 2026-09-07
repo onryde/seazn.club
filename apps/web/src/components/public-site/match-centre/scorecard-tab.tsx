@@ -256,6 +256,12 @@ function BattingTable({
   dict: PublicDict;
   label: string;
 }): ReactNode {
+  // An innings with NO rows of this kind renders NOTHING, never a bare header
+  // row. `match-b-tab-scorecard-320.png` showed exactly that: "BOWLER  O R W"
+  // with no rows under it, on a band-2 innings whose bowling was never
+  // recorded. The sibling `didNotBat` and fall-of-wickets lines in this file
+  // already guard the same way; this table did not.
+  if (rows.length === 0) return null;
   const showFours = anyNonNull(rows, (r) => r.fours);
   const showSixes = anyNonNull(rows, (r) => r.sixes);
   const showSr = anyNonNull(rows, (r) => r.strikeRate);
@@ -319,6 +325,12 @@ function BowlingTable({
   dict: PublicDict;
   label: string;
 }): ReactNode {
+  // An innings with NO rows of this kind renders NOTHING, never a bare header
+  // row. `match-b-tab-scorecard-320.png` showed exactly that: "BOWLER  O R W"
+  // with no rows under it, on a band-2 innings whose bowling was never
+  // recorded. The sibling `didNotBat` and fall-of-wickets lines in this file
+  // already guard the same way; this table did not.
+  if (rows.length === 0) return null;
   const showMaidens = anyNonNull(rows, (r) => r.maidens);
   const showEcon = anyNonNull(rows, (r) => r.economy);
   const showWides = anyNonNull(rows, (r) => r.wides);

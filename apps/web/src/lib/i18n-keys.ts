@@ -2596,6 +2596,7 @@ export type DictionaryKey =
   | "matchCentre.status.postponed"
   | "matchCentre.status.scheduled"
   | "matchCentre.status.startsAt"
+  | "matchCentre.status.timeNotRecorded"
   | "matchCentre.status.timeTbd"
   | "matchCentre.status.walkover"
   | "matchCentre.superOver"

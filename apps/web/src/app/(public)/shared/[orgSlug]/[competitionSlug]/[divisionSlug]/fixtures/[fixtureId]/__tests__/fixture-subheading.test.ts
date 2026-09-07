@@ -14,15 +14,37 @@ describe("fixtureSubheading", () => {
     expect(fixtureSubheading("scheduled", null)).toBe("Time TBD");
   });
 
-  it("still says Time TBD for a decided/other-status fixture with no scheduled time (the card shows a DIFFERENT fact, not this one)", () => {
-    expect(fixtureSubheading("decided", null)).toBe("Time TBD");
-    expect(fixtureSubheading("other", null)).toBe("Time TBD");
+  // R11 phone read — this used to assert "Time TBD" for `decided`, which is
+  // what `match-b-tab-scorecard-320.png` showed above an ENDED scorebug. "To
+  // be determined" is a promise about the future; a played match is missing a
+  // time, not awaiting one. The assertion is INVERTED here deliberately, not
+  // relaxed: the old wording is now what must NOT appear.
+  it("says the time was NOT RECORDED for a match that has already been played", () => {
+    for (const status of ["decided", "finalized"]) {
+      expect(fixtureSubheading(status, null), `${status} is a played match`).toBe("Time not recorded");
+      expect(fixtureSubheading(status, null)).not.toBe("Time TBD");
+    }
+  });
+
+  // The default branch is deliberately NOT swept in with the played ones.
+  // `statusOf` folds abandoned / forfeited / cancelled — and any status this
+  // module does not yet know — into "other", which is exactly where guessing
+  // would be wrong, so its wording is unchanged. This is the negative pair
+  // for the test above: a change that simply moved every non-live status onto
+  // the new label would pass that one and fail this.
+  it("leaves every OTHER status on Time TBD — abandoned/forfeited/cancelled and anything unknown", () => {
+    for (const status of ["other", "abandoned", "forfeited", "cancelled", "some_future_status"]) {
+      expect(fixtureSubheading(status, null), `${status} must keep the TBD wording`).toBe("Time TBD");
+    }
   });
 
   it("shows the formatted date whenever a scheduled time exists, regardless of status", () => {
-    const result = fixtureSubheading("in_play", "2026-07-20T14:30:00.000Z");
-    expect(result).not.toBe("Time TBD");
-    expect(result).not.toBe("");
+    for (const status of ["in_play", "decided", "scheduled"]) {
+      const result = fixtureSubheading(status, "2026-07-20T14:30:00.000Z");
+      expect(result).not.toBe("Time TBD");
+      expect(result).not.toBe("Time not recorded");
+      expect(result).not.toBe("");
+    }
   });
 
   // Task 14b (task-14-review.md OWED item 2) — "Time TBD" was hardcoded
@@ -33,7 +55,18 @@ describe("fixtureSubheading", () => {
     expect(fixtureSubheading("scheduled", null, "Heure à déterminer")).toBe("Heure à déterminer");
   });
 
-  it("ignores timeTbdLabel for an in-play fixture (still empty)", () => {
-    expect(fixtureSubheading("in_play", null, "Heure à déterminer")).toBe("");
+  // Both labels localise INDEPENDENTLY. Passing only the third argument must
+  // not silently drag a played match onto the TBD string — that would be the
+  // exact regression this parameter split exists to prevent, and it would be
+  // invisible to any test that passes both.
+  it("localises the played-match label separately from the TBD one", () => {
+    expect(fixtureSubheading("decided", null, "Heure à déterminer", "Heure non enregistrée")).toBe(
+      "Heure non enregistrée",
+    );
+    expect(fixtureSubheading("decided", null, "Heure à déterminer")).toBe("Time not recorded");
+  });
+
+  it("ignores both labels for an in-play fixture (still empty)", () => {
+    expect(fixtureSubheading("in_play", null, "Heure à déterminer", "Heure non enregistrée")).toBe("");
   });
 });

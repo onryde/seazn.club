@@ -267,7 +267,12 @@ export default async function FixturePage({ params }: Props) {
             is neither a subheading nor a venue/court to show. */}
         {(() => {
           const subheadingParts = [
-            fixtureSubheading(fixture.status, fixture.scheduled_at, t(dict, "matchCentre.status.timeTbd")),
+            fixtureSubheading(
+              fixture.status,
+              fixture.scheduled_at,
+              t(dict, "matchCentre.status.timeTbd"),
+              t(dict, "matchCentre.status.timeNotRecorded"),
+            ),
             fixture.venue_name,
             fixture.court_name,
           ].filter((part): part is string => Boolean(part));
