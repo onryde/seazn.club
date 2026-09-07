@@ -61,7 +61,7 @@ So during any Stripe failure, a paying customer opening `/o/{slug}/settings/bill
 
 **Sharper than first reported (Task 3 reviewer):** `settings/billing/page.tsx:425-426` also gates `RetryPaymentButton` on `overview?.hasOpenInvoice`, and `:435` gates `PlanIntervalSwitcher` on `overview?.interval`. So during a Stripe outage, a `past_due` payer specifically loses the ability to retry their payment — the one control that could get them out of the state — while Cancel subscription, the one destructive control, is the only money control left standing.
 
-**Status:** open, not fixed this wave. `getBillingOverview` should distinguish "no customer" from "fetch failed" (e.g. rethrow or return a tagged error the page can show), and the page should surface a visible error state rather than silently rendering the empty-customer UI. Worth a W8 fix given the money-adjacent surface; an owner call on whether it moves earlier per ruling 7's precedent.
+**Status:** PARTIALLY fixed, W8 (`13ef5e062`). The outage is no longer silent — `getBillingOverview`'s catch now logs the failure. The page-level distinct-error-state half (Cancel subscription staying visible, Retry/PromoBox/IntervalSwitcher silently disappearing, with no visible indication anything went wrong) is DEFERRED — a real fix needs `getBillingOverview`'s return type to distinguish "no customer" from "fetch failed" for its three callers (`pass-credit.ts`, `lib/billing.ts`, and this page), which is a bigger, coordinated change than this wave's contained-fix bar. Recommend a dedicated future task, alongside F6/F7.
 
 ### F6 (real, pre-existing, low/medium) — the cancel dialog and promo box are hardcoded English
 
