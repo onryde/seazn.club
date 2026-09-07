@@ -23,8 +23,8 @@ check expressed as a client `disabled` prop, and `apps/web` vitest is
 | W3 | `/o/{org}/settings` 7 tabs — gating matrix + first mutation sweep | **MERGED** — PR #732, squashed to `bb025fd26`. Row was never updated at merge time; see the W3 section below for the full task/mutation record |
 | W4 | `settings/{connect,credits,add-ons}`, billing's uncovered panels, sponsor monetize half | **MERGED** — PR #736, squashed to `aabb701ea`; measured +53.5s against the old single ceiling, resolved by owner ruling 8 (see below) |
 | W5 | Competition settings — frozen, visibility, discoverable | **MERGED** — PR #737, squashed to `ff73d6278`, all 8 e2e jobs green. Fast-path cost: 14.9s (both spec files together, serial-sum via JSON reporter) |
-| W6 | Division schedule + constraints — full bounds table | **READY FOR PR** — 2 tasks, 1 task-level fix round (Task 1's afterAll leak guard, `fd3adffb8`), final whole-branch review clean after 1 fix round; worktree `.claude/worktrees/settings-w6`, branch `feat/settings-walkthrough-w6` |
-| W7 | Division registration settings — partial-save, money bounds | Not started |
+| W6 | Division schedule + constraints — full bounds table | **MERGED** — PR #738, squashed to `659568cb9`, all 8 e2e jobs green. Fast-path cost: ~20.3s (Task 1 ~12.5s + Task 2 ~7.8s) |
+| W7 | Division registration settings — partial-save, money bounds | **IN PLANNING** — worktree `.claude/worktrees/settings-w7`, branch `feat/settings-walkthrough-w7` |
 | W8 | Fix wave + programme review + second mutation sweep | Not started |
 
 W0 (foundations) was **folded into W1**, and `e2e/settings-support.ts` was cut
