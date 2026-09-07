@@ -38,6 +38,7 @@ const baseProps = {
   tz: "UTC",
   orgTz: "UTC",
   canExport: false,
+  viewerPlan: "community" as const,
 };
 
 const courtTags = /data-testid="stage-court-tags"/;

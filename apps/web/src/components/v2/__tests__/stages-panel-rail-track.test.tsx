@@ -53,6 +53,7 @@ const baseProps = {
   tz: "UTC",
   orgTz: "UTC",
   canExport: false,
+  viewerPlan: "community" as const,
 };
 
 describe("StagesPanel — the stage body has no two-column track for either viewer (Option B retires Ruling T5-A's grid)", () => {

@@ -105,6 +105,7 @@ const PROPS = {
   tz: "UTC",
   orgTz: "UTC",
   canExport: false,
+  viewerPlan: "community" as const,
 };
 
 function progressCounts(html: string): string | null {
