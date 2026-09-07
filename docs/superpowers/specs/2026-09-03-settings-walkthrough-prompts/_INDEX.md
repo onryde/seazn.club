@@ -24,8 +24,8 @@ check expressed as a client `disabled` prop, and `apps/web` vitest is
 | W4 | `settings/{connect,credits,add-ons}`, billing's uncovered panels, sponsor monetize half | **MERGED** — PR #736, squashed to `aabb701ea`; measured +53.5s against the old single ceiling, resolved by owner ruling 8 (see below) |
 | W5 | Competition settings — frozen, visibility, discoverable | **MERGED** — PR #737, squashed to `ff73d6278`, all 8 e2e jobs green. Fast-path cost: 14.9s (both spec files together, serial-sum via JSON reporter) |
 | W6 | Division schedule + constraints — full bounds table | **MERGED** — PR #738, squashed to `659568cb9`, all 8 e2e jobs green. Fast-path cost: ~20.3s (Task 1 ~12.5s + Task 2 ~7.8s) |
-| W7 | Division registration settings — partial-save, money bounds | **READY FOR PR** — 2 tasks, 1 task-level fix round (Task 2's `75d77653f`, close registration before releasing the card-fee division), final whole-branch review clean after 1 documentation-only fix round (F13's coverage claim corrected, F14 opened); findings F12-F14; worktree `.claude/worktrees/settings-w7`, branch `feat/settings-walkthrough-w7` |
-| W8 | Fix wave + programme review + second mutation sweep | Not started |
+| W7 | Division registration settings — partial-save, money bounds | **MERGED** — PR #739, squashed to `cfe97642f`, all 8 e2e jobs green. 2 tasks, 1 task-level fix round (Task 2's `75d77653f`, close registration before releasing the card-fee division), final whole-branch review clean after 1 documentation-only fix round (F13's coverage claim corrected, F14 opened); findings F12-F14. Fast-path cost: ~20-30s (see running total below) |
+| W8 | Fix wave + programme review + second mutation sweep | IN PLANNING — worktree `.claude/worktrees/settings-w8`, branch `feat/settings-walkthrough-w8`; owes F12's fix (schemas.ts merge-against-stored-row check), F14's (a)/(b) decision, plus whichever of F1/F2/F5/F7/F8/F10 the owner elects to fix now vs. defer |
 
 W0 (foundations) was **folded into W1**, and `e2e/settings-support.ts` was cut
 from it. A support module with no consumer is an inert seam: W1's only shared
