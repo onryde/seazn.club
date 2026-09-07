@@ -207,11 +207,15 @@ tick in it wastes the width the numbers need.
 match in one match centre invites the question of which one is right, and the flat fold cannot
 express the ordered, phase-structured card anyway (§6).
 
-## 7.1 The fidelity bands — RECOMMENDATION AGAINST disabling bands 1 and 2
+## 7.1 The fidelity bands — RULED: all four bands stay
 
 Raised by the owner 2026-09-07 ("we may disable the Band 1 and Band 2"), in the context of
-guaranteeing this tab always has data. Recorded here with the reasoning, because the facts
-are not derivable from the read side and a later session will otherwise re-derive them wrongly.
+guaranteeing this tab always has data. Recommendation against was put; **owner ruled the same
+day: "we can keep band 1 and band 2"**. The 0–3 ladder is unchanged and §4.2's gate is
+therefore load-bearing, not a temporary measure.
+
+The reasoning is kept below because the facts are not derivable from the read side, and a
+later session asked to "just always show the stats tab" will otherwise re-derive them wrongly.
 
 **The band is an OUTPUT, not a setting.** `effectiveBand`
 (`apps/web/src/server/public-site/match-centre.ts:691`) computes the maximum band across the
@@ -232,10 +236,13 @@ LESS than today — a bare scoreline in place of a populated timeline. The band 
 `module.ts:90-95` is explicit that this is a UX affordance and that no band is paywalled;
 narrowing it is a burden increase on unpaid people.
 
-*Recommendation: keep all four bands, keep the gate, and revisit only with evidence about what
-scorers actually pick — which the `score_events` ledger can answer directly (distribution of
-`effectiveBand` across recorded fixtures). If the owner still wants the change, it belongs in
-a ScoringPad wave with that evidence, not in this spec.*
+*Ruled as recommended: all four bands stay, and the gate stays with them.* If the question is
+reopened it needs evidence about what scorers actually pick — the distribution of
+`effectiveBand` across recorded fixtures. That evidence must come from the PRODUCTION ledger:
+the query was run against a local test database while writing this spec and the result
+discarded, because every row there was seeded by a test suite and the distribution reflects
+our own fixtures rather than anyone's Saturday. Resolving event type → band also needs each
+module's `padSpec().fidelity` map, so it is a script, not plain SQL.
 
 ## 8. Verification (all four types, per RULES.md)
 
