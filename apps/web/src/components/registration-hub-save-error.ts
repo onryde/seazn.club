@@ -87,10 +87,16 @@ const MESSAGE_FIELD_PATTERNS: readonly [RegExp, ConfigFieldKey][] = [
   // bare message the same way the age-band check above does, but from a
   // different place since W8/F12: `patchDivision`'s cutoff merge-check
   // (usecases/divisions.ts), which compares the patch against the STORED row
-  // and throws its own 422. NOT from isAgeCutoffCheckViolation — that
-  // predicate cannot fire on this rule at all (a one-sided orphan SATISFIES
-  // divisions_age_cutoff_check), so there is no CHECK-violation race to
-  // catch here; the merge-check is the only producer of this sentence at 422.
+  // and throws its own 422. That merge-check is the only REACHABLE producer of
+  // this sentence at 422 — not the only producer in the code.
+  // `isAgeCutoffCheckViolation` (usecases/divisions.ts:914) raises the same
+  // AGE_CUTOFF_BOTH_OR_NEITHER string, but only for a RANGE violation of
+  // divisions_age_cutoff_check, and PatchDivision's own `.min`/`.max` bound
+  // every half before one can be sent, so nothing reaches it over /api/v1
+  // (that line's own comment says so). It cannot fire on the both-or-neither
+  // rule in any case: a one-sided orphan SATISFIES the constraint
+  // (`false OR NULL` is NULL, and a CHECK passes on NULL), so there is no
+  // CHECK-violation race to catch here.
   // Anchored on the day field, mirroring age_max's own choice above of the
   // LATER-typed side of a two-field pair.
   [/age_cutoff_month and age_cutoff_day must be set together/i, "age_cutoff_day"],
