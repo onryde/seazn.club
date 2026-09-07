@@ -1,5 +1,8 @@
 # Stream overlay — the live score inside a club's own broadcast — design
 
+**SUPERSEDED 2026-09-07 by `2026-09-07-streaming-programme-design.md` (Tier A
+carried in, corrections folded). Kept for the canvas links and the approval record.**
+
 Status: owner-approved in chat 2026-09-05 (design sections, entitlement gate as
 recommended). Mockups and the two theme directions the owner picked from:
 https://claude.ai/code/artifact/2aebcbde-28ba-45ff-9028-1151873e4901

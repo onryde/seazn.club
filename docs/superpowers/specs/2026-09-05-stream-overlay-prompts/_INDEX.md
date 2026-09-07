@@ -283,3 +283,71 @@ with `model: opus`.
 | `apps/web/playwright.config.ts:138-266` | projects | setup, parallel, walkthrough, serial, mobile-se 375, mobile-14 390, mobile-320, mobile-360, mobile-430, tablet-768, tablet-834, gallery |
 | `scripts/smoke.ts:24,91-95` | `BASE = process.env.SMOKE_BASE ?? "http://localhost:3000"`; `check(label, cond)`, `expectFail(label, fn)` | |
 | `lib/i18n-constants.ts:6,42` | `LOCALES = ["en","fr","es","nl"]`, `toLocale(x)` | |
+
+## 2026-09-07 — programme design rewrite
+
+**Design of record is now `../2026-09-07-streaming-programme-design.md`.** The
+09-05 design carries a superseded header and stays for the canvas links and
+the approval record. Branch rebased onto `main` at `fb99bbd4c` (clean, 24
+docs-only commits); the checklist the owner pasted is `docs/superpowers/RULES.md`
+§"Owner checklist (2026-09-07)" (`ed094e519`).
+
+### Owner rulings 2026-09-07 (verbatim where short)
+
+18. **Shape — "1"**: one design of record replacing the 09-05 design (Tier A
+    rewritten in, corrections folded, no findings layer); one step-level
+    programme plan for the seazn.club work not yet planned (W1 amendment, T1,
+    R1, R2, R0 brief); R3 native apps in their own spec in the capture repo.
+19. **"all ok"** on decisions A–J, with two refinements:
+    - **A, runner**: the owner asked *"are you saying that we can spin a flyVm
+      for temp to run the compositor? can we invoke the flyway dynamically in
+      the particular region or no need?"* — answered: yes, a Fly Machine per
+      session through the Machines API, `region "lhr"`, `auto_destroy`, no
+      need to move region (Cloudflare ingest is anycast). Cloud Run dropped.
+    - **C, entitlements**: the owner asked for two keys — one "where we will
+      offload to the OBS which include in the pro plan" and one add-on "where
+      it will use the compositor and cloudflare". Ruling on names: **"we can
+      keep corpus name as it"** → `streaming.overlay` (Pro, OBS) and
+      `streaming.relay` (Tier B). Purchase surface: **"we wwill buy the
+      streaming in the fixture console page itself?"** → yes, from the stream
+      panel's Phone tab.
+20. **Credits, per match**: *"what do you rec, I think per match? or how can
+    we charge for org level?"* → recommendation (per-match credits in packs of
+    1 / 5 / 20, a ledger not a counter, consumed at `live`, `streaming.relay`
+    = "may buy credits") accepted with **"go"**.
+21. **T1 wave**: *"Can we have Wave for designing the theme and testing?"* →
+    T1a canvas (≥2 options per un-approved surface, 1920×1080 + 320/768/1280
+    + 320 @ 125 % zoom, light+dark composite) and T1b manifest-driven visual
+    harness — **"Ok"**.
+22. Design batches 1 (§1–§3) and 2 (§4–§7) — **"Ok"** each.
+
+The rest of A–J as recommended and accepted: B Cloudflare Stream as the front
+door; D compositor self-mints realtime as a producer; E `max_duration` 5 h,
+retention 7 days, no auto-end after decided (a "match decided — still
+streaming" chip instead); F replay fill only when `stream_url` is null; G
+720p30 only at launch; H cookie banner suppressed on `/overlay/*` by
+`usePathname` + a zero-cookies e2e; I the checklist into `RULES.md`; J R3
+deferred, only the QR contract fixed here.
+
+### Findings 2026-09-07 (full text in the design §13)
+
+- **FS1** `cookie-consent.tsx` has NO route-key mechanism (the 09-06 documents
+  said it had one) — `localStorage` only, mounted at `app/layout.tsx:68`.
+- **FS2** V399 is taken (`stats_player_career_split`) — programme migrations
+  are V400 / V401 / V402 at rebase.
+- **FS3** `.claude/worktrees/stream-overlay` was an unregistered 15 MB residue
+  with no `.git`; moved to `stream-overlay.stale-20260907`, worktree re-added.
+- **FS4** desk W2 MERGED (#725); the live contention on `run-sheet-row.tsx` is
+  desk W3.
+- **FS5** Cloud Run dropped; Fly Machines only.
+- **FS6** the relay "implies overlay" bundling and org monthly budget are
+  replaced by two keys on the same plan split plus per-match credits.
+- **FS7** T1 theme-design and visual-gate wave added ahead of W1-C.
+- FS8 `barlowCondensed` weights are `["600","700"]`; W1-C adds 800.
+- FS9 `playwright.config.ts` lives at `apps/web/`, not `apps/web/e2e/`.
+
+### Status
+
+Design committed; the programme plan
+(`../../plans/2026-09-07-streaming-programme.md`) is written next by
+`writing-plans`. No code under `apps/`, `packages/` or `db/` yet.
