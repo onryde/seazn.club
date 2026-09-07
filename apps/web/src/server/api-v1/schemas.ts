@@ -65,9 +65,18 @@ export const ApiKeyScope = z.enum(["read", "score", "manage", "write"]);
 /** #376: ISO `YYYY-MM-DD` sorts lexicographically, so a string compare IS the
  *  date compare. Attached to both the create and the patch body; the patch can
  *  only see the dates it CARRIES, which is why the same order is re-checked in
- *  the use-case against the stored row. Message mirrors the `en` copy for
- *  `comp.validation.endsBeforeStarts` — the forms render the localized key,
- *  API clients read this sentence out of the 400's `issues`. */
+ *  `patchCompetition` (usecases/competitions.ts) against the stored row. That
+ *  re-check landed with settings-walkthrough F8 (2026-09-07) — this sentence
+ *  described it for months before it existed, and a `PATCH { ends_on }` alone
+ *  answered 200 the whole time, so do not read it as evidence for the next
+ *  claim of the same shape.
+ *
+ *  Message mirrors the `en` copy for `comp.validation.endsBeforeStarts` — the
+ *  forms render the localized key, and an API client reads this same sentence
+ *  either out of a **400**'s `issues` (this refinement, when one body carries
+ *  both dates) or out of a **422**'s `error.message` (the use-case's own
+ *  `HttpError`, when the inversion is only visible against the stored row).
+ *  Two layers, two statuses, one sentence: change it here and both move. */
 export const ENDS_BEFORE_STARTS = "The end date cannot be before the start date.";
 
 function checkDateOrder(

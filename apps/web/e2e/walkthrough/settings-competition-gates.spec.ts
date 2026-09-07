@@ -76,16 +76,19 @@ const L = {
   tabGeneral: ui("compset.tab.general"),
   tabBranding: ui("compset.tab.branding"),
   /**
-   * The sentence the 400's `issues[0].message` must carry.
+   * The sentence BOTH date refusals must carry — the 400's `issues[0].message`
+   * (one body carrying an inverted pair) and the 422's `error.message` (one
+   * date inverted against the stored row, W8/F8).
    *
    * Read from the dictionary rather than retyped BECAUSE the schema says it
-   * is a mirror: `ENDS_BEFORE_STARTS` (api-v1/schemas.ts:71) is documented as
-   * "Message mirrors the `en` copy for `comp.validation.endsBeforeStarts` —
-   * the forms render the localized key, API clients read this sentence out of
-   * the 400's `issues`". Two spellings of one sentence in two files is a
-   * standing invitation to drift, and this is the only thing in the tree that
-   * would notice. A value import of `schemas.ts` is not the alternative: it
-   * pulls `@seazn/engine/scheduling` and `lib/registration-rules.ts` into a
+   * is a mirror: `ENDS_BEFORE_STARTS` (api-v1/schemas.ts, `export const` just
+   * under the `#376` block comment) is documented as "Message mirrors the `en`
+   * copy for `comp.validation.endsBeforeStarts` … an API client reads this
+   * same sentence either out of a 400's `issues` … or out of a 422's
+   * `error.message`". Two spellings of one sentence in two files is a standing
+   * invitation to drift, and this is the only thing in the tree that would
+   * notice. A value import of `schemas.ts` is not the alternative: it pulls
+   * `@seazn/engine/scheduling` and `lib/registration-rules.ts` into a
    * Playwright worker, and no e2e file imports it today.
    */
   endsBeforeStarts: ui("comp.validation.endsBeforeStarts"),
@@ -671,7 +674,7 @@ test("a viewer sees the same form with no Save button, and their PATCH is 403 wh
   }
 });
 
-test("case #18: a PATCH carrying both dates refuses an end before the start, with the issue on ends_on", async ({
+test("case #18: an end before the start is refused both in one body (400, issue on ends_on) and against the stored row (422)", async ({
   request,
 }) => {
   test.setTimeout(budget(0, 0));
@@ -681,12 +684,14 @@ test("case #18: a PATCH carrying both dates refuses an end before the start, wit
       starts_on: "2027-06-01",
       ends_on: "2027-01-01",
     });
-    // 400, NOT 422. The order check is a `superRefine` on `PatchCompetition`
-    // (api-v1/schemas.ts:72-79, :139), so it throws a ZodError, and `v1Inner`
-    // maps ZodError to 400 with `issues` (http.ts:152-155) before any
-    // use-case runs. 422 on this route is reserved for the semantic refusals
-    // `patchCompetition` raises itself (a reserved slug, showcasing a
-    // non-public competition).
+    // 400, NOT 422, for THIS shape. The order check is a `superRefine` on
+    // `PatchCompetition` (api-v1/schemas.ts, `checkDateOrder` and the
+    // `.superRefine(checkDateOrder)` on `PatchCompetition`), so it throws a
+    // ZodError, and `v1Inner` maps ZodError to 400 with `issues`
+    // (api-v1/http.ts) before any use-case runs. 422 on this route is the
+    // semantic refusals `patchCompetition` raises itself — a reserved slug,
+    // showcasing a non-public competition, and since W8/F8 the stored-row
+    // date order asserted at the end of this test.
     expect(
       refused.status,
       `an inverted date pair must be refused: ${JSON.stringify(v1Error(refused))}`,
@@ -719,31 +724,66 @@ test("case #18: a PATCH carrying both dates refuses an end before the start, wit
     expect(after.starts_on).toBe("2027-01-01");
     expect(after.ends_on).toBe("2027-06-01");
 
-    // WHAT THIS TEST DOES NOT COVER, and it is not an oversight.
+    // F8, FIXED (W8 Task 4). The same inversion assembled across TWO requests
+    // is now refused exactly like the inversion in ONE request above — but by
+    // a different layer, so the status differs and that is the point.
     //
     // `checkDateOrder` is a `superRefine` on the request BODY, so it can only
-    // compare dates the request CARRIES. `schemas.ts:65-68` says the gap is
-    // closed elsewhere — "the patch can only see the dates it carries, which
-    // is why the same order is re-checked in the use-case against the stored
-    // row" — and no such re-check exists: `ENDS_BEFORE_STARTS` appears in
-    // `schemas.ts` and in one scheduling unit test, nowhere in
-    // `usecases/competitions.ts`, and there is no CHECK constraint either.
+    // compare the dates a request CARRIES; a patch naming one date alone walks
+    // past it by construction. `schemas.ts` has always claimed the gap was
+    // closed elsewhere ("the same order is re-checked in the use-case against
+    // the stored row"), and until W8 that re-check did not exist: with
+    // `starts_on = 2027-06-01` stored, a `PATCH { ends_on: "2027-01-01" }`
+    // answered 200 and left the row ending five months before it started
+    // (witnessed against a running server, W5 T2 probe 2026-09-06; recorded as
+    // F8 in the programme's FINDINGS.md). `patchCompetition` now merges the
+    // patch against the stored row inside its own tenant transaction and
+    // raises its own `HttpError(422, ENDS_BEFORE_STARTS)` — hence **422** here
+    // against **400** above. Same sentence, two layers, and the status is what
+    // says which one caught it.
     //
-    // Verified against the running server rather than reasoned about (W5 T2
-    // probe, 2026-09-06): with `starts_on = 2027-06-01` already stored, a
-    // PATCH of `{ ends_on: "2027-01-01" }` alone answered 200 and left the row
-    // ending five months before it starts. The form always sends both dates,
-    // so this is script-only — but /api/v1 is a public API.
-    //
-    // NOT asserted here on purpose: pinning the 200 would freeze a live bug as
-    // this file's expected value (AGENTS.md failure class 4), and asserting
-    // the 400 it ought to give would red the branch for a defect this wave did
-    // not create. When the use-case guard lands, its case belongs right here.
-    //
-    // Recorded as **F8** in the programme's findings register
-    // (`docs/superpowers/specs/2026-09-03-settings-walkthrough-prompts/
-    // FINDINGS.md`), which is what W8 plans its fixes from — a comment in one
-    // test body does not reach that far on its own.
+    // Stored at this point, from the `allowed` pair just above:
+    //   starts_on = 2027-01-01, ends_on = 2027-06-01.
+
+    // (a) `ends_on` alone, dragged BEFORE the stored start.
+    const endsFirst = await patchComp(request, comp.id, { ends_on: "2026-12-31" });
+    expect(
+      endsFirst.status,
+      `a cross-request inversion via ends_on must be refused: ${JSON.stringify(v1Error(endsFirst))}`,
+    ).toBe(422);
+    expect(v1Error(endsFirst).message).toBe(L.endsBeforeStarts);
+    const afterEndsFirst = await readComp(request, comp.id);
+    expect(afterEndsFirst.ends_on, "a refused patch must not have written the new end date").toBe(
+      "2027-06-01",
+    );
+    expect(afterEndsFirst.starts_on, "and must not have moved the start either").toBe("2027-01-01");
+
+    // (b) the MIRROR — `starts_on` alone, dragged AFTER the stored end. The
+    // merge has two sides and each is separately reachable: a guard that only
+    // merged the end against the stored start still passes (a). One request
+    // per side, per AGENTS.md failure class 3.
+    const startsLater = await patchComp(request, comp.id, { starts_on: "2027-12-01" });
+    expect(
+      startsLater.status,
+      `a cross-request inversion via starts_on must be refused: ${JSON.stringify(v1Error(startsLater))}`,
+    ).toBe(422);
+    expect(v1Error(startsLater).message).toBe(L.endsBeforeStarts);
+    const afterStartsLater = await readComp(request, comp.id);
+    expect(afterStartsLater.starts_on, "a refused patch must not have written the new start").toBe(
+      "2027-01-01",
+    );
+
+    // (c) the POSITIVE pair for (a) and (b), without which a use-case that
+    // refused EVERY single-date patch — or every patch at all — satisfies both
+    // of them. A single date that stays in order against the stored row lands.
+    const singleAllowed = await patchComp(request, comp.id, { ends_on: "2027-09-01" });
+    expect(
+      singleAllowed.status,
+      `a single-date patch that stays in order must land: ${JSON.stringify(v1Error(singleAllowed))}`,
+    ).toBe(200);
+    const afterSingle = await readComp(request, comp.id);
+    expect(afterSingle.ends_on, "the in-order single-date patch must apply").toBe("2027-09-01");
+    expect(afterSingle.starts_on, "and must leave the start where it was").toBe("2027-01-01");
   } finally {
     await releaseCompetition(request, comp.id);
   }
