@@ -148,6 +148,7 @@ describe("fixture-console: the pad's actual mount site (owner ruling 17)", () =>
       <FixtureConsole
         fixture={{ id: "f-cricket-decided", status: "decided", scheduled_at: null, venue_name: null, court_name: null, round_no: 1 }}
         sport={cricketSport}
+        viewerPlan="community"
         home={side("e-home", "Home XI")}
         away={side("e-away", "Away XI")}
         initialState={live}
@@ -174,6 +175,7 @@ describe("fixture-console: the pad's actual mount site (owner ruling 17)", () =>
       <FixtureConsole
         fixture={{ id: "f-football-decided", status: "decided", scheduled_at: null, venue_name: null, court_name: null, round_no: 1 }}
         sport={footballSport}
+        viewerPlan="community"
         home={side("e-home", "Riverside FC")}
         away={side("e-away", "Summit Athletic")}
         initialState={live}
