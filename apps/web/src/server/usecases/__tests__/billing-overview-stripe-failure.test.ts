@@ -99,10 +99,15 @@ beforeEach(() => {
 
 afterAll(async () => {
   if (!HAS_DB) return;
+  // Two SEPARATE guards, not one: `seedOrg` inserts a user BEFORE the org, so a
+  // throw in between leaves userIds non-empty and orgIds empty. Nesting the user
+  // cleanup inside `if (orgIds.length)` would leak that row permanently.
   if (orgIds.length) {
     await sql`update organizations set subscription_id = null where id = any(${orgIds})`;
-    await sql`delete from subscriptions where owner_user_id = any(${userIds})`;
     await sql`delete from organizations where id = any(${orgIds})`;
+  }
+  if (userIds.length) {
+    await sql`delete from subscriptions where owner_user_id = any(${userIds})`;
     await sql`delete from users where id = any(${userIds})`;
   }
   const globalForDb = globalThis as { _sql?: { end(): Promise<void> } };

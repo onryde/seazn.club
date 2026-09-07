@@ -87,11 +87,17 @@ return null; }` at the end of the function (confirm current line number; was
 `:316-319` in the finding's own citation) is EXCLUSIVELY the fetch-failed
 case already, no null-customer conflation inside the catch itself. Good news:
 a fix does not need to disentangle two meanings inside one catch. Bad news:
-`getBillingOverview` has THREE callers beyond the billing page —
-`apps/web/src/server/usecases/pass-credit.ts`, `apps/web/src/lib/billing.ts`,
-and their own tests — so changing the function's return TYPE (e.g. to a
+`getBillingOverview` has exactly ONE production caller, the billing page
+itself (`app/o/[orgSlug]/settings/billing/page.tsx:128`). **[CORRECTED W8
+Task 8 review — this paragraph originally claimed "THREE callers beyond the
+billing page", naming `pass-credit.ts` and `lib/billing.ts`; both only
+mention the function in JSDoc prose and neither imports it. The claim was
+copied verbatim into FINDINGS.md's F5 Status and had to be retracted there
+too — do not re-derive it from here.]** So a return-TYPE change (e.g. to a
 tagged `{ok:true,data}|{ok:false,reason}` union, which is what a real
-distinct-UI fix needs) ripples through all of them. Task 8 below ships the
+distinct-UI fix needs) does NOT ripple widely; what makes that fix big is
+the page side — a visible error state, its four-locale copy, and re-gating
+`CancelSubscriptionButton`. Task 8 below ships the
 safe subset: log the swallowed error (so the outage is observable in
 Sentry/logs, closing "with no log" from the finding) without changing the
 function's signature or any caller. The page-level distinct-error-UI half of
@@ -969,12 +975,19 @@ with:
 outage is no longer silent — `getBillingOverview`'s catch now logs the
 failure. The page-level distinct-error-state half (Cancel subscription
 staying visible, Retry/PromoBox/IntervalSwitcher silently disappearing, with
-no visible indication anything went wrong) is DEFERRED — a real fix needs
-`getBillingOverview`'s return type to distinguish "no customer" from "fetch
-failed" for its three callers (`pass-credit.ts`, `lib/billing.ts`, and this
-page), which is a bigger, coordinated change than this wave's contained-fix
-bar. Recommend a dedicated future task, alongside F6/F7.
+no visible indication anything went wrong) is DEFERRED — a real fix needs a
+visible distinct-error UI state on the billing page, four-locale copy for it,
+a re-gate of `CancelSubscriptionButton`, and a return type that separates all
+THREE of the function's null producers, which is a bigger, coordinated change
+than this wave's contained-fix bar. Recommend a dedicated future task,
+alongside F6/F7.
 ```
+
+**[CORRECTED W8 Task 8 review]** the template above originally gave the
+deferral reason as "its three callers (`pass-credit.ts`, `lib/billing.ts`,
+and this page)". That is FALSE — see the correction at the head of this
+task's preamble. `getBillingOverview` has ONE production caller. The
+deferral stands on its cost, not on a caller count.
 
 - [ ] **Step 4: Run the relevant unit/vitest coverage for `billing-manage.ts` to confirm the logging addition doesn't change behavior**
 
