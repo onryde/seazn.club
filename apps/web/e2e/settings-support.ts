@@ -267,3 +267,131 @@ export const TABS: readonly SettingsTab[] = [
   "preferences",
   "account",
 ] as const;
+
+// ---------------------------------------------------------------------------
+// Competitions (W5) — the settings surface under `/o/{org}/c/{comp}/settings`.
+// ---------------------------------------------------------------------------
+
+/** The `visibility` values `Visibility` accepts (api-v1/schemas.ts). */
+export type SeededCompetitionVisibility = "private" | "unlisted" | "public";
+/** The `status` values the `competitions.status` CHECK accepts (V207). */
+export type SeededCompetitionStatus =
+  | "draft"
+  | "published"
+  | "live"
+  | "completed"
+  | "archived";
+
+export interface SeededCompetition {
+  id: string;
+  slug: string;
+  name: string;
+}
+
+/**
+ * A competition inside a settings-seeded org, in the state the caller asked
+ * for — verified, not assumed.
+ *
+ * THREE things this has to work around, all read out of the tree AND witnessed
+ * against a running server on 2026-09-06 rather than reasoned about:
+ *
+ *  1. `POST /api/v1/competitions` takes NO org id. It authenticates through
+ *     `requireAuth` (route.ts:15), which resolves the ACTIVE org from the
+ *     `seazn_org` cookie — so an `orgId` argument alone does nothing, and a
+ *     create issued from a per-test `request` fixture lands in the SHARED PRO
+ *     ORG, silently, with a 201. (Witnessed: a create with no active-org move
+ *     came back carrying the shared org's id.) `settings-org-tabs.spec.ts`
+ *     gets away without this only because it creates inside the same
+ *     `browser.newContext()` whose cookie jar `seedSettingsOrg` just moved.
+ *     Each Playwright `request` fixture is its own jar, so the move is redone
+ *     here, per context — and the answer is then CHECKED against `org_id` on
+ *     the returned row, which is the only thing that can catch a silent
+ *     mis-seed.
+ *  2. `CreateCompetition` (api-v1/schemas.ts) declares no `status`, and zod
+ *     STRIPS unknown keys rather than refusing them. A create sent
+ *     `status: "live"` therefore returns 201 with `status: "draft"` and no
+ *     error anywhere. Status is applied by a follow-up PATCH instead — the
+ *     only path that can set it — and read back off the PATCH's own row.
+ *  3. `createCompetition` DEGRADES a requested `public` to `private` when the
+ *     org is over `dashboard.public.max` (T15/F, owner ruling 2026-09-03) —
+ *     it never refuses. A seed that asked for public and got private would
+ *     make every downstream visibility assertion test the wrong thing, so the
+ *     applied visibility is asserted too.
+ */
+export async function seedCompetition(
+  request: APIRequestContext,
+  orgId: string,
+  opts: {
+    name?: string;
+    visibility?: SeededCompetitionVisibility;
+    status?: SeededCompetitionStatus;
+  } = {},
+): Promise<SeededCompetition> {
+  const wantVisibility = opts.visibility ?? "public";
+  const wantStatus = opts.status ?? "draft";
+
+  // Finding 1 above: point THIS context's `seazn_org` at the target org.
+  // `setActiveOrgSchema` is `.strict()` and snake_case (see releaseSettingsOrg).
+  const active = await apiJson(request, "/api/orgs/active", "POST", { org_id: orgId });
+  if (active.status !== 200) {
+    throw new Error(
+      `seedCompetition: POST /api/orgs/active failed (${active.status}) ${JSON.stringify(active.error)}`,
+    );
+  }
+
+  const created = await apiJson<{
+    id: string;
+    slug: string;
+    name: string;
+    org_id: string;
+    visibility: string;
+    status: string;
+  }>(request, "/api/v1/competitions", "POST", {
+    name: opts.name ?? `W5 Competition ${TAG}-${Math.random().toString(36).slice(2, 6)}`,
+    ends_on: "2030-12-31",
+    visibility: wantVisibility,
+  });
+  if (!created.data) {
+    throw new Error(
+      `seedCompetition: POST /api/v1/competitions failed (${created.status}) ${JSON.stringify(created.error)}`,
+    );
+  }
+  if (created.data.org_id !== orgId) {
+    throw new Error(
+      `seedCompetition: competition landed in org ${created.data.org_id}, not ${orgId} — the active-org move did not take`,
+    );
+  }
+  if (created.data.visibility !== wantVisibility) {
+    throw new Error(
+      `seedCompetition: asked for visibility "${wantVisibility}", got "${created.data.visibility}" — the public-dashboard cap degraded the create`,
+    );
+  }
+
+  const seeded: SeededCompetition = {
+    id: created.data.id,
+    slug: created.data.slug,
+    name: created.data.name,
+  };
+
+  if (created.data.status !== wantStatus) {
+    const patched = await apiJson<{ status: string }>(
+      request,
+      `/api/v1/competitions/${seeded.id}`,
+      "PATCH",
+      { status: wantStatus },
+    );
+    if (patched.data?.status !== wantStatus) {
+      throw new Error(
+        `seedCompetition: PATCH status -> "${wantStatus}" failed (${patched.status}) ${JSON.stringify(patched.error)}`,
+      );
+    }
+  }
+  return seeded;
+}
+
+/** Safe to call on a competition that was already deleted or never created —
+ *  `apiJson` resolves on any status, so a 404 here is not a throw. */
+export async function releaseCompetition(request: APIRequestContext, id: string): Promise<void> {
+  if (!id) return;
+  await apiJson(request, `/api/v1/competitions/${id}`, "DELETE");
+}

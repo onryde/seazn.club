@@ -76,3 +76,39 @@ Registrations do not have this gap: `registration_groups.checkout_session_id` is
 **Reproduction:** with a connected org, sell a package, send an invoice, then reload `?tab=sponsors`. Observe: the order row is present and `pending`, and there is no way from the console to reach or resend its payment link.
 
 **Status:** open, not fixed this wave — it is a schema column plus a re-send/copy affordance plus supersede-on-remint, which is a task, not an inline fix. Not a defect in anything W4 built; found by driving the surface W2 deliberately left uncovered.
+
+## W5
+
+F-numbers continue W4's sequence so every id in this file stays unique.
+
+### F8 (real, moderate) — a partial PATCH can leave a competition ending five months before it starts
+
+Found: Task 2, `settings-competition-gates.spec.ts`, while building the ends-before-starts case.
+
+`checkDateOrder` (`server/api-v1/schemas.ts:73-80`) is a `superRefine` on the request BODY, attached to the create and the patch schemas (`:107`, `:141`). It can therefore only compare the dates a request CARRIES. Nothing re-checks the pair against the row that is already stored: `patchCompetition` (`server/usecases/competitions.ts:471`) touches `starts_on`/`ends_on` only in a "did anything change" boolean (`:630`) and a cache-invalidation comment (`:633-635`), `ENDS_BEFORE_STARTS` appears nowhere in the use-case, and there is no CHECK constraint on the table either (no `ends_on` CHECK anywhere under `db/migration/deltas`).
+
+So an inverted pair sent in ONE request is correctly refused 400, while the same inversion assembled across TWO requests is accepted.
+
+**Reproduction — verified live against the running server (W5 T2 probe, 2026-09-06), not reasoned about:** with `starts_on = 2027-06-01` already stored, `PATCH /api/v1/competitions/{id}` with a body of `{ "ends_on": "2027-01-01" }` alone answers **200**, and a read-back shows the row ending five months before it starts. The settings form always sends both dates, so this is script-only — but `/api/v1` is a public API.
+
+**It carries an F4-shaped false premise on top.** `server/api-v1/schemas.ts:65-68` states the gap is already closed — "the patch can only see the dates it CARRIES, which is why the same order is re-checked in the use-case against the stored row". No such re-check exists. A later session re-deriving this from the comment derives it wrong, which is exactly the harm F3 and F4 were recorded to prevent.
+
+**Status:** open, deliberately NOT fixed and NOT asserted against in W5. Pinning the 200 would freeze a live bug as the suite's expected value (AGENTS.md failure class 4); asserting the 400 it ought to give would red the branch for a defect this wave did not create; and patching production code mid-review is outside a test-only wave's remit (design §10). The fix is a re-check inside `patchCompetition` against the stored row, plus correcting the `schemas.ts` comment. When it lands, its case belongs in `settings-competition-gates.spec.ts` beside the existing full-pair case, where a comment already marks the spot.
+
+### F9 (documentation only, assessed NOT exploitable) — `branding` writes are ungated while every read of them is gated
+
+Found: Task 2 and the whole-branch final review, while enumerating `patchCompetition`'s `requireFeature` calls.
+
+`patchCompetition` gates exactly two keys: `discovery.listed` (`usecases/competitions.ts:517`) and `discovery.branding` (`:520`). `PatchCompetition` accepts `branding: z.record(z.string(), z.unknown())` (`api-v1/schemas.ts:133`) and `:582` writes it, so a non-entitled org's scripted `{ branding: { colors: { primary } } }` PATCH is accepted and stored.
+
+Every READ path is gated on `dashboard.theme`, so the stored value is inert. `public_competitions_v` returns `'{}'::jsonb` unless `org_has_feature(org_id, 'dashboard.theme')` (`deltas/V397__dashboard_theme_key.sql:71`), which covers `getPublicOrg`, `getPublicCompetition` and `embed-data.ts`; `/score/[token]/page.tsx:86` is the one place reading `c.branding` off the base table, and it applies it only behind `chrome.themed` (`:100`), itself a `hasFeature(orgId, "dashboard.theme")` call (`server/slideshow-data.ts:106-107`).
+
+**Status:** recorded, no fix opened. Ruled a write-side asymmetry with no rendering consequence — defence-in-depth, not an entitlement bypass: a stored value can only ever take effect once the org is entitled, at which point it is theirs anyway. Recorded so a later wave does not re-derive the question and answer it wrongly in either direction. A `requireFeature` on the write would be optional hardening, not a defect fix.
+
+### F10 (real, low severity) — `invalidateOrgEntitlements` fails open on either request
+
+Found: the final whole-branch review's fix round, while gating W5's own calls to this helper on `REDIS_URL` to close an unrelated shared-user contention finding (Important #1, this wave).
+
+`invalidateOrgEntitlements` (`e2e/helpers.ts`) flips an org's owner to superadmin, makes two `fetch` calls, then flips the owner back — and never checks either fetch's response status. A failed invalidation (a dropped connection, a 5xx) is silent: the caller proceeds believing the cache was cleared when it was not.
+
+**Status:** open, not fixed. Three existing specs already call this helper as written, so a fix belongs to the helper itself, not to any one caller — out of scope for this wave, which only needed to stop calling it where it bought nothing. Recorded so W8 (or whichever wave next touches `helpers.ts`) can add the status checks without re-discovering the gap from scratch.

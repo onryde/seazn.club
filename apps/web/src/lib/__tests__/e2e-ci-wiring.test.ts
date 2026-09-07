@@ -215,6 +215,17 @@ const WALKTHROUGH_SPECS: string[] = [
   // job is to notice a DELETED spec, whatever the run state of the leg.
   "settings-sponsor-monetize.spec.ts",
 
+  // Settings W5 — competition settings (`/o/{org}/c/{comp}/settings`), the
+  // surface the suite never navigated to before this wave: general/branding
+  // drive+persist, the showcase opt-in and its auto-clear (case #10), and the
+  // youth-consent interstitial.
+  "settings-competition-drive.spec.ts",
+  // The gating half of the same surface: the `competitions.max_active` freeze
+  // (case #4) and its bare-status escape hatch, the `discovery.branding` /
+  // `discovery.listed` / `dashboard.theme` entitlements, a viewer's read-only
+  // render and 403, and the date-order refusal (case #18).
+  "settings-competition-gates.spec.ts",
+
   // The directory — the organiser's own records, driven through the screens
   // that own them: club import caps, the import paywall preview, officials'
   // roles against the upgrade gate, player identity and its duplicate queue,

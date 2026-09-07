@@ -82,9 +82,13 @@ The shared Pro user outlives the test that borrowed from it.
 7. Derived timeouts: `Math.max(FLOOR, base + n * per_unit)`, never a flat
    constant beside a derived cost.
 
-Budget: **≤60s added to the walkthrough leg across the whole programme.**
-Measured each wave, reported with raw numbers. A wave that blows it gets
-restructured; the budget is not raised.
+Budget: **two buckets, not one ceiling** — owner ruling 8 (2026-09-06) split
+the old single ≤60s programme ceiling into a **fast-path budget**
+(API-first/DB-seeded, no external network) and a **separate small allowance for
+real-money-completion legs**, judged on "bounded time + clean teardown" because
+the two kinds of test do not shrink the same way. Measured each wave and
+reported against BOTH buckets separately, with raw numbers. `_INDEX.md`
+ruling 8 holds the numbers and is the authority on them — not restated here.
 
 ## 6. Toolchain
 
