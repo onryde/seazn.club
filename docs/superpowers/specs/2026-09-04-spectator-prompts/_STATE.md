@@ -46,6 +46,26 @@ review clears.
 **Owed documentation before the PR:** the bench `_MASTER.md` spectator row still reads "W0 in
 flight; W1–W4 sequential" — stale since W1 began.
 
+**OPEN FOLLOW-UP — the DLS revised target is invisible to a spectator.** Ruled 2026-09-07
+(product owner, during the gate): NOT a gate item and not fixed in W1, because unlike the
+shootout sentence — where the engine had the fact and the page dropped it — this number has
+never been surfaced at all. It is a feature needing a design decision, not a defect.
+
+What was found by driving a real DLS match (Hundred format, 150/0 off 100 balls, rain cutting
+the chase to 50 balls, revised target 84, chase all out 60): the board reads "Kings won by 23
+runs (DLS)" above scores of 150 and 60, and nothing anywhere explains how 150 v 60 is a
+23-run win. The target is what explains it. It is missing in BOTH states, for different
+reasons:
+- LIVE: `live.target` exists on the card but is only used as a GATE in
+  `matchCentre.chase.need` ("{side} need {runs} to win") and never printed — so a spectator
+  cannot tell a revised target from an original one.
+- DECIDED: `target` lives on the card's `live` block, which is null once the match ends, so
+  the number is not reachable from where `buildHeader` reads at all. Surfacing it there needs
+  `revisedTarget`/`targetSource` carried out of the fold onto the card — an engine change.
+
+Two changes, then, not one. Whoever picks this up should decide first WHERE it belongs (the
+chase line, an Info row, or both) rather than starting from the plumbing.
+
 **Findings to carry into the PR body:** band-2 player lines were never submittable through the
 product (two stacked defects, both fixed); the cricket skin's `buildDock` has no "Send now" for
 non-ball events; `usecases/exports.ts` reads `colors->>'primary'`, a key nothing writes, so the
