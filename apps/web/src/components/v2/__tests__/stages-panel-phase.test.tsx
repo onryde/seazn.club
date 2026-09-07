@@ -19,6 +19,7 @@ const baseProps = {
   divisionId: "d1", divisionSeq: 5, competitionId: "c1", orgSlug: "org", compSlug: "comp", divSlug: "div",
   stages: [stage()], fixtures: [fixture("s1")], entrantNames: { e1: "Alpha", e2: "Bravo" },
   canEdit: true, tz: "UTC", orgTz: "UTC", canExport: false,
+  viewerPlan: "community" as const,
 };
 
 const TIP = 'data-tip="division.start-locks"';

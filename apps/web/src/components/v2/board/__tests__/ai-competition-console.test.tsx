@@ -137,6 +137,7 @@ function render(divisions = DIVISIONS, courtNames = COURT_LABELS): string {
         fixtures={[]}
         courtNames={courtNames}
         onClose={() => {}}
+        viewerPlan="community"
       />
     </DictProvider>
     </RungConfigProvider>,

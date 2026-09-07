@@ -17,11 +17,20 @@ export interface MobileNavLink {
   label: string;
 }
 
+/** An auth action folded out of the bar below `sm` (see marketing-nav.tsx for
+ *  why). `primary` is the one action the panel styles as a filled button —
+ *  hiding a signup CTA behind a hamburger is only acceptable if it still reads
+ *  as the primary action once the panel is open. */
+export interface MobileNavAuthLink extends MobileNavLink {
+  primary: boolean;
+}
+
 export function MarketingMobileNav({
   links,
   openLabel,
   closeLabel,
   night,
+  auth = [],
 }: {
   links: MobileNavLink[];
   openLabel: string;
@@ -29,6 +38,10 @@ export function MarketingMobileNav({
   /** Matches the header's night/light chrome so the button and panel read as
    *  part of the same bar instead of a foreign overlay. */
   night: boolean;
+  /** Rendered below a divider, and ONLY below `sm` — from `sm` up these same
+   *  actions are in the bar itself, so showing them twice would put two
+   *  "Start free" controls on one screen. */
+  auth?: MobileNavAuthLink[];
 }) {
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
@@ -77,7 +90,9 @@ export function MarketingMobileNav({
       <div
         role="menu"
         aria-hidden={!open}
-        className={`absolute right-0 top-11 z-50 w-56 rounded-xl border border-purple-100 bg-white py-1 shadow-xl ${
+        // w-64, not w-56: "Commencer gratuitement" is ~190px at this size and
+        // needs the extra 32px to stay on one line in the panel.
+        className={`absolute right-0 top-11 z-50 w-64 rounded-xl border border-purple-100 bg-white py-1 shadow-xl ${
           open ? "block" : "hidden"
         }`}
       >
@@ -93,6 +108,29 @@ export function MarketingMobileNav({
             {l.label}
           </Link>
         ))}
+        {auth.length > 0 && (
+          // `sm:hidden` because from `sm` up these actions are in the bar
+          // itself — without it a 640-767px viewport (where the hamburger is
+          // still shown) would carry two "Start free" controls at once.
+          <div className="sm:hidden mt-1 border-t border-purple-100 pt-1">
+            {auth.map((a) => (
+              <Link
+                key={a.href}
+                role="menuitem"
+                href={a.href}
+                tabIndex={open ? undefined : -1}
+                onClick={() => setOpen(false)}
+                className={
+                  a.primary
+                    ? "mx-2 my-1.5 block rounded-lg bg-purple-600 px-4 py-2.5 text-center text-sm font-semibold text-white hover:bg-purple-700"
+                    : "block px-4 py-2.5 text-sm text-slate-700 hover:bg-purple-50 hover:text-purple-800"
+                }
+              >
+                {a.label}
+              </Link>
+            ))}
+          </div>
+        )}
       </div>
     </div>
   );

@@ -21,7 +21,7 @@ vi.mock("@/lib/client-v1", () => ({
 // paragraph above. `.btn-danger` is the existing token for exactly this.
 describe("HistoryPanel — danger zone", () => {
   const html = renderToStaticMarkup(
-    <HistoryPanel divisionId="d1" scheduleLocked={false} canEdit />,
+    <HistoryPanel divisionId="d1" scheduleLocked={false} canEdit viewerPlan="community" />,
   );
   const button =
     html.match(/<button[^>]*>(?=\s*Clear schedule)/)?.[0] ??

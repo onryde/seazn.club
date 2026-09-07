@@ -40,7 +40,13 @@ describe("nextOfficialRoles (role chip picker transition)", () => {
 describe("RoleChipPicker (static render)", () => {
   it("renders every suggestion as a chip, with the current value pressed", () => {
     const html = renderToStaticMarkup(
-      <RoleChipPicker value={["referee"]} onChange={() => {}} suggestions={ALL_OFFICIAL_ROLES} multiAllowed />,
+      <RoleChipPicker
+        value={["referee"]}
+        onChange={() => {}}
+        suggestions={ALL_OFFICIAL_ROLES}
+        multiAllowed
+        viewerPlan="community"
+      />,
     );
     for (const role of ALL_OFFICIAL_ROLES) {
       expect(html).toContain(role.replace(/_/g, " "));

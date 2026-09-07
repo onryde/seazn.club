@@ -20,6 +20,7 @@ import {
   PASS_LOCK_REASON_KEY,
 } from "@/lib/pass-ladder";
 import { PASS_FEATURES } from "@/lib/pass-features";
+import { planAlreadyHeld, type ViewerPlan } from "@/lib/viewer-plan";
 import { routes } from "@/lib/routes";
 import { useDict, useMsg } from "@/components/i18n/dict-provider";
 import { t } from "@/lib/i18n-runtime";
@@ -60,6 +61,25 @@ interface Props {
    * feature key alone).
    */
   reason?: string;
+  /**
+   * The plan the VIEWER's org already holds (v18 W3-B).
+   *
+   * REQUIRED, and that is the whole design. `featurePlan(feature)` is a pure
+   * function of the key and cannot tell "you need Pro" from "you have Pro", so
+   * the answer has to come from the call site — and an OPTIONAL prop is
+   * exactly how such a figure quietly stops arriving at some of them. Making
+   * it required means `tsc` enumerates every paywall in the app instead of a
+   * reviewer trying to.
+   *
+   * `"unknown"` exists for a route that genuinely cannot answer, and NO
+   * production call site passes it today. Three were expected to —
+   * app/directory, app/clubs/[id], app/import — and all three turned out to
+   * hold an `auth.orgId` from `requirePageAuth()`, so they resolve the real
+   * plan like everywhere else. A site that CAN answer and passes "unknown"
+   * anyway is the one failure this prop cannot catch by itself, which is why
+   * `viewer-plan-coverage.test.ts` asserts the production count stays zero.
+   */
+  viewerPlan: ViewerPlan;
 }
 
 /**
@@ -111,7 +131,7 @@ const creditLine = (msg: ReturnType<typeof useMsg>, plan: string) => msg("upgrad
  *  shape without branching twice. */
 type PlanCta =
   | { kind: "priced"; name: string; price: string; href: string }
-  | { kind: "contact"; name: string; href: string };
+  | { kind: "contact"; name: "Enterprise" | null; href: string };
 
 /**
  * The paywall action that actually unlocks a key: a priced Pro upgrade, or
@@ -132,11 +152,41 @@ type PlanCta =
  * badge (`featureReason(feature)`, or a caller's override), so this reuses
  * it rather than inventing a second, shorter label nobody asked for.
  */
-function paidPlan(feature: string, currency: Currency, href: string, reason: string): PlanCta {
-  if (featurePlan(feature) === "enterprise") {
+function paidPlan(
+  feature: string,
+  currency: Currency,
+  href: string,
+  reason: string,
+  /**
+   * The viewer's org is ALREADY on a paid plan, so the plan this key would
+   * otherwise be sold with is the plan they hold (entitlements v18 W3-B).
+   *
+   * `featurePlan` is a pure function of the KEY and cannot know this — a
+   * Community org at 64 entrants and a Pro org at 256 hit the SAME key and
+   * need opposite answers. So the answer arrives from outside, and when it is
+   * yes there is no priced arm left: everything self-serve is already bought.
+   *
+   * This is the dead end the L rung used to cover. L was the only rung
+   * exceeding Pro's `entrants.per_division.max`, and with it off sale a Pro
+   * org with a larger division has no self-serve route at all. The withdrawal
+   * is deliberate; the paywall answering "Go Pro" to an org already on Pro is
+   * not.
+   */
+  planCovers: boolean,
+): PlanCta {
+  const aboveSelfServe = featurePlan(feature) === "enterprise";
+  if (planCovers || aboveSelfServe) {
     return {
       kind: "contact",
-      name: "Enterprise",
+      // Named only when Enterprise is genuinely what is being pointed at. A
+      // Pro org past a Pro ceiling is not being sold Enterprise — nothing is
+      // for sale on that path — and labelling it so would put a tier name on
+      // a conversation we have not had yet. `name` reaches no rendered string
+      // on this arm (`PlanCtaButton` prints `upgrade.contactUs`, and the
+      // pass-credit footnote is gated on `kind === "priced"`), so this is
+      // about what the value MEANS to the next reader of it, not about what
+      // the card shows today.
+      name: aboveSelfServe ? "Enterprise" : null,
       href: `mailto:hello@seazn.club?subject=${encodeURIComponent(reason)}`,
     };
   }
@@ -204,6 +254,7 @@ export function UpgradeGate({
   href = "/settings/billing",
   compact = false,
   reason: reasonOverride,
+  viewerPlan,
 }: Props) {
   const reason = reasonOverride ?? featureReason(feature);
   const pathname = usePathname();
@@ -225,14 +276,36 @@ export function UpgradeGate({
   // reason: `gate === "closed"` is DERIVED from a non-null reason, so the
   // conjunct never fails in practice and exists so the Record can be indexed.
   const passClosed = gate === "closed";
+  /**
+   * v18 W3-B — the org is on a paid plan, so whatever closed this gate was the
+   * PLAN's own ceiling, not a missing plan.
+   *
+   * `usePassGateState` puts `paid_plan` ahead of every other arm ("a paid plan
+   * beats everything"), which is what makes this readable as a plain
+   * "already paying" and not merely "no pass to offer": `held`, `ended` and
+   * `closed` are only reachable for an org that is NOT on a paid plan, so the
+   * three cards below get `false` here by construction rather than by
+   * coincidence.
+   *
+   * What it is NOT: a claim that this competition is fully covered. It says
+   * the org bought the most we sell without a conversation — which is exactly
+   * the fact "Go Pro" was contradicting.
+   */
+  const planCovers = planAlreadyHeld(viewerPlan, gate);
   const liftable = PASS_FEATURES.has(feature);
   // Only an org that can still BENEFIT from a pass is offered one.
   const passHref = liftable && gate === "none" ? passHrefFromPath(pathname, feature) : null;
 
   if (compact) {
+    const compactCta = planCovers ? paidPlan(feature, currency, href, reason, true) : null;
     return (
       <Link
-        href={passHref ?? href}
+        // A pill for an org already on a paid plan points at the conversation,
+        // not at the billing page — landing them on a plan picker showing the
+        // plan they hold is the dead end this fixes, and it is worse in the
+        // pill than in the card because the pill has no room to explain.
+        href={compactCta?.href ?? passHref ?? href}
+        data-beyond-plan={planCovers || undefined}
         data-feature={feature}
         data-pass-owned={passOwned || undefined}
         data-pass-ended={passEnded || undefined}
@@ -243,8 +316,14 @@ export function UpgradeGate({
         className="inline-flex items-center gap-1.5 rounded-full bg-purple-50 px-3 py-1 text-xs font-medium text-purple-700 hover:bg-purple-100"
       >
         <LockIcon />
-        <PlanBadge feature={feature} />
-        {reason} <span className="font-semibold underline">Upgrade →</span>
+        {/* The badge names the tier the FEATURE belongs to. Above a reader who
+            already holds that tier it reads as the thing being sold, which is
+            the misdirection this branch exists to stop. */}
+        {!planCovers && <PlanBadge feature={feature} />}
+        {reason}{" "}
+        <span className="font-semibold underline">
+          {planCovers ? msg("upgrade.contactUs") : "Upgrade →"}
+        </span>
       </Link>
     );
   }
@@ -252,7 +331,7 @@ export function UpgradeGate({
   // The org already holds this competition's pass. One path out, and an
   // acknowledgement that they have already paid us once for this competition.
   if (passOwned) {
-    const plan = paidPlan(feature, currency, href, reason);
+    const plan = paidPlan(feature, currency, href, reason, planCovers);
     return (
       <div
         data-feature={feature}
@@ -313,7 +392,7 @@ export function UpgradeGate({
   // impossible pairing ever did arrive it degrades to the plain Pro card rather
   // than rendering a heading above a missing sentence.
   if (passEnded && lockReason) {
-    const plan = paidPlan(feature, currency, href, reason);
+    const plan = paidPlan(feature, currency, href, reason, planCovers);
     return (
       <div
         data-feature={feature}
@@ -369,7 +448,7 @@ export function UpgradeGate({
   // working — false twice over here, since nothing was bought. The two sets of
   // copy are separate Records for exactly that reason.
   if (passClosed && lockReason) {
-    const plan = paidPlan(feature, currency, href, reason);
+    const plan = paidPlan(feature, currency, href, reason, planCovers);
     return (
       <div
         data-feature={feature}
@@ -453,6 +532,45 @@ export function UpgradeGate({
           The Event Pass upgrades this competition for its lifetime. Pro covers
           every competition in your organization.
         </p>
+      </div>
+    );
+  }
+
+  // v18 W3-B — the org is already on a paid plan, and this is the branch it
+  // lands on: `paid_plan` matches none of the pass arms above and `passHref` is
+  // null for it, so until now a Pro org past a Pro ceiling was shown "See plans
+  // & upgrade →" pointing at a plan picker containing the plan it holds.
+  //
+  // Slate, not the purple family, and for the same reason the ended and closed
+  // cards are: purple here means "a payment lifts this", and nothing on this
+  // card is for sale. It is deliberately its own branch rather than a flag on
+  // the card below — the two give opposite advice, and a reader who has just
+  // been told to upgrade by a card that looks identical has been told the
+  // opposite twice in the same colour.
+  if (planCovers) {
+    const plan = paidPlan(feature, currency, href, reason, true);
+    return (
+      <div
+        data-feature={feature}
+        data-beyond-plan
+        className="rounded-lg border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700"
+      >
+        <p className="flex items-center gap-2 font-medium">
+          <LockIcon />
+          {/* No <PlanBadge>: it names the tier the FEATURE belongs to, and
+              this reader already holds it. A "PRO" badge above "Contact us"
+              is the same sell-you-what-you-have confusion in a smaller box. */}
+          {reason}
+        </p>
+        {/* Says what is true and what the next step is, and claims nothing
+            about which tier grants what — the reader's plan already is the top
+            of self-serve, so any attribution here would either name a tier
+            they hold or open a negotiation this sentence cannot conduct.
+            `beyondPlanCopyFaults` in lib/copy-truth.ts pins that. */}
+        <p className="mt-2">{msg("upgrade.beyondPlan.body")}</p>
+        <div className="mt-3">
+          <PlanCtaButton plan={plan} />
+        </div>
       </div>
     );
   }

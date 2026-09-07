@@ -101,7 +101,10 @@ vi.mock("@/server/usecases/entrants", () => ({ listEntrants: vi.fn(async () => [
 vi.mock("@/server/usecases/schedule", () => ({
   getScheduleSettings: vi.fn(async () => ({ config: {}, tz: "Europe/London" })),
 }));
-vi.mock("@/lib/entitlements", () => ({ hasFeature: vi.fn(async () => true) }));
+vi.mock("@/lib/entitlements", () => ({
+  hasFeature: vi.fn(async () => true),
+  orgPlanKey: vi.fn(async () => "community"),
+}));
 vi.mock("@/lib/currency-server", () => ({ preferredCurrency: vi.fn(async () => "GBP") }));
 
 const tx = () => Promise.resolve([]);

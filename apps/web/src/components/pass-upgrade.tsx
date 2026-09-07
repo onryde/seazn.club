@@ -7,15 +7,16 @@ import { fetchPassCheckoutClientSecret } from "@/lib/billing-checkout-client";
 import type { CheckoutSecretResult } from "@/lib/billing-checkout-client";
 import { stripePromise } from "@/lib/stripe-browser";
 import { Modal } from "@/components/modal";
-import { formatMinor, type Currency, type PassKey } from "@/lib/currency";
+import { formatMinor, SELLABLE_PASS_KEYS, type Currency, type PassKey } from "@/lib/currency";
 // Client-safe i18n: `@/lib/i18n` pulls in `server-only`, which breaks the build
 // for a "use client" island. Same convention as buy-credits.tsx.
 import { t } from "@/lib/i18n-runtime";
 import type { Dict } from "@/lib/i18n-constants";
 import {
-  PASS_RUNG_NAME_KEY,
+  offeredRungName,
   PASS_RUNG_SIZE_KEY,
   passCheckoutErrorKey,
+  rungNamingRequired,
   type PassRungOption,
 } from "@/lib/pass-ladder";
 
@@ -142,7 +143,20 @@ export function PassRungLadder({
       {/* `disabled` on the fieldset rather than on each input: it is one
           control, and for a non-owner the whole control is inert. */}
       <fieldset className="mt-3 space-y-2" disabled={!canBuy}>
-        <legend className="sr-only">{t(dict, "upgrade.ladder.legend")}</legend>
+        {/* "Choose a pass size" is the accessible NAME of this whole control,
+            and with one rung on sale there is no size to choose — a group of
+            one announced as a choice sends a screen-reader user looking for
+            the option that is not there. Same derived rule as the stamp and
+            the button below, off the catalogue rather than `options.length`:
+            see `rungNamingRequired`. */}
+        <legend className="sr-only">
+          {t(
+            dict,
+            rungNamingRequired(SELLABLE_PASS_KEYS.length)
+              ? "upgrade.ladder.legend"
+              : "upgrade.ladder.legendOne",
+          )}
+        </legend>
         {options.map((option) => {
           // Checked in the DOM either way — a radio group must have one — but
           // only DRESSED as chosen when there is someone to choose. A reader who
@@ -190,18 +204,37 @@ export function PassRungLadder({
                   on nothing else. This ladder carries NO best-value badge
                   (#294, owner's decision), so the only emphasis on the stub
                   belongs to the reader. */}
-              <span
-                aria-hidden
-                className={`app-display mt-0.5 grid h-5 w-6 shrink-0 place-items-center rounded-md text-[0.6875rem] font-bold ${
-                  active ? "bg-lime-400 text-[#150b36]" : "bg-white/10 text-white/70"
-                }`}
-              >
-                {t(dict, PASS_RUNG_SIZE_KEY[option.key])}
-              </span>
+              {/* Dropped entirely, not blanked, when one rung sells: a class
+                  stamp distinguishes this ticket from the one beside it, and
+                  with nothing beside it the letter names a size the buyer will
+                  not meet again — on the ticket stub, in the matrix column, or
+                  on the invoice. The row keeps its `gap-2.5` and simply starts
+                  at the price. */}
+              {rungNamingRequired(SELLABLE_PASS_KEYS.length) && (
+                <span
+                  aria-hidden
+                  // Named so its ABSENCE is assertable. A mutation sweep found
+                  // this the one part of the rung-naming rule no test could
+                  // see: restoring the unconditional stamp left all 84 green,
+                  // because the letter it prints is one character and every
+                  // `not.toContain("M")` shape is either vacuous or matches
+                  // half the page.
+                  data-pass-rung-stamp={option.key}
+                  className={`app-display mt-0.5 grid h-5 w-6 shrink-0 place-items-center rounded-md text-[0.6875rem] font-bold ${
+                    active ? "bg-lime-400 text-[#150b36]" : "bg-white/10 text-white/70"
+                  }`}
+                >
+                  {t(dict, PASS_RUNG_SIZE_KEY[option.key])}
+                </span>
+              )}
               <span className="min-w-0 flex-1">
                 {/* The radio's accessible name reads "Event Pass L, $59, …":
-                    the stamp is decorative, so the full name has to be here. */}
-                <span className="sr-only">{t(dict, PASS_RUNG_NAME_KEY[option.key])}</span>
+                    the stamp is decorative, so the full name has to be here.
+                    Drops to plain "Event Pass" with one rung on sale, so what
+                    is announced matches what is printed. */}
+                <span className="sr-only">
+                  {offeredRungName(dict, option.key, SELLABLE_PASS_KEYS.length)}
+                </span>
                 <span className="app-display block text-2xl font-bold leading-none text-white tabular-nums">
                   {formatMinor(option.amountMinor, currency)}
                 </span>
@@ -235,9 +268,15 @@ export function PassRungLadder({
             className="btn btn-primary mt-3 w-full px-4 py-2.5"
             data-pass-buy
           >
+            {/* The page's primary buy button. "Buy the pass — M" was the last
+                surface still naming a rung after the 2026-09-05 ruling took the
+                suffix off `/pricing`; the letter is restored automatically by
+                `rungNamingRequired` the day a second rung goes back on sale. */}
             {loading
               ? t(dict, "upgrade.ladder.preparing")
-              : t(dict, "upgrade.buyCta", { rung: t(dict, PASS_RUNG_SIZE_KEY[selected]) })}
+              : rungNamingRequired(SELLABLE_PASS_KEYS.length)
+                ? t(dict, "upgrade.buyCta", { rung: t(dict, PASS_RUNG_SIZE_KEY[selected]) })
+                : t(dict, "upgrade.buyCtaPlain")}
           </button>
           {failure && (
             // Localised copy chosen from the STATUS. The route's own strings are

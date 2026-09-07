@@ -9,6 +9,7 @@ import Link from "@/components/ui/console-link";
 import { useRouter } from "next/navigation";
 import { apiV1, ApiV1Error } from "@/lib/client-v1";
 import { UpgradeGate } from "@/components/upgrade-gate";
+import type { ViewerPlan } from "@/lib/viewer-plan";
 import { routes } from "@/lib/routes";
 import { PUBLISH_BLOCKED, PUBLISH_UNACKNOWLEDGED } from "@/lib/schedule-board";
 import { useMsg } from "@/components/i18n/dict-provider";
@@ -29,6 +30,7 @@ interface Props {
    *  worth a second query on every division page load. */
   fixtures: BoardFixture[];
   entrantNames: Record<string, string>;
+  viewerPlan: ViewerPlan;
 }
 
 export function LaunchActions({
@@ -40,6 +42,7 @@ export function LaunchActions({
   canEdit,
   fixtures,
   entrantNames,
+  viewerPlan,
 }: Props) {
   const msg = useMsg();
   const router = useRouter();
@@ -113,7 +116,7 @@ export function LaunchActions({
       <Link href={routes.divisionSchedule(orgSlug, compSlug, divSlug)} className="btn btn-ghost px-3 py-1.5 text-xs">
         {msg("launch.schedule")}
       </Link>
-      {paywall && <UpgradeGate feature={paywall} compact />}
+      {paywall && <UpgradeGate feature={paywall} compact viewerPlan={viewerPlan} />}
       {error && <span className="text-xs text-red-600">{error}</span>}
       {/* The way through the gate — and, for a blocking board, the honest report
           that there is none. Same dialog the board's start button opens, so the

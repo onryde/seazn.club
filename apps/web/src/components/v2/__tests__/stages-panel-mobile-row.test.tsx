@@ -28,6 +28,7 @@ const baseProps = {
   // Governing venue clock (#448) — display `tz` may diverge from it.
   orgTz: "UTC",
   canExport: false,
+  viewerPlan: "community" as const,
 };
 const fixture = {
   id: "f1", stage_id: "s1", pool_id: null, round_no: 1, seq_in_round: 1,

@@ -128,7 +128,22 @@ test("the wizard opens on Public, and at the cap it creates a PRIVATE competitio
     const note = page.getByTestId("public-quota-degraded");
     await expect(note).toBeVisible({ timeout: 20_000 });
     await expect(note).toContainText(cappedName);
-    await expect(note.getByRole("link", { name: /upgrade|plan|billing/i }).first()).toBeVisible();
+    // A WAY ONWARD, and which way depends on the viewer's plan (v18 W3-B).
+    //
+    // This asserted a link named /upgrade|plan|billing/. Both specs here run as
+    // the shared PRO org (AUTH_STATE), and a Pro org that has hit a cap has no
+    // self-serve step left above it — so that assertion required the paywall to
+    // offer a paying customer the plan they already pay for, which is the exact
+    // defect W3-B removed. The honest route for them is a conversation.
+    //
+    // Pinned on the gate's own state attribute plus the rendered CTA, and the
+    // old wording is asserted ABSENT: without that negative this would pass
+    // again the day the beyond-plan card regressed to "See plans & upgrade".
+    await expect(note.locator("[data-beyond-plan]")).toHaveAttribute("data-beyond-plan", "true");
+    const onward = note.getByRole("link", { name: /contact us/i }).first();
+    await expect(onward).toBeVisible();
+    await expect(onward).toHaveAttribute("href", /^mailto:/);
+    await expect(note.getByRole("link", { name: /upgrade|plan|billing/i })).toHaveCount(0);
     // The form is GONE, so the same night cannot be created twice by a second
     // press of a button sitting under the note.
     await expect(page.getByRole("button", { name: /^create competition$/i })).toHaveCount(0);
@@ -185,7 +200,22 @@ test("the TEMPLATE GALLERY at the cap shows the same note — it does not redire
     const note = page.getByTestId("public-quota-degraded");
     await expect(note).toBeVisible({ timeout: 20_000 });
     await expect(note).toContainText(cappedName);
-    await expect(note.getByRole("link", { name: /upgrade|plan|billing/i }).first()).toBeVisible();
+    // A WAY ONWARD, and which way depends on the viewer's plan (v18 W3-B).
+    //
+    // This asserted a link named /upgrade|plan|billing/. Both specs here run as
+    // the shared PRO org (AUTH_STATE), and a Pro org that has hit a cap has no
+    // self-serve step left above it — so that assertion required the paywall to
+    // offer a paying customer the plan they already pay for, which is the exact
+    // defect W3-B removed. The honest route for them is a conversation.
+    //
+    // Pinned on the gate's own state attribute plus the rendered CTA, and the
+    // old wording is asserted ABSENT: without that negative this would pass
+    // again the day the beyond-plan card regressed to "See plans & upgrade".
+    await expect(note.locator("[data-beyond-plan]")).toHaveAttribute("data-beyond-plan", "true");
+    const onward = note.getByRole("link", { name: /contact us/i }).first();
+    await expect(onward).toBeVisible();
+    await expect(onward).toHaveAttribute("href", /^mailto:/);
+    await expect(note.getByRole("link", { name: /upgrade|plan|billing/i })).toHaveCount(0);
     // THE REGRESSION: the redirect must NOT have fired. Asserted on the URL
     // rather than on the note alone — a note that renders for a beat while the
     // router navigates past it would satisfy the visibility check and still

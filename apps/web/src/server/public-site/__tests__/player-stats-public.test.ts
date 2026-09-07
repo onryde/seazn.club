@@ -1,8 +1,13 @@
 // PROMPT-65 — per-player stats on the public profile: getPublicPlayer reads
 // player_stat_snapshots and labels metrics from the sport module's declared
 // playerStats model. No stats.player gate on the profile block (locked
-// decision: the leaderboard TABLE stays Pro; profile totals ride the existing
-// consent + dashboard.player_profiles visibility). Real Postgres required.
+// decision: profile totals ride the existing consent + dashboard.player_profiles
+// visibility — unchanged by W3-A). The leaderboard TABLE
+// (`publicDivisionStats`, a SEPARATE function this file does not exercise)
+// used to be described as "stays Pro" here; W3-A (2026-09-06, V399) froze
+// `stats.player` true on every plan, so it is free by default too now — see
+// usecases/__tests__/player-stats.test.ts's W3-A cases. Real Postgres
+// required.
 import { describe, expect, it, afterAll, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 

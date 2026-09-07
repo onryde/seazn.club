@@ -11,6 +11,7 @@ import { useEffect, useState } from "react";
 import { apiV1, ApiV1Error } from "@/lib/client-v1";
 import { UpgradeGate } from "@/components/upgrade-gate";
 import { useMsg } from "@/components/i18n/dict-provider";
+import type { ViewerPlan } from "@/lib/viewer-plan";
 import { MarkBadge } from "./mark-badge";
 
 export interface MarkSummaryData {
@@ -50,7 +51,13 @@ export function MarksSummaryView({ summary }: { summary: MarkSummaryData }) {
   );
 }
 
-export function MarksSummaryBlock({ officialId }: { officialId: string }) {
+export function MarksSummaryBlock({
+  officialId,
+  viewerPlan,
+}: {
+  officialId: string;
+  viewerPlan: ViewerPlan;
+}) {
   const msg = useMsg();
   const [summary, setSummary] = useState<MarkSummaryData | null>(null);
   const [gated, setGated] = useState(false);
@@ -73,7 +80,7 @@ export function MarksSummaryBlock({ officialId }: { officialId: string }) {
     };
   }, [officialId, msg]);
 
-  if (gated) return <UpgradeGate feature="officials.marks" compact />;
+  if (gated) return <UpgradeGate feature="officials.marks" compact viewerPlan={viewerPlan} />;
   if (error) return <p className="text-xs text-red-500">{error}</p>;
   if (!summary) return <p className="text-xs text-slate-400">{msg("marks.summary.loading")}</p>;
   return <MarksSummaryView summary={summary} />;

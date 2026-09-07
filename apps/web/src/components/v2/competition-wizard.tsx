@@ -6,6 +6,7 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { apiV1, ApiV1Error } from "@/lib/client-v1";
 import { UpgradeGate } from "@/components/upgrade-gate";
+import type { ViewerPlan } from "@/lib/viewer-plan";
 import {
   publicDashboardGain,
   PUBLIC_DASHBOARD_FEATURE,
@@ -20,6 +21,7 @@ import { useMsg } from "@/components/i18n/dict-provider";
 export function CompetitionWizard({
   orgSlug,
   publicDashboardUpgrade,
+  viewerPlan,
 }: {
   orgSlug: string;
   /**
@@ -32,6 +34,7 @@ export function CompetitionWizard({
    * exists to close. `tsc` names every caller instead.
    */
   publicDashboardUpgrade: PublicDashboardUpgrade | null;
+  viewerPlan: ViewerPlan;
 }) {
   const msg = useMsg();
   const router = useRouter();
@@ -154,7 +157,7 @@ export function CompetitionWizard({
               : msg("comp.wizard.publicDegraded.capsOwn", { limit: degraded.limit })}
           </p>
         )}
-        <UpgradeGate feature={PUBLIC_DASHBOARD_FEATURE} />
+        <UpgradeGate feature={PUBLIC_DASHBOARD_FEATURE} viewerPlan={viewerPlan} />
         <div className="flex justify-end">
           <button
             type="button"
@@ -246,7 +249,7 @@ export function CompetitionWizard({
         />
       </div>
 
-      {paywall && <UpgradeGate feature={paywall.feature} />}
+      {paywall && <UpgradeGate feature={paywall.feature} viewerPlan={viewerPlan} />}
       {error && (
         <p className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-600">{error}</p>
       )}

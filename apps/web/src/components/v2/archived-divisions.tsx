@@ -10,6 +10,7 @@ import { apiV1, ApiV1Error } from "@/lib/client-v1";
 import { ConfirmDialog } from "@/components/v2/confirm-dialog";
 import { UpgradeGate } from "@/components/upgrade-gate";
 import { useMsg } from "@/components/i18n/dict-provider";
+import type { ViewerPlan } from "@/lib/viewer-plan";
 
 export interface ArchivedDivisionLite {
   id: string;
@@ -24,6 +25,7 @@ export function ArchivedDivisions({
   divisions,
   canEdit,
   archivedSlotsExplainRefusal = false,
+  viewerPlan,
 }: {
   divisions: ArchivedDivisionLite[];
   canEdit: boolean;
@@ -43,6 +45,7 @@ export function ArchivedDivisions({
    * question renders exactly what this component always rendered.
    */
   archivedSlotsExplainRefusal?: boolean;
+  viewerPlan: ViewerPlan;
 }) {
   const msg = useMsg();
   const router = useRouter();
@@ -100,7 +103,7 @@ export function ArchivedDivisions({
       )}
       {paywallFeature && (
         <div className="mt-2 space-y-2">
-          <UpgradeGate feature={paywallFeature} />
+          <UpgradeGate feature={paywallFeature} viewerPlan={viewerPlan} />
           {/* The cause, named — and it is on this screen. The gate says "you
               are at your division limit"; the rows immediately below are the
               ones spending the missing slots, and nothing said so. Gated on

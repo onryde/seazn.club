@@ -59,6 +59,7 @@ interface PanelProps {
   divisionId: string;
   scheduleLocked: boolean;
   canEdit: boolean;
+  viewerPlan: "community";
 }
 
 /** Mount the real island and let the mount fetches settle. `canEdit` is held
@@ -75,6 +76,7 @@ async function render(scheduleLocked: boolean) {
     divisionId: "d1",
     scheduleLocked,
     canEdit: true,
+    viewerPlan: "community",
   });
   await new Promise((r) => setTimeout(r, 0));
   await new Promise((r) => setTimeout(r, 0));

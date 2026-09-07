@@ -26,6 +26,7 @@ const baseProps = {
   tz: "UTC",
   orgTz: "UTC",
   canExport: false,
+  viewerPlan: "community" as const,
 };
 
 // Persisted round numbering for a 4-entrant DE (k=2): WB 1-2, LB 5-6, GF 9 —

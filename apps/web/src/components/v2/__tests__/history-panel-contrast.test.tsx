@@ -36,6 +36,7 @@ interface PanelProps {
   divisionId: string;
   scheduleLocked: boolean;
   canEdit: boolean;
+  viewerPlan: "community";
 }
 type Island = ReturnType<typeof renderIsland<PanelProps>>;
 
@@ -49,6 +50,7 @@ async function renderWithCheckpoints(checkpoints: unknown[]): Promise<Island> {
     divisionId: "d1",
     scheduleLocked: false,
     canEdit: true,
+    viewerPlan: "community",
   });
   // The mount-time `load()` effect defers via `setTimeout(0)` and awaits two
   // fetches — two ticks lets both settle, same margin the eviction-notice

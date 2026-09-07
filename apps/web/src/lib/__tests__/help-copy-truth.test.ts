@@ -3413,3 +3413,80 @@ describe.skipIf(!HAS_DB)("no help article misquotes a per-plan capacity cap", ()
     expect(faults.filter((f) => f.startsWith("probe/true-copy"))).toEqual([]);
   });
 });
+
+/**
+ * The billing help sold a format community already has.
+ *
+ * `content/help/billing/plans.md` listed the Event Pass as carrying "advanced
+ * formats including double elimination", and `event-pass.md` repeated it as a
+ * bullet. `formats.double_elim` is TRUE on community and has been since V393 —
+ * so both sentences named a free capability as a thing the $11.99 buys.
+ *
+ * This is the same defect W3 fixed in `pricing.pass.f3`, in a tree that guard
+ * cannot see: `localePaidOverclaimFaults` scans the four DICTIONARIES, and
+ * `content/help/**` is a separate English-only tree with no locale files at
+ * all. One fix caught by a guard, an identical sentence three directories away
+ * that no guard was looking at.
+ *
+ * Scoped to the BILLING articles on purpose. `divisions/bracket-view.md`
+ * describes double elimination at length and must go on doing so — the claim
+ * being forbidden is "this is what you are buying", not the format's existence.
+ */
+describe.skipIf(!HAS_DB)("billing help does not sell a format community already grants", () => {
+  it("names no paid benefit that plan_entitlements gives away", async () => {
+    const rows = await sql<{ plan_key: string; bool_value: boolean | null }[]>`
+      select plan_key, bool_value from plan_entitlements
+      where feature_key = 'formats.double_elim' order by plan_key`;
+    // Canary: a renamed key returns nothing and every assertion below passes
+    // by examining an empty set.
+    expect(rows.length, "no formats.double_elim rows — the key moved").toBeGreaterThan(3);
+    const community = rows.find((r) => r.plan_key === "community")?.bool_value;
+
+    const articles = [
+      { file: "billing/plans.md", text: plans },
+      { file: "billing/event-pass.md", text: eventPass },
+    ];
+    // Canary for the OTHER half: an article helper returning "" would make the
+    // scan below find nothing and report clean.
+    for (const a of articles) {
+      expect(a.text.length, `${a.file} read as empty`).toBeGreaterThan(500);
+    }
+
+    const claims = articles.filter((a) => /double elimination/i.test(a.text)).map((a) => a.file);
+
+    if (community === true) {
+      expect(
+        claims,
+        "these billing articles sell double elimination, which community already grants — " +
+          "say what the pass actually adds (formats.advanced: americano, ladders) instead",
+      ).toEqual([]);
+    } else {
+      // The other branch, stated rather than left implicit: if the row is ever
+      // taken off community the claim becomes TRUE and this guard must stop
+      // forbidding it. Nothing is owed in that direction — the articles are
+      // free to mention it or not — so this asserts the premise, not the copy.
+      expect(community, "formats.double_elim has no community row at all").not.toBeUndefined();
+    }
+  });
+
+  it("says what the pass DOES add, so the fix is not just a deletion", async () => {
+    // The positive pair. Removing the false clause and leaving nothing behind
+    // would satisfy the assertion above while making the article worse: a
+    // buyer reading the pass's benefits would see one fewer, with no idea a
+    // real format upgrade is included. `formats.advanced` IS false on
+    // community, which is what makes this claim honest.
+    const [row] = await sql<{ bool_value: boolean | null }[]>`
+      select bool_value from plan_entitlements
+      where feature_key = 'formats.advanced' and plan_key = 'community' limit 1`;
+    expect(row, "plan_entitlements has no community/formats.advanced row").toBeDefined();
+    expect(row!.bool_value, "formats.advanced is free — this claim is no longer honest").toBe(false);
+    for (const [file, text] of [
+      ["billing/plans.md", plans],
+      ["billing/event-pass.md", eventPass],
+    ] as const) {
+      expect(text, `${file} no longer names the formats the pass adds`).toMatch(
+        /americano|ladders/i,
+      );
+    }
+  });
+});

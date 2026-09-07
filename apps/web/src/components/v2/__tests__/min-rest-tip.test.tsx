@@ -68,6 +68,7 @@ const renderConstraints = (dict: Dict, locale: Locale) =>
         initialSettings={{ division_id: "d1", config: { courts: ["Court 1"], matchMinutes: 30, gapMinutes: 0 } }}
         canEdit
         orgTz={ORG_TZ}
+        viewerPlan="community"
       />
     </DictProvider>,
   );
@@ -82,6 +83,7 @@ const renderSettings = (dict: Dict, locale: Locale) =>
         constraintsAllowed
         venueCap="Court"
         orgTz={ORG_TZ}
+        viewerPlan="community"
       />
     </DictProvider>,
   );

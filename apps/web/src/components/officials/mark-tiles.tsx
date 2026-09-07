@@ -10,6 +10,7 @@ import { useState } from "react";
 import { apiV1, ApiV1Error } from "@/lib/client-v1";
 import { UpgradeGate } from "@/components/upgrade-gate";
 import { useMsg } from "@/components/i18n/dict-provider";
+import type { ViewerPlan } from "@/lib/viewer-plan";
 
 const MARKS = [1, 2, 3, 4, 5] as const;
 
@@ -81,9 +82,11 @@ export function MarkTiles({
 export function MarkControl({
   fixtureOfficialId,
   initialMark,
+  viewerPlan,
 }: {
   fixtureOfficialId: string;
   initialMark: number | null;
+  viewerPlan: ViewerPlan;
 }) {
   const msg = useMsg();
   const [mark, setMark] = useState<number | null>(initialMark);
@@ -125,7 +128,7 @@ export function MarkControl({
     }
   }
 
-  if (gated) return <UpgradeGate feature="officials.marks" compact />;
+  if (gated) return <UpgradeGate feature="officials.marks" compact viewerPlan={viewerPlan} />;
 
   return (
     <div className="flex flex-col items-start gap-1.5">

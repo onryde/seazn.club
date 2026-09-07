@@ -25,6 +25,12 @@
 import { expect, test } from "@playwright/test";
 import { apiJson } from "../helpers";
 import { fillHostedCheckout } from "../stripe-checkout-kit";
+// The SHARED claim/release, not a private copy. This file used to define its
+// own `claimConnectAccount`/`releaseConnectAccount` that took NO advisory
+// lock, while rs007-money-kit's versions exist precisely to serialize access
+// to the one Connect fixture — and a lock only works if every participant
+// takes it. See the comment on the kit's `claimConnectAccount`.
+import { claimConnectAccount, releaseConnectAccount, type ConnectClaim } from "../rs007-money-kit";
 
 /** Never on by accident: absent the flag this skips visibly rather than
  *  silently passing, so a CI run that cannot reach Stripe reports a skip
@@ -50,72 +56,6 @@ if (!ENABLED || !CONNECT_ACCOUNT) {
       `\n    Nothing else in the suite produces checkout.session.completed, so this run proves nothing about it.\n`,
   );
 }
-
-/** `organizations.stripe_account_id` is UNIQUE, so exactly one org can hold
- *  the fixture account at a time. Take it for the duration and give it back —
- *  the smoke sponsor suite crashes if it finds the account already claimed.
- *  Deliberately NOT helpers' `setOrgConnectSql`: that writes a fabricated
- *  `acct_e2e_<id>`, which Stripe rejects as a transfer destination, so the
- *  card path never actually runs. */
-async function withDb<T>(fn: (sql: import("postgres").Sql) => Promise<T>): Promise<T> {
-  const url = process.env.DATABASE_URL;
-  if (!url) throw new Error("DATABASE_URL required");
-  const { default: postgres } = await import("postgres");
-  const sql = postgres(url, { connection: { search_path: "seazn_club" }, ssl: false });
-  try {
-    return await fn(sql);
-  } finally {
-    await sql.end({ timeout: 5 });
-  }
-}
-
-async function claimConnectAccount(orgId: string): Promise<string | null> {
-  return withDb(async (sql) => {
-    const prior = await sql`
-      select id from organizations where stripe_account_id = ${CONNECT_ACCOUNT}`;
-    const priorId = (prior[0]?.id as string | undefined) ?? null;
-    if (priorId) {
-      await sql`
-        update organizations
-        set stripe_account_id = null, stripe_charges_enabled = false
-        where id = ${priorId}`;
-    }
-    await sql`
-      update organizations
-      set stripe_account_id = ${CONNECT_ACCOUNT}, stripe_charges_enabled = true
-      where id = ${orgId}`;
-    return priorId;
-  });
-}
-
-async function releaseConnectAccount(orgId: string, priorId: string | null): Promise<void> {
-  await withDb(async (sql) => {
-    await sql`
-      update organizations
-      set stripe_account_id = null, stripe_charges_enabled = false
-      where id = ${orgId}`;
-    if (priorId) {
-      await sql`
-        update organizations
-        set stripe_account_id = ${CONNECT_ACCOUNT}, stripe_charges_enabled = true
-        where id = ${priorId}`;
-    }
-    const back = await sql`
-      select id from organizations where stripe_account_id = ${CONNECT_ACCOUNT}`;
-    console.log(`RESTORE>>> fixture now held by ${(back[0]?.id as string) ?? "NOBODY"} (expected ${priorId})`);
-  });
-}
-
-test.use({
-  headless: !WATCH,
-  ...(WATCH ? { launchOptions: { slowMo: 650 }, video: { mode: "on" as const, size: { width: 1280, height: 900 } } } : {}),
-  // A wrong selector should fail in seconds, not ride the test timeout — the
-  // first run of this sat 8 minutes on a button that never existed. Stripe's
-  // own page and the post-payment redirect get explicit, longer waits.
-  actionTimeout: 15_000,
-  viewport: { width: 1280, height: 900 },
-});
-
 test("RS006 — organiser settings, team entry, Stripe Connect payment", async ({ page, browser, request }, testInfo) => {
   test.skip(!ENABLED, "opt-in: set CONNECT_WALKTHROUGH=1 (needs a real sk_test and `stripe listen`)");
   test.skip(!CONNECT_ACCOUNT, "STRIPE_CONNECT_TEST_ACCOUNT is unset — a fabricated account id is rejected by Stripe");
@@ -124,8 +64,7 @@ test("RS006 — organiser settings, team entry, Stripe Connect payment", async (
   // Screenshots land beside the run's other artifacts rather than a path
   // baked into the file.
   const SHOTS = testInfo.outputPath();
-  let priorHolder: string | null = null;
-  let claimedFor: string | null = null;
+  let connect: ConnectClaim | null = null;
 
   const comp = await apiJson<{ id: string; slug: string }>(request, "/api/v1/competitions", "POST", {
     ends_on: "2030-12-31",
@@ -140,9 +79,11 @@ test("RS006 — organiser settings, team entry, Stripe Connect payment", async (
     // when the org has no connected account, leaving the division Closed/Free
     // with a blank entrant kind and no error anywhere the run can see.
     const org = (await apiJson<{ id: string; slug: string }[]>(page.request, "/api/orgs")).data![0]!;
-    priorHolder = await claimConnectAccount(org.id);
-    claimedFor = org.id;
-    console.log(`CONNECT>>> ${CONNECT_ACCOUNT} taken from ${priorHolder ?? "nobody"} for ${org.slug}`);
+    // Blocks until any other worker holding the fixture gives it back.
+    connect = await claimConnectAccount(org.id);
+    console.log(
+      `CONNECT>>> ${CONNECT_ACCOUNT} taken from ${connect.priorId ?? "nobody"} for ${org.slug}`,
+    );
 
     // A team division with a real fee — this is the one we pay for.
     const team = await apiJson<{ id: string }>(request, `/api/v1/competitions/${comp.data!.id}/divisions`, "POST", {
@@ -341,6 +282,9 @@ test("RS006 — organiser settings, team entry, Stripe Connect payment", async (
     await ctx.close();
   } finally {
     await apiJson(request, `/api/v1/competitions/${comp.data!.id}`, "DELETE");
-    if (claimedFor) await releaseConnectAccount(claimedFor, priorHolder);
+    // UNCONDITIONAL, per the kit's contract: a claim that threw after taking
+    // the lock but before its UPDATEs landed still holds the lock, and only an
+    // unguarded call releases it.
+    await releaseConnectAccount(connect);
   }
 });

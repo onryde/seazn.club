@@ -7,11 +7,12 @@ import Link from "@/components/ui/console-link";
 import { BackLink } from "@/components/back-link";
 import { Nav } from "@/components/nav";
 import { requirePageAuth } from "@/server/page-auth";
+import { viewerPlanFrom } from "@/lib/viewer-plan";
 import { listPersons } from "@/server/usecases/persons";
 import { listClubsWithMeta } from "@/server/usecases/clubs";
 import { listTeams } from "@/server/usecases/teams";
 import { listOfficialsForConsole } from "@/server/usecases/officials";
-import { hasFeature } from "@/lib/entitlements";
+import { hasFeature, orgPlanKey } from "@/lib/entitlements";
 import { PersonsPanel } from "@/components/v2/persons-panel";
 import { DuplicatesPanel, type DupPerson } from "@/components/v2/duplicates-panel";
 import { listDuplicateCandidates } from "@/server/usecases/person-duplicates";
@@ -149,6 +150,7 @@ async function PlayersTab({ ui }: { ui: Dict }) {
 
 async function ClubsTab({ ui }: { ui: Dict }) {
   const { auth, canEdit } = await requirePageAuth();
+  const viewerPlan = viewerPlanFrom(await orgPlanKey(auth.orgId));
   const [clubs, teams] = await Promise.all([listClubsWithMeta(auth), listTeams(auth)]);
   const storageBase = `${process.env.NEXT_PUBLIC_SUPABASE_URL ?? ""}/storage/v1/object/public/assets`;
   return (
@@ -172,6 +174,10 @@ async function ClubsTab({ ui }: { ui: Dict }) {
         }))}
         storageBase={storageBase}
         canEdit={canEdit}
+        // The Directory is a cross-org surface (v18 W3-B rule C) — there is
+        // no single organization this page's paywalls can be resolved
+        // against, so "unknown" is the honest answer here.
+        viewerPlan={viewerPlan}
       />
     </div>
   );
@@ -179,6 +185,7 @@ async function ClubsTab({ ui }: { ui: Dict }) {
 
 async function OfficialsTab({ ui }: { ui: Dict }) {
   const { auth, canEdit } = await requirePageAuth();
+  const viewerPlan = viewerPlanFrom(await orgPlanKey(auth.orgId));
   const [officials, rolesMultiAllowed] = await Promise.all([
     listOfficialsForConsole(auth),
     hasFeature(auth.orgId, "officials.roles_multi"),
@@ -199,6 +206,7 @@ async function OfficialsTab({ ui }: { ui: Dict }) {
         }))}
         canEdit={canEdit}
         rolesMultiAllowed={rolesMultiAllowed}
+        viewerPlan={viewerPlan}
       />
     </div>
   );

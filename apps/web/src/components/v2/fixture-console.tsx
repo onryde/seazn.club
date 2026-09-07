@@ -8,6 +8,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { apiV1, ApiV1Error } from "@/lib/client-v1";
 import { UpgradeGate } from "@/components/upgrade-gate";
+import type { ViewerPlan } from "@/lib/viewer-plan";
 import { AuditStrip } from "@/components/v2/audit-strip";
 import { ClientTime } from "@/components/client-time";
 import { ShareButton } from "@/components/share-button";
@@ -266,6 +267,7 @@ interface Props {
    * own heading row.
    */
   deviceHandover?: boolean;
+  viewerPlan: ViewerPlan;
 }
 
 /** Payload keys that carry a person id across the sport modules (card, goal,
@@ -327,6 +329,7 @@ export function FixtureConsole({
   scorePadV2 = null,
   audit = null,
   deviceHandover = false,
+  viewerPlan,
 }: Props) {
   const msg = useMsg();
   const router = useRouter();
@@ -724,7 +727,7 @@ export function FixtureConsole({
         </div>
       </header>
 
-      {paywallFeature && <UpgradeGate feature={paywallFeature} />}
+      {paywallFeature && <UpgradeGate feature={paywallFeature} viewerPlan={viewerPlan} />}
       {error && (
         <p className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-600">{error}</p>
       )}
@@ -789,7 +792,12 @@ export function FixtureConsole({
 
           {canHandOver && handoverOpen && (
             <div className="mb-4">
-              <DeviceLinkPanel fixtureId={fixture.id} scorerLabel={sport.scorerLabel} embedded />
+              <DeviceLinkPanel
+                fixtureId={fixture.id}
+                scorerLabel={sport.scorerLabel}
+                embedded
+                viewerPlan={viewerPlan}
+              />
             </div>
           )}
 

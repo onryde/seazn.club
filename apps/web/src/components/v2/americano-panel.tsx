@@ -9,6 +9,7 @@ import { useCallback, useEffect, useState } from "react";
 import { apiV1, ApiV1Error } from "@/lib/client-v1";
 import { UpgradeGate } from "@/components/upgrade-gate";
 import { useMsg } from "@/components/i18n/dict-provider";
+import type { ViewerPlan } from "@/lib/viewer-plan";
 
 interface Team {
   entrant_id: string;
@@ -39,7 +40,15 @@ interface View {
   leaderboard: Leader[];
 }
 
-export function AmericanoPanel({ stageId, canEdit }: { stageId: string; canEdit: boolean }) {
+export function AmericanoPanel({
+  stageId,
+  canEdit,
+  viewerPlan,
+}: {
+  stageId: string;
+  canEdit: boolean;
+  viewerPlan: ViewerPlan;
+}) {
   const msg = useMsg();
   const [view, setView] = useState<View | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -63,7 +72,7 @@ export function AmericanoPanel({ stageId, canEdit }: { stageId: string; canEdit:
     return () => clearTimeout(t);
   }, [load]);
 
-  if (paywall) return <UpgradeGate feature={paywall} />;
+  if (paywall) return <UpgradeGate feature={paywall} viewerPlan={viewerPlan} />;
   if (error) return <p className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-600">{error}</p>;
   if (!view) return <p className="text-sm text-slate-500">{msg("americano.loading")}</p>;
 

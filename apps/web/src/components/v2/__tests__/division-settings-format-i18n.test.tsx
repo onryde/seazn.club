@@ -101,6 +101,7 @@ function mount() {
     entrantModelSource: "sport",
     autoPosts: false,
     canAutoPost: false,
+    viewerPlan: "community",
   });
 }
 

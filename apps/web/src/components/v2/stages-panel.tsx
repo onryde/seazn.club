@@ -11,6 +11,7 @@ import { useRouter } from "next/navigation";
 import { routes } from "@/lib/routes";
 import { apiV1, ApiV1Error } from "@/lib/client-v1";
 import { UpgradeGate } from "@/components/upgrade-gate";
+import type { ViewerPlan } from "@/lib/viewer-plan";
 import { useConfirm } from "@/components/ui/confirm-provider";
 import { TipCallout } from "@/components/ui/tip";
 import { useLocaleOrDefault, useMsg } from "@/components/i18n/dict-provider";
@@ -232,6 +233,7 @@ interface Props {
    *  it. The fallback is `DEFAULT_MATCH_MINUTES`, the schema's own default
    *  pinned by `division-phase.test.ts`, never a number typed in here. */
   matchMinutes?: number;
+  viewerPlan: ViewerPlan;
 }
 
 // PROMPT-66: stage kinds that accept an ad-hoc match (standings fold every
@@ -443,7 +445,7 @@ export function capacityRequestForStage(
 }
 
 
-export function StagesPanel({ divisionId, divisionSeq, competitionId, orgSlug, compSlug, divSlug, stages, fixtures, entrantNames, venues = [], rosterDrift = {}, canEdit, tz, orgTz, canExport, phase, matchMinutes = DEFAULT_MATCH_MINUTES }: Props) {
+export function StagesPanel({ divisionId, divisionSeq, competitionId, orgSlug, compSlug, divSlug, stages, fixtures, entrantNames, venues = [], rosterDrift = {}, canEdit, tz, orgTz, canExport, phase, matchMinutes = DEFAULT_MATCH_MINUTES, viewerPlan }: Props) {
   const msg = useMsg();
   // Only for Intl.ListFormat in attachmentWarning below — the rebuild
   // confirm dialog joins its "this also clears …" list per locale. The
@@ -812,7 +814,7 @@ export function StagesPanel({ divisionId, divisionSeq, competitionId, orgSlug, c
           strip is the QUALIFICATION of that line. The notice counts what the
           apply wrote; only this says what the solver could not do. */}
       {lastRun && <ScheduleResultStrip metrics={lastRun.metrics} solver={lastRun.solver} />}
-      {paywallFeature && <UpgradeGate feature={paywallFeature} />}
+      {paywallFeature && <UpgradeGate feature={paywallFeature} viewerPlan={viewerPlan} />}
       {/* Precondition-not-met (amber, actionable) — never the green success
           banner: "Générer les matchs" did nothing because the entrants can't
           fill the configured groups yet, not because it was already done. */}

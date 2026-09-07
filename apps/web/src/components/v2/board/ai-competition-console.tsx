@@ -28,6 +28,7 @@
 import { useCallback, useMemo, useRef, useState } from "react";
 import { useMsg, usePlural } from "@/components/i18n/dict-provider";
 import { UpgradeGate } from "@/components/upgrade-gate";
+import type { ViewerPlan } from "@/lib/viewer-plan";
 import { PlanBadge } from "@/components/plan-badge";
 import type { Currency } from "@/lib/currency";
 import type { MessageKey } from "@/lib/messages";
@@ -1000,6 +1001,7 @@ export function AiCompetitionConsole({
   onProposalChange,
   entrantNames = {},
   courtNames = {},
+  viewerPlan,
 }: {
   competitionId: string;
   /** Every division on the board, in board order. */
@@ -1029,6 +1031,7 @@ export function AiCompetitionConsole({
   /** Court id -> venue-qualified display label — P9 review wave 1, finding 5.
    *  Threaded straight through to `JointReviewStep`; see its own doc. */
   courtNames?: Record<string, string>;
+  viewerPlan: ViewerPlan;
 }) {
   const msg = useMsg();
   const plural = usePlural();
@@ -1396,7 +1399,7 @@ export function AiCompetitionConsole({
   );
 
   const body = !aiAllowed ? (
-    <UpgradeGate feature="scheduling.ai" />
+    <UpgradeGate feature="scheduling.ai" viewerPlan={viewerPlan} />
   ) : plan ? (
     <JointReviewStep
       plan={plan}

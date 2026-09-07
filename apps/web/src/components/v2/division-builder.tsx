@@ -11,6 +11,7 @@ import { STAGE_TEMPLATES, buildTemplateStages, clampKnob, type StageDraft } from
 import { apiV1, ApiV1Error } from "@/lib/client-v1";
 import { routes } from "@/lib/routes";
 import { UpgradeGate } from "@/components/upgrade-gate";
+import type { ViewerPlan } from "@/lib/viewer-plan";
 import { doubleElimFormatReason } from "@/lib/feature-copy";
 import { venueNoun, venueLabel, pluralizeVenue } from "@/lib/venue";
 import { defaultMatchMinutes } from "@/lib/match-length";
@@ -186,6 +187,7 @@ export function DivisionBuilder({
   competitionWindow,
   constraintsAllowed = true,
   archivedSlotsExplainRefusal = false,
+  viewerPlan,
 }: {
   competitionId: string;
   orgSlug: string;
@@ -225,6 +227,7 @@ export function DivisionBuilder({
    * quota limit, which is not a question a client component can ask.
    */
   archivedSlotsExplainRefusal?: boolean;
+  viewerPlan: ViewerPlan;
 }) {
   const msg = useMsg();
   const locale = useLocale();
@@ -992,7 +995,7 @@ export function DivisionBuilder({
             // a second court in the first place; this just explains why.
             <div className="mt-2 space-y-1">
               <p className="text-xs text-slate-400">{msg("wizard.venuesProHint", { venue })}</p>
-              <UpgradeGate feature="scheduling.constraints" compact />
+              <UpgradeGate feature="scheduling.constraints" compact viewerPlan={viewerPlan} />
             </div>
           )}
         </div>
@@ -1000,7 +1003,7 @@ export function DivisionBuilder({
 
       {paywallFeature && (
         <div className="space-y-2">
-          <UpgradeGate feature={paywallFeature} reason={paywallReason} />
+          <UpgradeGate feature={paywallFeature} reason={paywallReason} viewerPlan={viewerPlan} />
           {/* The invisible cause. The gate itself says "you are at your
               division limit" and the console shows the org fewer divisions
               than that limit, because an archived-but-played one keeps its

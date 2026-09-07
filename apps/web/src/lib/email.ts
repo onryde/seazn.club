@@ -1049,9 +1049,11 @@ export interface ExtraOrgAllowanceAlertEmail {
    *  conversation, not the scope of the allowance (which is group-wide). */
   orgId: string;
   planKey: string;
-  /** The plan's own `orgs.max_owned` from plan_entitlements (pro 5 /
-   *  pro_plus 10 today) — READ, never assumed, so the copy cannot drift from
-   *  the seed. */
+  /** The plan's own `orgs.max_owned` from plan_entitlements (community 1, pro
+   *  5, enterprise unlimited as at 2026-09-07 — the `pro_plus 10` this used to
+   *  cite went with V393) — READ, never assumed, so the copy cannot drift from
+   *  the seed. The parenthetical is an illustration and the only reason it can
+   *  go stale without breaking anything is that nothing reads it. */
   baseCap: number;
   extraOrgs: number;
   previousExtraOrgs: number;
@@ -1125,8 +1127,20 @@ export interface ExtraOrgRepriceFailedAlertEmail {
 /**
  * Internal staff alert (v17 gap #293, Task 4b): the webhook could not move an
  * extra-organisation rider onto the price its group's CURRENT plan charges, so
- * that group is billing the WRONG RATE — $9 on a Pro Plus plan (the arbitrage
- * the two rates exist to close) or $19 on Pro (an overcharge).
+ * that group is billing a rate its plan does not charge.
+ *
+ * This used to describe a TIER ARBITRAGE — "$9 on a Pro Plus plan, or $19 on
+ * Pro" — and entitlements v18 (V393) retired `pro_plus`, leaving one
+ * purchasable plan and therefore one rider rate. The fault it reports is
+ * unchanged and no less expensive; what changed is why it costs money. A stuck
+ * rider is now simply a STALE PRICE: the group keeps paying whatever the old
+ * price says, in either direction, for as long as nobody looks.
+ *
+ * No amount is quoted here any more, and that is deliberate rather than a
+ * shortcut. The alert has no currency in scope, so any figure would be right
+ * for one reader and wrong for the rest — and the two price IDs the panel
+ * already carries (`price now` / `price expected`) are what a triage actually
+ * opens Stripe with. A number would have been decoration that could rot.
  *
  * This alert exists because the convergence has no other backstop. It is driven
  * only by `customer.subscription.updated`, so a group that never changes plan
@@ -1143,9 +1157,9 @@ export async function sendExtraOrgRepriceFailedAlertEmail(
   const subject = `Extra-org rider stuck on the wrong price (group ${opts.subscriptionId})`;
   const bodyText =
     `The extra-organisation add-on for a ${opts.planKey} billing group could not be moved onto that ` +
-    `plan's rider price, so the group is being billed at the WRONG RATE until someone acts. The two ` +
-    `rates ($9 Pro / $19 Pro Plus) are load-bearing: left on the Pro price, a Pro Plus group undercuts ` +
-    `the tier ladder; left on the Pro Plus price, a Pro group is overcharged. Reason: ${opts.reason}. ` +
+    `plan's rider price, so the group is being billed at a rate its plan does not charge until ` +
+    `someone acts. Compare "price now" against "price expected" below — those two ids are the whole ` +
+    `fault, and nothing re-converges this group on its own. Reason: ${opts.reason}. ` +
     `Fix it in the Stripe Dashboard by changing the item's price (restate the quantity — Stripe resets ` +
     `it to 1 on a price change), or re-run stripe:sync if the catalog is the problem and then touch the ` +
     `subscription so a fresh customer.subscription.updated re-converges it. Nothing retries this on its ` +

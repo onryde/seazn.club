@@ -123,8 +123,19 @@ const DATA: MatrixData = {
     event_pass_l: cell(4),
     pro: cell(2),
   },
-  // V393: the pass now lifts player stats too. Community stays denied.
+  // W3-A (2026-09-06, V399): the per-division RECORD is free on every plan —
+  // community caught up. Kept in the fixture (an all-true row still renders,
+  // same precedent as formats.double_elim) rather than dropped.
   "stats.player": {
+    community: cell(null, true),
+    event_pass: cell(null, true),
+    event_pass_l: cell(null, true),
+    pro: cell(null, true),
+  },
+  // W3-A: the NEW key for the split-off leverage half — the cross-division
+  // CAREER ROLLUP. Carries forward exactly the cells `stats.player` held
+  // before the split (V393: the pass lifts it, community stays denied).
+  "stats.player.career": {
     community: cell(null, false),
     event_pass: cell(null, true),
     event_pass_l: cell(null, true),
@@ -158,6 +169,16 @@ const DATA: MatrixData = {
     // largest matchday squad (football 11 + 12 bench, icehockey 6 + 17).
     community: cell(23, true),
     pro: cell(40, true),
+  },
+  // W3 fix round 2, item 3: the one row where every purchasable-plan cell is
+  // dashed. Values mirror the live matrix exactly (checked directly against
+  // `entw3`'s plan_entitlements, 2026-09-06): denied on every self-serve plan,
+  // granted only on enterprise, which is why it earns the routing note below
+  // rather than reading as a flat "no" with nowhere to send the reader.
+  "api.write": {
+    community: cell(null, false),
+    pro: cell(null, false),
+    enterprise: cell(null, true),
   },
 };
 
@@ -367,6 +388,14 @@ describe("buildPricingSections — the /pricing pivot", () => {
     }
   });
 
+  // W3 fix round 2, item 6 (controller extension): the fees row must disclose
+  // that our cut is ADDITIVE — V398 made the percentage pure margin, so the
+  // club's connected account also pays Stripe's own processing on top. Same
+  // noteKey mechanism `orgsRow` already uses, not a second facility.
+  it("carries the additive-fee disclosure note on the fees row", () => {
+    expect(row("pricing.matrix.fees").noteKey).toBe("pricing.matrix.fees.note");
+  });
+
   // dashboard.player_profiles is a row the Event Pass lifts that /pricing used
   // to omit entirely (classed as vestigial — see the banned-list test below);
   // it is a live gate, so the matrix has to price it. The AI run cap row that
@@ -379,14 +408,28 @@ describe("buildPricingSections — the /pricing pivot", () => {
   // went paid — so the two rows now read identically and both sell the pass,
   // which is the third state this case has held and the reason it is written
   // as two explicit expectations rather than a shared one.
-  it("renders profiles and player stats both as pass-lifted", () => {
+  it("renders profiles and the career rollup both as pass-lifted", () => {
+    // W3-A (2026-09-06): `stats.player` (the per-division record) left the
+    // pass-lifted pair here — it is free on every plan now, so the story this
+    // case was built to tell moved onto `stats.player.career`, its split-off
+    // leverage half. `dashboard.player_profiles` is unchanged.
     expect(cells("pricing.matrix.dashboard.player_profiles")).toMatchObject({
       community: "—",
       event_pass: "✓",
       pro: "✓",
     });
-    expect(cells("pricing.matrix.stats.player")).toMatchObject({
+    expect(cells("pricing.matrix.stats.player.career")).toMatchObject({
       community: "—",
+      event_pass: "✓",
+      pro: "✓",
+    });
+  });
+
+  // W3-A: the sibling of the case above. `stats.player` (the RECORD) is now
+  // included on every plan, community included — the split's whole point.
+  it("renders the player-stats record as included on every plan (W3-A)", () => {
+    expect(cells("pricing.matrix.stats.player")).toMatchObject({
+      community: "✓",
       event_pass: "✓",
       pro: "✓",
     });
@@ -413,6 +456,74 @@ describe("buildPricingSections — the /pricing pivot", () => {
     for (const key of banned) {
       expect(labelKeys.some((lk) => lk.includes(key))).toBe(false);
     }
+  });
+});
+
+// W3 fix round 2, item 3: "Write API access" is the one row of 56 where every
+// purchasable-plan cell reads "—" — the single self-serve-unreachable feature
+// (design §4: only `api.write` qualifies). It reads as a flat "no" with no
+// hint that anyone can get it. DERIVED from the matrix — a row qualifies when
+// every PRICING_PLAN_KEYS plan denies it AND enterprise grants it — never a
+// hardcoded "api.write" check, so a key becoming (or ceasing to be)
+// enterprise-only later moves the treatment with it automatically.
+describe("enterprise-only rows get a routing note, derived from the matrix (W3 fix round 2)", () => {
+  it("api.write — denied everywhere purchasable, granted only on enterprise — carries the note", () => {
+    const rows = buildPricingSections(DATA).flatMap((s) => s.rows);
+    const apiWrite = rows.find((r) => r.labelKey === "pricing.matrix.api.write")!;
+    expect(apiWrite, "the row must exist").toBeTruthy();
+    // The premise, read from the fixture rather than assumed.
+    for (const plan of PRICING_PLAN_KEYS) expect(apiWrite.cells[plan], plan).toBe("—");
+    expect(apiWrite.noteKey).toBe("pricing.matrix.enterpriseOnly.note");
+  });
+
+  it("does not tag a row enterprise-only just because it is enterprise-only AND some plan also grants it", () => {
+    // A row every self-serve plan denies but ALSO enterprise denies is a plain
+    // "no", not a routing opportunity — no plan sells it. A row where a
+    // purchasable plan already grants it is reachable by buying, so it must
+    // not print a Contact-us note either.
+    const data: MatrixData = {
+      "api.write": {
+        community: { bool_value: false, int_value: null },
+        // Now Pro grants it too — reachable without Enterprise.
+        event_pass: { bool_value: false, int_value: null },
+        pro: { bool_value: true, int_value: null },
+        enterprise: { bool_value: true, int_value: null },
+      },
+    };
+    const row = buildPricingSections(data)
+      .flatMap((s) => s.rows)
+      .find((r) => r.labelKey === "pricing.matrix.api.write")!;
+    expect(row.noteKey).toBeUndefined();
+  });
+
+  it("does not tag a row nobody grants at all — enterprise denies it too", () => {
+    const data: MatrixData = {
+      "api.write": {
+        community: { bool_value: false, int_value: null },
+        pro: { bool_value: false, int_value: null },
+        enterprise: { bool_value: false, int_value: null },
+      },
+    };
+    const row = buildPricingSections(data)
+      .flatMap((s) => s.rows)
+      .find((r) => r.labelKey === "pricing.matrix.api.write")!;
+    expect(row.noteKey).toBeUndefined();
+  });
+
+  it("is exactly one row of the whole table — not a blanket treatment", () => {
+    const rows = buildPricingSections(DATA).flatMap((s) => s.rows);
+    const noted = rows.filter((r) => r.noteKey === "pricing.matrix.enterpriseOnly.note");
+    expect(noted.map((r) => r.labelKey)).toEqual(["pricing.matrix.api.write"]);
+  });
+
+  it("leaves the orgs.max_owned and fees rows' own notes untouched", () => {
+    const rows = buildPricingSections(DATA).flatMap((s) => s.rows);
+    expect(rows.find((r) => r.labelKey === "pricing.matrix.orgs.max_owned")?.noteKey).toBe(
+      "pricing.matrix.orgs.max_owned.note",
+    );
+    expect(rows.find((r) => r.labelKey === "pricing.matrix.fees")?.noteKey).toBe(
+      "pricing.matrix.fees.note",
+    );
   });
 });
 

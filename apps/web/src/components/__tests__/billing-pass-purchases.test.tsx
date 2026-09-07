@@ -12,7 +12,7 @@
 import { describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import { BillingPassPurchases } from "@/components/billing-pass-purchases";
-import { PASS_RUNG_NAME_KEY, passActiveLabel } from "@/lib/pass-ladder";
+import { heldRungName, PASS_RUNG_NAME_KEY, passActiveLabel } from "@/lib/pass-ladder";
 import { PASS_KEYS, type PassKey } from "@/lib/currency";
 import { t } from "@/lib/i18n-runtime";
 import enUi from "@/dictionaries/en/ui.json";
@@ -20,7 +20,7 @@ import type { PassPurchaseRow } from "@/server/usecases/billing-manage";
 
 // Read from the dictionary the component reads, so a copy change reaches this
 // file instead of a literal here going quietly stale.
-const NAME = (key: PassKey) => t(enUi, PASS_RUNG_NAME_KEY[key]);
+const NAME = (key: PassKey) => heldRungName(enUi, key);
 
 function row(over: Partial<PassPurchaseRow> = {}): PassPurchaseRow {
   return {
@@ -57,9 +57,25 @@ describe("BillingPassPurchases", () => {
 
   it("names the RUNG each purchase was, both ways round", () => {
     // Both arms: a list hardcoded to either rung satisfies one of them.
+    //
+    // `NAME` now goes through `heldRungName`, not the raw `PASS_RUNG_NAME_KEY`.
+    // A held rung is named only when it is NOT the single rung on sale, so an
+    // L receipt still reads "Event Pass L" (that is v17 #294 — a $44.99 buyer
+    // must not read their purchase as the $11.99 product) while an M receipt
+    // reads plain "Event Pass", matching what the buy button offered and what
+    // Stripe's own product name for that rung has always been.
     const m = render([row({ passKey: "event_pass" })]);
     expect(m).toContain(NAME("event_pass"));
     expect(m).not.toContain(NAME("event_pass_l"));
+    // …and the M row carries no size letter. `toContain("Event Pass")` above is
+    // satisfied by "Event Pass M" too, so without this the assertion could not
+    // witness the letter coming back.
+    //
+    // Asserted on the COMPOSED name, never the bare letter: the size code is a
+    // single character and `not.toContain("M")` matches half the markup —
+    // class names, ids, entities. That mistake was made here first and caught
+    // by this very test failing on `expected … not to contain 'M'`.
+    expect(m).not.toContain(t(enUi, PASS_RUNG_NAME_KEY.event_pass));
 
     const l = render([row({ passKey: "event_pass_l", amountMinor: 5900 })]);
     expect(l).toContain(NAME("event_pass_l"));

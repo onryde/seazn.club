@@ -234,10 +234,15 @@ describe.skipIf(!HAS_DB)("scoring is free on every plan (R9)", () => {
   // ["cricket.player.line"], entitlement: "stats.player"}`, a FOURTH key the
   // old model gated, not three. The owner has ruled the new boundary is
   // correct: scoring is free to WRITE, player-stats ANALYSIS stays paid to
-  // READ — `player-stats.ts`'s `divisionPlayerStats`/`personStats`/
-  // `personCareerStats` still gate `stats.player` on read, untouched by this
-  // task, and V390 does not drop its `plan_entitlements` rows (verified:
-  // still 3 rows, one per plan). This pins the new WRITE-side boundary.
+  // READ — at the time, `player-stats.ts`'s `divisionPlayerStats`/
+  // `personStats`/`personCareerStats` all gated `stats.player` on read,
+  // untouched by this task, and V390 does not drop its `plan_entitlements`
+  // rows (verified: still 3 rows, one per plan). This pins the WRITE-side
+  // boundary, which W3-A (2026-09-06, V399) left alone — only the READ side
+  // moved, splitting `stats.player` so `divisionPlayerStats`/`personStats`
+  // (the per-division RECORD) are free by default too now, while
+  // `personCareerStats` (the cross-division rollup) kept the paid boundary on
+  // its own new key, `stats.player.career`.
   //
   // `cricket.player.line` is POST-decision only (`postDecisionTypes`, and its
   // own padSpec panel is literally commented "Post-match") — `pickTopBand

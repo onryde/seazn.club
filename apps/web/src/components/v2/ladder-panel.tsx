@@ -8,6 +8,7 @@ import { useRouter } from "next/navigation";
 import { apiV1, ApiV1Error } from "@/lib/client-v1";
 import { UpgradeGate } from "@/components/upgrade-gate";
 import { useMsg } from "@/components/i18n/dict-provider";
+import type { ViewerPlan } from "@/lib/viewer-plan";
 
 interface Entrant {
   id: string;
@@ -19,11 +20,13 @@ export function LadderPanel({
   order,
   entrants,
   canEdit,
+  viewerPlan,
 }: {
   stageId: string;
   order: string[]; // entrant ids, top first
   entrants: Record<string, string>; // id → display name
   canEdit: boolean;
+  viewerPlan: ViewerPlan;
 }) {
   const msg = useMsg();
   const router = useRouter();
@@ -65,7 +68,7 @@ export function LadderPanel({
 
   return (
     <div className="space-y-4">
-      {paywall && <UpgradeGate feature={paywall} />}
+      {paywall && <UpgradeGate feature={paywall} viewerPlan={viewerPlan} />}
       {error && <p className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-600">{error}</p>}
 
       <div className="card scroll-x scroll-x-fade">

@@ -35,6 +35,7 @@ const baseProps = {
   tz: "UTC",
   orgTz: "UTC",
   canExport: false,
+  viewerPlan: "community" as const,
 };
 const GHOST_DRIFT = {
   s1: { ghosts: [{ id: "e1", display_name: "Withdrawn Wendy" }], unplaced: [] },

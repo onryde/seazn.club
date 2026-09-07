@@ -78,6 +78,7 @@ interface PanelProps {
   divisionId: string;
   scheduleLocked: boolean;
   canEdit: boolean;
+  viewerPlan: "community";
 }
 
 /** Mount the real island with `rows` save points and let both fetches settle.
@@ -94,6 +95,7 @@ async function render(scheduleLocked: boolean, rows = CHECKPOINTS) {
     divisionId: "d1",
     scheduleLocked,
     canEdit: true,
+    viewerPlan: "community",
   });
   // The mount effect defers via setTimeout(0) and awaits two fetches — two
   // ticks lets both settle, the same margin the sibling suites use.

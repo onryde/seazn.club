@@ -118,6 +118,7 @@ const PROPS = {
   tz: "UTC",
   orgTz: "UTC",
   canExport: false,
+  viewerPlan: "community" as const,
 };
 
 /** Every per-stage "to schedule" badge, in stage order. */

@@ -7,6 +7,7 @@ import { useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { apiV1, ApiV1Error } from "@/lib/client-v1";
 import { UpgradeGate } from "@/components/upgrade-gate";
+import type { ViewerPlan } from "@/lib/viewer-plan";
 import { useConfirm } from "@/components/ui/confirm-provider";
 import { useMsg } from "@/components/i18n/dict-provider";
 import type { MessageKey } from "@/lib/messages";
@@ -64,10 +65,12 @@ export function OverviewTab({
   club,
   canEdit,
   storageBase,
+  viewerPlan,
 }: {
   club: ClubFull;
   canEdit: boolean;
   storageBase: string;
+  viewerPlan: ViewerPlan;
 }) {
   const msg = useMsg();
   const router = useRouter();
@@ -120,7 +123,7 @@ export function OverviewTab({
 
   return (
     <div className="space-y-5">
-      {paywall && <UpgradeGate feature={paywall} />}
+      {paywall && <UpgradeGate feature={paywall} viewerPlan={viewerPlan} />}
       {error && (
         <p role="alert" className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-600">
           {error}

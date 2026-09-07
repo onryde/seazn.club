@@ -39,7 +39,14 @@ export const ENTITLEMENT_DOMAINS: { slug: string; features: string[] }[] = [
   // recording detail is something plans differ on. It is not: every band is
   // free on every plan.
   { slug: "scoring", features: [
-    "scoring.device_links", "cricket.dls", "stats.player",
+    // W3-A (2026-09-06): `stats.player` (the per-division record) is now free
+    // on every plan — kept in this list rather than removed, same precedent
+    // as `formats.double_elim` above (an all-true row still tells the "this
+    // is included" story). `stats.player.career` is the NEW key for the
+    // leverage half split off it — the cross-division career rollup,
+    // Pro + pass — placed immediately after so the pair reads as one split
+    // rather than two unrelated rows.
+    "scoring.device_links", "cricket.dls", "stats.player", "stats.player.career",
     // The public player card that carries those stats. Grouped with the player
     // data rather than with `brand` so a reader comparing plans finds both
     // player rows together; the `dashboard.` prefix is not a domain signal

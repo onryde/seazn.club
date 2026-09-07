@@ -65,9 +65,24 @@ test.describe.serial("pro lifecycle", () => {
     // If other specs left teams in the shared org, the Add-entrant form
     // defaults to "Existing team" (and flips async once teams load, detaching
     // the fields) — pin it to the ad-hoc "New entrant" mode first.
+    //
+    // PROVE the pin stuck rather than clicking and hoping. The previous
+    // `click().catch(() => undefined)` raced the very flip the comment above
+    // describes: teams finish loading, the form switches back, and the fill
+    // below lands on a detached field. It passed alone and failed 2 of 3
+    // full-project runs — the shared org only has teams in it once earlier
+    // specs have run. Retrying the toggle until the Name box is actually
+    // there closes the race; only the PINNING is retried, never the add, so a
+    // retry can never enter the same entrant twice.
     const modeToggle = page.getByRole("button", { name: "New entrant", exact: true });
-    await modeToggle.click({ timeout: 3_000 }).catch(() => undefined);
-    await page.getByRole("textbox", { name: "Name", exact: true }).fill(PLAYERS[0]!);
+    const nameBox = page.getByRole("textbox", { name: "Name", exact: true });
+    await expect(async () => {
+      if (await modeToggle.isVisible().catch(() => false)) {
+        await modeToggle.click({ timeout: 3_000 }).catch(() => undefined);
+      }
+      await expect(nameBox).toBeVisible({ timeout: 2_000 });
+    }).toPass({ timeout: 30_000, intervals: [250, 500, 1_000, 2_000] });
+    await nameBox.fill(PLAYERS[0]!);
     await page.getByRole("button", { name: "Add entrant", exact: true }).click();
     await expect(page.getByRole("cell", { name: PLAYERS[0]! })).toBeVisible({ timeout: 20_000 });
 

@@ -214,7 +214,14 @@ import Page from "../page";
 // guard below covers every rung that exists rather than a copy of the list.
 import { HIDDEN_PASS_KEYS, PASS_KEYS, SELLABLE_PASS_KEYS } from "@/lib/currency";
 import { rungsExceedingPlan } from "@/lib/pass-vs-plan";
-import { PASS_CLOSED_REASON_KEY, PASS_LOCK_REASON_KEY } from "@/lib/pass-ladder";
+import {
+  heldRungName,
+  offeredRungName,
+  PASS_CLOSED_REASON_KEY,
+  PASS_LOCK_REASON_KEY,
+  PASS_RUNG_SIZE_KEY,
+  rungNamingRequired,
+} from "@/lib/pass-ladder";
 import { t } from "@/lib/i18n-runtime";
 import uiEn from "@/dictionaries/en/ui.json";
 
@@ -300,7 +307,29 @@ describe("not owned — the owner", () => {
     expect(offered).toEqual([...SELLABLE_PASS_KEYS]);
     expect(html).toContain(M_PRICE);
     expect(html).toContain('checked="" value="event_pass"');
-    expect(html).toContain("Buy the pass — M");
+    // The buy button names a size only while more than one is on sale
+    // (`rungNamingRequired`, the same rule /pricing's stub and this page's
+    // comparison header follow). DERIVED from SELLABLE_PASS_KEYS, never typed:
+    // the day L goes back on sale this asserts the letter is BACK rather than
+    // needing to be remembered as one more place that ruling touches.
+    //
+    // Both directions, because the one-rung arm's positive is weak on its own:
+    // "Buy the pass — M" also contains "Buy the pass", so the plain assertion
+    // passes in the very state this exists to forbid.
+    const SIZE_M = t(uiEn, PASS_RUNG_SIZE_KEY.event_pass);
+    if (rungNamingRequired(SELLABLE_PASS_KEYS.length)) {
+      expect(html).toContain(`Buy the pass — ${SIZE_M}`);
+      expect(html).toContain(`data-pass-rung-stamp="event_pass"`);
+    } else {
+      expect(html).toContain("Buy the pass");
+      expect(html).not.toContain(`Buy the pass — ${SIZE_M}`);
+      // The class stamp goes with the button's letter, and its absence needs
+      // its own probe: a mutation sweep restored the unconditional stamp and
+      // all 84 tests stayed green. Anchored on `="` per the repo's React
+      // serialisation trap, and on the ATTRIBUTE rather than the letter it
+      // prints — "M" is one character and matches half the page.
+      expect(html).not.toContain("data-pass-rung-stamp=");
+    }
     // …and the hidden rung is nowhere in the picker, by key AND by price. The
     // two prices must differ, or the price half of that claim is satisfied by
     // one number appearing twice.
@@ -317,7 +346,14 @@ describe("not owned — the owner", () => {
     expect(columns).toContain("community");
     expect(columns).toContain("pro");
     for (const sellable of SELLABLE_PASS_KEYS) expect(columns).toContain(sellable);
-    expect(html).toContain("Event Pass M");
+    // The column header follows the buy button's rule: plain "Event Pass"
+    // while one rung sells, "Event Pass M" while two do. The negative is the
+    // load-bearing half — `toContain("Event Pass")` is satisfied by
+    // "Event Pass M", so on its own it cannot witness the letter returning.
+    expect(html).toContain(offeredRungName(uiEn, "event_pass", SELLABLE_PASS_KEYS.length));
+    if (!rungNamingRequired(SELLABLE_PASS_KEYS.length)) {
+      expect(html).not.toContain(`Event Pass ${t(uiEn, PASS_RUNG_SIZE_KEY.event_pass)}`);
+    }
     // M's own figures from the fixture matrix: 10 divisions, 64 entrants.
     expect(html).toContain(">10<");
     // …and no column for a rung nobody can buy. A comparison column IS an
@@ -403,8 +439,15 @@ describe("owned", () => {
     // thing standing between an owner and a second sale for one competition.
     heldPass();
     const html = await render();
-    expect(html).toContain("Event Pass M");
+    // The HELD column, named by the hold-side rule: M is the only rung on
+    // sale, so it reads plain "Event Pass" — the letter would appear only
+    // after purchase, naming a size the buy button never showed. An L holder
+    // still gets "Event Pass L" (the case below), which is what #294 is for.
+    expect(html).toContain(heldRungName(uiEn, "event_pass"));
     expect(html).not.toContain("Event Pass L");
+    // The load-bearing negative: "Event Pass" is a prefix of "Event Pass M",
+    // so the positive above passes in both states on its own.
+    expect(html).not.toContain(`Event Pass ${t(uiEn, PASS_RUNG_SIZE_KEY.event_pass)}`);
     expect(html).not.toContain(M_PRICE);
     expect(html).not.toContain(L_PRICE);
   });

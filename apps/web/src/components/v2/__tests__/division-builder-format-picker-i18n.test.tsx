@@ -48,7 +48,13 @@ const SPORTS: SportOption[] = [
 function renderBuilder(dict: Dict, locale: Locale): string {
   return renderToStaticMarkup(
     <DictProvider dict={dict} locale={locale}>
-      <DivisionBuilder competitionId="c1" orgSlug="org" compSlug="comp" sports={SPORTS} />
+      <DivisionBuilder
+        competitionId="c1"
+        orgSlug="org"
+        compSlug="comp"
+        sports={SPORTS}
+        viewerPlan="community"
+      />
     </DictProvider>,
   );
 }

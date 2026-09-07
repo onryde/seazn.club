@@ -73,6 +73,7 @@ interface PanelProps {
   divisionId: string;
   scheduleLocked: boolean;
   canEdit: boolean;
+  viewerPlan: "community";
 }
 
 /** Mount the real island and let both mount fetches settle. `canEdit` is held
@@ -88,6 +89,7 @@ async function mount(scheduleLocked: boolean, rows = CHECKPOINTS) {
     divisionId: "d1",
     scheduleLocked,
     canEdit: true,
+    viewerPlan: "community",
   });
   const settle = async () => {
     // The mount effect defers via setTimeout(0) and awaits two fetches — two

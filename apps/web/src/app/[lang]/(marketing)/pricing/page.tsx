@@ -12,7 +12,8 @@ import {
   type MatrixData,
   type PricingPlanKey,
 } from "@/lib/pricing-matrix";
-import { lowestPricedRung, passLadderOptions, PASS_RUNG_MARKETING_KEY } from "@/lib/pass-ladder";
+import { lowestPricedRung, PASS_RUNG_MARKETING_KEY } from "@/lib/pass-ladder";
+import { PRICING_RAIL_SPORTS, pricingRailKey, PRICING_RAIL_FOOTER_KEY } from "@/lib/pricing-rail";
 import {
   FREE_CARD_BULLETS,
   PASS_CARD_BULLETS,
@@ -45,10 +46,23 @@ export const dynamic = "force-dynamic";
 
 /** Per-column cell styling. A `Record` so a plan added to PRICING_PLAN_KEYS
  *  without a tone is a compile error, not an unstyled column. Every pass rung
- *  takes the lime the Event Pass card uses — one offer, however many sizes. */
+ *  takes the lime the Event Pass card uses — one offer, however many sizes.
+ *
+ *  THE LIME IS #3f6212, not the #4d7c0f it shipped as. Measured in the browser:
+ *  #4d7c0f on the ticket's cream (#f5f0e8) is 4.40:1, against WCAG 1.4.4's 4.5
+ *  floor for normal text — the "Event Pass" eyebrow is 13px/600, which is not
+ *  large text by any reading (large needs 24px, or 18.66px bold). axe called it
+ *  a SERIOUS violation on the first e2e run this page ever had.
+ *
+ *  It failed by 0.10, and only in one place: of the 99 elements carrying this
+ *  colour, that eyebrow is the only one on the cream — every other sits on
+ *  white, where the same value scores 5.01 and passes. Darkening only the
+ *  eyebrow would have fixed the violation and left the page with two limes a
+ *  shade apart, which reads as a mistake rather than a decision, so the single
+ *  token moved instead. #3f6212 scores 6.24 on the cream and 7.08 on white. */
 const CELL_TONE: Record<PricingPlanKey, string> = {
   community: "text-slate-500",
-  event_pass: "text-[#4d7c0f]",
+  event_pass: "text-[#3f6212]",
   pro: "font-medium text-purple-700",
 };
 
@@ -57,12 +71,20 @@ const CELL_TONE: Record<PricingPlanKey, string> = {
 // carries a Contact-us strip under the table (`pricing.enterprise.*`) for
 // the above-Pro conversation; a proper FAQ entry for it is W3's redesign,
 // not restored here as a stopgap.
+// W3 fix round 2 (item 6): `platformFee` is a DEDICATED entry — the existing
+// `fees` answer only covers the rates inside "Can I charge entry fees?",
+// which nobody scans looking for the fee itself. Rendered CONDITIONALLY
+// (see `platformFeeReadable` below): its rates are interpolated live from
+// the same matrix the fee pills and comparison table read, and absence must
+// suppress the entry rather than print an unfilled `{communityFee}`
+// placeholder.
 const FAQ_KEYS = [
   "card",
   "eventPass",
   "upgraded",
   "trialEnd",
   "fees",
+  "platformFee",
   "groups",
   "currencies",
   "annual",
@@ -145,13 +167,6 @@ export default async function PricingPage({
   // (2026-09-05) it names the grant of the rung actually being offered — the
   // cheapest one on sale, the same rung the headline price quotes, so the two
   // figures on this card are about the same product.
-  //
-  // Rendered UNCONDITIONALLY, unlike the ladder below it, which is suppressed
-  // when `loadMatrix` fails soft. So this is the one credit figure a buyer is
-  // guaranteed to see, and it must be the offered rung's own — the defect it
-  // was rewritten for was M's 25 sitting beside L's price. Interpolated from
-  // `PASS_CREDIT_GRANT` rather than typed, so a repricing moves the copy with
-  // the declaration.
   const offeredRung = lowestPricedRung(
     SELLABLE_PASS_KEYS.map((key) => ({ key, amountMinor: passPrice(currency, key) })),
   );
@@ -163,36 +178,33 @@ export default async function PricingPage({
 
   const passLabel = formatMinor(passPrice(currency, "event_pass"), currency);
 
-  // The M/L ladder on the Event Pass card. Prices come from stripe-plans.json;
-  // the CAPS come from the same `matrix` the comparison table below renders
-  // from, so the card and the table can never quote different limits for the
-  // same rung (the whole reason lib/pass-ladder.ts takes caps as an argument).
-  //
-  // Rendered only when every figure is real. `loadMatrix` fails soft to `{}`
-  // when the DB is unreachable at build, and a null `int_value` legitimately
-  // means UNLIMITED — so a missing row read through `?? null` would advertise
-  // an unlimited pass. Absence must suppress the block, not embellish it.
-  //
-  // `SELLABLE_PASS_KEYS`, never `PASS_KEYS` (lib/currency.ts — owner decision
-  // 2026-09-05, the L rung off sale). Both halves matter: a rung that is off
-  // sale must not be quoted here, AND its absent matrix rows must not suppress
-  // the offer that IS on sale. Demanding caps for every rung in `PASS_KEYS`
-  // would do the second — a hidden rung losing its rows would take the live
-  // ladder down with it.
+  // The fee-percent pill Free and Pro cards both print (R14 composition —
+  // the mockup repeats this pill across every offer). Absence must suppress
+  // it, never render a hole: `feeCell`'s own "—" is a matrix-table concept,
+  // not something a marketing pill should ever say.
+  const feePercent = (plan: string): number | null | undefined =>
+    matrix["registration.fee_percent"]?.[plan]?.int_value;
+  const feePill = (plan: string): string | null => {
+    const fee = feePercent(plan);
+    return typeof fee === "number" ? t(d, "pricing.card.feePill", { fee }) : null;
+  };
+
+  // ── R14 stub slot 1: Size M — its price, caps, and one-time credit grant.
+  // Every figure read from the SAME matrix/catalogue the comparison table
+  // renders from; nothing here is typed. `divisions` must be a NUMBER (the
+  // copy reads "{divisions} divisions ×…") while `entrants` may legitimately
+  // be null (unlimited) — the same asymmetry the old M/L ladder pinned.
   const rungCap = (feature: string, plan: string): number | null | undefined =>
     matrix[feature]?.[plan]?.int_value;
-  const passLadder = SELLABLE_PASS_KEYS.every(
-    (k) =>
-      matrix["entrants.per_division.max"]?.[k] !== undefined &&
-      typeof rungCap("divisions.per_competition.max", k) === "number",
-  )
-    ? passLadderOptions(currency, {
-        event_pass: {
-          entrants: rungCap("entrants.per_division.max", "event_pass") ?? null,
-          divisions: rungCap("divisions.per_competition.max", "event_pass") ?? null,
-        },
-      })
-    : null;
+  const stubDivisions = rungCap("divisions.per_competition.max", offeredRung.key);
+  const stubEntrants = rungCap("entrants.per_division.max", offeredRung.key);
+  const stubCapsLine =
+    typeof stubDivisions === "number" && stubEntrants !== undefined
+      ? stubEntrants === null
+        ? t(d, "pricing.pass.stub.capsUnlimited", { divisions: stubDivisions })
+        : t(d, "pricing.pass.stub.caps", { divisions: stubDivisions, entrants: stubEntrants })
+      : null;
+
   // Who is reading the Event Pass column? An anonymous visitor still gets the
   // signup path; a signed-in organiser gets handed to their competition list,
   // which is the only place a pass can actually be bought. The nav on this very
@@ -202,55 +214,56 @@ export default async function PricingPage({
   const passCta = await passColumnCta().catch(() => "signup" as const);
   const proMonthly = formatMinor(proPrice("monthly", currency), currency);
 
-  // WHERE THE TWO OFFERS CROSS (lib/pricing-crossover.ts). The pass is cheaper
-  // up front and dearer per pound of entry fees, so for a competition that runs
-  // a month the two cost the same at exactly one volume — and the page never
-  // said so. Read plainly it said "the pass is cheaper", which is true only
-  // below that point and pushes volume at the ONE-TIME sku when the recurring
-  // one is what retains.
-  //
-  // Every input is live: the two prices from the same `stripe-plans.json` the
-  // cards above quote, both fee rates from the `matrix` the comparison table
-  // below renders from. The line disappears rather than misleads when a rate is
-  // unreadable or the ladder stops having a crossing at all — the same rule the
-  // M/L ladder above follows for a cap it does not have.
-  const feePercent = (plan: string): number | null | undefined =>
-    matrix["registration.fee_percent"]?.[plan]?.int_value;
+  // ── R14 stub slot 2: where Pro overtakes the Event Pass (owner-approved
+  // composition, decided this session — discharges gap #4 of 2026-09-04).
+  // The mockup's stub was a two-rung M/L comparison; L is off sale, so the
+  // second slot is this crossover instead, derived live from
+  // lib/pricing-crossover.ts. Every input is a live read (stripe-plans.json
+  // prices, `registration.fee_percent`); the line disappears rather than
+  // misleads when a rate is unreadable or the ladder has no crossing at all —
+  // the same rule the old ladder followed for a cap it did not have.
   const proFeePercent = feePercent("pro");
-  // WHICH RUNG the sentence is about is the SAME value as the rung the number
-  // is derived from, because it is read once. The line used to solve for
-  // `event_pass` and then say "this is the cheaper option" on a card that sells
-  // BOTH rungs — and it is not true of L: at 4499 against a month of Pro at
-  // 1499, L is dearer up front AND dearer per pound of entry fees, so there is
-  // no volume at which the two cross. `feeCrossoverMinor` says so itself
-  // (`null` for that shape); the sentence was simply printed beside it anyway.
-  // The entry rung is the honest subject: it is the cheapest, it is what the
-  // in-app picker pre-selects, and it is the only one the crossing exists for.
-  //
-  // Derived from `SELLABLE_PASS_KEYS` for a second reason on top of that one:
-  // a crossing solved for a rung nobody can buy is a threshold quoted against a
-  // price the checkout would refuse.
-  const crossoverRung = offeredRung;
-  const passFeePercent = feePercent(crossoverRung.key);
+  const passFeePercent = feePercent(offeredRung.key);
+  // W3 fix round 2 (item 6): the three live rates the new Platform fee FAQ
+  // entry names — read once here so the FAQ, the fee pills and the crossover
+  // comparator can never quote different numbers for the same plan.
+  const communityFeePercent = feePercent("community");
+  const platformFeeReadable =
+    typeof communityFeePercent === "number" &&
+    typeof passFeePercent === "number" &&
+    typeof proFeePercent === "number";
   const crossoverMinor = feeCrossoverMinor({
-    passMinor: crossoverRung.amountMinor,
+    passMinor: offeredRung.amountMinor,
     proMonthlyMinor: proPrice("monthly", currency),
     passFeePercent,
     proFeePercent,
   });
   const crossoverReadable = crossoverMinor === null ? 0 : readableMinor(crossoverMinor);
-  const crossoverLine =
+  // The FULL correctness-hardened sentence (pricing.pass.crossover), not a
+  // shorter paraphrase: `pricing-crossover.test.ts`'s "states its own
+  // assumption" guard exists precisely because an unscoped short line — "Pro
+  // is cheaper above {amount}" — is the wording that shipped once already and
+  // recommended the wrong offer for a season (it omits that the crossing is a
+  // ONE-MONTH crossing) and the wrong rung once after that (the card sells one
+  // rung on sale, but a bare "the pass" reads as a claim about the whole
+  // Event Pass column, which is false of the hidden L rung). Reusing this
+  // key, verbatim, in the stub rather than inventing a shorter one keeps both
+  // lessons enforced instead of reintroducing the defect they were written
+  // for. `pass-cards-i18n.test.ts` and `pricing-crossover.test.ts` both pin
+  // this key's wording; changing it here would change it there too.
+  const crossoverStubLine =
     crossoverReadable > 0
       ? t(d, "pricing.pass.crossover", {
           amount: formatMinor(crossoverReadable, currency),
           pro: proMonthly,
-          // The rung the claim is scoped to — its ladder label and its price,
-          // the two things the list directly above the line shows it by.
-          rung: t(d, PASS_RUNG_MARKETING_KEY[crossoverRung.key]),
-          pass: formatMinor(crossoverRung.amountMinor, currency),
+          // No `rung`: the sentence no longer names the rung letter. With one
+          // sellable rung, "the M pass" printed a size that exists nowhere
+          // else on the page — the stub and the matrix column both read plain
+          // "Event Pass" — which is the confusion dropping the suffix was for.
+          pass: passLabel,
           // Non-null wherever `crossoverMinor` is: `feeCrossoverMinor` returns
-          // null unless both rates are numbers. Narrowed rather than defaulted,
-          // so a rate that went missing can never render as a rate of 0.
+          // null unless both rates are numbers. Narrowed rather than
+          // defaulted, so a rate that went missing can never render as 0%.
           proFee: proFeePercent as number,
           passFee: passFeePercent as number,
         })
@@ -267,6 +280,12 @@ export default async function PricingPage({
     pass: passLabel,
     pro: proMonthly,
     proAnnual: formatMinor(proPrice("annual", currency), currency),
+    // Read only by `pricing.faq.platformFee.a`, and only rendered when
+    // `platformFeeReadable` is true (see the FAQ_KEYS filter below) — the
+    // `?? 0` here is unreachable in practice, never a rendered "0%".
+    communityFee: communityFeePercent ?? 0,
+    passFee: passFeePercent ?? 0,
+    proFee: proFeePercent ?? 0,
   };
 
   // Most matrix cells are locale-free literals (numbers, ∞, ✓, —); only the
@@ -274,235 +293,349 @@ export default async function PricingPage({
   const cellText = (value: string): string =>
     value.startsWith("pricing.matrix.") ? t(d, value) : value;
 
+  // The pass card's CTA — one Link, reused both on the stub (always) and at
+  // the ticket's foot on phone (the phone-only repeat action, md:hidden). No
+  // repeat for `included`: there is no buy action to repeat for a paying org.
+  const passCtaLabel =
+    passCta === "console" ? t(d, "pricing.pass.ctaSignedIn") : t(d, "pricing.pass.cta");
+  const passCtaHref = passCta === "console" ? "/dashboard" : "/login?tab=signup";
+
   return (
     <>
       <TrackOnMount event={EVENTS.PRICING_VIEWED} />
       <MarketingShell lang={lang}>
         <main>
-          <section className="mx-auto max-w-5xl px-4 pb-14 pt-16 text-center">
-            <p className="mk-eyebrow mb-3 justify-center">{t(d, "pricing.eyebrow")}</p>
-            <h1 className="mk-display mb-3 text-5xl font-bold text-purple-950 sm:text-6xl">
-              {t(d, "pricing.title")}
-            </h1>
-            <p className="text-lg text-slate-600">{t(d, "pricing.subhead")}</p>
-            <div className="mt-6 flex justify-center">
-              <CurrencySwitcher current={currency} label={t(d, "pricing.currency.label")} />
+          {/* ══ Box office marquee (R14) ═══════════════════════════════════
+              A night band, matching the home page's own marquee/finale
+              sections — the eyebrow, the promise, and the sport board that
+              answers "which sports?" without an eleventh "and more" line. */}
+          <section className="relative overflow-hidden bg-[linear-gradient(180deg,var(--mk-night-2),var(--mk-night))] px-4 pb-10 pt-16 text-cream sm:pb-14 sm:pt-20">
+            <div className="mx-auto max-w-6xl">
+              <p className="mk-display mb-3 text-xs font-medium tracking-[0.22em] text-lime-400">
+                {t(d, "pricing.eyebrow")}
+              </p>
+              <h1 className="mk-display max-w-[16ch] text-4xl font-bold leading-[0.95] text-cream sm:text-6xl">
+                {t(d, "pricing.title")}
+              </h1>
+              <p className="mt-4 max-w-[56ch] text-base leading-relaxed text-[#bdb4e2] sm:text-lg">
+                {t(d, "pricing.subhead")}
+              </p>
+
+              {/* The board: ten sports in hairline-ruled slots, `generic` as
+                  the foot line rather than an eleventh sport. A wrapping
+                  ribbon at 320, 5×2 from 768, ten across from 1280 — a
+                  different DEVICE per width, not one narrowed. */}
+              <ul
+                className="pr-board mt-7 divide-x divide-y divide-[rgb(124,58,237,0.35)] overflow-hidden rounded-lg border border-[rgb(124,58,237,0.35)] bg-[#100827]"
+                data-pricing-rail
+              >
+                {PRICING_RAIL_SPORTS.map((sport) => (
+                  <li
+                    key={sport}
+                    data-rail-sport={sport}
+                    className="mk-cond px-3 py-2.5 text-[15px] leading-tight text-[#ded7f5] sm:text-sm"
+                  >
+                    {t(d, pricingRailKey(sport))}
+                  </li>
+                ))}
+                <li
+                  data-rail-footer
+                  className="col-span-full px-3 py-2 text-xs leading-snug text-[#a99ad4]"
+                >
+                  {t(d, PRICING_RAIL_FOOTER_KEY)}
+                </li>
+              </ul>
             </div>
           </section>
 
-          {/* Three offers — entitlements v18: Community / Event Pass / Pro.
-              The Pro Plus card that used to sit here is retired along with
-              the plan (V393); the above-Pro conversation is now the
-              Contact-us strip under the comparison table below, per design
-              §4 — a redesigned ticket-styled layout is W3's, this interim
-              grid just stops rendering a fourth card for a plan that no
-              longer exists. Each card still carries the two v17
-              differentiators (fee % + the credit line). Stacks on mobile,
-              3-up on desktop — no horizontal scroll at 375px. */}
-          <section className="mx-auto max-w-6xl px-4 pb-20">
-            <div className="grid gap-6 md:grid-cols-2 xl:grid-cols-3">
-              {/* Community */}
-              <div className="card flex flex-col p-8">
-                <p className="mb-1 text-xs font-semibold uppercase tracking-wider text-slate-400">
-                  {t(d, "pricing.community.name")}
-                </p>
-                <p className="mb-1 text-4xl font-bold text-slate-900">
-                  {t(d, "pricing.community.price")}
-                </p>
-                <p className="mb-4 text-sm text-slate-500">{t(d, "pricing.community.note")}</p>
-                {communityCreditsLine && (
-                  <p className="mb-4 flex items-center gap-1.5 rounded-lg bg-slate-100 px-3 py-2 text-sm font-semibold text-slate-700">
-                    <span aria-hidden>⚡</span>
-                    {communityCreditsLine}
-                  </p>
-                )}
-                <ul className="mb-8 flex-1 space-y-2.5 text-sm text-slate-600">
-                  {cardBullets(d, FREE_CARD_BULLETS, matrix).map((f) => (
-                    <li key={f} className="flex items-start gap-2">
-                      <span className="mt-0.5 text-emerald-500">✓</span>
-                      {f}
-                    </li>
-                  ))}
-                </ul>
-                <Link href="/login?tab=signup" className="btn btn-ghost w-full justify-center py-3">
-                  {t(d, "pricing.community.cta")}
-                </Link>
-              </div>
+          {/* Currency switcher — its own light strip. The component's own
+              colours assume a light background (shared with Settings →
+              Preferences), so it sits just off the night band rather than
+              inside it. */}
+          <div className="border-b border-purple-100 bg-white py-3">
+            <div className="mx-auto flex max-w-6xl justify-center px-4">
+              <CurrencySwitcher current={currency} label={t(d, "pricing.currency.label")} />
+            </div>
+          </div>
 
-              {/* Event Pass */}
-              <div className="card flex flex-col border-[#b5d977] bg-[#f7fce9] p-8">
-                <p className="mk-display mb-1 text-xs font-semibold tracking-[0.18em] text-[#4d7c0f]">
-                  {t(d, "pricing.pass.name")}
-                </p>
-                {/* "from" is a claim about a LADDER — the floor of several
-                    prices, not the price. It renders only while more than one
-                    rung is on sale (owner decision 2026-09-05 took the L rung
-                    off sale). Derived from the authority rather than deleted,
-                    so putting L back restores the word with no copy change and
-                    no re-translation; and a single price introduced beside a
-                    "from" would tell a buyer there is a bigger, dearer size
-                    they cannot actually reach. */}
-                <p className="mb-1 text-4xl font-bold text-slate-900">
-                  {SELLABLE_PASS_KEYS.length > 1 && (
-                    <span className="mr-1.5 align-middle text-sm font-semibold uppercase tracking-wider text-slate-400">
-                      {t(d, "pricing.pass.from")}
-                    </span>
-                  )}
-                  {passLabel}
-                  <span className="text-lg font-normal text-slate-500">
-                    {t(d, "pricing.pass.per")}
-                  </span>
-                </p>
-                <p className="mb-4 text-sm text-slate-500">{t(d, "pricing.pass.note")}</p>
-                {/* The ladder, led by the entrant/division difference — the
-                    only thing that differs between the rungs — in the same
-                    order and shape as the in-app picker (spec A7). No "best
-                    value" badge and no multiplier claim: L/M is 2.03× in USD
-                    but 1.96× in GBP, so any "double" framing is false
-                    somewhere. */}
-                {passLadder && (
-                  <ul className="mb-4 space-y-1.5" data-pass-ladder>
-                    {passLadder.map((o) => (
-                      <li
-                        key={o.key}
-                        // The rung this row is FOR, so a test can enumerate what
-                        // the ladder rendered instead of asserting a name is
-                        // absent — an absence assertion passes just as well on a
-                        // ladder that rendered nothing at all.
-                        data-pass-rung={o.key}
-                        className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5 rounded-lg bg-white/70 px-3 py-2"
+          {/* ══ The counter (R14): a real ticket, then the two subscribe-or-
+              not offers, then the enterprise strip — all on one night band,
+              matching the marquee above. ══ */}
+          <section className="bg-[linear-gradient(180deg,var(--mk-night),var(--mk-night-2))] px-4 pb-16 pt-12 sm:pt-14">
+            <div className="mx-auto max-w-6xl">
+              {/* ══ EVENT PASS — the hero: a real ticket with a tear-off stub.
+                  Portrait at 320 (stub across the top, tear horizontal),
+                  landscape from 768 (stub down the right, tear vertical) —
+                  one DOM, branched by `.pr-pass`'s CSS grid. ══ */}
+              <article className="relative mb-8 min-w-0 overflow-hidden rounded-2xl bg-cream text-night shadow-[0_0_0_1px_rgba(163,230,53,0.35),0_26px_70px_-28px_rgba(163,230,53,0.55),0_10px_40px_-20px_rgba(124,58,237,0.7)] sm:mb-10">
+                <div className="pr-pass">
+                  {/* head — the promise, above the stub on phone, top of the
+                      left column on desktop. */}
+                  <div className="pr-pass-head min-w-0 px-6 pb-5 pt-7 sm:px-8 md:pb-0 md:pt-9">
+                    <p className="mk-display mb-2 text-[13px] font-semibold tracking-[0.26em] text-[#3f6212]">
+                      {t(d, "pricing.pass.name")}
+                    </p>
+                    <p className="max-w-[48ch] text-[0.9375rem] leading-snug text-[#5a4b78]">
+                      {t(d, "pricing.pass.note")}
+                    </p>
+                  </div>
+
+                  {/* the lit tear-off stub: serial, ADMIT ONE, the M rung and
+                      the pass/Pro crossover, and the buy action. */}
+                  <div
+                    className="pr-pass-stub relative min-w-0 bg-[linear-gradient(158deg,var(--mk-night-2),var(--mk-night))] px-6 pb-7 pt-5 text-cream sm:px-7 md:pr-12 md:pt-8"
+                    data-pass-stub
+                  >
+                    <p
+                      aria-hidden
+                      className="mk-cond mb-4 flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 border-b border-[#3b2a6e] pb-3 text-[10.5px] tracking-[0.16em] text-[#9a8cc9] md:mb-5 md:block md:border-0 md:pb-0"
+                    >
+                      <span>№ 0001</span>
+                      <span className="md:block">ADMIT ONE COMPETITION</span>
+                    </p>
+
+                    {/* W3 fix round 2 (item 1): ALWAYS one column. With the L
+                        rung off sale, slot 2 is the crossover PARAGRAPH, not a
+                        second short price — a 2-up phone layout squeezed it
+                        into an 84px column and produced 22 wrapped lines. Two
+                        full-width row cards, stacked, at every width this stub
+                        grid renders at (phone AND the narrow desktop stub
+                        column) — never a side-by-side comparison. */}
+                    <div className="grid grid-cols-1 gap-3 md:gap-4">
+                      <div
+                        className="rounded-xl border border-[#3b2a6e] bg-black/25 px-3.5 py-3"
+                        data-pass-stub-slot="m"
                       >
-                        <span className="min-w-4 text-sm font-bold text-[#4d7c0f]">
-                          {t(d, PASS_RUNG_MARKETING_KEY[o.key])}
-                        </span>
-                        <span className="text-sm font-semibold text-slate-900">
-                          {formatMinor(o.amountMinor, currency)}
-                        </span>
-                        {/* Always its own line. `sm:` is a VIEWPORT breakpoint,
-                            not a container one, so letting this sit inline on a
-                            wide screen still wraps it mid-phrase inside a card
-                            this narrow ("128 entrants / each"). */}
-                        <span className="basis-full text-xs text-slate-500">
-                          {o.entrants === null
-                            ? t(d, "pricing.pass.ladder.capsUnlimited", {
-                                divisions: o.divisions ?? "",
-                              })
-                            : t(d, "pricing.pass.ladder.caps", {
-                                divisions: o.divisions ?? "",
-                                entrants: o.entrants,
-                              })}
-                        </span>
+                        <p className="mk-cond text-[12.5px] font-semibold tracking-[0.22em] text-lime-400">
+                          {t(d, "pricing.pass.stub.label")}
+                        </p>
+                        {/* W3 fix round 2 (item 1): `whitespace-nowrap` keeps
+                            the price and its "/ event" qualifier on one
+                            line — it used to orphan onto its own line two
+                            lines below the number. */}
+                        <p
+                          data-pass-price
+                          className="mk-cond mt-0.5 whitespace-nowrap text-[2.25rem] font-bold leading-[0.95] text-cream"
+                        >
+                          {passLabel}
+                          <span className="text-sm font-normal text-[#bdb4e2]">
+                            {t(d, "pricing.pass.per")}
+                          </span>
+                        </p>
+                        {stubCapsLine && (
+                          <p className="mt-1.5 text-[0.78rem] leading-snug text-[#bdb4e2]">
+                            {stubCapsLine}
+                          </p>
+                        )}
+                        <p className="mt-1 text-[0.78rem] leading-snug text-lime-300">
+                          {passCreditsLine}
+                        </p>
+                      </div>
+
+                      {crossoverStubLine && (
+                        // Named like its sibling above so the row-card layout
+                        // is assertable as a RELATIONSHIP between the two
+                        // slots. `data-pass-crossover` is the paragraph
+                        // INSIDE this box and sits 15px in on each side, so a
+                        // test comparing it to the price SLOT measures padding
+                        // and calls it a layout change.
+                        <div
+                          data-pass-stub-slot="crossover"
+                          className="rounded-xl border border-[#3b2a6e] bg-black/25 px-3.5 py-3"
+                        >
+                          <p className="mk-cond text-[12.5px] font-semibold tracking-[0.22em] text-lime-400">
+                            {t(d, "pricing.table.pro")}
+                          </p>
+                          <p
+                            data-pass-crossover
+                            className="mt-1.5 text-[0.78rem] leading-snug text-[#bdb4e2]"
+                          >
+                            {crossoverStubLine}
+                          </p>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Three readers, three honest endings (task 19, spec D3).
+                        `included` is not a disabled button: a paying customer
+                        is not being refused, the offer simply does not apply —
+                        Pro already exceeds every key the pass lifts. */}
+                    {passCta === "included" ? (
+                      <p
+                        data-pass-column-cta="included"
+                        className="mt-5 rounded-lg bg-white/10 px-4 py-3 text-center text-sm font-medium text-lime-300"
+                      >
+                        {t(d, "pricing.pass.included")}
+                      </p>
+                    ) : (
+                      <Link
+                        href={passCtaHref}
+                        data-pass-column-cta={passCta}
+                        className="mk-display mt-5 block w-full rounded-lg bg-lime-400 px-4 py-4 text-center text-[15px] font-bold tracking-[0.1em] text-night transition hover:bg-lime-300 md:py-3.5"
+                      >
+                        {passCtaLabel}
+                      </Link>
+                    )}
+                  </div>
+
+                  <div className="pr-pass-seam pr-seam" aria-hidden />
+
+                  {/* body — the bullets, and (phone only) the buy action
+                      repeated at the thumb. */}
+                  <div className="pr-pass-body flex min-w-0 flex-col px-6 pb-8 pt-7 sm:px-8 md:pb-9 md:pt-6">
+                    {/* `content-start` because `flex-1` stretches this grid to
+                        the height of the tall stub column beside it, and a
+                        grid's default align-content distributes that slack
+                        BETWEEN the rows: seven one-line bullets were rendering
+                        with 137px gaps where gap-y-3 asks for 10. The slack
+                        now collects at the foot of the column instead. */}
+                    <ul className="grid flex-1 content-start gap-x-7 gap-y-3 text-[0.95rem] leading-snug text-[#463a60] sm:grid-cols-2 sm:gap-y-2.5 sm:text-[0.9rem] lg:grid-cols-3">
+                      {cardBullets(d, PASS_CARD_BULLETS, matrix).map((f) => (
+                        <li key={f} className="flex gap-2.5">
+                          <span aria-hidden className="mt-[3px] shrink-0 text-[#3f6212]">
+                            ✓
+                          </span>
+                          {f}
+                        </li>
+                      ))}
+                    </ul>
+
+                    {/* The mobile ticket is a screen and a half tall; the buy
+                        action repeats where the thumb already is. Pointless
+                        at desktop, where the stub button never leaves the
+                        screen — hence md:hidden. No repeat for `included`,
+                        which has no buy action to repeat. */}
+                    {passCta !== "included" && (
+                      <Link
+                        href={passCtaHref}
+                        data-pass-cta-repeat={passCta}
+                        className="mk-display mt-6 block w-full rounded-lg bg-lime-400 px-4 py-4 text-center text-[15px] font-bold tracking-[0.1em] text-night transition hover:bg-lime-300 md:hidden"
+                      >
+                        {passCtaLabel}
+                      </Link>
+                    )}
+                  </div>
+                </div>
+              </article>
+
+              {/* ══ The two subscriptions-or-nothing offers, quieter ═══════ */}
+              <div className="grid gap-6 md:grid-cols-2">
+                {/* Community — a torn counterfoil, cream on the night band. */}
+                <div className="card pr-tear-top flex flex-col p-8 pt-9">
+                  {/* slate-500, not slate-400. #94a3b8 on white is 2.85:1 and
+                      this label is 12px/600 — nowhere near large text — so axe
+                      called it a SERIOUS contrast violation on the first e2e
+                      run this page ever had. slate-500 measures 4.76:1 and
+                      stays the muted eyebrow the accordion wants; slate-600
+                      (7.58:1) reads as a heading and competes with the plan
+                      name underneath it. */}
+                  <p className="mb-1 text-xs font-semibold uppercase tracking-wider text-slate-500">
+                    {t(d, "pricing.community.name")}
+                  </p>
+                  <p className="mb-1 text-4xl font-bold text-slate-900">
+                    {t(d, "pricing.community.price")}
+                  </p>
+                  <p className="mb-4 text-sm text-slate-500">{t(d, "pricing.community.note")}</p>
+                  {communityCreditsLine && (
+                    <p className="mb-4 flex items-center gap-1.5 rounded-lg bg-slate-100 px-3 py-2 text-sm font-semibold text-slate-700">
+                      <span aria-hidden>⚡</span>
+                      {communityCreditsLine}
+                    </p>
+                  )}
+                  <ul className="mb-6 flex-1 space-y-2.5 text-sm text-slate-600">
+                    {cardBullets(d, FREE_CARD_BULLETS, matrix).map((f) => (
+                      <li key={f} className="flex items-start gap-2">
+                        <span className="mt-0.5 text-emerald-500">✓</span>
+                        {f}
                       </li>
                     ))}
                   </ul>
-                )}
-                <p className="mb-4 flex items-center gap-1.5 rounded-lg bg-[#eaf6cf] px-3 py-2 text-sm font-semibold text-[#4d7c0f]">
-                  <span aria-hidden>⚡</span>
-                  {passCreditsLine}
-                </p>
-                {/* "the same platform fee EITHER WAY … CHOOSE YOUR SIZE when
-                    you check out" — every clause is about a choice between two
-                    sizes, and there is one size on sale. Suppressed by the rung
-                    count for the same reason the "from" prefix above is: the
-                    sentence is correct again the moment a second rung is, with
-                    no copy edit in any of the four locales. */}
-                {passLadder && SELLABLE_PASS_KEYS.length > 1 && (
-                  <p className="mb-4 text-xs text-slate-500">{t(d, "pricing.pass.ladderNote")}</p>
-                )}
-                {/* The comparator, on the pass card rather than beside Pro:
-                    this is where the buyer is choosing, and the mis-sale this
-                    prevents is choosing the pass for a competition big enough
-                    that Pro is cheaper. */}
-                {crossoverLine && (
-                  <p className="mb-4 text-xs text-slate-500" data-pass-crossover>
-                    {crossoverLine}
-                  </p>
-                )}
-                <ul className="mb-8 flex-1 space-y-2.5 text-sm text-slate-600">
-                  {cardBullets(d, PASS_CARD_BULLETS, matrix).map((f) => (
-                    <li key={f} className="flex items-start gap-2">
-                      <span className="mt-0.5 text-[#4d7c0f]">✓</span>
-                      {f}
-                    </li>
-                  ))}
-                </ul>
-                {/* Three readers, three honest endings (task 19, spec D3).
-                    `included` is not a disabled button: a paying customer is
-                    not being refused, the offer simply does not apply to
-                    them — Pro already exceeds every key the pass lifts. */}
-                {passCta === "included" ? (
-                  <p
-                    data-pass-column-cta="included"
-                    className="rounded-xl bg-white/70 px-4 py-3 text-center text-sm font-medium text-[#4d7c0f]"
-                  >
-                    {t(d, "pricing.pass.included")}
-                  </p>
-                ) : (
-                  <Link
-                    href={passCta === "console" ? "/dashboard" : "/login?tab=signup"}
-                    data-pass-column-cta={passCta}
-                    className="btn btn-ghost w-full justify-center border-amber-300 py-3 hover:bg-amber-100"
-                  >
-                    {passCta === "console"
-                      ? t(d, "pricing.pass.ctaSignedIn")
-                      : t(d, "pricing.pass.cta")}
+                  {feePill("community") && (
+                    <p
+                      data-community-fee-pill
+                      className="mb-5 inline-flex w-fit items-baseline gap-1 whitespace-nowrap rounded border border-slate-200 px-2.5 py-1.5 text-[11px] font-semibold tracking-[0.08em] text-slate-500"
+                    >
+                      {feePill("community")}
+                    </p>
+                  )}
+                  <Link href="/login?tab=signup" className="btn btn-ghost w-full justify-center py-3">
+                    {t(d, "pricing.community.cta")}
                   </Link>
-                )}
+                </div>
+
+                {/* Pro — annual toggle default-on */}
+                <ProPriceCard
+                  monthly={proMonthly}
+                  annualPerMonth={formatMinor(Math.round(proPrice("annual", currency) / 12), currency)}
+                  features={cardBullets(d, PRO_CARD_BULLETS, matrix)}
+                  creditsLine={proCreditsLine ?? undefined}
+                  feeLine={feePill("pro") ?? undefined}
+                  // Every string the card paints, resolved HERE. The component
+                  // carries no copy and no English fallback — see
+                  // components/pro-price-card.tsx and the source scan in
+                  // lib/__tests__/pricing-card-i18n.test.ts.
+                  labels={{
+                    // `pricing.table.pro`, NOT a `pricing.pro.name` — there is
+                    // no such key. Community and the pass have `.name`; the Pro
+                    // column's label has only ever lived on the comparison
+                    // table's key, which is what `ticketTiers` reads for the home
+                    // stub too (lib/pricing-cards.ts).
+                    tier: t(d, "pricing.table.pro"),
+                    perMonth: t(d, "pricing.pro.per"),
+                    annualBilled: t(d, "pricing.pro.annualBilled", {
+                      total: formatMinor(proPrice("annual", currency), currency),
+                    }),
+                    annualSaving: t(d, "pricing.pro.annualSaving"),
+                    monthlyNote: t(d, "pricing.pro.monthlyNote"),
+                    annualToggle: t(d, "pricing.pro.annualToggle"),
+                    // W3: the retired `pricing.plus.cta` key. Pro's own CTA now
+                    // has its own name — the last of the `pricing.plus.*` family
+                    // was pruned in the same commit that stopped reading it.
+                    cta: t(d, "pricing.pro.cta"),
+                  }}
+                />
               </div>
 
-              {/* Pro — annual toggle default-on */}
-              <ProPriceCard
-                monthly={proMonthly}
-                annualPerMonth={formatMinor(Math.round(proPrice("annual", currency) / 12), currency)}
-                features={cardBullets(d, PRO_CARD_BULLETS, matrix)}
-                creditsLine={proCreditsLine ?? undefined}
-                // Every string the card paints, resolved HERE. The component
-                // carries no copy and no English fallback — see
-                // components/pro-price-card.tsx and the source scan in
-                // lib/__tests__/pricing-card-i18n.test.ts.
-                labels={{
-                  // `pricing.table.pro`, NOT a `pricing.pro.name` — there is
-                  // no such key. Community and the pass have `.name`; the Pro
-                  // column's label has only ever lived on the comparison
-                  // table's key, which is what `ticketTiers` reads for the home
-                  // stub too (lib/pricing-cards.ts). One authority for one
-                  // fact. Caught by driving /fr/pricing after 175 green tests:
-                  // `t()` returns the KEY when it misses, so the card painted
-                  // the literal string "pricing.pro.name" in every locale.
-                  tier: t(d, "pricing.table.pro"),
-                  perMonth: t(d, "pricing.pro.per"),
-                  // The yearly TOTAL, in the visitor's currency, interpolated
-                  // rather than typed into four locale files.
-                  annualBilled: t(d, "pricing.pro.annualBilled", {
-                    total: formatMinor(proPrice("annual", currency), currency),
-                  }),
-                  annualSaving: t(d, "pricing.pro.annualSaving"),
-                  monthlyNote: t(d, "pricing.pro.monthlyNote"),
-                  annualToggle: t(d, "pricing.pro.annualToggle"),
-                  cta: t(d, "pricing.plus.cta"),
-                }}
-              />
+              {/* ══ Enterprise — a hairline band, not a priced column ══════ */}
+              <div className="mt-10 rounded-2xl border border-[#3b2a6e] bg-[#1d1145] px-6 py-7 sm:px-8">
+                <div className="flex flex-col gap-5 lg:flex-row lg:items-center lg:justify-between">
+                  <div className="min-w-0">
+                    <h2 className="mk-display text-2xl font-bold text-cream">
+                      {t(d, "pricing.enterprise.heading")}
+                    </h2>
+                    <p className="mt-2 max-w-[60ch] text-sm leading-relaxed text-[#bdb4e2]">
+                      {t(d, "pricing.enterprise.text")}
+                    </p>
+                  </div>
+                  <a
+                    href="mailto:hello@seazn.club"
+                    className="mk-display block shrink-0 rounded-lg border-2 border-lime-400 px-6 py-3.5 text-center text-[15px] font-semibold tracking-[0.1em] text-lime-400 transition hover:bg-lime-400 hover:text-night lg:w-auto lg:py-3"
+                  >
+                    {t(d, "pricing.enterprise.link")}
+                  </a>
+                </div>
+              </div>
             </div>
+          </section>
 
+          <section className="mx-auto max-w-6xl px-4 pb-20 pt-12">
             {/* Add-ons strip (SPEC-6 A1): the recurring + one-time extras sit
                 beneath the tier ladder. Non-committal labels — the actual
                 purchase surfaces are later SPEC-6 billing tabs — so these are
                 static, not links, and never gate money. */}
-            <div className="mt-8 rounded-2xl border border-purple-100 bg-purple-50/60 px-6 py-4">
+            <div className="rounded-2xl border border-purple-100 bg-purple-50/60 px-6 py-4">
               <div className="flex flex-wrap items-center gap-x-6 gap-y-2 text-sm text-slate-600">
-                <span className="text-xs font-semibold uppercase tracking-wider text-purple-500">
+                {/* purple-600, not purple-500. #a855f7 on white is 3.40:1 and this
+                    eyebrow is 12px/600 — normal text, so the floor is 4.5.
+                    axe caught it on the pricing page's first ever e2e run,
+                    one violation behind the lime and one behind the slate:
+                    each fix uncovered the next, because the assertion prints
+                    a single node per violation. purple-600 is 5.39:1. */}
+                <span className="text-xs font-semibold uppercase tracking-wider text-purple-600">
                   {t(d, "pricing.addons.label")}
                 </span>
                 <span className="flex items-center gap-1.5">
                   <span aria-hidden>⚡</span>
-                  {/* fix round 2: this line hardcoded "$10" in all four
-                      locales while every other price on the page honours the
-                      CurrencySwitcher. The seed's cheapest pack was eur 900 /
-                      gbp 800 / inr 79900 then and is eur 900 / gbp 800 /
-                      inr 39900 now, so the literal was false in three of
-                      four currencies — #191's defect, again. The point of
-                      deriving it is that this comment can go stale and the
-                      rendered price cannot. */}
                   {t(d, "pricing.addons.credits", {
                     price: formatMinor(lowestCreditPackAmount(currency), currency),
                   })}
@@ -518,89 +651,126 @@ export default async function PricingPage({
               </div>
             </div>
 
-            {/* Feature comparison table — rendered from plan_entitlements,
-                grouped into ENTITLEMENT_DOMAINS sections. Columns come from
-                PRICING_PLAN_KEYS, the same tuple `loadPricingMatrix` selects on,
-                so a plan can never be read from the database and then have
-                nowhere to render. Wider than the card grid on purpose: the Event
-                Pass is one card and two columns, because the rungs differ in the
-                only two rows a buyer chooses between. */}
+            {/* Feature comparison — a real TABLE at ≥768 (unchanged markup —
+                same `data-pricing-matrix`, same `data-pricing-column={plan}`,
+                the e2e/smoke suites read those), a per-plan ACCORDION at 320
+                so a comparison table never becomes a horizontally-scrolling
+                desktop table shrunk to fit a phone. Both render from the SAME
+                `sections` — one data source, two renderers. */}
             {sections.length > 0 && (
-              <div className="scroll-x scroll-x-fade mt-12 rounded-2xl border border-purple-100 bg-white">
-                <table className="table w-full" data-pricing-matrix>
-                  <thead>
-                    <tr>
-                      <th className="py-3 text-left">{t(d, "pricing.table.feature")}</th>
-                      {PRICING_PLAN_KEYS.map((plan) => (
-                        <th
-                          key={plan}
-                          // The plan this column is FOR. `PRICING_PLAN_KEYS`
-                          // decides the set, and this is what lets a test read
-                          // the rendered set back rather than infer it from
-                          // headings — the headings are translated, the keys
-                          // are not.
-                          data-pricing-column={plan}
-                          className="py-3 text-center whitespace-nowrap"
-                        >
-                          {t(d, PRICING_COLUMN_LABEL_KEY[plan])}
-                        </th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody className="text-sm">
-                    {sections.map((section) => (
-                      <Fragment key={section.labelKey}>
-                        <tr>
-                          <td
-                            colSpan={PRICING_PLAN_KEYS.length + 1}
-                            className="bg-purple-50/60 pt-5 pb-1.5 text-xs font-semibold uppercase tracking-wider text-purple-500"
-                          >
-                            {t(d, section.labelKey)}
-                          </td>
-                        </tr>
-                        {section.rows.map((r) => (
-                          <tr key={r.labelKey}>
-                            <td className="font-medium text-slate-700">
-                              {t(d, r.labelKey)}
-                              {/* A count that is really a price gets a second
-                                  line, so the number is never read as an
-                                  allowance (billing groups, spec 2026-07-21). */}
-                              {r.noteKey && (
-                                <span className="mt-0.5 block text-xs font-normal text-slate-500">
-                                  {t(d, r.noteKey)}
-                                </span>
-                              )}
-                            </td>
-                            {/* `whitespace-nowrap` because a sixth column
-                                narrows every one of them: at 375px the folded
-                                fee cell broke across two lines as "✓" / "2%".
-                                The region already scrolls horizontally, so a
-                                cell staying on one line costs nothing and a
-                                split percentage is unreadable. */}
-                            {PRICING_PLAN_KEYS.map((plan) => (
-                              <td
-                                key={plan}
-                                className={`whitespace-nowrap text-center ${CELL_TONE[plan]}`}
-                              >
-                                {cellText(r.cells[plan])}
-                              </td>
-                            ))}
-                          </tr>
-                        ))}
-                      </Fragment>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
+              <>
+                <h2 className="sr-only">{t(d, "pricing.table.compareLabel")}</h2>
 
-            <p className="mt-6 text-center text-sm text-slate-500">
-              {t(d, "pricing.enterprise.text")}{" "}
-              <a href="mailto:hello@seazn.club" className="font-medium text-purple-700 underline">
-                {t(d, "pricing.enterprise.link")}
-              </a>
-              .
-            </p>
+                <div
+                  className="scroll-x scroll-x-fade mt-12 hidden rounded-2xl border border-purple-100 bg-white md:block"
+                  tabIndex={0}
+                  role="region"
+                  aria-label={t(d, "pricing.table.compareLabel")}
+                >
+                  <table className="table w-full" data-pricing-matrix>
+                    <thead>
+                      <tr>
+                        <th className="py-3 text-left">{t(d, "pricing.table.feature")}</th>
+                        {PRICING_PLAN_KEYS.map((plan) => (
+                          <th
+                            key={plan}
+                            data-pricing-column={plan}
+                            className="py-3 text-center whitespace-nowrap"
+                          >
+                            {t(d, PRICING_COLUMN_LABEL_KEY[plan])}
+                          </th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody className="text-sm">
+                      {sections.map((section) => (
+                        <Fragment key={section.labelKey}>
+                          <tr>
+                            <td
+                              colSpan={PRICING_PLAN_KEYS.length + 1}
+                              className="bg-purple-50/60 pt-5 pb-1.5 text-xs font-semibold uppercase tracking-wider text-purple-600"
+                            >
+                              {t(d, section.labelKey)}
+                            </td>
+                          </tr>
+                          {section.rows.map((r) => (
+                            <tr key={r.labelKey}>
+                              <td className="font-medium text-slate-700">
+                                {t(d, r.labelKey)}
+                                {r.noteKey && (
+                                  <span className="mt-0.5 block text-xs font-normal text-slate-500">
+                                    {t(d, r.noteKey)}
+                                  </span>
+                                )}
+                              </td>
+                              {PRICING_PLAN_KEYS.map((plan) => (
+                                <td
+                                  key={plan}
+                                  className={`whitespace-nowrap text-center ${CELL_TONE[plan]}`}
+                                >
+                                  {cellText(r.cells[plan])}
+                                </td>
+                              ))}
+                            </tr>
+                          ))}
+                        </Fragment>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+
+                {/* The phone accordion: one collapsible `<details>` per plan,
+                    each listing that plan's OWN values grouped by the same
+                    ENTITLEMENT_DOMAINS sections. Native disclosure — no client
+                    JS needed, so the page stays a server component. */}
+                <div className="mt-8 space-y-2 md:hidden" data-pricing-accordion>
+                  {PRICING_PLAN_KEYS.map((plan) => (
+                    <details
+                      key={plan}
+                      className="group rounded-xl border border-purple-100 bg-white px-4 py-3"
+                      data-pricing-accordion-plan={plan}
+                    >
+                      <summary className="flex cursor-pointer list-none items-center justify-between gap-3 py-1 font-semibold text-purple-900">
+                        {t(d, PRICING_COLUMN_LABEL_KEY[plan])}
+                        <span aria-hidden className="text-purple-400 transition group-open:rotate-180">
+                          ⌄
+                        </span>
+                      </summary>
+                      <div className="mt-3 space-y-4 border-t border-purple-50 pt-3">
+                        {sections.map((section) => (
+                          <div key={section.labelKey}>
+                            <p className="mb-1.5 text-[11px] font-semibold uppercase tracking-wider text-purple-400">
+                              {t(d, section.labelKey)}
+                            </p>
+                            <dl className="divide-y divide-purple-50 text-sm">
+                              {section.rows.map((r) => (
+                                <div
+                                  key={r.labelKey}
+                                  className="flex items-center justify-between gap-3 py-1.5"
+                                  data-pricing-accordion-row={r.labelKey}
+                                >
+                                  <dt className="min-w-0 text-slate-600">
+                                    {t(d, r.labelKey)}
+                                    {r.noteKey && (
+                                      <span className="mt-0.5 block text-xs font-normal text-slate-500">
+                                        {t(d, r.noteKey)}
+                                      </span>
+                                    )}
+                                  </dt>
+                                  <dd className={`shrink-0 font-medium ${CELL_TONE[plan]}`}>
+                                    {cellText(r.cells[plan])}
+                                  </dd>
+                                </div>
+                              ))}
+                            </dl>
+                          </div>
+                        ))}
+                      </div>
+                    </details>
+                  ))}
+                </div>
+              </>
+            )}
           </section>
 
           {/* FAQ */}
@@ -610,7 +780,7 @@ export default async function PricingPage({
                 {t(d, "pricing.faq.heading")}
               </h2>
               <div className="space-y-6">
-                {FAQ_KEYS.map((k) => (
+                {FAQ_KEYS.filter((k) => k !== "platformFee" || platformFeeReadable).map((k) => (
                   <div key={k} className="card p-6">
                     <h3 className="mb-2 font-semibold text-slate-800">
                       {t(d, `pricing.faq.${k}.q`)}

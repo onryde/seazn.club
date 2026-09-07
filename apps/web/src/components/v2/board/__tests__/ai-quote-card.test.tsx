@@ -447,6 +447,7 @@ const consoleProps: Parameters<typeof AiConsole>[0] = {
   fixtures: [],
   scheduleFrozen: false,
   onClose: () => {},
+  viewerPlan: "community",
 };
 
 const renderConsole = (props: Partial<Parameters<typeof AiConsole>[0]> = {}): string =>

@@ -272,12 +272,16 @@ export async function recomputePlayerStats(
 }
 
 
-/** The competition a `stats.player` gate must be resolved against.
+/** The competition a `stats.player` / `stats.player.career` gate must be
+ *  resolved against.
  *
  *  lib/entitlements.ts only consults `competition_passes` when a competition is
- *  in scope, and V393 turns `stats.player` TRUE on `event_pass`/`event_pass_l`
- *  and FALSE on `community` — so gating org-wide sold a Free org player stats
- *  with the pass and then refused them on the competition it paid for.
+ *  in scope. Historically (pre-W3-A) that mattered because V393 turned
+ *  `stats.player` TRUE on `event_pass`/`event_pass_l` and FALSE on
+ *  `community` — gating org-wide sold a Free org player stats with the pass
+ *  and then refused them on the competition it paid for. W3-A (2026-09-06)
+ *  froze `stats.player` true on every plan and moved the pass-lifted half to
+ *  `stats.player.career`, so the same reasoning now applies to THAT key.
  *
  *  Pooled `sql`, and deliberately OUTSIDE the `withTenant` callbacks below:
  *  `resolve` queries the pooled proxy, and issuing that from inside a pinned
@@ -328,7 +332,13 @@ async function personDivisionScope(
 }
 
 /**
- * Which of those divisions this org may actually read player stats for.
+ * Which of those divisions this org may actually read the per-division player
+ * stats RECORD for (`personStats`'s own caller below) — gated on
+ * `stats.player`, free on every plan since W3-A (V399). The per-competition
+ * resolution predates that freeze and is kept regardless: it is what lets an
+ * `org_entitlement_overrides` deny still be scoped to one competition, and it
+ * is what `personCareerStats`'s sibling `careerReadableDivisions` (below)
+ * needs for real, since `stats.player.career` genuinely still varies by plan.
  *
  * An Event Pass lifts ONE competition, and both person readers span
  * competitions — so neither a single org-wide answer nor `hasFeatureOnAnyPass`
@@ -344,7 +354,8 @@ async function personDivisionScope(
  * paywall is unchanged. `scope[0]` is the competition the answer is about; when
  * the person plays nowhere at all the scope is empty and the resolve falls back
  * to the org-wide answer, which is byte-for-byte the pre-fix behaviour for that
- * case (an entitled org gets an empty card, an unentitled one gets 402).
+ * case (an entitled org gets an empty card, an unentitled one — today, an org
+ * with an explicit override deny — gets 402).
  *
  * A per-competition answer is never WORSE than the org-wide one — the pass
  * overlay coalesces into the plan row rather than replacing it — so an org that
@@ -366,6 +377,37 @@ async function statsReadableDivisions(
   return scope.filter((s) => allowed.has(s.competition_id)).map((s) => s.division_id);
 }
 
+/**
+ * The CAREER ROLLUP's sibling of `statsReadableDivisions` above — identical
+ * shape, gated on `stats.player.career` instead of `stats.player` (W3-A split,
+ * V399): the per-division record is free, the cross-division rollup stays
+ * Pro + pass, on its own key so the pricing matrix can describe the two
+ * honestly rather than one row lying about the free half.
+ *
+ * NOT folded into `statsReadableDivisions` as a single function taking the
+ * feature key as a parameter. `lib/__tests__/pass-scoping-guard.test.ts`
+ * statically parses this file's AST and only recognises a STRING LITERAL as
+ * the second argument to `hasFeature`/`requireFeature` — a shared function
+ * threading the key through a variable would make BOTH call sites invisible
+ * to that guard, which is exactly the class of regression it exists to catch
+ * (a resolver call that silently drops its competition scoping). Two small
+ * literal-keyed functions, on purpose, not one parameterised one.
+ */
+async function careerReadableDivisions(
+  orgId: string,
+  scope: { division_id: string; competition_id: string }[],
+): Promise<string[]> {
+  const allowed = new Set<string>();
+  for (const competitionId of new Set(scope.map((s) => s.competition_id))) {
+    if (await hasFeature(orgId, "stats.player.career", competitionId)) allowed.add(competitionId);
+  }
+  if (allowed.size === 0) {
+    await requireFeature(orgId, "stats.player.career", scope[0]?.competition_id);
+    return [];
+  }
+  return scope.filter((s) => allowed.has(s.competition_id)).map((s) => s.division_id);
+}
+
 export interface LeaderboardRow {
   person_id: string;
   full_name: string;
@@ -377,8 +419,10 @@ export interface LeaderboardRow {
   public_profile: boolean;
 }
 
-/** GET /divisions/{id}/stats/players?metric=&sort= (Jul3/07 §6). Pro
- *  `stats.player`. Sortable by any declared metric (27 Nov). */
+/** GET /divisions/{id}/stats/players?metric=&sort= (Jul3/07 §6). `stats.player`
+ *  — free on every plan since W3-A (V399); the gate call stays so an
+ *  `org_entitlement_overrides` deny can still switch it off per organisation.
+ *  Sortable by any declared metric (27 Nov). */
 export async function divisionPlayerStats(
   auth: AuthCtx,
   divisionId: string,
@@ -584,10 +628,16 @@ export async function personCareerStats(
   auth: AuthCtx,
   personId: string,
 ): Promise<{ sports: CareerSportStats[] }> {
-  // Per competition, not org-wide — see `statsReadableDivisions`. A career
+  // Per competition, not org-wide — see `careerReadableDivisions`. A career
   // rollup spans competitions, so an Event Pass covers the part of the career
   // played inside the competition it was bought for, and no more.
-  const readable = await statsReadableDivisions(
+  //
+  // Gated on `stats.player.career` (W3-A split, V399), NOT `stats.player`:
+  // the record `personStats` reads is free on every plan now, but this
+  // cross-division rollup is the leverage half and stays Pro + pass — the
+  // whole reason the two share a route (`/persons/{id}/stats`) but not a
+  // gate.
+  const readable = await careerReadableDivisions(
     auth.orgId,
     await personDivisionScope(auth.orgId, personId),
   );
@@ -634,21 +684,37 @@ export async function personCareerStats(
 }
 
 /** Public consent-filtered leaderboard (Jul3/07 §6): names via
- *  public_person_name (minors gated, doc 06 §4.7). */
+ *  public_person_name (minors gated, doc 06 §4.7).
+ *
+ *  W3-A (2026-09-06, V399): gated on `stats.player`, same key
+ *  `divisionPlayerStats`/`personStats` read. Before this it had NO gate at
+ *  all — combined with V396 making competitions public by default, that was
+ *  a live inversion: an anonymous visitor saw a Free org's player stats while
+ *  the signed-in org got 402 on the exact same data. `stats.player` is free
+ *  on every plan by default now, so this changes nothing for the ordinary
+ *  case; what it buys is that an org's explicit `org_entitlement_overrides`
+ *  deny (the only refusal left on this key) is now honoured here too — the
+ *  public can never see MORE than the org's own signed-in read. 404, not 402:
+ *  there is no payment prompt to show an anonymous visitor, and treating a
+ *  denied leaderboard the same as a missing division tells a scraper nothing
+ *  about which case it hit. */
 export async function publicDivisionStats(
   orgSlug: string,
   competitionSlug: string,
   divisionSlug: string,
 ): Promise<{ rows: { name: string; stats: Record<string, number> }[] }> {
   const { sql } = await import("@/lib/db");
-  const [division] = await sql<{ id: string; org_id: string }[]>`
-    select d.id, d.org_id
+  const [division] = await sql<{ id: string; org_id: string; competition_id: string }[]>`
+    select d.id, d.org_id, c.id as competition_id
     from divisions d
     join competitions c on c.id = d.competition_id
     join organizations o on o.id = c.org_id
     where o.slug = ${orgSlug} and c.slug = ${competitionSlug} and d.slug = ${divisionSlug}
       and c.visibility in ('public','unlisted')`;
   if (!division) throw new HttpError(404, "division not found");
+  if (!(await hasFeature(division.org_id, "stats.player", division.competition_id))) {
+    throw new HttpError(404, "division not found");
+  }
   const refresh = await withTenant(division.org_id, async (tx) => recomputePlayerStats(tx, division.id));
   void refresh;
   const rows = await sql<{ name: string; stats: Record<string, number> }[]>`

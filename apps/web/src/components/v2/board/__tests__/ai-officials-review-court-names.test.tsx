@@ -115,6 +115,7 @@ const consoleProps: Parameters<typeof AiConsole>[0] = {
   scheduleFrozen: false,
   onClose: () => {},
   courtNames: COURT_NAMES,
+  viewerPlan: "community",
 };
 
 describe("AiConsole threads courtNames into OfficialsStep (P9 review wave 3, finding #10, hop 1)", () => {

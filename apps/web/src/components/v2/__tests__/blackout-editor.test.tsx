@@ -216,6 +216,7 @@ function panelProps(
     canEdit: over.canEdit ?? true,
     orgTz: ORG_TZ,
     venues: over.venues ?? [],
+    viewerPlan: "community" as const,
   };
 }
 
@@ -646,6 +647,7 @@ describe("settings panel — the dead-end pointer is gone", () => {
           constraintsAllowed
           venueCap="Court"
           orgTz={ORG_TZ}
+          viewerPlan="community"
         />
       </DictProvider>,
     );

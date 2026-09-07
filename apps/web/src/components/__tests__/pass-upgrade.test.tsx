@@ -43,7 +43,12 @@ import {
 // its default deps, so this is the only place a spy can sit on the real
 // production path from the click to the POST.
 import { fetchPassCheckoutClientSecret } from "@/lib/billing-checkout-client";
-import type { PassRungOption } from "@/lib/pass-ladder";
+import {
+  PASS_RUNG_SIZE_KEY,
+  rungNamingRequired,
+  type PassRungOption,
+} from "@/lib/pass-ladder";
+import { t } from "@/lib/i18n-runtime";
 import type { Dict } from "@/lib/i18n-constants";
 // The REAL dictionary, not a stub: `t()` returns the KEY on a miss, so this
 // also fails if a key the picker needs was never added to en/ui.json.
@@ -163,9 +168,34 @@ describe("PassRungLadder — the rung the button means", () => {
     expect(onSelect.mock.calls[0]![0]).toBe("event_pass_l");
   });
 
-  it("names the selected rung on the button", () => {
-    expect(ladder({ selected: "event_pass_l" }).html).toContain("Buy the pass — L");
-    expect(ladder({ selected: "event_pass" }).html).toContain("Buy the pass — M");
+  it("names NO rung on the button while one rung is on sale, whichever is selected", () => {
+    // This test used to assert "Buy the pass — L" / "Buy the pass — M". It was
+    // right while both rungs sold, and the owner's 2026-09-05 decision took the
+    // L rung off sale: `rungNamingRequired(SELLABLE_PASS_KEYS.length)` is now
+    // false, so the button names no size on any surface that SELLS one.
+    //
+    // The fixture still hands the ladder two options — the component supports
+    // them and `passLadderOptions` will produce them again the day L returns —
+    // so this is deliberately asserted against BOTH selections. The rule reads
+    // the CATALOGUE, not the option list it was handed, which is exactly the
+    // distinction a two-option fixture can hide.
+    for (const selected of ["event_pass", "event_pass_l"] as const) {
+      const { html } = ladder({ selected });
+      expect(html, selected).toContain("Buy the pass");
+      expect(html, selected).not.toContain("Buy the pass —");
+    }
+  });
+
+  it("…and the named form is still intact for the day a second rung returns", () => {
+    // Asserted on the STRING rather than through the component, because no
+    // fixture can give the component a two-rung catalogue — `SELLABLE_PASS_KEYS`
+    // is a module constant. Without this, taking the letter out of the button
+    // would also quietly retire the interpolation that puts it back, and
+    // nothing would notice until a rung went back on sale.
+    expect(rungNamingRequired(2)).toBe(true);
+    expect(t(ui as Dict, "upgrade.buyCta", { rung: t(ui as Dict, PASS_RUNG_SIZE_KEY.event_pass_l) })).toBe(
+      "Buy the pass — L",
+    );
   });
 });
 

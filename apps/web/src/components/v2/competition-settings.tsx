@@ -5,6 +5,7 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { apiV1, ApiV1Error } from "@/lib/client-v1";
 import { UpgradeGate } from "@/components/upgrade-gate";
+import type { ViewerPlan } from "@/lib/viewer-plan";
 import { BrandColorPicker } from "@/components/brand-color-picker";
 import { VisibilityPicker } from "@/components/ui/visibility-picker";
 import { Tip } from "@/components/ui/tip";
@@ -63,6 +64,7 @@ export function CompetitionSettings({
   archivedCount = 0,
   sharePath = null,
   hasYouthDivisions = false,
+  viewerPlan,
 }: {
   competition: CompetitionLite;
   /** Owning org — the description editor uploads images under it. */
@@ -83,6 +85,7 @@ export function CompetitionSettings({
   archivedPanel?: React.ReactNode;
   /** The Archived tab only shows when there is something to restore. */
   archivedCount?: number;
+  viewerPlan: ViewerPlan;
 }) {
   const msg = useMsg();
   const router = useRouter();
@@ -446,7 +449,7 @@ export function CompetitionSettings({
             </div>
           )}
 
-          {paywallFeature && <UpgradeGate feature={paywallFeature} />}
+          {paywallFeature && <UpgradeGate feature={paywallFeature} viewerPlan={viewerPlan} />}
           {error && (
             <p className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-600">{error}</p>
           )}

@@ -365,7 +365,7 @@ describe("enumeration 2: the five renderings agree on every reachable phase/atte
             scheduled_at: f.scheduledAt, venue: null, court_label: null, court_id: null, court_name: null,
             status: f.status, outcome: null,
           }))}
-          entrantNames={{ e1: "Alpha", e2: "Bravo" }} canEdit tz={TZ} orgTz={TZ} canExport={false} phase={r.phase} />,
+          entrantNames={{ e1: "Alpha", e2: "Bravo" }} canEdit tz={TZ} orgTz={TZ} canExport={false} phase={r.phase} viewerPlan="community" />,
       );
       const shown = html.includes('data-tip="division.start-locks"');
       // `stages.length > 0` is the panel's own earlier gate — with no stage

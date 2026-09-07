@@ -198,6 +198,7 @@ describe("RestFloorNote — the described set tracks the note", () => {
           constraintsAllowed
           venueCap="Court"
           orgTz={ORG_TZ}
+          viewerPlan="community"
         />
       </DictProvider>,
     );
@@ -245,6 +246,7 @@ describe("RestFloorNote — reaches both panels", () => {
           constraintsAllowed
           venueCap="Court"
           orgTz={ORG_TZ}
+          viewerPlan="community"
         />
       </DictProvider>,
     );
@@ -269,6 +271,7 @@ describe("RestFloorNote — reaches both panels", () => {
           }}
           canEdit
           orgTz={ORG_TZ}
+          viewerPlan="community"
         />
       </DictProvider>,
     );

@@ -30,7 +30,8 @@ import { listVenues } from "@/server/usecases/venues";
 import { resolveVenueTz } from "@/lib/tz";
 import { resolvePhase, type DivisionStatus } from "@/lib/division-phase";
 import { defaultMatchMinutes } from "@/server/usecases/competition-desk";
-import { hasFeature } from "@/lib/entitlements";
+import { hasFeature, orgPlanKey } from "@/lib/entitlements";
+import { viewerPlanFrom } from "@/lib/viewer-plan";
 import { listEntrantLogoUrls } from "@/server/usecases/teams";
 import { resolveModule } from "@/server/engine-db";
 import { lineupCatalogFor } from "@/server/usecases/lineup-catalog";
@@ -121,7 +122,8 @@ export default async function DivisionPage({
     (requested === "settings" && !canEdit) || (requested === "discipline" && !disciplineAvailable)
       ? defaultTab
       : (requested ?? defaultTab);
-  const [competition, stages, fixtures, entrants, scheduleSettings, canExport, venues] = await Promise.all([
+  const [competition, stages, fixtures, entrants, scheduleSettings, canExport, venues, planKey] =
+    await Promise.all([
     getCompetition(auth, division.competition_id),
     listStages(auth, id),
     listDivisionFixtures(auth, id),
@@ -136,7 +138,9 @@ export default async function DivisionPage({
     // name colliding only with an archived sibling rendered unqualified here
     // and venue-qualified on the board — the same court, two labels.
     listVenues(auth, { includeArchived: true }),
+    orgPlanKey(auth.orgId),
   ]);
+  const viewerPlan = viewerPlanFrom(planKey);
   // How long a match is assumed to last on THIS division — resolved once,
   // here, and used twice: by `resolvePhase`'s fixture shape below and by the
   // run sheet's "Needs result" filter (`StagesPanel`'s `matchMinutes` prop).
@@ -488,6 +492,7 @@ export default async function DivisionPage({
               // is about. Both are already loaded above for the tabs.
               fixtures={fixtures}
               entrantNames={entrantNames}
+              viewerPlan={viewerPlan}
             />
           </div>
         </div>
@@ -548,6 +553,7 @@ export default async function DivisionPage({
             }}
             entrantModel={entrantModel}
             suspensions={entrantSuspensions}
+            viewerPlan={viewerPlan}
           />
         )}
 
@@ -575,7 +581,7 @@ export default async function DivisionPage({
             {stages
               .filter((st) => st.kind === "americano")
               .map((st) => (
-                <AmericanoPanel key={st.id} stageId={st.id} canEdit={editable} />
+                <AmericanoPanel key={st.id} stageId={st.id} canEdit={editable} viewerPlan={viewerPlan} />
               ))}
             {stages
               .filter((st) => st.kind === "ladder")
@@ -587,6 +593,7 @@ export default async function DivisionPage({
                     order={(st.config.ladder_order as string[] | undefined) ?? []}
                     entrants={entrantNames}
                     canEdit={editable}
+                    viewerPlan={viewerPlan}
                   />
                 </div>
               ))}
@@ -630,6 +637,7 @@ export default async function DivisionPage({
               canExport={canExport}
               phase={phase}
               matchMinutes={matchMinutes}
+              viewerPlan={viewerPlan}
             />
           </>
         )}
@@ -720,6 +728,7 @@ export default async function DivisionPage({
                 ? `/shared/${orgSlug}/${compSlug}`
                 : null
             }
+            viewerPlan={viewerPlan}
           />
         )}
 
@@ -728,7 +737,7 @@ export default async function DivisionPage({
         {tab === "discipline" && canEdit && (
           <div className="max-w-3xl space-y-6">
             {disciplineGated ? (
-              <UpgradeGate feature="discipline.enforced" />
+              <UpgradeGate feature="discipline.enforced" viewerPlan={viewerPlan} />
             ) : disciplineRules ? (
               <>
                 <RulesEditor
@@ -797,11 +806,13 @@ export default async function DivisionPage({
             // Event Pass rungs, so an org-wide resolve would show a pass holder
             // a locked control on the competition they paid for.
             canAutoPost={await hasFeature(auth.orgId, "news.auto", competition.id)}
+            viewerPlan={viewerPlan}
             embed={
               competition.visibility !== "private" ? (
                 <EmbedSnippet
                   divisionId={id}
                   entitled={await hasFeature(auth.orgId, "embeds.enabled", competition.id)}
+                  viewerPlan={viewerPlan}
                 />
               ) : (
                 <p className="text-xs text-slate-500">

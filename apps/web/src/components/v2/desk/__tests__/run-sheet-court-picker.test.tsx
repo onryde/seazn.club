@@ -88,6 +88,7 @@ function panelHtml(venues: Venue[] | undefined): string {
       tz="UTC"
       orgTz="UTC"
       canExport={false}
+      viewerPlan="community"
     />,
   );
 }

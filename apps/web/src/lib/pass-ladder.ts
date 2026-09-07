@@ -153,8 +153,46 @@ export function lowestPassRung(currency: Currency): PricedRung {
  * site: `t()` renders a forgotten var as the literal `{rung}`, and three call
  * sites each remembering is three chances to ship a brace to a customer.
  */
+/**
+ * Does a rung a customer HOLDS need naming?
+ *
+ * The offer side has `rungNamingRequired`, which asks whether more than one
+ * rung is on sale. The hold side asks a narrower question, and the difference
+ * is the whole point: a letter earns its place when the rung held is not the
+ * one on sale, because that is when the reader could otherwise be shown the
+ * wrong product's name.
+ *
+ * So an L holder keeps "Event Pass L" — L is off sale, and #294 exists because
+ * a $44.99 buyer read their own competition as the $11.99 product. An M holder
+ * drops to plain "Event Pass": M is the only thing sold, there is nothing to
+ * confuse it with, and the letter was appearing ONLY AFTER PURCHASE — the buy
+ * button says "Buy the pass", and paying then produced a size the buyer had
+ * never been shown. That is the confusion the 2026-09-05 suffix ruling removed
+ * from the selling surfaces, relocated one step later.
+ *
+ * Takes the sellable set rather than reading it, so a test can drive both
+ * directions; `passActiveLabel` passes the live catalogue.
+ */
+export function heldRungNeedsNaming(rung: PassKey, sellable: readonly PassKey[]): boolean {
+  return !(sellable.length === 1 && sellable[0] === rung);
+}
+
+/**
+ * What to call a rung the org HOLDS — "Event Pass L" while L is off sale,
+ * plain "Event Pass" for the single rung that is on sale.
+ *
+ * The hold-side counterpart of `offeredRungName`. `PASS_RUNG_NAME_KEY` stays
+ * complete over `PassKey` behind it: the map must be able to name every rung
+ * that can be held, and this decides when it should.
+ */
+export function heldRungName(dict: Dict, rung: PassKey): string {
+  return heldRungNeedsNaming(rung, SELLABLE_PASS_KEYS)
+    ? t(dict, PASS_RUNG_NAME_KEY[rung])
+    : t(dict, "upgrade.rung.plain");
+}
+
 export function passActiveLabel(dict: Dict, passKey: PassKey): string {
-  return t(dict, "pass.entry.active", { rung: t(dict, PASS_RUNG_NAME_KEY[passKey]) });
+  return t(dict, "pass.entry.active", { rung: heldRungName(dict, passKey) });
 }
 
 /**
@@ -282,6 +320,56 @@ export const PASS_RUNG_SIZE_KEY: Record<PassKey, DictionaryKey> = {
 export const PASS_RUNG_MARKETING_KEY: Record<SellablePassKey, DictionaryKey> = {
   event_pass: "pricing.pass.rung.m",
 };
+
+/**
+ * Does a rung letter earn its place on a surface that is SELLING a pass?
+ *
+ * A size code is a disambiguator, and it only has a job when there is more
+ * than one size to be confused with. With a single rung on sale, "M" names a
+ * size that appears nowhere else the reader can see — not on `/pricing`'s
+ * ticket stub, not in its matrix column, not on the invoice — and a lone
+ * letter with no sibling reads as a product they have not been shown rather
+ * than as the one they are looking at.
+ *
+ * Takes the COUNT rather than reading `SELLABLE_PASS_KEYS` itself so a test
+ * can drive both directions; every production caller passes
+ * `SELLABLE_PASS_KEYS.length`, so the letter returns on its own the day a
+ * second rung goes back on sale instead of needing four surfaces remembered.
+ *
+ * **The catalogue's count, never the reader's.** `passLadderOptions` filters
+ * to the rungs THIS org may still buy (#327 — on a paid plan, only rungs that
+ * beat it), so a Pro org can be shown one option out of two on sale. That is a
+ * one-org view of a two-rung product, and the letter must still be printed:
+ * the sibling exists on every other surface, which is exactly the confusion
+ * this answers.
+ *
+ * Deliberately `> 1` and not `>= 1`: at zero there is nothing on sale, so
+ * there is no selling surface to name a rung on, and the answer is the same
+ * "no" as at one.
+ *
+ * NOT for surfaces describing a pass the org HOLDS. `PASS_RUNG_NAME_KEY` and
+ * `passActiveLabel` stay complete over `PassKey` for that reason: L is off
+ * sale but rows holding it are live, and a $44.99 buyer reading their own
+ * competition as the $11.99 product is the v17 #294 mis-sale exactly.
+ */
+export function rungNamingRequired(sellableCount: number): boolean {
+  return sellableCount > 1;
+}
+
+/**
+ * What to call a rung being OFFERED — "Event Pass M" while two sizes sell,
+ * plain "Event Pass" while one does.
+ *
+ * The offer/hold split this expresses is the same one `PASS_RUNG_MARKETING_KEY`
+ * draws against `PASS_RUNG_NAME_KEY` above; this is that rule applied to the
+ * in-app buy page, which had been borrowing the hold-side map and so kept
+ * printing a letter after the ruling that removed it from `/pricing`.
+ */
+export function offeredRungName(dict: Dict, rung: PassKey, sellableCount: number): string {
+  return rungNamingRequired(sellableCount)
+    ? t(dict, PASS_RUNG_NAME_KEY[rung])
+    : t(dict, "upgrade.rung.plain");
+}
 
 /**
  * Which localised sentence a failed checkout gets, from the HTTP status alone.

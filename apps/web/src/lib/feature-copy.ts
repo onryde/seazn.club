@@ -40,8 +40,21 @@ export const FEATURE_REASONS: Record<string, string> = {
   "divisions.per_competition.max": "Adding another division needs a bigger plan.",
   "entrants.per_division.max": "This division is at your plan's entrant limit.",
   "stages.per_division.max": "Adding another stage needs a bigger plan.",
-  "formats.double_elim": "Double-elimination brackets are a Pro format.",
-  "formats.advanced": "Americano, ladders, custom brackets, cross-stage feeds and auto-advance are Pro formats.",
+  // W3 fix round 2 (item 4): was "Double-elimination brackets are a Pro
+  // format." — false since V393's growth cell made `formats.double_elim`
+  // true on COMMUNITY (and every plan). The only refusal this gate can still
+  // raise is an explicit `org_entitlement_overrides` deny, the same shape
+  // `cricket.dls` / `scheduling.board` already use below for a key every plan
+  // grants by default.
+  "formats.double_elim": "Double-elimination brackets are switched off for this organisation.",
+  // W3 fix round 2 (item 4): found BY widening `PRO_ATTRIBUTION` to
+  // recognise "are Pro formats" (not just "is a Pro feature") — the widened
+  // vocabulary immediately flagged this as the SAME W2-era gap the twelve
+  // "is a Pro feature" reasons were fixed for: `formats.advanced` is granted
+  // to BOTH pass rungs, live, not just Pro, so a reason naming only Pro sends
+  // a pass holder to buy an upgrade they already hold.
+  "formats.advanced":
+    "Americano, ladders, custom brackets, cross-stage feeds and auto-advance are on Pro and the Event Pass.",
   // Sport depth.
   //
   // W1 (entitlements v18, owner ruling 2026-08-30): the three fidelity keys —
@@ -94,10 +107,21 @@ export const FEATURE_REASONS: Record<string, string> = {
   // keep the override wording, because for them an explicit
   // `org_entitlement_overrides` deny really is the only refusal left.
   "cricket.dls": "DLS revised targets are switched off for this organisation — a manual umpire target still works.",
-  // Reads only — `divisionPlayerStats`, `personStats`, `personCareerStats`.
-  // Nothing gates scorecard ENTRY on this key, so that half of the old
-  // sentence described a paywall the code does not have.
-  "stats.player": "Player stats are on Pro and the Event Pass.",
+  // W3-A (2026-09-06): was "Player stats are on Pro and the Event Pass." —
+  // false the moment community caught up (V399 froze `stats.player` true on
+  // every plan, the per-division RECORD: `divisionPlayerStats`, `personStats`,
+  // and now `publicDivisionStats` too). Reads only — nothing gates scorecard
+  // ENTRY on this key. The only refusal left is an explicit
+  // `org_entitlement_overrides` deny, so this reads like every other
+  // override-only reason (`formats.double_elim`, `cricket.dls` above). The
+  // leverage half — the cross-division career rollup — moved to its own key;
+  // see `stats.player.career` below.
+  "stats.player": "Player stats are switched off for this organisation.",
+  // W3-A (2026-09-06): the NEW key for the split-off leverage half —
+  // `personCareerStats` (S9/#418), the cross-division career rollup. Carries
+  // forward the OLD `stats.player` sentence verbatim (it is still Pro + pass,
+  // exactly as `stats.player` was before the split).
+  "stats.player.career": "Career stats across every competition are on Pro and the Event Pass.",
   "scoring.audit_export": "The signed match audit trail download is on Pro and the Event Pass.",
   "discipline.enforced": "Automatic suspension tracking is on Pro and the Event Pass.",
   "tiebreakers.custom": "Custom tiebreaker order is switched off for this organisation.",
@@ -241,8 +265,13 @@ export function featureReason(featureKey: string): string {
  * share is untouched.
  */
 export function doubleElimFormatReason(stageKind: string): string {
+  // W3 fix round 2 (item 4): was "Page playoffs are a Pro format." — the
+  // SAME false attribution as `FEATURE_REASONS["formats.double_elim"]` two
+  // lines above, on the shared gate: community grants `formats.double_elim`
+  // to every plan, so a Page playoff (the four-team double-chance shape) is
+  // refused only by an explicit organisation-level override, never by plan.
   return stageKind === "page_playoff"
-    ? "Page playoffs are a Pro format."
+    ? "Page playoffs are switched off for this organisation."
     : featureReason("formats.double_elim");
 }
 

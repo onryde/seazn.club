@@ -14,8 +14,15 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { feeCrossoverMinor, readableMinor } from "../pricing-crossover";
-import { PASS_KEYS, SUPPORTED_CURRENCIES, formatMinor, passPrice, proPrice } from "../currency";
-import { lowestPricedRung } from "../pass-ladder";
+import {
+  PASS_KEYS,
+  SELLABLE_PASS_KEYS,
+  SUPPORTED_CURRENCIES,
+  formatMinor,
+  passPrice,
+  proPrice,
+} from "../currency";
+import { lowestPricedRung, rungNamingRequired } from "../pass-ladder";
 import { sql } from "@/lib/db";
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -246,19 +253,50 @@ describe("the /pricing crossover line states its own assumption, in every locale
     });
 
   /**
-   * A locale FAULTS unless the sentence names a rung. `{rung}` alone is not
-   * enough — a token can be interpolated with anything — so the price of that
-   * rung has to travel with it, which is how the ladder directly above the
-   * line identifies each rung too.
+   * Whether the crossing must literally name the rung it is true of —
+   * `rungNamingRequired`, IMPORTED from lib/pass-ladder.ts rather than
+   * redeclared here.
+   *
+   * It began life as a local copy in this file, and then W3 needed the same
+   * question answered by the in-app buy page (`pass-upgrade.tsx`'s button and
+   * size stamp, `upgrade/page.tsx`'s comparison header) — which is exactly how
+   * two surfaces end up disagreeing about one ruling. Promoted to the module
+   * that owns the ladder; this file keeps its wording, not its own arithmetic.
+   *
+   * Its own truth table is pinned in `pass-rung-naming.test.ts` against
+   * LITERAL counts. That separation matters: every assertion below derives its
+   * expectation from this same predicate, so a mutation to the predicate moves
+   * the expectation with it and none of them could witness it.
    */
-  const rungFaults = (values: Record<Locale, string>): string[] =>
-    LOCALES.flatMap((locale) => {
+
+  /**
+   * A locale FAULTS if it drops `{pass}` — the crossing is always true of
+   * ONE specific rung's price, sellable count or not — and, separately,
+   * FAULTS if its `{rung}` token disagrees with `rungNamingRequired`:
+   * missing when required, present when it must not be. `{rung}` alone
+   * would not be enough even when required — a token can be interpolated
+   * with anything — but the price living beside it in `{pass}` is checked
+   * unconditionally, which is how the ladder directly above the line
+   * identifies each rung too.
+   */
+  const rungFaults = (values: Record<Locale, string>, sellableCount: number): string[] => {
+    const mustName = rungNamingRequired(sellableCount);
+    return LOCALES.flatMap((locale) => {
       const value = values[locale];
-      const missing = ["{rung}", "{pass}"].filter((token) => !value.includes(token));
-      return missing.length === 0
-        ? []
-        : [`${locale}: the claim names no rung — missing ${missing.join(" and ")}`];
+      const hasPass = value.includes("{pass}");
+      const hasRung = value.includes("{rung}");
+      if (!hasPass) return [`${locale}: the claim names no pass price — missing {pass}`];
+      if (mustName && !hasRung) {
+        return [`${locale}: ${sellableCount} rungs on sale and the claim names no rung — missing {rung}`];
+      }
+      if (!mustName && hasRung) {
+        return [
+          `${locale}: ${sellableCount} rung(s) on sale and the claim names one anyway — {rung} must not appear`,
+        ];
+      }
+      return [];
     });
+  };
 
   const live = (): Record<Locale, string> =>
     Object.fromEntries(
@@ -293,10 +331,21 @@ describe("the /pricing crossover line states its own assumption, in every locale
   it("still carries every figure the line is built from", () => {
     // The rewrite must not drop a placeholder: `t()` leaves an unknown token
     // alone, so a lost `{passFee}` would render as literal braces on the card
-    // rather than failing anything.
+    // rather than failing anything. `{rung}` is NOT unconditional — see
+    // "names the rung the crossing is true of" below, which pins it against
+    // SELLABLE_PASS_KEYS instead of requiring it here regardless of count.
     for (const [locale, value] of Object.entries(live())) {
-      for (const token of ["{amount}", "{pro}", "{proFee}", "{passFee}", "{rung}", "{pass}"]) {
+      for (const token of ["{amount}", "{pro}", "{proFee}", "{passFee}", "{pass}"]) {
         expect(value, `${locale} lost ${token}`).toContain(token);
+      }
+    }
+    // …and when more than one rung IS on sale, `{rung}` becomes one of those
+    // unconditional figures too — folded in here rather than a fifth
+    // standalone assertion, since it is the same "nothing may be dropped"
+    // property, just gated on the live sellable count.
+    if (rungNamingRequired(SELLABLE_PASS_KEYS.length)) {
+      for (const [locale, value] of Object.entries(live())) {
+        expect(value, `${locale} lost {rung}`).toContain("{rung}");
       }
     }
   });
@@ -304,29 +353,100 @@ describe("the /pricing crossover line states its own assumption, in every locale
   // ── …and WHICH OFFER it is true of ────────────────────────────────────────
   //
   // The second half of the same class of defect as the duration clause above.
-  // The crossing is solved for ONE rung; the card sells TWO. Read without a
-  // rung the line says "this is the cheaper option" of the whole Event Pass
-  // column — and it is false of L, which never crosses Pro at any volume
+  // The crossing is solved for ONE rung. When the card sells TWO, reading it
+  // without a rung says "this is the cheaper option" of the whole Event Pass
+  // column — and that was false of L, which never crosses Pro at any volume
   // (4499 up front against a month of Pro at 1499, and the dearer rate per
   // pound as well, so `feeCrossoverMinor` returns null for it). Naming the
-  // rung is what makes the sentence true of the thing it sits beside.
+  // rung is what made the sentence true of the thing it sat beside.
+  //
+  // PREMISE CHANGED 2026-09-05 (entitlements v18 W3): the L rung came off
+  // sale, so the card sells only ONE rung now, and the owner separately
+  // approved dropping the rung suffix from every customer-facing selling
+  // surface — the ticket stub and the matrix column header both now read
+  // plain "Event Pass". Naming a rung letter here that appears nowhere else
+  // on the page is the confusion that decision removed, so the live wording
+  // dropped `{rung}` and kept `{pass}` (the price alone still identifies
+  // which offer the line is about, unambiguously, with one rung on sale).
+  // The reasoning above stays live rather than deleted: it is exactly what
+  // fires again the day a second rung returns to sale — `rungFaults` is
+  // gated on SELLABLE_PASS_KEYS.length rather than "always require {rung}"
+  // or "never require {rung}" specifically so that day flips it back on its
+  // own. Do not restore `{rung}` to the live strings while one rung sells.
   it("names the rung the crossing is true of", () => {
-    expect(rungFaults(live())).toEqual([]);
+    expect(rungFaults(live(), SELLABLE_PASS_KEYS.length)).toEqual([]);
   });
 
   it("would have caught the wording that shipped without it", () => {
-    // The strings as they shipped, verbatim — every figure live, every one of
-    // them silent about which rung. Same shape as the retired registry above:
-    // a scan nobody has ever seen fail is not a scan.
+    // The strings as they shipped, verbatim, from the wave where the card
+    // sold two rungs — every figure live, every one of them silent about
+    // which rung. Same shape as the retired registry above: a scan nobody
+    // has ever seen fail is not a scan. Checked against a synthetic
+    // two-rung count rather than the live (now one-rung) SELLABLE_PASS_KEYS,
+    // since that is the state this wording shipped in and the state the
+    // rule must still catch it in.
     const RETIRED: Record<Locale, string> = {
       en: "For a competition running about a month, up to about {amount} of entry fees this is the cheaper option; above that it is Pro at {pro}/mo — a {proFee}% platform fee against {passFee}%. The pass is one-time, so a longer competition puts that threshold higher.",
       es: "Para una competición de aproximadamente un mes, hasta unos {amount} de cuotas de inscripción esta es la opción más barata; por encima de eso lo es Pro a {pro}/mes: una comisión de plataforma del {proFee}% frente al {passFee}%. El pase es de pago único, así que una competición más larga sitúa ese umbral más alto.",
       fr: "Pour une compétition d’environ un mois, jusqu’à environ {amount} de frais d’inscription, c’est l’option la moins chère ; au-delà, c’est Pro à {pro}/mois — {proFee} % de frais de plateforme contre {passFee} %. Le pass est ponctuel : une compétition plus longue place ce seuil plus haut.",
       nl: "Voor een competitie van ongeveer een maand is dit tot ongeveer {amount} aan inschrijfgelden de goedkoopste keuze; daarboven is dat Pro voor {pro}/mnd — {proFee}% platformkosten tegen {passFee}%. De pass is eenmalig, dus bij een langere competitie ligt die grens hoger.",
     };
-    expect(rungFaults(RETIRED)).toHaveLength(LOCALES.length);
+    expect(rungFaults(RETIRED, 2)).toHaveLength(LOCALES.length);
     const now = live();
     for (const locale of LOCALES) expect(now[locale]).not.toBe(RETIRED[locale]);
+  });
+
+  // ── Both directions, and the empty case, on the derived rule itself ───────
+  //
+  // The two tests above only ever exercise `rungFaults` at the sellable count
+  // this repo happens to be in right now (1) or the count the retired wording
+  // shipped in (2). Neither, alone, proves the rule actually FLIPS — a rule
+  // hardcoded to "never require {rung}" would pass the first and, coupled
+  // with a RETIRED string that is ALSO missing {pass}, would still pass the
+  // second by accident (see the {pass} branch in `rungFaults`). These pin the
+  // rule directly, both directions, plus the empty-set case named in the
+  // brief: a rule whose every other case is "does this contain X" answers no
+  // to everything when the set is empty and lands on a default, which is
+  // exactly the vacuous shape that has shipped bugs in this repo before. Zero
+  // sellable rungs is not a state SELLABLE_PASS_KEYS should ever actually be
+  // in, but the FUNCTION must not treat it as "nothing to check" either.
+  const NAMED: Record<Locale, string> = {
+    en: "The {rung} pass ({pass}) crosses Pro at {amount}, {proFee}% against {passFee}%.",
+    es: "El pase {rung} ({pass}) cruza con Pro en {amount}, {proFee}% frente a {passFee}%.",
+    fr: "Le pass {rung} ({pass}) croise Pro à {amount}, {proFee}% contre {passFee}%.",
+    nl: "De {rung}-pass ({pass}) kruist Pro bij {amount}, {proFee}% tegen {passFee}%.",
+  };
+  const UNNAMED: Record<Locale, string> = {
+    en: "The pass ({pass}) crosses Pro at {amount}, {proFee}% against {passFee}%.",
+    es: "El pase ({pass}) cruza con Pro en {amount}, {proFee}% frente a {passFee}%.",
+    fr: "Le pass ({pass}) croise Pro à {amount}, {proFee}% contre {passFee}%.",
+    nl: "De pass ({pass}) kruist Pro bij {amount}, {proFee}% tegen {passFee}%.",
+  };
+  const NO_PASS: Record<Locale, string> = {
+    en: "This crosses Pro at {amount}, {proFee}% against {passFee}%.",
+    es: "Esto cruza con Pro en {amount}, {proFee}% frente a {passFee}%.",
+    fr: "Cela croise Pro à {amount}, {proFee}% contre {passFee}%.",
+    nl: "Dit kruist Pro bij {amount}, {proFee}% tegen {passFee}%.",
+  };
+
+  it("requires the rung letter once a second rung is on sale, and forbids it with one", () => {
+    // Two sellable rungs: unnamed wording faults, named wording does not.
+    expect(rungFaults(UNNAMED, 2)).toHaveLength(LOCALES.length);
+    expect(rungFaults(NAMED, 2)).toEqual([]);
+    // One sellable rung (today's live state): the reverse.
+    expect(rungFaults(NAMED, 1)).toHaveLength(LOCALES.length);
+    expect(rungFaults(UNNAMED, 1)).toEqual([]);
+  });
+
+  it("is not vacuous against an empty rung set — {pass} is still required", () => {
+    // Zero sellable rungs must not read as "nothing to check": the naming
+    // requirement follows `rungNamingRequired`'s `> 1` (false at 0, same as
+    // at 1 — nothing to disambiguate FROM either way), but the {pass} check
+    // is unconditional, so a line naming no pass at all still faults.
+    expect(rungNamingRequired(0)).toBe(false);
+    expect(rungFaults(NO_PASS, 0)).toHaveLength(LOCALES.length);
+    expect(rungFaults(UNNAMED, 0)).toEqual([]);
+    expect(rungFaults(NAMED, 0)).toHaveLength(LOCALES.length);
   });
 });
 

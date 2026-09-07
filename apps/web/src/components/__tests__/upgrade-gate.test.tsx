@@ -27,7 +27,9 @@
 // the suite runs in the node environment and the gate has no effects.
 import { describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
-import type { ReactNode } from "react";
+import { PlanBadge } from "@/components/plan-badge";
+import type { ComponentProps, ReactNode } from "react";
+import type { ViewerPlan } from "@/lib/viewer-plan";
 import { CompetitionPassProvider } from "@/components/competition-pass-provider";
 import { PASS_FEATURES, UpgradeGate } from "@/components/upgrade-gate";
 import { formatMinor, passPrice, proPrice, type Currency, type PassKey } from "@/lib/currency";
@@ -42,6 +44,7 @@ import {
 import type { PassLockReason } from "@/lib/entitlements";
 import { DictProvider } from "@/components/i18n/dict-provider";
 import { t } from "@/lib/i18n-runtime";
+import { featureReason } from "@/lib/feature-copy";
 import uiEn from "@/dictionaries/en/ui.json";
 import type { Dict } from "@/lib/i18n-constants";
 
@@ -72,6 +75,24 @@ const FLOOR_GBP = formatMinor(lowestPassRung("gbp").amountMinor, "gbp"); // "£2
  *  itself drifts. */
 const LIFTABLE = "divisions.per_competition.max";
 const NOT_LIFTABLE = "api.access";
+
+/**
+ * `<UpgradeGate>` with `viewerPlan` defaulted to "community".
+ *
+ * Every case in this file predates the prop (v18 W3-B) and each one meant "a
+ * community org" — that is what they all assert. Defaulting here rather than
+ * repeating the same literal ~40 times keeps those assertions readable, and a
+ * case that cares passes its own value.
+ *
+ * NOT a weakening of the required prop: the prop exists so `tsc` enumerates
+ * every PRODUCTION paywall, and a test file is not one. The rule that a real
+ * call site must state its answer is pinned separately, by
+ * `viewer-plan-coverage.test.ts`.
+ */
+type GateProps = Omit<ComponentProps<typeof UpgradeGate>, "viewerPlan"> & {
+  viewerPlan?: ViewerPlan;
+};
+const Gate = (props: GateProps) => <UpgradeGate viewerPlan="community" {...props} />;
 
 // The CTA carries `?feature=<key>`: the upgrade page keys its ceiling state off
 // that param, the gate is the only place that knows which key was refused, and
@@ -123,7 +144,7 @@ function render(
 describe("UpgradeGate — pass not held (unchanged behaviour)", () => {
   it("offers both paths for a liftable feature inside a competition", () => {
     pathname = "/o/riverside/c/summer-league/d/new";
-    const html = render(<UpgradeGate feature={LIFTABLE} />);
+    const html = render(<Gate feature={LIFTABLE} />);
     expect(html).toContain("data-pass-gate");
     expect(html).toContain(`href="${UPGRADE_HREF}"`);
     expect(html).toContain(PASS_PRICE);
@@ -134,7 +155,7 @@ describe("UpgradeGate — pass not held (unchanged behaviour)", () => {
     // The credit line is goodwill for money already spent. Showing it to
     // someone who has not bought a pass advertises a discount they cannot get.
     pathname = "/o/riverside/c/summer-league/d/new";
-    const html = render(<UpgradeGate feature={LIFTABLE} />);
+    const html = render(<Gate feature={LIFTABLE} />);
     expect(html).not.toContain("data-pass-owned");
     expect(html).not.toMatch(/30 days/);
   });
@@ -143,7 +164,7 @@ describe("UpgradeGate — pass not held (unchanged behaviour)", () => {
     // The regression that matters most: usePassActive() defaults to false, so
     // /o/[orgSlug]/settings/billing must render exactly what it renders today.
     pathname = "/o/riverside/settings/billing";
-    const html = render(<UpgradeGate feature={LIFTABLE} />);
+    const html = render(<Gate feature={LIFTABLE} />);
     expect(html).not.toContain("data-pass-gate");
     expect(html).not.toContain("data-pass-owned");
     expect(html).toContain("See plans &amp; upgrade");
@@ -157,7 +178,7 @@ describe("UpgradeGate — pass not held (unchanged behaviour)", () => {
 describe("UpgradeGate — the pass price it quotes", () => {
   it("quotes the ladder's floor as a 'from' price, not one rung as the price", () => {
     pathname = "/o/riverside/c/summer-league/d/new";
-    const html = render(<UpgradeGate feature={LIFTABLE} />, { passKey: null, provider: true });
+    const html = render(<Gate feature={LIFTABLE} />, { passKey: null, provider: true });
     const cta = html.slice(html.indexOf("data-pass-cta"));
     expect(cta).toContain(FLOOR_USD);
     // The word matters as much as the number: without it the card states a
@@ -171,7 +192,7 @@ describe("UpgradeGate — the pass price it quotes", () => {
     // line read `passPrice("usd", …)` — a £-paying organiser was quoted $29
     // for a pass Stripe would charge them £25 for.
     pathname = "/o/riverside/c/summer-league/d/new";
-    const html = render(<UpgradeGate feature={LIFTABLE} />, {
+    const html = render(<Gate feature={LIFTABLE} />, {
       passKey: null,
       provider: true,
       currency: "gbp",
@@ -184,7 +205,7 @@ describe("UpgradeGate — the pass price it quotes", () => {
     // One card, one currency. A pass in £ beside "Go Pro — $19/mo" is worse
     // than the hardcoded usd it replaced.
     pathname = "/o/riverside/c/summer-league/d/new";
-    const html = render(<UpgradeGate feature={LIFTABLE} />, {
+    const html = render(<Gate feature={LIFTABLE} />, {
       passKey: null,
       provider: true,
       currency: "gbp",
@@ -198,7 +219,7 @@ describe("UpgradeGate — the pass price it quotes", () => {
     // the paid-plan/owned cards can — and outside a provider that must be
     // exactly what it has always been.
     pathname = "/o/riverside/settings/billing";
-    const html = render(<UpgradeGate feature={LIFTABLE} />);
+    const html = render(<Gate feature={LIFTABLE} />);
     expect(html).not.toContain("£");
   });
 });
@@ -209,7 +230,7 @@ describe("UpgradeGate — pass held (D1: never re-sell a pass the org holds)", (
     // this gate with a pass active means all 10 are used: another $29 buys
     // nothing, and Pro is the only real answer.
     pathname = "/o/riverside/c/summer-league/d/new";
-    const html = render(<UpgradeGate feature={LIFTABLE} />, { passKey: "event_pass" });
+    const html = render(<Gate feature={LIFTABLE} />, { passKey: "event_pass" });
     expect(html).not.toContain(UPGRADE_HREF);
     expect(html).not.toContain(PASS_PRICE);
     expect(html).not.toContain("data-pass-gate");
@@ -225,18 +246,18 @@ describe("UpgradeGate — pass held (D1: never re-sell a pass the org holds)", (
     pathname = "/o/riverside/c/summer-league/d/new";
     const dict = uiEn as unknown as Dict;
 
-    const l = render(<UpgradeGate feature={LIFTABLE} />, { passKey: "event_pass_l" });
+    const l = render(<Gate feature={LIFTABLE} />, { passKey: "event_pass_l" });
     expect(l).toContain(passActiveLabel(dict, "event_pass_l"));
     expect(l).not.toContain(passActiveLabel(dict, "event_pass"));
 
-    const m = render(<UpgradeGate feature={LIFTABLE} />, { passKey: "event_pass" });
+    const m = render(<Gate feature={LIFTABLE} />, { passKey: "event_pass" });
     expect(m).toContain(passActiveLabel(dict, "event_pass"));
     expect(m).not.toContain(passActiveLabel(dict, "event_pass_l"));
   });
 
   it("leaves no un-substituted placeholder in that signal", () => {
     pathname = "/o/riverside/c/summer-league/d/new";
-    expect(render(<UpgradeGate feature={LIFTABLE} />, { passKey: "event_pass_l" })).not.toContain(
+    expect(render(<Gate feature={LIFTABLE} />, { passKey: "event_pass_l" })).not.toContain(
       "{rung}",
     );
   });
@@ -246,7 +267,7 @@ describe("UpgradeGate — pass held (D1: never re-sell a pass the org holds)", (
     // within PASS_CREDIT_WINDOW_DAYS=30 is credited in full. The copy must
     // stay conditional on both, or it promises what the code refuses.
     pathname = "/o/riverside/c/summer-league/d/new";
-    const html = render(<UpgradeGate feature={LIFTABLE} />, { passKey: "event_pass" });
+    const html = render(<Gate feature={LIFTABLE} />, { passKey: "event_pass" });
     expect(html).toMatch(/bought in the last 30 days/i);
     expect(html).toMatch(/first Pro invoice/i);
   });
@@ -265,7 +286,7 @@ describe("UpgradeGate — pass held (D1: never re-sell a pass the org holds)", (
     const html = renderToStaticMarkup(
       <DictProvider dict={dict} locale="en">
         <CompetitionPassProvider passKey="event_pass" paidPlan={false}>
-          <UpgradeGate feature={LIFTABLE} />
+          <Gate feature={LIFTABLE} />
         </CompetitionPassProvider>
       </DictProvider>,
     );
@@ -280,7 +301,7 @@ describe("UpgradeGate — pass held (D1: never re-sell a pass the org holds)", (
 
   it("says the feature is not on the pass when the pass could never lift it", () => {
     pathname = "/o/riverside/c/summer-league/schedule";
-    const html = render(<UpgradeGate feature={NOT_LIFTABLE} />, { passKey: "event_pass" });
+    const html = render(<Gate feature={NOT_LIFTABLE} />, { passKey: "event_pass" });
     expect(html).toContain("data-pass-owned");
     expect(html).toMatch(/not included in the Event Pass/i);
     expect(html).not.toContain(PASS_PRICE);
@@ -291,8 +312,8 @@ describe("UpgradeGate — pass held (D1: never re-sell a pass the org holds)", (
     // "You've used everything the pass gives" and "the pass never gave this"
     // are different sales conversations.
     pathname = "/o/riverside/c/summer-league/d/new";
-    const ceiling = render(<UpgradeGate feature={LIFTABLE} />, { passKey: "event_pass" });
-    const outside = render(<UpgradeGate feature={NOT_LIFTABLE} />, { passKey: "event_pass" });
+    const ceiling = render(<Gate feature={LIFTABLE} />, { passKey: "event_pass" });
+    const outside = render(<Gate feature={NOT_LIFTABLE} />, { passKey: "event_pass" });
     expect(ceiling).toMatch(/used everything the Event Pass includes/i);
     expect(ceiling).not.toMatch(/not included in the Event Pass/i);
     expect(outside).toMatch(/not included in the Event Pass/i);
@@ -305,7 +326,7 @@ describe("UpgradeGate — pass held (D1: never re-sell a pass the org holds)", (
     // automatically — no second hand-written list to drift.
     pathname = "/o/riverside/c/summer-league/d/new";
     for (const feature of PASS_FEATURES) {
-      const html = render(<UpgradeGate feature={feature} />, { passKey: "event_pass" });
+      const html = render(<Gate feature={feature} />, { passKey: "event_pass" });
       expect(html, feature).not.toContain(UPGRADE_HREF);
       expect(html, feature).not.toContain("data-pass-cta");
     }
@@ -320,7 +341,7 @@ describe("UpgradeGate — pass held (D1: never re-sell a pass the org holds)", (
     // Contact-us mailto instead.
     pathname = "/o/riverside/c/summer-league/d/main";
     const dict = uiEn as unknown as Dict;
-    const html = render(<UpgradeGate feature="api.write" />, { passKey: "event_pass" });
+    const html = render(<Gate feature="api.write" />, { passKey: "event_pass" });
     expect(html).toContain(`mailto:hello@seazn.club?subject=`);
     expect(html).toContain(t(dict, "upgrade.contactUs"));
     expect(html).not.toMatch(/Go Pro —/);
@@ -331,14 +352,14 @@ describe("UpgradeGate — pass held (D1: never re-sell a pass the org holds)", (
     // The toolbar pill is one link with no room for two paths; with a pass
     // held it must not be the $29 one.
     pathname = "/o/riverside/c/summer-league/d/main/schedule";
-    const html = render(<UpgradeGate feature={LIFTABLE} compact />, { passKey: "event_pass" });
+    const html = render(<Gate feature={LIFTABLE} compact />, { passKey: "event_pass" });
     expect(html).not.toContain(UPGRADE_HREF);
     expect(html).toContain('href="/settings/billing"');
   });
 
   it("honours an explicit href for the Pro path", () => {
     pathname = "/o/riverside/c/summer-league/d/new";
-    const html = render(<UpgradeGate feature={LIFTABLE} href="/settings/billing#plans" />, {
+    const html = render(<Gate feature={LIFTABLE} href="/settings/billing#plans" />, {
       passKey: "event_pass",
     });
     expect(html).toContain('href="/settings/billing#plans"');
@@ -358,7 +379,7 @@ describe("UpgradeGate — pass ended (v17 gap #301: a locked pass is not 'active
 
   it("does not say the pass is active, or that everything on it was used up", () => {
     pathname = "/o/riverside/c/summer-league/d/new";
-    const html = render(<UpgradeGate feature={LIFTABLE} />, ended("terminal"));
+    const html = render(<Gate feature={LIFTABLE} />, ended("terminal"));
     expect(html).not.toContain(passActiveLabel(dictEn, "event_pass"));
     expect(html).not.toContain(passActiveLabel(dictEn, "event_pass_l"));
     expect(html).not.toMatch(/used everything the Event Pass includes/i);
@@ -371,7 +392,7 @@ describe("UpgradeGate — pass ended (v17 gap #301: a locked pass is not 'active
     // sale to make here, so a price or a checkout link would be an offer the
     // product cannot honour.
     pathname = "/o/riverside/c/summer-league/d/new";
-    const html = render(<UpgradeGate feature={LIFTABLE} />, ended("past_ends_on"));
+    const html = render(<Gate feature={LIFTABLE} />, ended("past_ends_on"));
     expect(html).not.toContain(UPGRADE_HREF);
     expect(html).not.toContain(PASS_PRICE);
     expect(html).not.toContain(FLOOR_USD);
@@ -381,7 +402,7 @@ describe("UpgradeGate — pass ended (v17 gap #301: a locked pass is not 'active
 
   it("still sends the reader to Pro — the only real path left", () => {
     pathname = "/o/riverside/c/summer-league/d/new";
-    const html = render(<UpgradeGate feature={LIFTABLE} />, ended("terminal"));
+    const html = render(<Gate feature={LIFTABLE} />, ended("terminal"));
     expect(html).toContain("/settings/billing");
   });
 
@@ -395,11 +416,11 @@ describe("UpgradeGate — pass ended (v17 gap #301: a locked pass is not 'active
     const pastEndsCopy = t(dictEn, PASS_LOCK_REASON_KEY.past_ends_on);
     expect(terminalCopy).not.toEqual(pastEndsCopy);
 
-    const terminal = render(<UpgradeGate feature={LIFTABLE} />, ended("terminal"));
+    const terminal = render(<Gate feature={LIFTABLE} />, ended("terminal"));
     expect(terminal).toContain(terminalCopy);
     expect(terminal).not.toContain(pastEndsCopy);
 
-    const pastEnds = render(<UpgradeGate feature={LIFTABLE} />, ended("past_ends_on"));
+    const pastEnds = render(<Gate feature={LIFTABLE} />, ended("past_ends_on"));
     expect(pastEnds).toContain(pastEndsCopy);
     expect(pastEnds).not.toContain(terminalCopy);
   });
@@ -413,7 +434,7 @@ describe("UpgradeGate — pass ended (v17 gap #301: a locked pass is not 'active
     pathname = "/o/riverside/c/summer-league/d/new";
     const seen = new Set<string>();
     for (const reason of Object.keys(PASS_LOCK_REASON_KEY) as PassLockReason[]) {
-      const html = render(<UpgradeGate feature={LIFTABLE} />, ended(reason));
+      const html = render(<Gate feature={LIFTABLE} />, ended(reason));
       const copy = t(dictEn, PASS_LOCK_REASON_KEY[reason]);
       expect(html).toContain(copy);
       expect(copy).not.toEqual("");
@@ -427,13 +448,13 @@ describe("UpgradeGate — pass ended (v17 gap #301: a locked pass is not 'active
     // earns. On this card it would contradict the sentence beneath it, and a
     // reader scanning for state reads the badge before the prose.
     pathname = "/o/riverside/c/summer-league/d/new";
-    const html = render(<UpgradeGate feature={LIFTABLE} />, ended("terminal"));
+    const html = render(<Gate feature={LIFTABLE} />, ended("terminal"));
     expect(html).not.toContain("app-eyebrow");
   });
 
   it("marks the compact pill too, without changing its state-agnostic copy", () => {
     pathname = "/o/riverside/c/summer-league/d/main/schedule";
-    const html = render(<UpgradeGate feature={LIFTABLE} compact />, ended("terminal"));
+    const html = render(<Gate feature={LIFTABLE} compact />, ended("terminal"));
     expect(html).toContain("data-pass-ended");
     expect(html).toContain('href="/settings/billing"');
     expect(html).not.toContain(UPGRADE_HREF);
@@ -443,7 +464,7 @@ describe("UpgradeGate — pass ended (v17 gap #301: a locked pass is not 'active
     // The ended card explains the PASS's state, not the feature's, so it does
     // not branch on liftability the way the owned card does.
     pathname = "/o/riverside/c/summer-league/schedule";
-    const html = render(<UpgradeGate feature={NOT_LIFTABLE} />, ended("terminal"));
+    const html = render(<Gate feature={NOT_LIFTABLE} />, ended("terminal"));
     expect(html).toContain("data-pass-ended");
     expect(html).toContain(t(dictEn, PASS_LOCK_REASON_KEY.terminal));
   });
@@ -452,14 +473,18 @@ describe("UpgradeGate — pass ended (v17 gap #301: a locked pass is not 'active
     // usePassGateState decides precedence once. A paid org's gate was closed by
     // its PLAN, so explaining it with a dead pass would name the wrong limit.
     pathname = "/o/riverside/c/summer-league/d/new";
-    const html = render(<UpgradeGate feature={LIFTABLE} />, {
+    const html = render(<Gate feature={LIFTABLE} />, {
       passKey: "event_pass",
       paidPlan: true,
       lockReason: "terminal",
     });
     expect(html).not.toContain("data-pass-ended");
     expect(html).not.toContain("data-pass-owned");
-    expect(html).toContain("See plans &amp; upgrade");
+    // W3-B: the paid arm now renders the beyond-plan card. It used to render
+    // "See plans & upgrade →" — a link to a picker holding the plan this org
+    // is already paying for.
+    expect(html).toContain("data-beyond-plan");
+    expect(html).not.toContain("See plans &amp; upgrade");
   });
 
   it("does not invent an ended pass when a lock reason arrives with no pass row", () => {
@@ -475,7 +500,7 @@ describe("UpgradeGate — pass ended (v17 gap #301: a locked pass is not 'active
     // `passLockReason` verdict makes `POST /api/billing/pass-checkout` answer
     // 410 Gone. The old assertion was pinning a live CTA to a dead checkout.
     pathname = "/o/riverside/c/summer-league/d/new";
-    const html = render(<UpgradeGate feature={LIFTABLE} />, { lockReason: "terminal" });
+    const html = render(<Gate feature={LIFTABLE} />, { lockReason: "terminal" });
     expect(html).not.toContain("data-pass-ended");
     expect(html).not.toContain("data-pass-owned");
     expect(html).not.toContain("data-pass-gate");
@@ -488,7 +513,7 @@ describe("UpgradeGate — pass ended (v17 gap #301: a locked pass is not 'active
     // Same rule #294 established for the cards either side of this one: every
     // amount on a card uses the currency the org is actually charged in.
     pathname = "/o/riverside/c/summer-league/d/new";
-    const html = render(<UpgradeGate feature={LIFTABLE} />, {
+    const html = render(<Gate feature={LIFTABLE} />, {
       ...ended("terminal"),
       currency: "gbp",
     });
@@ -510,7 +535,7 @@ describe("UpgradeGate — competition closed to passes (#376: past the line, nev
 
   it("offers no pass at any price, and does not claim one ended", () => {
     pathname = "/o/riverside/c/summer-league/d/new";
-    const html = render(<UpgradeGate feature={LIFTABLE} />, closed("terminal"));
+    const html = render(<Gate feature={LIFTABLE} />, closed("terminal"));
     expect(html).toContain('data-pass-closed-gate="');
     expect(html).not.toContain("data-pass-cta");
     expect(html).not.toContain("data-pass-gate");
@@ -527,7 +552,7 @@ describe("UpgradeGate — competition closed to passes (#376: past the line, nev
     // Both maps are read from the dictionary rather than re-typed, so a
     // hardcoded literal, a typo'd key and a reworded string all fail here.
     pathname = "/o/riverside/c/summer-league/d/new";
-    const html = render(<UpgradeGate feature={LIFTABLE} />, closed("terminal"));
+    const html = render(<Gate feature={LIFTABLE} />, closed("terminal"));
     expect(html).toContain(t(dictEn, PASS_CLOSED_REASON_KEY.terminal));
     expect(html).not.toContain(t(dictEn, PASS_LOCK_REASON_KEY.terminal));
   });
@@ -538,12 +563,12 @@ describe("UpgradeGate — competition closed to passes (#376: past the line, nev
     const pastEndsCopy = t(dictEn, PASS_CLOSED_REASON_KEY.past_ends_on);
     expect(terminalCopy).not.toEqual(pastEndsCopy);
 
-    const terminal = render(<UpgradeGate feature={LIFTABLE} />, closed("terminal"));
+    const terminal = render(<Gate feature={LIFTABLE} />, closed("terminal"));
     expect(terminal).toContain(terminalCopy);
     expect(terminal).not.toContain(pastEndsCopy);
     expect(terminal).toContain('data-pass-closed-gate="terminal"');
 
-    const pastEnds = render(<UpgradeGate feature={LIFTABLE} />, closed("past_ends_on"));
+    const pastEnds = render(<Gate feature={LIFTABLE} />, closed("past_ends_on"));
     expect(pastEnds).toContain(pastEndsCopy);
     expect(pastEnds).not.toContain(terminalCopy);
     expect(pastEnds).toContain('data-pass-closed-gate="past_ends_on"');
@@ -557,7 +582,7 @@ describe("UpgradeGate — competition closed to passes (#376: past the line, nev
     const seen = new Set<string>();
     for (const reason of Object.keys(PASS_CLOSED_REASON_KEY) as PassLockReason[]) {
       const copy = t(dictEn, PASS_CLOSED_REASON_KEY[reason]);
-      expect(render(<UpgradeGate feature={LIFTABLE} />, closed(reason))).toContain(copy);
+      expect(render(<Gate feature={LIFTABLE} />, closed(reason))).toContain(copy);
       expect(copy).not.toEqual("");
       seen.add(copy);
     }
@@ -566,20 +591,20 @@ describe("UpgradeGate — competition closed to passes (#376: past the line, nev
 
   it("still sends the reader to Pro — the only path that is actually open", () => {
     pathname = "/o/riverside/c/summer-league/d/new";
-    const html = render(<UpgradeGate feature={LIFTABLE} />, closed("terminal"));
+    const html = render(<Gate feature={LIFTABLE} />, closed("terminal"));
     expect(html).toContain("/settings/billing");
   });
 
   it("does not wear the console's 'this is on' eyebrow", () => {
     pathname = "/o/riverside/c/summer-league/d/new";
-    expect(render(<UpgradeGate feature={LIFTABLE} />, closed("terminal"))).not.toContain(
+    expect(render(<Gate feature={LIFTABLE} />, closed("terminal"))).not.toContain(
       "app-eyebrow",
     );
   });
 
   it("marks the compact pill and sends it to billing, not to a dead checkout", () => {
     pathname = "/o/riverside/c/summer-league/d/main/schedule";
-    const html = render(<UpgradeGate feature={LIFTABLE} compact />, closed("terminal"));
+    const html = render(<Gate feature={LIFTABLE} compact />, closed("terminal"));
     expect(html).toContain('data-pass-closed-gate="terminal"');
     expect(html).toContain('href="/settings/billing"');
     expect(html).not.toContain(UPGRADE_HREF);
@@ -589,7 +614,7 @@ describe("UpgradeGate — competition closed to passes (#376: past the line, nev
     // The card explains the COMPETITION's state, not the feature's, so it does
     // not branch on liftability the way the pass-owned card does.
     pathname = "/o/riverside/c/summer-league/schedule";
-    const html = render(<UpgradeGate feature={NOT_LIFTABLE} />, closed("terminal"));
+    const html = render(<Gate feature={NOT_LIFTABLE} />, closed("terminal"));
     expect(html).toContain('data-pass-closed-gate="');
     expect(html).toContain(t(dictEn, PASS_CLOSED_REASON_KEY.terminal));
   });
@@ -599,19 +624,20 @@ describe("UpgradeGate — competition closed to passes (#376: past the line, nev
     // PLAN's, and explaining it with the competition's lifecycle would name the
     // wrong limit entirely.
     pathname = "/o/riverside/c/summer-league/d/new";
-    const html = render(<UpgradeGate feature={LIFTABLE} />, {
+    const html = render(<Gate feature={LIFTABLE} />, {
       paidPlan: true,
       lockReason: "terminal",
     });
     expect(html).not.toContain("data-pass-closed-gate");
-    expect(html).toContain("See plans &amp; upgrade");
+    expect(html).toContain("data-beyond-plan");
+    expect(html).not.toContain("See plans &amp; upgrade");
   });
 
   it("leaves a competition still inside the line offering the pass", () => {
     // The control arm. Without it every assertion above would pass on a gate
     // that had simply stopped offering the pass anywhere.
     pathname = "/o/riverside/c/summer-league/d/new";
-    const html = render(<UpgradeGate feature={LIFTABLE} />, { provider: true });
+    const html = render(<Gate feature={LIFTABLE} />, { provider: true });
     expect(html).not.toContain("data-pass-closed-gate");
     expect(html).toContain("data-pass-gate");
     expect(html).toContain(`href="${UPGRADE_HREF}"`);
@@ -632,12 +658,27 @@ describe("UpgradeGate — paid plan (D1: any paid plan → Pro path only)", () =
 
   it("drops the $29 path for a paid org that hits a liftable ceiling", () => {
     pathname = "/o/riverside/c/summer-league/d/new";
-    const html = render(<UpgradeGate feature={LIFTABLE} />, { paidPlan: true });
+    const html = render(<Gate feature={LIFTABLE} />, { paidPlan: true });
     expect(html).not.toContain(UPGRADE_HREF);
     expect(html).not.toContain(PASS_PRICE);
     expect(html).not.toContain("data-pass-gate");
     expect(html).not.toContain("data-pass-cta");
-    expect(html).toContain("See plans &amp; upgrade");
+    // …and does not answer "Go Pro" to an org already on Pro (W3-B). This is
+    // the dead end the L rung used to cover: L was the only rung above Pro's
+    // entrants ceiling, and with it off sale there is no self-serve route
+    // left, so the only honest next step is a conversation.
+    expect(html).toContain("data-beyond-plan");
+    expect(html).not.toContain("See plans &amp; upgrade");
+    expect(html).toContain("mailto:hello@seazn.club");
+    // The SENTENCE, not just the container: a card carrying the right
+    // attribute over a missing dictionary key renders a lock icon, a reason
+    // and a button with nothing between them, and every assertion above
+    // passes on it. Read through `t` so a reworded string moves this with it.
+    expect(html).toContain(t(uiEn as unknown as Dict, "upgrade.beyondPlan.body"));
+    // No tier badge on the card either, for the same reason as the pill:
+    // "Pro ✦" over a reader on Pro names the thing being sold. Rendered from
+    // the component so a relabelled badge moves this with it.
+    expect(html).not.toContain(renderToStaticMarkup(<PlanBadge feature={LIFTABLE} />));
   });
 
   it("never offers a pass that grants LESS than the plan already held", () => {
@@ -645,7 +686,7 @@ describe("UpgradeGate — paid plan (D1: any paid plan → Pro path only)", () =
     pathname = "/o/riverside/c/summer-league/d/main";
     for (const feature of DOWNGRADE_KEYS) {
       expect(PASS_FEATURES.has(feature), feature).toBe(true);
-      const html = render(<UpgradeGate feature={feature} />, { paidPlan: true });
+      const html = render(<Gate feature={feature} />, { paidPlan: true });
       expect(html, feature).not.toContain(UPGRADE_HREF);
       expect(html, feature).not.toContain(PASS_PRICE);
     }
@@ -656,7 +697,7 @@ describe("UpgradeGate — paid plan (D1: any paid plan → Pro path only)", () =
     // key added there is covered here with no second list to drift.
     pathname = "/o/riverside/c/summer-league/d/new";
     for (const feature of PASS_FEATURES) {
-      const html = render(<UpgradeGate feature={feature} />, { paidPlan: true });
+      const html = render(<Gate feature={feature} />, { paidPlan: true });
       expect(html, feature).not.toContain(UPGRADE_HREF);
       expect(html, feature).not.toContain("data-pass-cta");
     }
@@ -667,28 +708,114 @@ describe("UpgradeGate — paid plan (D1: any paid plan → Pro path only)", () =
     // credit for money spent on a pass. A paid org was blocked by its PLAN and
     // may never have bought a pass at all; both statements would be false.
     pathname = "/o/riverside/c/summer-league/d/new";
-    const html = render(<UpgradeGate feature={LIFTABLE} />, { paidPlan: true });
+    const html = render(<Gate feature={LIFTABLE} />, { paidPlan: true });
     expect(html).not.toContain("data-pass-owned");
     expect(html).not.toMatch(/Event Pass/i);
     expect(html).not.toMatch(/30 days/);
   });
 
-  it("keeps the paid-plan card identical to the org-level one", () => {
-    // No new state was invented: a paid org inside a competition renders the
-    // same Pro-only card an org-level page has always rendered.
+  it("reaches the SAME card at org level once the call site states the plan", () => {
+    // The history of this one test is the history of the whole change.
+    //
+    // It first asserted `inComp === orgLevel` byte for byte, under the heading
+    // "no new state was invented". W3-B's first half invented exactly that
+    // state on purpose, and this became an assertion that the two DIFFER —
+    // with the org-level arm named as the known gap, because outside a
+    // competition there is no CompetitionPassProvider and `usePassGateState()`
+    // answers "none", indistinguishable from a community org.
+    //
+    // The `viewerPlan` prop closes it, and the two cards are identical again
+    // for the opposite reason to the original: not because the paid state was
+    // never distinguished, but because the gate can now recognise it from
+    // EITHER signal. That is what the required prop bought, and asserting the
+    // equality is how a call site that silently stopped passing a real plan
+    // would show up here.
     pathname = "/o/riverside/c/summer-league/d/new";
-    const inComp = render(<UpgradeGate feature={LIFTABLE} />, { paidPlan: true });
+    const inComp = render(<Gate feature={LIFTABLE} />, { paidPlan: true });
     pathname = "/o/riverside/settings/billing";
-    const orgLevel = render(<UpgradeGate feature={LIFTABLE} />);
+    const orgLevel = render(<Gate feature={LIFTABLE} viewerPlan="pro" />);
+
     expect(inComp).toBe(orgLevel);
+    expect(orgLevel).toContain("data-beyond-plan");
+    expect(orgLevel).toContain("mailto:hello@seazn.club");
+    expect(orgLevel).not.toContain("See plans &amp; upgrade");
   });
 
-  it("sends the compact pill to billing rather than the $29 checkout", () => {
+  it("still offers the plan at org level to an org that is NOT paying", () => {
+    // The control the equality above needs. Without it "the org-level card is
+    // the beyond-plan card" is satisfied by a gate that renders it for
+    // everybody, which would withdraw the upsell from every community org on
+    // every org-level page — a strictly worse defect than the one being fixed.
+    pathname = "/o/riverside/settings/billing";
+    const html = render(<Gate feature={LIFTABLE} viewerPlan="community" />);
+    expect(html).not.toContain("data-beyond-plan");
+    expect(html).toContain("See plans &amp; upgrade");
+  });
+
+  it("treats an enterprise viewer as already holding the plan", () => {
+    // Enterprise is above Pro, so "Go Pro" is a downgrade pitch. It reaches
+    // the same card by the same route rather than a third branch.
+    pathname = "/o/riverside/settings/billing";
+    const html = render(<Gate feature={LIFTABLE} viewerPlan="enterprise" />);
+    expect(html).toContain("data-beyond-plan");
+  });
+
+  it("degrades 'unknown' to the pre-prop behaviour, and NOT to silence", () => {
+    // app/directory, app/clubs/[id] and app/import render paywalls with no
+    // organization in server scope, so "unknown" is what they can honestly
+    // say. It must behave exactly as this gate did before the prop existed:
+    // offer the plan. The failure to avoid is the other direction — treating
+    // "I don't know" as "they're covered" would silently remove the upsell
+    // from three whole route trees and look like nothing at all.
+    pathname = "/directory";
+    const html = render(<Gate feature={LIFTABLE} viewerPlan="unknown" />);
+    expect(html).not.toContain("data-beyond-plan");
+    expect(html).toContain("See plans &amp; upgrade");
+  });
+
+  it("lets the competition's own signal answer even when the route cannot", () => {
+    // "unknown" is not an override — it contributes nothing and falls through
+    // to the pass gate state, which the competition layout resolved on the
+    // server. A route that cannot name the plan still gets the right card
+    // inside a competition.
+    pathname = "/o/riverside/c/summer-league/d/new";
+    const html = render(<Gate feature={LIFTABLE} viewerPlan="unknown" />, { paidPlan: true });
+    expect(html).toContain("data-beyond-plan");
+  });
+
+  it("sends the compact pill to the conversation, not to the $29 checkout OR to billing", () => {
+    // Billing was the OLD destination and is no better than the checkout for
+    // this reader: it is the page that lists the plan they hold. The pill has
+    // no room to explain, so its href is the whole message.
     pathname = "/o/riverside/c/summer-league/d/main/schedule";
-    const html = render(<UpgradeGate feature={LIFTABLE} compact />, { paidPlan: true });
+    const html = render(<Gate feature={LIFTABLE} compact />, { paidPlan: true });
     expect(html).not.toContain(UPGRADE_HREF);
-    expect(html).toContain('href="/settings/billing"');
+    expect(html).not.toContain('href="/settings/billing"');
+    expect(html).toContain("mailto:hello@seazn.club");
+    expect(html).toContain("data-beyond-plan");
     expect(html).not.toContain("data-pass-owned");
+    // …and no tier badge. <PlanBadge> names the tier the FEATURE belongs to —
+    // "Pro ✦" — which above a reader already on Pro reads as the thing being
+    // sold. Rendered from the component itself rather than typed here, so a
+    // relabelled badge moves this assertion with it; a mutation sweep found
+    // this the one part of the card no test could see.
+    expect(html).not.toContain(renderToStaticMarkup(<PlanBadge feature={LIFTABLE} />));
+  });
+
+  it("keeps the compact pill pointed at billing for an org that is NOT paying", () => {
+    // The control arm for the test above. Without it, "the pill does not link
+    // to billing" is satisfied by a pill that links nowhere useful in any
+    // state, and the change would read as green while breaking every community
+    // org's route to the plan picker.
+    pathname = "/o/riverside/c/summer-league/d/main/schedule";
+    const html = render(<Gate feature={NOT_LIFTABLE} compact />, { provider: true });
+    expect(html).toContain('href="/settings/billing"');
+    expect(html).not.toContain("data-beyond-plan");
+    expect(html).not.toContain("mailto:hello@seazn.club");
+    // The badge's POSITIVE pair. Without it "the paid pill has no badge" is
+    // satisfied by a badge that renders for nobody, which would strip every
+    // community org of the tier signal the pill exists to give.
+    expect(html).toContain(renderToStaticMarkup(<PlanBadge feature={NOT_LIFTABLE} />));
   });
 
   it("beats a pass row the org still holds", () => {
@@ -696,7 +823,7 @@ describe("UpgradeGate — paid plan (D1: any paid plan → Pro path only)", () =
     // a paid plan lib/entitlements.ts stops consulting the pass entirely, so a
     // gate firing here is the PLAN's ceiling and the pass explains nothing.
     pathname = "/o/riverside/c/summer-league/d/new";
-    const html = render(<UpgradeGate feature={LIFTABLE} />, {
+    const html = render(<Gate feature={LIFTABLE} />, {
       passKey: "event_pass",
       paidPlan: true,
     });
@@ -709,7 +836,7 @@ describe("UpgradeGate — paid plan (D1: any paid plan → Pro path only)", () =
     // The control arm. Without it every assertion above would pass on a gate
     // that had simply stopped rendering the pass CTA anywhere.
     pathname = "/o/riverside/c/summer-league/d/new";
-    const html = render(<UpgradeGate feature={LIFTABLE} />, {
+    const html = render(<Gate feature={LIFTABLE} />, {
       provider: true,
       paidPlan: false,
     });
@@ -721,7 +848,7 @@ describe("UpgradeGate — paid plan (D1: any paid plan → Pro path only)", () =
   it("leaves the pass-held card untouched for a community org", () => {
     // The other control arm: task 17's state must survive this change.
     pathname = "/o/riverside/c/summer-league/d/new";
-    const html = render(<UpgradeGate feature={LIFTABLE} />, { passKey: "event_pass" });
+    const html = render(<Gate feature={LIFTABLE} />, { passKey: "event_pass" });
     expect(html).toContain("data-pass-owned");
     expect(html).toMatch(/used everything the Event Pass includes/i);
     expect(html).not.toContain(PASS_PRICE);
@@ -731,13 +858,13 @@ describe("UpgradeGate — paid plan (D1: any paid plan → Pro path only)", () =
 describe("UpgradeGate — the pass CTA still appears where it should", () => {
   it("is absent on /c/new, which is not a competition yet", () => {
     pathname = "/o/riverside/c/new";
-    const html = render(<UpgradeGate feature={LIFTABLE} />);
+    const html = render(<Gate feature={LIFTABLE} />);
     expect(html).not.toContain("data-pass-cta");
   });
 
   it("is absent for a feature the pass does not lift", () => {
     pathname = "/o/riverside/c/summer-league/schedule";
-    const html = render(<UpgradeGate feature={NOT_LIFTABLE} />);
+    const html = render(<Gate feature={NOT_LIFTABLE} />);
     expect(html).not.toContain("data-pass-cta");
     expect(html).not.toContain("data-pass-owned");
   });
@@ -754,7 +881,7 @@ describe("UpgradeGate — reason override", () => {
   it("uses the passed reason instead of featureReason(feature) when given one", () => {
     pathname = "/o/riverside/settings/billing";
     const html = render(
-      <UpgradeGate feature="formats.double_elim" reason="Page playoffs are a Pro format." />,
+      <Gate feature="formats.double_elim" reason="Page playoffs are a Pro format." />,
     );
     expect(html).toContain("Page playoffs are a Pro format.");
     expect(html).not.toMatch(/double-elimination/i);
@@ -762,7 +889,11 @@ describe("UpgradeGate — reason override", () => {
 
   it("falls back to featureReason(feature) when no override is passed (every pre-existing call site)", () => {
     pathname = "/o/riverside/settings/billing";
-    const html = render(<UpgradeGate feature="formats.double_elim" />);
-    expect(html).toContain("Double-elimination brackets are a Pro format.");
+    const html = render(<Gate feature="formats.double_elim" />);
+    // Derived from the live map, not typed here — W3 fix round 2 reworded
+    // this entry (community grants `formats.double_elim` too, so "a Pro
+    // format" was false); pinning the STRING would have made this test the
+    // thing standing in the way of that correction.
+    expect(html).toContain(featureReason("formats.double_elim"));
   });
 });

@@ -9,6 +9,7 @@ import Link from "@/components/ui/console-link";
 import { useRouter } from "next/navigation";
 import { apiV1, ApiV1Error } from "@/lib/client-v1";
 import { UpgradeGate } from "@/components/upgrade-gate";
+import type { ViewerPlan } from "@/lib/viewer-plan";
 import { useMsg } from "@/components/i18n/dict-provider";
 import { TeamSquadPanel } from "@/components/v2/club-hub/team-squad-editor";
 
@@ -70,11 +71,13 @@ export function ClubsTeamsList({
   teams,
   storageBase,
   canEdit,
+  viewerPlan,
 }: {
   clubs: ClubListItem[];
   teams: TeamListItem[];
   storageBase: string;
   canEdit: boolean;
+  viewerPlan: ViewerPlan;
 }) {
   const msg = useMsg();
   const router = useRouter();
@@ -214,7 +217,7 @@ export function ClubsTeamsList({
         </form>
       )}
 
-      {paywall && <UpgradeGate feature={paywall} />}
+      {paywall && <UpgradeGate feature={paywall} viewerPlan={viewerPlan} />}
       {error && <p className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-600">{error}</p>}
 
       <section className="card scroll-x scroll-x-fade">
@@ -289,7 +292,7 @@ export function ClubsTeamsList({
                   )}
                   {openTeam === t.id && (
                     <div className="mt-2">
-                      <TeamSquadPanel teamId={t.id} canEdit={canEdit} />
+                      <TeamSquadPanel teamId={t.id} canEdit={canEdit} viewerPlan={viewerPlan} />
                     </div>
                   )}
                 </td>

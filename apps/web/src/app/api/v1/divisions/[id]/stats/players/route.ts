@@ -5,7 +5,8 @@ import { divisionPlayerStats } from "@/server/usecases/player-stats";
 type Ctx = { params: Promise<{ id: string }> };
 
 /** Division leaderboard, sortable by any declared metric (Jul3/07 §6;
- *  Pro `stats.player`). */
+ *  `stats.player`, free on every plan since W3-A — an org may still switch it
+ *  off via an entitlement override). */
 export async function GET(req: Request, { params }: Ctx) {
   return v1(async () => {
     const { id } = await params;

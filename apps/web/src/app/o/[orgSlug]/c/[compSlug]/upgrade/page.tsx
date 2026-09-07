@@ -68,6 +68,8 @@ import {
 } from "@/lib/currency";
 import { passExceedsPlan, rungsExceedingPlan } from "@/lib/pass-vs-plan";
 import {
+  heldRungName,
+  offeredRungName,
   PASS_CLOSED_REASON_KEY,
   PASS_LOCK_REASON_KEY,
   PASS_RUNG_NAME_KEY,
@@ -679,7 +681,7 @@ function Ticket({
               data-pass-held-rung={heldRung}
               className={`app-display mt-2 text-sm font-bold ${ended ? "text-white/80" : "text-lime-300"}`}
             >
-              {t(dict, PASS_RUNG_NAME_KEY[heldRung])}
+              {heldRungName(dict, heldRung)}
             </p>
             {purchasedAt && (
               <p className="mt-3 text-xs text-white/70">
@@ -864,7 +866,13 @@ function Comparison({
     planKey === "community"
       ? t(dict, "upgrade.compare.free")
       : planKey === "event_pass"
-        ? t(dict, "upgrade.compare.pass")
+        ? // Plain "Event Pass" while one rung sells, "Event Pass M" the day two
+          // do — the same derived rule as the picker's stamp and buy button
+          // (lib/pass-ladder.ts's `rungNamingRequired`). The `event_pass_l`
+          // branch below keeps its letter unconditionally and that asymmetry is
+          // the point: L is the rung that needs distinguishing FROM the one on
+          // sale, and `columns` never carries both at once.
+          offeredRungName(dict, "event_pass", SELLABLE_PASS_KEYS.length)
         : planKey === "event_pass_l"
           ? t(dict, "upgrade.compare.passL")
           : planLabel(planKey);

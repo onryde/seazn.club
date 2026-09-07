@@ -8,6 +8,7 @@ import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { apiV1, ApiV1Error } from "@/lib/client-v1";
 import { UpgradeGate } from "@/components/upgrade-gate";
+import type { ViewerPlan } from "@/lib/viewer-plan";
 import { useConfirm } from "@/components/ui/confirm-provider";
 import { Tip } from "@/components/ui/tip";
 import { useMsg } from "@/components/i18n/dict-provider";
@@ -73,10 +74,12 @@ export function HistoryPanel({
   divisionId,
   scheduleLocked,
   canEdit,
+  viewerPlan,
 }: {
   divisionId: string;
   scheduleLocked: boolean;
   canEdit: boolean;
+  viewerPlan: ViewerPlan;
 }) {
   const msg = useMsg();
   const router = useRouter();
@@ -275,7 +278,7 @@ export function HistoryPanel({
         </p>
       )}
 
-      {paywallFeature && <UpgradeGate feature={paywallFeature} />}
+      {paywallFeature && <UpgradeGate feature={paywallFeature} viewerPlan={viewerPlan} />}
       {error && (
         <p
           data-testid="history-error"

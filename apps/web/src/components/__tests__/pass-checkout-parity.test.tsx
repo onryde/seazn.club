@@ -169,7 +169,13 @@ describe("Event Pass checkout — the button that opens it", () => {
     );
     expect(html).toContain('checked="" value="event_pass"');
     expect(html).not.toContain('checked="" value="event_pass_l"');
-    expect(html).toContain("Buy the pass — M");
+    // The button used to read "Buy the pass — M" here. The L rung came off
+    // sale on 2026-09-05 and `rungNamingRequired` now returns false, so no
+    // selling surface names a size. This test's subject is the DEFAULT
+    // SELECTION, asserted on the radios above; the button is checked only to
+    // show it renders at all, so the negative is what keeps that honest.
+    expect(html).toContain("Buy the pass");
+    expect(html).not.toContain("Buy the pass —");
   });
 });
 

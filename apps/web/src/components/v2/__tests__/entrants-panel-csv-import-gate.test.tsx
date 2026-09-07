@@ -88,6 +88,7 @@ function panelProps() {
     roles: [],
     eligibility: NO_ELIGIBILITY,
     entrantModel: MODEL,
+    viewerPlan: "community" as const,
   };
 }
 

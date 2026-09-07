@@ -837,7 +837,27 @@ export interface PaywallReason {
 }
 
 /**
- * "…is a Pro feature", "needs a Pro plan", "upgrade to Pro".
+ * The noun class a "this belongs to a paid tier" sentence actually uses in
+ * this codebase — not just "feature".
+ *
+ * W3 fix round 2 (item 4): `FEATURE_REASONS["formats.double_elim"]` read
+ * "Double-elimination brackets are a Pro FORMAT" — one word away from the "a
+ * Pro feature" phrasing `PRO_ATTRIBUTION` matched, which is exactly how it
+ * evaded `freeClaimFaults` while community had granted the row since V393.
+ * Widening to "format" ALONE would have been the same mistake with a
+ * shorter fuse: `discovery.featured` ships "is a Pro PERK" today, matched by
+ * neither the old pattern nor a "feature|format" one — found only by reading
+ * every noun this file's own copy actually uses, which is the check the
+ * item's finding demands rather than "add the one word that just bit us".
+ * `plan`/`tier`/`add-on` are included on the same reasoning even though no
+ * shipped sentence currently uses them: a vocabulary sized to today's copy is
+ * the same fragility one wave later.
+ */
+const PAID_TIER_NOUN = "(?:features?|formats?|perks?|plans?|tiers?|add-ons?)";
+
+/**
+ * "…is a Pro feature", "…are Pro formats", "needs a Pro plan", "upgrade to
+ * Pro".
  *
  * DELIBERATELY NOT "needs a bigger plan". That is a QUOTA sentence — the
  * allowance is used up — and every quota key legitimately has a community
@@ -845,9 +865,23 @@ export interface PaywallReason {
  * `divisions.per_competition.max`, `stages.per_division.max` and `import.bulk`
  * as falsehoods on this guard's first run. A cap sentence says "you have used
  * yours", not "this belongs to Pro".
+ *
+ * Two shapes for the noun clause, not one: "is a/an Pro NOUN" (singular, with
+ * article — "is a Pro feature") and "is/are Pro NOUN(s)" (no article, either
+ * number — "are Pro formats"). `formats.advanced`'s own TRUE reason uses the
+ * second shape ("Americano, ladders … are Pro formats"), which is why both
+ * have to be recognised: a vocabulary that only matched the false claim's
+ * shape and not the true claim's own would be an accident of which sentence
+ * happened to get fixed first, not a rule.
  */
-export const PRO_ATTRIBUTION =
-  /\b(?:is|are)\s+(?:a|an)\s+(?:Pro|paid)\s+feature\b|\b(?:is|are)\s+on\s+Pro\b|\bneeds?\s+(?:a\s+)?Pro\s+plan\b|\bupgrade\s+to\s+Pro\b/i;
+export const PRO_ATTRIBUTION = new RegExp(
+  String.raw`\b(?:is|are)\s+(?:a|an)\s+(?:Pro|paid)\s+${PAID_TIER_NOUN}\b` +
+    String.raw`|\b(?:is|are)\s+Pro\s+${PAID_TIER_NOUN}\b` +
+    String.raw`|\b(?:is|are)\s+on\s+Pro\b` +
+    String.raw`|\bneeds?\s+(?:a\s+)?Pro\s+plan\b` +
+    String.raw`|\bupgrade\s+to\s+Pro\b`,
+  "i",
+);
 // "…is on Pro and the Event Pass" was added 2026-09-05 with the twelve reasons
 // that now name both plans. Without it those sentences match no PAID
 // attribution at all, so a trailing contrast clause ("…the flat partner strip
@@ -877,8 +911,16 @@ export const PRO_ATTRIBUTION =
  */
 export const PASS_ATTRIBUTION = /\bevent\s+pass\b/i;
 
-export const ENTERPRISE_ATTRIBUTION =
-  /\b(?:is|are)\s+(?:a|an)\s+Enterprise\s+feature\b|\bneeds?\s+(?:an\s+)?Enterprise\s+plan\b/i;
+// Same noun-class widening as `PRO_ATTRIBUTION`, and the same reasoning: an
+// Enterprise attribution keyed to "feature" alone is one synonym from the
+// identical evasion, even though no shipped Enterprise sentence has used a
+// different noun yet.
+export const ENTERPRISE_ATTRIBUTION = new RegExp(
+  String.raw`\b(?:is|are)\s+(?:a|an)\s+Enterprise\s+${PAID_TIER_NOUN}\b` +
+    String.raw`|\b(?:is|are)\s+Enterprise\s+${PAID_TIER_NOUN}\b` +
+    String.raw`|\bneeds?\s+(?:an\s+)?Enterprise\s+plan\b`,
+  "i",
+);
 
 /** "…works on every plan", "free on every plan", "included on every plan". */
 export const FREE_ATTRIBUTION =
@@ -3018,6 +3060,197 @@ export function localePassUncoveredFaults(
       faults.push(
         `${locale} ${key}: names no recognised capability — the ${locale} vocabulary has gone stale and this guard examined nothing`,
       );
+    }
+  }
+  return faults;
+}
+
+/**
+ * ── THE INVERSE OF `localePassUncoveredFaults`, AND OF `freeClaimFaults` ────
+ *
+ * `freeClaimFaults` catches a paywall REASON calling a pass-granted key "a Pro
+ * feature" — twelve of them, W2 (entitlements v18) 2026-09-05. Both misreads
+ * are the same class pointed opposite ways: a plan attribution that has gone
+ * stale against `plan_entitlements`. But `freeClaimFaults` is keyed to ONE ROW
+ * per sentence — `lib/feature-copy.ts`'s `FEATURE_REASONS` map is
+ * `feature_key -> reason`, so the guard always knows which row a reason is
+ * ABOUT. A pricing-card bullet carries no such key: "Advanced formats —
+ * double elim, ladders" is free prose illustrating ONE row
+ * (`formats.advanced`, the actual paid differentiator) with EXAMPLES, and one
+ * of those examples is itself a SEPARATE row (`formats.double_elim`) that
+ * community has granted since the V393 growth cell — Free already had double
+ * elimination. The bullet's own header ("Advanced formats") was true; its
+ * illustrative half was the concrete claim a reader believes, and it was
+ * false. `pricing-cards.test.ts`'s `cardBooleanFaults` cannot see this either:
+ * it only proves a claimed row IS granted to the plans that claim it, never
+ * that an EXAMPLE beside the claim names a DIFFERENT, already-free row.
+ *
+ * So — like `localePassUncoveredFaults` — this guard recognises capabilities
+ * by VOCABULARY (a phrase can appear in prose with no key attached), but it
+ * judges each recognised phrase against ITS OWN feature_key rather than the
+ * row the bullet nominally illustrates, because the phrase is the half a
+ * reader actually believes.
+ *
+ * DERIVED FROM THE LIVE MATRIX, NEVER A HARDCODED OFFENDING SET: an entry
+ * names a PHRASE and the feature_key it is a claim about; whether quoting
+ * that phrase is currently false is read from `grants` on every call, so the
+ * day a migration moves that cell the other way, this rule falls silent on
+ * its own — exactly as `localePassUncoveredFaults`'s own "must fall silent
+ * when the matrix moves" case proves for its half of this pair.
+ *
+ * THE VOCABULARY IS DELIBERATELY SMALL, and every entry is commented with why
+ * it exists — a wide "any capability word" list is unreviewable and, per the
+ * header note over this file, exactly the shape ("A DENYLIST OF PHRASINGS")
+ * that lets the same falsehood back in reworded. Three entries:
+ *
+ *  - `formats.double_elim`: the phrase THIS TASK'S DEFECT USED ("double elim"
+ *    / "double elimination"). Community grants it, so any bullet naming it is
+ *    a fault regardless of which row the bullet is nominally selling.
+ *  - `formats.advanced`: "americano" / "ladders", the examples the fixed
+ *    copy uses instead (design doc
+ *    2026-09-02-entitlements-v18-three-tier-design.md §2: "americano,
+ *    ladders, custom brackets, feeds"). Community does NOT grant this row, so
+ *    these phrases must NEVER fault — carrying them here is what makes the
+ *    rule DISCRIMINATING rather than a blanket "double elim" ban: it proves
+ *    the guard is judging the MATRIX, not pattern-matching a banned word,
+ *    because the same shape of entry (a phrase mapped to a feature_key) reds
+ *    for one row and stays silent for the other, on the same bullet.
+ *  - `stats.player`: "player stats", the W3-A defect's own phrase (2026-09-06,
+ *    V399). `stats.player` (the per-division RECORD) went free on every plan
+ *    in that migration — the SAME falsehood class `formats.double_elim`
+ *    demonstrated one wave earlier, on the survivor of that fix
+ *    (`pricing.pro.f4` had already been through one rewrite, W1, for a
+ *    DIFFERENT reason, and still carried a claim that went false under it).
+ *    No discriminating sibling entry is needed here the way `formats.advanced`
+ *    pairs with `formats.double_elim`: the still-gated half of the same split,
+ *    `stats.player.career`, is described with a DIFFERENT phrase ("career
+ *    stats") that this pattern does not match at all — the discrimination is
+ *    structural (the two feature keys' example phrases share no words), not a
+ *    second vocabulary entry standing guard over one that would otherwise be
+ *    a blanket ban.
+ *
+ * ANTI-VACUITY, both halves: `PAID_OVERCLAIM_VOCAB.length === 0` is checked
+ * FIRST, before any loop — an empty vocabulary would otherwise fall through
+ * every string and return `[]`, indistinguishable from "scanned and clean".
+ * (Three vacuous "empty set answers no to every question" defects have
+ * shipped in this repo already; this is that failure mode's precondition,
+ * caught before the loop rather than left to be inferred from silence.) The
+ * SECOND half — the vocabulary must actually MATCH at least one real shipped
+ * string, not just be non-empty — is proved in
+ * `dictionary-copy-truth.test.ts` against the literal pre-fix wording this
+ * task replaced, never a synthetic fixture: a vocabulary that only recognises
+ * strings nobody ships is equally silent.
+ */
+export const PAID_OVERCLAIM_VOCAB: Array<[feature: string, byLocale: Record<DictionaryLocale, RegExp>]> = [
+  [
+    "formats.double_elim",
+    {
+      en: /\bdouble[- ]elim(?:ination)?\b/i,
+      es: claim(String.raw`\bdoble\s+eliminaci[oó]n\b`),
+      fr: claim(String.raw`\bdouble\s+[ée]limination\b`),
+      nl: claim(String.raw`\bdubbele\s+eliminatie\b`),
+    },
+  ],
+  [
+    "formats.advanced",
+    {
+      en: /\b(americano|ladders?)\b/i,
+      es: claim(String.raw`\b(americano|escaleras?)\b`),
+      fr: claim(String.raw`\b(americano|[ée]chelles?)\b`),
+      nl: claim(String.raw`\b(americano|ladders?)\b`),
+    },
+  ],
+  [
+    "stats.player",
+    {
+      en: /\bplayer\s+stats\b/i,
+      es: claim(String.raw`\bestad[ií]sticas\s+de\s+jugador(?:es)?\b`),
+      fr: claim(String.raw`\bstatistiques\s+(?:des?\s+)?joueurs?\b`),
+      nl: claim(String.raw`\bspelers?statistieken\b`),
+    },
+  ],
+];
+
+/**
+ * Every plan name this product prints, in the ONE spelling all four locales
+ * use.
+ *
+ * Untranslated on purpose, and that is what makes this rule locale-robust
+ * rather than an English guard silently passing three dictionaries: "Pro",
+ * "Event Pass" and "Enterprise" are proper nouns here and ship identically in
+ * es/fr/nl (`upgrade.rung.m` is "Event Pass M" in all four). A rule phrased
+ * around English GRAMMAR — `PRO_ATTRIBUTION` and its siblings above — cannot
+ * make that claim, which is why those take a per-locale vocabulary and this
+ * does not.
+ *
+ * Its own constant rather than reusing `PAID_PLAN_NAME`: that one is missing
+ * Enterprise, and widening it would change what several unrelated rules judge.
+ */
+export const ANY_PLAN_NAME = /\b(?:Pro Plus|Pro|Event Pass|Enterprise|Community)\b/i;
+
+/**
+ * The beyond-plan card's sentence — shown ONLY to an org already on a paid
+ * plan, when a gate fired because of that plan's own ceiling (v18 W3-B).
+ *
+ * It must name no plan at all, in any locale. Every other paywall sentence in
+ * this product exists to attribute a capability to a tier; this one is shown
+ * to a reader for whom every such attribution is either something they already
+ * hold ("Pro") or a negotiation a sentence cannot conduct ("Enterprise"). The
+ * failure it guards against is concrete and was the shipped behaviour: the
+ * card said "See plans & upgrade" to an org whose plan was in that list.
+ *
+ * ANTI-VACUITY, both halves. An empty `values` is reported rather than passing
+ * — a rule that examines nothing is the failure mode this file has hit twice —
+ * and so is a call that supplies fewer than the four dictionaries, because a
+ * plan name reaching only `fr` is exactly the shape a locale-blind sweep
+ * misses.
+ */
+export function beyondPlanCopyFaults(values: readonly LocalisedValue[]): string[] {
+  if (values.length === 0) {
+    return ["no beyond-plan copy supplied — this rule would examine nothing"];
+  }
+  const faults: string[] = [];
+  const seen = new Set(values.map((v) => v.locale));
+  for (const locale of DICTIONARY_LOCALES) {
+    if (!seen.has(locale)) faults.push(`${locale}: beyond-plan copy was not supplied`);
+  }
+  for (const { locale, key, value } of values) {
+    if (value.trim() === "") {
+      faults.push(`${locale} ${key}: empty — the card would render a heading over nothing`);
+      continue;
+    }
+    const named = ANY_PLAN_NAME.exec(value);
+    if (named) {
+      faults.push(
+        `${locale} ${key}: names "${named[0]}" to a reader who already holds the top self-serve tier`,
+      );
+    }
+  }
+  return faults;
+}
+
+export function localePaidOverclaimFaults(
+  values: LocalisedValue[],
+  grants: FeatureGrants,
+): string[] {
+  // STATE THE EMPTY CASE FIRST — see the header comment above for why.
+  if (PAID_OVERCLAIM_VOCAB.length === 0) {
+    return ["paid-overclaim vocabulary is empty — this rule would examine nothing"];
+  }
+  const faults: string[] = [];
+  for (const { locale, key, value } of values) {
+    for (const [feature, byLocale] of PAID_OVERCLAIM_VOCAB) {
+      if (!byLocale[locale].test(value)) continue;
+      const row = grants[feature];
+      if (!row) {
+        faults.push(`${locale} ${key}: names ${feature}, which has no rows in plan_entitlements`);
+        continue;
+      }
+      if (row.community) {
+        faults.push(
+          `${locale} ${key}: sells ${feature} as a paid differentiator, but community already grants it`,
+        );
+      }
     }
   }
   return faults;

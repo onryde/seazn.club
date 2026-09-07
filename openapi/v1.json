@@ -87611,7 +87611,7 @@
     },
     "/api/v1/divisions/{id}/stats/players": {
       "get": {
-        "summary": "Division leaderboard from the score-event fold, sortable by any declared metric; flags requires_detailed_scoring instead of wrong zeros (Pro `stats.player`)",
+        "summary": "Division leaderboard from the score-event fold, sortable by any declared metric; flags requires_detailed_scoring instead of wrong zeros (`stats.player`, free on every plan since W3-A — an org may switch it off via an entitlement override)",
         "tags": [
           "stats"
         ],
@@ -87867,7 +87867,7 @@
     },
     "/api/v1/persons/{id}/stats": {
       "get": {
-        "summary": "A player's card stats, keyed per division (Pro `stats.player`). `?group=sport` returns the S9/#418 career rollup instead: every sport this person has snapshot rows in, summed across divisions and labelled via the sport's latest registered module; any other (or absent) `group` value keeps the per-division shape unchanged",
+        "summary": "A player's card stats, keyed per division (`stats.player`, free on every plan since W3-A). `?group=sport` returns the S9/#418 career rollup instead, still Pro + Event Pass on its own key `stats.player.career`: every sport this person has snapshot rows in, summed across divisions and labelled via the sport's latest registered module; any other (or absent) `group` value keeps the per-division shape unchanged",
         "tags": [
           "stats"
         ],
@@ -88123,7 +88123,7 @@
     },
     "/api/v1/public/orgs/{orgSlug}/competitions/{slug}/divisions/{divisionSlug}/stats": {
       "get": {
-        "summary": "Consent-filtered public leaderboard (minors' names gated)",
+        "summary": "Consent-filtered public leaderboard (minors' names gated); `stats.player`, same key and default as the org's own read since W3-A",
         "tags": [
           "public"
         ],

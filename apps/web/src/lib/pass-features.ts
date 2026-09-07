@@ -43,7 +43,6 @@ export const PASS_FEATURES = new Set([
   // the pass for a key whose gate still refuses it takes $29 and leaves the user
   // exactly as blocked, which is strictly worse than never offering it.
   "officials.auto",
-  "stats.player",
   "discipline.enforced",
   "scoring.device_links",
   "scoring.audit_export",
@@ -63,6 +62,15 @@ export const PASS_FEATURES = new Set([
   "dashboard.player_profiles",
   "embeds.enabled",
   "news.auto",
+  // W3-A (2026-09-06, entitlements v18): `stats.player` (the per-division
+  // RECORD — divisionPlayerStats, personStats) LEFT this set here, split into
+  // two keys — see usecases/player-stats.ts. The record is now free on every
+  // plan (community caught up, same shape as the two keys below), and its
+  // leverage half, the cross-division CAREER ROLLUP (personCareerStats,
+  // S9/#418), got its own key, `stats.player.career`, which enters the set
+  // in its place: it carries forward exactly the pass-lifted cells
+  // `stats.player` held before the split.
+  "stats.player.career",
   // Two keys LEFT this set at V393, and not because the pass stopped lifting
   // them — because `community` caught up: `formats.double_elim` and
   // `scheduling.multi_division` are TRUE on every plan key including community,

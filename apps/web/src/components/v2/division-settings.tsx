@@ -16,6 +16,7 @@ import { useMsg } from "@/components/i18n/dict-provider";
 import { TagChipInput } from "@/components/ui/tag-chip-input";
 import type { MessageKey } from "@/lib/messages";
 import type { EffectiveEntrantModel } from "@seazn/engine/sport";
+import type { ViewerPlan } from "@/lib/viewer-plan";
 
 // The three entrant shapes, in a stable display order. The effective model
 // (module default ← division override) decides which are ticked.
@@ -263,6 +264,7 @@ export function DivisionSettings({
   entrantModelSource,
   autoPosts,
   canAutoPost,
+  viewerPlan,
 }: {
   division: DivisionSettingsInfo;
   /** Org id, for the tag-suggestions fetch only (the division PATCH itself
@@ -302,6 +304,7 @@ export function DivisionSettings({
   autoPosts: boolean;
   /** news.auto entitlement (Pro) — off → the toggle shows the PlusReveal. */
   canAutoPost: boolean;
+  viewerPlan: ViewerPlan;
 }) {
   const msg = useMsg();
   const router = useRouter();
@@ -1049,7 +1052,7 @@ export function DivisionSettings({
             {msg("divset.news.toggle")}
           </label>
         ) : (
-          <UpgradeGate feature="news.auto" />
+          <UpgradeGate feature="news.auto" viewerPlan={viewerPlan} />
         )}
         <p className="text-[11px] text-slate-400">{msg("divset.news.note")}</p>
       </Group>
@@ -1062,7 +1065,7 @@ export function DivisionSettings({
         {danger}
       </Group>
 
-      {paywallFeature && <UpgradeGate feature={paywallFeature} />}
+      {paywallFeature && <UpgradeGate feature={paywallFeature} viewerPlan={viewerPlan} />}
       {notice && <p className="rounded-md bg-emerald-50 px-3 py-2 text-xs text-emerald-700">{notice}</p>}
       {error && <p className="rounded-md bg-red-50 px-3 py-2 text-xs text-red-600">{error}</p>}
     </div>

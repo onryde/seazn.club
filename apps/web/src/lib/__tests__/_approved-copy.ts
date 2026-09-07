@@ -105,6 +105,51 @@ export const APPROVED_PLANS_PASS: ApprovedParagraph[] = [
  *   two-bullet size ladder and its "sized with the pass" credit sentence.
  *   Same sources, same figures.
  *
+ * AND AGAIN, same day, three more — all in event-pass.md, all the same
+ * sentence fragment: the held marker "Event Pass M active" became
+ * "Event Pass active". Owner-approved.
+ *
+ *   This is the HELD side, which the 2026-09-05 ruling deliberately left
+ *   alone, so it needs its own justification rather than inheriting that one.
+ *   The letter had become something a buyer meets ONLY AFTER paying: the buy
+ *   button reads "Buy the pass", /pricing's ticket and matrix column read
+ *   "Event Pass", and `config/stripe-plans.json` names this rung's product
+ *   "Seazn Club Event Pass" — no letter on the checkout line or the receipt.
+ *   So the active marker was the single place in the whole purchase naming a
+ *   size, and it appeared after the money moved.
+ *
+ *   The L rung is UNCHANGED and still reads "Event Pass L active", which is
+ *   what v17 #294 is about: a $44.99 buyer must not read their competition as
+ *   holding the $11.99 product. The rule is `heldRungNeedsNaming` — name a
+ *   held rung unless it is exactly the one rung on sale — so the letter comes
+ *   back on its own the day a second rung does.
+ *
+ * RE-PINNED AGAIN 2026-09-07 — four surfaces, two per article, owner-approved
+ * before the swap (entitlements v18 W3).
+ *
+ *   TWO were a FALSE PAID CLAIM, and they are the reason this is not a tidy-up.
+ *   Both articles sold the pass as carrying "advanced formats including double
+ *   elimination". Read against `plan_entitlements`: `formats.double_elim` is
+ *   bool_value TRUE on community and has been since V393 — the format is free,
+ *   and the pass was being credited with something every organiser already
+ *   has. Replaced with "americano and ladders", which is `formats.advanced`,
+ *   FALSE on community and true on both pass rungs, so the sentence now names
+ *   what the money actually buys. This is the identical defect W3 fixed in
+ *   `pricing.pass.f3`; the dictionaries have a guard for it
+ *   (`localePaidOverclaimFaults`) and `content/help/**` did not, because that
+ *   guard scans the four locale files and this tree has none. A matrix-backed
+ *   guard now covers the billing articles too — see help-copy-truth.test.ts,
+ *   "billing help does not sell a format community already grants".
+ *
+ *   TWO were the retired rung letter on a SELLING surface: plans.md's Event
+ *   Pass bullet and event-pass.md's price-table header both read "Event Pass M
+ *   — $11.99". The owner took the L rung off sale on 2026-09-05 and the suffix
+ *   off every selling surface with it; `/pricing` and `/upgrade` were done in
+ *   that wave and in `ad73763ca`, and the help tree still named a size that
+ *   appears nowhere a reader can reach it. Figures re-read against
+ *   `plan_entitlements` and unchanged (event_pass: 128 entrants, 10 divisions,
+ *   4% against community's 5%).
+ *
  * Nothing about a pass a customer already HOLDS changed: the "Event Pass M
  * active" marker, the receipt, and the pass's own grants are untouched, and the
  * rung is dormant in `plan_entitlements` rather than deleted.
@@ -114,7 +159,7 @@ export const APPROVED_EVENT_PASS_INVENTORY: string[] = [
   "74fb0e84d81cf750",
   "7b44a9ceda103f3a",
   "0f6590c1fd0b70ad",
-  "3d07b637e0fcd0db",
+  "7d2b6bb67fc828d2",
   "9906a08781bbfbc3",
   "c8038bc5e87faf21",
   "d0495741c4edb2b5",
@@ -130,7 +175,7 @@ export const APPROVED_EVENT_PASS_INVENTORY: string[] = [
   "1b57ba96756ac962",
   "fcd1bcb9b15230dd",
   "9cdc77f8e4467e2c",
-  "4ebceeab83e6a5bf",
+  "f8a66461cb7b0535",
   "adede976a539f9fa",
   "219ccaea5a3878ae",
   "6feca5577c55cf2b",
@@ -141,7 +186,7 @@ export const APPROVED_EVENT_PASS_INVENTORY: string[] = [
   "f39d96b7fbbbfc13",
   "665584fd0671d579",
   "3f3be96ac6e6be4e",
-  "79e1623c03c1f2a8",
+  "37f1d155a0e644b9",
   "3b3bc011debe7da5",
   "9a68888ef2d9aa1a",
   "4901d7ce5eea800a",
@@ -149,7 +194,7 @@ export const APPROVED_EVENT_PASS_INVENTORY: string[] = [
   "81e902865f77d84a",
   "69fbd1e0e9c144ec",
   "8c072be7bd782c73",
-  "51f349d614c306b2",
+  "a3ca58415ff21405",
   "774d4d6b3246dd97",
   "c42978cab6965d56",
   "331525dbff809017",
@@ -177,7 +222,7 @@ export const APPROVED_EVENT_PASS_INVENTORY: string[] = [
   "2508d8869fe2a54a",
   "c503ebdc56e74a10",
   "3f08a1036ddefbd7",
-  "3ad16eeee6e0b482",
+  "49e759a1a332176d",
   "02427d5e988e6afa",
 ];
 
@@ -203,8 +248,8 @@ export const APPROVED_PLANS_INVENTORY: string[] = [
   "1e9a3c2b4d3941d7",
   "e5ac72886c19cefc",
   "8ee85036b1264382",
-  "249e25ab9983cc87",
-  "cde930076d641e8b",
+  "c315a996027a99ea",
+  "9a4d219f071cc7fb",
   "f7c7084faf0e9fab",
   "d5a0df90dfe35a6c",
   "01b10f014d674ec5",

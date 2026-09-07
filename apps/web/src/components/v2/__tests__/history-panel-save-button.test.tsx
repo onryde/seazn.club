@@ -24,7 +24,7 @@ vi.mock("@/lib/client-v1", () => ({
 //   - btn-ghost + text-xs/py-1.5 → matches the density of the list below it
 describe("HistoryPanel — save-point button sizing", () => {
   const html = renderToStaticMarkup(
-    <HistoryPanel divisionId="d1" scheduleLocked={false} canEdit />,
+    <HistoryPanel divisionId="d1" scheduleLocked={false} canEdit viewerPlan="community" />,
   );
   const button = html.match(/<button[^>]*type="submit"[^>]*>/)?.[0] ?? "";
 

@@ -164,6 +164,7 @@ function baseProps(fixtures: BoardFixture[]): BoardProps {
     competitionStart: "2026-08-01",
     competitionEnd: "2026-12-31",
     officialsWithBlackout: 0,
+    viewerPlan: "community",
   } as BoardProps;
 }
 
