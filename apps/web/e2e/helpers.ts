@@ -957,6 +957,14 @@ export async function seedBareRegistrationSql(
  * There is no public invalidation endpoint, so this rides the superadmin
  * entitlement-override route (upsert and delete both invalidate): the calling
  * session's user is flipped to superadmin for the two calls, then restored.
+ *
+ * BOTH responses are checked, and either one being non-ok THROWS (W8/F10). It
+ * used to read neither: a 401 (the staff flip lost a race with another spec's
+ * restore), a 404 or a 5xx left the caller proceeding on a cache it believed
+ * clear and had not dropped — the failure mode this helper exists to prevent,
+ * arriving silently. Callers already `await` it, so a throw surfaces in the
+ * test that asked for the drop instead of as a wrong-plan assertion later on.
+ * Proven by `walkthrough/settings-competition-gates.spec.ts`'s "W8/F10" test.
  */
 export async function invalidateOrgEntitlements(
   request: APIRequestContext,
@@ -969,16 +977,26 @@ export async function invalidateOrgEntitlements(
   const KEY = "e2e.cache.bust";
   await setStaff(true);
   try {
-    await request.fetch(`/api/admin/orgs/${orgId}/entitlement-override`, {
+    const setRes = await request.fetch(`/api/admin/orgs/${orgId}/entitlement-override`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       data: { feature_key: KEY, reason: "e2e: drop cached entitlements after SQL flip" },
     });
-    await request.fetch(`/api/admin/orgs/${orgId}/entitlement-override`, {
+    if (!setRes.ok()) {
+      throw new Error(
+        `invalidateOrgEntitlements: set override failed (${setRes.status()}) for org ${orgId}`,
+      );
+    }
+    const clearRes = await request.fetch(`/api/admin/orgs/${orgId}/entitlement-override`, {
       method: "DELETE",
       headers: { "Content-Type": "application/json" },
       data: { feature_key: KEY },
     });
+    if (!clearRes.ok()) {
+      throw new Error(
+        `invalidateOrgEntitlements: clear override failed (${clearRes.status()}) for org ${orgId}`,
+      );
+    }
   } finally {
     await setStaff(false);
   }

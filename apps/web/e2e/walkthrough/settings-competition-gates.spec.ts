@@ -1,4 +1,5 @@
 import { test, expect, type APIRequestContext, type Page } from "@playwright/test";
+import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import {
@@ -252,9 +253,13 @@ const overridden = new Set<string>();
  * No assertion in this file changes either way: with no Redis there is no
  * cached resolution to drop.
  *
- * Note the helper never checks either fetch's response status, so a lost race
- * fails silently rather than loudly. Tracked as `FINDINGS.md` F10 — not this
- * wave's to fix, three other specs call it.
+ * The helper now reads BOTH fetches' response status and throws on either
+ * (W8/F10) — a lost race fails loudly, inside the test that asked for the
+ * drop, rather than as a wrong-plan assertion later. Because the predicate
+ * above skips the call in every environment this suite can run in, nothing
+ * else in this file exercises that guard: the "W8/F10" test at the foot of
+ * this file is what proves it, and it is here because this is the file that
+ * recorded the gap.
  */
 async function dropEntitlementCache(request: APIRequestContext, orgId: string): Promise<void> {
   if (!process.env.REDIS_URL) return;
@@ -830,3 +835,81 @@ test("case #18: an end before the start is refused both in one body (400, issue 
   }
 });
 
+
+// ---------------------------------------------------------------------------
+// The helper this file leans on, and the refusal it used to swallow (W8/F10).
+// ---------------------------------------------------------------------------
+
+/**
+ * `invalidateOrgEntitlements` flips the org owner to superadmin, POSTs an
+ * override, DELETEs it, and flips the owner back. Until W8 it read neither
+ * response: a 401, a 404 or a 5xx left the caller believing a cache it had
+ * not dropped was clear (`FINDINGS.md` F10).
+ *
+ * The proof lives HERE rather than in one of the other callers because this
+ * is the file that recorded the finding, and because the guard belongs to the
+ * helper: `dropEntitlementCache` above gates the call on `REDIS_URL`, so
+ * nothing else in this file exercises it in any environment this suite can
+ * run in.
+ *
+ * Three cases, and the third is not decoration — an unconditional `throw`
+ * passes both refusal cases and breaks every real caller.
+ */
+test("W8/F10: a refused entitlement-cache drop throws, on either half, and the happy path still resolves", async ({
+  request,
+}) => {
+  test.setTimeout(budget(0, 0, 0));
+
+  // (a) The REAL server refuses, and the helper says so — no stub in this
+  //     half. An org id nothing was seeded under: `setOwnerStaffSql` matches
+  //     zero `org_members` rows, so the calling session is never made
+  //     superadmin and `requireSuperadmin` throws an `AuthError`, which
+  //     `lib/http.ts` answers 401. (If a sibling spec's superadmin window
+  //     happens to be open — `settings-admin.spec.ts` flips the same shared
+  //     `users` row — the route gets past that check and answers 404
+  //     "Organization not found" instead. Both are non-ok, which is the whole
+  //     assertion.) Nothing real is touched either way: both
+  //     `update users … where id in (select … where org_id = <nowhere>)`
+  //     statements match zero rows, so the shared Pro user's `is_staff` bit is
+  //     never written.
+  const nowhere = randomUUID();
+  await expect(
+    invalidateOrgEntitlements(request, nowhere),
+    "a refused override write must be reported, not swallowed",
+  ).rejects.toThrow(/invalidateOrgEntitlements: set override failed \(40\d\)/);
+
+  // (b) The CLEAR half carries its own guard, and (a) cannot reach it: the
+  //     first fetch has to SUCCEED before the second one runs. Playwright's
+  //     routing is no help — `page.route` AND `context.route` were both
+  //     measured on 1.61.1 intercepting ZERO of `page.request`'s calls, so an
+  //     `APIRequestContext` is unroutable and there is no network seam to
+  //     inject through. The seam that does exist is the helper's own first
+  //     parameter. Without this case, deleting the second `if` leaves this
+  //     file green: two guards covering for each other are each untested
+  //     (AGENTS.md failure class 3).
+  const stub = (ok: (method: string) => boolean): APIRequestContext =>
+    ({
+      fetch: (_url: string, opts?: { method?: string }) => {
+        const method = opts?.method ?? "GET";
+        return Promise.resolve({ ok: () => ok(method), status: () => (ok(method) ? 200 : 503) });
+      },
+    }) as unknown as APIRequestContext;
+
+  await expect(
+    invalidateOrgEntitlements(
+      stub((m) => m !== "DELETE"),
+      nowhere,
+    ),
+    "a refused override CLEAR must be reported too",
+  ).rejects.toThrow(/invalidateOrgEntitlements: clear override failed \(503\)/);
+
+  // (c) The positive pair for both of the above. Both halves ok ⇒ the helper
+  //     RESOLVES, and every caller keeps working.
+  await expect(
+    invalidateOrgEntitlements(
+      stub(() => true),
+      nowhere,
+    ),
+    "a helper that throws on the happy path breaks all eleven of its callers",
+  ).resolves.toBeUndefined();
+});
