@@ -17,6 +17,24 @@ import { join } from "node:path";
 import { expect, type APIRequestContext, type Browser, type BrowserContext, type Page, type TestInfo } from "@playwright/test";
 import { apiJson, screenshotAtWidths, setDivisionConfigSql } from "./helpers";
 import { consentedAnonymousState } from "./scorepad-a11y-kit";
+import { POLL_MS } from "../src/components/public-site/match-centre/use-live-fixture";
+
+/** How long an R10 "the open page updates itself" assertion may wait.
+ *
+ *  `useLiveFixture` refreshes on a `setInterval(refresh, POLL_MS)` with no
+ *  overlap guard, so the page's own worst case is not one interval: a tick
+ *  whose fetch is still in flight when the next is due leaves the document
+ *  untouched until the one AFTER it lands. `POLL_MS + 5_000` (1.3 intervals)
+ *  therefore reds on a single missed tick — which is exactly how it failed:
+ *  the 320 page sat at `36/0 (4.5)` reading "Updated 24s ago" while the
+ *  ledger and the 1280 page both had the wicket. TWO intervals plus slack is
+ *  the real budget, and deriving it from `POLL_MS` moves it if that constant
+ *  ever moves (AGENTS.md rule #20 — a flat timeout beside a derived cost is a
+ *  latent red).
+ *
+ *  This does not weaken any assertion: a page that never updates still fails,
+ *  it just takes 35 s to say so instead of 20 s. */
+export const LIVE_UPDATE_BUDGET_MS = 2 * POLL_MS + 5_000;
 
 // `.` not `..`: this module lives at `e2e/` root, NOT in `e2e/walkthrough/`.
 // It was moved out of that directory because Playwright's WALKTHROUGH pattern
@@ -383,8 +401,36 @@ export async function closeOpenContexts(): Promise<void> {
  *  walkthrough's own committed `__screens__/spectator-w1/walkthrough/`
  *  directory — the same convention Task 19's `more-sheet-{320,768}.png`
  *  already committed under `__screens__/spectator-w1/`. */
+/** The rail scrolls its ACTIVE tab into view from both a selection effect and
+ *  a `resize` listener, with `behavior: "smooth"` (`tab-rail.tsx:62`). A
+ *  screenshot taken the instant after `setViewportSize` therefore catches the
+ *  scroll mid-flight and freezes a CLIPPED active tab into the golden — which
+ *  is what `match-a-tab-info-320.png` showed: an "Info" pill cut off by the
+ *  viewport edge that a real visitor never sees. Wait for the tab to come to
+ *  REST before every shot.
+ *
+ *  Failing here is the right outcome, not an inconvenience: if the rail truly
+ *  cannot seat the active tab at this width, the visual gate must go red
+ *  rather than hand the owner a golden that misrepresents the product. */
+async function settleTabRail(page: Page): Promise<void> {
+  const active = page.locator('[role="tab"][aria-selected="true"]');
+  if ((await active.count()) === 0) return; // a page with no tab rail (or none selected yet)
+  const viewportWidth = page.viewportSize()?.width ?? 0;
+  await expect
+    .poll(
+      async () => {
+        const box = await active.first().boundingBox();
+        // +1px for sub-pixel float rounding, matching the width assertion in
+        // spectator-public-2.spec.ts.
+        return box !== null && box.x >= 0 && box.x + box.width <= viewportWidth + 1;
+      },
+      { timeout: 5_000, message: `the active tab must come to REST inside the ${viewportWidth}px viewport before the shot` },
+    )
+    .toBe(true);
+}
+
 export async function shotAtWidths(page: Page, testInfo: TestInfo, name: string, widths: number[]): Promise<void> {
-  await screenshotAtWidths(page, testInfo, name, widths);
+  await screenshotAtWidths(page, testInfo, name, widths, settleTabRail);
   for (const width of widths) {
     copyFileSync(`${testInfo.outputPath()}/${name}-${width}.png`, join(OUT, `${name}-${width}.png`));
   }

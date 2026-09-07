@@ -243,15 +243,30 @@ const DEFAULT_SHOT_WIDTHS = [1280, 768, 320];
  * claim/consent/opt-out/standings moments). Kept minimal on purpose: a
  * single-width spec should keep using its own local `shot()`, not this.
  */
+/** `beforeShot` runs after each `setViewportSize` and BEFORE that width's
+ *  screenshot — the hook a surface needs when a resize kicks off work the
+ *  capture would otherwise race.
+ *
+ *  It exists because this helper shot the frame immediately after resizing,
+ *  and the spectator match centre scrolls its tab rail from a `resize`
+ *  listener with `behavior: "smooth"` (`tab-rail.tsx:62`). Every 320px golden
+ *  of a tab far enough along the rail was therefore captured mid-scroll, with
+ *  the ACTIVE tab clipped by the viewport edge — the goldens showed a defect
+ *  the product does not have, on the very surface the owner signs off from
+ *  (AGENTS.md rule #10: the visual gate has its own vacuous mode; confirm the
+ *  last check runs AFTER the state being proven). Callers that pass nothing
+ *  keep the previous behaviour exactly. */
 export async function screenshotAtWidths(
   page: Page,
   testInfo: TestInfo,
   name: string,
   widths: number[] = DEFAULT_SHOT_WIDTHS,
+  beforeShot?: (page: Page) => Promise<void>,
 ): Promise<void> {
   const original = page.viewportSize();
   for (const width of widths) {
     await page.setViewportSize({ width, height: 900 });
+    await beforeShot?.(page);
     await page.screenshot({ path: `${testInfo.outputPath()}/${name}-${width}.png`, fullPage: true });
   }
   if (original) await page.setViewportSize(original);

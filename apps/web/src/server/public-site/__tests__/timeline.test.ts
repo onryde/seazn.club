@@ -64,6 +64,10 @@ import { readFileSync, readdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import type { Dict } from "@/lib/i18n-constants";
+import { t } from "@/lib/i18n-runtime";
+import enPublic from "@/dictionaries/en/public.json";
+import { localiseParams } from "@/components/public-site/match-centre/timeline-tab";
 import {
   CORE_EVENT_SCHEMAS,
   EngineError,
@@ -338,6 +342,37 @@ describe("buildTimeline", () => {
     // H1 closed 1–0 at the half-time marker (seq 3).
     expect(end[0]!.text.params).toMatchObject({ phase: "H1", home: 1, away: 0 });
     expect(end[0]!.seq).toBe(3);
+  });
+
+
+  /**
+   * The recorded period row reads as the PHASE, not as the event's own name.
+   * It shipped as "Period marker — Half-time": the ledger's vocabulary, on a
+   * spectator's timeline, directly beneath the derived row for the same
+   * instant already reading "End of 1st half — 1–0". A row naming its own
+   * event type is a developer's label, not a reader's.
+   *
+   * Resolved through the REAL dictionary rather than asserted on the key,
+   * because the key was never wrong — only what it said. Both halves are
+   * pinned: what the row must read, and the label it must no longer carry.
+   */
+  it("the recorded period row reads as the phase alone, never as the event's own name", () => {
+    const lines = linesOf(args({ sportKey: "football", events: footballLedger }));
+    const recorded = lines.find((l) => l.text.key === "timeline.football.period")!;
+    expect(recorded, "the football ledger must still produce a recorded period row").toBeTruthy();
+    const dict = enPublic as Dict;
+    const text = t(dict, recorded.text.key, localiseParams(dict, recorded.text.params));
+    // The recorded event at seq 3 is `football.period {phase:"HT"}`, which
+    // resolves through `term.*` to the phase's own name — the row is that
+    // name and nothing else. Derived from the dictionary, never the literal
+    // "Half-time", so re-wording `term.HT` moves this with it.
+    expect(recorded.text.params?.phase).toBe("HT");
+    expect(text).toBe(t(dict, "term.HT"));
+    expect(text).not.toMatch(/marker|marca|repère|markering/i);
+    // The positive pair: the DERIVED sibling keeps its sentence, so this is a
+    // change to one row's copy and not a timeline that lost its prose.
+    const derived = lines.find((l) => l.text.key === "timeline.period.end")!;
+    expect(t(dict, derived.text.key, localiseParams(dict, derived.text.params))).toContain("End of");
   });
 
   it("a derived line sorts ABOVE the event that caused it", () => {

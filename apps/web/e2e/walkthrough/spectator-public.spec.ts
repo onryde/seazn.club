@@ -25,7 +25,6 @@ import { test, expect } from "@playwright/test";
 import { mkdirSync } from "node:fs";
 import { activeOrg, apiJson, createStageAndGenerate, fixturePath, TAG } from "../helpers";
 import { HOLD_MS } from "../../src/components/v2/scorepad/queue";
-import { POLL_MS } from "../../src/components/public-site/match-centre/use-live-fixture";
 import {
   type Team,
   mustPost,
@@ -43,6 +42,7 @@ import {
   anonPage,
   closeOpenContexts,
   shotAllTabs,
+  LIVE_UPDATE_BUDGET_MS,
   OUT,
 } from "../spectator-public-helpers";
 
@@ -218,7 +218,15 @@ test("cricket match A: the anonymous match centre updates live as the real pad a
   const taps = 7; // 6 legal balls (one a wicket) + 1 wide
   // Fix round 1: +POLL_MS for the extra scorecard-row poll (task-15-review
   // I1) added after the taps below.
-  test.setTimeout(Math.max(120_000, taps * (HOLD_MS + 2_000) + 2 * POLL_MS + 30_000));
+  //
+  // The four live-update waits below (newest ball, score strip, fall of
+  // wickets, scorecard row) each get `LIVE_UPDATE_BUDGET_MS`, so the test's
+  // own budget has to carry four of them or a slow poll trips the WALL CLOCK
+  // and reports itself as whichever assertion happened to be in flight
+  // (AGENTS.md rule #20). Derived, never a literal: raising `POLL_MS` raises
+  // this with it.
+  const liveWaits = 4;
+  test.setTimeout(Math.max(120_000, taps * (HOLD_MS + 2_000) + liveWaits * LIVE_UPDATE_BUDGET_MS + 30_000));
 
   const matchAPath = publicFixturePath(orgSlug, compSlug, liveDivSlug, matchA);
 
@@ -292,19 +300,19 @@ test("cricket match A: the anonymous match centre updates live as the real pad a
   await expect(
     anon320.getByTestId(/^mc-ball-\d+\.\d+\.\d+$/).first(),
     "the newest ball must appear on the already-open anonymous page within one poll interval",
-  ).toBeVisible({ timeout: POLL_MS + 5_000 });
+  ).toBeVisible({ timeout: LIVE_UPDATE_BUDGET_MS });
 
   await expect
     .poll(
       async () => [await anon320.getByTestId("mc-score-0").textContent(), await anon320.getByTestId("mc-score-1").textContent()],
-      { timeout: POLL_MS + 5_000 },
+      { timeout: LIVE_UPDATE_BUDGET_MS },
     )
     .not.toEqual(scoreBefore);
 
   await anon320.getByTestId("mc-tab-summary").click();
   await expect(anon320.getByTestId("mc-tab-panel-summary")).toBeVisible();
   await expect
-    .poll(async () => anon320.getByTestId("mc-fow-2").locator('[role="listitem"]').count(), { timeout: POLL_MS + 5_000 })
+    .poll(async () => anon320.getByTestId("mc-fow-2").locator('[role="listitem"]').count(), { timeout: LIVE_UPDATE_BUDGET_MS })
     .toBeGreaterThan(fowBefore);
 
   // Fix round 1 (task-15-review.md I1) -- the THIRD R10 witness: the
@@ -319,7 +327,7 @@ test("cricket match A: the anonymous match centre updates live as the real pad a
   const strikerRowAfter = anon320.getByTestId(`mc-bat-${strikerId}`);
   await expect(strikerRowAfter, "the striker's row must still render after the update").toBeVisible();
   await expect
-    .poll(async () => strikerRowAfter.locator("td").nth(1).textContent(), { timeout: POLL_MS + 5_000 })
+    .poll(async () => strikerRowAfter.locator("td").nth(1).textContent(), { timeout: LIVE_UPDATE_BUDGET_MS })
     .not.toBe(strikerRunsBefore);
 
   // Fix round 1 (task-15-review.md I2) -- the positive pair for "no

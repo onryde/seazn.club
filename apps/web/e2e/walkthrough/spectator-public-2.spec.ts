@@ -16,7 +16,6 @@ import { test, expect, type Page } from "@playwright/test";
 import { mkdirSync } from "node:fs";
 import { activeOrg, apiJson, createStageAndGenerate, expectNoHorizontalScroll, setOrgLocaleSql, TAG } from "../helpers";
 import { scanPadContrast } from "../scorepad-a11y-kit";
-import { POLL_MS } from "../../src/components/public-site/match-centre/use-live-fixture";
 import { maskDisplayName } from "../../src/lib/name-display";
 import {
   type Team,
@@ -35,6 +34,7 @@ import {
   shotAllTabs,
   shotAtWidths,
   controlSet,
+  LIVE_UPDATE_BUDGET_MS,
   centreHits,
   OUT,
 } from "../spectator-public-helpers";
@@ -379,7 +379,7 @@ test("football: Timeline and Sets/Periods tabs render by presence and update in 
   browser,
   request,
 }) => {
-  test.setTimeout(60_000 + POLL_MS + 10_000);
+  test.setTimeout(60_000 + LIVE_UPDATE_BUDGET_MS + 10_000);
   const footballPath = publicFixturePath(orgSlug, compSlug, footballDivSlug, footballFixture);
   const anon = await anonPage(browser, { width: 1280, height: 900 });
   await anon.goto(footballPath, { waitUntil: "load" });
@@ -400,7 +400,7 @@ test("football: Timeline and Sets/Periods tabs render by presence and update in 
   await mustPost(request, footballFixture, "football.goal", { by: footballAway });
 
   await expect
-    .poll(async () => anon.getByTestId(/^mc-timeline-line-\d+$/).count(), { timeout: POLL_MS + 5_000 })
+    .poll(async () => anon.getByTestId(/^mc-timeline-line-\d+$/).count(), { timeout: LIVE_UPDATE_BUDGET_MS })
     .toBeGreaterThan(lineCountBefore);
   expect(anon.url()).toBe(urlBefore);
   expect(loadFired).toBe(false);
@@ -542,12 +542,34 @@ test("widths 320 vs 1280: control-set diff, every tab reachable, 44px tab hit ta
   // `scrollLeft` is 0, so Commentary is genuinely off-screen before
   // selection, not "off-screen because a previous step happened to leave it
   // there".
+  // `tab-rail.tsx:62` scrolls with `behavior: "smooth"`, so the tab is IN
+  // MOTION when the effect fires and a flat `waitForTimeout` is racing an
+  // animation rather than waiting for it. Under load that race was lost by
+  // 2.078px at 320 — the scroll caught ~99% of the way to its rest, not a
+  // rail that failed to move. Poll the resting position instead.
+  //
+  // This does not weaken the gate. The predicate is the same one the flat
+  // wait asserted, so a rail that never scrolls (the effect deleted, the
+  // listener removed) leaves the tab permanently outside the viewport, the
+  // poll never goes true, and the test fails on the timeout. Only a rail
+  // that DOES arrive can satisfy it — the change buys the animation time to
+  // finish, nothing else. The exact edges are re-asserted afterwards so a
+  // failure past the poll still reports real numbers rather than `false`.
   const assertCommentaryTabInsideViewport = async (page: Page, viewportWidth: number) => {
-    const box = await page.getByTestId("mc-tab-commentary").boundingBox();
+    const tab = page.getByTestId("mc-tab-commentary");
+    // +1px tolerance on the right edge for sub-pixel float rounding
+    // (measured ~0.08px over in practice, not a visible clip).
+    const insideViewport = (box: { x: number; width: number } | null) =>
+      box !== null && box.x >= 0 && box.x + box.width <= viewportWidth + 1;
+    await expect
+      .poll(async () => insideViewport(await tab.boundingBox()), {
+        timeout: 10_000,
+        message: "the active tab must come to REST fully inside the viewport",
+      })
+      .toBe(true);
+    const box = await tab.boundingBox();
     expect(box, "mc-tab-commentary has no layout box").not.toBeNull();
     expect(box!.x, "active tab's LEFT edge must be inside the viewport").toBeGreaterThanOrEqual(0);
-    // +1px tolerance for sub-pixel float rounding (measured ~0.08px over in
-    // practice, not a visible clip).
     expect(box!.x + box!.width, "active tab's RIGHT edge must be inside the viewport").toBeLessThanOrEqual(
       viewportWidth + 1,
     );
@@ -567,7 +589,11 @@ test("widths 320 vs 1280: control-set diff, every tab reachable, 44px tab hit ta
   await freshA.goto(matchAPath, { waitUntil: "load" });
   await expect(freshA.getByTestId("mc-court-card")).toBeVisible({ timeout: 20_000 });
   await freshA.getByTestId("mc-tab-commentary").dispatchEvent("click");
-  await freshA.waitForTimeout(400); // let the smooth scrollIntoView settle
+  // A short fixed wait for the click to REFLOW, not for the scroll to finish —
+  // the poll inside the assertion owns the settle. It is still needed: polling
+  // the instant the event is dispatched can read a pre-reflow box and pass on
+  // a position the rail is about to leave.
+  await freshA.waitForTimeout(400);
   await assertCommentaryTabInsideViewport(freshA, 320);
 
   // (b) click at a WIDE viewport, then resize down — the exact sequence
@@ -584,7 +610,9 @@ test("widths 320 vs 1280: control-set diff, every tab reachable, 44px tab hit ta
   await freshB.getByTestId("mc-tab-commentary").click();
   await freshB.waitForTimeout(300);
   await freshB.setViewportSize({ width: 320, height: 568 });
-  await freshB.waitForTimeout(400); // let the resize listener's scrollIntoView settle
+  // Same shape as (a): the wait is for the RESIZE to reflow, so the poll
+  // cannot read a stale pre-resize box; the poll owns the scroll's settle.
+  await freshB.waitForTimeout(400);
   await assertCommentaryTabInsideViewport(freshB, 320);
 });
 

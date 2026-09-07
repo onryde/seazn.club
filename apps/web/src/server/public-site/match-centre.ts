@@ -278,15 +278,58 @@ function ballGlyphString(g: BallGlyph): string {
  *  delivery, so a wide/no-ball reports the SAME notation as the legal ball
  *  it precedes (it has not advanced the count yet). `batter` is always ""
  *  — see the module header's documented gap. */
-function ballLines(over: OverLog, personOf: PersonOf): MsgT[] {
+/** The ball kinds whose line carries a run COUNT and therefore inflects.
+ *  `wide`/`noball` read "+{runs}" (no noun), and `wicket` carries none. */
+const PLURALISED_BALL_KINDS = new Set(["runs", "bye", "legbye", "penalty"]);
+
+/** The plural category for a ball's run count, in the doc's own locale.
+ *
+ *  Only `one` and `other` are ever emitted, and that is a deliberate,
+ *  test-enforced narrowing rather than an oversight: the extra CLDR
+ *  categories the shipped locales define (`many` in fr and es) apply to
+ *  magnitudes a single delivery cannot reach, so authoring them would mean
+ *  four dictionary entries nothing can ever select. `ballLineKeysResolve`
+ *  in `match-centre-dictionary.test.ts` enumerates every locale × kind ×
+ *  0..6 runs and asserts the key this function names EXISTS — so if a fifth
+ *  locale ever needs a third form, that test reds instead of a spectator
+ *  seeing a raw dictionary key.
+ *
+ *  Selecting server-side is consistent with how this builder already works:
+ *  the doc is locale-specific by construction (`buildHeader` and
+ *  `buildInfoView` both format dates through `Intl.DateTimeFormat(locale)`),
+ *  so the `Msg` a tab renders with a plain `t()` needs no locale of its own. */
+function ballLineCategory(locale: string, count: number): "one" | "other" {
+  return new Intl.PluralRules(locale).select(count) === "one" ? "one" : "other";
+}
+
+/** Every dictionary key `ballLines` below can emit, derived from the SAME two
+ *  declarations it reads — so a kind added to `BALL_GLYPH_KINDS`, or moved in
+ *  or out of `PLURALISED_BALL_KINDS`, moves the locale-parity expectation with
+ *  it instead of leaving `match-centre-parity.test.ts` asserting yesterday's
+ *  key list. */
+export const BALL_LINE_KEYS: readonly string[] = BALL_GLYPH_KINDS.flatMap((kind) =>
+  PLURALISED_BALL_KINDS.has(kind)
+    ? [`matchCentre.ballLine.${kind}.one`, `matchCentre.ballLine.${kind}.other`]
+    : [`matchCentre.ballLine.${kind}`],
+);
+
+function ballLines(over: OverLog, personOf: PersonOf, locale: string): MsgT[] {
   const bowlerName = over.bowler === null ? "" : personOf(over.bowler).name;
   let legalCount = 0;
   return over.balls.map((ball) => {
     const notation = `${over.number - 1}.${legalCount + 1}`;
     if (ball.kind !== "wide" && ball.kind !== "noball") legalCount += 1;
     const runs = ball.kind === "wicket" ? 0 : ball.runs;
+    // `matchCentre.ballLine.*`, NOT `matchCentre.ball.*`. The latter prefix
+    // belongs to the glyph-label family (`glyphs.tsx`: boundary/wicket/dot/
+    // extras/run), and the two collided on `wicket` — a wicket delivery's
+    // commentary line rendered the bare word "Wicket" with no over notation
+    // and no bowler, beside neighbours reading "0.3 · Player A7 · Wide +1".
+    // The dictionary coverage test could not see it: it asserts the key
+    // EXISTS, and it did — as the glyph label.
+    const base = `matchCentre.ballLine.${ball.kind}`;
     return {
-      key: `matchCentre.ball.${ball.kind}`,
+      key: PLURALISED_BALL_KINDS.has(ball.kind) ? `${base}.${ballLineCategory(locale, runs)}` : base,
       params: { over: notation, bowler: bowlerName, batter: "", runs },
     };
   });
@@ -336,7 +379,7 @@ function extrasLineOf(extras: CricketInningsCard["extras"]): string | null {
   return parts.length === 0 ? `${extras.total}` : `${extras.total} (${parts.join(", ")})`;
 }
 
-function buildOverLogView(over: OverLog, personOf: PersonOf): CricketViewT["innings"][number]["overs"][number] {
+function buildOverLogView(over: OverLog, personOf: PersonOf, locale: string): CricketViewT["innings"][number]["overs"][number] {
   return {
     number: over.number,
     bowler: over.bowler === null ? null : personOf(over.bowler),
@@ -344,7 +387,7 @@ function buildOverLogView(over: OverLog, personOf: PersonOf): CricketViewT["inni
     runs: over.runs,
     wickets: over.wickets,
     scoreAfter: `${over.scoreAfter.runs}/${over.scoreAfter.wickets}`,
-    lines: ballLines(over, personOf),
+    lines: ballLines(over, personOf, locale),
   };
 }
 
@@ -352,6 +395,7 @@ function buildInningsView(
   card: CricketInningsCard,
   sides: readonly [SideT, SideT],
   personOf: PersonOf,
+  locale: string,
 ): CricketViewT["innings"][number] {
   return {
     number: card.number,
@@ -379,7 +423,7 @@ function buildInningsView(
       balls: p.balls,
       wicket: p.wicket,
     })),
-    overs: card.overs.map((over) => buildOverLogView(over, personOf)),
+    overs: card.overs.map((over) => buildOverLogView(over, personOf, locale)),
   };
 }
 
@@ -490,7 +534,12 @@ function topPerformersOf(
   return out;
 }
 
-function buildCricketView(card: CricketScorecard, sides: readonly [SideT, SideT], personOf: PersonOf): CricketViewT {
+function buildCricketView(
+  card: CricketScorecard,
+  sides: readonly [SideT, SideT],
+  personOf: PersonOf,
+  locale: string,
+): CricketViewT {
   return {
     band: card.band,
     toss:
@@ -500,7 +549,7 @@ function buildCricketView(card: CricketScorecard, sides: readonly [SideT, SideT]
             key: "matchCentre.toss",
             params: { side: sideNameOf(sides, card.toss.wonBy), elected: card.toss.elected },
           },
-    innings: card.innings.map((innings) => buildInningsView(innings, sides, personOf)),
+    innings: card.innings.map((innings) => buildInningsView(innings, sides, personOf, locale)),
     live: buildLiveView(card, personOf),
     topPerformers: topPerformersOf(card, sides, personOf),
   };
@@ -884,7 +933,7 @@ export function buildMatchCentre(input: MatchCentreInput): MatchCentreDocT {
   if (sportKey === "cricket") {
     const parsedCfg = cricket.configSchema.parse(cfg);
     card = deriveCricketScorecard({ events, cfg: parsedCfg, lineups: lineupPair });
-    cricketView = buildCricketView(card, sides, personOf);
+    cricketView = buildCricketView(card, sides, personOf, locale);
     if (card.innings.some((innings) => innings.batting.length > 0)) extraTabs.push("scorecard");
     if (card.innings.some((innings) => innings.overs.length > 0)) extraTabs.push("commentary");
     // Cricket's fold has no partial-failure mode to report — unlike

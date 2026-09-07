@@ -15,7 +15,7 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { BALL_GLYPH_KINDS, DISMISSAL_KINDS, RESULT_KINDS } from "../match-centre";
+import { BALL_GLYPH_KINDS, BALL_LINE_KEYS, DISMISSAL_KINDS, RESULT_KINDS } from "../match-centre";
 import type { Dict } from "@/lib/i18n-constants";
 import en from "@/dictionaries/en/public.json";
 import es from "@/dictionaries/es/public.json";
@@ -74,7 +74,11 @@ const DERIVED_KEYS = [
     ...FIXED_KEYS,
     ...DISMISSAL_KINDS.map((k) => `matchCentre.dismissal.${k}`),
     ...RESULT_KINDS.map((k) => `matchCentre.result.${k}`),
-    ...BALL_GLYPH_KINDS.map((k) => `matchCentre.ball.${k}`),
+    // `matchCentre.ballLine.*` (with `.one`/`.other` on the four kinds that
+    // carry a run count), NOT `matchCentre.ball.*`: the latter prefix belongs
+    // to the glyph-label family and the two collided on `wicket`, which is
+    // how a wicket line shipped rendering the bare word "Wicket".
+    ...BALL_LINE_KEYS,
   ]),
 ].sort();
 
@@ -89,6 +93,11 @@ describe("match-centre parity — every key buildMatchCentre can emit exists in 
     // which is the per-locale assertion below.
     expect(RESULT_KINDS.length).toBe(10);
     expect(BALL_GLYPH_KINDS.length).toBe(7);
+    // 11, not 7: four of the seven kinds inflect, so each contributes a
+    // `.one` and an `.other`. EXACT for the same reason `RESULT_KINDS` is —
+    // this number moving is what forces all four dictionaries to gain the
+    // new form alongside.
+    expect(BALL_LINE_KEYS.length).toBe(11);
     expect(DERIVED_KEYS.length).toBeGreaterThanOrEqual(30);
   });
 
@@ -123,5 +132,55 @@ describe("match-centre parity — every key buildMatchCentre can emit exists in 
       }
     }
     expect(mismatches).toEqual([]);
+  });
+
+  /**
+   * The `.one`/`.other` narrowing in `ballLineCategory` is an ASSUMPTION about
+   * the shipped locales, so it is asserted rather than trusted: for every
+   * locale, every inflecting kind, and every run count a single delivery can
+   * carry, the key the builder will name must actually exist. If a fifth
+   * locale ever needs a third CLDR form for these magnitudes, this reds —
+   * instead of a spectator reading a raw dictionary key off the page.
+   *
+   * 0..6 is the real domain: 0-6 off the bat, and byes/leg byes/penalties in
+   * the same range. It deliberately includes 0 (English "0 runs" — the plural
+   * form, which is the case a naive `count === 1 ? one : other` would get
+   * right but a `count > 1` test would not) and 1 (the only singular).
+   */
+  it("every locale resolves a REAL template for every inflecting kind at every run count a ball can carry", () => {
+    const missing: string[] = [];
+    for (const locale of LOCALES) {
+      for (const kind of ["runs", "bye", "legbye", "penalty"]) {
+        for (let runs = 0; runs <= 6; runs += 1) {
+          const category = new Intl.PluralRules(locale).select(runs) === "one" ? "one" : "other";
+          const key = `matchCentre.ballLine.${kind}.${category}`;
+          if (typeof DICTS[locale][key] !== "string") missing.push(`${locale}:${key} (runs=${runs})`);
+        }
+      }
+    }
+    expect(missing).toEqual([]);
+  });
+
+  /**
+   * The collision this namespace exists to prevent, pinned in both directions.
+   * `matchCentre.ball.wicket` is the GLYPH label ("Wicket"); the line the
+   * commentary tab renders is `matchCentre.ballLine.wicket`. They are
+   * different strings with different jobs, and the bug was the line resolving
+   * to the label — so asserting the line key merely EXISTS would pass in
+   * exactly the broken state. Both halves are asserted: the line carries the
+   * over notation and the bowler like every other ball line, and the label
+   * does not.
+   */
+  it("the ball-LINE and glyph-LABEL families stay separate — a wicket line is not the bare glyph label", () => {
+    for (const locale of LOCALES) {
+      const line = DICTS[locale]["matchCentre.ballLine.wicket"];
+      const label = DICTS[locale]["matchCentre.ball.wicket"];
+      expect(typeof line, `${locale}: the wicket LINE must exist`).toBe("string");
+      expect(typeof label, `${locale}: the wicket glyph LABEL must exist`).toBe("string");
+      expect(line, `${locale}: the wicket line must not be the glyph label`).not.toBe(label);
+      expect(line as string, `${locale}: a ball line carries the over notation`).toContain("{over}");
+      expect(line as string, `${locale}: a ball line names the bowler`).toContain("{bowler}");
+      expect(label as string, `${locale}: the glyph label takes no params`).not.toContain("{");
+    }
   });
 });

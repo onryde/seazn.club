@@ -28,7 +28,10 @@ import {
 } from "../match-centre";
 import type { PublicFixture } from "../data";
 import type { PublicPerson } from "../public-lineups";
-import type { PersonT, SideT } from "../match-centre-schema";
+import type { MsgT, PersonT, SideT } from "../match-centre-schema";
+import type { Dict } from "@/lib/i18n-constants";
+import { t } from "@/lib/i18n-runtime";
+import enPublic from "@/dictionaries/en/public.json";
 import {
   AWAY,
   HOME,
@@ -858,5 +861,90 @@ describe("buildMatchCentre — cricket", () => {
     expect(RESULT_KINDS).toContain("forfeit");
     expect(BALL_GLYPH_KINDS).toContain("wicket");
     expect(BALL_GLYPH_KINDS).toContain("runs");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Ball-by-ball commentary lines — the key family and its plural form
+// ---------------------------------------------------------------------------
+//
+// These exist because a wicket's line shipped rendering the bare word
+// "Wicket". `matchCentre.ball.<kind>` was BOTH the glyph-label family
+// (`glyphs.tsx`: boundary/wicket/dot/extras/run) and the ball-line family,
+// and they collided on `wicket`. Nothing caught it: the dictionary coverage
+// test asserts the key EXISTS, and it did — as the label. The line family now
+// lives under `matchCentre.ballLine.*`.
+//
+// The assertions below resolve the builder's own output through the REAL
+// dictionary rather than stopping at the key, because the defect was
+// invisible at the key: `matchCentre.ball.wicket` was a perfectly present
+// key that said the wrong thing.
+const BALL_LINE_SCRIPT: Script = {
+  cfg: { ballsPerInnings: 12, ballsPerOver: 6, playersPerSide: 8, minOversForResult: 1 },
+  home: HOME,
+  away: AWAY,
+  tossWonBy: "home",
+  elected: "bat",
+  innings: [
+    {
+      batting: "home",
+      bowlers: ["a7"],
+      // 1 (the ONLY singular), 0 and 4 (both plural — 0 is the case a
+      // `count > 1` rule gets wrong), a wide, a wicket, and a 2-bye.
+      deliveries: [{ bat: 1 }, { bat: 0 }, { extra: "wide", runs: 1 }, { bat: 4 }, { out: "bowled" }, { extra: "bye", runs: 2 }],
+      leaveOpen: true,
+    },
+  ],
+};
+
+describe("buildMatchCentre — ball-by-ball commentary lines", () => {
+  const linesOf = (locale: string): MsgT[] => {
+    const ledger = scriptLedger(BALL_LINE_SCRIPT);
+    const doc = buildMatchCentre(input({ events: ledger.events, cfg: ledger.cfg, locale }));
+    return (doc.cricket?.innings ?? []).flatMap((innings) => innings.overs.flatMap((over) => over.lines));
+  };
+
+  it("keys every line under `matchCentre.ballLine.`, never the glyph-label prefix", () => {
+    const keys = linesOf("en").map((line) => line.key);
+    expect(keys.length).toBe(6);
+    for (const key of keys) expect(key.startsWith("matchCentre.ballLine.")).toBe(true);
+    // The positive pair for the negative above: the collision was with THIS
+    // exact key, so name it rather than only asserting a prefix.
+    expect(keys).not.toContain("matchCentre.ball.wicket");
+    expect(keys).toContain("matchCentre.ballLine.wicket");
+  });
+
+  it("inflects the run count: 1 takes the singular, 0 and 4 take the plural", () => {
+    const keys = linesOf("en").map((line) => line.key);
+    expect(keys[0], "1 run").toBe("matchCentre.ballLine.runs.one");
+    expect(keys[1], "0 runs").toBe("matchCentre.ballLine.runs.other");
+    expect(keys[3], "4 runs").toBe("matchCentre.ballLine.runs.other");
+    expect(keys[5], "2 byes").toBe("matchCentre.ballLine.bye.other");
+  });
+
+  it("RESOLVES through the real dictionary to finished English, with no `(s)` and no bare key", () => {
+    const dict = enPublic as Dict;
+    const text = linesOf("en").map((line) => t(dict, line.key, line.params));
+    // Not a key that failed to resolve, and not a parenthetical plural.
+    for (const line of text) {
+      expect(line, `unresolved key: ${line}`).not.toMatch(/^matchCentre\./);
+      expect(line, `parenthetical plural: ${line}`).not.toContain("(s)");
+    }
+    expect(text[0]).toBe("0.1 · Player A7 · 1 run");
+    expect(text[1]).toBe("0.2 · Player A7 · 0 runs");
+    expect(text[3]).toBe("0.3 · Player A7 · 4 runs");
+    // The defect itself: this used to be exactly "Wicket".
+    expect(text[4]).toBe("0.4 · Player A7 · Wicket");
+    expect(text[5]).toBe("0.5 · Player A7 · 2 byes");
+  });
+
+  it("picks the plural form in the DOC'S OWN locale, not always English's", () => {
+    // French puts 0 in the SINGULAR category where English puts it in the
+    // plural — so this pair differs between the two locales for the same
+    // ball, which is what proves the builder reads `input.locale` rather
+    // than hardcoding one rule. A locale whose answer matched English's
+    // could not witness that.
+    expect(linesOf("en")[1]!.key).toBe("matchCentre.ballLine.runs.other");
+    expect(linesOf("fr")[1]!.key).toBe("matchCentre.ballLine.runs.one");
   });
 });
