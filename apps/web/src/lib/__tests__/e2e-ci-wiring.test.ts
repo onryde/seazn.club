@@ -240,6 +240,14 @@ const WALKTHROUGH_SPECS: string[] = [
   // Entirely API-only — no `page` in this file.
   "settings-schedule-bounds.spec.ts",
 
+  // Settings W7 — the registration hub's row-click config panel
+  // (`/o/{org}/c/{comp}/registration`, Settings tab), for the three CLIENT
+  // behaviours no API-only spec can see: the card-fee-minimum gate refusing
+  // before any network write (case #20), a real double-tap on Save firing one
+  // save cycle (case #24), and the two-endpoint save reporting a genuine half
+  // landing — PATCH ok, PUT refused by the plan's entrant cap (case #23).
+  "settings-registration-client-guards.spec.ts",
+
   // The directory — the organiser's own records, driven through the screens
   // that own them: club import caps, the import paywall preview, officials'
   // roles against the upgrade gate, player identity and its duplicate queue,
