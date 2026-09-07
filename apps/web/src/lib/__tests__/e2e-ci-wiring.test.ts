@@ -233,6 +233,12 @@ const WALKTHROUGH_SPECS: string[] = [
   // tab's noBackToBack toggle, and case #17 (the play-hours client-side
   // guard that blocks the PUT before it ever fires).
   "settings-schedule-drive.spec.ts",
+  // The bounds half of the same surface (Task 2): matchMinutes 0/1441
+  // (case #15), gapMinutes/perEntrantMinRest/constraints.restMin negative
+  // (case #16), endAt-before-startAt and a blackout to-before-from
+  // (case #18's division half), and courts above the 50 cap (case #22).
+  // Entirely API-only — no `page` in this file.
+  "settings-schedule-bounds.spec.ts",
 
   // The directory — the organiser's own records, driven through the screens
   // that own them: club import caps, the import paywall preview, officials'
