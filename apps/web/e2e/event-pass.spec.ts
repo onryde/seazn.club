@@ -23,7 +23,13 @@ import type { PassLockReason } from "../src/lib/entitlements";
 // zero tests instead of failing loudly. Every money figure below — rendered or
 // charged — comes from the seed through this, because these numbers have now
 // moved three times and a literal has rotted every time.
-import { HIDDEN_PASS_RUNGS, SELLABLE_PASS_RUNGS, passLabel, passMinor } from "./price-kit";
+import {
+  HIDDEN_PASS_RUNGS,
+  SELLABLE_PASS_RUNGS,
+  passActiveMarker,
+  passLabel,
+  passMinor,
+} from "./price-kit";
 
 // Event Pass, end to end, through a REAL Stripe test-mode purchase (task 22).
 //
@@ -669,7 +675,7 @@ for (const vp of VIEWPORTS) {
       // sheet, so this card must say M and not the product family. A literal
       // "Event Pass active" would now be a rung-blind assertion on the one
       // surface an L buyer reads to learn which ceiling stopped them.
-      await expect(owned).toContainText("Event Pass M active");
+      await expect(owned).toContainText(passActiveMarker("event_pass"));
       // Page-wide, and deliberately so: no gate anywhere on this page may offer
       // the pass a second time to an org that already holds it.
       await expect(page.locator("[data-pass-cta]")).toHaveCount(0);

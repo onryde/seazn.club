@@ -19,6 +19,7 @@ import {
   SELLABLE_PASS_RUNGS,
   passLabel,
   proAnnualPerMonthLabel,
+  passActiveMarker,
 } from "./price-kit";
 
 // PROMPT-36 (v3/07): pricing page renders three offers from plan_entitlements
@@ -272,7 +273,7 @@ test.describe.serial("event pass gate (community org)", () => {
     await expect(owned).toBeVisible({ timeout: 20_000 });
     // `grantCompetitionPassSql` grants M, and since v17 #294 this card names
     // the rung rather than the product family.
-    await expect(owned).toContainText("Event Pass M active");
+    await expect(owned).toContainText(passActiveMarker("event_pass"));
     // The negative half of the CTA assertion above, and only meaningful
     // because it names the string this very test watched the page render
     // before the pass landed. A retired price passes here unconditionally.

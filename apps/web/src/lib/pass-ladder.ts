@@ -153,8 +153,46 @@ export function lowestPassRung(currency: Currency): PricedRung {
  * site: `t()` renders a forgotten var as the literal `{rung}`, and three call
  * sites each remembering is three chances to ship a brace to a customer.
  */
+/**
+ * Does a rung a customer HOLDS need naming?
+ *
+ * The offer side has `rungNamingRequired`, which asks whether more than one
+ * rung is on sale. The hold side asks a narrower question, and the difference
+ * is the whole point: a letter earns its place when the rung held is not the
+ * one on sale, because that is when the reader could otherwise be shown the
+ * wrong product's name.
+ *
+ * So an L holder keeps "Event Pass L" — L is off sale, and #294 exists because
+ * a $44.99 buyer read their own competition as the $11.99 product. An M holder
+ * drops to plain "Event Pass": M is the only thing sold, there is nothing to
+ * confuse it with, and the letter was appearing ONLY AFTER PURCHASE — the buy
+ * button says "Buy the pass", and paying then produced a size the buyer had
+ * never been shown. That is the confusion the 2026-09-05 suffix ruling removed
+ * from the selling surfaces, relocated one step later.
+ *
+ * Takes the sellable set rather than reading it, so a test can drive both
+ * directions; `passActiveLabel` passes the live catalogue.
+ */
+export function heldRungNeedsNaming(rung: PassKey, sellable: readonly PassKey[]): boolean {
+  return !(sellable.length === 1 && sellable[0] === rung);
+}
+
+/**
+ * What to call a rung the org HOLDS — "Event Pass L" while L is off sale,
+ * plain "Event Pass" for the single rung that is on sale.
+ *
+ * The hold-side counterpart of `offeredRungName`. `PASS_RUNG_NAME_KEY` stays
+ * complete over `PassKey` behind it: the map must be able to name every rung
+ * that can be held, and this decides when it should.
+ */
+export function heldRungName(dict: Dict, rung: PassKey): string {
+  return heldRungNeedsNaming(rung, SELLABLE_PASS_KEYS)
+    ? t(dict, PASS_RUNG_NAME_KEY[rung])
+    : t(dict, "upgrade.rung.plain");
+}
+
 export function passActiveLabel(dict: Dict, passKey: PassKey): string {
-  return t(dict, "pass.entry.active", { rung: t(dict, PASS_RUNG_NAME_KEY[passKey]) });
+  return t(dict, "pass.entry.active", { rung: heldRungName(dict, passKey) });
 }
 
 /**

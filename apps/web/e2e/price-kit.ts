@@ -24,6 +24,14 @@
 // The rule for callers: NEVER write a money literal in a spec. Every expected
 // amount, rendered or charged, comes from here.
 import seed from "../src/config/stripe-plans.json" with { type: "json" };
+// The dictionary, read rather than imported for the same reason as the note
+// above: a bare JSON import needs an import attribute and a missing one makes
+// the importing spec collect nothing at all.
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+const UI_EN = JSON.parse(
+  readFileSync(fileURLToPath(new URL("../src/dictionaries/en/ui.json", import.meta.url)), "utf8"),
+) as Record<string, string>;
 // Type-only, so nothing from the app reaches the Playwright runtime — the same
 // import event-pass.spec.ts and helpers.ts already make. Keyed off the real
 // unions so a third rung or a fifth currency is a compile error here rather
@@ -83,6 +91,37 @@ export function money(
  */
 export const SELLABLE_PASS_RUNGS = ["event_pass"] as const satisfies readonly PassKey[];
 export const HIDDEN_PASS_RUNGS = ["event_pass_l"] as const satisfies readonly PassKey[];
+
+/**
+ * The HELD marker a buyer reads once a pass is active — "Event Pass active",
+ * or "Event Pass L active" for the rung that is off sale.
+ *
+ * Composed here rather than imported from `lib/pass-ladder`, for this file's
+ * whole reason for existing: importing `@/lib/*` into a Playwright spec makes
+ * it collect ZERO tests, which reports as a silently missing file rather than
+ * a failure.
+ *
+ * The rule it mirrors (`heldRungNeedsNaming`): a held rung is named UNLESS it
+ * is exactly the one rung on sale. An L holder must still read "Event Pass L"
+ * — v17 #294, a $44.99 buyer must not see their purchase as the $11.99
+ * product — while the rung actually being sold drops its letter, because the
+ * buy button says "Buy the pass" and a size appearing only after payment names
+ * something the buyer was never shown. Stripe's own product name for that rung
+ * is "Seazn Club Event Pass", with no letter, so this is also what the receipt
+ * says.
+ *
+ * Both halves READ the dictionary, so a reword moves the assertion with it;
+ * only the RULE is restated, and `pass-rung-naming.test.ts` pins that against
+ * literal sets.
+ */
+export function passActiveMarker(passKey: PassKey): string {
+  const named = !(SELLABLE_PASS_RUNGS.length === 1 && SELLABLE_PASS_RUNGS[0] === passKey);
+  const rung = named ? UI_EN[`upgrade.rung.${passKey === "event_pass_l" ? "l" : "m"}`] : UI_EN["upgrade.rung.plain"];
+  if (!rung) throw new Error(`price-kit: en/ui.json has no rung name for ${passKey}`);
+  const template = UI_EN["pass.entry.active"];
+  if (!template) throw new Error("price-kit: en/ui.json has no pass.entry.active");
+  return template.replace("{rung}", rung);
+}
 
 /** What an Event Pass rung costs, in MINOR units — the figure Stripe charges,
  *  so this is what `pi.amount`, `invoice.total`, `customer.balance` and

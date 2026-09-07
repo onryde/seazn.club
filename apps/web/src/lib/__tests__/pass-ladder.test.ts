@@ -236,9 +236,25 @@ describe("passActiveLabel", () => {
   // competition settings said a flat "Event Pass active" — the FAMILY name,
   // with nothing beside it naming the rung. An org that paid $59 for L reads
   // its competition as holding the $29 product.
-  it("names the rung that is actually held", () => {
-    expect(passActiveLabel(uiEn, "event_pass")).toBe("Event Pass M active");
+  //
+  // NARROWED 2026-09-07, and only for the rung on sale. The L half is
+  // unchanged and is the half #294 was about. The M half went back to the
+  // family name because the letter had become something a buyer met ONLY
+  // AFTER paying: the buy button reads "Buy the pass", the /pricing ticket and
+  // matrix column read "Event Pass", and Stripe's own product name for this
+  // rung is "Seazn Club Event Pass" — so "Event Pass M active" was the one
+  // place in the whole purchase naming a size, and it appeared after the
+  // money moved. `heldRungNeedsNaming` states the rule; this pins what it
+  // renders.
+  it("names the rung that is actually held — when the rung needs naming", () => {
     expect(passActiveLabel(uiEn, "event_pass_l")).toBe("Event Pass L active");
+    expect(passActiveLabel(uiEn, "event_pass")).toBe("Event Pass active");
+    // The two must DIFFER, or an org holding L is being shown the product it
+    // did not buy — which is the whole point of this test and cannot be
+    // satisfied by both arms collapsing to the family name.
+    expect(passActiveLabel(uiEn, "event_pass")).not.toBe(
+      passActiveLabel(uiEn, "event_pass_l"),
+    );
   });
 
   it("leaves no un-substituted placeholder in the rendered label", () => {

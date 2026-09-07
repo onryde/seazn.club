@@ -1,7 +1,7 @@
 import Link from "@/components/ui/console-link";
 import { routes } from "@/lib/routes";
 import { asCurrency, formatMinor } from "@/lib/currency";
-import { PASS_RUNG_NAME_KEY, passActiveLabel } from "@/lib/pass-ladder";
+import { heldRungName, passActiveLabel } from "@/lib/pass-ladder";
 import { t, type Dict, type Locale } from "@/lib/i18n";
 import type { PassPurchaseRow } from "@/server/usecases/billing-manage";
 
@@ -82,7 +82,7 @@ export function BillingPassPurchases({ rows, orgSlug, locale, dict, invoicesList
                     whenever the Stripe read failed — precisely the rows where
                     the reader has nothing else to identify the purchase by. */}
                 <span data-pass-rung={row.passKey} className="font-medium text-slate-700">
-                  {t(dict, PASS_RUNG_NAME_KEY[row.passKey])}
+                  {heldRungName(dict, row.passKey)}
                 </span>
                 {" · "}
                 {new Date(row.purchasedIso).toLocaleDateString(locale, {

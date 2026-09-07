@@ -215,6 +215,7 @@ import Page from "../page";
 import { HIDDEN_PASS_KEYS, PASS_KEYS, SELLABLE_PASS_KEYS } from "@/lib/currency";
 import { rungsExceedingPlan } from "@/lib/pass-vs-plan";
 import {
+  heldRungName,
   offeredRungName,
   PASS_CLOSED_REASON_KEY,
   PASS_LOCK_REASON_KEY,
@@ -438,8 +439,15 @@ describe("owned", () => {
     // thing standing between an owner and a second sale for one competition.
     heldPass();
     const html = await render();
-    expect(html).toContain("Event Pass M");
+    // The HELD column, named by the hold-side rule: M is the only rung on
+    // sale, so it reads plain "Event Pass" — the letter would appear only
+    // after purchase, naming a size the buy button never showed. An L holder
+    // still gets "Event Pass L" (the case below), which is what #294 is for.
+    expect(html).toContain(heldRungName(uiEn, "event_pass"));
     expect(html).not.toContain("Event Pass L");
+    // The load-bearing negative: "Event Pass" is a prefix of "Event Pass M",
+    // so the positive above passes in both states on its own.
+    expect(html).not.toContain(`Event Pass ${t(uiEn, PASS_RUNG_SIZE_KEY.event_pass)}`);
     expect(html).not.toContain(M_PRICE);
     expect(html).not.toContain(L_PRICE);
   });

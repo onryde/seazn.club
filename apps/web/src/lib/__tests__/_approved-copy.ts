@@ -105,6 +105,25 @@ export const APPROVED_PLANS_PASS: ApprovedParagraph[] = [
  *   two-bullet size ladder and its "sized with the pass" credit sentence.
  *   Same sources, same figures.
  *
+ * AND AGAIN, same day, three more — all in event-pass.md, all the same
+ * sentence fragment: the held marker "Event Pass M active" became
+ * "Event Pass active". Owner-approved.
+ *
+ *   This is the HELD side, which the 2026-09-05 ruling deliberately left
+ *   alone, so it needs its own justification rather than inheriting that one.
+ *   The letter had become something a buyer meets ONLY AFTER paying: the buy
+ *   button reads "Buy the pass", /pricing's ticket and matrix column read
+ *   "Event Pass", and `config/stripe-plans.json` names this rung's product
+ *   "Seazn Club Event Pass" — no letter on the checkout line or the receipt.
+ *   So the active marker was the single place in the whole purchase naming a
+ *   size, and it appeared after the money moved.
+ *
+ *   The L rung is UNCHANGED and still reads "Event Pass L active", which is
+ *   what v17 #294 is about: a $44.99 buyer must not read their competition as
+ *   holding the $11.99 product. The rule is `heldRungNeedsNaming` — name a
+ *   held rung unless it is exactly the one rung on sale — so the letter comes
+ *   back on its own the day a second rung does.
+ *
  * RE-PINNED AGAIN 2026-09-07 — four surfaces, two per article, owner-approved
  * before the swap (entitlements v18 W3).
  *
@@ -167,7 +186,7 @@ export const APPROVED_EVENT_PASS_INVENTORY: string[] = [
   "f39d96b7fbbbfc13",
   "665584fd0671d579",
   "3f3be96ac6e6be4e",
-  "79e1623c03c1f2a8",
+  "37f1d155a0e644b9",
   "3b3bc011debe7da5",
   "9a68888ef2d9aa1a",
   "4901d7ce5eea800a",
@@ -175,7 +194,7 @@ export const APPROVED_EVENT_PASS_INVENTORY: string[] = [
   "81e902865f77d84a",
   "69fbd1e0e9c144ec",
   "8c072be7bd782c73",
-  "51f349d614c306b2",
+  "a3ca58415ff21405",
   "774d4d6b3246dd97",
   "c42978cab6965d56",
   "331525dbff809017",
@@ -203,7 +222,7 @@ export const APPROVED_EVENT_PASS_INVENTORY: string[] = [
   "2508d8869fe2a54a",
   "c503ebdc56e74a10",
   "3f08a1036ddefbd7",
-  "3ad16eeee6e0b482",
+  "49e759a1a332176d",
   "02427d5e988e6afa",
 ];
 

@@ -68,6 +68,7 @@ import {
 } from "@/lib/currency";
 import { passExceedsPlan, rungsExceedingPlan } from "@/lib/pass-vs-plan";
 import {
+  heldRungName,
   offeredRungName,
   PASS_CLOSED_REASON_KEY,
   PASS_LOCK_REASON_KEY,
@@ -680,7 +681,7 @@ function Ticket({
               data-pass-held-rung={heldRung}
               className={`app-display mt-2 text-sm font-bold ${ended ? "text-white/80" : "text-lime-300"}`}
             >
-              {t(dict, PASS_RUNG_NAME_KEY[heldRung])}
+              {heldRungName(dict, heldRung)}
             </p>
             {purchasedAt && (
               <p className="mt-3 text-xs text-white/70">
