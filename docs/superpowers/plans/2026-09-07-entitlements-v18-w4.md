@@ -577,6 +577,21 @@ A green run in which they skipped is the failure this task exists to name —
 read the new check's output, not the pass count. Paste the raw result back;
 "done, tests pass" is not accepted.
 
+**"Did not skip" is not enough, and Step 10 is why.** Mutants 1-3 could not be
+run at the e2e level, so they were killed in adjacent unit suites instead. That
+proves the production functions are covered; it does not prove U1's and U16's
+own Playwright assertions have teeth. A test that runs and passes for the wrong
+reason looks identical to one that runs and passes for the right one.
+
+So the first real run owes a second half: **push ONE money mutant and confirm
+the matching test REDS in CI.** Break refund revocation — leave the pass active
+after a full refund — and dispatch a second run; U16 must fail. Revert before
+merging. Without it the money path has executed but nothing has ever observed
+it fail, which is where this task started, one layer further in.
+
+That costs a second CI run and a second pass of live-Stripe traffic against the
+shared test account, so it is the owner's call, not the implementer's.
+
 ---
 
 ### Task 4: N0 — instrument the three distribution quantities
