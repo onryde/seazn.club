@@ -239,14 +239,19 @@ const overridden = new Set<string>();
  *
  * Local and CI have no Redis on purpose (e2e.yml), so `lib/cache.ts` is inert
  * and the round-trip buys NOTHING there while the `is_staff` side effect is
- * paid on every call. Gating on `REDIS_URL` keeps the invalidation on a
- * Redis-backed target (staging), where the write it pairs with genuinely needs
- * it, and drops it where it is a no-op. No assertion in this file changes in
- * either direction: with no Redis there is no cached resolution to drop.
+ * paid on every call. Gating on `REDIS_URL` drops the call wherever it is a
+ * no-op — which, per `e2e/global-setup.ts:63-70`, is EVERY environment this
+ * suite can actually run in (a set `REDIS_URL` aborts the run before any spec
+ * executes), so in practice this predicate always skips the call. It reads
+ * the RUNNER's env, not the server process's — the one live-cache shape that
+ * would matter (a Redis-backed server, a Redis-less runner) is exactly what
+ * this gate cannot see, but no config in this repo produces that shape today.
+ * No assertion in this file changes either way: with no Redis there is no
+ * cached resolution to drop.
  *
  * Note the helper never checks either fetch's response status, so a lost race
- * fails silently rather than loudly — worth raising for `helpers.ts` itself,
- * but not this wave's to change: three other specs call it.
+ * fails silently rather than loudly. Tracked as `FINDINGS.md` F10 — not this
+ * wave's to fix, three other specs call it.
  */
 async function dropEntitlementCache(request: APIRequestContext, orgId: string): Promise<void> {
   if (!process.env.REDIS_URL) return;

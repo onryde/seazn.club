@@ -104,3 +104,11 @@ Found: Task 2 and the whole-branch final review, while enumerating `patchCompeti
 Every READ path is gated on `dashboard.theme`, so the stored value is inert. `public_competitions_v` returns `'{}'::jsonb` unless `org_has_feature(org_id, 'dashboard.theme')` (`deltas/V397__dashboard_theme_key.sql:71`), which covers `getPublicOrg`, `getPublicCompetition` and `embed-data.ts`; `/score/[token]/page.tsx:86` is the one place reading `c.branding` off the base table, and it applies it only behind `chrome.themed` (`:100`), itself a `hasFeature(orgId, "dashboard.theme")` call (`server/slideshow-data.ts:106-107`).
 
 **Status:** recorded, no fix opened. Ruled a write-side asymmetry with no rendering consequence — defence-in-depth, not an entitlement bypass: a stored value can only ever take effect once the org is entitled, at which point it is theirs anyway. Recorded so a later wave does not re-derive the question and answer it wrongly in either direction. A `requireFeature` on the write would be optional hardening, not a defect fix.
+
+### F10 (real, low severity) — `invalidateOrgEntitlements` fails open on either request
+
+Found: the final whole-branch review's fix round, while gating W5's own calls to this helper on `REDIS_URL` to close an unrelated shared-user contention finding (Important #1, this wave).
+
+`invalidateOrgEntitlements` (`e2e/helpers.ts`) flips an org's owner to superadmin, makes two `fetch` calls, then flips the owner back — and never checks either fetch's response status. A failed invalidation (a dropped connection, a 5xx) is silent: the caller proceeds believing the cache was cleared when it was not.
+
+**Status:** open, not fixed. Three existing specs already call this helper as written, so a fix belongs to the helper itself, not to any one caller — out of scope for this wave, which only needed to stop calling it where it bought nothing. Recorded so W8 (or whichever wave next touches `helpers.ts`) can add the status checks without re-discovering the gap from scratch.
