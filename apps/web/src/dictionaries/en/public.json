@@ -176,7 +176,7 @@
   "matchCentre.result.regulation": "{winner} won {margin}",
   "matchCentre.result.dls": "{winner} won {margin} (DLS)",
   "matchCentre.result.innings": "{winner} won {margin}",
-  "matchCentre.result.super_over": "{winner} won the super over",
+  "matchCentre.result.super_over": "{winner} won on the super over",
   "matchCentre.result.boundary_count": "{winner} won on boundary count",
   "matchCentre.result.shootout": "{winner} won {margin} on penalties",
   "matchCentre.result.shootoutPlain": "{winner} won on penalties",

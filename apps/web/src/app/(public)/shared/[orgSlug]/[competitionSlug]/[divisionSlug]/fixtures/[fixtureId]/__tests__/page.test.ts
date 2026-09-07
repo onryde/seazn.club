@@ -103,6 +103,8 @@ function cricketDocFor(status: "in_play" | "decided"): MatchCentreDocT {
           ? { key: "matchCentre.result.regulation", params: { winner: "Home XI", margin: "65 runs" } }
           : null,
       rateLine: null,
+      phase: null,
+      strength: null,
       updatedAt: new Date().toISOString(),
     },
     tabs: ["summary", "scorecard", "info"],

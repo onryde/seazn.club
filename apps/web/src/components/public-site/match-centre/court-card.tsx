@@ -44,7 +44,7 @@
 //   trip took; that is expected drift, not the corruption
 //   `suppressHydrationWarning` normally papers over on OTHER attributes.
 import type { Dict as PublicDict } from "@/lib/i18n-constants";
-import { t } from "@/lib/i18n-runtime";
+import { lookup, t } from "@/lib/i18n-runtime";
 import type { MatchCentreHeaderT } from "@/server/public-site/match-centre-schema";
 import { useNow } from "./use-now";
 
@@ -82,11 +82,32 @@ function statusChip(status: MatchCentreHeaderT["status"], dict: PublicDict): { t
   }
 }
 
+/** `term.<phase>` when the dictionary names this phase, else null so the
+ *  caller can fall back to the engine's own token. Deliberately NOT `t()`:
+ *  that warns and returns the KEY ITSELF, which would put a raw dictionary
+ *  key on a public page for any phase beyond the authored set. */
+function lookupPhaseTerm(dict: PublicDict, phase: string): string | null {
+  const value = lookup(dict, `term.${phase}`);
+  return typeof value === "string" && value !== "" ? value : null;
+}
+
 export function CourtCard({ header, dict }: CourtCardProps) {
   const now = useNow();
   const parsedUpdatedAt = Date.parse(header.updatedAt);
   const seconds = Number.isFinite(parsedUpdatedAt) ? Math.max(0, Math.floor((now - parsedUpdatedAt) / 1000)) : 0;
   const inPlay = header.status === "in_play";
+  // `lookup`, not `t`: a missing key makes `t` WARN and return the key itself,
+  // which would print a raw dictionary key on the page for any phase the
+  // dictionary does not name. Falling back to the engine token instead keeps an
+  // unbounded phase readable — the choice `sets-tab.tsx` documents for its own
+  // headers.
+  //
+  // The example is spelled out in prose deliberately: `match-centre-dictionary
+  // .test.ts` SCANS this source for term keys and requires every one it finds
+  // to exist in all four dictionaries, so naming a hypothetical phase here in
+  // key form invents a key nobody should author.
+  const phaseLabel =
+    header.phase === null ? null : (lookupPhaseTerm(dict, header.phase) ?? header.phase);
   const chip = statusChip(header.status, dict);
   return (
     <div
@@ -107,6 +128,36 @@ export function CourtCard({ header, dict }: CourtCardProps) {
               <span className={`h-2 w-2 rounded-full bg-emerald-400${header.live ? " animate-live-pulse" : ""}`} />
             ) : null}
             {chip.text}
+            {/* The period kernel's live pair, restored: both were dropped when
+                the match centre replaced the old scorebug, because
+                `suppressScorebug` (R11/C7) hid their only renderer and neither
+                had a home in the new header. A hockey spectator lost the
+                power-play chip outright, and the phase survived only inside
+                the Periods tab.
+
+                They sit HERE, on the chip row, rather than in a band of their
+                own: both are true only while the match is live, which is
+                exactly what this row already says, and the alternative
+                (restoring the suppressed slab) is the duplicate court card C7
+                exists to forbid.
+
+                `phase` is the engine's raw token, resolved through `term.*`
+                the way `sets-tab.tsx` resolves its column headers, and it
+                falls back to the token itself so an unbounded phase (`OT3`,
+                `P7`) still reads rather than printing a missing key. */}
+            {!inPlay || phaseLabel === null ? null : (
+              <span data-testid="mc-phase" className="font-semibold tracking-normal text-emerald-200/90">
+                {phaseLabel}
+              </span>
+            )}
+            {!inPlay || header.strength === null ? null : (
+              <span
+                data-testid="mc-strength"
+                className="rounded-full bg-amber-400/20 px-2 py-0.5 font-mono text-[11px] font-bold tracking-normal text-amber-300"
+              >
+                {header.strength}
+              </span>
+            )}
           </p>
         ) : null}
         <div className="space-y-2">

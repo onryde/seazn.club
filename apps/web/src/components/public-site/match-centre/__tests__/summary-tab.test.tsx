@@ -40,6 +40,10 @@ function baseHeader(status: MatchCentreDocT["header"]["status"] = "in_play") {
     battingIndex: 0 as const,
     statusLine: null,
     rateLine: null,
+    // Null here on purpose: this file's subject is the SUMMARY tab, and a
+    // cricket fixture has neither. The court card's own tests cover the pair.
+    phase: null,
+    strength: null,
     updatedAt: new Date().toISOString(),
   };
 }

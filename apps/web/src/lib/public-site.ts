@@ -345,6 +345,23 @@ export function periodBreakdown(summary: unknown): PeriodScoreRow[] | null {
   return rows;
 }
 
+/** The period kernel's own CURRENT phase token — "P1", "H1", "ET_H2",
+ *  "SHOOTOUT" (`sports/period/kernel.ts`'s summary `detail.phase`). A raw
+ *  token, never copy: callers resolve it through `term.<phase>` the way
+ *  `sets-tab.tsx` already does for its column headers.
+ *
+ *  Read from `detail.phase` rather than off the engine's `headline`, which
+ *  appends the same fact as a " · P1" suffix — parsing that prose back apart
+ *  would make this a SECOND authority for something `detail` already states
+ *  by name. */
+export function matchPhase(summary: unknown): string | null {
+  if (typeof summary !== "object" || summary === null) return null;
+  const detail = (summary as { detail?: unknown }).detail;
+  if (typeof detail !== "object" || detail === null) return null;
+  const phase = (detail as { phase?: unknown }).phase;
+  return typeof phase === "string" && phase !== "" ? phase : null;
+}
+
 /** "5v4" / "10v11" while a team-short suspension runs, else null. */
 export function matchStrength(summary: unknown): string | null {
   if (typeof summary !== "object" || summary === null) return null;

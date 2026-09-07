@@ -73,6 +73,9 @@ import { resolveLatestModule, resolveModule } from "@/server/engine-db/registry"
 // decided sentence — a second parse of the same jsonb is a second chance to
 // disagree about the same match.
 import { shootoutScoreFromDetail } from "@/lib/scoring-vocab";
+// The SAME readers `live-score.tsx` uses for the pair the match centre had
+// dropped — one authority per fact, never a second parse of the same jsonb.
+import { matchPhase, matchStrength } from "@/lib/public-site";
 import type { PublicFixture } from "./data";
 import type { PublicPerson } from "./public-lineups";
 import { buildSets, buildTimeline } from "./timeline";
@@ -770,6 +773,16 @@ function buildHeader(
     rateLine = rateLineOf(live);
   }
 
+  // Both read through the SHARED readers in `lib/public-site.ts` — the same
+  // ones `live-score.tsx` uses — rather than reaching into `summary.detail`
+  // again here. Gated on in_play: a decided match has no current phase and
+  // nobody is short-handed, and the engine leaves both stale in `detail`
+  // after the final whistle (`live-score.tsx:122` gates `matchStrength` the
+  // same way, for the same reason).
+  const inPlay = status === "in_play";
+  const phase = inPlay ? matchPhase(fixture.summary) : null;
+  const strength = inPlay ? matchStrength(fixture.summary) : null;
+
   return {
     live: status === "in_play",
     status,
@@ -779,6 +792,8 @@ function buildHeader(
     battingIndex,
     statusLine,
     rateLine,
+    phase,
+    strength,
     updatedAt: now.toISOString(),
   };
 }

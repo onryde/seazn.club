@@ -101,6 +101,8 @@ export function makeDoc(o: DocOver = {}): MatchCentreDocT {
       battingIndex: null,
       statusLine: null,
       rateLine: null,
+      phase: null,
+      strength: null,
       updatedAt: "2026-09-04T12:00:00.000Z",
     },
     tabs: ["summary", "info"],

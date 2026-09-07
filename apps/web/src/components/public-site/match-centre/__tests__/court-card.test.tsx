@@ -39,6 +39,8 @@ const liveHeader: MatchCentreHeaderT = {
   // Msg → text pipeline, not just that SOME string appears.
   statusLine: { key: "org.competitionsBy", params: { org: "Riverside" } },
   rateLine: "CRR 7.00 · RRR 9.71",
+  phase: null,
+  strength: null,
   updatedAt: new Date().toISOString(),
 };
 
@@ -161,5 +163,63 @@ describe("CourtCard", () => {
     const html = renderToStaticMarkup(<CourtCard header={header} dict={dict} />);
     expect(html).toContain("Updated 0s ago");
     expect(html).not.toContain("NaN");
+  });
+
+  // -------------------------------------------------------------------------
+  // The period kernel's live pair — restored after CI found both had been lost
+  // -------------------------------------------------------------------------
+  //
+  // `v6-sports.spec.ts` was the only test covering either, it lives in a
+  // Playwright project no local gate runs, and e2e only fires on pushes to
+  // main — so W1 dropped the power-play chip and the live phase from the
+  // public page and every local run stayed green. These are the unit tests
+  // that would have caught it.
+
+  it("renders the live phase, resolved through term.* rather than as the engine's raw token", () => {
+    const header: MatchCentreHeaderT = { ...liveHeader, phase: "P1" };
+    const html = renderToStaticMarkup(<CourtCard header={header} dict={dict} />);
+    expect(html).toContain('data-testid="mc-phase"');
+    // The dictionary's own value, never a literal typed here — re-wording
+    // `term.P1` moves this assertion with it.
+    expect(html).toContain(dict["term.P1"] as string);
+    // ...and NOT the raw token, which is what the old scorebug showed and
+    // what a `t()`-less render would leave behind.
+    expect(html).not.toContain(">P1<");
+  });
+
+  it("falls back to the raw phase token when the dictionary does not name it", () => {
+    // An unbounded phase the authored set does not cover. `t()` would warn and
+    // return "term.OT9", printing a dictionary key on a public page.
+    const header: MatchCentreHeaderT = { ...liveHeader, phase: "OT9" };
+    const html = renderToStaticMarkup(<CourtCard header={header} dict={dict} />);
+    expect(html).toContain("OT9");
+    expect(html).not.toContain("term.OT9");
+  });
+
+  it("renders the power-play strength chip verbatim — a number pair, not copy", () => {
+    const header: MatchCentreHeaderT = { ...liveHeader, strength: "5v4" };
+    const html = renderToStaticMarkup(<CourtCard header={header} dict={dict} />);
+    expect(html).toContain('data-testid="mc-strength"');
+    expect(html).toContain("5v4");
+  });
+
+  // The negative pair for both, and the reason the builder gates them on
+  // in_play: a match with neither must render neither element, not an empty
+  // chip. Asserting only the presence cases above would pass just as happily
+  // if the component rendered a blank span whenever the fields were null.
+  it("renders NEITHER element when the header carries neither fact", () => {
+    const html = renderToStaticMarkup(<CourtCard header={liveHeader} dict={dict} />);
+    expect(html).not.toContain('data-testid="mc-phase"');
+    expect(html).not.toContain('data-testid="mc-strength"');
+  });
+
+  // Both live on the LIVE pill's row, which only renders while in play — so a
+  // decided header cannot show a stale phase or a stale power play even if
+  // the document carried one. This pins the placement, not just the presence.
+  it("shows neither on a DECIDED header, even when both fields are populated", () => {
+    const header: MatchCentreHeaderT = { ...decidedHeader, phase: "P3", strength: "5v4" };
+    const html = renderToStaticMarkup(<CourtCard header={header} dict={dict} />);
+    expect(html).not.toContain('data-testid="mc-phase"');
+    expect(html).not.toContain('data-testid="mc-strength"');
   });
 });

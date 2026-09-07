@@ -33,6 +33,8 @@ function buildDoc(overrides: Partial<MatchCentreDocT> = {}): MatchCentreDocT {
       battingIndex: null,
       statusLine: null,
       rateLine: null,
+      phase: null,
+      strength: null,
       updatedAt: new Date().toISOString(),
     },
     tabs: ["summary", "scorecard", "commentary", "timeline", "sets", "info"],

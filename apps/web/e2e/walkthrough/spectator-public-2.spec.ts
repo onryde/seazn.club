@@ -906,7 +906,7 @@ test("badge chips hold the WIDEST abbreviation the ladder produces, at 320 and 1
     // notices if that class is dropped — nothing else in the repo would.
     expect(
       setsBoxes[0]!.client,
-      `at ${width}px the two stacked sets badges are different widths ("${setsBoxes[0]!.text}" ${setsBoxes[0]!.client}px vs "${setsBoxes[1]!.text}" ${setsBoxes[1]!.client}px), so the two entrant names no longer start at the same x — the chip needs tabular figures`,
+      `at ${width}px the two stacked sets badges are different widths ("${setsBoxes[0]!.text}" ${setsBoxes[0]!.client}px vs "${setsBoxes[1]!.text}" ${setsBoxes[1]!.client}px), so the two entrant names no longer start at the same x. tabular-nums alone does NOT fix this: it is a font FEATURE a face may not implement (the CI runner's fallback does not). The chip needs a monospace FAMILY`,
     ).toBe(setsBoxes[1]!.client);
 
     // And the consequence itself, rather than only its cause: the names line up.

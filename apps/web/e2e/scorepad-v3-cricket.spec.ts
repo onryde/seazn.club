@@ -1148,7 +1148,7 @@ test(
 );
 
 test(
-  "cricket v3: a genuinely terminal tie (no super over) decides the match outright — the v3 pad does not render at all, superOver's own live state is the contrast",
+  "cricket v3: a genuinely terminal tie (no super over) decides the match outright — the pad keeps only its POST phase, superOver's own live state is the contrast",
   async ({ page }) => {
     // Entirely API-driven setup (a config flip + five events), then a page
     // load — no held dispatch at all.
@@ -1226,9 +1226,29 @@ test(
 
     await page.goto(await fixturePath(page.request, fx.fixtureId));
     await expect(page.getByRole("heading", { level: 1 })).toBeVisible({ timeout: 20_000 });
-    // No v3 scoring surface at all — nothing to disable, nothing to hide a
-    // tile from, because the pad itself never mounts on a decided fixture.
-    await expect(pad(page)).toHaveCount(0);
+    // OWNER RULING 17 (2026-09-06) SUPERSEDES THE ORIGINAL ASSERTION HERE.
+    // This used to require `pad(page)` count 0 — "the pad itself never mounts
+    // on a decided fixture". The ruling is that a decided fixture KEEPS the
+    // pad's post-phase panel when the sport module declares post-phase
+    // actions, so band-2 player lines can still be entered after the result;
+    // `shouldMountPad` (`fixture-console.tsx`) mounts when not decided, OR
+    // when `padSpec.panels` carries a `phase: "post"` panel. Cricket declares
+    // one, so the pad stays.
+    //
+    // The same stale assertion was already corrected once, in
+    // `scorepad-v3-deciders-fullmatch.spec.ts`; THIS copy survived because it
+    // lives in the `parallel` project, which no local gate runs, and e2e only
+    // fires on pushes to main. CI caught it on the first dispatch.
+    //
+    // Pinned to what the ruling REQUIRES, in both halves — not flipped 0 -> 1
+    // to go green. A bare count of 1 would pass just as happily if a decided
+    // fixture kept its full live scoring surface, which is the defect actually
+    // worth fearing.
+    await expect(pad(page), "ruling 17: cricket declares a post-phase panel, so the pad stays").toHaveCount(1);
+    await expect(
+      pad(page).locator('[data-tile-id="run1"]'),
+      "a decided fixture is still offering live scoring tiles — the pad mounted, but not in its post phase",
+    ).toHaveCount(0);
   },
 );
 

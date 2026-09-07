@@ -170,9 +170,25 @@ export function SetsTab({ doc, dict }: SetsTabProps): ReactNode {
                         ordinals do not make these two STACKED chips different
                         widths and start the two names at different x. See that
                         component's note for both. */}
+                    {/* `font-mono`, not just `tabular-nums`. CI measured these
+                        two stacked chips at 33px ("AND1") and 34px ("AND2"),
+                        which is the exact defect the note above says the
+                        tabular figures were there to prevent — because
+                        `tabular-nums` is `font-variant-numeric`, a FEATURE a
+                        font may simply not implement, and the fallback face on
+                        the CI runner does not. A monospace FAMILY guarantees
+                        equal advance widths whatever face resolves, including
+                        the generic fallback when the webfont never loads.
+                        `tabular-nums` stays: it costs nothing and is correct
+                        wherever the face does support it.
+
+                        Local runs passed this for months — the box's own font
+                        fallback happened to render `1` and `2` at the same
+                        width. A layout guarantee that depends on which machine
+                        rendered it is not a guarantee. */}
                     <span
                       data-testid={`mc-sets-badge-${rowIndex}`}
-                      className="inline-flex h-6 min-w-[24px] shrink-0 items-center justify-center rounded-md bg-accent/15 px-0.5 text-[10px] font-bold uppercase tabular-nums"
+                      className="inline-flex h-6 min-w-[24px] shrink-0 items-center justify-center rounded-md bg-accent/15 px-0.5 font-mono text-[10px] font-bold uppercase tabular-nums"
                     >
                       {side.short || side.name.slice(0, 3)}
                     </span>

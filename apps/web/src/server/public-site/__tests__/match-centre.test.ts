@@ -948,3 +948,65 @@ describe("buildMatchCentre — ball-by-ball commentary lines", () => {
     expect(linesOf("fr")[1]!.key).toBe("matchCentre.ballLine.runs.one");
   });
 });
+
+// ---------------------------------------------------------------------------
+// header.phase / header.strength — the period kernel's live pair
+// ---------------------------------------------------------------------------
+//
+// Both come off `summary.detail` (`sports/period/kernel.ts` writes `phase` and
+// `strength` there), through the SAME readers `live-score.tsx` uses. They are
+// here because W1 dropped both from the public page: `suppressScorebug` hides
+// the block that used to render them, and nothing in the new header carried
+// them. Only `v6-sports.spec.ts` covered either, in a Playwright project no
+// local gate runs.
+describe("buildMatchCentre — the live phase and power-play strength", () => {
+  const withDetail = (status: PublicFixture["status"], detail: Record<string, unknown>) =>
+    buildMatchCentre(
+      input({
+        sportKey: "football",
+        cfg: football.configSchema.parse({}),
+        fixture: F({ status, summary: { headline: "1 — 0 · H1", perSide: [], detail } as never }),
+      }),
+    ).header;
+
+  it("carries both off summary.detail while the match is in play", () => {
+    const header = withDetail("in_play", { phase: "H1", strength: "10v11" });
+    expect(header.phase).toBe("H1");
+    expect(header.strength).toBe("10v11");
+  });
+
+  // The engine leaves both in `detail` after the final whistle, so reading
+  // them unconditionally would show a decided match a phase it is no longer
+  // in and a power play nobody is serving. `live-score.tsx:122` gates
+  // `matchStrength` on in_play for exactly this reason.
+  it("drops both once the match is decided, even though the engine still reports them", () => {
+    const header = withDetail("decided", { phase: "H2", strength: "10v11" });
+    expect(header.phase).toBeNull();
+    expect(header.strength).toBeNull();
+  });
+
+  // A sport whose summary carries neither (cricket) must not invent them.
+  it("is null for a summary that carries neither", () => {
+    const header = withDetail("in_play", {});
+    expect(header.phase).toBeNull();
+    expect(header.strength).toBeNull();
+  });
+
+  // The reader must take `detail.phase` by NAME, never parse it back out of
+  // the headline's " · H1" suffix — the headline is prose and the same fact
+  // stated twice is two chances to disagree. A headline that disagrees with
+  // `detail` proves which one is being read.
+  it("reads detail.phase by name, not the headline's own suffix", () => {
+    const header = buildMatchCentre(
+      input({
+        sportKey: "football",
+        cfg: football.configSchema.parse({}),
+        fixture: F({
+          status: "in_play",
+          summary: { headline: "1 — 0 · WRONG", perSide: [], detail: { phase: "H2" } } as never,
+        }),
+      }),
+    ).header;
+    expect(header.phase).toBe("H2");
+  });
+});

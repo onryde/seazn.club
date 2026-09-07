@@ -20,6 +20,20 @@ export const MatchCentreHeader = z.object({
   battingIndex: z.union([z.literal(0), z.literal(1)]).nullable(),
   statusLine: Msg.nullable(),        // "Queens need 34 from 21" / "Blue Blazers won by 12 runs" / "Starts Sat 14:00"
   rateLine: z.string().nullable(),   // "CRR 8.44 · RRR 9.71" — numbers, no copy
+  // The period kernel's live pair, restored after the W1 read found both had
+  // been dropped. `summary-tab.tsx` passes `suppressScorebug` for every
+  // non-cricket sport (R11/C7 — the court slab must not paint twice), and the
+  // suppressed block was the ONLY renderer of either: a hockey spectator lost
+  // the power-play chip entirely, and the live phase survived only inside the
+  // Periods tab. Both are header facts — "which period, and is someone a man
+  // up" is what the top of the page is for.
+  //
+  // `phase` is the engine's RAW token ("P1", "ET_H2"), resolved to copy by the
+  // renderer through `term.<phase>`; `strength` is a number pair ("5v4") and
+  // is not copy at all. Both null unless the match is in play — a finished
+  // match has no current phase and nobody is a man up.
+  phase: z.string().nullable(),
+  strength: z.string().nullable(),
   updatedAt: z.string(),             // ISO
 });
 

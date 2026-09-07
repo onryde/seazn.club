@@ -231,6 +231,8 @@ function doc(over: {
       battingIndex: over.live === true ? 1 : null,
       statusLine: null,
       rateLine: null,
+      phase: null,
+      strength: null,
       updatedAt: "2026-09-04T12:00:00.000Z",
     },
     tabs: ["summary", "scorecard", "info"],
