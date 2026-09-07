@@ -3043,6 +3043,8 @@
   "fixture.officials.declined": "Rechazado",
   "fixture.decidedBy.shootout": "{winner} ganó {score} en la tanda de penaltis",
   "fixture.decidedBy.shootoutPlain": "{winner} ganó en la tanda de penaltis",
+  "fixture.decidedBy.shootoutHockey": "{winner} ganó {score} en la tanda de penalis",
+  "fixture.decidedBy.shootoutHockeyPlain": "{winner} ganó en la tanda de penalis",
   "fixture.decidedBy.superOver": "{winner} ganó en el súper over",
   "fixture.decidedBy.boundaryCount": "{winner} ganó por recuento de límites",
   "fixture.decidedBy.extraTime": "{winner} ganó tras la prórroga",

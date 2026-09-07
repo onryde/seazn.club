@@ -179,6 +179,8 @@
   "matchCentre.result.boundary_count": "{winner} won on boundary count",
   "matchCentre.result.shootout": "{winner} won {margin} on penalties",
   "matchCentre.result.shootoutPlain": "{winner} won on penalties",
+  "matchCentre.result.shootoutHockey": "{winner} won {margin} in the shootout",
+  "matchCentre.result.shootoutHockeyPlain": "{winner} won in the shootout",
   "matchCentre.result.tie": "Match tied",
   "matchCentre.result.no_result": "No result",
   "matchCentre.result.draw": "Match drawn",

@@ -53,12 +53,18 @@ function decidedLineFor(
   fixture: { outcome: { kind?: string; winner?: string; method?: string } | null; summary: { detail?: unknown } | null },
   entrantNames: Record<string, string>,
   msgFn: ReturnType<typeof lookup>,
+  // The shootout sentence is the SPORT's: ice hockey and field hockey have a
+  // shootout, football has penalties. Threaded so the share/OG text and the
+  // court card cannot describe one match two ways — which they did, briefly,
+  // when only the court card was made sport-aware.
+  sportKey: string,
 ): string | null {
   return decidedOutcomeText(
     fixture.outcome,
     entrantNames,
     msgFn,
     shootoutScoreFromDetail(fixture.summary?.detail),
+    sportKey,
   );
 }
 
@@ -132,7 +138,7 @@ export async function generateMetadata({ params }: Pick<Props, "params">): Promi
   const away = data.fixture.away_entrant_id
     ? (data.entrantNames[data.fixture.away_entrant_id] ?? resolveSlotLabel(null, msgFn, "schedule.tbd"))
     : resolveSlotLabel(data.fixture.away_slot_label, msgFn, "schedule.tbd");
-  const decidedLine = decidedLineFor(data.fixture, data.entrantNames, msgFn);
+  const decidedLine = decidedLineFor(data.fixture, data.entrantNames, msgFn, data.division.sport_key);
   const decided = data.fixture.status === "decided" || data.fixture.status === "finalized";
   // Task 14 acceptance (a) — a decided fixture's title carries both the raw
   // score lines and the result phrase, so a share/search preview shows the
@@ -178,7 +184,7 @@ export default async function FixturePage({ params }: Props) {
     ? (entrantNames[fixture.away_entrant_id] ?? resolveSlotLabel(null, msgFn, "schedule.tbd"))
     : resolveSlotLabel(fixture.away_slot_label, msgFn, "schedule.tbd");
   const basePath = `/shared/${org.slug}/${competition.slug}/${division.slug}`;
-  const decidedLine = decidedLineFor(fixture, entrantNames, msgFn);
+  const decidedLine = decidedLineFor(fixture, entrantNames, msgFn, division.sport_key);
 
   const jsonLd = sportsEventJsonLd({
     name: t(ui, "fixture.meta.jsonLdName", { home, away, division: division.name, competition: competition.name }),

@@ -3088,6 +3088,8 @@
   "fixture.officials.declined": "Declined",
   "fixture.decidedBy.shootout": "{winner} won {score} on penalties",
   "fixture.decidedBy.shootoutPlain": "{winner} won on penalties",
+  "fixture.decidedBy.shootoutHockey": "{winner} won {score} in the shootout",
+  "fixture.decidedBy.shootoutHockeyPlain": "{winner} won in the shootout",
   "fixture.decidedBy.superOver": "{winner} won on the super over",
   "fixture.decidedBy.boundaryCount": "{winner} won on boundary count",
   "fixture.decidedBy.extraTime": "{winner} won after extra time",

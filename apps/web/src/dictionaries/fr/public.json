@@ -179,6 +179,8 @@
   "matchCentre.result.boundary_count": "{winner} a gagné au boundary count",
   "matchCentre.result.shootout": "{winner} a gagné {margin} aux tirs au but",
   "matchCentre.result.shootoutPlain": "{winner} a gagné aux tirs au but",
+  "matchCentre.result.shootoutHockey": "{winner} a gagné {margin} en tirs de fusillade",
+  "matchCentre.result.shootoutHockeyPlain": "{winner} a gagné en tirs de fusillade",
   "matchCentre.result.tie": "Égalité",
   "matchCentre.result.no_result": "Aucun résultat",
   "matchCentre.result.draw": "Match nul",

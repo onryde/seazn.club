@@ -3043,6 +3043,8 @@
   "fixture.officials.declined": "Afgewezen",
   "fixture.decidedBy.shootout": "{winner} won {score} na strafschoppen",
   "fixture.decidedBy.shootoutPlain": "{winner} won na strafschoppen",
+  "fixture.decidedBy.shootoutHockey": "{winner} won {score} in de shoot-outs",
+  "fixture.decidedBy.shootoutHockeyPlain": "{winner} won in de shoot-outs",
   "fixture.decidedBy.superOver": "{winner} won de super over",
   "fixture.decidedBy.boundaryCount": "{winner} won op het aantal boundaries",
   "fixture.decidedBy.extraTime": "{winner} won na verlenging",

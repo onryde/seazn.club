@@ -1325,15 +1325,29 @@ export interface DecidedOutcomeTemplates {
  * "super_over", … a second time — if that map ever gains or loses a method,
  * this follows with no edit.
  */
-export function decidedOutcomeTemplates(m: MsgFn): DecidedOutcomeTemplates {
+/**
+ * Sports whose shootout is SKATED, not kicked. "Won on penalties" is football's
+ * sentence; ice hockey and field hockey have a shootout, and the engine already
+ * speaks that way (icehockey's own metrics are "GWS goals" — game-winning
+ * shots). One shared, football-worded key was printed for every sport.
+ *
+ * `sportKey` is OPTIONAL, defaulting to football's wording, so every caller
+ * that does not pass one renders byte-identical to before. Deliberate: a
+ * REQUIRED parameter would have forced a change on every call site whether or
+ * not it had a sport in hand, and this is a copy nuance, not a contract.
+ */
+const SHOOTOUT_IS_SKATED = new Set(["icehockey", "hockey"]);
+
+export function decidedOutcomeTemplates(m: MsgFn, sportKey?: string): DecidedOutcomeTemplates {
+  const skated = sportKey !== undefined && SHOOTOUT_IS_SKATED.has(sportKey);
   const byMethod: Record<string, string> = {};
   for (const [method, key] of Object.entries(DECIDED_METHOD_KEY)) {
-    byMethod[method] = m(key);
+    byMethod[method] = method === "shootout" && skated ? m("fixture.decidedBy.shootoutHockey") : m(key);
   }
   return {
     tie: m("fixture.decidedBy.tie"),
     plain: m("fixture.decidedBy.plain"),
-    shootoutPlain: m("fixture.decidedBy.shootoutPlain"),
+    shootoutPlain: skated ? m("fixture.decidedBy.shootoutHockeyPlain") : m("fixture.decidedBy.shootoutPlain"),
     byMethod,
   };
 }
@@ -1404,8 +1418,10 @@ export function decidedOutcomeText(
   entrantNames: Record<string, string>,
   m: MsgFn,
   shootoutScore?: { home: number; away: number } | null,
+  /** See `decidedOutcomeTemplates` — omitting it keeps football's wording. */
+  sportKey?: string,
 ): string | null {
-  return renderDecidedOutcome(outcome, entrantNames, decidedOutcomeTemplates(m), shootoutScore);
+  return renderDecidedOutcome(outcome, entrantNames, decidedOutcomeTemplates(m, sportKey), shootoutScore);
 }
 
 /**

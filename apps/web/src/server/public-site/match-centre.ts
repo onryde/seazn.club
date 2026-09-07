@@ -527,11 +527,22 @@ function buildCricketView(card: CricketScorecard, sides: readonly [SideT, SideT]
  * — card.result is the cricket fold's own answer) and falls back to
  * `outcome.winner` only when there is no card (every non-cricket sport).
  */
+/**
+ * Sports that decide a shootout with SKATES/STICKS rather than penalty kicks.
+ * "Won on penalties" is football's sentence; ice hockey and field hockey have a
+ * shootout, and the engine already speaks that way (icehockey's own metrics are
+ * "GWS goals" — game-winning shots). One shared, football-worded key was being
+ * printed for every sport, which was invisible until the shootout sentence
+ * started reaching the court card at all.
+ */
+const SHOOTOUT_IS_SKATED = new Set(["icehockey", "hockey"]);
+
 function resultMsg(
   outcome: PublicFixture["outcome"],
   marginText: string | null,
   cardWinner: string | null,
   sides: readonly [SideT, SideT],
+  sportKey: string,
 ): MsgT | null {
   if (outcome == null || outcome.kind === undefined) return null;
   const winnerName = (id: string | null | undefined): string => (id ? sideNameOf(sides, id) : "");
@@ -557,8 +568,18 @@ function resultMsg(
       // every other, and dropping it is the exact mistake `scoring-vocab.ts`'s
       // own `shootoutPlain` exists to prevent (F8, R3.5 review). Same rule,
       // second surface — a coarse or replayed summary carries no tally.
-      if (kind === "shootout" && margin === "") {
-        return { key: "matchCentre.result.shootoutPlain", params: { winner } };
+      if (kind === "shootout") {
+        const skated = SHOOTOUT_IS_SKATED.has(sportKey);
+        if (margin === "") {
+          return {
+            key: skated ? "matchCentre.result.shootoutHockeyPlain" : "matchCentre.result.shootoutPlain",
+            params: { winner },
+          };
+        }
+        return {
+          key: skated ? "matchCentre.result.shootoutHockey" : "matchCentre.result.shootout",
+          params: { winner, margin },
+        };
       }
       return { key: `matchCentre.result.${kind}`, params: { winner, margin } };
     }
@@ -630,6 +651,9 @@ function buildHeader(
   venueTz: string,
   locale: string,
   now: Date,
+  // Only the shootout sentence needs it: the word for a shootout is the
+  // SPORT's, not one shared football phrase (see `SHOOTOUT_IS_SKATED`).
+  sportKey: string,
 ): MatchCentreHeaderT {
   const status = statusOf(fixture.status);
 
@@ -683,7 +707,7 @@ function buildHeader(
           ? card.result.margin
           : null;
     const cardWinner = card?.result?.winner ?? null;
-    statusLine = resultMsg(fixture.outcome, marginText, cardWinner, sides);
+    statusLine = resultMsg(fixture.outcome, marginText, cardWinner, sides, sportKey);
   } else if (status === "other") {
     statusLine = { key: `matchCentre.status.${fixture.status}` };
   } else if (status === "in_play" && card?.live) {
@@ -892,7 +916,7 @@ export function buildMatchCentre(input: MatchCentreInput): MatchCentreDocT {
     band = effectiveBand(events, sportModule, cfg);
   }
 
-  const header = buildHeader(fixture, sides, card, setsView, venueTz, locale, now);
+  const header = buildHeader(fixture, sides, card, setsView, venueTz, locale, now, sportKey);
   const info = buildInfoView(fixture, card, sides, formatLabel, stage, hrefs, venueTz, locale, band);
 
   return {

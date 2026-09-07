@@ -12,6 +12,7 @@ import { describe, expect, it } from "vitest";
 import type { EventEnvelope } from "@seazn/engine/core";
 import { makeEnvelope } from "@seazn/engine/testkit";
 import { registry as engineRegistry, type AnySportModule } from "@seazn/engine/sport";
+import { builtinModules } from "@seazn/engine/sports";
 import { cricket, deriveCricketScorecard, type DismissalKind } from "@seazn/engine/sports/cricket";
 import { football, FootballCfg } from "@seazn/engine/sports/football";
 import { tennis } from "@seazn/engine/sports/tennis";
@@ -407,6 +408,45 @@ describe("buildMatchCentre — cricket", () => {
     expect(doc.header.statusLine?.key).toBe("matchCentre.result.shootoutPlain");
     expect(doc.header.statusLine?.key).not.toBe("matchCentre.result.regulation");
     expect(doc.header.statusLine?.params?.winner).toBe(HOME_SIDE.name);
+  });
+
+  // The word for a shootout belongs to the SPORT. "Won on penalties" is
+  // football's sentence; ice hockey and field hockey have a shootout, and the
+  // engine already speaks that way (icehockey's metrics are "GWS goals" —
+  // game-winning shots). One shared football-worded key was printing for every
+  // sport, which only became visible once the shootout sentence reached the
+  // court card at all. Asserted as a PAIR — football keeps its word, hockey
+  // gets its own — because a test that only checked hockey would pass just as
+  // happily if BOTH sports had been switched to the skated wording.
+  it.each([
+    ["football", "matchCentre.result.shootout"],
+    ["icehockey", "matchCentre.result.shootoutHockey"],
+    ["hockey", "matchCentre.result.shootoutHockey"],
+  ])("a %s shootout uses that sport's own word (%s)", (sportKey, expectedKey) => {
+    const ledger = scriptLedger(DECIDED_BY_RUNS_SCRIPT);
+    // Each sport's OWN default cfg, from its own module. Passing cricket's cfg
+    // with a football `sportKey` resolves the football module and then crashes
+    // inside its `padSpec` reading a key cricket's config has never heard of —
+    // a harness fault whose stack looks exactly like a production one.
+    // `builtinModules` rather than the shared `registry`: nothing registers the
+    // built-ins in this test process (that happens at server boot), so
+    // `registry.latest("football")` throws MODULE_NOT_FOUND here.
+    const sportModule = builtinModules.find((m) => m.key === sportKey);
+    expect(sportModule, `no built-in module for ${sportKey}`).toBeDefined();
+    const sportCfg = sportModule!.configSchema.parse({});
+    const doc = buildMatchCentre(
+      input({
+        events: [],
+        cfg: sportCfg,
+        sportKey,
+        fixture: decidedFixture(ledger, {
+          outcome: { kind: "win", winner: HOME_SIDE.entrantId, method: "shootout" } as PublicFixture["outcome"],
+          summary: { headline: "", perSide: [], detail: { shootout: { home: 3, away: 2 } } } as never,
+        }),
+      }),
+    );
+    expect(doc.header.statusLine?.key).toBe(expectedKey);
+    expect(doc.header.statusLine?.params?.margin).toBe("3–2");
   });
 
   it("final: header status decided, statusLine is the result key with the margin params, live null", () => {

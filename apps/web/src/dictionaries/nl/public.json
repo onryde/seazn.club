@@ -179,6 +179,8 @@
   "matchCentre.result.boundary_count": "{winner} won op boundary count",
   "matchCentre.result.shootout": "{winner} won {margin} na strafschoppen",
   "matchCentre.result.shootoutPlain": "{winner} won na strafschoppen",
+  "matchCentre.result.shootoutHockey": "{winner} won {margin} in de shoot-outs",
+  "matchCentre.result.shootoutHockeyPlain": "{winner} won in de shoot-outs",
   "matchCentre.result.tie": "Gelijkspel",
   "matchCentre.result.no_result": "Geen resultaat",
   "matchCentre.result.draw": "Onbeslist",

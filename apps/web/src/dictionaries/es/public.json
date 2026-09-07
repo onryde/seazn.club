@@ -179,6 +179,8 @@
   "matchCentre.result.boundary_count": "{winner} ganó por boundary count",
   "matchCentre.result.shootout": "{winner} ganó {margin} en la tanda de penaltis",
   "matchCentre.result.shootoutPlain": "{winner} ganó en la tanda de penaltis",
+  "matchCentre.result.shootoutHockey": "{winner} ganó {margin} en la tanda de penalis",
+  "matchCentre.result.shootoutHockeyPlain": "{winner} ganó en la tanda de penalis",
   "matchCentre.result.tie": "Empate",
   "matchCentre.result.no_result": "Sin resultado",
   "matchCentre.result.draw": "Partido inconcluso",
