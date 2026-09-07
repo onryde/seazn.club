@@ -1153,7 +1153,17 @@ test("football v3: the public page's decided sentence updates live while already
   // Open the page BEFORE a single event has been posted (seedRosteredFixture
   // never emits core.start unless asked), and never navigate again.
   await page.goto(publicPath);
-  await expect(page.getByText("Not started")).toBeVisible({ timeout: 20_000 });
+  // PRECONDITION: the page opened in its pre-play state. This asserted
+  // `getByText("Not started")` — `LiveScoreBody`'s headline fallback — which
+  // stopped being what a spectator sees here once the match centre replaced
+  // the legacy fixture page: `summary-tab.tsx` suppresses that scorebug for
+  // non-cricket sports so the court slab is not painted twice (R11/C7), and
+  // before a ball is bowled that left the Summary tab COMPLETELY EMPTY. The
+  // empty state is what fills it now, and it is a STRONGER precondition than
+  // the old one — a testid that exists only in the pre-play/no-detail case,
+  // where "Not started" was a loose text match that could come from anywhere
+  // on the page.
+  await expect(page.getByTestId("mc-summary-empty")).toBeVisible({ timeout: 20_000 });
   await expect(page.getByText(/won .* on penalties/)).toHaveCount(0);
 
   // A DIFFERENT context posts every event — the same helper the reload test
