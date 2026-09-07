@@ -153,6 +153,9 @@ describe("runSuite — B03 T7 forwards sql/transport into runTinySuite", () => {
       async entitlementRows() {
         return [];
       },
+      async planCandidateInfo() {
+        return [];
+      },
       async getOrgSubscriptionId() {
         return null;
       },

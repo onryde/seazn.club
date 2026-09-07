@@ -374,11 +374,21 @@ export async function runDlsGateProbe(input: DlsGateProbeInput): Promise<DlsGate
   // dropped the whole stats baseline with no warning, because only
   // `officials.auto` had reporting.
   const statsRows = await sql.entitlementRows("stats.player");
-  const { plan: provisionedPlan, unsatisfied: unsatisfiedCapabilities } = chooseGrantingPlanForCapabilities([
-    { featureKey: "cricket.dls", rows: dlsRows },
-    { featureKey: "officials.auto", rows: autoRows },
-    { featureKey: "stats.player", rows: statsRows },
-  ]);
+  // B05 T0: `chooseGrantingPlanForCapabilities` now needs is_public/privilege
+  // info for every plan_key any of the three reads above named, so it can
+  // never land on a comped/staff-only plan like `enterprise` (plan.ts's own
+  // header comment on this exact defect) — fetched for the UNION of
+  // plan_keys across all three rows, once, before choosing.
+  const candidatePlanKeys = [...new Set([...dlsRows, ...autoRows, ...statsRows].map((r) => r.plan_key))];
+  const candidates = await sql.planCandidateInfo(candidatePlanKeys);
+  const { plan: provisionedPlan, unsatisfied: unsatisfiedCapabilities } = chooseGrantingPlanForCapabilities(
+    [
+      { featureKey: "cricket.dls", rows: dlsRows },
+      { featureKey: "officials.auto", rows: autoRows },
+      { featureKey: "stats.player", rows: statsRows },
+    ],
+    candidates,
+  );
   await provisionPlan({ base, orgId, plan: provisionedPlan, ownerSession: s, sql, transport: t });
 
   // Same fixture, same body, as `revise_no_target_unentitled` above — its

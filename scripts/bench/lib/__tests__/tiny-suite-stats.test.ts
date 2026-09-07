@@ -237,6 +237,15 @@ function fakeServer(opts: { statsPlayerGranted: boolean }): {
       }
       return [];
     },
+    // B05 T0: `chooseGrantingPlanForCapabilities` now filters candidates to
+    // is_public plans — "pro" is the only plan this fixture ever grants
+    // anything to, so it just needs to be marked public to keep resolving
+    // the way it always did.
+    async planCandidateInfo(planKeys) {
+      return planKeys
+        .filter((k) => k === "community" || k === "pro")
+        .map((k) => ({ plan_key: k, is_public: true, privilege: k === "pro" ? 1 : 0 }));
+    },
     async getOrgSubscriptionId() {
       return null;
     },
