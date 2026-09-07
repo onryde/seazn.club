@@ -290,7 +290,25 @@ export async function loadMatchCentre(
   // Resolved module's own configSchema — "the same cfg the pad scored
   // with" (contract notes), normalising a frozen snapshot taken under an
   // older schema version rather than trusting the raw jsonb shape as-is.
-  const cfg = sportModule.configSchema.parse(rawCfg);
+  //
+  // safeParse, NOT parse, and the difference is a 500 on a public page.
+  // `parse` here was STRICTER THAN THE PRODUCTION READ PATH: `fold.ts`
+  // hands `resolveFixtureCfg`'s output to `foldMatch` unparsed, and
+  // `module.init` takes the raw cfg, so every module already tolerates a
+  // config this schema rejects. `fixture-cfg.ts` says so outright — "`{}`
+  // is a legitimate config for several modules" — and a division row whose
+  // `config` is `{}` (no `resultMode`, no `allowDraws`) reaches exactly
+  // that. Throwing took down the WHOLE `publicFixture` response, not just
+  // the match centre, because this loader runs inside it.
+  //
+  // Found by the task-16 gate: `public-court-venue-names.test.ts` passed on
+  // `origin/main` and failed here, and it failed because Task 9 wired this
+  // loader into `usecases/public.ts` — the test's own division is a plain
+  // `'{}'` insert it has always used. Falling back to `rawCfg` is not a
+  // shrug: it is precisely what the read fold does with the same value, so
+  // the worst case is parity with the rest of the app rather than a crash.
+  const parsedCfg = sportModule.configSchema.safeParse(rawCfg);
+  const cfg = parsedCfg.success ? parsedCfg.data : rawCfg;
 
   const lineups = await readPublicLineups(sql, fixture.id, {
     youth: ctx.division.youth,

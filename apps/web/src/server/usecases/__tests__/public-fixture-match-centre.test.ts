@@ -145,4 +145,31 @@ describe.skipIf(!HAS_DB)("publicFixture — match_centre (Task 9)", () => {
     await expect(publicFixture(fixtures[0]!.id)).rejects.toThrow(HttpError);
     await expect(publicFixture(fixtures[0]!.id)).rejects.toMatchObject({ status: 404 });
   });
+
+  // Task 16 gate regression. This loader ran `configSchema.parse(rawCfg)`,
+  // which is STRICTER than the production read path: `fold.ts` gives
+  // `resolveFixtureCfg`'s output to `foldMatch` unparsed and `module.init`
+  // takes it raw, and `fixture-cfg.ts` states plainly that "`{}` is a
+  // legitimate config for several modules". So a division row carrying `{}`
+  // threw ZodError (`resultMode` invalid_value, `allowDraws` undefined) out
+  // of `loadMatchCentre` — and because Task 9 calls it inside `publicFixture`,
+  // the whole public fixture response 500'd, not merely its match centre.
+  //
+  // The config is set by SQL on purpose: `createDivision` writes a complete
+  // config, so the shape under test is the LEGACY/partial row that already
+  // exists in the database — the same shape `public-court-venue-names.test.ts`
+  // inserts, which is the test that caught this. That one is named for venue
+  // names and would not tell a later reader what it is really holding down.
+  it("a division whose config is {} serves the page instead of throwing", async () => {
+    const { fixtureId, divisionId } = await publicGenericFixture();
+    await sql`update divisions set config = '{}'::jsonb where id = ${divisionId}`;
+
+    const res = (await publicFixture(fixtureId)) as { match_centre: unknown };
+
+    // The assertion is that it RESOLVES at all — but pin the doc too, so a
+    // future "fix" that swallows the error into a null match_centre and still
+    // returns a 200 cannot pass this test quietly.
+    expect(res.match_centre).not.toBeNull();
+    expect(MatchCentreDoc.safeParse(res.match_centre).success).toBe(true);
+  });
 });
