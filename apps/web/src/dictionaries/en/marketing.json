@@ -83,7 +83,7 @@
   "pricing.pass.stub.label": "Event Pass",
   "pricing.pass.stub.caps": "{divisions} divisions × {entrants} entrants",
   "pricing.pass.stub.capsUnlimited": "{divisions} divisions × unlimited entrants",
-  "pricing.pass.crossover": "On a competition running about a month, the {rung} pass ({pass}) is the cheaper option up to about {amount} of entry fees; above that it is Pro at {pro}/mo — a {proFee}% platform fee against {passFee}%. The pass is one-time, so a longer competition puts that threshold higher.",
+  "pricing.pass.crossover": "On a competition running about a month, the pass ({pass}) is the cheaper option up to about {amount} of entry fees; above that it is Pro at {pro}/mo — a {proFee}% platform fee against {passFee}%. The pass is one-time, so a longer competition puts that threshold higher.",
   "pricing.pass.cta": "Start free, upgrade in-app",
   "pricing.pass.ctaSignedIn": "Pick a competition",
   "pricing.pass.included": "Your plan applies across the whole organisation, so a pass would sit dormant.",

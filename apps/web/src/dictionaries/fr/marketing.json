@@ -83,7 +83,7 @@
   "pricing.pass.stub.label": "Pass Événement",
   "pricing.pass.stub.caps": "{divisions} divisions × {entrants} participants",
   "pricing.pass.stub.capsUnlimited": "{divisions} divisions × participants illimités",
-  "pricing.pass.crossover": "Sur une compétition d’environ un mois, le pass {rung} ({pass}) est l’option la moins chère jusqu’à environ {amount} de frais d’inscription ; au-delà, c’est Pro à {pro}/mois — {proFee} % de frais de plateforme contre {passFee} %. Le pass est ponctuel : une compétition plus longue place ce seuil plus haut.",
+  "pricing.pass.crossover": "Sur une compétition d’environ un mois, le pass ({pass}) est l’option la moins chère jusqu’à environ {amount} de frais d’inscription ; au-delà, c’est Pro à {pro}/mois — {proFee} % de frais de plateforme contre {passFee} %. Le pass est ponctuel : une compétition plus longue place ce seuil plus haut.",
   "pricing.pass.cta": "Commencez gratuitement, améliorez dans l'app",
   "pricing.pass.ctaSignedIn": "Choisir une compétition",
   "pricing.pass.included": "Votre formule s’applique à toute l’organisation : un pass resterait en veille.",

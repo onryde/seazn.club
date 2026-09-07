@@ -243,7 +243,10 @@ export default async function PricingPage({
       ? t(d, "pricing.pass.crossover", {
           amount: formatMinor(crossoverReadable, currency),
           pro: proMonthly,
-          rung: t(d, PASS_RUNG_MARKETING_KEY[offeredRung.key]),
+          // No `rung`: the sentence no longer names the rung letter. With one
+          // sellable rung, "the M pass" printed a size that exists nowhere
+          // else on the page — the stub and the matrix column both read plain
+          // "Event Pass" — which is the confusion dropping the suffix was for.
           pass: passLabel,
           // Non-null wherever `crossoverMinor` is: `feeCrossoverMinor` returns
           // null unless both rates are numbers. Narrowed rather than
@@ -458,7 +461,13 @@ export default async function PricingPage({
                   {/* body — the bullets, and (phone only) the buy action
                       repeated at the thumb. */}
                   <div className="pr-pass-body flex min-w-0 flex-col px-6 pb-8 pt-7 sm:px-8 md:pb-9 md:pt-6">
-                    <ul className="grid flex-1 gap-x-7 gap-y-3 text-[0.95rem] leading-snug text-[#463a60] sm:grid-cols-2 sm:gap-y-2.5 sm:text-[0.9rem] lg:grid-cols-3">
+                    {/* `content-start` because `flex-1` stretches this grid to
+                        the height of the tall stub column beside it, and a
+                        grid's default align-content distributes that slack
+                        BETWEEN the rows: seven one-line bullets were rendering
+                        with 137px gaps where gap-y-3 asks for 10. The slack
+                        now collects at the foot of the column instead. */}
+                    <ul className="grid flex-1 content-start gap-x-7 gap-y-3 text-[0.95rem] leading-snug text-[#463a60] sm:grid-cols-2 sm:gap-y-2.5 sm:text-[0.9rem] lg:grid-cols-3">
                       {cardBullets(d, PASS_CARD_BULLETS, matrix).map((f) => (
                         <li key={f} className="flex gap-2.5">
                           <span aria-hidden className="mt-[3px] shrink-0 text-[#4d7c0f]">

@@ -256,10 +256,11 @@ describe("/pricing's Event Pass stub: row cards, not a 2-up phone comparison (W3
 
 // ── W3 fix round 2, item 2: "Size M" / "Event Pass M" name a distinction no
 // customer can act on with one sellable rung. Both surfaces read "Event
-// Pass" now; the crossover sentence's OWN naming of the rung (M_RUNG,
-// asserted elsewhere in this file) is untouched — that is a different claim
-// entirely (which rung the comparator's numbers are about), not a size
-// contrast with an L nobody can buy.
+// Pass" now. UPDATE 2026-09-05: the crossover sentence's own naming of the
+// rung (M_RUNG) is NOT untouched by this any more — the owner extended the
+// same "no rung suffix on a selling surface" ruling to it, so it dropped
+// `{rung}` too; see "names no rung — one is on sale…" further down this file
+// and `pricing-crossover.test.ts`'s `rungFaults`.
 describe("/pricing names the pass plainly — no rung suffix on a selling surface (W3 fix round 2)", () => {
   it("the ticket stub's price card reads \"Event Pass\", never \"Size M\"", async () => {
     const { markup } = await render();
@@ -354,18 +355,35 @@ describe("/pricing names where Pro overtakes the Event Pass", () => {
     expect(CROSSING).not.toBe(formatMinor(proPrice("monthly", "usd"), "usd"));
   });
 
-  it("says WHICH RUNG it is true of — the ticket sells one and the crossing is that rung's", async () => {
+  // PREMISE CHANGED 2026-09-05 (W3 fix round 2, item 2, the same ruling that
+  // strips "Size M"/"Event Pass M" from the stub and the table header above):
+  // with one rung sellable, naming it here printed a letter that exists
+  // nowhere else on the page — the confusion dropping the suffix was for. So
+  // this test now pins the OPPOSITE of what it pinned before: the line must
+  // NOT name a rung. It is still true of exactly one rung, just identified by
+  // its price alone rather than by letter — which is why M_PRICE (not
+  // L_PRICE) staying in the line, unconditionally, is still asserted below.
+  // `pricing-crossover.test.ts`'s `rungFaults`/`rungNamingRequired` pin the
+  // same rule against SELLABLE_PASS_KEYS at the dictionary-string level; this
+  // is the same rule read off the RENDERED page instead.
+  it("names no rung — one is on sale, so the price alone is what the crossing is true of", async () => {
     const { markup } = await render();
     const para = /<p[^>]*data-pass-crossover[^>]*>([\s\S]*?)<\/p>/.exec(markup);
     expect(para, "the comparator paragraph").not.toBeNull();
     const line = para![1].replace(/<[^>]*>/g, " ").replace(/\s+/g, " ");
 
+    // This test's premise: exactly one rung sellable. If that ever changes,
+    // this test (and the dictionary copy it reads) needs to change with it —
+    // see `rungFaults` in pricing-crossover.test.ts, which is what re-requires
+    // the rung letter the moment SELLABLE_PASS_KEYS grows past one.
+    expect(SELLABLE_PASS_KEYS.length, "this test's premise — see the comment above").toBe(1);
+
     const escape = (v: string) => v.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    expect(
-      line,
-      `the line must name the ${M_RUNG} rung beside its own price`,
-    ).toMatch(new RegExp(`\\b${escape(M_RUNG)}\\b[^.;]{0,20}${escape(M_PRICE)}`));
+    expect(line, `the line must not name the ${M_RUNG} rung`).not.toMatch(
+      new RegExp(`\\b${escape(M_RUNG)}\\b`),
+    );
     expect(M_PRICE).not.toBe(L_PRICE);
+    expect(line, "the price still identifies which offer this is about").toContain(M_PRICE);
     expect(line, "the line must not read as a claim about L").not.toContain(L_PRICE);
     expect(line).toContain(CROSSING);
     expect(line).toContain("2% platform fee against 4%");

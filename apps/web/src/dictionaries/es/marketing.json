@@ -83,7 +83,7 @@
   "pricing.pass.stub.label": "Pase de Evento",
   "pricing.pass.stub.caps": "{divisions} divisiones × {entrants} participantes",
   "pricing.pass.stub.capsUnlimited": "{divisions} divisiones × participantes ilimitados",
-  "pricing.pass.crossover": "En una competición de aproximadamente un mes, el pase {rung} ({pass}) es la opción más barata hasta unos {amount} de cuotas de inscripción; por encima de eso lo es Pro a {pro}/mes: una comisión de plataforma del {proFee}% frente al {passFee}%. El pase es de pago único, así que una competición más larga sitúa ese umbral más alto.",
+  "pricing.pass.crossover": "En una competición de aproximadamente un mes, el pase ({pass}) es la opción más barata hasta unos {amount} de cuotas de inscripción; por encima de eso lo es Pro a {pro}/mes: una comisión de plataforma del {proFee}% frente al {passFee}%. El pase es de pago único, así que una competición más larga sitúa ese umbral más alto.",
   "pricing.pass.cta": "Empieza gratis, mejora en la app",
   "pricing.pass.ctaSignedIn": "Elige una competición",
   "pricing.pass.included": "Tu plan se aplica a toda la organización, así que un pase quedaría inactivo.",
