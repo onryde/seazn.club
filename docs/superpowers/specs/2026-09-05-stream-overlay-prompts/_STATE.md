@@ -35,20 +35,26 @@ Last updated: 2026-09-07, mid-session, after the programme design was written.
 | `W1-step-one.md`, `W2-moments.md` | the wave prompts (corrected in place by the plan's Task 0) |
 | `../../plans/2026-09-05-stream-overlay-w1.md` | W1 plan, executes as corrected (Task 0 Steps 2–13 → the overlay endpoint) |
 | `../../plans/2026-09-05-stream-overlay-w2-moments.md` | W2 plan, blocked on spectator W1 |
-| `../../plans/2026-09-07-streaming-programme.md` | the programme plan — **being written next** by `writing-plans` |
+| `T1-theme-and-visual-gate.md`, `R0-bench.md`, `R1-relay-core.md`, `R2-compositor.md` | per-wave PROMPT files (owner ruling 2026-09-07: prompts for every wave now) — **being written next** |
+| `../../plans/2026-09-07-streaming-t1.md` (now), `…-r1.md` (after PR1 merges), `…-r2.md` (after the R0 memo) | per-wave PLAN files, written one wave ahead of execution by `writing-plans`; Task 0's steps sit at the head of the T1 plan |
 | `docs/superpowers/RULES.md` §"Owner checklist (2026-09-07)" | the owner's checklist; every task's acceptance names its rows |
 | Canvas | https://claude.ai/code/artifact/2aebcbde-28ba-45ff-9028-1151873e4901 |
 
 ## THE FIRST THING TO DO NEXT SESSION
 
-1. If `../../plans/2026-09-07-streaming-programme.md` does not exist: run
-   `superpowers:writing-plans` from the design (§11 is the task list). Do not
+1. If the four wave prompts (`T1-theme-and-visual-gate.md`, `R0-bench.md`,
+   `R1-relay-core.md`, `R2-compositor.md`) or the T1 plan
+   (`../../plans/2026-09-07-streaming-t1.md`) do not exist: write them from
+   the design (§11 is the table; §9a the patterns every brief must name).
+   Prompts for every wave now; step-level plans one wave ahead only. Do not
    re-brainstorm; every decision is in the design and in `_INDEX.md` rulings
    18–22.
-2. If it exists: execute its Task 0 (corpus corrections in place, migration
-   renumbering, Q12 reproduction), then T1 and W1-A/W1-B in parallel, per
-   `superpowers:subagent-driven-development` with `model: opus` per dispatch
-   (owner instruction; the agent frontmatter reads `sonnet`).
+2. If they exist: execute Task 0 from the head of the T1 plan (corpus
+   corrections in place, migration renumbering, Q12 reproduction), then T1 and
+   W1-A/W1-B in parallel, per `superpowers:subagent-driven-development` with
+   `model: opus` per dispatch (owner instruction; the agent frontmatter reads
+   `sonnet`). The R1 plan is written after PR1 merges; the R2 plan after the
+   R0 memo.
 3. Force-push the rebased branch (`/usr/bin/git push --force-with-lease`).
 
 ## Decisions, all made (owner's words in `_INDEX.md`)

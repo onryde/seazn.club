@@ -16,8 +16,8 @@ design and visual gate (T1) · bench spike (R0)
   `_THEMES.md` binding values, `_OPEN-QUESTIONS.md`, `_STATE.md`, the W1/W2
   prompts). Plans: `docs/superpowers/plans/2026-09-05-stream-overlay-w1.md`
   (W1, executes as corrected by this design), `…-w2-moments.md` (W2), and the
-  programme plan this design hands to `writing-plans`:
-  `docs/superpowers/plans/2026-09-07-streaming-programme.md`.
+  per-wave prompt + plan pairs §11 lists (prompts for every wave now, plans
+  one wave ahead of execution — owner ruling 2026-09-07).
 - Canvas: https://claude.ai/code/artifact/2aebcbde-28ba-45ff-9028-1151873e4901
   (artboards "A · Broadcast bar", "B · Corner bug", "A across sports", "B across
   sports", "Moments", "How fans see it on a phone", "What the club sets up",
@@ -790,6 +790,32 @@ one Machine size up (R0 prices it). Capacity: a T20 ≈ 300 ledger events / 3 h;
 fan-out (watch item). 50 composed matches = 100 vCPU + 156 Mbps egress
 sustained.
 
+## 9a. Design patterns (binding on code)
+
+Owner 2026-09-07: *"include the follow the design pattern when developing the
+code."* Every implementer follows the repo's codified patterns below; each
+names its in-tree exemplar. **A brief that cannot name the exemplar for a
+pattern it invokes is not compliant** (mirrors `RULES.md` §Skills: apply,
+never cite decoratively).
+
+| Pattern | Rule | Exemplar |
+|---|---|---|
+| Parse → authorize → delegate | every route is `v1()`/`handler()` wrapping `parseBody` → `requireResourceAuth` → one usecase; no logic in the route file | `lib/http.ts:69`; `server/api-v1/auth.ts:352`; `app/api/v1/fixtures/[id]/route.ts:17` |
+| Zod schemas in one place | request/response shapes live at `server/api-v1/schemas.ts`, never inline in a route or a component | `schemas.ts` (`PatchFixture :964`) |
+| Privacy folds live in VIEWS | what the public may see is decided by `public_*_v`, not by a filter in a usecase | `public_fixtures_v` (`V362:22` ac85c70; setup nulls schedule/venue/court, `officials_hide_names`, visibility filter) |
+| Fire-and-forget side channels | realtime, revalidation and CDN purge are `void`, warn-only; a scoring write is never hostage to them | `publishFixtureUpdate` (`scoring.ts:139`), `fireDivisionRevalidate` (`revalidate.ts:14`) |
+| One authority per fact | a value is derived in one function and imported; a second source is a fallback, never a tiebreaker | `resolveFixtureCfg` (`fold.ts`), `fixtureStatusLabel` / `VOID_STATUSES` (`stages-panel.tsx`), the five `lib/public-site.ts` derivations |
+| Registry over branching | variants are entries in a registry looked up by id; adding one never edits a call site | `OVERLAY_THEMES` + `resolveTheme` (§3.5); sport skins by name (`registry.ts:85 V3_SKINS`) |
+| Ports and adapters with in-repo fakes | external systems sit behind an interface with a fake that runs in CI without credentials | `IngestProvider` / `RunnerProvider` + `server/relay/fakes.ts` (§6); the placement service client |
+| Pure projections, strings via `msg` | a view-model is a pure function of data + `msg`; no string literal reaches a component | `overlayModel` (§3.4) importing `setBreakdown` and siblings, never re-deriving |
+| State machines over booleans | lifecycle is an enum with explicit transitions plus a `desired_state`; no `is_live`/`is_ending` flags | `fixture_stream_sessions.state` + `desired_state` (§6.4); the pad reducer (`scorepad/v3`) |
+| Deny by default | 404 ≡ missing (never "forbidden"), RLS enabled with zero client policies, exact-host allowlists | overlay page `notFound()` (§3.1); §6.1 RLS; `streamUrlSchema` (§3.7) |
+| The client never decides | entitlement and visibility are resolved server-side on every render; a client prop is a display hint, never a gate | `hasFeature` on the page and the division page (§3.1, §3.8) |
+| Cron pair idiom | 503 when the secret is unset, then 401 on mismatch, then ONE idempotent row-locked usecase, driven by an Actions-cron workflow | `app/api/cron/registrations/route.ts:13-16` |
+| Money is ledger rows in the same transaction | never a counter column; the debit row is inserted in the transaction that grants the thing paid for, under `for update`; Stripe events idempotent by id | `org_stream_credits` (§5.2); `size-pack-checkout.ts` |
+| i18n: four dictionaries + generated keys | every user-facing string in `en/es/fr/nl`, `pnpm i18n:gen-keys`, zero diff on `lib/i18n-keys.ts` | `dictionaries/*/ui.json`, `public.json` |
+| One DOM, branched for phone | phone is `max-md:*` on the same tree; phone-only is `md:hidden`; never a second tree, never a shrunk desktop | `2026-09-02-scorepad-v3-phone-composition-design.md`; `phone-disclosure.tsx` |
+
 ## 10. Testing and gates
 
 Every task, all four kinds, stated in its acceptance with named assertions
@@ -868,20 +894,30 @@ reason, machineId`; the session row is the primary trace; Sentry the sink
 
 ## 11. Plan structure and PRs
 
-The programme plan `docs/superpowers/plans/2026-09-07-streaming-programme.md`
-(writing-plans standard: task → steps → exact files, code, commands, expected
-output) covers:
+Owner ruling 2026-09-07: **per wave, not one plan file.** Each wave gets a
+PROMPT file in the corpus directory
+(`docs/superpowers/specs/2026-09-05-stream-overlay-prompts/`: rulings, scope,
+do-NOT-touch, acceptance, mutant table — symbols, not line numbers) and a
+PLAN file under `docs/superpowers/plans/` (writing-plans standard: task →
+steps → exact files, code, commands, expected output). **Prompts for ALL
+waves are written now; step-level plans only one wave ahead of execution.**
+Reason recorded: a plan written today for R2 rots at every rebase (V399
+proved it — three documents named a migration number that was taken by the
+time anyone read them); a prompt names symbols, which survive.
 
-| Task group | Scope | PR |
-|---|---|---|
-| **Task 0** | worktree facts (done: recreated, rebased on `fb99bbd4c`); `ls deltas \| tail` → migrations renumber V400/V401/V402; `RULES.md` checklist (done, `ed094e519`); corpus corrections IN PLACE with "(re-pinned 2026-09-07 @ fb99bbd4c)" annotations: `_INDEX.md` findings, `W1-step-one.md`, `W2-moments.md`, W1 plan Task 0 Steps 2–13 replaced by §3.2; `_STATE.md`; Q12 reproduction | — (docs) |
-| **T1** | §4.1 canvas + `_THEMES.md` sections; §4.2 harness + manifest + asserts + contrast test | PR-T1 |
-| **W1** | executes the EXISTING W1 plan (Tasks 1–8) as corrected; the amendment is Task 0 (§3.2, §3.3), plus the Phone tab strip reading the §5.3 gate | PR1 |
-| **R1** | V401 keys, V402 tables, credits ledger + checkout + webhook, crypto, ports + fakes (`ingest-cf.ts`, `runner-fly.ts`, `fakes.ts`), tokens, session API, cron pair + workflow, Phone tab (QR, passthrough live-detect, failed-reason copy, replay fill), Sentry DSN | PR-R1 |
-| **R2** | relay page, `slate` entry, `delayMs` wiring + alignment e2e, container + supervisor, `relay-*` workflows, soak harness, green soak | PR-R2 |
-| **R0** | the bench brief (§8), memo as the deliverable | — |
+| Wave | Prompt (corpus dir) | Plan (`docs/superpowers/plans/`) | Written | PR |
+|---|---|---|---|---|
+| **Task 0** | in `_STATE.md` (worktree recreated and rebased on `fb99bbd4c` — done; `ls deltas \| tail` → V400/V401/V402; `RULES.md` checklist — done `ed094e519`; corpus corrections IN PLACE annotated "(re-pinned 2026-09-07 @ fb99bbd4c)": `_INDEX.md`, `W1-step-one.md`, `W2-moments.md`, W1 plan Task 0 Steps 2–13 → §3.2; Q12 reproduction) | steps inline at the head of the T1 plan | now | — (docs) |
+| **T1** | `T1-theme-and-visual-gate.md` (§4) | `2026-09-07-streaming-t1.md` | now | PR-T1 |
+| **W1** | `W1-step-one.md` corrected in place | existing `2026-09-05-stream-overlay-w1.md` with the Task-0 amendment (§3.2, §3.3) and the Phone tab strip reading the §5.3 gate | now | PR1 |
+| **R0** | `R0-bench.md` (§8) | none — the memo is the deliverable | now | — |
+| **R1** | `R1-relay-core.md` (§5, §6, §7.6: V401 keys, V402 tables, credits ledger + checkout + webhook, crypto, ports + fakes, tokens, session API, cron pair + workflow, Phone tab with QR, passthrough live-detect, failed-reason copy, replay fill, Sentry DSN) | `2026-09-07-streaming-r1.md` | prompt now; **plan after PR1 merges** | PR-R1 |
+| **R2** | `R2-compositor.md` (§7: relay page, `slate`, `delayMs` + alignment e2e, container + supervisor, `relay-*` workflows, soak harness, green soak) | `2026-09-07-streaming-r2.md` | prompt now; **plan after the R0 memo** | PR-R2 |
+| W2 | existing `W2-moments.md` (+F3/F4 corrections at Task 0) | existing `2026-09-05-stream-overlay-w2-moments.md` | exists | PR2 |
+| PR3 | after its artboard | — | deferred | PR3 |
+| R3 | own spec in `seazn-capture` | — | deferred | — |
 
-Out of this plan, with reasons: **W2** has its own committed plan
+Out of the plans written now, with reasons: **W2** has its own committed plan
 (`…-w2-moments.md`, 1083 lines) and is gated on spectator W1, which has not
 merged; **R3** native apps live in the `seazn-capture` repo under their own
 spec (only §7.6 is fixed here); **PR3** sponsor logos are LAST by ruling and

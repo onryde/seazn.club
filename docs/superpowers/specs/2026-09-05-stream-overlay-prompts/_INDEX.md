@@ -348,6 +348,11 @@ deferred, only the QR contract fixed here.
 
 ### Status
 
-Design committed; the programme plan
-(`../../plans/2026-09-07-streaming-programme.md`) is written next by
-`writing-plans`. No code under `apps/`, `packages/` or `db/` yet.
+Design committed. Owner rulings after the first commit, folded in
+`97edecc55`'s follow-up: **§9a "Design patterns (binding on code)"** (*"include
+the follow the design pattern when developing the code"*) and **§11 per-wave
+prompt + plan pairs** — prompts for every wave now (`T1-theme-and-visual-gate.md`,
+`R0-bench.md`, `R1-relay-core.md`, `R2-compositor.md`), step-level plans one
+wave ahead only (`plans/2026-09-07-streaming-t1.md` now; R1 after PR1 merges;
+R2 after the R0 memo). Written next. No code under `apps/`, `packages/` or
+`db/` yet.
