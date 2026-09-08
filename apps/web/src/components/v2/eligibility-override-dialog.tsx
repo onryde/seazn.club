@@ -23,6 +23,7 @@ import { ConfirmDialog } from "@/components/v2/confirm-dialog";
 import { REASON_MIN, REASON_MAX, type EligibilityIssue } from "@/lib/registration-rules";
 import { useMsg } from "@/components/i18n/dict-provider";
 import type { MessageKey } from "@/lib/messages";
+import { eligibilityIssueText } from "@/lib/eligibility-issue-i18n";
 
 /** One violation row's label — the same "Player N (name):" shape
  *  `formatEligibilityIssues` (server-side) renders as a sentence, kept
@@ -115,7 +116,7 @@ export function EligibilityOverrideDialog({
               </span>
               <span>
                 {who && <span className="font-medium">{who}: </span>}
-                {issue.message}
+                {eligibilityIssueText(issue, msg)}
               </span>
             </li>
           );
