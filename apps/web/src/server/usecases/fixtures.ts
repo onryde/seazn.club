@@ -13,6 +13,7 @@ import { type BoardFixtureRow, type FixtureRow } from "./stages";
 import { moveFixture, courtNamesById } from "./schedule";
 import { scoresViaAssignment } from "./scorers";
 import { gateRosterEligibility } from "./registration-eligibility";
+import { disciplineEnforcedForFixture, gateLineupSuspensions } from "./discipline";
 import { resolveModule } from "@/server/engine-db";
 import { lineupCatalogFor } from "./lineup-catalog";
 import { validateLineup, type LineupIssue } from "@seazn/engine/sport";
@@ -311,10 +312,16 @@ export async function putLineup(
   input: PutLineup,
 ): Promise<PutLineupOut> {
   rejectDeviceLink(auth); // doc 13 §7: no lineups via device link
+  // B05: resolved HERE, not inside the transaction. `hasFeature` queries the
+  // pooled `sql` proxy and `withTenant` pins a pooled connection for its whole
+  // callback — asking inside is the self-deadlock `lib/db.ts`'s nesting guard
+  // exists to catch. The boolean rides in instead.
+  const disciplineEnforced = await disciplineEnforcedForFixture(auth.orgId, fixtureId);
   return withTenant(auth.orgId, async (tx) => {
     const [fixture] = await tx<
       {
         division_id: string;
+        competition_id: string;
         home_entrant_id: string | null;
         away_entrant_id: string | null;
         status: string;
@@ -325,7 +332,7 @@ export async function putLineup(
       }[]
     >`
       select f.division_id, f.home_entrant_id, f.away_entrant_id, f.status, d.scorer_can_enter_lineups,
-             d.sport_key, d.module_version, d.config
+             d.sport_key, d.module_version, d.config, d.competition_id
       from fixtures f join divisions d on d.id = f.division_id
       where f.id = ${fixtureId}`;
     if (!fixture) throw new HttpError(404, "fixture not found");
@@ -361,6 +368,21 @@ export async function putLineup(
       divisionId: fixture.division_id,
       personIds: ids,
       context: "put_lineup",
+      override: input.eligibility_override,
+      actorId: auth.userId,
+    });
+    // B05: and the discipline gate, on the same override field. A confirmed
+    // ban ('active') was recorded, shown on the pad banner and on the public
+    // strip, and then accepted onto the sheet anyway — this is the one place
+    // that read was owed. `eligibility_override.reason` lets an organiser
+    // proceed on the record, against a ledger row.
+    await gateLineupSuspensions(tx, {
+      divisionId: fixture.division_id,
+      competitionId: fixture.competition_id,
+      orgId: auth.orgId,
+      fixtureId,
+      personIds: ids,
+      enforced: disciplineEnforced,
       override: input.eligibility_override,
       actorId: auth.userId,
     });

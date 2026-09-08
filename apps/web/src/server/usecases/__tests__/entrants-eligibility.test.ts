@@ -657,7 +657,24 @@ describe.skipIf(!HAS_DB)("RS011 — organiser-side eligibility gates", () => {
     }
 
     function slot(personId: string, orderNo: number) {
-      return { person_id: personId, slot: "starting", position_key: null, order_no: orderNo, roles: [] };
+      return {
+        person_id: personId,
+        slot: "starting" as const,
+        position_key: null,
+        order_no: orderNo,
+        roles: [] as string[],
+      };
+    }
+
+    /** The person ids actually STORED for this sheet, in slot order. Read
+     *  back out of `lineups` rather than off the return value: `LineupOut.slots`
+     *  is `unknown[]`, and the row is what an accepted sheet has to mean. */
+    async function storedNames(fixtureId: string, entrantId: string): Promise<string[]> {
+      const rows = await sql<{ person_id: string }[]>`
+        select person_id from lineups
+        where fixture_id = ${fixtureId} and entrant_id = ${entrantId}
+        order by order_no`;
+      return rows.map((r) => r.person_id);
     }
 
     it("refuses the banned player, and still accepts an eligible team-mate on the same sheet", async () => {
@@ -674,8 +691,8 @@ describe.skipIf(!HAS_DB)("RS011 — organiser-side eligibility gates", () => {
         putLineup(s.auth, s.fixture.id, s.entrant.id, { slots: [slot(s.banned.id, 1)] }),
       ).rejects.toThrow(/Banned Player/);
 
-      const ok = await putLineup(s.auth, s.fixture.id, s.entrant.id, { slots: [slot(s.mate.id, 1)] });
-      expect(ok.slots.map((x) => x.person_id)).toEqual([s.mate.id]);
+      await putLineup(s.auth, s.fixture.id, s.entrant.id, { slots: [slot(s.mate.id, 1)] });
+      expect(await storedNames(s.fixture.id, s.entrant.id)).toEqual([s.mate.id]);
 
       // A sheet naming BOTH is refused as a whole — the ban is not silently
       // dropped from an otherwise-valid lineup.
@@ -685,10 +702,7 @@ describe.skipIf(!HAS_DB)("RS011 — organiser-side eligibility gates", () => {
         }),
       ).rejects.toMatchObject({ status: 422, code: "SUSPENDED_PLAYER" });
       // …and that refusal left the earlier, legal sheet intact.
-      const after = await sql<{ person_id: string }[]>`
-        select person_id from lineups
-        where fixture_id = ${s.fixture.id} and entrant_id = ${s.entrant.id}`;
-      expect(after.map((r) => r.person_id)).toEqual([s.mate.id]);
+      expect(await storedNames(s.fixture.id, s.entrant.id)).toEqual([s.mate.id]);
     });
 
     // Rule: an "is the status in this set" check is vacuously satisfied by an
@@ -720,17 +734,17 @@ describe.skipIf(!HAS_DB)("RS011 — organiser-side eligibility gates", () => {
       const s = await seedBanScenario("pro");
       const other = await seedDivision(s.auth);
       await seedSuspension(s.auth, other.division.id, s.banned.id, "active");
-      const ok = await putLineup(s.auth, s.fixture.id, s.entrant.id, { slots: [slot(s.banned.id, 1)] });
-      expect(ok.slots.map((x) => x.person_id)).toEqual([s.banned.id]);
+      await putLineup(s.auth, s.fixture.id, s.entrant.id, { slots: [slot(s.banned.id, 1)] });
+      expect(await storedNames(s.fixture.id, s.entrant.id)).toEqual([s.banned.id]);
     });
 
     it("an org WITHOUT discipline.enforced is unaffected; the same org WITH it is blocked", async () => {
       const free = await seedBanScenario("community");
       await seedSuspension(free.auth, free.division.id, free.banned.id, "active");
-      const ok = await putLineup(free.auth, free.fixture.id, free.entrant.id, {
+      await putLineup(free.auth, free.fixture.id, free.entrant.id, {
         slots: [slot(free.banned.id, 1)],
       });
-      expect(ok.slots.map((x) => x.person_id)).toEqual([free.banned.id]);
+      expect(await storedNames(free.fixture.id, free.entrant.id)).toEqual([free.banned.id]);
 
       const paid = await seedBanScenario("pro");
       await seedSuspension(paid.auth, paid.division.id, paid.banned.id, "active");
@@ -748,11 +762,11 @@ describe.skipIf(!HAS_DB)("RS011 — organiser-side eligibility gates", () => {
       ).rejects.toMatchObject({ status: 422, code: "SUSPENDED_PLAYER" });
       expect(await suspensionOverrideAuditRows(s.comp.id)).toHaveLength(0);
 
-      const ok = await putLineup(s.auth, s.fixture.id, s.entrant.id, {
+      await putLineup(s.auth, s.fixture.id, s.entrant.id, {
         slots: [slot(s.banned.id, 1)],
         eligibility_override: { reason: "Appeal upheld by the committee" },
       });
-      expect(ok.slots.map((x) => x.person_id)).toEqual([s.banned.id]);
+      expect(await storedNames(s.fixture.id, s.entrant.id)).toEqual([s.banned.id]);
 
       const rows = await suspensionOverrideAuditRows(s.comp.id);
       expect(rows).toHaveLength(1);
