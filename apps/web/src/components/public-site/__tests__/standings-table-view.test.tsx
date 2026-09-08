@@ -29,11 +29,15 @@
 //  (v) cells rendered in reverse column order → the cell-alignment test.
 //  (w) the `-scroll` element loses its `data-testid` (round 1 fix 4).
 //  (x) the rank chip goes back to a fixed `w-5` (round 1 fix 2).
-//  (y) `minTableWidth` drops `NAME_MIN_PX` (round 1 fix 3).
-//  (z) `minTableWidth` counts FOLDED columns too — the value that would put a
+//  (y) the floor drops `NAME_MIN_PX` (round 1 fix 3).
+//  (z) the PHONE floor counts FOLDED columns too — the value that would put a
 //      rail under a collapsed phone (round 1 fix 3).
 //  (aa) the empty case tests `view.rows` instead of the sliced `rows`
 //      (round 1 fix 6).
+//  (aj) the `md:` floor uses the phone sum — the round-1 regression that left
+//      the name column 16px short from `md` up (round 2 NEW-1).
+//  (ak) the `md:min-w-[var(…)]` class dropped, so the wide floor is emitted
+//      but never read (round 2 NEW-1).
 //
 // A NOTE ON WHAT THESE CANNOT SHOW. `environment: "node"` — no DOM, no
 // cascade, no layout. The three geometry fixes are asserted as ARITHMETIC and
@@ -217,15 +221,16 @@ describe("StandingsTableView — phone composition", () => {
     expect(h).toMatch(/<th[^>]*data-col="points"[^>]*class="w-11\s/);
   });
 
-  it("the rank column is sized for a three-digit chip AND the tie-break marker beside it", () => {
+  it("the rank column emits the widened class, a content-sized chip and a flex-sibling marker — CLASSES only, no box is asserted", () => {
     const h = html();
-    // 48px less `pl-2` (8px) = 40px of content box. The old `w-8`/`pl-3` left
-    // exactly the chip's own 20px, with the marker overflowing into the name
-    // cell on every tied row.
+    // Round 2, NEW-4: this test's earlier title said the column "is sized for"
+    // its contents, which is a layout guarantee no string assertion can make.
+    // What is checked is that the classes the geometry depends on are the ones
+    // emitted; whether 40px of content box actually holds a 25px chip beside a
+    // 6px marker is in the unproven list, not here.
     expect(h).toMatch(/<th[^>]*data-col="rank"[^>]*class="w-12 py-2 pl-2\s/);
-    // The chip sizes to its CONTENT: `min-w-5` keeps the 20px circle for one
-    // and two digits and grows for three. A fixed `w-5` clipped rank 100,
-    // which the builder deliberately sorts correctly.
+    // `min-w-5` lets the box grow with its content; a fixed `w-5` clipped the
+    // rank 100 the builder deliberately sorts correctly.
     expect(h).toMatch(/class="inline-flex h-5 min-w-5 shrink-0 /);
     expect(h).not.toMatch(/class="inline-flex h-5 w-5 /);
     // The marker is a flex sibling with real gap, not an adjacent JSX
@@ -241,21 +246,31 @@ describe("StandingsTableView — phone composition", () => {
     expect(h).toMatch(/min-w-5[^>]*>100</);
   });
 
-  it("the table carries a min-width floor built from the rank column, the name floor and the columns actually shown", () => {
+  it("the table carries TWO min-width floors — the phone one counts only the shown columns, the md one counts them all", () => {
+    const h = html();
+    // A computed length cannot vary by media query as a plain inline
+    // `min-width`, so both floors ride as custom properties and the variant
+    // picks one. Same shape as `settings-nav.tsx`'s `top-[var(--app-header-h)]`.
+    expect(h).toMatch(/<table class="[^"]*\bmin-w-\[var\(--sv-min\)\]/);
+    expect(h).toMatch(/<table class="[^"]*\bmd:min-w-\[var\(--sv-min-md\)\]/);
     // 48 (rank) + 96 (name floor) + played 32 + won 32 + lost 32 + points 44.
     // `gd` is long-tail: below `md` it is display:none and claims nothing, so
-    // counting it here would put a rail under the COLLAPSED phone, which is
-    // the one thing the fold exists to prevent.
-    expect(html()).toContain('style="min-width:284px"');
-    // Differential — the same five columns with `gd` made compact must add its
-    // 32px, so the number is really derived from the shown set and not a
-    // constant. (A flat literal would print 284 here too.)
+    // counting it in the PHONE floor would put a rail under the collapsed
+    // phone, which is the one thing the fold exists to prevent.
+    // From `md` up nothing folds, so `gd` adds its 32px there — the two
+    // numbers differ by exactly the folded column, which is the differential
+    // that round 1 was missing and that leaves the name column 16px short at
+    // 768 without it.
+    expect(h).toContain('style="--sv-min:284px;--sv-min-md:316px"');
+    // Differential — with `gd` made compact nothing folds at any width, so the
+    // two floors converge. That is what proves the gap above comes from the
+    // FOLD and not from a constant offset between the two properties.
     const allCompact = html({
       view: { ...view, columns: view.columns.map((c) => ({ ...c, compact: true })) },
     });
-    expect(allCompact).toContain('style="min-width:316px"');
-    // …and a wide derived column contributes its own wider size, so the floor
-    // tracks `columnSize`, not a per-column constant.
+    expect(allCompact).toContain('style="--sv-min:316px;--sv-min-md:316px"');
+    // …and a wide derived column contributes its own wider size, so both
+    // floors track `columnSize` rather than a per-column constant.
     const wide = html({
       view: {
         ...view,
@@ -265,7 +280,7 @@ describe("StandingsTableView — phone composition", () => {
         rows: view.rows.map((r) => ({ ...r, cells: [...r.cells.slice(0, 3), "+1.000", r.cells[4]!] })),
       },
     });
-    expect(wide).toContain('style="min-width:340px"');
+    expect(wide).toContain('style="--sv-min:340px;--sv-min-md:340px"');
   });
 
   it("preview={0} states the empty case rather than painting a header over nothing", () => {

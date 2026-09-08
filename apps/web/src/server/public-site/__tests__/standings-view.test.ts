@@ -39,7 +39,12 @@
 import { describe, expect, it } from "vitest";
 import type { StandingsRow } from "@seazn/engine/competition";
 import { TableView } from "../competition-hub-schema";
-import { buildTableView, COMPACT_KEYS, type TableViewInput } from "../standings-view";
+import {
+  buildTableView,
+  COMPACT_KEYS,
+  TIE_BREAK_MSG_KEYS,
+  type TableViewInput,
+} from "../standings-view";
 
 // The caller binds `t(dict, …)` into `msg`. Here it echoes the key (and its
 // params) so an assertion can pin WHICH key was asked for — the dictionary
@@ -208,6 +213,52 @@ describe("buildTableView", () => {
     // a dotted `table.tieBreak.gd` on screen. An unknown entrant id in the
     // `with` list renders as the id, never as "undefined".
     expect(v.rows[1]!.tieBreakText).toBe('table.tieBreak:{"with":"Alpha, zz","rule":"gd"}');
+  });
+
+  it("the tie-break dictionary keys are an enumerable registry with every value spelled out", () => {
+    // Round 2, NEW-3: a `` `table.tieBreak.${key}` `` concatenation is
+    // invisible to a grep, to `scripts/i18n/gen-keys.ts` and to any future
+    // source-scanning gate — the whole family could go missing without a red.
+    // This is the shape `packages/engine/src/competition/display.test.ts` uses
+    // to pin `DERIVED_METRICS`: the exact membership, so adding or dropping a
+    // rule is a deliberate edit here and not a silent one.
+    expect(Object.keys(TIE_BREAK_MSG_KEYS)).toEqual([
+      "points",
+      "wins",
+      "diff",
+      "for",
+      "fair_play",
+      "nrr",
+      "set_ratio",
+      "board_ratio",
+      "point_ratio",
+      "h2h_points",
+      "h2h_diff",
+      "h2h_for",
+      "direct",
+      "buchholz",
+      "buchholz_cut1",
+      "sberger",
+      "seed",
+      "lots",
+    ]);
+    // …and every value is the literal key for its own rule, so a typo in one
+    // of the eighteen strings reds here rather than in a spectator's browser.
+    for (const [trace, dictKey] of Object.entries(TIE_BREAK_MSG_KEYS)) {
+      expect(dictKey).toBe(`table.tieBreak.${trace}`);
+    }
+  });
+
+  it("every registered rule actually routes through msg when a row is separated on it", () => {
+    for (const [trace, dictKey] of Object.entries(TIE_BREAK_MSG_KEYS)) {
+      const v = buildTableView({
+        ...base,
+        rows: [row("a", { rank: 1 }), row("b", { rank: 2, tieBreak: { key: trace, with: ["a"] } })],
+      });
+      expect(v.rows[1]!.tieBreakText).toBe(
+        `table.tieBreak:{"with":"Alpha","rule":"${dictKey}"}`,
+      );
+    }
   });
 
   it("a self-labelling engine key is still localised (the trap that forbids deriving the set from tieBreakLabel)", () => {

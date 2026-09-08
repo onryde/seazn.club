@@ -64,29 +64,43 @@ const STRUCTURAL_KEYS: ReadonlySet<string> = new Set([
  *  DECLARED, not derived: two of the engine's entries label themselves
  *  (`points → "points"`, `wins → "wins"`), so `tieBreakLabel(k) !== k` cannot
  *  separate a key the engine knows from one it does not. A key absent from
- *  this set falls back to `tieBreakLabel`, which is today's behaviour — so an
+ *  this map falls back to `tieBreakLabel`, which is today's behaviour — so an
  *  engine key added later degrades to English rather than to a dotted key on
- *  screen, and the raw key still comes through for anything neither knows. */
-const TIE_BREAK_MSG_KEYS: ReadonlySet<string> = new Set([
-  "points",
-  "wins",
-  "diff",
-  "for",
-  "fair_play",
-  "nrr",
-  "set_ratio",
-  "board_ratio",
-  "point_ratio",
-  "h2h_points",
-  "h2h_diff",
-  "h2h_for",
-  "direct",
-  "buchholz",
-  "buchholz_cut1",
-  "sberger",
-  "seed",
-  "lots",
-]);
+ *  screen, and the raw key still comes through for anything neither knows.
+ *
+ *  Review round 2, NEW-3: the dictionary key is SPELLED OUT rather than built
+ *  as `` `table.tieBreak.${key}` ``. A concatenated key is invisible to a
+ *  grep, to `scripts/i18n/gen-keys.ts` and to any future source-scanning gate
+ *  — a whole family could go missing and nothing would say so. `check-parity`
+ *  compares locales against `en` and never reads source, so a literal is not
+ *  enough on its own either: `standings-view.test.ts` enumerates this map, the
+ *  same shape `packages/engine/src/competition/display.test.ts` uses to pin
+ *  `DERIVED_METRICS`. Exported for that test.
+ *
+ *  Typed `TKey`, not `DictionaryKey`, because none of these exist in the
+ *  dictionaries yet (Task 6 owns them) and `DictionaryKey` is generated FROM
+ *  them — tightening it today would red tsc. Worth tightening once Task 6
+ *  lands: that is the only thing that would make a typo here a build error. */
+export const TIE_BREAK_MSG_KEYS: Readonly<Record<string, TKey>> = {
+  points: "table.tieBreak.points",
+  wins: "table.tieBreak.wins",
+  diff: "table.tieBreak.diff",
+  for: "table.tieBreak.for",
+  fair_play: "table.tieBreak.fair_play",
+  nrr: "table.tieBreak.nrr",
+  set_ratio: "table.tieBreak.set_ratio",
+  board_ratio: "table.tieBreak.board_ratio",
+  point_ratio: "table.tieBreak.point_ratio",
+  h2h_points: "table.tieBreak.h2h_points",
+  h2h_diff: "table.tieBreak.h2h_diff",
+  h2h_for: "table.tieBreak.h2h_for",
+  direct: "table.tieBreak.direct",
+  buchholz: "table.tieBreak.buchholz",
+  buchholz_cut1: "table.tieBreak.buchholz_cut1",
+  sberger: "table.tieBreak.sberger",
+  seed: "table.tieBreak.seed",
+  lots: "table.tieBreak.lots",
+};
 
 /** Sort key for a row the ranking pass has not ranked (a division with no
  *  played fixtures yet, or a row excluded from the cascade). Unranked rows go
@@ -122,8 +136,10 @@ export function buildTableView(input: TableViewInput): TableViewT {
   const columns = standingsColumns(input.metricSpecs, input.cascade, input.rows, DERIVED_METRICS);
   const ranked = [...input.rows].sort((a, b) => (a.rank ?? UNRANKED) - (b.rank ?? UNRANKED));
   const name = (id: string) => input.entrantNames[id] ?? id;
-  const rule = (key: string) =>
-    TIE_BREAK_MSG_KEYS.has(key) ? input.msg(`table.tieBreak.${key}`) : tieBreakLabel(key);
+  const rule = (key: string) => {
+    const dictKey = TIE_BREAK_MSG_KEYS[key];
+    return dictKey === undefined ? tieBreakLabel(key) : input.msg(dictKey);
+  };
 
   return {
     id: input.id,

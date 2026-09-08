@@ -44,10 +44,22 @@
 //    name clipped to nothing, with 14px of scroll to show for it. The table
 //    now carries an explicit `min-width` = rank + `NAME_MIN_PX` + the columns
 //    actually DISPLAYED, so the remainder can never fall below the floor and
-//    the region scrolls instead of crushing. It is computed per state rather
-//    than once because below `md` the folded columns are `display:none` and
-//    contribute nothing — a single unconditional value would either force a
-//    rail on a collapsed phone or under-protect the expanded one.
+//    the region scrolls instead of crushing. TWO values, because below `md`
+//    the folded columns are `display:none` and claim nothing while from `md`
+//    up nothing folds at all: a single value would either force a rail under
+//    a collapsed phone or leave the wide state unprotected. They travel as
+//    inline CUSTOM PROPERTIES read by the two utilities on the table below,
+//    which is how a computed length gets to vary by media query — a plain
+//    inline `min-width` cannot, and round 1 wrongly
+//    (Write arbitrary-value class names out only where they are USED, never
+//    abbreviated in prose: Tailwind's scanner reads comments too, and an
+//    ellipsised form written here generated a real, inert min-width rule with
+//    an invalid value into the bundle. Measured, not assumed.)
+//    deferred the `md`+ case to the mounting task on that basis. It was not
+//    a deferral but a REGRESSION: widening the rank column 32→48 took 16px
+//    off the name column at every width from `md` up, and football on a
+//    ~360px card at 768 — a width the e2e matrix actually runs — left 44px
+//    of name and no scroll. The `md:` floor is what puts it back.
 //  * THE RANK COLUMN COULD NOT HOLD ITS OWN CONTENTS. `w-8` (32px) minus
 //    `pl-3` (12px) left exactly the 20px of the `h-5 w-5` chip — zero slack —
 //    and the tie-break `*` beside it is an adjacent JSX expression with no
@@ -57,8 +69,14 @@
 //    gap, and the column is sized for chip + marker together.
 //  * THE CHIP COULD NOT PAINT THREE DIGITS. `buildTableView` deliberately
 //    sorts rank ≥ 100 correctly (`UNRANKED = MAX_SAFE_INTEGER`); a fixed
-//    `w-5` chip then clipped it. `min-w-5 px-1` keeps the circle for one and
-//    two digits and grows to a pill for three.
+//    `w-5` chip then clipped it. `min-w-5 px-0.5` grows the box instead.
+//    Round 2, NEW-4 — the first version said `px-1` "keeps the circle for one
+//    and two digits", which its own border-box arithmetic contradicts: 20px
+//    less 8px of padding leaves 12px, and two bold 12px digits are roughly
+//    14px. `px-0.5` leaves 16px, so one and two digits stay inside the 20px
+//    circle and only three push it to a ~25px pill. The digit width is an
+//    ESTIMATE (~7px at `text-[12px] font-bold`), not something measured here
+//    — see the unproven list in the task report.
 //
 // AGENTS.md #23 — the scroll region owes a `tabindex`, a role and an
 // accessible name, and `tabindex` cannot be varied by a media query, so all
@@ -67,7 +85,7 @@
 // REACHABLE is a feature, one inside an `overflow-hidden` box is a defect,
 // and a wide long tail on a narrow desktop card is exactly that case.
 import Link from "next/link";
-import { useState } from "react";
+import { useState, type CSSProperties } from "react";
 import { EntityLogo } from "@/components/ui/entity-logo";
 import type { Dict as PublicDict } from "@/lib/i18n-constants";
 import { t } from "@/lib/i18n-runtime";
@@ -121,7 +139,8 @@ function columnSize(chars: number): (typeof COLUMN_SIZES)[number] {
 }
 
 /** The rank column: `w-12` (48px) less `pl-2` (8px) = 40px of content box, for
- *  a three-digit chip (~29px) plus the tie-break marker (~6px) side by side. */
+ *  a three-digit chip (~25px) plus the gap and the tie-break marker (~6px)
+ *  side by side. */
 const RANK_PX = 48;
 
 /** The narrowest the name column may ever be. 96px holds the 20px crest, its
@@ -150,18 +169,20 @@ export function StandingsTableView({
   // the disclosure is opened; from `md` up nothing folds, ever.
   const shown = (c: TableColumnT) => c.compact || expanded;
   const foldCls = (c: TableColumnT) => (shown(c) ? "" : " max-md:hidden");
-  // The floor described at the top of the file: rank + name + whatever is
-  // actually painted right now. A folded column is `display:none` and claims
-  // nothing, so it is excluded — which is what keeps the collapsed phone off a
-  // rail while still guaranteeing the name column its 96px when expanded.
-  const minTableWidth =
-    RANK_PX +
-    NAME_MIN_PX +
-    view.columns.reduce((total, c, i) => total + (shown(c) ? sizes[i]!.px : 0), 0);
+  // The floor described at the top of the file, in two flavours because the
+  // column set differs by viewport. BELOW `md` a folded column is
+  // `display:none` and claims nothing, so only the shown set counts — which is
+  // what keeps the collapsed phone off a rail while still guaranteeing the
+  // name column its 96px once the disclosure is open. From `md` UP nothing
+  // folds, so every column counts.
+  const floor = (px: (c: TableColumnT, i: number) => number) =>
+    RANK_PX + NAME_MIN_PX + view.columns.reduce((total, c, i) => total + px(c, i), 0);
+  const minPhone = floor((c, i) => (shown(c) ? sizes[i]!.px : 0));
+  const minWide = floor((_c, i) => sizes[i]!.px);
 
   const rankChip = (rank: number | null) => (
     <span
-      className={`inline-flex h-5 min-w-5 shrink-0 items-center justify-center rounded-full px-1 font-display text-[12px] font-bold ${
+      className={`inline-flex h-5 min-w-5 shrink-0 items-center justify-center rounded-full px-0.5 font-display text-[12px] font-bold ${
         rank !== null && MEDAL[rank] ? MEDAL[rank] : "text-ink-muted"
       }`}
     >
@@ -211,9 +232,15 @@ export function StandingsTableView({
             aria-label={view.caption}
             className="overflow-x-auto rounded-xl border border-zinc-200/80 bg-surface shadow-sm"
           >
+            {/* The two floors ride as custom properties so the `md:` variant
+                can pick the wider one — a computed length has no other way to
+                vary by media query. `settings-nav.tsx` uses the same
+                `[var(--…)]` + `md:` shape. */}
             <table
-              className="w-full table-fixed text-sm tabular-nums"
-              style={{ minWidth: `${minTableWidth}px` }}
+              className="w-full table-fixed text-sm tabular-nums min-w-[var(--sv-min)] md:min-w-[var(--sv-min-md)]"
+              style={
+                { "--sv-min": `${minPhone}px`, "--sv-min-md": `${minWide}px` } as CSSProperties
+              }
             >
               <caption className="sr-only">{view.caption}</caption>
               <thead>
