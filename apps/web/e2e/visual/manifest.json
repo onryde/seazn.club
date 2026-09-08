@@ -1,0 +1,73 @@
+{
+  "version": 1,
+  "groups": [
+    {
+      "id": "public-fixture",
+      "seed": "public-fixture",
+      "rows": [
+        {
+          "id": "fixture-320",
+          "route": "/shared/{orgSlug}/{compSlug}/{divSlug}/fixtures/{fixtureId}",
+          "viewport": { "width": 320, "height": 568 },
+          "awaitSelector": "main h1",
+          "controlRoot": "main",
+          "checks": ["no-horizontal-scroll", "no-clip", "hit-targets", "truncate-chain", "rails-a11y"]
+        },
+        {
+          "id": "fixture-320-zoom125",
+          "route": "/shared/{orgSlug}/{compSlug}/{divSlug}/fixtures/{fixtureId}",
+          "viewport": { "width": 320, "height": 568 },
+          "zoom": 1.25,
+          "awaitSelector": "main h1",
+          "controlRoot": "main",
+          "checks": ["no-horizontal-scroll", "no-clip", "truncate-chain", "rails-a11y"]
+        },
+        {
+          "id": "fixture-768",
+          "route": "/shared/{orgSlug}/{compSlug}/{divSlug}/fixtures/{fixtureId}",
+          "viewport": { "width": 768, "height": 1024 },
+          "awaitSelector": "main h1",
+          "controlRoot": "main",
+          "checks": ["no-horizontal-scroll", "no-clip", "hit-targets", "truncate-chain", "rails-a11y"]
+        },
+        {
+          "id": "fixture-1280",
+          "route": "/shared/{orgSlug}/{compSlug}/{divSlug}/fixtures/{fixtureId}",
+          "viewport": { "width": 1280, "height": 800 },
+          "awaitSelector": "main h1",
+          "controlRoot": "main",
+          "checks": ["no-horizontal-scroll", "no-clip", "truncate-chain", "rails-a11y"]
+        }
+      ],
+      "mustDiffer": [
+        ["fixture-320", "fixture-1280"],
+        ["fixture-320", "fixture-320-zoom125"]
+      ],
+      "controlSetEqual": [["fixture-320", "fixture-1280"]]
+    },
+    {
+      "id": "embed-standings",
+      "seed": "public-fixture",
+      "rows": [
+        {
+          "id": "standings-768",
+          "route": "/embed/divisions/{divisionId}/standings",
+          "viewport": { "width": 768, "height": 600 },
+          "awaitSelector": "table",
+          "controlRoot": null,
+          "checks": ["no-horizontal-scroll", "no-clip", "rails-a11y"]
+        },
+        {
+          "id": "standings-320",
+          "route": "/embed/divisions/{divisionId}/standings",
+          "viewport": { "width": 320, "height": 600 },
+          "awaitSelector": "table",
+          "controlRoot": null,
+          "checks": ["no-horizontal-scroll"]
+        }
+      ],
+      "mustDiffer": [["standings-768", "standings-320"]],
+      "controlSetEqual": []
+    }
+  ]
+}

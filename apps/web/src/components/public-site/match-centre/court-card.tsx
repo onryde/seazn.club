@@ -169,7 +169,19 @@ export function CourtCard({ header, dict }: CourtCardProps) {
                 key={side.entrantId}
                 className={`flex items-baseline justify-between gap-3 tabular-nums ${batting ? "font-bold" : ""}`}
               >
-                <span className="truncate font-display text-xl font-semibold uppercase tracking-wide sm:text-2xl">
+                {/* `min-w-0` is what lets `truncate` engage at all: this span
+                    is an item of the row-flex above, so without it the
+                    automatic minimum size (`min-width: auto`,
+                    css-flexbox-1 §4.5) refuses to shrink it below its content
+                    and a long entrant name pushes the score off the row
+                    instead of ellipsing — AGENTS.md, "`truncate` needs
+                    `min-w-0` on the whole ancestor chain, not just the span".
+                    Latent until now (short seeded names never reached the
+                    threshold) and found by the streaming-T1 visual gate's
+                    `truncate-chain` check, which reds on this span without
+                    it. `(public)/shared/[orgSlug]/layout.tsx:83` already
+                    pairs the two the same way. */}
+                <span className="min-w-0 truncate font-display text-xl font-semibold uppercase tracking-wide sm:text-2xl">
                   {side.short || side.name}
                 </span>
                 <span className="shrink-0 text-right">

@@ -845,6 +845,11 @@ async function main() {
   // /help + /developers, scoped keys, OG/poster/embed/sponsors — pro + free.
   await v3ContentApiSuite(admin, org2.id, renamed.slug);
 
+  // --- streaming T1: the routes the visual gate photographs still answer
+  // with the markup its manifest awaits (`main h1`, `table`). Same pro org —
+  // the embed widget 404s below Pro.
+  await visualSeedRoutesSuite(admin, renamed.slug);
+
   // --- the above-Pro rung (Task 11): community's save-point window and its
   // ungated officials, api.write re-armed above Pro, and the rung above Pro
   // lifting the window and minting the key — own fresh org, restores its own
@@ -16523,6 +16528,74 @@ async function gapSuite(admin: Session, org1Id: string, proOrgId: string): Promi
  * invites). Scoped to the run's `tag` by exact email match. No-op when
  * DATABASE_URL is unset. Never throws — teardown must not fail the run.
  */
+/**
+ * Streaming T1 — the two routes the visual gate photographs today answer as
+ * its manifest expects them to, through the SERVER rather than a browser:
+ * the public fixture page with a headline inside `<main>`, and the embed
+ * standings widget with both a `<table>` and its auto-height script. Those
+ * are the manifest's own `awaitSelector`s (`apps/web/e2e/visual/manifest.json`
+ * — `main h1` and `table`), so a 200 whose body lacks them is the inert page
+ * the harness would otherwise photograph as "fine" and sign off on.
+ *
+ * The fixture is driven to FULL TIME on purpose, and that was measured rather
+ * than assumed: `/embed/divisions/{id}/standings` renders from the standings
+ * SNAPSHOT rows, which `recomputeStandings` writes only for a decided fixture,
+ * so a live 2-1 returns 200 with an empty widget body and no table at all.
+ * `core.finalize` is not the lever either — it 422s WRONG_PHASE on an
+ * undecided fixture. A level score would go to a shoot-out instead of
+ * deciding, hence 2-1.
+ *
+ * Distinct from the pro-path embed check in `v3ContentApiSuite` below, which
+ * asserts only that the widget renders the attribution string ("seazn.club")
+ * on a division that has no standings at all.
+ */
+async function visualSeedRoutesSuite(owner: Session, orgSlug: string): Promise<void> {
+  const comp = v1data<{ id: string; slug: string }>(
+    await v1(owner, "/api/v1/competitions", "POST", {
+      ends_on: "2030-12-31",
+      name: `Visual Gate ${tag}`,
+      visibility: "public",
+    }),
+  );
+  const fx = await timedFixture(owner, comp.id, {
+    name: "Visual Gate League",
+    sport_key: "football",
+    variant_key: "11-a-side",
+    entrants: [
+      { kind: "team", display_name: `Visual Home ${tag}`, seed: 1 },
+      { kind: "team", display_name: `Visual Away ${tag}`, seed: 2 },
+    ],
+  });
+  const led = ledger(owner, fx.fixtureId);
+  await led.send("core.start", {});
+  await led.send("football.goal", { by: fx.entrantIds[0] });
+  await led.send("football.goal", { by: fx.entrantIds[1] });
+  await led.send("football.goal", { by: fx.entrantIds[0] });
+  await led.send("football.period", { phase: "HT" });
+  await led.send("football.period", { phase: "FT" });
+  const state = v1data<{ status: string }>(await v1(owner, `/api/v1/fixtures/${fx.fixtureId}/state`));
+  check(
+    `visual gate: full time decides the seeded fixture (got '${state.status}')`,
+    state.status === "decided" || state.status === "finalized",
+  );
+
+  const embed = await html(newSession(), `/embed/divisions/${fx.divisionId}/standings`);
+  check(
+    "visual gate: embed standings renders a <table> and the auto-height script",
+    embed.status === 200 && embed.body.includes("<table") && embed.body.includes("seazn:embed:height"),
+  );
+
+  const div = v1data<{ slug: string }>(await v1(owner, `/api/v1/divisions/${fx.divisionId}`));
+  const page = await html(
+    newSession(),
+    `/shared/${orgSlug}/${comp.slug}/${div.slug}/fixtures/${fx.fixtureId}`,
+  );
+  check(
+    "visual gate: public fixture page renders a headline inside <main>",
+    page.status === 200 && page.body.includes("<main") && /<h1[\s>]/.test(page.body),
+  );
+}
+
 // =====================================================================
 // v3 content + API wave (PROMPT-35/37/39): markdown descriptions render
 // through the one prose pipeline, /help + /developers are live, API keys
