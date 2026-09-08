@@ -28,7 +28,7 @@ import { runTinySuite, TINY_PACK_PATH } from "../suites/tiny.ts";
 import { makeScheduleWorld } from "./_schedule-routes.ts";
 import { makeDivisionPhaseWorld } from "./_division-phase.ts";
 import { makeAdvanceRoutesWorld } from "./_advance-routes.ts";
-import { makeOracleRoutesWorld } from "./_oracle-routes.ts";
+import { makeOracleRoutesWorld, tinyDivisionPlayerStats, tinyLeagueTableRows } from "./_oracle-routes.ts";
 
 const silent = pino({ level: "silent" });
 
@@ -56,6 +56,11 @@ function fakeServer(opts: { statsPlayerGranted: boolean }): {
   // league, which was true of every pack this file drove before this task.
   const kindByStageId = new Map<string, string>();
   const divisionIdByStageId = new Map<string, string>();
+  // B05 T4b — see `_oracle-routes.ts`'s own header comment: these key the
+  // real (non-placement) league-table/leaderboard fixtures on the `/stages`
+  // and `/divisions` POST bodies' own `name` field.
+  const stageNameById = new Map<string, string>();
+  const divisionNameById = new Map<string, string>();
   const fixtureDivisionId = new Map<string, string>();
   const fixtureOfficials = new Map<string, unknown[]>();
   const claimInvites = new Map<string, unknown>();
@@ -87,6 +92,16 @@ function fakeServer(opts: { statsPlayerGranted: boolean }): {
     getRankedEntrantIds: (stageId) => {
       const divisionId = divisionIdByStageId.get(stageId);
       return divisionId === undefined ? undefined : schedule.entrantsOfDivision(divisionId);
+    },
+    getFullStandingsRows: (stageId) => {
+      const divisionId = divisionIdByStageId.get(stageId);
+      const stageName = stageNameById.get(stageId);
+      if (divisionId === undefined || stageName === undefined) return undefined;
+      return tinyLeagueTableRows(stageName, schedule.entrantsOfDivision(divisionId));
+    },
+    getDivisionPlayerStats: (divisionId) => {
+      if (divisionNameById.get(divisionId) !== "Tiny") return undefined;
+      return tinyDivisionPlayerStats((fullName) => `person-${slug(fullName)}`);
     },
   });
 
@@ -123,9 +138,10 @@ function fakeServer(opts: { statsPlayerGranted: boolean }): {
         return { id: `comp-${slug((body as { name: string }).name)}` } as T;
       }
       if (method === "POST" && /^\/api\/v1\/competitions\/[^/]+\/divisions$/.test(routePath)) {
-        const b = body as { config?: { dls?: { enabled?: boolean } } };
+        const b = body as { name?: string; config?: { dls?: { enabled?: boolean } } };
         const id = `div-${++divisionCounter}`;
         dlsByDivisionId.set(id, b.config?.dls?.enabled === true);
+        if (b.name !== undefined) divisionNameById.set(id, b.name);
         return { id } as T;
       }
       const entrantsMatch = /^\/api\/v1\/divisions\/([^/]+)\/entrants$/.exec(routePath);
@@ -139,12 +155,13 @@ function fakeServer(opts: { statsPlayerGranted: boolean }): {
       }
       if (method === "POST" && /^\/api\/v1\/divisions\/([^/]+)\/stages$/.test(routePath)) {
         const divisionId = routePath.split("/")[4]!;
-        const stagesBody = body as { kind?: string; config?: { legs?: number } }[];
+        const stagesBody = body as { name?: string; kind?: string; config?: { legs?: number } }[];
         return stagesBody.map((st) => {
           const id = `stage-${++stageCounter}`;
           legsByStageId.set(id, (st.config?.legs as number | undefined) ?? 1);
           kindByStageId.set(id, st.kind ?? "league");
           divisionIdByStageId.set(id, divisionId);
+          if (st.name !== undefined) stageNameById.set(id, st.name);
           schedule.addStage(id, divisionId);
           return { id };
         }) as unknown as T;
@@ -429,7 +446,14 @@ describe("runTinySuite — B03 T6b player-stats baseline wiring", () => {
 
     expect(report.gate).toBe("green");
     expect(calls.some((c) => c.method === "GET" && c.path === "/api/orgs")).toBe(false);
-    expect(calls.some((c) => c.method === "GET" && /\/stats\/players$/.test(c.path))).toBe(false);
+    // NOT `/stats/players` (B05 T4b now calls that route independently, via
+    // `raw()`, for the leaderboard oracle — unconditionally, regardless of
+    // this `statsPlayerGranted` knob, which only gates B03 T6b's OWN
+    // `request()`-based baseline read). `/persons/{id}/stats` stays a clean
+    // discriminator: only the baseline ever calls it.
+    expect(calls.some((c) => c.method === "GET" && /^\/api\/v1\/persons\/[^/]+\/stats(\?|$)/.test(c.path))).toBe(
+      false,
+    );
     expect((report.oracles ?? []).some((o) => o.name === "player-stats: baseline")).toBe(false);
     expect((report.warnings ?? []).some((w) => w.includes("player-stats baseline skipped"))).toBe(true);
   });
