@@ -164,6 +164,13 @@ type FixtureRaw = {
   /** When core.start was recorded — the fixture's REAL kick-off. `fixtures`
    *  has no such column (V214), and `scheduled_at` is a plan, not an event. */
   started_at: string | Date | null;
+  /** The SAME instant as `started_at`, rendered by Postgres at MICROSECOND
+   *  precision. It exists purely to sort by: `started_at` reaches JS as a
+   *  `Date`, which is millisecond-resolution, so two kick-offs inside one
+   *  millisecond arrive indistinguishable and the comparator below cannot
+   *  order them. Fixed-width UTC, so a plain string compare is a time
+   *  compare. */
+  started_at_key: string | null;
 };
 type SettingsRaw = { division_id: string; tz: string | null; match_minutes: number | null };
 /** F4 (final review, Important) — resolved once per competition, not N+1:
@@ -269,7 +276,7 @@ export async function getCompetitionDesk(
       ? await tx<FixtureRaw[]>`
           select f.id, f.division_id, f.status, f.scheduled_at, f.fixture_no, f.stage_id,
                  h.display_name as home, a.display_name as away,
-                 coalesce(e.n, 0)::int as event_count, e.started_at,
+                 coalesce(e.n, 0)::int as event_count, e.started_at, e.started_at_key,
                  ms.summary->>'headline' as headline
             from fixtures f
             left join entrants h on h.id = f.home_entrant_id
@@ -314,7 +321,14 @@ export async function getCompetitionDesk(
               -- a fixture cannot be in play without a core.start.
               select fixture_id,
                      count(*) filter (where type <> 'core.start') as n,
-                     min(recorded_at) filter (where type = 'core.start') as started_at
+                     min(recorded_at) filter (where type = 'core.start') as started_at,
+                     -- Sort key, microsecond precision. See FixtureRaw.started_at_key:
+                     -- the Date this column becomes in JS has already lost the
+                     -- microseconds by the time the comparator runs.
+                     to_char(
+                       min(recorded_at) filter (where type = 'core.start') at time zone 'UTC',
+                       'YYYY-MM-DD"T"HH24:MI:SS.US'
+                     ) as started_at_key
                 from score_events
                where fixture_id = any(
                  select id from fixtures where division_id = any(${ids}) and status = 'in_play'
@@ -355,6 +369,10 @@ export async function getCompetitionDesk(
   const out = new Map<string, DeskDivision>();
   let inPlayTotal = 0;
   const inPlayFixtures: DeskInPlayFixture[] = [];
+  /** fixture id -> microsecond kick-off key, for the sort below only. Kept
+   *  beside the list rather than on `DeskInPlayFixture` so the payload shape
+   *  every consumer reads is unchanged. */
+  const startedAtKeys = new Map<string, string>();
   for (const d of divisions) {
     const s = stats.get(d.id);
     const st = settings.find((x) => x.division_id === d.id);
@@ -459,6 +477,7 @@ export async function getCompetitionDesk(
         headline: x.headline,
         started_at: x.started_at === null ? null : new Date(x.started_at).toISOString(),
       });
+      if (x.started_at_key !== null) startedAtKeys.set(x.id, x.started_at_key);
     }
     const fixture_names: DeskDivision["fixture_names"] = {};
     for (const x of rows) fixture_names[x.id] = { home: x.home, away: x.away, fixture_no: x.fixture_no };
@@ -495,10 +514,23 @@ export async function getCompetitionDesk(
   // coin flip: measured locally, eight consecutive single-statement inserts
   // produced four distinct millisecond values.
   inPlayFixtures.sort((a, b) => {
-    if (a.started_at !== b.started_at) {
-      if (a.started_at === null) return 1;
-      if (b.started_at === null) return -1;
-      return a.started_at < b.started_at ? -1 : 1;
+    // Two-key sort. The MICROSECOND key first, never the millisecond ISO
+    // string the payload carries: `started_at` is min(recorded_at), a
+    // microsecond timestamptz, but it reaches JS as a Date and the ISO string
+    // built from it truncates. Two kick-offs 100us apart inside one
+    // millisecond used to compare EQUAL here.
+    //
+    // `fixture_no` then breaks a GENUINE tie — two fixtures whose kick-offs
+    // really are the same instant, which is ordinary on match day. Without it
+    // the stable sort falls back to the query's own tuple order, so the band
+    // could reorder its own cards between two polls with nothing having
+    // changed. Both halves are load-bearing and each has its own test.
+    const ka = startedAtKeys.get(a.id) ?? null;
+    const kb = startedAtKeys.get(b.id) ?? null;
+    if (ka !== kb) {
+      if (ka === null) return 1;
+      if (kb === null) return -1;
+      return ka < kb ? -1 : 1;
     }
     return a.fixture_no - b.fixture_no;
   });
