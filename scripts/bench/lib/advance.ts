@@ -317,15 +317,41 @@ export interface FinalRanksComparison {
   readonly matched: boolean;
   readonly expected: readonly string[];
   readonly actual: readonly string[] | undefined;
+  /** Set only on a false-by-EMPTINESS verdict (either side reporting zero
+   *  entrants) — the same field, with the same meaning, as
+   *  `RankCrossingComparison.reason` (oracle.ts). It distinguishes "there was
+   *  nothing to agree on" from an ordinary order/length mismatch between two
+   *  real rankings. Deliberately NOT set for `actual === undefined`, which is
+   *  its own long-standing verdict (`actual` is right there in the result,
+   *  saying so). */
+  readonly reason?: string;
 }
 
+/**
+ * B05 review round 1, MAJOR 3: this carried the exact vacuous-pass shape
+ * `compareRankCrossings` was fixed for in 8376359cc. `[].every(…)` is
+ * vacuously true and `0 === 0`, so empty/empty reported `matched: true` — a
+ * comparator agreeing with nothing at all. It was unreachable in practice only
+ * because `pack-schema.ts`'s `PackExpectedFinalRanks` declares `order.min(2)`,
+ * and a schema constraint elsewhere is not the comparator's own discipline: a
+ * later pack shape, or a second caller, silently re-opens it. So an empty side
+ * reds here, with a `reason`, exactly as the crossings comparator does.
+ */
 export function compareFinalRanks(
   expected: readonly string[],
   actual: readonly string[] | undefined,
 ): FinalRanksComparison {
-  const matched =
-    actual !== undefined &&
-    actual.length === expected.length &&
-    actual.every((id, i) => id === expected[i]);
+  if (actual === undefined) {
+    return { matched: false, expected, actual };
+  }
+  if (expected.length === 0 || actual.length === 0) {
+    return {
+      matched: false,
+      expected,
+      actual,
+      reason: "empty expected or empty actual finalRanks — nothing to agree on",
+    };
+  }
+  const matched = actual.length === expected.length && actual.every((id, i) => id === expected[i]);
   return { matched, expected, actual };
 }

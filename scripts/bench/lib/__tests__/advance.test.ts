@@ -367,4 +367,41 @@ describe("compareFinalRanks — pure, EXACT order (D1's finalRanks oracle)", () 
   it("undefined actual (the stage never completed) never matches", () => {
     expect(compareFinalRanks(["id-alpha"], undefined).matched).toBe(false);
   });
+
+  // B05 review round 1, MAJOR 3: the same vacuous-pass shape
+  // `compareRankCrossings` was hardened away from in 8376359cc. `[].every(…)`
+  // is vacuously true and `0 === 0`, so empty/empty reported `matched: true` —
+  // a comparator agreeing with nothing. Only `pack-schema.ts`'s
+  // `order.min(2)` kept it unreachable, which is a schema constraint standing
+  // in for the comparator's own discipline.
+  it("empty EXPECTED and empty ACTUAL is a RED, not a vacuous pass, and says why", () => {
+    const result = compareFinalRanks([], []);
+    expect(result.matched).toBe(false);
+    expect(result.reason).toMatch(/nothing to agree on/);
+  });
+
+  it("an empty side reds even when the OTHER side is real — both directions", () => {
+    const emptyActual = compareFinalRanks(["id-alpha", "id-bravo"], []);
+    expect(emptyActual.matched).toBe(false);
+    expect(emptyActual.reason).toMatch(/nothing to agree on/);
+
+    const emptyExpected = compareFinalRanks([], ["id-alpha", "id-bravo"]);
+    expect(emptyExpected.matched).toBe(false);
+    expect(emptyExpected.reason).toMatch(/nothing to agree on/);
+  });
+
+  it("POSITIVE PAIR — a real agreement still matches, and carries NO reason", () => {
+    // Without this, "return matched:false always" passes every red above.
+    const result = compareFinalRanks(["id-alpha", "id-bravo"], ["id-alpha", "id-bravo"]);
+    expect(result.matched).toBe(true);
+    expect(result.reason).toBeUndefined();
+  });
+
+  it("an ordinary mismatch carries NO reason — emptiness is a distinct verdict", () => {
+    // `reason` is set only on false-by-EMPTINESS, exactly as
+    // `RankCrossingComparison.reason` is, so a reader is never tempted to
+    // read one as the other.
+    expect(compareFinalRanks(["id-alpha", "id-bravo"], ["id-bravo", "id-alpha"]).reason).toBeUndefined();
+    expect(compareFinalRanks(["id-alpha"], undefined).reason).toBeUndefined();
+  });
 });
