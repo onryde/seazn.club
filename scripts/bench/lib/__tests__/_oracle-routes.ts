@@ -27,9 +27,9 @@
 // reasoning `_advance-routes.ts`'s header already gives for hardcoding
 // qualifier order — `oracle.test.ts` proves `compareStandings`/
 // `compareLeaderboard` themselves, directly, against deliberately
-// mismatched fixtures). `tinyLeagueTableRows`/`tinyLeaderboardStats` below
-// are the ONE place those constants live, reused by every caller rather
-// than re-typed four times.
+// mismatched fixtures). `tinyLeagueTableRows`/`tinyDivisionPlayerStats`
+// below are the ONE place those constants live, reused by every caller
+// rather than re-typed four times.
 //
 // These four test files are not ABOUT proving the oracle comparators are
 // correct (`oracle.test.ts` does that, directly, against deliberately
@@ -137,7 +137,7 @@ export function makeOracleRoutesWorld(input: {
 
       const standingsMatch = /^\/api\/v1\/stages\/([^/]+)\/standings/.exec(path);
       if (standingsMatch !== null) {
-        const stageId = standingsMatch[1]!;
+        const stageId = standingsMatch[1];
         const full = input.getFullStandingsRows?.(stageId);
         if (full !== undefined) {
           return {
@@ -175,7 +175,7 @@ export function makeOracleRoutesWorld(input: {
 
       const playerStatsMatch = /^\/api\/v1\/divisions\/([^/]+)\/stats\/players$/.exec(path);
       if (playerStatsMatch !== null) {
-        const divisionId = playerStatsMatch[1]!;
+        const divisionId = playerStatsMatch[1];
         const stats = input.getDivisionPlayerStats?.(divisionId);
         if (stats === undefined) return undefined;
         return { status: 200, json: { ok: true, data: stats } };
