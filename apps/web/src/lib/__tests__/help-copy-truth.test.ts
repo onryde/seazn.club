@@ -2246,8 +2246,12 @@ describe("the add-ons article's behaviour claims are pinned to the code", () => 
     );
     // The product string says it correctly and is the sentence a buyer sees at
     // the control itself; the article must agree with it rather than drift.
+    // F16 split this into .one/.other (the flat key read "1 organisation...
+    // are standing" at the commonest floor, min: 1); both halves carry the
+    // same claim, checked here against .other for continuity with what this
+    // assertion pinned before the split.
     expect(
-      JSON.parse(readFileSync("src/dictionaries/en/ui.json", "utf8"))["addOns.extraOrg.floorNote"],
+      JSON.parse(readFileSync("src/dictionaries/en/ui.json", "utf8"))["addOns.extraOrg.floorNote.other"],
       "the floorNote moved — the article was written to agree with it",
     ).toMatch(/standing on an extra organisation/i);
 
