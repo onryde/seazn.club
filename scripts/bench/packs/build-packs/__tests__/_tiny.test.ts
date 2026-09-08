@@ -75,20 +75,23 @@ describe("packs/_tiny.json — two divisions, stage 0, no new errors", () => {
     expect(block.organiser).toEqual([{ action: "approve", target: "reg-cap1" }]);
   });
 
-  it("validates GREEN through the real stage-0 validator, with exactly the two permanent not_derived warnings", () => {
+  it("validates GREEN through the real stage-0 validator, with exactly the three permanent not_derived warnings", () => {
     const raw = JSON.parse(readFileSync(TINY_JSON_PATH, "utf8"));
     const result = validatePack(raw, { expectedSuite: "_tiny" });
     expect(errorsOf(result.findings)).toEqual([]);
     expect(result.ok).toBe(true);
-    // The two permanent warnings _tiny has always carried (leaderboards +
-    // champions, both declared only by d-tiny) — MUST survive, per the task
-    // brief, and nothing else should have appeared alongside them. A
-    // "drop a stream" mutant (removing streams[3], the badminton stream,
-    // while its expected.matches row stays) reds THIS test: `checkExpected`
-    // then reports "no stream declares fixture ... d-badminton" as an ERROR,
-    // so `result.ok` goes false and `errorsOf(...)` stops being empty.
+    // The three permanent warnings _tiny now carries (leaderboards +
+    // champions + finalRanks, all declared only by d-tiny — B05 T3 added
+    // d-tiny's second stage, s-playoff, and its own expected.finalRanks
+    // entry) — MUST survive, per the task brief, and nothing else should
+    // have appeared alongside them. A "drop a stream" mutant (removing
+    // streams[3], the badminton stream, while its expected.matches row
+    // stays) reds THIS test: `checkExpected` then reports "no stream
+    // declares fixture ... d-badminton" as an ERROR, so `result.ok` goes
+    // false and `errorsOf(...)` stops being empty.
     expect(warningsOf(result.findings).map((f) => f.code).sort()).toEqual([
       "champions.not_derived",
+      "finalRanks.not_derived",
       "leaderboards.not_derived",
     ]);
     // Both divisions actually folded — not just parsed. `overall.real` is the

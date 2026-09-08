@@ -178,6 +178,11 @@ import type {
 } from "../report.ts";
 import { computeEventsPerSecond, simulateDivisionStreams } from "../simulate.ts";
 import { buildImportId, importDivisionStreams, type ImportFinding } from "../import.ts";
+import {
+  advanceStageSeeding,
+  compareFinalRanks,
+  completeStageCapture,
+} from "../advance.ts";
 import type { SelectedDivisionExposure } from "../env.ts";
 import {
   resolveEntryMode,
@@ -510,6 +515,19 @@ export interface TinySuiteInput {
    * either): starting is neither fold, and runs before both of them.
    */
   startTransport?: DivisionStartTransport;
+  /**
+   * B05 T3 — overridable so a test can drive the stage-advancement step's
+   * (`advance.ts`) OWN HTTP surface through a fake, never `global.fetch`.
+   * `ProbeTransport`, same reasoning as `simTransport`/`importTransport`
+   * above — it is exactly the shape `advance.ts`'s own `AdvanceTransport`
+   * needs (`raw()`). Defaults to `advance.ts`'s own `defaultAdvanceTransport`;
+   * a live run never passes it. Meaningless (never read) when `sql` is
+   * omitted, or when `division0`'s second stage declares no `progression` —
+   * same gating discipline as every other B05 transport field. A SEPARATE
+   * field from every other one above: advancement is neither fold nor the
+   * start step, and runs after both folds and the player-stats baseline.
+   */
+  advanceTransport?: ProbeTransport;
   /** B03r tasks 9+10: `bench.ts`'s `--entry admin|registration` flag,
    *  forwarded through `BenchConfig.entry`/`runSuite`. `undefined` (no flag)
    *  leaves every registration-carrying division on its own pack-declared
@@ -687,6 +705,47 @@ function describeExpectedCount(
  * GREEN `_tiny` while the product mints the wrong number of fixtures, which is
  * the one failure the addendum exists to prevent.
  */
+/**
+ * B05 T3 — how many of `seeded.fixtureIdByKey`'s bound fixtures belong to a
+ * LEAGUE-kind stage, the only kind `expectedFixtureCounts` can derive a
+ * number for (`SeedPlan.expectedFixtureCounts`'s own doc comment: "a
+ * bracket/group/swiss/etc. stage simply has no entry here, not a wrong
+ * one"). `d-tiny` gained a second stage this task (`s-playoff`, a knockout)
+ * whose own TBD placeholder fixture is generated and bound exactly like
+ * every other one — `seedSuite`'s per-stage `/generate` loop does not
+ * discriminate by kind — so `seeded.fixtureIdByKey.size` now counts a
+ * fixture `expectedFixtureCounts` was never asked about. Comparing the two
+ * totals wholesale would red every division that ever grows a non-league
+ * stage, forever, regardless of whether the league stage itself seeded
+ * correctly — exactly the false attribution `fixtureCountIssue`'s own doc
+ * comment warns a silent shape change produces.
+ *
+ * Scoped by STREAM rather than by re-deriving a per-stage generated count:
+ * `bindStreamFixtures` already proved (its own two anti-vacuity checks) that
+ * every pack stream matches exactly one generated, bound fixture and vice
+ * versa, so "how many streams resolve to a league-kind stage" and "how many
+ * bound fixtures belong to a league-kind stage" are the same number. A
+ * stream's stage is resolved the same way `validate-pack.ts`'s `resolveStage`
+ * does — declared `stageRef` wins, absent means "the division's only stage"
+ * — reimplemented here rather than imported because that resolver is a
+ * validate-pack.ts private helper, not an exported one.
+ */
+function leagueBoundStreamCount(pack: Pack, plan: SeedPlan): number {
+  let count = 0;
+  for (const stream of pack.streams) {
+    const division = plan.divisions.find((d) => d.ref === stream.divisionRef);
+    if (division === undefined) continue;
+    const stage =
+      stream.stageRef !== undefined
+        ? division.stages.find((s) => s.ref === stream.stageRef)
+        : division.stages.length === 1
+          ? division.stages[0]
+          : undefined;
+    if (stage?.kind === "league") count += 1;
+  }
+  return count;
+}
+
 export function fixtureCountIssue(
   actual: number,
   plan: SeedPlan,
@@ -1345,15 +1404,22 @@ export async function runTinySuite(
       };
     }
 
-    // `_tiny.json` declares exactly one division and one (league) stage —
-    // `buildSeedPlan`/`seedSuite` are generalised past that, but this
-    // suite's OWN scheduling walk below still only ever drives the first of
-    // each, matching what `_tiny.json` actually contains. `divisions.min(1)`
-    // on `PackSchema` guarantees at least one; a stage-less division would be
-    // an authoring bug stage 0 does not currently catch, so it is named here
+    // `_tiny.json` declares exactly one FIRST division — `buildSeedPlan`/
+    // `seedSuite` are generalised past that, but this suite's OWN scheduling
+    // walk below still only ever drives the first division's FIRST stage,
+    // matching what `_tiny.json`'s league stage needs. `divisions.min(1)` on
+    // `PackSchema` guarantees at least one; a stage-less division would be an
+    // authoring bug stage 0 does not currently catch, so it is named here
     // rather than silently producing `undefined.id` downstream.
+    //
+    // B05 T3: `division0` now legitimately declares a SECOND stage
+    // (`s-playoff`, a knockout fed from the league) — `stage1`, undefined for
+    // every pack (and division) that does not. Every existing reader of
+    // `division0`/`stage0` above is unaffected; `stage1` is read only by the
+    // advance step below.
     const division0 = plan.divisions[0];
     const stage0 = division0?.stages[0];
+    const stage1 = division0?.stages[1];
     if (division0 === undefined || stage0 === undefined) {
       throw new Error(
         "tiny: the pack's plan has no division/stage to seed and schedule",
@@ -1535,7 +1601,11 @@ export async function runTinySuite(
     // DERIVED from the pack (entrants choose two, times its declared legs) —
     // never a constant. See `fixtureCountIssue`'s own doc comment for why
     // this comparison lives on the testable side of the network boundary.
-    const countIssue = fixtureCountIssue(seeded.fixtureIdByKey.size, plan);
+    // B05 T3: scoped to LEAGUE-stage-bound fixtures ONLY — see
+    // `leagueBoundStreamCount`'s own doc comment for why the pool-wide
+    // `seeded.fixtureIdByKey.size` stopped being the right number the moment
+    // `d-tiny` grew a second, non-league stage.
+    const countIssue = fixtureCountIssue(leagueBoundStreamCount(pack, plan), plan);
     if (countIssue !== null) errors.push(countIssue);
     timings.seedMs = Math.round(performance.now() - seedStart);
 
@@ -2218,8 +2288,8 @@ export async function runTinySuite(
 
     // B05 T1 — the single-event write-path fold (design doc §3 D4): division
     // A's own streams (`division0` — this file's own "declares exactly one
-    // division" comment above is why that index is always the division the
-    // pack calls A) folded through the LIVE `POST /fixtures/{id}/events`
+    // FIRST division" comment above is why that index is always the division
+    // the pack calls A) folded through the LIVE `POST /fixtures/{id}/events`
     // route, strictly sequential per fixture (`simulate.ts`'s own header
     // comment). Division B's import path is a SEPARATE task (T2) — this
     // block touches only `division0`'s streams.
@@ -2231,9 +2301,24 @@ export async function runTinySuite(
     // correct baseline oracle into a wrong one for every future `input.sql`
     // caller. Ordered AFTER, this step touches nothing the baseline already
     // read.
+    //
+    // B05 T3: scoped to `stage0`'s OWN streams, never `stage1`'s (a
+    // progression-fed stage's fixture has no real entrants until the advance
+    // step below confirms them — folding it here would score a TBD fixture
+    // before it exists as anything but a placeholder). A stream naming no
+    // stage still counts when the division has exactly one — the same
+    // "absent means the division's only stage" convention `validate-pack.ts`'s
+    // own `resolveStage` uses — so no pack before this task sees any change.
+    // `stage1`'s own stream is folded separately, after the advance step,
+    // reusing this exact function (see that block's own comment for why: the
+    // acceptance bar is "the existing fold covers it", not a new primitive).
     if (input.sql !== undefined) {
       const divisionAStreams = pack.streams.filter(
-        (st) => st.divisionRef === division0.ref,
+        (st) =>
+          st.divisionRef === division0.ref &&
+          (st.stageRef === undefined
+            ? division0.stages.length === 1
+            : st.stageRef === stage0.ref),
       );
       if (divisionAStreams.length > 0) {
         // `@`-sigilled payload refs (pack-schema.ts header note 6) name
@@ -2378,6 +2463,182 @@ export async function runTinySuite(
           },
           "suite_simulated",
         );
+      }
+    }
+
+    // B05 T3 — stage advancement (design doc §3 D1/D7): `division0`'s second
+    // stage, `stage1`, when it declares a `progression` (a `timing:"setup"`
+    // knockout fed from `stage0`'s standings, in `_tiny`'s own case) is
+    // advanced through the LIVE `propose -> assert -> confirm -> generate`
+    // flow (`advance.ts`), its own stream folded through the SAME
+    // `simulateDivisionStreams` T1 uses above, and completed with the
+    // `finalRanks` response CAPTURED (D1 — it is the only time they cross the
+    // wire; `GET /divisions/{id}/history` never carries the payload).
+    //
+    // Gated on `input.sql`, same as every other B05 step — a unit test with
+    // no `sql` gets today's behavior unchanged. A no-op for any pack (or
+    // division) whose second stage declares no `progression`: `_tiny` is the
+    // only pack this bench runs, and its OTHER two divisions
+    // (d-badminton, d-registration) are both single-stage.
+    if (input.sql !== undefined && stage1?.progression !== undefined) {
+      const sourceStageId = seeded.stageIdByRef.get(stage0.ref);
+      const targetStageId = seeded.stageIdByRef.get(stage1.ref);
+      if (sourceStageId === undefined || targetStageId === undefined) {
+        errors.push(
+          `tiny: division "${division0.ref}" declares a progression-fed stage "${stage1.ref}" but one of ` +
+            `its own stage ids ("${stage0.ref}" / "${stage1.ref}") never resolved — cannot advance it`,
+        );
+      } else {
+        // The expected qualifier order (D7's "expected qualifier list"),
+        // derived from the SOURCE stage's own `expected.tables` row — the
+        // pack's already-authored, already-offline-checked final standings
+        // for `stage0`, resolved from refs to the REAL entrant ids `seedSuite`
+        // minted. Assumes the progression's own take rule pulls every ranked
+        // entrant of that table, in order (true of `_tiny`'s own
+        // `rankRange(1, N)` — a future pack with a NARROWER take, e.g. top 2
+        // of 8, would need this sliced to the qualifier count, out of this
+        // task's scope).
+        const sourceTable = pack.expected.tables.find(
+          (t) => t.divisionRef === division0.ref && t.stageRef === stage0.ref && t.poolKey === undefined,
+        );
+        const expectedQualifierEntrantIds: string[] = [];
+        const unresolvedQualifierRefs: string[] = [];
+        for (const row of [...(sourceTable?.rows ?? [])].sort((a, b) => a.rank - b.rank)) {
+          const id = seeded.entrantIdByRef.get(row.entrant);
+          if (id === undefined) unresolvedQualifierRefs.push(row.entrant);
+          else expectedQualifierEntrantIds.push(id);
+        }
+        if (sourceTable === undefined || unresolvedQualifierRefs.length > 0) {
+          errors.push(
+            sourceTable === undefined
+              ? `tiny: stage "${stage1.ref}" declares a progression from "${stage0.ref}" but the pack carries ` +
+                `no expected.tables row for "${stage0.ref}" — there is no expected qualifier order to assert ` +
+                "against before confirming (D7)"
+              : `tiny: stage "${stage0.ref}"'s expected table names entrant ref(s) with no resolved id: ` +
+                `${unresolvedQualifierRefs.join(", ")}`,
+          );
+        } else {
+          log.info(
+            { sourceStage: stage0.ref, targetStage: stage1.ref, expected: expectedQualifierEntrantIds },
+            "tiny: advancing the progression-fed stage (B05 T3)",
+          );
+          // The SOURCE stage must be COMPLETE before `computeSeedProposal`
+          // will resolve its standings (409 SEEDING_SOURCE_INCOMPLETE
+          // otherwise) — nothing upstream of this block ever completes a
+          // stage, so this run does it here, once, immediately before
+          // proposing into the stage it feeds.
+          await completeStageCapture(base, s, sourceStageId, input.advanceTransport);
+
+          const advanceOutcome = await advanceStageSeeding({
+            base,
+            session: s,
+            stageId: targetStageId,
+            expectedQualifierEntrantIds,
+            ...(input.advanceTransport === undefined ? {} : { transport: input.advanceTransport }),
+          });
+          const qc = advanceOutcome.qualifierCheck;
+          oracles.push({
+            name: `advance: ${stage1.ref} seed proposal qualifiers`,
+            passed: qc.matched,
+            detail: qc.matched
+              ? `proposal qualifiers [${qc.actual.join(", ")}] match the pack's expected order`
+              : `proposal qualifiers [${qc.actual.join(", ")}] disagree with the pack's expected order ` +
+                `[${qc.expected.join(", ")}] — confirm/generate/complete were never called for "${stage1.ref}" (D7)`,
+          });
+          if (!qc.matched) {
+            errors.push(
+              `advance: ${stage1.ref}: seed proposal qualifiers [${qc.actual.join(", ")}] disagree with the ` +
+                `pack's expected order [${qc.expected.join(", ")}]`,
+            );
+          } else {
+            // The newly-confirmed stage's OWN stream(s), folded through the
+            // SAME single-event route T1 uses above — reusing that function
+            // is the acceptance bar (T3's brief: "the existing fold covers
+            // it", not a new folding primitive). Explicit `stageRef` match
+            // only: `division0` now has more than one stage, so the "absent
+            // means the division's only stage" fallback (T1's own block)
+            // does not apply here.
+            const stage1Streams = pack.streams.filter(
+              (st) => st.divisionRef === division0.ref && st.stageRef === stage1.ref,
+            );
+            if (stage1Streams.length > 0) {
+              const refIdByKey = new Map<string, string>([
+                ...seeded.entrantIdByRef,
+                ...seeded.personIdByRef,
+              ]);
+              const advSim = await simulateDivisionStreams({
+                base,
+                session: s,
+                streams: stage1Streams,
+                fixtureIdByKey: seeded.fixtureIdByKey,
+                refIdByKey,
+                ...(input.advanceTransport === undefined ? {} : { transport: input.advanceTransport }),
+              });
+              for (const finding of advSim.findings) {
+                errors.push(
+                  `advance: fixture ${finding.fixtureId} (stream ${finding.streamKey}) event #${finding.eventIndex}: ` +
+                    `${finding.code} (HTTP ${finding.status}) — ${finding.message}`,
+                );
+              }
+              log.info(
+                { events: advSim.eventsSent, ms: advSim.wallMs, eventsPerSecond: advSim.eventsPerSecond, path: "advance" },
+                "suite_simulated",
+              );
+            }
+
+            const completion = await completeStageCapture(
+              base,
+              s,
+              targetStageId,
+              input.advanceTransport,
+            );
+            // D1 — the finalRanks oracle: the pack's OWN expected order
+            // (`expected.finalRanks`, `PackExpectedFinalRanks` — the ONLY
+            // block that can assert a bracket's placement order) compared
+            // against the CAPTURED `complete` response. A mismatch renders
+            // BOTH sides, never just one.
+            const expectedFinalRanksRow = pack.expected.finalRanks.find(
+              (fr) => fr.divisionRef === division0.ref && fr.stageRef === stage1.ref,
+            );
+            if (expectedFinalRanksRow === undefined) {
+              errors.push(
+                `tiny: stage "${stage1.ref}" completed but the pack declares no expected.finalRanks row for it — ` +
+                  "there is nothing to compare the captured finalRanks against",
+              );
+            } else {
+              const expectedIds: string[] = [];
+              const unresolvedFinalRankRefs: string[] = [];
+              for (const ref of expectedFinalRanksRow.order) {
+                const id = seeded.entrantIdByRef.get(ref);
+                if (id === undefined) unresolvedFinalRankRefs.push(ref);
+                else expectedIds.push(id);
+              }
+              if (unresolvedFinalRankRefs.length > 0) {
+                errors.push(
+                  `tiny: stage "${stage1.ref}"'s expected.finalRanks names entrant ref(s) with no resolved id: ` +
+                    `${unresolvedFinalRankRefs.join(", ")}`,
+                );
+              } else {
+                const franksCheck = compareFinalRanks(expectedIds, completion.finalRanks);
+                oracles.push({
+                  name: `advance: ${stage1.ref} finalRanks`,
+                  passed: franksCheck.matched,
+                  detail: franksCheck.matched
+                    ? `captured finalRanks [${(franksCheck.actual ?? []).join(", ")}] match the pack's expected order`
+                    : `captured finalRanks [${franksCheck.actual === undefined ? "(absent — stage did not report complete)" : franksCheck.actual.join(", ")}] ` +
+                      `disagree with the pack's expected order [${franksCheck.expected.join(", ")}]`,
+                });
+                if (!franksCheck.matched) {
+                  errors.push(
+                    `advance: ${stage1.ref}: captured finalRanks ` +
+                      `[${franksCheck.actual === undefined ? "(absent)" : franksCheck.actual.join(", ")}] disagree with ` +
+                      `the pack's expected order [${franksCheck.expected.join(", ")}]`,
+                  );
+                }
+              }
+            }
+          }
+        }
       }
     }
 

@@ -27,6 +27,7 @@ import { runTinySuite, TINY_PACK_PATH } from "../suites/tiny.ts";
 // directory, so no two of them can disagree about what landed on the board.
 import { makeScheduleWorld } from "./_schedule-routes.ts";
 import { makeDivisionPhaseWorld } from "./_division-phase.ts";
+import { makeAdvanceRoutesWorld } from "./_advance-routes.ts";
 
 const silent = pino({ level: "silent" });
 
@@ -48,6 +49,11 @@ function fakeServer(opts: { statsPlayerGranted: boolean }): {
   const calls: RecordedCall[] = [];
   const dlsByDivisionId = new Map<string, boolean>();
   const legsByStageId = new Map<string, number>();
+  // B05 T3 — d-tiny now declares a second, non-league stage (s-playoff, a
+  // knockout fed from the league). `/generate` needs to know which shape to
+  // mint: this fake's own round-robin arithmetic assumes every stage is a
+  // league, which was true of every pack this file drove before this task.
+  const kindByStageId = new Map<string, string>();
   const divisionIdByStageId = new Map<string, string>();
   const fixtureDivisionId = new Map<string, string>();
   const fixtureOfficials = new Map<string, unknown[]>();
@@ -63,6 +69,17 @@ function fakeServer(opts: { statsPlayerGranted: boolean }): {
   // unconditionally. This file is not ABOUT the start step, so it only
   // answers `/start` and the re-read.
   const phase = makeDivisionPhaseWorld();
+  // B05 T3 — see `_advance-routes.ts`'s own header comment: EVERY
+  // `sql`-passing fake now reaches the advancement routes unconditionally,
+  // because `_tiny.json`'s own `s-playoff` always declares a `progression`.
+  // This file is not ABOUT advancement; it exists so the player-stats
+  // baseline assertions this file DOES cover stay green.
+  const advanceRoutes = makeAdvanceRoutesWorld({
+    getQualifiers: (stageId) => {
+      const divisionId = divisionIdByStageId.get(stageId);
+      return divisionId === undefined ? undefined : schedule.entrantsOfDivision(divisionId);
+    },
+  });
 
   const transport: ProbeTransport = {
     async signIn(_base, _s) {
@@ -113,10 +130,11 @@ function fakeServer(opts: { statsPlayerGranted: boolean }): {
       }
       if (method === "POST" && /^\/api\/v1\/divisions\/([^/]+)\/stages$/.test(routePath)) {
         const divisionId = routePath.split("/")[4]!;
-        const stagesBody = body as { config?: { legs?: number } }[];
+        const stagesBody = body as { kind?: string; config?: { legs?: number } }[];
         return stagesBody.map((st) => {
           const id = `stage-${++stageCounter}`;
           legsByStageId.set(id, (st.config?.legs as number | undefined) ?? 1);
+          kindByStageId.set(id, st.kind ?? "league");
           divisionIdByStageId.set(id, divisionId);
           schedule.addStage(id, divisionId);
           return { id };
@@ -124,13 +142,23 @@ function fakeServer(opts: { statsPlayerGranted: boolean }): {
       }
       if (method === "POST" && /^\/api\/v1\/stages\/[^/]+\/generate$/.test(routePath)) {
         const stageId = routePath.split("/")[4]!;
-        const legs = legsByStageId.get(stageId) ?? 1;
         const divisionId = divisionIdByStageId.get(stageId);
-        const fixtures = Array.from({ length: legs }, (_v, i) => {
-          const id = `fx-${++fixtureCounter}`;
-          if (divisionId !== undefined) fixtureDivisionId.set(id, divisionId);
-          return { id, ext_key: `rr-r${i + 1}-c1` };
-        });
+        // B05 T3 — a knockout `timing:"setup"` progression stage mints ONE
+        // TBD placeholder (`se-r0-i0`, `buildSingleElim`'s own id for a
+        // 2-slot single-elim bracket), never this fake's round-robin
+        // arithmetic — see `kindByStageId`'s own comment.
+        const fixtures =
+          kindByStageId.get(stageId) === "knockout"
+            ? [(() => {
+                const id = `fx-${++fixtureCounter}`;
+                if (divisionId !== undefined) fixtureDivisionId.set(id, divisionId);
+                return { id, ext_key: "se-r0-i0" };
+              })()]
+            : Array.from({ length: legsByStageId.get(stageId) ?? 1 }, (_v, i) => {
+                const id = `fx-${++fixtureCounter}`;
+                if (divisionId !== undefined) fixtureDivisionId.set(id, divisionId);
+                return { id, ext_key: `rr-r${i + 1}-c1` };
+              });
         schedule.addFixtures(stageId, fixtures);
         return { fixtures } as unknown as T;
       }
@@ -212,6 +240,10 @@ function fakeServer(opts: { statsPlayerGranted: boolean }): {
       // present. Checked FIRST: nothing below can be reached before this.
       const started = phase.handleStart(method, path);
       if (started !== undefined) return started;
+      // B05 T3 — the advancement routes, unconditionally whenever `sql` is
+      // present (see `_advance-routes.ts`'s own header comment).
+      const advanced = advanceRoutes.handle(method, path, body);
+      if (advanced !== undefined) return advanced;
       // B05 T2 — division B's own streams (`d-badminton`) fold through THIS
       // route unconditionally whenever `sql` is present, same gating as
       // division A's single-event fold below. This suite is not ABOUT the
@@ -321,6 +353,7 @@ describe("runTinySuite — B03 T6b player-stats baseline wiring", () => {
       // rather than falling back to a real `fetch()`.
       importTransport: transport,
       startTransport: transport,
+      advanceTransport: transport,
     });
 
     expect(report.gate).toBe("green");
@@ -375,6 +408,7 @@ describe("runTinySuite — B03 T6b player-stats baseline wiring", () => {
       // rather than falling back to a real `fetch()`.
       importTransport: transport,
       startTransport: transport,
+      advanceTransport: transport,
     });
 
     expect(report.gate).toBe("green");

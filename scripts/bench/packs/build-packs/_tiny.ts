@@ -280,6 +280,36 @@ const TINY_DIVISION: PackInput["divisions"][number] = {
       config: { legs: 3 },
       seeding: ["e-alpha", "e-bravo"],
     },
+    // B05 T3: a second stage, fed from the league by a REAL `progression`
+    // (not a hand-authored `.seeding` list, which s-league above uses) — the
+    // non-vacuous subject the propose->assert->confirm->generate->complete
+    // advancement flow (design doc D7) needs. `take: [{kind:"rankRange",
+    // from:1,to:2}]` pulls both of s-league's two ranks (there are only two
+    // entrants in the whole division, so this is the smallest possible
+    // knockout: one TBD fixture, `se-r0-i0` — buildSingleElim's own id for a
+    // 2-slot single-elim bracket, `scheduling/bracket.ts:170`, marked
+    // `isFinal` since `rounds===1`). `timing: "setup"` is what makes this
+    // stage's ONE fixture exist as a TBD placeholder from `seedSuite`'s own
+    // per-stage `/generate` loop (seed.ts:658-675) — the SAME "ALL stages'
+    // fixtures are generated at setup time" owner ruling `generateStage
+    // Fixtures`'s own header comment cites — so no NEW bench primitive is
+    // needed to create it; T3's `advance.ts` only has to seed real entrants
+    // into slots that already exist. `placement: "rank_order"` (not "snake"
+    // or "seeded_map") is the only legal placement for a single, ungrouped
+    // league source (progression.ts's own refusal: snake is for a
+    // multi-pool wave).
+    {
+      ref: "s-playoff",
+      seq: 2,
+      kind: "knockout",
+      name: "Playoff",
+      config: {},
+      progression: {
+        sources: [{ stage: "previous", take: [{ kind: "rankRange", from: 1, to: 2 }] }],
+        placement: "rank_order",
+        timing: "setup",
+      },
+    },
   ],
   // B04 T6 (design §7): BOTH scheduled divisions get one, and both are
   // scheduled. `_INDEX.md` recorded that `runTinySuite` drove
@@ -322,6 +352,7 @@ const TINY_STREAMS: NonNullable<PackInput["streams"]> = [
   {
     divisionRef: "d-tiny",
     fixtureExtKey: "rr-r1-c1",
+    stageRef: "s-league",
     home: "e-alpha",
     away: "e-bravo",
     provenance: "real",
@@ -333,6 +364,7 @@ const TINY_STREAMS: NonNullable<PackInput["streams"]> = [
   {
     divisionRef: "d-tiny",
     fixtureExtKey: "rr-r2-c1",
+    stageRef: "s-league",
     home: "e-bravo",
     away: "e-alpha",
     provenance: "reconstructed",
@@ -347,12 +379,36 @@ const TINY_STREAMS: NonNullable<PackInput["streams"]> = [
   {
     divisionRef: "d-tiny",
     fixtureExtKey: "rr-r3-c1",
+    stageRef: "s-league",
     home: "e-alpha",
     away: "e-bravo",
     provenance: "real",
     events: [
       { type: "core.start" },
       { type: "core.forfeit", payload: { by: "@e-bravo", reason: "retired hurt" } },
+    ],
+  },
+  // B05 T3 — the playoff final. `home`/`away` are declared here exactly as
+  // for every other stream (header note 9): the propose/confirm flow seeds
+  // rank 1 (e-alpha, the league's own winner) into `buildSingleElim`'s seat
+  // 1, which `entrantOfSeed`/`positions[0]` always resolves to `home`
+  // (scheduling/bracket.ts:171-172), so this is deterministic given the
+  // league table above, not a guess. A plain `generic.result` (no
+  // `generic.score` events) on purpose — this stream must not perturb
+  // TINY_LEADERBOARDS below, which is entirely derived from rr-r2-c1's own
+  // three `generic.score` events (B05 review: adding scoring events here
+  // would silently change an oracle two blocks away in a diff nobody would
+  // think to re-check).
+  {
+    divisionRef: "d-tiny",
+    fixtureExtKey: "se-r0-i0",
+    stageRef: "s-playoff",
+    home: "e-alpha",
+    away: "e-bravo",
+    provenance: "real",
+    events: [
+      { type: "core.start" },
+      { type: "generic.result", payload: { p1Score: 2, p2Score: 0 } },
     ],
   },
 ];
@@ -385,6 +441,18 @@ const TINY_MATCHES: NonNullable<PackInput["expected"]["matches"]> = [
       { entrant: "e-bravo", line: "L" },
     ],
   },
+  // B05 T3 — the playoff final: a clean regulation win for the league's own
+  // winner (e-alpha stays champion end to end, so TINY_CHAMPIONS below needs
+  // no change — see that block's own note).
+  {
+    divisionRef: "d-tiny",
+    fixtureExtKey: "se-r0-i0",
+    outcome: { kind: "win", winner: "e-alpha", loser: "e-bravo", method: "regulation" },
+    perSide: [
+      { entrant: "e-alpha", line: "2" },
+      { entrant: "e-bravo", line: "0" },
+    ],
+  },
 ];
 
 const TINY_TABLES: NonNullable<PackInput["expected"]["tables"]> = [
@@ -396,6 +464,18 @@ const TINY_TABLES: NonNullable<PackInput["expected"]["tables"]> = [
       { entrant: "e-bravo", rank: 2, played: 3, won: 0, drawn: 1, lost: 2, points: 1 },
     ],
   },
+];
+
+// B05 T3 (design doc D1) — s-playoff's full placement order, the subject
+// advance.ts's `complete` capture compares against. `expected.tables` is a
+// HARD ERROR on a bracket stage (validate-pack.ts's TABLE_STAGE_KINDS), so
+// this is the ONLY block that can assert a knockout's finish order — see
+// PackExpectedFinalRanks's own doc comment. e-alpha wins the final too, so
+// this agrees with TINY_CHAMPIONS' division-wide (no stageRef) champion —
+// not a checked consistency rule (that rule is stage-scoped-champion-only),
+// but true regardless and worth keeping true.
+const TINY_FINAL_RANKS: NonNullable<PackInput["expected"]["finalRanks"]> = [
+  { divisionRef: "d-tiny", stageRef: "s-playoff", order: ["e-alpha", "e-bravo"] },
 ];
 
 const TINY_CHAMPIONS: NonNullable<PackInput["expected"]["champions"]> = [
@@ -548,6 +628,20 @@ const TINY_ADAPTATIONS: PackInput["meta"]["adaptations"] = [
     what: "claimInvites[] carries two entries, one per division's own star (p-ana from d-tiny, p-cho from d-badminton) — minted, never accepted (B03 §5: \"the accept flow is B05's, seeding only mints invites\").",
     why: "Bench design §9 P2: \"pc_ claim invites for ~3 stars/suite\". Two is enough for _tiny to prove the mapping generalises across divisions without inflating a fixture whose whole point is staying small.",
     where: "claimInvites[]",
+  },
+  {
+    what:
+      "d-tiny gained a SECOND stage, s-playoff (kind: knockout, progression-fed from s-league, " +
+      "timing: setup), a fourth stream (se-r0-i0) and expected.finalRanks — B05 T3's non-vacuous " +
+      "subject for the propose->assert->confirm->generate->complete advancement flow, and the " +
+      "first pack stage anywhere that asserts a knockout's placement order rather than a table.",
+    why:
+      "B05's design doc (D1/D7) found every division in this pack single-stage, so an advancement " +
+      "layer built against it would have no subject and expected.finalRanks no value to compare " +
+      "(the exact vacuity B04 shipped one layer down). Two entrants keep it the smallest possible " +
+      "knockout: one TBD fixture (se-r0-i0, buildSingleElim's own id), generated at setup time by " +
+      "seedSuite's existing per-stage /generate loop, no new bench seeding primitive required.",
+    where: "divisions[0].stages[1], streams[3], expected.matches[3], expected.finalRanks",
   },
 ];
 
@@ -916,6 +1010,7 @@ export function buildTinyPack(): PackInput {
       matches: [...TINY_MATCHES, BADMINTON_MATCH],
       tables: [...TINY_TABLES, BADMINTON_TABLE],
       champions: TINY_CHAMPIONS,
+      finalRanks: TINY_FINAL_RANKS,
       leaderboards: TINY_LEADERBOARDS,
       suspensions: [],
       specials: TINY_SPECIALS,

@@ -25,6 +25,7 @@ import type { PlanEntitlementRow, PlanSql } from "../plan.ts";
 import { runTinySuite, TINY_PACK_PATH } from "../suites/tiny.ts";
 import { makeScheduleWorld } from "./_schedule-routes.ts";
 import { makeDivisionPhaseWorld } from "./_division-phase.ts";
+import { makeAdvanceRoutesWorld } from "./_advance-routes.ts";
 
 const silent = pino({ level: "silent" });
 
@@ -38,7 +39,15 @@ function slug(s: string): string {
   return s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
 }
 
-function fakeServer(opts: { conflictAt?: { extKey: string; expectedSeq: number } } = {}): {
+function fakeServer(
+  opts: {
+    conflictAt?: { extKey: string; expectedSeq: number };
+    /** B05 T3 regression — the seed-proposal answers with the WRONG order
+     *  (reversed), so D7's assertion should red and neither confirm,
+     *  generate nor the playoff's own stream fold should ever be attempted. */
+    reverseAdvanceQualifiers?: boolean;
+  } = {},
+): {
   transport: ProbeTransport;
   sql: PlanSql;
   calls: RecordedCall[];
@@ -46,6 +55,11 @@ function fakeServer(opts: { conflictAt?: { extKey: string; expectedSeq: number }
   const calls: RecordedCall[] = [];
   const dlsByDivisionId = new Map<string, boolean>();
   const legsByStageId = new Map<string, number>();
+  // B05 T3 — d-tiny now declares a second, non-league stage (s-playoff, a
+  // knockout fed from the league). `/generate` needs to know which shape to
+  // mint: this fake's own round-robin arithmetic assumes every stage is a
+  // league, which was true of every pack this file drove before this task.
+  const kindByStageId = new Map<string, string>();
   const divisionIdByStageId = new Map<string, string>();
   const fixtureDivisionId = new Map<string, string>();
   // B05 T2.5 (D9) — see `_division-phase.ts`'s own header comment: EVERY
@@ -64,6 +78,20 @@ function fakeServer(opts: { conflictAt?: { extKey: string; expectedSeq: number }
   let entitled = false;
 
   const schedule = makeScheduleWorld({ solverEngine: "optimized" });
+  // B05 T3 — see `_advance-routes.ts`'s own header comment: EVERY
+  // `sql`-passing fake now reaches the advancement routes unconditionally,
+  // because `_tiny.json`'s own `s-playoff` always declares a `progression`.
+  // This file is not ABOUT advancement; it exists so this file's OWN
+  // "clean fold, gate green" assertions stay green rather than reddening on
+  // an unmodeled route.
+  const advanceRoutes = makeAdvanceRoutesWorld({
+    getQualifiers: (stageId) => {
+      const divisionId = divisionIdByStageId.get(stageId);
+      if (divisionId === undefined) return undefined;
+      const entrants = schedule.entrantsOfDivision(divisionId);
+      return opts.reverseAdvanceQualifiers === true ? [...entrants].reverse() : entrants;
+    },
+  });
 
   const transport: ProbeTransport = {
     async signIn(_base, _s) {
@@ -114,10 +142,11 @@ function fakeServer(opts: { conflictAt?: { extKey: string; expectedSeq: number }
       }
       if (method === "POST" && /^\/api\/v1\/divisions\/([^/]+)\/stages$/.test(routePath)) {
         const divisionId = routePath.split("/")[4]!;
-        const stagesBody = body as { config?: { legs?: number } }[];
+        const stagesBody = body as { kind?: string; config?: { legs?: number } }[];
         return stagesBody.map((st) => {
           const id = `stage-${++stageCounter}`;
           legsByStageId.set(id, (st.config?.legs as number | undefined) ?? 1);
+          kindByStageId.set(id, st.kind ?? "league");
           divisionIdByStageId.set(id, divisionId);
           schedule.addStage(id, divisionId);
           return { id };
@@ -125,15 +154,26 @@ function fakeServer(opts: { conflictAt?: { extKey: string; expectedSeq: number }
       }
       if (method === "POST" && /^\/api\/v1\/stages\/[^/]+\/generate$/.test(routePath)) {
         const stageId = routePath.split("/")[4]!;
-        const legs = legsByStageId.get(stageId) ?? 1;
         const divisionId = divisionIdByStageId.get(stageId);
-        const fixtures = Array.from({ length: legs }, (_v, i) => {
-          const id = `fx-${++fixtureCounter}`;
-          if (divisionId !== undefined) fixtureDivisionId.set(id, divisionId);
-          const extKey = `rr-r${i + 1}-c1`;
-          fixtureExtKeyById.set(id, extKey);
-          return { id, ext_key: extKey };
-        });
+        // B05 T3 — a knockout `timing:"setup"` progression stage mints ONE
+        // TBD placeholder (`se-r0-i0`, `buildSingleElim`'s own id for a
+        // 2-slot single-elim bracket), never this fake's round-robin
+        // arithmetic — see `kindByStageId`'s own comment.
+        const fixtures =
+          kindByStageId.get(stageId) === "knockout"
+            ? [(() => {
+                const id = `fx-${++fixtureCounter}`;
+                if (divisionId !== undefined) fixtureDivisionId.set(id, divisionId);
+                fixtureExtKeyById.set(id, "se-r0-i0");
+                return { id, ext_key: "se-r0-i0" };
+              })()]
+            : Array.from({ length: legsByStageId.get(stageId) ?? 1 }, (_v, i) => {
+                const id = `fx-${++fixtureCounter}`;
+                if (divisionId !== undefined) fixtureDivisionId.set(id, divisionId);
+                const extKey = `rr-r${i + 1}-c1`;
+                fixtureExtKeyById.set(id, extKey);
+                return { id, ext_key: extKey };
+              });
         schedule.addFixtures(stageId, fixtures);
         return { fixtures } as unknown as T;
       }
@@ -200,6 +240,10 @@ function fakeServer(opts: { conflictAt?: { extKey: string; expectedSeq: number }
       // present. Checked FIRST: nothing below can be reached before this.
       const started = phase.handleStart(method, path);
       if (started !== undefined) return started;
+      // B05 T3 — the advancement routes, unconditionally whenever `sql` is
+      // present (see `_advance-routes.ts`'s own header comment).
+      const advanced = advanceRoutes.handle(method, path, body);
+      if (advanced !== undefined) return advanced;
       // B05 T2 — division B's own streams (`d-badminton`) fold through THIS
       // route unconditionally whenever `sql` is present, same gating as
       // division A's single-event fold this file is actually about. Handled
@@ -350,6 +394,7 @@ describe("runTinySuite — B05 T1 division-A stream fold wiring", () => {
       // `tiny-suite-import.test.ts`'s job.
       importTransport: transport,
       startTransport: transport,
+      advanceTransport: transport,
     });
 
     expect(report.gate).toBe("green");
@@ -377,11 +422,18 @@ describe("runTinySuite — B05 T1 division-A stream fold wiring", () => {
     );
     expect(firstStartIdx).toBeGreaterThan(-1);
     expect(firstDivisionAEventIdx).toBeGreaterThan(firstStartIdx);
-    // `_tiny.json`'s division A (`d-tiny`) declares 3 streams with 2, 5 and 2
-    // events — 9 total. Asserted against what the pack ACTUALLY sent (call
-    // count), never a constant typed into this test a second time.
+    // `_tiny.json`'s division A (`d-tiny`) league stage (`s-league`) declares
+    // 3 streams with 2, 5 and 2 events — 9 total, via T1's OWN fold
+    // (`report.simulation`, asserted below). B05 T3 ALSO folds `s-playoff`'s
+    // OWN single stream (2 events: core.start + generic.result) through this
+    // SAME `/fixtures/{id}/events` route — a SEPARATE call, reusing T1's
+    // fold function rather than a new one (the acceptance bar: the existing
+    // fold covers it) — so the RAW call count this fake recorded is 11
+    // across 4 fixtures, not 9 across 3; `report.simulation` itself stays
+    // scoped to T1's own 9, asserted against what the pack ACTUALLY sent
+    // (call count), never a constant typed into this test a second time.
     const eventCalls = divisionAEventCalls(calls);
-    expect(eventCalls).toHaveLength(9);
+    expect(eventCalls).toHaveLength(11);
     // And in strictly ascending expected_seq PER FIXTURE — grouped by path
     // (== fixture), each fixture's own sequence starts at 0 and increments.
     const byFixture = new Map<string, number[]>();
@@ -390,7 +442,7 @@ describe("runTinySuite — B05 T1 division-A stream fold wiring", () => {
       seqs.push((c.body as { expected_seq: number }).expected_seq);
       byFixture.set(c.path, seqs);
     }
-    expect(byFixture.size).toBe(3);
+    expect(byFixture.size).toBe(4);
     for (const seqs of byFixture.values()) {
       expect(seqs).toEqual(seqs.map((_v, i) => i));
     }
@@ -399,6 +451,10 @@ describe("runTinySuite — B05 T1 division-A stream fold wiring", () => {
     expect(report.simulation?.eventsSent).toBe(9);
     expect(report.simulation?.findings ?? []).toHaveLength(0);
     expect(report.timings.simMs).toBeDefined();
+    // B05 T3's own oracles — the advance step's qualifier proposal and the
+    // captured finalRanks both matched the pack's own expectations.
+    const advanceOracles = (report.oracles ?? []).filter((o) => o.name.startsWith("advance:"));
+    expect(advanceOracles.map((o) => o.passed)).toEqual([true, true]);
   });
 
   it("without `sql`, the fold never runs — no fixtures/events calls, no simulation section", async () => {
@@ -441,6 +497,7 @@ describe("runTinySuite — B05 T1 division-A stream fold wiring", () => {
       // `tiny-suite-import.test.ts`'s job.
       importTransport: transport,
       startTransport: transport,
+      advanceTransport: transport,
     });
 
     expect(report.gate).toBe("red");
@@ -457,5 +514,48 @@ describe("runTinySuite — B05 T1 division-A stream fold wiring", () => {
     const conflictedFixtureCalls = divisionAEventCalls(calls).filter((c) => c.path === conflictedFixturePath);
     const seqsOnConflictedFixture = conflictedFixtureCalls.map((c) => (c.body as { expected_seq: number }).expected_seq);
     expect(seqsOnConflictedFixture).toEqual([0, 1, 2]);
+  });
+
+  // B05 T3 (design doc D7) — the wiring-level regression: a wrong seed
+  // proposal reds the run, and NOTHING downstream of the assertion is ever
+  // attempted, at the `tiny.ts` wiring layer, not just inside
+  // `advanceStageSeeding` itself (`advance.test.ts` proves the function; this
+  // proves the SUITE actually stops on its answer rather than folding
+  // `s-playoff`'s own stream regardless).
+  it("D7 — a WRONG seed-proposal order reds the run, and the playoff's own fixture is NEVER scored", async () => {
+    const { transport, sql, calls } = fakeServer({ reverseAdvanceQualifiers: true });
+
+    const report = await runTinySuite({
+      base: "http://bench.example",
+      engine: "optimized",
+      keep: false,
+      log: silent,
+      cliEntry: "admin",
+      packPath: TINY_PACK_PATH,
+      transport,
+      sql,
+      probeTransport: transport,
+      simTransport: transport,
+      importTransport: transport,
+      startTransport: transport,
+      advanceTransport: transport,
+    });
+
+    expect(report.gate).toBe("red");
+    expect((report.errors ?? []).some((e) => e.includes("disagree with the pack's expected order"))).toBe(true);
+    const advanceOracle = (report.oracles ?? []).find((o) => o.name.includes("seed proposal qualifiers"));
+    expect(advanceOracle?.passed).toBe(false);
+    // No finalRanks oracle at all — completing the target stage never ran.
+    expect((report.oracles ?? []).some((o) => o.name.includes("finalRanks"))).toBe(false);
+    // The absence of the downstream CALLS, not just the absence of an
+    // oracle: confirm is never attempted at all, and `/complete` is called
+    // EXACTLY once — the SOURCE stage's own completion this wiring always
+    // makes BEFORE proposing (it is what satisfies SEEDING_SOURCE_INCOMPLETE)
+    // — never a second time for the TARGET stage.
+    expect(calls.some((c) => c.method === "POST" && /\/seed-proposal\/confirm$/.test(c.path))).toBe(false);
+    expect(calls.filter((c) => c.method === "POST" && /\/complete$/.test(c.path))).toHaveLength(1);
+    // 9 events total (T1's league fold only) — the playoff's own 2-event
+    // stream was never sent.
+    expect(divisionAEventCalls(calls)).toHaveLength(9);
   });
 });

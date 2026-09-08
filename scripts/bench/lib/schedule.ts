@@ -153,6 +153,12 @@ interface PutSettingsOut {
 interface WireFixture {
   id: string;
   division_id?: string;
+  // B05 T3 — present on the real wire (`schemas.ts:1093`, inside the
+  // `S.Fixture` range this interface already narrows) but never read before
+  // this task: every division `runScheduleLayer` ever fetched a board for
+  // had exactly one stage, so `division_id` alone was enough to scope
+  // `GET /divisions/{id}/fixtures`'s rows. See its own read site's comment.
+  stage_id?: string | null;
   round_no?: number | null;
   pool_id?: string | null;
   ext_key?: string | null;
@@ -945,11 +951,24 @@ async function runDivision(
     outcome.warnKindTally = tallyWarnKinds(conflicts);
 
     // --- Step 7: FETCH the board -------------------------------------------
-    const after = await t.request<readonly WireFixture[]>(
+    const afterAllStages = await t.request<readonly WireFixture[]>(
       base,
       s,
       `/api/v1/divisions/${division.divisionId}/fixtures`,
     );
+    // B05 T3 — `GET /divisions/{id}/fixtures` is DIVISION-scoped (there is no
+    // per-stage listing route), and a division can now legitimately carry a
+    // SECOND stage this walk was never asked to schedule (a `timing:"setup"`
+    // progression stage, generated as a TBD placeholder at pack-setup time —
+    // see suites/tiny.ts's own "declares N stages and only stage0 is
+    // scheduled" warning). Filtered to THIS stage before it becomes `board`,
+    // or that other stage's own never-scheduled fixture reads as an unplaced
+    // one on a board this walk never touched, red-ing `judgeDivision`'s
+    // `unplacedCount > 0` trigger for a fixture nobody here failed to place.
+    // A no-op filter on every single-stage division (every pack before this
+    // task): `stage_id` there is the SAME for every row, matching what
+    // `after` used to contain wholesale.
+    const after = afterAllStages.filter((f) => f.stage_id === division.stageId);
     const venues = await t.request<readonly WireVenue[]>(base, s, `/api/v1/orgs/${input.orgId}/venues`);
     board = {
       divisionId: division.divisionId,

@@ -25,6 +25,7 @@ import type { PlanEntitlementRow, PlanSql } from "../plan.ts";
 import { runTinySuite, TINY_PACK_PATH } from "../suites/tiny.ts";
 import { makeScheduleWorld } from "./_schedule-routes.ts";
 import { makeDivisionPhaseWorld } from "./_division-phase.ts";
+import { makeAdvanceRoutesWorld } from "./_advance-routes.ts";
 
 const silent = pino({ level: "silent" });
 
@@ -46,6 +47,11 @@ function fakeServer(opts: { refuseImportWith?: { status: number; code: string; m
   const calls: RecordedCall[] = [];
   const dlsByDivisionId = new Map<string, boolean>();
   const legsByStageId = new Map<string, number>();
+  // B05 T3 — d-tiny now declares a second, non-league stage (s-playoff, a
+  // knockout fed from the league). `/generate` needs to know which shape to
+  // mint: this fake's own round-robin arithmetic assumes every stage is a
+  // league, which was true of every pack this file drove before this task.
+  const kindByStageId = new Map<string, string>();
   const divisionIdByStageId = new Map<string, string>();
   const fixtureDivisionId = new Map<string, string>();
   const fixtureExtKeyById = new Map<string, string>();
@@ -63,6 +69,18 @@ function fakeServer(opts: { refuseImportWith?: { status: number; code: string; m
   // this file's own "clean fold" assertions a real regression against the
   // start step being wired in.
   const phase = makeDivisionPhaseWorld();
+  // B05 T3 — see `_advance-routes.ts`'s own header comment: EVERY
+  // `sql`-passing fake now reaches the advancement routes unconditionally,
+  // because `_tiny.json`'s own `s-playoff` always declares a `progression`.
+  // This file is not ABOUT advancement; it exists so this file's OWN
+  // "clean fold, gate green" assertions stay green rather than reddening on
+  // an unmodeled route.
+  const advanceRoutes = makeAdvanceRoutesWorld({
+    getQualifiers: (stageId) => {
+      const divisionId = divisionIdByStageId.get(stageId);
+      return divisionId === undefined ? undefined : schedule.entrantsOfDivision(divisionId);
+    },
+  });
 
   const transport: ProbeTransport = {
     async signIn(_base, _s) {
@@ -113,10 +131,11 @@ function fakeServer(opts: { refuseImportWith?: { status: number; code: string; m
       }
       if (method === "POST" && /^\/api\/v1\/divisions\/([^/]+)\/stages$/.test(routePath)) {
         const divisionId = routePath.split("/")[4]!;
-        const stagesBody = body as { config?: { legs?: number } }[];
+        const stagesBody = body as { kind?: string; config?: { legs?: number } }[];
         return stagesBody.map((st) => {
           const id = `stage-${++stageCounter}`;
           legsByStageId.set(id, (st.config?.legs as number | undefined) ?? 1);
+          kindByStageId.set(id, st.kind ?? "league");
           divisionIdByStageId.set(id, divisionId);
           schedule.addStage(id, divisionId);
           return { id };
@@ -124,15 +143,26 @@ function fakeServer(opts: { refuseImportWith?: { status: number; code: string; m
       }
       if (method === "POST" && /^\/api\/v1\/stages\/[^/]+\/generate$/.test(routePath)) {
         const stageId = routePath.split("/")[4]!;
-        const legs = legsByStageId.get(stageId) ?? 1;
         const divisionId = divisionIdByStageId.get(stageId);
-        const fixtures = Array.from({ length: legs }, (_v, i) => {
-          const id = `fx-${++fixtureCounter}`;
-          if (divisionId !== undefined) fixtureDivisionId.set(id, divisionId);
-          const extKey = `rr-r${i + 1}-c1`;
-          fixtureExtKeyById.set(id, extKey);
-          return { id, ext_key: extKey };
-        });
+        // B05 T3 — a knockout `timing:"setup"` progression stage mints ONE
+        // TBD placeholder (`se-r0-i0`, `buildSingleElim`'s own id for a
+        // 2-slot single-elim bracket), never this fake's round-robin
+        // arithmetic — see `kindByStageId`'s own comment.
+        const fixtures =
+          kindByStageId.get(stageId) === "knockout"
+            ? [(() => {
+                const id = `fx-${++fixtureCounter}`;
+                if (divisionId !== undefined) fixtureDivisionId.set(id, divisionId);
+                fixtureExtKeyById.set(id, "se-r0-i0");
+                return { id, ext_key: "se-r0-i0" };
+              })()]
+            : Array.from({ length: legsByStageId.get(stageId) ?? 1 }, (_v, i) => {
+                const id = `fx-${++fixtureCounter}`;
+                if (divisionId !== undefined) fixtureDivisionId.set(id, divisionId);
+                const extKey = `rr-r${i + 1}-c1`;
+                fixtureExtKeyById.set(id, extKey);
+                return { id, ext_key: extKey };
+              });
         schedule.addFixtures(stageId, fixtures);
         return { fixtures } as unknown as T;
       }
@@ -199,6 +229,10 @@ function fakeServer(opts: { refuseImportWith?: { status: number; code: string; m
       // present. Checked FIRST: nothing below can be reached before this.
       const started = phase.handleStart(method, path);
       if (started !== undefined) return started;
+      // B05 T3 — the advancement routes, unconditionally whenever `sql` is
+      // present (see `_advance-routes.ts`'s own header comment).
+      const advanced = advanceRoutes.handle(method, path, body);
+      if (advanced !== undefined) return advanced;
       // B05 T2's own addition: division B's batch-import fold. Refuses the
       // WHOLE call when `opts.refuseImportWith` is set (so a wiring test can
       // prove a call-level refusal reaches `report.errors`/`report.gate`,
@@ -321,6 +355,7 @@ describe("runTinySuite — B05 T2 division-B stream fold wiring", () => {
       simTransport: transport,
       importTransport: transport,
       startTransport: transport,
+      advanceTransport: transport,
     });
 
     expect(report.gate).toBe("green");
@@ -391,6 +426,7 @@ describe("runTinySuite — B05 T2 division-B stream fold wiring", () => {
       simTransport: transport,
       importTransport: transport,
       startTransport: transport,
+      advanceTransport: transport,
     });
 
     expect(report.gate).toBe("red");

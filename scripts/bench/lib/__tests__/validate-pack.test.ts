@@ -114,12 +114,17 @@ const TINY = { expectedSuite: "_tiny" } as const;
 const UNIT = { expectedSuite: "_unit" } as const;
 
 /**
- * `_tiny` declares two leaderboards and a champion, and stage 0 derives
- * NEITHER — so every green `_tiny` run carries exactly these two warnings.
+ * `_tiny` declares two leaderboards, a champion, and (B05 T3 — d-tiny's
+ * second stage, s-playoff) a finalRanks order, and stage 0 derives NONE of
+ * them — so every green `_tiny` run carries exactly these three warnings.
  * Spelled out rather than filtered away, because the whole point of the
  * not-derived warnings is that a reader sees them.
  */
-const TINY_NOT_DERIVED = ["leaderboards.not_derived", "champions.not_derived"];
+const TINY_NOT_DERIVED = [
+  "leaderboards.not_derived",
+  "champions.not_derived",
+  "finalRanks.not_derived",
+];
 
 /** `genericPack` declares a league stage and no `expected.tables`, so stage 0
  *  says the stage's points and tie order are asserted by nothing. */
@@ -309,22 +314,27 @@ describe("validatePack — _tiny.json, the shared fixture", () => {
       expect.stringContaining(
         "1 declared expected.champions entry is NOT checked offline",
       ),
+      // B05 T3 — d-tiny's second stage, s-playoff.
+      expect.stringContaining(
+        "1 declared expected.finalRanks entry is NOT checked offline",
+      ),
     ]);
   });
 
   it("reports the provenance split per division and overall", () => {
     const result = validatePack(tiny(), TINY);
-    // d-tiny: two `real` streams and one `reconstructed`. d-badminton (B03
-    // T5): one `reconstructed` stream (`reconstructSetBasedStream`, folded
-    // through the real generator). Overall sums both divisions.
+    // d-tiny: THREE `real` streams (B05 T3 added the playoff final,
+    // provenance "real") and one `reconstructed`. d-badminton (B03 T5): one
+    // `reconstructed` stream (`reconstructSetBasedStream`, folded through the
+    // real generator). Overall sums both divisions.
     expect(result.provenance.overall).toEqual({
-      real: 2,
+      real: 3,
       reconstructed: 2,
       synthetic: 0,
-      total: 4,
+      total: 5,
     });
     expect(result.provenance.byDivision).toEqual({
-      "d-tiny": { real: 2, reconstructed: 1, synthetic: 0, total: 3 },
+      "d-tiny": { real: 3, reconstructed: 1, synthetic: 0, total: 4 },
       "d-badminton": { real: 0, reconstructed: 1, synthetic: 0, total: 1 },
       // d-registration (B03r tasks 9+10) declares no streams at all — its
       // split is present and zeroed, same as "gives every declared division
@@ -660,14 +670,15 @@ describe("validatePack — provenance", () => {
     (pack.streams[1] as TinyStream).provenance = "synthetic";
     const result = validatePack(pack, TINY);
     expectClean(result, TINY_NOT_DERIVED);
-    // d-tiny's two `real` streams, the mutated `synthetic` one, and
-    // d-badminton's own `reconstructed` stream (B03 T5) — untouched by this
-    // mutation, since it targets `pack.streams[1]`, d-tiny's own.
+    // d-tiny's THREE `real` streams (B05 T3 added the playoff final), the
+    // mutated `synthetic` one, and d-badminton's own `reconstructed` stream
+    // (B03 T5) — untouched by this mutation, since it targets
+    // `pack.streams[1]`, d-tiny's own.
     expect(result.provenance.overall).toEqual({
-      real: 2,
+      real: 3,
       reconstructed: 1,
       synthetic: 1,
-      total: 4,
+      total: 5,
     });
   });
 });
@@ -1191,13 +1202,25 @@ describe("validatePack — the limits stage 0 declares", () => {
 
   it("cannot bind streams to a stage in a MULTI-STAGE division, and says so", () => {
     const pack = tiny();
+    // B05 T3 gave d-tiny a real second stage (s-playoff, seq 2) whose own
+    // streams declare an explicit `stageRef` — so a THIRD stage alone no
+    // longer reproduces "cannot bind": every d-tiny stream now resolves
+    // fine on its own declared ref. `seq: 3` avoids colliding with
+    // s-playoff's seq 2 (PackSchema refuses a duplicate stage seq outright,
+    // a schema-level error this test is not about), and clearing every
+    // league stream's OWN `stageRef` recreates the ambiguity this test
+    // exists to prove: a stream naming no stage cannot be resolved once its
+    // division has more than one.
     pack.divisions[0]!.stages.push({
       ref: "s-ko",
-      seq: 2,
+      seq: 3,
       kind: "knockout",
       name: "Knockout",
       config: {},
     });
+    for (const stream of pack.streams) {
+      if (stream.divisionRef === "d-tiny") delete (stream as { stageRef?: string }).stageRef;
+    }
     const result = validatePack(pack, TINY);
     expect(errors(result.findings)).toEqual([]);
     expect(result.ok).toBe(true);
@@ -2028,6 +2051,10 @@ describe("validatePack — the oracles it does NOT derive say so", () => {
     const pack = tiny();
     pack.expected.leaderboards = [];
     pack.expected.champions = [];
+    // B05 T3 — `_tiny.json` now declares its own expected.finalRanks
+    // (d-tiny/s-playoff); cleared here too so this test still proves silence
+    // on an EMPTY block rather than silently stopping being about finalRanks.
+    (pack.expected as Record<string, unknown>)["finalRanks"] = [];
     expectClean(validatePack(pack, TINY), []);
   });
 
@@ -2052,6 +2079,11 @@ describe("validatePack — the oracles it does NOT derive say so", () => {
 
   it("warns for finalRanks — a bracket's placement order is the product's answer, not the fold's", () => {
     const pack = tiny();
+    // B05 T3 — `_tiny.json` now declares its OWN finalRanks entry
+    // (d-tiny/s-playoff, already covered by TINY_NOT_DERIVED below); this
+    // REPLACES it with a different one (same count, 1, so the warning's own
+    // count assertion below is unaffected) to keep proving the block is
+    // reachable independent of which stage it names.
     (pack.expected as Record<string, unknown>)["finalRanks"] = [
       {
         divisionRef: "d-tiny",
@@ -2063,7 +2095,7 @@ describe("validatePack — the oracles it does NOT derive say so", () => {
     // The block is REACHABLE and the warning names its count and its owner —
     // a shape the schema accepts and stage 0 never mentions is the inert seam
     // this warning channel exists to prevent.
-    expectClean(result, [...TINY_NOT_DERIVED, "finalRanks.not_derived"]);
+    expectClean(result, TINY_NOT_DERIVED);
     const found = warnings(result.findings).find(
       (f) => f.code === "finalRanks.not_derived",
     );

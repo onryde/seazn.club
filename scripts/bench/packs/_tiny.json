@@ -47,6 +47,29 @@
             "e-alpha",
             "e-bravo"
           ]
+        },
+        {
+          "ref": "s-playoff",
+          "seq": 2,
+          "kind": "knockout",
+          "name": "Playoff",
+          "config": {},
+          "progression": {
+            "sources": [
+              {
+                "stage": "previous",
+                "take": [
+                  {
+                    "kind": "rankRange",
+                    "from": 1,
+                    "to": 2
+                  }
+                ]
+              }
+            ],
+            "placement": "rank_order",
+            "timing": "setup"
+          }
         }
       ],
       "scheduleConfig": {
@@ -309,6 +332,7 @@
     {
       "divisionRef": "d-tiny",
       "fixtureExtKey": "rr-r1-c1",
+      "stageRef": "s-league",
       "home": "e-alpha",
       "away": "e-bravo",
       "provenance": "real",
@@ -328,6 +352,7 @@
     {
       "divisionRef": "d-tiny",
       "fixtureExtKey": "rr-r2-c1",
+      "stageRef": "s-league",
       "home": "e-bravo",
       "away": "e-alpha",
       "provenance": "reconstructed",
@@ -367,6 +392,7 @@
     {
       "divisionRef": "d-tiny",
       "fixtureExtKey": "rr-r3-c1",
+      "stageRef": "s-league",
       "home": "e-alpha",
       "away": "e-bravo",
       "provenance": "real",
@@ -379,6 +405,26 @@
           "payload": {
             "by": "@e-bravo",
             "reason": "retired hurt"
+          }
+        }
+      ]
+    },
+    {
+      "divisionRef": "d-tiny",
+      "fixtureExtKey": "se-r0-i0",
+      "stageRef": "s-playoff",
+      "home": "e-alpha",
+      "away": "e-bravo",
+      "provenance": "real",
+      "events": [
+        {
+          "type": "core.start"
+        },
+        {
+          "type": "generic.result",
+          "payload": {
+            "p1Score": 2,
+            "p2Score": 0
           }
         }
       ]
@@ -1005,6 +1051,26 @@
         ]
       },
       {
+        "divisionRef": "d-tiny",
+        "fixtureExtKey": "se-r0-i0",
+        "outcome": {
+          "kind": "win",
+          "winner": "e-alpha",
+          "loser": "e-bravo",
+          "method": "regulation"
+        },
+        "perSide": [
+          {
+            "entrant": "e-alpha",
+            "line": "2"
+          },
+          {
+            "entrant": "e-bravo",
+            "line": "0"
+          }
+        ]
+      },
+      {
         "divisionRef": "d-badminton",
         "fixtureExtKey": "rr-r1-c1",
         "outcome": {
@@ -1079,6 +1145,16 @@
       {
         "divisionRef": "d-tiny",
         "entrant": "e-alpha"
+      }
+    ],
+    "finalRanks": [
+      {
+        "divisionRef": "d-tiny",
+        "stageRef": "s-playoff",
+        "order": [
+          "e-alpha",
+          "e-bravo"
+        ]
       }
     ],
     "leaderboards": [
@@ -1247,6 +1323,11 @@
         "what": "claimInvites[] carries two entries, one per division's own star (p-ana from d-tiny, p-cho from d-badminton) — minted, never accepted (B03 §5: \"the accept flow is B05's, seeding only mints invites\").",
         "why": "Bench design §9 P2: \"pc_ claim invites for ~3 stars/suite\". Two is enough for _tiny to prove the mapping generalises across divisions without inflating a fixture whose whole point is staying small.",
         "where": "claimInvites[]"
+      },
+      {
+        "what": "d-tiny gained a SECOND stage, s-playoff (kind: knockout, progression-fed from s-league, timing: setup), a fourth stream (se-r0-i0) and expected.finalRanks — B05 T3's non-vacuous subject for the propose->assert->confirm->generate->complete advancement flow, and the first pack stage anywhere that asserts a knockout's placement order rather than a table.",
+        "why": "B05's design doc (D1/D7) found every division in this pack single-stage, so an advancement layer built against it would have no subject and expected.finalRanks no value to compare (the exact vacuity B04 shipped one layer down). Two entrants keep it the smallest possible knockout: one TBD fixture (se-r0-i0, buildSingleElim's own id), generated at setup time by seedSuite's existing per-stage /generate loop, no new bench seeding primitive required.",
+        "where": "divisions[0].stages[1], streams[3], expected.matches[3], expected.finalRanks"
       },
       {
         "what": "d-registration declares two ordinary-shaped entrants[] rows (e-reg-priya, e-reg-sami) that a live run NEVER creates over HTTP — they exist only to satisfy PackSchema's checkEntrantDivisions minimum (every division needs >=2 declared entrants, with no carve-out for a registration-only division).",
