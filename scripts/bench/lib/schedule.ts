@@ -969,6 +969,22 @@ async function runDivision(
     // task): `stage_id` there is the SAME for every row, matching what
     // `after` used to contain wholesale.
     const after = afterAllStages.filter((f) => f.stage_id === division.stageId);
+    // The filter's failure mode is SILENT and vacuous, so it is checked rather
+    // than trusted: `S.Fixture` (`api-v1/schemas.ts:1091-1093`) declares
+    // `stage_id` REQUIRED, but this interface types it optional, and if the
+    // field ever stopped arriving every row would compare `undefined !==
+    // stageId` and the board would come back EMPTY — no fixtures, therefore no
+    // unplaced fixtures and no conflicts, therefore a clean judgement over
+    // nothing at all. An empty result from a non-empty fetch is never a real
+    // board here: this walk just scheduled this stage.
+    if (afterAllStages.length > 0 && after.length === 0) {
+      throw new Error(
+        `schedule: the board fetch for division ${division.divisionRef} returned ` +
+          `${afterAllStages.length} fixture(s) but none carried stage_id ` +
+          `${division.stageId} — refusing to judge an empty board (a missing ` +
+          `stage_id on the wire would otherwise read as a clean scheduling run)`,
+      );
+    }
     const venues = await t.request<readonly WireVenue[]>(base, s, `/api/v1/orgs/${input.orgId}/venues`);
     board = {
       divisionId: division.divisionId,

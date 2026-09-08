@@ -452,6 +452,53 @@ function layer(over: Partial<ScheduleLayerInput> & { transport: SeedTransport })
 // The engine assertion — design §2.1, the whole point of `--engine`
 // ---------------------------------------------------------------------------
 
+describe("runScheduleLayer — the stage filter cannot empty a board silently", () => {
+  // T3 scoped the board fetch to the stage being scheduled, because a division
+  // can now carry a second, never-scheduled stage whose TBD fixture would read
+  // as unplaced. The filter compares `stage_id`, which `WireFixture` types as
+  // OPTIONAL — so if that field ever stopped arriving, every row would fail the
+  // comparison, the board would be empty, and an empty board has no unplaced
+  // fixtures and no conflicts: a clean judgement over nothing. This drives that
+  // exact state, which no pack can produce on its own.
+  it("reds when every fetched row carries a foreign stage_id, instead of judging an empty board", async () => {
+    const { transport } = fakeTransport({
+      divisions: {
+        "div-a": {
+          fixturesBefore: [
+            fx({ id: "f1", scheduled_at: "2099-01-01T09:00:00.000Z", court_id: "court-1" }),
+            fx({ id: "f2", scheduled_at: "2099-01-01T10:00:00.000Z", court_id: "court-2" }),
+          ],
+          fixturesAfter: [
+            fx({ id: "f1", scheduled_at: "2099-01-01T09:00:00.000Z", court_id: "court-1" }),
+            fx({ id: "f2", scheduled_at: "2099-01-01T10:00:00.000Z", court_id: "court-2" }),
+          ],
+        },
+      },
+    });
+    const masked: SeedTransport = {
+      signIn: transport.signIn.bind(transport),
+      async request<T>(base: string, s: Session, reqPath: string, opts?: RequestOptions): Promise<T> {
+        const out = await transport.request<T>(base, s, reqPath, opts);
+        const method = opts?.method ?? "GET";
+        if (method === "GET" && /^\/api\/v1\/divisions\/[^/]+\/fixtures$/.test(reqPath) && Array.isArray(out)) {
+          return (out as readonly Record<string, unknown>[]).map((f) => ({
+            ...f,
+            stage_id: "stage-belonging-to-nobody",
+          })) as T;
+        }
+        return out;
+      },
+    };
+
+    const r = await runScheduleLayer(layer({ transport: masked, engine: "optimized" }));
+
+    expect(r.outcomes[0].errors.join(" ")).toMatch(/refusing to judge an empty board/i);
+    // And specifically NOT the shape this guard exists to prevent: a clean
+    // verdict with nothing behind it.
+    expect(r.outcomes[0].errors.length).toBeGreaterThan(0);
+  });
+});
+
 describe("runScheduleLayer — the engine assertion", () => {
   it("asserts the engine that actually ran and reds on a silent greedy fallback", async () => {
     const { transport } = fakeTransport({
