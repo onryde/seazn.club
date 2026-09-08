@@ -65,6 +65,12 @@ function fakeServer(
      *  an empty `actual` against a non-empty `expected.tables` row must red,
      *  never vacuously pass. */
     emptyBadmintonStandings?: boolean;
+    /** B05 T5a review MINOR — `GET /divisions/{id}/stats/players` answers
+     *  `d-tiny`'s division with ZERO rows (the same empty shape
+     *  `oracle.test.ts`'s own unit test uses) instead of this fake's real
+     *  live tally, proving `compareLeaderboard`'s empty-case discipline
+     *  through the WIRING — symmetric with `emptyBadmintonStandings` above. */
+    emptyLeaderboard?: boolean;
   } = {},
 ): {
   transport: ProbeTransport;
@@ -159,6 +165,9 @@ function fakeServer(
     // produced, not a constant that could never disagree with it.
     getDivisionPlayerStats: (divisionId) => {
       if (divisionNameById.get(divisionId) !== "Tiny") return undefined;
+      if (opts.emptyLeaderboard === true) {
+        return { metrics: [], rows: [], requires_detailed_scoring: true };
+      }
       return {
         metrics: [
           { key: "scores", label: "Scores" },
@@ -697,6 +706,47 @@ describe("runTinySuite — B05 T1 division-A stream fold wiring", () => {
     expect(tableOracles.map((o) => o.passed)).toEqual([true, false]);
     expect(report.gate).toBe("red");
     expect((report.errors ?? []).some((e) => e.includes("d-badminton/s-badminton-league"))).toBe(true);
+  });
+
+  // B05 T5a review MINOR — `compareLeaderboard`'s own empty-case discipline
+  // (`oracle.test.ts`: "the EMPTY set: an empty actual leaderboard against
+  // non-empty expected reds every entry, never vacuously") is unit-tested
+  // but had no WIRED equivalent, asymmetric with standings' own empty-case
+  // wiring proof just above. `GET /divisions/{id}/stats/players` answers
+  // `d-tiny`'s division with `{metrics:[],rows:[],requires_detailed_scoring:
+  // true}` — the SAME empty shape the unit test uses — in place of this
+  // fake's real live tally, against the pack's own non-empty
+  // `expected.leaderboards` rows.
+  it("B05 T5a — an EMPTY leaderboard reds the wired comparator, never vacuously (symmetric with standings' empty case)", async () => {
+    const { transport, sql } = fakeServer({ emptyLeaderboard: true });
+
+    const report = await runTinySuite({
+      base: "http://bench.example",
+      engine: "optimized",
+      keep: false,
+      log: silent,
+      cliEntry: "admin",
+      packPath: TINY_PACK_PATH,
+      transport,
+      sql,
+      probeTransport: transport,
+      simTransport: transport,
+      importTransport: transport,
+      startTransport: transport,
+      advanceTransport: transport,
+      oracleTransport: transport,
+    });
+
+    const leaderboardOracles = (report.oracles ?? []).filter((o) => o.name.startsWith("oracle: d-tiny leaderboard"));
+    expect(leaderboardOracles.map((o) => o.name)).toEqual([
+      "oracle: d-tiny leaderboard (scores)",
+      "oracle: d-tiny leaderboard (points)",
+    ]);
+    // Every entry reds against the empty actual — never a vacuous pass just
+    // because there was nothing to fetch.
+    expect(leaderboardOracles.map((o) => o.passed)).toEqual([false, false]);
+    expect(report.gate).toBe("red");
+    expect((report.errors ?? []).some((e) => e.includes("d-tiny/scores") || e.includes("leaderboard"))).toBe(true);
   });
 
   it("B05 T4 — the runtime oracle is a REAL wire read, not an inert restatement: a reversed re-read standings order reds the run", async () => {
