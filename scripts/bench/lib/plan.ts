@@ -7,6 +7,18 @@
 // entitlements v18 W1 is `requiresDlsEntitlement` (cricket.dls) — the old
 // fidelity-band gate this file's ancestors might have expected is deleted.
 //
+// BOTH OF THOSE ARE HISTORY, corrected 2026-09-08 (B05). There is no
+// scoring-door refusal left to unblock: SCORING IS FREE by owner ruling
+// (V390__scoring_free.sql, ruled 2026-08-30; restated 2026-09-08, "we made
+// all scoring is free"), and `V393__entitlements_v18.sql:63-70` grants
+// `cricket.dls` on `community` — the plan a subscription-less org resolves
+// to — so `requiresDlsEntitlement` still fires and `requireFeature` simply
+// never throws. This file's plan flip now exists for `officials.auto` and
+// `stats.player`, which ARE still sold; `lib/dls-gate.ts`'s header records
+// the whole reversal, including why manufacturing a refusal with an
+// `org_entitlement_overrides` deny was considered and rejected. Do not
+// restore a scoring paywall anywhere on the strength of an old comment here.
+//
 // ---------------------------------------------------------------------------
 // The precedent this hand-copies: scripts/smoke.ts's `setPlan` /
 // `bustOrgEntitlements` (smoke.ts:17007-17043 / :16952+), read directly, not

@@ -14,6 +14,8 @@ import {
   chooseGrantingPlan,
   chooseGrantingPlanForCapabilities,
   planGrants,
+  paywalledOnFreePlan,
+  FREE_PLAN_KEY,
   provisionPlan,
   type PlanCandidateInfo,
   type PlanEntitlementRow,
@@ -340,6 +342,57 @@ describe("planGrants", () => {
     // opinion", never "granted". Only `=== true` is a real grant.
     const withNull: PlanEntitlementRow[] = [{ plan_key: "enterprise", bool_value: null }];
     expect(planGrants(withNull, "enterprise")).toBe(false);
+  });
+});
+
+describe("paywalledOnFreePlan", () => {
+  it("true only when the free plan lacks the grant AND some other plan has it", () => {
+    // The live shape of a key that is still SOLD: `officials.auto` —
+    // V393__entitlements_v18.sql:84 grants it to `pro`, `community` gets no
+    // row at all.
+    expect(paywalledOnFreePlan([{ plan_key: "pro", bool_value: true }])).toBe(true);
+    // An explicit `false` on the free plan reads the same as no row here.
+    expect(
+      paywalledOnFreePlan([
+        { plan_key: FREE_PLAN_KEY, bool_value: false },
+        { plan_key: "pro", bool_value: true },
+      ]),
+    ).toBe(true);
+  });
+
+  it("false once the free plan grants it — the direction the product has already moved", () => {
+    // `cricket.dls` today: V393:63-70 puts it on `community`. A bench that
+    // still called this a paywall would assert a refusal no customer can hit,
+    // which is exactly the stale premise B05 repaired.
+    expect(
+      paywalledOnFreePlan([
+        { plan_key: FREE_PLAN_KEY, bool_value: true },
+        { plan_key: "pro", bool_value: true },
+      ]),
+    ).toBe(false);
+  });
+
+  it("false when NOTHING grants it — a key nobody sells is dead, not gated", () => {
+    // Without this half, a feature_key deleted from the matrix (V390 did
+    // exactly that to the three fidelity keys) would read as "still behind a
+    // paywall" and send the probe knocking on a gate that cannot refuse.
+    expect(paywalledOnFreePlan([])).toBe(false);
+    expect(
+      paywalledOnFreePlan([
+        { plan_key: FREE_PLAN_KEY, bool_value: false },
+        { plan_key: "pro", bool_value: false },
+      ]),
+    ).toBe(false);
+    // A null is "no opinion", never a grant — same rule `planGrants` applies.
+    expect(paywalledOnFreePlan([{ plan_key: "pro", bool_value: null }])).toBe(false);
+  });
+
+  it("the free plan is the one the resolver falls back to, not merely the cheapest name in the fixture", () => {
+    // Pins the constant against its source of truth
+    // (`apps/web/src/lib/entitlements.ts:70`). A rename that moved the free
+    // tier without moving this would silently make every gated key read as
+    // free, and every probe cell would pass by describing nothing.
+    expect(FREE_PLAN_KEY).toBe("community");
   });
 });
 
