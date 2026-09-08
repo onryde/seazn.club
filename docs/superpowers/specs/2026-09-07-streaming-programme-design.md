@@ -304,8 +304,9 @@ Migration `V400__fixture_stream_url.sql` (next free at rebase; deltas run to
 V399 [E] — the 09-05 text said V392, the 09-06 text V399, both taken):
 `alter table fixtures add column stream_url text null check (stream_url is
 null or stream_url like 'https://%')` plus a FULL `create or replace view
-public_fixtures_v` redefinition copied from its latest definer (the 09-06
-scout pinned `V362:22` at `ac85c70`; Task 0 re-pins) with `stream_url`
+public_fixtures_v` redefinition copied from its latest definer
+(`V369__public_fixtures_round_role.sql:18` at `fb99bbd4c` — the 09-06 doc's
+"no V369 definer exists" was false, FS13; Task 0 re-pins) with `stream_url`
 appended LAST (R6: the view may only append). `PublicFixture`
 (`data.ts:206`) gains the column in BOTH hand-maintained lists.
 
@@ -831,7 +832,7 @@ never cite decoratively).
 |---|---|---|
 | Parse → authorize → delegate | every route is `v1()`/`handler()` wrapping `parseBody` → `requireResourceAuth` → one usecase; no logic in the route file | `lib/http.ts:69`; `server/api-v1/auth.ts:352`; `app/api/v1/fixtures/[id]/route.ts:17` |
 | Zod schemas in one place | request/response shapes live at `server/api-v1/schemas.ts`, never inline in a route or a component | `schemas.ts` (`PatchFixture :964`) |
-| Privacy folds live in VIEWS | what the public may see is decided by `public_*_v`, not by a filter in a usecase | `public_fixtures_v` (`V362:22` ac85c70; setup nulls schedule/venue/court, `officials_hide_names`, visibility filter) |
+| Privacy folds live in VIEWS | what the public may see is decided by `public_*_v`, not by a filter in a usecase | `public_fixtures_v` (`V369:18` fb99bbd4c, FS13; setup nulls schedule/venue/court, `officials_hide_names`, visibility filter) |
 | Fire-and-forget side channels | realtime, revalidation and CDN purge are `void`, warn-only; a scoring write is never hostage to them | `publishFixtureUpdate` (`scoring.ts:139`), `fireDivisionRevalidate` (`revalidate.ts:14`) |
 | One authority per fact | a value is derived in one function and imported; a second source is a fallback, never a tiebreaker | `resolveFixtureCfg` (`fold.ts`), `fixtureStatusLabel` / `VOID_STATUSES` (`stages-panel.tsx`), the five `lib/public-site.ts` derivations |
 | Registry over branching | variants are entries in a registry looked up by id; adding one never edits a call site | `OVERLAY_THEMES` + `resolveTheme` (§3.5); sport skins by name (`registry.ts:85 V3_SKINS`) |
@@ -1006,6 +1007,8 @@ design or owner RULING is an `_INDEX.md` finding, never silently resolved.
 | FS9 | `playwright.config.ts` cited under `apps/web/e2e/` | it is `apps/web/playwright.config.ts:119` |
 | **FS10** | Credits donor named as `size-pack-checkout.ts` | a full credits ledger already exists: `V320__ai_credit_ledger.sql`, `lib/credits.ts`, `credit-pack-checkout`, `billing-events.ts:151` — §5.2 adopts its shape (`balance_after >= 0` CHECK as the oversell guard) as a SEPARATE table, and reuses its checkout + webhook path via `kind: "stream_pack"` |
 | FS11 | Stripe events assumed applied inline by the webhook | `app/api/cron/billing-events` exists; the sandbox purchase e2e drives that cron before asserting the `purchase` row |
+| **FS13** | RP3: "no V369 definer exists", copy source `V362:22` | false — `V369__public_fixtures_round_role.sql:18` is the latest `create or replace view public_fixtures_v` [E fb99bbd4c]; the W1 plan already used V369 |
+| FS14 | `run-sheet-edit-time` at `run-sheet-row.tsx:377` | desk W3 (#740) merged 2026-09-08 → now `:407`; the symbol is the authority, re-pin at W1 Task 6 |
 | FS12 | §5.1's plan split read as the landing state | landing rows are false for all five plans (dark, §10.4); the split is the GA-flip migration shipped with the domain entry and copy |
 
 ### 13.2 Re-pins against `main` `fb99bbd4c`
@@ -1014,7 +1017,7 @@ design or owner RULING is an `_INDEX.md` finding, never silently resolved.
 |---|---|---|
 | RP1 | panel mounts in `components/v2/desk/run-sheet-row.tsx:377` beside `run-sheet-edit-time` | verified [E fb99bbd4c] |
 | RP2 | migrations | V400 stream_url, V401 keys, V402 sessions — next free at rebase, re-check at Task 0 |
-| RP3 | `public_fixtures_v` copy source `V362:22` | [E ac85c70]; re-pin at Task 0 (`grep -al "public_fixtures_v" db/migration/deltas \| tail -1`) |
+| RP3 | `public_fixtures_v` copy source `V362:22` | **moved: `V369:18`** [E fb99bbd4c, FS13]; re-pin at Task 0 (`grep -al "public_fixtures_v" db/migration/deltas \| tail -1`) |
 | RP4 | catalogue rows in the v18 shape, five plans | verified [E V393] |
 | RP5 | desk contention | W2 merged; W3 live — W1-D rebases after any W3 merge |
 | RP6 | zod schemas at `server/api-v1/schemas.ts` | [E ac85c70]; re-pin at Task 0 |

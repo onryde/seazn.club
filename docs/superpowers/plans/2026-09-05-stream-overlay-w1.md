@@ -18,8 +18,10 @@ club sets up" (the OBS flow), and "Organiser console: Stream this match" plus
 "Same panel at 390" (Task 6's target). Open it before building any surface;
 `_THEMES.md` holds the same design as numbers.
 
-**Spec:** `docs/superpowers/specs/2026-09-05-stream-overlay-design.md`
-**Wave prompt (rulings win over this plan; task ORDER below wins):** `docs/superpowers/specs/2026-09-05-stream-overlay-prompts/W1-step-one.md`
+**Spec:** `docs/superpowers/specs/2026-09-07-streaming-programme-design.md` — the design of record (supersedes `2026-09-05-stream-overlay-design.md`, which stays for the canvas links). §3 is Tier A as this plan builds it; §3.2 the endpoint contract Task 0 now implements; §5.1/§5.3 the two keys and the Phone tab gate Task 4 and Task 6 read; §9a the patterns every task names; §13 the findings that moved this plan's pins.
+**AMENDED 2026-09-07 @ `fb99bbd4c`** (annotations "(re-pinned 2026-09-07 @ fb99bbd4c)" mark every moved pin): Task 0 is the overlay endpoint over `foldFixture` (zero engine edits); Task 1's hook is generic over `{ fetcher, delayMs? }`; Task 2's readers take the endpoint's shape and the clock is the STAGE's 1 Hz concern; migrations V400/V401 with BOTH keys; fonts reuse `lib/fonts.ts`; the panel mounts in `desk/run-sheet-row.tsx` with an OBS tab and a Phone tab; the visual gate is T1b's manifest; `WALKTHROUGH_SPECS` exists and is edited in Task 8 directly.
+**Sibling plan (T1 — lands FIRST; this plan imports its `tokens.ts`, extends its `contrast.test.ts`, appends to its manifest):** `docs/superpowers/plans/2026-09-07-streaming-t1.md`
+**Wave prompt (rulings win over this plan; task ORDER below wins):** `docs/superpowers/specs/2026-09-05-stream-overlay-prompts/W1-step-one.md` (corrected in place by T1 Task 0)
 **Standing rules R1–R17:** `docs/superpowers/specs/2026-09-05-stream-overlay-prompts/_RULES.md`
 **Binding design values:** `docs/superpowers/specs/2026-09-05-stream-overlay-prompts/_THEMES.md`
 **Pinned symbols:** `docs/superpowers/specs/2026-09-05-stream-overlay-prompts/_INDEX.md`
@@ -29,10 +31,10 @@ club sets up" (the OBS flow), and "Organiser console: Stream this match" plus
 
 - `pnpm`, never `npm install` — `npm install` fails in this repo.
 - Every user-facing string lands in all four dictionaries (`apps/web/src/dictionaries/{en,fr,es,nl}/`), then `pnpm i18n:gen-keys` (`package.json:39`); `apps/web/src/lib/i18n-keys.ts` is GENERATED — never hand-edited (R14).
-- Migration numbering is flat across `db/migration/**` (`db/flyway.toml:6`). Highest on this branch today is `V391`, so this plan uses **V392** (`stream_url`) and **V393** (entitlement rows); take the next free numbers at rebase and AMEND the unmerged files rather than correcting forward (R10). Record the landed numbers in `_INDEX.md`.
+- Migration numbering is flat across `db/migration/**` (`db/flyway.toml:6`). Highest on `main` at `fb99bbd4c` is **`V399__stats_player_career_split.sql`** (re-pinned 2026-09-07 @ fb99bbd4c — the 09-05 text said V391, the 09-06 documents V398; both were taken by the time they were read), so this plan uses **V400** (`stream_url`) and **V401** (`streaming_entitlements`, BOTH keys); run `ls db/migration/deltas | sort -V | tail -1` at Task 3 Step 6 and AMEND the unmerged files to the next free numbers rather than correcting forward (R10). Record the landed numbers in `_INDEX.md`.
 - OpenAPI: the new route goes into `ROUTES` (`apps/web/src/server/api-v1/openapi.ts:57`, neighbour `PATCH /fixtures/{id}` at `:142`) in the same change, then `npm run openapi:gen` (`package.json:45`) and both generated files are committed. CI's drift check is a `ci.yml` step (`:94-98`), not a hook (R7).
 - Entitlement key `streaming.overlay` is granted by **no plan**, and is **NOT added to `ENTITLEMENT_DOMAINS`** (`apps/web/src/lib/entitlement-domains.ts:5`) — that omission is the mechanism that keeps it off `/pricing`, because `buildPricingSections` (`apps/web/src/lib/pricing-matrix.ts:191,199`) renders only listed keys (R1).
-- `create or replace view public_fixtures_v` may only APPEND, so `stream_url` is the LAST column of a FULL redefinition copied from `db/migration/deltas/V369__public_fixtures_round_role.sql:18` (R6).
+- `create or replace view public_fixtures_v` may only APPEND, so `stream_url` is the LAST column of a FULL redefinition copied from `db/migration/deltas/V369__public_fixtures_round_role.sql:18` (R6). (Re-pinned 2026-09-07 @ fb99bbd4c: STILL V369 — `grep -al public_fixtures_v db/migration/deltas/*.sql | sort -V | tail -1` — the 09-07 design's RP3 "`V362:22`" is the 09-06 scout's stale pin, recorded as finding FS10 in `_INDEX.md`; this plan is right and the design's row is corrected there.)
 - Judge vitest green ONLY from `--reporter=json --outputFile=<file>` — read `numPassedTests`/`numTotalTests`/`numFailedTests`, and confirm `.testResults[].name` resolves under `/Users/ashokhein/github/seazn.club/.claude/worktrees/stream-overlay`. `rtk` prints `PASS(0) FAIL(0)` for a suite that failed to COLLECT and swallows exit codes.
 - **Baseline:** on the fresh `ovl` DB the full `apps/web` suite is **13962 passing / 14041 total, 5 red** — 3 in `schedule-build-honours-locks.test.ts` (placement service not running; environmental) and 2 in `pass-scoping-guard.test.ts` (unclassified). Neither touches a W1 file. Every task gate compares against **this baseline**, not against zero.
 - DB-backed tests need `DATABASE_URL`. Stand the env up from THIS worktree: `~/.claude/skills/seazn-local-env/scripts/seazn-env.sh up --label ovl`; `eval` is refused by the session guard, so read `~/.claude/skills/seazn-local-env/scripts/seazn-env.sh env --label ovl` as a plain call and set the printed values inline on the command (`DATABASE_URL=postgresql://postgres@127.0.0.1:<port>/seazn_ovl DATABASE_SSL=disable`). `db:apply` alone is NOT a fresh schema — `sync:sports` must have run.
@@ -47,31 +49,37 @@ club sets up" (the OBS flow), and "Organiser console: Stream this match" plus
 - **The hiding gate is the per-organisation entitlement override row (owner answer 17 / Q14)** — not a request header (a browser cannot set one on a navigation and OBS sends none), not a preview cookie, not an environment flag. A viewer whose org does not hold `streaming.overlay` gets exactly three things: `notFound()` (404) on `/overlay/fixtures/[id]`, no panel on the division page, and nothing on `/pricing`. No task in this plan may invent a second gate.
 - **Themes are a REGISTRY, not a two-value union (owner answer 18 / Q7):** *"we will have multiple theme per sports so make it abstract and use can choose for now apply the default one."* `OVERLAY_THEMES` (`components/overlay/theme-registry.ts`, Task 5 Steps 6a–6d) keys an `OverlayThemeDef` by `ThemeId` and holds `bar` and `bug` on day one. **A third theme is one registry entry plus one component** — never an edit to the route (Task 5's page passes `resolveTheme(...).id` and nothing else), never an edit to the panel (Task 6's tabs map over `themesForSport(sportKey)`), never an edit to the model (Task 2 does not know a theme exists). `?style=<themeId>` is validated against the registry AND against the entry's `sports`; an unknown, misspelt or unsuitable id falls back to `defaultThemeFor(sportKey)` and **never throws**, because an OBS browser source cannot be asked to correct a typo mid-match. The per-sport default is exactly what it was — cricket `bar`, every other sport `bug` — but it now lives in one named function instead of an inline boolean. No task may reintroduce a `"bar" | "bug"` union, an `overlayStyleFor`, or a `props.style === "bar" ? … : …` branch.
 - **Sponsor logos are not in this wave, and not in W2 (owner answer 20 / Q9: *"ok for own wave as put it last"*).** They become their own wave, scheduled LAST in the programme, after W1 and W2. Nothing in this plan designs, reserves a slot for, or leaves a seam for them — a reserved-but-empty slab is an inert seam, and the sizing, placement and per-tier rules are that wave's job.
-- Do NOT touch: `components/v2/scorepad/**` (read `sport-theme.ts`, import from it, never edit), the engine **except the four additions Task 0 makes and nothing else** (`cricket.ts`'s `summary().detail.innings[].ballsLimit`; `football.ts`'s and `sports/period/kernel.ts`'s `summary().detail.clock`; `core/position.ts`'s `clockValue` reader; football's `coarsen` carrying `at` through, which §9.6 requires once the clock is a summary fact) — every other engine file, and every other field of those summaries, stays off-limits, `components/v2/fixture-console.tsx`, `ENTITLEMENT_DOMAINS`, other keys' matrix rows, any pricing surface, `LiveScore`'s render and `Props`, `proxy.ts` CSP, `app/embed/**`, `app/slideshow/**`, `.github/workflows/e2e.yml`, and anything in `stages-panel.tsx` beyond one import plus one conditional line (R11).
+- Do NOT touch: `components/v2/scorepad/**` (read `sport-theme.ts`, import from it, never edit), **the whole of `packages/engine`** (amended 2026-09-07: Task 0 reads the folded STATE the engine already holds; there is no engine edit anywhere in this programme, and `/usr/bin/git status --porcelain packages` must print nothing at every gate), `components/v2/fixture-console.tsx`, `ENTITLEMENT_DOMAINS`, other keys' matrix rows, any pricing surface, `LiveScore`'s render and `Props`, `proxy.ts` CSP, `app/embed/**`, `app/slideshow/**`, `.github/workflows/e2e.yml`, T1b's harness files (`e2e/visual/capture.spec.ts`, `asserts.ts`, `manifest.ts` — this wave appends to `manifest.json` and adds one seed kind to `seeds.ts`, nothing else), and anything in `desk/run-sheet-row.tsx` beyond one import plus one conditional line, or in `desk/run-sheet.tsx` / `stages-panel.tsx` beyond threading two props (R11; re-pinned 2026-09-07 @ fb99bbd4c — `FixtureLine` was retired by desk W2 #725; **desk W3** `feat/competition-desk-w3-band-and-phone` is editing `run-sheet-row.tsx` now, so Task 6 rebases after any W3 merge and never races it).
+- **Owner checklist (`docs/superpowers/RULES.md` §"Owner checklist (2026-09-07)")** binds every task below; each task's acceptance names the rows it satisfies, and the reviewer checks the rows, not the prose.
+- **Patterns this plan invokes, with exemplars (design §9a):** parse → authorize → delegate (`lib/http.ts:69`, `auth.ts:352`, `app/api/v1/fixtures/[id]/route.ts`); zod at `server/api-v1/schemas.ts`; privacy folds in VIEWS (`public_fixtures_v`); fire-and-forget side channels (`fireDivisionRevalidate`); one authority per fact (`resolveVenueTz`, `fixtureStatusLabel`/`VOID_STATUSES`, the five `lib/public-site.ts` derivations, `globals.css` for colour via T1's `tokens.ts`); registry over branching (`OVERLAY_THEMES`); pure projections with strings via `msg` (`overlayModel`); deny by default (`notFound()`, exact-host allowlist); the client never decides (`hasFeature` on the page and the division page); one DOM branched for phone.
 
 ## File Structure
 
 | File | Create / Modify | Responsibility |
 |---|---|---|
-| `packages/engine/src/core/position.ts` | Modify (append after `formatPosition`, `:278`) | `clockValue(position)` — the ONE reader for the clock segment `clockSegment` (`:164`) writes. |
-| `packages/engine/src/sports/cricket/cricket.ts` | Modify (`summary()`, `:3306-3317`) | `ballsLimit` on each `detail.innings[]` entry — the chase's denominator. |
-| `packages/engine/src/sports/cricket/cricket.test.ts` | Modify | The summary case that pins `ballsLimit`, and its revised-target case. |
-| `packages/engine/src/sports/football/football.ts` | Modify (`summary()` `:2551-2560`, `coarsen()` `:3029-3040`) | `detail.clock` from `footballPosition(state)`; `coarsen` carries `at` so §9.6 still holds. |
-| `packages/engine/src/sports/football/football.time.test.ts` | Modify | Clock in the summary; coarse ≡ fine with a stamped goal. |
-| `packages/engine/src/sports/period/kernel.ts` | Modify (`summary()`, `:2513`) | `detail.clock` from `periodPosition(state)` — hockey and ice hockey. This kernel declares no `coarsen`, so §9.6 does not gate it. |
-| `apps/web/src/server/public-site/data.ts` | Modify (`getPublicFixture`, `:689-747`) | `venueTz` on the return — `resolveVenueTz(divisionTz, orgTz)`, one zone per fixture. |
+| `apps/web/src/server/public-site/data.ts` | Modify (`getPublicFixture`, `:701-760` @ fb99bbd4c) | `venueTz` on the return — `resolveVenueTz(divisionTz, orgTz)`, one zone per fixture. |
+| `apps/web/src/components/public-site/live-score-data.ts` | Modify (after `LiveFixtureData`) | `OverlayLiveData` (design §3.2, verbatim) + `fetchOverlayFixture` (amended 2026-09-07). |
+| `apps/web/src/server/overlay/project.ts` | Create | `projectOverlayLiveData` — pure: folded state → the contract, by shape, no sport-key branch. |
+| `apps/web/src/server/overlay/__tests__/project.test.ts` | Create | Real football and cricket folds through the real modules; every other sport yields neither field. |
+| `apps/web/src/server/overlay/load.ts` | Create | `loadOverlayLiveData` — cached public row + venue zone + `foldFixture` inside `unstable_cache` keyed on `last_seq`. |
+| `apps/web/src/server/overlay/__tests__/load.test.ts` | Create | The cost claim: fold ≤ 1× per `last_seq`. |
+| `apps/web/src/app/api/v1/public/fixtures/[id]/overlay/route.ts` | Create | `GET` — the overlay's one poll target; visibility = the view's; no entitlement here. |
+| `apps/web/src/components/overlay/tokens.ts` | **Exists from T1** (Task 2 there) | `ROOT_SPORT_DEFAULTS`, `OVERLAY_FIXED`, `paletteFor`, `OVERLAY_PAIR_ROLES` — Task 5 IMPORTS, never re-declares. |
+| `apps/web/src/lib/fonts.ts` | Modify (`:8`) | `weight: ["600", "700", "800"]` — the one edit RP8 allows; the overlay layout imports `barlowCondensed`, never remounts `next/font`. |
+| `apps/web/src/components/overlay/use-overlay-clock.ts` | Create | The ONE timer: 1 Hz, anchored on `OverlayLiveData.clock`, offset by the hook's `presentationNowOffsetMs`, holds the last value while `clock` is absent (owner ruling 2026-09-06: the clock TICKS in W1). |
+| `apps/web/src/components/overlay/__tests__/use-overlay-clock.test.ts` | Create | `renderIsland` + captured `setInterval`: anchors, ticks, re-anchors on push, holds at half-time, offsets under `delayMs`. |
 | `apps/web/src/server/public-site/__tests__/public-fixture-venue-tz.test.ts` | Create | DB-backed: division override wins, org fallback, UTC default. |
 | `apps/web/src/components/public-site/use-live-fixture.ts` | Create | The ONE public live transport: subscribe-or-poll, lifted verbatim from `live-score.tsx:60-117`. |
 | `apps/web/src/components/public-site/__tests__/use-live-fixture.test.tsx` | Create | Hook branches via `renderIsland` + captured `setInterval`. |
 | `apps/web/src/components/public-site/live-score.tsx` | Modify (`:8`, `:29`, `:59-117`, `:148`) | Repointed to the hook; render and `Props` unchanged. |
-| `apps/web/src/lib/public-site.ts` | Modify (append after `:378`) | `battingEntrantId`, `chaseNeed`, `chaseBalls`, `matchClock` — the summary readers the overlay needs and nothing else owns. |
-| `apps/web/src/lib/__tests__/public-site-overlay-derive.test.ts` | Create | Unit cover for the two new readers. |
+| `apps/web/src/lib/public-site.ts` | Modify (append after `:378`) | `battingEntrantId`, `chaseNeed` (summary readers) and `chaseBalls` (reads `OverlayLiveData.cricket`, amended 2026-09-07) — `matchClock` is GONE: the clock is the stage's timer, formatted by `formatClock` in `overlay-model.ts`. |
+| `apps/web/src/lib/__tests__/public-site-overlay-derive.test.ts` | Create | Unit cover for the three readers. |
 | `apps/web/src/lib/overlay-model.ts` | Create | Pure projection `overlayModel(input): OverlayModel`; `overlayStartLabel(iso, locale, tz)`; type-only `OverlayMoment` slot for W2. |
 | `apps/web/src/lib/__tests__/overlay-model.test.ts` | Create | Eleven sports folded through real modules; empty / decided / led truth table. |
 | `apps/web/src/lib/stream-url.ts` | Create | `streamUrlSchema` — https + exact-hostname allowlist, `""` → `null`. |
 | `apps/web/src/lib/__tests__/stream-url.test.ts` | Create | Eleven accepted hosts (R16's ten plus `m.youtube.com`, owner answer 16 / Q5); the rejections named in the prompt, look-alike hosts included. |
-| `db/migration/deltas/V392__fixture_stream_url.sql` | Create | Column + check + full `public_fixtures_v` redefinition with `stream_url` last. |
-| `db/migration/deltas/V393__streaming_overlay_entitlement.sql` | Create | `streaming.overlay` `false` on every plan key. |
+| `db/migration/deltas/V400__fixture_stream_url.sql` | Create (re-pinned 2026-09-07 @ fb99bbd4c; next free at rebase) | Column + check + full `public_fixtures_v` redefinition with `stream_url` last. |
+| `db/migration/deltas/V401__streaming_entitlements.sql` | Create (re-pinned 2026-09-07) | BOTH keys — `streaming.overlay` and `streaming.relay` — `false` on every plan key (dark rollout, design §10.4; the GA flip to §5.1's split is a later migration). |
 | `apps/web/src/server/public-site/data.ts` | Modify (`:206`, `:711-716`, new export after `:747`) | `PublicFixture.stream_url`; the fixture SELECT gains it; `publicFixtureSlugs(fixtureId)`. |
 | `apps/web/src/server/usecases/public.ts` | Modify (`:263-297`) | `publicFixture()`'s `Pick<>` and SELECT gain `stream_url`. |
 | `apps/web/src/server/api-v1/schemas.ts` | Modify (after `:989`) | `PutFixtureStream`, `FixtureStream`. |
@@ -82,7 +90,7 @@ club sets up" (the OBS flow), and "Organiser console: Stream this match" plus
 | `apps/web/src/server/api-v1/key-scopes.ts` | Modify (after `:175`) | One `KEY_ROUTE_RULES` entry (total-classification test demands it). |
 | `apps/web/openapi/v1.json`, `apps/web/openapi/v1.public.json` | Modify (generated) | `npm run openapi:gen` output. |
 | `apps/web/src/lib/__tests__/entitlement-streaming-overlay.test.ts` | Create | `ENTITLEMENT_DOMAINS` does NOT list the key; DB-backed override flip. |
-| `apps/web/src/app/overlay/fixtures/[fixtureId]/layout.tsx` | Create | Nested `<div>` layout: transparent `html, body`, Barlow mount, cookie banner suppressed. |
+| `apps/web/src/app/overlay/fixtures/[fixtureId]/layout.tsx` | Create | Nested `<div>` layout: transparent `html, body`, `barlowCondensed` IMPORTED from `@/lib/fonts` (RP8, re-pinned 2026-09-07), cookie banner suppressed. |
 | `apps/web/src/app/overlay/fixtures/[fixtureId]/page.tsx` | Create | Server: slug resolve → `getPublicFixture` → `hasFeature` → `notFound()`; `robots: { index: false }`. |
 | `apps/web/src/components/overlay/theme-registry.ts` | Create | `OverlayThemeDef`, `ThemeId`, `OVERLAY_THEMES`, `defaultThemeFor`, `themesForSport`, `resolveTheme` — the ONE authority for which themes exist, which sports they suit and which one a sport opens on (owner answer 18 / Q7). |
 | `apps/web/src/components/overlay/__tests__/theme-registry.test.ts` | Create | Valid id resolves; unknown id falls back; sport-unsuitable id falls back; the fallback is the SPORT's default, not a constant. |
@@ -93,7 +101,9 @@ club sets up" (the OBS flow), and "Organiser console: Stream this match" plus
 | `apps/web/src/components/cookie-consent.tsx` | Modify (`:84` + a `usePathname` guard) | `data-testid="cookie-consent"`, and RENDERS NOTHING under `/overlay/` (owner answer 13). |
 | `apps/web/src/components/__tests__/cookie-consent-overlay-segment.test.tsx` | Create | The guard, driven through the component — plus its positive pair. |
 | `apps/web/src/components/v2/fixture-stream-panel.tsx` | Create | The organiser panel per `_THEMES.md` §8. |
-| `apps/web/src/components/v2/stages-panel.tsx` | Modify (`:144-146`, `:399`, `:1072-1085`, `:1115-1128`, `:1167-1180`, `:1579-1604`, `:1747`) | Two new props threaded; one import + one conditional line in `FixtureLine`. |
+| `apps/web/src/components/v2/desk/run-sheet-row.tsx` | Modify (beside `data-testid="run-sheet-edit-time"`, `:377` @ fb99bbd4c) | ONE import + ONE conditional line: the `fixture-stream-toggle` and the expander (re-pinned 2026-09-07 — `FixtureLine` in `stages-panel.tsx` was retired by desk W2 #725). |
+| `apps/web/src/components/v2/desk/run-sheet.tsx` | Modify (Props `:44-80`, both `<RunSheetRow>` call sites `:261`, `:296`) | Threads `sportKey`, `streamingEntitled`, `relayEntitled`, `openStreamFor` to every row. |
+| `apps/web/src/components/v2/stages-panel.tsx` | Modify (Props, the `<RunSheet>` mount `:1167-1183`) | Threads the same props one level up; reads `?stream=<fixtureId>` from the URL for the row to open. |
 | `apps/web/src/app/o/[orgSlug]/c/[compSlug]/d/[divSlug]/page.tsx` | Modify (`:124-138`, `:596`) | `hasFeature(auth.orgId, "streaming.overlay")` into the `Promise.all`; both props passed. |
 | `apps/web/src/app/(public)/shared/[orgSlug]/[competitionSlug]/[divisionSlug]/fixtures/[fixtureId]/page.tsx` | Modify (above `:175`) | The "Watch live" / "Replay" anchor. |
 | `apps/web/src/dictionaries/{en,fr,es,nl}/public.json` | Modify | `overlay.*` keys. |
@@ -101,130 +111,93 @@ club sets up" (the OBS flow), and "Organiser console: Stream this match" plus
 | `apps/web/src/lib/i18n-keys.ts` | Modify (generated) | `pnpm i18n:gen-keys` output. |
 | `apps/web/src/lib/__tests__/overlay-dict-coverage.test.ts` | Create | Every `overlay.*`/`stream.*` key referenced in source exists in all four locales. |
 | `apps/web/e2e/walkthrough/stream-overlay.spec.ts` | Create | The wave's e2e (project `walkthrough` by path regex, R9). |
-| `apps/web/e2e/walkthrough/stream-overlay-capture.spec.ts` | Create | Visual gate, gated on `OVL_DIR`. |
+| `apps/web/e2e/visual/seeds.ts` | Modify (one seed kind, `overlay-fixture`) | The entitled org, four short real streams, the "—" fixture and the 404 id — the ONLY harness file this wave touches (amended 2026-09-07; the `OVL_DIR` capture spec is retired). |
+| `apps/web/e2e/visual/manifest.json` | Modify (append two groups) | `overlay` (bar + bug × four sports × light + dark, the "—" and 404 states) and `console-panel` (320 / 768 / 1280 / 320 @ 125 %, control-set-equal 320↔1280). |
+| `apps/web/src/lib/__tests__/e2e-ci-wiring.test.ts` | Modify (`WALKTHROUGH_SPECS`) | `stream-overlay.spec.ts` registered (re-pinned 2026-09-07: the list EXISTS on `main` since #723 — Task 8 edits it directly, not post-rebase). |
 | `scripts/smoke.ts` | Modify (after `:790`) | `streamOverlaySuite` — overlay 200/404 and the `stream_url` seam end to end. |
 | `docs/superpowers/specs/2026-09-05-stream-overlay-prompts/_INDEX.md` | Modify | Status rows, landed migration numbers, findings. |
 
 ---
 
-### Task 0: The public payload carries what a scorebug needs
+### Task 0: The venue zone, and the overlay endpoint over `foldFixture`
 
-> **Why this task exists, and why it is numbered 0.** Owner answer 12 (2026-09-06),
-> *"we can add it as required"*, on Q1. Three facts a broadcast scorebug shows are
-> not on the public payload today: the fixture's venue time zone, cricket's balls
-> remaining in the chase, and the football match clock. It is numbered **Task 0**
-> rather than inserted as a new "Task 1" so every existing cross-reference to
-> Tasks 1–8 — in this file, `_INDEX.md`, `_STATE.md`, the W1 prompt and the W2
-> plan — stays valid. It runs FIRST: Task 2's projection reads all three.
+> **AMENDED 2026-09-07 (design of record §3.2, §3.3; `_INDEX.md` 2026-09-07
+> section).** Steps 2–13 of the original Task 0 — four engine edits, a
+> `coarsen` change and four regenerated golden corpora — were marked
+> SUPERSEDED on 2026-09-06 and are now REPLACED. Owner answer 19 (Q16) gives
+> the overlay its own DATA PATH inside the app, and Q15 closed on evidence
+> (2026-09-06, verified in the tree): `foldFixture(tx, fixtureId)`
+> (`apps/web/src/server/engine-db/fold.ts:58`, returns the module's WHOLE
+> folded state at `:130` over the fine, void-resolved stream) already carries
+> football's `phase` / `periods` / `asOf` (`football.ts:566,570,599`) and
+> cricket's `legalBalls` / `ballsLimit` (`cricket.ts:436,440`); `grep -arn
+> coarsen apps/web/src` returns zero. **Nothing in `packages/engine` is
+> touched by this programme.** The Global Constraints' engine carve-out is
+> gone; the "Do NOT touch" list now names the engine whole.
 >
-> **This is the one task that edits `packages/engine`,** which the Global
-> Constraints otherwise forbid. Recorded as a conflict the owner's answer
-> creates: the live transport carries `{ status, summary, outcome }` and nothing
-> else (`components/public-site/live-score-data.ts:7-23`), so a number that must
-> change DURING a match can only ride on `ScoreSummary`. The venue zone does not
-> change during a match, so it rides on the server-rendered payload instead and
-> touches no engine file.
-
----
-
-> ### ⚠️ FINDING (owner answer 19 / Q16) — the folded state ALREADY carries both in-match numbers. Read before executing a single step of this task.
+> What this task now builds, in order: **Step 1–4 unchanged** (the venue
+> zone on `getPublicFixture` — a row fact, owed either way); **Steps 5–8** a
+> PURE projection `projectOverlayLiveData` from a folded state to the
+> `OverlayLiveData` contract, tested by folding REAL football and cricket
+> streams through the REAL modules (the same `foldMatch` builder Task 2's
+> projection test uses); **Steps 9–12** the loader `loadOverlayLiveData`
+> that reads the cached public row, resolves the venue zone, and folds inside
+> `unstable_cache` KEYED ON `last_seq` — the fold runs once per ledger
+> advance, not once per poll (a spy proves ≤ 1× per `last_seq`); **Step 13**
+> the route `GET /api/v1/public/fixtures/[id]/overlay` beside the existing
+> public fixture route, plus its OpenAPI row and the client fetcher
+> `fetchOverlayFixture`; **Steps 14–17** e2e staging, mutants, gate, commit.
 >
-> **Verified in the tree 2026-09-06, not inferred.** The owner's Q16 answer is
-> that the overlay gets its own DATA PATH inside the app: an overlay endpoint
-> calls `foldFixture(tx, fixtureId)`
-> (`apps/web/src/server/engine-db/fold.ts:58`, already called by
-> `server/usecases/admin-fixture-config.ts`) and projects an overlay-shaped
-> payload, using the engine rather than changing it. The question this note
-> answers is the only one that decides whether Task 0's engine edits are needed
-> at all: **does the folded state actually carry (a) football's period/clock and
-> (b) cricket's balls remaining?**
+> **Why the numbers ride the ENDPOINT and not `ScoreSummary`:** the live
+> transport carries `{ status, summary, outcome }` (`live-score-data.ts`), so
+> the 2026-09-05 plan smuggled two numbers through the engine's summary at the
+> cost of §9.6 exposure and a golden re-baseline. The endpoint reads them off
+> the folded STATE the engine already holds, through the engine, changing no
+> engine file — and Task 1's hook becomes generic over its fetcher so `LiveScore`
+> and the overlay share one transport with two payloads.
 >
-> **It carries both.** `foldFixture` returns `FoldedFixture`
-> (`fold.ts:17-28`), and its `state` field is the module's **whole** folded
-> state — `foldMatch(sportModule, cfg, lineups, envelopes)` (`fold.ts:130`),
-> folded over the **fine**, void-resolved envelope stream, never over `coarsen`.
-> `summary` sits beside it as one projection of that state, not as a limit on it.
+> **Contract (design §3.2, VERBATIM — the one poll target on every tier):**
 >
-> - **(a) Football's period and clock — YES.** `FootballState`
->   (`packages/engine/src/sports/football/football.ts:563`) carries
->   `phase: Phase` (`:566`), `periods: PeriodRecord[]` (`:570`, each
->   `{ phase, home, away, addedMinutes? }`, declared `:556-561`) and
->   `asOf?: GameTime` (`:599`), written by the fold at `:2525`
->   (`return { ...swept, asOf: at }`). `GameTime` is
->   `{ period: string; elapsed: DurationSeconds }` (`core/time.ts:51-55`).
->   `footballPosition(state)` (`football.ts:730`) already reads `state.asOf`
->   (`:735`, `:739`) and already applies the staleness guard — that is the
->   *existing* reader Task 0 was going to re-expose through `summary`.
-> - **(b) Cricket's balls remaining — YES.** `InningsState`
->   (`packages/engine/src/sports/cricket/cricket.ts:432-447`) carries
->   `legalBalls` (`:436`) and `ballsLimit: number | null` (`:440` — "quota at
->   this point (revise updates it)"), and `CricketState.innings` (`:463`) is the
->   array of them; `CricketState.quota` (`:465`) and `revisedTarget` (`:466`)
->   are there too. Balls remaining is `ballsLimit − legalBalls` on the current
->   innings — arithmetic over two fields the fold already holds.
-> - **`coarsen` is not on this path at all.** `grep -a "coarsen" apps/web/src`
->   returns **zero** matches, and `foldFixture` folds `envelopes`/`resolveVoids(envelopes)`
->   — the fine stream. The §9.6 "coarse fold ≡ fine fold" property
->   (`packages/engine/src/testkit/conformance.ts:243-252`) is only exposed by
->   putting the clock into `ScoreSummary`, which is precisely what Q15 costed at
->   days and a golden re-baseline.
+> ```ts
+> interface OverlayLiveData extends LiveFixtureData {   // status, summary, outcome — one authority: match_states
+>   lastSeq: number | null;                             // W2's mount-seq
+>   venueTz: string;                                    // resolveVenueTz(schedule_settings.tz, org.timezone)
+>   clock?: { phase: string; anchorSeconds: number; anchorAtWallMs: number };  // football family, while a play phase is running
+>   cricket?: { innings: { runs: number; wickets: number; legalBalls: number; ballsLimit: number | null }[] };
+> }
+> ```
 >
-> **Therefore, plainly: Task 0's engine edits are unnecessary.** `clockValue` in
-> `core/position.ts`, `detail.clock` in `football.ts` and `sports/period/kernel.ts`,
-> `detail.innings[].ballsLimit` in `cricket.ts`, football's `coarsen` carrying
-> `at`, and the regeneration of four golden corpora under `REBASELINE_GOLDEN=1`
-> all exist only to smuggle two numbers through `ScoreSummary` because the live
-> transport carries `{ status, summary, outcome }` and nothing else
-> (`live-score-data.ts:7-23`). An overlay endpoint over `foldFixture` reads them
-> directly, changes no engine file, and closes Q15 as option (d) — no engine
-> edit, no §9.6 exposure, no re-baseline.
->
-> **Steps 2–13 below are left IN PLACE and marked SUPERSEDED pending the owner's
-> confirmation.** Do not delete them and do not rewrite this task: the main
-> session decides. What replaces them, if the owner confirms, is a new task —
-> *"the overlay endpoint"* — owning:
-> 1. `GET /api/v1/public/fixtures/{id}/overlay` (or an equivalent server read),
->    entitlement-gated exactly as Task 5's page is, calling `foldFixture` inside
->    `withTenant`/a read transaction and projecting an overlay payload:
->    `{ status, summary, outcome }` **plus** `clock` (from `footballPosition` /
->    `periodPosition` on the folded state) and `chaseBalls` (from
->    `ballsLimit − legalBalls`).
-> 2. **Task 1's transport, which is the real cost and is NOT free.**
->    `useLiveFixture` fetches `/api/v1/public/fixtures/${id}`
->    (`live-score-data.ts:30-32`) and `LiveScore` shares it. The overlay would
->    need that hook to be generic over its fetcher, or a sibling
->    `useOverlayFixture` on the same subscribe-or-poll body — an honest cost to
->    weigh against Task 0, not a reason to keep Task 0.
-> 3. The Supabase realtime ping is unchanged: it says "something changed", and
->    whichever endpoint is refetched then re-folds.
->
-> **What is NOT superseded.** Step 1 and the `venueTz` work
-> (`getPublicFixture` + `resolveVenueTz`, `public-fixture-venue-tz.test.ts`) are
-> untouched by this finding: the venue zone is a row on the fixture's payload,
-> not a folded number, it touches no engine file, and it is owed either way.
-> Mutation check `g` in the Self-review stands; `h`, `i` and `j` fall with the
-> steps they guard.
+> `clock` is present only while the folded state's `asOf.period === phase`
+> (the same staleness guard `footballPosition` applies): during a play phase
+> it anchors the stage's 1 Hz tick (Task 5); at half-time and full-time the
+> field is ABSENT and the stage HOLDS the last displayed value (`_THEMES.md`
+> §6: "stops at half-time, at full-time"). `anchorAtWallMs` is the wall time
+> of the LAST active envelope (`folded.active[last].recordedAt`), so a
+> viewer joining mid-half sees `anchorSeconds + (now − anchorAtWallMs)`, not
+> a frozen stamp.
 
 ---
 
 **Files:**
 - Create (Test): `apps/web/src/server/public-site/__tests__/public-fixture-venue-tz.test.ts`
-- Modify: `apps/web/src/server/public-site/data.ts` — `getPublicFixture`'s return type and its cached block (`:689-747`)
-- Modify: `packages/engine/src/core/position.ts` — append after `formatPosition` (`:278`)
-- Modify: `packages/engine/src/sports/cricket/cricket.ts` — `summary()`'s `detail.innings` map (`:3306-3317`)
-- Modify (Test): `packages/engine/src/sports/cricket/cricket.test.ts`
-- Modify: `packages/engine/src/sports/football/football.ts` — `summary()` (`:2551-2560`) and `coarsen()` (`:3029-3040`)
-- Modify (Test): `packages/engine/src/sports/football/football.time.test.ts`
-- Modify: `packages/engine/src/sports/period/kernel.ts` — `summary()` (`:2513`)
-- Regenerated: `packages/engine/src/sports/{cricket,football,hockey,icehockey}/*.golden.json`
+- Modify: `apps/web/src/server/public-site/data.ts` — `getPublicFixture`'s return type and its cached block (`:701-760` @ fb99bbd4c)
+- Modify: `apps/web/src/components/public-site/live-score-data.ts` — `OverlayLiveData` type + `fetchOverlayFixture`
+- Create: `apps/web/src/server/overlay/project.ts` — `projectOverlayLiveData` (pure)
+- Create (Test): `apps/web/src/server/overlay/__tests__/project.test.ts` — real modules, real folds
+- Create: `apps/web/src/server/overlay/load.ts` — `loadOverlayLiveData` (row + venue zone + cached fold)
+- Create (Test): `apps/web/src/server/overlay/__tests__/load.test.ts` — the ≤ 1× per `last_seq` spy
+- Create: `apps/web/src/app/api/v1/public/fixtures/[id]/overlay/route.ts`
+- Modify: `apps/web/src/server/api-v1/openapi.ts` — one `ROUTES` row beside `/public/fixtures/{id}` (`:200`)
+- Generated: `apps/web/openapi/v1.json`, `apps/web/openapi/v1.public.json`
 
 **Interfaces:**
-- Consumes: `resolveVenueTz(divisionTz, orgTz): string` (`apps/web/src/lib/tz.ts:43`) — the VENUE lane, division override then org then UTC; `clockSegment(elapsed): PositionSegment` (`core/position.ts:164`, key `"clock"`, value `formatElapsed(elapsed)`); `periodClockPosition({ phaseOrder, evidence, asOf })` (`core/position.ts:247`), which already applies the staleness guard `asOf.period === phase`; `footballPosition(state)` (`football.ts:730`); `periodPosition(state)` (`sports/period/kernel.ts:702`); `InningsState.ballsLimit` (`cricket.ts:440`, set from `state.quota` at `:770`, revised by DLS at `:1006`).
+- Consumes: `resolveVenueTz(divisionTz, orgTz): string` (`apps/web/src/lib/tz.ts:44`); `foldFixture(tx: Tx, fixtureId: string): Promise<FoldedFixture | null>` (`server/engine-db/fold.ts:58`; `FoldedFixture { fixtureId, lastSeq, state: unknown, summary, outcome, active: readonly EventEnvelope[] }` `:17-28`); `sql.begin(async (tx) => …)` (`lib/db.ts:221`; precedent `usecases/registration-submit.ts:609` — a plain read transaction, no tenant role, the public views already fold privacy); `publicFixture(fixtureId): Promise<unknown>` (`usecases/public.ts:279` — the cached public row `{ status, outcome, summary, last_seq, … }`), `publicRateLimit(req)`, `PUBLIC_CACHE_CONTROL`; `v1`, `reply` (`server/api-v1/http.ts:124,96`); `unstable_cache(fn, keys, { revalidate })` from `next/cache` (usage at `data.ts:720-753`); `api<T>(path)` (`lib/client.ts`, unwraps `data` once); `FootballState.phase/asOf` (`football.ts:566,599`, `asOf?: { period: string; elapsed: number }`), `CricketState.innings[]` (`cricket.ts:432-447,463`); `foldMatch`, `defaultLineupPair`, `makeEnvelope`, `builtinModules` (the Task 2 test's imports from `@seazn/engine/core`, `@seazn/engine/testkit`, `@seazn/engine/sports`).
 - Produces:
-  - `export function clockValue(position: MatchPosition): string | undefined` (`core/position.ts`)
-  - `ScoreSummary.detail.innings[].ballsLimit: number | null` (cricket)
-  - `ScoreSummary.detail.clock?: string` (football, hockey, ice hockey)
-  - `getPublicFixture(...)` gains `venueTz: string` on its resolved object
+  - `getPublicFixture(...)` gains `venueTz: string` on its resolved object (Steps 1–4, unchanged)
+  - `export interface OverlayLiveData extends LiveFixtureData { lastSeq: number | null; venueTz: string; clock?: { phase: string; anchorSeconds: number; anchorAtWallMs: number }; cricket?: { innings: { runs: number; wickets: number; legalBalls: number; ballsLimit: number | null }[] } }` and `export async function fetchOverlayFixture(fixtureId: string): Promise<OverlayLiveData>` (`live-score-data.ts`)
+  - `export function projectOverlayLiveData(input: { row: { status: string; summary: LiveFixtureData["summary"]; outcome: LiveFixtureData["outcome"]; last_seq: number | null }; folded: FoldedFixture | null; venueTz: string }): OverlayLiveData` (`server/overlay/project.ts`)
+  - `export async function loadOverlayLiveData(fixtureId: string): Promise<OverlayLiveData>` (`server/overlay/load.ts`; throws `HttpError(404)` through `publicFixture` when the fixture is not publicly visible)
+  - `GET /api/v1/public/fixtures/{id}/overlay` → `{ ok: true, data: OverlayLiveData }` with `PUBLIC_CACHE_CONTROL`
 
 > **Shape decision — the venue zone rides as a raw IANA string, and the LABEL is
 > formatted by the server component that already holds the locale.** Not both, and
@@ -384,229 +357,437 @@ describe.skipIf(!HAS_DB)("getPublicFixture carries the venue zone", () => {
 - [ ] **Step 4: Run — expect PASS.** `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/stream-overlay/apps/web && DATABASE_URL=postgresql://postgres@127.0.0.1:54405/seazn_ovl DATABASE_SSL=disable npx vitest run src/server/public-site --reporter=json --outputFile=/tmp/ovl-w1/t0a-green.json`
   Expected: `numFailedTests: 0`; the new file contributes 4; `data-court-venue-names.test.ts`, `pass-scope-public-realtime.test.ts` and `player-stats-public.test.ts` pass with ZERO edits. Confirm every `.testResults[].name` resolves under the worktree.
 
-- [ ] **Step 5: Write the failing cricket test.** In `packages/engine/src/sports/cricket/cricket.test.ts`, add to the summary describe block:
+- [ ] **Step 5: Write the failing projection test.** Create `apps/web/src/server/overlay/__tests__/project.test.ts`:
 
 ```ts
-  it("the summary carries each innings' ballsLimit, so a chase line can read 'off N balls'", () => {
-    // `_THEMES.md` §3 draws the chase line as "Need 45 off 45". `legalBalls`
-    // has always been on the summary; its DENOMINATOR has not, so the public
-    // payload could only ever say "Need 45". `ballsLimit` is already on
-    // InningsState (cricket.ts:440, seeded from state.quota at :770) — this
-    // exposes it, it does not compute it. A second derivation in the web app
-    // would be a second authority for the number a chase turns on.
-    const state = foldCricket(t20Cfg(), [
-      ["core.start"],
-      ...overOf(0, "e-home"),
-      ["cricket.innings.close", { reason: "overs" }],
-      ...overOf(0, "e-away"),
-    ]) as CricketState;
-    const detail = cricket.summary(state).detail as {
-      innings: { ballsLimit: number | null; legalBalls: number }[];
-    };
-    expect(detail.innings).toHaveLength(2);
-    // T20 = 120 legal balls per innings; derived from the CFG this test built,
-    // never a constant typed here, so changing the format moves the expectation.
-    const quota = t20Cfg().ballsPerInnings;
-    expect(detail.innings[0]!.ballsLimit).toBe(quota);
-    expect(detail.innings[1]!.ballsLimit).toBe(quota);
-    // The number the overlay actually renders — and it must differ from the
-    // runs figure, so a transposed pair cannot pass.
-    expect(detail.innings[1]!.ballsLimit! - detail.innings[1]!.legalBalls).toBe(quota - 6);
+// `projectOverlayLiveData` — the folded state → the overlay's wire contract
+// (design §3.2). Every case folds a SHORT REAL ledger through the REAL module
+// (`foldMatch`, packages/engine/src/core/events.ts:445, with
+// `defaultLineupPair`/`makeEnvelope` from `@seazn/engine/testkit`) — the same
+// builder Task 2's overlay-model.test.ts uses — so the two numbers the
+// overlay needs are read off the state the ENGINE produced, never off a
+// hand-typed object that happens to have the right keys.
+//
+// Pure: no DB. `FoldedFixture` is assembled from the fold's own outputs.
+import { describe, expect, it } from "vitest";
+import { foldMatch, type EventEnvelope } from "@seazn/engine/core";
+import { defaultLineupPair, makeEnvelope } from "@seazn/engine/testkit";
+import { builtinModules } from "@seazn/engine/sports";
+import { projectOverlayLiveData } from "../project";
+import type { FoldedFixture } from "@/server/engine-db/fold";
+
+const moduleFor = (key: string) => {
+  const m = builtinModules.find((mod) => mod.key === key);
+  if (!m) throw new Error(`no builtin module for "${key}"`);
+  return m;
+};
+
+/** Folds `stream` through the real module and returns what foldFixture would. */
+function folded(key: string, stream: readonly (readonly [string, unknown])[], recordedAt = "2026-09-07T14:00:00.000Z"): FoldedFixture {
+  const mod = moduleFor(key);
+  const cfg = mod.configSchema.parse({});
+  const lineups = defaultLineupPair(mod.positions);
+  const events: EventEnvelope[] = stream.map(([type, p], i) => ({
+    ...makeEnvelope(i, { type, payload: p } as never),
+    recordedAt,
+  }));
+  const state = foldMatch(mod as never, cfg as never, lineups, events);
+  const m = mod as unknown as { summary: (s: unknown) => FoldedFixture["summary"]; outcome?: (s: unknown) => FoldedFixture["outcome"] };
+  return {
+    fixtureId: "fx-1",
+    lastSeq: events.length,
+    state,
+    summary: m.summary(state),
+    outcome: m.outcome ? m.outcome(state) : null,
+    active: events,
+  };
+}
+
+const ROW = (last_seq: number | null, status = "in_play") => ({ status, summary: { headline: "x" }, outcome: null, last_seq });
+
+describe("projectOverlayLiveData", () => {
+  it("carries the row's snapshot fields and the venue zone, and lastSeq from the ROW (one authority: match_states)", () => {
+    const out = projectOverlayLiveData({ row: ROW(7), folded: null, venueTz: "Asia/Kolkata" });
+    expect(out.status).toBe("in_play");
+    expect(out.summary).toEqual({ headline: "x" });
+    expect(out.outcome).toBeNull();
+    expect(out.lastSeq).toBe(7);
+    expect(out.venueTz).toBe("Asia/Kolkata");
+    expect(out.clock).toBeUndefined();
+    expect(out.cricket).toBeUndefined();
   });
 
-  it("a DLS revision moves ballsLimit with the target, not just the runs", () => {
-    // The revise path (cricket.ts:991-1006) is the one that makes ballsLimit a
-    // live number rather than a constant restatement of the config. Without
-    // this case a "return cfg.ballsPerInnings" implementation would pass.
-    const state = foldCricket(t20Cfg(), [
-      ["core.start"],
-      ...overOf(0, "e-home"),
-      ["cricket.innings.close", { reason: "overs" }],
-      ...overOf(0, "e-away"),
+  it("football: a stamped goal in a running half anchors the clock at the stamp, on the last event's wall time", () => {
+    const f = folded("football", [
+      ["core.start", {}],
+      ["football.goal", { by: "home", at: { period: "H1", elapsed: 761 } }],
+    ]);
+    const out = projectOverlayLiveData({ row: ROW(2), folded: f, venueTz: "UTC" });
+    expect(out.clock).toEqual({ phase: "H1", anchorSeconds: 761, anchorAtWallMs: Date.parse("2026-09-07T14:00:00.000Z") });
+    expect(out.cricket).toBeUndefined();
+  });
+
+  it("football: between periods the clock is ABSENT (the stage holds the last value), never a stale stamp", () => {
+    // H1's closing whistle carries an H1 stamp; once HT/H2 begins the stamp
+    // names a phase the match has left — the same guard footballPosition
+    // applies. RE-PIN the period-change event name against football.ts's
+    // event schema before running (the 2026-09-05 plan used
+    // `football.period` with `{ to, at }`).
+    const f = folded("football", [
+      ["core.start", {}],
+      ["football.goal", { by: "home", at: { period: "H1", elapsed: 761 } }],
+      ["football.period", { to: "HT", at: { period: "H1", elapsed: 2700 } }],
+    ]);
+    const out = projectOverlayLiveData({ row: ROW(3), folded: f, venueTz: "UTC" });
+    expect(out.clock, "a stale clock on air is worse than no clock").toBeUndefined();
+  });
+
+  it("football: a stream nothing stamped carries no clock", () => {
+    const f = folded("football", [["core.start", {}], ["football.goal", { by: "home" }]]);
+    expect(projectOverlayLiveData({ row: ROW(2), folded: f, venueTz: "UTC" }).clock).toBeUndefined();
+  });
+
+  it("cricket: every innings' runs, wickets, legalBalls and ballsLimit, from the state — the quota derived from the cfg, never typed here", () => {
+    const mod = moduleFor("cricket");
+    const quota = (mod.configSchema.parse({}) as { ballsPerInnings: number }).ballsPerInnings;
+    const ball = (over: number, b: number, runs: number) =>
+      ["cricket.ball", { over, ballInOver: b, striker: "H-p1", nonStriker: "H-p2", bowler: "A-p1", runs: { bat: runs } }] as const;
+    const f = folded("cricket", [
+      ["core.start", {}],
+      ["cricket.toss", { winner: "home", decision: "bat" }],
+      ball(0, 1, 4), ball(0, 2, 0), ball(0, 3, 1), ball(0, 4, 6), ball(0, 5, 0), ball(0, 6, 2),
+      ["cricket.innings.close", { reason: "declared" }],
+      ball(0, 1, 1),
+    ]);
+    const out = projectOverlayLiveData({ row: ROW(f.lastSeq), folded: f, venueTz: "UTC" });
+    expect(out.cricket).toBeDefined();
+    expect(out.cricket!.innings).toHaveLength(2);
+    expect(out.cricket!.innings[0]).toMatchObject({ runs: 13, wickets: 0, legalBalls: 6, ballsLimit: quota });
+    expect(out.cricket!.innings[1]).toMatchObject({ runs: 1, wickets: 0, legalBalls: 1, ballsLimit: quota });
+    // The number the chase line renders — and it differs from the runs, so a
+    // transposed pair cannot pass.
+    expect(out.cricket!.innings[1]!.ballsLimit! - out.cricket!.innings[1]!.legalBalls).toBe(quota - 1);
+    expect(out.clock).toBeUndefined();
+  });
+
+  it("cricket: a DLS revision moves ballsLimit with the target (the case that makes it a live number)", () => {
+    // RE-PIN the revise payload shape against cricket.ts's schema (:991-1006)
+    // — the 2026-09-05 plan used { target, ballsLimit, source: "dls" }.
+    const f = folded("cricket", [
+      ["core.start", {}],
+      ["cricket.toss", { winner: "home", decision: "bat" }],
+      ["cricket.innings.close", { reason: "declared" }],
       ["cricket.revise", { target: 91, ballsLimit: 60, source: "dls" }],
-    ]) as CricketState;
-    const detail = cricket.summary(state).detail as { innings: { ballsLimit: number | null }[] };
-    expect(detail.innings[1]!.ballsLimit).toBe(60);
-    expect(detail.innings[1]!.ballsLimit).not.toBe(t20Cfg().ballsPerInnings);
-  });
-```
-
-  RE-PIN before writing: the fold helper, the cfg builder and the over helper in this file are named by the file's own existing cases (`cricket.test.ts` is 72 KB and predates this plan) — read three neighbouring summary tests and use THEIR helpers and THEIR `cricket.revise` payload shape. A hand-invented event name folds to `UNKNOWN_TYPE` and proves nothing.
-
-- [ ] **Step 6: Run it — expect red.** `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/stream-overlay/packages/engine && npx vitest run src/sports/cricket/cricket.test.ts --reporter=json --outputFile=/tmp/ovl-w1/t0b-red.json`
-  Expected: both new cases fail with `expected undefined to be 120` — the field is on state, not on the summary. `numFailedTests: 2`.
-
-- [ ] **Step 7: Expose `ballsLimit` on the cricket summary.** In `packages/engine/src/sports/cricket/cricket.ts`, inside `summary()`'s `detail.innings` map (`:3306-3317`), beside `legalBalls`:
-
-```ts
-        innings: state.innings.map((innings) => ({
-          entrantId: state.entrants[innings.battingSide],
-          runs: innings.runs,
-          wickets: innings.wickets,
-          legalBalls: innings.legalBalls,
-          // The DENOMINATOR of the number already above it. `legalBalls` alone
-          // cannot express "off 45 balls", which is what a chase turns on
-          // (_THEMES.md §3). Survives coarsening: the quota is fixed at innings
-          // creation (:770) and only `cricket.revise` moves it, and `coarsen`
-          // passes revise through — so §9.6's coarse ≡ fine still holds, which
-          // the conformance property in Step 8 proves rather than assumes.
-          // `null` where the format declares no quota (timed / unlimited).
-          ballsLimit: innings.ballsLimit,
-          declared: innings.declared,
-          closed: innings.closed,
-          ...(innings.closeReason === undefined ? {} : { closeReason: innings.closeReason }),
-        })),
-```
-
-- [ ] **Step 8: Run cricket AND the §9.6 property — expect PASS.** `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/stream-overlay/packages/engine && npx vitest run src/sports/cricket src/testkit/conformance.test.ts --reporter=json --outputFile=/tmp/ovl-w1/t0b-green.json`
-  Expected: `numFailedTests: 0`. The case that matters is `§9.6 dual-fidelity: coarse fold ≡ fine fold` (`testkit/conformance.ts:244`) — it compares whole summaries over generated streams, so it is the ONLY thing that can tell us the new field is fold-invariant. If it reds, the field is NOT safe on the summary: stop and record, do not weaken the property.
-
-- [ ] **Step 9: Write the failing clock test.** In `packages/engine/src/sports/football/football.time.test.ts`, add:
-
-```ts
-  it("the summary carries the match clock, and drops it once the stamp names a phase the match has left", () => {
-    // Owner answer 12 (Q1). `_THEMES.md` §3 and §4 both draw a clock cell for
-    // the football family, and `lib/public-site.ts:319-373` was the complete
-    // reader set — none of them carried one, because the summary did not.
-    //
-    // The value is NOT derived here: it is `footballPosition(state)`'s own
-    // clock segment (core/position.ts:164/247), which already applies the
-    // staleness guard `asOf.period === phase` and already formats through
-    // `formatElapsed`. Same authority as the pad's strip; one format, one
-    // guard, one place to change them.
-    const stamped = foldFootball(cfg, [
-      ["core.start"],
-      ["football.goal", { by: "home", at: { period: "H1", elapsed: 761 } }],
-    ]) as FootballState;
-    expect((football.summary(stamped).detail as { clock?: string }).clock).toBe("12:41");
-
-    // A stamp from a phase the match has LEFT must not read as "now" — the
-    // guard footballPosition already owns. H1's closing whistle carries an H1
-    // stamp; once H2 is running, the clock is absent rather than wrong.
-    const nextPeriod = foldFootball(cfg, [
-      ["core.start"],
-      ["football.goal", { by: "home", at: { period: "H1", elapsed: 761 } }],
-      ["football.period", { to: "H2", at: { period: "H1", elapsed: 2700 } }],
-    ]) as FootballState;
-    expect(
-      (football.summary(nextPeriod).detail as { clock?: string }).clock,
-      "a stale clock on air is worse than no clock",
-    ).toBeUndefined();
-
-    // And absent entirely for a stream nothing stamped, which is every match
-    // scored through the v3 pad before R6 (clock.ts's own doc).
-    const unstamped = foldFootball(cfg, [["core.start"], ["football.goal", { by: "home" }]]) as FootballState;
-    expect((football.summary(unstamped).detail as { clock?: string }).clock).toBeUndefined();
+    ]);
+    const out = projectOverlayLiveData({ row: ROW(f.lastSeq), folded: f, venueTz: "UTC" });
+    expect(out.cricket!.innings[1]!.ballsLimit).toBe(60);
   });
 
-  it("a coarsened stream keeps the stamp, so coarse and fine agree about the clock", () => {
-    // §9.6 in miniature, written here as well as in the property because the
-    // property's failure message names a generated stream nobody can read.
-    // `coarsen` strips ATTRIBUTION (scorer, kick taker, the deprecated
-    // `minute`); `at` is not attribution, it is the event's own game time, and
-    // once the clock is a summary fact the two fidelities must agree on it.
-    const events: FootballEventTuple[] = [
-      ["core.start"],
-      ["football.goal", { by: "home", person: "e-home-p1", at: { period: "H1", elapsed: 761 } }],
-    ];
-    const fine = foldFootball(cfg, events) as FootballState;
-    const coarse = foldFootball(cfg, coarsenTuples(events)) as FootballState;
-    expect(football.summary(coarse)).toEqual(football.summary(fine));
-    expect((football.summary(coarse).detail as { clock?: string }).clock).toBe("12:41");
+  it("every other sport: neither clock nor cricket, by shape, not by a sport-key branch", () => {
+    for (const key of ["tennis", "badminton", "volleyball", "tabletennis", "boardgame", "carrom", "generic"]) {
+      const f = folded(key, [["core.start", {}]]);
+      const out = projectOverlayLiveData({ row: ROW(1), folded: f, venueTz: "UTC" });
+      expect(out.clock, key).toBeUndefined();
+      expect(out.cricket, key).toBeUndefined();
+    }
   });
+});
 ```
 
-  RE-PIN before writing: `cfg`, `foldFootball`, the tuple type and a coarsen helper are this file's own (`football.time.test.ts` is 54 KB and already exercises `at`/`asOf` — `clock.test.ts:426-435` in `apps/web` shows the same fold shape). Use the file's helpers; if it has no coarsen helper, build the coarse stream with `football.coarsen(...)` and the file's own envelope maker.
+  RE-PIN before writing: the event names and payload shapes (`core.start`, `football.goal` with `at`, `football.period`, `cricket.toss`, `cricket.ball`, `cricket.innings.close`, `cricket.revise`) against each module's zod event schemas — read three neighbouring cases in `football.time.test.ts` and `cricket.test.ts` and use THEIR shapes. A hand-invented event folds to `UNKNOWN_TYPE` and proves nothing. If `builtinModules[].outcome` is not a method, read the outcome off `summary` the way `foldFixture` does (`fold.ts:130-135`).
 
-- [ ] **Step 10: Run it — expect red, TWICE over.** `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/stream-overlay/packages/engine && npx vitest run src/sports/football src/testkit/conformance.test.ts --reporter=json --outputFile=/tmp/ovl-w1/t0c-red.json`
-  Expected: the first new case fails `expected undefined to be "12:41"`. **The second failure is the one that matters:** once Step 11's summary change lands without the `coarsen` change, `§9.6 dual-fidelity: coarse fold ≡ fine fold` reds, because `coarsen` (`football.ts:3029-3040`) rebuilds `football.goal` as `{ by, ownGoal }` and drops `at` — so the coarse fold's `state.asOf` never advances past the last period marker. Record both; a plan that only expected the first would have discovered this from CI.
+- [ ] **Step 6: Run it — expect red (collection).** `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/stream-overlay/apps/web && npx vitest run src/server/overlay --reporter=json --outputFile=/tmp/ovl-w1/t0b-red.json; node -e "const r=require('/tmp/ovl-w1/t0b-red.json');console.log(r.numTotalTests,(r.testResults[0]||{}).message)"`
+  Expected: `Cannot find module '../project'`, `numTotalTests: 0`.
 
-- [ ] **Step 11: Add the clock, its reader, and the coarsen fix.**
-
-  (a) `packages/engine/src/core/position.ts`, appended after `formatPosition` (`:278`):
+- [ ] **Step 7: Write the projection.** Create `apps/web/src/server/overlay/project.ts`:
 
 ```ts
-/**
- * The clock a period sport is at, or `undefined`.
- *
- * The ONE reader for the segment `clockSegment` writes, so "which key is the
- * clock" is spelled once. `periodClockPosition` has already applied the
- * staleness guard (`asOf.period === phase`) before this can see the segment —
- * this function must never re-implement or relax that guard.
- */
-export function clockValue(position: MatchPosition): string | undefined {
-  return position.segments.find((segment) => segment.key === "clock")?.value;
+// The folded state → OverlayLiveData (design §3.2). Pure. The two fields the
+// overlay needs beyond ScoreSummary are read off the module's own STATE —
+// which foldFixture already holds — by SHAPE, so no sport-key branch exists
+// here and a twelfth sport that carries `asOf` or `innings` is covered by
+// construction (owner ruling 4: "all sports").
+import type { FoldedFixture } from "@/server/engine-db/fold";
+import type { LiveFixtureData, OverlayLiveData } from "@/components/public-site/live-score-data";
+
+interface RowSnapshot {
+  status: string;
+  summary: LiveFixtureData["summary"];
+  outcome: LiveFixtureData["outcome"];
+  last_seq: number | null;
+}
+
+/** The period family's clock stamp, present only while it is CURRENT. The
+ *  guard `asOf.period === phase` is footballPosition's own
+ *  (football.ts:730-739): a stamp from a phase the match has left is no
+ *  clock, not a wrong one. */
+function clockOf(state: unknown, active: FoldedFixture["active"]): OverlayLiveData["clock"] {
+  if (typeof state !== "object" || state === null) return undefined;
+  const s = state as { phase?: unknown; asOf?: unknown };
+  if (typeof s.phase !== "string") return undefined;
+  if (typeof s.asOf !== "object" || s.asOf === null) return undefined;
+  const asOf = s.asOf as { period?: unknown; elapsed?: unknown };
+  if (asOf.period !== s.phase || typeof asOf.elapsed !== "number") return undefined;
+  const last = active[active.length - 1];
+  if (!last) return undefined;
+  const wall = Date.parse(last.recordedAt);
+  if (!Number.isFinite(wall)) return undefined;
+  return { phase: s.phase, anchorSeconds: asOf.elapsed, anchorAtWallMs: wall };
+}
+
+/** Cricket's innings, by shape: an `innings[]` whose entries carry the four
+ *  numbers. Anything else (no innings, or innings without `legalBalls`) is
+ *  not cricket's state and yields nothing. */
+function cricketOf(state: unknown): OverlayLiveData["cricket"] {
+  if (typeof state !== "object" || state === null) return undefined;
+  const raw = (state as { innings?: unknown }).innings;
+  if (!Array.isArray(raw) || raw.length === 0) return undefined;
+  const innings: NonNullable<OverlayLiveData["cricket"]>["innings"] = [];
+  for (const entry of raw) {
+    if (typeof entry !== "object" || entry === null) return undefined;
+    const e = entry as Record<string, unknown>;
+    if (typeof e.runs !== "number" || typeof e.wickets !== "number" || typeof e.legalBalls !== "number") return undefined;
+    if (!(e.ballsLimit === null || typeof e.ballsLimit === "number")) return undefined;
+    innings.push({ runs: e.runs, wickets: e.wickets, legalBalls: e.legalBalls, ballsLimit: e.ballsLimit });
+  }
+  return { innings };
+}
+
+export function projectOverlayLiveData(input: {
+  row: RowSnapshot;
+  folded: FoldedFixture | null;
+  venueTz: string;
+}): OverlayLiveData {
+  const { row, folded, venueTz } = input;
+  const out: OverlayLiveData = {
+    status: row.status,
+    summary: row.summary,
+    outcome: row.outcome,
+    lastSeq: row.last_seq,
+    venueTz,
+  };
+  if (!folded) return out;
+  const clock = clockOf(folded.state, folded.active);
+  if (clock) out.clock = clock;
+  const cricket = cricketOf(folded.state);
+  if (cricket) out.cricket = cricket;
+  return out;
 }
 ```
 
-  (b) `packages/engine/src/sports/football/football.ts`, in `summary()`'s `detail`:
+  and in `apps/web/src/components/public-site/live-score-data.ts`, after `LiveFixtureData`:
 
 ```ts
-      detail: {
-        periods: state.periods,
-        // W1 stream overlay (owner answer 12): the match clock the bar and the
-        // bug both draw. `footballPosition` (:730) is the SAME derivation the
-        // module's `position` axis publishes and the pad's strip reads — never
-        // a second one — and it drops the value itself when the last stamp
-        // names a phase the match has left. Absent (not `null`) when there is
-        // no current stamp, so the renderer's `clock ? … : null` cell is the
-        // only branch anyone writes.
-        ...(clockValue(footballPosition(state)) === undefined
-          ? {}
-          : { clock: clockValue(footballPosition(state)) as string }),
-        ...(shootout === null ? {} : { shootout }),
-        ...(state.replayFlagged ? { abandoned: true } : {}),
-      },
+/** The overlay's one poll target (design §3.2). `status`/`summary`/`outcome`
+ *  are the SAME row `LiveFixtureData` reads (one authority: match_states);
+ *  `clock` and `cricket` are projected server-side off the folded state.
+ *  W2 reads `lastSeq` as its mount-seq. */
+export interface OverlayLiveData extends LiveFixtureData {
+  lastSeq: number | null;
+  venueTz: string;
+  clock?: { phase: string; anchorSeconds: number; anchorAtWallMs: number };
+  cricket?: { innings: { runs: number; wickets: number; legalBalls: number; ballsLimit: number | null }[] };
+}
+
+export async function fetchOverlayFixture(fixtureId: string): Promise<OverlayLiveData> {
+  return api<OverlayLiveData>(`/api/v1/public/fixtures/${fixtureId}/overlay`);
+}
 ```
 
-  (compute `footballPosition(state)` once into a local `const position` above the return rather than calling it twice — written out twice here only to keep the spread readable.)
+- [ ] **Step 8: Run — expect PASS.** Re-run Step 6's command. Expected: `numTotalTests: 7`, `numFailedTests: 0`; every `.testResults[].name` under the worktree.
 
-  (c) `packages/engine/src/sports/football/football.ts`, in `coarsen()`'s `football.goal` arm — and the `football.shootout.kick` arm if it carries `at` (read it; do not assume):
+- [ ] **Step 9: Write the failing loader test — the fold runs ≤ 1× per `last_seq`.** Create `apps/web/src/server/overlay/__tests__/load.test.ts`:
 
 ```ts
-        case "football.goal": {
-          const payload = event.payload as z.infer<typeof FootballGoal>;
-          out.push({
-            type: "football.goal",
-            payload: {
-              by: payload.by,
-              ...(payload.ownGoal === undefined ? {} : { ownGoal: payload.ownGoal }),
-              // `at` is NOT attribution. The scorer, the deprecated `minute`
-              // and the assist are attribution and stay stripped; `at` is the
-              // event's own position in game time, and §9.6 requires coarse and
-              // fine to agree on `state.asOf` now that the clock is a summary
-              // fact. Dropping it is what made the property red in Step 10.
-              ...(payload.at === undefined ? {} : { at: payload.at }),
-            },
-          });
-          break;
-        }
+// `loadOverlayLiveData` — cached public row + venue zone + a fold inside
+// `unstable_cache` KEYED ON last_seq (design §3.2). The claim under test is
+// the COST claim: with N polls at the same last_seq the ledger is folded
+// once; a ledger advance folds once more. `unstable_cache` is a Next
+// runtime API absent under vitest — this double is a real memo keyed on the
+// keys array (the passthrough double the neighbouring tests use would let a
+// missing key pass).
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+const memo = new Map<string, unknown>();
+vi.mock("next/cache", () => ({
+  unstable_cache: (fn: () => Promise<unknown>, keys: string[]) => async () => {
+    const k = keys.join("|");
+    if (!memo.has(k)) memo.set(k, await fn());
+    return memo.get(k);
+  },
+  revalidateTag: vi.fn(),
+}));
+
+const fold = vi.fn();
+vi.mock("@/server/engine-db/fold", () => ({ foldFixture: (...args: unknown[]) => fold(...args) }));
+
+const row = vi.fn();
+vi.mock("@/server/usecases/public", () => ({ publicFixture: (...args: unknown[]) => row(...args) }));
+
+vi.mock("@/lib/db", () => ({
+  sql: Object.assign(
+    async () => [{ division_tz: null, org_tz: "Europe/London" }],
+    { begin: async (fn: (tx: unknown) => Promise<unknown>) => fn({}) },
+  ),
+}));
+
+import { loadOverlayLiveData } from "../load";
+
+beforeEach(() => {
+  memo.clear();
+  fold.mockReset();
+  row.mockReset();
+  fold.mockResolvedValue({ fixtureId: "fx", lastSeq: 3, state: {}, summary: {}, outcome: null, active: [] });
+});
+afterEach(() => vi.clearAllMocks());
+
+const ROW = (last_seq: number) => ({ id: "fx", division_id: "d1", status: "in_play", summary: { headline: "1 — 0" }, outcome: null, last_seq });
+
+describe("loadOverlayLiveData", () => {
+  it("folds ONCE for three polls at the same last_seq", async () => {
+    row.mockResolvedValue(ROW(3));
+    await loadOverlayLiveData("fx");
+    await loadOverlayLiveData("fx");
+    const out = await loadOverlayLiveData("fx");
+    expect(fold).toHaveBeenCalledTimes(1);
+    expect(out.lastSeq).toBe(3);
+    expect(out.venueTz).toBe("Europe/London");
+    expect(out.summary).toEqual({ headline: "1 — 0" });
+  });
+
+  it("folds AGAIN when the ledger advances (the key is last_seq, not the fixture id)", async () => {
+    row.mockResolvedValueOnce(ROW(3)).mockResolvedValueOnce(ROW(4));
+    await loadOverlayLiveData("fx");
+    await loadOverlayLiveData("fx");
+    expect(fold).toHaveBeenCalledTimes(2);
+  });
+
+  it("a fixture with no events (last_seq null) skips the fold entirely", async () => {
+    row.mockResolvedValue({ ...ROW(0), last_seq: null });
+    const out = await loadOverlayLiveData("fx");
+    expect(fold).not.toHaveBeenCalled();
+    expect(out.clock).toBeUndefined();
+    expect(out.cricket).toBeUndefined();
+  });
+
+  it("propagates publicFixture's 404 unchanged (visibility is the view's decision, not this loader's)", async () => {
+    row.mockRejectedValue(Object.assign(new Error("fixture not found"), { status: 404 }));
+    await expect(loadOverlayLiveData("fx")).rejects.toThrow("fixture not found");
+    expect(fold).not.toHaveBeenCalled();
+  });
+});
 ```
 
-  (d) `packages/engine/src/sports/period/kernel.ts`, in `summary()` (`:2513`): the same one-line spread, from `periodPosition(state)` (`:702`) and the same `clockValue` import. This kernel declares **no `coarsen`** (`:2530-2533`), so `testkit/conformance.ts:243`'s `if (module.coarsen)` guard skips §9.6 for hockey and ice hockey entirely — there is nothing to fix on their side, and nothing to claim credit for either.
+- [ ] **Step 10: Run it — expect red (collection).** `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/stream-overlay/apps/web && npx vitest run src/server/overlay/__tests__/load.test.ts --reporter=json --outputFile=/tmp/ovl-w1/t0c-red.json; node -e "const r=require('/tmp/ovl-w1/t0c-red.json');console.log(r.numTotalTests,(r.testResults[0]||{}).message)"`
+  Expected: `Cannot find module '../load'`.
 
-- [ ] **Step 12: Run the football family AND the property — expect PASS.** `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/stream-overlay/packages/engine && npx vitest run src/sports/football src/sports/hockey src/sports/icehockey src/sports/period src/core/position.test.ts src/testkit/conformance.test.ts --reporter=json --outputFile=/tmp/ovl-w1/t0c-green.json`
-  Expected: `numFailedTests: 0`, and `§9.6 dual-fidelity: coarse fold ≡ fine fold` GREEN for football. If `core/position.test.ts` does not exist under that name, drop it from the command rather than inventing a file.
+- [ ] **Step 11: Write the loader.** Create `apps/web/src/server/overlay/load.ts`:
 
-- [ ] **Step 13: Regenerate the goldens the new summary fields move.** The corpora are single-line JSON that embed folded summaries (`cricket.golden.json` is 551 KB), so three summary fields change every affected snapshot.
-  `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/stream-overlay/packages/engine && UPDATE_GOLDEN=1 npx vitest run src/testkit/golden.test.ts --reporter=json --outputFile=/tmp/ovl-w1/t0-golden.json`
-  then re-run WITHOUT the flag and confirm green. Read `testkit/golden.ts:1300`'s own guard before running this — `UPDATE_GOLDEN` is documented as reserved, and `REBASELINE_GOLDEN` is a different, wider flag that must NOT be used here. Then `/usr/bin/git diff --stat packages/engine/src/sports` and confirm the ONLY corpora that moved are cricket, football, hockey and ice hockey. A moved tennis or badminton corpus means something else changed and the run is not clean.
+```ts
+// The overlay endpoint's read (design §3.2). Three reads, one authority each:
+// the public row from `publicFixture` (cached, the same view the match page
+// reads — visibility decided THERE, never here); the venue zone through
+// `resolveVenueTz` (the VENUE lane, lib/tz.ts:44); and the fold, inside
+// `unstable_cache` keyed on `last_seq`, so N polls at one ledger position
+// cost one fold. Fire-and-forget nothing; throw nothing new — a 404 from the
+// row read is the 404 the route answers.
+import "server-only";
+import { unstable_cache } from "next/cache";
+import { sql } from "@/lib/db";
+import { resolveVenueTz } from "@/lib/tz";
+import { foldFixture, type FoldedFixture } from "@/server/engine-db/fold";
+import { publicFixture } from "@/server/usecases/public";
+import type { OverlayLiveData } from "@/components/public-site/live-score-data";
+import { projectOverlayLiveData } from "./project";
 
-- [ ] **Step 14: Mutation checks — three, each named.**
-  1. Delete the venue-zone query and hardcode `venueTz: "UTC"` in `data.ts`. Re-run Step 4's command. Expected red: `falls back to the organisation's zone when the division has no schedule_settings row` — `expected 'UTC' to be 'Asia/Kolkata'`. Restore.
-  2. Drop `ballsLimit: innings.ballsLimit,` from the cricket summary map. Re-run Step 8's command. Expected red: `the summary carries each innings' ballsLimit…` — `expected undefined to be 120`. Restore.
-  3. Drop the `clock` spread from football's summary. Re-run Step 12's command. Expected red: `the summary carries the match clock…` — `expected undefined to be "12:41"`. Restore and re-run each to green.
-  A surviving mutant is a missing test, not a note. Record all three in the PR inventory.
+interface PublicRow {
+  id: string;
+  division_id: string;
+  status: string;
+  summary: OverlayLiveData["summary"];
+  outcome: OverlayLiveData["outcome"];
+  last_seq: number | null;
+}
 
-- [ ] **Step 15: Gate the whole of both workspaces against the baseline.**
-  `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/stream-overlay/packages/engine && npx vitest run --reporter=json --outputFile=/tmp/ovl-w1/t0-engine-full.json`
-  then `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/stream-overlay/apps/web && DATABASE_URL=postgresql://postgres@127.0.0.1:54405/seazn_ovl DATABASE_SSL=disable npx vitest run --reporter=json --outputFile=/tmp/ovl-w1/t0-web-full.json`
-  Expected: engine `numFailedTests: 0`; web at the **13962 / 14041, 5 red** baseline in Global Constraints and no more — the engine change reaches `apps/web` through the pad shim and the public readers, so a web-side red here is this task's, not a pre-existing one. Also `cd .../packages/engine && npm run typecheck` and `cd .../apps/web && npm run typecheck`: the local build skips typechecking, so a green build proves nothing about types.
+/** Folds once per (fixture, last_seq). The fold reads the whole ledger and
+ *  every module the fixture pins; at ~1 event / 36 s per T20 that is once
+ *  per ledger advance, and never once per 15 s poll across every viewer. */
+function cachedFold(fixtureId: string, lastSeq: number): () => Promise<FoldedFixture | null> {
+  return unstable_cache(
+    async () => sql.begin(async (tx) => foldFixture(tx, fixtureId)) as Promise<FoldedFixture | null>,
+    ["overlay-fold", fixtureId, String(lastSeq)],
+    { revalidate: 300 },
+  );
+}
 
-- [ ] **Step 16: Commit.**
-  `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/stream-overlay && /usr/bin/git add packages/engine/src/core/position.ts packages/engine/src/sports/cricket/cricket.ts packages/engine/src/sports/cricket/cricket.test.ts packages/engine/src/sports/football/football.ts packages/engine/src/sports/football/football.time.test.ts packages/engine/src/sports/period/kernel.ts packages/engine/src/sports/cricket/cricket.golden.json packages/engine/src/sports/football/football.golden.json packages/engine/src/sports/hockey/hockey.golden.json packages/engine/src/sports/icehockey/icehockey.golden.json apps/web/src/server/public-site/data.ts apps/web/src/server/public-site/__tests__/public-fixture-venue-tz.test.ts`
+export async function loadOverlayLiveData(fixtureId: string): Promise<OverlayLiveData> {
+  const row = (await publicFixture(fixtureId)) as PublicRow;
+  const [zone] = await sql<{ division_tz: string | null; org_tz: string | null }[]>`
+    select ss.tz as division_tz, o.timezone as org_tz
+    from divisions d
+    left join schedule_settings ss on ss.division_id = d.id
+    left join organizations o on o.id = d.org_id
+    where d.id = ${row.division_id}`;
+  const venueTz = resolveVenueTz(zone?.division_tz, zone?.org_tz);
+  const folded = row.last_seq === null ? null : await cachedFold(fixtureId, row.last_seq)();
+  return projectOverlayLiveData({ row, folded, venueTz });
+}
+```
+
+  RE-PIN: `publicFixture`'s SELECT (`usecases/public.ts:296-303`) must include `division_id` — it does at `ac85c70` (`select id, division_id, …`). If `sql.begin` is typed to reject a non-array return, cast as shown; the precedent is `registration-submit.ts:609`.
+
+- [ ] **Step 12: Run — expect PASS.** Re-run Step 10's command. Expected: `numTotalTests: 4`, `numFailedTests: 0`.
+
+- [ ] **Step 13: Add the route, the OpenAPI row, regenerate.** Create `apps/web/src/app/api/v1/public/fixtures/[id]/overlay/route.ts`:
+
+```ts
+import { v1, reply } from "@/server/api-v1/http";
+import { publicRateLimit, PUBLIC_CACHE_CONTROL } from "@/server/usecases/public";
+import { loadOverlayLiveData } from "@/server/overlay/load";
+
+type Ctx = { params: Promise<{ id: string }> };
+
+/** The stream overlay's one poll target (design §3.2): the public live
+ *  summary plus the two folded-state facts a scorebug needs. Visibility is
+ *  the public view's (404 ≡ missing); the ENTITLEMENT gate is on the overlay
+ *  PAGE, not here — this JSON is public exactly as /public/fixtures/{id} is. */
+export async function GET(req: Request, { params }: Ctx) {
+  return v1(async () => {
+    await publicRateLimit(req);
+    const { id } = await params;
+    const data = await loadOverlayLiveData(id);
+    return reply(200, data, { "Cache-Control": PUBLIC_CACHE_CONTROL });
+  });
+}
+```
+
+  In `apps/web/src/server/api-v1/openapi.ts`, immediately after the `/public/fixtures/{id}/realtime-token` row (`:201`):
+
+```ts
+  { path: "/public/fixtures/{id}/overlay", method: "get", summary: "Stream overlay payload: the public live summary plus the folded-state clock (football family) and innings numbers (cricket)", tag: "public", public: true },
+```
+
+  Then `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/stream-overlay && npm run openapi:gen` and `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/stream-overlay/apps/web && npx vitest run src/server/api-v1/__tests__/openapi-coverage.test.ts src/server/api-v1/__tests__/key-scopes.test.ts src/server/api-v1/__tests__/openapi-published.test.ts --reporter=json --outputFile=/tmp/ovl-w1/t0d.json` — expected `numFailedTests: 0` (the public route follows `/public/fixtures/{id}`'s classification; if `key-scopes.test.ts` names the new path, add the row it names beside that route's, and record it). Re-run `openapi:gen`: no further diff.
+
+- [ ] **Step 14: Stage the e2e assertions Task 8 owns.** Add to Task 8's `stream-overlay.spec.ts` case list (Task 8 Step 1): `GET /api/v1/public/fixtures/{id}/overlay` answers 200 with `status`/`summary`/`outcome` DEEP-EQUAL to `GET /api/v1/public/fixtures/{id}`'s, `lastSeq` a number, `venueTz` a valid IANA string; after ONE `football.goal` with an `at` stamp on a football fixture, `clock.phase === "H1"` and `clock.anchorSeconds` equals the stamp; on the cricket fixture, `cricket.innings[0].ballsLimit` equals the T20 quota; a fixture whose org lacks `streaming.overlay` STILL answers 200 here (the gate is the page's), and a private competition's fixture answers 404. Written there, run there.
+
+- [ ] **Step 15: Mutation checks — five, each named.**
+  1. `data.ts`: delete the venue-zone query and hardcode `venueTz: "UTC"`. Re-run Step 4's command. Expected red: `falls back to the organisation's zone…` — `expected 'UTC' to be 'Asia/Kolkata'`. Restore.
+  2. `load.ts`: change the cache keys to `["overlay-fold", fixtureId]` (drop `last_seq`). Re-run Step 12's command. Expected red: `folds AGAIN when the ledger advances` — `expected "spy" to be called 2 times, but got 1`. Restore.
+  3. `project.ts` `clockOf`: delete `asOf.period !== s.phase ||`. Re-run Step 8's command. Expected red: `between periods the clock is ABSENT` — `expected { phase: 'HT', … } to be undefined`. Restore.
+  4. `project.ts` `cricketOf`: swap `runs` and `wickets` in the pushed object. Expected red: `cricket: every innings' runs…` — `toMatchObject` names `runs`. Restore.
+  5. `project.ts`: `anchorAtWallMs: Date.now()` instead of the last envelope's wall time. Expected red: `football: a stamped goal…` — `expected <now> to equal 1788...` . Restore.
+  A surviving mutant is a missing test, not a note. Record all five with their killers in the PR inventory.
+
+- [ ] **Step 16: Gate `apps/web` against the baseline.**
+  `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/stream-overlay/apps/web && DATABASE_URL=<ovl url> DATABASE_SSL=disable npx vitest run --reporter=json --outputFile=/tmp/ovl-w1/t0-web-full.json; node -e "const r=require('/tmp/ovl-w1/t0-web-full.json');console.log(r.numPassedTests,r.numTotalTests,r.numFailedTests)"`
+  Expected: the T1 Task 0 baseline in `_STATE.md` plus this task's 4 + 7 + 4 new tests, no new red. `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/stream-overlay && npx tsc --noEmit -p apps/web/tsconfig.json; echo "EXIT=$?"` → `EXIT=0` (the local build skips typechecking; a green build proves nothing about types). `packages/engine` is UNTOUCHED — `/usr/bin/git status --porcelain packages` prints nothing.
+
+- [ ] **Step 17: Commit.**
+  `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/stream-overlay && /usr/bin/git add apps/web/src/server/public-site/data.ts apps/web/src/server/public-site/__tests__/public-fixture-venue-tz.test.ts apps/web/src/components/public-site/live-score-data.ts apps/web/src/server/overlay/project.ts apps/web/src/server/overlay/load.ts apps/web/src/server/overlay/__tests__/project.test.ts apps/web/src/server/overlay/__tests__/load.test.ts "apps/web/src/app/api/v1/public/fixtures/[id]/overlay/route.ts" apps/web/src/server/api-v1/openapi.ts apps/web/openapi/v1.json apps/web/openapi/v1.public.json`
   then
-  `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/stream-overlay && /usr/bin/git commit -m "overlay(payload): venue zone, cricket balls remaining, football clock" -m "Owner answer 12 (Q1). The public payload could not say when a fixture starts in the venue's own zone, how many balls a chase has left, or what the match clock reads. The zone rides on the server-rendered payload via resolveVenueTz (one zone per fixture); the two live numbers ride on ScoreSummary, because the live transport carries summary and nothing else. football.coarsen now keeps 'at' — not attribution, and s9.6 requires coarse and fine to agree on state.asOf once the clock is a summary fact." -m "Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>" -m "Claude-Session: https://claude.ai/code/session_01UdUR7dcxassJ4FExpVfRRr"`
+  `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/stream-overlay && /usr/bin/git commit -m "overlay(data): venue zone on the public payload, and the overlay endpoint over foldFixture" -m "Owner answers 12 and 19 (2026-09-06), design §3.2 (2026-09-07). The venue zone rides on getPublicFixture via resolveVenueTz. The football clock anchor and cricket's innings numbers are projected off the folded STATE the engine already holds, inside unstable_cache keyed on last_seq — one fold per ledger advance, zero engine edits, no golden re-baseline." -m "Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>" -m "Claude-Session: https://claude.ai/code/session_01LJGBoVPAWczYB9c45TD1aw"`
+
 
 ---
 
@@ -624,8 +805,9 @@ export function clockValue(position: MatchPosition): string | undefined {
   - `export const POLL_MS: number` (15_000)
   - `export const DEBOUNCE_MS: number` (250)
   - `export function isLiveStatus(status: string): boolean`
-  - `export interface LiveFixture { data: LiveFixtureData; live: boolean; subscribed: boolean; refresh: () => Promise<void> }`
-  - `export function useLiveFixture(fixtureId: string, initial: LiveFixtureData, realtime: boolean): LiveFixture`
+  - `export interface LiveFixture<T extends LiveFixtureData = LiveFixtureData> { data: T; live: boolean; subscribed: boolean; refresh: () => Promise<void>; presentationNowOffsetMs: number }` (amended 2026-09-07: generic, plus the offset)
+  - `export interface LiveFixtureOptions<T extends LiveFixtureData> { fetcher?: (fixtureId: string) => Promise<T>; delayMs?: number }`
+  - `export function useLiveFixture<T extends LiveFixtureData = LiveFixtureData>(fixtureId: string, initial: T, realtime: boolean, options?: LiveFixtureOptions<T>): LiveFixture<T>` — `LiveScore` calls it with three arguments and is byte-identical in behaviour; the overlay stage passes `{ fetcher: fetchOverlayFixture }`; R2 passes `delayMs`.
 
 > **Conflict with the wave prompt, recorded:** scope 1 writes the return type as bare `LiveFixtureData`. `LiveScore` renders `subscribed` at `live-score.tsx:148` (`Live{subscribed ? " · realtime" : ""}`), and the same scope requires its render to stay untouched — a bare `LiveFixtureData` return cannot satisfy both. The object return above is the minimum that does. `live` is returned because the overlay stage needs it for the live-dot breath (`_THEMES.md` §6).
 
@@ -766,6 +948,107 @@ describe("useLiveFixture", () => {
 - [ ] **Step 2: Run it — expect red.** `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/stream-overlay/apps/web && npx vitest run src/components/public-site/__tests__/use-live-fixture.test.tsx --reporter=json --outputFile=/tmp/ovl-w1/t1-red.json`
   Expected: the suite fails to COLLECT with `Failed to resolve import "../use-live-fixture" from "src/components/public-site/__tests__/use-live-fixture.test.tsx"`. In the JSON that is `numTotalTests: 0` with a non-empty `testResults[0].message` — a collection failure, which `rtk` would have printed as `PASS(0) FAIL(0)`. Read the JSON.
 
+- [ ] **Step 2a (amended 2026-09-07, design §3.3): the fetcher and delay cases.** Append INSIDE the same `describe` in `use-live-fixture.test.tsx`, after Step 1's last case. Step 1's `stubInterval` captures ONE callback; the delay buffer arms a SECOND interval (1000 ms) beside the poll (`POLL_MS`), so these cases use a stub keyed by delay:
+
+```tsx
+/** Every setInterval, keyed by its delay — the poll (POLL_MS) and the delay
+ *  drain (1000) are told apart by the number they were armed with. */
+function stubIntervals(): { fire: (ms: number) => Promise<void>; armed: () => number[] } {
+  const byDelay = new Map<number, () => void | Promise<void>>();
+  vi.stubGlobal(
+    "setInterval",
+    ((fn: () => void, ms?: number) => {
+      byDelay.set(ms ?? -1, fn);
+      return byDelay.size as unknown as ReturnType<typeof setInterval>;
+    }) as unknown as typeof setInterval,
+  );
+  vi.stubGlobal("clearInterval", (() => {}) as typeof clearInterval);
+  return {
+    fire: async (ms) => {
+      const cb = byDelay.get(ms);
+      if (!cb) throw new Error(`no interval armed at ${ms} ms — armed: ${[...byDelay.keys()].join(",")}`);
+      await cb();
+    },
+    armed: () => [...byDelay.keys()].sort((a, b) => a - b),
+  };
+}
+
+function harnessWith<T extends LiveFixtureData>(initial: T, realtime: boolean, options: LiveFixtureOptions<T>) {
+  let latest: LiveFixture<T> | null = null;
+  const island = renderIsland(
+    (props: { fixtureId: string; initial: T; realtime: boolean }) => {
+      latest = useLiveFixture<T>(props.fixtureId, props.initial, props.realtime, options);
+      return null;
+    },
+    { fixtureId: "fx-1", initial, realtime },
+  );
+  return { island, read: (): LiveFixture<T> => latest as unknown as LiveFixture<T> };
+}
+
+it("uses the fetcher it is given, and fetchLiveFixture's URL by default (one transport, two payloads)", async () => {
+  const timers = stubIntervals();
+  stubFetch({ ...IN_PLAY, summary: { headline: "9 — 9" } });
+  const own = vi.fn(async (id: string) => ({ ...IN_PLAY, summary: { headline: `own:${id}` } }));
+  const h = harnessWith(IN_PLAY, false, { fetcher: own });
+  await timers.fire(POLL_MS);
+  expect(own).toHaveBeenCalledWith("fx-1");
+  expect(h.read().data.summary?.headline).toBe("own:fx-1");
+  // Default: the public endpoint, through global fetch.
+  const d = harnessWith(IN_PLAY, false, {});
+  await timers.fire(POLL_MS);
+  expect((globalThis.fetch as unknown as { mock: { calls: unknown[][] } }).mock.calls.some((c) => String(c[0]).endsWith("/api/v1/public/fixtures/fx-1"))).toBe(true);
+  expect(d.read().data.summary?.headline).toBe("9 — 9");
+});
+
+it("without options arms ONLY the poll — no drain interval, offset 0 (byte-identical to LiveScore's behaviour)", () => {
+  const timers = stubIntervals();
+  const h = harnessWith(IN_PLAY, false, {});
+  expect(timers.armed()).toEqual([POLL_MS]);
+  expect(h.read().presentationNowOffsetMs).toBe(0);
+});
+
+it("delayMs: a refreshed snapshot is presented only once delayMs has elapsed, on the drain tick, and the offset is exposed", async () => {
+  const timers = stubIntervals();
+  const now = vi.spyOn(Date, "now");
+  now.mockReturnValue(100_000);
+  const fetcher = vi.fn(async () => ({ ...IN_PLAY, summary: { headline: "1 — 1" } }));
+  const h = harnessWith(IN_PLAY, false, { fetcher, delayMs: 3000 });
+  expect(h.read().presentationNowOffsetMs).toBe(3000);
+  expect(timers.armed()).toEqual([1000, POLL_MS]);
+  await timers.fire(POLL_MS);                 // received at 100 000
+  expect(h.read().data.summary?.headline, "not yet — 3 s have not passed").toBe(IN_PLAY.summary?.headline);
+  now.mockReturnValue(102_000);
+  await timers.fire(1000);
+  expect(h.read().data.summary?.headline, "2 s in: still held").toBe(IN_PLAY.summary?.headline);
+  now.mockReturnValue(103_000);
+  await timers.fire(1000);
+  expect(h.read().data.summary?.headline, "3 s in: presented").toBe("1 — 1");
+  now.mockRestore();
+});
+
+it("delayMs: two snapshots received 500 ms apart present in order, newest-due wins, nothing is skipped backwards", async () => {
+  const timers = stubIntervals();
+  const now = vi.spyOn(Date, "now");
+  let n = 0;
+  const fetcher = vi.fn(async () => ({ ...IN_PLAY, summary: { headline: `s${++n}` } }));
+  const h = harnessWith(IN_PLAY, false, { fetcher, delayMs: 2000 });
+  now.mockReturnValue(10_000);
+  await timers.fire(POLL_MS);                 // s1 @ 10 000
+  now.mockReturnValue(10_500);
+  await timers.fire(POLL_MS);                 // s2 @ 10 500
+  now.mockReturnValue(12_200);
+  await timers.fire(1000);                    // s1 due (12 000), s2 not (12 500)
+  expect(h.read().data.summary?.headline).toBe("s1");
+  now.mockReturnValue(12_600);
+  await timers.fire(1000);
+  expect(h.read().data.summary?.headline).toBe("s2");
+  now.mockRestore();
+});
+```
+
+  Add `type LiveFixtureOptions` to the file's imports from `../use-live-fixture`. RE-PIN: `renderIsland`'s exact signature and whether effects run synchronously on first render (`components/__tests__/_hook-harness.tsx:169`) — if effects are deferred, call the harness's flush before reading `timers.armed()`. Re-run Step 2's command: the four new cases red for `useLiveFixture is not a function` / missing export until Step 3 lands.
+
+
 - [ ] **Step 3: Implement the hook.** Create `apps/web/src/components/public-site/use-live-fixture.ts`:
 
 ```ts
@@ -778,7 +1061,7 @@ describe("useLiveFixture", () => {
 // everyone else falls back to a 15 s poll of the public fixture endpoint.
 // Behaviour — the interval, the 250 ms debounce, the "any failure leaves
 // `subscribed` false" rule — is contract, not tuning (R5).
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   fetchLiveFixture,
   fetchPublicRealtimeToken,
@@ -798,8 +1081,11 @@ export function isLiveStatus(status: string): boolean {
   return status === "in_play" || status === "scheduled";
 }
 
-export interface LiveFixture {
-  data: LiveFixtureData;
+export interface LiveFixture<T extends LiveFixtureData = LiveFixtureData> {
+  data: T;
+  /** How far behind wall time the PRESENTED snapshot is (= `delayMs`, 0 by
+   *  default). The overlay clock subtracts it; nothing else reads it. */
+  presentationNowOffsetMs: number;
   /** `isLiveStatus(data.status)` — recomputed from the LIVE data, never from
    *  the initial prop, so a fixture that decides while the page is open stops
    *  polling on the very next tick. */
@@ -810,20 +1096,65 @@ export interface LiveFixture {
   refresh: () => Promise<void>;
 }
 
-export function useLiveFixture(
+/** Amended 2026-09-07 (design §3.3): generic over the payload and its
+ *  fetcher, so `LiveScore` (public JSON) and the overlay stage (the overlay
+ *  endpoint) share ONE transport with two payloads. `delayMs` is R2's
+ *  presentation buffer, built here so the seam is real from W1: with it
+ *  absent the hook is byte-identical in behaviour. */
+export interface LiveFixtureOptions<T extends LiveFixtureData> {
+  fetcher?: (fixtureId: string) => Promise<T>;
+  /** Present snapshots no sooner than `delayMs` after they were received. */
+  delayMs?: number;
+}
+
+export function useLiveFixture<T extends LiveFixtureData = LiveFixtureData>(
   fixtureId: string,
-  initial: LiveFixtureData,
+  initial: T,
   realtime: boolean,
-): LiveFixture {
-  const [data, setData] = useState<LiveFixtureData>(initial);
+  options: LiveFixtureOptions<T> = {},
+): LiveFixture<T> {
+  const fetcher = (options.fetcher ?? (fetchLiveFixture as unknown as (id: string) => Promise<T>));
+  const delayMs = options.delayMs ?? 0;
+  // The newest snapshot RECEIVED (always current) and the one PRESENTED
+  // (held back by delayMs). With delayMs 0 they are the same state.
+  const [data, setData] = useState<T>(initial);
+  const bufferRef = useRef<{ receivedAt: number; snapshot: T }[]>([]);
+
+  const present = useCallback(
+    (snapshot: T) => {
+      if (delayMs <= 0) {
+        setData(snapshot);
+        return;
+      }
+      bufferRef.current.push({ receivedAt: Date.now(), snapshot });
+    },
+    [delayMs],
+  );
+
+  // Drain the delay buffer once per second: present the newest snapshot whose
+  // receivedAt ≤ now − delayMs. One interval, only while delayMs > 0.
+  useEffect(() => {
+    if (delayMs <= 0) return;
+    const id = setInterval(() => {
+      const due = Date.now() - delayMs;
+      const buf = bufferRef.current;
+      let idx = -1;
+      for (let i = 0; i < buf.length; i++) if (buf[i]!.receivedAt <= due) idx = i;
+      if (idx >= 0) {
+        setData(buf[idx]!.snapshot);
+        bufferRef.current = buf.slice(idx + 1);
+      }
+    }, 1000);
+    return () => clearInterval(id);
+  }, [delayMs]);
 
   const refresh = useCallback(async () => {
     try {
-      setData(await fetchLiveFixture(fixtureId));
+      present(await fetcher(fixtureId));
     } catch {
       // transient — keep the last known score
     }
-  }, [fixtureId]);
+  }, [fixtureId, fetcher, present]);
 
   const live = isLiveStatus(data.status);
 
@@ -875,7 +1206,10 @@ export function useLiveFixture(
     return () => clearInterval(id);
   }, [live, subscribed, refresh]);
 
-  return { data, live, subscribed, refresh };
+  // The ONE authority for "how far behind the wall clock is the picture":
+  // the football clock (use-overlay-clock.ts) subtracts it so a delayed goal
+  // and the clock advance land together (design §3.6).
+  return { data, live, subscribed, refresh, presentationNowOffsetMs: delayMs };
 }
 ```
 
@@ -926,7 +1260,7 @@ export function LiveScore({
   Deletions: the `useCallback, useEffect, useState` import from `react`, the `fetchLiveFixture` / `fetchPublicRealtimeToken` imports, `const POLL_MS = 15_000;` (`:29`), and the whole `:59-117` block (`useState`, `refresh`, `live`, both effects).
 
 - [ ] **Step 5: Run — expect PASS, including the untouched regression witnesses.** `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/stream-overlay/apps/web && npx vitest run src/components/public-site --reporter=json --outputFile=/tmp/ovl-w1/t1-green.json`
-  Expected: `numFailedTests: 0`; `use-live-fixture.test.tsx` contributes 6 tests; `live-score.test.tsx` and `live-score-data.test.ts` pass with ZERO edits. Confirm every `.testResults[].name` starts with `/Users/ashokhein/github/seazn.club/.claude/worktrees/stream-overlay/apps/web/src/components/public-site/`.
+  Expected: `numFailedTests: 0`; `use-live-fixture.test.tsx` contributes 10 tests (Step 1's six plus Step 2a's four); `live-score.test.tsx` and `live-score-data.test.ts` pass with ZERO edits. Confirm every `.testResults[].name` starts with `/Users/ashokhein/github/seazn.club/.claude/worktrees/stream-overlay/apps/web/src/components/public-site/`.
 
 - [ ] **Step 6: Mutation check (d) — delete the poll guard.** Temporarily change `if (!live || subscribed) return;` to `if (subscribed) return;` in `use-live-fixture.ts`, re-run Step 5's command. Expected red: `never arms a poll for a fixture that is already decided at mount` — `expected 1 to be 0`. Restore the guard and re-run to green. Record "mutant (d) killed by use-live-fixture.test.tsx › never arms a poll…" in the PR inventory.
 
@@ -947,12 +1281,13 @@ export function LiveScore({
 
 **Interfaces:**
 - Consumes: `setBreakdown(summary: unknown, sportKey: string): SetBreakdown | null` (`public-site.ts:290`), `periodBreakdown(summary: unknown): PeriodScoreRow[] | null` (`:319`), `matchStrength(summary: unknown): string | null` (`:338`), `disciplineList(summary: unknown): DisciplineEntry[] | null` (`:352`), `servingSide(summary: unknown): "home" | "away" | null` (`:373`), `disciplineLabel(classKey: string): string` (`:377`); `renderDecidedOutcome(outcome, entrantNames: Record<string,string>, templates: DecidedOutcomeTemplates, shootoutScore?): string | null` (`scoring-vocab.ts:1345`), `shootoutScoreFromDetail(detail: unknown)` (`:1410`), `type DecidedOutcomeTemplates` (`:1296`); `type LiveFixtureData` (`live-score-data.ts:7`).
-- Also consumes, from **Task 0**: `ScoreSummary.detail.innings[].ballsLimit` (cricket), `ScoreSummary.detail.clock` (football, hockey, ice hockey), and `getPublicFixture(...).venueTz`.
+- Also consumes, from **Task 0** (amended 2026-09-07): `OverlayLiveData.cricket.innings[]` (`{ runs, wickets, legalBalls, ballsLimit }`, off the folded state) and `getPublicFixture(...).venueTz`. The football clock is NOT a model input read off the payload: `OverlayLiveData.clock` anchors the STAGE's 1 Hz timer (Task 5, `use-overlay-clock.ts`), which hands the model a formatted `clockLabel`.
 - Produces (in `public-site.ts`):
   - `export function battingEntrantId(summary: unknown): string | null`
   - `export function chaseNeed(summary: unknown): number | null`
-  - `export function chaseBalls(summary: unknown): number | null`
-  - `export function matchClock(summary: unknown): string | null`
+  - `export function chaseBalls(cricket: OverlayLiveData["cricket"] | null | undefined): number | null` (amended 2026-09-07 — reads the endpoint's innings, not `summary.detail`)
+- Produces (in `overlay-model.ts`, amended 2026-09-07):
+  - `export function formatClock(seconds: number): string` — `mm:ss`, minutes unbounded ("90:00", "104:12"); RE-PIN: if `@seazn/engine/core` exports `formatElapsed`, delegate to it and delete the local body (one authority)
 - Produces (in `overlay-model.ts`):
   - `export type OverlayMsg = (key: string, vars?: Record<string, string | number>) => string`
   - `export interface OverlaySideInput { id: string; name: string; short?: string | null }`
@@ -960,7 +1295,7 @@ export function LiveScore({
   - `export interface OverlayCell { key: string; value: string }`
   - `export interface OverlayModel { live: boolean; decided: boolean; header: { context: string; clock?: string }; sides: [OverlaySide, OverlaySide]; cells: OverlayCell[]; detail: string[]; chase?: string; result?: string }`
   - `export interface OverlayMoment { kind: string; headline: string; line?: string; tone: "led" | "caution" | "dismissal" }` — **type only**, W2's slot (R4). W2 re-declares it in `lib/overlay-moments.ts` with an added `seq: number`; keep the four fields identically named so the widening is additive.
-  - `export interface OverlayModelInput { sportKey: string; data: LiveFixtureData; sides: [OverlaySideInput, OverlaySideInput]; startLabel: string | null; msg: OverlayMsg; decidedTemplates: DecidedOutcomeTemplates }`
+  - `export interface OverlayModelInput { sportKey: string; data: OverlayLiveData; sides: [OverlaySideInput, OverlaySideInput]; startLabel: string | null; clockLabel: string | null; msg: OverlayMsg; decidedTemplates: DecidedOutcomeTemplates }` (amended 2026-09-07: `data` is the endpoint's payload; `clockLabel` is the stage's formatted tick, `null` when there is nothing to show)
   - `export function shortCode(side: OverlaySideInput): string`
   - `export function splitLine(line: string): { big: string; sub?: string }`
   - `export function overlayStartLabel(iso: string | null, locale: string, tz: string): string | null`
@@ -971,7 +1306,7 @@ export function LiveScore({
 > 2. `overlayModel` also takes `decidedTemplates`. The decided sentence's one authority is `renderDecidedOutcome` (`scoring-vocab.ts:1345`), whose templates are built from **ui** keys (`fixture.decidedBy.*`) — exactly what `LiveScore` already receives as a prop. Re-implementing that sentence off `summary.headline` would be a second authority for a fact this repo already owns.
 > 3. `startLabel: string | null` stays a formatted string on the input rather than the model computing it: `overlayModel` takes no zone and no `Intl`, so it stays pure and locale-free. What CHANGED with owner answer 12 is where the string comes from — `overlayStartLabel(iso, locale, venueTz)` in this same file, called by the overlay page with the `venueTz` Task 0 puts on the payload. One formatter, tested here, instead of an `Intl.DateTimeFormat` literal inlined in `page.tsx`.
 >
-> **Owner answer 12 (2026-09-06) closed the two W1 deviations and the unpinned clock that used to sit here.** Deviation 4 ("start time formats in UTC") and deviation 6 ("chase reads 'Need 45', not 'Need 45 off 45'") are both closed by Task 0, and so is "football's clock is unpinned". Their replacements: the start label formats in `venueTz`, the chase line renders `overlay.chase.needBalls`, and `header.clock` is populated from `matchClock(summary)`. Nothing in this task may fall back to UTC, to a runs-only chase line, or to an empty clock slot.
+> **Owner answer 12 (2026-09-06) closed the two W1 deviations and the unpinned clock that used to sit here.** Deviation 4 ("start time formats in UTC") and deviation 6 ("chase reads 'Need 45', not 'Need 45 off 45'") are both closed by Task 0, and so is "football's clock is unpinned". Their replacements: the start label formats in `venueTz`, the chase line renders `overlay.chase.needBalls`, and `header.clock` is the STAGE's ticking value handed in as `clockLabel` (amended 2026-09-07: the anchor rides the overlay endpoint, `useOverlayClock` advances it — Task 5 Step 8a — and this pure model only places the string). Nothing in this task may fall back to UTC, to a runs-only chase line, or read a clock off the summary.
 >
 > **One open pin recorded here rather than guessed:**
 > - `short` has no source. `public_entrants_v` (`db/migration/deltas/V350__person_tombstone_views.sql:18-47`) exposes `display_name` and a `team_display` jsonb of `club_id/club_name/logo_path/colors` — **no `short_name`**; `teams.short_name` exists (`V206:5`) but does not reach the public payload. Watch-list 6 therefore resolves to **the three-letter fallback**, and the panel copy says so (`ui.stream.codeNote`, Task 6).
@@ -986,11 +1321,14 @@ export function LiveScore({
 //
 // Driven off the REAL cricket summary shape (`packages/engine/src/sports/
 // cricket/cricket.ts:3285-3325`: `detail.innings[] = { entrantId, runs,
-// wickets, legalBalls, ballsLimit, declared, closed }` — `ballsLimit` added by
-// Task 0), not an invented one. `detail.clock` is Task 0's football/period
-// field, a `mm:ss` string the engine has already formatted and guarded.
+// wickets, legalBalls, declared, closed }`) for `battingEntrantId` and
+// `chaseNeed`, and off the overlay ENDPOINT's `cricket.innings[]` (Task 0,
+// design §3.2: `{ runs, wickets, legalBalls, ballsLimit }`, projected from the
+// folded state) for `chaseBalls` — amended 2026-09-07. No summary field is
+// invented here; the clock is not a reader at all (it is the stage's timer).
 import { describe, expect, it } from "vitest";
-import { battingEntrantId, chaseBalls, chaseNeed, matchClock } from "@/lib/public-site";
+import { battingEntrantId, chaseBalls, chaseNeed } from "@/lib/public-site";
+import { formatClock } from "@/lib/overlay-model";
 
 const innings = (entrantId: string, runs: number, closed: boolean) => ({
   entrantId, runs, wickets: 2, legalBalls: 60, ballsLimit: 120, declared: false, closed,
@@ -1037,49 +1375,45 @@ describe("chaseNeed", () => {
   });
 });
 
-describe("chaseBalls", () => {
-  // The denominator `_THEMES.md` §3 draws: "Need 45 off 45". Task 0 put
-  // `ballsLimit` on the payload; this is the only place that subtracts.
+describe("chaseBalls (amended 2026-09-07: reads OverlayLiveData.cricket, the endpoint's innings off the folded state)", () => {
+  // The denominator `_THEMES.md` §3 draws: "Need 45 off 45". Task 0's endpoint
+  // carries `ballsLimit` beside `legalBalls`; this is the only place that
+  // subtracts. Whether a chase is IN PROGRESS is `chaseNeed`'s call (summary);
+  // the model asks this only when `chaseNeed` is non-null.
+  const inn = (runs: number, legalBalls: number, ballsLimit: number | null) => ({ runs, wickets: 2, legalBalls, ballsLimit });
+
   it("is the chasing innings' quota less the legal balls it has faced", () => {
-    const summary = { detail: { innings: [innings("e-home", 180, true), innings("e-away", 91, false)] } };
-    expect(chaseBalls(summary), "120 quota less 60 bowled").toBe(60);
+    expect(chaseBalls({ innings: [inn(180, 120, 120), inn(91, 60, 120)] }), "120 quota less 60 bowled").toBe(60);
   });
 
   it("follows a DLS-revised quota rather than the format's original", () => {
-    const revised = { ...innings("e-away", 91, false), ballsLimit: 90 };
-    const summary = { detail: { target: 160, innings: [innings("e-home", 180, true), revised] } };
-    expect(chaseBalls(summary)).toBe(30);
+    expect(chaseBalls({ innings: [inn(180, 120, 120), inn(91, 60, 90)] })).toBe(30);
   });
 
-  it("is null where the format declares no quota, and null with no chase", () => {
+  it("is null where the format declares no quota, null in the first innings, and null with no cricket at all", () => {
     // A timed/unlimited format carries `ballsLimit: null` (cricket.ts:440) —
     // "off null balls" must never render, so the line falls back to runs only.
-    const unlimited = { ...innings("e-away", 91, false), ballsLimit: null };
-    expect(chaseBalls({ detail: { innings: [innings("e-home", 180, true), unlimited] } })).toBeNull();
-    expect(chaseBalls({ detail: { innings: [innings("e-home", 91, false)] } })).toBeNull();
-    expect(chaseBalls({ detail: { periods: [{ phase: "H1", home: 1, away: 0 }] } })).toBeNull();
+    expect(chaseBalls({ innings: [inn(180, 120, 120), inn(91, 60, null)] })).toBeNull();
+    expect(chaseBalls({ innings: [inn(91, 60, 120)] })).toBeNull();
+    expect(chaseBalls(undefined)).toBeNull();
+    expect(chaseBalls(null)).toBeNull();
   });
 
   it("never goes negative when the quota has been overshot", () => {
-    const over = { ...innings("e-away", 91, false), legalBalls: 130 };
-    expect(chaseBalls({ detail: { innings: [innings("e-home", 180, true), over] } })).toBe(0);
+    expect(chaseBalls({ innings: [inn(180, 120, 120), inn(91, 130, 120)] })).toBe(0);
   });
 });
 
-describe("matchClock", () => {
-  it("reads the clock the engine already formatted and guarded", () => {
-    // NOT re-derived here. Task 0's `detail.clock` comes from
-    // `footballPosition`/`periodPosition`, which drop the value themselves when
-    // the last stamp names a phase the match has left — so this reader must be
-    // a read, never a second guard.
-    expect(matchClock({ detail: { periods: [{ phase: "H2", home: 1, away: 0 }], clock: "12:41" } })).toBe("12:41");
+describe("formatClock (overlay-model.ts)", () => {
+  it("formats mm:ss with minutes unbounded, zero-padded seconds", () => {
+    expect(formatClock(761)).toBe("12:41");
+    expect(formatClock(0)).toBe("00:00");
+    expect(formatClock(5400)).toBe("90:00");
+    expect(formatClock(6252)).toBe("104:12");
   });
-
-  it("is null for a stream nothing stamped, and for a sport with no clock", () => {
-    expect(matchClock({ detail: { periods: [{ phase: "H1", home: 0, away: 0 }] } })).toBeNull();
-    expect(matchClock({ detail: { sets: [{ home: 21, away: 15, closed: true }] } })).toBeNull();
-    expect(matchClock({ detail: { clock: "" } }), "an empty string is not a clock").toBeNull();
-    expect(matchClock(null)).toBeNull();
+  it("floors fractional seconds and clamps negatives to zero", () => {
+    expect(formatClock(59.9)).toBe("00:59");
+    expect(formatClock(-3)).toBe("00:00");
   });
 });
 ```
@@ -1145,47 +1479,42 @@ export function chaseNeed(summary: unknown): number | null {
  * Balls still available to the side batting second, or null.
  *
  * The denominator of the line `_THEMES.md` §3 draws — "Need 45 off 45". Both
- * numbers come from the SAME innings entry the engine publishes (Task 0 put
- * `ballsLimit` beside the `legalBalls` that was already there), so a DLS
- * revision moves them together and nothing here re-derives a quota from a
- * format name.
+ * numbers come from the SAME innings entry the overlay endpoint projects off
+ * the folded state (Task 0, design §3.2: `OverlayLiveData.cricket.innings[]`),
+ * so a DLS revision moves them together and nothing here re-derives a quota
+ * from a format name. Whether a chase is in progress is `chaseNeed`'s
+ * decision over the summary; the model calls this only when it is.
  *
  * `null`, never a guess, where the format declares no quota (`ballsLimit:
  * null` — timed and unlimited formats, cricket.ts:440): the bar then renders
  * the runs-only line, which is correct rather than short.
  */
-export function chaseBalls(summary: unknown): number | null {
-  if (typeof summary !== "object" || summary === null) return null;
-  const detail = (summary as { detail?: unknown }).detail;
-  if (typeof detail !== "object" || detail === null) return null;
-  const raw = (detail as { innings?: unknown }).innings;
-  if (!Array.isArray(raw) || raw.length < 2) return null;
-  const current = raw[raw.length - 1];
-  if (typeof current !== "object" || current === null) return null;
-  const row = current as Record<string, unknown>;
-  if (row.closed === true) return null;
-  const limit = row.ballsLimit;
-  const bowled = row.legalBalls;
-  if (typeof limit !== "number" || typeof bowled !== "number") return null;
-  return Math.max(0, limit - bowled);
+export function chaseBalls(
+  cricket: { innings: { legalBalls: number; ballsLimit: number | null }[] } | null | undefined,
+): number | null {
+  if (!cricket || !Array.isArray(cricket.innings) || cricket.innings.length < 2) return null;
+  const current = cricket.innings[cricket.innings.length - 1]!;
+  if (typeof current.ballsLimit !== "number" || typeof current.legalBalls !== "number") return null;
+  return Math.max(0, current.ballsLimit - current.legalBalls);
 }
+```
 
+  and in `apps/web/src/lib/overlay-model.ts` (Step 7 creates the file; this export goes beside `overlayStartLabel`):
+
+```ts
 /**
- * The match clock ("12:41") for the period family, or null.
- *
- * A READ, not a derivation. `detail.clock` is written by the engine's own
- * `footballPosition` / `periodPosition` (Task 0), which already apply the
- * staleness guard — a stamp naming a phase the match has left yields no clock
- * at all — and already format through `formatElapsed`. Re-implementing either
- * here would be a second authority for a number that goes out on air, and the
- * two would drift the first time a period label changed.
+ * `mm:ss` for the football family's clock cell. Minutes are unbounded
+ * ("90:00", "104:12" in extra time) because a period clock never wraps to
+ * hours on air. The STAGE owns the number (use-overlay-clock.ts, the one 1 Hz
+ * timer); this only spells it. RE-PIN: if `@seazn/engine/core` exports
+ * `formatElapsed`, this becomes `return formatElapsed(seconds)` and the body
+ * below is deleted — one authority for the format.
  */
-export function matchClock(summary: unknown): string | null {
-  if (typeof summary !== "object" || summary === null) return null;
-  const detail = (summary as { detail?: unknown }).detail;
-  if (typeof detail !== "object" || detail === null) return null;
-  const clock = (detail as { clock?: unknown }).clock;
-  return typeof clock === "string" && clock !== "" ? clock : null;
+export function formatClock(seconds: number): string {
+  const s = Math.max(0, Math.floor(seconds));
+  const mm = Math.floor(s / 60);
+  const ss = s % 60;
+  return `${String(mm).padStart(2, "0")}:${String(ss).padStart(2, "0")}`;
 }
 ```
 
@@ -1210,7 +1539,7 @@ import { builtinModules } from "@seazn/engine/sports";
 import { V3_SKINS } from "@/components/v2/scorepad/v3/registry";
 import { overlayModel, overlayStartLabel, shortCode, splitLine, type OverlayMsg } from "@/lib/overlay-model";
 import type { DecidedOutcomeTemplates } from "@/lib/scoring-vocab";
-import type { LiveFixtureData } from "@/components/public-site/live-score-data";
+import type { LiveFixtureData, OverlayLiveData } from "@/components/public-site/live-score-data";
 
 /** A msg that returns its own key, so any literal that leaked into the model
  *  shows up as prose among keys (R14). Never the real dictionary. */
@@ -1254,8 +1583,19 @@ function payload(
   return { status, summary, outcome };
 }
 
-const project = (key: string, data: LiveFixtureData, startLabel: string | null = null) =>
-  overlayModel({ sportKey: key, data, sides: SIDES, startLabel, msg: keyMsg, decidedTemplates: TEMPLATES });
+/** `payload()` returns the public shape; the model takes the OVERLAY shape
+ *  (a superset — Task 0). The two extra fields default here so the eleven
+ *  sport cases stay short; the clock and cricket cases pass them explicitly. */
+const project = (key: string, data: LiveFixtureData | OverlayLiveData, startLabel: string | null = null, clockLabel: string | null = null) =>
+  overlayModel({
+    sportKey: key,
+    data: { lastSeq: null, venueTz: "UTC", ...data } as OverlayLiveData,
+    sides: SIDES,
+    startLabel,
+    clockLabel,
+    msg: keyMsg,
+    decidedTemplates: TEMPLATES,
+  });
 
 const CRICKET_BALL = (over: number, ball: number, runs: number) =>
   ["cricket.ball", { over, ballInOver: ball, striker: "H-p1", nonStriker: "H-p2", bowler: "A-p1", runs: { bat: runs } }] as const;
@@ -1456,27 +1796,33 @@ describe("overlayModel — cricket chase line", () => {
 });
 
 describe("overlayModel — the football family's clock", () => {
-  it("populates header.clock from the summary the engine publishes", () => {
-    // Owner answer 12 closed the "clock stays undefined" pin. The value is
-    // read (`matchClock`), never derived here — the bar and the bug both render
-    // the cell only when it is set, so an empty slot is invisible and a wrong
-    // one is on air for ninety minutes.
-    const data: LiveFixtureData = {
+  it("places the stage's formatted clock in header.clock, and drops it on a decided frame (amended 2026-09-07)", () => {
+    // The clock is the STAGE's 1 Hz timer, formatted by `formatClock` before it
+    // reaches this pure model — the model neither reads a stamp nor derives a
+    // number. The bar and the bug both render the cell only when it is set,
+    // so an empty slot is invisible and a wrong one is on air for ninety
+    // minutes; a decided frame shows none.
+    const data: OverlayLiveData = {
       status: "in_play",
       summary: {
         headline: "2 — 1",
         perSide: [{ entrantId: "H", line: "2" }, { entrantId: "A", line: "1" }],
-        detail: { periods: [{ phase: "H1", home: 1, away: 1 }, { phase: "H2", home: 1, away: 0 }], clock: "12:41" },
+        detail: { periods: [{ phase: "H1", home: 1, away: 1 }, { phase: "H2", home: 1, away: 0 }] },
       },
       outcome: null,
+      lastSeq: 9,
+      venueTz: "UTC",
+      clock: { phase: "H2", anchorSeconds: 761, anchorAtWallMs: 0 },
     };
-    const model = project("football", data);
+    const model = project("football", data, null, "12:41");
     expect(model.header.clock).toBe("12:41");
     expect(model.header.context, "the phase is the context; the clock is its own cell").toBe("H2");
+    const done = project("football", { ...data, status: "decided", outcome: { kind: "win", winner: "H" } }, null, "90:00");
+    expect(done.header.clock, "no clock on a decided frame, whatever the stage hands in").toBeUndefined();
   });
 
-  it("leaves the clock absent for a stream nothing stamped, and for a sport with none", () => {
-    const unstamped: LiveFixtureData = {
+  it("leaves the clock absent when the stage has nothing to show, and for a sport with none", () => {
+    const unstamped: OverlayLiveData = {
       status: "in_play",
       summary: {
         headline: "0 — 0",
@@ -1484,8 +1830,10 @@ describe("overlayModel — the football family's clock", () => {
         detail: { periods: [{ phase: "H1", home: 0, away: 0 }] },
       },
       outcome: null,
+      lastSeq: 1,
+      venueTz: "UTC",
     };
-    expect(project("football", unstamped).header.clock).toBeUndefined();
+    expect(project("football", unstamped, null, null).header.clock).toBeUndefined();
     const badminton = payload("badminton", [["core.start", {}], ["badminton.rally", { wonBy: "home" }]], "in_play");
     expect(project("badminton", badminton).header.clock).toBeUndefined();
   });
@@ -1556,7 +1904,6 @@ import {
   chaseNeed,
   disciplineLabel,
   disciplineList,
-  matchClock,
   matchStrength,
   periodBreakdown,
   servingSide,
@@ -1567,7 +1914,7 @@ import {
   shootoutScoreFromDetail,
   type DecidedOutcomeTemplates,
 } from "@/lib/scoring-vocab";
-import type { LiveFixtureData } from "@/components/public-site/live-score-data";
+import type { OverlayLiveData } from "@/components/public-site/live-score-data";
 
 /**
  * A dictionary lookup over the `public` namespace. Deliberately NOT
@@ -1628,11 +1975,17 @@ export interface OverlayMoment {
 
 export interface OverlayModelInput {
   sportKey: string;
-  data: LiveFixtureData;
+  /** The overlay endpoint's payload (Task 0, design §3.2) — the public
+   *  summary plus `cricket.innings[]` for the chase denominator. */
+  data: OverlayLiveData;
   sides: [OverlaySideInput, OverlaySideInput];
   /** The kick-off, already formatted by the server in the venue zone and the
    *  reader's locale. Null when the fixture carries no time. */
   startLabel: string | null;
+  /** The football family's clock, already ticking and formatted by the STAGE
+   *  (`useOverlayClock` → `formatClock`). Null when there is nothing to show.
+   *  The model never reads a stamp and never derives a number. */
+  clockLabel: string | null;
   msg: OverlayMsg;
   /** The decided sentence's templates — `fixture.decidedBy.*`, the `ui`
    *  namespace — resolved server-side exactly as `LiveScore` receives them. */
@@ -1753,8 +2106,10 @@ export function overlayModel(input: OverlayModelInput): OverlayModel {
   // Owner answer 12: both halves of `_THEMES.md` §3's line when the format
   // declares a quota, the runs-only key when it does not. Two keys rather than
   // one with an empty `{balls}` — a dangling "off" is worse than a short line.
-  const balls = need === null ? null : chaseBalls(data.summary);
-  const clock = decided ? null : matchClock(data.summary);
+  const balls = need === null ? null : chaseBalls(data.cricket);
+  // The clock is the STAGE's timer (use-overlay-clock.ts), formatted before it
+  // reaches this pure model; decided frames show none (amended 2026-09-07).
+  const clock = decided ? null : input.clockLabel;
   const result = renderDecidedOutcome(
     data.outcome,
     { [sides[0].id]: sides[0].name, [sides[1].id]: sides[1].name },
@@ -1836,7 +2191,7 @@ export function overlayStartLabel(iso: string | null, locale: string, tz: string
 **Files:**
 - Create: `apps/web/src/lib/stream-url.ts`
 - Create (Test): `apps/web/src/lib/__tests__/stream-url.test.ts`
-- Create: `db/migration/deltas/V392__fixture_stream_url.sql`
+- Create: `db/migration/deltas/V400__fixture_stream_url.sql`
 - Modify: `apps/web/src/server/public-site/data.ts` — `PublicFixture` (`:206`), the `getPublicFixture` SELECT (`:711-716`)
 - Modify: `apps/web/src/server/usecases/public.ts` — `publicFixture()`'s `Pick<>` and SELECT (`:263-297`)
 - Modify: `apps/web/src/server/api-v1/schemas.ts` — after `PatchedFixture`'s neighbourhood, next to `PatchFixture` (`:964-989`)
@@ -2009,11 +2364,11 @@ export const streamUrlSchema = z
 
 - [ ] **Step 5: Mutation check (a) — delete the hostname comparison.** Change `return ALLOWED.has(url.hostname);` to `return true;`, re-run Step 4. Expected red: all ten `rejects …` cases for the https ones — `expected [Function] to throw an error`. Restore and re-run to green. Record "mutant (a) killed by stream-url.test.ts › rejects https://evil.example/www.youtube.com".
 
-- [ ] **Step 6: Write the migration.** Create `db/migration/deltas/V392__fixture_stream_url.sql` (renumber at rebase, R10):
+- [ ] **Step 6: Write the migration.** Create `db/migration/deltas/V400__fixture_stream_url.sql` (renumber at rebase, R10):
 
 ```sql
 -- =============================================================================
--- V392 — Stream overlay W1: the club's own broadcast link on a fixture.
+-- V400 — Stream overlay W1: the club's own broadcast link on a fixture.
 --
 -- A club streams the match to YouTube / Facebook / Twitch / Kick and pastes the
 -- link here; the public match page turns it into "Watch live" (and "Replay"
@@ -2059,7 +2414,7 @@ create or replace view public_fixtures_v as
 - [ ] **Step 8: Widen both hand-maintained column lists.** In `apps/web/src/server/public-site/data.ts`, add to `PublicFixture` (after `conditional`, the last field of the interface at `:206`ff):
 
 ```ts
-  /** The club's own broadcast link (V392). Null unless an organiser saved one,
+  /** The club's own broadcast link (V400). Null unless an organiser saved one,
    *  and null for a `setup` division — the view redacts it alongside the
    *  schedule. Rendered ONLY as an `<a href target="_blank" rel="noopener">`
    *  (R16); never an iframe, never fetched. */
@@ -2129,7 +2484,7 @@ describe.skipIf(!HAS_DB)("setFixtureStreamUrl", () => {
 
     const [view] = await sql<{ stream_url: string | null }[]>`
       select stream_url from public_fixtures_v where id = ${fixtureId}`;
-    expect(view?.stream_url, "V392 appended the column to the view — this is the seam").toBe(url);
+    expect(view?.stream_url, "V400 appended the column to the view — this is the seam").toBe(url);
   });
 
   it("clears the link with null", async () => {
@@ -2262,16 +2617,16 @@ export async function PUT(req: Request, { params }: Ctx) {
   Then `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/stream-overlay && /usr/bin/git status --porcelain apps/web/openapi` — expected: both files modified, and re-running `openapi:gen` leaves no further diff (CI's drift gate).
 
 - [ ] **Step 17: Commit.**
-  `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/stream-overlay && /usr/bin/git add apps/web/src/lib/stream-url.ts apps/web/src/lib/__tests__/stream-url.test.ts db/migration/deltas/V392__fixture_stream_url.sql apps/web/src/server/public-site/data.ts apps/web/src/server/usecases/public.ts apps/web/src/server/api-v1/schemas.ts apps/web/src/server/usecases/fixtures.ts apps/web/src/server/usecases/__tests__/fixture-stream-url.test.ts apps/web/src/app/api/v1/fixtures/[id]/stream/route.ts apps/web/src/server/api-v1/openapi.ts apps/web/src/server/api-v1/key-scopes.ts apps/web/openapi/v1.json apps/web/openapi/v1.public.json`
+  `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/stream-overlay && /usr/bin/git add apps/web/src/lib/stream-url.ts apps/web/src/lib/__tests__/stream-url.test.ts db/migration/deltas/V400__fixture_stream_url.sql apps/web/src/server/public-site/data.ts apps/web/src/server/usecases/public.ts apps/web/src/server/api-v1/schemas.ts apps/web/src/server/usecases/fixtures.ts apps/web/src/server/usecases/__tests__/fixture-stream-url.test.ts apps/web/src/app/api/v1/fixtures/[id]/stream/route.ts apps/web/src/server/api-v1/openapi.ts apps/web/src/server/api-v1/key-scopes.ts apps/web/openapi/v1.json apps/web/openapi/v1.public.json`
   then
-  `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/stream-overlay && /usr/bin/git commit -m "overlay(data): fixtures.stream_url, the exact-host allowlist and PUT /fixtures/{id}/stream" -m "V392 appends stream_url to public_fixtures_v (append-only, R6); both hand-maintained PublicFixture column lists gain it; the DB-backed usecase test proves the value reaches the public view rather than assuming it." -m "Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>" -m "Claude-Session: https://claude.ai/code/session_01UdUR7dcxassJ4FExpVfRRr"`
+  `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/stream-overlay && /usr/bin/git commit -m "overlay(data): fixtures.stream_url, the exact-host allowlist and PUT /fixtures/{id}/stream" -m "V400 appends stream_url to public_fixtures_v (append-only, R6); both hand-maintained PublicFixture column lists gain it; the DB-backed usecase test proves the value reaches the public view rather than assuming it." -m "Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>" -m "Claude-Session: https://claude.ai/code/session_01UdUR7dcxassJ4FExpVfRRr"`
 
 ---
 
 ### Task 4: The entitlement key
 
 **Files:**
-- Create: `db/migration/deltas/V393__streaming_overlay_entitlement.sql`
+- Create: `db/migration/deltas/V401__streaming_entitlements.sql`
 - Create (Test): `apps/web/src/lib/__tests__/entitlement-streaming-overlay.test.ts`
 - **Not modified, deliberately:** `apps/web/src/lib/entitlement-domains.ts`, `apps/web/src/lib/pricing-matrix.ts`, every pricing dictionary key.
 
@@ -2318,13 +2673,17 @@ describe("streaming.overlay is unadvertised", () => {
 });
 
 describe.skipIf(!HAS_DB)("streaming.overlay resolves", () => {
-  it("carries a catalogue row for every plan, all false", async () => {
+  // Amended 2026-09-07 (design §5.1): V401 seeds BOTH keys, so the catalogue
+  // claim is made for both — a migration that forgot `streaming.relay` would
+  // leave the Phone tab's gate with no row to flip at GA.
+  it.each(["streaming.overlay", "streaming.relay"] as const)("carries a catalogue row for every plan for %s, all false", async (key) => {
     const rows = await sql<{ plan_key: string; bool_value: boolean | null }[]>`
-      select plan_key, bool_value from plan_entitlements where feature_key = ${KEY}`;
+      select plan_key, bool_value from plan_entitlements where feature_key = ${key}`;
     const plans = await sql<{ key: string }[]>`select key from plans`;
     expect(rows.length, "a missing row already denies, but /admin needs the key visible under \"other\"")
       .toBe(plans.length);
-    for (const row of rows) expect(row.bool_value, row.plan_key).toBe(false);
+    expect(plans.length, "the v18 plan set (V393): community, pro, event_pass, event_pass_l, enterprise").toBe(5);
+    for (const row of rows) expect(row.bool_value, `${key} on ${row.plan_key}`).toBe(false);
   });
 
   it("is false for a fresh org and true after an org_entitlement_overrides row", async () => {
@@ -2375,13 +2734,17 @@ describe.skipIf(!HAS_DB)("streaming.overlay resolves", () => {
 - [ ] **Step 2: Run it — expect red.** `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/stream-overlay/apps/web && DATABASE_URL=<the ovl url> DATABASE_SSL=disable npx vitest run src/lib/__tests__/entitlement-streaming-overlay.test.ts --reporter=json --outputFile=/tmp/ovl-w1/t4-red.json`
   Expected: the two pure cases PASS (the key is genuinely absent from the domains list today), and `carries a catalogue row for every plan, all false` FAILS with `expected +0 to be 5` (or whatever `select count(*) from plans` returns) — the migration does not exist yet. `numFailedTests: 1`.
 
-- [ ] **Step 3: Write the migration.** Create `db/migration/deltas/V393__streaming_overlay_entitlement.sql` (renumber at rebase, R10):
+- [ ] **Step 3: Write the migration.** Create `db/migration/deltas/V401__streaming_entitlements.sql` (renumber at rebase, R10):
 
 ```sql
 -- =============================================================================
--- V393 — Stream overlay W1: the `streaming.overlay` entitlement key.
+-- V401 — Streaming W1: the `streaming.overlay` and `streaming.relay` keys
+-- (design §5.1, re-pinned 2026-09-07 @ fb99bbd4c; the 09-05 plan wrote V393,
+-- which is the entitlements-v18 catalogue on main).
 --
--- Granted by NO plan at launch (R1). A missing row already denies
+-- Both granted by NO plan at launch (dark rollout, design §10.4; the GA flip
+-- to §5.1's split — true on pro / event_pass_l / enterprise — is a LATER
+-- migration shipped with its pricing copy). A missing row already denies
 -- (lib/entitlements.ts's resolver; V024__plan_entitlements.sql:1), so these
 -- rows are not what makes the gate work — they are what makes the key VISIBLE
 -- in /admin/entitlements under "other", so an operator can see the feature
@@ -2403,10 +2766,14 @@ describe.skipIf(!HAS_DB)("streaming.overlay resolves", () => {
 -- =============================================================================
 
 insert into plan_entitlements (plan_key, feature_key, bool_value, int_value)
-select p.key, 'streaming.overlay', false, null from plans p
+select p.key, k.feature_key, false, null
+from plans p
+cross join (values ('streaming.overlay'), ('streaming.relay')) as k(feature_key)
 on conflict (plan_key, feature_key) do update
   set bool_value = excluded.bool_value, int_value = excluded.int_value;
 ```
+
+  RE-PIN at execution (V393 measured its own prose — "measured, not assumed"): `select key from plans order by key` on the ovl DB must list exactly `community, enterprise, event_pass, event_pass_l, pro` (the v18 set; `pro_plus` retired at `V393:145`) — paste the result into the migration header as V393 does, and into `_INDEX.md`.
 
 - [ ] **Step 4: Apply and run — expect PASS.**
   `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/stream-overlay && DATABASE_URL=<the ovl url> DATABASE_SSL=disable npm run db:apply`
@@ -2417,7 +2784,7 @@ on conflict (plan_key, feature_key) do update
   Expected: `:196` and `:199` — `buildPricingSections` maps `ENTITLEMENT_DOMAINS` and nothing else. Record in the PR inventory: "no `pricing.feature.streaming.overlay` key added; `buildPricingSections` (pricing-matrix.ts:199) iterates only `ENTITLEMENT_DOMAINS`, which does not list the key."
 
 - [ ] **Step 6: Commit.**
-  `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/stream-overlay && /usr/bin/git add db/migration/deltas/V393__streaming_overlay_entitlement.sql apps/web/src/lib/__tests__/entitlement-streaming-overlay.test.ts`
+  `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/stream-overlay && /usr/bin/git add db/migration/deltas/V401__streaming_entitlements.sql apps/web/src/lib/__tests__/entitlement-streaming-overlay.test.ts`
   then
   `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/stream-overlay && /usr/bin/git commit -m "overlay(entitlement): streaming.overlay, denied on every plan" -m "V393 writes an explicit false for every plan key so /admin can see the feature; the key stays out of ENTITLEMENT_DOMAINS, which is what keeps it off /pricing (R1). The DB half proves the override flip in both directions." -m "Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>" -m "Claude-Session: https://claude.ai/code/session_01UdUR7dcxassJ4FExpVfRRr"`
 
@@ -2440,7 +2807,7 @@ on conflict (plan_key, feature_key) do update
 - Modify: `apps/web/src/dictionaries/{en,fr,es,nl}/public.json`
 - Modify (generated): `apps/web/src/lib/i18n-keys.ts`
 - Create (Test): `apps/web/src/lib/__tests__/overlay-dict-coverage.test.ts`
-- Create (Test): `apps/web/src/components/overlay/__tests__/contrast.test.ts`
+- Modify ONLY IF NEEDED (exists from T1 Task 2): `apps/web/src/components/overlay/tokens.ts` — a new `OVERLAY_PAIR_ROLES` row for any pair this task paints that the table lacks; `__tests__/contrast.test.ts` is T1's and is NOT re-created (re-pinned 2026-09-07)
 
 **Interfaces:**
 - Consumes: `getPublicFixture(orgSlug, compSlug, divSlug, fixtureId)` (`data.ts:689`); `hasFeature` (`entitlements.ts:454`); `getDictionary(locale, "public"): Promise<Dict>` (`lib/i18n.ts:77`); `t(dict, key, vars)` (`lib/i18n-runtime.ts:30`); `toLocale` (`lib/i18n-constants.ts:42`); `decidedOutcomeTemplates(m: MsgFn)` (`scoring-vocab.ts:1320`) with `msgFor(locale, key, vars)` (`messages-i18n.ts:24`); `sportThemeStyle(skinKey): CSSProperties | undefined` (`sport-theme.ts:557`), `sportThemeAttr(skinKey): string | undefined` (`:553`), `resolveSportPalette(skinKey): SportPalette` (`:515`), `SPORT_TOKENS` (`:77`); `useLiveFixture` (Task 1); `overlayModel`, `OverlayModel`, `OverlaySideInput` (Task 2).
@@ -2860,30 +3227,28 @@ export async function publicFixtureSlugs(
 // returning a <div> instead — so the transparent ground is set by a <style>
 // element scoped to this segment rather than by a prop. OBS composites the
 // page over the camera, so anything painted here goes on air: no header, no
-// footer, no attribution link, and the root layout's consent banner is
-// suppressed by the `body:has(.ovl-canvas)` rule in globals.css.
-import { Barlow_Condensed } from "next/font/google";
-
-// Its own next/font instance, mounted on this div exactly as the public tree
-// does (`(public)/shared/[orgSlug]/layout.tsx:19-23,60`). 800 is here for W2's
-// slab headline (_THEMES.md §1); the same woff2 files back every instance, so
-// this is a second CSS variable, not a second download path — watch-list 7 is
-// verified in Step 12 by reading the built CSS, not assumed.
-const displayFont = Barlow_Condensed({
-  weight: ["500", "600", "700", "800"],
-  subsets: ["latin"],
-  variable: "--ps-font-display",
-});
+// footer, no attribution link, and the root layout's consent banner returns
+// null on this segment (Step 4a — `usePathname`, not CSS).
+//
+// RP8 (re-pinned 2026-09-07 @ fb99bbd4c): the display face is the ROOT
+// layout's `barlowCondensed` (`lib/fonts.ts:7-9`, variable `--font-barlow`),
+// REUSED — never a second `next/font` mount. The existing declaration gains
+// weight "800" for W2's slab headline (_THEMES.md §1); `.ovl-display` reads
+// `var(--font-barlow)`. Watch-list 7 (double mount) is closed by construction
+// and still verified in Step 12 by reading the built CSS.
+import { barlowCondensed } from "@/lib/fonts";
 
 export default function OverlayLayout({ children }: { children: React.ReactNode }) {
   return (
-    <div className={displayFont.variable}>
+    <div className={barlowCondensed.variable}>
       <style>{"html,body{background:transparent;margin:0}"}</style>
       {children}
     </div>
   );
 }
 ```
+
+  And in `apps/web/src/lib/fonts.ts:8`, `weight: ["600", "700"],` → `weight: ["600", "700", "800"],` with the comment `// 800: the stream overlay's W2 moment slab (_THEMES.md §1, RP8)`. That is the ONLY edit to that file; the console and marketing keep their own instances.
 
 > **Owner answer 18 (Q7), 2026-09-06 — the ruling this task is now built on.**
 > *"we will have multiple theme per sports so make it abstract and use can choose
@@ -3130,6 +3495,7 @@ import { toLocale } from "@/lib/i18n-constants";
 import { msgFor } from "@/lib/messages-i18n";
 import { decidedOutcomeTemplates } from "@/lib/scoring-vocab";
 import { overlayStartLabel } from "@/lib/overlay-model";
+import { loadOverlayLiveData } from "@/server/overlay/load";
 import { OverlayStage } from "@/components/overlay/overlay-stage";
 import { resolveTheme } from "@/components/overlay/theme-registry";
 
@@ -3190,10 +3556,17 @@ export default async function OverlayPage({
   // — never UTC, and never `Intl` inlined at this call site.
   const startLabel = overlayStartLabel(fixture.scheduled_at, locale, venueTz);
 
+  // First paint from the SAME contract the stage polls (Task 0, design §3.2):
+  // the cached public row plus the folded-state clock/innings, one fold per
+  // last_seq. `venueTz` here and on `initial` come from the same
+  // `resolveVenueTz` call chain; the page keeps `getPublicFixture`'s copy for
+  // the start label because that read already happened for the gate.
+  const initial = await loadOverlayLiveData(fixture.id);
+
   return (
     <OverlayStage
       fixtureId={fixture.id}
-      initial={{ status: fixture.status, summary: fixture.summary, outcome: fixture.outcome }}
+      initial={initial}
       realtime={realtime}
       sportKey={division.sport_key}
       // Owner answer 18 (Q7): resolved against the REGISTRY, and only the id
@@ -3227,8 +3600,9 @@ export default async function OverlayPage({
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { sportThemeAttr, sportThemeStyle } from "@/components/v2/scorepad/v3/sport-theme";
 import { useLiveFixture } from "@/components/public-site/use-live-fixture";
-import type { LiveFixtureData } from "@/components/public-site/live-score-data";
+import { fetchOverlayFixture, type OverlayLiveData } from "@/components/public-site/live-score-data";
 import { overlayModel, type OverlayModel, type OverlaySideInput } from "@/lib/overlay-model";
+import { useOverlayClock } from "./use-overlay-clock";
 import { t } from "@/lib/i18n-runtime";
 import type { DecidedOutcomeTemplates } from "@/lib/scoring-vocab";
 // Owner answer 18 (Q7): the stage knows the REGISTRY, not two components. It
@@ -3238,7 +3612,9 @@ import { OVERLAY_THEMES, type ThemeId } from "./theme-registry";
 
 export interface OverlayStageProps {
   fixtureId: string;
-  initial: LiveFixtureData;
+  /** The overlay endpoint's payload (Task 0, design §3.2) — the SAME shape the
+   *  stage polls, so first paint and every refresh render one contract. */
+  initial: OverlayLiveData;
   realtime: boolean;
   sportKey: string;
   /** A registry id, already resolved server-side by `resolveTheme` (Step 6c).
@@ -3269,13 +3645,22 @@ function usePrevious<T>(value: T): T | undefined {
 }
 
 export function OverlayStage(props: OverlayStageProps) {
-  const { data } = useLiveFixture(props.fixtureId, props.initial, props.realtime);
+  // One transport, two payloads (Task 1): the overlay endpoint is this
+  // stage's fetcher; `LiveScore` keeps the public JSON. `presentationNowOffsetMs`
+  // is 0 until R2 passes `delayMs` — the clock subtracts it either way.
+  const { data, presentationNowOffsetMs } = useLiveFixture(props.fixtureId, props.initial, props.realtime, {
+    fetcher: fetchOverlayFixture,
+  });
+  // The ONE timer in the overlay (Step 8a; _THEMES.md §6; owner 2026-09-06:
+  // the clock TICKS). Formatted here, handed to the pure model as a string.
+  const clockLabel = useOverlayClock(data.clock, data.status, presentationNowOffsetMs);
 
   const model: OverlayModel = overlayModel({
     sportKey: props.sportKey,
     data,
     sides: props.sides,
     startLabel: props.startLabel,
+    clockLabel,
     msg: (key, vars) => t(props.dict, key, vars),
     decidedTemplates: props.decidedTemplates,
   });
@@ -3334,6 +3719,184 @@ export function OverlayStage(props: OverlayStageProps) {
   );
 }
 ```
+
+- [ ] **Step 8a (amended 2026-09-07 — owner ruling 2026-09-06: the football clock ships in W1 and TICKS): the one timer.** Create `apps/web/src/components/overlay/__tests__/use-overlay-clock.test.ts` FIRST:
+
+```ts
+// The overlay's ONE timer (_THEMES.md §6, design §3.6). A match clock is DATA:
+// the engine stamps `asOf` only when something is scored or a period turns,
+// so left alone the cell freezes for minutes and reads as broken on air. This
+// hook advances the display from the endpoint's anchor plus elapsed wall time,
+// re-anchors on every push, HOLDS at half-time (the endpoint omits `clock`
+// while no play phase is running), shows nothing before kick-off or after
+// full-time, and subtracts the transport's presentation offset so a delayed
+// goal and the clock land together (R2's alignment, unit-level here).
+//
+// `environment: "node"` — driven through renderIsland with setInterval and
+// Date.now stubbed, the idiom live-score.test.tsx and use-live-fixture.test.tsx use.
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { renderIsland } from "@/components/__tests__/_hook-harness";
+import { useOverlayClock } from "../use-overlay-clock";
+import type { OverlayLiveData } from "@/components/public-site/live-score-data";
+
+type Clock = OverlayLiveData["clock"];
+
+function stubTick(): { tick: () => void; armed: () => number } {
+  let cb: (() => void) | null = null;
+  let armed = 0;
+  vi.stubGlobal("setInterval", ((fn: () => void, ms?: number) => {
+    if (ms !== 1000) throw new Error(`the clock must be 1 Hz, got ${ms}`);
+    cb = fn;
+    armed += 1;
+    return 1 as unknown as ReturnType<typeof setInterval>;
+  }) as unknown as typeof setInterval);
+  vi.stubGlobal("clearInterval", (() => {}) as typeof clearInterval);
+  return { tick: () => { if (!cb) throw new Error("no interval armed"); cb(); }, armed: () => armed };
+}
+
+function harness(clock: Clock, status: string, offset = 0) {
+  let latest: string | null = null;
+  const island = renderIsland(
+    (p: { clock: Clock; status: string; offset: number }) => {
+      latest = useOverlayClock(p.clock, p.status, p.offset);
+      return null;
+    },
+    { clock, status, offset },
+  );
+  return { island, read: () => latest };
+}
+
+const ANCHOR: NonNullable<Clock> = { phase: "H1", anchorSeconds: 761, anchorAtWallMs: 1_000_000 };
+
+afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); });
+
+describe("useOverlayClock", () => {
+  it("shows the anchor at mount and advances by wall time on each 1 Hz tick", () => {
+    const t = stubTick();
+    const now = vi.spyOn(Date, "now").mockReturnValue(1_000_000);
+    const h = harness(ANCHOR, "in_play");
+    expect(h.read()).toBe("12:41");
+    now.mockReturnValue(1_001_000); t.tick();
+    expect(h.read()).toBe("12:42");
+    now.mockReturnValue(1_017_000); t.tick();
+    expect(h.read()).toBe("12:58");
+    expect(t.armed()).toBe(1);
+  });
+
+  it("re-anchors on a push (a goal re-stamps asOf) instead of drifting from its own count", () => {
+    const t = stubTick();
+    const now = vi.spyOn(Date, "now").mockReturnValue(1_000_000);
+    const h = harness(ANCHOR, "in_play");
+    now.mockReturnValue(1_030_000); t.tick();
+    expect(h.read()).toBe("13:11");
+    // RE-PIN: the harness's prop-update call (`island.rerender` /
+    // `island.update`, _hook-harness.tsx:169+) — use its real name.
+    h.island.rerender({ clock: { phase: "H1", anchorSeconds: 1_800, anchorAtWallMs: 1_030_000 }, status: "in_play", offset: 0 });
+    expect(h.read()).toBe("30:00");
+  });
+
+  it("holds the last displayed value at half-time (clock absent while in_play), and resumes on the next anchor", () => {
+    const t = stubTick();
+    const now = vi.spyOn(Date, "now").mockReturnValue(1_000_000);
+    const h = harness(ANCHOR, "in_play");
+    now.mockReturnValue(1_005_000); t.tick();
+    expect(h.read()).toBe("12:46");
+    h.island.rerender({ clock: undefined, status: "in_play", offset: 0 });
+    expect(h.read(), "half-time: the cell holds, it does not blank").toBe("12:46");
+    h.island.rerender({ clock: { phase: "H2", anchorSeconds: 2_700, anchorAtWallMs: 1_900_000 }, status: "in_play", offset: 0 });
+    now.mockReturnValue(1_900_000);
+    expect(h.read()).toBe("45:00");
+  });
+
+  it("shows nothing before kick-off and after the decision, whatever the anchor says", () => {
+    stubTick();
+    vi.spyOn(Date, "now").mockReturnValue(1_000_000);
+    expect(harness(undefined, "scheduled").read()).toBeNull();
+    expect(harness(ANCHOR, "decided").read()).toBeNull();
+    expect(harness(ANCHOR, "finalized").read()).toBeNull();
+  });
+
+  it("subtracts the presentation offset, so under delayMs the clock does not run ahead of the delayed goal", () => {
+    const t = stubTick();
+    const now = vi.spyOn(Date, "now").mockReturnValue(1_010_000);
+    const h = harness(ANCHOR, "in_play", 3_000);
+    // wall +10 s, offset 3 s → the PICTURE is at +7 s.
+    expect(h.read()).toBe("12:48");
+    now.mockReturnValue(1_011_000); t.tick();
+    expect(h.read()).toBe("12:49");
+  });
+
+  it("never runs backwards: a wall clock behind the anchor reads the anchor", () => {
+    stubTick();
+    vi.spyOn(Date, "now").mockReturnValue(999_000);
+    expect(harness(ANCHOR, "in_play").read()).toBe("12:41");
+  });
+});
+```
+
+  Run: `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/stream-overlay/apps/web && npx vitest run src/components/overlay/__tests__/use-overlay-clock.test.ts --reporter=json --outputFile=/tmp/ovl-w1/t5-clock-red.json` → `Cannot find module '../use-overlay-clock'`. Then create `apps/web/src/components/overlay/use-overlay-clock.ts`:
+
+```ts
+"use client";
+// The overlay's ONE timer (_THEMES.md §6; design §3.6). Everything else in
+// the overlay is CSS. It survives prefers-reduced-motion because it is
+// information, not movement.
+import { useEffect, useRef, useState } from "react";
+import { formatClock } from "@/lib/overlay-model";
+import type { OverlayLiveData } from "@/components/public-site/live-score-data";
+
+const NO_CLOCK_STATUSES = new Set(["scheduled", "decided", "finalized", "abandoned", "forfeited", "cancelled"]);
+
+/**
+ * @param clock  the endpoint's anchor — present only while a play phase is
+ *               running (server/overlay/project.ts applies footballPosition's
+ *               staleness guard); absent between periods.
+ * @param status the fixture status; nothing shows outside `in_play`.
+ * @param presentationNowOffsetMs the transport's delay (0 without delayMs) —
+ *               the ONE authority for how far behind wall time the picture is.
+ */
+export function useOverlayClock(
+  clock: OverlayLiveData["clock"],
+  status: string,
+  presentationNowOffsetMs: number,
+): string | null {
+  const compute = (): string | null => {
+    if (!clock) return null;
+    const pictureNow = Date.now() - presentationNowOffsetMs;
+    const elapsed = Math.max(0, (pictureNow - clock.anchorAtWallMs) / 1000);
+    return formatClock(clock.anchorSeconds + elapsed);
+  };
+  const [label, setLabel] = useState<string | null>(() => (NO_CLOCK_STATUSES.has(status) ? null : compute()));
+  const held = useRef<string | null>(label);
+
+  useEffect(() => {
+    if (NO_CLOCK_STATUSES.has(status)) {
+      held.current = null;
+      setLabel(null);
+      return;
+    }
+    // Half-time / full-time: the endpoint omits `clock`. HOLD what was last
+    // shown — a cell that blanks at the whistle reads as broken.
+    if (!clock) {
+      setLabel(held.current);
+      return;
+    }
+    const tick = () => {
+      const next = compute();
+      held.current = next;
+      setLabel(next);
+    };
+    tick(); // re-anchor immediately on every push
+    const id = setInterval(tick, 1000);
+    return () => clearInterval(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- `compute` closes over exactly these
+  }, [clock?.phase, clock?.anchorSeconds, clock?.anchorAtWallMs, status, presentationNowOffsetMs]);
+
+  return label;
+}
+```
+
+  Re-run: 6 passed. RE-PIN: `VOID_STATUSES` is exported from `stages-panel.tsx` (design §3.4) — if importing it into a client hook drags the whole panel module in, keep the local set and add a unit that asserts it EQUALS `["scheduled", "decided", "finalized", ...VOID_STATUSES]` (one authority, proven, not duplicated silently). Mutants j2 and j3 (Self-review) are killed by `subtracts the presentation offset…` and `holds the last displayed value…` — run both, restore, record.
 
 - [ ] **Step 9: Write the two skins.** Create `apps/web/src/components/overlay/overlay-bar.tsx`:
 
@@ -3478,60 +4041,7 @@ export function OverlayBug({ model, tick }: { model: OverlayModel; tick: [boolea
 }
 ```
 
-- [ ] **Step 10: Add the contrast gate.** Create `apps/web/src/components/overlay/__tests__/contrast.test.ts`, the same method `scorepad/v3/__tests__/contrast.test.ts` uses, over the pairs `_THEMES.md` §2 names:
-
-```ts
-// _THEMES.md §2: every ink-on-board and LED-on-board pair the overlay paints
-// clears WCAG AA (4.5:1 for text, 3:1 for the LED bar, which is a graphical
-// object). Driven off `resolveSportPalette` so the table cannot drift from
-// `SPORT_PALETTES` — a hand-typed hex here would only prove the hex.
-import { describe, expect, it } from "vitest";
-import { resolveSportPalette } from "@/components/v2/scorepad/v3/sport-theme";
-import { V3_SKINS } from "@/components/v2/scorepad/v3/registry";
-
-const channel = (v: number) => (v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4);
-
-function luminance(hex: string): number {
-  const m = /^#([0-9a-f]{6})$/i.exec(hex.trim());
-  if (!m) throw new Error(`not a six-digit hex: ${hex}`);
-  const n = parseInt(m[1]!, 16);
-  const [r, g, b] = [(n >> 16) & 255, (n >> 8) & 255, n & 255].map((c) => channel(c / 255));
-  return 0.2126 * r! + 0.7152 * g! + 0.0722 * b!;
-}
-
-const ratio = (a: string, b: string) => {
-  const [x, y] = [luminance(a), luminance(b)].sort((p, q) => q - p);
-  return (x! + 0.05) / (y! + 0.05);
-};
-
-describe("overlay contrast", () => {
-  const keys = Object.keys(V3_SKINS).sort();
-
-  it("covers every skin — a zero-length sweep would pass vacuously", () => {
-    expect(keys.length).toBe(11);
-  });
-
-  it.each(Object.keys(V3_SKINS).sort())("%s: ink on board reads as text", (key) => {
-    const p = resolveSportPalette(key);
-    expect(ratio(p.ink, p.board)).toBeGreaterThanOrEqual(4.5);
-  });
-
-  it.each(Object.keys(V3_SKINS).sort())("%s: ink on board-2 reads as text", (key) => {
-    const p = resolveSportPalette(key);
-    expect(ratio(p.ink, p["board-2"])).toBeGreaterThanOrEqual(4.5);
-  });
-
-  it.each(Object.keys(V3_SKINS).sort())("%s: the LED bar clears the graphical floor on board", (key) => {
-    const p = resolveSportPalette(key);
-    expect(ratio(p.led, p.board)).toBeGreaterThanOrEqual(3);
-  });
-
-  it.each(Object.keys(V3_SKINS).sort())("%s: LED-on-board is legible as the score numeral too", (key) => {
-    const p = resolveSportPalette(key);
-    expect(ratio(p.led, p["board-2"])).toBeGreaterThanOrEqual(3);
-  });
-});
-```
+- [ ] **Step 10: The contrast gate is T1's — audit the ROLE table, do not write a second test (amended 2026-09-07).** `apps/web/src/components/overlay/__tests__/contrast.test.ts` exists from T1 Task 2 and sweeps `OVERLAY_PAIR_ROLES` × every sport from `SPORT_PALETTES` (`components/overlay/tokens.ts`). This step: open Step 4's `.ovl-*` CSS and Step 9's two skins and list every (foreground, background) token pair they PAINT; for each, name the `OVERLAY_PAIR_ROLES` row whose `where` covers it. A pair with no row is added to `tokens.ts` as one row (id, fg, bg, floor by rendered size — ≥ 24 px or ≥ 18.66 px bold → 3, else 4.5 — and `where` naming the class). Paste the audit table (pair → row id) into the PR inventory. Then `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/stream-overlay/apps/web && npx vitest run src/components/overlay --reporter=json --outputFile=/tmp/ovl-w1/t5-contrast.json` — expected: T1's counts plus one row's worth of cases per added role, and any red row recorded as a FINDING against `_THEMES.md` (never a lowered floor). Recorded weak spot: the sweep cannot see a pair the table lacks — the audit above is the killer for "paint a pair without a row", and the reviewer re-runs it.
 
 - [ ] **Step 11: Run the unit gate — expect PASS.** `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/stream-overlay/apps/web && npx vitest run src/lib/__tests__/overlay-dict-coverage.test.ts src/components/overlay --reporter=json --outputFile=/tmp/ovl-w1/t5-green.json`
   Expected: `numFailedTests: 0`; dict coverage contributes 10 tests, contrast 45. If a contrast case reds, that is a REAL finding about `SPORT_PALETTES` on a new surface — record it for the owner and raise the floor question; do NOT lower the threshold.
@@ -3549,7 +4059,11 @@ describe("overlay contrast", () => {
 
 **Files:**
 - Create: `apps/web/src/components/v2/fixture-stream-panel.tsx`
-- Modify: `apps/web/src/components/v2/stages-panel.tsx` — `Props` (`:144-146`), the destructure (`:399`), the three `<FixtureLine>` call sites (`:1072-1085`, `:1115-1128`, `:1167-1180`), `FixtureLine`'s own signature (`:1579-1604`), and ONE conditional line beside the schedule toggle (`:1747`)
+- Create: `apps/web/src/components/v2/stream-phone-tab.tsx` (Step 3b — the Phone tab shell, D-W1-1)
+- Modify: `apps/web/src/components/v2/stages-panel.tsx` — `Props` (beside `canEdit` `:205`), the destructure, `openStreamFor` from the URL, and the `<RunSheet>` mount (`:1167-1183`) — re-pinned 2026-09-07 @ fb99bbd4c: `FixtureLine` was retired by desk W2 (#725)
+- Modify: `apps/web/src/components/v2/desk/run-sheet.tsx` — Props (`:44-80`) and both `<RunSheetRow>` call sites (`:261`, `:296`)
+- Modify: `apps/web/src/components/v2/desk/run-sheet-row.tsx` — ONE import + ONE conditional line beside `run-sheet-edit-time` (`:377`); **desk W3 is editing this file** — rebase after any W3 merge, never race it
+- Modify (Test): `apps/web/src/components/v2/desk/__tests__/run-sheet-row.test.tsx` — Step 3a's gate cases
 - Modify: `apps/web/src/app/o/[orgSlug]/c/[compSlug]/d/[divSlug]/page.tsx` — the `Promise.all` (`:124-138`) and the `<StagesPanel>` mount (`:596`)
 - Modify: `apps/web/src/dictionaries/{en,fr,es,nl}/ui.json`
 - Modify (generated): `apps/web/src/lib/i18n-keys.ts`
@@ -3557,10 +4071,11 @@ describe("overlay contrast", () => {
 **Interfaces:**
 - Consumes: `useMsg(): (key: MessageKey, vars?) => string` (`components/i18n/dict-provider.tsx:113`); `streamUrlSchema` (Task 3); `OverlayStage` (Task 5 Step 8) and `themesForSport`, `defaultThemeFor`, `ThemeId` from `@/components/overlay/theme-registry` (Task 5 Step 6c — the panel reads the REGISTRY, so a theme registered tomorrow appears in the console with no edit to this file); `fetchLiveFixture` (`live-score-data.ts:30`); `decidedOutcomeTemplates` — NOT available client-side with a dictionary, so the panel passes a templates object built from `useMsg` (a `MsgFn`, ui keys — the same call the server makes).
 - Produces:
-  - `export interface FixtureStreamPanelProps { fixtureId: string; sportKey: string; homeName: string; awayName: string; homeEntrantId: string; awayEntrantId: string; initialStreamUrl: string | null }`
+  - `export interface FixtureStreamPanelProps { fixtureId: string; sportKey: string; homeName: string; awayName: string; homeEntrantId: string; awayEntrantId: string; initialStreamUrl: string | null; relayEntitled: boolean; defaultTab?: "obs" | "phone" }` (amended 2026-09-07)
   - `export function FixtureStreamPanel(props: FixtureStreamPanelProps): JSX.Element`
-  - `StagesPanel` `Props` gains `sportKey: string; streamingEntitled: boolean`
-  - `FixtureLine`'s prop object gains `sportKey: string; streamingEntitled: boolean`
+  - `export function StreamRowSlot(props: { fixture: { id: string; home_entrant_id: string | null; away_entrant_id: string | null; stream_url: string | null }; sportKey: string; relayEntitled: boolean; entrantNames: Record<string, string>; defaultOpen: boolean }): JSX.Element` — the toggle + expander the row mounts (Step 3b)
+  - `export function StreamPhoneTab(props: { relayEntitled: boolean }): JSX.Element` and `export const CREDIT_PACKS = [1, 5, 20] as const` (`stream-phone-tab.tsx`, Step 3b)
+  - `StagesPanel` `Props` gains `sportKey: string; streamingEntitled: boolean; relayEntitled: boolean`; `RunSheet` and `RunSheetRow` gain the same three plus `openStreamFor: string | null` (Step 4)
 
 > **Ruling applied (owner answer 17 / Q6, 2026-09-06: "Agree"; wave prompt scope 6, over the spec):** the toggle's gate is `canEdit && streamingEntitled` and **nothing else** — in particular **NOT** the schedule toggle's `fixture.status === "scheduled"`, which sits on the very next line of the same row and is the obvious thing to copy.
 >
@@ -3568,7 +4083,7 @@ describe("overlay contrast", () => {
 >
 > **Pinned by a test, not by this paragraph** (Step 3a below): the panel toggle is asserted present on a **decided** fixture, and absent when either half of the real gate is false. A gate that is only stated in prose is a gate nothing kills.
 
-- [ ] **Step 3a: Pin the gate — the panel opens at EVERY status.** Add to `apps/web/src/components/v2/__tests__/` (the directory Step 6 already runs), a static-markup test over `FixtureLine`'s gate. `apps/web` vitest is `environment: "node"`, so this is a render-to-markup assertion, not a click:
+- [ ] **Step 3a: Pin the gate — the panel opens at EVERY status.** Add to `apps/web/src/components/v2/desk/__tests__/run-sheet-row.test.tsx` (EXISTS on `main`; re-pinned 2026-09-07 @ fb99bbd4c — `FixtureLine` was retired by desk W2, the row is `RunSheetRow`), a static-markup test over the row's gate, using that file's own render helper and fixture builder (read three neighbouring cases first). `apps/web` vitest is `environment: "node"`, so this is a render-to-markup assertion, not a click:
 
 ```ts
 // Owner answer 17 (Q6): the stream toggle is gated on `canEdit &&
@@ -3581,7 +4096,8 @@ describe("overlay contrast", () => {
 // most fixtures a test builds.
 it.each(["scheduled", "in_play", "completed", "forfeit", "abandoned"])(
   "the stream toggle is present at status %s when canEdit && streamingEntitled",
-  (status) => { /* render FixtureLine with this status; expect
+  (status) => { /* render RunSheetRow with this status, canEdit: true,
+                   streamingEntitled: true (the file's own helper); expect
                    `fixture-stream-toggle` in the markup */ },
 );
 
@@ -3593,7 +4109,7 @@ it("is absent when the org is not entitled, at a status where it would otherwise
 it("is absent when canEdit is false, at the same status", () => {});
 ```
 
-  If `FixtureLine` is not directly mountable in this suite, assert the same three facts through `stream-overlay.spec.ts` in Task 8 instead and record WHICH here — but do not drop the decided-status row: it is the whole point of the ruling.
+  `run-sheet-row.test.tsx` already mounts `RunSheetRow` to markup (read its helper before writing); if a status the row's fixture type refuses is in the list above, drop that one row and record it. If the row is somehow not mountable, assert the same three facts through `stream-overlay.spec.ts` in Task 8 instead and record WHICH here — but do not drop the decided-status row: it is the whole point of the ruling.
 
 - [ ] **Step 1: Add the panel copy in all four locales.** `apps/web/src/dictionaries/en/ui.json` (the `embed.*` block at `:419-421` is the copy-button precedent):
 
@@ -3718,7 +4234,9 @@ import { useEffect, useState } from "react";
 import { Video } from "lucide-react";
 import { useMsg } from "@/components/i18n/dict-provider";
 import { streamUrlSchema } from "@/lib/stream-url";
-import { fetchLiveFixture, type LiveFixtureData } from "@/components/public-site/live-score-data";
+// The preview is the REAL stage on the endpoint's payload (amended 2026-09-07):
+// same contract the overlay polls, so the console shows what OBS will show.
+import { fetchOverlayFixture, type OverlayLiveData } from "@/components/public-site/live-score-data";
 import { decidedOutcomeTemplates } from "@/lib/scoring-vocab";
 import { OverlayStage } from "@/components/overlay/overlay-stage";
 // Owner answer 18 (Q7): the tabs come FROM the registry, filtered to this
@@ -3743,7 +4261,7 @@ export interface FixtureStreamPanelProps {
   initialStreamUrl: string | null;
 }
 
-const EMPTY: LiveFixtureData = { status: "scheduled", summary: null, outcome: null };
+const EMPTY: OverlayLiveData = { status: "scheduled", summary: null, outcome: null, lastSeq: null, venueTz: "UTC" };
 
 export function FixtureStreamPanel(props: FixtureStreamPanelProps) {
   const msg = useMsg();
@@ -3757,14 +4275,14 @@ export function FixtureStreamPanel(props: FixtureStreamPanelProps) {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [copied, setCopied] = useState(false);
-  const [live, setLive] = useState<LiveFixtureData>(EMPTY);
+  const [live, setLive] = useState<OverlayLiveData>(EMPTY);
 
   // The preview shows THE FIXTURE'S OWN current score, not a mock — the whole
   // point of previewing the real component. One fetch; the stage's own
   // transport keeps it moving from there.
   useEffect(() => {
     let cancelled = false;
-    void fetchLiveFixture(props.fixtureId)
+    void fetchOverlayFixture(props.fixtureId)
       .then((data) => {
         if (!cancelled) setLive(data);
       })
@@ -3934,72 +4452,157 @@ export function FixtureStreamPanel(props: FixtureStreamPanelProps) {
 }
 ```
 
-- [ ] **Step 4: Thread the two props.** In `apps/web/src/components/v2/stages-panel.tsx`:
-  - `Props` (after `divSlug: string;` at `:146`):
+- [ ] **Step 3b (amended 2026-09-07, design §3.8 / §5.3, D-W1-1): two tabs, the Phone tab shell, and the row slot.** In `apps/web/src/components/v2/fixture-stream-panel.tsx` (Step 3's file):
 
-```ts
-  /** The division's sport, from `PublicDivision`/`divisions.sport_key` — the
-   *  stream panel themes its preview with it. The panel is the only reader;
-   *  this panel had no sport key before (stream overlay W1). */
-  sportKey: string;
-  /** `hasFeature(orgId, "streaming.overlay")`, resolved server-side by the
-   *  division page (R1 — the client never decides). False hides the toggle
-   *  entirely; there is no upsell state. */
-  streamingEntitled: boolean;
-```
+  (a) Props gain `relayEntitled: boolean` and `defaultTab?: "obs" | "phone"` (default `"obs"`). Above the OBS body, a tab strip — `role="tablist"` `aria-label={msg("stream.tabs.label")}` with two `<button role="tab" aria-selected data-testid="stream-tab-obs" | "stream-tab-phone">` in the §8 style-tab classes, full-width 44 px at 320 (`max-md:flex-1 max-md:min-h-11`). The OBS body is Step 3's unchanged; the Phone body is (b).
 
-  - the destructure (`:399`): add `sportKey, streamingEntitled,` to the parameter list.
-  - each of the three `<FixtureLine …>` call sites (`:1072`, `:1115`, `:1167`): add the two lines
-    `sportKey={sportKey}` and `streamingEntitled={streamingEntitled}` beside `canEdit={canEdit}`.
-  - `FixtureLine`'s destructure and its prop type (`:1579-1604`): add `sportKey,` and `streamingEntitled,` to the destructure and
-
-```ts
-  /** Stream overlay W1 — threaded from StagesPanel, which is threaded from the
-   *  division page. See that panel's own Props for why neither is derived here. */
-  sportKey: string;
-  streamingEntitled: boolean;
-```
-
-    to the inline type; add `const [streaming, setStreaming] = useState(false);` beside `const [editing, setEditing] = useState(false);`.
-  - the ONE import at the top of the file: `import { FixtureStreamPanel } from "./fixture-stream-panel";`
-  - the ONE conditional block, immediately after the schedule-toggle button's closing `)}` (`:1753`):
+  (b) Create `apps/web/src/components/v2/stream-phone-tab.tsx`:
 
 ```tsx
-          {canEdit && streamingEntitled && (
-            <button
-              type="button"
-              data-testid="fixture-stream-toggle"
-              onClick={() => setStreaming(!streaming)}
-              className="btn btn-ghost px-3 py-1 text-xs"
-            >
-              {streaming ? msg("stream.toggle.close") : msg("stream.toggle.open")}
-            </button>
-          )}
+"use client";
+// The Phone tab (Tier B), W1 SHELL (design §5.3; plan decision D-W1-1): the
+// gate is REAL from PR1 — no `streaming.relay` → UpgradeGate; the key (an
+// override, while dark) → the three credit packs rendered DISABLED with the
+// "soon" line. R1 removes `disabled` and the line in the same change that adds
+// POST /api/billing/relay-checkout. Nothing here posts anywhere in W1.
+import { useMsg } from "@/components/i18n/dict-provider";
+import { UpgradeGate } from "@/components/upgrade-gate";
+
+export const CREDIT_PACKS = [1, 5, 20] as const;
+
+export function StreamPhoneTab({ relayEntitled }: { relayEntitled: boolean }) {
+  const msg = useMsg();
+  if (!relayEntitled) {
+    // RE-PIN `UpgradeGate`'s props at `components/upgrade-gate.tsx:252-330`
+    // (featureKey + the plan href it derives, or `href` if it needs one);
+    // pass `featureKey="streaming.relay"` and nothing invented.
+    return <UpgradeGate featureKey="streaming.relay" />;
+  }
+  return (
+    <div data-testid="stream-phone-buy" className="flex flex-col gap-3">
+      <p className="text-sm font-semibold text-slate-700">{msg("stream.phone.buyTitle")}</p>
+      <p className="text-xs text-slate-500">{msg("stream.phone.buyExplainer")}</p>
+      <div className="grid grid-cols-1 gap-2 md:grid-cols-3">
+        {CREDIT_PACKS.map((n) => (
+          <button
+            key={n}
+            type="button"
+            disabled
+            aria-disabled="true"
+            data-testid={`stream-pack-${n}`}
+            className="min-h-11 rounded-lg border border-purple-200 p-3 text-left disabled:opacity-60"
+          >
+            <span className="block text-lg font-semibold text-slate-800">{msg("stream.phone.pack", { n })}</span>
+            <span className="block text-[11px] text-slate-500">{msg("stream.phone.soon")}</span>
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
 ```
 
-    and, immediately after the `{editing && (…)}` block's closing `)}`:
+  Dictionary keys (four locales, `ui.json`, beside Step 1's `stream.*`): `stream.tabs.label` "Streaming", `stream.tabs.obs` "OBS overlay", `stream.tabs.phone` "Phone stream", `stream.phone.buyTitle` "Buy match credits", `stream.phone.buyExplainer` "1 match = 1 credit, up to 5 hours of streaming from a phone.", `stream.phone.pack` "{n} credit(s)" (RE-PIN the plural form the dictionaries use), `stream.phone.soon` "Available soon". Then `pnpm i18n:gen-keys`; the Step 1 coverage test proves every key exists in all four.
+
+  (c) The ROW SLOT — the one thing `run-sheet-row.tsx` mounts. In `fixture-stream-panel.tsx`, export:
 
 ```tsx
-      {streaming && (
-        <FixtureStreamPanel
-          fixtureId={fixture.id}
-          sportKey={sportKey}
-          homeEntrantId={fixture.home_entrant_id ?? "home"}
-          awayEntrantId={fixture.away_entrant_id ?? "away"}
-          homeName={home}
-          awayName={away}
-          initialStreamUrl={null}
-        />
-      )}
+/** Toggle + expander for one run-sheet row: the ONE import and ONE
+ *  conditional line the row gets (R11). `defaultOpen` is how `?stream=<id>`
+ *  (Step 4) and R1's Stripe `success_url` land on the open panel. */
+export function StreamRowSlot(props: {
+  fixture: { id: string; home_entrant_id: string | null; away_entrant_id: string | null; stream_url: string | null };
+  sportKey: string;
+  relayEntitled: boolean;
+  entrantNames: Record<string, string>;
+  defaultOpen: boolean;
+}) {
+  const msg = useMsg();
+  const [open, setOpen] = useState(props.defaultOpen);
+  return (
+    <>
+      <button
+        type="button"
+        data-testid="fixture-stream-toggle"
+        aria-expanded={open}
+        aria-label={msg("stream.toggle")}
+        title={msg("stream.toggle")}
+        onClick={() => setOpen((o) => !o)}
+        className="-my-1 flex min-h-11 w-11 shrink-0 items-center justify-center text-slate-500 hover:text-purple-700"
+      >
+        <Video size={16} strokeWidth={1.75} aria-hidden />
+      </button>
+      {open ? (
+        <div data-testid="fixture-stream-panel" className="basis-full">
+          <FixtureStreamPanel
+            fixtureId={props.fixture.id}
+            sportKey={props.sportKey}
+            homeName={props.fixture.home_entrant_id ? (props.entrantNames[props.fixture.home_entrant_id] ?? "—") : "—"}
+            awayName={props.fixture.away_entrant_id ? (props.entrantNames[props.fixture.away_entrant_id] ?? "—") : "—"}
+            homeEntrantId={props.fixture.home_entrant_id ?? "home"}
+            awayEntrantId={props.fixture.away_entrant_id ?? "away"}
+            initialStreamUrl={props.fixture.stream_url}
+            relayEntitled={props.relayEntitled}
+            defaultTab={props.defaultOpen ? "obs" : "obs"}
+          />
+        </div>
+      ) : null}
+    </>
+  );
+}
 ```
+
+  RE-PIN: `RunSheetFixture` (`lib/run-sheet-groups.ts`) must carry `stream_url` — Task 3 Step 8 widened `PublicFixture`; if the run-sheet's fixture type is a different projection, add `stream_url: string | null` to it at the ONE place it is built (`toRunSheetFixture`, `stages-panel.tsx:1168`) and record which. `basis-full` puts the expander on its own line under the row in the row's flex-wrap (read the row's root classes at `:330-360` — if the row is not `flex-wrap`, wrap the slot's expander in the row's existing "details" region instead and record it).
+
+- [ ] **Step 4: Thread the props (amended 2026-09-07 @ fb99bbd4c — `FixtureLine` is retired; the run sheet is `stages-panel.tsx` → `run-sheet.tsx` → `run-sheet-row.tsx`).**
+
+  (a) `apps/web/src/components/v2/stages-panel.tsx` — `Props` (beside `canEdit: boolean;` at `:205`):
+
+```ts
+  /** The division's sport — the stream panel themes its preview with it.
+   *  This panel had no sport key before (stream overlay W1). */
+  sportKey: string;
+  /** `hasFeature(orgId, "streaming.overlay")` resolved server-side by the
+   *  division page (the client never decides). False hides the toggle. */
+  streamingEntitled: boolean;
+  /** `hasFeature(orgId, "streaming.relay")` — the Phone tab's body
+   *  (UpgradeGate vs the credit packs); never the toggle. */
+  relayEntitled: boolean;
+```
+
+  the destructure gains the three names; and the `<RunSheet>` mount (`:1167-1183`) gains
+
+```tsx
+        sportKey={sportKey}
+        streamingEntitled={streamingEntitled}
+        relayEntitled={relayEntitled}
+        openStreamFor={openStreamFor}
+```
+
+  where `openStreamFor` is read ONCE beside the existing `filter` state: `const openStreamFor = useSearchParams().get("stream");` (`stages-panel.tsx` is a client component — it holds `setFilter`; RE-PIN by reading its first line for `"use client"`, and if the tab reads its URL state through a prop from the page instead, thread `stream` the way `tab` arrives).
+
+  (b) `apps/web/src/components/v2/desk/run-sheet.tsx` — Props (`:44-80`) gain the same three plus `openStreamFor: string | null`; BOTH `<RunSheetRow>` call sites (`:261`, `:296`) pass them through.
+
+  (c) `apps/web/src/components/v2/desk/run-sheet-row.tsx` — the ONE import `import { StreamRowSlot } from "@/components/v2/fixture-stream-panel";`, the four props on the row's prop type (`sportKey: string; streamingEntitled: boolean; relayEntitled: boolean; openStreamFor: string | null;`), and the ONE conditional line immediately AFTER the `canEditFixtureTime(...) ? <button data-testid="run-sheet-edit-time" …> : <span …>` expression (`:365-392`; RE-PIN the closing of that ternary and place this as its next sibling):
+
+```tsx
+          {canEdit && streamingEntitled ? (
+            <StreamRowSlot fixture={fixture} sportKey={sportKey} relayEntitled={relayEntitled} entrantNames={entrantNames} defaultOpen={openStreamFor === fixture.id} />
+          ) : null}
+```
+
+  Gate = `canEdit && streamingEntitled` and NOTHING else — not the edit-time predicate on the line above (owner answer 17 / Q6: the toggle opens at every status; a club attaches the replay link after the whistle). Step 3a's test pins it on a decided row.
 
 - [ ] **Step 5: Feed the props from the division page.** In `apps/web/src/app/o/[orgSlug]/c/[compSlug]/d/[divSlug]/page.tsx`, add one entry to the `Promise.all` (`:124-138`) — after `hasFeature(auth.orgId, "exports")`:
 
 ```ts
     // Stream overlay W1 (R1): resolved here, server-side, exactly as
-    // `embeds.enabled` is at :785 — the panel is absent when false, never an
-    // upsell, and the client is told rather than asked to derive it.
+    // `embeds.enabled` is at :814 — the panel is absent when false, and the
+    // client is told rather than asked to derive it. `streaming.relay` (Task 4,
+    // design §5.1/§5.3) drives the Phone tab's body — UpgradeGate or the
+    // (W1-disabled) buy card — never the toggle.
     hasFeature(auth.orgId, "streaming.overlay"),
+    hasFeature(auth.orgId, "streaming.relay"),
 ```
 
   widen the destructure to `const [competition, stages, fixtures, entrants, scheduleSettings, canExport, streamingEntitled, venues] = await Promise.all([…]);` (matching the array's new order — put the new call immediately before `listVenues` so both lists stay aligned), and on the `<StagesPanel …>` mount (`:596`) add:
@@ -4007,7 +4610,10 @@ export function FixtureStreamPanel(props: FixtureStreamPanelProps) {
 ```tsx
             sportKey={division.sport_key}
             streamingEntitled={streamingEntitled}
+            relayEntitled={relayEntitled}
 ```
+
+  (the destructure gains `relayEntitled` after `streamingEntitled`, matching the array order; re-pinned 2026-09-07 @ fb99bbd4c: the `Promise.all` is at `:126-138` and the `embeds.enabled` precedent at `:814`.)
 
 - [ ] **Step 6: Run the console's own suites — expect PASS.** `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/stream-overlay/apps/web && npx vitest run src/components/v2/__tests__ src/lib/__tests__/overlay-dict-coverage.test.ts --reporter=json --outputFile=/tmp/ovl-w1/t6b.json`
   Expected: `numFailedTests: 0`. Hand-built `StagesPanel` props in that directory will fail to type-check on the two new REQUIRED props — add them there rather than making the props optional; an optional entitlement prop defaults to a state the server never chose.
@@ -4107,16 +4713,17 @@ export function FixtureStreamPanel(props: FixtureStreamPanelProps) {
 
 **Files:**
 - Create: `apps/web/e2e/walkthrough/stream-overlay.spec.ts`
-- Create: `apps/web/e2e/walkthrough/stream-overlay-capture.spec.ts`
+- Modify: `apps/web/src/lib/__tests__/e2e-ci-wiring.test.ts` — `WALKTHROUGH_SPECS` gains `"stream-overlay.spec.ts"` under a `// Streaming — the OBS overlay, end to end.` comment (re-pinned 2026-09-07 @ fb99bbd4c: the list EXISTS; edited HERE, in Step 1's commit, not post-rebase)
+- Modify: `apps/web/e2e/visual/seeds.ts` — ONE seed kind, `overlay-fixture` (Step 8a)
+- Modify: `apps/web/e2e/visual/manifest.json` — the `overlay` and `console-panel` groups (Step 8b)
 - Modify: `scripts/smoke.ts` — a new `streamOverlaySuite`, called beside `scorePadV2AppendSuite` (`:784`)
 - Modify: `docs/superpowers/specs/2026-09-05-stream-overlay-prompts/_INDEX.md`
-- Modify (post-rebase, same commit): whatever `WALKTHROUGH_SPECS` list exists after the rebase
 
 **Interfaces:**
 - Consumes: `apiJson(request, path, method, body?)` (`e2e/helpers.ts:128`), `activeOrg(page)` (`:1268`), `addEntrantsViaApi` (`:1412`), `createStageAndGenerate` (`:1429`), `setBoolEntitlementOverrideSql(orgId, featureKey, value)` (`:500`), `invalidateOrgEntitlements(request, orgId)` (`:943`), `expectNoHorizontalScroll(page, opts?)` (`:49`); `check(label, cond)` and `insertEntitlementOverride(owner, orgId, featureKey, value)` (`scripts/smoke.ts:91`, `:9461`), `html(s, path)` (`:12644`), `v1`/`v1data`.
 - Produces: no exported symbol; one Playwright spec, one capture spec, one smoke suite.
 
-> **R9, restated because it changed under this plan:** `WALKTHROUGH_SPECS` **does not exist on this branch** (base `997ad225b`); it landed on `main` in PR #723 (`01ea4a455`) after it. The `walkthrough` project matches by PATH (`playwright.config.ts:119`, `const WALKTHROUGH = /[\\/]e2e[\\/]walkthrough[\\/]/`), so both specs are collected here with no list. **After the rebase, re-grep — do not assume either way** — and if the list exists, register BOTH specs in it in the same commit as the rebase, because a peer session reports `e2e-ci-wiring.test.ts` reds in two CI jobs for any walkthrough spec not named there.
+> **R9, re-pinned 2026-09-07 @ fb99bbd4c:** the branch is rebased on `main`, and `WALKTHROUGH_SPECS` (`apps/web/src/lib/__tests__/e2e-ci-wiring.test.ts:16`) EXISTS. The `walkthrough` project matches by PATH (`apps/web/playwright.config.ts:119`, `const WALKTHROUGH = /[\\/]e2e[\\/]walkthrough[\\/]/`), so the spec is collected with no list — but `e2e-ci-wiring.test.ts` reds in every CI job for a walkthrough spec not NAMED there. Register `stream-overlay.spec.ts` in Step 1's own commit. The visual gate is no longer a walkthrough spec (it is T1b's manifest, Step 8), so only ONE name is added.
 
 - [ ] **Step 1: Write the failing e2e.** Create `apps/web/e2e/walkthrough/stream-overlay.spec.ts`:
 
@@ -4395,6 +5002,67 @@ test.describe("stream overlay", () => {
 - [ ] **Step 2: Run it — expect red.** `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/stream-overlay/apps/web && PLAYWRIGHT_BASE=<ovl base> E2E_PROD_TARGET=1 npx playwright test e2e/walkthrough/stream-overlay.spec.ts --project=walkthrough --list`
   Expected first: the spec is COLLECTED — `--list` names all eight tests under `[walkthrough]`. A spec the runner does not resolve is the silent failure R9 exists for. Then run it for real; before Task 5/6 land it reds on `ovl-root` / `fixture-stream-toggle` not existing.
 
+- [ ] **Step 2a (amended 2026-09-07 — Task 0 Step 14's staged assertions): the overlay endpoint on the wire.** Append to `stream-overlay.spec.ts`, inside the same `describe`, after the seed helpers (the cricket rig Step 1 builds is reused; the football fixture is seeded the same way with `sport_key: "football"`):
+
+```ts
+  test("the overlay endpoint carries the public summary plus the folded-state facts, and is public exactly as the fixture JSON is", async ({ request, page }) => {
+    const pub = await apiJson<{ status: string; summary: unknown; outcome: unknown }>(request, `/api/v1/public/fixtures/${cricketFixtureId}`);
+    const ovl = await apiJson<{
+      status: string; summary: unknown; outcome: unknown; lastSeq: number | null; venueTz: string;
+      clock?: { phase: string; anchorSeconds: number; anchorAtWallMs: number };
+      cricket?: { innings: { runs: number; wickets: number; legalBalls: number; ballsLimit: number | null }[] };
+    }>(request, `/api/v1/public/fixtures/${cricketFixtureId}/overlay`);
+    expect(ovl.status).toBe(200);
+    // One authority: the SAME match_states row, byte-equal on the three shared fields.
+    expect({ status: ovl.data!.status, summary: ovl.data!.summary, outcome: ovl.data!.outcome }).toEqual({ status: pub.data!.status, summary: pub.data!.summary, outcome: pub.data!.outcome });
+    expect(typeof ovl.data!.lastSeq).toBe("number");
+    expect(() => new Intl.DateTimeFormat("en", { timeZone: ovl.data!.venueTz }), "venueTz is a real IANA zone").not.toThrow();
+    // Cricket: the innings numbers, off the folded state; the quota is the
+    // T20 format's, read from the division's config rather than typed here.
+    const cfg = await apiJson<{ config: { ballsPerInnings?: number } }>(request, `/api/v1/divisions/${cricketDivisionId}`);
+    expect(ovl.data!.cricket, "cricket carries innings").toBeDefined();
+    expect(ovl.data!.cricket!.innings[0]!.ballsLimit).toBe(cfg.data!.config.ballsPerInnings ?? 120);
+    expect(ovl.data!.clock, "cricket has no period clock").toBeUndefined();
+
+    // Football: a stamped goal in H1 anchors the clock at the stamp.
+    const fb = await seedFootballFixture(request); // same rig as the cricket seed, sport_key "football"
+    const state = await apiJson<{ last_seq: number }>(request, `/api/v1/fixtures/${fb.fixtureId}/state`);
+    const goal = await apiJson(request, `/api/v1/fixtures/${fb.fixtureId}/events`, "POST", {
+      expected_seq: state.data!.last_seq, type: "football.goal", payload: { by: "home", at: { period: "H1", elapsed: 761 } },
+    });
+    expect(goal.status, "the goal appended").toBe(201);
+    const fbOvl = await apiJson<{ clock?: { phase: string; anchorSeconds: number; anchorAtWallMs: number } }>(request, `/api/v1/public/fixtures/${fb.fixtureId}/overlay`);
+    expect(fbOvl.data!.clock).toMatchObject({ phase: "H1", anchorSeconds: 761 });
+    expect(fbOvl.data!.clock!.anchorAtWallMs).toBeGreaterThan(Date.now() - 60_000);
+    // Period change: the stamp names a phase the match has left → no clock
+    // (mutant i's wire-level killer). RE-PIN the event name/payload against
+    // football.ts's schema before running.
+    const s2 = await apiJson<{ last_seq: number }>(request, `/api/v1/fixtures/${fb.fixtureId}/state`);
+    await apiJson(request, `/api/v1/fixtures/${fb.fixtureId}/events`, "POST", { expected_seq: s2.data!.last_seq, type: "football.period", payload: { to: "HT", at: { period: "H1", elapsed: 2700 } } });
+    const ht = await apiJson<{ clock?: unknown }>(request, `/api/v1/public/fixtures/${fb.fixtureId}/overlay`);
+    expect(ht.data!.clock, "at half-time the endpoint omits the clock; the stage holds").toBeUndefined();
+
+    // The gate is the PAGE's, not the endpoint's: thaw the org and the JSON still answers.
+    const org = await activeOrg(page);
+    await setBoolEntitlementOverrideSql(org.id, "streaming.overlay", false);
+    await invalidateOrgEntitlements(request, org.id);
+    const stillPublic = await apiJson(request, `/api/v1/public/fixtures/${cricketFixtureId}/overlay`);
+    expect(stillPublic.status, "public JSON is public; the overlay PAGE 404s").toBe(200);
+    await setBoolEntitlementOverrideSql(org.id, "streaming.overlay", true);
+    await invalidateOrgEntitlements(request, org.id);
+
+    // A private competition's fixture: 404, indistinguishable from missing.
+    const priv = await apiJson<{ id: string }>(request, "/api/v1/competitions", "POST", { name: `Private ${TAG}`, visibility: "private", ends_on: "2030-12-31" });
+    const pdiv = await apiJson<{ id: string }>(request, `/api/v1/competitions/${priv.data!.id}/divisions`, "POST", { name: "p", sport_key: "generic", variant_key: "", config: {} });
+    await addEntrantsViaApi(request, pdiv.data!.id, ["A", "B"]);
+    const { fixtureIds } = await createStageAndGenerate(request, pdiv.data!.id, { kind: "league", name: "L" });
+    const hidden = await apiJson(request, `/api/v1/public/fixtures/${fixtureIds[0]}/overlay`);
+    expect(hidden.status).toBe(404);
+  });
+```
+
+  RE-PIN: the cricket rig's variable names (`cricketFixtureId`, `cricketDivisionId`) are Step 1's — use its names; `seedFootballFixture` is a five-line clone of the cricket seed with `sport_key: "football"`, written beside it; `TAG` from `../helpers`. Run whole-file (never `-g`).
+
 - [ ] **Step 3: Run it green, whole-file, after Tasks 5–7.** `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/stream-overlay/apps/web && PLAYWRIGHT_BASE=<ovl base> E2E_PROD_TARGET=1 npx playwright test e2e/walkthrough/stream-overlay.spec.ts --project=walkthrough --reporter=line`
   Expected: `8 passed`. Never `-g` a slice of it — a `-g` sweep is a filename sweep in costume and will select neither of the tests a UI change most often breaks.
 
@@ -4484,103 +5152,68 @@ async function streamOverlaySuite(admin: Session, proOrgId: string): Promise<voi
 - [ ] **Step 7: Run smoke against the prod build.** `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/stream-overlay && SMOKE_BASE=<ovl base> DATABASE_URL=<the ovl url> DATABASE_SSL=disable node --experimental-strip-types scripts/smoke.ts 2>&1 | grep -a "stream overlay"`
   Expected: seven `PASS  stream overlay: …` lines and no `FAIL`. A `FAIL` on the seam line is the inert-seam class this suite exists for — fix the column list, not the assertion.
 
-- [ ] **Step 8: Write the visual-gate capture spec.** Create `apps/web/e2e/walkthrough/stream-overlay-capture.spec.ts`:
+- [ ] **Step 8: The visual gate — one seed kind and the manifest rows (amended 2026-09-07; the capture spec this step used to write is retired).** The harness is T1b's (`apps/web/e2e/visual/capture.spec.ts`, `docs/runbooks/visual-gate.md`); this wave adds ONE seed kind and rows, never harness code.
+
+  (a) In `apps/web/e2e/visual/seeds.ts`: add `"overlay-fixture"` to `SEED_KINDS`; to `SEED_PARAMS`: `["orgSlug", "compSlug", "divSlug", "cricketFixtureId", "footballFixtureId", "tennisFixtureId", "volleyballFixtureId", "scheduledFixtureId", "missingFixtureId"]`; and the seed:
 
 ```ts
-// The owner's per-screen visual gate (merge gate 6). Doubly guarded, the same
-// convention gallery.capture.ts uses: it lives in e2e/walkthrough/ so the
-// project collects it, and every test skips unless OVL_DIR is set, so a plain
-// sweep is a no-op.
-//
-// The harness asserts the images EXIST and DIFFER — a capture run that errored
-// before its first screenshot, or that photographed the same state eight
-// times, has collected a sign-off on nothing.
-import { test, expect } from "@playwright/test";
-import { createHash } from "node:crypto";
-import { mkdirSync, readFileSync, existsSync } from "node:fs";
-import { join } from "node:path";
-import { activeOrg, addEntrantsViaApi, apiJson, createStageAndGenerate, invalidateOrgEntitlements, setBoolEntitlementOverrideSql } from "../helpers";
-
-const DIR = process.env.OVL_DIR;
-const SPORTS = ["cricket", "football", "tennis", "volleyball"] as const;
-// The registry's ids, typed out rather than imported: this spec runs under
-// Playwright and `theme-registry.ts` pulls in two React client components.
-// It is therefore a LIST THAT CAN GO STALE — when a theme is registered, add
-// it here in the same change, or the visual gate silently stops photographing
-// a shipped theme (owner answer 18 / Q7).
-const STYLES = ["bar", "bug"] as const;
-const hashes = new Map<string, string>();
-
-test.skip(!DIR, "set OVL_DIR to capture the stream-overlay visual gate");
-test.describe.configure({ mode: "serial" });
-
-test("captures bar and bug for four sports at 1920x1080, and the panel at three widths", async ({ page, request }) => {
-  test.setTimeout(240_000);
-  mkdirSync(DIR!, { recursive: true });
+/** Stream overlay W1 — the entitled org, four short REAL streams (one per
+ *  sport the sheet draws), one fixture with no events (the "—" state), and a
+ *  well-formed id that exists nowhere (the 404 state). The entitlement is
+ *  lifted by the SAME SQL upsert stream-overlay.spec.ts uses and thawed to
+ *  FALSE by that spec's afterAll — this seed only lifts. */
+async function overlayFixture(page: Page): Promise<Record<string, string>> {
+  const request = page.request;
   const org = await activeOrg(page);
   await setBoolEntitlementOverrideSql(org.id, "streaming.overlay", true);
   await invalidateOrgEntitlements(request, org.id);
-
-  for (const sport of SPORTS) {
-    const comp = await apiJson<{ id: string; slug: string }>(request, "/api/v1/competitions", "POST", {
-      name: `Overlay shot ${sport} ${Date.now()}`, visibility: "public", ends_on: "2030-12-31",
-    });
-    const div = await apiJson<{ id: string; slug: string }>(
-      request, `/api/v1/competitions/${comp.data!.id}/divisions`, "POST",
-      { name: sport, sport_key: sport, variant_key: sport === "cricket" ? "t20" : "", config: {} },
-    );
+  const comp = await apiJson<{ id: string; slug: string }>(request, "/api/v1/competitions", "POST", {
+    name: `Overlay visual ${TAG}`, visibility: "public", ends_on: "2030-12-31",
+  });
+  const out: Record<string, string> = { orgSlug: org.slug, compSlug: comp.data!.slug, missingFixtureId: "00000000-0000-4000-8000-000000000000" };
+  for (const sport of ["cricket", "football", "tennis", "volleyball"] as const) {
+    const div = await apiJson<{ id: string; slug: string }>(request, `/api/v1/competitions/${comp.data!.id}/divisions`, "POST",
+      { name: sport, sport_key: sport, variant_key: sport === "cricket" ? "t20" : "", config: {} });
     await addEntrantsViaApi(request, div.data!.id, ["Milton Keynes Rovers Cricket Club First XI", "Northbridge Athletic"]);
     const { fixtureIds } = await createStageAndGenerate(request, div.data!.id, { kind: "league", name: "L" });
-    const fx = fixtureIds[0]!;
     await apiJson(request, `/api/v1/divisions/${div.data!.id}/start`, "POST");
-    // A short, REAL stream per sport — re-pin each sport's opener against its
-    // module before running; a refused append photographs the empty state.
+    const fx = fixtureIds[0]!;
+    // RE-PIN each opener against its module before running; a refused append
+    // photographs the empty state and the mustDiffer pair then fails honestly.
+    const opener: Record<string, { type: string; payload: unknown }[]> = {
+      cricket: [{ type: "cricket.toss", payload: { winner: "home", decision: "bat" } }, { type: "core.start", payload: {} }],
+      football: [{ type: "core.start", payload: {} }, { type: "football.goal", payload: { by: "home", at: { period: "H1", elapsed: 761 } } }],
+      tennis: [{ type: "core.start", payload: {} }, { type: "tennis.point", payload: { wonBy: "home" } }],
+      volleyball: [{ type: "core.start", payload: {} }, { type: "volleyball.rally", payload: { wonBy: "away" } }],
+    };
+    let seq = 0;
+    for (const ev of opener[sport]!) {
+      const res = await apiJson(request, `/api/v1/fixtures/${fx}/events`, "POST", { expected_seq: seq, ...ev });
+      if (res.status !== 201) throw new Error(`seed overlay-fixture: ${sport} ${ev.type} → ${res.status} ${res.error?.message ?? ""}`);
+      seq += 1;
+    }
+    out[`${sport}FixtureId`] = fx;
     if (sport === "cricket") {
-      await apiJson(request, `/api/v1/fixtures/${fx}/events`, "POST", { expected_seq: 0, type: "cricket.toss", payload: { winner: "home", decision: "bat" } });
-    }
-
-    await page.setViewportSize({ width: 1920, height: 1080 });
-    for (const style of STYLES) {
-      await page.goto(`/overlay/fixtures/${fx}?style=${style}`);
-      await expect(page.getByTestId("ovl-root")).toBeVisible();
-      const file = join(DIR!, `${sport}-${style}.png`);
-      await page.screenshot({ path: file });
-      expect(existsSync(file), file).toBe(true);
-      hashes.set(`${sport}-${style}`, createHash("sha256").update(readFileSync(file)).digest("hex"));
+      out.divSlug = div.data!.slug;
+      out.scheduledFixtureId = fixtureIds[1]!; // the league's second fixture: no events, "—"
     }
   }
-
-  expect(
-    new Set(hashes.values()).size,
-    "eight images that DIFFER — identical hashes mean the theme never applied or nothing opened",
-  ).toBe(8);
-});
-
-test("captures the organiser panel at 320, 768 and 1280", async ({ page }) => {
-  const org = await activeOrg(page);
-  const panel: string[] = [];
-  for (const width of [320, 768, 1280]) {
-    await page.setViewportSize({ width, height: 900 });
-    await page.goto(`/o/${org.slug}`);
-    // Navigate to the seeded division's fixtures tab, open the first row's
-    // stream panel, then shoot. (Path re-pinned at execution against the rig
-    // the first test seeded.)
-    const toggle = page.getByTestId("fixture-stream-toggle").first();
-    await expect(toggle).toBeAttached();
-    if (await toggle.isVisible()) await toggle.click();
-    const file = join(DIR!, `panel-${width}.png`);
-    await page.screenshot({ path: file, fullPage: true });
-    expect(existsSync(file)).toBe(true);
-    panel.push(createHash("sha256").update(readFileSync(file)).digest("hex"));
-  }
-  expect(new Set(panel).size, "three widths, three different pictures").toBe(3);
-});
+  return out;
+}
 ```
 
-- [ ] **Step 9: Run the capture and read the pictures.** `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/stream-overlay/apps/web && OVL_DIR=/tmp/ovl-w1/shots PLAYWRIGHT_BASE=<ovl base> E2E_PROD_TARGET=1 npx playwright test e2e/walkthrough/stream-overlay-capture.spec.ts --project=walkthrough --reporter=line`
-  Expected: `2 passed` and eleven files in `/tmp/ovl-w1/shots`. Then OPEN them and write a verdict row per screen: alignment, the 43-character name, LED position, contrast composited over a LIGHT and a DARK frame (OBS will do both), the 404 state and the "—" scheduled state. "CI green" is not a visual sign-off.
+  (add `setBoolEntitlementOverrideSql`, `invalidateOrgEntitlements`, `addEntrantsViaApi`, `createStageAndGenerate` to the `../helpers` import, and the `case "overlay-fixture": return overlayFixture(page);` arm to `seedFor`).
 
-- [ ] **Step 10: Update `_INDEX.md`.** In `docs/superpowers/specs/2026-09-05-stream-overlay-prompts/_INDEX.md`: flip the plan row to `done`, the PR1 row to `in flight`/`merged` with its number, record the LANDED migration numbers (V392/V393 or whatever the rebase gave them), and add the findings this wave produced — the `useLiveFixture` return-type conflict, `OverlayMsg` vs `MsgFn`, `decidedTemplates` as an input, `startLabel` formatted server-side in UTC (no public venue zone), watch-list 6 resolved to the three-letter fallback (`public_entrants_v` carries no `short_name`), `header.clock` empty in W1, the "Replay" label needing a reload, and whatever `--sport-*` contrast or `m.youtube.com` question the run raised.
+  (b) Append to `apps/web/e2e/visual/manifest.json`'s `groups` — the `overlay` group: for each `sport` in `cricket, football, tennis, volleyball` and each `style` in `bar, bug` and each `backdrop` in `light, dark`, one row `{ "id": "<sport>-<style>-<backdrop>", "route": "/overlay/fixtures/{<sport>FixtureId}?style=<style>", "viewport": { "width": 1920, "height": 1080 }, "backdrop": "<backdrop>", "awaitSelector": "[data-testid=ovl-root]", "controlRoot": null, "checks": [] }` (sixteen rows; the overlay has no controls and no page scroll — its gate is the CONTRAST test and the pictures); plus `{ "id": "scheduled-bug-dark", "route": "/overlay/fixtures/{scheduledFixtureId}", … "backdrop": "dark", "awaitSelector": "[data-testid=ovl-root]" }` and `{ "id": "missing-404", "route": "/overlay/fixtures/{missingFixtureId}", "viewport": { "width": 1280, "height": 800 }, "backdrop": null, "awaitSelector": "h1", "auth": true }` (RE-PIN: read `apps/web/src/app/not-found.tsx` for the element the 404 page renders and use its selector). `mustDiffer`: every `<sport>-bar-light` vs `<sport>-bug-light` (four pairs), every `<sport>-bar-light` vs `<sport>-bar-dark` (four pairs), `cricket-bar-light` vs `football-bar-light`, and `scheduled-bug-dark` vs `cricket-bug-dark`.
+
+  And the `console-panel` group, seed `overlay-fixture`, `auth: true` on every row: routes `/o/{orgSlug}/c/{compSlug}/d/{divSlug}?tab=fixtures&stream={cricketFixtureId}` (Task 6 Step 3b makes `?stream=<fixtureId>` open that row's panel — the same parameter R1's Stripe `success_url` returns to), rows `panel-320` (320×568), `panel-320-zoom125` (320×568, `zoom: 1.25`), `panel-768` (768×1024), `panel-1280` (1280×800); `awaitSelector: "[data-testid=fixture-stream-panel]"`; `controlRoot: "[data-testid=fixture-stream-panel]"`; checks on every row `["no-horizontal-scroll", "no-clip", "hit-targets", "truncate-chain", "rails-a11y"]` (drop `hit-targets` on `panel-1280` only); `mustDiffer: [["panel-320", "panel-1280"], ["panel-320", "panel-320-zoom125"]]`; `controlSetEqual: [["panel-320", "panel-1280"]]` — the checklist's control-SET diff, membership and order and repeats, asserted by the harness rather than eyeballed.
+
+  Then `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/stream-overlay/apps/web && npx vitest run src/lib/__tests__/visual-manifest.test.ts --reporter=json --outputFile=/tmp/ovl-w1/t8-manifest.json` → `numFailedTests: 0` (a dangling id or an unprovided placeholder fails HERE, in seconds).
+
+- [ ] **Step 9: Run the harness and read the pictures.** `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/stream-overlay && ~/.claude/skills/seazn-local-env/scripts/seazn-env.sh rebuild --label ovl > /dev/null 2>&1; echo "EXIT=$?"` then `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/stream-overlay/apps/web && VISUAL_DIR=/tmp/ovl-w1/shots PLAYWRIGHT_BASE=<ovl base> E2E_PROD_TARGET=1 npx playwright test e2e/visual/capture.spec.ts --project=parallel --reporter=line > /tmp/ovl-w1/visual.log 2>&1; echo "EXIT=$?"; tail -6 /tmp/ovl-w1/visual.log; ls /tmp/ovl-w1/shots | wc -l`
+  Expected: `4 passed` (the two T1 groups plus `overlay` and `console-panel`), 24 PNGs for this wave plus T1's six, every `mustDiffer` pair different, the `[control-set console-panel]` block printing the SAME list for 320 and 1280. Then OPEN every picture (the Read tool renders PNGs) and write one verdict line per screen into the PR inventory — alignment against `_THEMES.md` §3/§4 by `getComputedStyle` at 1920×1080 (the reviewer measures, the executor records), the 43-character name, LED position, legibility over the LIGHT and the DARK frame, the 404 and the "—" state, the panel at 320 with every control 44 px and the same set as 1280, and the 125 % row visibly larger at the same window. "CI green" is not a visual sign-off; the owner signs per screen.
+
+- [ ] **Step 10: Update `_INDEX.md`.** In `docs/superpowers/specs/2026-09-05-stream-overlay-prompts/_INDEX.md`: flip the plan row to `done`, the PR1 row to `in flight`/`merged` with its number, record the LANDED migration numbers (V400/V393 or whatever the rebase gave them), and add the findings this wave produced — the `useLiveFixture` return-type conflict, `OverlayMsg` vs `MsgFn`, `decidedTemplates` as an input, `startLabel` formatted server-side in UTC (no public venue zone), watch-list 6 resolved to the three-letter fallback (`public_entrants_v` carries no `short_name`), `header.clock` empty in W1, the "Replay" label needing a reload, and whatever `--sport-*` contrast or `m.youtube.com` question the run raised.
 
 - [ ] **Step 11: Wave-boundary gate — the full suite, against the baseline.**
   `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/stream-overlay/apps/web && DATABASE_URL=<the ovl url> DATABASE_SSL=disable npx vitest run --reporter=json --outputFile=/tmp/ovl-w1/full.json`
@@ -4590,11 +5223,11 @@ test("captures the organiser panel at 320, 768 and 1280", async ({ page }) => {
   `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/stream-overlay && npm run openapi:gen` and `pnpm i18n:gen-keys`, then `/usr/bin/git status --porcelain` → no diff from either.
 
 - [ ] **Step 12: Commit.**
-  `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/stream-overlay && /usr/bin/git add apps/web/e2e/walkthrough/stream-overlay.spec.ts apps/web/e2e/walkthrough/stream-overlay-capture.spec.ts scripts/smoke.ts docs/superpowers/specs/2026-09-05-stream-overlay-prompts/_INDEX.md`
+  `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/stream-overlay && /usr/bin/git add apps/web/e2e/walkthrough/stream-overlay.spec.ts apps/web/src/lib/__tests__/e2e-ci-wiring.test.ts apps/web/e2e/visual/seeds.ts apps/web/e2e/visual/manifest.json scripts/smoke.ts docs/superpowers/specs/2026-09-05-stream-overlay-prompts/_INDEX.md`
   then
   `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/stream-overlay && /usr/bin/git commit -m "overlay(tests): e2e both gate directions, smoke through the seam, and the visual gate" -m "The e2e drives a real cricket ledger and asserts the score moves without navigating; smoke proves the saved link reaches the public JSON; the capture harness asserts eight images that exist and differ." -m "Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>" -m "Claude-Session: https://claude.ai/code/session_01UdUR7dcxassJ4FExpVfRRr"`
 
-- [ ] **Step 13: Post-rebase (R11, R9, R10).** After `feat/fixture-console-redesign` merges, rebase on `main`, then in ONE commit: renumber the two migrations to the next free V, and `grep -arn "WALKTHROUGH_SPECS" apps/web` — if the symbol now exists, register BOTH `stream-overlay.spec.ts` and `stream-overlay-capture.spec.ts` in it. Re-run the WHOLE `mobile.spec.ts` AFTER the rebase, not before, and re-run Step 11's full gate.
+- [ ] **Step 13: Post-rebase (R11, R10) — amended 2026-09-07.** Desk W1 (#708) and desk W2 (#725) are MERGED; the live contention on `run-sheet-row.tsx` is **desk W3** (`feat/competition-desk-w3-band-and-phone`). Before opening PR1, `/usr/bin/git fetch origin main && /usr/bin/git log --oneline origin/main -- apps/web/src/components/v2/desk/run-sheet-row.tsx | head -3` — if W3 has landed, rebase on `main`, re-read `:377`'s neighbourhood, and re-place Task 6's one conditional line; then in the SAME commit `ls db/migration/deltas | sort -V | tail -1` and renumber V400/V401 to the next free numbers if either was taken (a duplicate Flyway version survives a clean rebase — three times now). Re-run the WHOLE `mobile.spec.ts` at seven widths AFTER the rebase, not before, re-run Step 11's full gate, and re-run the visual harness (Step 9). e2e pre-merge: `workflow_dispatch pr=<n>` on `e2e.yml`.
 
 ---
 
@@ -4605,8 +5238,8 @@ test("captures the organiser panel at 320, 768 and 1280", async ({ page }) => {
 | Source section | Task |
 |---|---|
 | Owner answer 12 (Q1) — venue zone on the public payload | 0 (payload), 2 (`overlayStartLabel`), 5 (page) |
-| Owner answer 12 (Q1) — cricket balls remaining, "Need 45 off 45" (`_THEMES.md` §3/§4) | 0 (`ballsLimit`), 2 (`chaseBalls`, `overlay.chase.needBalls`), 5 (dictionaries) |
-| Owner answer 12 (Q1) — football match clock, `header.clock` (`_THEMES.md` §3/§4) | 0 (`detail.clock` + §9.6), 2 (`matchClock`), 5 (the bar/bug clock cells) |
+| Owner answer 12 (Q1) — cricket balls remaining, "Need 45 off 45" (`_THEMES.md` §3/§4) | 0 (`OverlayLiveData.cricket.innings[].ballsLimit`, off the folded state), 2 (`chaseBalls(data.cricket)`, `overlay.chase.needBalls`), 5 (dictionaries) |
+| Owner answer 12 (Q1) — football match clock, `header.clock` (`_THEMES.md` §3/§4); owner 2026-09-06: it TICKS | 0 (`OverlayLiveData.clock` anchor), 5 (Step 8a `useOverlayClock`, the one 1 Hz timer; the bar/bug clock cells), 2 (`formatClock`, `clockLabel` input) |
 | Owner answer 13 (Q2) — no consent banner on the overlay segment | 5 (Steps 4a, 4b), 8 (the e2e absence + cookie assertions) |
 | Owner answer 14 (Q3) — Supabase realtime, override grants both keys | Global Constraints, 4 |
 | Owner answer 17 (Q14) — the override row IS the hiding gate | Global Constraints, 4, 5 (the `notFound()` gate) |
@@ -4617,24 +5250,27 @@ test("captures the organiser panel at 320, 768 and 1280", async ({ page }) => {
 | Spec §1 Overlay route (layout, page, canvas, stage) / prompt scope 5 | 5 |
 | Spec §2 Projection (`OverlayModel`, `overlayModel`) / prompt scope 2 | 2 |
 | Spec §3 Theme (`sportThemeStyle`, seven tokens, `.ovl-*`) / `_THEMES.md` §1–§4 | 5 |
-| Spec §4 Data (V392, view, `PublicFixture`, `PUT /stream`, OpenAPI) / prompt scope 3 | 3 |
-| Spec §4 Data — the three payload fields a scorebug needs (owner answer 12) | 0 |
+| Spec §4 Data (V400, view, `PublicFixture`, `PUT /stream`, OpenAPI) / prompt scope 3 | 3 |
+| Design §3.2 — the overlay endpoint, `OverlayLiveData` verbatim, fold cached on `last_seq`, zero engine edits (owner answers 12, 19; Q15 closed) | 0 (Steps 5–13), 1 (the generic fetcher), 8 (the endpoint e2e case) |
+| Design §3.3 — `useLiveFixture` generic over `{ fetcher, delayMs? }`, `presentationNowOffsetMs`, `LiveScore` byte-identical | 1 (Steps 1, 2a, 3, 4, 5) |
+| Design §5.1 / §5.3 — both keys `false` on five plans (V401); the Phone tab reads the gate from PR1 (D-W1-1) | 4, 6 (Step 3b) |
+| Design §4.2 / T1b — this wave adds manifest rows and one seed kind, never harness code | 8 (Steps 8a, 8b, 9) |
 | Spec §5 Entitlement (`streaming.overlay`, no plan, override row) / prompt scope 4 | 4 |
 | Spec §6 Organiser panel / prompt scope 6 / `_THEMES.md` §8 | 6 |
 | Spec §7 Public match page link / prompt scope 7 | 7 |
-| Spec §8 Sequencing with in-flight programmes (R11) | 8 (Step 13) |
+| Spec §8 Sequencing with in-flight programmes (R11) — desk W3 on `run-sheet-row.tsx` (re-pinned 2026-09-07) | 8 (Step 13) |
 | Spec §9 Motion — the three W1 motions / `_THEMES.md` §6 / R13 | 5 (CSS + stage), proven in 8 |
 | Spec "Error and empty states" (404 both causes, scheduled "—", decided, no-detail sports) | 2 (unit), 5 (render), 8 (e2e) |
 | Spec "Tests" — Unit | 0, 1, 2, 3, 4, 5 |
 | Spec "Tests" — E2E | 8 (with 7's block) |
 | Spec "Tests" — Smoke | 8 |
 | Spec "Tests" — Regression (`LiveScore` unchanged, `mobile.spec.ts`, gen diffs) | 1, 8 (Steps 5, 11) |
-| Spec "Tests" — Visual gate | 8 (Steps 8–9) |
+| Spec "Tests" — Visual gate (T1b manifest rows: bar + bug × four sports × light + dark, "—", 404; panel 320/768/1280/320 @ 125 % with control-set-equal) | 8 (Steps 8–9) |
 | Prompt scope 1 Hook extraction | 1 |
 | Prompt scope 8 i18n (four locales, gen-keys, derived coverage test) | 5, 6 |
 | Prompt scope 10 `_INDEX.md` | 8 (Step 10) |
 | R4 `OverlayMoment` type + `ovl-moment-slot`, W2 compatibility | 2, 5 |
-| `_THEMES.md` §2 contrast floors | 5 (Step 10) |
+| `_THEMES.md` §2 contrast floors | T1 Task 2 (the derived sweep); 5 (Step 10 — a role row only if a new pair is painted) |
 | `_THEMES.md` §7 phone legibility floors (no native size lowered) | 5 (CSS values are §3/§4 verbatim), reviewed in 8 Step 9 |
 
 ### Mutation checks — each names the test that must go red
@@ -4642,9 +5278,11 @@ test("captures the organiser panel at 320, 768 and 1280", async ({ page }) => {
 | # | Mutation | Test that must go red |
 |---|---|---|
 | g | `data.ts`: delete the venue-zone query and hardcode `venueTz: "UTC"` | `public-fixture-venue-tz.test.ts` › `falls back to the organisation's zone when the division has no schedule_settings row` — `expected 'UTC' to be 'Asia/Kolkata'` (Task 0 Step 14.1) |
-| h | `cricket.ts`: drop `ballsLimit: innings.ballsLimit,` from the summary map | `cricket.test.ts` › `the summary carries each innings' ballsLimit…` — `expected undefined to be 120`; and `overlay-model.test.ts` › `renders 'Need 45 off 45'…`, which falls back to the runs-only key (Task 0 Step 14.2) |
-| i | `football.ts`: drop the `clock` spread from `summary().detail` | `football.time.test.ts` › `the summary carries the match clock…` — `expected undefined to be "12:41"`; and `overlay-model.test.ts` › `populates header.clock…` (Task 0 Step 14.3) |
-| j | `football.ts`: revert `coarsen`'s goal arm to drop `at` | `testkit/conformance.ts` › `§9.6 dual-fidelity: coarse fold ≡ fine fold` (football), and `football.time.test.ts` › `a coarsened stream keeps the stamp…`. This is the mutant that proves the clock is fold-invariant rather than merely present. |
+| h | `server/overlay/load.ts`: cache keys `["overlay-fold", fixtureId]` (drop `last_seq`) | `load.test.ts` › `folds AGAIN when the ledger advances` — `expected "spy" to be called 2 times, but got 1` (Task 0 Step 15.2, amended 2026-09-07) |
+| i | `server/overlay/project.ts` `clockOf`: delete `asOf.period !== s.phase \|\|` | `project.test.ts` › `between periods the clock is ABSENT` — `expected { phase: 'HT', … } to be undefined`; and `stream-overlay.spec.ts` › the endpoint case, which posts a period change and expects no `clock` (Task 0 Step 15.3) |
+| j | `server/overlay/project.ts` `cricketOf`: swap `runs` and `wickets` | `project.test.ts` › `cricket: every innings' runs…` — `toMatchObject` names `runs`; and `overlay-model.test.ts` › `renders 'Need 45 off 45'…` through `chaseBalls(data.cricket)` (Task 0 Step 15.4) |
+| j2 | `components/overlay/use-overlay-clock.ts`: `displayed = anchorSeconds + (now − anchorAtWallMs)` without `− presentationNowOffsetMs` | `use-overlay-clock.test.ts` › `subtracts the presentation offset…` — the R2 alignment e2e's unit-level twin (Task 5 Step 8a); and the R2 alignment e2e later |
+| j3 | `components/overlay/use-overlay-clock.ts`: delete the hold — return `null` when `clock` is absent | `use-overlay-clock.test.ts` › `holds the last displayed value at half-time…` (Task 5 Step 8a) |
 | k | `cookie-consent.tsx`: delete the `pathname?.startsWith(OVERLAY_SEGMENT)` guard, so the banner renders on the overlay segment | `cookie-consent-overlay-segment.test.tsx` › `renders nothing under /overlay/…`, and `stream-overlay.spec.ts` › `the page is transparent…` on `not.toBeAttached()`. Run the e2e as well as the unit: the unit alone cannot see the root layout that mounts it. |
 | a | `stream-url.ts`: `return ALLOWED.has(url.hostname)` → `return true` | `stream-url.test.ts` › `rejects https://evil.example/www.youtube.com — an allowed host in the PATH is not the host` (and the other nine rejections) |
 | b | `overlay-model.ts` `ledEntrantId`: swap the serving branch's two side ids | `overlay-model.test.ts` › `tennis: the LED and the serve dot follow the server` |
@@ -4655,7 +5293,7 @@ test("captures the organiser panel at 320, 768 and 1280", async ({ page }) => {
 | l | `theme-registry.ts` `resolveThemeFrom`: delete the `sports` filter — `if (requested && suits(requested, sportKey))` → `if (requested)` | `theme-registry.test.ts` › `falls back when the requested theme does not list the fixture's sport` — `expected 'bar' to be 'bug'`. **Only the PROBE registry can kill this**: both shipped themes are `sports: "all"`, so a test written against `OVERLAY_THEMES` alone would survive the mutation. A surviving (l) means the probe is wrong, not the code (Task 5 Step 6d) |
 | m | `theme-registry.ts` `resolveThemeFrom`: `return OVERLAY_THEMES[fallback];` → `throw new Error("unknown theme")` | `theme-registry.test.ts` › `falls back on an unknown or misspelt id, and never throws` — nine `not.toThrow()` failures. This is the mutant that stands for "an OBS browser source cannot be asked to fix a typo mid-match" (Task 5 Step 6d) |
 | n | `theme-registry.ts` `resolveTheme`: `defaultThemeFor(sportKey)` → `"bug"` | `theme-registry.test.ts` › `falls back to THE SPORT'S default, not to a hardcoded one` — `expected 'bug' to be 'bar'`. Without the cricket/football differential row this mutant survives every other assertion in the file |
-| extra | `V392`: drop `stream_url` from the view redefinition | `fixture-stream-url.test.ts` › `writes the link … and it arrives on the PUBLIC view`, and smoke's `the saved link arrives on the PUBLIC fixture JSON (the seam)` |
+| extra | `V400`: drop `stream_url` from the view redefinition | `fixture-stream-url.test.ts` › `writes the link … and it arrives on the PUBLIC view`, and smoke's `the saved link arrives on the PUBLIC fixture JSON (the seam)` |
 | extra | `entitlement-domains.ts`: add `"streaming.overlay"` to any section | `entitlement-streaming-overlay.test.ts` › `is in NO ENTITLEMENT_DOMAINS section` |
 
 A surviving mutant is a missing test, not a note. Run each one, restore, and re-run to green before recording it.
@@ -4664,12 +5302,14 @@ A surviving mutant is a missing test, not a note. Run each one, restore, and re-
 
 1. **Entrant short name (watch-list 6) — RESOLVED to the fallback.** `public_entrants_v` (`V350__person_tombstone_views.sql:18-47`) exposes `display_name` and a `team_display` blob of `club_id/club_name/logo_path/colors`; `teams.short_name` (`V206:5`) never reaches it. `shortCode` therefore always takes the three-letter branch, and `ui.stream.codeNote` tells the organiser so.
 2. **CLOSED by owner answer 12 (2026-09-06) — venue timezone for `startLabel`.** Was: "formatted in UTC, no IANA zone on `PublicFixture`". Now Task 0 puts `venueTz` on `getPublicFixture` via `resolveVenueTz`, and `overlayStartLabel` formats with it. W1 **deviation 4 is closed**; nothing is owed here.
-3. **CLOSED by owner answer 12 (2026-09-06) — `header.clock` (football family), and the cricket chase line.** Was: "no elapsed-time field exists on the public `ScoreSummary.detail`" and "the chase reads 'Need 45', not 'Need 45 off 45'". Task 0 adds `detail.clock` (from the engine's own `footballPosition`/`periodPosition`) and `detail.innings[].ballsLimit`. W1 **deviations 4 and 6, and the unpinned football clock, are all closed by the owner's answers** — the only thing this wave still owes on them is the §9.6 obligation Task 0 Steps 10–12 carry. `_STATE.md`'s copy of the eight-deviation list is a SEPARATE file and is not edited by this plan; whoever updates `_INDEX.md` at PR time strikes 4 and 6 there.
+3. **CLOSED by owner answer 12 (2026-09-06) — `header.clock` (football family), and the cricket chase line.** Was: "no elapsed-time field exists on the public `ScoreSummary.detail`" and "the chase reads 'Need 45', not 'Need 45 off 45'". Amended 2026-09-07: Task 0 projects `OverlayLiveData.clock` (the anchor, under `footballPosition`'s own staleness guard) and `OverlayLiveData.cricket.innings[].ballsLimit` off the folded state through the overlay endpoint — no engine field is added, so the §9.6 obligation the 09-05 plan carried is GONE (nothing coarsens, nothing re-baselines). W1 **deviations 4 and 6, and the unpinned football clock, are all closed by the owner's answers**, and the clock TICKS (Task 5 Step 8a). `_STATE.md`'s copy of the eight-deviation list is a SEPARATE file and is not edited by this plan; whoever updates `_INDEX.md` at PR time strikes 4 and 6 there.
 4. **CLOSED by owner answer 16 (Q5), 2026-09-06 — `m.youtube.com`.** Was: "not on R16's ten; the unit test asserts it is REJECTED". The owner answered *"Agree"*, so it is the eleventh entry in `STREAM_HOSTS` with its own accepted row, and two look-alike rejections (`m.youtube.com.evil.example`, `mm.youtube.com`) were added in the same edit so the widening stays an exact-hostname addition rather than a suffix rule. **R16 in `_RULES.md` still says ten and is now stale** — whoever updates `_INDEX.md` at PR time records the widening there; this plan does not edit `_RULES.md`.
 5. **Barlow double-mount (watch-list 7).** Verified in Task 5 Step 12 by reading the built CSS and the network tab, not by assumption.
 6. **`V3_SKINS` = every `sport_key` a division can carry (watch-list 8).** Task 2's sweep asserts eleven keys; run `select distinct sport_key from divisions` on the ovl DB and diff before the PR — a division on a twelfth key would render the generic composition, which is a designed state but should be a KNOWN one.
-7. **`WALKTHROUGH_SPECS` after the rebase (R9).** Absent at base `997ad225b`; present on `main` since PR #723 (`01ea4a455`). Task 8 Step 13 re-greps and registers both specs in the same commit rather than assuming either way.
-8. **The one conflict the owner's answers CREATE, recorded rather than quietly resolved:** Global Constraints say "do NOT touch the engine", and Task 0 does — `cricket.ts`, `football.ts`, `sports/period/kernel.ts` and `core/position.ts`. It is unavoidable: the live transport carries `{ status, summary, outcome }` and nothing else (`live-score-data.ts:7-23`), so a number that must change DURING a match can only ride on `ScoreSummary`. The alternative considered and rejected was reading `match_states.state` server-side and grafting the two numbers onto the payload outside the engine — no engine edit and no §9.6 exposure, but a SECOND authority for the chase denominator and for the clock's staleness guard, which this repo's standing rules punish harder. The carve-out is written into the constraint itself so it cannot widen.
+7. **CLOSED 2026-09-07 @ fb99bbd4c — `WALKTHROUGH_SPECS` exists** (`e2e-ci-wiring.test.ts:16`, on `main` since #723). Task 8 Step 1 registers `stream-overlay.spec.ts` in its own commit. The capture spec is retired in favour of T1b's manifest, so one name, not two.
+8. **CLOSED 2026-09-07 — the engine conflict no longer exists.** Was: Task 0 edits four engine files because the live transport carries only `{ status, summary, outcome }`. Now: the overlay ENDPOINT (design §3.2, owner Q16/Q15) projects the two numbers off the folded STATE `foldFixture` already returns, through the engine and changing no engine file; Task 1's hook is generic over its fetcher so the overlay polls that endpoint and `LiveScore` keeps the public JSON. The "second authority" objection that rejected the server-side graft on 2026-09-05 is answered by reading the engine's own state fields (`asOf`, `innings[].ballsLimit`) rather than re-deriving them, and by keeping `footballPosition`'s staleness guard verbatim in `clockOf`. `/usr/bin/git status --porcelain packages` is empty at every gate.
+8a. **FS13 (2026-09-07) — the design's RP3 pin was wrong; this plan's is right.** `grep -al public_fixtures_v db/migration/deltas/*.sql | sort -V | tail -1` → `V369__public_fixtures_round_role.sql:18` is the latest definer on `main`; the design's `V362:22` is the 2026-09-06 consolidation's stale scout pin. `_INDEX.md` records FS10 and the design's §13.2 row is corrected at PR1.
+8b. **Plan decision D-W1-1 (2026-09-07) — the Phone tab ships in W1 with its buy card DISABLED, not absent.** Design §3.8 says W1 ships the Phone tab "showing the upgrade or buy card and nothing else until R1"; a buy card whose buttons POST to a route that does not exist until R1 is an inert seam. So: no `streaming.relay` → `UpgradeGate` (real, tested); `streaming.relay` (override only, while dark) → the three pack tiles rendered `disabled` with `aria-disabled` and `ui.stream.phone.soon` copy in four locales, asserted disabled by the e2e. R1 removes the `disabled` and the copy in the same change that adds the checkout route. Reviewer: this is a designed state with a named owner, not a stub — if the owner would rather the tiles not render at all until R1, that is one prop.
 9. **Themes are a registry (owner answer 18 / Q7) — recorded so the review checks the ABSTRACTION, not just the two themes.** The claim W1 now makes is "a third theme is one registry entry plus one component". It is provable, and the reviewer should prove it rather than take it: add a throwaway third entry, confirm it appears in the panel's tabs and resolves on the route, and confirm that neither `page.tsx`, `overlay-stage.tsx` nor `fixture-stream-panel.tsx` needed an edit — then delete it. A registry nothing has ever been added to is a registry whose claim is untested. (The one honest caveat: the `ThemeId` union is declared in the registry file, so a third theme is two lines in ONE file, not one. That is deliberate — see the type's comment in Task 5 Step 6c — and it is still no edit outside the registry.)
 10. **The registry's `sports` filter has no production user on day one.** Both shipped themes are `sports: "all"`. Designed, not an oversight, but it means the filter's ONLY cover is the probe registry in `theme-registry.test.ts`. If a later wave deletes that probe as "redundant", mutant (l) stops being killable and the filter silently becomes decoration.
 11. **Conflicts with the wave prompt, listed for `_INDEX.md`:** the hook's return type (object, not bare `LiveFixtureData` — `LiveScore` renders `subscribed`); `OverlayMsg` instead of `MsgFn` (`MessageKey` is the `ui` catalog, the overlay's copy is `public`); `decidedTemplates` as a fourth model input (one authority for the decided sentence); `startLabel` formatted by the server; W2's plan names `apps/web/e2e/stream-overlay.spec.ts` while the W1 prompt's R9 puts it under `e2e/walkthrough/` — the W1 prompt wins and W2 re-pins. **And two the owner's later answers create, where the OWNER wins over both the prompt and the spec:** the wave prompt and the spec both describe `style=bar|bug` as a two-value query parameter with a per-sport default, which owner answer 18 (Q7) replaces with the registry; and R16's ten-host allowlist, which owner answer 16 (Q5) widens to eleven. Neither `_RULES.md` nor `W1-step-one.md` is edited by this plan — `_INDEX.md` records both supersessions at PR time.
