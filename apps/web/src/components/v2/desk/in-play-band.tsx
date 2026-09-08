@@ -8,11 +8,17 @@
 // SSR-first, then polled: `initial` is Task 6's `getCompetitionDesk` output,
 // already awaited by the page, so the band paints on first load with no
 // client fetch. From then on it polls its own endpoint
-// (`GET /api/v1/competitions/{id}/desk`) every 20s WHILE something is live —
-// same shape as `run-elapsed.tsx`/`live-score.tsx` (this repo has no query
-// library): a plain `setInterval`, cleared (not merely skipped) once nothing
-// is in play, so a competition that has gone quiet stops fetching instead of
-// polling a permanently-empty band forever.
+// (`GET /api/v1/competitions/{id}/desk`) — fast while something is live, slow
+// while the band is empty, paused while the tab is hidden.
+//
+// W4 correction. W3 CLEARED the interval once nothing was in play, reasoning
+// that a quiet competition should not poll a permanently-empty band. That
+// left the band unable to see the one transition it exists for: with
+// `inPlay.length === 0` the component renders `null`, so a desk open before
+// the first match of the day never noticed that match starting — it appeared
+// only on a manual reload. The schedule now lives in `band-poll.ts`, where
+// the node-environment suite can actually reach it; see that file's header
+// for why none of this can be tested through the component.
 import { useCallback, useEffect, useState } from "react";
 // NOT `@/lib/i18n` — that module carries `import "server-only"` and this is
 // a client component (build failure, not a lint nit: found via a real
@@ -23,8 +29,7 @@ import { useCallback, useEffect, useState } from "react";
 import { t } from "@/lib/i18n-runtime";
 import type { Dict } from "@/lib/i18n-constants";
 import type { DeskInPlayFixture, DeskNextFixture } from "@/server/usecases/competition-desk";
-
-const POLL_MS = 20_000;
+import { browserBandPollDeps, startBandPolling } from "./band-poll";
 
 export interface InPlayBandProps {
   competitionId: string;
@@ -65,16 +70,13 @@ export function InPlayBand({ competitionId, initial, dict }: InPlayBandProps): R
   }, [competitionId]);
 
   // Recomputed from STATE (not the initial prop) so a poll that empties the
-  // list — the last live fixture decided — clears its OWN interval on the
-  // very next render instead of continuing to fetch a dead band.
+  // list — the last live fixture decided — drops to the quiet cadence on the
+  // very next render, and a poll that fills it speeds back up.
   const live = inPlay.length > 0;
-  useEffect(() => {
-    if (!live) return;
-    const id = setInterval(() => {
-      void refresh();
-    }, POLL_MS);
-    return () => clearInterval(id);
-  }, [live, refresh]);
+  useEffect(
+    () => startBandPolling(live, () => void refresh(), browserBandPollDeps()),
+    [live, refresh],
+  );
 
   // Design doc Task 7 / this task's own mutation gate: rendered ONLY when
   // `inPlay.length > 0`, no empty state — delete this guard and exactly one

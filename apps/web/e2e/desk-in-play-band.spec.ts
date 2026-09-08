@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { TAG, competitionPath, scoreFixture, seedRosteredFixture } from "./helpers";
+import { TAG, apiJson, competitionPath, scoreFixture, seedRosteredFixture } from "./helpers";
 
 /**
  * Competition Desk W3, Task 7 — the live in-play band
@@ -51,8 +51,8 @@ test("the competition page shows a live band for a real core.start, with NO SCOR
   // the SSR snapshot alone would never self-correct, only the poll does.
   await expect(band, "band vanished before its own poll ran — this is not proving the poll").toBeVisible();
 
-  // The poll fires every 20s (in-play-band.tsx's POLL_MS) — advance virtual
-  // time well past one tick, never a real sleep.
+  // The live poll fires every 20s (`LIVE_POLL_MS`, band-poll.ts) — advance
+  // virtual time well past one tick, never a real sleep.
   await page.clock.fastForward("00:21");
 
   await expect(
@@ -87,4 +87,71 @@ test("regression: the band is absent off match day", async ({ page, request }) =
   // trusting the zero count below.
   await expect(page.getByTestId("desk-ledger-row").first()).toBeVisible();
   await expect(page.getByTestId("desk-in-play-band")).toHaveCount(0);
+});
+
+/**
+ * Competition Desk W4 — the band wakes a QUIET desk.
+ *
+ * W3 cleared the interval whenever nothing was in play, so a desk opened
+ * before the day's first match polled nothing at all and the band appeared
+ * only on a manual reload. The band renders `null` while quiet, which is
+ * precisely why it cannot notice its own change: there is no card on screen
+ * to update. `band-poll.ts` now keeps a slow poll running while quiet
+ * (`QUIET_POLL_MS`, 90s) and speeds up once something is live.
+ *
+ * This is the only test that can see any of it. `apps/web` vitest is
+ * `environment: "node"`, so no unit test ever runs the effect; the
+ * schedule's unit tests drive `startBandPolling` directly with fake timers,
+ * which proves the decisions and not the wiring. Here the real component
+ * hydrates in a real browser and the tab is never reloaded.
+ */
+test("a quiet desk left open picks up the day's first fixture without a reload", async ({
+  page,
+  request,
+}) => {
+  const fx = await seedRosteredFixture(request, {
+    label: `Desk Band Wake ${TAG}`,
+    sportKey: "generic",
+    variantKey: "score",
+    entrantKind: "individual",
+    home: [{ fullName: `Desk Band Wake Home ${TAG}` }],
+    away: [{ fullName: `Desk Band Wake Away ${TAG}` }],
+    emitCoreStart: false,
+  });
+  const compUrl = await competitionPath(request, fx.competitionId);
+
+  await page.clock.install();
+  await page.goto(compUrl, { waitUntil: "load" });
+
+  // Quiet: no band, and the page really did render (the same pairing the
+  // off-match-day regression above uses, for the same reason).
+  await expect(page.getByTestId("desk-ledger-row").first()).toBeVisible();
+  await expect(page.getByTestId("desk-in-play-band")).toHaveCount(0);
+
+  // The match starts — a real `core.start` through the engine, out of band
+  // from this tab, exactly as it would if a scorer opened the pad elsewhere.
+  const started = await apiJson<{ seq: number }>(
+    request,
+    `/api/v1/fixtures/${fx.fixtureId}/events`,
+    "POST",
+    { expected_seq: 0, type: "core.start", payload: {} },
+  );
+  expect(started.status, `core.start failed: ${JSON.stringify(started.error)}`).toBeLessThan(300);
+
+  // Nothing has told this tab. Past ONE live tick (20s) the band must still
+  // be absent — if it appeared here the test would be passing on some other
+  // mechanism (a router refresh, a stray fetch) rather than the quiet poll,
+  // and the 90s cadence would be unproven.
+  await page.clock.fastForward("00:25");
+  await expect(
+    page.getByTestId("desk-in-play-band"),
+    "the band appeared before the quiet poll could have run — this test is not proving the quiet poll",
+  ).toHaveCount(0);
+
+  // Past the quiet period it wakes, with no reload and no interaction.
+  await page.clock.fastForward("01:10");
+  await expect(
+    page.getByTestId("desk-in-play-band"),
+    "a quiet desk never noticed the first fixture start — this is the W3 defect",
+  ).toBeVisible();
 });
