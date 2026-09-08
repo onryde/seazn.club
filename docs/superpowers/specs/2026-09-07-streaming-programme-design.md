@@ -447,6 +447,13 @@ per-match recommendation, *"go"*).
 | `streaming.overlay` | Tier A: overlay route + OBS tab | false | **true** | false | **true** | **true** |
 | `streaming.relay` | Tier B: "may buy credits" and use the Phone tab | false | **true** | false | **true** | **true** |
 
+**The split above is the GA flip, not the landing state.** At landing (W1
+for `streaming.overlay`, R1 for `streaming.relay`) both keys are inserted
+**false for all five plans** — the feature is dark (§10.4) and only the test
+org's override rows open it. The true/false split in this table ships as its
+own migration together with the `ENTITLEMENT_DOMAINS` entry and the pricing
+copy, at the GA flip. Prompts and plans therefore land false-everywhere rows.
+
 Rows for all five plans, `on conflict (plan_key, feature_key) do update`,
 header prose to the V393 bar ("measured, not assumed"). Resolver semantics
 "bool requires true; no row denies" [E V393]. `streaming.relay` never appears
@@ -467,6 +474,10 @@ create table org_stream_credits (
   reason          text not null check (reason in ('purchase','consume','refund','grant','expire')),
   session_id      uuid null references fixture_stream_sessions(id),
   stripe_event_id text null unique,
+  -- per-row snapshot + the oversell guard, copied from ai_credit_ledger (V320):
+  -- the CHECK makes a consume that would overdraw fail in the transaction,
+  -- so guard placement is enforced by the schema, not by a test.
+  balance_after   integer not null check (balance_after >= 0),
   note            text null,
   created_by      uuid null,
   created_at      timestamptz not null default now()
@@ -474,7 +485,24 @@ create table org_stream_credits (
 create index on org_stream_credits (org_id, created_at);
 ```
 
-- **Balance = `sum(delta)`** through one usecase `creditBalance(tx, orgId)`.
+**Donor (FS10).** The repo already has a credits ledger with packs and a
+Stripe writer: `db/migration/deltas/V320__ai_credit_ledger.sql`
+(`wallet_id, delta, source, ref, balance_after`), `apps/web/src/lib/credits.ts`
+(`walletIdFor`, `balance`, `packBalance`; "compensating rows, never
+UPDATE/DELETE — it is money"), `app/api/billing/credit-pack-checkout/route.ts`
+and the `session.metadata.kind === "credit_pack"` branch in
+`server/usecases/billing-events.ts:151` [E fb99bbd4c]. Stream credits are a
+**separate table on the same shape**, not a second wallet in
+`ai_credit_ledger`: the two are different currencies (one credit = one
+match vs AI run units) and a shared table invites a spend from the wrong
+pool. The checkout route and the webhook branch are reused by adding
+`kind: "stream_pack"` beside `credit_pack`, with the same ungranted-pack
+recovery path. Watch (FS11): `app/api/cron/billing-events` exists, so paid
+events may be applied by cron rather than inline — the sandbox purchase e2e
+drives that cron before asserting the `purchase` row.
+
+- **Balance = `sum(delta)`** through one usecase `creditBalance(tx, orgId)`
+  (`balance_after` is a snapshot and the guard, never read as the balance).
   There is no counter column; the ledger is the one authority.
 - **Consume** happens in the SAME transaction as the session's transition to
   `live` (§6.4): `select id from org_stream_credits where org_id = $1 for
@@ -486,7 +514,8 @@ create index on org_stream_credits (org_id, created_at);
   within the last 24 h → no second consume (a restart after a failure is the
   same match).
 - **Purchase**: packs of 1 / 5 / 20 via Stripe Checkout, one-off, on the
-  `size-pack-checkout.ts` pattern [E]. `POST /api/billing/relay-checkout`
+  `credit-pack-checkout` + `billing-events.ts` pattern (FS10 donor above)
+  [E]. `POST /api/billing/relay-checkout`
   refuses BEFORE Stripe when the org's plan lacks `streaming.relay` (402 with
   reason copy), so nobody pays for a tier they cannot use. The webhook writes
   `(delta +n, 'purchase', stripe_event_id)`; the unique constraint makes a
@@ -812,7 +841,7 @@ never cite decoratively).
 | Deny by default | 404 ≡ missing (never "forbidden"), RLS enabled with zero client policies, exact-host allowlists | overlay page `notFound()` (§3.1); §6.1 RLS; `streamUrlSchema` (§3.7) |
 | The client never decides | entitlement and visibility are resolved server-side on every render; a client prop is a display hint, never a gate | `hasFeature` on the page and the division page (§3.1, §3.8) |
 | Cron pair idiom | 503 when the secret is unset, then 401 on mismatch, then ONE idempotent row-locked usecase, driven by an Actions-cron workflow | `app/api/cron/registrations/route.ts:13-16` |
-| Money is ledger rows in the same transaction | never a counter column; the debit row is inserted in the transaction that grants the thing paid for, under `for update`; Stripe events idempotent by id | `org_stream_credits` (§5.2); `size-pack-checkout.ts` |
+| Money is ledger rows in the same transaction | never a counter column; the debit row is inserted in the transaction that grants the thing paid for, under `for update`; Stripe events idempotent by id | `org_stream_credits` (§5.2); `ai_credit_ledger` V320 + `lib/credits.ts` |
 | i18n: four dictionaries + generated keys | every user-facing string in `en/es/fr/nl`, `pnpm i18n:gen-keys`, zero diff on `lib/i18n-keys.ts` | `dictionaries/*/ui.json`, `public.json` |
 | One DOM, branched for phone | phone is `max-md:*` on the same tree; phone-only is `md:hidden`; never a second tree, never a shrunk desktop | `2026-09-02-scorepad-v3-phone-composition-design.md`; `phone-disclosure.tsx` |
 
@@ -975,6 +1004,9 @@ design or owner RULING is an `_INDEX.md` finding, never silently resolved.
 | **FS7** | No theme-design or visual-gate wave existed | **T1** added (owner: *"Ok"*) ahead of W1-C |
 | FS8 | `barlowCondensed` weights `["600","700"]` | W1-C adds `"800"` to the existing declaration (RP8 confirmed) |
 | FS9 | `playwright.config.ts` cited under `apps/web/e2e/` | it is `apps/web/playwright.config.ts:119` |
+| **FS10** | Credits donor named as `size-pack-checkout.ts` | a full credits ledger already exists: `V320__ai_credit_ledger.sql`, `lib/credits.ts`, `credit-pack-checkout`, `billing-events.ts:151` — §5.2 adopts its shape (`balance_after >= 0` CHECK as the oversell guard) as a SEPARATE table, and reuses its checkout + webhook path via `kind: "stream_pack"` |
+| FS11 | Stripe events assumed applied inline by the webhook | `app/api/cron/billing-events` exists; the sandbox purchase e2e drives that cron before asserting the `purchase` row |
+| FS12 | §5.1's plan split read as the landing state | landing rows are false for all five plans (dark, §10.4); the split is the GA-flip migration shipped with the domain entry and copy |
 
 ### 13.2 Re-pins against `main` `fb99bbd4c`
 
