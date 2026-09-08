@@ -437,7 +437,35 @@ function renderAttributionRow(
                       aria-pressed={pressed}
                       onClick={() => onSelect(pressed ? undefined : opt.value)}
                       style={{ minHeight: 44 }}
-                      className={`inline-flex shrink-0 items-center rounded-full border px-4 text-sm font-medium transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-lime-400 ${
+                      // `max-w-full break-words` — without them a real
+                      // 31-character entrant name is CUT at the card's edge
+                      // rather than wrapped. `shrink-0` means the chip is
+                      // sized by its content whatever `min-w-0` says, so it
+                      // overflows its own flex row and the CARD clips it:
+                      // measured at 320, the chip was 253px inside a 194px row
+                      // (59px of overhang) while its own
+                      // `scrollWidth - clientWidth` was ZERO. That zero is the
+                      // trap — the obvious "does this element clip its text"
+                      // probe passes here, because the element does not clip
+                      // its text, its ancestor does. `max-w-full` caps the chip
+                      // at the row (194px, overhang 0) and `break-words` is
+                      // what then wraps the name inside it; `min-w-0` alone is
+                      // INERT against `shrink-0` and was tried first, shipped,
+                      // and disproved by re-shooting the page.
+                      //
+                      // Invisible to everything already running: the page does
+                      // not scroll horizontally (the card clips), so the
+                      // no-h-scroll gate cannot see it; vitest here is
+                      // `environment: "node"`; and the suite's own short
+                      // synthetic names never reach the width that triggers it.
+                      // Only a browser at 320 with a realistic name shows it.
+                      //
+                      // This row is the one that holds NAMES. `renderField`'s
+                      // enum chips and guided-sheet.tsx's chip classes share
+                      // the same missing `max-w-full`, but they are separate
+                      // controls this change has not driven, so they are left
+                      // alone rather than changed on suspicion.
+                      className={`inline-flex max-w-full shrink-0 items-center break-words rounded-full border px-4 text-sm font-medium transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-lime-400 ${
                         pressed
                           ? "border-transparent bg-violet-600 text-white hover:bg-violet-700"
                           : "border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
