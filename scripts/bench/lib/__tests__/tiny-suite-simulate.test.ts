@@ -705,6 +705,33 @@ describe("runTinySuite — B05 T1 division-A stream fold wiring", () => {
     // too, and could never witness a reversed cascade).
     const tiebreakCascade = runtimeOracles.find((o) => o.name === "oracle: d-tiebreak/s-tiebreak-league tie-order cascade");
     expect(tiebreakCascade?.detail).toContain("1 checked");
+
+    // B05 T5b-2 — HOW MANY subjects each new oracle actually compared, not
+    // merely that it ran. A reachability assertion is satisfied by any
+    // value (AGENTS.md rule 19): a career block that passed an EMPTY expected
+    // list to `compareCareerStats` would still push a passing, correctly-
+    // named oracle here. Both counts are read out of the pack rather than
+    // typed, so a pack that grows a metric or an entrant moves the assertion
+    // with it instead of leaving it pinning yesterday's number.
+    const packExpected = (
+      JSON.parse(await readFile(TINY_PACK_PATH, "utf8")) as {
+        expected: {
+          careers: { person: string }[];
+          leaderboards: { divisionRef: string; metricKey: string; entries: unknown[] }[];
+        };
+      }
+    ).expected;
+    const anaCareerRows = packExpected.careers.filter((c) => c.person === "p-ana").length;
+    expect(anaCareerRows).toBeGreaterThan(0);
+    const careerOracle = runtimeOracles.find((o) => o.name === "oracle: p-ana career rollup");
+    expect(careerOracle?.detail).toContain(`all ${anaCareerRows} of this person's`);
+
+    const tinyScoresBoard = packExpected.leaderboards.find(
+      (b) => b.divisionRef === "d-tiny" && b.metricKey === "scores",
+    );
+    expect(tinyScoresBoard?.entries.length).toBeGreaterThan(0);
+    const tinyScoresCards = runtimeOracles.find((o) => o.name === "oracle: d-tiny person cards (scores)");
+    expect(tinyScoresCards?.detail).toContain(`each of the ${tinyScoresBoard?.entries.length} person(s)`);
   });
 
   // B05 T4b — D6, MOVED ONTO THE WIRED PATH (the re-pin's own instruction:
