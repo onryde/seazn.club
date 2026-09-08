@@ -1,36 +1,48 @@
-// The overlay's colour gate (spec §4.2, `_THEMES.md` §2, §4a, §5). Five claims,
+// The overlay's colour gate (spec §4.2, `_THEMES.md` §2, §4a, §5). Six claims,
 // and every one of them is a comparison between TWO authorities rather than an
 // assertion about a constant — a fixture on both ends proves the fixture.
 //
-//  1. ROOT_SPORT_DEFAULTS in overlay-tokens.ts is EXACTLY what app/globals.css's
-//     `:root { --sport-* }` block resolves to. globals.css is the authority
-//     (the pad's own sport-theme.ts says the same); this file's typed mirror
-//     exists so a test can iterate it, and this claim is what keeps the mirror
-//     honest. `var(--x)` and `var(--x, fallback)` are resolved against the same
-//     stylesheet.
+//  1. overlay-tokens.ts holds NO second copy of the pad's palette layer:
+//     ROOT_SPORT_DEFAULTS and paletteFor are the SAME objects as sport-theme.ts's
+//     DEFAULT_SPORT_PALETTE and resolveSportPalette (asserted by identity), and
+//     that one copy is proven equal to app/globals.css's `:root { --sport-* }`
+//     block by parsing the stylesheet and resolving its `var()` aliases.
 //  2. The overlay renders the same ELEVEN sports the pad's skin registry names
 //     (`V3_SKINS`), not the NINE `SPORT_PALETTES` happens to hold — that table
-//     is OVERRIDES ONLY (sport-theme.ts's own header), so cricket and generic
-//     have no entry at all and boardgame and carrom omit `caution`/`dismissal`.
-//     A sweep driven off `Object.keys(SPORT_PALETTES)` is silently short by
-//     four, and the four it misses include cricket, whose OUT slab is the
-//     dismissal tone's headline use (`_THEMES.md` §2, "Eleven sports, not nine").
-//  3. Every pair ROLE the overlay paints clears its floor for every sport that
-//     paints it — the per-sport values come from SPORT_PALETTES, never typed
-//     here. One sample is not a parity sweep; this is the whole table.
-//  4. Alpha text (ink at 50 %, 65 %, 70 %, 75 %, 85 %, 92 % — `_THEMES.md` §2,
-//     §3, §4, §4a) is measured as the COMPOSITE the viewer sees, not as the
-//     solid ink.
-//  5. The moments slab's `dismissal` ink is DERIVED per sport (owner pick 5C,
-//     2026-09-08) and the derivation reproduces the eleven rows `_THEMES.md` §5
-//     records. Hockey's 4.46 is a named exception, pinned TWO-SIDED so the
-//     exception's end is asserted as well as its floor.
+//     is OVERRIDES ONLY, so cricket and generic have no entry at all and
+//     boardgame and carrom omit `caution`/`dismissal`. A sweep driven off
+//     `Object.keys(SPORT_PALETTES)` is silently short by four, and the four it
+//     misses include cricket, whose OUT slab is the dismissal tone's headline
+//     use (`_THEMES.md` §2, "Eleven sports, not nine"). The registry is the
+//     authority; the module holds a literal so the overlay bundle does not pull
+//     eleven `"use client"` skin modules, and THIS FILE is where the two are
+//     proven equal — the shape `v3/__tests__/a11y-sweep-totality.test.ts` uses.
+//  3. Every pair ROLE the overlay paints clears its floor for EVERY sport — the
+//     per-sport values come from SPORT_PALETTES, never typed here. One sample is
+//     not a parity sweep; this is the whole table. No role is scoped to fewer
+//     sports: a pair that misses its floor is RECORDED as a two-sided exception,
+//     never narrowed out of the sweep.
+//  4. Each role's floor is justified by what the pixel IS. 4.5 for text; 3 for
+//     large text and for graphical objects (WCAG 1.4.11) — a card chip, an LED
+//     bar and a live dot are shapes in a colour, not words, and sport-theme.ts's
+//     own note grants the discipline tones exactly that licence. The `where`
+//     string states which, and the test holds it to it.
+//  5. Alpha text (ink at 50 %, 65 %, 70 %, 75 %, 85 %, 92 % — §2, §3, §4, §4a)
+//     is measured as the COMPOSITE the viewer sees, not as the solid ink.
+//  6. The moments slab's `dismissal` ink is DERIVED per sport (owner pick 5C,
+//     2026-09-08) and the derivation reproduces the eleven rows §5 records.
 //
 // A red row is a FINDING for the sheet, never a lowered floor.
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
-import { join } from "node:path";
-import { SPORT_PALETTES, SPORT_TOKENS } from "@/components/v2/scorepad/v3/sport-theme";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import {
+  DEFAULT_SPORT_PALETTE,
+  resolveSportPalette,
+  SPORT_PALETTES,
+  SPORT_TOKENS,
+} from "@/components/v2/scorepad/v3/sport-theme";
 import { V3_SKINS } from "@/components/v2/scorepad/v3/registry";
 import { blendOver, contrastRatio } from "@/lib/contrast";
 // ONE exported object (spec §4.2; T1/W1/R2 prompts bind on this name). Every
@@ -51,21 +63,36 @@ const {
 } = OVERLAY_TOKENS;
 
 // ---------------------------------------------------------------------------
-// Authority readers. Each one PARSES the document that owns the fact, so the
-// export is compared against the source rather than against itself.
+// Authority readers. Each PARSES the document that owns the fact, so the export
+// is compared against the source rather than against itself.
+//
+// PATHS RESOLVE FROM `import.meta.url`, NOT `process.cwd()`, and every read is
+// LAZY. A read at module scope throws before collection, and a suite that fails
+// to collect reports `numTotalTests: 0` / `numFailedTests: 0` — this repo's
+// documented class-9 trap, a green-looking run with nothing in it. With the
+// reads inside test bodies (or made non-throwing where an `it.each` source
+// genuinely needs them at collection time), a missing or renamed file fails a
+// NAMED test that says which path it looked at.
 // ---------------------------------------------------------------------------
+const HERE = dirname(fileURLToPath(import.meta.url));
+const GLOBALS_CSS = join(HERE, "../../../app/globals.css");
+const REPO_ROOT = join(HERE, "../../../../../..");
+const SHEET_PATH = join(REPO_ROOT, "docs/superpowers/specs/2026-09-05-stream-overlay-prompts/_THEMES.md");
 
 /** `--name: value;` declarations from globals.css, first occurrence wins
  *  (the :root block declares each once; later media/theme blocks are not the
  *  default). `var(--x, fb)` resolves through the same map, falling back to
  *  `fb` when `--x` is undeclared (which is how `--sport-led` reaches #9ae600:
  *  `--color-lime-400` is Tailwind's, not globals.css's). */
+let cssVarsCache: Map<string, string> | undefined;
 function cssVars(): Map<string, string> {
-  const css = readFileSync(join(process.cwd(), "src/app/globals.css"), "utf8");
+  if (cssVarsCache) return cssVarsCache;
+  const css = readFileSync(GLOBALS_CSS, "utf8");
   const vars = new Map<string, string>();
   for (const m of css.matchAll(/(--[a-z0-9-]+)\s*:\s*([^;]+);/g)) {
     if (!vars.has(m[1]!)) vars.set(m[1]!, m[2]!.trim());
   }
+  cssVarsCache = vars;
   return vars;
 }
 
@@ -80,15 +107,29 @@ function resolveVar(vars: Map<string, string>, name: string, depth = 0): string 
   throw new Error(`${name} aliases ${m[1]} which is undeclared and has no fallback`);
 }
 
-const SHEET_PATH = join(process.cwd(), "../../docs/superpowers/specs/2026-09-05-stream-overlay-prompts/_THEMES.md");
-const SHEET = readFileSync(SHEET_PATH, "utf8");
+/** `_THEMES.md`, or `""` if it cannot be read. Non-throwing ON PURPOSE: two
+ *  `it.each` sources below are parsed from it at collection time, and a throw
+ *  there would take the whole file down into a vacuous green. The strict read
+ *  lives in a named test instead. */
+let sheetCache: string | undefined;
+function sheet(): string {
+  if (sheetCache === undefined) {
+    try {
+      sheetCache = readFileSync(SHEET_PATH, "utf8");
+    } catch {
+      sheetCache = "";
+    }
+  }
+  return sheetCache;
+}
 
 /** The text of one `## <heading>` section of `_THEMES.md`, up to the next one. */
 function sheetSection(heading: string): string {
-  const start = SHEET.indexOf(`\n## ${heading}`);
-  expect(start, `_THEMES.md has no "## ${heading}" section`).toBeGreaterThanOrEqual(0);
-  const end = SHEET.indexOf("\n## ", start + 1);
-  return SHEET.slice(start, end < 0 ? undefined : end);
+  const text = sheet();
+  const start = text.indexOf(`\n## ${heading}`);
+  if (start < 0) return "";
+  const end = text.indexOf("\n## ", start + 1);
+  return text.slice(start, end < 0 ? undefined : end);
 }
 
 /** Markdown table rows of `text`, as trimmed cell arrays (header and rule rows
@@ -106,8 +147,8 @@ const hexes = (cell: string): string[] => [...cell.matchAll(/#[0-9a-f]{6}/g)].ma
 
 /** `_THEMES.md` §5's recorded outcome table: sport → dismissal, slab ink, ratio.
  *  The sheet calls this "the sheet's record of the outcome, not the test's
- *  source of truth" — so it is used to CROSS-CHECK the derivation, in both
- *  directions, never as the value the derivation is copied from. */
+ *  source of truth" — so it CROSS-CHECKS the derivation, in both directions,
+ *  never supplies the value the derivation is copied from. */
 function sheetSlabTable(): Map<string, { dismissal: string; ink: string; ratio: number }> {
   const out = new Map<string, { dismissal: string; ink: string; ratio: number }>();
   for (const cells of tableRows(sheetSection("5. Moments slab"), 4)) {
@@ -116,12 +157,10 @@ function sheetSlabTable(): Map<string, { dismissal: string; ink: string; ratio: 
     const dismissal = hexes(cells[1]!);
     const ink = hexes(cells[2]!);
     const ratio = cells[3]!.match(/\d+\.\d+/);
-    expect(dismissal.length, `§5 row "${sport}" names no dismissal hex`).toBe(1);
-    expect(ink.length, `§5 row "${sport}" names no slab-ink hex`).toBeGreaterThanOrEqual(1);
-    expect(ratio, `§5 row "${sport}" names no ratio`).not.toBeNull();
+    if (dismissal.length !== 1 || ink.length === 0 || !ratio) continue;
     // The board-picked rows read "`--sport-board` `#06323c`": the LAST hex in
     // the cell is the colour, the token name is the reason.
-    out.set(sport, { dismissal: dismissal[0]!, ink: ink[ink.length - 1]!, ratio: Number(ratio![0]) });
+    out.set(sport, { dismissal: dismissal[0]!, ink: ink[ink.length - 1]!, ratio: Number(ratio[0]) });
   }
   return out;
 }
@@ -140,6 +179,20 @@ describe("the gate is not vacuous (empty-set case first)", () => {
     expect(OVERLAY_ALPHA_ROLES.length).toBeGreaterThan(0);
   });
 
+  it("both authority documents are readable at the paths this suite resolves", () => {
+    // The strict reads. Everything else in this file reads through the lazy,
+    // non-throwing helpers, so a missing or renamed file lands HERE with the
+    // path in the message instead of collapsing collection into a green run of
+    // zero tests. Paths come from import.meta.url, so the verdict does not
+    // depend on which directory the runner was launched from.
+    expect(() => readFileSync(GLOBALS_CSS, "utf8"), `globals.css at ${GLOBALS_CSS}`).not.toThrow();
+    expect(() => readFileSync(SHEET_PATH, "utf8"), `_THEMES.md at ${SHEET_PATH}`).not.toThrow();
+    expect(sheet().length, "_THEMES.md is empty").toBeGreaterThan(1000);
+    for (const heading of ["2. Colour", "4a. Theme C", "5. Moments slab"]) {
+      expect(sheetSection(heading).length, `_THEMES.md has no "## ${heading}" section`).toBeGreaterThan(0);
+    }
+  });
+
   it("every sport resolves a palette naming all SEVEN tokens, each a 6-digit hex", () => {
     for (const sport of OVERLAY_SPORT_KEYS) {
       const p = paletteFor(sport);
@@ -150,79 +203,104 @@ describe("the gate is not vacuous (empty-set case first)", () => {
     }
   });
 
-  it("the table IS the scope — these exact pairs are gated, by id", () => {
+  it("the table IS the scope — these exact pairs are gated, at these exact floors", () => {
     // `_THEMES.md` §2: "The table is the scope: EVERY pair the picks introduce
-    // is in it." A count alone cannot say that — nine rows minus one is still
-    // "at least eight" — so a deleted or renamed row would slip through every
-    // other assertion in this file. This pins WHICH pairs are gated; what each
-    // one measures is still derived from the palette, never from here.
-    expect([...OVERLAY_PAIR_ROLES].map((r) => r.id).sort()).toEqual([
-      "board-on-advisory",
-      "board-on-caution",
-      "board-on-led-headline",
-      "board-on-led-line",
-      "dismissal-on-board",
-      "dismissal-on-board-2",
-      "ink-on-board",
-      "ink-on-board-2",
-      "led-on-board",
-      "led-on-board-2",
-      "slab-ink-on-dismissal",
-    ]);
-    expect([...OVERLAY_ALPHA_ROLES].map((r) => r.id).sort()).toEqual([
-      "ink50-on-board",
-      "ink50-on-board-2",
-      "ink65-on-board",
-      "ink65-on-board-2",
-      "ink70-on-board",
-      "ink70-on-board-2",
-      "ink75-on-board",
-      "ink75-on-board-2",
-      "ink85-on-board",
-      "ink92-on-board",
-    ]);
+    // is in it." A count alone cannot say that — sixteen rows minus one is
+    // still "at least eight" — and an id list alone cannot say a floor was not
+    // quietly downgraded 4.5 → 3. This pins BOTH. What each row measures is
+    // still derived from the palette, never from here.
+    expect(Object.fromEntries(OVERLAY_PAIR_ROLES.map((r) => [r.id, r.floor]))).toEqual({
+      "ink-on-board": 4.5,
+      "ink-on-board-2": 4.5,
+      "board-on-led-line": 4.5,
+      "board-on-caution": 4.5,
+      "slab-ink-on-dismissal": 4.5,
+      "board-on-led-headline": 3,
+      "led-on-board": 3,
+      "led-on-board-2": 3,
+      "live-dot-on-board": 3,
+      "live-dot-on-board-2": 3,
+      "advisory-swatch-on-board": 3,
+      "advisory-swatch-on-board-2": 3,
+      "caution-swatch-on-board": 3,
+      "caution-swatch-on-board-2": 3,
+      "dismissal-swatch-on-board": 3,
+      "dismissal-swatch-on-board-2": 3,
+    });
+    expect(Object.fromEntries(OVERLAY_ALPHA_ROLES.map((r) => [r.id, r.floor]))).toEqual({
+      "ink70-on-board": 4.5,
+      "ink70-on-board-2": 4.5,
+      "ink65-on-board": 4.5,
+      "ink65-on-board-2": 4.5,
+      "ink75-on-board": 4.5,
+      "ink75-on-board-2": 4.5,
+      "ink85-on-board": 4.5,
+      "ink92-on-board": 4.5,
+      "ink50-on-board": 3,
+      "ink50-on-board-2": 3,
+    });
   });
 
-  it("no role id repeats, and every role names a real token and a real floor", () => {
+  it("every role names a real token, and its `where` justifies its floor", () => {
+    // The `where` is not prose. A 4.5 row must describe TEXT; a 3 row must
+    // describe LARGE TEXT or a GRAPHICAL object (WCAG 1.4.11). Without this,
+    // "3" is a number somebody chose and the audit the brief left to a reviewer
+    // has nothing to read. sport-theme.ts's SPORT_TOKENS note is the source of
+    // the swatch licence: the discipline tones "carry the swatch obligations …
+    // and not the 4.5 text floor".
     const ids = [...OVERLAY_PAIR_ROLES, ...OVERLAY_ALPHA_ROLES].map((r) => r.id);
     expect(new Set(ids).size, "duplicate role id").toBe(ids.length);
+    for (const role of [...OVERLAY_PAIR_ROLES, ...OVERLAY_ALPHA_ROLES]) {
+      expect(SPORT_TOKENS, `${role.id}.bg`).toContain(role.bg);
+      expect(role.where, `${role.id} must open with TEXT / LARGE TEXT / GRAPHICAL`).toMatch(
+        /^(TEXT|LARGE TEXT|GRAPHICAL)\b/,
+      );
+      expect(role.floor, `${role.id}: "${role.where.slice(0, 24)}…" against floor ${role.floor}`).toBe(
+        role.where.startsWith("TEXT") ? 4.5 : 3,
+      );
+    }
     for (const role of OVERLAY_PAIR_ROLES) {
-      expect(SPORT_TOKENS).toContain(role.bg);
-      expect([4.5, 3]).toContain(role.floor);
-      expect(role.where.length, `${role.id} has no "where"`).toBeGreaterThan(0);
+      if (role.fg !== "slabDismissalInk" && role.fg !== "liveDot") expect(SPORT_TOKENS).toContain(role.fg);
     }
     for (const role of OVERLAY_ALPHA_ROLES) {
       expect(SPORT_TOKENS).toContain(role.fg);
-      expect(SPORT_TOKENS).toContain(role.bg);
       expect(role.alpha).toBeGreaterThan(0);
       expect(role.alpha).toBeLessThan(1);
     }
   });
 
-  it("a role scoped to a subset of sports names a NON-EMPTY subset of the eleven", () => {
-    // A `sports` list is how a pair only one sport paints stays in the table
-    // without reddening ten sports that never paint it. A typo'd key would
-    // empty the row instead — the same vacuous green this block opens on.
-    for (const role of OVERLAY_PAIR_ROLES) {
-      if (role.sports === "all") continue;
-      expect(role.sports.length, `${role.id} is scoped to no sport at all`).toBeGreaterThan(0);
-      for (const s of role.sports) expect(OVERLAY_SPORT_KEYS, `${role.id} names unknown sport ${s}`).toContain(s);
+  it("both fixed colours are PAINTED on a ground, not merely declared", () => {
+    // OVERLAY_FIXED holds two values and both reach the screen, so both owe a
+    // pair role. `liveDot` had only a value-equality check in the first cut —
+    // a colour nothing measures against a background, which is how hockey's
+    // 2.75 on its own band went unnoticed.
+    const markers = OVERLAY_PAIR_ROLES.map((r) => r.fg);
+    for (const key of Object.keys(OVERLAY_FIXED)) {
+      expect(markers, `OVERLAY_FIXED.${key} has no pair role`).toContain(key);
     }
   });
 });
 
 // ---------------------------------------------------------------------------
-// 1. The mirror.
+// 1. The mirror — and, first, that there is only ONE thing to mirror.
 // ---------------------------------------------------------------------------
-describe("ROOT_SPORT_DEFAULTS mirrors globals.css :root exactly", () => {
-  const vars = cssVars();
+describe("ROOT_SPORT_DEFAULTS is sport-theme.ts's own palette, mirrored to globals.css once", () => {
+  it("is the SAME object as DEFAULT_SPORT_PALETTE, not a copy of it", () => {
+    // Identity, not equality. Two byte-identical copies each with its own proof
+    // is the failure this asserts against: a globals.css change that moves one
+    // and not the other leaves the pad and the overlay disagreeing about a
+    // colour with both suites green. `_THEMES.md`'s own rule — "a value typed
+    // twice is a finding".
+    expect(ROOT_SPORT_DEFAULTS).toBe(DEFAULT_SPORT_PALETTE);
+    expect(paletteFor).toBe(resolveSportPalette);
+  });
 
   it.each([...SPORT_TOKENS])("--sport-%s", (token) => {
-    expect(ROOT_SPORT_DEFAULTS[token]).toBe(resolveVar(vars, `--sport-${token}`));
+    expect(ROOT_SPORT_DEFAULTS[token]).toBe(resolveVar(cssVars(), `--sport-${token}`));
   });
 
   it("the mirror has no token globals.css lacks, and vice versa", () => {
-    const declared = [...vars.keys()]
+    const declared = [...cssVars().keys()]
       .filter((k) => k.startsWith("--sport-"))
       .map((k) => k.slice(8))
       .sort();
@@ -234,8 +312,11 @@ describe("ROOT_SPORT_DEFAULTS mirrors globals.css :root exactly", () => {
     // #9ae600)` are the two shapes resolveVar exists for. If it ever returned
     // the raw declaration, this pair would read as `var(...)` and the rows
     // above would compare a hex against a function call.
-    expect(resolveVar(vars, "--sport-board")).toMatch(/^#[0-9a-f]{6}$/);
-    expect(resolveVar(vars, "--sport-led")).toMatch(/^#[0-9a-f]{6}$/);
+    expect(resolveVar(cssVars(), "--sport-board")).toMatch(/^#[0-9a-f]{6}$/);
+    expect(resolveVar(cssVars(), "--sport-led")).toMatch(/^#[0-9a-f]{6}$/);
+    // …and the fallback arm is live: --color-lime-400 is Tailwind's, declared
+    // nowhere in globals.css, so the declared #9ae600 is what must come back.
+    expect(cssVars().has("--color-lime-400")).toBe(false);
   });
 });
 
@@ -244,9 +325,13 @@ describe("ROOT_SPORT_DEFAULTS mirrors globals.css :root exactly", () => {
 // ---------------------------------------------------------------------------
 describe("OVERLAY_SPORT_KEYS is the pad's ELEVEN, not SPORT_PALETTES' nine", () => {
   it("is exactly the sport keys the pad's skin registry names (one authority)", () => {
-    // V3_SKINS (scorepad/v3/registry.ts) is the working list of eleven keys.
-    // Derived from it, never typed here — a twelfth skin reddens this until
-    // OVERLAY_SPORT_KEYS covers it.
+    // The module holds a LITERAL so the overlay bundle does not pull eleven
+    // "use client" skin modules and the engine with them (an OBS browser source
+    // is the one page where weight IS the feature). The registry stays the
+    // authority, and this is where the two are held equal — both directions, so
+    // a twelfth skin reddens here until the literal covers it, and a key the
+    // registry does not own reddens too. Same shape as
+    // v3/__tests__/a11y-sweep-totality.test.ts's V3_SKIN_CASE_KEYS pin.
     expect([...OVERLAY_SPORT_KEYS].sort()).toEqual(Object.keys(V3_SKINS).sort());
     expect(Object.keys(V3_SKINS).length).toBe(11);
     expect(new Set(OVERLAY_SPORT_KEYS).size).toBe(OVERLAY_SPORT_KEYS.length);
@@ -291,25 +376,23 @@ describe("OVERLAY_SPORT_KEYS is the pad's ELEVEN, not SPORT_PALETTES' nine", () 
 // 3. The parity sweep.
 // ---------------------------------------------------------------------------
 const pairRows = OVERLAY_SPORT_KEYS.flatMap((sport) =>
-  OVERLAY_PAIR_ROLES.filter((role) => role.sports === "all" || role.sports.includes(sport)).map((role) => ({
-    sport,
-    role,
-    title: `${sport} · ${role.id} (${role.where})`,
-  })),
+  OVERLAY_PAIR_ROLES.map((role) => ({ sport, role, title: `${sport} · ${role.id} (${role.where})` })),
 );
 
 function pairInk(sport: string, role: (typeof OVERLAY_PAIR_ROLES)[number]): string {
   const p = paletteFor(sport);
-  return role.fg === "slabDismissalInk" ? slabDismissalInkFor(sport) : p[role.fg];
+  if (role.fg === "slabDismissalInk") return slabDismissalInkFor(sport);
+  if (role.fg === "liveDot") return OVERLAY_FIXED.liveDot;
+  return p[role.fg];
 }
 
 /**
  * The sweep's own body, extracted so a HARNESS SELF-TEST can drive it with an
  * injected ratio. Without that, the sweep's floor is a test-side constant no
- * assertion can see: replacing `role.floor` with `1` here leaves all 121 rows
- * green and every other test in this file untouched — a measured survivor
- * before this function existed. The self-test below feeds it a ratio just under
- * each floor and requires it to throw, so the floor is now itself under test.
+ * assertion can see: replacing `role.floor` with `1` here leaves every row green
+ * and every other test in this file untouched — a measured survivor before this
+ * function existed. The self-test below feeds it a ratio just under each floor
+ * and requires it to throw, so the floor is now itself under test.
  */
 function assertPairClearsFloor(sport: string, role: (typeof OVERLAY_PAIR_ROLES)[number], injected?: number): void {
   const p = paletteFor(sport);
@@ -323,7 +406,9 @@ function assertPairClearsFloor(sport: string, role: (typeof OVERLAY_PAIR_ROLES)[
     // for hockey's card swatch. A one-sided `>= atLeast` would keep passing if
     // the palette drifted upward and would never tell anyone the exception had
     // ENDED; a skip would say nothing at all.
-    expect(ratio, `${seen} (exception floor ${exception.atLeast})`).toBeGreaterThanOrEqual(exception.atLeast);
+    expect(ratio, `${seen} (${exception.status} exception, floor ${exception.atLeast})`).toBeGreaterThanOrEqual(
+      exception.atLeast,
+    );
     expect(ratio, `${seen} (exception ceiling ${exception.below} — delete the exception)`).toBeLessThan(exception.below);
     return;
   }
@@ -347,17 +432,14 @@ const roleById = (id: string) => {
   return role!;
 };
 
-describe("every pair role clears its floor for every sport that paints it", () => {
-  it("the sweep enumerates a row per sport per applicable role, and there are many", () => {
-    // Pins the SHAPE of the product so a filter bug (or an emptied role list)
-    // cannot shrink the sweep into a quiet green. Ten roles apply to all
-    // eleven sports and one is scoped to cricket alone.
-    const expected = OVERLAY_SPORT_KEYS.reduce(
-      (n, sport) => n + OVERLAY_PAIR_ROLES.filter((r) => r.sports === "all" || r.sports.includes(sport)).length,
-      0,
-    );
-    expect(pairRows.length).toBe(expected);
-    expect(pairRows.length).toBeGreaterThanOrEqual(OVERLAY_SPORT_KEYS.length * 8);
+describe("every pair role clears its floor for every sport", () => {
+  it("the sweep is one row per sport per role, with nothing filtered out", () => {
+    // No role is scoped to a subset of sports, so the product is exact. A
+    // filter reappearing here — the mechanism that once kept football's 2.56
+    // out of the sweep — changes this number.
+    expect(pairRows.length).toBe(OVERLAY_SPORT_KEYS.length * OVERLAY_PAIR_ROLES.length);
+    expect(OVERLAY_SPORT_KEYS.length).toBe(11);
+    expect(OVERLAY_PAIR_ROLES.length).toBe(16);
   });
 
   it.each(pairRows)("$title", ({ sport, role }) => {
@@ -365,11 +447,11 @@ describe("every pair role clears its floor for every sport that paints it", () =
   });
 
   it("HARNESS SELF-TEST: the sweep's own check refuses a ratio under the floor", () => {
-    // The positive pair for all 121 rows above. Every one of them passes, so
-    // nothing there can say the floor is still 4.5 (or 3) rather than 1 — the
-    // floor is a constant on the assertion side, and a mutant that lowers it
-    // leaves the whole sweep green. These four cases drive the same function
-    // with an injected ratio on both sides of each floor.
+    // The positive pair for every row above. All of them pass, so nothing there
+    // can say the floor is still 4.5 (or 3) rather than 1 — the floor is a
+    // constant on the assertion side, and a mutant that lowers it leaves the
+    // whole sweep green. These cases drive the same function with an injected
+    // ratio on both sides of each floor.
     const text = roleById("ink-on-board");
     expect(text.floor).toBe(4.5);
     expect(() => assertPairClearsFloor("cricket", text, 4.49)).toThrow();
@@ -380,11 +462,17 @@ describe("every pair role clears its floor for every sport that paints it", () =
     expect(() => assertPairClearsFloor("cricket", ui, 2.99)).toThrow();
     expect(() => assertPairClearsFloor("cricket", ui, 3)).not.toThrow();
 
-    // The exception branch is two-sided, so BOTH sides must refuse.
+    // The exception branch is two-sided, so BOTH sides must refuse — for the
+    // ruled exception and for an unruled one.
     const slab = roleById("slab-ink-on-dismissal");
     expect(() => assertPairClearsFloor("hockey", slab, 2.99)).toThrow();
     expect(() => assertPairClearsFloor("hockey", slab, 4.5)).toThrow();
     expect(() => assertPairClearsFloor("hockey", slab, 4.0)).not.toThrow();
+
+    const dot = roleById("live-dot-on-board-2");
+    expect(() => assertPairClearsFloor("hockey", dot, 2.5)).toThrow();
+    expect(() => assertPairClearsFloor("hockey", dot, 3)).toThrow();
+    expect(() => assertPairClearsFloor("hockey", dot, 2.8)).not.toThrow();
 
     // …and the alpha sweep's check, same argument.
     const alpha = OVERLAY_ALPHA_ROLES.find((r) => r.id === "ink70-on-board")!;
@@ -394,14 +482,72 @@ describe("every pair role clears its floor for every sport that paints it", () =
   });
 
   it("the sweep is not vacuous: a pair that CANNOT clear 4.5 is reported under it", () => {
-    // The positive pair for the assertion above, taken from the product rather
-    // than invented: `#fff5f5` on hockey's own dismissal is the ink the owner
-    // ruling REPLACED, and it is 2.88. If the helper scored this at 4.5 or
-    // more, every row above would be meaningless.
+    // Taken from the product rather than invented: `#fff5f5` on hockey's own
+    // dismissal is the ink the owner ruling REPLACED, and it is 2.88. If the
+    // helper scored this at 4.5 or more, every row above would be meaningless.
     const hockey = paletteFor("hockey");
     const rejected = contrastRatio(OVERLAY_FIXED.slabDismissalInk, hockey.dismissal);
     expect(rejected, `#fff5f5 on hockey dismissal = ${rejected.toFixed(2)}`).toBeLessThan(4.5);
     expect(rejected).toBeGreaterThan(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 3a. The exception table — the ONE mechanism for a pair under its floor.
+// ---------------------------------------------------------------------------
+describe("exceptions are recorded and two-sided, never narrowed away", () => {
+  it("is exactly these three rows, and the two UNRULED ones are owed to the owner", () => {
+    // An exception is a licence to miss a floor, so the list is pinned: a
+    // fourth row appearing without a sheet change or a ruling is a silent
+    // waiver. `ruled` = the sheet has accepted the number. `unruled` = the pair
+    // is under its floor on an ALREADY-APPROVED theme, the owner has not been
+    // asked, and the row exists so the number is ASSERTED rather than disclosed
+    // in a comment nothing measures.
+    expect(OVERLAY_PAIR_EXCEPTIONS.map((e) => `${e.status}:${e.sport}/${e.roleId}`).sort()).toEqual([
+      "ruled:hockey/slab-ink-on-dismissal",
+      "unruled:football/dismissal-swatch-on-board-2",
+      "unruled:hockey/live-dot-on-board-2",
+    ]);
+  });
+
+  it("every exception names a real role and sport, and cannot license a wider miss than its floor", () => {
+    for (const e of OVERLAY_PAIR_EXCEPTIONS) {
+      const role = OVERLAY_PAIR_ROLES.find((r) => r.id === e.roleId);
+      expect(role, `exception names unknown role ${e.roleId}`).toBeDefined();
+      expect(OVERLAY_SPORT_KEYS, `exception names unknown sport ${e.sport}`).toContain(e.sport);
+      // The ceiling IS the role's own floor.
+      expect(e.below, `${e.roleId} exception ceiling`).toBe(role!.floor);
+      expect(e.atLeast).toBeLessThan(e.below);
+      expect(e.why.length, `${e.roleId}/${e.sport} has no reason`).toBeGreaterThan(40);
+    }
+  });
+
+  it("every exception is a REAL miss — the pair genuinely fails its role floor today", () => {
+    // An exception whose pair now clears its floor is stale, and a stale
+    // exception is a floor that is no longer enforced for that sport. The
+    // two-sided `< below` in the sweep says the same thing; this states it as
+    // its own claim so the reason is legible.
+    for (const e of OVERLAY_PAIR_EXCEPTIONS) {
+      const role = roleById(e.roleId);
+      const p = paletteFor(e.sport);
+      const ratio = contrastRatio(pairInk(e.sport, role), p[role.bg]);
+      expect(ratio, `${e.sport}/${e.roleId} measures ${ratio.toFixed(2)} — no longer an exception`).toBeLessThan(
+        role.floor,
+      );
+      expect(ratio, `${e.sport}/${e.roleId} measures ${ratio.toFixed(2)}`).toBeGreaterThanOrEqual(e.atLeast);
+    }
+  });
+
+  it("the two unruled misses measure what the findings say they measure", () => {
+    // The numbers that go to the owner, asserted rather than written down.
+    const football = paletteFor("football");
+    expect(contrastRatio(football.dismissal, football["board-2"])).toBeCloseTo(2.56, 2);
+    const hockey = paletteFor("hockey");
+    expect(contrastRatio(OVERLAY_FIXED.liveDot, hockey["board-2"])).toBeCloseTo(2.75, 2);
+    // Both are ONE ground, not a systemic failure — the same colours clear on
+    // the other ground, which is what makes "darken that band" a real option.
+    expect(contrastRatio(football.dismissal, football.board)).toBeGreaterThanOrEqual(3);
+    expect(contrastRatio(OVERLAY_FIXED.liveDot, hockey.board)).toBeGreaterThanOrEqual(3);
   });
 });
 
@@ -415,7 +561,7 @@ const alphaRows = OVERLAY_SPORT_KEYS.flatMap((sport) =>
 describe("alpha text is measured as the composite the viewer sees", () => {
   it("the sweep enumerates a row per sport per alpha role", () => {
     expect(alphaRows.length).toBe(OVERLAY_SPORT_KEYS.length * OVERLAY_ALPHA_ROLES.length);
-    expect(alphaRows.length).toBeGreaterThan(0);
+    expect(OVERLAY_ALPHA_ROLES.length).toBe(10);
   });
 
   it.each(alphaRows)("$title", ({ sport, role }) => {
@@ -425,9 +571,7 @@ describe("alpha text is measured as the composite the viewer sees", () => {
   it("a composite is strictly lower-contrast than the solid ink (the test measures the right thing)", () => {
     for (const sport of OVERLAY_SPORT_KEYS) {
       const p = paletteFor(sport);
-      expect(contrastRatio(blendOver(p.ink, p.board, 0.7), p.board), sport).toBeLessThan(
-        contrastRatio(p.ink, p.board),
-      );
+      expect(contrastRatio(blendOver(p.ink, p.board, 0.7), p.board), sport).toBeLessThan(contrastRatio(p.ink, p.board));
     }
   });
 });
@@ -436,10 +580,8 @@ describe("alpha text is measured as the composite the viewer sees", () => {
 // 5. The derived slab ink (owner pick 5C, `_THEMES.md` §5).
 // ---------------------------------------------------------------------------
 describe("the moments slab's dismissal ink is derived per sport, and matches §5's record", () => {
-  const sheetTable = sheetSlabTable();
-
   it("§5 records a row for every one of the eleven sports", () => {
-    expect([...sheetTable.keys()].sort()).toEqual([...OVERLAY_SPORT_KEYS].sort());
+    expect([...sheetSlabTable().keys()].sort()).toEqual([...OVERLAY_SPORT_KEYS].sort());
   });
 
   it("the light candidate is the one §5 names, read out of the sheet", () => {
@@ -465,7 +607,7 @@ describe("the moments slab's dismissal ink is derived per sport, and matches §5
   });
 
   it.each([...OVERLAY_SPORT_KEYS])("%s's derived ink and ratio are the ones §5 records", (sport) => {
-    const row = sheetTable.get(sport)!;
+    const row = sheetSlabTable().get(sport)!;
     const p = paletteFor(sport);
     // Both directions: the palette the sheet transcribed is the palette the
     // code resolves, and the ink the code derives is the ink the sheet
@@ -501,22 +643,6 @@ describe("the moments slab's dismissal ink is derived per sport, and matches §5
     expect(ratio, `hockey slab ink on dismissal = ${ratio.toFixed(2)} — exception ended, delete it`).toBeLessThan(4.5);
   });
 
-  it("the exception table names hockey's slab row and nothing else", () => {
-    // An exception is a licence to miss a floor, so the list is pinned: a
-    // second row appearing without a sheet change is a silent waiver.
-    expect(OVERLAY_PAIR_EXCEPTIONS.map((e) => `${e.sport}/${e.roleId}`)).toEqual(["hockey/slab-ink-on-dismissal"]);
-    for (const e of OVERLAY_PAIR_EXCEPTIONS) {
-      const role = OVERLAY_PAIR_ROLES.find((r) => r.id === e.roleId);
-      expect(role, `exception names unknown role ${e.roleId}`).toBeDefined();
-      expect(OVERLAY_SPORT_KEYS).toContain(e.sport);
-      // The ceiling IS the role's own floor — an exception may not quietly
-      // license a wider miss than the floor it excuses.
-      expect(e.below, `${e.roleId} exception ceiling`).toBe(role!.floor);
-      expect(e.atLeast).toBeLessThan(e.below);
-      expect(e.why.length).toBeGreaterThan(0);
-    }
-  });
-
   it("ten of the eleven clear 4.5 outright, so the exception is one row and not a policy", () => {
     const clearing = OVERLAY_SPORT_KEYS.filter(
       (s) => contrastRatio(slabDismissalInkFor(s), paletteFor(s).dismissal) >= 4.5,
@@ -530,11 +656,9 @@ describe("the moments slab's dismissal ink is derived per sport, and matches §5
 // 6. Slate (§4a). The three values are read out of the sheet, not restated.
 // ---------------------------------------------------------------------------
 describe("slate (§4a) reads on every board, and its values are the sheet's", () => {
-  const slate = sheetSection("4a. Theme C");
-
   /** `<label>:  … ink NN %` from §4a's own layout block. */
   function slateInkAlpha(label: string): number {
-    const m = slate.match(new RegExp(`^${label}:\\s+.*?ink\\s+(\\d+)\\s*%`, "m"));
+    const m = sheetSection("4a. Theme C").match(new RegExp(`^${label}:\\s+.*?ink\\s+(\\d+)\\s*%`, "m"));
     expect(m, `_THEMES.md §4a no longer states an ink alpha for "${label}"`).not.toBeNull();
     return Number(m![1]) / 100;
   }
@@ -559,7 +683,7 @@ describe("slate (§4a) reads on every board, and its values are the sheet's", ()
     expect(OVERLAY_FIXED.liveDot).toBe(fromTwo![1]);
     // §4a's signal-lost row uses the same hex — a cross-document relation, not
     // a value restated against itself.
-    const fromFourA = slate.match(/one 15-px `(#[0-9a-f]{6})` dot/);
+    const fromFourA = sheetSection("4a. Theme C").match(/one 15-px `(#[0-9a-f]{6})` dot/);
     expect(fromFourA, "_THEMES.md §4a no longer names the signal-lost dot").not.toBeNull();
     expect(SLATE_TOKENS.indicator).toBe(fromFourA![1]);
     expect(SLATE_TOKENS.indicator).toBe(OVERLAY_FIXED.liveDot);
@@ -579,23 +703,21 @@ describe("slate (§4a) reads on every board, and its values are the sheet's", ()
       contrastRatio(blendOver(p.ink, p.board, SLATE_TOKENS.brandInkAlpha), p.board),
       `${sport} slate brand @ ${SLATE_TOKENS.brandInkAlpha}`,
     ).toBeGreaterThanOrEqual(4.5);
-    // The warming indicator is three `--sport-led` dots on that ground: a
-    // graphical object, so the 3:1 UI floor (WCAG 1.4.11).
-    expect(contrastRatio(p.led, p.board), `${sport} slate warming dots`).toBeGreaterThanOrEqual(3);
   });
 });
 
 // ---------------------------------------------------------------------------
 // 7. The organiser panel (§8a Phone tab, §8b credits card), whose pairs §2
-//    tabulates. Light theme, so none of it is a sport pair — but §2 states the
-//    same 4.5 floor for every pair the T1 picks introduce, and the table is
-//    declared to BE the scope. This block recomputes the sheet's own
-//    arithmetic: the hexes and the ratios both come out of §2, so a row whose
-//    recorded number is wrong reds here rather than at a reviewer's eye.
+//    tabulates. Light theme, so none of it is a sport pair — and note what this
+//    block does and does NOT prove: the hexes AND the recorded ratios both come
+//    out of `_THEMES.md`, so it catches a wrong number written into the sheet
+//    (it would have caught the `text-slate-400` 2.63 row before §8a used it),
+//    but no mutation of overlay-tokens.ts can red it. It is a DOCUMENT
+//    regression, not a proof about this module's code.
 // ---------------------------------------------------------------------------
 describe("§2's panel pair table is arithmetically true and clears 4.5", () => {
   const panelRows = tableRows(sheetSection("2. Colour"), 3)
-    .filter((cells) => hexes(cells[1]!).length === 2)
+    .filter((cells) => hexes(cells[1]!).length === 2 && /\d+\.\d+/.test(cells[2]!))
     .map((cells) => ({
       title: `${cells[0]!} — ${cells[1]!}`,
       fg: hexes(cells[1]!)[0]!,
