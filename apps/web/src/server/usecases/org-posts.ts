@@ -684,7 +684,19 @@ async function insertGeneratedPost(
           where auto_source is not null and (auto_source ->> 'trigger') <> 'weekly_digest'
         do nothing
         returning id`;
-      return rows[0] ?? null;
+      const inserted = rows[0] ?? null;
+      if (inserted) {
+        // Distinct from POST_PUBLISHED{auto:true}, which fires only once a
+        // human publishes this draft. Counting the publish as the auto-post is
+        // what made item 0's "auto-posted items" unanswerable.
+        await captureServer({
+          event: EVENTS.POST_AUTO_DRAFTED,
+          distinctId: `org:${params.orgId}`,
+          orgId: params.orgId,
+          properties: { kind: params.kind, trigger: params.autoSource?.trigger ?? null },
+        });
+      }
+      return inserted;
     },
   );
 }

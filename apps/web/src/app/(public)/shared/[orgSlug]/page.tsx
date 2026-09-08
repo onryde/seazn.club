@@ -6,6 +6,8 @@ import type { Metadata } from "next";
 import { ChevronRight } from "lucide-react";
 import { getPublicOrg } from "@/server/public-site/data";
 import { publicPosts } from "@/server/usecases/org-posts";
+import { captureServer } from "@/lib/posthog-server";
+import { EVENTS } from "@/lib/analytics-events";
 import { competitionChip, chipLabelKey } from "@/lib/public-site";
 import { kindEyebrow } from "@/lib/news-presentation";
 import { renderProse } from "@/lib/prose";
@@ -77,6 +79,12 @@ export default async function OrgLandingPage({ params }: Props) {
   const { orgSlug } = await params;
   const data = await getPublicOrg(orgSlug);
   if (!data) notFound();
+  await captureServer({
+    event: EVENTS.PUBLIC_PROFILE_VIEWED,
+    distinctId: `org:${data.org.id}`,
+    orgId: data.org.id,
+    properties: { orgSlug },
+  });
   const { org, competitions } = data;
   const locale = orgLocale(org.default_locale);
   const dict = await getDictionary(locale, "public");
