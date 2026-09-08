@@ -43,7 +43,11 @@ export default async function EmbedWidgetPage({ params }: Props) {
 
   // Item 0: this event has existed since the PLG loops shipped and has never
   // been fired. No user is in scope on an embed, so the org carries the
-  // identity, per CaptureArgs' own note on synthetic ids.
+  // identity, per CaptureArgs' own note on synthetic ids. This route is
+  // ISR-cached (revalidate=30 above) — the capture fires on RENDER, not per
+  // viewer request, so it counts cache fills, not loads. A consented-traffic
+  // count of renders, never a total (captureServer no-ops without a PostHog
+  // key, and is consent-gated).
   await captureServer({
     event: EVENTS.EMBED_RENDERED,
     distinctId: `org:${org.id}`,
