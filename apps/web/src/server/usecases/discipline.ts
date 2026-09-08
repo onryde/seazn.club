@@ -17,6 +17,8 @@ import type { Locale } from "@/lib/i18n-constants";
 import { sendSuspensionConfirmedEmail, sendSuspensionServedEmail } from "@/lib/email";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { resolveModule } from "@/server/engine-db";
+import { suspendedPlayersMessage } from "@/lib/registration-rules";
+import { audit } from "./audit";
 
 type Tx = postgres.TransactionSql;
 
@@ -768,4 +770,144 @@ export async function publicSuspensions(
     from suspensions s join persons p on p.id = s.person_id
     where s.division_id = ${division.id} and s.status = 'active'
     order by name`;
+}
+
+// ---------------------------------------------------------------------------
+// B05 — the discipline gate at the team sheet.
+//
+// Everything above this line is READ-side: the fold, the organiser console,
+// the pad banner, the public strip. Until now that was the whole of discipline
+// in this product — an organiser could record a suspension, confirm it, and
+// the banned player was still accepted onto a lineup, because nothing on the
+// write path read this table at all. `discipline.enforced` is sold on the
+// pricing matrix, so the feature stopped exactly short of the one moment it
+// matters: a manager naming a player.
+//
+// A ban names no fixtures. `suspensions` carries no fixture list and no date
+// range, so "is P banned for fixture F" is answerable ONLY as "P holds an
+// `active` row in F's division" — which is why the gate is division-scoped and
+// why `updateServing`'s counting (untouched here) stays the thing that ends a
+// ban.
+// ---------------------------------------------------------------------------
+
+/**
+ * Is this org entitled to discipline enforcement on the competition this
+ * fixture belongs to?
+ *
+ * MUST be awaited BEFORE the caller opens its `withTenant` transaction, never
+ * inside it: `hasFeature` queries the pooled `sql` proxy, and a second pool
+ * checkout while a transaction pins the first is the self-deadlock `lib/db.ts`'s
+ * nesting guard exists to catch (same reason `getDisciplineRules` above splits
+ * into two phases, and same "resolve it outside, pass the boolean in" shape as
+ * `draftPostsForDecidedFixture`).
+ *
+ * `hasFeature`, NOT `requireFeature`: an org that never bought discipline must
+ * see NO behaviour change on the lineup path. A 402 there would break a team
+ * sheet that works today for every Community org in the product.
+ */
+export async function disciplineEnforcedForFixture(
+  orgId: string,
+  fixtureId: string,
+): Promise<boolean> {
+  const [row] = await sql<{ competition_id: string }[]>`
+    select d.competition_id
+    from fixtures f join divisions d on d.id = f.division_id
+    where f.id = ${fixtureId}`;
+  // No fixture (or none this org can see): the caller's own transaction raises
+  // the 404. Answering "not enforced" here leaks nothing and gates nothing.
+  if (!row) return false;
+  return hasFeature(orgId, "discipline.enforced", row.competition_id);
+}
+
+export interface GateLineupSuspensionsArgs {
+  /** The fixture's division — the only scope a suspension has. */
+  divisionId: string;
+  competitionId: string;
+  orgId: string;
+  fixtureId: string;
+  /** person ids on the sheet being written. Empty is a no-op. */
+  personIds: readonly string[];
+  /** `disciplineEnforcedForFixture`, resolved OUTSIDE the transaction. */
+  enforced: boolean;
+  /** Reuses `PutLineup.eligibility_override` rather than adding a second
+   *  override field — one dialog, one reason box, two gates behind it. */
+  override?: { reason: string } | null;
+  actorId: string | null;
+}
+
+/**
+ * Refuses a team sheet that names anyone serving an ACTIVE suspension in this
+ * division, unless the organiser supplies an override reason — in which case
+ * exactly one `suspension.overridden` ledger row is written and the sheet is
+ * accepted.
+ *
+ * `suspension.overridden`, deliberately NOT `eligibility.overridden`: the two
+ * gates share the override FIELD, but a person reading the ledger has to be
+ * able to tell "organiser waved through an age/category violation" from
+ * "organiser named a banned player". They are different conversations with
+ * different people.
+ *
+ * ONLY `status = 'active'` blocks, and the other three statuses the V293 CHECK
+ * allows are each a deliberate non-block:
+ *  - `pending` — raised by the auto-fold, the report bridge or a manual POST,
+ *    and NOBODY HAS CONFIRMED IT. `decideSuspension` is the only thing that
+ *    makes a row a ban (it is also the only thing that stamps `decided_at`),
+ *    so blocking on `pending` would ban a player off an unreviewed accusation.
+ *  - `served` — the ban is spent (`updateServing`).
+ *  - `waived` — an organiser explicitly cancelled it.
+ *
+ * No `detectSuspensions` fold here on purpose: the fold only ever raises
+ * `pending` rows, which do not block, so it could not change this answer — it
+ * would just put the whole discipline projection on the write path of every
+ * lineup PUT.
+ */
+export async function gateLineupSuspensions(
+  tx: Tx,
+  {
+    divisionId,
+    competitionId,
+    orgId,
+    fixtureId,
+    personIds,
+    enforced,
+    override,
+    actorId,
+  }: GateLineupSuspensionsArgs,
+): Promise<void> {
+  if (!enforced) return;
+  const ids = [...new Set(personIds)];
+  if (ids.length === 0) return;
+  // `distinct` because one person can hold more than one active row (two
+  // accumulation buckets, or an accumulation plus a manual): the sentence and
+  // the ledger payload name a PERSON once, not once per row.
+  const banned = await tx<{ person_id: string; full_name: string }[]>`
+    select distinct s.person_id, p.full_name
+    from suspensions s join persons p on p.id = s.person_id
+    where s.division_id = ${divisionId}
+      and s.status = 'active'
+      and s.person_id in ${tx(ids)}
+    order by p.full_name`;
+  if (banned.length === 0) return;
+  if (!override?.reason) {
+    throw new HttpError(
+      422,
+      suspendedPlayersMessage(banned.map((b) => b.full_name)),
+      "SUSPENDED_PLAYER",
+      { suspended: banned.map((b) => ({ person_id: b.person_id, full_name: b.full_name })) },
+    );
+  }
+  await audit(
+    tx,
+    competitionId,
+    orgId,
+    "suspension.overridden",
+    {
+      context: "put_lineup",
+      division_id: divisionId,
+      fixture_id: fixtureId,
+      person_ids: banned.map((b) => b.person_id),
+      reason: override.reason,
+    },
+    actorId,
+  );
 }

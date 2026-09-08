@@ -408,3 +408,28 @@ export function rosterCompositionIssues(
     },
   ];
 }
+
+/**
+ * B05 — the ONE refusal sentence for the discipline gate at the team sheet
+ * (`putLineup`, `server/usecases/fixtures.ts`). It lives here, beside the
+ * age/category/composition messages above, because those are the sentences an
+ * organiser already reads when a roster write is refused and a scorer should
+ * not have to learn a second vocabulary for the same 422.
+ *
+ * NOT an `EligibilityIssue`: a suspension is not a property of the division's
+ * eligibility rules, and `rosterIssues` — the ONE evaluator the public
+ * registration submit path shares — must keep returning exactly the codes it
+ * returns today. Folding a ban into it would block a public registration on a
+ * discipline record, which is a different product decision nobody has taken.
+ *
+ * ENGLISH-ONLY, deliberately, and a known gap: every message in this module is
+ * hardcoded English today (there are no dictionary keys for any of them).
+ * Routing this one sentence through the four locale dictionaries while its six
+ * siblings stay hardcoded would be worse than consistent — the family moves
+ * together or not at all. Flagged for the owner; do not "fix" it alone.
+ */
+export function suspendedPlayersMessage(names: readonly string[]): string {
+  const who = names.length > 0 ? names.join(", ") : "This player";
+  const verb = names.length === 1 || names.length === 0 ? "is" : "are";
+  return `${who} ${verb} serving an active suspension in this division and cannot be named on a team sheet.`;
+}

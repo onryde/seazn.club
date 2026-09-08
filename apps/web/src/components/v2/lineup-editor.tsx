@@ -17,6 +17,7 @@ import { useMsg } from "@/components/i18n/dict-provider";
 // `entrants-panel.tsx`'s `runGated` wraps 4 roster-write call sites with.
 import type { EligibilityIssue } from "@/lib/registration-rules";
 import { EligibilityOverrideDialog } from "@/components/v2/eligibility-override-dialog";
+import { suspendedPlayersText } from "@/lib/eligibility-issue-i18n";
 
 /** One row of the resolved `PositionCatalog.groups` (engine `PositionGroup`),
  *  narrowed to the fields this editor reads. Structural, not an engine import:
@@ -316,8 +317,13 @@ export function LineupEditor({
   // RS011 review round 3, finding 1: pending override-dialog state, set only
   // while a save is blocked on ELIGIBILITY_VIOLATION and waiting on the
   // organiser — same shape as `entrants-panel.tsx`'s `eligibilityGate`.
+  //
+  // B05 review round 1, MAJOR 1: `additionalReasons` carries a refusal that has
+  // no `EligibilityIssue` row — today only the discipline gate's
+  // SUSPENDED_PLAYER, whose sentence is built before it lands here.
   const [eligibilityGate, setEligibilityGate] = useState<{
     violations: EligibilityIssue[];
+    additionalReasons: string[];
   } | null>(null);
 
   const inLineup = new Set(slots.map((s) => s.person_id));
@@ -365,7 +371,36 @@ export function LineupEditor({
     } catch (err) {
       if (err instanceof ApiV1Error && err.code === "ELIGIBILITY_VIOLATION") {
         const violations = (err.extra.violations as EligibilityIssue[] | undefined) ?? [];
-        setEligibilityGate({ violations });
+        setEligibilityGate({ violations, additionalReasons: [] });
+      } else if (err instanceof ApiV1Error && err.code === "SUSPENDED_PLAYER") {
+        // B05: the discipline gate's own 422 (`gateLineupSuspensions`,
+        // server/usecases/discipline.ts). It is NOT an eligibility violation —
+        // it carries `suspended: [{ person_id, full_name }]`, never
+        // `violations`, and `SUSPENDED_PLAYER` is an HttpError code with no
+        // `EligibilityCode` twin — so it is adapted HERE, at the boundary, into
+        // an already-localized sentence rather than faked into an issue row
+        // wearing somebody else's `code`. `suspendedPlayersText` returns null
+        // when the names are unusable, and the server's English then stands
+        // rather than a nameless accusation.
+        //
+        // B05 review round 1, MAJOR 1: it opens the SAME override dialog the
+        // eligibility branch above does. The API has always accepted
+        // `eligibility_override` for a ban (`gateLineupSuspensions` writes a
+        // `suspension.overridden` ledger row for it), and the owner approved
+        // override-with-reason explicitly and NOT a hard block — appeals get
+        // upheld, committees overrule, the wrong person sometimes gets banned.
+        // This editor is the product's only lineup UI, so leaving it at
+        // `setError` left an organiser with no path at all. The banner is set
+        // too, and outlives a cancelled dialog: backing out of the override
+        // should still leave the refusal on screen.
+        const suspended = (err.extra.suspended as { full_name?: string }[] | undefined) ?? [];
+        const sentence =
+          suspendedPlayersText(
+            suspended.map((s) => s.full_name ?? ""),
+            msg,
+          ) ?? err.message;
+        setError(sentence);
+        setEligibilityGate({ violations: [], additionalReasons: [sentence] });
       } else {
         setError(err instanceof Error ? err.message : msg("lineup.failed"));
       }
@@ -606,6 +641,7 @@ export function LineupEditor({
       <EligibilityOverrideDialog
         open={eligibilityGate !== null}
         violations={eligibilityGate?.violations ?? []}
+        additionalReasons={eligibilityGate?.additionalReasons ?? []}
         busy={busy}
         onCancel={() => setEligibilityGate(null)}
         onConfirm={(reason) => void save({ reason })}

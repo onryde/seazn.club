@@ -166,7 +166,10 @@ const SPAN_CLASS: Record<NonNullable<TileSpec["span"]>, string> = {
   1: "col-span-1",
   2: "col-span-2",
   3: "col-span-3",
-  4: "col-span-4",
+  // Phones run THREE columns (see the grid below), so a full-row tile must say
+  // so in both grids: `col-span-4` inside a 3-column grid does not clamp, it
+  // creates an implicit fourth column and the row overflows the card.
+  4: "col-span-4 max-md:col-span-3",
 };
 
 /** One hue per signal (see file header): violet fill = primary (this
@@ -221,10 +224,33 @@ export interface TileGridProps {
  */
 export function TileGrid({ tiles, phase, t, onAction, onOpenSheet }: TileGridProps) {
   const visible = tilesForPhase(tiles, phase);
+  // A four-column grid reserves four columns even when the phase leaves ONE
+  // tile in the row, so the lone tile gets a quarter of the width and three
+  // columns sit empty. English hid this — "Toss" fits 60px on one line — while
+  // fr/es/nl wrap it to three lines and the tile renders 60x92, taller than it
+  // is wide. A row with a single unspanned tile therefore gives it the whole
+  // row; a tile that declares its own span keeps it, and two or more tiles are
+  // untouched, so the four-across rhythm the phone composition design asks for
+  // is unchanged wherever it actually applies.
+  const soleUnspanned = visible.length === 1 && visible[0]?.span === undefined;
+  // Four columns at 320 gives each tile 60px, which fits a numeral and almost
+  // no word: measured in a browser, cricket's keypad broke "No-ball" mid-word
+  // and stacked "Clore la manche" and "Pénalité" — in English as well as
+  // fr/es/nl, since the cricket terms are not translated. Three columns at the
+  // same width give ~82px, which is a word rather than a fragment. Desktop is
+  // untouched at four, so §3.6 of the phone-composition design ("cricket's
+  // keypad keeps four columns") still describes every width it was measured at;
+  // this is the phone half that shipped before the labels were read at 320.
   return (
-    <div className="grid grid-cols-4 gap-2">
+    <div className="grid grid-cols-4 max-md:grid-cols-3 gap-2">
       {visible.map((tile) => (
-        <Tile key={tile.id} tile={tile} t={t} onAction={onAction} onOpenSheet={onOpenSheet} />
+        <Tile
+          key={tile.id}
+          tile={soleUnspanned ? { ...tile, span: 4 } : tile}
+          t={t}
+          onAction={onAction}
+          onOpenSheet={onOpenSheet}
+        />
       ))}
     </div>
   );
