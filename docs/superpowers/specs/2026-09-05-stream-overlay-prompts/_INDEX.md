@@ -356,3 +356,17 @@ prompt + plan pairs** — prompts for every wave now (`T1-theme-and-visual-gate.
 wave ahead only (`plans/2026-09-07-streaming-t1.md` now; R1 after PR1 merges;
 R2 after the R0 memo). Written next. No code under `apps/`, `packages/` or
 `db/` yet.
+
+## 2026-09-08 — passthrough ruling
+
+Owner asked "What's Passthrough?" and "Why people need that as they can do it
+directly in YouTube Live right?" — the recommendation went back that passthrough
+has no customer value (every destination app goes live from a phone for free;
+the only edge is YouTube's 50-subscriber minimum for MOBILE-APP live, which RTMP
+ingest does not have) and that its value is engineering only: R1 proves the
+phone → Cloudflare → destination pipeline with zero new deployables, and it is
+the fallback when composed is unavailable. **Ruling 23 (owner, 2026-09-08): "I am
+good with passthroug now"** — passthrough is an INTERNAL MODE, never a tier,
+never priced, never shown as a choice; the organiser sees one "Go live"; the
+system falls back to clean feed with a chip "scorebug unavailable — streaming
+clean". Spec §12 item 2 closed on this ruling.

@@ -986,9 +986,16 @@ design or owner RULING is an `_INDEX.md` finding, never silently resolved.
    Owner value: ≈ 90 %+ margin on composed, a one-sentence pitch ("1 match =
    1 credit"), and the packs map to a club's season shape. Ruled before the
    GA flip; sandbox placeholders until then.
-2. **Passthrough at half a credit.** Recommend NO at launch — one price, one
-   sentence; the ledger's integer `delta` takes a `2 credits = 1 composed`
-   rebase later if wanted. Owner value: no fractional copy, no second SKU.
+2. ~~**Passthrough at half a credit.**~~ **CLOSED — owner ruling 23,
+   2026-09-08 ("I am good with passthroug now").** Passthrough is an
+   INTERNAL MODE: never a tier, never priced, never shown as a choice. The
+   organiser sees one "Go live"; the system uses passthrough only when
+   composed is unavailable (R0 fail, Machine death mid-match) and says so
+   with a chip "scorebug unavailable — streaming clean". Its value is
+   engineering: R1 proves phone → Cloudflare → destination with zero new
+   deployables; the only customer edge is YouTube's 50-subscriber minimum
+   for mobile-app live, which RTMP ingest does not have. `mode` stays on
+   the session row; no SKU, ever.
 3. **Enterprise monthly bundle** (N `grant` rows per cycle from a cron,
    `expire` rows at cycle end). Recommend later, when an Enterprise org asks.
    Owner value: nothing built for a customer who does not exist yet; the

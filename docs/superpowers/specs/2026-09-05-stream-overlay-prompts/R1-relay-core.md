@@ -237,7 +237,7 @@ The Machine image, the relay page, `slate`, `delayMs` (R2); the phone app
 (R3, own spec; only `docs/contracts/capture-qr.v1.json` + its fixtures land
 here per §7.6, with the checksum unit test); pricing copy and the
 `ENTITLEMENT_DOMAINS` entry (GA flip); an Enterprise monthly bundle (§12.3);
-passthrough at half a credit (§12.2).
+passthrough as a tier, SKU or organiser-visible choice — CLOSED by owner ruling 23 (2026-09-08, §12.2): internal mode only, fallback chip "scorebug unavailable — streaming clean".
 
 ## Do NOT touch
 
