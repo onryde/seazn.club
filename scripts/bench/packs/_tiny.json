@@ -310,6 +310,12 @@
       "fullName": "Farid Haddad",
       "lane": "player",
       "shortName": "F. Haddad"
+    },
+    {
+      "ref": "p-hotel",
+      "fullName": "Hana Okonkwo",
+      "lane": "player",
+      "shortName": "H. Okonkwo"
     }
   ],
   "entrants": [
@@ -410,7 +416,7 @@
     {
       "ref": "e-foxtrot",
       "divisionRef": "d-tiebreak",
-      "kind": "individual",
+      "kind": "team",
       "displayName": "Farid Haddad",
       "seed": 2,
       "roster": [
@@ -418,6 +424,11 @@
           "person": "p-foxtrot",
           "captain": true,
           "squadNumber": 1
+        },
+        {
+          "person": "p-hotel",
+          "captain": false,
+          "squadNumber": 2
         }
       ]
     },
@@ -1522,7 +1533,16 @@
         "count": 3
       }
     ],
-    "suspensions": [],
+    "suspensions": [
+      {
+        "divisionRef": "d-tiebreak",
+        "person": "p-hotel",
+        "missesFixtureExtKeys": [
+          "rr-r3-c1"
+        ],
+        "reason": "Dissent toward the match official"
+      }
+    ],
     "specials": [
       {
         "kind": "retirement",

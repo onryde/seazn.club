@@ -47,6 +47,9 @@ const TINY_WARNINGS = [
   "champions.not_derived",
   "finalRanks.not_derived",
   "careers.not_derived",
+  // B05 T5b-3 — and a discipline carry-over (`p-hotel` banned from
+  // d-tiebreak's `rr-r3-c1`). Five now, in validate-pack.ts's emission order.
+  "suspensions.not_derived",
 ];
 
 const codes = (load: PackLoad): { errors: string[]; warnings: string[] } => ({
@@ -89,6 +92,8 @@ describe("loadPackValue — the committed micro-pack", () => {
       "expected.finalRanks",
       // B05 T5b — the cross-division career rollup.
       "expected.careers",
+      // B05 T5b-3 — the discipline carry-over.
+      "expected.suspensions",
     ]);
   });
 });

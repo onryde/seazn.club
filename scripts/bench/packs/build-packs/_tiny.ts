@@ -1037,6 +1037,9 @@ const TIEBREAK_STAGE_REF = "s-tiebreak-league";
 const TIEBREAK_HOME_ECHO = "e-echo";
 const TIEBREAK_AWAY_FOXTROT = "e-foxtrot";
 const TIEBREAK_THIRD_GOLF = "e-golf";
+// B05 T5b-3: named because `expected.suspensions` has to point at the SAME
+// fixture the stream below declares — a literal on both ends could drift.
+const TIEBREAK_STREAM_R3 = "rr-r3-c1";
 
 // B05 T5b: seat 3 has NO person of its own. The entrant refs here are NATO
 // SEAT LABELS — exactly what `e-alpha`/`e-bravo` are in d-tiny, where the
@@ -1046,9 +1049,18 @@ const TIEBREAK_THIRD_GOLF = "e-golf";
 // `expected.careers` a cross-division subject to roll up: `personCareerStats`
 // groups by sport_key, and d-tiny and d-tiebreak are both `generic` while
 // d-badminton is not.
+//
+// B05 T5b-3: `p-hotel` is the DISCIPLINE subject — a second member of seat 2
+// (`e-foxtrot`), carrying no events of her own so that adding her moves no
+// `expected.leaderboards` count, no `expected.tables` row and no
+// `expected.careers` rollup. She exists to be banned, and `p-foxtrot` beside
+// her exists to stay ELIGIBLE: a one-sided ban test passes against a product
+// that refuses everybody, so the pack has to declare both people on the same
+// entrant or the oracle has no control to compare against.
 const TIEBREAK_PERSONS: NonNullable<PackInput["persons"]> = [
   { ref: "p-echo", fullName: "Elena Reyes", lane: "player", shortName: "E. Reyes" },
   { ref: "p-foxtrot", fullName: "Farid Haddad", lane: "player", shortName: "F. Haddad" },
+  { ref: "p-hotel", fullName: "Hana Okonkwo", lane: "player", shortName: "H. Okonkwo" },
 ];
 
 const TIEBREAK_ENTRANTS: PackInput["entrants"] = [
@@ -1060,13 +1072,25 @@ const TIEBREAK_ENTRANTS: PackInput["entrants"] = [
     seed: 1,
     roster: [{ person: "p-echo", captain: true, squadNumber: 1 }],
   },
+  // B05 T5b-3: the ONLY multi-person entrant in the pack, and it has to be —
+  // `entrantKindCap` (`packages/engine/src/sport/entrant-model.ts:49-57`) caps
+  // an `individual` at ONE person, so a suspended player and an eligible
+  // team-mate cannot both sit on an individual seat. `generic` is the one
+  // builtin that declares no `entrantModel` at all
+  // (`packages/engine/src/testkit/conformance.ts:270`), so `effectiveEntrantModel`
+  // falls through to ALL THREE kinds with no member cap and this seat may be a
+  // `team`. Standings are entrant-keyed, so the kind change moves no expected
+  // table row; the display name is deliberately left alone.
   {
     ref: TIEBREAK_AWAY_FOXTROT,
     divisionRef: TIEBREAK_DIVISION_REF,
-    kind: "individual",
+    kind: "team",
     displayName: "Farid Haddad",
     seed: 2,
-    roster: [{ person: "p-foxtrot", captain: true, squadNumber: 1 }],
+    roster: [
+      { person: "p-foxtrot", captain: true, squadNumber: 1 },
+      { person: "p-hotel", captain: false, squadNumber: 2 },
+    ],
   },
   {
     ref: TIEBREAK_THIRD_GOLF,
@@ -1173,7 +1197,7 @@ const TIEBREAK_STREAMS: NonNullable<PackInput["streams"]> = [
   },
   {
     divisionRef: TIEBREAK_DIVISION_REF,
-    fixtureExtKey: "rr-r3-c1",
+    fixtureExtKey: TIEBREAK_STREAM_R3,
     stageRef: TIEBREAK_STAGE_REF,
     home: TIEBREAK_AWAY_FOXTROT,
     away: TIEBREAK_THIRD_GOLF,
@@ -1248,6 +1272,49 @@ const TIEBREAK_LEADERBOARDS: NonNullable<PackInput["expected"]["leaderboards"]> 
   },
 ];
 
+// B05 T5b-3 — the discipline-carry subject. `expected.suspensions` sat at ZERO
+// rows from the day `PackExpectedSuspension` was written, so its oracle was a
+// silence: nothing to compare, nothing to fail.
+//
+// WHAT THIS PACK CAN HONESTLY DECLARE, and what it deliberately does not.
+// A suspension reaches `suspensions` by exactly three routes in this product
+// (`apps/web/src/server/usecases/discipline.ts`):
+//   (a) AUTO — `detectSuspensions` re-folds the division's `score_events`
+//       through the sport module's `discipline` model on every read. Needs a
+//       `discipline_rules` row with `enabled = true` AND a module that
+//       declares a card model. `generic` declares none, so this route cannot
+//       reach `d-tiebreak` at all.
+//   (b) REPORT BRIDGE — `usecases/match-reports.ts` raises a *pending* row
+//       off a named incident in a match report.
+//   (c) MANUAL — `POST /api/v1/divisions/{id}/suspensions`
+//       (`createManualSuspension`), which is the route this pack uses.
+// All three land the row as `status: "pending"`. Nothing is a ban until an
+// organiser CONFIRMS it: `PATCH /api/v1/suspensions/{id}` `{kind:"confirm"}`
+// -> `decideSuspension` flips it to `active` and only then stamps
+// `entrant_id` and `decided_at`. So the bench's producer is two calls, not
+// one, and a pack that only POSTed would be asserting against a row the
+// product does not consider a ban.
+//
+// `missesFixtureExtKeys` is the WHOLE assertion and it is deliberately a
+// STRICT SUBSET of `e-foxtrot`'s fixtures: seat 2 plays `rr-r1-c1` (away to
+// echo) and `rr-r3-c1` (home to golf), and only the second is missed. A ban
+// that removed the player from EVERY fixture and a ban that removed her from
+// the RIGHT one both satisfy "was she absent from rr-r3-c1?" — the oracle
+// pins the identity by also requiring her PRESENT on `rr-r1-c1`, which it
+// can only do because this list names one of the two and not both.
+//
+// `matches_total` is NOT declared here: it is `missesFixtureExtKeys.length`,
+// derived at the wire by the suite. A hand-typed ban length could drift away
+// from the fixtures the pack says are missed and still pass.
+const TIEBREAK_SUSPENSIONS: NonNullable<PackInput["expected"]["suspensions"]> = [
+  {
+    divisionRef: TIEBREAK_DIVISION_REF,
+    person: "p-hotel",
+    missesFixtureExtKeys: [TIEBREAK_STREAM_R3],
+    reason: "Dissent toward the match official",
+  },
+];
+
 // echo and golf tie on points (4 each) — this block's own header works the
 // arithmetic. Rank order here is the REAL engine's own tiebreaker cascade
 // applied to this division's declared `tiebreakers` (validate-pack.ts's
@@ -1298,7 +1365,7 @@ export function buildTinyPack(): PackInput {
       finalRanks: TINY_FINAL_RANKS,
       leaderboards: [...TINY_LEADERBOARDS, ...TIEBREAK_LEADERBOARDS],
       careers: TINY_CAREERS,
-      suspensions: [],
+      suspensions: TIEBREAK_SUSPENSIONS,
       specials: TINY_SPECIALS,
     },
     registration: { byDivision: { [REGISTRATION_DIVISION_REF]: REGISTRATION_BLOCK } },

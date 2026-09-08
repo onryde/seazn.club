@@ -98,6 +98,11 @@ describe("packs/_tiny.json — two divisions, stage 0, no new errors", () => {
       "champions.not_derived",
       "finalRanks.not_derived",
       "leaderboards.not_derived",
+      // B05 T5b-3 — the FIFTH: `expected.suspensions` now carries p-hotel's
+      // ban from d-tiebreak's `rr-r3-c1`, and a discipline carry-over spans
+      // fixtures while stage 0 folds each one on its own. (`.sort()` above
+      // is why this reads alphabetically rather than in emission order.)
+      "suspensions.not_derived",
     ]);
     // Both divisions actually folded — not just parsed. `overall.real` is the
     // two `d-tiny` "real" streams; `overall.reconstructed` is d-tiny's
@@ -229,6 +234,10 @@ describe("buildSeedPlan — the T4 generalisation, exercised on a REAL two-divis
       "p-dahl",
       "p-echo",
       "p-foxtrot",
+      // B05 T5b-3 — the discipline subject: a SECOND member of seat 2
+      // (`e-foxtrot`, now a `team`), so the ban has a team-mate to stay
+      // eligible beside. Sorts here, between p-foxtrot and p-reg-priya.
+      "p-hotel",
       // B05 T5b — `p-golf` is gone: d-tiebreak's third SEAT (`e-golf`, a
       // NATO ordinal label, not a person) is now Ana Alvarez entering her
       // second division, which is what gives `expected.careers` a

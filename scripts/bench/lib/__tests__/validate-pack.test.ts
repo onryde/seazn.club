@@ -129,6 +129,11 @@ const TINY_NOT_DERIVED = [
   // this pack's clean baseline. Order matches validate-pack.ts's own
   // emission order (:1839-1870), which this list is compared against exactly.
   "careers.not_derived",
+  // B05 T5b-3 — `_tiny.json` now declares an expected.suspensions row
+  // (`p-hotel` banned from d-tiebreak's `rr-r3-c1`), so stage 0's FIFTH
+  // permanent notice joins the baseline. Last in the list because
+  // validate-pack.ts emits it last (:1864-1874).
+  "suspensions.not_derived",
 ];
 
 /** `genericPack` declares a league stage and no `expected.tables`, so stage 0
@@ -330,6 +335,10 @@ describe("validatePack — _tiny.json, the shared fixture", () => {
       expect.stringContaining(
         "2 declared expected.careers entries are NOT checked offline",
       ),
+      // B05 T5b-3 — the discipline carry-over: p-hotel's ban in d-tiebreak.
+      expect.stringContaining(
+        "1 declared expected.suspensions entry is NOT checked offline",
+      ),
     ]);
   });
 
@@ -364,6 +373,12 @@ describe("validatePack — _tiny.json, the shared fixture", () => {
     pack.expected.matches = [];
     pack.expected.tables = [];
     pack.expected.specials = [];
+    // T5b-3: `expected.suspensions[].missesFixtureExtKeys` resolves against
+    // `streams` too (pack-schema.ts:2202-2213), so emptying the streams
+    // without emptying this reds the pack on a ref error and `validatePack`
+    // returns before it ever builds a provenance split — which is exactly
+    // how this test first failed.
+    pack.expected.suspensions = [];
     // officials[].assignments name a (divisionRef, fixtureExtKey) that must
     // resolve against `streams` — emptied above, so this has to empty too,
     // or `checkReservations` reds the pack for a reason this test is not
@@ -2076,6 +2091,8 @@ describe("validatePack — the oracles it does NOT derive say so", () => {
     // declares: without this the test asserts silence on a block that is no
     // longer empty, which is the opposite of what it is named for.
     (pack.expected as Record<string, unknown>)["careers"] = [];
+    // B05 T5b-3 — and expected.suspensions, which `_tiny.json` now declares.
+    (pack.expected as Record<string, unknown>)["suspensions"] = [];
     expectClean(validatePack(pack, TINY), []);
   });
 
@@ -2089,7 +2106,10 @@ describe("validatePack — the oracles it does NOT derive say so", () => {
       },
     ] as TinyShape["expected"]["suspensions"];
     const result = validatePack(pack, TINY);
-    expectClean(result, [...TINY_NOT_DERIVED, "suspensions.not_derived"]);
+    // T5b-3: `suspensions.not_derived` is part of TINY_NOT_DERIVED now, and
+    // the assignment above REPLACES the committed pack's own row rather than
+    // adding to it — so the notice still fires exactly once, over 1 entry.
+    expectClean(result, TINY_NOT_DERIVED);
     const suspension = warnings(result.findings).find(
       (f) => f.code === "suspensions.not_derived",
     );
@@ -2159,6 +2179,8 @@ describe("validatePack — the oracles it does NOT derive say so", () => {
     pack.expected.champions = [];
     (pack.expected as Record<string, unknown>)["finalRanks"] = [];
     (pack.expected as Record<string, unknown>)["careers"] = [];
+    // B05 T5b-3 — and expected.suspensions, which `_tiny.json` now declares.
+    (pack.expected as Record<string, unknown>)["suspensions"] = [];
     expectClean(validatePack(pack, TINY), []);
   });
 
