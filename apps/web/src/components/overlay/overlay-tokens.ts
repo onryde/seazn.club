@@ -20,6 +20,17 @@
 //    is deliberately no way to scope a role to fewer sports — narrowing a role
 //    is how a sub-floor value disappears from a sweep while still being painted.
 //
+// WHAT THIS MODULE'S TEST CANNOT PROVE, AND WHO OWES IT. `_THEMES.md` §2/§3
+// (addendum 2026-09-08) give the card chips and the live dot a 1-px
+// `--sport-ink` hairline, and rule that the HAIRLINE — not the fill — is what
+// meets WCAG 1.4.11 for them. This module can assert the COLOUR PAIR behind
+// that rule (`ink-hairline-on-board-2`, 9.46–16.11). It cannot assert that the
+// hairline is RENDERED: `apps/web` vitest is `environment: "node"`, and a 1-px
+// border is a pixel. That obligation belongs to **W1's e2e**, named there
+// alongside this module's other e2e debt. Read the hairline row as "the colour
+// works if it is drawn", never as "the boundary is covered" — the two failing
+// fills below are covered only while that border exists.
+//
 // WHY THE ELEVEN KEYS ARE A LITERAL AND NOT `Object.keys(V3_SKINS)`. The pad's
 // skin registry statically imports eleven `"use client"` skin modules (cricket
 // alone is ~138 KB and pulls `@seazn/engine/core` and `.../sports/cricket`) and
@@ -174,6 +185,14 @@ export const OVERLAY_PAIR_ROLES: readonly OverlayPairRole[] = [
   { id: "led-on-board", fg: "led", bg: "board", floor: 3, where: "GRAPHICAL + LARGE — §3/§4 LED score Barlow 78/69, the 8-px LED bar, the serve/striker dots, §4a warming dots" },
   { id: "led-on-board-2", fg: "led", bg: "board-2", floor: 3, where: "GRAPHICAL + LARGE — §4 side-in-play row: LED score and inset bar on board-2" },
   {
+    id: "ink-hairline-on-board-2",
+    fg: "ink",
+    bg: "board-2",
+    floor: 3,
+    where:
+      "GRAPHICAL — the 1-px --sport-ink hairline on §3's and §4's card chips and live dot (owner 2026-09-08). This row measures the COLOUR PAIR only; that the border is RENDERED is owed to W1's e2e — no node-environment test can see a pixel. It is what carries WCAG 1.4.11 for the two fills that miss it below",
+  },
+  {
     id: "live-dot-on-board-2",
     fg: "liveDot",
     bg: "board-2",
@@ -221,19 +240,33 @@ export const OVERLAY_PAIR_ROLES: readonly OverlayPairRole[] = [
  * the role's own floor, so an exception cannot license a wider miss than the
  * floor it excuses.
  *
- * `status` separates a decision from a QUESTION. `ruled` means the sheet or an
- * owner ruling has accepted the number. `unruled` means the pair is measurably
- * under its floor on a theme that is ALREADY APPROVED (§3/§4), the owner has
- * not yet been asked, and the row exists so the number is asserted rather than
- * merely disclosed in a comment — an absent symptom means suppressed, not safe.
- * An `unruled` row is a finding owed to `_INDEX.md`, not a permanent licence.
+ * `status` says WHAT KIND of thing the row is, and the three are not
+ * interchangeable:
+ *
+ *   `ruled`    the sheet or an owner ruling has accepted the number as it is.
+ *   `covered`  the pair misses its floor, and a DIFFERENT pair — named in
+ *              `coveredBy` — is what meets the criterion instead. Per
+ *              `_THEMES.md` §2: "neither a pass nor a waiver". The fill stays
+ *              asserted at its measured value precisely so that removing or
+ *              thinning the covering element reads as removing something
+ *              load-bearing rather than as tidying a decoration.
+ *   `unruled`  measurably under its floor, owner not yet asked. A finding owed
+ *              to `_INDEX.md`, never a permanent licence. None today; the
+ *              status stays in the union so the next one has a correct label
+ *              and the test's list pin makes it impossible to add quietly.
+ *
+ * A `covered` row is only as true as its covering element being DRAWN, which
+ * this module's node-environment test cannot see — see the file header.
  */
 export interface OverlayPairException {
   roleId: string;
   sport: string;
   atLeast: number;
   below: 4.5 | 3;
-  status: "ruled" | "unruled";
+  status: "ruled" | "covered" | "unruled";
+  /** Required for `covered`: the role whose pair meets the criterion instead.
+   *  The test checks that role exists AND clears its floor for this sport. */
+  coveredBy?: string;
   why: string;
 }
 
@@ -251,16 +284,18 @@ export const OVERLAY_PAIR_EXCEPTIONS: readonly OverlayPairException[] = [
     sport: "football",
     atLeast: 2.5,
     below: 3,
-    status: "unruled",
-    why: "Football's #d00000 on its own band #122e21 is 2.56 — under WCAG 1.4.11's 3:1 for a graphical object, so a red-card chip (and §5's wicket LED bar) on the side-in-play row is the one card chip in the set that is not reliably distinguishable from its ground. Not a T1 design; §3/§4 are already approved. Owner decision owed: darken the chip's own ground, give the chip a --sport-board hairline (the pad's own remedy for a wash), or accept. `atLeast` is the measured value rounded down, so a further slip reds.",
+    status: "covered",
+    coveredBy: "ink-hairline-on-board-2",
+    why: "Football's #d00000 on its own band #122e21 is 2.56, under WCAG 1.4.11's 3:1. Owner-ruled 2026-09-08 (_THEMES.md §2/§3 addendum): the chip's 1-px --sport-ink hairline carries the boundary, and the fill is then free to be the sport's own red. NOT a waiver — the number stays asserted so that removing or thinning that hairline reads as removing a load-bearing element. The pad's own --sport-board hairline could NOT serve here: board against board-2 is 1.08–1.33, invisible exactly where it would have to work.",
   },
   {
     roleId: "live-dot-on-board-2",
     sport: "hockey",
     atLeast: 2.7,
     below: 3,
-    status: "unruled",
-    why: "The fixed live dot #ef4444 on hockey's band #0a4657 is 2.75 — under 3:1 for a graphical object. Hockey's is the only band the fixed dot fails on (every other sport is 3.44–4.82) and §4a's signal-lost dot on the BOARD clears at 3.65, so this is one ground, not the dot. Owner decision owed: a per-sport dot, a hairline, or accept. `atLeast` is the measured value rounded down.",
+    status: "covered",
+    coveredBy: "ink-hairline-on-board-2",
+    why: "The fixed live dot #ef4444 on hockey's band #0a4657 is 2.75, under 3:1. Same owner ruling and same remedy as football's chip: the 1-px --sport-ink hairline carries it. Hockey's is the only band the dot fails on (every other sport is 3.44–4.82), and §4a's signal-lost dot on the BOARD clears at 3.65, so darkening the band stays the live alternative the sheet records.",
   },
 ];
 

@@ -220,6 +220,7 @@ describe("the gate is not vacuous (empty-set case first)", () => {
       "led-on-board-2": 3,
       "live-dot-on-board": 3,
       "live-dot-on-board-2": 3,
+      "ink-hairline-on-board-2": 3,
       "advisory-swatch-on-board": 3,
       "advisory-swatch-on-board-2": 3,
       "caution-swatch-on-board": 3,
@@ -439,7 +440,7 @@ describe("every pair role clears its floor for every sport", () => {
     // out of the sweep — changes this number.
     expect(pairRows.length).toBe(OVERLAY_SPORT_KEYS.length * OVERLAY_PAIR_ROLES.length);
     expect(OVERLAY_SPORT_KEYS.length).toBe(11);
-    expect(OVERLAY_PAIR_ROLES.length).toBe(16);
+    expect(OVERLAY_PAIR_ROLES.length).toBe(17);
   });
 
   it.each(pairRows)("$title", ({ sport, role }) => {
@@ -496,18 +497,64 @@ describe("every pair role clears its floor for every sport", () => {
 // 3a. The exception table — the ONE mechanism for a pair under its floor.
 // ---------------------------------------------------------------------------
 describe("exceptions are recorded and two-sided, never narrowed away", () => {
-  it("is exactly these three rows, and the two UNRULED ones are owed to the owner", () => {
+  it("is exactly these three rows, with the two fills COVERED and nothing left unruled", () => {
     // An exception is a licence to miss a floor, so the list is pinned: a
     // fourth row appearing without a sheet change or a ruling is a silent
-    // waiver. `ruled` = the sheet has accepted the number. `unruled` = the pair
-    // is under its floor on an ALREADY-APPROVED theme, the owner has not been
-    // asked, and the row exists so the number is ASSERTED rather than disclosed
-    // in a comment nothing measures.
+    // waiver. The STATUS is pinned with it, because the three kinds are not
+    // interchangeable — laundering a `covered` row into a `ruled` one would
+    // drop the obligation that its covering element keeps existing.
     expect(OVERLAY_PAIR_EXCEPTIONS.map((e) => `${e.status}:${e.sport}/${e.roleId}`).sort()).toEqual([
+      "covered:football/dismissal-swatch-on-board-2",
+      "covered:hockey/live-dot-on-board-2",
       "ruled:hockey/slab-ink-on-dismissal",
-      "unruled:football/dismissal-swatch-on-board-2",
-      "unruled:hockey/live-dot-on-board-2",
     ]);
+    // Nothing is awaiting a decision. A future `unruled` row is a deliberate
+    // addition that reddens the pin above, which is the point of keeping the
+    // status in the union.
+    expect(OVERLAY_PAIR_EXCEPTIONS.filter((e) => e.status === "unruled")).toEqual([]);
+  });
+
+  it("a COVERED row names the pair that actually meets the criterion, and that pair clears", () => {
+    // `_THEMES.md` §2: covered is "neither a pass nor a waiver" — some OTHER
+    // pair is what satisfies WCAG 1.4.11. A `coveredBy` naming a role that does
+    // not exist, or one that itself fails for that sport, would make the whole
+    // arrangement a waiver wearing a better word.
+    const covered = OVERLAY_PAIR_EXCEPTIONS.filter((e) => e.status === "covered");
+    expect(covered.length).toBeGreaterThan(0);
+    for (const e of covered) {
+      expect(e.coveredBy, `${e.sport}/${e.roleId} is covered by nothing`).toBeDefined();
+      const carrier = roleById(e.coveredBy!);
+      const p = paletteFor(e.sport);
+      const ratio = contrastRatio(pairInk(e.sport, carrier), p[carrier.bg]);
+      expect(ratio, `${e.sport}: ${e.coveredBy} measures ${ratio.toFixed(2)} — it cannot carry the floor`).toBeGreaterThanOrEqual(
+        carrier.floor,
+      );
+      // The carrier must be measured on the SAME ground as the pair it covers:
+      // a boundary drawn somewhere else is not a boundary for this one.
+      expect(carrier.bg, `${e.coveredBy} is not on the same ground as ${e.roleId}`).toBe(roleById(e.roleId).bg);
+    }
+    // A `ruled` row is a different animal and must NOT claim a carrier.
+    for (const e of OVERLAY_PAIR_EXCEPTIONS.filter((x) => x.status === "ruled")) {
+      expect(e.coveredBy, `${e.sport}/${e.roleId} is ruled, not covered`).toBeUndefined();
+    }
+  });
+
+  it("the pad's own --sport-board hairline could NOT have carried it (the ruling's argument)", () => {
+    // `_THEMES.md` §3: tokens.ts's "boundary carried by the --sport-board
+    // hairline, NEVER by the fill" is scoped to the pad's PALE console sheet
+    // and does not transfer here. board against board-2 are neighbouring
+    // shades by design. Asserted rather than quoted, so a future wave that
+    // reaches for the pad's rule finds the number instead of the habit.
+    for (const sport of OVERLAY_SPORT_KEYS) {
+      const p = paletteFor(sport);
+      const ratio = contrastRatio(p.board, p["board-2"]);
+      expect(ratio, `${sport}: a board hairline on board-2 measures ${ratio.toFixed(2)}`).toBeLessThan(3);
+    }
+    // …while the ink hairline the owner picked clears on every one of them.
+    for (const sport of OVERLAY_SPORT_KEYS) {
+      const p = paletteFor(sport);
+      expect(contrastRatio(p.ink, p["board-2"]), `${sport} ink hairline`).toBeGreaterThanOrEqual(3);
+    }
   });
 
   it("every exception names a real role and sport, and cannot license a wider miss than its floor", () => {
@@ -538,16 +585,74 @@ describe("exceptions are recorded and two-sided, never narrowed away", () => {
     }
   });
 
-  it("the two unruled misses measure what the findings say they measure", () => {
-    // The numbers that go to the owner, asserted rather than written down.
+  it("the two covered misses measure what the ruling says they measure", () => {
+    // The numbers the owner ruled on, asserted rather than written down.
     const football = paletteFor("football");
     expect(contrastRatio(football.dismissal, football["board-2"])).toBeCloseTo(2.56, 2);
     const hockey = paletteFor("hockey");
     expect(contrastRatio(OVERLAY_FIXED.liveDot, hockey["board-2"])).toBeCloseTo(2.75, 2);
     // Both are ONE ground, not a systemic failure — the same colours clear on
-    // the other ground, which is what makes "darken that band" a real option.
-    expect(contrastRatio(football.dismissal, football.board)).toBeGreaterThanOrEqual(3);
-    expect(contrastRatio(OVERLAY_FIXED.liveDot, hockey.board)).toBeGreaterThanOrEqual(3);
+    // the other ground. `_THEMES.md` §2 records darken-the-band as the live
+    // alternative to the hairline, so these two keep their assertion.
+    expect(contrastRatio(football.dismissal, football.board)).toBeCloseTo(3.01, 2);
+    expect(contrastRatio(OVERLAY_FIXED.liveDot, hockey.board)).toBeCloseTo(3.65, 2);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 3b. `_THEMES.md` §2's graphical range table (addendum 2026-09-08). Six rows,
+//     all on `board-2`, each recording a MIN and a MAX with the sport that
+//     holds it. Unlike §2's panel table — whose hexes and ratios both come out
+//     of the sheet — this one is a genuine two-authority check: the ranges come
+//     from the sheet, the ratios from SPORT_PALETTES. A palette move reds here
+//     and says which sport and which direction.
+// ---------------------------------------------------------------------------
+describe("§2's graphical range table is the range the palettes actually produce", () => {
+  /** The colour a §2 graphical row names, for one sport. */
+  function rowInk(label: string, sport: string): string | undefined {
+    const p = paletteFor(sport);
+    if (label.includes("live dot")) return OVERLAY_FIXED.liveDot;
+    if (label.includes("--sport-ink")) return p.ink;
+    if (label.includes("--sport-board")) return p.board;
+    for (const token of ["advisory", "caution", "dismissal"] as const) {
+      if (label.includes(`\`${token}\``)) return p[token];
+    }
+    return undefined;
+  }
+
+  const graphicalRows = tableRows(sheetSection("2. Colour"), 3)
+    .map((cells) => {
+      const m = cells[1]!.replace(/\*/g, "").match(/(\d+\.\d+)\s*\(([a-z]+)\)\s*[–—-]\s*(\d+\.\d+)\s*\(([a-z]+)\)/);
+      return m
+        ? { label: cells[0]!, min: Number(m[1]), minSport: m[2]!, max: Number(m[3]), maxSport: m[4]! }
+        : undefined;
+    })
+    .filter((r): r is NonNullable<typeof r> => r !== undefined);
+
+  it("has the six rows §2 states, each naming a colour this module knows", () => {
+    expect(graphicalRows.length).toBe(6);
+    for (const r of graphicalRows) {
+      expect(rowInk(r.label, "cricket"), `§2 graphical row "${r.label}" names no colour`).toBeDefined();
+      expect(OVERLAY_SPORT_KEYS, `${r.label} min sport`).toContain(r.minSport);
+      expect(OVERLAY_SPORT_KEYS, `${r.label} max sport`).toContain(r.maxSport);
+    }
+  });
+
+  it.each(graphicalRows)("$label — $min ($minSport) to $max ($maxSport)", ({ label, min, minSport, max, maxSport }) => {
+    const ratios = OVERLAY_SPORT_KEYS.map((s) => ({
+      sport: s,
+      ratio: contrastRatio(rowInk(label, s)!, paletteFor(s)["board-2"]),
+    }));
+    // The NAMED sport's own value, not "whichever sport happens to be lowest" —
+    // cricket and generic tie on every inherited row, so an argmin would be
+    // deciding a tie the sheet did not.
+    expect(ratios.find((r) => r.sport === minSport)!.ratio, `${label} at ${minSport}`).toBeCloseTo(min, 2);
+    expect(ratios.find((r) => r.sport === maxSport)!.ratio, `${label} at ${maxSport}`).toBeCloseTo(max, 2);
+    // …and they really are the extremes, so the sheet is not quoting a middle.
+    for (const r of ratios) {
+      expect(r.ratio, `${label}: ${r.sport} is below the recorded min`).toBeGreaterThanOrEqual(min - 0.005);
+      expect(r.ratio, `${label}: ${r.sport} is above the recorded max`).toBeLessThanOrEqual(max + 0.005);
+    }
   });
 });
 
