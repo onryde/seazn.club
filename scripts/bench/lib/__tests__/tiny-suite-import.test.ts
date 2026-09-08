@@ -26,6 +26,7 @@ import { runTinySuite, TINY_PACK_PATH } from "../suites/tiny.ts";
 import { makeScheduleWorld } from "./_schedule-routes.ts";
 import { makeDivisionPhaseWorld } from "./_division-phase.ts";
 import { makeAdvanceRoutesWorld } from "./_advance-routes.ts";
+import { makeOracleRoutesWorld } from "./_oracle-routes.ts";
 
 const silent = pino({ level: "silent" });
 
@@ -77,6 +78,14 @@ function fakeServer(opts: { refuseImportWith?: { status: number; code: string; m
   // an unmodeled route.
   const advanceRoutes = makeAdvanceRoutesWorld({
     getQualifiers: (stageId) => {
+      const divisionId = divisionIdByStageId.get(stageId);
+      return divisionId === undefined ? undefined : schedule.entrantsOfDivision(divisionId);
+    },
+  });
+  // B05 T4 — the runtime oracle's own route, unconditionally reached once
+  // `s-playoff` completes (see `_oracle-routes.ts`'s own header comment).
+  const oracleRoutes = makeOracleRoutesWorld({
+    getRankedEntrantIds: (stageId) => {
       const divisionId = divisionIdByStageId.get(stageId);
       return divisionId === undefined ? undefined : schedule.entrantsOfDivision(divisionId);
     },
@@ -233,6 +242,11 @@ function fakeServer(opts: { refuseImportWith?: { status: number; code: string; m
       // present (see `_advance-routes.ts`'s own header comment).
       const advanced = advanceRoutes.handle(method, path, body);
       if (advanced !== undefined) return advanced;
+      // B05 T4 — the runtime oracle's standings read, unconditionally
+      // whenever `sql` is present (see `_oracle-routes.ts`'s own header
+      // comment).
+      const oracled = oracleRoutes.handle(method, path);
+      if (oracled !== undefined) return oracled;
       // B05 T2's own addition: division B's batch-import fold. Refuses the
       // WHOLE call when `opts.refuseImportWith` is set (so a wiring test can
       // prove a call-level refusal reaches `report.errors`/`report.gate`,
@@ -356,6 +370,7 @@ describe("runTinySuite — B05 T2 division-B stream fold wiring", () => {
       importTransport: transport,
       startTransport: transport,
       advanceTransport: transport,
+      oracleTransport: transport,
     });
 
     expect(report.gate).toBe("green");
@@ -427,6 +442,7 @@ describe("runTinySuite — B05 T2 division-B stream fold wiring", () => {
       importTransport: transport,
       startTransport: transport,
       advanceTransport: transport,
+      oracleTransport: transport,
     });
 
     expect(report.gate).toBe("red");

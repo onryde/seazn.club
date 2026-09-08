@@ -26,6 +26,7 @@ import { runTinySuite, TINY_PACK_PATH } from "../suites/tiny.ts";
 import { makeScheduleWorld } from "./_schedule-routes.ts";
 import { makeDivisionPhaseWorld } from "./_division-phase.ts";
 import { makeAdvanceRoutesWorld } from "./_advance-routes.ts";
+import { makeOracleRoutesWorld } from "./_oracle-routes.ts";
 
 const silent = pino({ level: "silent" });
 
@@ -46,6 +47,15 @@ function fakeServer(
      *  (reversed), so D7's assertion should red and neither confirm,
      *  generate nor the playoff's own stream fold should ever be attempted. */
     reverseAdvanceQualifiers?: boolean;
+    /** B05 T4 regression — `GET /stages/{id}/standings` answers with the
+     *  final order REVERSED, independent of `reverseAdvanceQualifiers`
+     *  above (that one is read by the SEED PROPOSAL for `s-league` ->
+     *  `s-playoff`; this one is read by the runtime oracle's re-fetch of
+     *  `s-playoff`'s OWN completed standings). Proves the oracle step is a
+     *  real wire read, not a restatement of the captured `complete`
+     *  response: with this set, the captured response still says
+     *  [e-alpha, e-bravo] but the re-read standings say the opposite. */
+    wrongFinalStandingsOrder?: boolean;
   } = {},
 ): {
   transport: ProbeTransport;
@@ -90,6 +100,21 @@ function fakeServer(
       if (divisionId === undefined) return undefined;
       const entrants = schedule.entrantsOfDivision(divisionId);
       return opts.reverseAdvanceQualifiers === true ? [...entrants].reverse() : entrants;
+    },
+  });
+  // B05 T4 — the runtime oracle's own route (`GET /stages/{id}/standings`),
+  // unconditionally reached once `s-playoff` completes. This world reports
+  // the REAL entrant order regardless of `reverseAdvanceQualifiers` above —
+  // that knob feeds the SEED PROPOSAL a wrong order to prove D7 stops the
+  // flow before `complete` is ever called, so the oracle step (which only
+  // runs once `complete` has actually been captured) never reaches this
+  // route in that scenario either way.
+  const oracleRoutes = makeOracleRoutesWorld({
+    getRankedEntrantIds: (stageId) => {
+      const divisionId = divisionIdByStageId.get(stageId);
+      if (divisionId === undefined) return undefined;
+      const entrants = schedule.entrantsOfDivision(divisionId);
+      return opts.wrongFinalStandingsOrder === true ? [...entrants].reverse() : entrants;
     },
   });
 
@@ -244,6 +269,11 @@ function fakeServer(
       // present (see `_advance-routes.ts`'s own header comment).
       const advanced = advanceRoutes.handle(method, path, body);
       if (advanced !== undefined) return advanced;
+      // B05 T4 — the runtime oracle's standings read, unconditionally
+      // whenever `sql` is present (see `_oracle-routes.ts`'s own header
+      // comment).
+      const oracled = oracleRoutes.handle(method, path);
+      if (oracled !== undefined) return oracled;
       // B05 T2 — division B's own streams (`d-badminton`) fold through THIS
       // route unconditionally whenever `sql` is present, same gating as
       // division A's single-event fold this file is actually about. Handled
@@ -395,6 +425,7 @@ describe("runTinySuite — B05 T1 division-A stream fold wiring", () => {
       importTransport: transport,
       startTransport: transport,
       advanceTransport: transport,
+      oracleTransport: transport,
     });
 
     expect(report.gate).toBe("green");
@@ -455,6 +486,54 @@ describe("runTinySuite — B05 T1 division-A stream fold wiring", () => {
     // captured finalRanks both matched the pack's own expectations.
     const advanceOracles = (report.oracles ?? []).filter((o) => o.name.startsWith("advance:"));
     expect(advanceOracles.map((o) => o.passed)).toEqual([true, true]);
+    // B05 T4 — the runtime oracle layer's own checks: rank crossing
+    // (captured vs re-read standings), standings vs `expected.finalRanks`,
+    // and champion, all against this fake's clean (unreversed) final order.
+    const runtimeOracles = (report.oracles ?? []).filter((o) => o.name.startsWith("oracle:"));
+    expect(runtimeOracles.map((o) => o.name)).toEqual([
+      "oracle: s-playoff rank crossing (captured vs standings)",
+      "oracle: s-playoff standings rank vs expected.finalRanks",
+      "oracle: d-tiny champion",
+    ]);
+    expect(runtimeOracles.map((o) => o.passed)).toEqual([true, true, true]);
+  });
+
+  it("B05 T4 — the runtime oracle is a REAL wire read, not an inert restatement: a reversed re-read standings order reds the run", async () => {
+    // The captured `complete` response still reports [e-alpha, e-bravo] —
+    // this fake's `advanceRoutes` world is untouched. Only the SEPARATE
+    // `GET /stages/{id}/standings` re-read (`oracleRoutes`) disagrees. If
+    // the oracle step were dead code (never wired, or silently comparing
+    // the captured response against itself), this run would still be
+    // green.
+    const { transport, sql } = fakeServer({ wrongFinalStandingsOrder: true });
+    const report = await runTinySuite({
+      base: "http://bench.example",
+      engine: "optimized",
+      keep: false,
+      log: silent,
+      cliEntry: "admin",
+      packPath: TINY_PACK_PATH,
+      transport,
+      sql,
+      probeTransport: transport,
+      simTransport: transport,
+      importTransport: transport,
+      startTransport: transport,
+      advanceTransport: transport,
+      oracleTransport: transport,
+    });
+
+    expect(report.gate).toBe("red");
+    const runtimeOracles = (report.oracles ?? []).filter((o) => o.name.startsWith("oracle:"));
+    const rankCrossing = runtimeOracles.find((o) => o.name === "oracle: s-playoff rank crossing (captured vs standings)");
+    expect(rankCrossing?.passed).toBe(false);
+    const standingsVsExpected = runtimeOracles.find(
+      (o) => o.name === "oracle: s-playoff standings rank vs expected.finalRanks",
+    );
+    expect(standingsVsExpected?.passed).toBe(false);
+    const champion = runtimeOracles.find((o) => o.name === "oracle: d-tiny champion");
+    expect(champion?.passed).toBe(false);
+    expect((report.errors ?? []).join(" | ")).toContain("DISAGREE on final order");
   });
 
   it("without `sql`, the fold never runs — no fixtures/events calls, no simulation section", async () => {
@@ -498,6 +577,7 @@ describe("runTinySuite — B05 T1 division-A stream fold wiring", () => {
       importTransport: transport,
       startTransport: transport,
       advanceTransport: transport,
+      oracleTransport: transport,
     });
 
     expect(report.gate).toBe("red");
@@ -539,6 +619,7 @@ describe("runTinySuite — B05 T1 division-A stream fold wiring", () => {
       importTransport: transport,
       startTransport: transport,
       advanceTransport: transport,
+      oracleTransport: transport,
     });
 
     expect(report.gate).toBe("red");

@@ -183,6 +183,14 @@ import {
   compareFinalRanks,
   completeStageCapture,
 } from "../advance.ts";
+import {
+  compareChampion,
+  compareRankCrossings,
+  fetchStandings,
+  renderChampionMismatch,
+  renderRankCrossingMismatch,
+  standingsRankOrder,
+} from "../oracle.ts";
 import type { SelectedDivisionExposure } from "../env.ts";
 import {
   resolveEntryMode,
@@ -528,6 +536,19 @@ export interface TinySuiteInput {
    * start step, and runs after both folds and the player-stats baseline.
    */
   advanceTransport?: ProbeTransport;
+  /**
+   * B05 T4 — overridable so a test can drive the runtime-oracle step's OWN
+   * HTTP surface through a fake, never `global.fetch`. `ProbeTransport`,
+   * same reasoning as `advanceTransport` above — it is exactly the shape
+   * `oracle.ts`'s own `OracleTransport` needs (`raw()`). Defaults to
+   * `oracle.ts`'s own `defaultOracleTransport`; a live run never passes it.
+   * Meaningless (never read) when `sql` is omitted, or when `division0`'s
+   * second stage declares no `progression` — same gating discipline as
+   * `advanceTransport`. A SEPARATE field: the oracle step reads standings
+   * AFTER the advance step writes, and a test wanting different fakes for
+   * each must be able to say so.
+   */
+  oracleTransport?: ProbeTransport;
   /** B03r tasks 9+10: `bench.ts`'s `--entry admin|registration` flag,
    *  forwarded through `BenchConfig.entry`/`runSuite`. `undefined` (no flag)
    *  leaves every registration-carrying division on its own pack-declared
@@ -2640,6 +2661,86 @@ export async function runTinySuite(
                       `[${franksCheck.actual === undefined ? "(absent)" : franksCheck.actual.join(", ")}] disagree with ` +
                       `the pack's expected order [${franksCheck.expected.join(", ")}]`,
                   );
+                }
+
+                // B05 T4 — the runtime oracle layer proper (design doc D1/D2).
+                // A SECOND, independently-fetched crossing of the same final
+                // order: `GET /stages/{id}/standings`'s own `rank` field is
+                // re-readable at any time (unlike the `complete` response
+                // captured above, which is not — `advance.ts`'s own header
+                // comment) and is what a CUSTOMER actually sees. Comparing it
+                // against the captured response is the genuinely new check
+                // this task owes; comparing it against the pack's own
+                // `expected.finalRanks` re-derives D7's own assertion from a
+                // wholly different route.
+                const standingsWire = await fetchStandings(base, s, targetStageId, undefined, input.oracleTransport);
+                const standingsRanked = standingsRankOrder(standingsWire.rows);
+
+                const rankCrossing = compareRankCrossings(completion.finalRanks, standingsRanked);
+                oracles.push({
+                  name: `oracle: ${stage1.ref} rank crossing (captured vs standings)`,
+                  passed: rankCrossing.matched,
+                  detail: rankCrossing.matched
+                    ? `captured finalRanks and the re-read standings agree: [${standingsRanked.join(", ")}]`
+                    : renderRankCrossingMismatch(rankCrossing),
+                });
+                log.info({ kind: "rank_crossing", passed: rankCrossing.matched }, "oracle_checked");
+                if (!rankCrossing.matched) {
+                  errors.push(
+                    `oracle: ${stage1.ref}: the captured complete response and the re-read standings DISAGREE on final order — ` +
+                      `${renderRankCrossingMismatch(rankCrossing)}`,
+                  );
+                }
+
+                const standingsVsExpected = compareFinalRanks(expectedIds, standingsRanked);
+                oracles.push({
+                  name: `oracle: ${stage1.ref} standings rank vs expected.finalRanks`,
+                  passed: standingsVsExpected.matched,
+                  detail: standingsVsExpected.matched
+                    ? `re-read standings [${standingsRanked.join(", ")}] match the pack's expected order`
+                    : `re-read standings [${standingsRanked.join(", ")}] disagree with the pack's expected order ` +
+                      `[${expectedIds.join(", ")}]`,
+                });
+                log.info({ kind: "standings_final_rank", passed: standingsVsExpected.matched }, "oracle_checked");
+                if (!standingsVsExpected.matched) {
+                  errors.push(
+                    `oracle: ${stage1.ref}: re-read standings [${standingsRanked.join(", ")}] disagree with the ` +
+                      `pack's expected order [${expectedIds.join(", ")}]`,
+                  );
+                }
+
+                // D2 — champion, defined as rank 1 of the final stage's
+                // standings, cross-checked against the captured response,
+                // compared against `expected.champions`. No champion field
+                // exists anywhere on the wire (F1b) — the bench does not
+                // invent one.
+                const expectedChampionRow = pack.expected.champions.find(
+                  (c) => c.divisionRef === division0.ref && (c.stageRef === undefined || c.stageRef === stage1.ref),
+                );
+                if (expectedChampionRow === undefined) {
+                  warnings.push(
+                    `oracle: division "${division0.ref}" completed but the pack declares no expected.champions row for it — champion oracle skipped`,
+                  );
+                } else {
+                  const expectedChampionId = seeded.entrantIdByRef.get(expectedChampionRow.entrant);
+                  if (expectedChampionId === undefined) {
+                    errors.push(
+                      `tiny: expected.champions names entrant ref "${expectedChampionRow.entrant}" with no resolved id`,
+                    );
+                  } else {
+                    const championCheck = compareChampion(expectedChampionId, standingsRanked, completion.finalRanks);
+                    oracles.push({
+                      name: `oracle: ${division0.ref} champion`,
+                      passed: championCheck.matched,
+                      detail: championCheck.matched
+                        ? `champion ${championCheck.fromStandings} matches the pack's expected champion`
+                        : renderChampionMismatch(championCheck),
+                    });
+                    log.info({ kind: "champion", passed: championCheck.matched }, "oracle_checked");
+                    if (!championCheck.matched) {
+                      errors.push(`oracle: champion mismatch — ${renderChampionMismatch(championCheck)}`);
+                    }
+                  }
                 }
               }
             }

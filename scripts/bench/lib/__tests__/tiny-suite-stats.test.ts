@@ -28,6 +28,7 @@ import { runTinySuite, TINY_PACK_PATH } from "../suites/tiny.ts";
 import { makeScheduleWorld } from "./_schedule-routes.ts";
 import { makeDivisionPhaseWorld } from "./_division-phase.ts";
 import { makeAdvanceRoutesWorld } from "./_advance-routes.ts";
+import { makeOracleRoutesWorld } from "./_oracle-routes.ts";
 
 const silent = pino({ level: "silent" });
 
@@ -76,6 +77,14 @@ function fakeServer(opts: { statsPlayerGranted: boolean }): {
   // baseline assertions this file DOES cover stay green.
   const advanceRoutes = makeAdvanceRoutesWorld({
     getQualifiers: (stageId) => {
+      const divisionId = divisionIdByStageId.get(stageId);
+      return divisionId === undefined ? undefined : schedule.entrantsOfDivision(divisionId);
+    },
+  });
+  // B05 T4 — the runtime oracle's own route, unconditionally reached once
+  // `s-playoff` completes (see `_oracle-routes.ts`'s own header comment).
+  const oracleRoutes = makeOracleRoutesWorld({
+    getRankedEntrantIds: (stageId) => {
       const divisionId = divisionIdByStageId.get(stageId);
       return divisionId === undefined ? undefined : schedule.entrantsOfDivision(divisionId);
     },
@@ -244,6 +253,11 @@ function fakeServer(opts: { statsPlayerGranted: boolean }): {
       // present (see `_advance-routes.ts`'s own header comment).
       const advanced = advanceRoutes.handle(method, path, body);
       if (advanced !== undefined) return advanced;
+      // B05 T4 — the runtime oracle's standings read, unconditionally
+      // whenever `sql` is present (see `_oracle-routes.ts`'s own header
+      // comment).
+      const oracled = oracleRoutes.handle(method, path);
+      if (oracled !== undefined) return oracled;
       // B05 T2 — division B's own streams (`d-badminton`) fold through THIS
       // route unconditionally whenever `sql` is present, same gating as
       // division A's single-event fold below. This suite is not ABOUT the
@@ -354,6 +368,7 @@ describe("runTinySuite — B03 T6b player-stats baseline wiring", () => {
       importTransport: transport,
       startTransport: transport,
       advanceTransport: transport,
+      oracleTransport: transport,
     });
 
     expect(report.gate).toBe("green");
@@ -409,6 +424,7 @@ describe("runTinySuite — B03 T6b player-stats baseline wiring", () => {
       importTransport: transport,
       startTransport: transport,
       advanceTransport: transport,
+      oracleTransport: transport,
     });
 
     expect(report.gate).toBe("green");
