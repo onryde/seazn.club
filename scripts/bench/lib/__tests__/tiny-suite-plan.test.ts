@@ -426,7 +426,6 @@ function fakeServer(opts: {
       }
       const m = /^\/api\/v1\/fixtures\/([^/]+)\/events$/.exec(path);
       if (!m) throw new Error(`fake server: unhandled raw ${method} ${path}`);
-      const fixtureId = m[1]!;
       const { type, payload } = body as { type: string; payload: { target?: unknown } };
       // B05: SCORING IS FREE (owner ruling; V390__scoring_free.sql, and
       // V393__entitlements_v18.sql:63-70 puts `cricket.dls` on `community`),
