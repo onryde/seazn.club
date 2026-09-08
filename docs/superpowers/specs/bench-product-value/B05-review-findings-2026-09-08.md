@@ -122,6 +122,45 @@ narrowed `/stats/players` → `/persons/{id}/stats` assertion in
 `tiny-suite-stats.test.ts` is a narrowing, not a weakening (the baseline oracle
 name and warning still assert the original intent).
 
+### F-T5b-3-1 — a confirmed ban does not keep a player off the team sheet (PRODUCT FINDING, spec §15)
+
+The brief for T5b-3 told the implementer to prove suspension carry with a pair
+this wave had pinned: a lineup PUT naming the banned person 422s
+`ELIGIBILITY_VIOLATION`, and the GET omits them. **That pair does not exist for
+discipline**, and the implementer said so instead of building a test around it.
+Verified independently here: `grep -c -a "suspen"` returns **0** in both
+`apps/web/src/server/usecases/fixtures.ts` and
+`usecases/registration-eligibility.ts`, and `gateRosterEligibility`
+(`registration-eligibility.ts:342`) gates ROSTER eligibility — age and category,
+via `rosterIssues` — with no reference to the suspensions table at all. Every
+reader of that table is a display surface or the stage-rebuild guard.
+
+**So discipline in this product is advisory: a player with an active, confirmed
+ban is accepted onto a team sheet.** The pin in `B05-repins-2026-09-07.md` was
+wrong because it conflated registration eligibility with discipline — the 422 is
+real, it just fires for a different reason than the one it was cited for.
+
+How the suite handles it, which is the right call: it does NOT assert either
+behaviour. It measures what the product actually does per run and reports a
+warning naming the fixture and the live HTTP status. Freezing today's behaviour
+as the expected value is how a live bug gets carried through two sign-offs
+(AGENTS.md failure class 4), and asserting the behaviour the product does not
+have would red every run for a decision nobody has made.
+
+What IS asserted, both directions: the ban is active, sized to
+`missesFixtureExtKeys.length`, stamped on her own entrant, and off exactly the
+named sheets; the eligible team-mate is unbanned and present on all sheets
+including the missed one.
+
+Also pinned while there (`usecases/discipline.ts`), none of it assumed: a
+suspension arrives by three routes — auto (`detectSuspensions` re-folds
+`score_events` through the module's card model, needing `discipline_rules.enabled`
+and a module that HAS a card model, which `generic` does not), the match-report
+bridge, and manual `POST /divisions/{id}/suspensions`. **All three land
+`status:'pending'`; only `PATCH /suspensions/{id}` `{kind:"confirm"}` makes it a
+ban**, and only there are `entrant_id`/`decided_at` stamped. All gated on
+`discipline.enforced`.
+
 ## Corrections to this wave's own documents
 
 - **F1 was too narrow** (fixed `698476409`). The design doc and re-pin record
@@ -151,7 +190,10 @@ spec §7 both forbid filing):
    selects `seq, type, actor_id, created_at` and not `payload`, so the ranks a
    completion computed cannot be re-read by any client that missed the
    response. Worth knowing before a UI tries.
-3. **`event-import.ts` cannot be imported by any non-Next consumer** — it opens
+3. **A confirmed ban does not keep a player off a team sheet** (F-T5b-3-1
+   above). Nothing in the lineup write path reads `suspensions`; discipline is
+   advisory. Whether that is intended is an owner decision, not a bench call.
+4. **`event-import.ts` cannot be imported by any non-Next consumer** — it opens
    `import "server-only"`, a webpack alias with no package behind it, so
    `IMPORT_CAPS` had to be hand-mirrored with a text-diff guard. The same is
    true of `lib/schedule-board.ts` (via `@/lib/zoned-datetime`) for the two
