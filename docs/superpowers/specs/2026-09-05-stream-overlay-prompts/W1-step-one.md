@@ -414,6 +414,28 @@ changes).
   - `?style=bug` renders `ovl-root[data-style="bug"]`; an unknown style falls to
     the sport default; `?lang=fr` renders the French `notStarted` on a scheduled
     fixture (drive the DOM, not the HTML).
+  - **Added 2026-09-08 by T1's close — the `--sport-ink` HAIRLINE. This
+    assertion is not optional and W1 is the wave that owes it.** Owner ruling
+    2026-09-08 ("apply your rec"): **a 1-px `--sport-ink` border on the three
+    discipline card chips and on the live dot**, in BOTH §3's bar and §4's bug
+    (`_THEMES.md:126-141`, `:183-186`, `:219`, `:314`, `:327`). Assert it in the
+    browser on a fixture that renders a card — computed `border-width` is 1px
+    and computed `border-color` resolves to the sport's `--sport-ink`, on the
+    chip AND on `ovl-live-dot`, in both styles. Prefer a football or hockey
+    fixture: those are the two sports whose numbers depend on it.
+
+    **Why it is load-bearing rather than cosmetic.** T1's contrast suite closes
+    two sub-floor WCAG 1.4.11 rows as *covered*, not waived — football's
+    red-card chip measures **2.56** and hockey's live dot **2.75** on their own
+    `board-2` bands, against a floor of 3 — and the element that meets the
+    criterion for both is this hairline (`ink` on `board-2` = 9.46–16.11 across
+    all eleven sports). **No unit test can see it.** `apps/web` vitest is
+    `environment: "node"`; the sweep proves the colour PAIR would work if the
+    border were drawn, and it passes identically when the border is never
+    rendered. If this assertion is not written, both closures are unbacked and
+    two approved themes ship under the accessibility floor with a green suite
+    saying otherwise. Full record: `_INDEX.md` "## 2026-09-08 — T1 wave CLOSED",
+    finding FS-T1f.
   - Added 2026-09-07: **cookie banner** — its testid ABSENT on the overlay and
     PRESENT on the public match page in the same anonymous context (positive
     pair); `context.cookies()` is `[]` after the overlay loads and after one

@@ -1,11 +1,16 @@
 # Stream overlay — resume state
 
 **Read this first.** It says what exists, what is decided, and the next
-action in order. Planning is being redone at programme scope; implementation
-has not started and no file under `apps/web`, `packages` or `db` has been
-touched by this programme.
+action in order.
 
-Last updated: 2026-09-08, planning complete and merged to `main`.
+**Implementation HAS started.** The T1 wave is complete and sits in **PR #752**
+on branch `feat/stream-overlay`: ten commits, four tasks, the first code this
+programme has shipped under `apps/web`. Nothing under `packages` or `db` is
+touched, and no migration exists yet. Anything below that says "no code exists"
+or "docs only" describes the tree before 2026-09-08 and is marked where it
+survives as a prior record.
+
+Last updated: 2026-09-08, **T1 closed and in PR #752**; W1 is next.
 
 ## 2026-09-08 — where things stand (read this block, then the tables)
 
@@ -20,7 +25,10 @@ Last updated: 2026-09-08, planning complete and merged to `main`.
 - **`main` moved under us on 2026-09-08:** desk W3 (#740) and settings W8
   (#744) merged. Consequences recorded in the spec's findings: FS14 —
   `run-sheet-edit-time` is now `desk/run-sheet-row.tsx:407` (was `:377`;
-  the symbol is the authority). Deltas still end at `V399`.
+  the symbol is the authority). ~~Deltas still end at `V399`.~~ **They end at
+  `V400__repair_orphaned_age_cutoff_half.sql` as of later that day** — which is
+  exactly why this programme now reads the tail instead of writing a number
+  down. Do not trust this line either; run the `ls`.
 - **2026-09-08 (later) — spectator W1 MERGED (PR #743, `main` 60c0615b0;
   worktree rebased, HEAD `09f5fa1de`+).** Consequences applied (design FS18):
   the live transport already exists at
@@ -40,16 +48,74 @@ Last updated: 2026-09-08, planning complete and merged to `main`.
   all five plans; FS13 `public_fixtures_v` latest definer is `V369:18`.
 - **Plan review:** `_REVIEW-2026-09-08-plans.md` (reviewer pass over the T1
   plan and the amended W1 plan; fixes applied before the second merge).
-- **NEXT ACTION:** execute `../../plans/2026-09-07-streaming-t1.md` from
-  this worktree with `superpowers:subagent-driven-development` (Opus at
-  minimum per dispatch). Its Task 0 stands the env up (`seazn-env up --label
-  ovl`), installs `node_modules` (fresh worktree has none), records the
-  vitest baseline, and re-checks `ls db/migration/deltas | sort -V | tail`.
-  R1/R2 plans are written one wave ahead, never earlier.
-  **(SUPERSEDED 2026-09-08 — T1 Task 0 has RUN: the env is up, `node_modules`
-  installed, the baseline recorded and the deltas tail re-checked. See
-  "## Environment (label `ovl`, stood up 2026-09-08 …)" below. T1 Task 4 owns
-  rewriting this bullet; it is left in place until then.)**
+- **T1 IS DONE (2026-09-08).** All four tasks executed from
+  `../../plans/2026-09-07-streaming-t1.md`; ten commits on
+  `feat/stream-overlay`, in **PR #752**. Owner picks **1A · 2A · 3A · 4A · 5C**
+  plus the ink-hairline addendum are in `_THEMES.md`; the full close — gate
+  numbers, mutant killer lists, findings, deferred minors — is the
+  "## 2026-09-08 — T1 wave CLOSED (PR-T1 #752)" section of `_INDEX.md`, which is
+  the authority for all of it. (This bullet replaces the "NEXT ACTION: execute
+  the T1 plan" instruction that stood here; Task 4 owned rewriting it and has.)
+- **NEXT ACTION:** see "## THE FIRST THING TO DO NEXT SESSION" below. In short:
+  PR #752's pre-merge e2e (`workflow_dispatch pr=752`) and the owner's
+  per-screen sign-off, then **W1** from
+  `../../plans/2026-09-05-stream-overlay-w1.md` (amended). R1's plan is written
+  after PR1 merges, R2's after the R0 memo — one wave ahead, never earlier.
+
+## T1 — what shipped, and what it handed forward (2026-09-08)
+
+`_INDEX.md`'s "## 2026-09-08 — T1 wave CLOSED (PR-T1 #752)" is the single
+authority for the detail: the ten commits, the gate numbers, the mutant killer
+lists, the findings and the deferred minors. Repeated here only so a resume
+read knows what exists and what is owed.
+
+**Shipped** — `apps/web/src/lib/contrast.ts`,
+`apps/web/src/components/overlay/overlay-tokens.ts` and its eleven-sport
+contrast sweep, `apps/web/e2e/visual/{manifest.ts,manifest.json,seeds.ts,asserts.ts,capture.spec.ts}`,
+`overflowingIn` moved into `apps/web/e2e/helpers.ts`, `visualSeedRoutesSuite` in
+`scripts/smoke.ts`, `docs/runbooks/visual-gate.md`, the T1a sections of
+`_THEMES.md`, and one production fix (`court-card.tsx`, a `min-w-0` on the
+truncate chain). **No migration, no dictionary key, no user-facing string.**
+
+**Gate, on `be36620db`:** full `apps/web` vitest **15543 / 15620 / 4 failed**
+against the baseline's **15121 / 15198 / 4** — **+422 tests, delta failed 0**,
+and the four reds are the baseline's own environmental placement file. Six PNGs,
+all hashes distinct; `mobile.spec.ts` @ mobile-320 **44 / 1 / 0**, the exact
+pre-change witness; spectator walkthroughs **19 / 0**; smoke visual-gate 4/4;
+`tsc` 0; lint 137 warnings / 0 errors, unchanged from baseline.
+
+**One caveat on the seven-width sweep (271 / 1 / 4):** the single red is
+`page smokes: settings save + invoice/plan card render`, a read-modify-write on
+the org name against the SHARED Pro org, raced by running seven width projects
+against ONE local server and database. It is a **run-method artefact** — CI
+matrixes those widths into separate jobs with their own DB — and it is recorded
+as one rather than as a pass. Run the widths one project at a time locally.
+
+**Handed forward, and each will be silently dropped if not carried:**
+
+1. **The `--sport-ink` hairline is an e2e obligation on W1.** Two contrast
+   findings (football's chip at 2.56, hockey's live dot at 2.75) are closed as
+   *covered* rather than waived, and the covering element is a 1-px border that
+   **no node-environment test can see**. If W1's e2e does not assert it, both
+   closures are unbacked. Named in `W1-step-one.md` acceptance.
+2. **`overlay-tokens.ts` owes an e2e and a smoke**, and W1 Task 8's are named as
+   its. The module has no HTTP surface until the overlay route exists.
+3. **`auth: true` and `seed: "none"` must be named as first-use in W1-E's
+   brief** — live harness code no manifest row drives.
+4. **Two `main` findings need an owner and a wave:** `standings-table.tsx:58`
+   (axe SERIOUS, `scrollable-region-focusable`; the fix owes a new string in
+   four locales across three surfaces) and `live-score.tsx:245`, the
+   `truncate`-without-`min-w-0` twin of the `court-card.tsx` fix. **The second
+   was being carried as "on a retired component" — that is wrong.** The
+   `LiveScore` WRAPPER is retired; `LiveScoreBody`, which contains line 245, is
+   mounted at `summary-tab.tsx:58` and `match-centre.tsx:90` and its branch
+   renders whenever `suppressScorebug` is false — cricket on the Summary tab,
+   and the no-document fallback, which passes the prop not at all. What is true
+   is only that no manifest row photographs it. See `_INDEX.md` FS-T1h.
+5. **An owner question for W2's planning:** `_THEMES.md` §5 scopes
+   `dismissal-on-board-2` to the WICKET slab. If W2 widens it to red-card slabs,
+   football measures 2.56 on its own band and the carrier accounting must be
+   re-derived.
 
 ## Environment (label `ovl`, stood up 2026-09-08 from this worktree @ `4ee38278d`)
 
@@ -68,8 +134,11 @@ prior record.
   reporting the server ready. This is the check that tells our cluster apart
   from a squatter's — a `pg_ctl` that failed "Address already in use" is
   followed by a `createdb` that SUCCEEDS against another session's server.
-- Deltas tail on this branch: `V399__stats_player_career_split.sql` (T1 adds
-  none; W1 takes V400/V401)
+- Deltas tail when the env was stood up: `V399__stats_player_career_split.sql`.
+  **That number is already stale** — `main` took `V400__repair_orphaned_age_cutoff_half.sql`
+  later the same day. T1 adds no migration. **No number is reserved for this
+  programme; read the tail yourself** — see the rule under "Where the work
+  lives" below.
 - Baseline (`apps/web`, full, fresh DB, tree = `origin/main` + this branch @
   `4ee38278d`): **passed 15121 / total 15198 / failed 4 / pending 73** — 1182
   test files, 1 failed; `outside-worktree 0` (every `.testResults[].name`
@@ -131,13 +200,30 @@ prior record.
   pointed at the pre-Task-0 `01669d287` — the push is the main session's call.
   The previous directory at that path was an unregistered residue and was
   moved to `.claude/worktrees/stream-overlay.stale-20260907`; the worktree was
-  re-added from the branch. The branch has no PR (docs only).
-- Every commit is documentation, all under `docs/superpowers/`.
-- **No pull request, deliberately.** CI and smoke run on `pull_request`; e2e
-  runs on `push` to `main`. Open the PR when code exists.
-- Deltas on `main` run to `V399__stats_player_career_split.sql`; this
-  programme takes V400 / V401 / V402 and re-checks `ls db/migration/deltas |
-  sort -V | tail` after every rebase.
+  re-added from the branch. ~~The branch has no PR (docs only).~~ **It has one:
+  PR #752**, opened 2026-09-08 once T1 landed code.
+- ~~Every commit is documentation, all under `docs/superpowers/`.~~ **False
+  since T1.** The branch now carries production and test code under `apps/web`
+  (`lib/contrast.ts`, `components/overlay/overlay-tokens.ts`, `e2e/visual/**`,
+  `e2e/helpers.ts`, `court-card.tsx`) plus `scripts/smoke.ts` and
+  `docs/runbooks/visual-gate.md`. Still nothing under `packages/` or `db/`.
+- ~~**No pull request, deliberately.**~~ **PR #752 is open.** The reasoning
+  behind the old bullet still holds and is why the PR waited for code: CI and
+  smoke run on `pull_request`, so a docs-only PR buys nothing. **e2e does NOT
+  run on pull requests** — `.github/workflows/e2e.yml` triggers on push to
+  `main` only, so the ONLY pre-merge e2e signal for #752 is
+  `workflow_dispatch` with `pr=752`. Re-read `e2e.yml` rather than trusting this
+  sentence; that trigger has changed three times in one day before.
+- **Migrations: a RULE, never a reserved number.** This bullet used to read
+  "this programme takes V400 / V401 / V402". `main` took
+  `V400__repair_orphaned_age_cutoff_half.sql` during the T1 wave, so the
+  reservation was already wrong — and renumbering to V401/V402/V403 would just
+  reset the same trap. **Take the next free numbers after
+  `ls db/migration/deltas | sort -V | tail -1`, re-read at every rebase and
+  again immediately before writing the migration file. Never carry a number
+  forward from a document.** A duplicate Flyway version survives a clean rebase
+  with no conflict, which is why the check is at every rebase and not once.
+  T1 adds no migration; **W1 is the first wave here that needs one.**
 
 ## The documents, and what each is for
 
@@ -145,9 +231,9 @@ prior record.
 |---|---|
 | `../2026-09-07-streaming-programme-design.md` | **design of record** (owner-approved 2026-09-07): Tier A rewritten in, T1, credits, Tier B, compositor, R0, testing, plan structure, findings |
 | `../2026-09-05-stream-overlay-design.md` | superseded; kept for the canvas links and the approval record |
-| `_INDEX.md` | decision log, owner rulings verbatim (1–22), false premises, both pinned-symbol tables, the 2026-09-07 section |
+| `_INDEX.md` | decision log, owner rulings verbatim (1–23), false premises, both pinned-symbol tables, the 2026-09-07 section, and **"## 2026-09-08 — T1 wave CLOSED"** — the authority for T1's gate numbers, mutant killer lists, findings and deferred minors |
 | `_RULES.md` | R1–R17 standing rules and the eight merge gates |
-| `_THEMES.md` | binding values at 1920×1080; §3 `bar`, §4 `bug`; T1a adds §4a slate, §8a Phone tab, §8b credits card, decided/void rows |
+| `_THEMES.md` | binding values at 1920×1080; §3 `bar`, §4 `bug`. **T1a LANDED 2026-09-08**: §4a slate, §8a Phone tab, §8b credits card, the decided/void rows, §5's derived slab ink and §2's contrast + ink-hairline rows. It supersedes design §7.6 on the Phone-tab QR floor, and it is the authority `overlay-tokens.ts` parses — a value typed in both places is a finding, not a convenience |
 | `_OPEN-QUESTIONS.md` | the 2026-09-05/06 questions and answers; the design's §12 holds today's open set |
 | `W1-step-one.md`, `W2-moments.md` | the wave prompts (corrected in place by the plan's Task 0) |
 | `../../plans/2026-09-05-stream-overlay-w1.md` | W1 plan, executes as corrected (Task 0 Steps 2–13 → the overlay endpoint) |
@@ -159,20 +245,49 @@ prior record.
 
 ## THE FIRST THING TO DO NEXT SESSION
 
-1. If the four wave prompts (`T1-theme-and-visual-gate.md`, `R0-bench.md`,
-   `R1-relay-core.md`, `R2-compositor.md`) or the T1 plan
-   (`../../plans/2026-09-07-streaming-t1.md`) do not exist: write them from
-   the design (§11 is the table; §9a the patterns every brief must name).
-   Prompts for every wave now; step-level plans one wave ahead only. Do not
-   re-brainstorm; every decision is in the design and in `_INDEX.md` rulings
-   18–22.
-2. If they exist: execute Task 0 from the head of the T1 plan (corpus
-   corrections in place, migration renumbering, Q12 reproduction), then T1 and
-   W1-A/W1-B in parallel, per `superpowers:subagent-driven-development` with
-   `model: opus` per dispatch (owner instruction; the agent frontmatter reads
-   `sonnet`). The R1 plan is written after PR1 merges; the R2 plan after the
-   R0 memo.
-3. Force-push the rebased branch (`/usr/bin/git push --force-with-lease`).
+**Rewritten 2026-09-08 by T1 Task 4.** The two instructions that stood here as
+items 2 and 3 are both dead and are named here so a fresh session does not act
+on a stale copy of this file:
+
+- ~~"execute Task 0 from the head of the T1 plan"~~ — **T1 is DONE**, Task 0
+  included. Re-running it would re-baseline against a tree that has moved and
+  re-do corpus corrections already landed.
+- ~~"Force-push the rebased branch (`git push --force-with-lease`)"~~ — **no
+  force-push is owed, and one would rewrite pushed history.** That instruction
+  survived from a state where the branch carried 24 unpushed docs-only commits;
+  the branch has since been a fast-forward and is pushed. `git push` plainly, or
+  nothing at all.
+
+The live order:
+
+1. **PR #752 (T1).** Two things gate it, and neither is CI-automatic:
+   (a) **pre-merge e2e is `workflow_dispatch` with `pr=752`** — `e2e.yml`
+   triggers on push to `main` only, so opening the PR ran nothing; re-read
+   `e2e.yml` rather than trusting this line. (b) **the owner's per-screen
+   sign-off** — six PNGs and the five T1a picks plus the hairline addendum, one
+   verdict each. "CI green" is not sign-off.
+2. **Then W1**, from `../../plans/2026-09-05-stream-overlay-w1.md` (amended),
+   per `superpowers:subagent-driven-development` with `model: opus` per dispatch
+   (owner instruction; the agent frontmatter reads `sonnet`). W1's task zero
+   owes: a rebase on `main`, the RE-PIN list, and the **migration-number READ**
+   — `ls db/migration/deltas | sort -V | tail -1`; no number is reserved, and
+   **the W1 plan still names `V400`/`V401` on 24 lines including two literal
+   "create this file" steps, while `V400` is already taken on `main`.** Its own
+   renumber guard sits at Step 13, after Steps 6 and 3 have written the files.
+   Correct the plan's numbers at Task 0, in one edit, before any step creates a
+   migration. Full list of the stale locations: `_INDEX.md` FS2. W1's
+   acceptance carries **two obligations T1 handed it**, both recorded in
+   `_INDEX.md`'s T1 close section and in `W1-step-one.md`: the **1-px
+   `--sport-ink` hairline** asserted in e2e (two contrast closures rest on it),
+   and this module's **e2e + smoke**, which W1 Task 8 owns.
+3. **W1-E's brief must name `auth: true` and `seed: "none"` as first-use** —
+   both are live harness code that no manifest row drives today, ruled
+   deliberate on the condition that W1-E names them.
+4. R1's plan is written after PR1 merges; R2's after the R0 memo. W2 stays
+   blocked on its own task-zero RE-PIN.
+5. Two `main` findings need an OWNER and a wave, not a fix here:
+   `standings-table.tsx:58` (axe SERIOUS) and `live-score.tsx:245` (the
+   `truncate` without `min-w-0`). Both are in `_INDEX.md` as FS-T1g / FS-T1h.
 
 ## Decisions, all made (owner's words in `_INDEX.md`)
 

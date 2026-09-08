@@ -52,7 +52,8 @@ Waves:
 | Wave | Scope | State | Plan | Prompt | PR | Gate |
 |---|---|---|---|---|---|---|
 | W1 | Hook extraction (`useLiveFixture`), `overlayModel`, `stream_url` + view + `PUT /stream` + OpenAPI, `streaming.overlay` key, overlay route + theme + three motions, console panel on `FixtureLine` with `sportKey`/`streamingEntitled` threaded from the division page, public "Watch live"/"Replay" link, all four test kinds, smoke, visual gate, inventory | Prompt written; plan in flight; code not started | `plans/2026-09-05-stream-overlay-w1.md` | `W1-step-one.md` | — | `_RULES.md` §Merge gates 1–8; rebase after desk W1 merges; owner per-screen sign-off |
-| T1 | theme design (T1a: slate, Phone tab, credits card, decided/void) + visual gate harness (T1b: `overlay-tokens.ts`, contrast sweep, manifest capture) | plan written 2026-09-07, reviewed 2026-09-08 (63 findings applied); execution started 2026-09-08 | `plans/2026-09-07-streaming-t1.md` | `T1-theme-and-visual-gate.md` | PR-T1 | `_RULES.md` §Merge gates 1–8; owner per-screen sign-off on the T1a picks; the six contrast rows in Task 2 Step 8 resolved by the sheet |
+| T1a | theme design — slate (§4a), Phone tab (§8a), credits card (§8b), decided/void rows, the derived slab ink (§5) and the §2 contrast rows, all into `_THEMES.md` | **done 2026-09-08.** Owner picked **1A · 2A · 3A · 4A · 5C**, plus a separate addendum ruling: the red-card chip and the live dot take a 1-px `--sport-ink` hairline | `plans/2026-09-07-streaming-t1.md` | `T1-theme-and-visual-gate.md` | PR-T1 #752 | `_RULES.md` §Merge gates 1–8; owner per-screen sign-off on the five picks — asked per artboard, five verdicts |
+| T1b | visual gate harness — `lib/contrast.ts`, `components/overlay/overlay-tokens.ts` + the eleven-sport contrast sweep, `e2e/visual/{manifest.ts,manifest.json,seeds.ts,asserts.ts,capture.spec.ts}`, `visualSeedRoutesSuite` in `scripts/smoke.ts`, `docs/runbooks/visual-gate.md`, `overflowingIn` moved to `e2e/helpers.ts`, and the D4 `min-w-0` fix in `court-card.tsx` | **done 2026-09-08.** Manifest ships **two groups, six rows**: `public-fixture` → `fixture-320`, `fixture-320-zoom125`, `fixture-768` (backdrop `dark`), `fixture-1280`; `embed-standings` → `standings-768`, `standings-320`. Six PNGs, all hashes distinct | `plans/2026-09-07-streaming-t1.md` | `T1-theme-and-visual-gate.md` | PR-T1 #752 | `_RULES.md` §Merge gates 1–8. **The plan's "six deliberately red contrast tests as the PR's open finding" did NOT ship** — pick 5C lands the suite green with hockey's 4.46 pinned two-sided. RP owed: `lib/contrast.ts` is a donor tidy — `scorepad/v3/__tests__/contrast.test.ts` still carries its own copy of the same formula, and `scorepad/**` is off-limits to this programme |
 | W2 | `OverlayMoment` + per-sport allowlist, FIFO slab (4 s hold, reduced-motion instant), consent on names, cricket batter/bowler line; source = spectator W1's model or the `score_events` fallback | Prompt written; plan in flight; blocked on spectator W1 merge + RE-PIN | `plans/2026-09-05-stream-overlay-w2-moments.md` | `W2-moments.md` | — | As W1, plus task-zero RE-PIN table in the PR |
 
 ## Owner rulings
@@ -337,8 +338,46 @@ design §13 — this file is their full text.
 
 - **FS1** `cookie-consent.tsx` has NO route-key mechanism (the 09-06 documents
   said it had one) — `localStorage` only, mounted at `app/layout.tsx:68`.
-- **FS2** V399 is taken (`stats_player_career_split`) — programme migrations
-  are V400 / V401 / V402 at rebase.
+- **FS2 — SUPERSEDED 2026-09-08. The migration line is now a RULE, not a
+  number.** This entry used to read "programme migrations are V400 / V401 / V402
+  at rebase". It went stale DURING the T1 wave: `main` took
+  `V400__repair_orphaned_age_cutoff_half.sql`, so the corpus was reserving a
+  number `main` already owned. Renumbering to V401/V402/V403 would only reset
+  the same trap — this corpus has now had a reserved migration number overtaken
+  repeatedly, and a fixed number written in a document cannot survive a branch
+  that lives for days beside a moving `main`.
+
+  **The rule, which replaces every reserved number in this programme:** a
+  programme migration takes the next free numbers after
+  `ls db/migration/deltas | sort -V | tail -1`, re-read **at every rebase** and
+  again immediately before the migration file is written. Never carry a number
+  forward from a document. (A duplicate Flyway version survives a clean rebase
+  with no conflict, which is why the check is at every rebase and not once.)
+  T1 added no migration; **W1 is the first wave in this programme that needs
+  one**, and W1 Task 0 does the read.
+
+  **The stale reservation survives in FIVE more places this wave could not
+  edit, and one of them is the document W1 actually executes from.** Found by
+  sweeping `V40[0-9]` across the corpus at T1 close, 2026-09-08 — the wave's own
+  owed list named only three lines and there were eight. **W1 Task 0 must
+  correct these before Step 6 writes a migration file**, because two of them are
+  a literal filename to create:
+
+  - `plans/2026-09-05-stream-overlay-w1.md` — **24 lines** carry `V400` /
+    `V401`, including `:81-82` (the files-to-create table), `:2156`
+    ("Create `db/migration/deltas/V400__fixture_stream_url.sql`") and `:2533`
+    (the same for `V401`). `V400` is **taken on `main`**. The plan's renumber
+    guard is real but it is at **Step 13**, a post-rebase step that runs long
+    after Steps 6 and 3 have written and committed the files — a guard placed
+    after the thing it guards. Read the deltas tail at Task 0 and rewrite the
+    numbers throughout, in one edit, before any step creates a file.
+  - `../2026-09-07-streaming-programme-design.md:1046` — the FS2 row still
+    reads "this programme takes **V400 / V401 / V402** at rebase"; `:979` — the
+    §11 Task 0 row still records `ls deltas | tail` → V400/V401/V402. Both are
+    `[A]`-class statements in the design of record.
+  - `plans/2026-09-07-streaming-t1.md:22` and `:133` — historical only (T1 is
+    done and added no migration), but they say the same thing and will be read
+    by anyone auditing the wave.
 - **FS3** `.claude/worktrees/stream-overlay` was an unregistered 15 MB residue
   with no `.git`; moved to `stream-overlay.stale-20260907`, worktree re-added.
 - **FS4** desk W2 MERGED (#725); the live contention on `run-sheet-row.tsx` is
@@ -363,10 +402,11 @@ re-sorted, so a reader following the plan finds each where the plan put it.
   `e2e/run-sheet.spec.ts:100 expectRunSheetNotClipped`, is recorded as a tidy
   owed, not touched by T1). The owner is told in the T1 Task 4 sign-off message
   that the prompt's instruction was overruled and why.
-- **FS-T1c** — `SLATE_TOKENS`'s three values are typed in `overlay-tokens.ts`
-  AND in `_THEMES.md` §4a until Task 1 lands §4a and Task 2's contrast test
-  gains a §4a parse (the live-dot parse is the shape); the sheet is the
-  authority.
+- **FS-T1c — CLOSED 2026-09-08.** It read: `SLATE_TOKENS`'s three values are
+  typed in `overlay-tokens.ts` AND in `_THEMES.md` §4a until Task 1 lands §4a
+  and Task 2's contrast test gains a §4a parse. Both happened. Task 2's suite
+  parses §4a out of the sheet and proves the slate values against it, so there
+  is no second typed copy to drift; the sheet remains the authority.
 - **FS-T1d** — the moments slab's `dismissal` tone (`_THEMES.md` §5: background
   `--sport-dismissal`, text `#fff5f5`) cannot clear WCAG 4.5:1 with any single
   fixed ink, because the eleven sports split into light-red and dark-red
@@ -426,8 +466,16 @@ re-sorted, so a reader following the plan finds each where the plan put it.
     palette hex moves, no sport is left undefined, and `overlay-tokens.ts` can
     compute the choice rather than a human maintaining an eleven-row lookup.
 
-  Until the sheet moves, Task 2's contrast suite commits with the six `#fff5f5`
-  reds named.
+  ~~Until the sheet moves, Task 2's contrast suite commits with the six
+  `#fff5f5` reds named.~~ **RESOLVED 2026-09-08 — the owner picked C.** The
+  sheet moved before Task 2 committed, so the six deliberately-red tests the
+  plan expected as this PR's open finding were never written. `_THEMES.md` §5
+  now derives the ink per sport (whichever of `#fff5f5` and that sport's own
+  `board` measures higher against that sport's `dismissal`), `overlay-tokens.ts`
+  computes the choice rather than carrying an eleven-row lookup, and the suite
+  lands **green**: ten of eleven clear 4.5, and hockey's 4.46 is a named
+  two-sided exception pinned `>= 3.0` and `< 4.5`, the same shape
+  `sport-theme.ts:213` already uses. No palette hex moved.
 - **FS-T1e** — a third overflow scan remains at `e2e/run-sheet.spec.ts:100
   expectRunSheetNotClipped` (desk's spec, untouched by T1); tidy owed to
   whichever desk wave next edits that file.
@@ -464,3 +512,370 @@ good with passthroug now"** — passthrough is an INTERNAL MODE, never a tier,
 never priced, never shown as a choice; the organiser sees one "Go live"; the
 system falls back to clean feed with a chip "scorebug unavailable — streaming
 clean". Spec §12 item 2 closed on this ruling.
+
+## 2026-09-08 — T1 wave CLOSED (PR-T1 #752)
+
+First code this programme has shipped. Everything before this section is
+documentation; T1 adds `apps/web/src/lib/contrast.ts`,
+`apps/web/src/components/overlay/overlay-tokens.ts`, the `apps/web/e2e/visual/`
+harness, a smoke suite, a runbook, and ONE production change — `court-card.tsx`
+(+13 −1, of which the behaviour is a single `min-w-0` on the truncate chain; the
+rest is the comment recording why). **No migration, no dictionary key, no
+user-facing string**, so none of the four-locale, OpenAPI or Flyway gates had
+anything to catch.
+
+**Branch** `feat/stream-overlay`, **ten commits**, four tasks, every task
+reviewed to clean:
+
+| Commit | Task | What |
+|---|---|---|
+| `e3ae4c871` | 0 | `ovl` environment, the vitest baseline, the T1 index row and the five `FS-T1*` deviations |
+| `1e4ef04d4` | 1 | T1a — slate, Phone tab, credits card and decided/void values, owner-picked |
+| `46081ef92` | 3 | `overflowingIn` moved out of `mobile.spec.ts` into `e2e/helpers.ts` |
+| `9787b379b` | 3 | manifest-driven capture harness with the owner checklist as assertions (+ the D4 `court-card.tsx` fix) |
+| `3e157f85e` | 2 | `OVERLAY_TOKENS`, the derived slab ink, the eleven-sport contrast sweep |
+| `18e2ad311` | 3 | close four ways the gate could pass on what it exists to fail on |
+| `2e9c8851b` | 2 | one home per value, the eleven keys as a literal, the swatch floors |
+| `2f8886a61` | 1 | T1a addendum — the card chips and live dot take an ink hairline |
+| `db70e9713` | 2 | the ink hairline carries the boundary; the two fills are *covered*, not waived |
+| `be36620db` | 3 | `knownDefects` honoured one check and lied about the other four |
+
+### The owner's decisions (T1a)
+
+Asked as five lettered picks with both/all options drawn at real values on the
+canvas (https://claude.ai/code/artifact/2aebcbde-28ba-45ff-9028-1151873e4901,
+page "T1 — five decisions"). Picked:
+
+| # | Surface | Pick | What it means in the sheet |
+|---|---|---|---|
+| 1 | Slate | **A — full-bleed board** | the club's own colours fill the frame; the score survives a dropout; no second palette (`_THEMES.md` §4a) |
+| 2 | Phone tab | **A — stepper** | a four-step flow someone at the ground can locate themselves in, and support can ask "which step are you on" (§8a) |
+| 3 | Credits card | **A — three tiles** | all three prices on screen; nothing owed to /pricing while streaming is dark (§8b) |
+| 4 | Decided / void frame | **A — result in place** | the post-whistle arrival sees the score AND why it ended, in the frame the live viewer saw; nothing jumps |
+| 5 | Slab ink | **C — split by luminance** | the slab writes in whichever of `#fff5f5` and the sport's own `board` measures higher on that sport's `dismissal` (§5) |
+
+**A sixth ruling, taken separately** (owner: *"apply your rec"*, 2026-09-08):
+**the three discipline card chips and the live dot take a 1-px `--sport-ink`
+hairline**, and it is the hairline — never the fill — that carries the WCAG
+1.4.11 boundary. `_THEMES.md` §2 (`:126-141`), §3 (`:183-186`, `:219`) and §4
+(`:314`, `:327`) are the binding text. **This ruling is what closes two contrast
+findings**, and it creates an e2e obligation recorded below.
+
+### Gate numbers — measured, on tree `be36620db`
+
+- **Full `apps/web` vitest, fresh `ovl` DB:** passed **15543** / total **15620**
+  / failed **4** / pending **73**, across **1185 files**; `outside-worktree 0`.
+  Task 0 baseline was **15121 / 15198 / 4 / 73** across 1182 files →
+  **+422 tests, delta failed 0**.
+- **The four reds are the baseline's own single file**,
+  `apps/web/src/server/usecases/__tests__/schedule-build-honours-locks.test.ts`
+  — the CP-SAT placement service the local `up` was not given (`--placement`).
+  **ENVIRONMENTAL**, not this branch's; identical file and count to the baseline.
+- **Spectator walkthroughs** (`spectator-public.spec.ts` +
+  `spectator-public-2.spec.ts` — the two specs that cover `court-card.tsx`, the
+  one production surface T1 changed): **19 passed, 0 failed.**
+- **`mobile.spec.ts` @ mobile-320, isolated: 44 passed / 1 skipped / 0 failed** —
+  matches the pre-change witness exactly, which is what the `overflowingIn` move
+  is judged against.
+- **Seven-width sweep: 271 passed / 1 failed / 4 skipped.** The one red is
+  `page smokes: settings save + invoice/plan card render` — a
+  read-modify-write on the org name against the SHARED Pro org, raced by running
+  all seven width projects against ONE local server and ONE database.
+  **Recorded as a run-method artefact, not as a pass and not as a defect:** the
+  evidence is that re-running mobile-320 alone returns 44 / 1 / 0, and that CI
+  matrixes the widths into separate jobs with their own database
+  (`e2e-mobile`), so the race has no CI analogue. A reader who wants the number
+  to mean something should re-run the widths one project at a time.
+- `capture.spec.ts` **7 passed**; **6 PNGs written, all six hashes distinct**;
+  smoke visual-gate checks **4 / 4**; `tsc --noEmit` exit 0; lint
+  **`✖ 137 problems (0 errors, 137 warnings)`** — byte-identical to the Task 0
+  baseline, none in T1's files.
+
+### Mutant killer lists — Task 2 (`overlay-tokens.ts`, the contrast sweep)
+
+Three rounds, **0 survivors at the end**. Per round: 19 / 19 (round 1),
+**22 / 22** (fix round 1 — 16 new plus 6 re-runs of the still-relevant
+originals: M3, M5, M6, M7, M12 and the test-side trio M16/M17/M18), **7 / 7**
+(fix round 2). The killers, verbatim:
+
+**Round 1 — `3e157f85e`**
+
+| # | Mutation | Verdict | Named killer |
+|---|---|---|---|
+| M1 | `ROOT.led` `#9ae600` → `#a3e635` (the v3 Tailwind hex `sport-theme.ts` warns about) | KILLED (1) | `ROOT_SPORT_DEFAULTS mirrors globals.css :root exactly › --sport-led` |
+| M2 | `ROOT.led` → the board hex | KILLED (11) | mirror `--sport-led`, **plus** `cricket · led-on-board`, `cricket · led-on-board-2`, `cricket · board-on-led-headline`, `… board-on-led-line`, `generic · …` |
+| M3 | `srgbChannelToLinear` body → `return c / 255` (delete the sRGB curve) | KILLED (106) | `distinguishes gamma-correct from naive-linear luminance (#767676 on white)` + 105 sweep rows |
+| M4 | swap the red and green luminance coefficients | KILLED (44) | `relativeLuminance weights the three primaries as WCAG does › green ≫ red ≫ blue` + 43 sweep rows |
+| M5 | delete `expandHex`'s validation (NaN channels score every pair 1:1) | KILLED (1) | `refuses a value that is not a hex colour rather than scoring it` |
+| M6 | `slabDismissalInkFor` → the superseded fixed `#fff5f5` | KILLED (21) | six `<sport> · slab-ink-on-dismissal` rows + `<sport>'s derived ink and ratio are the ones §5 records` |
+| M7 | invert the derivation (`light <= dark`) — pick the LOWER-contrast candidate | KILLED (36) | eleven `slab-ink-on-dismissal` rows + `%s picks the higher-contrast of the two candidates` |
+| M8a | empty `OVERLAY_PAIR_EXCEPTIONS` | KILLED (2) | `hockey · slab-ink-on-dismissal` (4.46 < 4.5) + `the exception table names hockey's slab row and nothing else` |
+| M8b | move the exception from hockey to tennis | KILLED (3) | `hockey · slab-ink-on-dismissal`, `tennis · slab-ink-on-dismissal` (4.68 is not `< 4.5`), + the exception-table test |
+| M9 | exception `atLeast 3.0/below 4.5` → `2.0/3` (a laxer licence than the floor) | KILLED (2) | `hockey · slab-ink-on-dismissal` + `the exception table…` (`below` must equal the role's floor) |
+| M10 | `OVERLAY_SPORT_KEYS` off `SPORT_PALETTES` (the "short by four" mistake) | KILLED (4, **total 311 → 263**) | `is exactly the sport keys the pad's skin registry names`, `covers the four sports SPORT_PALETTES does not name at all`, `ten of the eleven clear 4.5 outright`, `a role scoped to a subset of sports names a NON-EMPTY subset` |
+| M11 | `paletteFor` ignores the per-sport overrides | KILLED (13) | `paletteFor fills a missing token from the root defaults, never from another sport` + `hockey · slab-ink-on-dismissal` + `the sweep is not vacuous` + eight §5 record rows |
+| M12 | `SLATE.lineInkAlpha` 0.7 → 0.75 (one alpha copied into both) | KILLED (1) | `the line and brand alphas are §4a's own numbers` |
+| M13 | delete the `dismissal-on-board` role row | KILLED (1, **total 311 → 299**) | `the table IS the scope — these exact pairs are gated, by id` |
+| M14 | widen `dismissal-on-board-2` from cricket to every sport | KILLED (1, total 311 → 320) | `football · dismissal-on-board-2` (2.56 < 3) |
+| M15 | `liveDot` `#ef4444` → `#ff0000` | KILLED (1) | `the indicator is the live dot, and the live dot is what §2 names` |
+| M16 | **test-side** — the pair sweep's `role.floor` → `1` | KILLED (1) | `HARNESS SELF-TEST: the sweep's own check refuses a ratio under the floor` |
+| M17 | **test-side** — drop the exception's CEILING (leave a one-sided `>= 3.0`) | KILLED (1) | same harness self-test |
+| M18 | **test-side** — the alpha sweep's `role.floor` → `1` | KILLED (1) | same harness self-test |
+| M19 | `ROOT.board` `#150b36` → `#150b37` (one byte off the alias) | KILLED (1) | `ROOT_SPORT_DEFAULTS mirrors globals.css :root exactly › --sport-board` |
+
+**M16 survived its first run** — 311/311 green with the sweep's floor replaced
+by `1`. It was **converted into a kill, not recorded as a survivor**: the sweep
+body was extracted into `assertPairClearsFloor` / `assertAlphaClearsFloor` and a
+harness self-test drives each with a ratio on both sides of every floor. An
+inline threshold is invisible to its own assertions; extracting it is what gives
+the floor a test.
+
+**Fix round 1 — `2e9c8851b`**
+
+| # | Mutation | Verdict | Killer |
+|---|---|---|---|
+| N1 | drop `"cricket"` from the eleven-key literal | KILLED (total 381→352) | `is exactly the sport keys the pad's skin registry names`, `covers the four sports SPORT_PALETTES does not name at all`, `the sweep is one row per sport per role`, `ten of the eleven clear 4.5 outright` |
+| N2 | add a twelfth key no skin owns | KILLED (total 381→410) | the same registry pin, plus `§5 records a row for every one of the eleven sports` and `kabaddi's derived ink and ratio are the ones §5 records` |
+| N3 | `ROOT_SPORT_DEFAULTS` back to a copy | KILLED | `is the SAME object as DEFAULT_SPORT_PALETTE, not a copy of it` |
+| N4 | `paletteFor` back to a wrapper | KILLED | same |
+| N5 | delete the `live-dot-on-board-2` role | KILLED (381→370) | `the table IS the scope — these exact pairs are gated, at these exact floors`, `the sweep is one row per sport per role`, HARNESS SELF-TEST, and both exception-integrity tests |
+| N6 | `ink-on-board` 4.5 → 3 | KILLED | the id→floor map, `every role names a real token, and its where justifies its floor`, HARNESS SELF-TEST |
+| N7 | `advisory-swatch-on-board-2` 3 → 4.5 (the text floor on a swatch) | KILLED (8) | the id→floor map, the `where`/floor test, and six sweep rows (tennis 3.93, volleyball 4.27, tabletennis 4.34, football 4.43, badminton 4.44, carrom 4.48) |
+| N8 | relabel a GRAPHICAL row as TEXT, keeping floor 3 | KILLED | `every role names a real token, and its where justifies its floor` |
+| N9 | move the football exception to another sport | KILLED (4) | `football · dismissal-swatch-on-board-2`, `volleyball · …`, the exception-list pin, `every exception is a REAL miss` |
+| N10 | launder an `unruled` exception into `ruled` | KILLED | `is exactly these three rows, and the two UNRULED ones are owed to the owner` |
+| N11 | tighten hockey's dot exception past the measured 2.75 | KILLED | `hockey · live-dot-on-board-2`, `every exception is a REAL miss` |
+| N12 | point `SHEET_PATH` at a file that does not exist | KILLED (19 failures; total 381→366, **not** →0) | `both authority documents are readable at the paths this suite resolves` + 18 named §5/§2 tests |
+| N13 | point `GLOBALS_CSS` at a file that does not exist | KILLED (10 failures; total stays 381) | the same named test + all seven `--sport-*` mirror rows |
+| N14 | change `liveDot` to a hex that CLEARS hockey's band (a stale exception) | KILLED (4) | `hockey · live-dot-on-board-2`, `every exception is a REAL miss`, `the two unruled misses measure what the findings say they measure`, the §2 live-dot mirror |
+| N15 | **donor** `DEFAULT_SPORT_PALETTE.led` `#9ae600` → `#a3e635` | KILLED | `…mirrored to globals.css once › --sport-led` |
+| N16 | **donor** `DEFAULT_SPORT_PALETTE.board` `#150b36` → `#150b37` | KILLED | `…mirrored to globals.css once › --sport-board` |
+
+N15/N16 replace M1/M2/M19: after the de-duplication those hexes have exactly ONE
+home, so the old mirror mutants had no needle. Rather than report a hollow kill,
+the one home (`sport-theme.ts`, ship-off-limits) was mutated under a restore
+proven twice — byte comparison against the backup, and an empty
+`git diff --stat` on that path.
+
+**Fix round 2 — `db70e9713`** (the hairline ruling)
+
+| # | Mutation | Verdict | Killer |
+|---|---|---|---|
+| P1 | delete the `ink-hairline-on-board-2` role | KILLED (total 401→390) | `the table IS the scope — these exact pairs are gated, at these exact floors`; `the sweep is one row per sport per role`; **`a COVERED row names the pair that actually meets the criterion, and that pair clears`** |
+| P2 | hairline takes `--sport-board` (the pad's rule wrongly transferred) | KILLED (12) | eleven `<sport> · ink-hairline-on-board-2` rows (1.08–1.33 < 3) + the carrier test |
+| P3 | launder hockey's `covered` row into `ruled` | KILLED | `is exactly these three rows, with the two fills COVERED and nothing left unruled` |
+| P4 | drop football's `coveredBy` | KILLED | `a COVERED row names the pair that actually meets the criterion` |
+| P5 | point `coveredBy` at a carrier on the WRONG ground | KILLED | the same-ground half of that test |
+| P6 | move `dismissal-swatch-on-board-2` to the `board` ground (hiding football's 2.56 again) | KILLED (3) | `football · dismissal-swatch-on-board-2`, the carrier test, `every exception is a REAL miss` |
+| N17 | **donor** hockey's `board-2` `#0a4657` → `#1a6677` | KILLED (13) | `hockey · live-dot-on-board-2`, `hockey · dismissal-swatch-on-board-2`, `every exception is a REAL miss`, `the two covered misses measure what the ruling says they measure`, **and `§2's graphical range table … › --sport-ink 1-px hairline — 9.46 (hockey) to 16.11 (icehockey)`** |
+
+N17 is the one that proves §2's new range block is **not** sheet-checking-sheet:
+its ranges come from the sheet but its ratios are computed from `SPORT_PALETTES`,
+so a palette move reds it and names the sport and the direction.
+
+### Mutant killer list — Task 3 (the visual gate harness)
+
+Three rounds, **23 mutants, 23 killed, no survivors** (the report's own running
+total). Round 1 ran 11 with **2 survivors**; both were killed in fix round 1
+rather than recorded, and round 2's numbering continues round 1's.
+
+**Fix round 1 — `18e2ad311`** (16 run, 16 killed; 19 rows, `8b` replacing round
+1's `8`, which the per-axis rewrite subsumes)
+
+| # | Mutation | KILLER |
+|---|---|---|
+| 1 | `deviceScaleFactor: row.zoom` → `1` | `public-fixture/fixture-320-zoom125: PNG width — deviceScaleFactor did not apply (picture 256px, row declares 320px at zoom 1.25)` |
+| 2 | `differingPairViolations`: `ha === hb` → `false` | unit › `differingPairViolations catches two identical pictures, and a pair that was never photographed` — **round 1's first survivor**, killed once `mustDiffer` became a pure function with a unit killer |
+| 3 | `truncate-chain`: `minWidth !== "0px"` → `!== "auto"` | e2e probe › `truncate-chain: a length cap ends the walk, a percentage cap does not` (+ the fixture rows) |
+| 4 | `expectRailsA11y`: delete the `if (ownTab)` role/name block | e2e probe › `rails-a11y: the tabindex arm and the unreachable arm both fire` — **round 1's second survivor**; it had been *unreached*, not satisfied |
+| 5 | `parseManifest`: delete the duplicate-row throw | unit › `rejects what the harness cannot run, BY NAME` |
+| 6 | `expectNoClip`: drop `reachable(el) \|\|` from the split | `probe-bleed: the bleed split (1 clip + 1 bleed) disagrees with overflowingIn (1 clipped)` |
+| 7 | WCAG-inline predicate `"inline"` → `"block"` | `public-fixture/fixture-320: controls under 44px (kit: … (a) is 111.8x16px — height ×2)` |
+| 8b | off-viewport: `xOk` ignores the horizontal rail | `public-fixture/fixture-320: a tap at the centre reaches something else` |
+| 9 | `groups` loses `.min(1)` | unit › `rejects what the harness cannot run, BY NAME` |
+| 10 | capture loop → `group.rows.slice(0, 1)` | `public-fixture: a PNG is missing` (both groups) |
+| 11 | `MIN_PNG_BYTES` → `10_000_000` | `a PNG under 10000000 bytes is a blank or aborted capture` (both groups) |
+| 12 | `awaitSelector` back to `main h1` | unit › `no row awaits a selector the branded 404 also satisfies` |
+| 13 | bleed accounting `overhang <= attributable + 1` → `attributable >= 0` | e2e probe › `no-clip: a bleeding rail is excused, an overhang it cannot account for is not` |
+| 14 | `isLengthCap` → `v !== "none"` (percentage counts as a bound) | e2e probe › `truncate-chain: a length cap ends the walk, a percentage cap does not` |
+| 15 | `controlSetViolations`: drop the empty-list branch | unit › `controlSetViolations refuses the two ways an equal control set means nothing` |
+| 16 | `knownDefects` wiring returns `[]` for every check | `embed-standings/standings-320: knownDefects records rails-a11y as still broken, but the check now finds nothing — the page was FIXED…` |
+| 17 | exemption accumulator fed an empty list | `public-fixture/fixture-320: the bleeds exemptions the checks made do not match the row's declared exempt.bleeds` |
+| 18 | zod enum custom `error` removed | unit › `rejects what the harness cannot run, BY NAME` |
+| 19 | checks/knownDefects overlap guard removed | unit › `rejects what the harness cannot run, BY NAME` |
+
+**Fix round 2 — `be36620db`** (7 new, 7 killed)
+
+| # | Mutation | KILLER |
+|---|---|---|
+| 20 | `KNOWN_DEFECT_CHECKS` widened to every `VISUAL_CHECK` | unit › `knownDefects refuses a check the harness cannot re-run without asserting` |
+| 21 | `manifest.json` declares a second offender that is not present | `embed-standings/standings-320: the rails-a11y offenders no longer match the ones this row records…` — proves the comparison is a SET, not "non-empty" |
+| 22 | `EXEMPT_KINDS` hardcoded again, dropping `offscreen` | `public-fixture/fixture-320: a check returned exemption kind "offscreen", which no manifest row can declare` |
+| 23 | `ExemptShape` back to `z.object` (non-strict) | unit › `refuses a misspelt exempt kind instead of silently dropping it` |
+| 24 | the final anti-vacuity block HOISTED above the capture loop | `public-fixture: a PNG under 1024 bytes is a blank or aborted capture` (both groups) — **the mutant an earlier round had declared did not exist** |
+| 25 | `offenderIds.push(identity)` → `push("div")` (attribution lost) | e2e probe › `rails-a11y: the tabindex arm and the unreachable arm both fire` |
+| 26 | bare-heading guard back to `/^(main )?h[1-6]$/` | unit › `no row awaits a selector the branded 404 also satisfies` |
+
+`numTotalTests` was pinned as well as failures on every round of both tasks — a
+mutant that breaks collection shrinks the total and reads as a survivor if only
+`numFailedTests` is watched. Two of Task 2's round-1 mutants did exactly that.
+
+### T1 findings
+
+**FS-T1f — the two sub-floor contrast rows are CLOSED as *covered*, and the
+closure rests on an obligation W1 owes.** Football's red-card chip measures
+**2.56** and hockey's live dot **2.75** on their own `board-2` bands, both under
+the WCAG 1.4.11 floor of 3, both on **already-approved §3/§4 themes** that T1
+did not design. They are not waived. The owner's hairline ruling makes the 1-px
+`--sport-ink` border the element that meets the criterion (9.46–16.11 across all
+eleven sports), and `overlay-tokens.ts` encodes this as `status: "covered"` with
+a `coveredBy` the test holds to three conditions: the carrier must EXIST, must
+clear its own floor for that sport, and must sit on the SAME ground as the pair
+it covers. Both numbers stay asserted two-sided at their measured values.
+
+> **The e2e obligation, stated exactly, and it belongs to W1: a 1-px
+> `--sport-ink` border on the three discipline card chips and on the live dot,
+> in both §3's bar and §4's bug, asserted in W1's e2e.** No unit test can see
+> it — `apps/web` vitest is `environment: "node"`, and the contrast sweep proves
+> the colour PAIR would work if the border were drawn, never that it IS drawn.
+> `ink` on `board-2` at 9.46–16.11 against a floor of 3 passes identically when
+> the hairline is never rendered. **If W1 does not assert it, both closures
+> above are unbacked.** The obligation is written into `W1-step-one.md`'s
+> acceptance as well as here, because a closure recorded in only one document is
+> a closure nobody is assigned.
+
+**FS-T1g — `standings-table.tsx:58` is an axe SERIOUS finding on `main`, and it
+needs an owner.** `<div className="overflow-x-auto rounded-xl …">` has no
+`tabindex="0"`, no `role`, no accessible name — and in the embed it contains no
+focusable child either, so axe's `scrollable-region-focusable` applies at
+SERIOUS impact. The harness reported `div 364px in 294px: not keyboard-reachable
+(no tabindex=0, no focusable child)` at 320. This is AGENTS.md recurring class
+23, exactly the case the standing rule exists for. **T1 was barred from fixing
+it and did not:** `StandingsTable` renders on the public site, the embed and the
+console, so an accessible name is a new user-facing string owed in all four
+locale dictionaries across three surfaces with visual sign-off on each — a wave,
+not a line in a test task, and the "fix inline unless blast radius" rule saying
+route it. It is encoded as a self-retiring `knownDefects` entry on the
+`standings-320` row, so **the day it is fixed that row goes red and tells the
+fixer to restore `rails-a11y` to its `checks`**. Nothing schedules the fix.
+**Needs an owner and a wave.**
+
+**FS-T1h — `live-score.tsx:245` carries the identical `truncate`-without-`min-w-0`
+defect that D4 fixed at `court-card.tsx`.** Same span, same row-flex parent. It
+was on T1's do-not-touch list and is recorded, not fixed. **Needs an owner.**
+
+**Correction, recorded at T1 close — this finding was being carried with a
+premise that does not hold, and it is worse than it was written.** Task 3's
+report and the wave's owed list both justified leaving it with "`<LiveScore>` is
+retired, so no photographed route renders it". Only the first half is true, and
+the two halves are about different symbols. Read at close, 2026-09-08:
+
+- The **wrapper** `LiveScore` is genuinely retired — `live-score.tsx` exports
+  only `LiveScoreBody` (and the `LiveFixtureData` type), and the fixture page
+  records the retirement at `fixtures/[fixtureId]/page.tsx:5,286`.
+- The **body** is very much alive. `LiveScoreBody` is mounted in production at
+  `match-centre/summary-tab.tsx:58` and `match-centre/match-centre.tsx:90`.
+- Line 245 sits inside the `{suppressScorebug ? null : (…)}` branch opened at
+  `live-score.tsx:194` — so it renders whenever `suppressScorebug` is false.
+  `summary-tab.tsx:75` passes `suppressScorebug={!cricket}`, i.e. **false for
+  cricket**; `match-centre.tsx:90` passes the prop **not at all**, so it takes
+  the `= false` default at `:110` — that is the no-`match_centre`-document
+  fallback path.
+
+So this is **not dormant code**. It is a live truncate chain missing its
+`min-w-0` on at least the cricket Summary tab and the fallback render — the
+exact class that put 106 px of horizontal overflow on a page at 320–390 in the
+phone-composition wave, visible only with a realistic long entrant name and only
+in a browser. What is true is narrower and is all Task 3 could claim: **no row
+in T1's visual manifest photographs it** (the manifest seeds a football fixture),
+so the gate cannot see it — which is why it will sit there, not evidence that it
+is harmless. **Whoever takes this must settle it by driving the product at 320
+with a long cricket entrant name, not by reading either document** — this entry
+is a code read, and a read is not a run. Recorded in
+`docs/runbooks/visual-gate.md` and here.
+
+**FS-T1i — `dismissal-on-board-2` is scoped to the WICKET slab, and W2 may widen
+it.** `_THEMES.md` §5 grants the LED-takes-dismissal behaviour to the wicket
+slab only. **If W2 extends that treatment to red-card slabs, football measures
+2.56 on its own band** and the covered/carrier accounting above has to be
+re-derived for the new pair. This is an owner question for W2's planning, not
+for T1, and it must be asked before W2 paints a red-card slab.
+
+**FS-T1j — `court-card.tsx` ships with NO pre-merge test.** The D4 fix (a
+`min-w-0` on the truncate chain) is a production change on a `main` page. Its
+only regression witness is the visual gate — and `.github/workflows/e2e.yml`
+triggers on push to `main` only, never on pull requests. So the change is
+covered **after** merge, not before. "Every change ships a test that fails
+without it" is TRUE here and still does not mean pre-merge coverage. The only
+pre-merge e2e path this repo has is `workflow_dispatch` with `pr=<n>`, and it
+must be run against PR-T1 before merge. Locally the two spectator walkthroughs
+that cover the surface were run and returned 19 passed / 0 failed.
+
+**FS-T1k — `auth: true` and `seed: "none"` are inert by ruling, and W1-E's brief
+must name them as first-use.** Both are consumed by real harness code
+(`capture.spec.ts`'s `storageState`, `seeds.ts`'s `case "none"`) but **no
+manifest row declares either**, so neither is driven today. Ruled deliberate
+rather than fixed: driving them now means inventing a manifest row that
+photographs a page nobody needs, and a row that exists only to exercise the
+harness is the kind of row that later reads as coverage. Both fail loudly at
+context creation if wrong. **The condition of that ruling is that W1-E's brief
+names both as first-use** — otherwise they reach that wave unexercised and
+unremembered, which is the inert-seam class (recurring class 1) with a ruling
+attached.
+
+**RE-PIN outcomes.** Every brief pin held. Task 2: `sport-theme.ts:77-79`
+(`SPORT_TOKENS` / `SportToken` / `SportPalette`), `:165` (`SPORT_PALETTES`),
+`globals.css:1135-1141` (the seven `:root --sport-*`), `registry.ts:85`
+(`V3_SKINS`) — all exact. `SPORT_PALETTES` has **nine** entries and `V3_SKINS`
+**eleven**; the four `V3_SKINS` names with no palette entry (cricket, generic,
+boardgame, carrom) are precisely the ones a palette-driven sweep would miss and
+the ones that reversed FS-T1d's conclusion. `_THEMES.md` §5's eleven-row table
+and §2's fifteen panel ratios reproduce exactly from the palettes. **No false
+premise was found beyond the one the dispatch had already superseded.**
+
+### Deferred minors — triaged, none blocking, each named so it is not re-found
+
+- Task 0: the Step 8(a) re-pin check **sits exactly at its floor** (8 against
+  ≥ 8) — no margin, so a later edit that drops one re-pin line takes it below
+  its floor silently.
+- Task 1: §2's "every pair" claim vs the unlisted `text-purple-500` icon
+  (`#ad46ff` on white = 4.12:1 — it PASSES the applicable 3:1 non-text floor and
+  fails the 4.5 the paragraph implies; same shape for `border-purple-500` on
+  §8b's 5-pack tile and the 6-px `bg-red-500` pill dot). §8's `copy button` row
+  still carries Tailwind **v3** hexes (`#e9d5ff`, `#7e22ce`) against the
+  installed 4.3.1's `#e9d4ff` / `#8200db` — declared out of T1's scope by the
+  sheet itself. §4a's `ended` Line says "`resultMsg`'s full sentence" with no
+  fallback for the null-outcome case this wave newly established.
+- Task 2: the `covered` carrier check omits `carrier.floor >= coveredRole.floor`
+  (both are floor 3 today, so it cannot bite yet). Aliasing widens an unfrozen
+  shared-object hazard from the pad into the overlay — `Object.freeze` on the
+  donor is the right repair and `scorepad/**` is off-limits this wave. The
+  eleven-key literal's "alphabetical" comment asserts nothing, since both sides
+  of the comparison are sorted.
+- Task 3: `ExemptSchema`'s `.default()` is a hand-written tuple and zod 4.4.3
+  does **not** re-parse defaults, so a fourth `exempt` kind would be missing
+  from every row that omits `exempt` (fail-closed today; one line —
+  `.prefault({})`). **`standings-320` records `offenders: ["div"]`, an identity
+  with no discriminator** — set equality catches a COUNT change but not a
+  SUBSTITUTION, so if that rail is fixed and a different bare-`div` rail on the
+  embed becomes unreachable, the row passes green while BOTH the fix and the new
+  defect go unreported; this is the same attribution gap the probe rails were
+  given `data-testid`s to close in that very commit. `offenderIds`' JSDoc says
+  "DISTINCT" where the code deliberately does not dedupe (the behaviour is
+  right; the comment describes away the property the comparison depends on).
+- Out of scope, recorded: `checks` defaults to `[]`, so a later wave could
+  append a row listing `rails-a11y` in **neither** `checks` nor `knownDefects`
+  and get no rail assertion at all. All six current rows do one or the other; no
+  unit test holds that invariant.
+
+### What T1 does NOT prove
+
+Stated plainly so no later wave reads the green suite as more than it is.
+`overlay-tokens.ts` has **no HTTP surface** until the overlay route exists, so
+T1 carries **no e2e and no smoke of its own for the token module** — those are
+named in W1 Task 8's acceptance as this module's, and that naming is the whole
+of the debt's record. The contrast sweep proves colour PAIRS, never that any
+pixel is painted. The visual gate photographs `main` pages, not overlay pages,
+because no overlay page exists yet. And no migration, dictionary key or
+user-facing string was added, so none of the four-locale, OpenAPI or Flyway
+gates had anything to catch.
