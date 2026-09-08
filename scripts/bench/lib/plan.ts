@@ -74,6 +74,36 @@ export interface PlanEntitlementRow {
 }
 
 /**
+ * The plan key an org with no subscription row coalesces to —
+ * `apps/web/src/lib/entitlements.ts:70` ("Falls back to 'community' plan when
+ * no subscription row exists"), and :103's own `isPaidPlan` boundary.
+ *
+ * Hardcoded, unlike every plan key in this file, and deliberately: this is
+ * not "which plan grants X" (derived from the matrix at call time, see the
+ * header) but the identity of the free tier itself, which has exactly one
+ * source of truth and no query that could derive it. A bench asking "is this
+ * feature still behind a paywall for a customer who never paid" has to name
+ * the tier that customer is on.
+ */
+export const FREE_PLAN_KEY = "community";
+
+/**
+ * Whether `featureKey`'s live rows still put it BEHIND A PAYWALL for an org
+ * on the free tier: the free plan does not grant it, and some other plan
+ * does.
+ *
+ * Both halves matter. Without the first, a key every plan grants reads as
+ * gated; without the second, a key NO plan grants (dead, or deleted from the
+ * matrix like V390's fidelity keys) reads as gated when in truth there is
+ * nothing to sell and nothing to refuse for. Derived from the rows, never
+ * from a list of "paid features" typed into a bench — that list is exactly
+ * what went stale when scoring went free.
+ */
+export function paywalledOnFreePlan(rows: readonly PlanEntitlementRow[]): boolean {
+  return !planGrants(rows, FREE_PLAN_KEY) && rows.some((r) => r.bool_value === true && r.plan_key !== FREE_PLAN_KEY);
+}
+
+/**
  * B03 T7 FIX (this task): everything `chooseGrantingPlan` /
  * `chooseGrantingPlanForCapabilities` need to know about a candidate plan
  * BEYOND whether it grants the one feature being asked about — `plans` (V101
@@ -301,10 +331,22 @@ function publicGrantorsLeastPrivilegedFirst(
  *      because that plan also happens to grant it. A tie in privilege breaks
  *      lexicographically by `plan_key`, same determinism precedent this
  *      function has always used — deterministic, never DB order, but no
- *      longer an ACCIDENT: today's real catalog (community=false, pro=true
- *      for `cricket.dls`) has exactly one public grantor, so this rule picks
- *      "pro" because it is the only candidate, not because of how its name
- *      sorts.
+ *      longer an ACCIDENT.
+ *
+ * STALE PROSE CORRECTED 2026-09-08 (B05). This paragraph used to read
+ * "today's real catalog (community=false, pro=true for `cricket.dls`) has
+ * exactly one public grantor, so this rule picks 'pro' because it is the
+ * only candidate" — describing `cricket.dls` as Pro-gated. It is not, and
+ * has not been since `V393__entitlements_v18.sql:63-70` put it on
+ * `community` (`bool_value = true`), which is deliberate: SCORING IS FREE by
+ * owner ruling (V390__scoring_free.sql, ruling 2026-08-30; restated
+ * 2026-09-08, "we made all scoring is free"). `community` is therefore a
+ * public, privilege-0 grantor of `cricket.dls` and sorts FIRST here — which
+ * is correct and load-bearing: `chooseGrantingPlanForCapabilities` walks
+ * past it only because it satisfies no OTHER capability the run asked for.
+ * A single-capability caller asking about `cricket.dls` alone would now get
+ * "community" back, which is the right answer to the question it asked.
+ * Do not "restore" a DLS paywall on the strength of an old comment.
  *
  * Derived from whatever the target actually has — nothing here assumes a
  * specific plan_key exists; a target where a plan is renamed, retired, or
