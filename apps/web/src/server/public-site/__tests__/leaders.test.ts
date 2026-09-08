@@ -462,6 +462,48 @@ describe("toLeaderInputRows", () => {
     expect(out!.name).toBe("Arun K.");
   });
 
+  it("SAFEGUARDING: a SINGLE-TOKEN name in a youth division is still flagged masked", () => {
+    // `maskOne` returns a one-token name unchanged, so the resolver's output
+    // equals its input and a `name !== full_name` test reads "not masked".
+    // The rendered name is genuinely identical either way — what the flag
+    // actually gates is the player-page LINK, and that page carries the
+    // photo and the cross-division stat block a youth division is masking
+    // names to avoid. So the flag must follow the POLICY, not the string.
+    const [out] = toLeaderInputRows(
+      [snapshot({ full_name: "Ronaldinho", consent: { public_name: true } })],
+      [{ id: "d1", youth: true, player_name_display: null }],
+      new Map(),
+    );
+    expect(out!.name).toBe("Ronaldinho");
+    expect(out!.masked).toBe(true);
+  });
+
+  it("SAFEGUARDING: the masked flag survives into the board, withholding the link", () => {
+    // The end-to-end consequence, so the two halves cannot drift apart: a
+    // one-token youth player has a public profile and must still get no link.
+    const [input] = toLeaderInputRows(
+      [snapshot({ full_name: "Ronaldinho", stats: { runs: 7 } })],
+      [{ id: "d1", youth: true, player_name_display: null }],
+      new Map(),
+    );
+    const boards = buildLeaderBoards({
+      ...args([]),
+      rows: [{ ...input!, publicProfile: true }],
+    });
+    expect(boards[0]!.rows[0]!.person.name).toBe("Ronaldinho");
+    expect(boards[0]!.rows[0]!.personHref).toBeNull();
+  });
+
+  it("a single-token name with NO masking policy is not flagged masked", () => {
+    // The positive pair — otherwise `masked: true` everywhere would pass.
+    const [out] = toLeaderInputRows(
+      [snapshot({ full_name: "Ronaldinho" })],
+      OPEN_DIVISION,
+      new Map(),
+    );
+    expect(out!.masked).toBe(false);
+  });
+
   it("CONSENT: a division set to first_initial masks a person who never opted out", () => {
     // The division axis on its own, with youth false and consent granted —
     // the only case that fails if `player_name_display` is dropped on the way

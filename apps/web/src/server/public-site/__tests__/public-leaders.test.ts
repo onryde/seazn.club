@@ -119,7 +119,23 @@ describe("readLeaderRows — shape and wiring (no database)", () => {
     const { sql: stub, calls } = stubSql([]);
     await readLeaderRows(stub, [OPEN]);
     expect(calls[0]!.text).toContain("player_stat_snapshots");
-    expect(calls[0]!.text).toContain("public_divisions_v");
+  });
+
+  it("gates visibility with an INNER join on public_divisions_v", async () => {
+    // Anchored, not a substring. `toContain("public_divisions_v")` passes on
+    // its own inversion: weakening this to a LEFT join removes the gate
+    // entirely — every snapshot row comes back, with the division columns
+    // null — while the substring is still present. That mutant survived the
+    // whole suite in review. The gate is an INNER join or it is not a gate.
+    //
+    // This is a string assertion standing in for a behavioural one. The real
+    // proof is the private-competition test in the DB half below; this exists
+    // so the boundary is not left completely unguarded on a run without a
+    // database, which is every local run and every non-`smoke-db` CI job.
+    const { sql: stub, calls } = stubSql([]);
+    await readLeaderRows(stub, [OPEN]);
+    expect(calls[0]!.text).toMatch(/\n\s*join public_divisions_v d on d\.id = ps\.division_id/);
+    expect(calls[0]!.text).not.toMatch(/(left|right|full|cross)\s+join\s+public_divisions_v/i);
   });
 
   it("folds a row end to end, with the entrant name through the shared masking pass", async () => {
@@ -413,6 +429,23 @@ describe.skipIf(!HAS_DB)("readLeaderRows against real Postgres", () => {
       variant_key: "score",
       config: DIVISION_CONFIG,
     });
+    // The entrant membership is REQUIRED for `publicProfile` below, not
+    // decoration. The live `public_players_v` (V350:54-70, which supersedes
+    // the V307 the brief cited) gates on three things, not one: public_name
+    // consent, `merged_into is null`, AND an entrant_members row reaching a
+    // public/unlisted competition through an entrant whose status is
+    // registered or confirmed. Without this seed the person is absent from
+    // the view and the assertion below is false by construction.
+    await createEntrants(auth, division.id, [
+      {
+        kind: "individual",
+        display_name: "Priya Sharma",
+        seed: 1,
+        members: [
+          { person_id: personId, squad_number: null, default_position_key: null, is_captain: true, roles: [] },
+        ],
+      },
+    ]);
     await seedSnapshot(division.id, personId, { runs: 21 });
 
     const [row] = await readLeaderRows(sql, [{ id: division.id, youth: true, player_name_display: null }]);
@@ -421,5 +454,42 @@ describe.skipIf(!HAS_DB)("readLeaderRows against real Postgres", () => {
     // Still in public_players_v — a profile exists; the LINK decision belongs
     // to buildLeaderBoards, which withholds it for a masked person.
     expect(row!.publicProfile).toBe(true);
+  });
+
+  it("SAFEGUARDING: a single-token youth name is masked, so no player-page link is offered", async () => {
+    // The one-token case against the REAL view and the REAL resolver: the
+    // rendered name is identical either way (masking a single token returns
+    // it unchanged), so only the `masked` flag — and the link it gates —
+    // can carry the safeguarding decision.
+    const { auth, orgId } = await seedOrg();
+    const personId = await seedPerson(orgId, "Ronaldinho", { public_name: true });
+    const competition = await createCompetition(auth, {
+      ends_on: "2030-12-31",
+      name: "Youth Cup Single",
+      visibility: "public",
+      branding: {},
+    });
+    const division = await createDivision(auth, competition.id, {
+      name: "U12",
+      sport_key: "generic",
+      variant_key: "score",
+      config: DIVISION_CONFIG,
+    });
+    await createEntrants(auth, division.id, [
+      {
+        kind: "individual",
+        display_name: "Ronaldinho",
+        seed: 1,
+        members: [
+          { person_id: personId, squad_number: null, default_position_key: null, is_captain: true, roles: [] },
+        ],
+      },
+    ]);
+    await seedSnapshot(division.id, personId, { runs: 7 });
+
+    const [row] = await readLeaderRows(sql, [{ id: division.id, youth: true, player_name_display: null }]);
+    expect(row!.name).toBe("Ronaldinho");
+    expect(row!.publicProfile).toBe(true);
+    expect(row!.masked).toBe(true);
   });
 });

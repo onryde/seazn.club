@@ -17,11 +17,19 @@
 // That function re-folds EVERY `score_event` in a division on every call — its
 // `throughSeq` is a running count of events folded, not a resume point — so
 // calling it per division on a public page render makes a spectator's page
-// load O(all events ever scored in the competition). Keeping
-// `player_stat_snapshots` fresh is the scoring WRITE's job; this surface reads
-// what the write left behind. A hub whose boards lag a live fixture by a few
-// seconds is the correct trade; re-folding a season's ledger to close that gap
-// is not.
+// load O(all events ever scored in the competition). Re-folding a season's
+// ledger on a spectator render is not a trade worth making, and `data.ts`'s
+// public player card already reads this table without recomputing.
+//
+// Be clear about what that costs, though, because it is NOT "a few seconds of
+// lag". `player_stat_snapshots` is a recompute-on-read cache with NO
+// score-write hook: `recomputePlayerStats` is its only writer, and it runs
+// only when something asks for stats — `divisionPlayerStats` (console stats
+// route), `publicDivisionStats` (public stats route), a person merge, or the
+// weekly news-digest sweep. A division nobody has opened stats for, and no
+// digest has covered, holds ZERO rows, and this reader correctly returns
+// nothing for it. Who keeps the snapshot fresh is an open question for the
+// wave; this module deliberately does not answer it by recomputing.
 // ---------------------------------------------------------------------------
 import postgres from "postgres";
 import { maskPublicEntrantNames } from "./data";

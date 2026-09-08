@@ -23,13 +23,23 @@
 // 2. The snapshot is READ, never recomputed. `recomputePlayerStats` re-folds
 //    every `score_event` in a division on every call (its `throughSeq` is a
 //    running count, not a resume point), so calling it per division on a
-//    public page render is O(all events) on a spectator's page load. Keeping
-//    `player_stat_snapshots` fresh is the scoring WRITE's job; this surface
-//    reads what the write left behind.
+//    public page render is O(all events) on a spectator's page load.
+//
+//    What that table is NOT is a projection the scoring write maintains.
+//    There is no score-write hook: `recomputePlayerStats` is its only writer
+//    and runs only when something asks for stats — the console and public
+//    stats endpoints (`divisionPlayerStats`, `publicDivisionStats`), a person
+//    merge, or the weekly news-digest sweep. So a division nobody has opened
+//    stats for, and no digest has covered, holds ZERO rows and yields NO
+//    boards here; where rows exist they are as fresh as the last such call,
+//    not as fresh as the live fixture. Not recomputing on a spectator render
+//    is still right — `data.ts`'s public player card reads the same table the
+//    same way — but who refreshes it is an open question for the wave, not
+//    something this module settles.
 // ---------------------------------------------------------------------------
 import type { PlayerStatsModel } from "@seazn/engine/stats";
 import { resolveEntrantBadge } from "@/lib/entrant-badge";
-import { resolvePersonDisplayName } from "@/lib/name-display";
+import { resolveNameDisplay, resolvePersonDisplayName } from "@/lib/name-display";
 import type { LeaderBoardT } from "./competition-hub-schema";
 import type { DivisionConsentCtx } from "./public-lineups";
 
@@ -270,18 +280,30 @@ export function toLeaderInputRows(
     // resolve against, and guessing one would be guessing at consent.
     if (division === undefined) continue;
 
-    const name = resolvePersonDisplayName(
-      row.full_name,
-      row.consent,
-      division.player_name_display ?? null,
-      division.youth ?? false,
-    );
+    const setting = division.player_name_display ?? null;
+    const youth = division.youth ?? false;
+    const name = resolvePersonDisplayName(row.full_name, row.consent, setting, youth);
+
+    // `masked` follows the POLICY, not whether the string changed.
+    //
+    // The obvious `name !== row.full_name` (which `readPublicLineups` uses)
+    // is wrong here: `maskOne` returns a SINGLE-TOKEN name unchanged, so a
+    // one-word name resolves to itself and reads as unmasked. In W1 that flag
+    // drives nothing, but here it gates `personHref` — so a minor in a youth
+    // division with a one-token name would be handed a link to a player page
+    // carrying their photo and cross-division stats, which is the exact
+    // outcome the division's masking policy exists to prevent. The name
+    // string leaks nothing extra in that case; the LINK does.
+    //
+    // Reads the same two axes in the same order as `resolvePersonDisplayName`
+    // itself, through its own exported helper — not a second resolver.
+    const masked = row.consent?.public_name === false || resolveNameDisplay(setting, youth) !== "full";
 
     out.push({
       divisionId: row.division_id,
       personId: row.person_id,
       name,
-      masked: name !== row.full_name,
+      masked,
       publicProfile: row.public_profile,
       entrantName: row.entrant_id === null ? null : (entrantNames.get(row.entrant_id) ?? null),
       badgeUrl: resolveEntrantBadge({
