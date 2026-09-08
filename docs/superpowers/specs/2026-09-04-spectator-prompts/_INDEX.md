@@ -3,7 +3,7 @@
 Decision log and session status. Read `_RULES.md` beside this file first.
 
 - **Design of record:** `../2026-09-04-spectator-surface-design.md`
-- **Plans:** W1 `../../plans/2026-09-04-spectator-w1-match-centre.md` (20 tasks — 17–18 added by ruling 12, 19–20 by the band-2 findings; EXECUTING, gate remaining) · W2 `../../plans/2026-09-05-spectator-w2-competition-landing.md` (DRAFT, 19 tasks) · W3 `../../plans/2026-09-05-spectator-w3-poster.md` (DRAFT, 10 tasks) · W4 `../../plans/2026-09-05-spectator-w4-gallery.md` (DRAFT, 12 tasks) · W5 `../../plans/2026-09-05-spectator-w5-public-team-page.md` (CANDIDATE DRAFT, 9 tasks). W2–W5 were drafted 2026-09-05 in parallel with W1 by planning agents on the owner's request ("write all waves"); every one is DRAFT until re-pinned after the wave before it merges. Each wave prompt carries a `## Plan` section with the owner questions and the product-owner recommendation.
+- **Plans:** W1 `../../plans/2026-09-04-spectator-w1-match-centre.md` (20 tasks — 17–18 added by ruling 12, 19–20 by the band-2 findings; MERGED 2026-09-08, PR #743) · W2 `../../plans/2026-09-05-spectator-w2-competition-landing.md` (DRAFT, 19 tasks) · W3 `../../plans/2026-09-05-spectator-w3-poster.md` (DRAFT, 10 tasks) · W4 `../../plans/2026-09-05-spectator-w4-gallery.md` (DRAFT, 12 tasks) · W5 `../../plans/2026-09-05-spectator-w5-public-team-page.md` (CANDIDATE DRAFT, 9 tasks). W2–W5 were drafted 2026-09-05 in parallel with W1 by planning agents on the owner's request ("write all waves"); every one is DRAFT until re-pinned after the wave before it merges. Each wave prompt carries a `## Plan` section with the owner questions and the product-owner recommendation.
 - **Design system:** `_DESIGN.md` (tokens cited from the tree, W1's built vocabulary, per-wave themes with one memorable thing each, anti-patterns, R11 checklist; proposed items P1–P12 await an owner ruling). Visual theme sheet: https://claude.ai/code/artifact/45c81708-095d-458c-b49f-b471e2901415
 - **Design artifacts — read these before designing any wave.** Every wave prompt's
   `## Design theme` section cites the first one; the rest live only here, so a session that
@@ -36,7 +36,7 @@ Decision log and session status. Read `_RULES.md` beside this file first.
 | Wave | Scope | State |
 | --- | --- | --- |
 | W0 | Prod-build capture of every existing public page at 320/375/768/1280; current-state block II; two mockup options each for match centre and poster (+ football and tennis boards); pick | **Done 2026-09-05.** Canvas: https://claude.ai/code/artifact/f745adf2-fd1f-4f14-9184-ba6f0eb41978 · plain view: https://claude.ai/code/artifact/e7ced691-6978-4036-8f20-cd134b5cfca5 · picks: match centre A, poster A — owner-confirmed, for every sport |
-| W1 | Match centre for EVERY sport: engine cricket scorecard fold, ledger Timeline + Sets/Periods for the other sports, view model in the public fixture JSON, Summary/Scorecard/Commentary/Timeline/Sets/Info tabs by sport and tier, live transport carries the model, i18n, walkthrough v1 | **Executing** (subagent-driven), gate remaining. Tasks 1–20 complete, reviewed and on `feat/spectator-surface` (including 8b, 14b–14d, 15b and the 16a cosmetic round); 16c (cosmetics C7–C10) in flight; then Task 16's gate — full suites, the seven-width `mobile.spec.ts`, the walkthrough project, smoke, and an R11 per-screen verdict table written into the design doc — then the whole-branch review. NO PR until the owner says so. See `_STATE.md` for the live position. |
+| W1 | Match centre for EVERY sport: engine cricket scorecard fold, ledger Timeline + Sets/Periods for the other sports, view model in the public fixture JSON, Summary/Scorecard/Commentary/Timeline/Sets/Info tabs by sport and tier, live transport carries the model, i18n, walkthrough v1 | **MERGED** 2026-09-08 — PR #743, merge commit `60c0615b0`. Tasks 1–20 all shipped (8b, 14b–14d, 15b, the 16a and 16c cosmetic rounds, Task 16's gate, the whole-branch review). e2e green across all seven widths; CI could not give a verdict (GitHub-hosted runners were dead account-wide that morning — 0 steps, no runner allocated), so its six dead jobs were reproduced locally on the merged tree, all green. Three CI gates the branch reddened were fixed first, one of them a genuine gate defect (`git grep -a` matching random bytes in our new screenshots). Review dispositions: `W1-whole-branch-review-findings.md`. Three items deliberately carried out of W1 — see `_STATE.md`, which has the live position. |
 | W2 | Competition landing rail (Overview · Matches · Table · Stats · Teams · Gallery slot · Info), division + player pages for the phone, i18n sweep, walkthrough v2 | Plan DRAFT 2026-09-05 (19 tasks); 3 owner questions in `W2-landing.md`; not started |
 | W3 | Match poster `poster.png` feed + story, upcoming/live/result, real crests, sponsor strip, download + native share, walkthrough v3 | Plan DRAFT 2026-09-05 (10 tasks); 3 owner questions in `W3-poster.md`; not started |
 | W4 | Gallery: `gallery_photos`, storage bucket, staff upload from the public page with media-consent gate, Gallery tab + Photos strip, walkthrough v4 | Plan DRAFT 2026-09-05 (12 tasks); 6 owner questions in `W4-gallery.md` (consent data cannot express "declined" today); not started |
@@ -86,6 +86,54 @@ peer session as the other.
     (2026-09-05.) Standing rule R10 in the spec and `_RULES.md`: every public
     surface showing a match in play updates in place over the existing
     transport; proven by posting an event while the anonymous page is open.
+14. **"A is fine"** (2026-09-08) — the pad attribution picker, on the three
+    options put to the owner at 320 px
+    (<https://claude.ai/code/artifact/0e442f4d-ea6d-4398-a819-afae4e18f0fa>).
+    **Option A: group a person picker's candidates under a side heading.**
+    Closes the first of the three items carried out of W1. Built on
+    `feat/pad-attribution-side-groups` (`e36f08131`), with the chip-clipping
+    defect that sign-off exposed fixed beside it (`41dde9c19`).
+15. **"apply your rec"** (2026-09-08) — the four open W2 questions, ruled as
+    recommended. Each is the recommendation from `W2-landing.md` §Plan and
+    `_DESIGN.md` P1, adopted verbatim:
+    1. **Testid prefix `mh-*`** (the spec's own), not the `cl-*` an
+       orchestrator dispatch said in error. No rename anywhere.
+    2. **Leaders: count leaders in W2, plus ONE additive engine
+       `leaderboards` declaration for ratio leaders.** The plan's premise —
+       "minimum-balls floor read from the module's metric spec" — is FALSE;
+       `PlayerStatsModel` declares neither a floor nor a leaderboard. So W2
+       ships counts (runs, wickets, sixes; goals, assists) pinned to declared
+       keys, and one engine task in the ruling-12 pattern adds the declaration
+       that ratio leaders (strike rate, economy) need. Value: the leaders board
+       is headline cricheroes-grade content and a count-only board reads as
+       half a feature.
+    3. **Org-home liveness is POLL-ONLY** — a small public `…/orgs/{slug}/live`
+       endpoint polled by an island. Realtime would need a channel per division
+       per competition, which is not proportionate to a chip on a hub page.
+       R10 is satisfied: the page updates in place, without reload.
+    4. **Entrant colour fallback is `lib/division-hue.ts`'s wheel.** W3 does
+       NOT add a second FNV hash over `BRAND_PALETTE`.
+
+       The prompts framed this as "two authorities for one fact"; reading both
+       files shows that framing is wrong, and the correction matters because
+       the obvious ruling ("withdraw `BRAND_PALETTE`") would have deleted a
+       shipped, tested helper doing a different job.
+       `lib/brand-palette.ts` is a PICKER MENU — ten curated swatches, each
+       pinned to survive `resolvePublicTheme`'s 3:1 guard, plus `swatchName()`
+       to name a stored hex back to the organiser. It has no keying function
+       and cannot answer "what colour does THIS entrant get". `division-hue.ts`
+       is a DERIVATION — FNV-1a over an id into twelve hues that skip the brand
+       violet's 260–290° band, with `divisionAccent`/`divisionTint`/
+       `divisionInk`/`monogram` already paired for contrast. Only the second is
+       a fallback generator. So `BRAND_PALETTE` keeps its own job untouched;
+       what is dropped is W3's PROPOSAL to bolt a new FNV hash onto it
+       (`W3-poster.md:200-201`), which would have been a second derivation for
+       the one fact.
+
+       Note at build time: the wheel's functions are all named `division*` and
+       will be keyed on ENTRANT ids here (any string hashes the same). Alias or
+       rename at the call site rather than leaving `divisionAccent(entrantId)`
+       reading as a bug.
 
 ## Product-owner calls made in-session (mine, recorded so they can be reversed)
 

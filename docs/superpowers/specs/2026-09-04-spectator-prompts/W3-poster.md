@@ -196,10 +196,20 @@ the ground is the organiser's court colour for every sport.
    planned, `tileColour` always takes the fallback branch, its unit tests pass on their own
    fixtures, and the poster ships with no real team colour in it. Same root as W2's
    conflict 1 and W5's P6; **one ruling settles all three**.
-2. **Two authorities for the fallback colour.** `_DESIGN.md` P1 rung 2 says the existing
-   `lib/division-hue.ts` wheel keyed on the entrant id; the plan defines its own
-   `BRAND_PALETTE` + FNV hash (`…-w3-poster.md:955-962`). Same job, two tables, and they
-   will drift the moment one is edited.
+2. ~~**Two authorities for the fallback colour.**~~ **RULED 2026-09-08: use
+   `lib/division-hue.ts`'s wheel; do NOT add the `BRAND_PALETTE` + FNV hash this plan
+   proposes (`…-w3-poster.md:955-962`).** The "two authorities" wording here was itself
+   a false premise — corrected by opening both files at ruling time.
+   `lib/brand-palette.ts:13-24` is not this plan's table and is not a competitor: it
+   ships today as the organiser's PICKER menu (ten curated swatches, each pinned to
+   clear the 3:1 guard, plus `swatchName()` to name a stored hex back), and it carries
+   no keying function, so it cannot answer "what colour does THIS entrant get".
+   `division-hue.ts` is the only derivation of the two — FNV-1a over an id into twelve
+   hues that skip the brand violet's 260–290° band, with `divisionAccent`/`divisionTint`/
+   `divisionInk`/`monogram` already paired for contrast. So nothing is withdrawn from
+   the tree; only this plan's PROPOSAL to bolt a second hash onto the picker list is
+   dropped. At build time alias the `division*` helpers at the call site — they are
+   keyed on ENTRANT ids here, and `divisionAccent(entrantId)` otherwise reads as a bug.
 3. **The contrast guard is measured against the wrong surface.** `tileColour` gates on
    `resolvePublicTheme(primary)`, which tests 3:1 against **white**
    (`lib/public-theme.ts:77`). The tile lands on the `#231738` court ground, so a club's
