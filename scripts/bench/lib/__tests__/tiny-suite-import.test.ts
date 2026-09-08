@@ -411,13 +411,21 @@ describe("runTinySuite — B05 T2 division-B stream fold wiring", () => {
       ]),
     );
     // `_tiny.json`'s division B (`d-badminton`) declares ONE stream with 76
-    // events. Asserted against what the pack ACTUALLY sent, never a constant
-    // typed into this test a second time.
+    // events. B05 T5a added a THIRD streamed division (`d-tiebreak`, 3
+    // streams of 2 events each — 6 total), which the SAME "every OTHER
+    // division" import fold covers with no code change (`lib/suites/
+    // tiny.ts`'s own comment: "grouped by divisionRef... so a future pack
+    // adding a third streamed division folds it too") — so this now sends
+    // TWO import POSTs, one per division, never re-grouped into one.
+    // Asserted against what the pack ACTUALLY sent, never a constant typed
+    // into this test a second time.
     const calls2 = importPostCalls(calls);
-    expect(calls2).toHaveLength(1);
-    const sentStreams = (calls2[0]!.body as { streams: { events: unknown[] }[] }).streams;
-    expect(sentStreams).toHaveLength(1);
-    expect(sentStreams[0]!.events).toHaveLength(76);
+    expect(calls2).toHaveLength(2);
+    const eventCounts = calls2
+      .map((c) => (c.body as { streams: { events: unknown[] }[] }).streams)
+      .map((streams) => streams.reduce((sum, st) => sum + st.events.length, 0))
+      .sort((a, b) => a - b);
+    expect(eventCounts).toEqual([6, 76]);
     // `/start` happens BEFORE the import POST — never the other way around.
     const firstStartIdx = calls.findIndex((c) => c.method === "POST" && /\/start$/.test(c.path));
     const firstImportIdx = calls.findIndex((c) => c.method === "POST" && /\/events\/import$/.test(c.path));
@@ -425,8 +433,8 @@ describe("runTinySuite — B05 T2 division-B stream fold wiring", () => {
     expect(firstImportIdx).toBeGreaterThan(firstStartIdx);
 
     expect(report.importSimulation).toBeDefined();
-    expect(report.importSimulation?.eventsSent).toBe(76);
-    expect(report.importSimulation?.chunks).toBe(1);
+    expect(report.importSimulation?.eventsSent).toBe(82);
+    expect(report.importSimulation?.chunks).toBe(2);
     expect(report.importSimulation?.findings ?? []).toHaveLength(0);
     expect(report.timings.importMs).toBeDefined();
   });
@@ -473,12 +481,17 @@ describe("runTinySuite — B05 T2 division-B stream fold wiring", () => {
 
     expect(report.gate).toBe("red");
     expect((report.errors ?? []).some((e) => e.includes("import.concurrent"))).toBe(true);
-    expect(report.importSimulation?.findings).toHaveLength(1);
-    expect(report.importSimulation?.findings?.[0]).toMatchObject({ kind: "call_refused", code: "import.concurrent", status: 409 });
+    // B05 T5a — the knob refuses EVERY `/events/import` call unconditionally,
+    // and there are now TWO (d-badminton, d-tiebreak — the same "every OTHER
+    // division" fold the test above names), so both refuse.
+    expect(report.importSimulation?.findings).toHaveLength(2);
+    for (const finding of report.importSimulation?.findings ?? []) {
+      expect(finding).toMatchObject({ kind: "call_refused", code: "import.concurrent", status: 409 });
+    }
     expect(report.importSimulation?.eventsSent).toBe(0);
 
-    // Never retried: exactly one import POST for the one chunk this run
-    // needed.
-    expect(importPostCalls(calls)).toHaveLength(1);
+    // Never retried: exactly one import POST per division, for the one
+    // chunk each division's own streams needed.
+    expect(importPostCalls(calls)).toHaveLength(2);
   });
 });

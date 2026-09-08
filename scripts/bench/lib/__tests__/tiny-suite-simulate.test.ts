@@ -591,16 +591,37 @@ describe("runTinySuite — B05 T1 division-A stream fold wiring", () => {
     // import fold). If (false)-ing out either T4b block removes its four
     // entries from this list — the wiring-level regression this task owes.
     const runtimeOracles = (report.oracles ?? []).filter((o) => o.name.startsWith("oracle:"));
+    // B05 T5a — the tie-order cascade oracle (reviewer MAJOR #2: this
+    // comparator had no call site anywhere) is wired right after EACH
+    // table's own standings check, so it interleaves one-per-table rather
+    // than trailing the whole list. `d-tiebreak`'s own pair (echo/golf) is
+    // genuinely tied on points and genuinely checked (not skipped); d-tiny
+    // and d-badminton's tables carry no tied rows, so their own cascade
+    // entries report `checkedPairs: 0` but still run — removing the block
+    // (`if (false)`) drops all THREE from this list, which is the wiring
+    // regression this task owes.
     expect(runtimeOracles.map((o) => o.name)).toEqual([
       "oracle: d-tiny/s-league standings table",
+      "oracle: d-tiny/s-league tie-order cascade",
       "oracle: d-badminton/s-badminton-league standings table",
+      "oracle: d-badminton/s-badminton-league tie-order cascade",
+      "oracle: d-tiebreak/s-tiebreak-league standings table",
+      "oracle: d-tiebreak/s-tiebreak-league tie-order cascade",
       "oracle: d-tiny leaderboard (scores)",
       "oracle: d-tiny leaderboard (points)",
       "oracle: s-playoff rank crossing (captured vs standings)",
       "oracle: s-playoff standings rank vs expected.finalRanks",
       "oracle: d-tiny champion",
     ]);
-    expect(runtimeOracles.map((o) => o.passed)).toEqual([true, true, true, true, true, true, true]);
+    expect(runtimeOracles.map((o) => o.passed)).toEqual([
+      true, true, true, true, true, true, true, true, true, true, true,
+    ]);
+    // The genuinely tied pair (echo/golf) was actually CHECKED, not merely
+    // present-and-skipped — the whole point of an ordering-differential
+    // fixture (a case with nothing tied would report checkedPairs: 0 here
+    // too, and could never witness a reversed cascade).
+    const tiebreakCascade = runtimeOracles.find((o) => o.name === "oracle: d-tiebreak/s-tiebreak-league tie-order cascade");
+    expect(tiebreakCascade?.detail).toContain("1 checked");
   });
 
   // B05 T4b — D6, MOVED ONTO THE WIRED PATH (the re-pin's own instruction:
@@ -704,15 +725,19 @@ describe("runTinySuite — B05 T1 division-A stream fold wiring", () => {
     });
 
     const tableOracles = (report.oracles ?? []).filter((o) => o.name.endsWith("standings table"));
+    // B05 T5a added a THIRD table (`d-tiebreak`'s own), untouched by this
+    // knob just like d-tiny's — the knob only hollows out d-badminton's.
     expect(tableOracles.map((o) => o.name)).toEqual([
       "oracle: d-tiny/s-league standings table",
       "oracle: d-badminton/s-badminton-league standings table",
+      "oracle: d-tiebreak/s-tiebreak-league standings table",
     ]);
-    // d-tiny's own table is UNTOUCHED by this knob — only d-badminton's
-    // fetch was hollowed out — so the two entries must disagree with each
-    // other, never both red (which would suggest the knob leaked) or both
-    // green (which would suggest the empty case was silently ignored).
-    expect(tableOracles.map((o) => o.passed)).toEqual([true, false]);
+    // d-tiny's and d-tiebreak's own tables are UNTOUCHED by this knob —
+    // only d-badminton's fetch was hollowed out — so the middle entry must
+    // disagree with its neighbours, never all three red (which would
+    // suggest the knob leaked) or all three green (which would suggest the
+    // empty case was silently ignored).
+    expect(tableOracles.map((o) => o.passed)).toEqual([true, false, true]);
     expect(report.gate).toBe("red");
     expect((report.errors ?? []).some((e) => e.includes("d-badminton/s-badminton-league"))).toBe(true);
   });

@@ -45,6 +45,11 @@ interface FullStandingsRowLike {
   readonly drawn: number;
   readonly lost: number;
   readonly points: number;
+  /** B05 T5a — `d-tiebreak`'s own tied rows need `diff`/`for` to give the
+   *  tie-order cascade oracle a real subject; d-tiny/d-badminton's rows
+   *  never tie and so never needed one. Optional so those two branches stay
+   *  untouched. */
+  readonly metrics?: Record<string, number>;
 }
 
 interface DivisionPlayerStatsLike {
@@ -80,6 +85,24 @@ export function tinyLeagueTableRows(
     return [
       { entrantId: rank1, played: 1, won: 1, drawn: 0, lost: 0, points: 2 },
       { entrantId: rank2, played: 1, won: 0, drawn: 0, lost: 1, points: 0 },
+    ];
+  }
+  // B05 T5a — `d-tiebreak`'s own THREE entrants (echo/foxtrot/golf), the
+  // tie-order-cascade oracle's genuine subject: echo and golf tie on
+  // points (4 each); echo's `diff` (+3) beats golf's (+1), but golf's
+  // `for` (10) beats echo's (4) — see build-packs/_tiny.ts's own header
+  // comment on `d-tiebreak` for the full arithmetic. `entrantIdsRankOrder`
+  // here is CREATION order (echo, foxtrot, golf — `schedule.
+  // entrantsOfDivision`'s own convention, same as the two branches above),
+  // never rank order, so this branch reindexes into the REAL rank order
+  // (echo, golf, foxtrot) itself rather than asking every caller to.
+  if (stageName === "Tiebreak League") {
+    const [echo, foxtrot, golf] = entrantIdsRankOrder;
+    if (echo === undefined || foxtrot === undefined || golf === undefined) return undefined;
+    return [
+      { entrantId: echo, played: 2, won: 1, drawn: 1, lost: 0, points: 4, metrics: { for: 4, against: 1, diff: 3 } },
+      { entrantId: golf, played: 2, won: 1, drawn: 1, lost: 0, points: 4, metrics: { for: 10, against: 9, diff: 1 } },
+      { entrantId: foxtrot, played: 2, won: 0, drawn: 0, lost: 2, points: 0, metrics: { for: 8, against: 12, diff: -4 } },
     ];
   }
   return undefined;

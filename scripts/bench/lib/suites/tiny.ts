@@ -188,6 +188,7 @@ import {
   compareLeaderboard,
   compareRankCrossings,
   compareStandings,
+  compareTieOrderCascade,
   fetchDivisionPlayerStats,
   fetchStandings,
   renderChampionMismatch,
@@ -2570,6 +2571,42 @@ export async function runTinySuite(
             `oracle: ${table.divisionRef}/${table.stageRef}: live standings disagree with the pack's ` +
               `expected.tables row — ${renderStandingsMismatch(tableCheck)}`,
           );
+        }
+
+        // B05 T5a — the tie-order cascade oracle (design doc §3, oracle.ts's
+        // `compareTieOrderCascade`): reviewer MAJOR #2 — this comparator had
+        // no call site anywhere. Wired into the SAME loop, reusing the SAME
+        // already-fetched `standingsWire.rows` above (no second fetch, no
+        // second route), against the DIVISION's own declared `tiebreakers`
+        // — never a hardcoded order, per the comparator's own doc comment.
+        // `d-tiebreak`'s own table (B05 T5a) is what makes this reachable
+        // with a genuine ordering-differential tie; d-tiny/d-badminton's
+        // tables carry no tied rows, so this runs for them too but always
+        // reports `checkedPairs: 0`.
+        const tableDivision = pack.divisions.find((d) => d.ref === table.divisionRef);
+        if (tableDivision?.tiebreakers === undefined) {
+          warnings.push(
+            `oracle: division "${table.divisionRef}" declares no tiebreakers — tie-order cascade oracle ` +
+              `skipped for "${table.stageRef}"`,
+          );
+        } else {
+          const cascade = tableDivision.tiebreakers;
+          const cascadeCheck = compareTieOrderCascade(cascade, standingsWire.rows);
+          oracles.push({
+            name: `oracle: ${table.divisionRef}/${table.stageRef} tie-order cascade`,
+            passed: cascadeCheck.matched,
+            detail: cascadeCheck.matched
+              ? `live order agrees with cascade [${cascade.join(",")}] on every tied pair ` +
+                `(${cascadeCheck.checkedPairs} checked, ${cascadeCheck.skippedPairs} skipped)`
+              : cascadeCheck.issues.map((i) => i.detail).join("; "),
+          });
+          log.info({ kind: "tie_order_cascade", passed: cascadeCheck.matched }, "oracle_checked");
+          if (!cascadeCheck.matched) {
+            errors.push(
+              `oracle: ${table.divisionRef}/${table.stageRef}: live order disagrees with the division's own ` +
+                `cascade [${cascade.join(",")}] — ${cascadeCheck.issues.map((i) => i.detail).join("; ")}`,
+            );
+          }
         }
       }
     }
