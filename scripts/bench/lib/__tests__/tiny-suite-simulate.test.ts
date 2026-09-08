@@ -59,6 +59,12 @@ function fakeServer(
      *  response: with this set, the captured response still says
      *  [e-alpha, e-bravo] but the re-read standings say the opposite. */
     wrongFinalStandingsOrder?: boolean;
+    /** B05 T4b regression — `GET /stages/{id}/standings` answers `d-badminton`'s
+     *  own league table with ZERO rows (as if nothing ever folded into it),
+     *  proving `compareStandings`'s empty-case discipline through the WIRING:
+     *  an empty `actual` against a non-empty `expected.tables` row must red,
+     *  never vacuously pass. */
+    emptyBadmintonStandings?: boolean;
   } = {},
 ): {
   transport: ProbeTransport;
@@ -142,6 +148,7 @@ function fakeServer(
       const divisionId = divisionIdByStageId.get(stageId);
       const stageName = stageNameById.get(stageId);
       if (divisionId === undefined || stageName === undefined) return undefined;
+      if (opts.emptyBadmintonStandings === true && stageName === "Badminton League") return [];
       return tinyLeagueTableRows(stageName, schedule.entrantsOfDivision(divisionId));
     },
     // B05 T4b/D6 — a LIVE tally of `generic.score` events actually posted to
@@ -646,6 +653,50 @@ describe("runTinySuite — B05 T1 division-A stream fold wiring", () => {
     expect(leaderboardOracles.map((o) => o.passed)).toEqual([false, false]);
     expect(report.gate).toBe("red");
     expect((report.errors ?? []).some((e) => e.includes("d-tiny/scores") || e.includes("leaderboard"))).toBe(true);
+  });
+
+  // B05 T4b — `compareStandings`'s empty-case discipline ("an empty rows
+  // array must not vacuously satisfy the comparison"), proven through the
+  // WIRING: `d-badminton`'s own `GET /stages/{id}/standings` answers ZERO
+  // rows (as if its fold never happened), against a non-empty
+  // `expected.tables` row. `oracle.test.ts`'s own unit tests already prove
+  // `compareStandings` itself does this ("the EMPTY set is checked
+  // explicitly" — empty vs empty matches, empty actual vs non-empty
+  // expected reds); this proves the WIRED path reaches that same discipline
+  // rather than short-circuiting past it (e.g. skipping the comparison
+  // entirely for a stage with no rows).
+  it("B05 T4b — an EMPTY standings table reds the wired comparator, never vacuously", async () => {
+    const { transport, sql } = fakeServer({ emptyBadmintonStandings: true });
+
+    const report = await runTinySuite({
+      base: "http://bench.example",
+      engine: "optimized",
+      keep: false,
+      log: silent,
+      cliEntry: "admin",
+      packPath: TINY_PACK_PATH,
+      transport,
+      sql,
+      probeTransport: transport,
+      simTransport: transport,
+      importTransport: transport,
+      startTransport: transport,
+      advanceTransport: transport,
+      oracleTransport: transport,
+    });
+
+    const tableOracles = (report.oracles ?? []).filter((o) => o.name.endsWith("standings table"));
+    expect(tableOracles.map((o) => o.name)).toEqual([
+      "oracle: d-tiny/s-league standings table",
+      "oracle: d-badminton/s-badminton-league standings table",
+    ]);
+    // d-tiny's own table is UNTOUCHED by this knob — only d-badminton's
+    // fetch was hollowed out — so the two entries must disagree with each
+    // other, never both red (which would suggest the knob leaked) or both
+    // green (which would suggest the empty case was silently ignored).
+    expect(tableOracles.map((o) => o.passed)).toEqual([true, false]);
+    expect(report.gate).toBe("red");
+    expect((report.errors ?? []).some((e) => e.includes("d-badminton/s-badminton-league"))).toBe(true);
   });
 
   it("B05 T4 — the runtime oracle is a REAL wire read, not an inert restatement: a reversed re-read standings order reds the run", async () => {
