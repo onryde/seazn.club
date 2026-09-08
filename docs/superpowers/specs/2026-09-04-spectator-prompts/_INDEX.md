@@ -86,6 +86,54 @@ peer session as the other.
     (2026-09-05.) Standing rule R10 in the spec and `_RULES.md`: every public
     surface showing a match in play updates in place over the existing
     transport; proven by posting an event while the anonymous page is open.
+14. **"A is fine"** (2026-09-08) — the pad attribution picker, on the three
+    options put to the owner at 320 px
+    (<https://claude.ai/code/artifact/0e442f4d-ea6d-4398-a819-afae4e18f0fa>).
+    **Option A: group a person picker's candidates under a side heading.**
+    Closes the first of the three items carried out of W1. Built on
+    `feat/pad-attribution-side-groups` (`e36f08131`), with the chip-clipping
+    defect that sign-off exposed fixed beside it (`41dde9c19`).
+15. **"apply your rec"** (2026-09-08) — the four open W2 questions, ruled as
+    recommended. Each is the recommendation from `W2-landing.md` §Plan and
+    `_DESIGN.md` P1, adopted verbatim:
+    1. **Testid prefix `mh-*`** (the spec's own), not the `cl-*` an
+       orchestrator dispatch said in error. No rename anywhere.
+    2. **Leaders: count leaders in W2, plus ONE additive engine
+       `leaderboards` declaration for ratio leaders.** The plan's premise —
+       "minimum-balls floor read from the module's metric spec" — is FALSE;
+       `PlayerStatsModel` declares neither a floor nor a leaderboard. So W2
+       ships counts (runs, wickets, sixes; goals, assists) pinned to declared
+       keys, and one engine task in the ruling-12 pattern adds the declaration
+       that ratio leaders (strike rate, economy) need. Value: the leaders board
+       is headline cricheroes-grade content and a count-only board reads as
+       half a feature.
+    3. **Org-home liveness is POLL-ONLY** — a small public `…/orgs/{slug}/live`
+       endpoint polled by an island. Realtime would need a channel per division
+       per competition, which is not proportionate to a chip on a hub page.
+       R10 is satisfied: the page updates in place, without reload.
+    4. **Entrant colour fallback is `lib/division-hue.ts`'s wheel.** W3 does
+       NOT add a second FNV hash over `BRAND_PALETTE`.
+
+       The prompts framed this as "two authorities for one fact"; reading both
+       files shows that framing is wrong, and the correction matters because
+       the obvious ruling ("withdraw `BRAND_PALETTE`") would have deleted a
+       shipped, tested helper doing a different job.
+       `lib/brand-palette.ts` is a PICKER MENU — ten curated swatches, each
+       pinned to survive `resolvePublicTheme`'s 3:1 guard, plus `swatchName()`
+       to name a stored hex back to the organiser. It has no keying function
+       and cannot answer "what colour does THIS entrant get". `division-hue.ts`
+       is a DERIVATION — FNV-1a over an id into twelve hues that skip the brand
+       violet's 260–290° band, with `divisionAccent`/`divisionTint`/
+       `divisionInk`/`monogram` already paired for contrast. Only the second is
+       a fallback generator. So `BRAND_PALETTE` keeps its own job untouched;
+       what is dropped is W3's PROPOSAL to bolt a new FNV hash onto it
+       (`W3-poster.md:200-201`), which would have been a second derivation for
+       the one fact.
+
+       Note at build time: the wheel's functions are all named `division*` and
+       will be keyed on ENTRANT ids here (any string hashes the same). Alias or
+       rename at the call site rather than leaving `divisionAccent(entrantId)`
+       reading as a bug.
 
 ## Product-owner calls made in-session (mine, recorded so they can be reversed)
 

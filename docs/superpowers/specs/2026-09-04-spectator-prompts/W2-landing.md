@@ -82,19 +82,32 @@ As W1. `_INDEX.md` status updated in the same PR.
   island + layout · 16 English sweep · 17 walkthrough v2 + mobile + smoke · 18 gates /
   R11 / index · 19 optional TabRail fold). Status DRAFT until W1 merges and premises
   P1–P20 (listed in the plan) are re-pinned.
-- **Owner questions, with the product-owner recommendation:**
+- **Owner questions — ALL FOUR RULED 2026-09-08 ("apply your rec"), each as
+  recommended. `_INDEX.md` ruling 15 is the record; these are no longer open.**
   1. Testid prefix — spec R7 and this prompt say `mh-*`; an orchestrator dispatch said
-     `cl-*` in error. **Recommend `mh-*`** (the spec); no rename.
+     `cl-*` in error. **RULED: `mh-*`** (the spec); no rename.
   2. Leaders — scope item 5 says "minimum-balls floor read from the module's metric
      spec": a **false premise** — `PlayerStatsModel` (`packages/engine` `stats.ts:106`)
-     declares no floor and no leaderboard. **Recommend:** ship count leaders (runs,
-     wickets, sixes; goals, assists) pinned to declared keys in W2, AND permit one
+     declares no floor and no leaderboard. **RULED:** ship count leaders (runs,
+     wickets, sixes; goals, assists) pinned to declared keys in W2, AND one
      additive engine `leaderboards` declaration for ratio leaders (strike rate,
      economy) — the leaders board is headline cricheroes-grade value; cost is one
-     engine task in the ruling-12 pattern.
+     engine task in the ruling-12 pattern. **Re-verify the `stats.ts:106` pin
+     against merged `main` before building** — that line was read on 2026-09-05
+     and W1 has landed since.
   3. Org-home liveness (R10) — the plan adds a small public `…/orgs/{slug}/live`
      endpoint polled by an island; Realtime would need a channel per division for
-     every competition. **Recommend poll-only** for the org home.
+     every competition. **RULED: poll-only** for the org home.
+  4. Entrant colour fallback. **RULED: `lib/division-hue.ts`'s wheel; W3 does not
+     add a second FNV hash over `BRAND_PALETTE`.** The "two authorities" framing
+     below (and in `W3-poster.md:200-201`) is itself a FALSE PREMISE, found by
+     opening both files at ruling time: `lib/brand-palette.ts` is a picker MENU
+     (ten curated swatches + `swatchName()`, no keying function — it cannot say
+     what colour an entrant gets), while `division-hue.ts` is a DERIVATION
+     (FNV-1a → twelve hues skipping the violet band, with accent/tint/ink already
+     paired for contrast). `BRAND_PALETTE` is NOT withdrawn — it keeps its own
+     job. Only W3's proposal to hash over it is dropped. At build time, alias the
+     `division*` helpers at the call site: they are keyed on ENTRANT ids here.
 - **False premises found while drafting:** the module-spec floor (above);
   `division:{id}` Realtime channels are token-less/public today (P10); the public
   OpenAPI routes carry no `response` schema (P12); reschedules bypass
@@ -171,11 +184,14 @@ cells · **P11** `min-h-11` on controls · **P5** focus ring on the slab.
    and every tile silently falls to the fallback — a green suite over an inert seam. Not
    resolved here: the owner decides whether W2 reads `home_primary` (and W3/W5 follow), or
    the key question is deferred and all three waves ship fallback-only.
-2. **Where the fallback comes from.** `_DESIGN.md` P1 rung 2 specifies the existing
-   `lib/division-hue.ts` wheel keyed on the entrant id (twelve stops, skips the brand
-   violet's 260–290° band). W3's plan defines its own `BRAND_PALETTE`
-   (`…-w3-poster.md:955-962`). Two authorities for one fact; the owner picks one before
-   either wave builds it.
+2. **Where the fallback comes from.** ~~Two authorities for one fact.~~ **RULED
+   2026-09-08 — and the premise was wrong.** `_DESIGN.md` P1 rung 2 specifies the
+   existing `lib/division-hue.ts` wheel keyed on the entrant id (twelve stops, skips
+   the brand violet's 260–290° band); that is the ruling. `BRAND_PALETTE`
+   (`lib/brand-palette.ts:13-24`) was described here as W3's own competing table — it
+   is neither W3's nor competing: it ships today as the organiser's PICKER menu and
+   has no keying function at all. W3's plan proposed adding an FNV hash over it
+   (`…-w3-poster.md:955-962`); that proposal is dropped, the helper is not.
 
 **Correction (product-owner ruling, 2026-09-06 — apply at re-pin):** the team colour is
 NOT `colors.primary`. The only writer (`club-hub/overview-tab.tsx:38-52`) stores

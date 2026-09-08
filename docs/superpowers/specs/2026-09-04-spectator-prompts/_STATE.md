@@ -52,20 +52,45 @@ branch changes no dependency file, so its 42 advisories are pre-existing on main
 read before starting W2.
 
 **Deliberately open, carried out of W1** (all three are in the PR body):
-- The pad attribution pickers offer BOTH sides (`candidatesForPerson` loops home/away; `role`
-  narrows by position, never side), and `action-form.tsx:285` computes each candidate's `side`
-  and discards it — so the Bowler picker is a flat, unlabelled ~22-name list of which half are
-  invalid, and the refusal is resolved by error code only ("That entry isn't valid for this
-  match"), naming no field. Three options were put to the owner (A grouped headers, B inline
-  side tag, C filter chip; recommendation A) and NOT yet chosen. Owner call outstanding.
+- ~~The pad attribution pickers offer BOTH sides…~~ **CLOSED 2026-09-08.** The owner
+  picked **Option A** ("A is fine") from the three shown at 320 px
+  (<https://claude.ai/code/artifact/0e442f4d-ea6d-4398-a819-afae4e18f0fa>): group a person
+  picker's candidates under a side heading. Built on branch
+  `feat/pad-attribution-side-groups` — `e36f08131` (the grouping: `attributionGroups`
+  stops discarding the `side` that `candidatesForPerson` already computes, headed with the
+  existing `scorepad.attribution.home`/`.away`, one `role="group"` per side; eligibility
+  and chip ORDER unchanged) and `41dde9c19` (a chip-clipping defect the visual sign-off
+  exposed: `shrink-0` sized the chip to its content, so a real 31-character entrant name
+  rendered 253px inside a 194px row and the CARD cut it — fixed with `max-w-full`).
+  Two traps worth carrying forward, both of which passed as green first: `min-w-0` is
+  INERT against `flex-shrink: 0`, and a `scrollWidth > clientWidth` probe reads ZERO on
+  this defect, because the element does not clip its text, its ancestor does. The measure
+  that discriminates is the chip's right edge against its row's (+59px broken, 0 fixed).
+  Still open on the same surface, undriven and NOT changed on suspicion: `renderField`'s
+  enum chips and `guided-sheet.tsx`'s chip classes carry the same missing `max-w-full`,
+  and guided-sheet renders person chips too.
 - 228 uncaptioned pad items across 11 sports share the English-in-every-locale defect;
   cricket's eight are fixed, the rest is its own programme.
 - The OG card and page title compose the score from different sources — W2, no consent
   exposure (every engine `summary.headline` is numeric).
 
+**W2 is UNBLOCKED — all four open questions ruled 2026-09-08** ("apply your rec"), each as
+recommended; `_INDEX.md` ruling 15 is the record and `W2-landing.md` §Plan carries them
+inline. In short: testids stay `mh-*`; leaders ship as COUNTS in W2 plus one additive
+engine `leaderboards` declaration for ratio leaders; the org home is POLL-ONLY; the entrant
+colour fallback is `division-hue.ts`'s wheel. The fourth was recorded with a correction —
+the "two authorities" framing in W2/W3 was itself a false premise, `BRAND_PALETTE` is the
+organiser's picker menu and not a competing fallback table, so nothing is withdrawn from
+the tree; only W3's proposal to hash over it is dropped.
+
 **Next:** re-pin W2 (`../../plans/2026-09-05-spectator-w2-competition-landing.md`, DRAFT)
 against merged `main` before executing — every wave plan is DRAFT until re-pinned after the
-wave before it merges.
+wave before it merges. The re-pin owes, specifically: re-verify the six false premises the
+plan recorded on 2026-09-05 (module-spec floor at `stats.ts:106`; `division:{id}` Realtime
+channels token-less; public OpenAPI routes carrying no `response` schema — W1 added one for
+its own routes, so this is likely stale; reschedules bypassing `invalidatePublicCache`;
+`getPublicCompetition` selecting no `config`; the mobile.spec seed having no fixtures), and
+re-pin every line number in the plan. A grep is not a read: open each file.
 
 **Owed documentation:** the bench `_MASTER.md` spectator row still reads "W0 in flight; W1–W4
 sequential" — stale since W1 began, and now wrong in the other direction too.
