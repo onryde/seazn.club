@@ -115,7 +115,9 @@ describe("readLeaderRows — shape and wiring (no database)", () => {
     // The hub must never re-fold a division's score events on a page render.
     // `recomputePlayerStats` is the only thing that would, and this reader
     // does not import it — asserted on the query text, which selects from the
-    // snapshot table directly and gates visibility with public_divisions_v.
+    // snapshot table directly. The visibility gate is NOT asserted here: it
+    // has its own test below, anchored on the join, because a `toContain`
+    // check on the table name passes on its own inversion (`left join`).
     const { sql: stub, calls } = stubSql([]);
     await readLeaderRows(stub, [OPEN]);
     expect(calls[0]!.text).toContain("player_stat_snapshots");

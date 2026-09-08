@@ -25,14 +25,19 @@
 //    running count, not a resume point), so calling it per division on a
 //    public page render is O(all events) on a spectator's page load.
 //
-//    What that table is NOT is a projection the scoring write maintains.
-//    There is no score-write hook: `recomputePlayerStats` is its only writer
-//    and runs only when something asks for stats — the console and public
-//    stats endpoints (`divisionPlayerStats`, `publicDivisionStats`), a person
-//    merge, or the weekly news-digest sweep. So a division nobody has opened
-//    stats for, and no digest has covered, holds ZERO rows and yields NO
-//    boards here; where rows exist they are as fresh as the last such call,
-//    not as fresh as the live fixture. Not recomputing on a spectator render
+//    What that table is NOT is a projection the scoring write reliably
+//    maintains. `recomputePlayerStats` is its only writer, and it runs from
+//    the console and public stats endpoints (`divisionPlayerStats`,
+//    `publicDivisionStats`), a person merge, the auto-posts enrichment
+//    (`usecases/org-posts.ts:888,952`), and the weekly digest sweep
+//    (`:1331`). Only the auto-posts path is reached from scoring —
+//    `refreshNews` on a decided fixture — and it is doubly conditional: the
+//    division must have `auto_posts` set AND the org must hold `news.auto`.
+//    The digest cron POSTs `https://stg.seazn.club` and nothing else
+//    (`news-digest-stg.yml:36`), so it never refreshes production at all.
+//    A division outside every one of those paths holds ZERO rows and yields
+//    NO boards here; where rows exist they are as fresh as the last such
+//    call, not as fresh as the live fixture. Not recomputing on a spectator render
 //    is still right — `data.ts`'s public player card reads the same table the
 //    same way — but who refreshes it is an open question for the wave, not
 //    something this module settles.
