@@ -990,3 +990,115 @@ export function suspensionMismatchReasons(cmp: SuspensionComparison): string[] {
   }
   return out;
 }
+
+// --- the discipline driver -------------------------------------------------
+// The only WRITE calls in this file. They are here rather than in a suite
+// because they are the suspension oracle's own PRODUCER: `expected.
+// suspensions` cannot be compared against anything until a ban exists, and a
+// ban that the bench fabricated in SQL would prove the fixture, not the
+// product (AGENTS.md failure class 1). Two calls, not one — see this
+// section's header on why a POSTed row is not yet a ban.
+
+export async function createManualSuspension(
+  base: string,
+  session: Session,
+  divisionId: string,
+  input: { readonly personId: string; readonly matchesTotal: number; readonly reason: string },
+  transport?: OracleTransport,
+): Promise<SuspensionWire> {
+  const t = transport ?? defaultOracleTransport;
+  const path = `/api/v1/divisions/${divisionId}/suspensions`;
+  const result = await t.raw(base, session, path, "POST", {
+    person_id: input.personId,
+    matches_total: input.matchesTotal,
+    reason: input.reason,
+  });
+  if (result.status !== 201) {
+    const { code, message } = errorOf(result);
+    throw new Error(
+      `oracle: manual suspension refused — HTTP ${result.status} ${code ?? "(no code)"} — ` +
+        `${message ?? "(no message)"}${code === "PAYMENT_REQUIRED" ? " (the provisioned plan does not grant discipline.enforced)" : ""}`,
+    );
+  }
+  return dataOf<SuspensionWire>(result, path, "manual suspension");
+}
+
+/** `PATCH /suspensions/{id}` `{kind:"confirm"}` — the ONLY thing that turns a
+ *  pending row into a ban, and the only place `entrant_id`/`decided_at` are
+ *  stamped (`usecases/discipline.ts#decideSuspension`). */
+export async function confirmSuspension(
+  base: string,
+  session: Session,
+  suspensionId: string,
+  transport?: OracleTransport,
+): Promise<SuspensionWire> {
+  const t = transport ?? defaultOracleTransport;
+  const path = `/api/v1/suspensions/${suspensionId}`;
+  const result = await t.raw(base, session, path, "PATCH", { kind: "confirm" });
+  if (result.status !== 200) {
+    const { code, message } = errorOf(result);
+    throw new Error(
+      `oracle: suspension confirm refused — HTTP ${result.status} ${code ?? "(no code)"} — ${message ?? "(no message)"}`,
+    );
+  }
+  return dataOf<SuspensionWire>(result, path, "suspension confirm");
+}
+
+export async function fetchActiveSuspensions(
+  base: string,
+  session: Session,
+  divisionId: string,
+  transport?: OracleTransport,
+): Promise<SuspensionWire[]> {
+  const t = transport ?? defaultOracleTransport;
+  const path = `/api/v1/divisions/${divisionId}/suspensions?status=active`;
+  const result = await t.raw(base, session, path, "GET");
+  if (result.status !== 200) {
+    const { code, message } = errorOf(result);
+    throw new Error(
+      `oracle: active suspension list refused — HTTP ${result.status} ${code ?? "(no code)"} — ${message ?? "(no message)"}`,
+    );
+  }
+  return dataOf<SuspensionWire[]>(result, path, "active suspensions");
+}
+
+/** Writes a team sheet. `status` is returned rather than thrown on, because
+ *  whether the product ACCEPTS a banned player is itself the finding this
+ *  wave records — see this section's header. */
+export async function putFixtureLineup(
+  base: string,
+  session: Session,
+  fixtureId: string,
+  entrantId: string,
+  personIds: readonly string[],
+  transport?: OracleTransport,
+): Promise<{ readonly status: number; readonly code: string | undefined }> {
+  const t = transport ?? defaultOracleTransport;
+  const path = `/api/v1/fixtures/${fixtureId}/lineups/${entrantId}`;
+  const result = await t.raw(base, session, path, "PUT", {
+    slots: personIds.map((person_id, i) => ({ person_id, slot: "starting", order_no: i + 1 })),
+  });
+  return { status: result.status, code: errorOf(result).code };
+}
+
+/** Reads the team sheet BACK, never the PUT's own echo — the stored state is
+ *  what the oracle compares, so a write that silently dropped a slot is
+ *  visible. */
+export async function fetchFixtureLineup(
+  base: string,
+  session: Session,
+  fixtureId: string,
+  entrantId: string,
+  transport?: OracleTransport,
+): Promise<LineupWire> {
+  const t = transport ?? defaultOracleTransport;
+  const path = `/api/v1/fixtures/${fixtureId}/lineups/${entrantId}`;
+  const result = await t.raw(base, session, path, "GET");
+  if (result.status !== 200) {
+    const { code, message } = errorOf(result);
+    throw new Error(
+      `oracle: lineup read refused — HTTP ${result.status} ${code ?? "(no code)"} — ${message ?? "(no message)"}`,
+    );
+  }
+  return dataOf<LineupWire>(result, path, "lineup");
+}
