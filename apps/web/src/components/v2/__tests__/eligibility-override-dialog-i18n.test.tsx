@@ -65,3 +65,61 @@ describe("EligibilityOverrideDialog — the playerIndex-only fallback label is t
     expect(html).not.toContain("Jugador 1");
   });
 });
+
+describe("EligibilityOverrideDialog — `additionalReasons` (B05 review round 1, MAJOR 1)", () => {
+  // The suspension refusal has no `EligibilityIssue` row to ride, so the
+  // organiser reads it only if this prop is actually RENDERED. Without these
+  // rows the dialog opens on an empty reason list and asks someone to override
+  // a refusal it never states — which is worse than the hard block it replaced.
+  const SUSPENSION =
+    "Serving an active suspension in this division and cannot be named on a team sheet: Alex Doe";
+
+  it("renders a reason that is not an EligibilityIssue, beside the violations", () => {
+    const html = renderToStaticMarkup(
+      <DictProvider dict={enDict} locale="en">
+        <EligibilityOverrideDialog
+          open={true}
+          violations={NO_NAME_VIOLATION}
+          additionalReasons={[SUSPENSION]}
+          onCancel={() => {}}
+          onConfirm={() => {}}
+        />
+      </DictProvider>,
+    );
+    expect(html).toContain("Alex Doe");
+    expect(html).toContain("cannot be named on a team sheet");
+    expect(html).toContain("Player 2"); // the issue row is still there too
+  });
+
+  it("renders reasons with NO violations at all — the suspension case", () => {
+    const html = renderToStaticMarkup(
+      <DictProvider dict={enDict} locale="en">
+        <EligibilityOverrideDialog
+          open={true}
+          violations={[]}
+          additionalReasons={[SUSPENSION]}
+          onCancel={() => {}}
+          onConfirm={() => {}}
+        />
+      </DictProvider>,
+    );
+    expect(html).toContain("cannot be named on a team sheet");
+    // Still an overridable dialog, not a dead end: the reason field is there.
+    expect(html).toContain("eligibility-override-reason");
+  });
+
+  it("omitting the prop changes nothing for the callers that never pass it", () => {
+    const html = renderToStaticMarkup(
+      <DictProvider dict={enDict} locale="en">
+        <EligibilityOverrideDialog
+          open={true}
+          violations={NO_NAME_VIOLATION}
+          onCancel={() => {}}
+          onConfirm={() => {}}
+        />
+      </DictProvider>,
+    );
+    expect(html).toContain("Player 2");
+    expect(html).not.toContain("cannot be named on a team sheet");
+  });
+});

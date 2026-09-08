@@ -11,6 +11,15 @@
 // structured `suspended` list the error already carries, which is exactly what
 // the eligibility violations beside it now do.
 //
+// B05 review round 1, MAJOR 1: this file used to PIN the refusal as a hard
+// block ("does NOT open the override dialog"). That was wrong on the product,
+// not just on the code — the owner approved override-with-reason explicitly,
+// because appeals get upheld and committees overrule, and `gateLineupSuspensions`
+// has accepted `eligibility_override` (writing a `suspension.overridden` ledger
+// row) since the day it shipped. The API had the way out; the only lineup UI in
+// the product did not, so the shipped behaviour was API-only. The tests below
+// now drive the dialog open and the retry through.
+//
 // INTERACTION test (`renderIsland`), not a static render: the bug is in what
 // `save()` does with a fetch REJECTION, which no static render reaches — the
 // same reason `lineup-editor-eligibility-gate.test.tsx` beside this file is one.
@@ -38,15 +47,22 @@ function expectedBanner(names: string[]): string {
 const scenario = vi.hoisted(() => ({
   suspended: undefined as { person_id: string; full_name: string }[] | undefined,
   names: [] as string[],
-  calls: 0,
+  calls: [] as { json?: unknown }[],
 }));
 
 vi.mock("@/lib/client-v1", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/client-v1")>();
   return {
     ...actual, // ApiV1Error stays the REAL class.
-    apiV1: vi.fn(async () => {
-      scenario.calls += 1;
+    apiV1: vi.fn(async (_url: string, options?: { method?: string; json?: unknown }) => {
+      scenario.calls.push({ json: options?.json });
+      // The server's own contract: `gateLineupSuspensions` reuses
+      // `PutLineup.eligibility_override` (discipline.ts) and lets the sheet
+      // through with a `suspension.overridden` ledger row, so a retry that
+      // carries the organiser's reason SUCCEEDS. Refusing it here would make
+      // the retry assertion below unfalsifiable.
+      const body = options?.json as { eligibility_override?: { reason: string } } | undefined;
+      if (body?.eligibility_override) return {};
       const { suspendedPlayersMessage: serverSentence } =
         await import("@/lib/registration-rules");
       throw new actual.ApiV1Error(
@@ -91,17 +107,23 @@ function findSaveButton(tree: ReturnType<ReturnType<typeof renderIsland>["tree"]
   return el;
 }
 
+function findDialog(tree: ReturnType<ReturnType<typeof renderIsland>["tree"]>) {
+  const el = tree.find((e) => e.type === EligibilityOverrideDialog);
+  if (!el) throw new Error("EligibilityOverrideDialog element not found in tree");
+  return el;
+}
+
 async function saveAndReadBanner(
   names: string[],
   suspended: { person_id: string; full_name: string }[] | undefined,
 ) {
   scenario.names = names;
   scenario.suspended = suspended;
-  scenario.calls = 0;
+  scenario.calls.length = 0;
   const island = renderIsland(LineupEditor, baseProps());
   (propsOf(findSaveButton(island.tree())).onClick as () => void)();
   await vi.waitFor(() => {
-    expect(scenario.calls).toBe(1);
+    expect(scenario.calls).toHaveLength(1);
     expect(textOf(island.tree())).not.toBe("");
   });
   // The banner text only appears after the rejection has been handled.
@@ -153,6 +175,14 @@ describe("LineupEditor — a 422 SUSPENDED_PLAYER is said in the organiser's own
     const text = textOf(island.tree());
     expect(text).not.toContain("{names}");
     expect(text).toContain(suspendedPlayersMessage(["Alex Doe"]));
+    // The override path does not depend on the copy being localizable — an
+    // organiser reading the English fallback still gets the same way out.
+    await vi.waitFor(() => {
+      expect(propsOf(findDialog(island.tree())).open).toBe(true);
+    });
+    expect(propsOf(findDialog(island.tree())).additionalReasons).toEqual([
+      suspendedPlayersMessage(["Alex Doe"]),
+    ]);
   });
 
   it("falls back to English when a suspended row carries no usable name — never a nameless accusation", async () => {
@@ -165,13 +195,67 @@ describe("LineupEditor — a 422 SUSPENDED_PLAYER is said in the organiser's own
     expect(text).not.toContain(expectedBanner([""]));
   });
 
-  it("does NOT open the override dialog — a ban is refused at the banner, not offered as an override here", async () => {
+  it("OPENS the override dialog on a ban, carrying the localized sentence and NO faked EligibilityIssue", async () => {
+    // The owner's ruling: override-with-reason, explicitly NOT a hard block —
+    // appeals get upheld, committees overrule, and the wrong person sometimes
+    // gets banned. An organiser with no UI path has no path at all.
     const island = await saveAndReadBanner(
       ["Alex Doe"],
       [{ person_id: "p1", full_name: "Alex Doe" }],
     );
-    const dialog = island.tree().find((e) => e.type === EligibilityOverrideDialog);
-    expect(dialog).toBeDefined();
-    expect(propsOf(dialog!).open).toBe(false);
+    await vi.waitFor(() => {
+      expect(propsOf(findDialog(island.tree())).open).toBe(true);
+    });
+    const props = propsOf(findDialog(island.tree()));
+    // SUSPENDED_PLAYER is an HttpError code, not an `EligibilityCode`, and the
+    // refusal carries `suspended`, not `violations`. Manufacturing an issue row
+    // to reuse the `violations` prop would put a wrong `code` on the wire.
+    expect(props.violations).toEqual([]);
+    expect(props.additionalReasons).toEqual([expectedBanner(["Alex Doe"])]);
+  });
+
+  it("a confirmed override retries the PUT with the organiser's reason attached, and the retry succeeds", async () => {
+    const island = await saveAndReadBanner(
+      ["Alex Doe"],
+      [{ person_id: "p1", full_name: "Alex Doe" }],
+    );
+    await vi.waitFor(() => {
+      expect(propsOf(findDialog(island.tree())).open).toBe(true);
+    });
+
+    (propsOf(findDialog(island.tree())).onConfirm as (reason: string) => void)(
+      "appeal upheld by the committee",
+    );
+
+    await vi.waitFor(() => {
+      expect(propsOf(findDialog(island.tree())).open).toBe(false);
+    });
+    expect(textOf(island.tree())).toContain("Lineup saved.");
+    expect(scenario.calls).toHaveLength(2); // first (422) + retry (succeeds)
+    const retryJson = scenario.calls[1]!.json as {
+      eligibility_override?: { reason: string };
+    };
+    // This is the reason `gateLineupSuspensions` writes to the
+    // `suspension.overridden` ledger row — the whole point of the path.
+    expect(retryJson.eligibility_override).toEqual({ reason: "appeal upheld by the committee" });
+  });
+
+  it("cancelling the override dialog leaves the sheet unsaved and fires no retry", async () => {
+    const island = await saveAndReadBanner(
+      ["Alex Doe"],
+      [{ person_id: "p1", full_name: "Alex Doe" }],
+    );
+    await vi.waitFor(() => {
+      expect(propsOf(findDialog(island.tree())).open).toBe(true);
+    });
+    (propsOf(findDialog(island.tree())).onCancel as () => void)();
+
+    await vi.waitFor(() => {
+      expect(propsOf(findDialog(island.tree())).open).toBe(false);
+    });
+    expect(scenario.calls).toHaveLength(1);
+    // The banner outlives the cancelled dialog: the organiser who backs out
+    // still gets told why the sheet was refused.
+    expect(textOf(island.tree())).toContain(expectedBanner(["Alex Doe"]));
   });
 });

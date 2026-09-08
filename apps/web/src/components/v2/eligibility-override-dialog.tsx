@@ -52,6 +52,21 @@ function offenderLabel(
 interface Props {
   open: boolean;
   violations: EligibilityIssue[];
+  /** B05 review round 1, MAJOR 1: refusal sentences that are NOT
+   *  `EligibilityIssue` rows, already localized by the caller.
+   *
+   *  The discipline gate's 422 (`gateLineupSuspensions`,
+   *  server/usecases/discipline.ts) is the one producer today: it carries
+   *  `{ suspended: [{ person_id, full_name }] }`, never `violations`, and
+   *  `SUSPENDED_PLAYER` is an HttpError code with no `EligibilityCode` twin.
+   *  Manufacturing an issue row so it could ride the `violations` prop would
+   *  mean inventing a `code` this dialog then looks up in a map that has never
+   *  heard of it — so the refusal arrives as the sentence it already is
+   *  (`suspendedPlayersText`, lib/eligibility-issue-i18n.ts), and the override
+   *  and its audited reason work identically for both. The server agrees: it
+   *  reuses `PutLineup.eligibility_override` for the ban, writing a
+   *  `suspension.overridden` ledger row rather than `eligibility.overridden`. */
+  additionalReasons?: readonly string[];
   busy?: boolean;
   onCancel: () => void;
   onConfirm: (reason: string) => void;
@@ -61,6 +76,7 @@ interface Props {
 export function EligibilityOverrideDialog({
   open,
   violations,
+  additionalReasons = [],
   busy = false,
   onCancel,
   onConfirm,
@@ -121,6 +137,14 @@ export function EligibilityOverrideDialog({
             </li>
           );
         })}
+        {additionalReasons.map((text, i) => (
+          <li key={`extra-${i}`} className="flex gap-1.5">
+            <span aria-hidden className="text-rose-400">
+              •
+            </span>
+            <span>{text}</span>
+          </li>
+        ))}
       </ul>
 
       <label className="block">
