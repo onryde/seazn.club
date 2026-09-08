@@ -142,15 +142,38 @@ A check you cannot assert because the page has a defect owed to another wave
 goes in the row's `knownDefects`, never silently out of `checks`:
 
 ```json
-"knownDefects": [{ "check": "rails-a11y", "reason": "<file>, why not fixed here, what lands first" }]
+"knownDefects": [{
+  "check": "rails-a11y",
+  "offenders": ["div"],
+  "reason": "<file>, why not fixed here, what lands first"
+}]
 ```
 
-The harness still RUNS the check and requires the defect to STILL BE THERE. So
-the row reds the day the page is fixed, with a message telling the reader to
-delete the entry and put the check back. Prose in a runbook cannot do that —
-nothing failed when the fix landed, so nobody was told. `parseManifest`
-refuses a check listed in both `checks` and `knownDefects`, and refuses a
-reason shorter than 40 characters.
+The harness still RUNS the check and compares its offenders against
+`offenders` **as a set**. So the row reds in both directions: when the recorded
+defect disappears (someone fixed the page — the message says to delete the
+entry and restore the check), and when a *different* offender joins it. Prose
+in a runbook cannot do either — nothing failed when the fix landed, so nobody
+was told.
+
+Two things to be precise about, because the earlier wording over-claimed:
+
+- **`expectRailsA11y` scans the whole document**, so the comparison is over
+  every rail on the page, not the one the reason names. It says "these exact
+  rails still offend", not "this rail still offends". A page with two
+  unreachable rails must declare both.
+- **`check` is restricted to `KNOWN_DEFECT_CHECKS`** — today just
+  `rails-a11y`, the only check with a non-asserting mode
+  (`expectRailsA11y(page, label, { assert: false })`). Every other check throws
+  on its first offender and hands nothing back, so the harness cannot verify
+  the recorded defect is still there. Recording one used to be accepted by the
+  schema and then fail unconditionally with "the page was FIXED" — false, and
+  aimed at a wave doing exactly what this harness invites. `parseManifest` now
+  refuses it and tells you what to build first.
+
+`parseManifest` also refuses a check listed in both `checks` and
+`knownDefects`, an entry with no `offenders`, and a reason shorter than 40
+characters.
 
 ## Known `main` findings
 
@@ -162,8 +185,9 @@ reason shorter than 40 characters.
   class 23 and axe's `scrollable-region-focusable` at SERIOUS impact. Not
   fixed in streaming T1b because `StandingsTable` renders on the public site,
   the embed and the console alike, and an accessible name for it is a new
-  user-facing string owed in all four locales. The manifest entry is what will
-  tell the fixing wave to restore the check.
+  user-facing string owed in all four locales. The manifest entry declares
+  `offenders: ["div"]` and is what will tell the fixing wave to restore the
+  check — the row reds the moment that set changes in either direction.
 - **`live-score.tsx:245` still has the `truncate` without `min-w-0`** that this
   gate found and that was fixed at `match-centre/court-card.tsx:172`.
   Identical span, identical row-flex parent. Left alone because `<LiveScore>`

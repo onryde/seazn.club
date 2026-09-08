@@ -24,8 +24,10 @@ import { dismissCookieBanner } from "../scorepad-a11y-kit";
 import {
   controlSetViolations,
   differingPairViolations,
+  EXEMPT_KINDS,
   parseManifest,
   resolveRoute,
+  type KnownDefectCheck,
   type VisualGroup,
   type VisualRow,
 } from "./manifest";
@@ -68,8 +70,6 @@ interface Shot {
   /** Every box every check EXCUSED, merged and complete. */
   exempt: Record<string, string[]>;
 }
-
-const EXEMPT_KINDS = ["bleeds", "inline", "offscreen"] as const;
 
 async function captureRow(
   browser: Browser,
@@ -144,24 +144,51 @@ async function captureRow(
       seen["rails-a11y"] = { inspected: rails.rails.length, sample: rails.rails.slice(0, 5) };
     }
 
-    // A check this row records as a KNOWN DEFECT must still be broken. When
-    // the page is fixed the offender list empties and this reds, which is the
-    // only thing that will ever tell anyone to put the check back on the row.
+    // A check this row records as a KNOWN DEFECT is RE-RUN and its offenders
+    // compared, as a SET, against the ones the row declares. Two directions,
+    // both of which "non-empty" missed: the row reds when the recorded defect
+    // disappears (someone fixed the page — restore the check), AND when a
+    // DIFFERENT offender joins it on the same page.
+    //
+    // The map is keyed by check rather than branched on one name. A
+    // `knownDefects` entry for any other check used to evaluate `[]` and fail
+    // unconditionally, announcing "the page was FIXED" — false, and aimed at
+    // a wave doing exactly what this harness invites (append a row, touch no
+    // harness code). `KNOWN_DEFECT_CHECKS` now refuses those at parse time,
+    // and this throws if a listed check reaches here with nothing captured,
+    // so the list and the wiring cannot drift apart silently.
+    const offendersByCheck: Partial<Record<KnownDefectCheck, string[]>> = {
+      "rails-a11y": rails.offenderIds,
+    };
     for (const defect of row.knownDefects) {
+      const found = offendersByCheck[defect.check];
+      if (found === undefined) {
+        throw new Error(
+          `${label}: "${defect.check}" is in KNOWN_DEFECT_CHECKS but capture.spec.ts captures no offenders for it — wire it into offendersByCheck before a manifest row can record it.`,
+        );
+      }
       expect(
-        defect.check === "rails-a11y" ? rails.offenders : [],
-        `${label}: knownDefects records ${defect.check} as still broken, but the check now finds nothing — the page was FIXED, so delete the knownDefects entry and add "${defect.check}" back to this row's checks. Recorded reason: ${defect.reason}`,
-      ).not.toEqual([]);
+        [...found].sort(),
+        `${label}: the ${defect.check} offenders no longer match the ones this row records. If the list is now EMPTY the page was fixed — delete the knownDefects entry and add "${defect.check}" back to this row's checks. If it GREW, a second defect appeared on the same page and is not recorded. Recorded reason: ${defect.reason}`,
+      ).toEqual([...defect.offenders].sort());
     }
 
     // Every box any check EXCUSED, held to the list the row declares. An
     // exemption nothing checks would let the next overflow hide behind it
     // (AGENTS.md class 23) — so a NEW bleed ancestor, a NEW inline-exempt
     // link or a NEW off-viewport control fails here until it is written down.
-    const exempt: Record<string, string[]> = { bleeds: [], inline: [], offscreen: [] };
+    // `EXEMPT_KINDS` is derived from the schema, so a fourth kind is held to a
+    // declared list the moment it exists rather than landing in report.json
+    // asserted against nothing.
+    const exempt: Record<string, string[]> = Object.fromEntries(EXEMPT_KINDS.map((k) => [k, []]));
     for (const s of Object.values(seen)) {
       for (const [kind, list] of Object.entries(s.exempt ?? {})) {
-        exempt[kind] = [...(exempt[kind] ?? []), ...list];
+        if (!(kind in exempt)) {
+          throw new Error(
+            `${label}: a check returned exemption kind "${kind}", which no manifest row can declare — add it to ExemptShape in manifest.ts.`,
+          );
+        }
+        exempt[kind] = [...exempt[kind]!, ...list];
       }
     }
     for (const kind of EXEMPT_KINDS) {
@@ -208,16 +235,16 @@ test.describe("visual gate", () => {
       const shots: Shot[] = [];
       for (const row of group.rows) shots.push(await captureRow(browser, group, row, params));
 
-      // Every declared image exists on disk, and the ids match the manifest's
-      // in order — not just the COUNT, which the loop above makes tautological.
+      // Every declared image exists on disk. The right-hand side is built from
+      // `group.rows`, so a short `shots` fails on length — that is the count
+      // guard. (An `shots.map(s => s.id)` vs `group.rows.map(r => r.id)` line
+      // used to sit here as well: `shots` is built by iterating `group.rows`
+      // and copying `row.id` verbatim, so neither side could move
+      // independently. It was a tautology in a different shape and is gone.)
       expect(
         shots.map((s) => existsSync(s.file)),
         `${group.id}: a PNG is missing`,
       ).toEqual(group.rows.map(() => true));
-      expect(
-        shots.map((s) => s.id),
-        `${group.id}: the rows photographed are not the rows declared`,
-      ).toEqual(group.rows.map((r) => r.id));
 
       // Both cross-row comparisons are pure functions in ./manifest so they
       // have permanent unit killers (visual-manifest.test.ts) rather than a
@@ -250,10 +277,16 @@ test.describe("visual gate", () => {
       // (review 2026-09-08 finding 9 — the previous `sha256.length === 64`
       // could never fire): every PNG is a real picture, and where the group
       // declares any mustDiffer pair, the group's hashes are not all one value.
+      //
+      // The expectation is built from `group.rows`, not from `shots`. Compared
+      // against itself this block asserted `shots === shots` and would have
+      // passed on an EMPTY run if it were ever hoisted above the capture loop
+      // — the one property in this file that had no mutant. Anchored here it
+      // has one: move it up and `[]` fails against four declared rows.
       expect(
         shots.map((s) => [s.id, s.bytes > MIN_PNG_BYTES]),
         `${group.id}: a PNG under ${MIN_PNG_BYTES} bytes is a blank or aborted capture`,
-      ).toEqual(shots.map((s) => [s.id, true]));
+      ).toEqual(group.rows.map((r) => [r.id, true]));
       if (group.mustDiffer.length > 0) {
         expect(
           new Set(shots.map((s) => s.sha256)).size,
@@ -271,32 +304,43 @@ test.describe("visual gate", () => {
   // (fix round 1, Important 7). A synthetic rail reaches it permanently,
   // without a probe anyone has to remember to revert.
   test("rails-a11y: the tabindex arm and the unreachable arm both fire", async ({ page }) => {
+    // Every rail carries a `data-testid`, so the offender strings are
+    // ATTRIBUTABLE. Without one all four render the identical
+    // `div 400px in 100px` and an exact-set assertion cannot tell an offender
+    // raised against the wrong rail from the right one; and the "no offender
+    // for the good rail" check was written as a filter on `"Named rail"`,
+    // which the offender string never contains — it passed in every state,
+    // including the one its own comment claimed it caught (fix round 2).
     await page.setContent(`
-      <div id="bare" style="width:100px;overflow-x:auto">
+      <div data-testid="rail-bare" style="width:100px;overflow-x:auto">
         <div style="width:400px">no tabindex, no focusable child</div>
       </div>
-      <div id="tabbed" tabindex="0" style="width:100px;overflow-x:auto">
+      <div data-testid="rail-tabbed" tabindex="0" style="width:100px;overflow-x:auto">
         <div style="width:400px">tabindex, but no role and no name</div>
       </div>
-      <div id="ok" tabindex="0" role="region" aria-label="Named rail" style="width:100px;overflow-x:auto">
+      <div data-testid="rail-complete" tabindex="0" role="region" aria-label="Named rail" style="width:100px;overflow-x:auto">
         <div style="width:400px">complete</div>
       </div>
-      <div id="viachild" style="width:100px;overflow-x:auto">
+      <div data-testid="rail-viachild" style="width:100px;overflow-x:auto">
         <a href="#x" style="display:block;width:400px">reachable via a focusable child</a>
       </div>`);
-    const { rails, offenders } = await expectRailsA11y(page, "probe", { assert: false });
+    const { rails, offenders, offenderIds } = await expectRailsA11y(page, "probe", {
+      assert: false,
+    });
     expect(rails.length, "all four synthetic rails should be seen").toBe(4);
-    expect(offenders.sort()).toEqual(
+    // Exactly which rails offend — the two good ones must not appear.
+    expect([...offenderIds].sort()).toEqual([
+      "div[data-testid=rail-bare]",
+      "div[data-testid=rail-tabbed]",
+    ]);
+    // …and exactly which rules each broke, named against its own rail.
+    expect([...offenders].sort()).toEqual(
       [
-        "div 400px in 100px: not keyboard-reachable (no tabindex=0, no focusable child)",
-        "div 400px in 100px: tabindex=0 without a role",
-        "div 400px in 100px: tabindex=0 without an accessible name",
+        "div[data-testid=rail-bare] 400px in 100px: not keyboard-reachable (no tabindex=0, no focusable child)",
+        "div[data-testid=rail-tabbed] 400px in 100px: tabindex=0 without a role",
+        "div[data-testid=rail-tabbed] 400px in 100px: tabindex=0 without an accessible name",
       ].sort(),
     );
-    // The complete rail and the one reachable via a child raise nothing —
-    // without this the assertion above would also pass on a check that
-    // reported every rail as an offender.
-    expect(offenders.filter((o) => o.includes("Named rail"))).toEqual([]);
   });
 
   // The bleed exemption's ACCOUNTING, which no photographed route can falsify:

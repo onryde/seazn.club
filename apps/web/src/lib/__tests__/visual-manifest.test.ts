@@ -22,10 +22,12 @@ import { join, resolve } from "node:path";
 import {
   controlSetViolations,
   differingPairViolations,
+  KNOWN_DEFECT_CHECKS,
   notInDomSentinel,
   parseManifest,
   resolveRoute,
   SEED_PARAMS,
+  VISUAL_CHECKS,
 } from "../../../e2e/visual/manifest";
 
 /** apps/web — this file lives at apps/web/src/lib/__tests__/. */
@@ -34,6 +36,30 @@ const MANIFEST = join(WEB, "e2e/visual/manifest.json");
 
 function load() {
   return parseManifest(JSON.parse(readFileSync(MANIFEST, "utf8")));
+}
+
+/** A minimal one-row manifest whose only row records `check` as a known
+ *  defect. Nothing else about it can fail, so the parse result is entirely
+ *  about whether that check may be recorded. */
+function manifestWithKnownDefect(check: string) {
+  return {
+    version: 1,
+    groups: [
+      {
+        id: "g",
+        seed: "none",
+        rows: [
+          {
+            id: "r",
+            route: "/",
+            viewport: { width: 320, height: 568 },
+            awaitSelector: "[data-testid=x]",
+            knownDefects: [{ check, offenders: ["div"], reason: "x".repeat(50) }],
+          },
+        ],
+      },
+    ],
+  };
 }
 
 describe("e2e/visual/manifest.json", () => {
@@ -77,17 +103,38 @@ describe("e2e/visual/manifest.json", () => {
     // 404 — on which every check passes (no clips, no rails, few controls)
     // and both cross-row comparisons still hold. The whole group would have
     // signed off on a page that is not the fixture (fix round 1, Important 1).
+    //
+    // Structural, not exact-shape: the first version tested
+    // `/^(main )?h[1-6]$/` against the whole string, which let `main > h1`,
+    // `header h1` and the selector list `main h1, table` straight through
+    // (fix round 2). What matters is the TARGET of each comma-separated
+    // branch — the last compound, after any combinator — being a bare
+    // heading with no class, id or attribute to distinguish it.
+    const targetsABareHeading = (selector: string) =>
+      selector
+        .split(",")
+        .map((branch) => branch.trim().split(/[\s>+~]+/).filter(Boolean).at(-1) ?? "")
+        .some((target) => /^h[1-6]$/i.test(target));
+
+    // Guard the guard: it must actually reject the shapes it exists for.
+    for (const bad of ["main h1", "h1", "main > h1", "header h1", "main h1, table", "  H2 "]) {
+      expect(targetsABareHeading(bad), `${bad} should be refused`).toBe(true);
+    }
+    for (const ok of ["[data-testid=mc-score-0]", "table", "h1.headline", "main [role=tablist]"]) {
+      expect(targetsABareHeading(ok), `${ok} should be allowed`).toBe(false);
+    }
+
     for (const g of load().groups) {
       for (const r of g.rows) {
         expect(
-          /^(main )?h[1-6]$/.test(r.awaitSelector.trim()),
-          `${g.id}/${r.id}: awaitSelector "${r.awaitSelector}" is a bare heading, which the branded 404 also renders — await something only this page draws`,
+          targetsABareHeading(r.awaitSelector),
+          `${g.id}/${r.id}: awaitSelector "${r.awaitSelector}" targets a bare heading, which the branded 404 also renders — await something only this page draws`,
         ).toBe(false);
       }
     }
   });
 
-  it("a check is either asserted or recorded as a known defect, never both, and a known defect explains itself", () => {
+  it("a check is either asserted or recorded as a known defect, never both, and a known defect explains itself and names its offenders", () => {
     for (const g of load().groups) {
       for (const r of g.rows) {
         for (const d of r.knownDefects) {
@@ -98,9 +145,62 @@ describe("e2e/visual/manifest.json", () => {
             d.reason.length,
             `${g.id}/${r.id}: the ${d.check} reason must name the file and the owed fix`,
           ).toBeGreaterThan(40);
+          // Compared as a SET by the harness — "still broken" alone would let a
+          // second defect on the same page hide behind the recorded one.
+          expect(
+            d.offenders.length,
+            `${g.id}/${r.id}: the ${d.check} entry names no offender, so nothing pins WHICH defect is recorded`,
+          ).toBeGreaterThan(0);
         }
       }
     }
+  });
+
+  it("refuses a misspelt exempt kind instead of silently dropping it", () => {
+    // `exempt` was a non-strict object, so `"bleed"` (singular) was stripped by
+    // zod and the real `bleeds` fell back to `[]` — the row then read as
+    // "excuses nothing" while its actual exemption went unasserted. That is the
+    // same class as the exemptions themselves, one level up (fix round 2).
+    const withKind = (exempt: Record<string, string[]>) => ({
+      version: 1,
+      groups: [
+        {
+          id: "g",
+          seed: "none",
+          rows: [
+            {
+              id: "r",
+              route: "/",
+              viewport: { width: 320, height: 568 },
+              awaitSelector: "[data-testid=x]",
+              exempt,
+            },
+          ],
+        },
+      ],
+    });
+    expect(() => parseManifest(withKind({ bleed: ["div"] }))).toThrow(/bleed/);
+    expect(() => parseManifest(withKind({ bleeds: ["div"] }))).not.toThrow();
+  });
+
+  it("knownDefects refuses a check the harness cannot re-run without asserting", () => {
+    // The schema used to accept all five VISUAL_CHECKS while `capture.spec.ts`
+    // honoured only `rails-a11y`; every other entry then failed
+    // UNCONDITIONALLY with "the check now finds nothing — the page was FIXED",
+    // which is false and points a later wave at a page nobody broke. Only
+    // `rails-a11y` has a non-asserting mode, so only it can be recorded — and
+    // the refusal has to happen HERE, at parse time, not as a red at
+    // Playwright time (fix round 2, Important).
+    expect(KNOWN_DEFECT_CHECKS).toEqual(["rails-a11y"]);
+    for (const notRerunnable of VISUAL_CHECKS.filter(
+      (c) => !(KNOWN_DEFECT_CHECKS as readonly string[]).includes(c),
+    )) {
+      expect(
+        () => parseManifest(manifestWithKnownDefect(notRerunnable)),
+        `${notRerunnable} has no non-asserting mode and must be refused`,
+      ).toThrow(new RegExp(notRerunnable));
+    }
+    expect(() => parseManifest(manifestWithKnownDefect("rails-a11y"))).not.toThrow();
   });
 
   it("rejects what the harness cannot run, BY NAME", () => {
@@ -134,14 +234,7 @@ describe("e2e/visual/manifest.json", () => {
     expect(() => parseManifest({ ...base, groups: [{ ...group, seed: "no-such-seed" }] })).toThrow(
       /no-such-seed/,
     );
-    expect(() =>
-      parseManifest({
-        ...base,
-        groups: [
-          { ...group, rows: [{ ...row, knownDefects: [{ check: "no-such-check", reason: "x".repeat(50) }] }] },
-        ],
-      }),
-    ).toThrow(/no-such-check/);
+    expect(() => parseManifest(manifestWithKnownDefect("no-such-check"))).toThrow(/no-such-check/);
     expect(() =>
       parseManifest({ ...base, groups: [{ ...group, mustDiffer: [["r", "ghost"]] }] }),
     ).toThrow(/ghost/);
@@ -158,7 +251,7 @@ describe("e2e/visual/manifest.json", () => {
               {
                 ...row,
                 checks: ["rails-a11y"],
-                knownDefects: [{ check: "rails-a11y", reason: "x".repeat(50) }],
+                knownDefects: [{ check: "rails-a11y", offenders: ["div"], reason: "x".repeat(50) }],
               },
             ],
           },

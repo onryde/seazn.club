@@ -469,38 +469,53 @@ export async function expectTruncateChain(page: Page, label: string): Promise<Se
  *  read, not a count. The `tabindex="0"` branch has no natural killer on the
  *  routes photographed today (nothing on the seeded football fixture carries
  *  one — `tab-rail.tsx` deliberately does not, per its roving-tabindex note),
- *  so `capture.spec.ts` drives it against a synthetic rail instead. */
+ *  so `capture.spec.ts` drives it against a synthetic rail instead.
+ *
+ *  `offenderIds` is the DISTINCT set of offending element identities (tag +
+ *  `data-testid`), one entry per element however many rules it broke. It is
+ *  what a row's `knownDefects` declares, so a recorded defect is compared as a
+ *  SET rather than merely "non-empty" — otherwise a SECOND unreachable rail on
+ *  the same page hides behind the recorded one (fix round 2). */
 export async function expectRailsA11y(
   page: Page,
   label: string,
   opts: { assert: boolean } = { assert: true },
-): Promise<{ rails: string[]; offenders: string[] }> {
-  const { offenders, rails } = await page.evaluate(() => {
+): Promise<{ rails: string[]; offenders: string[]; offenderIds: string[] }> {
+  const { offenders, rails, offenderIds } = await page.evaluate(() => {
     const offenders: string[] = [];
     const rails: string[] = [];
+    const offenderIds: string[] = [];
     const focusable =
       'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
     for (const el of Array.from(document.querySelectorAll<HTMLElement>("*"))) {
       const cs = getComputedStyle(el);
       if (!/^(auto|scroll)$/.test(cs.overflowX) || el.scrollWidth - el.clientWidth <= 1) continue;
-      const name = `${el.tagName.toLowerCase()}${el.dataset.testid ? `[data-testid=${el.dataset.testid}]` : ""} ${el.scrollWidth}px in ${el.clientWidth}px`;
+      const identity =
+        el.tagName.toLowerCase() + (el.dataset.testid ? `[data-testid=${el.dataset.testid}]` : "");
+      const name = `${identity} ${el.scrollWidth}px in ${el.clientWidth}px`;
       rails.push(name);
+      const own: string[] = [];
       const ownTab = el.getAttribute("tabindex") === "0";
       const childFocusable = el.querySelector(focusable) !== null;
       if (!ownTab && !childFocusable)
-        offenders.push(`${name}: not keyboard-reachable (no tabindex=0, no focusable child)`);
+        own.push(`${name}: not keyboard-reachable (no tabindex=0, no focusable child)`);
       if (ownTab) {
-        if (!el.getAttribute("role")) offenders.push(`${name}: tabindex=0 without a role`);
+        if (!el.getAttribute("role")) own.push(`${name}: tabindex=0 without a role`);
         if (!el.getAttribute("aria-label") && !el.getAttribute("aria-labelledby")) {
-          offenders.push(`${name}: tabindex=0 without an accessible name`);
+          own.push(`${name}: tabindex=0 without an accessible name`);
         }
       }
+      // One id per offending ELEMENT, not per rule it broke: the declared
+      // `knownDefects.offenders` names elements, and a rail missing both a
+      // role and a name is still one rail.
+      if (own.length > 0) offenderIds.push(identity);
+      offenders.push(...own);
     }
-    return { offenders, rails };
+    return { offenders, rails, offenderIds };
   });
   // Inspected on every row for the report; ASSERTED only when the row lists
   // the check (review finding 20) — so `rails: []` in report.json means "no
   // overflowing rail", never "the check was not run".
   if (opts.assert) expect(offenders, `${label}: scrolling rails`).toEqual([]);
-  return { rails, offenders };
+  return { rails, offenders, offenderIds };
 }

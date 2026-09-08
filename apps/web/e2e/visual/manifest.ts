@@ -40,30 +40,65 @@ const NOT_IN_DOM = /^<.+ not in DOM>$/;
 
 /** A box a check EXCUSED, named by a STABLE identity — tag plus `data-testid`,
  *  never a pixel size, so the declared list in the manifest does not churn
- *  when content changes width. */
-const ExemptSchema = z
-  .object({
-    /** `no-clip`: `overflow-x: visible` boxes whose overhang is accounted for
-     *  by a reachable rail inside them. */
-    bleeds: z.array(z.string()).default([]),
-    /** `hit-targets`: WCAG 2.5.8 "Inline" — a link in running text. */
-    inline: z.array(z.string()).default([]),
-    /** `hit-targets`: a control off-viewport but reachable (a rail, or below
-     *  the fold on a scrollable page). */
-    offscreen: z.array(z.string()).default([]),
-  })
-  .default({ bleeds: [], inline: [], offscreen: [] });
+ *  when content changes width.
+ *
+ *  STRICT: a typo'd `exempt.bleed` would otherwise be stripped by zod and the
+ *  real `bleeds` would silently fall back to `[]` — which reads as "this row
+ *  excuses nothing" while the row's actual exemption goes unasserted. Same
+ *  class as the exemptions themselves, one level up (fix round 2). */
+const ExemptShape = z.strictObject({
+  /** `no-clip`: `overflow-x: visible` boxes whose overhang is accounted for
+   *  by a reachable rail inside them. */
+  bleeds: z.array(z.string()).default([]),
+  /** `hit-targets`: WCAG 2.5.8 "Inline" — a link in running text. */
+  inline: z.array(z.string()).default([]),
+  /** `hit-targets`: a control off-viewport but reachable (a rail, or below
+   *  the fold on a scrollable page). */
+  offscreen: z.array(z.string()).default([]),
+});
+
+/** The exemption kinds, DERIVED from the schema rather than retyped in the
+ *  spec: a fourth kind added above must be held to a declared list too, and a
+ *  hardcoded tuple in `capture.spec.ts` would have let it land in report.json
+ *  asserted against nothing. */
+export const EXEMPT_KINDS = Object.keys(ExemptShape.shape) as readonly (keyof z.infer<
+  typeof ExemptShape
+>)[];
+
+const ExemptSchema = ExemptShape.default({ bleeds: [], inline: [], offscreen: [] });
+
+/** The checks a row may record as a KNOWN DEFECT. Deliberately NOT all of
+ *  `VISUAL_CHECKS`: a check qualifies only when the harness can run it in a
+ *  NON-ASSERTING mode and read its offenders back, which today is
+ *  `rails-a11y` alone (`expectRailsA11y(page, label, { assert: false })`).
+ *  Every other check throws on its first offender and has nothing to hand
+ *  back, so the harness cannot verify the recorded defect is still there.
+ *
+ *  Accepting all five while honouring one is what this list exists to stop:
+ *  a `knownDefects` entry for `no-clip` then failed UNCONDITIONALLY with
+ *  "the check now finds nothing — the page was FIXED", which is false, and a
+ *  later wave appending a manifest row (exactly what this harness promises it
+ *  can do without touching harness code) would have been sent to debug a page
+ *  that was never fixed (fix round 2, Important). Adding a kind here means
+ *  giving that check a non-asserting mode AND wiring it into
+ *  `capture.spec.ts`'s offender map, which throws if a listed check has no
+ *  entry. */
+export const KNOWN_DEFECT_CHECKS = ["rails-a11y"] as const;
+export type KnownDefectCheck = (typeof KNOWN_DEFECT_CHECKS)[number];
 
 /** A check this row deliberately does NOT assert because the page has a
  *  recorded defect owed to another wave. The harness still RUNS the check and
- *  requires the defect to still be present — so the row reds the day the page
- *  is fixed, which is the only thing that will tell anyone to put the check
- *  back (fix round 1, Minor: "nothing currently fails when it is fixed"). */
-const KnownDefectSchema = z.object({
-  check: z.enum(VISUAL_CHECKS, {
+ *  compares its offenders against the ones declared here, so the row reds
+ *  both when the defect disappears AND when a different one joins it. */
+const KnownDefectSchema = z.strictObject({
+  check: z.enum(KNOWN_DEFECT_CHECKS, {
     error: (issue) =>
-      `unknown check ${JSON.stringify(issue.input)} in knownDefects — expected one of ${VISUAL_CHECKS.join(", ")}`,
+      `${JSON.stringify(issue.input)} cannot be recorded in knownDefects — only ${KNOWN_DEFECT_CHECKS.join(", ")} can be re-run without asserting, so the harness cannot verify any other check's defect is still there. Give the check a non-asserting mode and add it to KNOWN_DEFECT_CHECKS first.`,
   }),
+  /** The offender IDENTITIES (tag + `data-testid`) the check is expected to
+   *  still report. Compared as a SET, like `exempt` — non-empty alone would
+   *  let a SECOND defect on the same page hide behind the recorded one. */
+  offenders: z.array(z.string()).min(1),
   /** Long enough to name the file and the owed fix, not just "broken". */
   reason: z.string().min(40),
 });

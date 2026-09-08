@@ -170,7 +170,10 @@
           "knownDefects": [
             {
               "check": "rails-a11y",
-              "reason": "components/public-site/standings-table.tsx wraps the table in overflow-x-auto with no tabindex=0, no role and no accessible name, and the embed renders no links inside it, so the rail has no focusable child either — axe scrollable-region-focusable at SERIOUS. Not fixed in streaming T1b: StandingsTable renders on the public site, the embed and the console alike, and an accessible name for it is a new user-facing string owed in all four locales. When that lands, delete this entry and add rails-a11y back to this row's checks."
+              "reason": "components/public-site/standings-table.tsx wraps the table in overflow-x-auto with no tabindex=0, no role and no accessible name, and the embed renders no links inside it, so the rail has no focusable child either — axe scrollable-region-focusable at SERIOUS. Not fixed in streaming T1b: StandingsTable renders on the public site, the embed and the console alike, and an accessible name for it is a new user-facing string owed in all four locales. When that lands, delete this entry and add rails-a11y back to this row's checks.",
+              "offenders": [
+                "div"
+              ]
             }
           ]
         }
