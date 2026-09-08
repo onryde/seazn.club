@@ -378,6 +378,30 @@ describe("compareRankCrossings", () => {
     const cmp = compareRankCrossings(undefined, ["e-alpha", "e-bravo"]);
     expect(cmp.matched).toBe(false);
   });
+
+  // Review MAJOR: `[].every(...)` is vacuously true and 0===0, so the naive
+  // length+every check reported `matched: true` for two GENUINELY EMPTY
+  // arrays — there is nothing to agree ON, so this must never read as a pass.
+  it("the EMPTY set: empty captured against empty standings is NOT a vacuous match — nothing to agree on", () => {
+    const cmp = compareRankCrossings([], []);
+    expect(cmp.matched).toBe(false);
+    expect(cmp.reason).toBeDefined();
+  });
+
+  it("an empty captured against a NON-empty standings is also false-by-emptiness, not a length mismatch alone", () => {
+    const cmp = compareRankCrossings([], ["e-alpha"]);
+    expect(cmp.matched).toBe(false);
+    expect(cmp.reason).toBeDefined();
+  });
+
+  it("its positive pair: a REAL non-empty agreement still matches, and carries no 'nothing to agree on' reason", () => {
+    const captured = ["e-alpha", "e-bravo"];
+    const standings = ["e-alpha", "e-bravo"];
+    expect(captured).not.toBe(standings); // genuinely separate arrays, same discipline as the block's other tests
+    const cmp = compareRankCrossings(captured, standings);
+    expect(cmp.matched).toBe(true);
+    expect(cmp.reason).toBeUndefined();
+  });
 });
 
 // ---------------------------------------------------------------------------

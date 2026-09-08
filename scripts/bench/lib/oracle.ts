@@ -470,6 +470,14 @@ export interface RankCrossingComparison {
   readonly matched: boolean;
   readonly captured: readonly string[] | undefined;
   readonly standings: readonly string[];
+  /** Set only on a false-by-EMPTINESS verdict (an absent capture, or either
+   *  side reporting zero entrants) — distinguishes "there was nothing to
+   *  agree on" from an ordinary order/length mismatch between two real
+   *  crossings, so a reader is never tempted to read an empty/empty pair as
+   *  a vacuous pass (review MAJOR: `[].every(...)` is vacuously true and
+   *  0===0, so the naive check alone reported `matched: true` for two
+   *  genuinely empty arrays). */
+  readonly reason?: string;
 }
 
 /**
@@ -479,13 +487,26 @@ export interface RankCrossingComparison {
  * independently, right now? `captured: undefined` (the stage never reported
  * a `stage_completed` event) never MATCHES — an absent capture is not
  * evidence of agreement, it is evidence there was nothing to agree with.
+ * Same discipline for an EMPTY (but present) crossing on either side: an
+ * empty captured or an empty standings means there is nothing to agree ON,
+ * never a free pass just because the lengths happen to agree at zero.
  */
 export function compareRankCrossings(
   captured: readonly string[] | undefined,
   standings: readonly string[],
 ): RankCrossingComparison {
-  const matched =
-    captured !== undefined && captured.length === standings.length && captured.every((id, i) => id === standings[i]);
+  if (captured === undefined) {
+    return { matched: false, captured, standings };
+  }
+  if (captured.length === 0 || standings.length === 0) {
+    return {
+      matched: false,
+      captured,
+      standings,
+      reason: "empty captured or empty standings — nothing to agree on",
+    };
+  }
+  const matched = captured.length === standings.length && captured.every((id, i) => id === standings[i]);
   return { matched, captured, standings };
 }
 
