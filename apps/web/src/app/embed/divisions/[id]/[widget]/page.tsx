@@ -5,6 +5,8 @@
 import { notFound } from "next/navigation";
 import { resolveModule } from "@/server/engine-db";
 import { embedDivisionData } from "@/server/embed-data";
+import { captureServer } from "@/lib/posthog-server";
+import { EVENTS } from "@/lib/analytics-events";
 import { resolveEntrantBadge } from "@/lib/entrant-badge";
 import { publicThemeStyle } from "@/lib/public-theme";
 import type { MetricSpecLike } from "@/lib/public-site";
@@ -38,6 +40,20 @@ export default async function EmbedWidgetPage({ params }: Props) {
   if (!resolved.ok) notFound();
   const { org, competition, division, stages, pools, fixtures, standings, entrants, tz } =
     resolved.data;
+
+  // Item 0: this event has existed since the PLG loops shipped and has never
+  // been fired. No user is in scope on an embed, so the org carries the
+  // identity, per CaptureArgs' own note on synthetic ids. This route is
+  // ISR-cached (revalidate=30 above) — the capture fires on RENDER, not per
+  // viewer request, so it counts cache fills, not loads. A consented-traffic
+  // count of renders, never a total (captureServer no-ops without a PostHog
+  // key, and is consent-gated).
+  await captureServer({
+    event: EVENTS.EMBED_RENDERED,
+    distinctId: `org:${org.id}`,
+    orgId: org.id,
+    properties: { widget, divisionId: division.id, competitionId: competition.id },
+  });
 
   let metricSpecs: MetricSpecLike[] = [];
   let cascade: readonly string[] = [];

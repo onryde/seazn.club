@@ -719,6 +719,38 @@ test("console routes: no horizontal scroll", async ({ page, request }) => {
   }
 });
 
+// The division tab rail is a SCROLLING rail, not clipped content — a
+// distinction a `scrollWidth > clientWidth` scan cannot make on its own, and
+// the page-level no-horizontal-scroll gate above cannot see at all because the
+// box scrolls inside itself. Nothing classified it until W4: "the tabs are
+// reachable at 320" was true by accident. (The comment at page.tsx:500 citing
+// "v3/02 §3.3" as the source for this rail's behaviour points at a document
+// that does not exist anywhere under docs/ — treat it as a hypothesis, not a
+// ruling; it is not why this test exists.)
+test("division tab rail overflows reachably, never clipped", async ({ page, request }) => {
+  await page.goto(await divisionPath(request, divisionId, "?tab=fixtures"));
+  const { clipped, scrollable } = await overflowingIn(
+    page,
+    "nav.scroll-x",
+    "a",
+    "the division tab rail is absent",
+  );
+  expect(clipped, "the tab rail (or something in it) is clipped, not scrollable").toEqual([]);
+  // Only phone widths are tight enough to force the rail to overflow (measured:
+  // it does at all five, 320-430) — at >=768 every tab fits without scrolling,
+  // which is correct, not a gap in this gate. Scoping the vacuousness check to
+  // where overflow is guaranteed is what stops the SECOND assertion itself
+  // being the vacuous one (a fixed `toBeGreaterThan(0)` would fail for a real,
+  // non-defect reason on tablet-768/tablet-834 — confirmed by running the
+  // unscoped version first).
+  if ((projectViewport()?.width ?? 0) < 768) {
+    expect(
+      scrollable.length,
+      "the rail did not overflow at all — this gate is vacuous here",
+    ).toBeGreaterThan(0);
+  }
+});
+
 /**
  * Settings W2 task 4 — the org identity row at `/settings?tab=organization`.
  *

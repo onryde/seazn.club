@@ -6,6 +6,8 @@ import type { Metadata } from "next";
 import { ChevronRight } from "lucide-react";
 import { getPublicOrg } from "@/server/public-site/data";
 import { publicPosts } from "@/server/usecases/org-posts";
+import { captureServer } from "@/lib/posthog-server";
+import { EVENTS } from "@/lib/analytics-events";
 import { competitionChip, chipLabelKey } from "@/lib/public-site";
 import { kindEyebrow } from "@/lib/news-presentation";
 import { renderProse } from "@/lib/prose";
@@ -77,6 +79,16 @@ export default async function OrgLandingPage({ params }: Props) {
   const { orgSlug } = await params;
   const data = await getPublicOrg(orgSlug);
   if (!data) notFound();
+  // This route is ISR-cached (revalidate=30 above) — the capture fires on
+  // RENDER, not per viewer request, so it counts cache fills, not loads. A
+  // consented-traffic count of renders, never a total (captureServer no-ops
+  // without a PostHog key, and is consent-gated).
+  await captureServer({
+    event: EVENTS.PUBLIC_PROFILE_VIEWED,
+    distinctId: `org:${data.org.id}`,
+    orgId: data.org.id,
+    properties: { orgSlug },
+  });
   const { org, competitions } = data;
   const locale = orgLocale(org.default_locale);
   const dict = await getDictionary(locale, "public");

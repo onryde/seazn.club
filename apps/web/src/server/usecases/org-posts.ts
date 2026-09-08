@@ -449,7 +449,7 @@ export async function draftPostsForDecidedFixture(
   tx: Tx,
   fixtureId: string,
   newsAuto: boolean,
-): Promise<void> {
+): Promise<DraftedAutoPost[]> {
   // P9 cutover: venue is DERIVED from venues.name via fixtures.venue_id —
   // fixtures.venue (the frozen free-text column) is never written since pass
   // 3a, so a fixture decided after the cutover drafted its result/recap post
@@ -476,8 +476,8 @@ export async function draftPostsForDecidedFixture(
     where f.id = ${fixtureId}`;
   // Cheap probe: opt-in division only, and Pro news.auto live (a community org
   // whose toggle somehow reads true still gets no draft).
-  if (!fx || !fx.auto_posts) return;
-  if (!newsAuto) return;
+  if (!fx || !fx.auto_posts) return [];
+  if (!newsAuto) return [];
 
   const locale: Locale = toLocale(fx.default_locale);
   const decided = DECIDED.has(fx.status);
@@ -487,13 +487,17 @@ export async function draftPostsForDecidedFixture(
     // round; published posts are never touched (SPEC-2). Re-decide re-enters via
     // the decided branch and the unique index keeps the count at one.
     await staleDrafts(tx, fx);
-    return;
+    return [];
   }
 
-  await draftResult(tx, fx, locale);
+  const drafted: DraftedAutoPost[] = [];
+  const result = await draftResult(tx, fx, locale);
+  if (result) drafted.push(result);
   if (fx.round_no !== null && TABLE_KINDS.has(fx.stage_kind)) {
-    await maybeDraftRecap(tx, fx, locale);
+    const recap = await maybeDraftRecap(tx, fx, locale);
+    if (recap) drafted.push(recap);
   }
+  return drafted;
 }
 
 async function staleDrafts(tx: Tx, fx: FixtureCtx): Promise<void> {
@@ -517,7 +521,7 @@ async function staleDrafts(tx: Tx, fx: FixtureCtx): Promise<void> {
   }
 }
 
-async function draftResult(tx: Tx, fx: FixtureCtx, locale: Locale): Promise<void> {
+async function draftResult(tx: Tx, fx: FixtureCtx, locale: Locale): Promise<DraftedAutoPost | null> {
   const [state] = await tx<{ summary: unknown }[]>`
     select summary from match_states where fixture_id = ${fx.fixture_id}`;
   const scorers = await extractScorers(tx, fx);
@@ -551,10 +555,10 @@ async function draftResult(tx: Tx, fx: FixtureCtx, locale: Locale): Promise<void
     ...(fx.round_no !== null ? { round_no: fx.round_no } : {}),
     stale: false,
   };
-  await insertDraft(tx, fx, "result", title, bodyMd, autoSource, enriched);
+  return insertDraft(tx, fx, "result", title, bodyMd, autoSource, enriched);
 }
 
-async function maybeDraftRecap(tx: Tx, fx: FixtureCtx, locale: Locale): Promise<void> {
+async function maybeDraftRecap(tx: Tx, fx: FixtureCtx, locale: Locale): Promise<DraftedAutoPost | null> {
   const roundNo = fx.round_no!;
   // Round numbers restart per stage (natural key stage+round+seq) — scope the
   // completeness probe to THIS stage, else a scheduled knockout round 1 blocks
@@ -563,7 +567,7 @@ async function maybeDraftRecap(tx: Tx, fx: FixtureCtx, locale: Locale): Promise<
     select count(*) filter (where status not in ('decided','finalized','forfeited'))::int as open
     from fixtures
     where division_id = ${fx.division_id} and stage_id = ${fx.stage_id} and round_no = ${roundNo}`;
-  if (open > 0) return; // round not complete yet
+  if (open > 0) return null; // round not complete yet
 
   const resultRows = await tx<
     { home_name: string | null; away_name: string | null; home_id: string | null; away_id: string | null; summary: unknown }[]
@@ -604,7 +608,7 @@ async function maybeDraftRecap(tx: Tx, fx: FixtureCtx, locale: Locale): Promise<
     round_no: roundNo,
     stale: false,
   };
-  await insertDraft(tx, fx, "round_recap", title, bodyMd, autoSource, enriched);
+  return insertDraft(tx, fx, "round_recap", title, bodyMd, autoSource, enriched);
 }
 
 async function insertDraft(
@@ -615,7 +619,7 @@ async function insertDraft(
   bodyMd: string,
   autoSource: Record<string, unknown>,
   enriched: boolean,
-): Promise<void> {
+): Promise<DraftedAutoPost | null> {
   const row = await insertGeneratedPost(tx, {
     orgId: fx.org_id,
     competitionId: fx.competition_id,
@@ -627,13 +631,21 @@ async function insertDraft(
   });
   // Only on a REAL insert — the auto-once index (V295) on-conflict-do-nothing
   // skips a repeat firing for the same fixture/round, and that idempotent
-  // no-op must not be logged as a fresh draft.
-  if (row) {
-    log.info(
-      { orgId: fx.org_id, fixtureId: fx.fixture_id, divisionId: fx.division_id, kind, enriched },
-      "post_drafted",
-    );
-  }
+  // no-op must not be logged as a fresh draft, nor reported to the caller as
+  // one to capture (review round 1, finding 2 — the guard's runtime behaviour
+  // in BOTH directions is proven in org-posts-auto-draft-capture.test.ts).
+  if (!row) return null;
+  log.info(
+    { orgId: fx.org_id, fixtureId: fx.fixture_id, divisionId: fx.division_id, kind, enriched },
+    "post_drafted",
+  );
+  // Handed back rather than captured here: this runs inside the CALLER's open
+  // transaction (`tx` is passed in, never opened by this function), and on
+  // the scoring hot path that transaction is the live score write itself
+  // (review round 1, finding 1 — usecases/scoring.ts's refreshNews fires the
+  // capture only after that transaction commits, matching `void
+  // publishFixtureUpdate`'s fire-and-forget shape).
+  return { orgId: fx.org_id, kind, trigger: autoSource.trigger ?? null };
 }
 
 /**
@@ -688,6 +700,13 @@ async function insertGeneratedPost(
     },
   );
 }
+
+/** What a caller needs to fire `POST_AUTO_DRAFTED` for a real insert, handed
+ *  back rather than captured at the insert site — see `insertDraft`'s
+ *  comment. Distinct from `POST_PUBLISHED{auto:true}`, which fires only once
+ *  a human publishes the draft; counting the publish as the auto-post is what
+ *  made item 0's "auto-posted items" unanswerable. */
+export type DraftedAutoPost = { orgId: string; kind: PostKind; trigger: unknown };
 
 /** Scorers list for the result draft: the fixture's ledger folded through the
  *  sport's playerStats model on the "goals" metric (best-effort — a fold hiccup
@@ -1614,6 +1633,14 @@ export async function generateWeeklyDigest(auth: AuthCtx, orgId: string): Promis
   );
   // skipIfEmpty is not set above, so digestForOrg cannot return null here.
   if (!post) throw new HttpError(500, "digest generation failed unexpectedly");
+  // AFTER the transaction commits (review round 1, finding 1) — captureServer
+  // does a real network round trip and must never hold a tx open on it.
+  void captureServer({
+    event: EVENTS.POST_AUTO_DRAFTED,
+    distinctId: `org:${auth.orgId}`,
+    orgId: auth.orgId,
+    properties: { kind: post.kind, trigger: (post.autoSource as { trigger?: unknown } | null)?.trigger ?? null },
+  });
   return post;
 }
 
@@ -1681,7 +1708,20 @@ export async function sweepWeeklyDigests(
       const post = await withTenant(orgId, (tx) =>
         digestForOrg(tx, orgId, nowMs, scope.allowed, { skipIfEmpty: true }),
       );
-      if (post) digestsCreated += 1;
+      if (post) {
+        digestsCreated += 1;
+        // AFTER the transaction commits — same reasoning as the button path
+        // above (review round 1, finding 1).
+        void captureServer({
+          event: EVENTS.POST_AUTO_DRAFTED,
+          distinctId: `org:${orgId}`,
+          orgId,
+          properties: {
+            kind: post.kind,
+            trigger: (post.autoSource as { trigger?: unknown } | null)?.trigger ?? null,
+          },
+        });
+      }
     } catch (err) {
       log.warn({ orgId, err: String(err) }, "weekly digest sweep: org failed, continuing with the rest");
     }

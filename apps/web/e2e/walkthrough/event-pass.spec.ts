@@ -7,17 +7,17 @@ import {
   expectNoHorizontalScroll,
   mintLoginPathBySql,
   orgGroupIdSql,
-} from "./helpers";
+} from "../helpers";
 // Type-only (erased at build, so no `@/` alias resolution happens at runtime).
 // The wire test at the foot of this file names the rungs and the currency it
 // prices them in; retyping either union here is how a third rung would end up
 // unwitnessed.
-import type { PassKey } from "../src/lib/currency";
+import type { PassKey } from "../../src/lib/currency";
 // Also type-only. Keyed off the real union so a THIRD lock reason is a compile
 // error in the arm table below rather than an arm this file silently never
 // visits — the same discipline the components' own `Record<PassLockReason, …>`
 // props enforce.
-import type { PassLockReason } from "../src/lib/entitlements";
+import type { PassLockReason } from "../../src/lib/entitlements";
 // The one RUNTIME import from the app side, and deliberately not
 // `@/lib/currency`: see e2e/price-kit.ts for why importing that here collects
 // zero tests instead of failing loudly. Every money figure below — rendered or
@@ -29,7 +29,7 @@ import {
   passActiveMarker,
   passLabel,
   passMinor,
-} from "./price-kit";
+} from "../price-kit";
 
 // Event Pass, end to end, through a REAL Stripe test-mode purchase (task 22).
 //
@@ -61,7 +61,7 @@ import {
 //   cd apps/web && npm run build && npx next start -p 3021
 //   set -a; . ./.env.local; set +a
 //   E2E_PROD_TARGET=1 PLAYWRIGHT_BASE=http://localhost:3021 \
-//     npx playwright test --project=parallel e2e/event-pass.spec.ts
+//     npx playwright test e2e/walkthrough/event-pass.spec.ts --project=walkthrough
 //
 // Nothing here skips. A missing key FAILS the run with the line above, because
 // a green suite that quietly stopped buying anything is exactly the failure this
@@ -467,6 +467,16 @@ async function postSignedStripeWebhook(
 
 // ---------------------------------------------------------------------------
 
+// SERIAL, file-wide, and not merely for tidiness: U1 sets `stripeUsable` from
+// a live Stripe probe and U6/U12/U14/U15/U16 each `test.skip(!stripeUsable, …)`
+// on it. That flag is a closure local to each viewport's describe block, and
+// the walkthrough leg runs `--workers=3` under `fullyParallel: true`. Each
+// worker re-evaluates this module independently, so without a serial pin the
+// scheduler is free to hand U1 to one worker and U16 to another whose own copy
+// of `stripeUsable` never left `false` — U16 silently skips and the leg
+// reports green, which is exactly the failure this file exists to end.
+test.describe.configure({ mode: "serial" });
+
 test.beforeAll(() => {
   // A failure, never a skip. See the header.
   if (!/^(sk|rk)_test_/.test(STRIPE_KEY)) {
@@ -517,7 +527,18 @@ for (const vp of VIEWPORTS) {
       // real key returns 200 and everything below RUNS for real.
       const probeStatus = await passCheckoutProbeStatus(page.request, rig.orgId, rig.compId);
       stripeUsable = probeStatus === 200;
-      test.skip(probeStatus >= 500, "Stripe not usable (dummy key) — skipping the pass money path");
+      // The message reports the STATUS, never a guessed cause. It used to say
+      // "(dummy key)", which is one reason a probe can 5xx and not the one that
+      // actually fired: the first real walkthrough run (2026-09-08) skipped here
+      // with a REAL key because Stripe answered `resource_missing` — the pass
+      // price does not exist in the shared test account until `stripe:sync`
+      // runs. A hardcoded cause sends the next reader to the wrong fix.
+      test.skip(
+        probeStatus >= 500,
+        `Stripe not usable — /api/billing/pass-checkout probe returned ${probeStatus}. ` +
+          "A real key still 5xxes when the pass price is unsynced (resource_missing); " +
+          "check the server log before assuming the key is the dummy.",
+      );
       // Pin the non-skip path to a real 200 so this can never silently become an
       // unconditional skip (billing.spec.ts:255-257 learned this the hard way).
       expect(probeStatus).toBe(200);
@@ -970,7 +991,7 @@ test.describe("checkout sheet vs the cookie banner", () => {
         // Stripe iframe, which never mounts under CI's dummy key. Skip cleanly
         // there; a real key returns 200 and the hit-test RUNS.
         const probeStatus = await passCheckoutProbeStatus(page.request, rig.orgId, rig.compId);
-        test.skip(probeStatus >= 500, "Stripe not usable (dummy key) — skipping");
+        test.skip(probeStatus >= 500, `Stripe not usable — pass-checkout probe returned ${probeStatus}`);
         expect(probeStatus).toBe(200);
         await page.goto(upgradeUrl(rig));
         // The banner must actually be up, or this proves nothing.

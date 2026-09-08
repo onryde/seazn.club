@@ -9,6 +9,7 @@ import {
   TAG,
   type RosteredFixture,
 } from "./helpers";
+import { consentedAnonymousState, expectNoCookieBanner } from "./scorepad-a11y-kit";
 
 // ScoringPad v3, wave R2/task F1 — NEW coverage the wave's own acceptance
 // list requires beyond converting the four pre-existing cricket specs
@@ -418,10 +419,26 @@ test("cricket v3: the device link (/score/[token]) renders the v3 pad, not the l
   // Explicit fresh, unauthenticated context — the device route's own
   // credential is the token, never the ambient session (same posture
   // scorepad-v2.spec.ts's own device-link test takes).
-  const anonCtx = await browser.newContext({ storageState: undefined });
+  const anonCtx = await browser.newContext({ storageState: await consentedAnonymousState() });
   try {
     const dlPage = await anonCtx.newPage();
     await dlPage.goto(`/score/${minted.data!.secret}`);
+    // Assert the SEED itself, not just its downstream effect: see
+    // task-2-report.md, Step 7 — `expectNoCookieBanner` alone DID red under a
+    // real mutant here (this file has no pre-existing reactive dismissal
+    // before it runs), but it is still a race against hydration, not a
+    // deterministic check. The consent keys are context state — read them
+    // directly as a companion assertion that cannot race.
+    const { CONSENT_KEY, CONSENT_VERSION_KEY, COOKIE_POLICY_VERSION } = await import("../src/lib/consent");
+    const seeded = await dlPage.evaluate(
+      ([k, v]) => ({ choice: localStorage.getItem(k), version: localStorage.getItem(v) }),
+      [CONSENT_KEY, CONSENT_VERSION_KEY],
+    );
+    expect(
+      seeded,
+      "the anonymous context did not carry seeded consent, so the banner will mount and race this spec",
+    ).toEqual({ choice: "rejected", version: COOKIE_POLICY_VERSION });
+    await expectNoCookieBanner(dlPage, "anonymous scorer context");
     // DeviceScorePad (app/score/[token]/page.tsx) has no
     // `data-testid="score-pad"` — that testid is minted only by
     // fixture-console.tsx, the CONSOLE route's own wrapper (gallery.capture.ts's

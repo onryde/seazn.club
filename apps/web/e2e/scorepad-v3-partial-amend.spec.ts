@@ -4,6 +4,7 @@ import { HOLD_MS } from "../src/components/v2/scorepad/queue";
 import { DOUBLE_SUBMIT_WINDOW_MS } from "../src/components/v2/scorepad/use-pad-pipeline";
 import {
   HIT_TARGET_FLOOR_PX,
+  consentedAnonymousState,
   floorViolationLines,
   hitTargetFloorReport,
   measureHitTargets,
@@ -198,13 +199,31 @@ test("badminton v3 device link at 320: a drained dock leaves a tappable Partial 
 }) => {
   test.setTimeout(BUDGET_MS);
   const { fx, secret, homeFirst, homeSecond } = await seedPair(request, "320");
-  const ctx = await browser.newContext({ storageState: undefined, viewport: { width: 320, height: 720 } });
+  const ctx = await browser.newContext({
+    storageState: await consentedAnonymousState(),
+    viewport: { width: 320, height: 720 },
+  });
   try {
     const page = await ctx.newPage();
     // 320 FIRST. The scorer is holding a phone at a venue, and the activity row
     // is the tightest space in the pad — it already carries #seq, a caption, a
     // provenance line and Void.
     await openDeviceLink(page, secret);
+    // Assert the SEED, not a downstream effect racing something else's own
+    // dismissal — see task-2-report.md, Step 7: `expectNoCookieBanner` here
+    // raced this file's own `openDeviceLink`'s reactive Accept-click (and,
+    // under load, the SSR-visible pad winning against the hydration-gated
+    // banner), so it passed in both the seeded and unseeded states. The
+    // consent keys are deterministic context state — read them directly.
+    const { CONSENT_KEY, CONSENT_VERSION_KEY, COOKIE_POLICY_VERSION } = await import("../src/lib/consent");
+    const seeded = await page.evaluate(
+      ([k, v]) => ({ choice: localStorage.getItem(k), version: localStorage.getItem(v) }),
+      [CONSENT_KEY, CONSENT_VERSION_KEY],
+    );
+    expect(
+      seeded,
+      "the anonymous context did not carry seeded consent, so the banner will mount and race this spec",
+    ).toEqual({ choice: "rejected", version: COOKIE_POLICY_VERSION });
     await rallyWithDrainedDock(page);
 
     // The defect: the rally is on the ledger carrying `wonBy` and nothing else.
@@ -360,7 +379,10 @@ test("badminton v3 device link: taking back an amendment mid-hold leaves the ori
 }) => {
   test.setTimeout(BUDGET_MS);
   const { fx, secret } = await seedPair(request, "Cancel");
-  const ctx = await browser.newContext({ storageState: undefined, viewport: { width: 390, height: 844 } });
+  const ctx = await browser.newContext({
+    storageState: await consentedAnonymousState(),
+    viewport: { width: 390, height: 844 },
+  });
   try {
     const page = await ctx.newPage();
     await openDeviceLink(page, secret);
@@ -422,7 +444,10 @@ test("badminton v3 device link: after a RELOAD the scorer can no longer amend th
 }) => {
   test.setTimeout(BUDGET_MS);
   const { fx, secret } = await seedPair(request, "Reload");
-  const ctx = await browser.newContext({ storageState: undefined, viewport: { width: 390, height: 844 } });
+  const ctx = await browser.newContext({
+    storageState: await consentedAnonymousState(),
+    viewport: { width: 390, height: 844 },
+  });
   try {
     const page = await ctx.newPage();
     await openDeviceLink(page, secret);
@@ -468,7 +493,10 @@ test("badminton v3 device link: a partial row that a later rally now sits after 
 }) => {
   test.setTimeout(BUDGET_MS);
   const { fx, secret } = await seedPair(request, "Tail");
-  const ctx = await browser.newContext({ storageState: undefined, viewport: { width: 390, height: 844 } });
+  const ctx = await browser.newContext({
+    storageState: await consentedAnonymousState(),
+    viewport: { width: 390, height: 844 },
+  });
   try {
     const page = await ctx.newPage();
     await openDeviceLink(page, secret);

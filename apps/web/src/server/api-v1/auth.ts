@@ -252,7 +252,17 @@ export async function requireFixtureActor(
     assertUuid(fixtureId, "fixture");
     // Ownership lives in ONE predicate (device-links.ts) — the realtime-token
     // route asks the same question and must get the same answer.
-    if (!deviceLinkCoversFixture(link, fixtureId)) {
+    // Refusals are as cheap to probe as grants are, and until W4 only grants
+    // were metered — a stranger holding one valid link could sweep every
+    // fixture id at no cost, at read intent for free even after this. Its own
+    // key, so a prober cannot exhaust a legitimate scorer's 10/s budget (and
+    // vice versa), and no intent gate, because a cross-fixture 403 is equally
+    // free to probe at either one.
+    const covers = deviceLinkCoversFixture(link, fixtureId);
+    if (!covers) {
+      await rateLimit(`dlv1-refuse:${link.id}`, { max: 10, windowSeconds: 1 });
+    }
+    if (!covers) {
       throw new HttpError(403, "This device link is for a different fixture");
     }
     // Scoring cadence per link (doc 08 §6): same 10/s budget as a scorer.

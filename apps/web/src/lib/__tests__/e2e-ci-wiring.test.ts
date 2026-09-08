@@ -163,6 +163,7 @@ const WALKTHROUGH_SPECS: string[] = [
   "registration-connect.spec.ts",
   "rs007-invite-pay-cancel.spec.ts",
   "rs007-money-matrix.spec.ts",
+  "event-pass.spec.ts",
 
   // Registration — the entrant-facing journeys.
   "rs007-registration-journey.spec.ts",

@@ -14,6 +14,8 @@ import { EngineError } from "@seazn/engine/core";
 import { appendEvent } from "@/server/engine-db";
 import { recomputeStandings } from "@/server/engine-db";
 import { log } from "@/server/logger";
+import { captureServer } from "@/lib/posthog-server";
+import { EVENTS } from "@/lib/analytics-events";
 import { publishDivisionUpdate, publishFixtureUpdate } from "@/lib/realtime";
 import {
   fireDivisionRevalidate,
@@ -347,13 +349,29 @@ export async function refreshNews(auth: AuthCtx, fixtureId: string): Promise<voi
       select d.competition_id from fixtures f join divisions d on d.id = f.division_id
       where f.id = ${fixtureId}`;
     const newsAuto = await hasFeature(auth.orgId, "news.auto", scope?.competition_id);
-    await withTenant(auth.orgId, async (tx) => {
+    const drafted = await withTenant(auth.orgId, async (tx) => {
       const [row] = await tx<{ auto_posts: boolean }[]>`
         select d.auto_posts from fixtures f join divisions d on d.id = f.division_id
         where f.id = ${fixtureId}`;
-      if (!row?.auto_posts) return;
-      await draftPostsForDecidedFixture(tx, fixtureId, newsAuto);
+      if (!row?.auto_posts) return [];
+      return draftPostsForDecidedFixture(tx, fixtureId, newsAuto);
     });
+    // AFTER the transaction commits, never inside it (review round 1, finding
+    // 1): captureServer does a real network round trip, and this tx is the
+    // live score write itself — holding it open on PostHog would stall a
+    // scorer's tap. Fire-and-forget, matching `void publishFixtureUpdate`'s
+    // shape below; captureServer never throws, so no `.catch` is needed. The
+    // "only on a real insert" guard already ran inside the transaction
+    // (`insertDraft`'s on-conflict-do-nothing check) — `drafted` only ever
+    // carries rows that were actually written.
+    for (const post of drafted) {
+      void captureServer({
+        event: EVENTS.POST_AUTO_DRAFTED,
+        distinctId: `org:${post.orgId}`,
+        orgId: post.orgId,
+        properties: { kind: post.kind, trigger: post.trigger },
+      });
+    }
   } catch (err) {
     log.error({ err }, "scoring: news auto-draft failed (score write unaffected)");
   }

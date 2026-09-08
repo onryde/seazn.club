@@ -39,6 +39,12 @@ export const EVENTS = {
   PLAYER_STARTED_OWN_ORG: "player_started_own_org",
   COMPETITION_MADE_PUBLIC: "competition_made_public",
   EMBED_RENDERED: "embed_rendered",
+  /** A public org profile was rendered. Distribution baseline (entitlements
+   *  v18 item 0) — consent-gated, so a consented-traffic count, not a total. */
+  PUBLIC_PROFILE_VIEWED: "public_profile_viewed",
+  /** An auto-draft was GENERATED. Distinct from post_published{auto:true},
+   *  which only fires once a human publishes that draft. */
+  POST_AUTO_DRAFTED: "post_auto_drafted",
   /** Pricing page: visitor opened the hidden Pro Plus offer. */
   PRICING_PLUS_REVEALED: "pricing_plus_revealed",
   // Org news (SPEC-2) — composer + publish (server-side) and the public share
