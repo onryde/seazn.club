@@ -26,7 +26,7 @@ import { runTinySuite, TINY_PACK_PATH } from "../suites/tiny.ts";
 import { makeScheduleWorld } from "./_schedule-routes.ts";
 import { makeDivisionPhaseWorld } from "./_division-phase.ts";
 import { makeAdvanceRoutesWorld } from "./_advance-routes.ts";
-import { makeOracleRoutesWorld } from "./_oracle-routes.ts";
+import { makeOracleRoutesWorld, tinyDivisionPlayerStats, tinyLeagueTableRows } from "./_oracle-routes.ts";
 
 const silent = pino({ level: "silent" });
 
@@ -71,6 +71,12 @@ function fakeServer(
   // league, which was true of every pack this file drove before this task.
   const kindByStageId = new Map<string, string>();
   const divisionIdByStageId = new Map<string, string>();
+  // B05 T4b — the two names `_oracle-routes.ts`'s `tinyLeagueTableRows`/
+  // `tinyDivisionPlayerStats` key their real (non-placement) fixture values
+  // on: the `/stages` and `/divisions` POST bodies' own `name` field
+  // (`seed.ts`), never a pack ref this fake never sees.
+  const stageNameById = new Map<string, string>();
+  const divisionNameById = new Map<string, string>();
   const fixtureDivisionId = new Map<string, string>();
   // B05 T2.5 (D9) — see `_division-phase.ts`'s own header comment: EVERY
   // `sql`-passing fake now reaches `/start`/`GET /divisions/{id}`
@@ -116,6 +122,20 @@ function fakeServer(
       const entrants = schedule.entrantsOfDivision(divisionId);
       return opts.wrongFinalStandingsOrder === true ? [...entrants].reverse() : entrants;
     },
+    // B05 T4b — the two REAL league tables (`d-tiny`/`s-league`,
+    // `d-badminton`/`s-badminton-league`); `undefined` for `s-playoff`
+    // (the knockout `getRankedEntrantIds` above already covers) falls back
+    // to the placement shape unchanged.
+    getFullStandingsRows: (stageId) => {
+      const divisionId = divisionIdByStageId.get(stageId);
+      const stageName = stageNameById.get(stageId);
+      if (divisionId === undefined || stageName === undefined) return undefined;
+      return tinyLeagueTableRows(stageName, schedule.entrantsOfDivision(divisionId));
+    },
+    getDivisionPlayerStats: (divisionId) => {
+      if (divisionNameById.get(divisionId) !== "Tiny") return undefined;
+      return tinyDivisionPlayerStats((fullName) => `person-${slug(fullName)}`);
+    },
   });
 
   const transport: ProbeTransport = {
@@ -151,9 +171,10 @@ function fakeServer(
         return { id: `comp-${slug((body as { name: string }).name)}` } as T;
       }
       if (method === "POST" && /^\/api\/v1\/competitions\/[^/]+\/divisions$/.test(routePath)) {
-        const b = body as { config?: { dls?: { enabled?: boolean } } };
+        const b = body as { name?: string; config?: { dls?: { enabled?: boolean } } };
         const id = `div-${++divisionCounter}`;
         dlsByDivisionId.set(id, b.config?.dls?.enabled === true);
+        if (b.name !== undefined) divisionNameById.set(id, b.name);
         return { id } as T;
       }
       const entrantsMatch = /^\/api\/v1\/divisions\/([^/]+)\/entrants$/.exec(routePath);
@@ -167,12 +188,13 @@ function fakeServer(
       }
       if (method === "POST" && /^\/api\/v1\/divisions\/([^/]+)\/stages$/.test(routePath)) {
         const divisionId = routePath.split("/")[4]!;
-        const stagesBody = body as { kind?: string; config?: { legs?: number } }[];
+        const stagesBody = body as { name?: string; kind?: string; config?: { legs?: number } }[];
         return stagesBody.map((st) => {
           const id = `stage-${++stageCounter}`;
           legsByStageId.set(id, (st.config?.legs as number | undefined) ?? 1);
           kindByStageId.set(id, st.kind ?? "league");
           divisionIdByStageId.set(id, divisionId);
+          if (st.name !== undefined) stageNameById.set(id, st.name);
           schedule.addStage(id, divisionId);
           return { id };
         }) as unknown as T;
@@ -489,13 +511,24 @@ describe("runTinySuite — B05 T1 division-A stream fold wiring", () => {
     // B05 T4 — the runtime oracle layer's own checks: rank crossing
     // (captured vs re-read standings), standings vs `expected.finalRanks`,
     // and champion, all against this fake's clean (unreversed) final order.
+    // B05 T4b — the two comparators T4 left unwired, now reached for every
+    // real subject `_tiny.json` carries: both league tables
+    // (`expected.tables`) and both `d-tiny` leaderboard entries
+    // (`expected.leaderboards`), all BEFORE the T3 advance step's own checks
+    // (this task's wiring runs earlier in `runTinySuite`, right after T2's
+    // import fold). If (false)-ing out either T4b block removes its four
+    // entries from this list — the wiring-level regression this task owes.
     const runtimeOracles = (report.oracles ?? []).filter((o) => o.name.startsWith("oracle:"));
     expect(runtimeOracles.map((o) => o.name)).toEqual([
+      "oracle: d-tiny/s-league standings table",
+      "oracle: d-badminton/s-badminton-league standings table",
+      "oracle: d-tiny leaderboard (scores)",
+      "oracle: d-tiny leaderboard (points)",
       "oracle: s-playoff rank crossing (captured vs standings)",
       "oracle: s-playoff standings rank vs expected.finalRanks",
       "oracle: d-tiny champion",
     ]);
-    expect(runtimeOracles.map((o) => o.passed)).toEqual([true, true, true]);
+    expect(runtimeOracles.map((o) => o.passed)).toEqual([true, true, true, true, true, true, true]);
   });
 
   it("B05 T4 — the runtime oracle is a REAL wire read, not an inert restatement: a reversed re-read standings order reds the run", async () => {
