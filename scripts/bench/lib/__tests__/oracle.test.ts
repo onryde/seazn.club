@@ -1,0 +1,597 @@
+// B05 T4 — unit coverage for lib/oracle.ts, the comparators the whole
+// simulation wave exists for.
+//
+// Every fetch wrapper is exercised through an injected `OracleTransport`
+// fake (`{ raw }`, the same narrow-DI shape `advance.ts`/`simulate.ts` use)
+// — nothing here touches `global.fetch` or a real server. Every comparator
+// is pure and unit-tested directly, with NO transport at all.
+//
+// What this file pins, and why:
+//  * D6 — the runtime oracle is provably distinct from stage 0's own OFFLINE
+//    self-consistency check: mutating an event AFTER stage 0 passes does not
+//    make stage 0 fail (it never reads events for this), but DOES red the
+//    runtime comparator once fed the value that mutation would actually
+//    produce.
+//  * The two-crossing rank comparison is fed two INDEPENDENTLY CONSTRUCTED
+//    arrays (never the same object read twice) so a disagreement test can
+//    actually disagree.
+//  * A leaderboard entry whose NAME matches and whose COUNT does not must
+//    red on the count specifically — asserting a count alone would pass for
+//    the wrong player, asserting a name alone would pass for the wrong
+//    tally (design §8).
+//  * The tie-order cascade comparator is fed an ORDERING-DIFFERENTIAL
+//    fixture — two rows tied on points, where cascade order A picks one
+//    winner and cascade order B picks the other — so the test can actually
+//    tell which cascade ran, not merely that the two rows are present.
+import { readFile } from "node:fs/promises";
+import { describe, expect, it } from "vitest";
+import { newSession, type RawResult, type Session } from "../http.ts";
+import { loadPackValue } from "../pack-io.ts";
+import { TINY_PACK_PATH } from "../suites/tiny.ts";
+import {
+  compareCareerStats,
+  compareChampion,
+  compareLeaderboard,
+  comparePersonDivisionStat,
+  compareRankCrossings,
+  compareStandings,
+  compareTieOrderCascade,
+  fetchDivisionPlayerStats,
+  fetchPersonCareerStats,
+  fetchPersonStats,
+  fetchStandings,
+  renderChampionMismatch,
+  renderLeaderboardMismatch,
+  renderRankCrossingMismatch,
+  renderSideBySide,
+  renderStandingsMismatch,
+  resolveTieWinner,
+  standingsRankOrder,
+  type DivisionPlayerStatsWire,
+  type ExpectedCareerStat,
+  type ExpectedLeaderboardEntry,
+  type ExpectedStandingsRow,
+  type OracleTransport,
+  type PersonCareerStatsWire,
+  type PersonStatsWire,
+  type StandingsRowWire,
+  type StandingsWire,
+} from "../oracle.ts";
+
+const BASE = "http://bench.example";
+
+function session(): Session {
+  return newSession();
+}
+
+function fakeRaw(handler: (path: string, method: string, body: unknown) => RawResult): OracleTransport {
+  return {
+    async raw(_base, _s, path, method = "GET", body): Promise<RawResult> {
+      return handler(path, method, body);
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Fetch wrappers
+// ---------------------------------------------------------------------------
+
+describe("fetchStandings", () => {
+  const okBody: StandingsWire = {
+    stage_id: "stage-1",
+    pool_id: null,
+    rows: [{ entrantId: "e1", played: 1, won: 1, drawn: 0, lost: 0, points: 3 }],
+    computed_through_seq: 5,
+    updated_at: "2026-09-07T00:00:00.000Z",
+  };
+
+  it("returns the standings data on 200", async () => {
+    const t = fakeRaw((path) => {
+      expect(path).toBe("/api/v1/stages/stage-1/standings");
+      return { status: 200, json: { ok: true, data: okBody } };
+    });
+    const out = await fetchStandings(BASE, session(), "stage-1", undefined, t);
+    expect(out).toEqual(okBody);
+  });
+
+  it("appends pool_id when given", async () => {
+    const t = fakeRaw((path) => {
+      expect(path).toBe("/api/v1/stages/stage-1/standings?pool_id=A");
+      return { status: 200, json: { ok: true, data: okBody } };
+    });
+    await fetchStandings(BASE, session(), "stage-1", "A", t);
+  });
+
+  it("throws with the refusal's code and message on a non-200", async () => {
+    const t = fakeRaw(() => ({
+      status: 404,
+      json: { ok: false, error: { code: "NOT_FOUND", message: "stage not found" } },
+    }));
+    await expect(fetchStandings(BASE, session(), "stage-x", undefined, t)).rejects.toThrow(/NOT_FOUND/);
+  });
+});
+
+describe("fetchDivisionPlayerStats", () => {
+  it("returns the leaderboard data on 200", async () => {
+    const body: DivisionPlayerStatsWire = {
+      metrics: [{ key: "points", label: "Points" }],
+      rows: [{ person_id: "p1", full_name: "Ana", stats: { points: 2 } }],
+      requires_detailed_scoring: false,
+    };
+    const t = fakeRaw((path) => {
+      expect(path).toBe("/api/v1/divisions/div-1/stats/players");
+      return { status: 200, json: { ok: true, data: body } };
+    });
+    const out = await fetchDivisionPlayerStats(BASE, session(), "div-1", t);
+    expect(out).toEqual(body);
+  });
+
+  it("throws on refusal", async () => {
+    const t = fakeRaw(() => ({ status: 402, json: { ok: false, error: { code: "PAYMENT_REQUIRED" } } }));
+    await expect(fetchDivisionPlayerStats(BASE, session(), "div-1", t)).rejects.toThrow(/PAYMENT_REQUIRED/);
+  });
+});
+
+describe("fetchPersonStats / fetchPersonCareerStats", () => {
+  it("fetchPersonStats hits the plain route", async () => {
+    const body: PersonStatsWire = { divisions: [{ division_id: "d1", division_name: "D", stats: { points: 2 } }] };
+    const t = fakeRaw((path) => {
+      expect(path).toBe("/api/v1/persons/p1/stats");
+      return { status: 200, json: { ok: true, data: body } };
+    });
+    const out = await fetchPersonStats(BASE, session(), "p1", undefined, t);
+    expect(out).toEqual(body);
+  });
+
+  it("fetchPersonStats appends division_id", async () => {
+    const t = fakeRaw((path) => {
+      expect(path).toBe("/api/v1/persons/p1/stats?division_id=d1");
+      return { status: 200, json: { ok: true, data: { divisions: [] } } };
+    });
+    await fetchPersonStats(BASE, session(), "p1", "d1", t);
+  });
+
+  it("fetchPersonCareerStats hits ?group=sport", async () => {
+    const body: PersonCareerStatsWire = {
+      sports: [{ sport_key: "football", sport_label: "Football", metrics: [], divisions: 1, variants: 1, matches: 3 }],
+    };
+    const t = fakeRaw((path) => {
+      expect(path).toBe("/api/v1/persons/p1/stats?group=sport");
+      return { status: 200, json: { ok: true, data: body } };
+    });
+    const out = await fetchPersonCareerStats(BASE, session(), "p1", t);
+    expect(out).toEqual(body);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// renderSideBySide
+// ---------------------------------------------------------------------------
+
+describe("renderSideBySide", () => {
+  it("renders nothing readable as '(no mismatches)'", () => {
+    expect(renderSideBySide([])).toBe("(no mismatches)");
+  });
+
+  it("renders BOTH the expected and actual value for a mismatch, legibly", () => {
+    const out = renderSideBySide([{ label: "rank 1", expected: "e-alpha Pts7", actual: "e-alpha Pts1" }]);
+    expect(out).toContain("rank 1");
+    expect(out).toContain("expected:");
+    expect(out).toContain("e-alpha Pts7");
+    expect(out).toContain("actual:");
+    expect(out).toContain("e-alpha Pts1");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// compareStandings
+// ---------------------------------------------------------------------------
+
+const expectedTable: ExpectedStandingsRow[] = [
+  { entrantId: "e-alpha", played: 3, won: 2, drawn: 1, lost: 0, points: 7 },
+  { entrantId: "e-bravo", played: 3, won: 0, drawn: 1, lost: 2, points: 1 },
+];
+
+describe("compareStandings", () => {
+  it("matches an identical, same-order actual", () => {
+    const actual: StandingsRowWire[] = expectedTable.map((r) => ({ ...r }));
+    const cmp = compareStandings(expectedTable, actual);
+    expect(cmp.matched).toBe(true);
+    expect(cmp.rows.every((r) => r.matched)).toBe(true);
+  });
+
+  it("reds when a field disagrees (points), and the mismatch renders BOTH sides", () => {
+    const actual: StandingsRowWire[] = [
+      { ...expectedTable[0]!, points: 1 }, // wrong — the actual product bug class this guards
+      { ...expectedTable[1]! },
+    ];
+    const cmp = compareStandings(expectedTable, actual);
+    expect(cmp.matched).toBe(false);
+    expect(cmp.rows[0]!.mismatchFields).toContain("points");
+    const rendered = renderStandingsMismatch(cmp);
+    expect(rendered).toContain("Pts7"); // expected
+    expect(rendered).toContain("Pts1"); // actual
+  });
+
+  it("is ORDER-sensitive: a same-length, reordered actual does not match", () => {
+    const reordered: StandingsRowWire[] = [{ ...expectedTable[1]! }, { ...expectedTable[0]! }];
+    const cmp = compareStandings(expectedTable, reordered);
+    expect(cmp.matched).toBe(false);
+  });
+
+  it("the EMPTY set is checked explicitly: empty expected + empty actual matches", () => {
+    const cmp = compareStandings([], []);
+    expect(cmp.matched).toBe(true);
+    expect(cmp.rows).toHaveLength(0);
+  });
+
+  it("the EMPTY set is checked explicitly: empty actual against a non-empty expected reds, never vacuously", () => {
+    const cmp = compareStandings(expectedTable, []);
+    expect(cmp.matched).toBe(false);
+    expect(cmp.rows.every((r) => !r.matched)).toBe(true);
+  });
+
+  it("compares metrics by value, not by reference/key-order", () => {
+    const withMetrics: ExpectedStandingsRow[] = [{ ...expectedTable[0]!, metrics: { diff: 4, buchholz: 2 } }];
+    const same: StandingsRowWire[] = [{ ...withMetrics[0]!, metrics: { buchholz: 2, diff: 4 } }];
+    expect(compareStandings(withMetrics, same).matched).toBe(true);
+    const different: StandingsRowWire[] = [{ ...withMetrics[0]!, metrics: { buchholz: 2, diff: 5 } }];
+    expect(compareStandings(withMetrics, different).matched).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// resolveTieWinner / compareTieOrderCascade — the ORDERING-DIFFERENTIAL case
+// ---------------------------------------------------------------------------
+
+describe("resolveTieWinner / compareTieOrderCascade", () => {
+  // Tied on points; diff favours A, buchholz favours B — a genuine
+  // ordering-differential fixture, not a membership one.
+  const a: StandingsRowWire = { entrantId: "a", played: 3, won: 1, drawn: 1, lost: 1, points: 4, metrics: { diff: 5, buchholz: 2 } };
+  const b: StandingsRowWire = { entrantId: "b", played: 3, won: 1, drawn: 1, lost: 1, points: 4, metrics: { diff: 3, buchholz: 6 } };
+
+  it("cascade [points, diff] picks A", () => {
+    expect(resolveTieWinner(["points", "diff"], a, b)).toBe("a");
+  });
+
+  it("the SAME two rows, cascade [points, buchholz] picks B — same data, different cascade, different result", () => {
+    expect(resolveTieWinner(["points", "buchholz"], a, b)).toBe("b");
+  });
+
+  it("is 'unresolvable' when a decisive key has no readable value on either row (an h2h_* key)", () => {
+    expect(resolveTieWinner(["points", "h2h_diff"], a, b)).toBe("unresolvable");
+  });
+
+  it("is 'tie' when every cascade key agrees", () => {
+    expect(resolveTieWinner(["points"], a, { ...b, metrics: { diff: 5, buchholz: 2 } })).toBe("tie");
+  });
+
+  it("compareTieOrderCascade matches when the live order agrees with the cascade [points, diff] (A ranked ahead)", () => {
+    const cmp = compareTieOrderCascade(["points", "diff"], [a, b]);
+    expect(cmp.matched).toBe(true);
+    expect(cmp.checkedPairs).toBe(1);
+    expect(cmp.skippedPairs).toBe(0);
+  });
+
+  it("compareTieOrderCascade reds when the SAME data is ranked against the SAME cascade in the WRONG order", () => {
+    // b ranked ahead of a, but cascade [points, diff] says a should be first.
+    const cmp = compareTieOrderCascade(["points", "diff"], [b, a]);
+    expect(cmp.matched).toBe(false);
+    expect(cmp.issues).toHaveLength(1);
+  });
+
+  it("a non-tie (different points) needs no tiebreak and is reported as such — not a false pass on a check never run", () => {
+    const notTied: StandingsRowWire[] = [
+      { entrantId: "x", played: 1, won: 1, drawn: 0, lost: 0, points: 3 },
+      { entrantId: "y", played: 1, won: 0, drawn: 0, lost: 1, points: 0 },
+    ];
+    const cmp = compareTieOrderCascade(["points", "diff"], notTied);
+    expect(cmp.matched).toBe(true);
+    expect(cmp.checkedPairs).toBe(0);
+  });
+
+  it("the empty set (no rows, or one row) is checked explicitly and needs no tiebreak", () => {
+    expect(compareTieOrderCascade(["points"], [])).toMatchObject({ matched: true, checkedPairs: 0, skippedPairs: 0 });
+    expect(compareTieOrderCascade(["points"], [a])).toMatchObject({ matched: true, checkedPairs: 0, skippedPairs: 0 });
+  });
+
+  it("an unresolvable pair is SKIPPED, not silently passed as matched-with-no-issue miscounted as checked", () => {
+    const cmp = compareTieOrderCascade(["h2h_diff"], [a, b]);
+    expect(cmp.matched).toBe(true); // no issues raised
+    expect(cmp.checkedPairs).toBe(0); // but nothing was actually checked
+    expect(cmp.skippedPairs).toBe(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// standingsRankOrder / compareRankCrossings — the two-crossing check
+// ---------------------------------------------------------------------------
+
+describe("standingsRankOrder", () => {
+  it("sorts by rank ascending", () => {
+    const rows: StandingsRowWire[] = [
+      { entrantId: "b", played: 0, won: 0, drawn: 0, lost: 0, points: 0, rank: 2 },
+      { entrantId: "a", played: 0, won: 0, drawn: 0, lost: 0, points: 0, rank: 1 },
+    ];
+    expect(standingsRankOrder(rows)).toEqual(["a", "b"]);
+  });
+
+  it("sorts undefined ranks last, stably", () => {
+    const rows: StandingsRowWire[] = [
+      { entrantId: "no-rank-1", played: 0, won: 0, drawn: 0, lost: 0, points: 0 },
+      { entrantId: "ranked", played: 0, won: 0, drawn: 0, lost: 0, points: 0, rank: 1 },
+      { entrantId: "no-rank-2", played: 0, won: 0, drawn: 0, lost: 0, points: 0 },
+    ];
+    expect(standingsRankOrder(rows)).toEqual(["ranked", "no-rank-1", "no-rank-2"]);
+  });
+});
+
+describe("compareRankCrossings", () => {
+  // Two GENUINELY SEPARATE arrays each time — never the same object read
+  // twice, per the coordinator's own clarification: otherwise the
+  // "disagreement is a finding" test is decoration.
+  it("matches when the two INDEPENDENTLY SOURCED crossings agree", () => {
+    const captured = ["e-alpha", "e-bravo"];
+    const standings = ["e-alpha", "e-bravo"];
+    expect(captured).not.toBe(standings); // genuinely separate arrays
+    const cmp = compareRankCrossings(captured, standings);
+    expect(cmp.matched).toBe(true);
+  });
+
+  it("REDS when the captured response and the re-read standings DISAGREE", () => {
+    const captured = ["e-alpha", "e-bravo"]; // the engine's own captured intent
+    const standings = ["e-bravo", "e-alpha"]; // what a customer would see, independently re-read
+    const cmp = compareRankCrossings(captured, standings);
+    expect(cmp.matched).toBe(false);
+    const rendered = renderRankCrossingMismatch(cmp);
+    expect(rendered).toContain("e-alpha, e-bravo");
+    expect(rendered).toContain("e-bravo, e-alpha");
+  });
+
+  it("an absent capture never counts as agreement", () => {
+    const cmp = compareRankCrossings(undefined, ["e-alpha", "e-bravo"]);
+    expect(cmp.matched).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// compareChampion
+// ---------------------------------------------------------------------------
+
+describe("compareChampion", () => {
+  it("matches when standings, captured and expected all agree", () => {
+    const cmp = compareChampion("e-alpha", ["e-alpha", "e-bravo"], ["e-alpha", "e-bravo"]);
+    expect(cmp.matched).toBe(true);
+    expect(cmp.crossingsAgree).toBe(true);
+  });
+
+  it("reds when standings' rank-1 disagrees with expected, even with no capture to contradict it", () => {
+    const cmp = compareChampion("e-alpha", ["e-bravo", "e-alpha"], undefined);
+    expect(cmp.matched).toBe(false);
+    expect(cmp.crossingsAgree).toBe(true); // nothing to disagree with
+  });
+
+  it("reds when the two crossings disagree with EACH OTHER, even though standings alone matches expected", () => {
+    const cmp = compareChampion("e-alpha", ["e-alpha", "e-bravo"], ["e-bravo", "e-alpha"]);
+    expect(cmp.crossingsAgree).toBe(false);
+    expect(cmp.matched).toBe(false);
+    const rendered = renderChampionMismatch(cmp);
+    expect(rendered).toContain("e-alpha");
+    expect(rendered).toContain("e-bravo");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// compareLeaderboard — name AND count
+// ---------------------------------------------------------------------------
+
+describe("compareLeaderboard", () => {
+  const expected: ExpectedLeaderboardEntry[] = [
+    { personId: "p-ana", name: "Ana Alvarez", count: 2 },
+    { personId: "p-bo", name: "Bo Baptiste", count: 1 },
+  ];
+
+  it("matches when every entry's name AND count agree", () => {
+    const actual: DivisionPlayerStatsWire = {
+      metrics: [{ key: "scores", label: "Scores" }],
+      rows: [
+        { person_id: "p-ana", full_name: "Ana Alvarez", stats: { scores: 2 } },
+        { person_id: "p-bo", full_name: "Bo Baptiste", stats: { scores: 1 } },
+      ],
+      requires_detailed_scoring: false,
+    };
+    const cmp = compareLeaderboard("scores", expected, actual);
+    expect(cmp.matched).toBe(true);
+  });
+
+  it("REDS when the name matches but the COUNT does not — the exact vacuity trap design §8 names", () => {
+    const actual: DivisionPlayerStatsWire = {
+      metrics: [{ key: "scores", label: "Scores" }],
+      rows: [
+        { person_id: "p-ana", full_name: "Ana Alvarez", stats: { scores: 99 } }, // right person, WRONG count
+        { person_id: "p-bo", full_name: "Bo Baptiste", stats: { scores: 1 } },
+      ],
+      requires_detailed_scoring: false,
+    };
+    const cmp = compareLeaderboard("scores", expected, actual);
+    expect(cmp.matched).toBe(false);
+    expect(cmp.entries[0]!.nameMatched).toBe(true);
+    expect(cmp.entries[0]!.countMatched).toBe(false);
+    const rendered = renderLeaderboardMismatch(cmp);
+    expect(rendered).toContain("Ana Alvarez = 2");
+    expect(rendered).toContain("Ana Alvarez = 99");
+  });
+
+  it("reds when the count matches but the NAME does not (the wrong-player trap, its positive-pair complement)", () => {
+    const actual: DivisionPlayerStatsWire = {
+      metrics: [{ key: "scores", label: "Scores" }],
+      rows: [
+        { person_id: "p-ana", full_name: "Someone Else", stats: { scores: 2 } },
+        { person_id: "p-bo", full_name: "Bo Baptiste", stats: { scores: 1 } },
+      ],
+      requires_detailed_scoring: false,
+    };
+    const cmp = compareLeaderboard("scores", expected, actual);
+    expect(cmp.matched).toBe(false);
+    expect(cmp.entries[0]!.nameMatched).toBe(false);
+    expect(cmp.entries[0]!.countMatched).toBe(true);
+  });
+
+  it("the EMPTY set: an empty actual leaderboard against non-empty expected reds every entry, never vacuously", () => {
+    const actual: DivisionPlayerStatsWire = { metrics: [], rows: [], requires_detailed_scoring: true };
+    const cmp = compareLeaderboard("scores", expected, actual);
+    expect(cmp.matched).toBe(false);
+    expect(cmp.entries.every((e) => !e.matched)).toBe(true);
+  });
+
+  it("empty expected against empty actual matches (nothing to check, honestly)", () => {
+    const actual: DivisionPlayerStatsWire = { metrics: [], rows: [], requires_detailed_scoring: false };
+    expect(compareLeaderboard("scores", [], actual).matched).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// compareCareerStats / comparePersonDivisionStat
+// ---------------------------------------------------------------------------
+
+describe("compareCareerStats", () => {
+  const expected: ExpectedCareerStat[] = [{ personId: "p-ana", name: "Ana Alvarez", metricKey: "goals", count: 5 }];
+
+  it("matches when the metric is found in exactly one sport with the right value", () => {
+    const actual: PersonCareerStatsWire = {
+      sports: [{ sport_key: "football", sport_label: "Football", metrics: [{ key: "goals", label: "Goals", value: 5 }], divisions: 1, variants: 1, matches: 3 }],
+    };
+    expect(compareCareerStats(expected, actual).matched).toBe(true);
+  });
+
+  it("reds when the value disagrees", () => {
+    const actual: PersonCareerStatsWire = {
+      sports: [{ sport_key: "football", sport_label: "Football", metrics: [{ key: "goals", label: "Goals", value: 1 }], divisions: 1, variants: 1, matches: 3 }],
+    };
+    expect(compareCareerStats(expected, actual).matched).toBe(false);
+  });
+
+  it("reds on an AMBIGUOUS metric key (found under two sports) rather than silently picking one", () => {
+    const actual: PersonCareerStatsWire = {
+      sports: [
+        { sport_key: "football", sport_label: "Football", metrics: [{ key: "goals", label: "Goals", value: 5 }], divisions: 1, variants: 1, matches: 3 },
+        { sport_key: "hockey", sport_label: "Hockey", metrics: [{ key: "goals", label: "Goals", value: 5 }], divisions: 1, variants: 1, matches: 2 },
+      ],
+    };
+    const cmp = compareCareerStats(expected, actual);
+    expect(cmp.entries[0]!.foundInSports).toBe(2);
+    expect(cmp.matched).toBe(false);
+  });
+
+  it("the empty set: no expected careers is vacuously matched, and callers must check length before trusting it", () => {
+    const cmp = compareCareerStats([], { sports: [] });
+    expect(cmp.matched).toBe(true);
+    expect(cmp.entries).toHaveLength(0);
+  });
+});
+
+describe("comparePersonDivisionStat", () => {
+  it("matches when the person's own division card agrees with the leaderboard's authored count", () => {
+    const actual: PersonStatsWire = { divisions: [{ division_id: "div-1", division_name: "D", stats: { scores: 2 } }] };
+    expect(comparePersonDivisionStat("scores", 2, "div-1", actual).matched).toBe(true);
+  });
+
+  it("reds when the person's own card disagrees with the same historical count the leaderboard already pins", () => {
+    const actual: PersonStatsWire = { divisions: [{ division_id: "div-1", division_name: "D", stats: { scores: 99 } }] };
+    expect(comparePersonDivisionStat("scores", 2, "div-1", actual).matched).toBe(false);
+  });
+
+  it("reds when the division is absent from the person's card entirely", () => {
+    const actual: PersonStatsWire = { divisions: [] };
+    const cmp = comparePersonDivisionStat("scores", 2, "div-1", actual);
+    expect(cmp.matched).toBe(false);
+    expect(cmp.actualCount).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// D6 — the runtime oracle is provably distinct from stage 0
+// ---------------------------------------------------------------------------
+//
+// Re-pinned against the real `validate-pack.ts`, not assumed: stage 0
+// actually FOLDS `pack.streams.events` through the real engine module for
+// two subjects — `match.*` (a fixture's own outcome/score line) and
+// `standings.*` (a stage's aggregate table) — and reds a mutation to either.
+// A flipped scoreline is therefore the WRONG mutation to prove D6 with: it
+// would be caught at stage 0 too, which is not the point being proven.
+//
+// `validate-pack.ts`'s own header comment ("LIMITS — what stage 0 is KNOWN
+// not to catch") names the RIGHT one verbatim: "A MIS-TRANSCRIBED SCORER.
+// `generic.score.person` ... feeds `expected.leaderboards`, which stage 0
+// does NOT derive ... Owed to B05's live run." — this is that regression.
+describe("D6 — a mis-transcribed scorer stays invisible to stage 0, but reds the RUNTIME leaderboard oracle", () => {
+  it("stage 0 stays green on a re-attributed generic.score event; compareLeaderboard reds against what the live product would derive", async () => {
+    const raw = JSON.parse(await readFile(TINY_PACK_PATH, "utf8")) as Record<string, unknown>;
+
+    const before = loadPackValue(structuredClone(raw), TINY_PACK_PATH);
+    expect(before.ok).toBe(true);
+
+    // d-tiny's "rr-r2-c1" stream carries three `generic.score` events: two
+    // credited to @p-ana (1 point each) and one to @p-bo (2 points) — the
+    // real source of `expected.leaderboards`' "scores"/"points" metrics for
+    // this pack. Re-attribute p-bo's OWN scoring event to p-ana. The event's
+    // `by` (the SIDE/entrant, e-bravo) is left untouched, so this changes
+    // nothing about who won the fixture or the stage's aggregate table —
+    // only which PERSON gets credit, which is exactly what stage 0 admits it
+    // cannot see.
+    const mutated = structuredClone(raw) as {
+      streams: { fixtureExtKey: string; events: { type: string; payload?: Record<string, string | number> }[] }[];
+    };
+    const stream = mutated.streams.find((s) => s.fixtureExtKey === "rr-r2-c1");
+    if (stream === undefined) throw new Error("test fixture assumption broken: rr-r2-c1 stream not found");
+    const scoreEvents = stream.events.filter((e) => e.type === "generic.score");
+    expect(scoreEvents).toHaveLength(3);
+    const boEvent = scoreEvents.find((e) => e.payload?.person === "@p-bo");
+    if (boEvent?.payload === undefined) throw new Error("test fixture assumption broken: no @p-bo scoring event");
+    expect(boEvent.payload).toEqual({ by: "@e-bravo", points: 2, person: "@p-bo" });
+    boEvent.payload.person = "@p-ana"; // the mis-transcription
+
+    // Stage 0 does NOT derive `expected.leaderboards` from events at all
+    // (`validate-pack.ts`'s own header comment) — the mutated pack still
+    // validates clean, and says so explicitly via its own warning channel.
+    const after = loadPackValue(mutated, TINY_PACK_PATH);
+    expect(after.ok).toBe(true);
+    if (!after.ok) throw new Error("unreachable — checked above");
+    expect(after.warnings.some((w) => w.code === "leaderboards.not_derived")).toBe(true);
+
+    // The pack's OWN `expected.leaderboards` is UNCHANGED by the mutation —
+    // p-ana:2, p-bo:1 "scores", the real historical fact.
+    const board = after.pack.expected.leaderboards.find((l) => l.divisionRef === "d-tiny" && l.metricKey === "scores");
+    if (board === undefined) throw new Error("test fixture assumption broken: no d-tiny/scores leaderboard");
+    const expectedEntries: ExpectedLeaderboardEntry[] = board.entries.map((e) => ({
+      personId: e.person,
+      name: e.name,
+      count: e.count,
+    }));
+    expect(expectedEntries).toEqual([
+      { personId: "p-ana", name: "Ana Alvarez", count: 2 },
+      { personId: "p-bo", name: "Bo Baptiste", count: 1 },
+    ]);
+
+    // What the LIVE product would actually derive from the MUTATED stream —
+    // p-ana now credited with THREE scoring events, p-bo with zero. This
+    // stands in for a real fetch against `divisionPlayerStats`; it is
+    // constructed independently of `pack.expected`, never re-read from it a
+    // second time, which is the whole point of D6.
+    const liveDerivedActual: DivisionPlayerStatsWire = {
+      metrics: [{ key: "scores", label: "Scores" }],
+      rows: [
+        { person_id: "p-ana", full_name: "Ana Alvarez", stats: { scores: 3 } },
+        { person_id: "p-bo", full_name: "Bo Baptiste", stats: { scores: 0 } },
+      ],
+      requires_detailed_scoring: false,
+    };
+
+    const runtimeCheck = compareLeaderboard("scores", expectedEntries, liveDerivedActual);
+    // The RUNTIME oracle reds — even though stage 0 (an OFFLINE fold of
+    // `pack.expected` that explicitly does not touch leaderboards) passed on
+    // the very same mutated pack, and said so via its own warning.
+    expect(runtimeCheck.matched).toBe(false);
+    expect(runtimeCheck.entries.find((e) => e.personId === "p-bo")?.countMatched).toBe(false);
+  });
+});
