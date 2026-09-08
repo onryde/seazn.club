@@ -639,12 +639,26 @@ function divisionAEventCalls(calls: RecordedCall[]): RecordedCall[] {
 describe("runTinySuite — B05 T1 division-A stream fold wiring", () => {
   it("drives real POSTs for every division-A event and reports a populated simulation section", async () => {
     const { transport, sql, calls } = fakeServer();
+    // B05 T6 fix 2 — the `oracle_checked` pino event is a SEPARATE consumer
+    // surface from report.json, and a log reader filtering `passed: true`
+    // would miscount a no-subject oracle exactly the way report.md did. It is
+    // captured here rather than asserted through `silent`, so the event's own
+    // payload is pinned, not merely the report's.
+    const oracleEvents: { kind: unknown; passed: unknown; verdict: unknown }[] = [];
+    const capturing = pino({ level: "info" }, {
+      write(line: string) {
+        const entry = JSON.parse(line) as Record<string, unknown>;
+        if (entry.msg === "oracle_checked") {
+          oracleEvents.push({ kind: entry.kind, passed: entry.passed, verdict: entry.verdict });
+        }
+      },
+    });
 
     const report = await runTinySuite({
       base: "http://bench.example",
       engine: "optimized",
       keep: false,
-      log: silent,
+      log: capturing,
       cliEntry: "admin",
       packPath: TINY_PACK_PATH,
       transport,
@@ -785,6 +799,51 @@ describe("runTinySuite — B05 T1 division-A stream fold wiring", () => {
     // too, and could never witness a reversed cascade).
     const tiebreakCascade = runtimeOracles.find((o) => o.name === "oracle: d-tiebreak/s-tiebreak-league tie-order cascade");
     expect(tiebreakCascade?.detail).toContain("1 checked");
+
+    // B05 T6 fix 2 — and the two cascades that compared NOTHING report the
+    // third verdict, not a pass. The live run printed `PASS … (0 checked, 0
+    // skipped)` for exactly these two, which is a comparator with no subject
+    // printing itself green in the wave's own report. `passed` stays true (an
+    // absent subject does not red a run — the assertion above still expects
+    // twenty trues), so `verdict` is the ONLY thing that can witness this.
+    const cascades = runtimeOracles.filter((o) => o.name.endsWith("tie-order cascade"));
+    expect(
+      cascades.map((o) => [o.name.replace("oracle: ", "").replace(" tie-order cascade", ""), o.verdict]),
+    ).toEqual([
+      ["d-tiny/s-league", "no_subject"],
+      ["d-badminton/s-badminton-league", "no_subject"],
+      // its POSITIVE PAIR, from the same run: the one division with a genuine
+      // points tie compared something and agreed.
+      ["d-tiebreak/s-tiebreak-league", "pass"],
+    ]);
+    for (const o of cascades.filter((c) => c.verdict === "no_subject")) {
+      expect(o.detail).toContain("NO SUBJECT");
+      expect(o.detail).toContain("0 checked");
+    }
+
+    // The pino event carries the verdict DISTINCTLY: the two no-subject
+    // cascades are `passed: true` on the wire (they do not red a run) and are
+    // separable from a real pass only by `verdict`.
+    expect(oracleEvents.filter((e) => e.kind === "tie_order_cascade")).toEqual([
+      { kind: "tie_order_cascade", passed: true, verdict: "no_subject" },
+      { kind: "tie_order_cascade", passed: true, verdict: "no_subject" },
+      { kind: "tie_order_cascade", passed: true, verdict: "pass" },
+    ]);
+    // Every other `oracle_checked` event keeps the same `passed` it always
+    // had and gains the derived verdict — no oracle's verdict is changed by
+    // this task except the cascade's.
+    expect(
+      oracleEvents.filter((e) => e.kind !== "tie_order_cascade").every((e) => e.passed === true && e.verdict === "pass"),
+    ).toBe(true);
+    // Exactly one event per runtime oracle — a dropped emitter shrinks this
+    // and is not hidden by the two `every()` assertions above, which an empty
+    // or short list satisfies vacuously.
+    expect(oracleEvents).toHaveLength(runtimeOracles.length);
+    // Every OTHER oracle's verdict is untouched by this change — either
+    // absent (the pre-T6 shape) or an explicit pass, never no_subject.
+    expect(
+      runtimeOracles.filter((o) => !o.name.endsWith("tie-order cascade")).map((o) => o.verdict),
+    ).toEqual(new Array(runtimeOracles.length - cascades.length).fill(undefined));
 
     // B05 T6 fix 1 — the first LIVE run failed both metric-less tables on
     // nothing but a live `metrics` map the pack never declares. This fake now

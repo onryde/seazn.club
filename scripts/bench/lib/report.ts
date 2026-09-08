@@ -68,12 +68,77 @@ export const SolverResult = z.object({
 });
 export type SolverResult = z.infer<typeof SolverResult>;
 
-export const OracleResult = z.object({
-  name: z.string(),
-  passed: z.boolean(),
-  detail: z.string().optional(),
-});
+/**
+ * B05 T6 fix 2 — a THIRD verdict beside pass/fail.
+ *
+ * The first live run printed `PASS oracle: d-tiny/s-league tie-order cascade
+ * … (0 checked, 0 skipped)` for two of three divisions. A comparator that
+ * checked nothing has not passed — it had no subject, which is the exact
+ * vacuity this wave exists to eliminate, printing itself green in the wave's
+ * own report.
+ *
+ * `no_subject` does not RED a run (an absent subject is not a failure — the
+ * same stance `tiny.ts` already takes when it warns "has no subject and was
+ * NOT run" for an empty `expected.careers`), but it must never READ as PASS.
+ */
+export const OracleVerdict = z.enum(["pass", "fail", "no_subject"]);
+export type OracleVerdict = z.infer<typeof OracleVerdict>;
+
+export const OracleResult = z
+  .object({
+    name: z.string(),
+    passed: z.boolean(),
+    detail: z.string().optional(),
+    /** Absent on every oracle written before B05 T6 — `oracleVerdictOf`
+     *  derives `pass`/`fail` from `passed` for those, so an existing report
+     *  round-trips and renders byte-identically. */
+    verdict: OracleVerdict.optional(),
+  })
+  .superRefine((o, ctx) => {
+    if (o.verdict === undefined) return;
+    // `passed` is the GATE-facing half and `verdict` the READER-facing half.
+    // Pinned against each other here rather than left to each call site,
+    // because two answers to one question left free to drift is how a
+    // "no_subject" oracle would quietly acquire a red gate (or a "fail" a
+    // green one). Only ONE combination is legal per verdict.
+    const expectedPassed = o.verdict !== "fail";
+    if (o.passed !== expectedPassed) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["passed"],
+        message: `oracle "${o.name}": verdict "${o.verdict}" requires passed: ${expectedPassed}, got ${o.passed}`,
+      });
+    }
+  });
 export type OracleResult = z.infer<typeof OracleResult>;
+
+/** The reader-facing verdict for one oracle — the ONE place `passed` is
+ *  turned into a label, so a renderer can never invent a fourth answer. */
+export function oracleVerdictOf(o: OracleResult): OracleVerdict {
+  return o.verdict ?? (o.passed ? "pass" : "fail");
+}
+
+/**
+ * The `oracle_checked` pino payload's verdict half — `kind`, the reader-facing
+ * `verdict`, and the `passed` boolean every existing log consumer already
+ * reads, all DERIVED here from one input so the log stream cannot carry a
+ * `no_subject` event that also says `passed: false` (or a `fail` that says
+ * `passed: true`). The report's own `superRefine` above stops the same drift
+ * inside report.json; this stops it in the logs.
+ */
+export function oracleLogFields(kind: string, verdict: OracleVerdict): {
+  readonly kind: string;
+  readonly passed: boolean;
+  readonly verdict: OracleVerdict;
+} {
+  return { kind, passed: verdict !== "fail", verdict };
+}
+
+const ORACLE_VERDICT_LABEL: Readonly<Record<OracleVerdict, string>> = {
+  pass: "PASS",
+  fail: "FAIL",
+  no_subject: "NO SUBJECT",
+};
 
 /** B05 T1 — one refusal `simulate.ts` hit while folding a division's streams
  *  through the live single-event scoring route. Reported, never silently
@@ -682,6 +747,20 @@ function renderHeader(report: BenchReport): string {
     `- Started: ${report.startedAt}`,
   ];
   if (report.finishedAt) lines.push(`- Finished: ${report.finishedAt}`);
+  // B05 T6 fix 2 — the run-level answer to "how many oracles actually had a
+  // subject". Rendered only when a run produced oracles at all, so an
+  // oracle-free report (a preflight refusal, a `--keep` short circuit) stays
+  // byte-identical to what it was.
+  const allOracles = report.suites.flatMap((s) => s.oracles ?? []);
+  if (allOracles.length > 0) {
+    const verdicts = allOracles.map(oracleVerdictOf);
+    const noSubject = verdicts.filter((v) => v === "no_subject").length;
+    lines.push(
+      `- Oracles: ${allOracles.length} total, ${allOracles.length - noSubject} with a subject ` +
+        `(${verdicts.filter((v) => v === "pass").length} PASS, ${verdicts.filter((v) => v === "fail").length} FAIL), ` +
+        `${noSubject} NO SUBJECT`,
+    );
+  }
   return lines.join("\n");
 }
 
@@ -796,7 +875,9 @@ function renderSuitesSection(report: BenchReport): string {
     if (suite.conflictCount !== undefined) lines.push(`- Blocking conflicts: ${suite.conflictCount}`);
     if (suite.oracles && suite.oracles.length > 0) {
       lines.push("- Oracles:");
-      for (const o of suite.oracles) lines.push(`  - ${o.passed ? "PASS" : "FAIL"} ${o.name}${o.detail ? ` — ${o.detail}` : ""}`);
+      for (const o of suite.oracles) {
+        lines.push(`  - ${ORACLE_VERDICT_LABEL[oracleVerdictOf(o)]} ${o.name}${o.detail ? ` — ${o.detail}` : ""}`);
+      }
     }
     if (suite.errors && suite.errors.length > 0) {
       lines.push("- Errors:");

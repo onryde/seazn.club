@@ -163,6 +163,7 @@ import {
   playerStatsBaselineIssues,
   type RosterMemberRef,
 } from "../stats.ts";
+import { oracleLogFields } from "../report.ts";
 import type {
   DivisionScheduleReport,
   DivisionStartConflictReport,
@@ -171,6 +172,7 @@ import type {
   ImportFindingReport,
   ImportSimulationReport,
   OracleResult,
+  OracleVerdict,
   RegistrationDivisionReport,
   SimulationReport,
   SolverResult,
@@ -2558,7 +2560,7 @@ export async function runTinySuite(
                     .join("; "),
             });
             log.info(
-              { kind: "discipline_enforced", passed: enforced, division: sus.divisionRef },
+              { ...oracleLogFields("discipline_enforced", enforced ? "pass" : "fail"), division: sus.divisionRef },
               "oracle_checked",
             );
             if (!enforced) {
@@ -2634,7 +2636,7 @@ export async function runTinySuite(
                 : suspensionMismatchReasons(entry).join("; "),
           });
           log.info(
-            { kind: "suspension_carry", passed: susCheck.matched, division: sus.divisionRef },
+            { ...oracleLogFields("suspension_carry", susCheck.matched ? "pass" : "fail"), division: sus.divisionRef },
             "oracle_checked",
           );
           if (!susCheck.matched) {
@@ -2901,7 +2903,7 @@ export async function runTinySuite(
             ? `live standings for "${table.stageRef}" match the pack's expected.tables row${undeclaredSuffix}`
             : `${renderStandingsMismatch(tableCheck)}${undeclaredSuffix}`,
         });
-        log.info({ kind: "standings_table", passed: tableCheck.matched }, "oracle_checked");
+        log.info(oracleLogFields("standings_table", tableCheck.matched ? "pass" : "fail"), "oracle_checked");
         if (!tableCheck.matched) {
           errors.push(
             `oracle: ${table.divisionRef}/${table.stageRef}: live standings disagree with the pack's ` +
@@ -2928,15 +2930,33 @@ export async function runTinySuite(
         } else {
           const cascade = tableDivision.tiebreakers;
           const cascadeCheck = compareTieOrderCascade(cascade, standingsWire.rows);
+          // B05 T6 fix 2 — the first live run printed a PASS here for two of
+          // three divisions over ZERO tied pairs. `matched` is `issues.length
+          // === 0`, which an empty check satisfies vacuously; `checkedPairs`
+          // is the only field that answers "was there a subject at all", so
+          // it is what picks the verdict. `no_subject` keeps `passed: true`
+          // (an absent subject is not a failure, and nothing below this line
+          // reds) but never renders as PASS.
+          const cascadeVerdict: OracleVerdict = !cascadeCheck.matched
+            ? "fail"
+            : cascadeCheck.checkedPairs === 0
+              ? "no_subject"
+              : "pass";
           oracles.push({
             name: `oracle: ${table.divisionRef}/${table.stageRef} tie-order cascade`,
-            passed: cascadeCheck.matched,
-            detail: cascadeCheck.matched
-              ? `live order agrees with cascade [${cascade.join(",")}] on every tied pair ` +
-                `(${cascadeCheck.checkedPairs} checked, ${cascadeCheck.skippedPairs} skipped)`
-              : cascadeCheck.issues.map((i) => i.detail).join("; "),
+            passed: cascadeVerdict !== "fail",
+            verdict: cascadeVerdict,
+            detail:
+              cascadeVerdict === "no_subject"
+                ? `no two rows in "${table.stageRef}" are tied on points that cascade ` +
+                  `[${cascade.join(",")}] could decide — this oracle has NO SUBJECT and compared nothing ` +
+                  `(${cascadeCheck.checkedPairs} checked, ${cascadeCheck.skippedPairs} skipped)`
+                : cascadeCheck.matched
+                  ? `live order agrees with cascade [${cascade.join(",")}] on every tied pair ` +
+                    `(${cascadeCheck.checkedPairs} checked, ${cascadeCheck.skippedPairs} skipped)`
+                  : cascadeCheck.issues.map((i) => i.detail).join("; "),
           });
-          log.info({ kind: "tie_order_cascade", passed: cascadeCheck.matched }, "oracle_checked");
+          log.info(oracleLogFields("tie_order_cascade", cascadeVerdict), "oracle_checked");
           if (!cascadeCheck.matched) {
             errors.push(
               `oracle: ${table.divisionRef}/${table.stageRef}: live order disagrees with the division's own ` +
@@ -3004,7 +3024,7 @@ export async function runTinySuite(
             ? `live leaderboard "${board.metricKey}" matches the pack's expected.leaderboards row`
             : renderLeaderboardMismatch(boardCheck),
         });
-        log.info({ kind: "leaderboard", passed: boardCheck.matched }, "oracle_checked");
+        log.info(oracleLogFields("leaderboard", boardCheck.matched ? "pass" : "fail"), "oracle_checked");
         if (!boardCheck.matched) {
           errors.push(
             `oracle: ${board.divisionRef}/${board.metricKey}: live leaderboard disagrees with the pack's ` +
@@ -3065,7 +3085,7 @@ export async function runTinySuite(
                 `nothing was cross-checked against /persons/{id}/stats`
               : renderSideBySide(cardIssues),
         });
-        log.info({ kind: "person_division_stat", passed: cardsMatched }, "oracle_checked");
+        log.info(oracleLogFields("person_division_stat", cardsMatched ? "pass" : "fail"), "oracle_checked");
         if (!cardsMatched) {
           errors.push(
             `oracle: ${board.divisionRef}/${board.metricKey}: a person's own /persons/{id}/stats card ` +
@@ -3157,7 +3177,7 @@ export async function runTinySuite(
                     })),
                 ),
           });
-          log.info({ kind: "career_stats", passed: careerCheck.matched }, "oracle_checked");
+          log.info(oracleLogFields("career_stats", careerCheck.matched ? "pass" : "fail"), "oracle_checked");
           if (!careerCheck.matched) {
             errors.push(
               `oracle: ${personRef}: the live career rollup disagrees with the pack's expected.careers ` +
@@ -3367,7 +3387,7 @@ export async function runTinySuite(
                     ? `captured finalRanks and the re-read standings agree: [${standingsRanked.join(", ")}]`
                     : renderRankCrossingMismatch(rankCrossing),
                 });
-                log.info({ kind: "rank_crossing", passed: rankCrossing.matched }, "oracle_checked");
+                log.info(oracleLogFields("rank_crossing", rankCrossing.matched ? "pass" : "fail"), "oracle_checked");
                 if (!rankCrossing.matched) {
                   errors.push(
                     `oracle: ${stage1.ref}: the captured complete response and the re-read standings DISAGREE on final order — ` +
@@ -3384,7 +3404,7 @@ export async function runTinySuite(
                     : `re-read standings [${standingsRanked.join(", ")}] disagree with the pack's expected order ` +
                       `[${expectedIds.join(", ")}]`,
                 });
-                log.info({ kind: "standings_final_rank", passed: standingsVsExpected.matched }, "oracle_checked");
+                log.info(oracleLogFields("standings_final_rank", standingsVsExpected.matched ? "pass" : "fail"), "oracle_checked");
                 if (!standingsVsExpected.matched) {
                   errors.push(
                     `oracle: ${stage1.ref}: re-read standings [${standingsRanked.join(", ")}] disagree with the ` +
@@ -3419,7 +3439,7 @@ export async function runTinySuite(
                         ? `champion ${championCheck.fromStandings} matches the pack's expected champion`
                         : renderChampionMismatch(championCheck),
                     });
-                    log.info({ kind: "champion", passed: championCheck.matched }, "oracle_checked");
+                    log.info(oracleLogFields("champion", championCheck.matched ? "pass" : "fail"), "oracle_checked");
                     if (!championCheck.matched) {
                       errors.push(`oracle: champion mismatch — ${renderChampionMismatch(championCheck)}`);
                     }

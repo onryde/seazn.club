@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   BenchReport,
   gateOf,
+  oracleVerdictOf,
   renderMarkdown,
   resolveRunId,
   writeReport,
@@ -319,6 +320,107 @@ describe("gateOf", () => {
         suites: [{ suite: "_tiny", gate: "skipped", timings: {} }],
       }),
     ).toBe("red");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// B05 T6 fix 2 — an oracle that compared NOTHING is not a pass
+//
+// The first live run printed, for two of three divisions:
+//
+//   PASS oracle: d-tiny/s-league tie-order cascade — live order agrees with
+//   cascade [points,diff] on every tied pair (0 checked, 0 skipped)
+//
+// Zero tied pairs were compared, and it read as PASS — the exact vacuity
+// this wave exists to eliminate, printing itself green in the wave's own
+// report. `no_subject` is a THIRD verdict beside pass/fail: it does not red
+// the run (an absent subject is not a failure, and `passed` stays true so
+// nothing gating on that changes), but it must never render as PASS, and the
+// run summary must be able to say how many oracles actually had a subject.
+// ---------------------------------------------------------------------------
+
+function reportWithOracles(oracles: BenchReportType["suites"][number]["oracles"]): BenchReportType {
+  const base = fullReport();
+  return { ...base, suites: [{ ...(base.suites[0] as BenchReportType["suites"][number]), oracles }] };
+}
+
+describe("B05 T6 — the no-subject oracle verdict", () => {
+  it("renders NO SUBJECT — never PASS — for an oracle that compared nothing", () => {
+    const md = renderMarkdown(
+      reportWithOracles([
+        { name: "tie-order cascade", passed: true, verdict: "no_subject", detail: "0 checked, 0 skipped" },
+      ]),
+    );
+    const line = md.split("\n").find((l) => l.includes("tie-order cascade"));
+    expect(line).toBeDefined();
+    expect(line).toContain("NO SUBJECT");
+    expect(line).not.toContain("PASS");
+  });
+
+  it("its POSITIVE PAIR: one comparison that agreed still renders PASS", () => {
+    const md = renderMarkdown(
+      reportWithOracles([{ name: "tie-order cascade", passed: true, verdict: "pass", detail: "1 checked, 0 skipped" }]),
+    );
+    const line = md.split("\n").find((l) => l.includes("tie-order cascade"));
+    expect(line).toContain("PASS");
+    expect(line).not.toContain("NO SUBJECT");
+  });
+
+  it("an oracle with NO verdict field at all keeps its old rendering — pass and fail both", () => {
+    const md = renderMarkdown(
+      reportWithOracles([
+        { name: "legacy green", passed: true },
+        { name: "legacy red", passed: false },
+      ]),
+    );
+    expect(md.split("\n").find((l) => l.includes("legacy green"))).toContain("PASS");
+    expect(md.split("\n").find((l) => l.includes("legacy red"))).toContain("FAIL");
+  });
+
+  it("the run summary says how many oracles actually had a subject", () => {
+    const md = renderMarkdown(
+      reportWithOracles([
+        { name: "a", passed: true, verdict: "pass" },
+        { name: "b", passed: false, verdict: "fail" },
+        { name: "c", passed: true, verdict: "no_subject" },
+        { name: "d", passed: true },
+      ]),
+    );
+    // 4 oracles, 3 with a subject (2 pass + 1 fail), 1 with none — every
+    // number derived from the fixture above, none of them the same value, so
+    // a swapped-counter mutant lands on a wrong cell rather than a tie.
+    expect(md).toContain("- Oracles: 4 total, 3 with a subject (2 PASS, 1 FAIL), 1 NO SUBJECT");
+  });
+
+  it("says nothing about oracles when a run has none — an oracle-free report is unchanged", () => {
+    expect(renderMarkdown({ ...fullReport(), suites: [] })).not.toContain("- Oracles:");
+  });
+
+  it("round-trips the verdict through writeReport's own parse — it reaches report.json", async () => {
+    const dir = await tempDir();
+    const report = reportWithOracles([
+      { name: "tie-order cascade", passed: true, verdict: "no_subject", detail: "0 checked, 0 skipped" },
+    ]);
+    const written = await writeReport(dir, report);
+    const onDisk: unknown = JSON.parse(await readFile(written.jsonPath, "utf8"));
+    const reparsed = BenchReport.parse(onDisk);
+    expect(reparsed).toEqual(JSON.parse(JSON.stringify(report)));
+    expect(await readFile(written.mdPath, "utf8")).toContain("NO SUBJECT");
+  });
+
+  it("REFUSES a no_subject oracle marked passed:false — the two halves can never drift apart", () => {
+    const bad = reportWithOracles([{ name: "x", passed: false, verdict: "no_subject" }]);
+    expect(() => BenchReport.parse(bad)).toThrow();
+    const alsoBad = reportWithOracles([{ name: "x", passed: true, verdict: "fail" }]);
+    expect(() => BenchReport.parse(alsoBad)).toThrow();
+    const stillBad = reportWithOracles([{ name: "x", passed: false, verdict: "pass" }]);
+    expect(() => BenchReport.parse(stillBad)).toThrow();
+  });
+
+  it("oracleVerdictOf derives the verdict for an oracle that carries none", () => {
+    expect(oracleVerdictOf({ name: "x", passed: true })).toBe("pass");
+    expect(oracleVerdictOf({ name: "x", passed: false })).toBe("fail");
+    expect(oracleVerdictOf({ name: "x", passed: true, verdict: "no_subject" })).toBe("no_subject");
   });
 });
 
