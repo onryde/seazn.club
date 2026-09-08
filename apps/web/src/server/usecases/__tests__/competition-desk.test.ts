@@ -830,17 +830,28 @@ describe.skipIf(!HAS_DB)("getCompetitionDesk", () => {
       await sql`update fixtures set status = 'in_play', scheduled_at = now() - interval '1 minute' where id = ${rows[2]!.id}`;
 
       // Kickoff (`core.start`) order is the OPPOSITE of the fixtures-table
-      // write order above: fixture_no 2's core.start is recorded FIRST (so
-      // it kicked off earliest), fixture_no 1's SECOND — with a DIFFERENT
-      // event count from fixture 2's zero (the "NO SCORE" case a later task
-      // renders in red), so a single sample could not witness either an
-      // ordering bug or a per-row mapping bug.
+      // write order above: fixture_no 2 kicks off EARLIEST, fixture_no 1
+      // second — with a DIFFERENT event count from fixture 2's zero (the "NO
+      // SCORE" case a later task renders in red), so a single sample could
+      // not witness either an ordering bug or a per-row mapping bug.
+      //
+      // `recorded_at` is stated, not left to `now()`. This test used to
+      // insert the two rows back to back and rely on the wall clock to
+      // separate them, and it is a coin flip: `recorded_at` defaults to
+      // `now()` (transaction timestamp, microseconds) but reaches the
+      // comparator through `toISOString()`, which truncates to
+      // MILLISECONDS. Measured locally, eight consecutive single-statement
+      // inserts produced four distinct millisecond values — so roughly half
+      // the time these two tied, the comparator returned 0, `sort` kept the
+      // query's order and the answer was the [1, 2, 3] this case exists to
+      // reject. It passed locally and failed in CI for exactly that reason.
+      // A minute apart states the intent and cannot tie.
       await sql`
-        insert into score_events (fixture_id, org_id, seq, type, payload)
-        values (${rows[1]!.id}, ${auth.orgId}, 0, 'core.start', '{}')`;
+        insert into score_events (fixture_id, org_id, seq, type, payload, recorded_at)
+        values (${rows[1]!.id}, ${auth.orgId}, 0, 'core.start', '{}', now() - interval '10 minutes')`;
       await sql`
-        insert into score_events (fixture_id, org_id, seq, type, payload)
-        values (${rows[0]!.id}, ${auth.orgId}, 0, 'core.start', '{}')`;
+        insert into score_events (fixture_id, org_id, seq, type, payload, recorded_at)
+        values (${rows[0]!.id}, ${auth.orgId}, 0, 'core.start', '{}', now() - interval '5 minutes')`;
       await sql`
         insert into score_events (fixture_id, org_id, seq, type, payload)
         values (${rows[0]!.id}, ${auth.orgId}, 1, 'generic.result', '{"p1Score":1,"p2Score":0}')`;
@@ -856,6 +867,55 @@ describe.skipIf(!HAS_DB)("getCompetitionDesk", () => {
       // scalar the pill already renders, so the two cannot drift into two
       // authorities for one fact.
       expect(desk.in_play).toBe(desk.in_play_fixtures.length);
+    });
+
+    // The tie the case above used to fall into BY ACCIDENT, now driven on
+    // purpose. Two fixtures kicking off in the same millisecond is ordinary
+    // on match day, and `started_at` reaches the comparator through
+    // `toISOString()`, which truncates Postgres's microseconds — so the tie
+    // is reachable in production, not only under a test's fast inserts.
+    // Before the `fixture_no` tiebreak those two sat in whatever order the
+    // query produced (tuple write order, under MVCC), which means the band
+    // could reorder its own cards between two polls with nothing having
+    // changed.
+    it("two fixtures that kick off in the same millisecond order by fixture_no, not by whatever the query returned", async () => {
+      const { auth } = await seedOrg();
+      const { competitionId, divisionId } = await seedDivision(auth, 4);
+      const [stage] = await createStages(auth, divisionId, {
+        seq: 1, kind: "league", name: "League", config: {}, progression: null,
+      });
+      await generateStageFixtures(auth, stage!.id);
+      await sql`update divisions set status = 'active' where id = ${divisionId}`;
+      const rows = await sql<{ id: string }[]>`
+        select id from fixtures where division_id = ${divisionId} order by fixture_no`;
+      // Two SEPARATE statements, fixture_no 2 FIRST. That is the whole
+      // setup: `getCompetitionDesk`'s fixtures query carries no ORDER BY, so
+      // its row order is the table's scan order, and an UPDATE appends a new
+      // tuple version in write order. Updating both in ONE statement instead
+      // (the first version of this test) leaves them in fixture_no order,
+      // the unsorted answer is already [1, 2], and the assertion below
+      // passes with the tiebreak DELETED — which is exactly what the mutant
+      // showed before this comment was rewritten to say something true.
+      await sql`update fixtures set status = 'in_play' where id = ${rows[1]!.id}`;
+      await sql`update fixtures set status = 'in_play' where id = ${rows[0]!.id}`;
+      const at = new Date().toISOString();
+      await sql`
+        insert into score_events (fixture_id, org_id, seq, type, payload, recorded_at)
+        values (${rows[1]!.id}, ${auth.orgId}, 0, 'core.start', '{}', ${at})`;
+      await sql`
+        insert into score_events (fixture_id, org_id, seq, type, payload, recorded_at)
+        values (${rows[0]!.id}, ${auth.orgId}, 0, 'core.start', '{}', ${at})`;
+
+      const desk = await getCompetitionDesk(auth, competitionId);
+      // Guards the guard: these two really did tie once serialised, which is
+      // the whole premise. If they did not, the assertion below would be
+      // testing the kickoff sort again rather than the tiebreak.
+      const [first, second] = desk.in_play_fixtures;
+      expect(
+        first?.started_at,
+        "the two fixtures did not tie — this case is not exercising the tiebreak",
+      ).toBe(second?.started_at);
+      expect(desk.in_play_fixtures.map((f) => f.fixture_no)).toEqual([1, 2]);
     });
 
     // Fix round 1, Major 2: the ORIGINAL version of this test used only TWO

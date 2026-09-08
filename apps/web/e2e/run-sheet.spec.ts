@@ -2468,3 +2468,138 @@ test("Review m1: the NOW rule does not square off the run sheet's bottom corners
   console.log("m1 mid-list row radius:", midRadius);
   expect(parseFloat(midRadius), "a mid-list row must stay square — the rounding is scoped to the last block").toBe(0);
 });
+
+// Competition desk W4, review finding m2 — the bracket round header's sticky
+// offset must follow the day header's ACTUAL height.
+//
+// The offset shipped as `top-[86px]`: 56 (nav) plus a day header height
+// assumed to be 30px at one line. `DayHeading` prints
+// "<long weekday date> · <venue> · N fixtures", which at 320 with a real
+// venue name wraps to two lines — and the bracket header then overlaps the
+// header it exists to stack under, by the difference. The finding was
+// recorded as unreproduced for a specific reason: it needs a division holding
+// BOTH a day block and a bracket block with a placed venue, driven at 320,
+// and the two live sticky cases above (C-1, C-3) both seed a bracket-ONLY
+// division. So that state had never been rendered at any width.
+//
+// This is the only test that can see the fix. `apps/web` vitest is
+// `environment: "node"` — the unit suite pins the static half (the sheet
+// publishes `--desk-day-h`, the header derives its offset from it) and cannot
+// run the `ResizeObserver` that supplies the real number.
+test("a wrapped day header pushes the bracket round header down with it, at 320 (finding m2)", async ({
+  page,
+  request,
+}) => {
+  const comp = await apiJson<{ id: string }>(request, "/api/v1/competitions", "POST", {
+    ends_on: "2030-12-31",
+    name: `RunSheet StickyMix ${TAG}`,
+    visibility: "private",
+  });
+  const compId = comp.data!.id;
+  const div = await apiJson<{ id: string }>(request, `/api/v1/competitions/${compId}/divisions`, "POST", {
+    name: "Mixed",
+    sport_key: "generic",
+    variant_key: "score",
+    config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
+  });
+  const divisionId = div.data!.id;
+  await addEntrantsViaApi(request, divisionId, ["M1", "M2", "M3", "M4"]);
+
+  // A venue name long enough to WRAP the day header at 320. The wrap is the
+  // whole premise, so it is asserted below rather than assumed — a name that
+  // happened to fit would make every assertion here vacuous.
+  const { venueId, courts } = await seedVenueWithCourts(request, ["Show Court"], {
+    venueName: `Northbridge Memorial Athletic Ground ${TAG}`,
+  });
+  const settings = await apiJson(request, `/api/v1/divisions/${divisionId}/schedule-settings`, "PUT", {
+    config: {},
+    tz: "UTC",
+  });
+  expect(settings.status, `schedule-settings PUT failed: ${JSON.stringify(settings.error)}`).toBeLessThan(300);
+
+  // A league stage carries the DAY block, a knockout stage the BRACKET block.
+  const league = await apiJson<{ id: string }>(request, `/api/v1/divisions/${divisionId}/stages`, "POST", {
+    seq: 1,
+    kind: "league",
+    name: "Group",
+  });
+  expect(league.status, `league stage POST failed: ${JSON.stringify(league.error)}`).toBeLessThan(300);
+  const entrants = await apiJson<{ id: string }[]>(request, `/api/v1/divisions/${divisionId}/entrants`);
+  const [e1, e2] = entrants.data!;
+  // A FUTURE day, not today: `stages-panel.tsx` opens the sheet on the
+  // "today" filter once the division's phase is match_day, which would filter
+  // the (unscheduled) bracket rows away and leave nothing to stack.
+  const dayAt = new Date(Date.now() + 6 * 24 * 3600_000);
+  dayAt.setUTCHours(10, 0, 0, 0);
+  const placed = await apiJson(request, `/api/v1/stages/${league.data!.id}/fixtures`, "POST", {
+    home_entrant_id: e1!.id,
+    away_entrant_id: e2!.id,
+    scheduled_at: dayAt.toISOString(),
+    venue_id: venueId,
+    court_id: courts[0]!.id,
+  });
+  expect(placed.status, `ad-hoc fixture POST failed: ${JSON.stringify(placed.error)}`).toBeLessThan(300);
+
+  const cup = await apiJson<{ id: string }>(request, `/api/v1/divisions/${divisionId}/stages`, "POST", {
+    seq: 2,
+    kind: "knockout",
+    name: "Cup",
+  });
+  expect(cup.status, `knockout stage POST failed: ${JSON.stringify(cup.error)}`).toBeLessThan(300);
+  const gen = await apiJson<{ fixtures: { id: string }[] }>(
+    request,
+    `/api/v1/stages/${cup.data!.id}/generate`,
+    "POST",
+  );
+  expect((gen.data?.fixtures ?? []).length, "knockout generated no fixtures").toBeGreaterThan(0);
+
+  await page.setViewportSize({ width: 320, height: 700 });
+  await page.goto(await divisionPath(request, divisionId, "?tab=fixtures"));
+  await dismissCookieBanner(page);
+
+  const sheet = page.getByTestId("run-sheet");
+  await expect(sheet, "run-sheet did not render").toBeVisible();
+  const dayHeader = sheet.locator("[data-run-sheet-day]").first();
+  const bracketHeader = sheet.locator('[data-run-sheet-block="bracket"] header.sticky').first();
+  await expect(dayHeader, "no day block — the mixed state this test needs never rendered").toBeVisible();
+  await expect(bracketHeader, "no bracket block — the mixed state this test needs never rendered").toBeVisible();
+
+  const measured = await page.evaluate(() => {
+    const day = document.querySelector<HTMLElement>("[data-run-sheet-day]")!;
+    const bracket = document.querySelector<HTMLElement>(
+      '[data-run-sheet-block="bracket"] header',
+    )!;
+    return {
+      dayText: day.textContent ?? "",
+      dayHeight: day.getBoundingClientRect().height,
+      dayTop: getComputedStyle(day).top,
+      bracketTop: getComputedStyle(bracket).top,
+      published: getComputedStyle(
+        document.querySelector<HTMLElement>('[data-testid="run-sheet"] .space-y-6')!,
+      ).getPropertyValue("--desk-day-h"),
+    };
+  });
+  // Print what was seen beside the gate (`_RULES.md`) — a green gate on the
+  // wrong state is worse than a red one.
+  console.log("m2 sticky offsets at 320:", JSON.stringify(measured));
+
+  // The premise: the day header really did wrap past the 30px the old
+  // literal assumed. Without this the assertion below passes on a header
+  // that never needed a bigger offset in the first place.
+  expect(
+    measured.dayHeight,
+    `day header did not wrap at 320 — this test proves nothing (text: ${measured.dayText})`,
+  ).toBeGreaterThan(30);
+
+  const dayTopPx = Number.parseFloat(measured.dayTop);
+  const bracketTopPx = Number.parseFloat(measured.bracketTop);
+  expect(dayTopPx, "the day header still pins at 56px").toBeCloseTo(56, 0);
+  // The claim: the bracket header clears nav AND the whole day header.
+  expect(
+    bracketTopPx,
+    "bracket header would overlap the day header it stacks under",
+  ).toBeGreaterThanOrEqual(dayTopPx + measured.dayHeight - 1);
+  // …and the differential against the shipped constant, so this cannot pass
+  // against `top-[86px]` coming back.
+  expect(bracketTopPx, "offset is back to the assumed-height literal").toBeGreaterThan(86);
+});

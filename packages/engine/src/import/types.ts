@@ -43,6 +43,11 @@ export const ImportSnapshot = z.object({
       id: z.string(),
       name: z.string(),
       clubId: z.string().nullable(),
+      /** The team's PERSISTENT squad (`team_members`) — the same role
+       *  `entrants.memberPersonIds` plays for entrant rosters, and needed for
+       *  the same reason: re-planning committed rows must see the squad that
+       *  already exists and emit zero `squad.add` ops. */
+      memberPersonIds: z.array(z.string()),
     }),
   ),
   persons: z.array(
@@ -153,6 +158,24 @@ export const ImportOp = z.discriminatedUnion("kind", [
     }),
     sourceRows,
   }),
+  /** A person's membership of a TEAM's persistent squad (`team_members`),
+   *  as distinct from `roster.add`'s membership of one entrant's division
+   *  roster. Emitted for any row naming both a team and a player, with or
+   *  without a division: "Club,Team,Player" is a squad statement, and until
+   *  this op existed a directory-only import created the person and the team
+   *  and no link between them, so "Sync from team squad" pulled nothing and
+   *  enrolling that team seeded an empty roster. */
+  z.object({
+    kind: z.literal("squad.add"),
+    team: Target,
+    person: Target,
+    after: z.object({
+      squadNumber: z.number().int().optional(),
+      positionKey: z.string().optional(),
+      isCaptain: z.boolean(),
+    }),
+    sourceRows,
+  }),
   z.object({
     kind: z.literal("roster.add"),
     entrant: Target,
@@ -185,6 +208,8 @@ export const ImportPlan = z.object({
     persons: z.number().int(),
     entrants: z.number().int(),
     rosters: z.number().int(),
+    /** `squad.add` ops — team-squad memberships this plan will create. */
+    squads: z.number().int(),
   }),
   issues: z.array(ImportIssue),
 });

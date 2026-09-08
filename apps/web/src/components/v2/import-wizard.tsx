@@ -52,15 +52,25 @@ const ISSUE_I18N: Record<string, { messageKey: MessageKey; badgeKey: MessageKey 
     badgeKey: "import.issueCode.divisionNotFound",
   },
 };
+/** A plan target: either an existing row's id or a forward reference to
+ *  another op in this same plan (`packages/engine/src/import/types.ts`). */
+interface OpTarget {
+  id?: string;
+  ref?: string;
+}
 interface ImportOp {
   kind: string;
   ref?: string;
   sourceRows: number[];
   after?: Record<string, unknown>;
+  /** `squad.add` names its person by target rather than carrying a name —
+   *  the preview resolves it back through the plan's own `person.create`. */
+  person?: OpTarget;
+  team?: OpTarget;
 }
 interface ImportPlan {
   ops: ImportOp[];
-  stats: { clubs: number; teams: number; persons: number; entrants: number; rosters: number };
+  stats: { clubs: number; teams: number; persons: number; entrants: number; rosters: number; squads: number };
   issues: ImportIssue[];
 }
 interface Preview {
@@ -76,7 +86,10 @@ interface CommitResult {
   divisionIds: string[];
 }
 
-const OP_BADGE: Record<string, { labelKey: MessageKey; cls: string }> = {
+/** Exported for `import-wizard-op-badges.test.ts`, which derives the kinds
+ *  from the engine's own `ImportOp` union and fails when a new one arrives
+ *  unmapped — the fallback prints the raw kind, which is silent. */
+export const OP_BADGE: Record<string, { labelKey: MessageKey; cls: string }> = {
   "club.create": { labelKey: "import.op.clubCreate", cls: "bg-emerald-50 text-emerald-700" },
   "club.update": { labelKey: "import.op.clubUpdate", cls: "bg-sky-50 text-sky-700" },
   "team.create": { labelKey: "import.op.teamCreate", cls: "bg-emerald-50 text-emerald-700" },
@@ -84,6 +97,10 @@ const OP_BADGE: Record<string, { labelKey: MessageKey; cls: string }> = {
   "person.create": { labelKey: "import.op.personCreate", cls: "bg-emerald-50 text-emerald-700" },
   "entrant.create": { labelKey: "import.op.entrantCreate", cls: "bg-violet-50 text-violet-700" },
   "roster.add": { labelKey: "import.op.rosterAdd", cls: "bg-slate-100 text-slate-600" },
+  // W4. Missing this row did not fail anything — an unmapped kind falls back
+  // to `op.kind`, so the preview printed a literal "squad.add" chip beside
+  // the friendly ones. Found by looking at the screen, not by a test.
+  "squad.add": { labelKey: "import.op.squadAdd", cls: "bg-slate-100 text-slate-600" },
 };
 
 async function postForm<T>(url: string, form: FormData, headers?: Record<string, string>): Promise<T> {
@@ -257,6 +274,21 @@ export function ImportWizard({ viewerPlan }: { viewerPlan: ViewerPlan }) {
     return [...groups.entries()];
   }, [preview]);
 
+  /** Forward-ref → the name the op creates. `squad.add` points at a person by
+   *  ref, so without this its chip reads as a bare label with no player on it,
+   *  which is the least useful line in the preview. A target that is an
+   *  existing `id` has no name in the plan at all — the chip then carries the
+   *  label alone, exactly as it did before. */
+  const nameByRef = useMemo(() => {
+    const byRef = new Map<string, string>();
+    for (const op of preview?.plan.ops ?? []) {
+      if (!op.ref) continue;
+      const name = op.after?.name ?? op.after?.fullName ?? op.after?.displayName;
+      if (name) byRef.set(op.ref, String(name));
+    }
+    return byRef;
+  }, [preview]);
+
   return (
     <div className="space-y-5">
       <section className="card space-y-3 p-4">
@@ -323,6 +355,7 @@ export function ImportWizard({ viewerPlan }: { viewerPlan: ViewerPlan }) {
                   persons: preview.plan.stats.persons,
                   entrants: preview.plan.stats.entrants,
                   rosters: preview.plan.stats.rosters,
+                  squads: preview.plan.stats.squads,
                 })}
               </p>
             </div>
@@ -368,9 +401,12 @@ export function ImportWizard({ viewerPlan }: { viewerPlan: ViewerPlan }) {
                         const badge = OP_BADGE[op.kind];
                         const badgeLabel = badge ? msg(badge.labelKey) : op.kind;
                         const badgeCls = badge?.cls ?? "bg-slate-100 text-slate-600";
-                        const name = String(
-                          op.after?.name ?? op.after?.fullName ?? op.after?.displayName ?? op.ref ?? "",
-                        );
+                        const name =
+                          op.kind === "squad.add"
+                            ? (op.person?.ref ? (nameByRef.get(op.person.ref) ?? "") : "")
+                            : String(
+                                op.after?.name ?? op.after?.fullName ?? op.after?.displayName ?? op.ref ?? "",
+                              );
                         return (
                           <li
                             key={i}
@@ -435,6 +471,7 @@ export function ImportWizard({ viewerPlan }: { viewerPlan: ViewerPlan }) {
               persons: result.stats.persons,
               entrants: result.stats.entrants,
               rosters: result.stats.rosters,
+              squads: result.stats.squads,
             })}
             {result.divisionIds.length > 0 ? msg("import.acrossDivisions", { n: result.divisionIds.length }) : ""}.
           </p>

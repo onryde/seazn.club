@@ -112,12 +112,11 @@ function hasAssessableWindow(config: CapacityReportConfig): boolean {
  *    fresh `impossible` verdict — it cannot wrongly disable Auto-schedule.
  *
  * Second-review finding 1 was this predicate existing in only ONE of the two
- * hooks: `useCapacityReport` skipped an unassessable window,
- * `useCapacityReportsByStage` skipped only a literally `null` request. Since
- * `capacityRequestForStage` emits `-Infinity`/`Infinity` whenever just one of
- * startAt/endAt is set — an entirely ordinary division — the by-stage path
- * shipped the exact 400/retry/400 loop described above. Two hooks answering
- * the same question two ways is the fork this repo keeps paying for; hence
+ * hooks that used to live here: `useCapacityReport` skipped an unassessable
+ * window, the since-deleted `useCapacityReportsByStage` skipped only a
+ * literally `null` request, and the by-stage path shipped the exact
+ * 400/retry/400 loop described above. Two hooks answering the same question
+ * two ways is the fork this repo keeps paying for; hence
  * one function, both callers.
  */
 function isSendableRequest(
@@ -146,17 +145,14 @@ function inputsKey(
   return JSON.stringify({ divisionId, fixtures, config });
 }
 
-/** The non-hook core both `useCapacityReport` and `useCapacityReportsByStage`
- *  share: schedule ONE debounced, abortable POST, call `onResolved` with
- *  the settled report. Returns a canceller (clears the timer AND aborts an
- *  in-flight request) — the caller decides when to invoke it (an effect's
- *  cleanup, in both current callers). Factored out rather than left inline
- *  in `useCapacityReport` alone because `useCapacityReportsByStage` needs
- *  the SAME debounce/abort mechanics N times over (one per stage) from
- *  inside a single `useEffect`, where calling `useCapacityReport` itself N
- *  times would vary the hook-call count across renders whenever the stage
- *  count changes — a rules-of-hooks violation, not merely a style
- *  preference. Not exported: both callers live in this file. */
+/** The debounce/abort core: schedule ONE debounced, abortable POST, call
+ *  `onResolved` with the settled report. Returns a canceller (clears the
+ *  timer AND aborts an in-flight request) — the caller decides when to invoke
+ *  it (an effect's cleanup). It was factored out of `useCapacityReport` for a
+ *  second, per-stage hook that has since been deleted with the CTA it fed;
+ *  it stays factored out because that is where the retry/abort contract this
+ *  file's header describes actually lives. Not exported: its only caller is
+ *  in this file. */
 /** One retry, after a short fixed backoff, before a REAL failure is
  *  declared — enough to ride out a one-off blip without turning into an
  *  endless retry loop against the endpoint (review Finding 1: a genuine
@@ -267,155 +263,12 @@ export function useCapacityReport(
   return { report, stale: resolvedKey !== key, failed: failedKey === key };
 }
 
-/** One request per stage — `null` for a stage with nothing to assess yet
- *  (settings not loaded, or incomplete; `capacityRequestForStage`,
- *  stages-panel.tsx, returns `null` for exactly that state). */
-export type CapacityRequest = { fixtures: readonly CapacityFixtureInput[]; config: CapacityReportConfig } | null;
-
-/**
- * The multi-stage sibling of `useCapacityReport` (P10 §4/Task 6): one
- * independent debounced/abortable subscription PER MAP ENTRY, called ONCE
- * per render regardless of how many stages exist. `stages-panel.tsx` needs
- * this rather than N `useCapacityReport` calls because the stage count can
- * change between renders (a stage added or deleted) — the button that
- * reads this hook's result must stay a DIRECT part of `StagesPanel`'s own
- * render output too (never a child component wrapping it), because this
- * repo's hook-harness `walk()` never invokes a nested component's render
- * function — only the root component `renderIsland` was given. An
- * intermediate `<StageCapacityGate>`-shaped component, however cleanly
- * written, makes the button invisible to every existing `walk()`-based
- * test that locates it by testid (proved during this task: it broke
- * stages-panel-auto-schedule-seq.test.tsx and
- * stages-panel-result-strip.test.tsx, 7 pre-existing tests, before this
- * hook replaced that design).
- *
- * A stage id absent from `requests` on a later render has its subscription
- * cancelled and dropped — same "no leaked timers on removal" contract a
- * plain `useCapacityReport` gets for free by unmounting.
- */
-export function useCapacityReportsByStage(
-  divisionId: string,
-  requests: ReadonlyMap<string, CapacityRequest>,
-): ReadonlyMap<string, UseCapacityReportResult> {
-  // Per-stage siblings of useCapacityReport's own report/resolvedKey/
-  // failedKey state: real useState maps, not refs, because render reads
-  // all three below to build the returned per-stage map, and reading a
-  // ref's `.current` during render is the `react-hooks/refs` defect this
-  // hook must not have — a value read from a ref during render does not
-  // itself trigger a re-render when it changes, so a landed report could
-  // sit unseen until something else happens to re-render the caller.
-  // Each stage's fetch resolution replaces exactly ONE entry via a
-  // functional update, leaving every other stage's entry — and this
-  // stage's other two maps — untouched.
-  const [reports, setReports] = useState<ReadonlyMap<string, CapacityReport | null>>(new Map());
-  const [resolvedKeys, setResolvedKeys] = useState<ReadonlyMap<string, string>>(new Map());
-  const [failedKeys, setFailedKeys] = useState<ReadonlyMap<string, string>>(new Map());
-  // The in-flight subscription per stage (the canceller + the key it was
-  // scheduled for), consulted only inside the effect below to diff "which
-  // stages need a new/cancelled subscription". Render never reads this
-  // one — so, unlike the three maps above, it stays a ref.
-  const activeRef = useRef<Map<string, { key: string; cancel: () => void }>>(new Map());
-
-  // Normalised ONCE, at the top, and used by all three consumers below (the
-  // key loop, the effect, and the render-time short-circuit): a request that
-  // is not sendable is folded to `null` here, so it is indistinguishable
-  // from "settings haven't loaded yet" everywhere downstream. Doing this in
-  // one place rather than adding a second condition to each of the three is
-  // deliberate — the defect being fixed (finding 1) was exactly one of
-  // several parallel checks not being updated alongside its siblings.
-  const sendable = new Map<string, CapacityRequest>();
-  for (const [stageId, req] of requests) {
-    sendable.set(stageId, req !== null && isSendableRequest(req.fixtures, req.config) ? req : null);
-  }
-
-  const requestKeys = new Map<string, string>();
-  for (const [stageId, req] of sendable) {
-    // A `null` request never reaches scheduleCapacityFetch at all (see the
-    // effect below) — this placeholder key only has to be STABLE for "this
-    // stage's request is still the same shape of nothing", so the effect's
-    // signature does not churn on every render for a division whose
-    // settings simply haven't loaded yet.
-    requestKeys.set(stageId, req === null ? `${divisionId}: none` : inputsKey(divisionId, req.fixtures, req.config));
-  }
-  const requestKeysSignature = [...requestKeys.entries()]
-    .sort(([a], [b]) => a.localeCompare(b))
-    .map(([stageId, key]) => `${stageId}=${key}`)
-    .join("|");
-
-  useEffect(() => {
-    // Stage ids no longer present: cancel and drop — otherwise a deleted
-    // stage's in-flight fetch keeps running (and, on resolution, keeps
-    // writing into `reports`/`resolvedKeys`) for no reader that will ever
-    // see it.
-    for (const [stageId, active] of activeRef.current) {
-      if (!requestKeys.has(stageId)) {
-        active.cancel();
-        activeRef.current.delete(stageId);
-      }
-    }
-    for (const [stageId, key] of requestKeys) {
-      const req = sendable.get(stageId) ?? null;
-      if (req === null) {
-        // Nothing to schedule — the render-time short-circuit below already
-        // answers `{ report: null, stale: false }` for this stage without
-        // consulting the refs at all, mirroring useCapacityReport's own
-        // masked return for the same "not assessable" state. Still cancel
-        // a PRE-EXISTING subscription (e.g., settings that had loaded now
-        // read as incomplete).
-        activeRef.current.get(stageId)?.cancel();
-        activeRef.current.delete(stageId);
-        continue;
-      }
-      const active = activeRef.current.get(stageId);
-      if (active && active.key === key) continue; // unchanged — already scheduled or resolved
-      active?.cancel();
-      const cancel = scheduleCapacityFetch(
-        divisionId,
-        req.fixtures,
-        req.config,
-        // `reports` before `resolvedKeys` — same ordering rationale as
-        // useCapacityReport's own onResolved handler above.
-        (data) => {
-          setReports((prev) => new Map(prev).set(stageId, data));
-          setResolvedKeys((prev) => new Map(prev).set(stageId, key));
-        },
-        () => {
-          setFailedKeys((prev) => new Map(prev).set(stageId, key));
-        },
-      );
-      activeRef.current.set(stageId, { key, cancel });
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [requestKeysSignature, divisionId]);
-
-  // Full teardown on UNMOUNT only (deps: [] — fires once) — separate from
-  // the effect above, whose own per-key diffing already cancels exactly
-  // what needs cancelling on every OTHER re-run. Also clears the map
-  // itself, not just each entry's cancel(): React (in development strict
-  // mode) can run an effect's mount → cleanup → mount sequence once before
-  // settling, and a cleared map is what makes the SECOND mount pass
-  // reschedule genuinely-cancelled fetches instead of skipping them as
-  // "unchanged" against stale (already-cancelled) entries.
-  useEffect(() => {
-    return () => {
-      for (const active of activeRef.current.values()) active.cancel();
-      activeRef.current.clear();
-    };
-  }, []);
-
-  const out = new Map<string, UseCapacityReportResult>();
-  for (const [stageId, key] of requestKeys) {
-    if ((sendable.get(stageId) ?? null) === null) {
-      out.set(stageId, { report: null, stale: false, failed: false });
-      continue;
-    }
-    const resolvedKey = resolvedKeys.get(stageId) ?? null;
-    const failedKey = failedKeys.get(stageId) ?? null;
-    out.set(stageId, {
-      report: reports.get(stageId) ?? null,
-      stale: resolvedKey !== key,
-      failed: failedKey === key,
-    });
-  }
-  return out;
-}
+// `useCapacityReportsByStage` and its `CapacityRequest` type lived here and
+// were DELETED with the desk W4 follow-ups. Their only consumer was the
+// fixtures page's Auto-schedule CTA, which desk W3 removed (scheduling lives
+// on the Schedule page — owner ruling); the two `stages-panel.tsx` helpers
+// that built this hook's requests went with that PR, leaving the hook itself
+// exported, commented as if live, and called by nothing but its own tests.
+// `useCapacityReport` (singular) above is untouched and still feeds
+// `board/capacity-card.tsx`. `git log` has the implementation if the
+// per-stage pre-check is ever wanted on the Schedule page.

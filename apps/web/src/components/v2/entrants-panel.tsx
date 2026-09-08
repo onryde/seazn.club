@@ -1500,7 +1500,11 @@ export function RosterEditor({
     .filter((c) => c.on.length > 0);
 
   return (
-    <div className="space-y-3">
+    // The roster editor's own box. Named because the members and the
+    // add-player SUGGESTIONS live in one subtree, and a page-wide text probe
+    // cannot tell "on the roster" from "offered for the roster" — which is
+    // exactly how enroll.spec.ts once asserted a roster that was empty.
+    <div className="space-y-3" data-testid="entrant-roster">
       {conflicts.length > 0 && (
         <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
           <span className="font-medium">Also on another team in this division:</span>{" "}

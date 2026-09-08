@@ -7,9 +7,10 @@
 //
 // PRESENTATIONAL ONLY, deliberately: this component receives everything it
 // renders as props and calls no `use*` DATA hook of its own (useMsg is a
-// plain context read, not a data fetch, and is fine — see stages-panel.tsx's
-// own `useCapacityReportsByStage` comment for why a data-fetching hook
-// specifically must not move into a per-stage child). Task 10 folds this
+// plain context read, not a data fetch, and is fine — the per-stage capacity
+// hook that used to make this rule concrete is gone, deleted with the
+// Auto-schedule CTA it fed, but the rule stands: a data-fetching hook must
+// not move into a per-stage child). Task 10 folds this
 // into a phone bottom sheet, and the "no hooks of its own beyond useMsg"
 // rule turned out to be load-bearing for that too, not just decoration —
 // see the STATEFUL HOOKS note a few paragraphs down.

@@ -19,6 +19,20 @@ vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: vi.fn(), push: 
 // pins that offset differentiation, source-level (`environment: "node"`,
 // no DOM — the live scroll geometry itself is verified in a real browser,
 // not here).
+//
+// W4, review finding m2. The mechanism changed and these tests changed with
+// it. The offset was `top-[86px]`, where the 30 in that 86 was the day
+// header's height ASSUMED at one line; `DayHeading` prints date + venue +
+// count, so at 320 with a real venue name it wraps and the bracket header
+// then overlapped the header it was supposed to stack under. The height is
+// now MEASURED into `--desk-day-h` on the sheet root and consumed by one
+// `calc()` on the header. Nothing here can see the measurement — this is a
+// node environment and `useEffect` never runs — so what these tests pin is
+// the STATIC half: the root publishes a day-dependent fallback, and the
+// header's offset is derived from it rather than hardcoded. The measurement
+// itself is driven at 320 in `run-sheet.spec.ts` ("a wrapped day header
+// pushes the bracket header down with it"), which is the case that had
+// never been scrolled at any width before this finding.
 const TZ = "UTC";
 const NOW_MS = Date.UTC(2026, 8, 5, 12, 0, 0);
 
@@ -81,18 +95,45 @@ const MIXED_FIXTURES: RunSheetFixture[] = [
 const BRACKET_ONLY_STAGES = [{ id: "s2", seq: 1, kind: "knockout", name: "Cup" }];
 const BRACKET_ONLY_FIXTURES: RunSheetFixture[] = [fx(1, "s2", { scheduled_at: "2026-09-05T15:00:00.000Z" })];
 
+/** The sheet root's inline style — where the measured day-header height is
+ *  published for the header's `calc()` to read. */
+function rootStyle(html: string): string {
+  const m = /<div style="([^"]*)"[^>]*class="space-y-6/.exec(html);
+  expect(m, "sheet root (the space-y-6 block wrapper) not found").not.toBeNull();
+  return m![1]!;
+}
+
+/** The first bracket round header, split into its style and class halves —
+ *  the offset now lives in the former and the positioning in the latter. */
+function bracketHeader(html: string): { style: string; cls: string } {
+  const m = /<header style="([^"]*)" class="([^"]*)"/.exec(html);
+  expect(m, "bracket round header not found").not.toBeNull();
+  return { style: m![1]!, cls: m![2]! };
+}
+
 describe("run sheet — sticky header offsets stack deliberately when a day block coexists (controller ruling C-3)", () => {
   it("guards the guard: the mixed scenario really does produce one day block and one bracket block", () => {
     const blocks = buildRunSheet({ fixtures: MIXED_FIXTURES, stages: MIXED_STAGES, tz: TZ, nowMs: NOW_MS });
     expect(blocks.map((b) => b.kind)).toEqual(["day", "bracket"]);
   });
 
-  it("with a day block present, the bracket round header is pushed to top-[86px] (56 + the day header's own 30px)", () => {
+  it("with a day block present, the sheet publishes the day header's height for the offset to stack on", () => {
     const html = sheetHtml(MIXED_FIXTURES, MIXED_STAGES);
-    const bracketHeader = /<header class="([^"]*)"/.exec(html);
-    expect(bracketHeader, "bracket round header not found").not.toBeNull();
-    expect(bracketHeader![1]).toContain("top-[86px]");
-    expect(bracketHeader![1], "must not ALSO carry top-14 — exactly one offset class").not.toMatch(/\btop-14\b/);
+    // The pre-hydration / no-JS fallback is deliberately the OLD constant, so
+    // a sheet whose effect has not run yet behaves exactly as it shipped
+    // rather than collapsing both headers onto one slot.
+    expect(rootStyle(html), "sheet root must publish --desk-day-h").toContain("--desk-day-h:30px");
+  });
+
+  it("the bracket round header derives its offset from that value instead of hardcoding one", () => {
+    const html = sheetHtml(MIXED_FIXTURES, MIXED_STAGES);
+    const header = bracketHeader(html);
+    expect(header.style, "offset must be a calc over the measured height").toContain(
+      "calc(3.5rem + var(--desk-day-h, 0px))",
+    );
+    // The regression this replaces: any literal pixel offset is the bug.
+    expect(header.style, "the assumed-height literal must not come back").not.toContain("86px");
+    expect(header.cls, "the offset is no longer a class at all").not.toMatch(/\btop-/);
   });
 
   it("the day header itself is untouched — still top-14, the offset everything else stacks against", () => {
@@ -102,20 +143,29 @@ describe("run sheet — sticky header offsets stack deliberately when a day bloc
     expect(dayHeader![1]).toMatch(/\btop-14\b/);
   });
 
-  it("a bracket-only sheet (no day block anywhere) keeps the ordinary top-14 — no unearned gap under nav", () => {
+  it("a bracket-only sheet (no day block anywhere) resolves to the ordinary 56px — no unearned gap under nav", () => {
     const blocks = buildRunSheet({ fixtures: BRACKET_ONLY_FIXTURES, stages: BRACKET_ONLY_STAGES, tz: TZ, nowMs: NOW_MS });
     expect(blocks.map((b) => b.kind), "guards the guard — this scenario has no day block").toEqual(["bracket"]);
 
     const html = sheetHtml(BRACKET_ONLY_FIXTURES, BRACKET_ONLY_STAGES);
-    const bracketHeader = /<header class="([^"]*)"/.exec(html);
-    expect(bracketHeader, "bracket round header not found").not.toBeNull();
-    expect(bracketHeader![1]).toMatch(/\btop-14\b/);
-    expect(bracketHeader![1], "no day block exists — must not reserve the extra 30px").not.toContain("top-[86px]");
+    // Same expression on the header either way — the DIFFERENCE lives in the
+    // root's published value, and 0px makes the calc collapse to 3.5rem.
+    expect(bracketHeader(html).style).toContain("calc(3.5rem + var(--desk-day-h, 0px))");
+    expect(rootStyle(html), "no day block exists — must reserve nothing").toContain("--desk-day-h:0px");
+  });
+
+  it("the two scenarios actually DIFFER — the published height is what carries the differentiation", () => {
+    // Without this the four tests above are each satisfiable by a sheet that
+    // publishes the same value in both states, which is the whole defect
+    // ruling C-3 exists to prevent.
+    const mixed = rootStyle(sheetHtml(MIXED_FIXTURES, MIXED_STAGES));
+    const solo = rootStyle(sheetHtml(BRACKET_ONLY_FIXTURES, BRACKET_ONLY_STAGES));
+    expect(mixed).not.toBe(solo);
   });
 
   it("both offset variants keep sticky + z-10 — the fix changes only the offset, never the positioning scheme or stacking order", () => {
-    const mixedHeader = /<header class="([^"]*)"/.exec(sheetHtml(MIXED_FIXTURES, MIXED_STAGES))![1]!;
-    const soloHeader = /<header class="([^"]*)"/.exec(sheetHtml(BRACKET_ONLY_FIXTURES, BRACKET_ONLY_STAGES))![1]!;
+    const mixedHeader = bracketHeader(sheetHtml(MIXED_FIXTURES, MIXED_STAGES)).cls;
+    const soloHeader = bracketHeader(sheetHtml(BRACKET_ONLY_FIXTURES, BRACKET_ONLY_STAGES)).cls;
     for (const cls of [mixedHeader, soloHeader]) {
       expect(cls).toMatch(/\bsticky\b/);
       expect(cls).toMatch(/\bz-10\b/);

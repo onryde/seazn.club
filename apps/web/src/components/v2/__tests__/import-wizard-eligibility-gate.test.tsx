@@ -29,7 +29,7 @@ const PREVIEW = {
         after: { displayName: "Vet Player" },
       },
     ],
-    stats: { clubs: 0, teams: 0, persons: 1, entrants: 1, rosters: 1 },
+    stats: { clubs: 0, teams: 0, persons: 1, entrants: 1, rosters: 1, squads: 0 },
     issues: [],
   },
 };

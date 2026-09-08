@@ -25,6 +25,7 @@ type TeamLinkOp = Extract<ImportOp, { kind: "team.link" }>;
 type PersonCreateOp = Extract<ImportOp, { kind: "person.create" }>;
 type EntrantCreateOp = Extract<ImportOp, { kind: "entrant.create" }>;
 type RosterAddOp = Extract<ImportOp, { kind: "roster.add" }>;
+type SquadAddOp = Extract<ImportOp, { kind: "squad.add" }>;
 
 // A resolved entity within one planning run: either an existing row (id) or
 // an op emitted earlier in this same plan (ref).
@@ -53,6 +54,7 @@ export function planImport(
   const personCreates = new Map<string, PersonCreateOp>();
   const entrantCreates = new Map<string, EntrantCreateOp>();
   const rosterAdds = new Map<string, RosterAddOp>();
+  const squadAdds = new Map<string, SquadAddOp>();
 
   // --- snapshot indexes (built once; deterministic by construction) --------
   const clubByExtRef = new Map<string, ImportSnapshot["clubs"][number]>();
@@ -94,6 +96,12 @@ export function planImport(
   // (pinned imports still address by slug, doc 08 §3).
   const divisionByName = new Map(snapshot.divisions.map((d) => [fold(d.name), d]));
   const entrantByTeam = new Map<string, ImportSnapshot["entrants"][number]>();
+  // Existing TEAM-squad memberships, the `memberships` set's sibling one level
+  // up: re-planning a committed file must emit zero `squad.add` ops.
+  const squadMemberships = new Set<string>();
+  for (const t of snapshot.teams) {
+    for (const pid of t.memberPersonIds) squadMemberships.add(`${t.id}\x1f${pid}`);
+  }
   const memberships = new Set<string>();
   for (const e of snapshot.entrants) {
     if (e.teamId !== null) entrantByTeam.set(`${e.divisionId}\x1f${e.teamId}`, e);
@@ -295,6 +303,56 @@ export function planImport(
     const team = resolveTeam(row, club);
     const person = resolvePerson(row);
 
+    // A row naming both a team and a player is a statement about that team's
+    // SQUAD, whether or not it also places the team in a division. Emitted
+    // here, before the division branch below, so a directory-only file
+    // ("Club,Team,Player", no Division) produces it too — that file used to
+    // create the person and the team and nothing joining them.
+    // Filled in below only if this row's own division validates a position:
+    // the squad has no catalog of its own, so the ONLY position a squad.add
+    // may carry is one already checked against a real division.
+    let squadOpForRow: SquadAddOp | undefined;
+    if (team !== null && person !== null && person !== "error") {
+      const already =
+        "id" in team.target &&
+        "id" in person.target &&
+        squadMemberships.has(`${team.target.id}\x1f${person.target.id}`);
+      if (!already) {
+        const key = `${targetKey(team.target)}\x1f${targetKey(person.target)}`;
+        const pending = squadAdds.get(key);
+        if (pending) {
+          pending.sourceRows.push(row.rowNo);
+          squadOpForRow = pending;
+        } else {
+          const op: SquadAddOp = {
+            kind: "squad.add",
+            team: team.target,
+            person: person.target,
+            after: {
+              ...(row.squadNumber !== undefined ? { squadNumber: row.squadNumber } : {}),
+              isCaptain: row.isCaptain ?? false,
+            },
+            sourceRows: [row.rowNo],
+          };
+          squadAdds.set(key, op);
+          squadOpForRow = op;
+        }
+      }
+    }
+    // A Position on a row that names no division has nothing to validate it:
+    // team_members.default_position_key would take whatever the file said.
+    // Warn rather than drop it silently — the column is otherwise ignored
+    // with no trace, which is how a typo becomes an invisible no-op.
+    if (!blank(row.position) && blank(row.divisionSlug)) {
+      issues.push({
+        rowNo: row.rowNo,
+        column: "position",
+        severity: "warn",
+        code: "POSITION_WITHOUT_DIVISION",
+        message: `position '${row.position}' is ignored — this row names no division, so there is no position catalog to check it against`,
+      });
+    }
+
     // Jul3/01 §4: a row with divisionSlug places the team into that division.
     if (!blank(row.divisionSlug)) {
       const raw = row.divisionSlug!.trim();
@@ -368,6 +426,14 @@ export function planImport(
             continue;
           }
           positionKey = hit;
+          // The same validated key lands on the persistent squad, so a file
+          // with a Division sets team_members.default_position_key too — the
+          // squad op is emitted above, before this branch, and patched here
+          // rather than re-derived. First row to carry a position wins; a
+          // later row for the same pair does not overwrite it.
+          if (squadOpForRow && squadOpForRow.after.positionKey === undefined) {
+            squadOpForRow.after.positionKey = hit;
+          }
         }
         // roster idempotence: an existing member of an existing entrant is a no-op
         if (
@@ -402,6 +468,7 @@ export function planImport(
     ...teamCreates.values(),
     ...teamLinks.values(),
     ...personCreates.values(),
+    ...squadAdds.values(),
     ...entrantCreates.values(),
     ...rosterAdds.values(),
   ];
@@ -413,6 +480,7 @@ export function planImport(
       persons: personCreates.size,
       entrants: entrantCreates.size,
       rosters: rosterAdds.size,
+      squads: squadAdds.size,
     },
     issues,
   };
