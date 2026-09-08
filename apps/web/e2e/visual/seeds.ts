@@ -1,8 +1,16 @@
 // What each manifest group needs seeded, and the placeholders it then
-// provides. THIS is the file a later wave extends (W1-E adds
-// "overlay-fixture", R2 adds "relay-session"); the harness itself does not
-// change. SEED_PARAMS is read by the manifest unit test so a route asking for
-// a placeholder its seed cannot provide fails in seconds, not in Playwright.
+// provides. A later wave extends this file (W1-E adds "overlay-fixture", R2
+// adds "relay-session") but NOT ONLY this file: the two TABLES live in
+// ./manifest, so adding a kind is one entry in each of `SEED_KINDS` and
+// `SEED_PARAMS` there plus one `seedFor` case here — the "SEED_KINDS /
+// SEED_PARAMS are declared in ./manifest" comment just above the first recipe
+// is the authority, and this header now agrees with it. (It used to say "THIS
+// is the file a later wave extends … the harness itself does not change",
+// which that comment contradicted a dozen lines further down;
+// `docs/runbooks/visual-gate.md`'s step 2 repeated the same error and was
+// corrected with it, 2026-09-08.) SEED_PARAMS is read by
+// the manifest unit test so a route asking for a placeholder its seed cannot
+// provide fails in seconds, not in Playwright.
 import type { APIRequestContext, Page } from "@playwright/test";
 import { activeOrg, apiJson, seedRosteredFixture, TAG } from "../helpers";
 import type { SeedKind } from "./manifest";

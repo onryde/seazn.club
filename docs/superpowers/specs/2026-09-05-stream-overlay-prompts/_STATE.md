@@ -51,9 +51,14 @@ Last updated: 2026-09-08, **T1 closed and in PR #752**; W1 is next.
   plan and the amended W1 plan; fixes applied before the second merge).
 - **T1 IS DONE (2026-09-08).** All four tasks executed from
   `../../plans/2026-09-07-streaming-t1.md`, on `feat/stream-overlay`, in
-  **PR #752**. The commits are the range `0cc4614b8..feat/stream-overlay` —
-  count them with `git log --oneline 0cc4614b8..feat/stream-overlay` rather than
-  trusting a number written in a document, because each fix round appends one.
+  **PR #752**. The commits are the range **`origin/main..feat/stream-overlay`** —
+  count them with `git log --oneline origin/main..feat/stream-overlay` rather
+  than trusting a number written in a document, because each fix round appends
+  one. **Anchor on `origin/main`, never on a merge-base sha**: this line first
+  read `0cc4614b8..`, and the 2026-09-08 rebase made `0cc4614b8` an ancestor of
+  `origin/main`, so that range then swept the 79 replayed `main` commits too.
+  Measured on `9164a926a`: `git rev-list --count 0cc4614b8..feat/stream-overlay`
+  → **93**; `git rev-list --count origin/main..feat/stream-overlay` → **12**.
   Owner picks **1A · 2A · 3A · 4A · 5C**
   plus the ink-hairline addendum are in `_THEMES.md`; the full close — gate
   numbers, mutant killer lists, findings, deferred minors — is the
@@ -81,7 +86,9 @@ contrast sweep, `apps/web/e2e/visual/{manifest.ts,manifest.json,seeds.ts,asserts
 `_THEMES.md`, and one production fix (`court-card.tsx`, a `min-w-0` on the
 truncate chain). **No migration, no dictionary key, no user-facing string.**
 
-**Gate, on `be36620db`:** full `apps/web` vitest **15543 / 15620 / 4 failed**
+**Gate, on the tree at commit 10 of the range** (`knownDefects honoured one
+check and lied about the other four`, the last Task 3 commit — its pre-rebase
+sha no longer resolves)**:** full `apps/web` vitest **15543 / 15620 / 4 failed**
 against the baseline's **15121 / 15198 / 4** — **+422 tests, delta failed 0**,
 and the four reds are the baseline's own environmental placement file. Six PNGs,
 all hashes distinct; `mobile.spec.ts` @ mobile-320 **44 / 1 / 0**, the exact
@@ -175,7 +182,11 @@ prior record.
   ancestor of `origin/main`, `c8dc4d07f` is NOT — it was squash-merged, so
   `main` carries its changes under a different sha and
   `git merge-base --is-ancestor c8dc4d07f origin/main` returns false. Verify
-  these by content, never by ancestry alone.
+  these by content, never by ancestry alone. (Re-run after the 2026-09-08
+  rebase and unchanged. Both still `cat-file -e` in THIS clone, but
+  `c8dc4d07f` is reachable from nothing now — a fresh clone will not have the
+  object at all, which is the same reason the commit table above is keyed by
+  position rather than by sha.)
 
   The five checks and what they printed: `"re-pinned 2026-09-07
   @ fb99bbd4c"` in `W1-step-one.md` → **7 as of the final-review fix round,
@@ -187,6 +198,27 @@ prior record.
   say why here — never restore a marker to satisfy a count, which turns the
   sentinel into decoration. (The remaining margin is still zero, so the original
   warning stands: an accidental drop takes this below its floor silently.)
+
+  **A bare count still cannot tell a deliberate retirement from an accidental
+  drop** — a round that retires one marker and loses another nets to 7 and
+  reads clean. So the floor is a ROSTER, not an integer. The seven surviving
+  markers and the scope each belongs to, re-derived 2026-09-08 from
+  `grep -an "re-pinned 2026-09-07 @ fb99bbd4c" W1-step-one.md`:
+
+  | Line | Owning scope |
+  |---|---|
+  | `:27` | header — desk sequencing (W1/W2 merged, W3 is the contention) |
+  | `:209` | scope 5 — the cookie banner (Q2 + FS1) |
+  | `:226` | scope 5 — `hasFeature` at `lib/entitlements.ts:456`, moved from `:454` |
+  | `:270` | RP1 — `FixtureLine` / `fixture-schedule-toggle` retired by desk W2 |
+  | `:342` | do-not-touch list — `stages-panel.tsx` is no longer the mount |
+  | `:486` | acceptance — `fixture-schedule-toggle` absent, `run-sheet-edit-time` present |
+  | `:536` | merge gate — rebase after any desk-W3 merge touching `desk/run-sheet-row.tsx` |
+
+  Retired so far: **scope 3/4's migration numbers**, when the reserved
+  `V400`/`V401` became the `V<next>` RULE (final-review fix round, 2026-09-08).
+  Check the roster by SCOPE, not by count: a line number here moves whenever
+  the file is edited, so match on the owning scope and re-derive the numbers.
   `"eleven"` in
   `_RULES.md` → **3** (R16 widened); `"run-sheet-row.tsx"` in `W1-step-one.md`
   → hit at `:29` (RP1 re-pinned; the mount is the SYMBOL

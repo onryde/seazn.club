@@ -262,11 +262,11 @@ with `model: opus`.
 
 | path:line | symbol | fact |
 |---|---|---|
-| `apps/web/src/components/public-site/live-score.tsx:9-17` | imports | `disciplineLabel, disciplineList, matchStrength, periodBreakdown, servingSide, setBreakdown, stripLiveSetPoints` from `@/lib/public-site` |
-| `apps/web/src/lib/public-site.ts:290,319,338,352,373` | `setBreakdown(summary: unknown, sportKey: string): SetBreakdown \| null`, `periodBreakdown(summary): PeriodScoreRow[] \| null`, `matchStrength(summary): string \| null`, `disciplineList(summary): DisciplineEntry[] \| null`, `servingSide(summary): "home" \| "away" \| null` | already a shared module; premise 2 false in the good direction, nothing to move |
-| `live-score.tsx:29` | `const POLL_MS = 15_000;` | |
-| `live-score.tsx:32-50` | `interface Props` | `fixtureId, initial: LiveFixtureData, realtime: boolean, entrantNames: Record<string,string>, sportKey: string, decidedTemplates: DecidedOutcomeTemplates` |
-| `…/fixtures/[fixtureId]/page.tsx:175-182` | `<LiveScore>` call | `realtime={realtime} entrantNames={entrantNames} sportKey={division.sport_key} initial={{status,summary,outcome}}` |
+| `apps/web/src/components/public-site/live-score.tsx:19-27` | imports | `disciplineLabel, disciplineList, matchStrength, periodBreakdown, servingSide, setBreakdown, stripLiveSetPoints` from `@/lib/public-site`. (Was `:9-17`, which is the file's header COMMENT — corrected 2026-09-08) |
+| `apps/web/src/lib/public-site.ts:301,330,366,380,401` | `setBreakdown(summary: unknown, sportKey: string): SetBreakdown \| null`, `periodBreakdown(summary: unknown): PeriodScoreRow[] \| null`, `matchStrength(summary: unknown): string \| null`, `disciplineList(summary: unknown): DisciplineEntry[] \| null`, `servingSide(summary: unknown): "home" \| "away" \| null`; `stripLiveSetPoints` is `:297` | already a shared module; premise 2 false in the good direction, nothing to move. (Was `:290,319,338,352,373` — every one of the five landed on a brace, a comment or a blank line. Corrected 2026-09-08; **`W1-step-one.md`'s scope 2 carried the same five and was corrected with it**) |
+| `match-centre/use-live-fixture.ts:10` | `export const POLL_MS = 15_000;` (used at `:98`); the hook is `export function useLiveFixture(` at `:17` | **Corrected 2026-09-08 (post-rebase repair).** The three rows here previously described `live-score.tsx` as it was BEFORE spectator W1 Task 10/14 and were all false against the tree: this one put `POLL_MS` at `live-score.tsx:29`, which is an `import {`. `live-score.tsx` holds no transport at all any more |
+| `live-score.tsx:37-74` | `interface LiveScoreBodyProps` | `data: LiveFixtureData, entrantNames: Record<string,string>, sportKey: string, decidedTemplates: DecidedOutcomeTemplates, dict?: Dict, subscribed?: boolean, suppressScorebug?: boolean`. Previously recorded as `interface Props` at `:32-50` with `fixtureId, initial, realtime` — those are the RETIRED `LiveScore` wrapper's props and none of them exists in this file |
+| `…/shared/[orgSlug]/[competitionSlug]/[divisionSlug]/fixtures/[fixtureId]/page.tsx:22,293` | `import { MatchCentreWithTabParam }` / `<MatchCentreWithTabParam` | Task 14 replaced the `<LiveScore>` mount. **`LiveScore` is not exported anywhere** — `live-score.tsx`'s only exports are `LiveFixtureData` (`:35`) and `LiveScoreBody` (`:103`). Previously recorded as a `<LiveScore>` call at `:175-182`, with two route segments elided (`[competitionSlug]`, `[divisionSlug]`) — so even the path would not have resolved |
 | `app/(public)/shared/[orgSlug]/layout.tsx:19-23,60` | `Barlow_Condensed({ weight: ["500","600","700"], subsets: ["latin"], variable: "--ps-font-display" })` | variable class applied to a `<div>`, not `<body>`; root `app/layout.tsx:10-13` mounts Geist and `barlowCondensed` from `@/lib/fonts:4` |
 | `app/layout.tsx:54`, `global-error.tsx:17` | the only two `<html>` in `src/app` | `slideshow/layout.tsx:20` and `embed/layout.tsx:26` return a `<div>` — a nested layout cannot restyle `<body>` by props; the overlay layout injects a global `<style>` for `html, body { background: transparent }` scoped to its segment |
 | `…/v3/sport-theme.ts:557` | `sportThemeStyle(skinKey: string): CSSProperties \| undefined` | `undefined` when no palette entry (cricket, generic → `:root` defaults) |
@@ -543,28 +543,52 @@ user-facing string**, so none of the four-locale, OpenAPI or Flyway gates had
 anything to catch.
 
 **Branch** `feat/stream-overlay`, four tasks, every task reviewed to clean. Its
-commits are the range `0cc4614b8..feat/stream-overlay`; **read the count from
-`git log --oneline 0cc4614b8..feat/stream-overlay`, never from a number written
-here** — a fix round appends a commit and cannot append to a count already
-committed in prose, which is how "ten commits" survived into an eleven-commit
-branch on four lines across this file and `_STATE.md`. The table below runs to
-the eleventh; the
-final-review fix round that follows it appends its own, and the range is what
-shows them:
+commits are the range **`origin/main..feat/stream-overlay`**; **read the count
+from `git log --oneline origin/main..feat/stream-overlay`, never from a number
+written here** — a fix round appends a commit and cannot append to a count
+already committed in prose, which is how "ten commits" survived into an
+eleven-commit branch on four lines across this file and `_STATE.md`.
 
-| Commit | Task | What |
+**Anchor the range on `origin/main`, never on a merge-base sha.** This line
+first read `0cc4614b8..feat/stream-overlay` and was right for about a day. The
+2026-09-08 rebase replayed the branch over `origin/main`, which made
+`0cc4614b8` an ANCESTOR of `origin/main` — so that range then swept the 79
+replayed `main` commits as well. Both measured on `9164a926a`:
+
+    git rev-list --count 0cc4614b8..feat/stream-overlay   → 93
+    git rev-list --count origin/main..feat/stream-overlay → 12
+
+Replacing a number with a command was the right half of the repair; **the SHA
+was the fragile half.** `origin/main..` survives any rebase.
+
+**The same rebase invalidated every sha this section used to carry**, so the
+table below is keyed by POSITION IN THE RANGE, oldest first, and by subject —
+both of which a rebase preserves. Regenerate the hashes with
+`git log --oneline --reverse --format="%h %s" origin/main..feat/stream-overlay | cat -n`;
+do not write them back here.
+
+| # | Task | What |
 |---|---|---|
-| `e3ae4c871` | 0 | `ovl` environment, the vitest baseline, the T1 index row and the five `FS-T1*` deviations |
-| `1e4ef04d4` | 1 | T1a — slate, Phone tab, credits card and decided/void values, owner-picked |
-| `46081ef92` | 3 | `overflowingIn` moved out of `mobile.spec.ts` into `e2e/helpers.ts` |
-| `9787b379b` | 3 | manifest-driven capture harness with the owner checklist as assertions (+ the D4 `court-card.tsx` fix) |
-| `3e157f85e` | 2 | `OVERLAY_TOKENS`, the derived slab ink, the eleven-sport contrast sweep |
-| `18e2ad311` | 3 | close four ways the gate could pass on what it exists to fail on |
-| `2e9c8851b` | 2 | one home per value, the eleven keys as a literal, the swatch floors |
-| `2f8886a61` | 1 | T1a addendum — the card chips and live dot take an ink hairline |
-| `db70e9713` | 2 | the ink hairline carries the boundary; the two fills are *covered*, not waived |
-| `be36620db` | 3 | `knownDefects` honoured one check and lied about the other four |
-| `64bf49e84` | — | T1 close: findings, mutant killer lists, and the migration RULE (this section) |
+| 1 | 0 | `ovl` environment, the vitest baseline, the T1 index row and the five `FS-T1*` deviations |
+| 2 | 1 | T1a — slate, Phone tab, credits card and decided/void values, owner-picked |
+| 3 | 3 | `overflowingIn` moved out of `mobile.spec.ts` into `e2e/helpers.ts` |
+| 4 | 3 | manifest-driven capture harness with the owner checklist as assertions (+ the D4 `court-card.tsx` fix) |
+| 5 | 2 | `OVERLAY_TOKENS`, the derived slab ink, the eleven-sport contrast sweep |
+| 6 | 3 | close four ways the gate could pass on what it exists to fail on |
+| 7 | 2 | one home per value, the eleven keys as a literal, the swatch floors |
+| 8 | 1 | T1a addendum — the card chips and live dot take an ink hairline |
+| 9 | 2 | the ink hairline carries the boundary; the two fills are *covered*, not waived |
+| 10 | 3 | `knownDefects` honoured one check and lied about the other four |
+| 11 | — | T1 close: findings, mutant killer lists, and the migration RULE (this section) |
+| 12 | — | final-review fix round: the withdrawn `LiveScore` premise, the extension point, the migration RULE in `W1-step-one.md`, the hairline attribution, and FS-T1j's unit test |
+| 13 | — | post-rebase repair: re-anchor both ranges on `origin/main`, de-sha this table and six headings, three false `live-score.tsx` inventory rows, `seeds.ts`'s own contradiction |
+
+A row here is a LABEL, not a count — the range command above is the count, and a
+later round appends a commit whether or not anyone appends a row.
+
+**Every "commit N" below refers to the `#` column.** The four mutation-round
+headings and the two gate-number headings used to name shas and now name
+positions, for the same reason.
 
 ### The owner's decisions (T1a)
 
@@ -598,7 +622,12 @@ chip and the live dot and takes the other two as a proposal. `_THEMES.md` §2
 (`:126-141`), §3 (`:183-200`, `:233`) and §4 (`:328`, `:341`) are the binding
 text for the drawing.
 
-### Gate numbers — measured, on tree `be36620db`
+### Gate numbers — measured on the tree at commit 10
+
+Commit 10 is `knownDefects honoured one check and lied about the other four`,
+the last Task 3 commit. These numbers were measured on the sha it carried
+BEFORE the 2026-09-08 rebase; that sha no longer resolves, which is why the
+anchor is the position and the subject.
 
 - **Full `apps/web` vitest, fresh `ovl` DB:** passed **15543** / total **15620**
   / failed **4** / pending **73**, across **1185 files**; `outside-worktree 0`.
@@ -635,7 +664,7 @@ Three rounds, **0 survivors at the end**. Per round: 19 / 19 (round 1),
 originals: M3, M5, M6, M7, M12 and the test-side trio M16/M17/M18), **7 / 7**
 (fix round 2). The killers, verbatim:
 
-**Round 1 — `3e157f85e`**
+**Round 1 — commit 5**
 
 | # | Mutation | Verdict | Named killer |
 |---|---|---|---|
@@ -667,7 +696,7 @@ harness self-test drives each with a ratio on both sides of every floor. An
 inline threshold is invisible to its own assertions; extracting it is what gives
 the floor a test.
 
-**Fix round 1 — `2e9c8851b`**
+**Fix round 1 — commit 7**
 
 | # | Mutation | Verdict | Killer |
 |---|---|---|---|
@@ -694,7 +723,7 @@ the one home (`sport-theme.ts`, ship-off-limits) was mutated under a restore
 proven twice — byte comparison against the backup, and an empty
 `git diff --stat` on that path.
 
-**Fix round 2 — `db70e9713`** (the hairline ruling)
+**Fix round 2 — commit 9** (the hairline ruling)
 
 | # | Mutation | Verdict | Killer |
 |---|---|---|---|
@@ -716,7 +745,7 @@ Three rounds, **23 mutants, 23 killed, no survivors** (the report's own running
 total). Round 1 ran 11 with **2 survivors**; both were killed in fix round 1
 rather than recorded, and round 2's numbering continues round 1's.
 
-**Fix round 1 — `18e2ad311`** (16 run, 16 killed; 19 rows, `8b` replacing round
+**Fix round 1 — commit 6** (16 run, 16 killed; 19 rows, `8b` replacing round
 1's `8`, which the per-axis rewrite subsumes)
 
 | # | Mutation | KILLER |
@@ -741,7 +770,7 @@ rather than recorded, and round 2's numbering continues round 1's.
 | 18 | zod enum custom `error` removed | unit › `rejects what the harness cannot run, BY NAME` |
 | 19 | checks/knownDefects overlap guard removed | unit › `rejects what the harness cannot run, BY NAME` |
 
-**Fix round 2 — `be36620db`** (7 new, 7 killed)
+**Fix round 2 — commit 10** (7 new, 7 killed)
 
 | # | Mutation | KILLER |
 |---|---|---|
@@ -771,8 +800,9 @@ clear its own floor for that sport, and must sit on the SAME ground as the pair
 it covers. Both numbers stay asserted two-sided at their measured values.
 
 > **The e2e obligation, stated exactly, and it belongs to W1: a 1-px
-> `--sport-ink` border on the three discipline card chips and on the live dot,
-> in both §3's bar and §4's bug, asserted in W1's e2e.** No unit test can see
+> `--sport-ink` border on the three discipline card chips and on the live dot —
+> all three as the sheet draws them; the RULING covers the red-card chip and
+> the live dot — in both §3's bar and §4's bug, asserted in W1's e2e.** No unit test can see
 > it — `apps/web` vitest is `environment: "node"`, and the contrast sweep proves
 > the colour PAIR would work if the border were drawn, never that it IS drawn.
 > `ink` on `board-2` at 9.46–16.11 against a floor of 3 passes identically when

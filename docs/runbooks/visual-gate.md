@@ -132,7 +132,10 @@ overflow hides behind it") applied literally.
    its entry in `SEED_KINDS` **and** in `SEED_PARAMS` — both of which live in
    `e2e/visual/manifest.ts:17-22`, because that module is pure and the manifest
    unit test imports it — and then its recipe as a `seedFor` case in
-   `e2e/visual/seeds.ts` (`seeds.ts:10-11` says exactly this in its own header).
+   `e2e/visual/seeds.ts` — whose own file header and its "SEED_KINDS /
+   SEED_PARAMS are declared in ./manifest" comment now both say exactly this
+   (the header used to say the opposite; corrected 2026-09-08 in the same round
+   as this step).
    An earlier revision of this step named `seeds.ts` for all three and called it
    "the only harness file a wave edits"; that was wrong in the one instruction
    this section exists to give.

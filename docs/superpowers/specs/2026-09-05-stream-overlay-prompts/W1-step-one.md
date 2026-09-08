@@ -111,9 +111,12 @@ marked (re-pinned), and is re-pinned before an edit regardless.
    `OverlayModel` exactly as spec §2 (`live, decided, header{context, clock?},
    sides[2]{short,name,big,sub?,led,serving}, cells[], detail[], chase?,
    result?`). Pure; no React, no `@/server/**` import (the stage is a client
-   component). Derivations imported from `@/lib/public-site` (`setBreakdown :290`,
-   `periodBreakdown :319`, `matchStrength :338`, `disciplineList :352`,
-   `servingSide :373`) — never re-derived. Every string via `msg: MsgFn`
+   component). Derivations imported from `@/lib/public-site` — **import them by
+   SYMBOL; the line pins here have already gone stale once** (re-pinned
+   2026-09-08 post-rebase: `setBreakdown :301`, `periodBreakdown :330`,
+   `matchStrength :366`, `disciplineList :380`, `servingSide :401`; the
+   2026-09-07 text said `:290/:319/:338/:352/:373` and every one of those five
+   landed on a brace, a comment or a blank line) — never re-derived. Every string via `msg: MsgFn`
    (`lib/messages-i18n.ts:24-28`). `short`: the linked team's `short_name`
    (`teams.short_name`, `db/migration/v2-engine/tables/V206__teams.sql:5`,
    re-pinned) when the entrant reaches one, else the first three letters of the
