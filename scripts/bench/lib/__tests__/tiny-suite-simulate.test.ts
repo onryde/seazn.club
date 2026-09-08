@@ -29,7 +29,14 @@ import { runTinySuite, TINY_PACK_PATH } from "../suites/tiny.ts";
 import { makeScheduleWorld } from "./_schedule-routes.ts";
 import { makeDivisionPhaseWorld } from "./_division-phase.ts";
 import { makeAdvanceRoutesWorld } from "./_advance-routes.ts";
-import { makeOracleRoutesWorld, tinyDivisionPlayerStats, tinyLeagueTableRows } from "./_oracle-routes.ts";
+import type { DivisionCardSource, DivisionPlayerStatsLike } from "./_oracle-routes.ts";
+import {
+  makeOracleRoutesWorld,
+  personCareerStatsFromDivisions,
+  personStatsFromDivisions,
+  tinyDivisionPlayerStats,
+  tinyLeagueTableRows,
+} from "./_oracle-routes.ts";
 import { roundRobinRoundCount } from "./_roundrobin-rounds.ts";
 
 const silent = pino({ level: "silent" });
@@ -72,6 +79,20 @@ function fakeServer(
      *  live tally, proving `compareLeaderboard`'s empty-case discipline
      *  through the WIRING — symmetric with `emptyBadmintonStandings` above. */
     emptyLeaderboard?: boolean;
+    /** B05 T5b — `GET /persons/{id}/stats?group=sport` answers an EMPTY
+     *  `sports` array (a person the rollup found nothing for) while every
+     *  other read stays honest, proving `compareCareerStats`'s empty case
+     *  through the WIRING: an empty rollup against a non-empty
+     *  `expected.careers` must red, never vacuously pass. Scoped to the
+     *  career route alone so the per-division cards keep passing — a sibling
+     *  oracle reddening alongside it would not be coverage of this one. */
+    emptyCareerSports?: boolean;
+    /** B05 T5b — `GET /persons/{id}/stats` answers an EMPTY `divisions`
+     *  array while the division leaderboard read stays honest, proving
+     *  `comparePersonDivisionStat`'s absent-division case through the
+     *  WIRING. Symmetric with `emptyCareerSports`, and equally scoped: the
+     *  leaderboard oracle for the same board must still pass. */
+    emptyPersonDivisions?: boolean;
   } = {},
 ): {
   transport: ProbeTransport;
@@ -94,6 +115,12 @@ function fakeServer(
   // `getDivisionPlayerStats` below (is this division "Tiny"?).
   const stageNameById = new Map<string, string>();
   const divisionNameById = new Map<string, string>();
+  // B05 T5b — the `sport_key` the SAME `POST /competitions/{id}/divisions`
+  // body already carries (`seed.ts:614`). Read off the wire rather than
+  // guessed, because `personCareerStats` files a person's divisions UNDER
+  // their sport and `compareCareerStats` reds on a metric key found in more
+  // than one sport.
+  const divisionSportById = new Map<string, string>();
   const fixtureDivisionId = new Map<string, string>();
   // B05 T2.5 (D9) — see `_division-phase.ts`'s own header comment: EVERY
   // `sql`-passing fake now reaches `/start`/`GET /divisions/{id}`
@@ -140,6 +167,47 @@ function fakeServer(
   // flow before `complete` is ever called, so the oracle step (which only
   // runs once `complete` has actually been captured) never reaches this
   // route in that scenario either way.
+  // B05 T5b — division player stats, hoisted out of the world literal below
+  // so the person-stats routes can derive their own answers from the SAME
+  // source. `d-tiebreak` ("Tiebreak") also carries `expected.leaderboards`
+  // rows since T5b-1 gave `expected.careers` a second division to roll up;
+  // its own streams fold through `/events/import` (this file's pass-through
+  // branch, which tallies nothing), so it takes `_oracle-routes.ts`'s shared
+  // committed fixture rather than the live tally — only division A's fold is
+  // tallied here.
+  const honestDivisionPlayerStats = (divisionId: string): DivisionPlayerStatsLike | undefined => {
+    const divisionName = divisionNameById.get(divisionId);
+    if (divisionName === undefined) return undefined;
+    if (divisionName !== "Tiny") {
+      return tinyDivisionPlayerStats(divisionName, (fullName) => `person-${slug(fullName)}`);
+    }
+    return {
+      metrics: [
+        { key: "scores", label: "Scores" },
+        { key: "points", label: "Points" },
+      ],
+      rows: [...personScoreTally.entries()].map(([personId, tally]) => ({
+        person_id: personId,
+        full_name: personNameById.get(personId) ?? personId,
+        stats: { scores: tally.scores, points: tally.points },
+      })),
+      requires_detailed_scoring: false,
+    };
+  };
+  const divisionPlayerStatsFor = (divisionId: string): DivisionPlayerStatsLike | undefined => {
+    if (opts.emptyLeaderboard === true && divisionNameById.get(divisionId) === "Tiny") {
+      return { metrics: [], rows: [], requires_detailed_scoring: true };
+    }
+    return honestDivisionPlayerStats(divisionId);
+  };
+  const divisionCardSources = (): readonly DivisionCardSource[] =>
+    [...divisionNameById.entries()].flatMap(([divisionId, divisionName]) => {
+      const playerStats = honestDivisionPlayerStats(divisionId);
+      return playerStats === undefined
+        ? []
+        : [{ divisionId, divisionName, sportKey: divisionSportById.get(divisionId) ?? "unknown", playerStats }];
+    });
+
   const oracleRoutes = makeOracleRoutesWorld({
     getRankedEntrantIds: (stageId) => {
       const divisionId = divisionIdByStageId.get(stageId);
@@ -164,34 +232,22 @@ function fakeServer(
     // that folds division0's OWN real events, and D6's regression needs the
     // fake to report whatever a mis-attributed `payload.person` actually
     // produced, not a constant that could never disagree with it.
-    getDivisionPlayerStats: (divisionId) => {
-      const divisionName = divisionNameById.get(divisionId);
-      if (divisionName === undefined) return undefined;
-      // B05 T5b — `d-tiebreak` ("Tiebreak") also carries `expected.
-      // leaderboards` rows since T5b-1 gave `expected.careers` a second
-      // division to roll up. Its own streams fold through `/events/import`
-      // (this file's pass-through branch, which tallies nothing), so it takes
-      // `_oracle-routes.ts`'s shared committed fixture rather than the live
-      // tally below — only division A's fold is tallied here.
-      if (divisionName !== "Tiny") {
-        return tinyDivisionPlayerStats(divisionName, (fullName) => `person-${slug(fullName)}`);
-      }
-      if (opts.emptyLeaderboard === true) {
-        return { metrics: [], rows: [], requires_detailed_scoring: true };
-      }
-      return {
-        metrics: [
-          { key: "scores", label: "Scores" },
-          { key: "points", label: "Points" },
-        ],
-        rows: [...personScoreTally.entries()].map(([personId, tally]) => ({
-          person_id: personId,
-          full_name: personNameById.get(personId) ?? personId,
-          stats: { scores: tally.scores, points: tally.points },
-        })),
-        requires_detailed_scoring: false,
-      };
-    },
+    getDivisionPlayerStats: divisionPlayerStatsFor,
+    // B05 T5b — the two person-stats reads. Both derive from
+    // `honestDivisionPlayerStats`, NEVER from `divisionPlayerStatsFor`: the
+    // `emptyLeaderboard` knob models one broken ENDPOINT, and letting it
+    // leak into the person card would red two oracles for one injected
+    // fault, which is exactly the "two guards covering for each other" shape
+    // this task is required not to ship. Each of the three knobs below reds
+    // its own oracle and no other.
+    getPersonStats: (personId) =>
+      opts.emptyPersonDivisions === true
+        ? { divisions: [] }
+        : personStatsFromDivisions(personId, divisionCardSources()),
+    getPersonCareerStats: (personId) =>
+      opts.emptyCareerSports === true
+        ? { sports: [] }
+        : personCareerStatsFromDivisions(personId, divisionCardSources()),
   });
 
   const transport: ProbeTransport = {
@@ -230,10 +286,11 @@ function fakeServer(
         return { id: `comp-${slug((body as { name: string }).name)}` } as T;
       }
       if (method === "POST" && /^\/api\/v1\/competitions\/[^/]+\/divisions$/.test(routePath)) {
-        const b = body as { name?: string; config?: { dls?: { enabled?: boolean } } };
+        const b = body as { name?: string; sport_key?: string; config?: { dls?: { enabled?: boolean } } };
         const id = `div-${++divisionCounter}`;
         dlsByDivisionId.set(id, b.config?.dls?.enabled === true);
         if (b.name !== undefined) divisionNameById.set(id, b.name);
+        if (b.sport_key !== undefined) divisionSportById.set(id, b.sport_key);
         return { id } as T;
       }
       const entrantsMatch = /^\/api\/v1\/divisions\/([^/]+)\/entrants$/.exec(routePath);

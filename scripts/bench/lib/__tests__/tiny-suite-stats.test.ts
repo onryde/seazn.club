@@ -28,7 +28,14 @@ import { runTinySuite, TINY_PACK_PATH } from "../suites/tiny.ts";
 import { makeScheduleWorld } from "./_schedule-routes.ts";
 import { makeDivisionPhaseWorld } from "./_division-phase.ts";
 import { makeAdvanceRoutesWorld } from "./_advance-routes.ts";
-import { makeOracleRoutesWorld, tinyDivisionPlayerStats, tinyLeagueTableRows } from "./_oracle-routes.ts";
+import type { DivisionCardSource } from "./_oracle-routes.ts";
+import {
+  makeOracleRoutesWorld,
+  personCareerStatsFromDivisions,
+  personStatsFromDivisions,
+  tinyDivisionPlayerStats,
+  tinyLeagueTableRows,
+} from "./_oracle-routes.ts";
 import { roundRobinRoundCount } from "./_roundrobin-rounds.ts";
 
 const silent = pino({ level: "silent" });
@@ -62,6 +69,13 @@ function fakeServer(opts: { statsPlayerGranted: boolean }): {
   // and `/divisions` POST bodies' own `name` field.
   const stageNameById = new Map<string, string>();
   const divisionNameById = new Map<string, string>();
+  // B05 T5b — the `sport_key` the SAME `POST /competitions/{id}/divisions`
+  // body already carries (`seed.ts:614`). Read off the wire rather than
+  // guessed, because `personCareerStats` files a person's divisions UNDER
+  // their sport and `compareCareerStats` reds on a metric key found in more
+  // than one sport — a fake that flattened every division into one sport
+  // could never witness that guard.
+  const divisionSportById = new Map<string, string>();
   const fixtureDivisionId = new Map<string, string>();
   const fixtureOfficials = new Map<string, unknown[]>();
   const claimInvites = new Map<string, unknown>();
@@ -89,6 +103,24 @@ function fakeServer(opts: { statsPlayerGranted: boolean }): {
   });
   // B05 T4 — the runtime oracle's own route, unconditionally reached once
   // `s-playoff` completes (see `_oracle-routes.ts`'s own header comment).
+  // B05 T5b — keyed by division NAME so BOTH leaderboard divisions the pack
+  // now names (`Tiny` and, since T5b-1, `Tiebreak`) are answered; a name this
+  // pack declares no leaderboard for falls through to `undefined`. Hoisted
+  // out of the world literal below so the person-stats routes can derive
+  // their own answers from the SAME source.
+  const divisionPlayerStatsFor = (divisionId: string) => {
+    const divisionName = divisionNameById.get(divisionId);
+    if (divisionName === undefined) return undefined;
+    return tinyDivisionPlayerStats(divisionName, (fullName) => `person-${slug(fullName)}`);
+  };
+  const divisionCardSources = (): readonly DivisionCardSource[] =>
+    [...divisionNameById.entries()].flatMap(([divisionId, divisionName]) => {
+      const playerStats = divisionPlayerStatsFor(divisionId);
+      return playerStats === undefined
+        ? []
+        : [{ divisionId, divisionName, sportKey: divisionSportById.get(divisionId) ?? "unknown", playerStats }];
+    });
+
   const oracleRoutes = makeOracleRoutesWorld({
     getRankedEntrantIds: (stageId) => {
       const divisionId = divisionIdByStageId.get(stageId);
@@ -100,15 +132,11 @@ function fakeServer(opts: { statsPlayerGranted: boolean }): {
       if (divisionId === undefined || stageName === undefined) return undefined;
       return tinyLeagueTableRows(stageName, schedule.entrantsOfDivision(divisionId));
     },
-    // B05 T5b — keyed by division NAME so BOTH leaderboard divisions the pack
-    // now names (`Tiny` and, since T5b-1, `Tiebreak`) are answered; a name
-    // this pack declares no leaderboard for still falls through to
-    // `undefined` exactly as before.
-    getDivisionPlayerStats: (divisionId) => {
-      const divisionName = divisionNameById.get(divisionId);
-      if (divisionName === undefined) return undefined;
-      return tinyDivisionPlayerStats(divisionName, (fullName) => `person-${slug(fullName)}`);
-    },
+    getDivisionPlayerStats: divisionPlayerStatsFor,
+    // B05 T5b — the two person-stats reads, DERIVED from the same
+    // per-division sources (see `_oracle-routes.ts`).
+    getPersonStats: (personId) => personStatsFromDivisions(personId, divisionCardSources()),
+    getPersonCareerStats: (personId) => personCareerStatsFromDivisions(personId, divisionCardSources()),
   });
 
   const transport: ProbeTransport = {
@@ -144,10 +172,11 @@ function fakeServer(opts: { statsPlayerGranted: boolean }): {
         return { id: `comp-${slug((body as { name: string }).name)}` } as T;
       }
       if (method === "POST" && /^\/api\/v1\/competitions\/[^/]+\/divisions$/.test(routePath)) {
-        const b = body as { name?: string; config?: { dls?: { enabled?: boolean } } };
+        const b = body as { name?: string; sport_key?: string; config?: { dls?: { enabled?: boolean } } };
         const id = `div-${++divisionCounter}`;
         dlsByDivisionId.set(id, b.config?.dls?.enabled === true);
         if (b.name !== undefined) divisionNameById.set(id, b.name);
+        if (b.sport_key !== undefined) divisionSportById.set(id, b.sport_key);
         return { id } as T;
       }
       const entrantsMatch = /^\/api\/v1\/divisions\/([^/]+)\/entrants$/.exec(routePath);

@@ -1,4 +1,4 @@
-// B05 T4/T4b — a fake of the THREE routes these tasks wire into
+// B05 T4/T4b/T5b — a fake of the routes these tasks wire into
 // `runTinySuite`: `GET /stages/{id}/standings` (T4, division0's own FINAL
 // stage; T4b, EVERY stage with an `expected.tables` row) and
 // `GET /divisions/{id}/stats/players` (T4b, `expected.leaderboards`).
@@ -52,7 +52,7 @@ interface FullStandingsRowLike {
   readonly metrics?: Record<string, number>;
 }
 
-interface DivisionPlayerStatsLike {
+export interface DivisionPlayerStatsLike {
   readonly metrics: readonly { readonly key: string; readonly label: string }[];
   readonly rows: readonly { readonly person_id: string; readonly full_name: string; readonly stats: Record<string, number> }[];
   readonly requires_detailed_scoring: boolean;
@@ -157,6 +157,113 @@ export function tinyDivisionPlayerStats(
   return undefined;
 }
 
+/** `usecases/player-stats.ts#personStats`'s response shape. */
+interface PersonStatsLike {
+  readonly divisions: readonly {
+    readonly division_id: string;
+    readonly division_name: string;
+    readonly stats: Record<string, number>;
+  }[];
+}
+
+/** `usecases/player-stats.ts#personCareerStats`'s response shape. */
+interface PersonCareerStatsLike {
+  readonly sports: readonly {
+    readonly sport_key: string;
+    readonly sport_label: string;
+    readonly metrics: readonly { readonly key: string; readonly label: string; readonly value: number }[];
+    readonly divisions: number;
+    readonly variants: number;
+    readonly matches: number;
+  }[];
+}
+
+/**
+ * B05 T5b — one division as these fakes already know it: the id and name they
+ * minted at `POST /competitions/{id}/divisions`, the `sport_key` that SAME
+ * POST body carried (`seed.ts:614`), and whatever this world already answers
+ * for `GET /divisions/{id}/stats/players`.
+ */
+export interface DivisionCardSource {
+  readonly divisionId: string;
+  readonly divisionName: string;
+  readonly sportKey: string;
+  readonly playerStats: DivisionPlayerStatsLike;
+}
+
+/**
+ * B05 T5b — `GET /persons/{id}/stats`, DERIVED by inverting the per-division
+ * leaderboards this world already answers rather than typing a second copy of
+ * the same counts. That is the point: the product's own two reads of one
+ * historical fact (a division leaderboard and a person's own card) agree by
+ * construction here, so `comparePersonDivisionStat`'s wired regression has to
+ * come from a knob that genuinely breaks ONE of them — never from two
+ * independently-typed fixtures drifting apart, which would red the oracle for
+ * a reason that has nothing to do with the product.
+ */
+export function personStatsFromDivisions(
+  personId: string,
+  sources: readonly DivisionCardSource[],
+): PersonStatsLike {
+  return {
+    divisions: sources.flatMap((source) => {
+      const row = source.playerStats.rows.find((r) => r.person_id === personId);
+      return row === undefined
+        ? []
+        : [{ division_id: source.divisionId, division_name: source.divisionName, stats: row.stats }];
+    }),
+  };
+}
+
+/**
+ * B05 T5b — `GET /persons/{id}/stats?group=sport`, derived from the SAME
+ * per-division sources by summing each metric across the divisions of one
+ * sport. `personCareerStats` files a person's divisions under their sport, so
+ * `_tiny.json`'s `d-tiny` and `d-tiebreak` (both `generic`) roll up into ONE
+ * `sports[]` entry and `d-badminton` would be its own — which is exactly what
+ * `compareCareerStats`'s ambiguity guard (`foundInSports > 1`) exists to
+ * catch, so this fake must not flatten every division into one entry.
+ *
+ * `divisions` is the real per-sport division count; `variants` and `matches`
+ * are NOT modelled here (no fake tracks either) and are reported as the
+ * division count and 0 — `compareCareerStats` reads only `metrics[].value`
+ * and `sports[].length`, never these three.
+ */
+export function personCareerStatsFromDivisions(
+  personId: string,
+  sources: readonly DivisionCardSource[],
+): PersonCareerStatsLike {
+  const bySport = new Map<string, { totals: Map<string, number>; labels: Map<string, string>; divisions: number }>();
+  for (const source of sources) {
+    const row = source.playerStats.rows.find((r) => r.person_id === personId);
+    if (row === undefined) continue;
+    let bucket = bySport.get(source.sportKey);
+    if (bucket === undefined) {
+      bucket = { totals: new Map(), labels: new Map(), divisions: 0 };
+      bySport.set(source.sportKey, bucket);
+    }
+    bucket.divisions += 1;
+    for (const metric of source.playerStats.metrics) {
+      bucket.labels.set(metric.key, metric.label);
+      bucket.totals.set(metric.key, (bucket.totals.get(metric.key) ?? 0) + (row.stats[metric.key] ?? 0));
+    }
+  }
+  return {
+    sports: [...bySport.entries()].map(([sportKey, bucket]) => ({
+      sport_key: sportKey,
+      sport_label: sportKey,
+      metrics: [...bucket.totals.entries()].map(([key, value]) => ({
+        key,
+        label: bucket.labels.get(key) ?? key,
+        value,
+      })),
+      divisions: bucket.divisions,
+      variants: bucket.divisions,
+      matches: 0,
+    })),
+  };
+}
+
 export interface OracleRoutesWorld {
   /** `raw()`'s own handler for the three oracle routes — `undefined` for
    *  any other method/path, so a caller chains it before its own branches. */
@@ -178,6 +285,17 @@ export function makeOracleRoutesWorld(input: {
    *  `undefined` for a division this world has no leaderboard for. Optional
    *  for the same reason `getFullStandingsRows` is. */
   getDivisionPlayerStats?(divisionId: string): DivisionPlayerStatsLike | undefined;
+  /** T5b — `GET /persons/{id}/stats`'s response for a person id, `undefined`
+   *  for a person this world knows nothing about. Optional for the same
+   *  reason the two above are: a caller that never reaches the person-stats
+   *  oracles can omit it. */
+  getPersonStats?(personId: string): PersonStatsLike | undefined;
+  /** T5b — `GET /persons/{id}/stats?group=sport`'s response. A SEPARATE
+   *  callback from `getPersonStats`, never the same one filtered: the whole
+   *  point of the career oracle is that the rollup is a different read of the
+   *  same history, so a fake that served one from the other could not witness
+   *  a rollup that disagrees with its own divisions. */
+  getPersonCareerStats?(personId: string): PersonCareerStatsLike | undefined;
 }): OracleRoutesWorld {
   return {
     handle(method, path) {
@@ -219,6 +337,28 @@ export function makeOracleRoutesWorld(input: {
             },
           },
         };
+      }
+
+      // B05 T5b — the two person-stats reads, told apart by the ONE query
+      // string that distinguishes them on the wire (`oracle.ts`'s
+      // `fetchPersonCareerStats` appends `?group=sport`; `fetchPersonStats`
+      // sends none). B03 T6b's own baseline read of this path goes through
+      // `request()` with `?division_id=`, never `raw()`, so it never lands
+      // here — and a `?division_id=` that somehow did would fall through to
+      // the unfiltered branch rather than being silently answered as a
+      // career rollup.
+      const [personRoutePath, personQuery] = path.split("?");
+      const personStatsMatch = /^\/api\/v1\/persons\/([^/]+)\/stats$/.exec(personRoutePath ?? "");
+      if (personStatsMatch !== null) {
+        const personId = personStatsMatch[1]!;
+        if (personQuery === "group=sport") {
+          const career = input.getPersonCareerStats?.(personId);
+          if (career === undefined) return undefined;
+          return { status: 200, json: { ok: true, data: career } };
+        }
+        const personStats = input.getPersonStats?.(personId);
+        if (personStats === undefined) return undefined;
+        return { status: 200, json: { ok: true, data: personStats } };
       }
 
       const playerStatsMatch = /^\/api\/v1\/divisions\/([^/]+)\/stats\/players$/.exec(path);
