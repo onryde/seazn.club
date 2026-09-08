@@ -135,6 +135,41 @@ peer session as the other.
        rename at the call site rather than leaving `divisionAccent(entrantId)`
        reading as a bug.
 
+16. **"yes update the W3"** (2026-09-08) — the match poster and the link share
+    card are ONE design, not two. The owner asked whether the pre-match poster
+    would also be what appears when a public match link is shared. It would
+    not have: the fixture OG route
+    (`…/fixtures/[fixtureId]/opengraph-image.tsx`, 1200×630, `revalidate = 60`)
+    already ships a matchup + score headline, and W3 was scoped to build the
+    poster as a SEPARATE downloadable route — sharing no code and no design
+    with it. W3's "Do NOT touch" list even named "the landscape OG card's
+    design", and its regression asked for the card to stay byte-identical.
+
+    **Ruled: share the MODEL, never the pixels.** W3 re-renders the existing OG
+    route from `matchPosterModel` at OG aspect, so one design and one set of
+    variants (upcoming / live / result) serve three sizes — 1200×630 share
+    card, 1080×1350 feed, 1080×1920 story.
+
+    Why not simply put the poster in the OG slot, which is the literal reading
+    of the question: a 4:5 portrait dropped into an OG card is centre-cropped
+    to roughly 1.91:1 by WhatsApp, X and Facebook. The sponsor strip and the
+    footer are exactly what gets guillotined, so the shared portrait would be a
+    WORSE card than the one shipping today — and the sponsor strip and
+    "Powered by seazn" are the growth loop this wave exists to draw.
+
+    Why it is worth doing anyway: the UPCOMING variant. Today's card leads with
+    a score headline, and before kick-off there is no score, so a pre-match
+    share is the weakest card the product renders and the one a poster design
+    most improves.
+
+    Applied to `W3-poster.md` in four places, which had to move together —
+    new scope item 7; the OG card's design REMOVED from "Do NOT touch" (its
+    route contract stays fixed: `size`, `contentType`, `revalidate`, the
+    private-competition 404); the "byte-identical" regression REPLACED with
+    what is actually pinned; and task 9 of the plan sketch widened. The
+    regression line is called out as superseded rather than deleted, so a later
+    session does not restore it as an obvious missing assertion.
+
 ## Product-owner calls made in-session (mine, recorded so they can be reversed)
 
 - Top performers are COMPUTED (runs then strike rate; wickets then economy); no

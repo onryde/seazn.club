@@ -40,11 +40,27 @@ with satori); the crests and colours exist in the DB and reach no card.
 6. **Walkthrough v3** — download both formats from the fixture page in the
    anonymous context; decode the PNG; assert 1080×1350 and 1080×1920; assert
    the result variant's text through the model.
+7. **The share card IS the poster** (owner ruling 16, 2026-09-08). The existing
+   fixture OG route
+   (`…/fixtures/[fixtureId]/opengraph-image.tsx`, 1200×630, `revalidate = 60`)
+   is re-rendered from `matchPosterModel` at OG aspect, so one design and one
+   set of variants serve three sizes: **1200×630 share card** (appears on any
+   shared link), **1080×1350 feed**, **1080×1920 story** (both downloaded).
+   Share the MODEL, never the pixels — a 4:5 portrait dropped into an OG slot
+   is centre-cropped to ~1.91:1 by WhatsApp, X and Facebook, which guillotines
+   the sponsor strip and the footer, so a shared portrait poster is a WORSE
+   card than the one shipping today. The upcoming variant is where this pays:
+   today's card leads with a score headline, and before kick-off there is no
+   score, so a pre-match share is the weakest card the product renders and the
+   one a poster design most improves.
 
 ## Do NOT touch
 
-The landscape OG card's design; the competition QR poster / `poster.pdf`; the
-organiser console; entitlement matrix/copy; the engine.
+The competition QR poster / `poster.pdf`; the organiser console; entitlement
+matrix/copy; the engine. (**The landscape OG card's design was on this list
+until owner ruling 16 and is now IN scope — scope item 7.** Its ROUTE contract
+is still fixed: `size`, `contentType`, `revalidate = 60`, and the private-
+competition 404 do not move.)
 
 ## Acceptance — all four test types
 
@@ -54,7 +70,13 @@ organiser console; entitlement matrix/copy; the engine.
 - **E2E**: walkthrough v3 in `--project=walkthrough`.
 - **Smoke**: `poster.png` 200, `image/png`, non-trivial size, for one fixture.
 - **Regression**: private competition's poster 404s; a masked minor never
-  reaches the model; the OG card is byte-identical to before.
+  reaches the model. **The OG card is deliberately NOT byte-identical to
+  before** (ruling 16 supersedes that assertion — do not restore it). What is
+  pinned instead: the route still answers 200 `image/png` at exactly 1200×630
+  with `revalidate = 60`; a private competition's card still 404s; the masking
+  and youth rules give the SAME model output as the poster formats for the same
+  fixture; and every variant (upcoming / live / result) renders at OG aspect
+  without clipping its footer or sponsor strip.
 - **Visual**: three variants × two formats rendered and attached to the PR,
   checked against the W0 pick.
 
@@ -72,7 +94,9 @@ owner ruling 14 (corrected): planning only, docs only.
 **Tasks and order:** 10 tasks, TDD, all four test types — 1 fonts + renderer
 spike → 2 image fetcher → 3 `describeFormat` (consume W2's or own it) → 4 pure
 model → 5 satori card → 6 route → 7 dictionaries → 8 download control + page →
-9 walkthrough v3 + smoke + OG regression → 10 gates, review, R11 sign-off.
+9 walkthrough v3 + smoke + the OG re-render and its regression (ruling 16) → 10 gates, review, R11 sign-off.
+
+**Ruling 16 lands in the task list as a change to task 9, not a new task:** the model (task 4) and the card (task 5) already exist by then, so re-pointing the OG route at them is a re-render, not a second renderer. If the planner finds it is genuinely more, that is a finding to record — not a licence to write a parallel OG model.
 Lanes: 2 beside 1; 7 beside 5–6. Hard dependencies: W1 Task 9 (`matchCentre` on
 `getPublicFixture`) before 6; W1 Tasks 14–15 (page, walkthrough file) before 8–9;
 W2 Task 4 (`describeFormat`, `PublicDivision.config`) before 3, else W3 owns them.
