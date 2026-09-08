@@ -75,6 +75,17 @@ test.describe.configure({ mode: "default" });
 const CARD_FEE_MINIMUM = "Card entry fees must be at least 1.00 (or 0 for free)";
 
 /**
+ * F15 (`d9644e136`) split this off from `CARD_FEE_MINIMUM`: the solo-sign-up
+ * guard's message now names itself distinctly so
+ * `registration-hub-save-error.ts`'s pattern table can route a
+ * `free_agent_fee_cents` 422 onto its own field instead of `fee_cents`. That
+ * PR's own CI never ran this file — e2e triggers on push to `main` only, not
+ * on pull requests — so the drift here was invisible until merge.
+ */
+const SOLO_CARD_FEE_MINIMUM =
+  "Card entry fees for a solo sign-up must be at least 1.00 (or 0 for free)";
+
+/**
  * The Connect precondition that sits AHEAD of the fee-minimum check in
  * `putRegistrationSettings`. Unreachable from the panel by design — the card
  * radio is `disabled={cardUnavailable}` whenever `charges_enabled` is false
@@ -595,13 +606,12 @@ test("a cutoff with no age band is accepted and stored on its own", async ({ req
  * Connect state, and the first assertion below fails loudly (rather than
  * passing on the wrong guard) if the order is ever changed.
  *
- * The two guards throw an IDENTICAL sentence, so this test cannot distinguish
- * them by message; what distinguishes them is the state it runs in — with
- * charges disabled the `fee_cents` copy is UNREACHABLE, so a
- * CARD_FEE_MINIMUM here can only have come from the free-agent copy.
- * Recorded as F15: the client MISROUTES this refusal onto the `fee_cents`
- * input for the same reason (`registration-hub-save-error.ts`'s one pattern
- * matches both sentences).
+ * Post-F15 the two guards throw distinct sentences (`SOLO_CARD_FEE_MINIMUM`
+ * vs `CARD_FEE_MINIMUM`), so the message alone now proves which guard fired.
+ * The state this test runs in is still asserted rather than assumed, though:
+ * with charges disabled the `fee_cents` copy is UNREACHABLE, so a
+ * SOLO_CARD_FEE_MINIMUM here can only have come from the free-agent copy —
+ * belt and braces against the two ever going back to one string.
  */
 test("a solo sign-up price below 1.00 is refused ahead of the Connect gate", async ({
   request,
@@ -622,7 +632,7 @@ test("a solo sign-up price below 1.00 is refused ahead of the Connect gate", asy
     ).toBe(422);
     expect(
       atMinimum.error?.message,
-      "free_agent_fee_cents=100 must reach the Connect gate — a CARD_FEE_MINIMUM here means the guard refuses its own boundary",
+      "free_agent_fee_cents=100 must reach the Connect gate — a SOLO_CARD_FEE_MINIMUM here means the guard refuses its own boundary",
     ).toBe(CONNECT_REQUIRED);
 
     // 0 is the other half of the guard's own sentence ("or 0 for free") — a
@@ -640,8 +650,9 @@ test("a solo sign-up price below 1.00 is refused ahead of the Connect gate", asy
     // The matrix itself. Every row here would answer CONNECT_REQUIRED if the
     // free-agent guard were removed — the two rows above prove that is the
     // fall-through — so an exact `toBe` on the fee sentence is what witnesses
-    // the guard, and a `toContain` on the shared prefix would not (the client
-    // says the same rule in a different sentence; see CARD_FEE_MINIMUM).
+    // the guard, and a `toContain` on the shared prefix ("Card entry fees
+    // must be at least 1.00") would not distinguish it from `fee_cents`'s own
+    // guard (`CARD_FEE_MINIMUM`, asserted in the next test).
     for (const feeCents of [1, 50, 99]) {
       const refused = await putRegistrationSettings(
         request,
@@ -652,7 +663,9 @@ test("a solo sign-up price below 1.00 is refused ahead of the Connect gate", asy
         refused.status,
         `free_agent_fee_cents=${feeCents}: ${JSON.stringify(refused.error)}`,
       ).toBe(422);
-      expect(refused.error?.message, `free_agent_fee_cents=${feeCents}`).toBe(CARD_FEE_MINIMUM);
+      expect(refused.error?.message, `free_agent_fee_cents=${feeCents}`).toBe(
+        SOLO_CARD_FEE_MINIMUM,
+      );
     }
 
     // Nothing above reached the row. Every request in this test was refused,
