@@ -245,6 +245,26 @@ function fakeServer(opts: {
     },
     async raw(_base, _s, path, method = "GET", body): Promise<RawResult> {
       calls.push({ method, path, body });
+      // B05 T2 — division B's own streams (`d-badminton`) fold through THIS
+      // route unconditionally whenever `sql` is present, same gating as
+      // division A's single-event fold below. This suite is not ABOUT the
+      // import path — it exists so DLS-gate/officials assertions stay green
+      // rather than reddening on an unmodeled route.
+      const importMatch = /^\/api\/v1\/divisions\/[^/]+\/events\/import$/.exec(path);
+      if (importMatch) {
+        const sent = (body as { streams: { fixture: { id: string }; events: unknown[] }[] }).streams;
+        return {
+          status: 200,
+          json: {
+            ok: true,
+            data: {
+              importId: "x",
+              totals: { imported: sent.length, skipped: 0, rejected: 0 },
+              results: sent.map((s) => ({ fixture: s.fixture.id, status: "imported", eventsAppended: s.events.length })),
+            },
+          } as never,
+        };
+      }
       const m = /^\/api\/v1\/fixtures\/([^/]+)\/events$/.exec(path);
       if (!m) throw new Error(`fake server: unhandled raw ${method} ${path}`);
       const fixtureId = m[1]!;
@@ -337,6 +357,10 @@ describe("runTinySuite — B03 T7 plan/entitlement-gate wiring", () => {
       // cricket.revise/dls-enabled combination applies), so it doubles as
       // the simulate step's transport with no further changes.
       simTransport: transport,
+      // B05 T2 — the SAME fake now handles `/events/import` too (this
+      // file's own `raw()`), so division B's own streams fold cleanly
+      // rather than falling back to a real `fetch()`.
+      importTransport: transport,
     });
 
     expect(report.gate).toBe("green");
@@ -384,6 +408,10 @@ describe("runTinySuite — B03 T7 plan/entitlement-gate wiring", () => {
       // cricket.revise/dls-enabled combination applies), so it doubles as
       // the simulate step's transport with no further changes.
       simTransport: transport,
+      // B05 T2 — the SAME fake now handles `/events/import` too (this
+      // file's own `raw()`), so division B's own streams fold cleanly
+      // rather than falling back to a real `fetch()`.
+      importTransport: transport,
     });
 
     expect(report.gate).toBe("green");
@@ -426,6 +454,10 @@ describe("runTinySuite — B03 T7 plan/entitlement-gate wiring", () => {
       // cricket.revise/dls-enabled combination applies), so it doubles as
       // the simulate step's transport with no further changes.
       simTransport: transport,
+      // B05 T2 — the SAME fake now handles `/events/import` too (this
+      // file's own `raw()`), so division B's own streams fold cleanly
+      // rather than falling back to a real `fetch()`.
+      importTransport: transport,
     });
 
     expect(report.gate).toBe("green");
@@ -513,6 +545,7 @@ describe("runTinySuite — the post-officials re-check (B04 F-T6-2)", () => {
       sql: server.sql,
       probeTransport: server.transport,
       simTransport: server.transport,
+      importTransport: server.transport,
     });
     return { report, server };
   }

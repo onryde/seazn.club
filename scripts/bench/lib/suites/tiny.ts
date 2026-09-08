@@ -114,7 +114,7 @@ import type pino from "pino";
 import { newSession, signIn, type Session } from "../http.ts";
 import { formatFinding, loadPackFile } from "../pack-io.ts";
 import { hashPack } from "../pack-hash.ts";
-import { fixtureKey, type Pack, type PackDivision } from "../pack-schema.ts";
+import { fixtureKey, type Pack, type PackDivision, type PackStream } from "../pack-schema.ts";
 // B04 — the five modules this suite wires together. Each is CLOSED and owns
 // one layer: `schedule.ts` drives the seven steps, `checker.ts` recomputes the
 // rules independently of the product, `certificate.ts` runs §6.3's protocol,
@@ -163,13 +163,16 @@ import {
 import type {
   DivisionScheduleReport,
   EngineDeltaSection,
+  ImportFindingReport,
+  ImportSimulationReport,
   OracleResult,
   RegistrationDivisionReport,
   SimulationReport,
   SolverResult,
   SuiteReport,
 } from "../report.ts";
-import { simulateDivisionStreams } from "../simulate.ts";
+import { computeEventsPerSecond, simulateDivisionStreams } from "../simulate.ts";
+import { buildImportId, importDivisionStreams, type ImportFinding } from "../import.ts";
 import type { SelectedDivisionExposure } from "../env.ts";
 import {
   resolveEntryMode,
@@ -477,6 +480,19 @@ export interface TinySuiteInput {
    * must be able to say so.
    */
   simTransport?: ProbeTransport;
+  /**
+   * B05 T2 — overridable so a test can drive division B's batch-import
+   * fold's OWN HTTP surface through a fake, never `global.fetch`.
+   * `ProbeTransport` (not a bespoke type), same reasoning as `simTransport`
+   * above — it is exactly the shape `import.ts`'s own `ImportTransport`
+   * needs (`raw()`, to read back a refusal's real status and body). Defaults
+   * to `import.ts`'s own `defaultImportTransport`; a live run never passes
+   * it. Meaningless (never read) when `sql` is omitted — same gating as
+   * `simTransport`. A SEPARATE field from `simTransport` (never falls back
+   * to it): the two write paths are independent, and a test wanting
+   * different fakes for each must be able to say so.
+   */
+  importTransport?: ProbeTransport;
   /** B03r tasks 9+10: `bench.ts`'s `--entry admin|registration` flag,
    *  forwarded through `BenchConfig.entry`/`runSuite`. `undefined` (no flag)
    *  leaves every registration-carrying division on its own pack-declared
@@ -746,6 +762,62 @@ export function divisionDeclaresOfficials(pack: Pack, divisionRef: string): bool
   return (pack.officials ?? []).some((official) =>
     official.assignments.some((a) => a.divisionRef === divisionRef),
   );
+}
+
+/** B05 T2 — flattens `import.ts`'s discriminated `ImportFinding` union into
+ *  `report.ts`'s single reportable row shape (`ImportFindingReport`). A
+ *  `switch` over `kind` rather than a spread, so a FOURTH finding kind added
+ *  to the union later is a `tsc` error here (`never` narrows to nothing)
+ *  instead of silently reporting an empty row. */
+function toImportFindingReport(finding: ImportFinding): ImportFindingReport {
+  switch (finding.kind) {
+    case "stream_oversize":
+      return {
+        streamKey: finding.streamKey,
+        eventCount: finding.eventCount,
+        cap: finding.cap,
+        code: "import.stream_exceeds_cap",
+      };
+    case "call_refused":
+      return {
+        chunkIndex: finding.chunkIndex,
+        streamKeys: [...finding.streamKeys],
+        status: finding.status,
+        code: finding.code,
+        message: finding.message,
+      };
+    case "stream_not_imported":
+      return {
+        streamKey: finding.streamKey,
+        fixture: finding.fixture,
+        status: finding.status,
+        ...(finding.code === undefined ? {} : { code: finding.code }),
+        ...(finding.eventIndex === undefined ? {} : { eventIndex: finding.eventIndex }),
+      };
+  }
+}
+
+/** Human-readable form of the same finding, for `errors.push(...)` — same
+ *  "a refusal is a FINDING, reported and never silently retried" convention
+ *  division A's block already uses. */
+function describeImportFinding(finding: ImportFinding): string {
+  switch (finding.kind) {
+    case "stream_oversize":
+      return (
+        `stream ${finding.streamKey} carries ${finding.eventCount} events, over the ` +
+        `${finding.cap} eventsPerFixture cap — excluded from every call`
+      );
+    case "call_refused":
+      return (
+        `chunk #${finding.chunkIndex} (streams ${finding.streamKeys.join(", ")}) refused: ` +
+        `${finding.code} (HTTP ${finding.status}) — ${finding.message}`
+      );
+    case "stream_not_imported":
+      return (
+        `stream ${finding.streamKey} (fixture ${finding.fixture}) ${finding.status}` +
+        (finding.code === undefined ? "" : ` — ${finding.code}`)
+      );
+  }
 }
 
 /** The one distinct defined value in a list, or `undefined` when the list has
@@ -1102,7 +1174,7 @@ export async function runTinySuite(
   const errors: string[] = [];
   const warnings: string[] = [];
   const oracles: OracleResult[] = [];
-  const timings: { seedMs?: number; scheduleMs?: number; simMs?: number } = {};
+  const timings: { seedMs?: number; scheduleMs?: number; simMs?: number; importMs?: number } = {};
   const registrationReports: RegistrationDivisionReport[] = [];
   /** B04 — one row per division actually driven through the scheduling layer.
    *  Empty for a run that never reached it (stage 0 refused, `--keep` short
@@ -1124,6 +1196,9 @@ export async function runTinySuite(
   /** B05 T1 — set only when the simulate step actually ran (`input.sql`
    *  present AND division A declared at least one stream). */
   let simulation: SimulationReport | undefined;
+  /** B05 T2 — set only when the import step actually ran (`input.sql`
+   *  present AND some OTHER division declared at least one stream). */
+  let importSimulation: ImportSimulationReport | undefined;
 
   // Stage 0 FIRST, and nothing is created if it refuses: a pack the offline
   // gate rejects would otherwise be seeded over HTTP and report a product
@@ -2071,7 +2146,107 @@ export async function runTinySuite(
           );
         }
         log.info(
-          { events: sim.eventsSent, ms: sim.wallMs, eventsPerSecond: sim.eventsPerSecond },
+          // B05 T2 — `path` added so this event and the batch-import fold's
+          // own `suite_simulated` below are distinguishable in a log stream
+          // by more than which fields happen to be present.
+          { events: sim.eventsSent, ms: sim.wallMs, eventsPerSecond: sim.eventsPerSecond, path: "single" },
+          "suite_simulated",
+        );
+      }
+    }
+
+    // B05 T2 — the batch write-path fold (design doc §3 D4): every OTHER
+    // division's own streams (never `division0` — that is `simulate.ts`'s
+    // job, immediately above) folded through the LIVE
+    // `POST /divisions/{id}/events/import` route. `_tiny.json` declares
+    // exactly one such division today (`d-badminton`); grouped by
+    // `divisionRef` rather than hardcoding that name, so a future pack
+    // adding a third streamed division folds it too, aggregated into the
+    // same report section (T7 owns splitting that presentation out per
+    // division, if it ever needs to be).
+    //
+    // Gated on `input.sql`, same as division A's block — a unit test with no
+    // `sql` gets today's behavior unchanged.
+    if (input.sql !== undefined) {
+      const otherStreamsByDivisionRef = new Map<string, PackStream[]>();
+      for (const st of pack.streams) {
+        if (st.divisionRef === division0.ref) continue;
+        const group = otherStreamsByDivisionRef.get(st.divisionRef) ?? [];
+        group.push(st);
+        otherStreamsByDivisionRef.set(st.divisionRef, group);
+      }
+      if (otherStreamsByDivisionRef.size > 0) {
+        const refIdByKey = new Map<string, string>([
+          ...seeded.entrantIdByRef,
+          ...seeded.personIdByRef,
+        ]);
+        const importStart = performance.now();
+        let importEventsSent = 0;
+        const importFindings: ImportFinding[] = [];
+        let importChunks = 0;
+        for (const [divisionRef, streams] of otherStreamsByDivisionRef) {
+          const divisionId = seeded.divisionIdByRef.get(divisionRef);
+          if (divisionId === undefined) {
+            // Never silent: a division that declares streams but was never
+            // seeded/scheduled is indistinguishable in a report from one the
+            // import fold simply skipped.
+            errors.push(
+              `tiny: division "${divisionRef}" declares streams but has no resolved divisionId — ` +
+                "cannot fold them through the import route",
+            );
+            continue;
+          }
+          log.info(
+            { division: divisionRef, streams: streams.length },
+            "tiny: folding division B's streams through the batch-import route (B05 T2)",
+          );
+          const imp = await importDivisionStreams({
+            base,
+            session: s,
+            divisionId,
+            importId: buildImportId(divisionRef, input.runId),
+            streams,
+            fixtureIdByKey: seeded.fixtureIdByKey,
+            refIdByKey,
+            ...(input.importTransport === undefined
+              ? {}
+              : { transport: input.importTransport }),
+          });
+          importEventsSent += imp.eventsSent;
+          importChunks += imp.chunks;
+          importFindings.push(...imp.findings);
+        }
+        const importWallMs = Math.round(performance.now() - importStart);
+        timings.importMs = importWallMs;
+        importSimulation = {
+          eventsSent: importEventsSent,
+          wallMs: importWallMs,
+          eventsPerSecond: computeEventsPerSecond(importEventsSent, importWallMs),
+          chunks: importChunks,
+          ...(importFindings.length > 0
+            ? { findings: importFindings.map(toImportFindingReport) }
+            : {}),
+        };
+        // Same D5 discipline as division A's block: a refusal/oversize/
+        // not-imported finding is reported and never silently retried, and —
+        // for `_tiny`'s own real historical streams — also a genuine product
+        // defect (the pack's events are meant to fold cleanly), so it reds
+        // the run rather than staying a quiet report-only note.
+        for (const finding of importFindings) {
+          errors.push(`import: ${describeImportFinding(finding)}`);
+        }
+        log.info(
+          // Same event name as division A's fold above (`suite_simulated`),
+          // same core fields (events/ms/eventsPerSecond), plus `path` to
+          // distinguish which write path produced this line, and `chunks`
+          // (meaningless for the single-event door, so not present there).
+          {
+            events: importEventsSent,
+            ms: importWallMs,
+            eventsPerSecond: computeEventsPerSecond(importEventsSent, importWallMs),
+            chunks: importChunks,
+            path: "import",
+          },
           "suite_simulated",
         );
       }
@@ -2415,5 +2590,6 @@ export async function runTinySuite(
     // fired, because nothing else in the run can see it.
     ...(crossDivisionClashes.length > 0 ? { crossDivisionCourtClashes: crossDivisionClashes } : {}),
     ...(simulation === undefined ? {} : { simulation }),
+    ...(importSimulation === undefined ? {} : { importSimulation }),
   };
 }

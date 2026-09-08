@@ -48,6 +48,9 @@ export const PhaseTimings = z.object({
   seedMs: z.number().optional(),
   scheduleMs: z.number().optional(),
   simMs: z.number().optional(),
+  /** B05 T2 — division B's batch-import fold, separate from `simMs` (T1's
+   *  single-event fold) so a reader can tell the two write paths apart. */
+  importMs: z.number().optional(),
 });
 export type PhaseTimings = z.infer<typeof PhaseTimings>;
 
@@ -100,6 +103,42 @@ export const SimulationReport = z.object({
   findings: z.array(SimulationFinding).optional(),
 });
 export type SimulationReport = z.infer<typeof SimulationReport>;
+
+/** B05 T2 — the batch write-path fold's own finding shape. Flattens
+ *  `import.ts`'s three finding kinds (`stream_oversize`, `call_refused`,
+ *  `stream_not_imported`) into one reportable row rather than three
+ *  separate arrays — `code` and `message`/`eventCount`/`cap` are populated
+ *  per kind, and a reader distinguishes them by which fields are present
+ *  (a `chunkIndex` names a call-level refusal; a bare `streamKey` with no
+ *  `chunkIndex` names either an oversize stream or a per-stream product
+ *  outcome). Never a gate — same D5 "report, never silently retry or drop"
+ *  convention `SimulationFinding` already follows. */
+export const ImportFindingReport = z.object({
+  chunkIndex: z.number().int().optional(),
+  streamKeys: z.array(z.string()).optional(),
+  streamKey: z.string().optional(),
+  fixture: z.string().optional(),
+  status: z.union([z.number().int(), z.enum(["skipped_duplicate", "rejected"])]).optional(),
+  code: z.string().optional(),
+  message: z.string().optional(),
+  eventIndex: z.number().int().optional(),
+  eventCount: z.number().int().optional(),
+  cap: z.number().int().optional(),
+});
+export type ImportFindingReport = z.infer<typeof ImportFindingReport>;
+
+/** B05 T2 — division B's streams folded through the batch-import route.
+ *  Kept minimal, same as `SimulationReport` above: report-only throughput
+ *  (never a gate) plus any refusal/oversize/per-stream findings. T7 owns the
+ *  report's PRESENTATION and the "which checks had a subject" naming. */
+export const ImportSimulationReport = z.object({
+  eventsSent: z.number().int(),
+  wallMs: z.number(),
+  eventsPerSecond: z.number(),
+  chunks: z.number().int(),
+  findings: z.array(ImportFindingReport).optional(),
+});
+export type ImportSimulationReport = z.infer<typeof ImportSimulationReport>;
 
 /**
  * design §5.3 / §7: an unexpected 4xx/5xx or failed UI step attaches its
@@ -480,6 +519,10 @@ export const SuiteReport = z.object({
    *  same gating the DLS-gate probe and the player-stats baseline already
    *  use) or whose division declared no streams at all. */
   simulation: SimulationReport.optional(),
+  /** B05 T2 — division B's streams folded through the batch-import route
+   *  (D4's OTHER write path). Same gating as `simulation` above; absent when
+   *  no division besides division A declares streams. */
+  importSimulation: ImportSimulationReport.optional(),
 });
 export type SuiteReport = z.infer<typeof SuiteReport>;
 
@@ -675,6 +718,7 @@ function renderSuitesSection(report: BenchReport): string {
       t.seedMs !== undefined ? `seed ${t.seedMs}ms` : undefined,
       t.scheduleMs !== undefined ? `schedule ${t.scheduleMs}ms` : undefined,
       t.simMs !== undefined ? `sim ${t.simMs}ms` : undefined,
+      t.importMs !== undefined ? `import ${t.importMs}ms` : undefined,
     ].filter((part): part is string => part !== undefined);
     if (timingParts.length > 0) lines.push(`- Timings: ${timingParts.join(", ")}`);
     if (suite.keep !== undefined) lines.push(`- Data left in place: ${suite.keep ? "yes (--keep)" : "no (--wipe requested)"}`);

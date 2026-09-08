@@ -186,6 +186,27 @@ function fakeServer(opts: { conflictAt?: { extKey: string; expectedSeq: number }
     },
     async raw(_base, _s, path, method = "GET", body): Promise<RawResult> {
       calls.push({ method, path, body });
+      // B05 T2 — division B's own streams (`d-badminton`) fold through THIS
+      // route unconditionally whenever `sql` is present, same gating as
+      // division A's single-event fold this file is actually about. Handled
+      // here as a plain pass-through so THIS file's own division-A
+      // assertions stay green; the import path's own wiring/behaviour is
+      // covered by `tiny-suite-import.test.ts`.
+      const importMatch = /^\/api\/v1\/divisions\/[^/]+\/events\/import$/.exec(path);
+      if (importMatch) {
+        const sent = (body as { streams: { fixture: { id: string }; events: unknown[] }[] }).streams;
+        return {
+          status: 200,
+          json: {
+            ok: true,
+            data: {
+              importId: "x",
+              totals: { imported: sent.length, skipped: 0, rejected: 0 },
+              results: sent.map((s) => ({ fixture: s.fixture.id, status: "imported", eventsAppended: s.events.length })),
+            },
+          } as never,
+        };
+      }
       const m = /^\/api\/v1\/fixtures\/([^/]+)\/events$/.exec(path);
       if (!m) throw new Error(`fake server: unhandled raw ${method} ${path}`);
       const fixtureId = m[1]!;
@@ -288,6 +309,12 @@ describe("runTinySuite — B05 T1 division-A stream fold wiring", () => {
       sql,
       probeTransport: transport,
       simTransport: transport,
+      // B05 T2 — the SAME fake now handles `/events/import` too (see this
+      // file's own `raw()`), so division B's own streams fold cleanly
+      // rather than falling back to a real `fetch()`. This file's own
+      // assertions are about division A; the import path's own wiring is
+      // `tiny-suite-import.test.ts`'s job.
+      importTransport: transport,
     });
 
     expect(report.gate).toBe("green");
@@ -348,6 +375,12 @@ describe("runTinySuite — B05 T1 division-A stream fold wiring", () => {
       sql,
       probeTransport: transport,
       simTransport: transport,
+      // B05 T2 — the SAME fake now handles `/events/import` too (see this
+      // file's own `raw()`), so division B's own streams fold cleanly
+      // rather than falling back to a real `fetch()`. This file's own
+      // assertions are about division A; the import path's own wiring is
+      // `tiny-suite-import.test.ts`'s job.
+      importTransport: transport,
     });
 
     expect(report.gate).toBe("red");

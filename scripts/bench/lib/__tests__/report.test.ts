@@ -40,7 +40,7 @@ function fullReport(): BenchReportType {
       {
         suite: "_tiny",
         gate: "green",
-        timings: { seedMs: 120, scheduleMs: 45 },
+        timings: { seedMs: 120, scheduleMs: 45, importMs: 512 },
         solver: { engine: "greedy", requestedEngine: "greedy", status: "ok" },
         conflictCount: 0,
         believabilityMetrics: { gapDispersion: 0.5 },
@@ -73,6 +73,32 @@ function fullReport(): BenchReportType {
               code: "SEQ_CONFLICT",
               message: "expected seq 3 but ledger is at 4",
               currentSeq: 4,
+            },
+          ],
+        },
+        // B05 T2 — same "all-distinct values" discipline as `simulation`
+        // above, over the batch write path's own finding shapes (a
+        // call-level refusal AND a per-stream product outcome, so a
+        // swapped-field mutation lands on a wrong number in a specific
+        // cell).
+        importSimulation: {
+          eventsSent: 6,
+          wallMs: 388,
+          eventsPerSecond: 15.46,
+          chunks: 2,
+          findings: [
+            {
+              chunkIndex: 1,
+              streamKeys: ['["d-badminton","rr-r2-c1"]'],
+              status: 409,
+              code: "import.concurrent",
+              message: "another import with this import_id is already running for this division",
+            },
+            {
+              streamKey: '["d-badminton","rr-r3-c1"]',
+              fixture: "fx-9",
+              status: "rejected",
+              code: "import.fold_rejected",
             },
           ],
         },
