@@ -12,6 +12,7 @@
 // panel is built from) for the FACT, permission-blind, instead of reading a
 // row's offered action. See the block above `keep` for the two defects that
 // coupling produced.
+import { useEffect, useRef } from "react";
 import { dayKeyInTz } from "@seazn/engine/scheduling/tz";
 import { useLocaleOrDefault, useMsg, useMsgPlural } from "@/components/i18n/dict-provider";
 import { dayLabel, dayLabelLong } from "@/lib/day-label";
@@ -107,6 +108,36 @@ export function RunSheet({
   // repo's component tests, and the throwing hook reddens them.
   const locale = useLocaleOrDefault();
 
+  // Review finding m2, CLOSED (W4). The offset used to be the literal
+  // `top-[86px]` — 56 plus a day header height ASSUMED to be 30px at one
+  // line. `DayHeading` prints date + venue + count, so at 320 with a real
+  // venue name it wraps to two lines and the bracket header then overlapped
+  // the very header it was supposed to stack under. The height is now
+  // MEASURED into `--desk-day-h` and consumed through `calc()`, so the
+  // stacking follows whatever the day header actually is.
+  //
+  // The inline value below is the pre-hydration and no-JS fallback, and it
+  // is deliberately the OLD constant: before the effect runs, the sheet
+  // behaves exactly as it shipped rather than collapsing to a shared slot.
+  const sheetRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const root = sheetRef.current;
+    if (!root) return;
+    const heads = () => [...root.querySelectorAll<HTMLElement>("[data-run-sheet-day]")];
+    const measure = () => {
+      // The TALLEST day header, not the first: at 320 one day's venue clause
+      // can wrap while another's does not, and the offset has to clear the
+      // worst case or it under-shoots on exactly the day that needed it.
+      const tallest = heads().reduce((max, el) => Math.max(max, el.getBoundingClientRect().height), 0);
+      root.style.setProperty("--desk-day-h", `${Math.round(tallest)}px`);
+    };
+    measure();
+    if (typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(measure);
+    for (const el of heads()) ro.observe(el);
+    return () => ro.disconnect();
+  }, [blocks]);
+
   // Empty division (spec, "Error and empty states"): no header, nothing —
   // the stage rail (Task 5) is the whole story until then.
   if (blocks.length === 0) return null;
@@ -132,9 +163,10 @@ export function RunSheet({
   // a slot — belt-and-braces on top of the structural guarantee above.
   // A division with NO day block (single bracket stage, the common case)
   // keeps its round headers at the ordinary `top-14` — there is no day
-  // header for them to stack under, and reserving the extra 30px
+  // header for them to stack under, and reserving the extra height
   // unconditionally would open an empty band under nav for no reason.
   const hasDayBlock = blocks.some((b) => b.kind === "day");
+
 
   // F3 (W2 walkthrough gate 1): only the unscheduled/settled groups need a
   // stage name — day and bracket blocks already identify their own stage in
@@ -314,31 +346,18 @@ export function RunSheet({
                   `rounded-t-2xl` on the FIRST round only (see the section's
                   own comment above) — replaces the clipping
                   `overflow-hidden` used to do for this one corner.
-                  Ruling C-3 — `top-[86px]` (56 + the day header's own
-                  30px) whenever this sheet ALSO has a day block, so the
-                  two headers stack deliberately instead of sharing
-                  `top-14`; `hasDayBlock`'s own comment above has the full
-                  reasoning. Both literal class strings are written out in
-                  full so Tailwind's JIT scanner can see them — a
-                  template-built class name would not compile.
-
-                  Review finding m2, OPEN and deliberately not fixed here.
-                  The 30 in that 86 is the day header's height ASSUMED at one
-                  line (`px-4 py-1.5 text-xs border-y`). `DayHeading` prints
-                  date + venue + count, so at 320 with a real venue name it
-                  can wrap to two lines (~46px) and this header would then
-                  overlap the day header it is supposed to stack under, by
-                  the difference. Not reproduced: it needs a division holding
-                  BOTH a day block and a bracket block, with a placed venue,
-                  driven at 320 — the two live sticky tests
-                  (run-sheet.spec.ts) both seed a bracket-only division, so
-                  the mixed case has never been scrolled at any width. The
-                  real repair is to stop assuming the height (measure it into
-                  a CSS custom property and use `calc()`), which is more than
-                  a cosmetic Minor is worth mid-branch. Recorded rather than
-                  guessed at. */}
+                  Ruling C-3 — this header stacks BELOW the day header
+                  rather than sharing `top-14` with it, whenever the sheet
+                  also has a day block. The offset is `56px + the measured
+                  day-header height` (`--desk-day-h`, set on the sheet root
+                  above); with no day block the sheet publishes `0px` and
+                  this resolves to plain `top-14`, so one expression covers
+                  both cases and there is no class to keep in Tailwind's
+                  scanner. Review finding m2 is what retired the old
+                  `top-[86px]` literal — see the effect's comment. */}
               <header
-                className={`sticky ${hasDayBlock ? "top-[86px]" : "top-14"} z-10 border-b border-slate-100 bg-slate-50 px-4 py-2 ${i === 0 ? "rounded-t-2xl" : ""}`}
+                style={{ top: "calc(3.5rem + var(--desk-day-h, 0px))" }}
+                className={`sticky z-10 border-b border-slate-100 bg-slate-50 px-4 py-2 ${i === 0 ? "rounded-t-2xl" : ""}`}
               >
                 <h4 className="text-xs font-medium uppercase tracking-wide text-slate-500">
                   {stage ? `${stage.name} — ` : ""}
@@ -571,7 +590,13 @@ export function RunSheet({
         // why this is a CSS descendant rule on the last block rather than a
         // `last:` utility on `NowRule` itself, which cannot tell the two
         // apart.
-        <div className="space-y-6 [&>section:last-child>ul>li:last-child]:rounded-b-2xl">{renderedBlocks}</div>
+        <div
+          ref={sheetRef}
+          style={{ "--desk-day-h": hasDayBlock ? "30px" : "0px" } as React.CSSProperties}
+          className="space-y-6 [&>section:last-child>ul>li:last-child]:rounded-b-2xl"
+        >
+          {renderedBlocks}
+        </div>
       ) : (
         // Fix round 1, CRITICAL 1: every block existed but the ACTIVE FILTER
         // reduced every one of them to zero rows — the same vacuous shape

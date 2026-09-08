@@ -106,11 +106,13 @@ describe("run sheet — internal block spacing", () => {
     const afterCaption = html.slice(html.indexOf('data-testid="tz-caption"'));
     // `space-y-6[ "]`, not `space-y-6">`: review m1 added a second utility to
     // this same wrapper (an arbitrary variant rounding the LAST block's last
-    // row, so the NOW rule cannot square off the card's bottom corners). The
-    // anchor that matters — this wrapper sits immediately after the caption's
-    // own closing tags — is unchanged; only "space-y-6 is the whole class
-    // attribute" is relaxed, since that was never the property under test.
-    expect(afterCaption).toMatch(/^[^<]*<\/p><\/div><div class="space-y-6[ "]/);
+    // row, so the NOW rule cannot square off the card's bottom corners), and
+    // W4's finding-m2 fix added a `style` publishing the measured day-header
+    // height (`--desk-day-h`) that the bracket header's sticky offset reads.
+    // The anchor that matters — this wrapper sits immediately after the
+    // caption's own closing tags — is unchanged; only "space-y-6 is the whole
+    // class attribute" is relaxed, since that was never the property here.
+    expect(afterCaption).toMatch(/^[^<]*<\/p><\/div><div style="[^"]*" class="space-y-6[ "]/);
   });
 
   it("a single-block sheet still renders inside the space-y-6 wrapper (harmless with one child)", () => {
@@ -119,11 +121,13 @@ describe("run sheet — internal block spacing", () => {
     const afterCaption = html.slice(html.indexOf('data-testid="tz-caption"'));
     // `space-y-6[ "]`, not `space-y-6">`: review m1 added a second utility to
     // this same wrapper (an arbitrary variant rounding the LAST block's last
-    // row, so the NOW rule cannot square off the card's bottom corners). The
-    // anchor that matters — this wrapper sits immediately after the caption's
-    // own closing tags — is unchanged; only "space-y-6 is the whole class
-    // attribute" is relaxed, since that was never the property under test.
-    expect(afterCaption).toMatch(/^[^<]*<\/p><\/div><div class="space-y-6[ "]/);
+    // row, so the NOW rule cannot square off the card's bottom corners), and
+    // W4's finding-m2 fix added a `style` publishing the measured day-header
+    // height (`--desk-day-h`) that the bracket header's sticky offset reads.
+    // The anchor that matters — this wrapper sits immediately after the
+    // caption's own closing tags — is unchanged; only "space-y-6 is the whole
+    // class attribute" is relaxed, since that was never the property here.
+    expect(afterCaption).toMatch(/^[^<]*<\/p><\/div><div style="[^"]*" class="space-y-6[ "]/);
   });
 
   it("the empty-filter state does NOT get the space-y-6 treatment — that div is a single centered message, not a block list", () => {

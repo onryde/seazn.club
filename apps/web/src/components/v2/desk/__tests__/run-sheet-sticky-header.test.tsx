@@ -106,7 +106,7 @@ describe("run sheet — sticky group headers escape the overflow-hidden that bro
 
   it("only the bracket section's FIRST round header is rounded — not every header", () => {
     const html = sheetHtml();
-    const headers = [...html.matchAll(/<header class="([^"]*)"/g)].map((m) => m[1]!);
+    const headers = [...html.matchAll(/<header style="[^"]*" class="([^"]*)"/g)].map((m) => m[1]!);
     expect(headers.length, "expected two round headers, one per round").toBe(2);
     expect(headers[0], "first round header must carry rounded-t-2xl").toContain("rounded-t-2xl");
     expect(headers[1], "second round header must NOT carry rounded-t-2xl — it is not at the section's own top corner").not.toContain(
@@ -116,9 +116,16 @@ describe("run sheet — sticky group headers escape the overflow-hidden that bro
 
   it("both headers keep their sticky positioning — the fix removes overflow-hidden, never the sticky itself", () => {
     const html = sheetHtml();
-    const headers = [...html.matchAll(/<header class="([^"]*)"/g)].map((m) => m[1]!);
-    for (const cls of headers) {
-      expect(cls, "sticky top-14 z-10 must survive on every round header").toMatch(/\bsticky\b.*\btop-14\b.*\bz-10\b/);
+    const headers = [...html.matchAll(/<header style="([^"]*)" class="([^"]*)"/g)];
+    expect(headers.length, "expected two round headers").toBe(2);
+    for (const m of headers) {
+      // W4 moved the OFFSET from a `top-14`/`top-[86px]` class pair to one
+      // `calc()` in the style attribute (finding m2 — the 86 assumed a day
+      // header height that wraps at 320). `sticky` and `z-10` stay classes,
+      // and both still have to survive: this test exists for the
+      // overflow-hidden fix, which is about positioning, not offset.
+      expect(m[2], "sticky z-10 must survive on every round header").toMatch(/\bsticky\b.*\bz-10\b/);
+      expect(m[1], "the offset moved to an inline calc, and must still be there").toContain("--desk-day-h");
     }
   });
 });
