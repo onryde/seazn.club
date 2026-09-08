@@ -5,16 +5,44 @@ action in order. Planning is being redone at programme scope; implementation
 has not started and no file under `apps/web`, `packages` or `db` has been
 touched by this programme.
 
-Last updated: 2026-09-07, mid-session, after the programme design was written.
+Last updated: 2026-09-08, planning complete and merged to `main`.
+
+## 2026-09-08 — where things stand (read this block, then the tables)
+
+- **Planning is COMPLETE and ON MAIN.** Owner approved the design
+  ("approve") and ruled "push to main": merge commit `b2244879f` carried the
+  spec, the four wave prompts, the re-pinned W1/W2 prompts and the
+  `RULES.md` owner checklist. The T1 plan + W1 amendment (`c8dc4d07f`) and
+  the plan review follow in a second merge.
+- **Shareable spec page:** https://claude.ai/code/artifact/b7e7d0c8-e254-4d6e-80f0-161681ae797a
+  (rebuilt from the spec by `scratchpad/build-spec-page.mjs`; republish
+  after any spec change).
+- **`main` moved under us on 2026-09-08:** desk W3 (#740) and settings W8
+  (#744) merged. Consequences recorded in the spec's findings: FS14 —
+  `run-sheet-edit-time` is now `desk/run-sheet-row.tsx:407` (was `:377`;
+  the symbol is the authority). Deltas still end at `V399`.
+- **Findings since the design was written:** FS10 credits donor is
+  `ai_credit_ledger` (V320) + `lib/credits.ts` + `credit-pack-checkout` +
+  `billing-events.ts:151`, not size packs; FS11 Stripe events may be applied
+  by `api/cron/billing-events`; FS12 landing catalogue rows are FALSE for
+  all five plans; FS13 `public_fixtures_v` latest definer is `V369:18`.
+- **Plan review:** `_REVIEW-2026-09-08-plans.md` (reviewer pass over the T1
+  plan and the amended W1 plan; fixes applied before the second merge).
+- **NEXT ACTION:** execute `../../plans/2026-09-07-streaming-t1.md` from
+  this worktree with `superpowers:subagent-driven-development` (Opus at
+  minimum per dispatch). Its Task 0 stands the env up (`seazn-env up --label
+  ovl`), installs `node_modules` (fresh worktree has none), records the
+  vitest baseline, and re-checks `ls db/migration/deltas | sort -V | tail`.
+  R1/R2 plans are written one wave ahead, never earlier.
 
 ## Where the work lives
 
 - Branch `feat/stream-overlay`, worktree `.claude/worktrees/stream-overlay`,
   **rebased 2026-09-07 onto `main` at `fb99bbd4c`** (24 docs-only commits
-  carried clean). The previous directory at that path was an unregistered
-  residue and was moved to `.claude/worktrees/stream-overlay.stale-20260907`;
-  the worktree was re-added from the branch. **Not yet pushed since the
-  rebase** (a force-push is required; the branch has no PR).
+  carried clean) and pushed with `--force-with-lease` 2026-09-08. The
+  previous directory at that path was an unregistered residue and was moved
+  to `.claude/worktrees/stream-overlay.stale-20260907`; the worktree was
+  re-added from the branch. The branch has no PR (docs only).
 - Every commit is documentation, all under `docs/superpowers/`.
 - **No pull request, deliberately.** CI and smoke run on `pull_request`; e2e
   runs on `push` to `main`. Open the PR when code exists.
@@ -35,7 +63,7 @@ Last updated: 2026-09-07, mid-session, after the programme design was written.
 | `W1-step-one.md`, `W2-moments.md` | the wave prompts (corrected in place by the plan's Task 0) |
 | `../../plans/2026-09-05-stream-overlay-w1.md` | W1 plan, executes as corrected (Task 0 Steps 2–13 → the overlay endpoint) |
 | `../../plans/2026-09-05-stream-overlay-w2-moments.md` | W2 plan, blocked on spectator W1 |
-| `T1-theme-and-visual-gate.md`, `R0-bench.md`, `R1-relay-core.md`, `R2-compositor.md` | per-wave PROMPT files (owner ruling 2026-09-07: prompts for every wave now) — **being written next** |
+| `T1-theme-and-visual-gate.md`, `R0-bench.md`, `R1-relay-core.md`, `R2-compositor.md` | per-wave PROMPT files (owner ruling 2026-09-07: prompts for every wave now) — written, `8d31cb34f` |
 | `../../plans/2026-09-07-streaming-t1.md` (now), `…-r1.md` (after PR1 merges), `…-r2.md` (after the R0 memo) | per-wave PLAN files, written one wave ahead of execution by `writing-plans`; Task 0's steps sit at the head of the T1 plan |
 | `docs/superpowers/RULES.md` §"Owner checklist (2026-09-07)" | the owner's checklist; every task's acceptance names its rows |
 | Canvas | https://claude.ai/code/artifact/2aebcbde-28ba-45ff-9028-1151873e4901 |
