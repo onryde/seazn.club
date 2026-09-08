@@ -52,6 +52,7 @@ Waves:
 | Wave | Scope | State | Plan | Prompt | PR | Gate |
 |---|---|---|---|---|---|---|
 | W1 | Hook extraction (`useLiveFixture`), `overlayModel`, `stream_url` + view + `PUT /stream` + OpenAPI, `streaming.overlay` key, overlay route + theme + three motions, console panel on `FixtureLine` with `sportKey`/`streamingEntitled` threaded from the division page, public "Watch live"/"Replay" link, all four test kinds, smoke, visual gate, inventory | Prompt written; plan in flight; code not started | `plans/2026-09-05-stream-overlay-w1.md` | `W1-step-one.md` | — | `_RULES.md` §Merge gates 1–8; rebase after desk W1 merges; owner per-screen sign-off |
+| T1 | theme design (T1a: slate, Phone tab, credits card, decided/void) + visual gate harness (T1b: `overlay-tokens.ts`, contrast sweep, manifest capture) | plan written 2026-09-07, reviewed 2026-09-08 (63 findings applied); execution started 2026-09-08 | `plans/2026-09-07-streaming-t1.md` | `T1-theme-and-visual-gate.md` | PR-T1 | `_RULES.md` §Merge gates 1–8; owner per-screen sign-off on the T1a picks; the six contrast rows in Task 2 Step 8 resolved by the sheet |
 | W2 | `OverlayMoment` + per-sport allowlist, FIFO slab (4 s hold, reduced-motion instant), consent on names, cricket batter/bowler line; source = spectator W1's model or the `score_events` fallback | Prompt written; plan in flight; blocked on spectator W1 merge + RE-PIN | `plans/2026-09-05-stream-overlay-w2-moments.md` | `W2-moments.md` | — | As W1, plus task-zero RE-PIN table in the PR |
 
 ## Owner rulings
@@ -329,7 +330,10 @@ streaming" chip instead); F replay fill only when `stream_url` is null; G
 `usePathname` + a zero-cookies e2e; I the checklist into `RULES.md`; J R3
 deferred, only the QR contract fixed here.
 
-### Findings 2026-09-07 (full text in the design §13)
+### Findings 2026-09-07 (FS1–FS9: full text in the design §13)
+
+The five `FS-T1*` entries below were appended 2026-09-08 and are NOT in the
+design §13 — this file is their full text.
 
 - **FS1** `cookie-consent.tsx` has NO route-key mechanism (the 09-06 documents
   said it had one) — `localStorage` only, mounted at `app/layout.tsx:68`.
@@ -345,6 +349,96 @@ deferred, only the QR contract fixed here.
 - **FS7** T1 theme-design and visual-gate wave added ahead of W1-C.
 - FS8 `barlowCondensed` weights are `["600","700"]`; W1-C adds 800.
 - FS9 `playwright.config.ts` lives at `apps/web/`, not `apps/web/e2e/`.
+
+T1 wave deviations, appended 2026-09-08 by the T1 plan's Task 0 Step 8. Listed
+in the order the T1 plan's Step 8 gives them — a, c, d, e, then b — not
+re-sorted, so a reader following the plan finds each where the plan put it.
+
+- **FS-T1a** — `overflowingIn` is MOVED to `e2e/helpers.ts` and imported by
+  `mobile.spec.ts`, overruling the T1 prompt's "copy the logic into
+  `asserts.ts`" (`T1-theme-and-visual-gate.md` §Do NOT touch). Reason:
+  `helpers.ts` is not a spec, so Playwright's "a test file should not import a
+  test file" rule does not fire (`mobile.spec.ts:3-24` already imports 20
+  symbols from it), and one authority beats a copy that drifts (the third copy,
+  `e2e/run-sheet.spec.ts:100 expectRunSheetNotClipped`, is recorded as a tidy
+  owed, not touched by T1). The owner is told in the T1 Task 4 sign-off message
+  that the prompt's instruction was overruled and why.
+- **FS-T1c** — `SLATE_TOKENS`'s three values are typed in `overlay-tokens.ts`
+  AND in `_THEMES.md` §4a until Task 1 lands §4a and Task 2's contrast test
+  gains a §4a parse (the live-dot parse is the shape); the sheet is the
+  authority.
+- **FS-T1d** — the moments slab's `dismissal` tone (`_THEMES.md` §5: background
+  `--sport-dismissal`, text `#fff5f5`) cannot clear WCAG 4.5:1 with any single
+  fixed ink, because the eleven sports split into light-red and dark-red
+  dismissals that want opposite inks. Measured 2026-09-08 against
+  `SPORT_PALETTES` (`apps/web/src/components/v2/scorepad/v3/sport-theme.ts:165`)
+  and the `:root` fall-throughs, across all three candidate inks.
+
+  **Correction, 2026-09-08:** the first draft of this finding carried only SEVEN
+  rows and generalised its conclusion to all eleven sports. `SPORT_PALETTES`
+  holds OVERRIDES only — boardgame and carrom declare a `board` but no
+  `dismissal`, and cricket and generic have no palette entry at all — so those
+  four fall through to `:root --sport-dismissal: #dc2626` (`app/globals.css:1141`;
+  `--sport-board: var(--mk-night)` = `#150b36` and `--sport-ink:
+  var(--mk-cream)` = `#f5f0e8` at `:495-497`), where `#fff5f5` measures **4.51
+  and PASSES**. The four sports a seven-row table hides are exactly the ones
+  that reverse the conclusion. The full eleven, all three candidate inks
+  (**bold** = the winning ink for that sport):
+
+  | sport | dismissal | `#fff5f5` | own `board` | own `ink` | best |
+  |---|---|---|---|---|---|
+  | football | `#d00000` | **5.33** | 3.01 | 5.27 | 5.33 |
+  | hockey | `#ff5a4d` | 2.88 | **4.46** | 2.81 | 4.46 |
+  | icehockey | `#ff6b6b` | 2.59 | **7.06** | 2.47 | 7.06 |
+  | tennis | `#fa5252` | 3.07 | **4.68** | 3.06 | 4.68 |
+  | badminton | `#ff6b6b` | 2.59 | **6.14** | 2.47 | 6.14 |
+  | tabletennis | `#ff7a80` | 2.35 | **7.35** | 2.31 | 7.35 |
+  | volleyball | `#ff6b6b` | 2.59 | **6.11** | 2.58 | 6.11 |
+  | boardgame | `#dc2626` (root) | **4.51** | 3.57 | 3.98 | 4.51 |
+  | carrom | `#dc2626` (root) | **4.51** | 3.46 | 4.12 | 4.51 |
+  | cricket | `#dc2626` (root) | **4.51** | 3.84 | 4.26 | 4.51 |
+  | generic | `#dc2626` (root) | **4.51** | 3.84 | 4.26 | 4.51 |
+
+  Counts: `#fff5f5` alone clears FIVE and fails six. The sport's own `board`
+  alone clears FIVE, fails four, and is UNDEFINED for cricket and generic, which
+  have no `board` of their own. **Neither fixed ink works — that is the
+  finding.** The T1 plan's own remedy — "the slab LINE takes `board`, the
+  headline stays `#fff5f5` at the 3:1 large-text floor, which all six clear" —
+  is false in both halves: hockey's headline measures 2.88 and does not clear 3,
+  and `board` would drop football from 5.33 to 3.01. The plan's other variant,
+  darkening hockey's `dismissal` hex, is refused: `sport-theme.ts` is off-limits
+  to this wave. This is a T1a design question, put to the owner with the four
+  T1a picks:
+
+  - **(A)** the `dismissal` tone takes the sport's own `board` as its text, as
+    the `led` and `caution` tones already do. Clears five, and **regresses
+    boardgame (4.51 → 3.57) and carrom (4.51 → 3.46) from passing to failing**;
+    undefined for cricket and generic. The first draft recommended A on the
+    claim that "nine sports clear outright" — that claim was false.
+  - **(B)** §5 declares the slab line large text at floor 3, which still leaves
+    five sports red (hockey, icehockey, badminton, tabletennis, volleyball).
+  - **(C, recommended) — the slab's `dismissal` ink is DERIVED per sport:
+    whichever of `#fff5f5` and that sport's own `board` measures higher against
+    that sport's `dismissal`.** Ten of eleven sports clear 4.5 (five on `board`,
+    five on `#fff5f5`); hockey alone lands at 4.46, 0.04 short — and 4.46 is
+    already a documented, deliberately-pinned value in this repo
+    (`sport-theme.ts:213` argues it two-sided for the discipline swatches). No
+    palette hex moves, no sport is left undefined, and `overlay-tokens.ts` can
+    compute the choice rather than a human maintaining an eleven-row lookup.
+
+  Until the sheet moves, Task 2's contrast suite commits with the six `#fff5f5`
+  reds named.
+- **FS-T1e** — a third overflow scan remains at `e2e/run-sheet.spec.ts:100
+  expectRunSheetNotClipped` (desk's spec, untouched by T1); tidy owed to
+  whichever desk wave next edits that file.
+- **FS-T1b** — the manifest vocabulary is the PLAN's: `awaitSelector` (a CSS
+  selector — the public fixture page and the embed widgets carry no testids, so
+  `awaitTestId` could not await them), group-level `mustDiffer: [id, id][]` and
+  `controlSetEqual` (a pair is a group fact, not a row's), and `toBeVisible` on
+  the awaited element (a screenshot proves what is painted; `toBeAttached` is
+  the FOLD rule and the overlay has no fold). The design §4.2 block,
+  `T1-theme-and-visual-gate.md` items 5–6 and `R2-compositor.md` were amended to
+  this vocabulary on 2026-09-08 (design FS16).
 
 ### Status
 

@@ -46,14 +46,91 @@ Last updated: 2026-09-08, planning complete and merged to `main`.
   ovl`), installs `node_modules` (fresh worktree has none), records the
   vitest baseline, and re-checks `ls db/migration/deltas | sort -V | tail`.
   R1/R2 plans are written one wave ahead, never earlier.
+  **(SUPERSEDED 2026-09-08 — T1 Task 0 has RUN: the env is up, `node_modules`
+  installed, the baseline recorded and the deltas tail re-checked. See
+  "## Environment (label `ovl`, stood up 2026-09-08 …)" below. T1 Task 4 owns
+  rewriting this bullet; it is left in place until then.)**
+
+## Environment (label `ovl`, stood up 2026-09-08 from this worktree @ `4ee38278d`)
+
+This block supersedes the "## Environment" and "## Baseline" sections at the
+foot of this file — they describe the 2026-09-05 tree and are kept only as the
+prior record.
+
+- `DATABASE_URL=postgresql://postgres@127.0.0.1:54405/seazn_ovl`
+  `DATABASE_SSL=disable`
+- `SMOKE_BASE=http://localhost:3303` = `PLAYWRIGHT_BASE`; `E2E_PROD_TARGET=1`
+- `psql "postgresql://postgres@127.0.0.1:54405/seazn_ovl" -tAc "show
+  data_directory"` → `/tmp/seazn-env/ovl/pg` (contains `ovl`). Run by hand
+  2026-09-08; this is the psql output, not the script's
+  `BENCH_EXPECTED_DATA_DIR`. The script separately verified the same value
+  against its own datadir ("data_directory verified" in its log) before
+  reporting the server ready. This is the check that tells our cluster apart
+  from a squatter's — a `pg_ctl` that failed "Address already in use" is
+  followed by a `createdb` that SUCCEEDS against another session's server.
+- Deltas tail on this branch: `V399__stats_player_career_split.sql` (T1 adds
+  none; W1 takes V400/V401)
+- Baseline (`apps/web`, full, fresh DB, tree = `origin/main` + this branch @
+  `4ee38278d`): **passed 15121 / total 15198 / failed 4 / pending 73** — 1182
+  test files, 1 failed; `outside-worktree 0` (every `.testResults[].name`
+  resolves under this worktree); runner exit 1. JSON at
+  `/private/tmp/claude-501/-Users-ashokhein-github-seazn-club/80298fc7-d342-412c-85bd-3bd1f75ab7f6/scratchpad/t1/baseline-web.json`.
+  Red files: `apps/web/src/server/usecases/__tests__/schedule-build-honours-locks.test.ts`
+  — all four assertions fail `AssertionError: expected undefined to be
+  '2026-08-01T19:00:00.000Z'`. Classification **ENVIRONMENTAL**: the suite needs
+  the CP-SAT placement service and `up` was not given `--placement`. Not
+  attributable to this branch (which carries no code) and not to `main`.
+- Lint `✖ 137 problems (0 errors, 137 warnings)`, `LINT_EXIT=0` — read through
+  `rtk proxy pnpm run lint`, since plain `rtk` hides this output entirely; tsc
+  `EXIT=0`; `openapi:gen` + `i18n:gen-keys` porcelain: **EMPTY both before and
+  after**, so no generator drift on an untouched tree and no finding against
+  `main` from that step.
+- `mobile.spec.ts` @ mobile-320 before Task 3: **44 passed, 1 skipped, 0 failed**
+  (2.2 m), `PW_EXIT=0`. Both `auth.setup.ts` projects passed first, so the
+  served build is this tree's. This is the pre-change witness Task 3's helper
+  move is judged against.
+- Q12 (`pass-scoping-guard.test.ts`): **green on this tree.** The 2026-09-05
+  note's "two reds, unclassified" do NOT reproduce; closed as green on
+  `4ee38278d`. Nothing to attribute, nothing to fix.
+- **`seed:demo` was NOT run** — the env skill lists it as owed by the caller.
+  Nothing so far needed it; Task 3's smoke suite may.
+- **The 2026-09-07 corpus re-pins are ALREADY LANDED — do not re-pin them.**
+  Verified 2026-09-08 (T1 Task 0 Step 8a) on an untouched tree; they were
+  committed at `8d31cb34f` / `c8dc4d07f` and reached `main`, so a rewrite would
+  stage nothing. The five checks and what they printed: `"re-pinned 2026-09-07
+  @ fb99bbd4c"` in `W1-step-one.md` → **8** (floor is 8 — no margin, so a later
+  edit that drops one line takes this below its floor silently); `"eleven"` in
+  `_RULES.md` → **3** (R16 widened); `"run-sheet-row.tsx"` in `W1-step-one.md`
+  → hit at `:29` (RP1 re-pinned; the mount is the SYMBOL
+  `data-testid="run-sheet-edit-time"`, never a line number); `"set point"` in
+  `W2-moments.md` → **5** (F3 landed); `"^| T1 |"` in `_INDEX.md` → **empty**,
+  which was the row Task 0 then added.
+- Recreate from this worktree with
+  `POSTHOG_KEY= NEXT_PUBLIC_POSTHOG_KEY= ~/.claude/skills/seazn-local-env/scripts/seazn-env.sh up --label ovl --server`;
+  `rebuild --label ovl` after every code change. **Blank both PostHog keys**:
+  `captureServer` reads `POSTHOG_KEY ?? NEXT_PUBLIC_POSTHOG_KEY` and
+  `.env.local` carries a real key, so a browser-driven local run otherwise
+  posts to the LIVE PostHog project.
 
 ## Where the work lives
 
 - Branch `feat/stream-overlay`, worktree `.claude/worktrees/stream-overlay`,
-  **rebased 2026-09-07 onto `main` at `fb99bbd4c`** (24 docs-only commits
-  carried clean) and pushed with `--force-with-lease` 2026-09-08. The
-  previous directory at that path was an unregistered residue and was moved
-  to `.claude/worktrees/stream-overlay.stale-20260907`; the worktree was
+  **based at `4ee38278d`** (Task 0 Step 1, 2026-09-08). Every docs commit of
+  this programme is already ON `main`: the branch was 0 ahead / 3 behind, so
+  `/usr/bin/git rebase origin/main` was a FAST-FORWARD, not a replay. The
+  earlier "rebased onto `fb99bbd4c`, 24 unpushed docs-only commits,
+  force-pushed" no longer describes this branch — nothing is carried and no
+  force-push is owed. **`main` moves under this branch several times a day**
+  — during Task 0 alone #747 `feat/pad-attribution-side-groups`, #748
+  `docs/spectator-w1-merged`, then #750 `fix/money-path-gate-arming` (which
+  touched only `.github/workflows/e2e.yml`, no contention with this
+  programme). So treat any ahead/behind written here as a SNAPSHOT and re-run
+  `/usr/bin/git rev-list --left-right --count origin/main...HEAD` before
+  trusting it. At the close of Task 0 the branch was **1 ahead** (the Task 0
+  docs commit) **and 2 behind**, and `origin/feat/stream-overlay` still
+  pointed at the pre-Task-0 `01669d287` — the push is the main session's call.
+  The previous directory at that path was an unregistered residue and was
+  moved to `.claude/worktrees/stream-overlay.stale-20260907`; the worktree was
   re-added from the branch. The branch has no PR (docs only).
 - Every commit is documentation, all under `docs/superpowers/`.
 - **No pull request, deliberately.** CI and smoke run on `pull_request`; e2e
@@ -120,7 +197,16 @@ Design §12: real prices, passthrough half-credit, Enterprise monthly bundle,
 Vault vs envelope, YouTube fresh-channel copy, per-destination VOD, mic
 default (R3). Q11–Q13 from the earlier set stand as recorded.
 
-## Environment
+## Environment (SUPERSEDED — prior record, 2026-09-07)
+
+**Stale as of 2026-09-08** in its FIRST SENTENCE only — the `ovl` environment IS
+up, and the coordinates are in "## Environment (label `ovl`, stood up
+2026-09-08 …)" above, which is the authority for them. **Everything else in
+this section still holds and is kept deliberately:** the `up` FLAGS in the
+first bullet — `--server` for e2e and smoke, and **`--placement` before
+trusting `schedule-build-honours-locks.test.ts`**, which is the one command
+that turns the new block's four ENVIRONMENTAL reds green — and the
+worktree-setup traps in the last two bullets.
 
 - No `ovl` database or server is up. Recreate from this worktree:
   `~/.claude/skills/seazn-local-env/scripts/seazn-env.sh up --label ovl`, then
@@ -135,7 +221,12 @@ default (R3). Q11–Q13 from the earlier set stand as recorded.
 - Shell guard: `/usr/bin/git` in plain calls, no heredocs, no `eval` or
   sourcing, Write tool for files, `grep -a`.
 
-## Baseline (apps/web vitest, fresh `ovl` DB, 2026-09-05, at `997ad22`)
+## Baseline (SUPERSEDED — apps/web vitest, fresh `ovl` DB, 2026-09-05, at `997ad22`)
+
+**Stale as of 2026-09-08.** The live baseline is the one in "## Environment
+(label `ovl`, stood up 2026-09-08 …)" above — 15121 / 15198, one red file,
+environmental — and it is cited by JSON path, which is the single authority.
+Q12 was reproduced there and closed GREEN. Kept as the prior record only.
 
 13,962 passed of 14,041, 74 pending. Five reds: three placement-service
 environmental, two `pass-scoping-guard.test.ts` unclassified (Q12). **Stale
