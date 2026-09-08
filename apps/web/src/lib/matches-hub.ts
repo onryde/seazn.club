@@ -246,6 +246,7 @@ export type LandingStatus =
   | { kind: "empty" }
   | { kind: "live"; n: number }
   | { kind: "next"; at: string; tz: string }
+  | { kind: "match_day" }
   | { kind: "finished" }
   | { kind: "dates"; startsOn: string | null; endsOn: string | null };
 
@@ -259,7 +260,7 @@ export interface LandingStatusInput {
 }
 
 /**
- * ORDER IS THE RULE: empty → live → next → finished → dates.
+ * ORDER IS THE RULE: empty → live → next → match_day → finished → dates.
  *
  * The empty rung states itself FIRST and outranks everything, which is the
  * competition-desk amendment this repeats: a competition with no divisions
@@ -268,12 +269,30 @@ export interface LandingStatusInput {
  * itself as finished before it has begun. The same trap shipped three separate
  * vacuous "Finished" defects in one desk wave.
  *
- * `next` is the earliest upcoming fixture still AHEAD of `now`; a fixture whose
- * start time has passed but which has not been marked in play is overdue, not
- * next, and the competition falls through to its dates rather than claiming a
- * kickoff that is already behind us. `finished` needs every fixture completed
- * AND at least one to exist, so an overdue upcoming fixture cannot be mistaken
- * for a finished competition.
+ * `next` is the earliest upcoming fixture still AHEAD of `now`. A fixture whose
+ * start time has passed but which nobody has marked in play is overdue, not
+ * next — the page must not promise a kick-off that is already behind us.
+ * Inclusive at the boundary: a fixture starting at exactly `now` is still
+ * `next`, so there is no one-millisecond hole in which the status line has
+ * nothing to say. `finished` needs every fixture completed AND at least one to
+ * exist, so an overdue fixture cannot be mistaken for a finished competition.
+ *
+ * `match_day` sits BELOW `next` and ABOVE `finished`, and both placements are
+ * load-bearing:
+ *   • below `next`, because a fixture still ahead of us has a TIME, and
+ *     "Starts 14:00" tells a spectator more than "Match day";
+ *   • above `finished` and `dates`, because it is what catches the day once
+ *     every kick-off time has passed and nothing is marked in play. Without
+ *     this rung — the shape this function shipped with — a spectator arriving
+ *     on the afternoon of the one day they came to watch read a DATE RANGE.
+ * A fixture's day is its OWN venue's day, computed in its own zone against the
+ * same instant: never the viewer's zone, and never the competition's.
+ *
+ * Note this ladder is NOT `competitionPhase`'s (`server/usecases/
+ * competition-desk.ts`), and is deliberately not coupled to it. That one ranks
+ * DIVISION-level phases this public document does not carry, and it puts
+ * `match_day` ABOVE its `next` rung. The org desk and the public landing answer
+ * to different readers; where they differ, they differ on purpose.
  */
 export function landingStatus(a: LandingStatusInput): LandingStatus {
   if (a.divisions === 0) return { kind: "empty" };
@@ -292,6 +311,16 @@ export function landingStatus(a: LandingStatusInput): LandingStatus {
   upcoming.sort((x, y) => x.at - y.at);
   const next = upcoming[0];
   if (next) return { kind: "next", at: next.iso, tz: next.tz };
+
+  // `toISOString()` throws on an Invalid Date, and `now` is a caller's value —
+  // so it is only reached once `nowMs` has proved itself a real instant. An
+  // unusable `now` means no match day, not an exception out of a pure helper.
+  const nowIso = Number.isNaN(nowMs) ? null : a.now.toISOString();
+  const isMatchDay = a.matches.some((m) => {
+    const day = dayKeyInZone(m.scheduledAt, m.tz);
+    return day !== null && day === dayKeyInZone(nowIso, m.tz);
+  });
+  if (isMatchDay) return { kind: "match_day" };
 
   if (a.matches.length > 0 && a.matches.every((m) => m.bucket === "completed")) {
     return { kind: "finished" };

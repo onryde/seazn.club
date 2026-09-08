@@ -12,42 +12,67 @@
 //     from what the wrong rung order would produce. A ladder whose cases each
 //     supply exactly one candidate proves nothing about the order.
 //
-// Mutation sweep, 2026-09-08 — 24 mutants applied one at a time and restored;
-// 24 killed, 0 survivors, with `numTotalTests` pinned at 41 for every run so a
-// mutant that failed to parse could not read as a survivor. Each line names the
-// mutant and the test that caught it:
+// Mutation sweep — every mutant below was applied one at a time and restored,
+// and the total test count was compared against the run immediately before it,
+// so a mutant that failed to parse could not read as a survivor. (The count
+// itself is deliberately NOT written down here: a number in a comment cannot
+// fail, so it silently rots the moment a later task extends this file. Read it
+// from the run.) Each line names the mutant and the test that caught it:
 //    1 filter: swap live/upcoming rungs ....... "live wins over upcoming…"
 //    2 filter: delete the empty rung .......... "EMPTY: no matches at all"
 //    3 bucketFixture: always "upcoming" ....... the status-map case
 //    4 bucketFixture: drop the in_play rung ... the status-map case
 //    5 dayKeyInZone: drop the zone fallback ... "unknown zone falls back to UTC"
-//    6 dayKeyInZone: drop the NaN guard ....... "an unparseable instant is null"
-//    7 groupByDay: unscheduled FIRST .......... both grouping-order cases
-//    8 groupByDay: group in UTC, not the item's zone .. the Kolkata/London case
-//    9 sort: drop the completed descending branch ..... both completed cases
-//   10 sort: naive +Infinity sentinel ......... "unscheduled COMPLETED last"
-//   11 sort: drop the bucket RANK ordering .... the main ordering case
-//   12 sort: sort in place .................... "does not mutate its input"
-//   13 tabs: emit the reserved "gallery" ...... 3 cases
-//   14 tabs: swap table and stats ............. the full-order case
-//   15 tabs: stats unconditional .............. EMPTY + the zero-rows case
-//   16 landing: test `next` BEFORE `live` ..... "live outranks a nearer upcoming"
-//   17 landing: delete the empty rung ......... both EMPTY cases
-//   18 landing: drop the `ahead of now` filter  "next = the EARLIEST…" + overdue
-//   19 landing: drop `matches.length > 0` from `finished` .... both dates cases
-//   20 landing: hard-code the live count to 1 . "live counts every live fixture"
-//   21 drift: rename an id in HUB_TAB_IDS ..... the tab drift case
-//   22 drift: rename a bucket in MatchBucketSchema ... the bucket drift case
-//   23 drift: rename an id in CompetitionHubTabId .... the tab drift case
-//   24 probe: drop a status from STATUSES below ..... the schemas.ts drift guard
-//      (24 is what proves that guard is not decoration — it really does read
+//    6 dayKeyInZone: fall back to the RUNTIME LOCAL zone .. the same case
+//    7 dayKeyInZone: drop the NaN guard ....... "an unparseable instant is null"
+//    8 groupByDay: unscheduled FIRST .......... both grouping-order cases
+//    9 groupByDay: group in UTC, not the item's zone .. the Kolkata/London case
+//   10 sort: drop the completed descending branch ..... both completed cases
+//   11 sort: naive +Infinity sentinel ......... 2 cases
+//   12 sort: drop the bucket RANK ordering .... the main ordering case
+//   13 sort: sort in place .................... "does not mutate its input"
+//   14 sort: drop `instantOf`'s NaN guard ..... "an unparseable scheduledAt…"
+//   15 tabs: emit the reserved "gallery" ...... 3 cases
+//   16 tabs: swap table and stats ............. the full-order case
+//   17 tabs: stats unconditional .............. EMPTY + the zero-rows case
+//   18 tabs: `matches > 1` .................... "exactly ONE fixture…"
+//   19 tabs: `tables > 1` ..................... "exactly ONE table…"
+//   20 tabs: `leaderRows > 1` ................. "exactly ONE leader row…"
+//   21 tabs: `teams > 1` ...................... "exactly ONE team…"
+//   22 landing: test `next` BEFORE `live` ..... "live outranks a nearer upcoming"
+//   23 landing: delete the empty rung ......... both EMPTY cases
+//   24 landing: drop the `ahead of now` filter  "next = the EARLIEST…" + overdue
+//   25 landing: `at <= nowMs` (exclusive boundary) ... "starting at EXACTLY now"
+//   26 landing: drop `matches.length > 0` from `finished` .... both dates cases
+//   27 landing: hard-code the live count to 1 . "live counts every live fixture"
+//   28 landing: delete the match_day rung ..... 4 cases
+//   29 landing: match_day ABOVE next .......... "order-differential vs next"
+//   30 landing: match_day BELOW finished ...... "order-differential vs finished"
+//   31 landing: match_day computed in `now`'s zone, not the fixture's .. the pair
+//   32 landing: drop the `nowIso` NaN guard ... "an unusable `now`…" (it throws)
+//   33 drift: rename an id in HUB_TAB_IDS ..... the tab drift case
+//   34 drift: rename a bucket in MatchBucketSchema ... the bucket drift case
+//   35 drift: rename an id in CompetitionHubTabId .... the tab drift case
+//   36 probe: drop a status from STATUSES below ..... the schemas.ts drift guard
+//      (36 is what proves that guard is not decoration — it really does read
 //      the enum out of `server/api-v1/schemas.ts` and compare.)
 //
-// One mutant was DROPPED after being written down and tried: "hoist the
-// `finished` rung above `live`". It survives, and correctly — a set holding a
-// live fixture is not `every(completed)`, so those two rungs cannot see each
-// other and their order carries no meaning. The live/next crossing (16) is the
-// one that does.
+// TWO mutants were written down, tried, and dropped as EQUIVALENT — they cannot
+// be killed by any test, here or anywhere, and recording them is cheaper than
+// having the next reader re-derive them:
+//
+//   • "hoist the `finished` rung above `live`" in `landingStatus`. `finished`
+//     requires `every(bucket === "completed")`, which is false whenever a live
+//     fixture exists, so the two rungs cannot see each other and their relative
+//     order carries no behaviour. The crossing that DOES carry behaviour is
+//     live-vs-next (22), and match_day's two neighbours (29, 30).
+//   • "`return 0` → `return Number.NaN` in the both-undated branch of
+//     `sortHubMatches`". ECMA-262 SortCompare says: "Let v be ToNumber(...). If
+//     v is NaN, return +0" — so returning NaN there is *defined* to mean
+//     "equal", exactly what `return 0` means. Verified empirically as well as
+//     from the spec. NaN is only dangerous when it reaches the SUBTRACTION from
+//     a real value, which is mutant 14 and is killed.
+import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
@@ -144,9 +169,48 @@ describe("dayKeyInZone — the venue day across a DST boundary", () => {
     expect(dayKeyInZone("2026-10-24T23:30:00.000Z", "UTC")).toBe("2026-10-24");
     expect(dayKeyInZone("2026-10-25T23:30:00.000Z", "UTC")).toBe("2026-10-25");
   });
-  it("null in → null out; an unknown zone falls back to UTC rather than throwing", () => {
+  it("null in → null out", () => {
     expect(dayKeyInZone(null, "Europe/London")).toBeNull();
-    expect(dayKeyInZone("2026-10-24T23:30:00.000Z", "Mars/Olympus")).toBe("2026-10-24");
+  });
+
+  it("an unknown zone falls back to UTC — NOT to the runner's own zone", () => {
+    // This case has to hold its own zone down, or it is vacuous on CI. "Falls
+    // back to UTC" and "falls back to the RUNTIME LOCAL zone" are the same
+    // behaviour on a UTC runner, and `.github/workflows/ci.yml`'s sharded unit
+    // job runs on a default-UTC GitHub runner — so an assertion made against
+    // the ambient zone passes in both states there, forever. It killed the
+    // "fall back to local" mutant on this machine only because this machine is
+    // Europe/London, which is luck, not coverage.
+    //
+    // The zone cannot be changed from inside the test: vitest runs with
+    // `pool: "threads"`, and in a worker thread setting `process.env.TZ`
+    // (or `vi.stubEnv`) updates the variable but NOT ICU's cached default —
+    // measured, `resolvedOptions().timeZone` stays put. So the discrimination
+    // happens in a child process, where TZ is fixed at spawn. `matches-hub.ts`
+    // imports nothing and uses only erasable syntax, so node loads the module
+    // directly under its default type-stripping.
+    const probe = `
+      const { dayKeyInZone } = await import(${JSON.stringify(new URL("../matches-hub.ts", import.meta.url).href)});
+      const iso = "2026-10-24T20:00:00.000Z";
+      console.log(JSON.stringify({
+        ambientKey: new Intl.DateTimeFormat("en-CA").format(new Date(iso)),
+        unknownZoneKey: dayKeyInZone(iso, "Mars/Olympus"),
+      }));
+    `;
+    const out = execFileSync(process.execPath, ["--input-type=module", "-e", probe], {
+      // UTC+05:30, no DST — differs from UTC on every runner, including a UTC one.
+      env: { ...process.env, TZ: "Asia/Kolkata" },
+      encoding: "utf8",
+    });
+    const seen = JSON.parse(out.trim().split("\n").pop()!) as {
+      ambientKey: string;
+      unknownZoneKey: string;
+    };
+    // 20:00Z on the 24th is 01:30 on the 25th in Kolkata. The positive pair
+    // FIRST: it proves the child really is in a non-UTC zone, so the assertion
+    // under it is actually discriminating rather than quietly vacuous.
+    expect(seen.ambientKey).toBe("2026-10-25");
+    expect(seen.unknownZoneKey).toBe("2026-10-24");
   });
   it("an unparseable instant is null, not a bogus key — it groups as unscheduled", () => {
     expect(dayKeyInZone("not-a-date", "Europe/London")).toBeNull();
@@ -248,15 +312,28 @@ describe("sortHubMatches", () => {
     expect(sorted.map((x) => x.fixtureId)).toEqual(["new", "old", "no-date"]);
   });
 
-  it("two undated matches in one bucket keep their input order (no NaN comparator)", () => {
+  it("SEVERAL undated matches interleaved with dated ones: dated first in order, undated after in input order", () => {
+    // Deliberately four elements, interleaved, in the DESCENDING bucket. The
+    // two-element version of this case that shipped first was vacuous: with two
+    // items, a stable sort produces input order whatever the comparator says,
+    // so it passed under every defect it was written to catch.
     const sorted = sortHubMatches([
-      m("first", "completed", null),
-      m("second", "completed", null),
+      m("u1", "completed", null),
+      m("d-old", "completed", "2026-09-01T10:00:00Z"),
+      m("u2", "completed", null),
+      m("d-new", "completed", "2026-09-04T10:00:00Z"),
     ]);
-    expect(sorted.map((x) => x.fixtureId)).toEqual(["first", "second"]);
+    expect(sorted.map((x) => x.fixtureId)).toEqual(["d-new", "d-old", "u1", "u2"]);
   });
 
   it("an unparseable scheduledAt is treated as undated rather than poisoning the sort", () => {
+    // THIS is the case that witnesses "no NaN in the comparator". Drop the
+    // `Number.isNaN` guard inside `instantOf` and NaN reaches the subtraction:
+    // every comparison against it is false, ECMA-262 SortCompare normalises the
+    // NaN result to +0 ("equal"), and the stable sort hands back input order —
+    // so `bad` stays in front of `good` and this reds. See the adjudication in
+    // the sweep notes at the top of this file for the mutant that CANNOT be
+    // caught here, and why.
     const sorted = sortHubMatches([
       m("bad", "upcoming", "not-a-date"),
       m("good", "upcoming", "2026-09-06T10:00:00Z"),
@@ -290,6 +367,40 @@ describe("deriveHubTabs — tabs by PRESENCE, gallery never (W4's slot)", () => 
       "info",
     ]);
   });
+  // ONE of a thing is the boundary each of these four gates is really about,
+  // and it is the value that never appears in the cases above. `> 0` mutated to
+  // `> 1` survives every count of 0, 2, 3, 4 or 9 — so a competition with a
+  // single leader row, a single entrant, a single fixture or a single table
+  // would silently lose its tab. One case per gate, each with everything else
+  // at zero so nothing can cover for it.
+  it("exactly ONE leader row earns the Stats tab", () => {
+    expect(deriveHubTabs({ matches: 0, tables: 0, leaderRows: 1, teams: 0 })).toEqual([
+      "overview",
+      "stats",
+      "info",
+    ]);
+  });
+  it("exactly ONE team earns the Teams tab", () => {
+    expect(deriveHubTabs({ matches: 0, tables: 0, leaderRows: 0, teams: 1 })).toEqual([
+      "overview",
+      "teams",
+      "info",
+    ]);
+  });
+  it("exactly ONE fixture earns the Matches tab", () => {
+    expect(deriveHubTabs({ matches: 1, tables: 0, leaderRows: 0, teams: 0 })).toEqual([
+      "overview",
+      "matches",
+      "info",
+    ]);
+  });
+  it("exactly ONE table earns the Table tab", () => {
+    expect(deriveHubTabs({ matches: 0, tables: 1, leaderRows: 0, teams: 0 })).toEqual([
+      "overview",
+      "table",
+      "info",
+    ]);
+  });
   it("gallery is a RESERVED id — in the union, never derived (positive pair for the negative)", () => {
     expect(HUB_TAB_IDS).toContain("gallery");
     expect(deriveHubTabs({ matches: 9, tables: 9, leaderRows: 9, teams: 9 })).not.toContain(
@@ -303,9 +414,12 @@ describe("deriveHubTabs — tabs by PRESENCE, gallery never (W4's slot)", () => 
   });
 });
 
-describe("landingStatus — the Overview status line ladder (empty → live → next → finished → dates)", () => {
+describe("landingStatus — the Overview status line ladder (empty → live → next → match_day → finished → dates)", () => {
   const now = new Date("2026-09-05T12:00:00Z");
   const base = { divisions: 2, startsOn: "2026-09-01", endsOn: "2026-10-31", now };
+  // Every fixture in this block is in Europe/London and every date is 2026-09-0x,
+  // so a fixture dated 2026-09-05 is TODAY and any other date is not. `now` is
+  // 12:00Z = 13:00 BST, comfortably inside that day at both ends.
   const m = (bucket: MatchBucket, at: string | null) => ({
     bucket,
     scheduledAt: at,
@@ -363,7 +477,24 @@ describe("landingStatus — the Overview status line ladder (empty → live → 
       kind: "finished",
     });
   });
-  it("an OVERDUE upcoming fixture is not 'finished' — a competition with unplayed matches falls to dates", () => {
+  it("a fixture starting at EXACTLY now is still 'next' — the boundary is inclusive", () => {
+    // Decided deliberately, and stated in `landingStatus`'s own doc comment: a
+    // fixture whose start instant equals `now` has not started, so it is next
+    // rather than overdue. An exclusive boundary would open a hole in which the
+    // page has nothing to say about a match that is about to begin — here it
+    // would drop straight to "Match day".
+    expect(landingStatus({ ...base, matches: [m("upcoming", "2026-09-05T12:00:00Z")] })).toEqual({
+      kind: "next",
+      at: "2026-09-05T12:00:00Z",
+      tz: "Europe/London",
+    });
+  });
+  it("one millisecond earlier is overdue, not next (the other side of the same boundary)", () => {
+    expect(
+      landingStatus({ ...base, matches: [m("upcoming", "2026-09-05T11:59:59.999Z")] }),
+    ).toEqual({ kind: "match_day" });
+  });
+  it("an OVERDUE upcoming fixture on ANOTHER day is not 'finished' — it falls to dates", () => {
     expect(
       landingStatus({
         ...base,
@@ -371,7 +502,7 @@ describe("landingStatus — the Overview status line ladder (empty → live → 
       }),
     ).toEqual({ kind: "dates", startsOn: "2026-09-01", endsOn: "2026-10-31" });
   });
-  it("an upcoming fixture with no time at all is not 'next' — there is nothing to print", () => {
+  it("an undated fixture is neither 'next' nor a match day — there is no instant to read", () => {
     expect(landingStatus({ ...base, matches: [m("upcoming", null)] })).toEqual({
       kind: "dates",
       startsOn: "2026-09-01",
@@ -389,6 +520,73 @@ describe("landingStatus — the Overview status line ladder (empty → live → 
     expect(
       landingStatus({ ...base, startsOn: null, endsOn: null, matches: [] }),
     ).toEqual({ kind: "dates", startsOn: null, endsOn: null });
+  });
+
+  // ---- match_day: below `next`, above `finished` -------------------------
+  it("THE HOLE THIS RUNG CLOSES: a fixture earlier today, not in play → match_day, not a date range", () => {
+    // Before this rung existed the ladder answered "1 Sep – 31 Oct" here — a
+    // date range, on the afternoon of the one day a spectator came to watch.
+    expect(landingStatus({ ...base, matches: [m("upcoming", "2026-09-05T09:00:00Z")] })).toEqual({
+      kind: "match_day",
+    });
+  });
+  it("order-differential vs next: a fixture LATER today is 'next', not 'match_day'", () => {
+    // Both rungs are satisfied by this input — the fixture is today AND ahead
+    // of now. A ladder with match_day above next would answer match_day; the
+    // specific time is the better answer, so next wins.
+    expect(landingStatus({ ...base, matches: [m("upcoming", "2026-09-05T15:00:00Z")] })).toEqual({
+      kind: "next",
+      at: "2026-09-05T15:00:00Z",
+      tz: "Europe/London",
+    });
+  });
+  it("order-differential vs finished: everything played, but played TODAY → match_day", () => {
+    // Both rungs are satisfied — every fixture is completed AND one is today.
+    // A ladder with finished above match_day would answer finished.
+    expect(landingStatus({ ...base, matches: [m("completed", "2026-09-05T10:00:00Z")] })).toEqual({
+      kind: "match_day",
+    });
+  });
+  it("order-differential vs live: a live fixture today is 'live', not 'match_day'", () => {
+    expect(
+      landingStatus({
+        ...base,
+        matches: [m("live", "2026-09-05T10:00:00Z"), m("upcoming", "2026-09-05T09:00:00Z")],
+      }),
+    ).toEqual({ kind: "live", n: 1 });
+  });
+  it("the day is the FIXTURE's own zone — positive/negative pair on one instant pair", () => {
+    // Same two instants both times; only the zone changes. `now` is 23:00Z and
+    // the fixture is 18:00Z, so in UTC they share a day and in Kolkata (+05:30)
+    // they do not: the fixture is 23:30 on the 5th, `now` is 04:30 on the 6th.
+    // Computing either side in UTC — or in the viewer's zone — flips both rows.
+    const at = "2026-09-05T18:00:00Z";
+    const late = new Date("2026-09-05T23:00:00Z");
+    expect(
+      landingStatus({
+        ...base,
+        now: late,
+        matches: [{ bucket: "upcoming", scheduledAt: at, tz: "UTC" }],
+      }),
+    ).toEqual({ kind: "match_day" });
+    expect(
+      landingStatus({
+        ...base,
+        now: late,
+        matches: [{ bucket: "upcoming", scheduledAt: at, tz: "Asia/Kolkata" }],
+      }),
+    ).toEqual({ kind: "dates", startsOn: "2026-09-01", endsOn: "2026-10-31" });
+  });
+  it("an unusable `now` yields no match day rather than throwing out of a pure helper", () => {
+    // `Date#toISOString` throws on an Invalid Date, so the match-day rung has to
+    // reach for it only after `now` has proved itself an instant.
+    expect(
+      landingStatus({
+        ...base,
+        now: new Date("not-a-date"),
+        matches: [m("completed", "2026-09-04T10:00:00Z")],
+      }),
+    ).toEqual({ kind: "finished" });
   });
 });
 

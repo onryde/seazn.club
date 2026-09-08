@@ -12,6 +12,20 @@
 // a `Msg` — a dictionary key plus params, resolved client-side with `t()`.
 import { z } from "zod";
 import { Msg, Side, Person, MatchCentreHeader } from "./match-centre-schema";
+// The tab list is DERIVED, and the refinement at the bottom of this file makes
+// that a rule the document must satisfy rather than a comment nobody enforces
+// — so the derivation itself is imported instead of restated. `matches-hub.ts`
+// is pure and imports nothing, so pulling it in costs this module nothing.
+//
+// RELATIVE, with the explicit `.ts` extension, matching the reasoning already
+// written out at `server/api-v1/schemas.ts:24-28` for its import of this
+// file's W1 sibling: that module is shared with the standalone OpenAPI
+// generator, which runs under bare `node --experimental-strip-types` with no
+// tsconfig `paths` resolution, so a `@/...` specifier throws
+// ERR_MODULE_NOT_FOUND there while resolving fine everywhere else. Nothing
+// imports THIS file from that script yet; the extension is what keeps that
+// from becoming a trap the day something does.
+import { deriveHubTabs } from "../../lib/matches-hub.ts";
 
 /** The three lists the Matches hub can show. Restated here as zod because
  *  `lib/matches-hub.ts` — which owns the same vocabulary as a client-safe
@@ -177,10 +191,41 @@ export const CompetitionHubDoc = z.object({
   leaders: z.array(LeaderBoard),
   teams: z.array(TeamCard),
   info: HubInfo,
-  /** Derived by `deriveHubTabs`, never hand-assembled. `.min(1)` because
-   *  Overview and Info always exist — an empty tab list would render a hub
-   *  with no way into it. */
+  /** Derived by `deriveHubTabs`, never hand-assembled — enforced by the
+   *  refinement below, not merely asserted here. `.min(1)` because Overview
+   *  and Info always exist, so an empty tab list would render a hub with no
+   *  way into it. */
   tabs: z.array(CompetitionHubTabId).min(1),
+}).superRefine((doc, ctx) => {
+  // A document that offers a Matches tab beside an empty `matches` array is
+  // self-contradictory, and a spectator meets it as a tab that opens on
+  // nothing. `deriveHubTabs` is the ONLY thing that may produce this list, so
+  // the check is simply "did it". That makes the invariant hold at the seam
+  // rather than in whichever builder happens to be written next, and it is a
+  // self-consistency check: it cannot fire unless a builder is wrong.
+  //
+  // Safe to read the fields unguarded — zod 4 skips an object-level refinement
+  // entirely when any field failed with `invalid_type` (measured), so `doc`
+  // here always has every field at the right type. A field that failed a CHECK
+  // (`tabs` failing `.min(1)`, say) does still reach this, which is why the
+  // empty-tabs case reports two issues rather than one.
+  const expected = deriveHubTabs({
+    matches: doc.matches.length,
+    tables: doc.tables.length,
+    leaderRows: doc.leaders.reduce((n, board) => n + board.rows.length, 0),
+    teams: doc.teams.length,
+  });
+  const same =
+    doc.tabs.length === expected.length && doc.tabs.every((t, i) => t === expected[i]);
+  if (!same) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["tabs"],
+      message:
+        `tabs must be deriveHubTabs()'s output for this document's own contents — ` +
+        `expected [${expected.join(", ")}], got [${doc.tabs.join(", ")}]`,
+    });
+  }
 });
 
 export type CompetitionHubDocT = z.infer<typeof CompetitionHubDoc>;
