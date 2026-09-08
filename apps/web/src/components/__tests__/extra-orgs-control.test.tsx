@@ -176,6 +176,18 @@ describe("ExtraOrgsControl — the server's floor bounds the control", () => {
     expect(free.text()).not.toContain("You can't go below");
   });
 
+  // F16: `floorNote` is keyed on `min` itself, and `min: 1` is the smallest
+  // and most common floor there is. The flat string read "that many
+  // organisations ... are standing", plural for one.
+  it("pluralises the floor note correctly at min: 1", () => {
+    const floored = mount({ initialCount: 1, min: 1 });
+    expect(floored.text()).toContain(
+      "You can't go below 1 — that organisation in this group is standing " +
+        "on an extra organisation. Move it out of the group first.",
+    );
+    expect(floored.text()).not.toContain("that many organisations");
+  });
+
   it("stops the + button at the ceiling, and says why a typed one is refused", () => {
     // Degrades to an enabled no-op rather than a wrong charge, so it is the
     // mildest failure here — but an enabled control that ignores the click is
