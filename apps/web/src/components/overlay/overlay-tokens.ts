@@ -126,9 +126,14 @@ export const paletteFor: (sportKey: string) => SportPalette = resolveSportPalett
  * tokens that is a LIGHT colour in six palettes and a DARK one in five, so no
  * single ink clears 4.5:1 across the eleven sports — six fail either way. A
  * fixed `#fff5f5` measures 2.35–3.07 on the six light-red palettes; a fixed
- * `board` measures 3.01–4.46 on the five dark-red ones. The maximum of the two
- * clears 4.5 for ten of eleven, with hockey at 4.46 recorded as a named
- * exception in OVERLAY_PAIR_EXCEPTIONS rather than waived.
+ * `board` measures 3.01–3.84 on the five dark-red ones. The maximum of the two
+ * clears 4.5 for ten of eleven. The one miss is HOCKEY at 4.46 — and hockey is
+ * a LIGHT-red palette, so its 4.46 is on the `board` side of the six, whose
+ * range is 4.46–7.35; it is not the top of the five above. Recorded as a named
+ * exception in OVERLAY_PAIR_EXCEPTIONS rather than waived. `_THEMES.md` §5 —
+ * the paragraph opening "The `dismissal` ink is derived, not fixed" — lists all
+ * eleven measurements; this is the compressed restatement, and it previously
+ * wrote the two groups' ranges as one.
  *
  * Ties go to the light candidate, which only arises if a palette ever sets
  * `dismissal` equidistant from both — no sport does today.

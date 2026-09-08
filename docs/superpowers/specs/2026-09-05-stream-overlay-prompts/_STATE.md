@@ -4,8 +4,9 @@
 action in order.
 
 **Implementation HAS started.** The T1 wave is complete and sits in **PR #752**
-on branch `feat/stream-overlay`: ten commits, four tasks, the first code this
-programme has shipped under `apps/web`. Nothing under `packages` or `db` is
+on branch `feat/stream-overlay`: four tasks plus a post-review fix round, the
+first code this programme has shipped under `apps/web`. Nothing under
+`packages` or `db` is
 touched, and no migration exists yet. Anything below that says "no code exists"
 or "docs only" describes the tree before 2026-09-08 and is marked where it
 survives as a prior record.
@@ -49,8 +50,11 @@ Last updated: 2026-09-08, **T1 closed and in PR #752**; W1 is next.
 - **Plan review:** `_REVIEW-2026-09-08-plans.md` (reviewer pass over the T1
   plan and the amended W1 plan; fixes applied before the second merge).
 - **T1 IS DONE (2026-09-08).** All four tasks executed from
-  `../../plans/2026-09-07-streaming-t1.md`; ten commits on
-  `feat/stream-overlay`, in **PR #752**. Owner picks **1A · 2A · 3A · 4A · 5C**
+  `../../plans/2026-09-07-streaming-t1.md`, on `feat/stream-overlay`, in
+  **PR #752**. The commits are the range `0cc4614b8..feat/stream-overlay` —
+  count them with `git log --oneline 0cc4614b8..feat/stream-overlay` rather than
+  trusting a number written in a document, because each fix round appends one.
+  Owner picks **1A · 2A · 3A · 4A · 5C**
   plus the ink-hairline addendum are in `_THEMES.md`; the full close — gate
   numbers, mutant killer lists, findings, deferred minors — is the
   "## 2026-09-08 — T1 wave CLOSED (PR-T1 #752)" section of `_INDEX.md`, which is
@@ -65,7 +69,7 @@ Last updated: 2026-09-08, **T1 closed and in PR #752**; W1 is next.
 ## T1 — what shipped, and what it handed forward (2026-09-08)
 
 `_INDEX.md`'s "## 2026-09-08 — T1 wave CLOSED (PR-T1 #752)" is the single
-authority for the detail: the ten commits, the gate numbers, the mutant killer
+authority for the detail: the commit table, the gate numbers, the mutant killer
 lists, the findings and the deferred minors. Repeated here only so a resume
 read knows what exists and what is owed.
 
@@ -165,10 +169,25 @@ prior record.
   Nothing so far needed it; Task 3's smoke suite may.
 - **The 2026-09-07 corpus re-pins are ALREADY LANDED — do not re-pin them.**
   Verified 2026-09-08 (T1 Task 0 Step 8a) on an untouched tree; they were
-  committed at `8d31cb34f` / `c8dc4d07f` and reached `main`, so a rewrite would
-  stage nothing. The five checks and what they printed: `"re-pinned 2026-09-07
-  @ fb99bbd4c"` in `W1-step-one.md` → **8** (floor is 8 — no margin, so a later
-  edit that drops one line takes this below its floor silently); `"eleven"` in
+  committed at `8d31cb34f` / `c8dc4d07f` and their CONTENT is on `main`, so a
+  rewrite would stage nothing. **The obvious ancestry check disagrees with the
+  word "reached", and that is expected, not a missing merge**: `8d31cb34f` IS an
+  ancestor of `origin/main`, `c8dc4d07f` is NOT — it was squash-merged, so
+  `main` carries its changes under a different sha and
+  `git merge-base --is-ancestor c8dc4d07f origin/main` returns false. Verify
+  these by content, never by ancestry alone.
+
+  The five checks and what they printed: `"re-pinned 2026-09-07
+  @ fb99bbd4c"` in `W1-step-one.md` → **7 as of the final-review fix round,
+  2026-09-08; it was 8** — scope 4's entitlement migration lost its marker when
+  that line was rewritten from the reserved `V401` to the `V<next+1>` RULE, and
+  the re-pin it recorded is exactly what the rule supersedes. **The floor moves
+  DOWN to 7 rather than the check reading as a regression**, and the general
+  form is: when a marked line is deliberately rewritten, re-derive the floor and
+  say why here — never restore a marker to satisfy a count, which turns the
+  sentinel into decoration. (The remaining margin is still zero, so the original
+  warning stands: an accidental drop takes this below its floor silently.)
+  `"eleven"` in
   `_RULES.md` → **3** (R16 widened); `"run-sheet-row.tsx"` in `W1-step-one.md`
   → hit at `:29` (RP1 re-pinned; the mount is the SYMBOL
   `data-testid="run-sheet-edit-time"`, never a line number); `"set point"` in

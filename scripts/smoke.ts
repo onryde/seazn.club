@@ -846,8 +846,10 @@ async function main() {
   await v3ContentApiSuite(admin, org2.id, renamed.slug);
 
   // --- streaming T1: the routes the visual gate photographs still answer
-  // with the markup its manifest awaits (`main h1`, `table`). Same pro org —
-  // the embed widget 404s below Pro.
+  // with the markup its manifest awaits (`[data-testid=mc-score-0]` and
+  // `table`; the suite's own JSDoc says why a heading probe is unsafe — the
+  // branded 404 renders an `<h1>` in the same `<main>`). Same pro org — the
+  // embed widget 404s below Pro.
   await visualSeedRoutesSuite(admin, renamed.slug);
 
   // --- the above-Pro rung (Task 11): community's save-point window and its

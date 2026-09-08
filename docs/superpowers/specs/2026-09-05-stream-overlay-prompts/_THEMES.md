@@ -181,9 +181,23 @@ detail band:      height 51, padding 0 33, gap 33, background board @ 90 %
 ```
 
 **The hairline is `--sport-ink`, not `--sport-board`, and it — not the fill —
-is what satisfies WCAG 1.4.11 here.** This applies to both themes: the three
-discipline card chips and the live dot, in §3's bar and §4's bug alike, each
-carry a 1-px `--sport-ink` hairline (owner 2026-09-08, "apply your rec").
+is what satisfies WCAG 1.4.11 here.**
+
+**What the owner approved is narrower than what this sheet draws, and the two
+must not be read as one thing.** The recommendation put to them, and approved
+verbatim with "apply your rec" (2026-09-08), was: *"the red-card chip and the
+live dot take an `ink` hairline, not a `board` one"* — those two elements, the
+two that fail their floor. **That is the ruling.**
+
+This sheet then applies the same hairline to the `advisory` and `caution` chips
+as well, so that all three discipline chips share one treatment in §3's bar and
+§4's bug alike rather than the red one reading as an exception. **That extension
+is the sheet's own consistency choice, not the owner's ruling.** It is separable
+and reversible on its own: for those two chips the hairline is a boundary device
+rather than a requirement, because both fills already clear 3:1 unaided (see the
+`advisory`/`caution` note below). The owner's per-screen sign-off binds on the
+red-card chip and the live dot; the other two chips are put to them as this
+sheet's proposal.
 
 The pad's standing rule reads the other way, and deliberately so.
 `components/v2/scorepad/v3/tokens.ts:267-270` says of the pad's swatch:

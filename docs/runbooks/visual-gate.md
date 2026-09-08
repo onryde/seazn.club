@@ -122,14 +122,33 @@ overflow hides behind it") applied literally.
 
 1. Append a group to `manifest.json`. Use an existing `seed` kind if its
    placeholders suffice. Give the row an `awaitSelector` only that page draws.
-2. Need new state? Add ONE seed kind to `e2e/visual/seeds.ts` (`SEED_KINDS`,
-   `SEED_PARAMS`, `seedFor`). That file is the only harness file a wave edits.
+   **Give the group at least TWO rows and declare a `mustDiffer` pair between
+   them** (the overlay's `bar` and `bug` are the obvious pairing). The
+   "every picture is identical — nothing opened" guard (`capture.spec.ts:290`)
+   is gated on `group.mustDiffer.length > 0`, and a single-row group cannot have
+   a pair — so a one-row group escapes that guard entirely and a harness that
+   photographed the same blank state twice would sign itself off.
+2. Need new state? Adding ONE seed kind touches **two** harness files, not one:
+   its entry in `SEED_KINDS` **and** in `SEED_PARAMS` — both of which live in
+   `e2e/visual/manifest.ts:17-22`, because that module is pure and the manifest
+   unit test imports it — and then its recipe as a `seedFor` case in
+   `e2e/visual/seeds.ts` (`seeds.ts:10-11` says exactly this in its own header).
+   An earlier revision of this step named `seeds.ts` for all three and called it
+   "the only harness file a wave edits"; that was wrong in the one instruction
+   this section exists to give.
 3. `npx vitest run src/lib/__tests__/visual-manifest.test.ts` — a dangling
    reference, an unresolved placeholder, an unknown check name or a
    bare-heading `awaitSelector` fails here, in seconds.
-4. Run the harness. It will tell you every box its checks excused; put those
+4. Extend `visualSeedRoutesSuite` (`scripts/smoke.ts:16561`) if your row adds a
+   route or an `awaitSelector`. That suite is the manifest's server-side
+   counterpart — it proves the routes still answer with the markup the manifest
+   awaits, through HTTP rather than a browser — but it **hardcodes both routes
+   and both selectors** (`[data-testid=mc-score-0]` and `table`). It does not
+   read `manifest.json`, so a new manifest row gets no smoke counterpart until
+   somebody adds one, and nothing reds to say so.
+5. Run the harness. It will tell you every box its checks excused; put those
    in the row's `exempt` and read each one before you do.
-5. OPEN the pictures and write one verdict line per picture in the PR. A green
+6. OPEN the pictures and write one verdict line per picture in the PR. A green
    run is not a sign-off; the pictures are.
 
 A red `truncate-chain` / `rails-a11y` / `hit-targets` row on a page your wave
@@ -188,9 +207,34 @@ characters.
   user-facing string owed in all four locales. The manifest entry declares
   `offenders: ["div"]` and is what will tell the fixing wave to restore the
   check — the row reds the moment that set changes in either direction.
-- **`live-score.tsx:245` still has the `truncate` without `min-w-0`** that this
-  gate found and that was fixed at `match-centre/court-card.tsx:172`.
-  Identical span, identical row-flex parent. Left alone because `<LiveScore>`
-  is the retired scorebug (`court-card.tsx` replaced it in spectator W1) and no
-  photographed route renders it — so the gate cannot see it, and this bullet is
-  the only record that it is there.
+- **`components/public-site/live-score.tsx:245` still has the `truncate`
+  without `min-w-0`** that this gate found and that was fixed at
+  `match-centre/court-card.tsx:172-184`. Identical span, identical row-flex
+  parent: a `flex items-baseline justify-between gap-3` `<li>` whose other item
+  is `shrink-0`.
+
+  **It is LIVE, on two public paths.** An earlier revision of this bullet said
+  `<LiveScore>` was "the retired scorebug" and that nothing renders it. Half of
+  that is true and it is the wrong half. Task 14 of spectator W1 retired the
+  `LiveScore` **wrapper** (transport + body, composed for the legacy fixture
+  page); it did not retire the **body**, and the defective span is in the body:
+
+  - `match-centre/summary-tab.tsx:58` mounts `LiveScoreBody` with
+    `suppressScorebug={!cricket}` (`:75`), so the branch is suppressed for a
+    non-cricket fixture and **renders for pre-play cricket** — which is exactly
+    the state that fallback exists to serve.
+  - `match-centre/match-centre.tsx:90` mounts it with **no `suppressScorebug`
+    prop at all**, and the prop defaults to `false` (`live-score.tsx:110`), so
+    the no-document / empty-`tabs` fallback renders it too.
+
+  The span sits inside the `{suppressScorebug ? null : …}` branch opened at
+  `live-score.tsx:194`. Pre-existing on `main`, not introduced by T1, and
+  routed to W1.
+
+  What IS true, and is all this gate can claim: **no row in T1's manifest
+  photographs it.** Both groups seed a decided FOOTBALL fixture, whose Summary
+  tab is precisely the `!cricket` case that suppresses the scorebug. So the
+  gate cannot see it — which is why it will sit there, not evidence that it is
+  harmless. **Settle it by driving the product at 320 with a long cricket
+  entrant name, not by reading this bullet**: this entry is a code read, and a
+  read is not a run.

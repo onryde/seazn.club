@@ -271,7 +271,7 @@ with `model: opus`.
 | `app/layout.tsx:54`, `global-error.tsx:17` | the only two `<html>` in `src/app` | `slideshow/layout.tsx:20` and `embed/layout.tsx:26` return a `<div>` — a nested layout cannot restyle `<body>` by props; the overlay layout injects a global `<style>` for `html, body { background: transparent }` scoped to its segment |
 | `…/v3/sport-theme.ts:557` | `sportThemeStyle(skinKey: string): CSSProperties \| undefined` | `undefined` when no palette entry (cricket, generic → `:root` defaults) |
 | `sport-theme.ts:77,508` | `SPORT_TOKENS = ["board","board-2","ink","led","advisory","caution","dismissal"]`, `sportCustomProperty(token)` → `--sport-${token}` | seven tokens; palettes for 9 keys (football, hockey, icehockey, tennis, badminton, tabletennis, volleyball, boardgame, carrom) |
-| `app/globals.css:1014-1022` | `:root { --sport-* }` defaults | 20 `var(--sport-` reads across 19 `.pad-*` rules; overlay adds its own classes |
+| `app/globals.css:1135-1141` | `:root { --sport-* }` defaults | 20 `var(--sport-` reads across 19 `.pad-*` rules; overlay adds its own classes |
 | `components/v2/stages-panel.tsx:73` | `interface FixtureRow` | DATA type: `id, stage_id, pool_id, round_no, seq_in_round, fixture_no, home/away_entrant_id, home/away_slot_label, scheduled_at, venue, court_label, court_id, court_name, status` |
 | `stages-panel.tsx:1578-1605` | `FixtureLine({ fixture: FixtureRow, href, entrantNames, canEdit, tz, boardSlotOptions, venues, courtNames, onRescheduled })` | the row COMPONENT the panel mounts from (spec §6 said `FixtureRow`) |
 | `stages-panel.tsx:1745-1753` | `<button data-testid="fixture-schedule-toggle" onClick={() => setEditing(!editing)}>` | labels `msg("schedule.close")` / `msg("schedule.editTime")` / `msg("schedule.schedule")`; gated `canEdit && fixture.status === "scheduled"` |
@@ -378,6 +378,24 @@ design §13 — this file is their full text.
   - `plans/2026-09-07-streaming-t1.md:22` and `:133` — historical only (T1 is
     done and added no migration), but they say the same thing and will be read
     by anyone auditing the wave.
+  - **`W1-step-one.md` itself — MISSED by the sweep above and FIXED in the
+    final-review fix round, 2026-09-08.** Its scope 3 named
+    `V400__fixture_stream_url.sql` and its scope 4 named
+    `V401__streaming_overlay_entitlement.sql` as literal files to CREATE — in
+    the one document this branch already edits, which is why "five more places
+    this wave could not edit" undercounted. Both now state the RULE (`V<next>`
+    off `ls db/migration/deltas | sort -V | tail -1`, re-read at every rebase)
+    and name `V400`/`V401` only as numbers NOT to use. **The lesson, which is
+    the reason this bullet exists rather than a silent edit: a named list of
+    stale lines is a SAMPLE.** Re-sweep the pattern yourself before trusting the
+    enumeration above — the same re-sweep also turned up two files the list does
+    not name. `_STATE.md` (`:30`, `:142`, `:237-239`, `:293-294`) is fine: every
+    mention there is describing the staleness, not reserving a number.
+    `R1-relay-core.md:60-61` is fine too but is the closest to a trap —
+    "the design intends V401 (keys) and V402 (sessions + credits)" — and it
+    stands only because the same sentence says both are "next free at rebase"
+    and puts the `ls … | tail -1` FIRST. **R1 must still re-read the tail; those
+    two numbers are illustrative and are now wrong by at least one.**
 - **FS3** `.claude/worktrees/stream-overlay` was an unregistered 15 MB residue
   with no `.git`; moved to `stream-overlay.stale-20260907`, worktree re-added.
 - **FS4** desk W2 MERGED (#725); the live contention on `run-sheet-row.tsx` is
@@ -524,8 +542,15 @@ rest is the comment recording why). **No migration, no dictionary key, no
 user-facing string**, so none of the four-locale, OpenAPI or Flyway gates had
 anything to catch.
 
-**Branch** `feat/stream-overlay`, **ten commits**, four tasks, every task
-reviewed to clean:
+**Branch** `feat/stream-overlay`, four tasks, every task reviewed to clean. Its
+commits are the range `0cc4614b8..feat/stream-overlay`; **read the count from
+`git log --oneline 0cc4614b8..feat/stream-overlay`, never from a number written
+here** — a fix round appends a commit and cannot append to a count already
+committed in prose, which is how "ten commits" survived into an eleven-commit
+branch on four lines across this file and `_STATE.md`. The table below runs to
+the eleventh; the
+final-review fix round that follows it appends its own, and the range is what
+shows them:
 
 | Commit | Task | What |
 |---|---|---|
@@ -539,6 +564,7 @@ reviewed to clean:
 | `2f8886a61` | 1 | T1a addendum — the card chips and live dot take an ink hairline |
 | `db70e9713` | 2 | the ink hairline carries the boundary; the two fills are *covered*, not waived |
 | `be36620db` | 3 | `knownDefects` honoured one check and lied about the other four |
+| `64bf49e84` | — | T1 close: findings, mutant killer lists, and the migration RULE (this section) |
 
 ### The owner's decisions (T1a)
 
@@ -554,12 +580,23 @@ page "T1 — five decisions"). Picked:
 | 4 | Decided / void frame | **A — result in place** | the post-whistle arrival sees the score AND why it ended, in the frame the live viewer saw; nothing jumps |
 | 5 | Slab ink | **C — split by luminance** | the slab writes in whichever of `#fff5f5` and the sport's own `board` measures higher on that sport's `dismissal` (§5) |
 
-**A sixth ruling, taken separately** (owner: *"apply your rec"*, 2026-09-08):
-**the three discipline card chips and the live dot take a 1-px `--sport-ink`
-hairline**, and it is the hairline — never the fill — that carries the WCAG
-1.4.11 boundary. `_THEMES.md` §2 (`:126-141`), §3 (`:183-186`, `:219`) and §4
-(`:314`, `:327`) are the binding text. **This ruling is what closes two contrast
-findings**, and it creates an e2e obligation recorded below.
+**A sixth ruling, taken separately** (owner: *"apply your rec"*, 2026-09-08).
+The recommendation put to them, and the exact extent of what they approved:
+**the red-card chip and the live dot take a 1-px `--sport-ink` hairline, not a
+`board` one** — those two, the two that fail their floor — and it is the
+hairline, never the fill, that carries the WCAG 1.4.11 boundary. **This ruling
+is what closes two contrast findings**, and it creates an e2e obligation
+recorded below.
+
+`_THEMES.md` then extends the same hairline to the `advisory` and `caution`
+chips so all three discipline chips share one treatment. **That widening is the
+sheet's own consistency choice and is not part of the ruling** — it is
+separable, and for those two the hairline is a boundary device rather than a
+requirement (`_THEMES.md:221-223`: both fills clear 3:1 unaided). Said here
+because this feeds the owner's per-screen sign-off, which binds on the red-card
+chip and the live dot and takes the other two as a proposal. `_THEMES.md` §2
+(`:126-141`), §3 (`:183-200`, `:233`) and §4 (`:328`, `:341`) are the binding
+text for the drawing.
 
 ### Gate numbers — measured, on tree `be36620db`
 
@@ -801,15 +838,34 @@ slab only. **If W2 extends that treatment to red-card slabs, football measures
 re-derived for the new pair. This is an owner question for W2's planning, not
 for T1, and it must be asked before W2 paints a red-card slab.
 
-**FS-T1j — `court-card.tsx` ships with NO pre-merge test.** The D4 fix (a
-`min-w-0` on the truncate chain) is a production change on a `main` page. Its
-only regression witness is the visual gate — and `.github/workflows/e2e.yml`
-triggers on push to `main` only, never on pull requests. So the change is
-covered **after** merge, not before. "Every change ships a test that fails
-without it" is TRUE here and still does not mean pre-merge coverage. The only
-pre-merge e2e path this repo has is `workflow_dispatch` with `pr=<n>`, and it
-must be run against PR-T1 before merge. Locally the two spectator walkthroughs
-that cover the surface were run and returned 19 passed / 0 failed.
+**FS-T1j — `court-card.tsx` shipped with no pre-merge test. CLOSED in the
+final-review fix round, 2026-09-08.** The D4 fix (a `min-w-0` on the truncate
+chain) is a production change on a `main` page, and its only regression witness
+was the visual gate — which `.github/workflows/e2e.yml` runs on push to `main`
+only, never on pull requests. So the change was covered **after** merge, not
+before: "every change ships a test that fails without it" was TRUE and still did
+not mean pre-merge coverage.
+
+Closed by two unit tests in
+`components/public-site/match-centre/__tests__/court-card.test.tsx` (14 → 16
+tests in that file), following the existing node-env idiom in that same file and
+in `components/v2/__tests__/phone-disclosure.test.tsx`: `renderToStaticMarkup` of
+the real `CourtCard`, then anchored class-list assertions on the rendered markup.
+**"The visual gate is the only witness" was a choice, not a constraint** — the
+repo already had this idiom in three places, and a review found them in minutes.
+Killed by four hand-applied mutants, each restored from a `cp -p` backup: drop
+`min-w-0` (both tests red), change it to `max-md:min-w-0` (both red — this is why
+the assertions anchor on `(?:^|\s)…(?:\s|$)` and not `\bmin-w-0\b`, which matches
+inside the variant), turn the row `flex` into `block` (both red), drop the score
+span's `shrink-0` (one red). Total stayed at 16 in every run, so no mutant read
+as a survivor by breaking collection.
+
+What this does NOT close: the 320px PAINT. There is no jsdom here and jsdom does
+no layout, so the class contract is what these tests pin; the picture stays the
+visual gate's job. The only pre-merge e2e path this repo has is
+`workflow_dispatch` with `pr=<n>`, and it must still be run against PR-T1 before
+merge. Locally the two spectator walkthroughs that cover the surface were run and
+returned 19 passed / 0 failed.
 
 **FS-T1k — `auth: true` and `seed: "none"` are inert by ruling, and W1-E's brief
 must name them as first-use.** Both are consumed by real harness code
