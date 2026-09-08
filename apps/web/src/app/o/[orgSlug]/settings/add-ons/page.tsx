@@ -44,15 +44,15 @@ export default async function AddOnsSettingsPage({
   // during dunning; a receipt is not. The degradation is said in words below
   // instead, so the page never shows two caps that disagree.
   //
-  // `plural()`, not `t()`, on the unlimited half (W8 F2). A group that has never
-  // added a second organisation is the commonest one there is, and a flat key
-  // read "Using 1 organisations on this bill". The finite half keeps `t()`: its
-  // sentence carries a cap as well as a count, and "1 of 5 organisations" is
-  // already correct at every count it can hold.
+  // `plural()`, not `t()`, on BOTH halves (W8 F2, then F16 for this one). A
+  // group that has never added a second organisation is the commonest one
+  // there is, and a flat key reads "Using 1 organisations on this bill" — and
+  // a Community group's cap is 1 (plan_entitlements orgs.max_owned), so the
+  // ordinary Community rendering hit this too: "Using 1 of 1 organisations".
   const capSummary =
     view.orgCap === null
       ? plural(dict, "addOns.cap.summaryUnlimited", view.liveOrgCount, locale)
-      : t(dict, "addOns.cap.summary", { count: view.liveOrgCount, cap: view.orgCap });
+      : plural(dict, "addOns.cap.summary", view.liveOrgCount, locale, { cap: view.orgCap });
 
   return (
     <SettingsShell orgSlug={orgSlug} context={navCtx} active="add-ons" dict={dict} showNav={!viaPayer}>

@@ -373,6 +373,19 @@ describe("Add-ons page — the numbers it hands the control", () => {
     expect(text).toContain("Using 1 organisation on this bill");
     expect(text).not.toContain("Using 1 organisations");
   });
+
+  /**
+   * F16. The FINITE-cap sentence (`addOns.cap.summary`) had the identical
+   * defect as F2's unlimited half, in the state a plain Community group hits
+   * ordinarily: a cap of 1 (`plan_entitlements` orgs.max_owned) and a count of
+   * 1 read "Using 1 of 1 organisationS on this bill". Same positive/negative
+   * pair as the case above, on the branch that carries a `cap` as well.
+   */
+  it("counts a single-of-one cap in the singular, not 'Using 1 of 1 organisations'", async () => {
+    const { text } = await render({ liveOrgCount: 1, orgCap: 1 });
+    expect(text).toContain("Using 1 of 1 organisation on this bill");
+    expect(text).not.toContain("Using 1 of 1 organisations");
+  });
 });
 
 describe("Add-ons page — a payer who is not a member of this club (v17 gap #333)", () => {

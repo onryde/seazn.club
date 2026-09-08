@@ -104,6 +104,17 @@ describe("mapSaveError — plain-message usecase 422s (finding 2 guard, characte
     expect(mapSaveError(err).field).toBe("fee_cents");
   });
 
+  // F15 — the two guards used to throw an IDENTICAL string, so this case's
+  // message would previously route to "fee_cents" (the case above) instead.
+  it("solo sign-up fee below Stripe's minimum charge routes to free_agent_fee_cents, NOT fee_cents (server/usecases/registrations.ts:1856)", () => {
+    const err = new ApiV1Error(
+      "Card entry fees for a solo sign-up must be at least 1.00 (or 0 for free)",
+      422,
+      "ERROR",
+    );
+    expect(mapSaveError(err).field).toBe("free_agent_fee_cents");
+  });
+
   it("capacity above the plan's entrant limit — dynamic number, the pattern excludes it on purpose (server/usecases/registrations.ts:1043)", () => {
     const err = new ApiV1Error(
       "Capacity exceeds your plan's entrant limit (128) — raise the plan or lower the capacity",

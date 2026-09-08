@@ -7,7 +7,7 @@ import { extraOrgsErrorKey } from "@/lib/extra-orgs-copy";
 import { formatMinor, type Currency } from "@/lib/currency";
 // Client-safe i18n: `@/lib/i18n` pulls in `server-only`, which breaks the build
 // for a "use client" island. Same convention as buy-credits.tsx / pass-upgrade.
-import { t } from "@/lib/i18n-runtime";
+import { plural, t } from "@/lib/i18n-runtime";
 import type { Dict, Locale } from "@/lib/i18n-constants";
 
 /**
@@ -199,7 +199,10 @@ export function ExtraOrgsControl({
 
       {min > 0 && (
         <p className="mt-3 text-sm text-slate-500">
-          {t(dict, "addOns.extraOrg.floorNote", { min })}
+          {/* F16 — plural, keyed on `min` itself: at the smallest and most
+              common floor (min=1) the flat string read "that many
+              organisations ... are standing", plural for one. */}
+          {plural(dict, "addOns.extraOrg.floorNote", min, locale, { min })}
         </p>
       )}
 

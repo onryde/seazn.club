@@ -216,6 +216,56 @@ describe.skipIf(!HAS_DB)("free_agent_fee_cents", () => {
     const settings = await getRegistrationSettings(auth, ctx.divisionId);
     expect(settings.free_agent_fee_cents).toBe(1000);
   });
+
+  // F20 — the `method === "stripe"` conjunct on the Stripe-minimum guard
+  // (registrations.ts:1848) had no witness of its own: every prior case in
+  // this file either goes through `seedPaidTeamDivision`'s "stripe" default
+  // and hits the numeric half, or is offline with a legal fee. Deleting the
+  // conjunct alone would make this reject — an offline division has no
+  // Stripe minimum to enforce, so a sub-£1 solo fee must be accepted AND
+  // actually charged.
+  it("accepts a sub-100¢ solo fee on an OFFLINE division — the Stripe minimum does not apply", async () => {
+    const { auth } = await seedOrg();
+    const competition = await createCompetition(auth, {
+      name: "Fee Cup " + randomUUID().slice(0, 6),
+      visibility: "public",
+      branding: {},
+      starts_on: "2026-09-15",
+      ends_on: "2026-09-20",
+    });
+    const division = await createDivision(auth, competition.id, {
+      name: "Open " + randomUUID().slice(0, 6),
+      sport_key: "generic",
+      variant_key: "score",
+      config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
+    });
+    await putRegistrationSettings(auth, division.id, {
+      enabled: true,
+      entrant_kind: "team",
+      fee_cents: 6000,
+      free_agent_fee_cents: 50,
+      allow_free_agents: true,
+      payment_method: "offline",
+      form_fields: [],
+      opens_at: null,
+      closes_at: null,
+      capacity: null,
+      refund_lock_at: null,
+    } as never);
+
+    const [row] = await sql<{ org_slug: string; comp_slug: string }[]>`
+      select o.slug as org_slug, c.slug as comp_slug
+      from competitions c join organizations o on o.id = c.org_id
+      where c.id = ${competition.id}`;
+    const ctx = {
+      divisionId: division.id,
+      competitionId: competition.id,
+      orgSlug: row.org_slug,
+      compSlug: row.comp_slug,
+    };
+
+    expect(await submitAndPrice(ctx, { free_agent: true })).toBe(50);
+  });
 });
 
 

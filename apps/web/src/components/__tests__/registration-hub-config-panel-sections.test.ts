@@ -12,10 +12,11 @@ import {
 describe("SECTION_FIELDS — every ConfigFieldKey is covered exactly once", () => {
   // RS007/V380 added age_cutoff_month/age_cutoff_day/eligibility_note (15 -> 18).
   // RS012/V389 added place_by_at (18 -> 19).
-  it("covers all 19 known fields with no duplicates across sections", () => {
+  // F15 added free_agent_fee_cents (19 -> 20).
+  it("covers all 20 known fields with no duplicates across sections", () => {
     const all = SECTION_IDS.flatMap((id) => SECTION_FIELDS[id]);
-    expect(all).toHaveLength(19);
-    expect(new Set(all).size).toBe(19);
+    expect(all).toHaveLength(20);
+    expect(new Set(all).size).toBe(20);
   });
 });
 

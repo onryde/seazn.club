@@ -1845,8 +1845,15 @@ export async function putRegistrationSettings(
   // The Stripe minimum applies to whatever is actually CHARGED, and a solo
   // sign-up is charged this instead of fee_cents — so a division can pass the
   // fee_cents check below and still mint a checkout Stripe rejects.
+  //
+  // F15: this message must stay distinguishable from fee_cents's own
+  // "Card entry fees must be at least 1.00 (or 0 for free)" below — the two
+  // guards used to throw an IDENTICAL string, so the client's
+  // registration-hub-save-error.ts pattern table (matched by message text
+  // alone) could not tell them apart and always routed the error onto
+  // fee_cents, the wrong field, with no render site for the right one either.
   if (method === "stripe" && freeAgentFeeCents !== null && freeAgentFeeCents > 0 && freeAgentFeeCents < 100) {
-    throw new HttpError(422, "Card entry fees must be at least 1.00 (or 0 for free)");
+    throw new HttpError(422, "Card entry fees for a solo sign-up must be at least 1.00 (or 0 for free)");
   }
   if (method === "stripe") {
     if (!org.charges_enabled) {

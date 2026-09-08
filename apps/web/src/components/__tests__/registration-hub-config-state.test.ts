@@ -285,6 +285,38 @@ describe("validateConfigState", () => {
     });
   });
 
+  // F15 — mirrors the block above, on the SEPARATE guard registrations.ts
+  // runs for a solo sign-up (it is charged free_agent_fee_cents instead of
+  // fee_cents, so passing the block above says nothing about this one).
+  describe("solo card fee minimum (server: 'Card entry fees for a solo sign-up must be at least 1.00 (or 0 for free)')", () => {
+    it("null (no separate price) is fine on a card division", () => {
+      expect(
+        validateConfigState({ ...VALID_STATE, payment_method: "stripe", free_agent_fee_cents: null }),
+      ).toEqual({});
+    });
+    it("free (0) is fine on a card division", () => {
+      expect(
+        validateConfigState({ ...VALID_STATE, payment_method: "stripe", free_agent_fee_cents: 0 }),
+      ).toEqual({});
+    });
+    it("the minimum charge (100 = 1.00) is fine on a card division", () => {
+      expect(
+        validateConfigState({ ...VALID_STATE, payment_method: "stripe", free_agent_fee_cents: 100 }),
+      ).toEqual({});
+    });
+    it("1-99 cents on a card division is rejected", () => {
+      expect(
+        validateConfigState({ ...VALID_STATE, payment_method: "stripe", free_agent_fee_cents: 50 })
+          .free_agent_fee_cents,
+      ).toBe("soloCardFeeMinimum");
+    });
+    it("the SAME 50 cents is fine when paying the organiser offline — the rule is card-only", () => {
+      expect(
+        validateConfigState({ ...VALID_STATE, payment_method: "offline", free_agent_fee_cents: 50 }),
+      ).toEqual({});
+    });
+  });
+
   describe("dates order (server: 'closes_at must be after opens_at')", () => {
     it("closes strictly after opens is fine", () => {
       expect(validateConfigState(VALID_STATE)).toEqual({});

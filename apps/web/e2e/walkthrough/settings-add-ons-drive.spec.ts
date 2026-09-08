@@ -378,7 +378,10 @@ test("the tab offers no stepper until the group has a live subscription, then op
   // `extra-orgs-control.tsx` renders the Save/Cancel pair inside `dirty &&`.
   await expect(saveButton(page), "nothing to save yet").toHaveCount(0);
   await expect(
-    page.getByText(ui("addOns.extraOrg.floorNote", { min: 0 })),
+    // F16 split floorNote into .one/.other; min: 0 is never rendered
+    // either way (the component gates on `min > 0`), so `.other` here
+    // only has to be A valid key — it is never what's being asserted.
+    page.getByText(ui("addOns.extraOrg.floorNote.other", { min: 0 })),
     "no organisation is standing on a rider, so no floor note",
   ).toHaveCount(0);
 });
@@ -740,7 +743,9 @@ test("a group that already holds riders opens at what it holds, and cannot reduc
       "1",
     );
     await expect(
-      page.getByText(ui("addOns.extraOrg.floorNote", { min: 1 })),
+      // F16: min: 1 renders the SINGULAR form now ("that organisation ...
+      // is standing"), not the flat plural string this used to match.
+      page.getByText(ui("addOns.extraOrg.floorNote.one", { min: 1 })),
       "…and the page says why, naming that number",
     ).toBeVisible();
 

@@ -93,6 +93,8 @@ function validationMessage(issue: ConfigValidationIssue, msg: Msg): string {
       return msg("reg.hub.config.feeCentsRangeError");
     case "cardFeeMinimum":
       return msg("reg.hub.config.cardFeeMinimumError");
+    case "soloCardFeeMinimum":
+      return msg("reg.hub.config.soloCardFeeMinimumError");
     case "datesOrder":
       // Reuses the pre-existing (previously unused) key rather than minting
       // a near-duplicate — same wording the pre-deletion component showed
@@ -1091,6 +1093,15 @@ export function MoneySection({
           <span className="mt-1 block text-xs text-slate-500">
             {msg("reg.hub.config.soloFeeHint")}
           </span>
+          {/* F15 — this input had no render site at all: a real
+              free_agent_fee_cents 422 rendered onto fee_cents, the wrong
+              field, because the two guards used to throw an identical
+              message and nothing here could show the right one anyway. */}
+          {errors.free_agent_fee_cents && (
+            <p data-field-error="free_agent_fee_cents" role="alert" className="mt-1 text-xs text-red-600">
+              {errors.free_agent_fee_cents}
+            </p>
+          )}
         </label>
       )}
       {/* RS005 F4: only ever a WARNING about entries already queued, never a
