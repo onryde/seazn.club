@@ -115,9 +115,9 @@ Facts the design stands on, each verified this session unless marked:
 | `grep -arn coarsen apps/web/src` returns zero — the web app never coarsens; the dual-fidelity conformance property is nowhere near this path | tree | E ac85c70 |
 | `resolveVenueTz(divisionTz, orgTz)`; division tz = `schedule_settings.tz`, idiom `coalesce(ss.tz, o.timezone,'UTC')` | `apps/web/src/lib/tz.ts:44`; `officials.ts:707-711` | E fb99bbd4c / ac85c70 |
 | The five derivations are already a shared module | `apps/web/src/lib/public-site.ts:290 setBreakdown, :319 periodBreakdown, :338 matchStrength, :352 disciplineList, :373 servingSide` | E fb99bbd4c |
-| Seven sport tokens `board, board-2, ink, led, advisory, caution, dismissal`; `SPORT_TONES` | `apps/web/src/components/v2/scorepad/v3/sport-theme.ts:77` and `:87`; root values `app/globals.css:1014-1022` (advisory `#16a34a`, caution `#d97706`, dismissal `#dc2626`, LED `#9ae600`) | E fb99bbd4c |
+| Seven sport tokens `board, board-2, ink, led, advisory, caution, dismissal`; `SPORT_TONES` | `apps/web/src/components/v2/scorepad/v3/sport-theme.ts:77` and `:87`; root values `app/globals.css:1135-1141` (advisory `#16a34a`, caution `#d97706`, dismissal `#dc2626`, LED `#9ae600`; FS15 — the 2026-09-07 text said `:1014-1022`) | E b2244879f |
 | `barlowCondensed` declared with `weight: ["600", "700"]` — **800 absent** | `apps/web/src/lib/fonts.ts:7-9` | E fb99bbd4c |
-| Run-sheet row exists; edit-time control at `data-testid="run-sheet-edit-time"` | `apps/web/src/components/v2/desk/run-sheet-row.tsx:377` | E fb99bbd4c |
+| Run-sheet row exists; edit-time control at `data-testid="run-sheet-edit-time"` | `apps/web/src/components/v2/desk/run-sheet-row.tsx` — the SYMBOL is the pin (`:407` on `b2244879f` after desk W3 #740; was `:377` — FS14) | E b2244879f |
 | Competition desk W2 (the fixtures tab as a run sheet) MERGED as PR #725; **desk W3 is in flight** on `feat/competition-desk-w3-band-and-phone` (worktree `desk-w3`) and is the live contention on `run-sheet-row.tsx` | `git log main`; `git worktree list` | E fb99bbd4c |
 | Spectator W1 NOT merged: no spectator surface under `apps/web/src`; branch `feat/spectator-surface` at `2f3b4f9f4` (worktree `spectator`, locked) | grep; worktree list | E fb99bbd4c |
 | Cookie consent is mounted unconditionally in the root layout and gated by `localStorage` only — **there is no pathname or route-key mechanism** | `apps/web/src/components/cookie-consent.tsx:34,66`; `app/layout.tsx:68` | E fb99bbd4c |
@@ -172,7 +172,7 @@ source cannot be asked to correct a typo mid-match. `lang=<locale>` via
   `public_*` views; the plan pins its columns) → `getPublicFixture(orgSlug,
   compSlug, divSlug, fixtureId)` (4-arg, `server/public-site/data.ts` [E ac85c70])
   so visibility rules hold → `hasFeature(org.id, "streaming.overlay")`
-  (`lib/entitlements.ts:454` [E ac85c70]); either null → `notFound()`. Passes
+  (`lib/entitlements.ts:456` [E b2244879f]); either null → `notFound()`. Passes
   `initial: OverlayLiveData`, `sportKey`, entrant names, `realtime`
   eligibility and the resolved theme **id** to the client stage; the
   component is resolved on the client side of the boundary.
@@ -221,7 +221,9 @@ time zone) stands as written: it rides on `getPublicFixture` via
 lifted VERBATIM from `live-score.tsx:61-117` [E] (`refresh :61`, the
 `live`-includes-`scheduled` predicate `:69`, the realtime effect `:74-110`,
 the poll `:113-117`, `POLL_MS` import). New surface only: an options object
-`{ fetcher, delayMs? }` and an exported `presentationNowOffsetMs`. With
+`{ fetcher, delayMs? }` and a `presentationNowOffsetMs` FIELD on the object
+the hook returns (`LiveFixture<T>`; one authority per hook instance, never a
+module-level export — FS17, plan review 2026-09-08 finding 58). With
 `delayMs` absent the hook is byte-identical in behaviour; `LiveScore` is
 repointed in the SAME commit and `live-score.test.tsx` unchanged-and-green is
 the witness (R5, one transport). `delayMs` buffers `(receivedAt, snapshot)`
@@ -328,7 +330,7 @@ stream_url }`; 403 / 404 / 422. OpenAPI `ROUTES` entry in the same change
 ### 3.8 Organiser panel
 
 `components/v2/fixture-stream-panel.tsx` (client), mounted from
-**`desk/run-sheet-row.tsx` beside `run-sheet-edit-time` (`:377` [E])** — the
+**`desk/run-sheet-row.tsx` beside the SYMBOL `data-testid="run-sheet-edit-time"` (`:407` on `b2244879f`; FS14 — grep it, never seek a line)** — the
 09-05 text's `FixtureLine` in `stages-panel.tsx` was retired by desk W2 (RP1).
 ONE import + ONE conditional line; `sportKey` and `streamingEntitled={await
 hasFeature(auth.orgId, "streaming.overlay")}` threaded from the division page
@@ -407,13 +409,22 @@ Owner 2026-09-07: *"Can we have Wave for designing the theme and testing?"* →
 ### 4.2 T1b — the visual gate as code (lands in the same wave)
 
 `apps/web/e2e/visual/capture.spec.ts` driven by
-`apps/web/e2e/visual/manifest.json`: one row per capture — `{ id, route,
-viewport, zoom, backdrop: "light"|"dark"|null, awaitTestId, mustDifferFrom?:
-id[] }`. The spec seeds what a row needs through `apiJson`, navigates,
-awaits the testid, composites the backdrop when set, writes a PNG and its
-sha256 to the report directory, and asserts: every declared file exists;
-every `mustDifferFrom` pair differs by hash; the last assertion runs AFTER the
-state being proven (recurring class 10 — the harness's own vacuous mode).
+`apps/web/e2e/visual/manifest.json` (vocabulary amended 2026-09-08 — FS16):
+GROUPS, each `{ id, seed, rows, mustDiffer: [id, id][], controlSetEqual:
+[id, id][] }`, each row `{ id, route, viewport: { width, height }, zoom,
+backdrop: "light"|"dark"|null, awaitSelector, auth, controlRoot, checks }`.
+`awaitSelector` is a CSS selector (the public fixture page and the embed
+widgets carry no testids, so a testid-only field could not await them);
+`mustDiffer` and `controlSetEqual` are GROUP facts (a pair names two rows).
+The spec seeds what a group needs through `apiJson` (one seed kind per
+group), navigates each row in its own context, `toBeVisible` on the awaited
+element (a screenshot proves what is painted; `toBeAttached` is the fold
+rule, and the overlay has no fold), composites the backdrop when set, writes
+a PNG and its sha256 to the report directory, and asserts: every declared
+file exists and is > 1 KB; every `mustDiffer` pair differs by hash; where a
+group declares any pair, its hashes are not all one value; the last
+assertion runs AFTER the state being proven (recurring class 10 — the
+harness's own vacuous mode).
 
 - Seeded with routes that exist TODAY (`/embed`, a scorepad skin) so the
   harness is proven on real pages before the overlay exists. W1-E and R2 add
@@ -1010,12 +1021,15 @@ design or owner RULING is an `_INDEX.md` finding, never silently resolved.
 | **FS13** | RP3: "no V369 definer exists", copy source `V362:22` | false — `V369__public_fixtures_round_role.sql:18` is the latest `create or replace view public_fixtures_v` [E fb99bbd4c]; the W1 plan already used V369 |
 | FS14 | `run-sheet-edit-time` at `run-sheet-row.tsx:377` | desk W3 (#740) merged 2026-09-08 → now `:407`; the symbol is the authority, re-pin at W1 Task 6 |
 | FS12 | §5.1's plan split read as the landing state | landing rows are false for all five plans (dark, §10.4); the split is the GA-flip migration shipped with the domain entry and copy |
+| FS15 | §2 atlas pinned the `:root { --sport-* }` block at `globals.css:1014-1022` | it is `:1135-1141` on `b2244879f` (plan review 2026-09-08 finding 23); §2 corrected. The T1 plan had it right |
+| FS16 | §4.2 manifest vocabulary (`awaitTestId`, row-level `mustDifferFrom`, `toBeAttached`) | the T1 plan's vocabulary is adopted — `awaitSelector`, group-level `mustDiffer` / `controlSetEqual`, `toBeVisible` — because the seeded pages carry no testids and a pair is a group fact; §4.2, `T1-theme-and-visual-gate.md` items 5–6 amended (plan review finding 10) |
+| FS17 | §3.3 "an exported `presentationNowOffsetMs`" | it is a FIELD of the hook's returned `LiveFixture<T>` (one authority per hook instance); §3.3 amended (plan review finding 58) |
 
 ### 13.2 Re-pins against `main` `fb99bbd4c`
 
 | # | Pin | State |
 |---|---|---|
-| RP1 | panel mounts in `components/v2/desk/run-sheet-row.tsx:377` beside `run-sheet-edit-time` | verified [E fb99bbd4c] |
+| RP1 | panel mounts in `components/v2/desk/run-sheet-row.tsx` beside the symbol `data-testid="run-sheet-edit-time"` | verified [E b2244879f] — `:407` after desk W3 (#740); the number is not the pin (FS14) |
 | RP2 | migrations | V400 stream_url, V401 keys, V402 sessions — next free at rebase, re-check at Task 0 |
 | RP3 | `public_fixtures_v` copy source `V362:22` | **moved: `V369:18`** [E fb99bbd4c, FS13]; re-pin at Task 0 (`grep -al "public_fixtures_v" db/migration/deltas \| tail -1`) |
 | RP4 | catalogue rows in the v18 shape, five plans | verified [E V393] |

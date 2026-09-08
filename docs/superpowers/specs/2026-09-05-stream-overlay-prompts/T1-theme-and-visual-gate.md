@@ -86,11 +86,16 @@ own images exist and differ, reusable by W1-E, R2, desk W3 and spectator.
 
 ### T1b — the visual gate as code (lands in the SAME PR)
 
-5. **Manifest** `apps/web/e2e/visual/manifest.json` (new): an array of rows
-   `{ id, route, viewport: { width, height }, zoom?: number, backdrop:
-   "light" | "dark" | null, awaitTestId, mustDifferFrom?: string[], seed?:
-   string }`. `seed` names a seeding recipe the spec knows (`"scorepad-
-   cricket"`, `"embed-division"`); a row with no `seed` navigates as-is.
+5. **Manifest** `apps/web/e2e/visual/manifest.json` (new; vocabulary
+   amended 2026-09-08 — design FS16): GROUPS `{ id, seed, rows, mustDiffer:
+   [id, id][], controlSetEqual: [id, id][] }`, each row `{ id, route,
+   viewport: { width, height }, zoom?: number, backdrop: "light" | "dark" |
+   null, awaitSelector, auth?, controlRoot?, checks? }`. `awaitSelector` is a
+   CSS selector — the public fixture page and the embed widgets carry no
+   testids, so a testid-only field could not await them. `seed` names a
+   recipe in `e2e/visual/seeds.ts` (`"none"`, `"public-fixture"` today; W1-E
+   adds `"overlay-fixture"`); a group with `"none"` navigates as-is. A pair is
+   a GROUP fact, so `mustDiffer` / `controlSetEqual` sit on the group.
    Seeded TODAY with routes that exist: `/embed/...` (the existing embed
    layout, `app/embed/layout.tsx`) and one scorepad skin at 320 and 1280 — so
    the harness proves itself on real pages before the overlay exists. W1-E and
@@ -98,14 +103,17 @@ own images exist and differ, reusable by W1-E, R2, desk W3 and spectator.
 6. **Spec** `apps/web/e2e/visual/capture.spec.ts` (new): for every row —
    seed through `apiJson` (`e2e/helpers.ts:128`), open a fresh context at the
    row's viewport (and `deviceScaleFactor`/CSS `zoom` for the 125 % rows),
-   navigate, `toBeAttached` on `awaitTestId`, composite the backdrop when set
+   navigate, `toBeVisible` on `awaitSelector` (a screenshot proves what is
+   painted; `toBeAttached` is the fold rule and the overlay has no fold —
+   FS16), composite the backdrop when set
    (a fixed full-bleed `<div>` injected BEHIND the page's root, light
    `#f4f4f5` / dark `#0a0a0a`), screenshot to
    `<reportDir>/<id>.png` (`reportDir` = `E2E_VISUAL_DIR ??
    ../../.superpowers/sdd/shots/streaming`, the `credits-tab-shots.spec.ts`
    idiom), write `<id>.sha256`. Then, as the LAST test in the file (class 10 —
    the check runs after the state being proven): every declared `<id>.png`
-   exists and is > 1 KB; every `mustDifferFrom` pair has different hashes; the
+   exists and is > 1 KB; every `mustDiffer` pair has different hashes (and a
+   group that declares any pair has more than one distinct hash); the
    manifest has no duplicate ids. Empty storageState + `loginUi`
    (`helpers.ts:272`) for organiser rows, exactly as `f3-day-one-shots.spec.ts`
    does, including its cookie-banner pre-dismissal (the banner sat on top of
@@ -194,7 +202,7 @@ design of record.
     constant").
   - `e2e-ci-wiring.test.ts` green unchanged (the catch-all property).
   - **Mutants, each with its killer:** (a) set the LED hex to the board hex in
-    `OVERLAY_TOKENS` → contrast test red; (b) delete the `mustDifferFrom`
+    `OVERLAY_TOKENS` → contrast test red; (b) delete the `mustDiffer`
     check in `capture.spec.ts` → the manifest's `overlay-bar-vs-bug` style
     pair (seeded now with two DIFFERENT existing routes) no longer fails when
     one file is copied over the other in a harness self-test; (c) delete the

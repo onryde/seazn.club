@@ -262,8 +262,9 @@ marked (re-pinned), and is re-pinned before an edit regardless.
      reduced-motion because it is information**. `data-testid="ovl-clock"`.
 6. **Console panel** — `apps/web/src/components/v2/fixture-stream-panel.tsx`
    (client). Mounted from **`desk/run-sheet-row.tsx` beside
-   `data-testid="run-sheet-edit-time"` (`:377`)** — re-pinned 2026-09-07 @
-   fb99bbd4c, RP1: `FixtureLine` and `fixture-schedule-toggle` were RETIRED by
+   `data-testid="run-sheet-edit-time"`** (the SYMBOL is the pin; `:407` on
+   `main` b2244879f after desk W3 #740 — FS14; grep it, never seek a line) —
+   re-pinned 2026-09-07 @ fb99bbd4c, RP1: `FixtureLine` and `fixture-schedule-toggle` were RETIRED by
    desk W2 (#725, the run sheet); `grep -a` for either returns nothing on
    `main`. Toggle `<button data-testid="fixture-stream-toggle">`, rendered
    when `streamingEntitled && canEdit`, at **EVERY fixture status** (owner Q6

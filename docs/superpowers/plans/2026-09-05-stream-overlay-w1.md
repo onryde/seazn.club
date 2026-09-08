@@ -20,7 +20,7 @@ club sets up" (the OBS flow), and "Organiser console: Stream this match" plus
 
 **Spec:** `docs/superpowers/specs/2026-09-07-streaming-programme-design.md` — the design of record (supersedes `2026-09-05-stream-overlay-design.md`, which stays for the canvas links). §3 is Tier A as this plan builds it; §3.2 the endpoint contract Task 0 now implements; §5.1/§5.3 the two keys and the Phone tab gate Task 4 and Task 6 read; §9a the patterns every task names; §13 the findings that moved this plan's pins.
 **AMENDED 2026-09-07 @ `fb99bbd4c`** (annotations "(re-pinned 2026-09-07 @ fb99bbd4c)" mark every moved pin): Task 0 is the overlay endpoint over `foldFixture` (zero engine edits); Task 1's hook is generic over `{ fetcher, delayMs? }`; Task 2's readers take the endpoint's shape and the clock is the STAGE's 1 Hz concern; migrations V400/V401 with BOTH keys; fonts reuse `lib/fonts.ts`; the panel mounts in `desk/run-sheet-row.tsx` with an OBS tab and a Phone tab; the visual gate is T1b's manifest; `WALKTHROUGH_SPECS` exists and is edited in Task 8 directly.
-**Sibling plan (T1 — lands FIRST; this plan imports its `tokens.ts`, extends its `contrast.test.ts`, appends to its manifest):** `docs/superpowers/plans/2026-09-07-streaming-t1.md`
+**Sibling plan (T1 — lands FIRST; this plan imports its `OVERLAY_TOKENS` from `overlay-tokens.ts`, extends its `contrast.test.ts`, appends to its manifest):** `docs/superpowers/plans/2026-09-07-streaming-t1.md`
 **Wave prompt (rulings win over this plan; task ORDER below wins):** `docs/superpowers/specs/2026-09-05-stream-overlay-prompts/W1-step-one.md` (corrected in place by T1 Task 0)
 **Standing rules R1–R17:** `docs/superpowers/specs/2026-09-05-stream-overlay-prompts/_RULES.md`
 **Binding design values:** `docs/superpowers/specs/2026-09-05-stream-overlay-prompts/_THEMES.md`
@@ -33,7 +33,7 @@ club sets up" (the OBS flow), and "Organiser console: Stream this match" plus
 - Every user-facing string lands in all four dictionaries (`apps/web/src/dictionaries/{en,fr,es,nl}/`), then `pnpm i18n:gen-keys` (`package.json:39`); `apps/web/src/lib/i18n-keys.ts` is GENERATED — never hand-edited (R14).
 - Migration numbering is flat across `db/migration/**` (`db/flyway.toml:6`). Highest on `main` at `fb99bbd4c` is **`V399__stats_player_career_split.sql`** (re-pinned 2026-09-07 @ fb99bbd4c — the 09-05 text said V391, the 09-06 documents V398; both were taken by the time they were read), so this plan uses **V400** (`stream_url`) and **V401** (`streaming_entitlements`, BOTH keys); run `ls db/migration/deltas | sort -V | tail -1` at Task 3 Step 6 and AMEND the unmerged files to the next free numbers rather than correcting forward (R10). Record the landed numbers in `_INDEX.md`.
 - OpenAPI: the new route goes into `ROUTES` (`apps/web/src/server/api-v1/openapi.ts:57`, neighbour `PATCH /fixtures/{id}` at `:142`) in the same change, then `npm run openapi:gen` (`package.json:45`) and both generated files are committed. CI's drift check is a `ci.yml` step (`:94-98`), not a hook (R7).
-- Entitlement key `streaming.overlay` is granted by **no plan**, and is **NOT added to `ENTITLEMENT_DOMAINS`** (`apps/web/src/lib/entitlement-domains.ts:5`) — that omission is the mechanism that keeps it off `/pricing`, because `buildPricingSections` (`apps/web/src/lib/pricing-matrix.ts:191,199`) renders only listed keys (R1).
+- Entitlement key `streaming.overlay` is granted by **no plan**, and is **NOT added to `ENTITLEMENT_DOMAINS`** (`apps/web/src/lib/entitlement-domains.ts:7`) — that omission is the mechanism that keeps it off `/pricing`, because `buildPricingSections` (`apps/web/src/lib/pricing-matrix.ts:264-265`) renders only listed keys (R1; pins re-verified 2026-09-08 @ b2244879f).
 - `create or replace view public_fixtures_v` may only APPEND, so `stream_url` is the LAST column of a FULL redefinition copied from `db/migration/deltas/V369__public_fixtures_round_role.sql:18` (R6). (Re-pinned 2026-09-07 @ fb99bbd4c: STILL V369 — `grep -al public_fixtures_v db/migration/deltas/*.sql | sort -V | tail -1` — the 09-07 design's RP3 "`V362:22`" is the 09-06 scout's stale pin, recorded as finding FS10 in `_INDEX.md`; this plan is right and the design's row is corrected there.)
 - Judge vitest green ONLY from `--reporter=json --outputFile=<file>` — read `numPassedTests`/`numTotalTests`/`numFailedTests`, and confirm `.testResults[].name` resolves under `/Users/ashokhein/github/seazn.club/.claude/worktrees/stream-overlay`. `rtk` prints `PASS(0) FAIL(0)` for a suite that failed to COLLECT and swallows exit codes.
 - **Baseline:** on the fresh `ovl` DB the full `apps/web` suite is **13962 passing / 14041 total, 5 red** — 3 in `schedule-build-honours-locks.test.ts` (placement service not running; environmental) and 2 in `pass-scoping-guard.test.ts` (unclassified). Neither touches a W1 file. Every task gate compares against **this baseline**, not against zero.
@@ -51,7 +51,7 @@ club sets up" (the OBS flow), and "Organiser console: Stream this match" plus
 - **Sponsor logos are not in this wave, and not in W2 (owner answer 20 / Q9: *"ok for own wave as put it last"*).** They become their own wave, scheduled LAST in the programme, after W1 and W2. Nothing in this plan designs, reserves a slot for, or leaves a seam for them — a reserved-but-empty slab is an inert seam, and the sizing, placement and per-tier rules are that wave's job.
 - Do NOT touch: `components/v2/scorepad/**` (read `sport-theme.ts`, import from it, never edit), **the whole of `packages/engine`** (amended 2026-09-07: Task 0 reads the folded STATE the engine already holds; there is no engine edit anywhere in this programme, and `/usr/bin/git status --porcelain packages` must print nothing at every gate), `components/v2/fixture-console.tsx`, `ENTITLEMENT_DOMAINS`, other keys' matrix rows, any pricing surface, `LiveScore`'s render and `Props`, `proxy.ts` CSP, `app/embed/**`, `app/slideshow/**`, `.github/workflows/e2e.yml`, T1b's harness files (`e2e/visual/capture.spec.ts`, `asserts.ts`, `manifest.ts` — this wave appends to `manifest.json` and adds one seed kind to `seeds.ts`, nothing else), and anything in `desk/run-sheet-row.tsx` beyond one import plus one conditional line, or in `desk/run-sheet.tsx` / `stages-panel.tsx` beyond threading two props (R11; re-pinned 2026-09-07 @ fb99bbd4c — `FixtureLine` was retired by desk W2 #725; **desk W3** `feat/competition-desk-w3-band-and-phone` is editing `run-sheet-row.tsx` now, so Task 6 rebases after any W3 merge and never races it).
 - **Owner checklist (`docs/superpowers/RULES.md` §"Owner checklist (2026-09-07)")** binds every task below; each task's acceptance names the rows it satisfies, and the reviewer checks the rows, not the prose.
-- **Patterns this plan invokes, with exemplars (design §9a):** parse → authorize → delegate (`lib/http.ts:69`, `auth.ts:352`, `app/api/v1/fixtures/[id]/route.ts`); zod at `server/api-v1/schemas.ts`; privacy folds in VIEWS (`public_fixtures_v`); fire-and-forget side channels (`fireDivisionRevalidate`); one authority per fact (`resolveVenueTz`, `fixtureStatusLabel`/`VOID_STATUSES`, the five `lib/public-site.ts` derivations, `globals.css` for colour via T1's `tokens.ts`); registry over branching (`OVERLAY_THEMES`); pure projections with strings via `msg` (`overlayModel`); deny by default (`notFound()`, exact-host allowlist); the client never decides (`hasFeature` on the page and the division page); one DOM branched for phone.
+- **Patterns this plan invokes, with exemplars (design §9a):** parse → authorize → delegate (`lib/http.ts:69`, `auth.ts:352`, `app/api/v1/fixtures/[id]/route.ts`); zod at `server/api-v1/schemas.ts`; privacy folds in VIEWS (`public_fixtures_v`); fire-and-forget side channels (`fireDivisionRevalidate`); one authority per fact (`resolveVenueTz`, `fixtureStatusLabel`/`VOID_STATUSES`, the five `lib/public-site.ts` derivations, `globals.css` for colour via T1's `overlay-tokens.ts`); registry over branching (`OVERLAY_THEMES`); pure projections with strings via `msg` (`overlayModel`); deny by default (`notFound()`, exact-host allowlist); the client never decides (`hasFeature` on the page and the division page); one DOM branched for phone.
 
 ## File Structure
 
@@ -64,15 +64,15 @@ club sets up" (the OBS flow), and "Organiser console: Stream this match" plus
 | `apps/web/src/server/overlay/load.ts` | Create | `loadOverlayLiveData` — cached public row + venue zone + `foldFixture` inside `unstable_cache` keyed on `last_seq`. |
 | `apps/web/src/server/overlay/__tests__/load.test.ts` | Create | The cost claim: fold ≤ 1× per `last_seq`. |
 | `apps/web/src/app/api/v1/public/fixtures/[id]/overlay/route.ts` | Create | `GET` — the overlay's one poll target; visibility = the view's; no entitlement here. |
-| `apps/web/src/components/overlay/tokens.ts` | **Exists from T1** (Task 2 there) | `ROOT_SPORT_DEFAULTS`, `OVERLAY_FIXED`, `paletteFor`, `OVERLAY_PAIR_ROLES` — Task 5 IMPORTS, never re-declares. |
+| `apps/web/src/components/overlay/overlay-tokens.ts` | **Exists from T1** (Task 2 there) | `ROOT_SPORT_DEFAULTS`, `OVERLAY_FIXED`, `paletteFor`, `OVERLAY_PAIR_ROLES` — Task 5 IMPORTS, never re-declares. |
 | `apps/web/src/lib/fonts.ts` | Modify (`:8`) | `weight: ["600", "700", "800"]` — the one edit RP8 allows; the overlay layout imports `barlowCondensed`, never remounts `next/font`. |
 | `apps/web/src/components/overlay/use-overlay-clock.ts` | Create | The ONE timer: 1 Hz, anchored on `OverlayLiveData.clock`, offset by the hook's `presentationNowOffsetMs`, holds the last value while `clock` is absent (owner ruling 2026-09-06: the clock TICKS in W1). |
 | `apps/web/src/components/overlay/__tests__/use-overlay-clock.test.ts` | Create | `renderIsland` + captured `setInterval`: anchors, ticks, re-anchors on push, holds at half-time, offsets under `delayMs`. |
 | `apps/web/src/server/public-site/__tests__/public-fixture-venue-tz.test.ts` | Create | DB-backed: division override wins, org fallback, UTC default. |
-| `apps/web/src/components/public-site/use-live-fixture.ts` | Create | The ONE public live transport: subscribe-or-poll, lifted verbatim from `live-score.tsx:60-117`. |
+| `apps/web/src/components/public-site/use-live-fixture.ts` | Create | The ONE public live transport: subscribe-or-poll, lifted verbatim from `live-score.tsx:61-117` (`refresh` is `:61`; `:60` is blank). |
 | `apps/web/src/components/public-site/__tests__/use-live-fixture.test.tsx` | Create | Hook branches via `renderIsland` + captured `setInterval`. |
 | `apps/web/src/components/public-site/live-score.tsx` | Modify (`:8`, `:29`, `:59-117`, `:148`) | Repointed to the hook; render and `Props` unchanged. |
-| `apps/web/src/lib/public-site.ts` | Modify (append after `:378`) | `battingEntrantId`, `chaseNeed` (summary readers) and `chaseBalls` (reads `OverlayLiveData.cricket`, amended 2026-09-07) — `matchClock` is GONE: the clock is the stage's timer, formatted by `formatClock` in `overlay-model.ts`. |
+| `apps/web/src/lib/public-site.ts` | Modify (append after `disciplineLabel`'s closing brace, `:384` on b2244879f) | `battingEntrantId`, `chaseNeed` (summary readers) and `chaseBalls` (reads `OverlayLiveData.cricket`, amended 2026-09-07) — `matchClock` is GONE: the clock is the stage's timer, formatted by `formatClock` in `overlay-model.ts`. |
 | `apps/web/src/lib/__tests__/public-site-overlay-derive.test.ts` | Create | Unit cover for the three readers. |
 | `apps/web/src/lib/overlay-model.ts` | Create | Pure projection `overlayModel(input): OverlayModel`; `overlayStartLabel(iso, locale, tz)`; type-only `OverlayMoment` slot for W2. |
 | `apps/web/src/lib/__tests__/overlay-model.test.ts` | Create | Eleven sports folded through real modules; empty / decided / led truth table. |
@@ -80,9 +80,9 @@ club sets up" (the OBS flow), and "Organiser console: Stream this match" plus
 | `apps/web/src/lib/__tests__/stream-url.test.ts` | Create | Eleven accepted hosts (R16's ten plus `m.youtube.com`, owner answer 16 / Q5); the rejections named in the prompt, look-alike hosts included. |
 | `db/migration/deltas/V400__fixture_stream_url.sql` | Create (re-pinned 2026-09-07 @ fb99bbd4c; next free at rebase) | Column + check + full `public_fixtures_v` redefinition with `stream_url` last. |
 | `db/migration/deltas/V401__streaming_entitlements.sql` | Create (re-pinned 2026-09-07) | BOTH keys — `streaming.overlay` and `streaming.relay` — `false` on every plan key (dark rollout, design §10.4; the GA flip to §5.1's split is a later migration). |
-| `apps/web/src/server/public-site/data.ts` | Modify (`:206`, `:711-716`, new export after `:747`) | `PublicFixture.stream_url`; the fixture SELECT gains it; `publicFixtureSlugs(fixtureId)`. |
-| `apps/web/src/server/usecases/public.ts` | Modify (`:263-297`) | `publicFixture()`'s `Pick<>` and SELECT gain `stream_url`. |
-| `apps/web/src/server/api-v1/schemas.ts` | Modify (after `:989`) | `PutFixtureStream`, `FixtureStream`. |
+| `apps/web/src/server/public-site/data.ts` | Modify (`PublicFixture` `:207`, the `getPublicFixture` SELECT `:722-729`, new export after the function's closing brace `:759`; re-pinned 2026-09-08 @ b2244879f) | `PublicFixture.stream_url`; the fixture SELECT gains it; `publicFixtureSlugs(fixtureId)`. |
+| `apps/web/src/server/usecases/public.ts` | Modify (`publicFixture` `:279`; `Pick<>` `:284-302`; SELECT `:304-308` — re-pinned 2026-09-08 @ b2244879f) | `publicFixture()`'s `Pick<>` and SELECT gain `stream_url`. |
+| `apps/web/src/server/api-v1/schemas.ts` | Modify (after `PatchFixture` — `export const PatchFixture = z` at `:1118`, its `export type` at `:1144` on b2244879f; the file is 4,600+ lines, anchor on the symbol — review 2026-09-08 finding 28) | `PutFixtureStream`, `FixtureStream`. |
 | `apps/web/src/server/usecases/fixtures.ts` | Modify (after `:176`) | `setFixtureStreamUrl(auth, id, streamUrl)`. |
 | `apps/web/src/server/usecases/__tests__/fixture-stream-url.test.ts` | Create | DB-backed usecase test (`_rig.ts`, `HAS_DB` skip idiom). |
 | `apps/web/src/app/api/v1/fixtures/[id]/stream/route.ts` | Create | `PUT` — `parseBody` + `requireResourceAuth(req, "fixture", id, "write")`. |
@@ -97,12 +97,13 @@ club sets up" (the OBS flow), and "Organiser console: Stream this match" plus
 | `apps/web/src/components/overlay/overlay-stage.tsx` | Create | Client island: hook + model + scale + the three motions + `ovl-moment-slot`; renders `OVERLAY_THEMES[props.style].component`. |
 | `apps/web/src/components/overlay/overlay-bar.tsx` | Create | Theme A (registry entry `bar`) per `_THEMES.md` §3. |
 | `apps/web/src/components/overlay/overlay-bug.tsx` | Create | Theme B (registry entry `bug`) per `_THEMES.md` §4. |
-| `apps/web/src/app/globals.css` | Modify (append after `:1022`) | `.ovl-*` rules + the three keyframes + the reduced-motion block. |
+| `apps/web/src/app/globals.css` | Modify — append at END OF FILE, after the last rule (`.pad-card-swatch { … }`, the file's final block on b2244879f; the `:root { --sport-* }` block the overlay READS is `:1135-1141`, and `:1022` is mid-file inside a media query — review 2026-09-08 finding 56) | `.ovl-*` rules + the three keyframes + the reduced-motion block, under a `/* ── Stream overlay (components/overlay) ── */` banner. |
 | `apps/web/src/components/cookie-consent.tsx` | Modify (`:84` + a `usePathname` guard) | `data-testid="cookie-consent"`, and RENDERS NOTHING under `/overlay/` (owner answer 13). |
 | `apps/web/src/components/__tests__/cookie-consent-overlay-segment.test.tsx` | Create | The guard, driven through the component — plus its positive pair. |
 | `apps/web/src/components/v2/fixture-stream-panel.tsx` | Create | The organiser panel per `_THEMES.md` §8. |
-| `apps/web/src/components/v2/desk/run-sheet-row.tsx` | Modify (beside `data-testid="run-sheet-edit-time"`, `:377` @ fb99bbd4c) | ONE import + ONE conditional line: the `fixture-stream-toggle` and the expander (re-pinned 2026-09-07 — `FixtureLine` in `stages-panel.tsx` was retired by desk W2 #725). |
-| `apps/web/src/components/v2/desk/run-sheet.tsx` | Modify (Props `:44-80`, both `<RunSheetRow>` call sites `:261`, `:296`) | Threads `sportKey`, `streamingEntitled`, `relayEntitled`, `openStreamFor` to every row. |
+| `apps/web/src/components/v2/desk/run-sheet-row.tsx` | Modify (beside the SYMBOL `data-testid="run-sheet-edit-time"` — `:407` on `main` b2244879f after desk W3 #740; grep, never seek) | ONE import + ONE conditional line: the `fixture-stream-toggle` and the expander (`FixtureLine` in `stages-panel.tsx` was retired by desk W2 #725). |
+| `apps/web/src/components/v2/desk/run-sheet.tsx` | Modify (`RunSheet({` inline destructure `:36`; `RunSheetRowWithRule`'s prop type; ALL FOUR `<RunSheetRow` mounts `:355`/`:390`/`:428` settled/`:669` on b2244879f) | Threads `sportKey`, `streamingEntitled`, `relayEntitled`, `openStreamFor`, `openStreamTab` to every row in every lane. |
+| `apps/web/src/components/v2/desk/__tests__/run-sheet-filters.test.tsx` | Modify | The mount-count case: three lanes → three toggles when entitled, zero when not; the tree has exactly 4 `<RunSheetRow` mounts. |
 | `apps/web/src/components/v2/stages-panel.tsx` | Modify (Props, the `<RunSheet>` mount `:1167-1183`) | Threads the same props one level up; reads `?stream=<fixtureId>` from the URL for the row to open. |
 | `apps/web/src/app/o/[orgSlug]/c/[compSlug]/d/[divSlug]/page.tsx` | Modify (`:124-138`, `:596`) | `hasFeature(auth.orgId, "streaming.overlay")` into the `Promise.all`; both props passed. |
 | `apps/web/src/app/(public)/shared/[orgSlug]/[competitionSlug]/[divisionSlug]/fixtures/[fixtureId]/page.tsx` | Modify (above `:175`) | The "Watch live" / "Replay" anchor. |
@@ -156,7 +157,7 @@ club sets up" (the OBS flow), and "Organiser console: Stream this match" plus
 > engine file — and Task 1's hook becomes generic over its fetcher so `LiveScore`
 > and the overlay share one transport with two payloads.
 >
-> **Contract (design §3.2, VERBATIM — the one poll target on every tier):**
+> **Contract (design §3.2 in equivalent form — `extends LiveFixtureData` IS the spec's inline `status`/`summary`/`outcome`, which is exactly that type's three fields; the one poll target on every tier):**
 >
 > ```ts
 > interface OverlayLiveData extends LiveFixtureData {   // status, summary, outcome — one authority: match_states
@@ -218,6 +219,13 @@ club sets up" (the OBS flow), and "Organiser console: Stream this match" plus
 > "Org fallback" therefore means NO `schedule_settings` row, and the test seeds
 > it that way rather than writing `'UTC'` and expecting inheritance.
 
+**Acceptance (four kinds, named — RULES.md §Testing; review 2026-09-08 finding 35):**
+- Unit: `public-fixture-venue-tz.test.ts` (4), `server/overlay/__tests__/project.test.ts` (7), `server/overlay/__tests__/load.test.ts` (4).
+- E2E: `stream-overlay.spec.ts` › the overlay endpoint case (Task 8 Step 2a — byte-equal summary, `venueTz`, football clock anchor, HT absence, private 404).
+- Smoke: `streamOverlaySuite` › the public JSON seam (Task 8 Step 6) exercises `publicFixture`, which this loader reads.
+- Regression: `data-court-venue-names.test.ts`, `pass-scope-public-realtime.test.ts`, `player-stats-public.test.ts` unchanged and green; `packages/engine` untouched (`git status --porcelain packages` empty).
+- Checklist rows: "Derive expected values from the engine's own declarations" (quota from `cfg.ballsPerInnings`, revise from `oversPerSide × ballsPerOver`); "≥1 case where right ≠ wrong constant" (`ballsLimit − legalBalls ≠ runs`); "Negative assertion needs its positive pair" (clock present in H1 / absent at HT); mutants Step 15 (five, killers named).
+
 - [ ] **Step 1: Write the failing venue-zone test.** Create `apps/web/src/server/public-site/__tests__/public-fixture-venue-tz.test.ts`:
 
 ```ts
@@ -226,7 +234,7 @@ club sets up" (the OBS flow), and "Organiser console: Stream this match" plus
 // recognises instead of UTC.
 //
 // The competition-desk programme's ruling is "one zone per fixture" and its
-// resolver is `resolveVenueTz` (lib/tz.ts:43) — the VENUE lane, never the
+// resolver is `resolveVenueTz` (lib/tz.ts:44) — the VENUE lane, never the
 // personal lane. This test pins the three branches THROUGH getPublicFixture,
 // not through the helper (the helper already has its own unit cover): the
 // claim is about what the payload carries, and a helper test cannot see a
@@ -260,16 +268,38 @@ interface Seeded {
 
 /**
  * A public org / competition / division / fixture, seeded by direct insert.
- *
- * LIFT `seed()` from `data-court-venue-names.test.ts` in this same directory
- * rather than re-deriving the column list — that file already seeds exactly
- * this shape (public competition, live division, one fixture) and is the
- * working reference for which columns are NOT NULL. Drop its venue/court
- * inserts, which this test does not need, and return the ids below.
+ * Inlined from `data-court-venue-names.test.ts:47-93`'s `seed()` (which is
+ * NOT exported — review 2026-09-08 finding 40), minus its venue/court rows,
+ * plus the ONE column this test turns on: `organizations.timezone` (V305).
+ * That file is the working reference for which columns are NOT NULL; if an
+ * insert below is refused, diff against it rather than guessing.
  */
 async function seedPublicFixture(orgTz: string | null): Promise<Seeded> {
-  /* … lifted seed … */
-  throw new Error("lift from data-court-venue-names.test.ts");
+  const s = uniq();
+  await sql`
+    insert into sports (key, name, module_version, position_catalog)
+    values ('generic', 'Generic', '1.0.0', '{}') on conflict (key) do nothing`;
+  const orgSlug = "ovl-tz-org-" + s;
+  const [{ id: orgId }] = await sql<{ id: string }[]>`
+    insert into organizations (name, slug, timezone)
+    values (${"OVL TZ Org " + s}, ${orgSlug}, ${orgTz}) returning id`;
+  const compSlug = "ovl-tz-comp-" + s;
+  const [{ id: compId }] = await sql<{ id: string }[]>`
+    insert into competitions (org_id, name, slug, visibility, status)
+    values (${orgId}, ${"OVL TZ Comp " + s}, ${compSlug}, 'public', 'live') returning id`;
+  const divSlug = "open-" + s;
+  const [{ id: divisionId }] = await sql<{ id: string }[]>`
+    insert into divisions
+      (org_id, competition_id, name, slug, sport_key, variant_key, status, config, module_version)
+    values (${orgId}, ${compId}, 'Open', ${divSlug}, 'generic', 'score', 'active', '{}', '1.0.0')
+    returning id`;
+  const [{ id: stageId }] = await sql<{ id: string }[]>`
+    insert into stages (org_id, division_id, kind, name, seq)
+    values (${orgId}, ${divisionId}, 'league', 'League', 1) returning id`;
+  const [{ id: fixtureId }] = await sql<{ id: string }[]>`
+    insert into fixtures (org_id, division_id, stage_id, fixture_no, round_no, seq_in_round)
+    values (${orgId}, ${divisionId}, ${stageId}, 1, 1, 1) returning id`;
+  return { orgId, orgSlug, compSlug, divSlug, divisionId, fixtureId };
 }
 
 const seeded: string[] = [];
@@ -335,7 +365,7 @@ describe.skipIf(!HAS_DB)("getPublicFixture carries the venue zone", () => {
 ```ts
       // Venue lane (V305), "one zone per fixture" — the division's own
       // `schedule_settings.tz` override, else the ORGANISATION's zone, else
-      // UTC. Resolved through `resolveVenueTz` (lib/tz.ts:43) rather than the
+      // UTC. Resolved through `resolveVenueTz` (lib/tz.ts:44) rather than the
       // `coalesce(ss.tz, o.timezone, 'UTC')` mirror `getPublicDivision` above
       // splices inline: that mirror exists because a string helper cannot be
       // spliced into a postgres.js tagged template, and this query has both
@@ -405,6 +435,14 @@ function folded(key: string, stream: readonly (readonly [string, unknown])[], re
 
 const ROW = (last_seq: number | null, status = "in_play") => ({ status, summary: { headline: "x" }, outcome: null, last_seq });
 
+/** The testkit's HOME entrant id — `CricketToss` (cricket.ts:240) is
+ *  strictObject { wonBy: EntrantId, elected: "bat"|"bowl" } (review finding
+ *  25); read it off `defaultLineupPair` rather than typing "H". RE-PIN the
+ *  accessor against `@seazn/engine/testkit`'s `defaultLineupPair` return
+ *  shape before running (the Task 2 test's `striker: "H-p1"` implies the
+ *  home entrant id is "H"). */
+const HOME_ID: string = (defaultLineupPair(moduleFor("cricket").positions) as { home: { entrantId: string } }).home.entrantId;
+
 describe("projectOverlayLiveData", () => {
   it("carries the row's snapshot fields and the venue zone, and lastSeq from the ROW (one authority: match_states)", () => {
     const out = projectOverlayLiveData({ row: ROW(7), folded: null, venueTz: "Asia/Kolkata" });
@@ -454,7 +492,7 @@ describe("projectOverlayLiveData", () => {
       ["cricket.ball", { over, ballInOver: b, striker: "H-p1", nonStriker: "H-p2", bowler: "A-p1", runs: { bat: runs } }] as const;
     const f = folded("cricket", [
       ["core.start", {}],
-      ["cricket.toss", { winner: "home", decision: "bat" }],
+      ["cricket.toss", { wonBy: HOME_ID, elected: "bat" }],
       ball(0, 1, 4), ball(0, 2, 0), ball(0, 3, 1), ball(0, 4, 6), ball(0, 5, 0), ball(0, 6, 2),
       ["cricket.innings.close", { reason: "declared" }],
       ball(0, 1, 1),
@@ -475,12 +513,19 @@ describe("projectOverlayLiveData", () => {
     // — the 2026-09-05 plan used { target, ballsLimit, source: "dls" }.
     const f = folded("cricket", [
       ["core.start", {}],
-      ["cricket.toss", { winner: "home", decision: "bat" }],
+      ["cricket.toss", { wonBy: HOME_ID, elected: "bat" }],
       ["cricket.innings.close", { reason: "declared" }],
-      ["cricket.revise", { target: 91, ballsLimit: 60, source: "dls" }],
+      // `CricketRevise` (cricket.ts:259) is strictObject { oversPerSide?, target? }
+      // with a refine — there is no `ballsLimit` and no `source` (review
+      // 2026-09-08 finding 26). The limit the engine derives is
+      // oversPerSide × cfg.ballsPerOver — read from the module's own config,
+      // never the literal 60.
+      ["cricket.revise", { oversPerSide: 10, target: 91 }],
     ]);
+    const bpo = (moduleFor("cricket").configSchema.parse({}) as { ballsPerOver: number }).ballsPerOver;
     const out = projectOverlayLiveData({ row: ROW(f.lastSeq), folded: f, venueTz: "UTC" });
-    expect(out.cricket!.innings[1]!.ballsLimit).toBe(60);
+    expect(out.cricket!.innings[1]!.ballsLimit).toBe(10 * bpo);
+    expect(out.cricket!.innings[1]!.ballsLimit).not.toBe(out.cricket!.innings[0]!.ballsLimit);
   });
 
   it("every other sport: neither clock nor cricket, by shape, not by a sport-key branch", () => {
@@ -494,7 +539,7 @@ describe("projectOverlayLiveData", () => {
 });
 ```
 
-  RE-PIN before writing: the event names and payload shapes (`core.start`, `football.goal` with `at`, `football.period`, `cricket.toss`, `cricket.ball`, `cricket.innings.close`, `cricket.revise`) against each module's zod event schemas — read three neighbouring cases in `football.time.test.ts` and `cricket.test.ts` and use THEIR shapes. A hand-invented event folds to `UNKNOWN_TYPE` and proves nothing. If `builtinModules[].outcome` is not a method, read the outcome off `summary` the way `foldFixture` does (`fold.ts:130-135`).
+  RE-PIN before writing: the event names and payload shapes (`core.start`, `football.goal` with `at`, `football.period`, `cricket.ball`, `cricket.innings.close`) against each module's zod event schemas — read three neighbouring cases in `football.time.test.ts` and `cricket.test.ts` and use THEIR shapes. Two are already pinned on `main` `b2244879f` (review 2026-09-08 findings 25–26): `CricketToss` = `z.strictObject({ wonBy: EntrantId, elected: z.enum(["bat","bowl"]) })` (`cricket.ts:240-243`) and `CricketRevise` = `z.strictObject({ oversPerSide?: int>0, target?: int>0 }).refine(one of them)` (`:258-266`) — a strict parse REJECTS `winner`/`decision`/`ballsLimit`/`source`, the fold yields no innings, and every cricket assertion fails for a reason the plan would not have predicted. A hand-invented event folds to `UNKNOWN_TYPE` and proves nothing. If `builtinModules[].outcome` is not a method, read the outcome off `summary` the way `foldFixture` does (`fold.ts:130-135`).
 
 - [ ] **Step 6: Run it — expect red (collection).** `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/stream-overlay/apps/web && npx vitest run src/server/overlay --reporter=json --outputFile=/tmp/ovl-w1/t0b-red.json; node -e "const r=require('/tmp/ovl-w1/t0b-red.json');console.log(r.numTotalTests,(r.testResults[0]||{}).message)"`
   Expected: `Cannot find module '../project'`, `numTotalTests: 0`.
@@ -734,7 +779,7 @@ export async function loadOverlayLiveData(fixtureId: string): Promise<OverlayLiv
 }
 ```
 
-  RE-PIN: `publicFixture`'s SELECT (`usecases/public.ts:296-303`) must include `division_id` — it does at `ac85c70` (`select id, division_id, …`). If `sql.begin` is typed to reject a non-array return, cast as shown; the precedent is `registration-submit.ts:609`.
+  RE-PIN: `publicFixture` (`usecases/public.ts:279`; its `Pick<>` `:284-302`, its SELECT `:304-308` @ b2244879f) must include `division_id` — it does at `ac85c70` (`select id, division_id, …`). If `sql.begin` is typed to reject a non-array return, cast as shown; the precedent is `registration-submit.ts:609`.
 
 - [ ] **Step 12: Run — expect PASS.** Re-run Step 10's command. Expected: `numTotalTests: 4`, `numFailedTests: 0`.
 
@@ -810,6 +855,13 @@ export async function GET(req: Request, { params }: Ctx) {
   - `export function useLiveFixture<T extends LiveFixtureData = LiveFixtureData>(fixtureId: string, initial: T, realtime: boolean, options?: LiveFixtureOptions<T>): LiveFixture<T>` — `LiveScore` calls it with three arguments and is byte-identical in behaviour; the overlay stage passes `{ fetcher: fetchOverlayFixture }`; R2 passes `delayMs`.
 
 > **Conflict with the wave prompt, recorded:** scope 1 writes the return type as bare `LiveFixtureData`. `LiveScore` renders `subscribed` at `live-score.tsx:148` (`Live{subscribed ? " · realtime" : ""}`), and the same scope requires its render to stay untouched — a bare `LiveFixtureData` return cannot satisfy both. The object return above is the minimum that does. `live` is returned because the overlay stage needs it for the live-dot breath (`_THEMES.md` §6).
+
+**Acceptance (four kinds, named):**
+- Unit: `use-live-fixture.test.tsx` — Step 1's six + Step 2a's five (fetcher, no-drain default, delayMs presentation, ordered drain, rejected fetch holds the score).
+- E2E: `stream-overlay.spec.ts` › `a new event changes the score in place…` (the transport under the overlay) and Step 2b's dead-endpoint case (design §3.1 resilience).
+- Smoke: `streamOverlaySuite` › overlay 200 with `ovl-root` in the body — the transport's first paint through `initial`.
+- Regression: `live-score.test.tsx` and `live-score-data.test.ts` UNCHANGED and green (the witness that `LiveScore` is byte-identical).
+- Checklist rows: "Negative assertion needs its positive pair" (no drain interval without options ↔ drain armed with `delayMs`); "Pin the VALUE a control opens at" (`presentationNowOffsetMs` = 0 / 3000, not merely present); mutants (d) Step 6 and (q) (Self-review).
 
 - [ ] **Step 1: Write the failing test.** Create `apps/web/src/components/public-site/__tests__/use-live-fixture.test.tsx`:
 
@@ -998,6 +1050,16 @@ it("uses the fetcher it is given, and fetchLiveFixture's URL by default (one tra
   await timers.fire(POLL_MS);
   expect((globalThis.fetch as unknown as { mock: { calls: unknown[][] } }).mock.calls.some((c) => String(c[0]).endsWith("/api/v1/public/fixtures/fx-1"))).toBe(true);
   expect(d.read().data.summary?.headline).toBe("9 — 9");
+});
+
+it("a rejected fetch keeps the last known score and does not throw (design §3.1: the stage never paints a white frame)", async () => {
+  const timers = stubIntervals();
+  const fetcher = vi.fn(async () => { throw new Error("endpoint down"); });
+  const h = harnessWith(IN_PLAY, false, { fetcher });
+  await expect(timers.fire(POLL_MS)).resolves.toBeUndefined();
+  expect(fetcher).toHaveBeenCalledTimes(1);
+  expect(h.read().data, "the last known score is still the data").toEqual(IN_PLAY);
+  expect(h.read().live, "and the transport keeps trying").toBe(true);
 });
 
 it("without options arms ONLY the poll — no drain interval, offset 0 (byte-identical to LiveScore's behaviour)", () => {
@@ -1267,7 +1329,7 @@ export function LiveScore({
 - [ ] **Step 7: Commit.**
   `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/stream-overlay && /usr/bin/git add apps/web/src/components/public-site/use-live-fixture.ts apps/web/src/components/public-site/__tests__/use-live-fixture.test.tsx apps/web/src/components/public-site/live-score.tsx`
   then
-  `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/stream-overlay && /usr/bin/git commit -m "overlay(transport): lift LiveScore's subscribe-or-poll into useLiveFixture" -m "One transport for the public match page and the OBS overlay (R5). LiveScore's Props and render are untouched; live-score.test.tsx is the unedited regression witness." -m "Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>" -m "Claude-Session: https://claude.ai/code/session_01UdUR7dcxassJ4FExpVfRRr"`
+  `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/stream-overlay && /usr/bin/git commit -m "overlay(transport): lift LiveScore's subscribe-or-poll into useLiveFixture" -m "One transport for the public match page and the OBS overlay (R5). LiveScore's Props and render are untouched; live-score.test.tsx is the unedited regression witness." -m "Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>" -m "Claude-Session: https://claude.ai/code/session_01LJGBoVPAWczYB9c45TD1aw"`
 
 ---
 
@@ -1280,7 +1342,7 @@ export function LiveScore({
 - Create (Test): `apps/web/src/lib/__tests__/overlay-model.test.ts`
 
 **Interfaces:**
-- Consumes: `setBreakdown(summary: unknown, sportKey: string): SetBreakdown | null` (`public-site.ts:290`), `periodBreakdown(summary: unknown): PeriodScoreRow[] | null` (`:319`), `matchStrength(summary: unknown): string | null` (`:338`), `disciplineList(summary: unknown): DisciplineEntry[] | null` (`:352`), `servingSide(summary: unknown): "home" | "away" | null` (`:373`), `disciplineLabel(classKey: string): string` (`:377`); `renderDecidedOutcome(outcome, entrantNames: Record<string,string>, templates: DecidedOutcomeTemplates, shootoutScore?): string | null` (`scoring-vocab.ts:1345`), `shootoutScoreFromDetail(detail: unknown)` (`:1410`), `type DecidedOutcomeTemplates` (`:1296`); `type LiveFixtureData` (`live-score-data.ts:7`).
+- Consumes: `setBreakdown(summary: unknown, sportKey: string): SetBreakdown | null` (`public-site.ts:290`), `periodBreakdown(summary: unknown): PeriodScoreRow[] | null` (`:319`), `matchStrength(summary: unknown): string | null` (`:338`), `disciplineList(summary: unknown): DisciplineEntry[] | null` (`:352`), `servingSide(summary: unknown): "home" | "away" | null` (`:373`), `disciplineLabel(classKey: string): string` (`:382-384` on b2244879f); `renderDecidedOutcome(outcome, entrantNames: Record<string,string>, templates: DecidedOutcomeTemplates, shootoutScore?): string | null` (`scoring-vocab.ts:1345`), `shootoutScoreFromDetail(detail: unknown)` (`:1410`), `type DecidedOutcomeTemplates` (`:1296`); `type LiveFixtureData` (`live-score-data.ts:7`).
 - Also consumes, from **Task 0** (amended 2026-09-07): `OverlayLiveData.cricket.innings[]` (`{ runs, wickets, legalBalls, ballsLimit }`, off the folded state) and `getPublicFixture(...).venueTz`. The football clock is NOT a model input read off the payload: `OverlayLiveData.clock` anchors the STAGE's 1 Hz timer (Task 5, `use-overlay-clock.ts`), which hands the model a formatted `clockLabel`.
 - Produces (in `public-site.ts`):
   - `export function battingEntrantId(summary: unknown): string | null`
@@ -1294,7 +1356,7 @@ export function LiveScore({
   - `export interface OverlaySide { short: string; name: string; big: string; sub?: string; led: boolean; serving: boolean }`
   - `export interface OverlayCell { key: string; value: string }`
   - `export interface OverlayModel { live: boolean; decided: boolean; header: { context: string; clock?: string }; sides: [OverlaySide, OverlaySide]; cells: OverlayCell[]; detail: string[]; chase?: string; result?: string }`
-  - `export interface OverlayMoment { kind: string; headline: string; line?: string; tone: "led" | "caution" | "dismissal" }` — **type only**, W2's slot (R4). W2 re-declares it in `lib/overlay-moments.ts` with an added `seq: number`; keep the four fields identically named so the widening is additive.
+  - `export interface OverlayMoment { kind: string; headline: string; line?: string; tone: SportTone | "led" }` (`import type { SportTone } from "@/components/v2/scorepad/v3/sport-theme"` — `advisory | caution | dismissal` + `led`; design §3.4) — **type only**, W2's slot (R4). W2 re-declares it in `lib/overlay-moments.ts` with an added `seq: number`; keep the four fields identically named so the widening is additive.
   - `export interface OverlayModelInput { sportKey: string; data: OverlayLiveData; sides: [OverlaySideInput, OverlaySideInput]; startLabel: string | null; clockLabel: string | null; msg: OverlayMsg; decidedTemplates: DecidedOutcomeTemplates }` (amended 2026-09-07: `data` is the endpoint's payload; `clockLabel` is the stage's formatted tick, `null` when there is nothing to show)
   - `export function shortCode(side: OverlaySideInput): string`
   - `export function splitLine(line: string): { big: string; sub?: string }`
@@ -1311,7 +1373,14 @@ export function LiveScore({
 > **One open pin recorded here rather than guessed:**
 > - `short` has no source. `public_entrants_v` (`db/migration/deltas/V350__person_tombstone_views.sql:18-47`) exposes `display_name` and a `team_display` jsonb of `club_id/club_name/logo_path/colors` — **no `short_name`**; `teams.short_name` exists (`V206:5`) but does not reach the public payload. Watch-list 6 therefore resolves to **the three-letter fallback**, and the panel copy says so (`ui.stream.codeNote`, Task 6).
 
-- [ ] **Step 1: Write the failing test for the four new summary readers.** Create `apps/web/src/lib/__tests__/public-site-overlay-derive.test.ts`:
+**Acceptance (four kinds, named):**
+- Unit: `public-site-overlay-derive.test.ts` (three readers + `formatClock`), `overlay-model.test.ts` (eleven sports through real folds; led/serving truth table; empty case first).
+- E2E: `stream-overlay.spec.ts` › `the page is transparent, carries the seeded score, and is themed` (the projection's output on screen) and the tick case (only the changed side).
+- Smoke: `streamOverlaySuite` › the overlay body carries the seeded score (Task 8 Step 6).
+- Regression: the five `lib/public-site.ts` derivations' own tests unchanged (the model IMPORTS them); `scoring-vocab` tests unchanged.
+- Checklist rows: "Empty-set case checked explicitly" (boardgame / carrom / generic → empty `cells` and `detail`, asserted FIRST); "Ladder/rule tests need an ORDERING-differential case" (cells home–away in play order, a swapped pair reds); spy-`msg` proves no literal; mutants (b) Step 9, (c) Step 10.
+
+- [ ] **Step 1: Write the failing test for the three readers (`battingEntrantId`, `chaseNeed` over the summary; `chaseBalls` over the endpoint's innings).** Create `apps/web/src/lib/__tests__/public-site-overlay-derive.test.ts`:
 
 ```ts
 // The four ScoreSummary readers the stream overlay needs and nothing else owned
@@ -1421,7 +1490,7 @@ describe("formatClock (overlay-model.ts)", () => {
 - [ ] **Step 2: Run it — expect red.** `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/stream-overlay/apps/web && npx vitest run src/lib/__tests__/public-site-overlay-derive.test.ts --reporter=json --outputFile=/tmp/ovl-w1/t2a-red.json`
   Expected: collection failure — `"battingEntrantId" is not exported by "src/lib/public-site.ts"`. `numTotalTests: 0`.
 
-- [ ] **Step 3: Implement the readers.** Append to `apps/web/src/lib/public-site.ts` immediately after `disciplineLabel` (`:377-380`):
+- [ ] **Step 3: Implement the readers.** Append to `apps/web/src/lib/public-site.ts` immediately after `disciplineLabel` (`export function disciplineLabel(classKey: string): string {` at `:382`, closing brace `:384` on b2244879f — insert after `:384`; `:377` is inside `servingSide`'s neighbourhood, review 2026-09-08 finding 46):
 
 ```ts
 /**
@@ -1655,7 +1724,7 @@ describe("overlayModel — every skin key projects without throwing", () => {
 describe("overlayModel — led and serving truth table", () => {
   it("cricket: the LED sits on the side batting, and moves when the innings does", () => {
     const first = payload("cricket", [
-      ["cricket.toss", { winner: "home", decision: "bat" }],
+      ["cricket.toss", { wonBy: HOME_ID, elected: "bat" }],
       ["core.start", {}],
       CRICKET_BALL(0, 1, 4),
     ], "in_play");
@@ -1665,7 +1734,7 @@ describe("overlayModel — led and serving truth table", () => {
     expect(a.sides[0].serving, "cricket has no serve").toBe(false);
 
     const second = payload("cricket", [
-      ["cricket.toss", { winner: "home", decision: "bat" }],
+      ["cricket.toss", { wonBy: HOME_ID, elected: "bat" }],
       ["core.start", {}],
       CRICKET_BALL(0, 1, 4),
       ["cricket.innings.close", { reason: "declared" }],
@@ -1970,7 +2039,12 @@ export interface OverlayMoment {
   kind: string;
   headline: string;
   line?: string;
-  tone: "led" | "caution" | "dismissal";
+  /** Typed against the pad's own tone vocabulary (`SPORT_TONES`,
+   *  sport-theme.ts:87 = advisory | caution | dismissal — design §3.4) plus
+   *  `"led"` for the boundary/goal/set-point slab (_THEMES.md §5), so W2's
+   *  slab widens additively and hockey's green card is reachable (review
+   *  2026-09-08 finding 60). Never a hand-written union. */
+  tone: SportTone | "led";
 }
 
 export interface OverlayModelInput {
@@ -2182,7 +2256,7 @@ export function overlayStartLabel(iso: string | null, locale: string, tz: string
 - [ ] **Step 11: Commit.**
   `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/stream-overlay && /usr/bin/git add apps/web/src/lib/overlay-model.ts apps/web/src/lib/public-site.ts apps/web/src/lib/__tests__/overlay-model.test.ts apps/web/src/lib/__tests__/public-site-overlay-derive.test.ts`
   then
-  `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/stream-overlay && /usr/bin/git commit -m "overlay(model): one pure projection for all eleven sports" -m "overlayModel projects the public ScoreSummary into the bar/bug shape; battingEntrantId and chaseNeed join the other public-site summary readers. Every case is folded through the real module (R3, R5)." -m "Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>" -m "Claude-Session: https://claude.ai/code/session_01UdUR7dcxassJ4FExpVfRRr"`
+  `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/stream-overlay && /usr/bin/git commit -m "overlay(model): one pure projection for all eleven sports" -m "overlayModel projects the public ScoreSummary into the bar/bug shape; battingEntrantId and chaseNeed join the other public-site summary readers. Every case is folded through the real module (R3, R5)." -m "Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>" -m "Claude-Session: https://claude.ai/code/session_01LJGBoVPAWczYB9c45TD1aw"`
 
 ---
 
@@ -2192,7 +2266,7 @@ export function overlayStartLabel(iso: string | null, locale: string, tz: string
 - Create: `apps/web/src/lib/stream-url.ts`
 - Create (Test): `apps/web/src/lib/__tests__/stream-url.test.ts`
 - Create: `db/migration/deltas/V400__fixture_stream_url.sql`
-- Modify: `apps/web/src/server/public-site/data.ts` — `PublicFixture` (`:206`), the `getPublicFixture` SELECT (`:711-716`)
+- Modify: `apps/web/src/server/public-site/data.ts` — `PublicFixture` (`:207`), the `getPublicFixture` SELECT (`:722-729`) (re-pinned 2026-09-08 @ b2244879f)
 - Modify: `apps/web/src/server/usecases/public.ts` — `publicFixture()`'s `Pick<>` and SELECT (`:263-297`)
 - Modify: `apps/web/src/server/api-v1/schemas.ts` — after `PatchedFixture`'s neighbourhood, next to `PatchFixture` (`:964-989`)
 - Modify: `apps/web/src/server/usecases/fixtures.ts` — after `patchFixture` (`:136-176`)
@@ -2211,6 +2285,13 @@ export function overlayStartLabel(iso: string | null, locale: string, tz: string
   - `export const FixtureStream` / `export type FixtureStream = { id: string; stream_url: string | null }` (schemas.ts)
   - `export async function setFixtureStreamUrl(auth: AuthCtx, id: string, streamUrl: string | null): Promise<FixtureStreamOut>` where `export interface FixtureStreamOut { id: string; stream_url: string | null }` (usecases/fixtures.ts)
   - `PublicFixture.stream_url: string | null`
+
+**Acceptance (four kinds, named):**
+- Unit: `stream-url.test.ts` (eleven accepted, thirteen rejected incl. trailing dot and IDN homograph), `fixture-stream-url.test.ts` (usecase, DB-backed; the view's MAX ordinal).
+- E2E: `stream-overlay.spec.ts` › `the panel saves a valid link and refuses an invalid one without sending it` (403/422 on the wire).
+- Smoke: `streamOverlaySuite` › PUT valid → the public JSON carries it; invalid host → 422 (Task 8 Step 6).
+- Regression: `openapi-coverage.test.ts`, `key-scopes.test.ts`, `openapi-published.test.ts` (total-classification) green; `openapi:gen` no diff.
+- Checklist rows: "Negative assertion needs its positive pair" (eleven accepted beside thirteen rejected); "Report mutant KILLER LIST" (mutant (a): the eight hostname rows, five protocol rows survive by design); extra V400 mutant (Self-review).
 
 - [ ] **Step 1: Write the failing validation test.** Create `apps/web/src/lib/__tests__/stream-url.test.ts`:
 
@@ -2256,6 +2337,13 @@ const REJECTED: [string, string][] = [
   ["https://mm.youtube.com/x", "a near-miss subdomain of an allowed host is not on the list"],
   [" https://youtube.com", "a leading space is not trimmed into validity"],
   ["https://user:pass@www.youtube.com/x", "credentials in the authority"],
+  // Design §3.7 names two more attacks the EXACT comparison defeats (review
+  // 2026-09-08 finding 38): a trailing dot (a different hostname to the
+  // comparison, the same host to a resolver) and an IDN homograph (Cyrillic
+  // `е` U+0435 for Latin `e` — `new URL()` punycodes it to `xn--…`, which is
+  // not on the list).
+  ["https://youtube.com./x", "a trailing dot is a different hostname"],
+  ["https://youtubе.com/x", "an IDN homograph (Cyrillic е) punycodes to xn--… and is not on the list"],
   ["not a url at all", "unparseable"],
 ];
 
@@ -2362,7 +2450,7 @@ export const streamUrlSchema = z
 - [ ] **Step 4: Run — expect PASS.** `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/stream-overlay/apps/web && npx vitest run src/lib/__tests__/stream-url.test.ts --reporter=json --outputFile=/tmp/ovl-w1/t3a-green.json`
   Expected: `numFailedTests: 0`, `numTotalTests: 26` (11 accepted + 11 rejected + 4).
 
-- [ ] **Step 5: Mutation check (a) — delete the hostname comparison.** Change `return ALLOWED.has(url.hostname);` to `return true;`, re-run Step 4. Expected red: all ten `rejects …` cases for the https ones — `expected [Function] to throw an error`. Restore and re-run to green. Record "mutant (a) killed by stream-url.test.ts › rejects https://evil.example/www.youtube.com".
+- [ ] **Step 5: Mutation check (a) — delete the hostname comparison.** Change `return ALLOWED.has(url.hostname);` to `return true;`, re-run Step 4. Expected red: EXACTLY the hostname rows and no others (review 2026-09-08 finding 37 — a test that dies under every mutant fakes kills): `https://evil.example/www.youtube.com`, `https://www.youtube.com.evil.example/`, `https://youtube.com.evil.example`, `https://notyoutube.com/x`, `https://m.youtube.com.evil.example/x`, `https://mm.youtube.com/x`, `https://youtube.com./x`, the Cyrillic homograph — eight rows, each `expected [Function] to throw an error`. The other five rejections (`javascript:`, `http://`, the leading space, the userinfo case, and any unparseable string) MUST STAY GREEN under this mutant: they are killed by the protocol/parse branch, not the hostname check, and a red there means the mutant was applied too widely. Restore and re-run to green. Record "mutant (a) killed by stream-url.test.ts › the eight hostname rows; survived by design on the five protocol/parse rows".
 
 - [ ] **Step 6: Write the migration.** Create `db/migration/deltas/V400__fixture_stream_url.sql` (renumber at rebase, R10):
 
@@ -2409,9 +2497,9 @@ create or replace view public_fixtures_v as
 
 - [ ] **Step 7: Apply it and prove the column is on the view.** `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/stream-overlay && DATABASE_URL=<the ovl url> DATABASE_SSL=disable npm run db:apply`
   then `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/stream-overlay && DATABASE_URL=<the ovl url> DATABASE_SSL=disable npx tsx -e "import postgres from 'postgres'; const s = postgres(process.env.DATABASE_URL!, { ssl: false }); const r = await s\`select column_name, ordinal_position from information_schema.columns where table_name = 'public_fixtures_v' order by ordinal_position desc limit 1\`; console.log(r); await s.end();"`
-  Expected: the single row is `{ column_name: 'stream_url', ordinal_position: 22 }` — LAST, which is what proves the append rule was honoured rather than assumed.
+  Expected: the row for `stream_url` has the MAXIMUM `ordinal_position` in `public_fixtures_v` — assert `ordinal_position = (select max(ordinal_position) from information_schema.columns where table_name = 'public_fixtures_v')`, never a literal: V369's select lists 23 columns, so an appended `stream_url` is 24 today, and the count moves every time the view is redefined (R6 allows append-only; review 2026-09-08 finding 27 — the old literal `22` would mark a correct migration broken). Print the position beside the pass.
 
-- [ ] **Step 8: Widen both hand-maintained column lists.** In `apps/web/src/server/public-site/data.ts`, add to `PublicFixture` (after `conditional`, the last field of the interface at `:206`ff):
+- [ ] **Step 8: Widen both hand-maintained column lists.** In `apps/web/src/server/public-site/data.ts`, add to `PublicFixture` (after `conditional`, the last field of the interface at `:207`ff):
 
 ```ts
   /** The club's own broadcast link (V400). Null unless an organiser saved one,
@@ -2421,7 +2509,7 @@ create or replace view public_fixtures_v as
   stream_url: string | null;
 ```
 
-  and extend the SELECT inside `getPublicFixture` (`:711-716`) so its last line reads:
+  and extend the SELECT inside `getPublicFixture` (`:722-729`) so its last line reads (and, THIRD list — review 2026-09-08 finding 45's neighbour: the console run sheet's `FixtureRow` in `stages-panel.tsx` and `RunSheetFixture`'s `Pick<>` in `lib/run-sheet-groups.ts:32` must also carry `stream_url`, which means the console fixtures list usecase's SELECT must return it — grep `listFixtures`/the division fixtures usecase for an explicit column list and add `stream_url` there too; Task 6's `StreamRowSlot` reads `fixture.stream_url` off the ROW):
 
 ```ts
                lane, is_final, third_place, conditional, stream_url
@@ -2619,7 +2707,7 @@ export async function PUT(req: Request, { params }: Ctx) {
 - [ ] **Step 17: Commit.**
   `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/stream-overlay && /usr/bin/git add apps/web/src/lib/stream-url.ts apps/web/src/lib/__tests__/stream-url.test.ts db/migration/deltas/V400__fixture_stream_url.sql apps/web/src/server/public-site/data.ts apps/web/src/server/usecases/public.ts apps/web/src/server/api-v1/schemas.ts apps/web/src/server/usecases/fixtures.ts apps/web/src/server/usecases/__tests__/fixture-stream-url.test.ts apps/web/src/app/api/v1/fixtures/[id]/stream/route.ts apps/web/src/server/api-v1/openapi.ts apps/web/src/server/api-v1/key-scopes.ts apps/web/openapi/v1.json apps/web/openapi/v1.public.json`
   then
-  `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/stream-overlay && /usr/bin/git commit -m "overlay(data): fixtures.stream_url, the exact-host allowlist and PUT /fixtures/{id}/stream" -m "V400 appends stream_url to public_fixtures_v (append-only, R6); both hand-maintained PublicFixture column lists gain it; the DB-backed usecase test proves the value reaches the public view rather than assuming it." -m "Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>" -m "Claude-Session: https://claude.ai/code/session_01UdUR7dcxassJ4FExpVfRRr"`
+  `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/stream-overlay && /usr/bin/git commit -m "overlay(data): fixtures.stream_url, the exact-host allowlist and PUT /fixtures/{id}/stream" -m "V400 appends stream_url to public_fixtures_v (append-only, R6); both hand-maintained PublicFixture column lists gain it; the DB-backed usecase test proves the value reaches the public view rather than assuming it." -m "Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>" -m "Claude-Session: https://claude.ai/code/session_01LJGBoVPAWczYB9c45TD1aw"`
 
 ---
 
@@ -2631,8 +2719,15 @@ export async function PUT(req: Request, { params }: Ctx) {
 - **Not modified, deliberately:** `apps/web/src/lib/entitlement-domains.ts`, `apps/web/src/lib/pricing-matrix.ts`, every pricing dictionary key.
 
 **Interfaces:**
-- Consumes: `hasFeature(orgId: string, featureKey: string, competitionId?: string): Promise<boolean>` (`lib/entitlements.ts:454`); `invalidateOrgEntitlements(orgId: string)` (`lib/entitlements.ts`); `ENTITLEMENT_DOMAINS: { slug: string; features: string[] }[]` (`lib/entitlement-domains.ts:5`); `buildPricingSections` (`lib/pricing-matrix.ts:199`); `seedOrg()` (`server/usecases/__tests__/_rig.ts:23`).
+- Consumes: `hasFeature(orgId: string, featureKey: string, competitionId?: string): Promise<boolean>` (`lib/entitlements.ts:456`); `invalidateOrgEntitlements(orgId: string)` (`lib/entitlements.ts`); `ENTITLEMENT_DOMAINS: { slug: string; features: string[] }[]` (`lib/entitlement-domains.ts:5`); `buildPricingSections` (`lib/pricing-matrix.ts:199`); `seedOrg()` (`server/usecases/__tests__/_rig.ts:23`).
 - Produces: no new TypeScript symbol — the key is data. `plan_entitlements` gains one row per plan for `streaming.overlay`, all `bool_value = false`.
+
+**Acceptance (four kinds, named):**
+- Unit: `entitlement-streaming-overlay.test.ts` — both keys × five plans false; override flips; `ENTITLEMENT_DOMAINS` lists neither key.
+- E2E: `stream-overlay.spec.ts` › `the entitlement gate opens and closes the route, in both directions` + a second non-entitled org (Task 8 Step 1).
+- Smoke: `streamOverlaySuite` › overlay 404 by default / 200 with the override lever (Task 8 Step 6).
+- Regression: the pricing matrix's own tests unchanged; `/pricing` renders no streaming column (Step 5's read).
+- Checklist rows: "Negative assertion needs its positive pair" (false for a fresh org ↔ true after the override row); "Empty-set case" (no catalogue row = denied — the resolver's own rule, asserted); mutation Step 5a (two mutants, killers named).
 
 - [ ] **Step 1: Write the failing test.** Create `apps/web/src/lib/__tests__/entitlement-streaming-overlay.test.ts`:
 
@@ -2781,19 +2876,24 @@ on conflict (plan_key, feature_key) do update
   Expected: `numTotalTests: 5`, `numFailedTests: 0`, `numPendingTests: 0`.
 
 - [ ] **Step 5: Confirm by reading, not by assuming, that no pricing copy is owed.** `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/stream-overlay && grep -an "ENTITLEMENT_DOMAINS" apps/web/src/lib/pricing-matrix.ts`
-  Expected: `:196` and `:199` — `buildPricingSections` maps `ENTITLEMENT_DOMAINS` and nothing else. Record in the PR inventory: "no `pricing.feature.streaming.overlay` key added; `buildPricingSections` (pricing-matrix.ts:199) iterates only `ENTITLEMENT_DOMAINS`, which does not list the key."
+  Expected (re-pinned 2026-09-08 @ b2244879f): `:4` (a comment), `:6` (the import) and `:265` — `buildPricingSections` (`:264`) maps `ENTITLEMENT_DOMAINS` and nothing else. Record in the PR inventory: "no `pricing.feature.streaming.overlay` key added; `buildPricingSections` (pricing-matrix.ts:264-265) iterates only `ENTITLEMENT_DOMAINS` (`entitlement-domains.ts:7`), which does not list either key."
+
+- [ ] **Step 5a: Mutation checks — two, each named (review 2026-09-08 finding 36).**
+  1. `entitlement-domains.ts`: add `"streaming.overlay"` to any section's `features`. Re-run Step 4's command. Expected red: `is in NO ENTITLEMENT_DOMAINS section — that omission is what keeps it off /pricing`. Restore.
+  2. The catalogue half: `psql "<ovl url>" -c "delete from plan_entitlements where feature_key = 'streaming.relay'"` (Flyway will not re-run V401, so this simulates a migration that forgot the second key). Re-run Step 4's command. Expected red: `carries a catalogue row for every plan for streaming.relay, all false` — `expected 0 to be 5`. Restore by re-running V401's insert by hand (`psql -f db/migration/deltas/V401__streaming_entitlements.sql` — idempotent on conflict), re-run to green.
+  Record both with their killers in the PR inventory.
 
 - [ ] **Step 6: Commit.**
   `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/stream-overlay && /usr/bin/git add db/migration/deltas/V401__streaming_entitlements.sql apps/web/src/lib/__tests__/entitlement-streaming-overlay.test.ts`
   then
-  `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/stream-overlay && /usr/bin/git commit -m "overlay(entitlement): streaming.overlay, denied on every plan" -m "V393 writes an explicit false for every plan key so /admin can see the feature; the key stays out of ENTITLEMENT_DOMAINS, which is what keeps it off /pricing (R1). The DB half proves the override flip in both directions." -m "Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>" -m "Claude-Session: https://claude.ai/code/session_01UdUR7dcxassJ4FExpVfRRr"`
+  `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/stream-overlay && /usr/bin/git commit -m "overlay(entitlement): streaming.overlay and streaming.relay, denied on every plan" -m "V401 writes an explicit false for both keys on every plan key so /admin can see the features; neither key enters ENTITLEMENT_DOMAINS, which is what keeps them off /pricing while dark (design §10.4). The DB half proves the override flip in both directions." -m "Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>" -m "Claude-Session: https://claude.ai/code/session_01LJGBoVPAWczYB9c45TD1aw"`
 
 ---
 
 ### Task 5: The overlay route — layout, page, stage, bar, bug, CSS, dictionary
 
 **Files:**
-- Modify: `apps/web/src/server/public-site/data.ts` — new export after `getPublicFixture` (`:747`)
+- Modify: `apps/web/src/server/public-site/data.ts` — new export AFTER `getPublicFixture`'s closing brace (the function opens at `:701` and closes at `:759` on `b2244879f`; `:747` was INSIDE its body — review 2026-09-08 finding 43)
 - Create: `apps/web/src/app/overlay/fixtures/[fixtureId]/layout.tsx`
 - Create: `apps/web/src/app/overlay/fixtures/[fixtureId]/page.tsx`
 - Create: `apps/web/src/components/overlay/theme-registry.ts` (owner answer 18 / Q7)
@@ -2807,10 +2907,10 @@ on conflict (plan_key, feature_key) do update
 - Modify: `apps/web/src/dictionaries/{en,fr,es,nl}/public.json`
 - Modify (generated): `apps/web/src/lib/i18n-keys.ts`
 - Create (Test): `apps/web/src/lib/__tests__/overlay-dict-coverage.test.ts`
-- Modify ONLY IF NEEDED (exists from T1 Task 2): `apps/web/src/components/overlay/tokens.ts` — a new `OVERLAY_PAIR_ROLES` row for any pair this task paints that the table lacks; `__tests__/contrast.test.ts` is T1's and is NOT re-created (re-pinned 2026-09-07)
+- Modify ONLY IF NEEDED (exists from T1 Task 2): `apps/web/src/components/overlay/overlay-tokens.ts` — a new `OVERLAY_PAIR_ROLES` row for any pair this task paints that the table lacks; `__tests__/contrast.test.ts` is T1's and is NOT re-created (re-pinned 2026-09-07)
 
 **Interfaces:**
-- Consumes: `getPublicFixture(orgSlug, compSlug, divSlug, fixtureId)` (`data.ts:689`); `hasFeature` (`entitlements.ts:454`); `getDictionary(locale, "public"): Promise<Dict>` (`lib/i18n.ts:77`); `t(dict, key, vars)` (`lib/i18n-runtime.ts:30`); `toLocale` (`lib/i18n-constants.ts:42`); `decidedOutcomeTemplates(m: MsgFn)` (`scoring-vocab.ts:1320`) with `msgFor(locale, key, vars)` (`messages-i18n.ts:24`); `sportThemeStyle(skinKey): CSSProperties | undefined` (`sport-theme.ts:557`), `sportThemeAttr(skinKey): string | undefined` (`:553`), `resolveSportPalette(skinKey): SportPalette` (`:515`), `SPORT_TOKENS` (`:77`); `useLiveFixture` (Task 1); `overlayModel`, `OverlayModel`, `OverlaySideInput` (Task 2).
+- Consumes: `getPublicFixture(orgSlug, compSlug, divSlug, fixtureId)` (`data.ts:701`); `hasFeature` (`entitlements.ts:456`); `getDictionary(locale, "public"): Promise<Dict>` (`lib/i18n.ts:77`); `t(dict, key, vars)` (`lib/i18n-runtime.ts:30`); `toLocale` (`lib/i18n-constants.ts:42`); `decidedOutcomeTemplates(m: MsgFn)` (`scoring-vocab.ts:1320`) with `msgFor(locale, key, vars)` (`messages-i18n.ts:24`); `sportThemeStyle(skinKey): CSSProperties | undefined` (`sport-theme.ts:557`), `sportThemeAttr(skinKey): string | undefined` (`:553`), `resolveSportPalette(skinKey): SportPalette` (`:515`), `SPORT_TOKENS` (`:77`); `useLiveFixture` (Task 1); `overlayModel`, `OverlayModel`, `OverlaySideInput` (Task 2).
 - Produces:
   - `export async function publicFixtureSlugs(fixtureId: string): Promise<{ orgSlug: string; compSlug: string; divSlug: string } | null>` (`data.ts`)
   - `theme-registry.ts` (owner answer 18 / Q7) — `export type ThemeId = "bar" | "bug"`; `export interface OverlayThemeDef { id: ThemeId; labelKey: string; component: ComponentType<{ model: OverlayModel; tick: [boolean, boolean] }>; sports: "all" | readonly string[] }`; `export const OVERLAY_THEMES: Record<ThemeId, OverlayThemeDef>`; `export function defaultThemeFor(sportKey: string): ThemeId`; `export function themesForSport(sportKey: string): readonly OverlayThemeDef[]`; `export function resolveTheme(styleParam: string | undefined, sportKey: string): OverlayThemeDef`; `export function resolveThemeFrom(themes: Readonly<Record<string, OverlayThemeDef>>, styleParam: string | undefined, sportKey: string, fallback: ThemeId): OverlayThemeDef` (the injectable body `resolveTheme` delegates to — exported ONLY so the suitability branch is reachable in a test, see Step 6a)
@@ -2820,6 +2920,13 @@ on conflict (plan_key, feature_key) do update
   - `export function OverlayBug(props: { model: OverlayModel; tick: [boolean, boolean] }): JSX.Element`
 
 > **Resolution of watch-list 1 (recorded):** the overlay URL carries only a fixture id, and `getPublicFixture` needs three slugs. `publicFixtureSlugs` reads them through the `public_*_v` views — the same visibility filter `fixtureRealtimeEligible` already uses (`data.ts:952-961`) — then the existing `getPublicFixture` runs unchanged, so its `["pub-fixture", fixtureId]` cache key and `divisionTag` are untouched. No overload, no second query path for the fixture itself.
+
+**Acceptance (four kinds, named):**
+- Unit: `theme-registry.test.ts` (with the probe registry), `cookie-consent-overlay-segment.test.tsx`, `use-overlay-clock.test.ts` (six), `overlay-dict-coverage.test.ts`, the T1 contrast sweep re-run after Step 10's role audit.
+- E2E: `stream-overlay.spec.ts` › transparent body, seeded score, style/lang from the URL, unknown style → sport default, banner absent + zero cookies, tick on the changed side only (Task 8 Step 1).
+- Smoke: `streamOverlaySuite` › overlay 200 body contains `ovl-root` (Task 8 Step 6).
+- Regression: the WHOLE `mobile.spec.ts` at seven widths (the cookie-consent edit touches every page); `LiveScore` untouched; the built CSS shows ONE Barlow mount (Step 12).
+- Checklist rows: "Pin the VALUE a control opens at" (the clock opens at the anchor, `12:41`, not merely rendered); "Derive expected values" (contrast from `OVERLAY_TOKENS`); mutants (e) (f) (k) (l) (m) (n) (j2) (j3) — Self-review table.
 
 - [ ] **Step 1: Write the failing dictionary-coverage test.** Create `apps/web/src/lib/__tests__/overlay-dict-coverage.test.ts`:
 
@@ -3189,7 +3296,7 @@ describe("CookieConsent on the overlay segment", () => {
 
   If either cookie assertion fails, the answer's premise is false: STOP and record which script set the cookie rather than deleting the assertion — the correct fix is then keeping that script off the segment too, not accepting the banner.
 
-- [ ] **Step 5: Add the slug helper.** In `apps/web/src/server/public-site/data.ts`, after `getPublicFixture` (`:747`):
+- [ ] **Step 5: Add the slug helper.** In `apps/web/src/server/public-site/data.ts`, immediately after the closing brace of `getPublicFixture` (`export async function getPublicFixture(` at `:701`; its `return { org: shell.org, competition: shell.competition, division, ...detail };` at `:758` and `}` at `:759` on `b2244879f` — grep the return line, insert after the brace that follows it; `:747` is inside the `unstable_cache` closure):
 
 ```ts
 /**
@@ -3223,7 +3330,7 @@ export async function publicFixtureSlugs(
 ```tsx
 // The overlay segment's chrome-less shell. A NESTED layout cannot emit
 // <html>/<body> — `app/layout.tsx:54` owns the only one, and
-// `slideshow/layout.tsx:20` / `embed/layout.tsx:26` are the two precedents for
+// `slideshow/layout.tsx:20` / `embed/layout.tsx:26` (its `<div className=` line on b2244879f; the function opens at `:24`) are the two precedents for
 // returning a <div> instead — so the transparent ground is set by a <style>
 // element scoped to this segment rather than by a prop. OBS composites the
 // page over the camera, so anything painted here goes on air: no header, no
@@ -3529,6 +3636,12 @@ export default async function OverlayPage({
 
   // Competition-scoped, like every other spectator-side entitlement read here:
   // an Event Pass grants for the competition it was bought for.
+  // Deviation from design §3.1's 2-arg org-wide read, recorded (review
+  // 2026-09-08 finding 59): competition-scoped on purpose — an Event Pass
+  // grants for the competition it was bought for (`getPublicFixture`'s own
+  // realtime read does the same at data.ts:743-746). The override layer
+  // resolves first either way (entitlements.ts:443), so the test org is
+  // unaffected; a 2-arg read would deny a paid-for pass fixture.
   if (!(await hasFeature(org.id, "streaming.overlay", competition.id))) notFound();
 
   // `?lang` wins for a club broadcasting in a language other than the org's
@@ -4041,7 +4154,7 @@ export function OverlayBug({ model, tick }: { model: OverlayModel; tick: [boolea
 }
 ```
 
-- [ ] **Step 10: The contrast gate is T1's — audit the ROLE table, do not write a second test (amended 2026-09-07).** `apps/web/src/components/overlay/__tests__/contrast.test.ts` exists from T1 Task 2 and sweeps `OVERLAY_PAIR_ROLES` × every sport from `SPORT_PALETTES` (`components/overlay/tokens.ts`). This step: open Step 4's `.ovl-*` CSS and Step 9's two skins and list every (foreground, background) token pair they PAINT; for each, name the `OVERLAY_PAIR_ROLES` row whose `where` covers it. A pair with no row is added to `tokens.ts` as one row (id, fg, bg, floor by rendered size — ≥ 24 px or ≥ 18.66 px bold → 3, else 4.5 — and `where` naming the class). Paste the audit table (pair → row id) into the PR inventory. Then `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/stream-overlay/apps/web && npx vitest run src/components/overlay --reporter=json --outputFile=/tmp/ovl-w1/t5-contrast.json` — expected: T1's counts plus one row's worth of cases per added role, and any red row recorded as a FINDING against `_THEMES.md` (never a lowered floor). Recorded weak spot: the sweep cannot see a pair the table lacks — the audit above is the killer for "paint a pair without a row", and the reviewer re-runs it.
+- [ ] **Step 10: The contrast gate is T1's — audit the ROLE table, do not write a second test (amended 2026-09-07).** `apps/web/src/components/overlay/__tests__/contrast.test.ts` exists from T1 Task 2 and sweeps `OVERLAY_PAIR_ROLES` × every sport from `SPORT_PALETTES` (`components/overlay/overlay-tokens.ts`). This step: open Step 4's `.ovl-*` CSS and Step 9's two skins and list every (foreground, background) token pair they PAINT; for each, name the `OVERLAY_PAIR_ROLES` row whose `where` covers it. A pair with no row is added to `overlay-tokens.ts` as one row (id, fg, bg, floor by rendered size — ≥ 24 px or ≥ 18.66 px bold → 3, else 4.5 — and `where` naming the class). Paste the audit table (pair → row id) into the PR inventory. Then `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/stream-overlay/apps/web && npx vitest run src/components/overlay --reporter=json --outputFile=/tmp/ovl-w1/t5-contrast.json` — expected: T1's counts plus one row's worth of cases per added role, and any red row recorded as a FINDING against `_THEMES.md` (never a lowered floor). Recorded weak spot: the sweep cannot see a pair the table lacks — the audit above is the killer for "paint a pair without a row", and the reviewer re-runs it.
 
 - [ ] **Step 11: Run the unit gate — expect PASS.** `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/stream-overlay/apps/web && npx vitest run src/lib/__tests__/overlay-dict-coverage.test.ts src/components/overlay --reporter=json --outputFile=/tmp/ovl-w1/t5-green.json`
   Expected: `numFailedTests: 0`; dict coverage contributes 10 tests, contrast 45. If a contrast case reds, that is a REAL finding about `SPORT_PALETTES` on a new surface — record it for the owner and raise the floor question; do NOT lower the threshold.
@@ -4051,7 +4164,7 @@ export function OverlayBug({ model, tick }: { model: OverlayModel; tick: [boolea
 - [ ] **Step 13: Commit.**
   `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/stream-overlay && /usr/bin/git add apps/web/src/app/overlay apps/web/src/components/overlay apps/web/src/app/globals.css apps/web/src/components/cookie-consent.tsx apps/web/src/components/__tests__/cookie-consent-overlay-segment.test.tsx apps/web/src/server/public-site/data.ts apps/web/src/dictionaries apps/web/src/lib/i18n-keys.ts apps/web/src/lib/__tests__/overlay-dict-coverage.test.ts`
   then
-  `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/stream-overlay && /usr/bin/git commit -m "overlay(route): the transparent per-fixture page, in the sport's own colours" -m "Nested layout for the transparent ground, two server gates that both 404, one client stage scaling a native 1920x1080 canvas, and the three motions from _THEMES.md 6. Copy in four locales." -m "Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>" -m "Claude-Session: https://claude.ai/code/session_01UdUR7dcxassJ4FExpVfRRr"`
+  `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/stream-overlay && /usr/bin/git commit -m "overlay(route): the transparent per-fixture page, in the sport's own colours" -m "Nested layout for the transparent ground, two server gates that both 404, one client stage scaling a native 1920x1080 canvas, and the three motions from _THEMES.md 6. Copy in four locales." -m "Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>" -m "Claude-Session: https://claude.ai/code/session_01LJGBoVPAWczYB9c45TD1aw"`
 
 ---
 
@@ -4061,10 +4174,10 @@ export function OverlayBug({ model, tick }: { model: OverlayModel; tick: [boolea
 - Create: `apps/web/src/components/v2/fixture-stream-panel.tsx`
 - Create: `apps/web/src/components/v2/stream-phone-tab.tsx` (Step 3b — the Phone tab shell, D-W1-1)
 - Modify: `apps/web/src/components/v2/stages-panel.tsx` — `Props` (beside `canEdit` `:205`), the destructure, `openStreamFor` from the URL, and the `<RunSheet>` mount (`:1167-1183`) — re-pinned 2026-09-07 @ fb99bbd4c: `FixtureLine` was retired by desk W2 (#725)
-- Modify: `apps/web/src/components/v2/desk/run-sheet.tsx` — Props (`:44-80`) and both `<RunSheetRow>` call sites (`:261`, `:296`)
-- Modify: `apps/web/src/components/v2/desk/run-sheet-row.tsx` — ONE import + ONE conditional line beside `run-sheet-edit-time` (`:377`); **desk W3 is editing this file** — rebase after any W3 merge, never race it
+- Modify: `apps/web/src/components/v2/desk/run-sheet.tsx` — the inline destructure of `export function RunSheet({` (`:36`; there is no separate `Props` interface — pin the symbol), `RunSheetRowWithRule`'s prop type, and ALL FOUR `<RunSheetRow` mounts (`:355` day block, `:390` unscheduled, `:428` **settled** — the decided/finalized/voided lane where owner Q6's replay ruling needs the toggle — and `:669` inside `RunSheetRowWithRule` via `{...rest}`; on b2244879f, review 2026-09-08 finding 24 — verify with `grep -an "<RunSheetRow" apps/web/src/components/v2/desk/run-sheet.tsx` → 4 hits)
+- Modify: `apps/web/src/components/v2/desk/run-sheet-row.tsx` — ONE import + ONE conditional line beside the SYMBOL `data-testid="run-sheet-edit-time"` (`:407` on `main` b2244879f — desk W3 #740 has MERGED and rewrote 114 lines here; grep the testid, never seek a line)
 - Modify (Test): `apps/web/src/components/v2/desk/__tests__/run-sheet-row.test.tsx` — Step 3a's gate cases
-- Modify: `apps/web/src/app/o/[orgSlug]/c/[compSlug]/d/[divSlug]/page.tsx` — the `Promise.all` (`:124-138`) and the `<StagesPanel>` mount (`:596`)
+- Modify: `apps/web/src/app/o/[orgSlug]/c/[compSlug]/d/[divSlug]/page.tsx` — the `Promise.all` (`:126-138`) and the `<StagesPanel` mount (`:617` on b2244879f; re-pinned 2026-09-08)
 - Modify: `apps/web/src/dictionaries/{en,fr,es,nl}/ui.json`
 - Modify (generated): `apps/web/src/lib/i18n-keys.ts`
 
@@ -4073,9 +4186,9 @@ export function OverlayBug({ model, tick }: { model: OverlayModel; tick: [boolea
 - Produces:
   - `export interface FixtureStreamPanelProps { fixtureId: string; sportKey: string; homeName: string; awayName: string; homeEntrantId: string; awayEntrantId: string; initialStreamUrl: string | null; relayEntitled: boolean; defaultTab?: "obs" | "phone" }` (amended 2026-09-07)
   - `export function FixtureStreamPanel(props: FixtureStreamPanelProps): JSX.Element`
-  - `export function StreamRowSlot(props: { fixture: { id: string; home_entrant_id: string | null; away_entrant_id: string | null; stream_url: string | null }; sportKey: string; relayEntitled: boolean; entrantNames: Record<string, string>; defaultOpen: boolean }): JSX.Element` — the toggle + expander the row mounts (Step 3b)
+  - `export function StreamRowSlot(props: { fixture: { id: string; home_entrant_id: string | null; away_entrant_id: string | null; stream_url: string | null }; sportKey: string; relayEntitled: boolean; entrantNames: Record<string, string>; defaultOpen: boolean; defaultTab: "obs" | "phone" }): JSX.Element` — the toggle + expander the row mounts (Step 3b)
   - `export function StreamPhoneTab(props: { relayEntitled: boolean }): JSX.Element` and `export const CREDIT_PACKS = [1, 5, 20] as const` (`stream-phone-tab.tsx`, Step 3b)
-  - `StagesPanel` `Props` gains `sportKey: string; streamingEntitled: boolean; relayEntitled: boolean`; `RunSheet` and `RunSheetRow` gain the same three plus `openStreamFor: string | null` (Step 4)
+  - `StagesPanel` `Props` gains `sportKey: string; streamingEntitled: boolean; relayEntitled: boolean`; `RunSheet`, `RunSheetRowWithRule` and `RunSheetRow` gain the same three plus `openStreamFor: string | null; openStreamTab: "obs" | "phone"` (Step 4)
 
 > **Ruling applied (owner answer 17 / Q6, 2026-09-06: "Agree"; wave prompt scope 6, over the spec):** the toggle's gate is `canEdit && streamingEntitled` and **nothing else** — in particular **NOT** the schedule toggle's `fixture.status === "scheduled"`, which sits on the very next line of the same row and is the obvious thing to copy.
 >
@@ -4083,35 +4196,14 @@ export function OverlayBug({ model, tick }: { model: OverlayModel; tick: [boolea
 >
 > **Pinned by a test, not by this paragraph** (Step 3a below): the panel toggle is asserted present on a **decided** fixture, and absent when either half of the real gate is false. A gate that is only stated in prose is a gate nothing kills.
 
-- [ ] **Step 3a: Pin the gate — the panel opens at EVERY status.** Add to `apps/web/src/components/v2/desk/__tests__/run-sheet-row.test.tsx` (EXISTS on `main`; re-pinned 2026-09-07 @ fb99bbd4c — `FixtureLine` was retired by desk W2, the row is `RunSheetRow`), a static-markup test over the row's gate, using that file's own render helper and fixture builder (read three neighbouring cases first). `apps/web` vitest is `environment: "node"`, so this is a render-to-markup assertion, not a click:
+**Acceptance (four kinds, named):**
+- Unit: `run-sheet-row.test.tsx` (Step 3a — every status from the wire enum, both negative pairs, the `?stream=` open), `run-sheet-filters.test.tsx` (Step 4d — three lanes → three toggles; the tree has four mounts).
+- E2E: `stream-overlay.spec.ts` › console at 320/768/1280 (control-set diff, 44 px by `elementFromPoint`), save valid/invalid, not-entitled org (Task 8 Step 1); the settled-lane panel (Step 2b).
+- Smoke: `streamOverlaySuite` › the division fixtures tab answers 200 and, for the entitled org, its HTML carries `data-testid="fixture-stream-toggle"` (anchor on `="`).
+- Regression: the row test's existing cases unchanged; the WHOLE `e2e/run-sheet.spec.ts` (desk W2/W3's own spec) green after the row edit.
+- Checklist rows: "Compare control SET, not box size" (320 ↔ 1280 diff in the e2e and the T1b manifest row); "Mobile-first" (44 px at 320 asserted); "Negative assertion needs its positive pair" (`run-sheet-edit-time` present on scheduled, absent on decided, while the toggle shows on both); mutation Step 7a (three mutants).
 
-```ts
-// Owner answer 17 (Q6): the stream toggle is gated on `canEdit &&
-// streamingEntitled` ONLY. A club attaches the REPLAY link after the final
-// whistle, so a `status === "scheduled"` gate — the one the schedule-edit
-// button beside it uses — would hide the control exactly when it is wanted.
-//
-// The decided row is the case that matters: every other status would pass
-// even with the wrong gate copied in, because `scheduled` is the default in
-// most fixtures a test builds.
-it.each(["scheduled", "in_play", "completed", "forfeit", "abandoned"])(
-  "the stream toggle is present at status %s when canEdit && streamingEntitled",
-  (status) => { /* render RunSheetRow with this status, canEdit: true,
-                   streamingEntitled: true (the file's own helper); expect
-                   `fixture-stream-toggle` in the markup */ },
-);
-
-it("is absent when the org is not entitled, at a status where it would otherwise show", () => {
-  // streamingEntitled: false, status: "completed" — the NEGATIVE pair, so
-  // "present at every status" cannot pass by the control being unconditional.
-});
-
-it("is absent when canEdit is false, at the same status", () => {});
-```
-
-  `run-sheet-row.test.tsx` already mounts `RunSheetRow` to markup (read its helper before writing); if a status the row's fixture type refuses is in the list above, drop that one row and record it. If the row is somehow not mountable, assert the same three facts through `stream-overlay.spec.ts` in Task 8 instead and record WHICH here — but do not drop the decided-status row: it is the whole point of the ruling.
-
-- [ ] **Step 1: Add the panel copy in all four locales.** `apps/web/src/dictionaries/en/ui.json` (the `embed.*` block at `:419-421` is the copy-button precedent):
+- [ ] **Step 1: Add the panel copy in all four locales.** `apps/web/src/dictionaries/en/ui.json` (the `embed.*` block — `grep -a -n -F '"embed"' apps/web/src/dictionaries/en/ui.json`; if it is not in `ui.json` the console namespace is `console.json` per RP9, record which — is the copy-button precedent):
 
 ```json
   "stream.toggle.open": "Stream",
@@ -4516,6 +4608,10 @@ export function StreamRowSlot(props: {
   relayEntitled: boolean;
   entrantNames: Record<string, string>;
   defaultOpen: boolean;
+  /** Which tab the expander opens on. `?stream=<id>&streamTab=phone` is how
+   *  R1's Stripe `success_url` lands on the Phone tab (design §5.3); today's
+   *  only caller passes what the URL says, default "obs" (review finding 39). */
+  defaultTab: "obs" | "phone";
 }) {
   const msg = useMsg();
   const [open, setOpen] = useState(props.defaultOpen);
@@ -4543,7 +4639,7 @@ export function StreamRowSlot(props: {
             awayEntrantId={props.fixture.away_entrant_id ?? "away"}
             initialStreamUrl={props.fixture.stream_url}
             relayEntitled={props.relayEntitled}
-            defaultTab={props.defaultOpen ? "obs" : "obs"}
+            defaultTab={props.defaultTab}
           />
         </div>
       ) : null}
@@ -4552,7 +4648,91 @@ export function StreamRowSlot(props: {
 }
 ```
 
-  RE-PIN: `RunSheetFixture` (`lib/run-sheet-groups.ts`) must carry `stream_url` — Task 3 Step 8 widened `PublicFixture`; if the run-sheet's fixture type is a different projection, add `stream_url: string | null` to it at the ONE place it is built (`toRunSheetFixture`, `stages-panel.tsx:1168`) and record which. `basis-full` puts the expander on its own line under the row in the row's flex-wrap (read the row's root classes at `:330-360` — if the row is not `flex-wrap`, wrap the slot's expander in the row's existing "details" region instead and record it).
+  RE-PIN: `RunSheetFixture` is a `Pick<>` (`lib/run-sheet-groups.ts:32`) that does NOT carry `stream_url` today — add `"stream_url"` to the Pick, `stream_url: string | null` to the hand-declared `FixtureRow` in `stages-panel.tsx`, and confirm `toRunSheetFixture` (DEFINED at `stages-panel.tsx:141` on b2244879f — `:1126` is the `<RunSheet` mount, the wrong place; review 2026-09-08 finding 45) spreads it through (`...f` does); Task 3 Step 8's third list makes the console fixtures usecase return the column. Record which usecase. `basis-full` puts the expander on its own line under the row in the row's flex-wrap (read the row's root classes at `:330-360` — if the row is not `flex-wrap`, wrap the slot's expander in the row's existing "details" region instead and record it).
+
+- [ ] **Step 3a: Pin the gate — the panel opens at EVERY status.** Add to `apps/web/src/components/v2/desk/__tests__/run-sheet-row.test.tsx` (EXISTS on `main`; re-pinned 2026-09-07 @ fb99bbd4c — `FixtureLine` was retired by desk W2, the row is `RunSheetRow`), a static-markup test over the row's gate, using that file's own render helper and fixture builder (read three neighbouring cases first). `apps/web` vitest is `environment: "node"`, so this is a render-to-markup assertion, not a click:
+
+```ts
+// Owner answer 17 (Q6): the stream toggle is gated on `canEdit &&
+// streamingEntitled` ONLY. A club attaches the REPLAY link after the final
+// whistle, so a `status === "scheduled"` gate — the one the schedule-edit
+// button beside it uses — would hide the control exactly when it is wanted.
+//
+// The decided row is the case that matters: every other status would pass
+// even with the wrong gate copied in, because `scheduled` is the default in
+// most fixtures a test builds.
+// Imports this block adds to the file: `import { PatchFixture } from "@/server/api-v1/schemas";`
+// and `import type { z } from "zod";` (a vitest file, not a client component —
+// the @/server import is fine here).
+// `rowHtml(fixture, canEdit, stageName)` is the file's own helper (:63-77);
+// it gains four trailing props with defaults so every existing call is
+// untouched: `rowHtml(fixture, canEdit = true, stageName?, stream = { streamingEntitled: false, relayEntitled: false, sportKey: "cricket", openStreamFor: null, openStreamTab: "obs" as const })`,
+// spread onto <RunSheetRow … {...stream} />. `fx()` (:36) gains
+// `stream_url: null` in its base object (RunSheetFixture's Pick widens in
+// Task 3 Step 8's third list).
+
+/** The seven values of `fixtures.status` — read off the wire schema, never
+ *  typed here (server/api-v1/schemas.ts: `status: z.enum([...])` at :1188 on
+ *  b2244879f), so a new status joins the table by itself. */
+const STATUSES = (PatchFixture.shape.status as z.ZodEnum<[string, ...string[]]>).options;
+
+describe("the stream toggle opens at EVERY fixture status (owner Q6: the replay link is pasted after the whistle)", () => {
+  it("the status table is the whole enum, not a sample", () => {
+    expect([...STATUSES].sort()).toEqual(["abandoned", "cancelled", "decided", "finalized", "in_play", "scheduled"].sort().concat("forfeited").sort());
+    expect(STATUSES.length).toBe(7);
+  });
+
+  it.each(STATUSES)("present at status %s when canEdit && streamingEntitled", (status) => {
+    const html = rowHtml(fx({ status, outcome: status === "decided" || status === "finalized" ? { kind: "win", winner: "e1" } : null }), true, undefined, {
+      streamingEntitled: true, relayEntitled: false, sportKey: "cricket", openStreamFor: null, openStreamTab: "obs",
+    });
+    expectRowRendered(html);
+    expect(html, `status ${status}`).toContain('data-testid="fixture-stream-toggle"');
+    // aria-expanded="false" — the panel is CLOSED at mount unless ?stream= names this row.
+    expect(html).toMatch(/data-testid="fixture-stream-toggle"[^>]*aria-expanded="false"/);
+  });
+
+  it("is absent when the org is not entitled, on a DECIDED row — the negative pair, so 'present at every status' cannot pass by the control being unconditional", () => {
+    const html = rowHtml(fx({ status: "decided", outcome: { kind: "win", winner: "e1" } }), true, undefined, {
+      streamingEntitled: false, relayEntitled: false, sportKey: "cricket", openStreamFor: null, openStreamTab: "obs",
+    });
+    expectRowRendered(html);
+    expect(html).not.toContain('data-testid="fixture-stream-toggle"');
+  });
+
+  it("is absent when canEdit is false, at the same status, while the row still renders", () => {
+    const html = rowHtml(fx({ status: "decided", outcome: { kind: "win", winner: "e1" } }), false, undefined, {
+      streamingEntitled: true, relayEntitled: false, sportKey: "cricket", openStreamFor: null, openStreamTab: "obs",
+    });
+    expectRowRendered(html);
+    expect(html).not.toContain('data-testid="fixture-stream-toggle"');
+  });
+
+  it("the gate is NOT the edit-time gate: on a scheduled row both controls render; on a decided row only the stream toggle does (the positive pair for `run-sheet-edit-time`)", () => {
+    const stream = { streamingEntitled: true, relayEntitled: false, sportKey: "cricket", openStreamFor: null, openStreamTab: "obs" as const };
+    const scheduled = rowHtml(fx({ status: "scheduled" }), true, undefined, stream);
+    expect(scheduled).toContain('data-testid="run-sheet-edit-time"');
+    expect(scheduled).toContain('data-testid="fixture-stream-toggle"');
+    const decided = rowHtml(fx({ status: "decided", outcome: { kind: "win", winner: "e1" } }), true, undefined, stream);
+    expect(decided, "canEditFixtureTime hides the time editor on a decided row").not.toContain('data-testid="run-sheet-edit-time"');
+    expect(decided, "…and the stream toggle must NOT copy that gate").toContain('data-testid="fixture-stream-toggle"');
+  });
+
+  it("?stream=<this id> opens the panel at mount, on the tab the URL names", () => {
+    const stream = { streamingEntitled: true, relayEntitled: false, sportKey: "cricket", openStreamFor: "f1", openStreamTab: "phone" as const };
+    const html = rowHtml(fx({ status: "in_play" }), true, undefined, stream);
+    expect(html).toMatch(/data-testid="fixture-stream-toggle"[^>]*aria-expanded="true"/);
+    expect(html).toContain('data-testid="fixture-stream-panel"');
+    expect(html).toMatch(/data-testid="stream-tab-phone"[^>]*aria-selected="true"/);
+    const other = rowHtml(fx({ id: "f2", status: "in_play" }), true, undefined, stream);
+    expect(other, "another row's id does not open THIS row").toMatch(/data-testid="fixture-stream-toggle"[^>]*aria-expanded="false"/);
+  });
+});
+```
+
+  RE-PIN: `PatchFixture.shape.status` — if `PatchFixture` wraps the enum (`.partial()`/`.optional()`), unwrap with `.unwrap()` or import the status enum by its own name from `schemas.ts` (grep `z.enum(["scheduled", "in_play"`); the point is that the table is DERIVED. `outcome`'s shape for a decided row: copy the file's own `outcome` fixture from its `:160` case.
+
+  `run-sheet-row.test.tsx` already mounts `RunSheetRow` to markup (read its helper before writing); if a status the row's fixture type refuses is in the list above, drop that one row and record it. If the row is somehow not mountable, assert the same three facts through `stream-overlay.spec.ts` in Task 8 instead and record WHICH here — but do not drop the decided-status row: it is the whole point of the ruling.
 
 - [ ] **Step 4: Thread the props (amended 2026-09-07 @ fb99bbd4c — `FixtureLine` is retired; the run sheet is `stages-panel.tsx` → `run-sheet.tsx` → `run-sheet-row.tsx`).**
 
@@ -4579,17 +4759,19 @@ export function StreamRowSlot(props: {
         openStreamFor={openStreamFor}
 ```
 
-  where `openStreamFor` is read ONCE beside the existing `filter` state: `const openStreamFor = useSearchParams().get("stream");` (`stages-panel.tsx` is a client component — it holds `setFilter`; RE-PIN by reading its first line for `"use client"`, and if the tab reads its URL state through a prop from the page instead, thread `stream` the way `tab` arrives).
+  plus `openStreamTab={openStreamTab}`, where both are read ONCE beside the existing `filter` state: `const sp = useSearchParams(); const openStreamFor = sp.get("stream"); const openStreamTab = sp.get("streamTab") === "phone" ? "phone" : "obs";` (`stages-panel.tsx` is a client component — it holds `setFilter`; RE-PIN by reading its first line for `"use client"`, and if the tab reads its URL state through a prop from the page instead, thread `stream` the way `tab` arrives).
 
-  (b) `apps/web/src/components/v2/desk/run-sheet.tsx` — Props (`:44-80`) gain the same three plus `openStreamFor: string | null`; BOTH `<RunSheetRow>` call sites (`:261`, `:296`) pass them through.
+  (b) `apps/web/src/components/v2/desk/run-sheet.tsx` — the `RunSheet({ … }: { … })` inline destructure and type (`:36-80`; no separate `Props`) gain the three plus `openStreamFor: string | null; openStreamTab: "obs" | "phone"`, and **ALL FOUR** `<RunSheetRow` mounts pass them through (review 2026-09-08 finding 24 — the previous text threaded two): `:355` (the day block, `r.fixtures.map`), `:390` (the `unscheduled` block), `:428` (the **`settled`** block — decided / finalized / voided fixtures with no recorded time; this is the lane where owner Q6's ruling bites, because a club pastes the REPLAY link after the final whistle), and `:669` (`RunSheetRowWithRule`, which spreads `{...rest}` — its own prop type at `:655-666` gains the five fields so `rest` carries them). Verify with `grep -an "<RunSheetRow" apps/web/src/components/v2/desk/run-sheet.tsx` → 4 hits, every one passing `streamingEntitled`. Pinned by Step 4d's mount-count test.
 
-  (c) `apps/web/src/components/v2/desk/run-sheet-row.tsx` — the ONE import `import { StreamRowSlot } from "@/components/v2/fixture-stream-panel";`, the four props on the row's prop type (`sportKey: string; streamingEntitled: boolean; relayEntitled: boolean; openStreamFor: string | null;`), and the ONE conditional line immediately AFTER the `canEditFixtureTime(...) ? <button data-testid="run-sheet-edit-time" …> : <span …>` expression (`:365-392`; RE-PIN the closing of that ternary and place this as its next sibling):
+  (c) `apps/web/src/components/v2/desk/run-sheet-row.tsx` — the ONE import `import { StreamRowSlot } from "@/components/v2/fixture-stream-panel";`, the five props on the row's prop type (`sportKey: string; streamingEntitled: boolean; relayEntitled: boolean; openStreamFor: string | null; openStreamTab: "obs" | "phone";`), and the ONE conditional line immediately AFTER the `canEditFixtureTime(...) ? <button data-testid="run-sheet-edit-time" …> : <span …>` expression — find it by the SYMBOL, never a line: `grep -an 'data-testid="run-sheet-edit-time"' apps/web/src/components/v2/desk/run-sheet-row.tsx` (`:407` on `main` b2244879f after desk W3 #740 rewrote 114 lines of this file — FS14; review 2026-09-08 finding 8), then RE-PIN the closing of that ternary and place this as its next sibling:
 
 ```tsx
           {canEdit && streamingEntitled ? (
-            <StreamRowSlot fixture={fixture} sportKey={sportKey} relayEntitled={relayEntitled} entrantNames={entrantNames} defaultOpen={openStreamFor === fixture.id} />
+            <StreamRowSlot fixture={fixture} sportKey={sportKey} relayEntitled={relayEntitled} entrantNames={entrantNames} defaultOpen={openStreamFor === fixture.id} defaultTab={openStreamTab} />
           ) : null}
 ```
+
+  (d) The mount-count test — `apps/web/src/components/v2/desk/__tests__/run-sheet-filters.test.tsx` already renders `<RunSheet>` to static markup (read its helper first); add one case that builds blocks with ONE fixture in EACH lane (a day block, `unscheduled`, and `settled` — a `decided` fixture with `scheduled_at: null`) plus `streamingEntitled: true, canEdit: true`, and asserts the markup contains exactly THREE `data-testid="fixture-stream-toggle"` (the count of fixtures rendered), and ZERO when `streamingEntitled: false`. Then the positive proof from the TREE, not a mock: `expect((readFileSync(join(process.cwd(), "src/components/v2/desk/run-sheet.tsx"), "utf8").match(/<RunSheetRow\b/g) ?? []).length).toBe(4)` beside `expect(… .match(/streamingEntitled=\{streamingEntitled\}/g) … ).toBe(3)` (three explicit mounts; the fourth spreads `rest`) — a fifth lane added later reds this until it is threaded (recurring class 13: check both directions).
 
   Gate = `canEdit && streamingEntitled` and NOTHING else — not the edit-time predicate on the line above (owner answer 17 / Q6: the toggle opens at every status; a club attaches the replay link after the whistle). Step 3a's test pins it on a decided row.
 
@@ -4605,7 +4787,7 @@ export function StreamRowSlot(props: {
     hasFeature(auth.orgId, "streaming.relay"),
 ```
 
-  widen the destructure to `const [competition, stages, fixtures, entrants, scheduleSettings, canExport, streamingEntitled, venues] = await Promise.all([…]);` (matching the array's new order — put the new call immediately before `listVenues` so both lists stay aligned), and on the `<StagesPanel …>` mount (`:596`) add:
+  widen the destructure to `const [competition, stages, fixtures, entrants, scheduleSettings, canExport, streamingEntitled, relayEntitled, venues] = await Promise.all([…]);` (matching the array's new order — put the new call immediately before `listVenues` so both lists stay aligned), and on the `<StagesPanel …>` mount (`:596`) add:
 
 ```tsx
             sportKey={division.sport_key}
@@ -4621,10 +4803,16 @@ export function StreamRowSlot(props: {
 - [ ] **Step 7: `tsc` — the only thing that can see the prop threading.** `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/stream-overlay && npx tsc --noEmit -p apps/web/tsconfig.json; echo "EXIT=$?"`
   Expected: `EXIT=0`. `rtk` prints "tsc clean" while tsc exits 1 — read the `EXIT=` line, not the wrapper's verdict. A local `next build` skips typecheck entirely and proves nothing here.
 
+- [ ] **Step 7a: Mutation checks — three, each named (review 2026-09-08 findings 34 and 36).**
+  1. (o) `run-sheet-row.tsx`: change `canEdit && streamingEntitled` to `canEdit`. Re-run Step 6's command. Expected red: `run-sheet-row.test.tsx` › `is absent when the org is not entitled, on a DECIDED row`. Restore.
+  2. (p) `run-sheet.tsx`: delete `streamingEntitled={streamingEntitled}` from the `settled` mount only. Expected red: `run-sheet-filters.test.tsx` › the mount-count case — `expected 2 to be 3` (tsc also reds on the missing required prop; run vitest anyway — the count is the witness that the LANE is covered, not merely the type). Restore.
+  3. (r) `fixture-stream-panel.tsx` `StreamRowSlot`: `useState(props.defaultOpen)` → `useState(false)`. Expected red: `run-sheet-row.test.tsx` › `?stream=<this id> opens the panel at mount…` — `aria-expanded="false"`. Restore.
+  Record all three with their killers in the PR inventory.
+
 - [ ] **Step 8: Commit.**
   `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/stream-overlay && /usr/bin/git add apps/web/src/components/v2/fixture-stream-panel.tsx apps/web/src/components/v2/stages-panel.tsx "apps/web/src/app/o/[orgSlug]/c/[compSlug]/d/[divSlug]/page.tsx" apps/web/src/dictionaries apps/web/src/lib/i18n-keys.ts`
   then
-  `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/stream-overlay && /usr/bin/git commit -m "overlay(console): Stream this match on the fixture row" -m "Style tabs over a preview that is the real OverlayStage on the fixture's own score, the overlay link with copy, three numbered steps and the stream-link save. One import and one conditional line in stages-panel.tsx (R11); sportKey and streamingEntitled threaded from the division page." -m "Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>" -m "Claude-Session: https://claude.ai/code/session_01UdUR7dcxassJ4FExpVfRRr"`
+  `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/stream-overlay && /usr/bin/git commit -m "overlay(console): Stream this match on the fixture row" -m "Style tabs over a preview that is the real OverlayStage on the fixture's own score, the overlay link with copy, three numbered steps and the stream-link save. One import and one conditional line in stages-panel.tsx (R11); sportKey and streamingEntitled threaded from the division page." -m "Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>" -m "Claude-Session: https://claude.ai/code/session_01LJGBoVPAWczYB9c45TD1aw"`
 
 ---
 
@@ -4636,6 +4824,13 @@ export function StreamRowSlot(props: {
 **Interfaces:**
 - Consumes: `fixture.stream_url: string | null` (Task 3), `fixture.status: string`, `getDictionary(locale, "public")` + `t(dict, key)` — the page already resolves `org.default_locale` and holds a `msgFn` for the `ui` namespace (`:23-24`), so the two `public.overlay.*` labels need the `public` dict, loaded the same way `news/[postSlug]/page.tsx:62` does.
 - Produces: no exported symbol; one `<a data-testid="public-stream-link">`.
+
+**Acceptance (four kinds, named):**
+- Unit: none of its own beyond `overlay-dict-coverage.test.ts` (the link is a server render with no logic beyond the status split) — stated, not implied.
+- E2E: `stream-overlay.spec.ts` › `the public match page carries the saved link, and says Replay once decided` (present / href / rel / flips on the same open page), plus the VOID row Step 4a adds.
+- Smoke: `streamOverlaySuite` › the public fixture HTML contains `data-testid="public-stream-link"` with the saved href when `stream_url` is set, and NOT when null (anchor on `="`).
+- Regression: the public fixture page's existing spec(s) green; `getDictionary` keys unchanged for other surfaces.
+- Checklist rows: "Negative assertion needs its positive pair" (link present with a URL ↔ absent with null ↔ absent for a VOID status); mutation Step 4a (two mutants).
 
 - [ ] **Step 1: Write the failing e2e assertion (the unit layer cannot see this).** Append to `apps/web/e2e/walkthrough/stream-overlay.spec.ts` (created in Task 8's Step 1 — do Task 8 Step 1 first, or write this block into the file as you create it):
 
@@ -4700,10 +4895,15 @@ export function StreamRowSlot(props: {
 
 - [ ] **Step 4: Run — expect PASS.** Re-run Step 2's command. Expected: that test green. Also confirm the negative pair by hand once: a fixture with no saved link renders NO `public-stream-link` node at all (`await expect(page.getByTestId("public-stream-link")).toHaveCount(0)`), which Task 8's spec asserts.
 
+- [ ] **Step 4a: Mutation checks — two, each named (review 2026-09-08 finding 36).**
+  1. Drop `rel="noopener"` from the anchor. Re-run Step 2's command. Expected red: the link case's `toHaveAttribute("rel", "noopener")` — if Step 1's case does not assert `rel`, add that assertion NOW (a mutant nothing kills is a missing test), then run. Restore.
+  2. Remove the `VOID_STATUSES` guard so the anchor renders for `abandoned` / `cancelled` / `forfeited`. Expected red: the link case's void row — `setFixtureStatusSql(id, "abandoned")` then `expect(page.getByTestId("public-stream-link")).toHaveCount(0)`; add the row to Step 1's case if absent. Restore and re-run to green.
+  Record both with their killers in the PR inventory.
+
 - [ ] **Step 5: Commit.**
   `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/stream-overlay && /usr/bin/git add "apps/web/src/app/(public)/shared/[orgSlug]/[competitionSlug]/[divisionSlug]/fixtures/[fixtureId]/page.tsx"`
   then
-  `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/stream-overlay && /usr/bin/git commit -m "overlay(public): Watch live / Replay on the match page" -m "One anchor under the headline, target=_blank rel=noopener, labelled by fixture status. Placement only — spectator W1 owns this page's composition (spec 7)." -m "Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>" -m "Claude-Session: https://claude.ai/code/session_01UdUR7dcxassJ4FExpVfRRr"`
+  `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/stream-overlay && /usr/bin/git commit -m "overlay(public): Watch live / Replay on the match page" -m "One anchor under the headline, target=_blank rel=noopener, labelled by fixture status. Placement only — spectator W1 owns this page's composition (spec 7)." -m "Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>" -m "Claude-Session: https://claude.ai/code/session_01LJGBoVPAWczYB9c45TD1aw"`
 
 ---
 
@@ -4716,14 +4916,21 @@ export function StreamRowSlot(props: {
 - Modify: `apps/web/src/lib/__tests__/e2e-ci-wiring.test.ts` — `WALKTHROUGH_SPECS` gains `"stream-overlay.spec.ts"` under a `// Streaming — the OBS overlay, end to end.` comment (re-pinned 2026-09-07 @ fb99bbd4c: the list EXISTS; edited HERE, in Step 1's commit, not post-rebase)
 - Modify: `apps/web/e2e/visual/seeds.ts` — ONE seed kind, `overlay-fixture` (Step 8a)
 - Modify: `apps/web/e2e/visual/manifest.json` — the `overlay` and `console-panel` groups (Step 8b)
-- Modify: `scripts/smoke.ts` — a new `streamOverlaySuite`, called beside `scorePadV2AppendSuite` (`:784`)
+- Modify: `scripts/smoke.ts` — a new `streamOverlaySuite`, called beside `await scorePadV2AppendSuite(admin, org2.id);` (`:818` @ b2244879f; grep the call, the file moves every wave)
 - Modify: `docs/superpowers/specs/2026-09-05-stream-overlay-prompts/_INDEX.md`
 
 **Interfaces:**
-- Consumes: `apiJson(request, path, method, body?)` (`e2e/helpers.ts:128`), `activeOrg(page)` (`:1268`), `addEntrantsViaApi` (`:1412`), `createStageAndGenerate` (`:1429`), `setBoolEntitlementOverrideSql(orgId, featureKey, value)` (`:500`), `invalidateOrgEntitlements(request, orgId)` (`:943`), `expectNoHorizontalScroll(page, opts?)` (`:49`); `check(label, cond)` and `insertEntitlementOverride(owner, orgId, featureKey, value)` (`scripts/smoke.ts:91`, `:9461`), `html(s, path)` (`:12644`), `v1`/`v1data`.
+- Consumes (re-pinned 2026-09-08 @ b2244879f — `helpers.ts` is edited by every wave, so the SYMBOL is the pin and the numbers are today's: grep each before inserting): `apiJson(request, path, method, body?)` (`e2e/helpers.ts:128`), `activeOrg(page)` (`:1454`), `addEntrantsViaApi` (`:1598`), `createStageAndGenerate` (`:1615`), `setBoolEntitlementOverrideSql(orgId, featureKey, value)` (`:518`), `invalidateOrgEntitlements(request, orgId)` (`:1013`), `expectNoHorizontalScroll(page, opts?)` (`:49`); in `scripts/smoke.ts` (17k+ lines; grep the symbol, never seek a line — review 2026-09-08 finding 30): `check(label, cond)` (`grep -a -n -F "function check(" scripts/smoke.ts`), `insertEntitlementOverride(owner, orgId, featureKey, value)` (`:9937`), `html(s: Session, path)` (`:13356`), `v1`/`v1data` (grep), and the call site `await scorePadV2AppendSuite(admin, org2.id);` (`:818`) beside which the new suite call goes.
 - Produces: no exported symbol; one Playwright spec, one capture spec, one smoke suite.
 
-> **R9, re-pinned 2026-09-07 @ fb99bbd4c:** the branch is rebased on `main`, and `WALKTHROUGH_SPECS` (`apps/web/src/lib/__tests__/e2e-ci-wiring.test.ts:16`) EXISTS. The `walkthrough` project matches by PATH (`apps/web/playwright.config.ts:119`, `const WALKTHROUGH = /[\\/]e2e[\\/]walkthrough[\\/]/`), so the spec is collected with no list — but `e2e-ci-wiring.test.ts` reds in every CI job for a walkthrough spec not NAMED there. Register `stream-overlay.spec.ts` in Step 1's own commit. The visual gate is no longer a walkthrough spec (it is T1b's manifest, Step 8), so only ONE name is added.
+> **R9, re-pinned 2026-09-07 @ fb99bbd4c:** the branch is rebased on `main`, and `WALKTHROUGH_SPECS` (`apps/web/src/lib/__tests__/e2e-ci-wiring.test.ts:155`) EXISTS. The `walkthrough` project matches by PATH (`apps/web/playwright.config.ts:119`, `const WALKTHROUGH = /[\\/]e2e[\\/]walkthrough[\\/]/`), so the spec is collected with no list — but `e2e-ci-wiring.test.ts` reds in every CI job for a walkthrough spec not NAMED there. Register `stream-overlay.spec.ts` in Step 1's own commit. The visual gate is no longer a walkthrough spec (it is T1b's manifest, Step 8), so only ONE name is added.
+
+**Acceptance (this task IS the test task — the four kinds it lands, named):**
+- Unit: `e2e-ci-wiring.test.ts` (the walkthrough spec is named in `WALKTHROUGH_SPECS`), `visual-manifest.test.ts` (the two new groups parse, every placeholder provided by `overlay-fixture`).
+- E2E: `e2e/walkthrough/stream-overlay.spec.ts` whole-file (never `-g`), incl. Steps 2a (endpoint) and 2b (settled lane, dead endpoint); the T1b harness with the `overlay` and `console-panel` groups.
+- Smoke: `streamOverlaySuite` — seven `PASS stream overlay:` lines.
+- Regression: the full `apps/web` vitest against the Task 0 baseline; the WHOLE `mobile.spec.ts` at seven widths; `openapi:gen` + `i18n:gen-keys` no diff; `tsc` clean.
+- Checklist rows: "Verify visually, always" (Step 9 — every picture opened, one verdict line each); "Report mutant KILLER LIST" (Step 4 + the Self-review table pasted into PR1); "No horizontal scroll at 320/768/1280 — split on overflow-x" (the manifest rows).
 
 - [ ] **Step 1: Write the failing e2e.** Create `apps/web/e2e/walkthrough/stream-overlay.spec.ts`:
 
@@ -4788,8 +4995,11 @@ async function cricketRig(page: Page, request: APIRequestContext, label: string)
   const fixtureId = fixtureIds[0]!;
   expect((await apiJson(request, `/api/v1/divisions/${div.data!.id}/start`, "POST")).status).toBe(200);
 
+  // `CricketToss` is strictObject { wonBy: EntrantId, elected } (cricket.ts:240) —
+  // the ENTRANT id, read off the fixture row, never the word "home".
+  const fxRow = await apiJson<{ home_entrant_id: string }>(request, `/api/v1/fixtures/${fixtureId}`);
   const toss = await apiJson(request, `/api/v1/fixtures/${fixtureId}/events`, "POST", {
-    expected_seq: 0, type: "cricket.toss", payload: { winner: "home", decision: "bat" },
+    expected_seq: 0, type: "cricket.toss", payload: { wonBy: fxRow.data!.home_entrant_id, elected: "bat" },
   });
   expect(toss.status, "cricket.toss must precede core.start — 422 WRONG_PHASE otherwise").toBeLessThan(400);
   const start = await apiJson(request, `/api/v1/fixtures/${fixtureId}/events`, "POST", {
@@ -5063,6 +5273,46 @@ test.describe("stream overlay", () => {
 
   RE-PIN: the cricket rig's variable names (`cricketFixtureId`, `cricketDivisionId`) are Step 1's — use its names; `seedFootballFixture` is a five-line clone of the cricket seed with `sport_key: "football"`, written beside it; `TAG` from `../helpers`. Run whole-file (never `-g`).
 
+- [ ] **Step 2b (review 2026-09-08 findings 24 and 33): the settled-lane panel, and resilience on air.** Two more cases in the same file:
+
+```ts
+  test("the panel opens on a DECIDED fixture in the settled lane — the replay link is pasted after the whistle (owner Q6)", async ({ page, request }) => {
+    // The cricket rig's fixture, decided through the API (or `setFixtureStatusSql(id, "decided")`
+    // with an outcome — helpers.ts:715), lands in the run sheet's `settled` block
+    // (run-sheet.tsx:411-440, `data-run-sheet-block="settled"`), the fourth
+    // mount the plan threads. Assert IN that block, not anywhere on the page.
+    await setFixtureStatusSql(cricketFixtureId, "decided");
+    await page.goto(await divisionPath(request, cricketDivisionId, "?tab=fixtures"));
+    const settled = page.locator('[data-run-sheet-block="settled"]');
+    await expect(settled).toBeAttached();
+    const toggle = settled.getByTestId("fixture-stream-toggle").first();
+    await expect(toggle, "the toggle renders in the settled lane").toBeAttached();
+    await toggle.click();
+    await expect(settled.getByTestId("fixture-stream-panel")).toBeVisible();
+    await expect(settled.getByTestId("stream-link-input")).toBeVisible(); // the replay link field
+  });
+
+  test("the overlay holds the last score through a dead endpoint and never paints a white frame (design §3.1)", async ({ browser, request }) => {
+    const context = await browser.newContext({ storageState: { cookies: [], origins: [] }, viewport: { width: 1920, height: 1080 } });
+    const page = await context.newPage();
+    await page.goto(`/overlay/fixtures/${cricketFixtureId}?style=bar`);
+    await expect(page.getByTestId("ovl-root")).toBeVisible();
+    const before = await page.getByTestId("ovl-side-home-big").textContent();
+    // Kill the endpoint: every poll from now on 500s. page.route intercepts
+    // the fetch the hook makes (NOT a redirect target — the memory trap).
+    await page.route(`**/api/v1/public/fixtures/${cricketFixtureId}/overlay`, (r) => r.fulfill({ status: 500, body: "down" }));
+    // Two poll windows (POLL_MS = 15 s each); budget derived, not flat.
+    await page.waitForTimeout(2 * 15_000 + 2_000);
+    await expect(page.getByTestId("ovl-root"), "still mounted").toBeAttached();
+    expect(await page.getByTestId("ovl-side-home-big").textContent(), "the last known score is still painted").toBe(before);
+    const bg = await page.evaluate(() => getComputedStyle(document.body).backgroundColor);
+    expect(bg, "no white frame — the body stays transparent").toMatch(/rgba\(0, 0, 0, 0\)|transparent/);
+    await context.close();
+  });
+```
+
+  `test.setTimeout` for the second case = `60_000 + 2 * 15_000` (POLL_MS-derived, recurring class 20). Testids `ovl-side-home-big`, `stream-link-input` are Task 5 scope 5 / Task 6's — use the names those tasks landed.
+
 - [ ] **Step 3: Run it green, whole-file, after Tasks 5–7.** `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/stream-overlay/apps/web && PLAYWRIGHT_BASE=<ovl base> E2E_PROD_TARGET=1 npx playwright test e2e/walkthrough/stream-overlay.spec.ts --project=walkthrough --reporter=line`
   Expected: `8 passed`. Never `-g` a slice of it — a `-g` sweep is a filename sweep in costume and will select neither of the tests a UI change most often breaks.
 
@@ -5073,7 +5323,7 @@ test.describe("stream overlay", () => {
 - [ ] **Step 5: Run the WHOLE `mobile.spec.ts` at all seven widths.** `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/stream-overlay/apps/web && PLAYWRIGHT_BASE=<ovl base> E2E_PROD_TARGET=1 npx playwright test e2e/mobile.spec.ts --reporter=line`
   Expected: no new failures against main's counts. `mobile.spec.ts` is `describe.configure({ mode: "serial" })`, so a red count there is a FLOOR, not a total — re-run after each fix until a full pass completes. The fixtures-tab cases at `:578,2715,2907,3096,3189` are the ones that will see the new toggle.
 
-- [ ] **Step 6: Add the smoke suite.** In `scripts/smoke.ts`, add the function beside `scorePadV2AppendSuite` and call it from the same block (`:784`):
+- [ ] **Step 6: Add the smoke suite.** In `scripts/smoke.ts`, add the function beside `scorePadV2AppendSuite` (`:17358`) and call it from the same block as `await scorePadV2AppendSuite(admin, org2.id);` (`:818` — grep it; re-pinned 2026-09-08 @ b2244879f):
 
 ```ts
 /**
@@ -5154,7 +5404,7 @@ async function streamOverlaySuite(admin: Session, proOrgId: string): Promise<voi
 
 - [ ] **Step 8: The visual gate — one seed kind and the manifest rows (amended 2026-09-07; the capture spec this step used to write is retired).** The harness is T1b's (`apps/web/e2e/visual/capture.spec.ts`, `docs/runbooks/visual-gate.md`); this wave adds ONE seed kind and rows, never harness code.
 
-  (a) In `apps/web/e2e/visual/seeds.ts`: add `"overlay-fixture"` to `SEED_KINDS`; to `SEED_PARAMS`: `["orgSlug", "compSlug", "divSlug", "cricketFixtureId", "footballFixtureId", "tennisFixtureId", "volleyballFixtureId", "scheduledFixtureId", "missingFixtureId"]`; and the seed:
+  (a) In `apps/web/e2e/visual/manifest.ts` (the pure tables — T1 review finding 22): add `"overlay-fixture"` to `SEED_KINDS` and to `SEED_PARAMS`: `["orgSlug", "compSlug", "divSlug", "cricketFixtureId", "footballFixtureId", "tennisFixtureId", "volleyballFixtureId", "scheduledFixtureId", "missingFixtureId"]`. Then in `apps/web/e2e/visual/seeds.ts` the recipe:
 
 ```ts
 /** Stream overlay W1 — the entitled org, four short REAL streams (one per
@@ -5180,8 +5430,10 @@ async function overlayFixture(page: Page): Promise<Record<string, string>> {
     const fx = fixtureIds[0]!;
     // RE-PIN each opener against its module before running; a refused append
     // photographs the empty state and the mustDiffer pair then fails honestly.
+    const fxRow = await apiJson<{ home_entrant_id: string }>(request, `/api/v1/fixtures/${fx}`);
     const opener: Record<string, { type: string; payload: unknown }[]> = {
-      cricket: [{ type: "cricket.toss", payload: { winner: "home", decision: "bat" } }, { type: "core.start", payload: {} }],
+      // `CricketToss` = strictObject { wonBy: EntrantId, elected } (cricket.ts:240; review finding 25).
+      cricket: [{ type: "cricket.toss", payload: { wonBy: fxRow.data!.home_entrant_id, elected: "bat" } }, { type: "core.start", payload: {} }],
       football: [{ type: "core.start", payload: {} }, { type: "football.goal", payload: { by: "home", at: { period: "H1", elapsed: 761 } } }],
       tennis: [{ type: "core.start", payload: {} }, { type: "tennis.point", payload: { wonBy: "home" } }],
       volleyball: [{ type: "core.start", payload: {} }, { type: "volleyball.rally", payload: { wonBy: "away" } }],
@@ -5225,9 +5477,9 @@ async function overlayFixture(page: Page): Promise<Record<string, string>> {
 - [ ] **Step 12: Commit.**
   `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/stream-overlay && /usr/bin/git add apps/web/e2e/walkthrough/stream-overlay.spec.ts apps/web/src/lib/__tests__/e2e-ci-wiring.test.ts apps/web/e2e/visual/seeds.ts apps/web/e2e/visual/manifest.json scripts/smoke.ts docs/superpowers/specs/2026-09-05-stream-overlay-prompts/_INDEX.md`
   then
-  `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/stream-overlay && /usr/bin/git commit -m "overlay(tests): e2e both gate directions, smoke through the seam, and the visual gate" -m "The e2e drives a real cricket ledger and asserts the score moves without navigating; smoke proves the saved link reaches the public JSON; the capture harness asserts eight images that exist and differ." -m "Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>" -m "Claude-Session: https://claude.ai/code/session_01UdUR7dcxassJ4FExpVfRRr"`
+  `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/stream-overlay && /usr/bin/git commit -m "overlay(tests): e2e both gate directions, smoke through the seam, and the visual gate" -m "The e2e drives a real cricket ledger and asserts the score moves without navigating; smoke proves the saved link reaches the public JSON; the capture harness asserts eight images that exist and differ." -m "Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>" -m "Claude-Session: https://claude.ai/code/session_01LJGBoVPAWczYB9c45TD1aw"`
 
-- [ ] **Step 13: Post-rebase (R11, R10) — amended 2026-09-07.** Desk W1 (#708) and desk W2 (#725) are MERGED; the live contention on `run-sheet-row.tsx` is **desk W3** (`feat/competition-desk-w3-band-and-phone`). Before opening PR1, `/usr/bin/git fetch origin main && /usr/bin/git log --oneline origin/main -- apps/web/src/components/v2/desk/run-sheet-row.tsx | head -3` — if W3 has landed, rebase on `main`, re-read `:377`'s neighbourhood, and re-place Task 6's one conditional line; then in the SAME commit `ls db/migration/deltas | sort -V | tail -1` and renumber V400/V401 to the next free numbers if either was taken (a duplicate Flyway version survives a clean rebase — three times now). Re-run the WHOLE `mobile.spec.ts` at seven widths AFTER the rebase, not before, re-run Step 11's full gate, and re-run the visual harness (Step 9). e2e pre-merge: `workflow_dispatch pr=<n>` on `e2e.yml`.
+- [ ] **Step 13: Post-rebase (R11, R10) — amended 2026-09-07.** Desk W1 (#708) and desk W2 (#725) are MERGED; the live contention on `run-sheet-row.tsx` is **desk W3** (`feat/competition-desk-w3-band-and-phone`). Before opening PR1, `/usr/bin/git fetch origin main && /usr/bin/git log --oneline origin/main -- apps/web/src/components/v2/desk/run-sheet-row.tsx | head -3` — if W3 has landed, rebase on `main`, re-read the `data-testid="run-sheet-edit-time"` neighbourhood (grep the symbol; `:407` on b2244879f), and re-place Task 6's one conditional line; then in the SAME commit `ls db/migration/deltas | sort -V | tail -1` and renumber V400/V401 to the next free numbers if either was taken (a duplicate Flyway version survives a clean rebase — three times now). Re-run the WHOLE `mobile.spec.ts` at seven widths AFTER the rebase, not before, re-run Step 11's full gate, and re-run the visual harness (Step 9). e2e pre-merge: `workflow_dispatch pr=<n>` on `e2e.yml`.
 
 ---
 
@@ -5295,6 +5547,9 @@ async function overlayFixture(page: Page): Promise<Record<string, string>> {
 | n | `theme-registry.ts` `resolveTheme`: `defaultThemeFor(sportKey)` → `"bug"` | `theme-registry.test.ts` › `falls back to THE SPORT'S default, not to a hardcoded one` — `expected 'bug' to be 'bar'`. Without the cricket/football differential row this mutant survives every other assertion in the file |
 | extra | `V400`: drop `stream_url` from the view redefinition | `fixture-stream-url.test.ts` › `writes the link … and it arrives on the PUBLIC view`, and smoke's `the saved link arrives on the PUBLIC fixture JSON (the seam)` |
 | extra | `entitlement-domains.ts`: add `"streaming.overlay"` to any section | `entitlement-streaming-overlay.test.ts` › `is in NO ENTITLEMENT_DOMAINS section` |
+| o | `run-sheet-row.tsx`: delete `streamingEntitled` from the toggle's condition (`canEdit && streamingEntitled` → `canEdit`) — design §10.2's ninth W1 mutant (review 2026-09-08 finding 34) | `run-sheet-row.test.tsx` › `is absent when the org is not entitled, on a DECIDED row` — `expected … not to contain 'data-testid="fixture-stream-toggle"'`; and `stream-overlay.spec.ts` › `a non-entitled org sees no stream toggle at all, and still sees the schedule one` (Task 6 Step 3a + Task 8) |
+| p | `run-sheet.tsx`: drop `streamingEntitled={streamingEntitled}` from the `settled` mount (`:428`) | `run-sheet-filters.test.tsx` › the mount-count case — `expected 2 to be 3`; and `stream-overlay.spec.ts` › `the panel opens on a DECIDED fixture in the settled lane` (Task 6 Step 4d, Task 8 Step 2b) |
+| q | `overlay-stage.tsx` / `use-live-fixture.ts`: remove the `try/catch` around the fetcher so a rejected poll throws | `use-live-fixture.test.tsx` › `a rejected fetch keeps the last known score and does not throw` (Task 1 Step 2a); and `stream-overlay.spec.ts` › `the overlay holds the last score through a dead endpoint` (Task 8 Step 2b — design §3.1 "resilience on air", review finding 33) |
 
 A surviving mutant is a missing test, not a note. Run each one, restore, and re-run to green before recording it.
 
@@ -5306,7 +5561,7 @@ A surviving mutant is a missing test, not a note. Run each one, restore, and re-
 4. **CLOSED by owner answer 16 (Q5), 2026-09-06 — `m.youtube.com`.** Was: "not on R16's ten; the unit test asserts it is REJECTED". The owner answered *"Agree"*, so it is the eleventh entry in `STREAM_HOSTS` with its own accepted row, and two look-alike rejections (`m.youtube.com.evil.example`, `mm.youtube.com`) were added in the same edit so the widening stays an exact-hostname addition rather than a suffix rule. **R16 in `_RULES.md` still says ten and is now stale** — whoever updates `_INDEX.md` at PR time records the widening there; this plan does not edit `_RULES.md`.
 5. **Barlow double-mount (watch-list 7).** Verified in Task 5 Step 12 by reading the built CSS and the network tab, not by assumption.
 6. **`V3_SKINS` = every `sport_key` a division can carry (watch-list 8).** Task 2's sweep asserts eleven keys; run `select distinct sport_key from divisions` on the ovl DB and diff before the PR — a division on a twelfth key would render the generic composition, which is a designed state but should be a KNOWN one.
-7. **CLOSED 2026-09-07 @ fb99bbd4c — `WALKTHROUGH_SPECS` exists** (`e2e-ci-wiring.test.ts:16`, on `main` since #723). Task 8 Step 1 registers `stream-overlay.spec.ts` in its own commit. The capture spec is retired in favour of T1b's manifest, so one name, not two.
+7. **CLOSED 2026-09-07 @ fb99bbd4c — `WALKTHROUGH_SPECS` exists** (`e2e-ci-wiring.test.ts:155`, on `main` since #723). Task 8 Step 1 registers `stream-overlay.spec.ts` in its own commit. The capture spec is retired in favour of T1b's manifest, so one name, not two.
 8. **CLOSED 2026-09-07 — the engine conflict no longer exists.** Was: Task 0 edits four engine files because the live transport carries only `{ status, summary, outcome }`. Now: the overlay ENDPOINT (design §3.2, owner Q16/Q15) projects the two numbers off the folded STATE `foldFixture` already returns, through the engine and changing no engine file; Task 1's hook is generic over its fetcher so the overlay polls that endpoint and `LiveScore` keeps the public JSON. The "second authority" objection that rejected the server-side graft on 2026-09-05 is answered by reading the engine's own state fields (`asOf`, `innings[].ballsLimit`) rather than re-deriving them, and by keeping `footballPosition`'s staleness guard verbatim in `clockOf`. `/usr/bin/git status --porcelain packages` is empty at every gate.
 8a. **FS13 (2026-09-07) — the design's RP3 pin was wrong; this plan's is right.** `grep -al public_fixtures_v db/migration/deltas/*.sql | sort -V | tail -1` → `V369__public_fixtures_round_role.sql:18` is the latest definer on `main`; the design's `V362:22` is the 2026-09-06 consolidation's stale scout pin. `_INDEX.md` records FS10 and the design's §13.2 row is corrected at PR1.
 8b. **Plan decision D-W1-1 (2026-09-07) — the Phone tab ships in W1 with its buy card DISABLED, not absent.** Design §3.8 says W1 ships the Phone tab "showing the upgrade or buy card and nothing else until R1"; a buy card whose buttons POST to a route that does not exist until R1 is an inert seam. So: no `streaming.relay` → `UpgradeGate` (real, tested); `streaming.relay` (override only, while dark) → the three pack tiles rendered `disabled` with `aria-disabled` and `ui.stream.phone.soon` copy in four locales, asserted disabled by the e2e. R1 removes the `disabled` and the copy in the same change that adds the checkout route. Reviewer: this is a designed state with a named owner, not a stub — if the owner would rather the tiles not render at all until R1, that is one prop.
