@@ -786,6 +786,27 @@ describe("compareSuspensions — the discipline carry", () => {
     expect(cmp.entries[0]!.controlMissingFrom).toEqual(["rr-r1-c1", "rr-r3-c1"]);
   });
 
+  // The case above cannot KILL the control-presence clause on its own: an
+  // empty sheet also removes the BANNED player from the played fixture, so
+  // `absentOnPlayed` reds it first and the two guards cover for each other
+  // (AGENTS.md failure class 3). This one moves only the control: the banned
+  // player is off the missed sheet and on the played one, exactly as she
+  // should be, and ONLY the team-mate's own presence can witness the fault.
+  it("reds when ONLY the eligible team-mate is off the missed fixture — the banned player is placed correctly", () => {
+    const cmp = compareSuspensions(SUS_EXPECTED, {
+      active: [activeBan()],
+      sheets: [sheet("rr-r1-c1", false, [CONTROL, BANNED]), sheet("rr-r3-c1", true, [])],
+    });
+    expect(cmp.matched).toBe(false);
+    expect(cmp.entries[0]!.presentOnMissed).toEqual([]);
+    expect(cmp.entries[0]!.absentOnPlayed).toEqual([]);
+    expect(cmp.entries[0]!.controlBanned).toBe(false);
+    expect(cmp.entries[0]!.controlMissingFrom).toEqual(["rr-r3-c1"]);
+    expect(suspensionMismatchReasons(cmp.entries[0]!)).toEqual([
+      "the ELIGIBLE team-mate is off the team sheet of rr-r3-c1",
+    ]);
+  });
+
   it("reds a ban still PENDING — a row nobody confirmed is not a ban", () => {
     const cmp = compareSuspensions(SUS_EXPECTED, {
       // `listSuspensions(?status=active)` would not return this row at all;
