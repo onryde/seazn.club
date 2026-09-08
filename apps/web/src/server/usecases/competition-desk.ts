@@ -484,11 +484,23 @@ export async function getCompetitionDesk(
   // SQL (or set live before the scorer ever posts core.start — reachable
   // production shape, not just a test artifact) has no started_at and sorts
   // after every fixture that has genuinely kicked off.
+  //
+  // Ties break on `fixture_no`, and that is not defensive padding. Two
+  // fixtures starting in the same MILLISECOND is ordinary on match day —
+  // `started_at` is serialised through `toISOString()`, which truncates
+  // Postgres's microseconds — and a comparator that returned 0 left them in
+  // whatever order the query happened to produce. Under MVCC that is tuple
+  // write order, so the band could reorder its own cards between two polls
+  // with nothing having changed. It also made this list's own ordering test a
+  // coin flip: measured locally, eight consecutive single-statement inserts
+  // produced four distinct millisecond values.
   inPlayFixtures.sort((a, b) => {
-    if (a.started_at === b.started_at) return 0;
-    if (a.started_at === null) return 1;
-    if (b.started_at === null) return -1;
-    return a.started_at < b.started_at ? -1 : 1;
+    if (a.started_at !== b.started_at) {
+      if (a.started_at === null) return 1;
+      if (b.started_at === null) return -1;
+      return a.started_at < b.started_at ? -1 : 1;
+    }
+    return a.fixture_no - b.fixture_no;
   });
   // "Up next": the soonest across every division's own `next`, but only
   // among divisions whose next fixture has NOT yet started — an in-play
