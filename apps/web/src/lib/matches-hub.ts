@@ -198,8 +198,15 @@ export function sortHubMatches<T extends { bucket: MatchBucket; scheduledAt: str
 /** Every tab id the competition hub can show, in the order they are shown.
  *  `CompetitionHubTabId` in the hub schema restates this as a zod enum for the
  *  same client/server reason `MATCH_BUCKETS` does, and the suite pins the two
- *  equal. `gallery` is W4's reserved slot: it is a member of the union so the
- *  type is stable when W4 lands, and `deriveHubTabs` never emits it. */
+ *  equal.
+ *
+ *  `gallery` is W4's reserved slot: a member of the union so the type is stable
+ *  when W4 lands, and `deriveHubTabs` never emits it. Note that reserving it
+ *  costs W4 more than a one-line addition — `CompetitionHubDoc`'s refinement
+ *  demands that a document's `tabs` equal `deriveHubTabs`'s output exactly, so
+ *  no valid document can carry `gallery` until `HubTabCounts` and
+ *  `deriveHubTabs` below are extended to DERIVE it. Hand-adding the tab to a
+ *  document is refused at parse time, by design. */
 export const HUB_TAB_IDS = [
   "overview",
   "matches",

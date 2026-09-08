@@ -17,14 +17,22 @@ import { Msg, Side, Person, MatchCentreHeader } from "./match-centre-schema";
 // — so the derivation itself is imported instead of restated. `matches-hub.ts`
 // is pure and imports nothing, so pulling it in costs this module nothing.
 //
-// RELATIVE, with the explicit `.ts` extension, matching the reasoning already
-// written out at `server/api-v1/schemas.ts:24-28` for its import of this
-// file's W1 sibling: that module is shared with the standalone OpenAPI
-// generator, which runs under bare `node --experimental-strip-types` with no
-// tsconfig `paths` resolution, so a `@/...` specifier throws
-// ERR_MODULE_NOT_FOUND there while resolving fine everywhere else. Nothing
-// imports THIS file from that script yet; the extension is what keeps that
-// from becoming a trap the day something does.
+// RELATIVE, with the explicit `.ts` extension, following the reasoning written
+// out at `server/api-v1/schemas.ts:24-28`: that module is shared with the
+// standalone OpenAPI generator, which runs under bare
+// `node --experimental-strip-types` with no tsconfig `paths` resolution, so a
+// `@/...` specifier throws ERR_MODULE_NOT_FOUND there while resolving fine
+// under tsc, Next and vitest.
+//
+// Being accurate about what that buys, because the first version of this
+// comment claimed more: THIS MODULE IS NOT LOADABLE UNDER BARE NODE TODAY.
+// The `./match-centre-schema` import above is extensionless — measured,
+// `node --input-type=module -e 'await import(<this file>)'` fails with
+// `ERR_MODULE_NOT_FOUND: …/public-site/match-centre-schema`. Nothing imports
+// this file from the generator, so nothing is broken; the extension here is
+// the shape to copy, and the day something does wire it in, BOTH imports need
+// one. Left as a single deliberate inconsistency rather than a silent edit to
+// a line this task did not own.
 import { deriveHubTabs } from "../../lib/matches-hub.ts";
 
 /** The three lists the Matches hub can show. Restated here as zod because
@@ -173,6 +181,27 @@ export const HubInfo = z.object({
   presentHref: z.string(),
 });
 
+/**
+ * ⚠️ THIS SCHEMA CARRIES A REFINEMENT (see `.superRefine` at the bottom), and
+ * zod 4 forbids three kinds of schema surgery on a refined object. All three
+ * throw at RUNTIME, with no compile-time signal at all — measured against this
+ * exact schema on zod 4.4.3:
+ *
+ *     CompetitionHubDoc.pick({ … })     → Error: .pick() cannot be used on
+ *     CompetitionHubDoc.omit({ … })     →   object schemas containing
+ *     CompetitionHubDoc.partial()       →   refinements
+ *
+ * `.shape` and `.extend()` are fine — and `.extend()` carries the refinement
+ * forward into the extended schema, which is verified rather than assumed.
+ *
+ * So: to name a SUBSET of this document, derive from the inferred TYPE
+ * (`Pick<CompetitionHubDocT, "matches" | "tabs">`), never from the schema
+ * object. Tasks 2–17 consume `CompetitionHubDocT`, so this should not bite —
+ * but it would bite at request time rather than at build time, which is why it
+ * is stated here at the declaration instead of only in the refinement's own
+ * comment. The trade was made deliberately: enforcing the tab invariant is
+ * worth more than schema-surgery ergonomics.
+ */
 export const CompetitionHubDoc = z.object({
   competitionId: z.string(),
   orgSlug: z.string(),
@@ -209,6 +238,18 @@ export const CompetitionHubDoc = z.object({
   // here always has every field at the right type. A field that failed a CHECK
   // (`tabs` failing `.min(1)`, say) does still reach this, which is why the
   // empty-tabs case reports two issues rather than one.
+  //
+  // ONE CONSEQUENCE, DELIBERATE: demanding exact equality with
+  // `deriveHubTabs`'s output makes the reserved `gallery` id UNPARSEABLE. It is
+  // a member of `CompetitionHubTabId` so the union is stable, but nothing may
+  // emit it while `deriveHubTabs` does not — its widest possible output is
+  // [overview, matches, table, stats, teams, info]. That is correct for W2,
+  // which never produces a gallery. **W4 owns lifting it**, and lifting it
+  // means extending `HubTabCounts` and `deriveHubTabs` in `lib/matches-hub.ts`
+  // so the tab is DERIVED like every other one — not hand-adding it to a
+  // document's `tabs` array, which this refinement will refuse. A strict rule
+  // W4 must consciously extend is the point; a lax one would let a wrong tab
+  // list through for every wave in between.
   const expected = deriveHubTabs({
     matches: doc.matches.length,
     tables: doc.tables.length,

@@ -48,30 +48,48 @@
 //   28 landing: delete the match_day rung ..... 4 cases
 //   29 landing: match_day ABOVE next .......... "order-differential vs next"
 //   30 landing: match_day BELOW finished ...... "order-differential vs finished"
-//   31 landing: match_day computed in `now`'s zone, not the fixture's .. the pair
-//   32 landing: drop the `nowIso` NaN guard ... "an unusable `now`…" (it throws)
-//   33 drift: rename an id in HUB_TAB_IDS ..... the tab drift case
-//   34 drift: rename a bucket in MatchBucketSchema ... the bucket drift case
-//   35 drift: rename an id in CompetitionHubTabId .... the tab drift case
-//   36 probe: drop a status from STATUSES below ..... the schemas.ts drift guard
-//      (36 is what proves that guard is not decoration — it really does read
+//   31 landing: `now` side computed in UTC, not the fixture's zone .. case 1
+//   32 landing: FIXTURE side computed in UTC, not its own zone ...... case 2
+//   33 landing: drop the `nowIso` NaN guard ... "an unusable `now`…" (it throws)
+//   34 landing: hoist `finished` above `live` (and so above next/match_day)
+//      ................................ "order-differential vs finished"
+//   35 drift: rename an id in HUB_TAB_IDS ..... the tab drift case
+//   36 drift: rename a bucket in MatchBucketSchema ... the bucket drift case
+//   37 drift: rename an id in CompetitionHubTabId .... the tab drift case
+//   38 probe: drop a status from STATUSES below ..... the schemas.ts drift guard
+//      (38 is what proves that guard is not decoration — it really does read
 //      the enum out of `server/api-v1/schemas.ts` and compare.)
 //
-// TWO mutants were written down, tried, and dropped as EQUIVALENT — they cannot
-// be killed by any test, here or anywhere, and recording them is cheaper than
-// having the next reader re-derive them:
+// ONE mutant is EQUIVALENT — it cannot be killed by any test, here or anywhere,
+// and recording it is cheaper than having the next reader re-derive it:
 //
-//   • "hoist the `finished` rung above `live`" in `landingStatus`. `finished`
-//     requires `every(bucket === "completed")`, which is false whenever a live
-//     fixture exists, so the two rungs cannot see each other and their relative
-//     order carries no behaviour. The crossing that DOES carry behaviour is
-//     live-vs-next (22), and match_day's two neighbours (29, 30).
 //   • "`return 0` → `return Number.NaN` in the both-undated branch of
 //     `sortHubMatches`". ECMA-262 SortCompare says: "Let v be ToNumber(...). If
 //     v is NaN, return +0" — so returning NaN there is *defined* to mean
 //     "equal", exactly what `return 0` means. Verified empirically as well as
-//     from the spec. NaN is only dangerous when it reaches the SUBTRACTION from
-//     a real value, which is mutant 14 and is killed.
+//     from the spec, and independently reproduced in review. NaN is only
+//     dangerous when it reaches the SUBTRACTION from a real value, which is
+//     mutant 14 and is killed.
+//
+// A SECOND was recorded here as equivalent and NO LONGER IS — corrected rather
+// than deleted, because the way it went stale is the useful part. It read:
+// "hoisting the `finished` rung above `live` carries no behaviour, because
+// `finished` requires `every(bucket === "completed")`, which is false whenever
+// a live fixture exists."
+//
+// The statement about those two PREDICATES is still true. The conclusion drawn
+// from it is not, and was already false by the time it was written: `finished`
+// and `live` are not adjacent rungs — `next` and `match_day` sit between them —
+// so no code change can swap only that pair. Every mutant that lifts `finished`
+// past `live` necessarily lifts it past the other two, and mutant 34 is killed.
+// Attempting to isolate the pair (a `finished` clause guarded to fire only when
+// nothing is live, inserted above `live`) is killed too, for the same reason.
+//
+// The lesson, which is why this stays in the file: an equivalence argument is
+// scoped to the two rungs it names, and it stops justifying a MUTANT the moment
+// a rung is inserted between them. Re-run every "unkillable" mutant after any
+// change to the ladder it sits in — this one was verified equivalent in review,
+// and then falsified by the very commit that added `match_day`.
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
@@ -555,11 +573,22 @@ describe("landingStatus — the Overview status line ladder (empty → live → 
       }),
     ).toEqual({ kind: "live", n: 1 });
   });
-  it("the day is the FIXTURE's own zone — positive/negative pair on one instant pair", () => {
-    // Same two instants both times; only the zone changes. `now` is 23:00Z and
-    // the fixture is 18:00Z, so in UTC they share a day and in Kolkata (+05:30)
-    // they do not: the fixture is 23:30 on the 5th, `now` is 04:30 on the 6th.
-    // Computing either side in UTC — or in the viewer's zone — flips both rows.
+  // The rung's whole point is that a fixture's day is its VENUE's day. That is
+  // TWO readings of the zone — `now`'s and the fixture's — and each needs its
+  // own witness, because an input where the fixture's local day happens to equal
+  // its UTC day cannot see the fixture side at all. The first case below pins
+  // the `now` side and the second pins the fixture side; neither covers for the
+  // other. (Round 1 shipped only the first, and its comment claimed it covered
+  // both. Mutating the fixture side to `dayKeyInZone(m.scheduledAt, "UTC")`
+  // survived the whole suite.)
+  it("the `now` side is read in the FIXTURE's zone, not UTC", () => {
+    // Same two instants in both rows; only the zone changes. The fixture is
+    // 18:00Z and `now` is 23:00Z, so in UTC they share a day (both the 5th),
+    // and in Kolkata (+05:30) they do not — the fixture is 23:30 on the 5th and
+    // `now` is 04:30 on the 6th. Reading `now` in UTC would make row 2 agree
+    // with row 1 and answer match_day; only row 2 witnesses that. Note the
+    // FIXTURE side is invisible here: its Kolkata day and its UTC day are both
+    // 2026-09-05, which is exactly why the second case exists.
     const at = "2026-09-05T18:00:00Z";
     const late = new Date("2026-09-05T23:00:00Z");
     expect(
@@ -576,6 +605,34 @@ describe("landingStatus — the Overview status line ladder (empty → live → 
         matches: [{ bucket: "upcoming", scheduledAt: at, tz: "Asia/Kolkata" }],
       }),
     ).toEqual({ kind: "dates", startsOn: "2026-09-01", endsOn: "2026-10-31" });
+  });
+
+  it("the FIXTURE side is read in its own zone too — a late-evening match belongs to the venue's tomorrow", () => {
+    // A 23:00Z fixture in Kolkata is 04:30 the NEXT morning locally, so its
+    // venue day is the 6th; `now` at 02:00Z is 07:30 on the 6th there. Same
+    // day at the venue, different days in UTC — so reading the fixture side in
+    // UTC drops the match and the page answers "Finished" on a morning when a
+    // match was played hours earlier. That is the exact user-visible wrong
+    // answer this rung exists to prevent.
+    const at = "2026-09-05T23:00:00Z";
+    const morningAfter = new Date("2026-09-06T02:00:00Z");
+    expect(
+      landingStatus({
+        ...base,
+        now: morningAfter,
+        matches: [{ bucket: "completed", scheduledAt: at, tz: "Asia/Kolkata" }],
+      }),
+    ).toEqual({ kind: "match_day" });
+    // The contrast row: the same instants at a UTC venue really are two
+    // different days, so there the answer is finished — the zone is what moved
+    // the answer, not the instants.
+    expect(
+      landingStatus({
+        ...base,
+        now: morningAfter,
+        matches: [{ bucket: "completed", scheduledAt: at, tz: "UTC" }],
+      }),
+    ).toEqual({ kind: "finished" });
   });
   it("an unusable `now` yields no match day rather than throwing out of a pure helper", () => {
     // `Date#toISOString` throws on an Invalid Date, so the match-day rung has to
