@@ -658,6 +658,14 @@ describe("runTinySuite — B05 T1 division-A stream fold wiring", () => {
     // import fold). If (false)-ing out either T4b block removes its four
     // entries from this list — the wiring-level regression this task owes.
     const runtimeOracles = (report.oracles ?? []).filter((o) => o.name.startsWith("oracle:"));
+    // B05 T5b-2 — the two person-stats comparators, wired: a `person cards`
+    // entry interleaves after EACH leaderboard entry (same loop, same
+    // already-resolved expected entries, one `/persons/{id}/stats` fetch per
+    // person shared across both boards), and `p-ana career rollup` trails the
+    // whole leaderboard block. `if (false)`-ing out either new block drops
+    // its own entries from this list and nothing else — the wiring-level
+    // regression this task owes, one per block.
+    //
     // B05 T5a — the tie-order cascade oracle (reviewer MAJOR #2: this
     // comparator had no call site anywhere) is wired right after EACH
     // table's own standings check, so it interleaves one-per-table rather
@@ -675,15 +683,21 @@ describe("runTinySuite — B05 T1 division-A stream fold wiring", () => {
       "oracle: d-tiebreak/s-tiebreak-league standings table",
       "oracle: d-tiebreak/s-tiebreak-league tie-order cascade",
       "oracle: d-tiny leaderboard (scores)",
+      "oracle: d-tiny person cards (scores)",
       "oracle: d-tiny leaderboard (points)",
+      "oracle: d-tiny person cards (points)",
       "oracle: d-tiebreak leaderboard (scores)",
+      "oracle: d-tiebreak person cards (scores)",
       "oracle: d-tiebreak leaderboard (points)",
+      "oracle: d-tiebreak person cards (points)",
+      "oracle: p-ana career rollup",
       "oracle: s-playoff rank crossing (captured vs standings)",
       "oracle: s-playoff standings rank vs expected.finalRanks",
       "oracle: d-tiny champion",
     ]);
     expect(runtimeOracles.map((o) => o.passed)).toEqual([
-      true, true, true, true, true, true, true, true, true, true, true, true, true,
+      true, true, true, true, true, true, true, true, true,
+      true, true, true, true, true, true, true, true, true,
     ]);
     // The genuinely tied pair (echo/golf) was actually CHECKED, not merely
     // present-and-skipped — the whole point of an ordering-differential

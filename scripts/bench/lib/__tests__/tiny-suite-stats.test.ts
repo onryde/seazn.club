@@ -492,11 +492,19 @@ describe("runTinySuite — B03 T6b player-stats baseline wiring", () => {
     // NOT `/stats/players` (B05 T4b now calls that route independently, via
     // `raw()`, for the leaderboard oracle — unconditionally, regardless of
     // this `statsPlayerGranted` knob, which only gates B03 T6b's OWN
-    // `request()`-based baseline read). `/persons/{id}/stats` stays a clean
-    // discriminator: only the baseline ever calls it.
-    expect(calls.some((c) => c.method === "GET" && /^\/api\/v1\/persons\/[^/]+\/stats(\?|$)/.test(c.path))).toBe(
-      false,
-    );
+    // `request()`-based baseline read).
+    //
+    // B05 T5b-2 narrowed this from `/persons/{id}/stats(\?|$)` to the
+    // `?division_id=` form for the SAME reason, and only that reason: the
+    // career/person-card oracles now call the bare path and its
+    // `?group=sport` sibling unconditionally, via `raw()`. `?division_id=`
+    // is the ONE shape only this baseline ever sends (`player-stats.ts`'s
+    // per-division read), so the discriminator is still exact rather than
+    // weakened — and the two assertions below pin the baseline's absence by
+    // its own oracle and warning, independently of any route count.
+    expect(
+      calls.some((c) => c.method === "GET" && /^\/api\/v1\/persons\/[^/]+\/stats\?division_id=/.test(c.path)),
+    ).toBe(false);
     expect((report.oracles ?? []).some((o) => o.name === "player-stats: baseline")).toBe(false);
     expect((report.warnings ?? []).some((w) => w.includes("player-stats baseline skipped"))).toBe(true);
   });

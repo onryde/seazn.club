@@ -184,21 +184,29 @@ import {
   completeStageCapture,
 } from "../advance.ts";
 import {
+  compareCareerStats,
   compareChampion,
   compareLeaderboard,
+  comparePersonDivisionStat,
   compareRankCrossings,
   compareStandings,
   compareTieOrderCascade,
   fetchDivisionPlayerStats,
+  fetchPersonCareerStats,
+  fetchPersonStats,
   fetchStandings,
   renderChampionMismatch,
   renderLeaderboardMismatch,
   renderRankCrossingMismatch,
+  renderSideBySide,
   renderStandingsMismatch,
   standingsRankOrder,
   type DivisionPlayerStatsWire,
+  type ExpectedCareerStat,
   type ExpectedLeaderboardEntry,
   type ExpectedStandingsRow,
+  type PersonCareerStatsWire,
+  type PersonStatsWire,
 } from "../oracle.ts";
 import type { SelectedDivisionExposure } from "../env.ts";
 import {
@@ -2620,6 +2628,12 @@ export async function runTinySuite(
     // once per entry.
     if (input.sql !== undefined && pack.expected.leaderboards.length > 0) {
       const playerStatsCache = new Map<string, DivisionPlayerStatsWire>();
+      // B05 T5b-2 — `comparePersonDivisionStat`'s own cache. `GET
+      // /persons/{id}/stats` (UNFILTERED — no `?division_id=`) answers with
+      // EVERY division that person appears in, so one fetch per person serves
+      // every board they are named on: `p-ana` is on all four of `_tiny`'s
+      // boards and is fetched once.
+      const personStatsCache = new Map<string, PersonStatsWire>();
       for (const board of pack.expected.leaderboards) {
         const leaderboardDivisionId = seeded.divisionIdByRef.get(board.divisionRef);
         if (leaderboardDivisionId === undefined) {
@@ -2668,6 +2682,168 @@ export async function runTinySuite(
             `oracle: ${board.divisionRef}/${board.metricKey}: live leaderboard disagrees with the pack's ` +
               `expected.leaderboards row — ${renderLeaderboardMismatch(boardCheck)}`,
           );
+        }
+
+        // B05 T5b-2 — `comparePersonDivisionStat`, wired: the SECOND wire
+        // crossing of the same historical fact the board above already pins.
+        // A customer can read a division's leaderboard OR a player's own
+        // card, and `usecases/player-stats.ts` derives them separately —
+        // `personStats` walks that person's own rows, `divisionPlayerStats`
+        // walks the division's. Two derivations of one history that are
+        // never compared is precisely the gap this oracle closes; the
+        // comparator existed since T5b and was reached by nothing.
+        //
+        // Reuses `expectedEntries` above rather than re-resolving refs: the
+        // expected count IS the leaderboard's own authored count, never a
+        // second number typed anywhere.
+        const cardIssues: { label: string; expected: string; actual: string }[] = [];
+        for (const entry of expectedEntries) {
+          let personStats = personStatsCache.get(entry.personId);
+          if (personStats === undefined) {
+            personStats = await fetchPersonStats(base, s, entry.personId, undefined, input.oracleTransport);
+            personStatsCache.set(entry.personId, personStats);
+          }
+          const cardCheck = comparePersonDivisionStat(
+            board.metricKey,
+            entry.count,
+            leaderboardDivisionId,
+            personStats,
+          );
+          if (!cardCheck.matched) {
+            cardIssues.push({
+              label: `${board.metricKey}: ${entry.name}`,
+              expected: String(cardCheck.expectedCount),
+              actual: cardCheck.actualCount === undefined ? "(absent)" : String(cardCheck.actualCount),
+            });
+          }
+        }
+        // `expectedEntries.length` is what answers "did we check anything",
+        // exactly as `compareLeaderboard`'s own doc comment says of its
+        // entries — an `every()` over an empty list is a silent yes. The
+        // guard above (`unresolvedPersonRefs`) already `continue`s before
+        // here, and `pack-schema.ts` gives every board `entries.min(1)`, so
+        // an empty list here would mean the pack changed shape underneath
+        // this block rather than that nothing was owed.
+        const cardsChecked = expectedEntries.length;
+        const cardsMatched = cardsChecked > 0 && cardIssues.length === 0;
+        oracles.push({
+          name: `oracle: ${board.divisionRef} person cards (${board.metricKey})`,
+          passed: cardsMatched,
+          detail: cardsMatched
+            ? `each of the ${cardsChecked} person(s) on this board carries the SAME "${board.metricKey}" count ` +
+              `on their own /persons/{id}/stats card for "${board.divisionRef}"`
+            : cardsChecked === 0
+              ? `expected.leaderboards "${board.divisionRef}"/"${board.metricKey}" resolved ZERO person entries — ` +
+                `nothing was cross-checked against /persons/{id}/stats`
+              : renderSideBySide(cardIssues),
+        });
+        log.info({ kind: "person_division_stat", passed: cardsMatched }, "oracle_checked");
+        if (!cardsMatched) {
+          errors.push(
+            `oracle: ${board.divisionRef}/${board.metricKey}: a person's own /persons/{id}/stats card ` +
+              `disagrees with the SAME count the division leaderboard already pins — ` +
+              `${cardsChecked === 0 ? "zero entries resolved" : renderSideBySide(cardIssues)}`,
+          );
+        }
+      }
+    }
+
+    // B05 T5b-2 — `compareCareerStats`, wired against `expected.careers` via
+    // `GET /persons/{id}/stats?group=sport`. T5b-1 gave this comparator its
+    // first real subject on `_tiny` (Ana Alvarez scoring across `d-tiny` and
+    // `d-tiebreak`, both `generic`, so `personCareerStats` files them under
+    // ONE sports[] entry and SUMS them); until this block it was still
+    // reached by nothing — AGENTS.md failure class 1.
+    //
+    // Grouped by PERSON, not per row: `compareCareerStats` takes a person's
+    // whole expected metric list at once, and one `?group=sport` fetch
+    // answers all of them.
+    //
+    // Gated on `input.sql !== undefined` only — a career rollup crosses no
+    // stage and no progression, so it has nothing to wait for beyond the
+    // folds above.
+    if (input.sql !== undefined) {
+      if (pack.expected.careers.length === 0) {
+        // An EMPTY expected set is not a passing oracle. `compareCareerStats`
+        // says so itself ("no expected careers is vacuously matched, and
+        // callers must check length before trusting it") — pushing an oracle
+        // here would report a green "career rollup" for a pack that declares
+        // no career at all, which is the vacuity this wave exists to remove.
+        // Stated as a warning, the same way T5a's cascade states a division
+        // that declares no tiebreakers.
+        warnings.push(
+          `oracle: pack declares no expected.careers rows — the cross-division career rollup oracle ` +
+            `(compareCareerStats) has no subject and was NOT run`,
+        );
+      } else {
+        const careersByPerson = new Map<string, ExpectedCareerStat[]>();
+        const unresolvedCareerRefs: string[] = [];
+        for (const career of pack.expected.careers) {
+          const personId = seeded.personIdByRef.get(career.person);
+          if (personId === undefined) {
+            unresolvedCareerRefs.push(career.person);
+            continue;
+          }
+          const bucket = careersByPerson.get(career.person);
+          const row: ExpectedCareerStat = {
+            personId,
+            name: career.name,
+            metricKey: career.metricKey,
+            count: career.count,
+          };
+          if (bucket === undefined) careersByPerson.set(career.person, [row]);
+          else bucket.push(row);
+        }
+        if (unresolvedCareerRefs.length > 0) {
+          errors.push(
+            `oracle: expected.careers names person ref(s) with no resolved id: ` +
+              `${[...new Set(unresolvedCareerRefs)].join(", ")}`,
+          );
+        }
+        const careerStatsCache = new Map<string, PersonCareerStatsWire>();
+        for (const [personRef, expectedCareers] of careersByPerson) {
+          const careerPersonId = expectedCareers[0]!.personId;
+          let careerWire = careerStatsCache.get(careerPersonId);
+          if (careerWire === undefined) {
+            careerWire = await fetchPersonCareerStats(base, s, careerPersonId, input.oracleTransport);
+            careerStatsCache.set(careerPersonId, careerWire);
+          }
+          const careerCheck = compareCareerStats(expectedCareers, careerWire);
+          // `expectedCareers.length > 0` by construction (a key only exists
+          // once a row landed in it), so this `matched` is never the empty
+          // set's vacuous yes — the empty case is the `warnings.push` branch
+          // above, which reports NO oracle at all.
+          oracles.push({
+            name: `oracle: ${personRef} career rollup`,
+            passed: careerCheck.matched,
+            detail: careerCheck.matched
+              ? `the live ?group=sport rollup carries all ${careerCheck.entries.length} of this person's ` +
+                `expected.careers metric(s), each in exactly one sport`
+              : renderSideBySide(
+                  careerCheck.entries
+                    .filter((e) => !e.matched)
+                    .map((e) => ({
+                      label: `${e.metricKey} (found in ${e.foundInSports} sport(s))`,
+                      expected: String(e.expectedCount),
+                      actual: e.actualValue === undefined ? "(absent or ambiguous)" : String(e.actualValue),
+                    })),
+                ),
+          });
+          log.info({ kind: "career_stats", passed: careerCheck.matched }, "oracle_checked");
+          if (!careerCheck.matched) {
+            errors.push(
+              `oracle: ${personRef}: the live career rollup disagrees with the pack's expected.careers ` +
+                `row(s) — ${careerCheck.entries
+                  .filter((e) => !e.matched)
+                  .map(
+                    (e) =>
+                      `${e.metricKey}: expected ${e.expectedCount}, got ` +
+                      `${e.actualValue === undefined ? "(absent or ambiguous)" : e.actualValue} ` +
+                      `(found in ${e.foundInSports} sport(s))`,
+                  )
+                  .join("; ")}`,
+            );
+          }
         }
       }
     }
