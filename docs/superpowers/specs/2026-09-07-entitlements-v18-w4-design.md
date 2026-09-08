@@ -139,9 +139,17 @@ which item 6 does not know about. Assert the enterprise set by MEMBERSHIP
 against `feature-copy.ts:363` rather than asserting a count, so the next
 addition moves the test instead of breaking it.
 
-**C4 — `officials.auto` is competition-scoped.** Granted on Pro and on both
-pass rungs since V393; W2 T6's competition-scoped resolution is what makes the
-pass grant safe, and it has no browser test. Resolved at
+**C4 — `officials.auto` is competition-scoped. WITHDRAWN 2026-09-08: it already
+has a browser test.** This section claimed the scoping was unproven in a
+browser. That was wrong. `apps/web/e2e/pass-scope-officials.spec.ts` drives a
+pass-holding org against TWO competitions over real HTTP, asserts the grant on
+one and the refusal on the other, pins `feature_key` rather than hardcoding it,
+and exercises the real `competitionForDivision` resolver at `officials.ts:496`.
+That spec merged the day before this design was written, so the claim was stale
+on arrival — a reminder that `_INDEX.md` item 6's inventory is a snapshot and
+every line of it needs re-pinning, which is the same lesson this document's own
+"false premises" section opens with. The case below is left in place for the
+record; W4 does NOT rebuild it. Resolved at
 `apps/web/src/server/usecases/officials.ts:496` (also `:535`, `:795`) via
 `requireFeature(auth.orgId, "officials.auto", await competitionForDivision(divisionId))`,
 resolver at `:474-477`. The case that matters is the *scoping*: an org holding
