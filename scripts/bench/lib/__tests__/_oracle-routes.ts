@@ -46,9 +46,16 @@ interface FullStandingsRowLike {
   readonly lost: number;
   readonly points: number;
   /** B05 T5a — `d-tiebreak`'s own tied rows need `diff`/`for` to give the
-   *  tie-order cascade oracle a real subject; d-tiny/d-badminton's rows
-   *  never tie and so never needed one. Optional so those two branches stay
-   *  untouched. */
+   *  tie-order cascade oracle a real subject.
+   *
+   *  B05 T6 — and EVERY branch carries one now, because the real product
+   *  does. The first live run
+   *  (`bench-report/4b739e59…/report.md:34-39`) reddened `d-tiny/s-league`
+   *  and `d-badminton/s-badminton-league` on nothing but a live metrics map
+   *  the pack does not declare — invisible to this suite for as long as
+   *  this fake answered those two stages WITHOUT one, which is the "a
+   *  fixture on both ends proves the fixture" trap verbatim. Still optional
+   *  only because a placement-shaped table genuinely has none. */
   readonly metrics?: Record<string, number>;
 }
 
@@ -75,16 +82,35 @@ export function tinyLeagueTableRows(
 ): readonly FullStandingsRowLike[] | undefined {
   const [rank1, rank2] = entrantIdsRankOrder;
   if (rank1 === undefined || rank2 === undefined) return undefined;
+  // The `metrics` maps on these two branches are the LIVE shapes, transcribed
+  // from the first live run's own report.md — `_tiny.json` declares neither,
+  // which is exactly what makes them the undeclared-metric subject (B05 T6).
   if (stageName === "League") {
     return [
-      { entrantId: rank1, played: 3, won: 2, drawn: 1, lost: 0, points: 7 },
-      { entrantId: rank2, played: 3, won: 0, drawn: 1, lost: 2, points: 1 },
+      { entrantId: rank1, played: 3, won: 2, drawn: 1, lost: 0, points: 7, metrics: { for: 5, diff: 2, against: 3 } },
+      { entrantId: rank2, played: 3, won: 0, drawn: 1, lost: 2, points: 1, metrics: { for: 3, diff: -2, against: 5 } },
     ];
   }
   if (stageName === "Badminton League") {
     return [
-      { entrantId: rank1, played: 1, won: 1, drawn: 0, lost: 0, points: 2 },
-      { entrantId: rank2, played: 1, won: 0, drawn: 0, lost: 1, points: 0 },
+      {
+        entrantId: rank1,
+        played: 1,
+        won: 1,
+        drawn: 0,
+        lost: 0,
+        points: 2,
+        metrics: { sets_won: 2, sets_lost: 0, points_won: 42, points_lost: 33 },
+      },
+      {
+        entrantId: rank2,
+        played: 1,
+        won: 0,
+        drawn: 0,
+        lost: 1,
+        points: 0,
+        metrics: { sets_won: 0, sets_lost: 2, points_won: 33, points_lost: 42 },
+      },
     ];
   }
   // B05 T5a — `d-tiebreak`'s own THREE entrants (echo/foxtrot/golf), the

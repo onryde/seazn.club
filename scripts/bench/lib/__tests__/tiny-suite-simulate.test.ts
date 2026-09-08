@@ -786,6 +786,26 @@ describe("runTinySuite — B05 T1 division-A stream fold wiring", () => {
     const tiebreakCascade = runtimeOracles.find((o) => o.name === "oracle: d-tiebreak/s-tiebreak-league tie-order cascade");
     expect(tiebreakCascade?.detail).toContain("1 checked");
 
+    // B05 T6 fix 1 — the first LIVE run failed both metric-less tables on
+    // nothing but a live `metrics` map the pack never declares. This fake now
+    // answers the LIVE shape for those two stages (`_oracle-routes.ts`'s
+    // `tinyLeagueTableRows`), so this assertion is the wiring-level witness:
+    // the tables PASS, and the undeclared metrics are still REPORTED on the
+    // oracle's own detail line rather than silently dropped.
+    for (const [stageRef, liveMetrics] of [
+      ["d-tiny/s-league", { for: 5, diff: 2, against: 3 }],
+      ["d-badminton/s-badminton-league", { sets_won: 2, sets_lost: 0, points_won: 42, points_lost: 33 }],
+    ] as const) {
+      const table = runtimeOracles.find((o) => o.name === `oracle: ${stageRef} standings table`);
+      expect(table?.passed).toBe(true);
+      expect(table?.detail).toContain("does not declare");
+      for (const [k, v] of Object.entries(liveMetrics)) expect(table?.detail).toContain(`"${k}":${v}`);
+    }
+    // …and the table whose every live metric IS declared says nothing extra —
+    // the informational channel stays silent rather than restating a clean row.
+    const tiebreakTable = runtimeOracles.find((o) => o.name === "oracle: d-tiebreak/s-tiebreak-league standings table");
+    expect(tiebreakTable?.detail).not.toContain("does not declare");
+
     // B05 — the enforcement oracle. T5b-3 left this as a WARNING that pinned
     // no status, because the product had not decided whether discipline was
     // advisory; B05 decided (`putLineup` -> `gateLineupSuspensions`), so the

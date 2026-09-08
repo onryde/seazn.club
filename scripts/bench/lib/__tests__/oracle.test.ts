@@ -45,6 +45,7 @@ import {
   renderRankCrossingMismatch,
   renderSideBySide,
   renderStandingsMismatch,
+  renderUndeclaredMetrics,
   resolveTieWinner,
   standingsRankOrder,
   type DivisionPlayerStatsWire,
@@ -268,6 +269,139 @@ describe("compareStandings", () => {
     expect(compareStandings(withMetrics, same).matched).toBe(true);
     const different: StandingsRowWire[] = [{ ...withMetrics[0]!, metrics: { buchholz: 2, diff: 5 } }];
     expect(compareStandings(withMetrics, different).matched).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// B05 T6 fix 1 — a metric the pack does NOT declare is not a failure
+//
+// The first LIVE run reds two of three standings tables on nothing but this
+// (`bench-report/4b739e59.../report.md:34-39`): every field `_tiny.json`'s
+// `expected.tables` DECLARES for `d-tiny/s-league` — played, won, drawn,
+// lost, points and the entrant identity — matched exactly, and the row still
+// failed because the LIVE row carries a football `for/diff/against` map the
+// pack never mentions. `d-badminton` fails identically on
+// `sets_won/sets_lost/points_won/points_lost`; `d-tiebreak` passes ONLY
+// because T5a's tie work happened to declare those three keys.
+//
+// The rule these tests pin, in BOTH directions: a metric the pack DECLARES
+// must match (a live value that differs, or is absent, still reds); a metric
+// it does not declare is carried as `undeclaredMetrics` — visible, never a
+// failure, and never silently discarded (discarding is how a genuinely wrong
+// metric would hide).
+//
+// Every expected value below is read out of the committed pack, never typed
+// here; the only literals are the LIVE metric maps, which are transcribed
+// from that live run's own report and are the `actual` side by definition.
+// ---------------------------------------------------------------------------
+
+/** The live `GET /stages/{id}/standings` metrics for `_tiny.json`'s two
+ *  metric-less tables, verbatim from the first live run's report.md — the
+ *  shape the product actually answers with, which no fixture in this repo
+ *  had ever carried. */
+const LIVE_UNDECLARED_METRICS: Readonly<Record<string, readonly Record<string, number>[]>> = {
+  "s-league": [
+    { for: 5, diff: 2, against: 3 },
+    { for: 3, diff: -2, against: 5 },
+  ],
+  "s-badminton-league": [
+    { sets_won: 2, sets_lost: 0, points_won: 42, points_lost: 33 },
+    { sets_won: 0, sets_lost: 2, points_won: 33, points_lost: 42 },
+  ],
+};
+
+async function packTable(stageRef: string): Promise<ExpectedStandingsRow[]> {
+  const loaded = loadPackValue(JSON.parse(await readFile(TINY_PACK_PATH, "utf8")), TINY_PACK_PATH);
+  if (!loaded.ok) throw new Error(`_tiny.json did not load: ${JSON.stringify(loaded.errors)}`);
+  const table = loaded.pack.expected.tables.find((t) => t.stageRef === stageRef);
+  if (table === undefined) throw new Error(`_tiny.json declares no expected.tables row for "${stageRef}"`);
+  // `entrant` is a pack REF, not a resolved id — the comparator only ever
+  // compares it as an opaque string, so the ref IS a usable identity here
+  // (and keeps this test derived from the pack rather than from a seed run).
+  return table.rows.map((r) => ({
+    entrantId: r.entrant,
+    played: r.played,
+    won: r.won,
+    drawn: r.drawn,
+    lost: r.lost,
+    points: r.points,
+    ...(r.metrics === undefined ? {} : { metrics: r.metrics }),
+  }));
+}
+
+describe("B05 T6 — compareStandings and metrics the pack never declared", () => {
+  for (const stageRef of ["s-league", "s-badminton-league"] as const) {
+    it(`"${stageRef}": an expected row with NO metrics map matches a live row that HAS one`, async () => {
+      const expectedRows = await packTable(stageRef);
+      // The premise this whole test rests on, asserted rather than assumed:
+      // this pack table declares no metrics at all.
+      expect(expectedRows.every((r) => r.metrics === undefined)).toBe(true);
+      const liveMetrics = LIVE_UNDECLARED_METRICS[stageRef]!;
+      expect(liveMetrics).toHaveLength(expectedRows.length);
+      const live: StandingsRowWire[] = expectedRows.map((r, i) => ({ ...r, metrics: { ...liveMetrics[i]! } }));
+
+      const cmp = compareStandings(expectedRows, live);
+      expect(cmp.matched).toBe(true);
+      expect(cmp.rows.every((r) => r.mismatchFields.length === 0)).toBe(true);
+      // Carried, not discarded — every live key, with its live value.
+      expect(cmp.rows.map((r) => r.undeclaredMetrics)).toEqual(liveMetrics.map((m) => ({ ...m })));
+      const note = renderUndeclaredMetrics(cmp);
+      for (const [i, m] of liveMetrics.entries()) {
+        expect(note).toContain(expectedRows[i]!.entrantId);
+        for (const [k, v] of Object.entries(m)) expect(note).toContain(`"${k}":${v}`);
+      }
+    });
+  }
+
+  it("renders nothing when every live metric was declared — the informational channel stays silent on a clean row", async () => {
+    const expectedRows = await packTable("s-tiebreak-league");
+    expect(expectedRows.every((r) => r.metrics !== undefined)).toBe(true);
+    const live: StandingsRowWire[] = expectedRows.map((r) => ({ ...r, metrics: { ...r.metrics! } }));
+    const cmp = compareStandings(expectedRows, live);
+    expect(cmp.matched).toBe(true);
+    expect(cmp.rows.every((r) => Object.keys(r.undeclaredMetrics).length === 0)).toBe(true);
+    expect(renderUndeclaredMetrics(cmp)).toBe("");
+  });
+
+  it("a DECLARED metric whose live value differs still FAILS — the other direction", async () => {
+    const expectedRows = await packTable("s-tiebreak-league");
+    const declared = expectedRows[0]!.metrics!;
+    const [key, value] = Object.entries(declared)[0]!;
+    // Derived from the pack's own declared value, never a typed constant —
+    // if the pack's `diff` moves, so does this.
+    const live: StandingsRowWire[] = expectedRows.map((r, i) =>
+      i === 0 ? { ...r, metrics: { ...declared, [key]: value + 1 } } : { ...r, metrics: { ...r.metrics! } },
+    );
+    const cmp = compareStandings(expectedRows, live);
+    expect(cmp.matched).toBe(false);
+    expect(cmp.rows[0]!.mismatchFields).toContain("metrics");
+    // …and it is the DECLARED key that is named, not a blanket "metrics differ".
+    expect(cmp.rows[0]!.mismatchedMetrics).toEqual([key]);
+    expect(cmp.rows[0]!.undeclaredMetrics).toEqual({});
+  });
+
+  it("a DECLARED metric the live row does not carry AT ALL still FAILS — absence is not agreement", async () => {
+    const expectedRows = await packTable("s-tiebreak-league");
+    const live: StandingsRowWire[] = expectedRows.map(({ metrics: _drop, ...rest }) => ({ ...rest }));
+    const cmp = compareStandings(expectedRows, live);
+    expect(cmp.matched).toBe(false);
+    expect(cmp.rows[0]!.mismatchFields).toContain("metrics");
+    expect(cmp.rows[0]!.mismatchedMetrics).toEqual(Object.keys(expectedRows[0]!.metrics!));
+  });
+
+  it("a live row carrying BOTH a wrong declared metric and an undeclared one fails on the declared one only", async () => {
+    const expectedRows = await packTable("s-tiebreak-league");
+    const declared = expectedRows[0]!.metrics!;
+    const [key, value] = Object.entries(declared)[0]!;
+    const live: StandingsRowWire[] = expectedRows.map((r, i) =>
+      i === 0
+        ? { ...r, metrics: { ...declared, [key]: value + 1, sets_won: 9 } }
+        : { ...r, metrics: { ...r.metrics! } },
+    );
+    const cmp = compareStandings(expectedRows, live);
+    expect(cmp.matched).toBe(false);
+    expect(cmp.rows[0]!.mismatchedMetrics).toEqual([key]);
+    expect(cmp.rows[0]!.undeclaredMetrics).toEqual({ sets_won: 9 });
   });
 });
 

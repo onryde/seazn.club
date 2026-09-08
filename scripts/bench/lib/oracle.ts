@@ -283,6 +283,15 @@ export interface StandingsRowComparison {
   /** Which fields disagreed — empty when `actual` is undefined (the whole
    *  row is the mismatch then) or when `matched`. */
   readonly mismatchFields: readonly string[];
+  /** B05 T6 — the DECLARED metric keys behind a `"metrics"` entry in
+   *  `mismatchFields`, so a reader is told WHICH metric moved rather than
+   *  "the maps differ". Empty whenever `mismatchFields` carries no
+   *  `"metrics"`. */
+  readonly mismatchedMetrics: readonly string[];
+  /** B05 T6 — metrics the LIVE row carries that this pack row never
+   *  declared. Never a failure (see `compareMetrics`), but carried through
+   *  to the report so an undeclared metric is visible rather than dropped. */
+  readonly undeclaredMetrics: Readonly<Record<string, number>>;
 }
 
 export interface StandingsComparison {
@@ -290,12 +299,57 @@ export interface StandingsComparison {
   readonly rows: readonly StandingsRowComparison[];
 }
 
-function metricsEqual(a: Record<string, number> | undefined, b: Record<string, number> | undefined): boolean {
-  const ae = Object.entries(a ?? {});
-  const be = Object.entries(b ?? {});
-  if (ae.length !== be.length) return false;
-  const bMap = new Map(be);
-  return ae.every(([k, v]) => bMap.get(k) === v);
+/** B05 T6 fix 1 — the outcome of comparing ONE row's metrics map. Split into
+ *  two halves because they answer two different questions and the first live
+ *  run proved conflating them is a defect. */
+export interface MetricsComparison {
+  /** Keys the PACK declares whose live value differs — or which the live row
+   *  does not carry at all. These, and only these, are failures. */
+  readonly mismatched: readonly string[];
+  /** Keys the live row carries that the pack never declared, with their live
+   *  values. Informational: reported so a reader SEES them (silently
+   *  discarding them is how a genuinely wrong metric would hide), never
+   *  gated. */
+  readonly undeclared: Readonly<Record<string, number>>;
+}
+
+/**
+ * Compares a live metrics map against the pack's own DECLARED one, as a
+ * SUBSET rather than an equality.
+ *
+ * The first live run (`bench-report/4b739e59…/report.md:34-39`) failed
+ * `d-tiny/s-league` and `d-badminton/s-badminton-league` on nothing else:
+ * every field those tables declare matched exactly, and the rows still red
+ * because the live standings carry a sport-shaped metrics map
+ * (`for`/`diff`/`against` for football, `sets_won`/`sets_lost`/`points_won`/
+ * `points_lost` for badminton) that the pack's `expected.tables` row does
+ * not mention. Under the old key-count equality, a pack that omits the
+ * OPTIONAL metrics map could never pass — which is a comparator defect, not
+ * a pack defect, and is why the repair belongs here and not in `_tiny.json`.
+ *
+ * A declared key is still checked strictly, in BOTH directions: a live value
+ * that differs reds, and so does a declared key the live row omits entirely
+ * (absence is not agreement).
+ */
+export function compareMetrics(
+  expected: Record<string, number> | undefined,
+  actual: Record<string, number> | undefined,
+): MetricsComparison {
+  const exp = expected ?? {};
+  const act = actual ?? {};
+  // A DECLARED key the live row omits entirely is covered by this SAME
+  // comparison (`act[k]` is then `undefined`, never equal to a declared
+  // number) — deliberately not a second `Object.hasOwn(act, k)` conjunct
+  // beside it, which measured as an unkillable mutant: two guards covering
+  // for each other are each untested. `Object.hasOwn` IS load-bearing on the
+  // `undeclared` side below, where a live key could otherwise be swallowed
+  // by a prototype member of `exp`.
+  const mismatched = Object.keys(exp).filter((k) => act[k] !== exp[k]);
+  const undeclared: Record<string, number> = {};
+  for (const [k, v] of Object.entries(act)) {
+    if (!Object.hasOwn(exp, k)) undeclared[k] = v;
+  }
+  return { mismatched, undeclared };
 }
 
 /**
@@ -313,7 +367,15 @@ export function compareStandings(
   const rows: StandingsRowComparison[] = expected.map((exp, i) => {
     const act = actual[i];
     if (act === undefined) {
-      return { entrantId: exp.entrantId, matched: false, expected: exp, actual: undefined, mismatchFields: [] };
+      return {
+        entrantId: exp.entrantId,
+        matched: false,
+        expected: exp,
+        actual: undefined,
+        mismatchFields: [],
+        mismatchedMetrics: [],
+        undeclaredMetrics: {},
+      };
     }
     const mismatchFields: string[] = [];
     if (act.entrantId !== exp.entrantId) mismatchFields.push("entrantId");
@@ -322,8 +384,17 @@ export function compareStandings(
     if (act.drawn !== exp.drawn) mismatchFields.push("drawn");
     if (act.lost !== exp.lost) mismatchFields.push("lost");
     if (act.points !== exp.points) mismatchFields.push("points");
-    if (!metricsEqual(exp.metrics, act.metrics)) mismatchFields.push("metrics");
-    return { entrantId: exp.entrantId, matched: mismatchFields.length === 0, expected: exp, actual: act, mismatchFields };
+    const metrics = compareMetrics(exp.metrics, act.metrics);
+    if (metrics.mismatched.length > 0) mismatchFields.push("metrics");
+    return {
+      entrantId: exp.entrantId,
+      matched: mismatchFields.length === 0,
+      expected: exp,
+      actual: act,
+      mismatchFields,
+      mismatchedMetrics: metrics.mismatched,
+      undeclaredMetrics: metrics.undeclared,
+    };
   });
   const matched = rows.every((r) => r.matched) && actual.length === expected.length;
   return { matched, rows };
@@ -332,6 +403,23 @@ export function compareStandings(
 function renderRow(r: ExpectedStandingsRow | StandingsRowWire | undefined): string {
   if (r === undefined) return "(absent)";
   return `${r.entrantId} P${r.played} W${r.won} D${r.drawn} L${r.lost} Pts${r.points}${r.metrics ? ` ${JSON.stringify(r.metrics)}` : ""}`;
+}
+
+/**
+ * B05 T6 — the INFORMATIONAL half of the metrics rule: every live metric no
+ * pack row declared, named with the row that carried it. Returns `""` when
+ * there are none, so a caller can append it unconditionally and a clean
+ * table stays byte-identical.
+ *
+ * This exists because "not a failure" must not become "not reported": an
+ * undeclared metric that is silently dropped is exactly where a genuinely
+ * wrong metric would hide.
+ */
+export function renderUndeclaredMetrics(cmp: StandingsComparison): string {
+  return cmp.rows
+    .filter((r) => Object.keys(r.undeclaredMetrics).length > 0)
+    .map((r) => `${r.entrantId}: ${JSON.stringify(r.undeclaredMetrics)}`)
+    .join("; ");
 }
 
 export function renderStandingsMismatch(cmp: StandingsComparison): string {

@@ -207,6 +207,7 @@ import {
   renderRankCrossingMismatch,
   renderSideBySide,
   renderStandingsMismatch,
+  renderUndeclaredMetrics,
   standingsRankOrder,
   type DivisionPlayerStatsWire,
   type ExpectedCareerStat,
@@ -2883,12 +2884,22 @@ export async function runTinySuite(
         // vacuous pass.
         const standingsWire = await fetchStandings(base, s, tableStageId, table.poolKey, input.oracleTransport);
         const tableCheck = compareStandings(expectedRows, standingsWire.rows);
+        // B05 T6 fix 1 — a metric the pack does NOT declare is not a failure
+        // (`compareMetrics`), but it is not nothing either: the live rows'
+        // undeclared metrics ride along on the oracle's own detail line so a
+        // reader SEES them. Empty string when there are none, so a table
+        // whose every live metric was declared renders exactly as before.
+        const undeclaredNote = renderUndeclaredMetrics(tableCheck);
+        const undeclaredSuffix =
+          undeclaredNote === ""
+            ? ""
+            : ` — live rows also carry metric(s) this pack does not declare (not gated): ${undeclaredNote}`;
         oracles.push({
           name: `oracle: ${table.divisionRef}/${table.stageRef} standings table`,
           passed: tableCheck.matched,
           detail: tableCheck.matched
-            ? `live standings for "${table.stageRef}" match the pack's expected.tables row`
-            : renderStandingsMismatch(tableCheck),
+            ? `live standings for "${table.stageRef}" match the pack's expected.tables row${undeclaredSuffix}`
+            : `${renderStandingsMismatch(tableCheck)}${undeclaredSuffix}`,
         });
         log.info({ kind: "standings_table", passed: tableCheck.matched }, "oracle_checked");
         if (!tableCheck.matched) {
