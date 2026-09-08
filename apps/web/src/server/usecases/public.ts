@@ -24,6 +24,9 @@ import { sql } from "@/lib/db";
 import { cacheGet, cacheSet } from "@/lib/cache";
 import { HttpError } from "@/lib/errors";
 import { rateLimit } from "@/lib/rate-limit";
+import { toLocale } from "@/lib/i18n-constants";
+import { msgFor } from "@/lib/messages-i18n";
+import type { MessageKey } from "@/lib/messages";
 import {
   maskPublicEntrantNames,
   withCourtVenueName,
@@ -31,6 +34,7 @@ import {
   type PublicEntrantMember,
   type PublicFixture,
 } from "@/server/public-site/data";
+import { loadMatchCentre, type MatchCentreLoadCtx } from "@/server/public-site/match-centre-load";
 
 // s-maxage=30 at the edge (doc 08 §6); Redis mirrors that window.
 export const PUBLIC_CACHE_CONTROL = "public, s-maxage=30, stale-while-revalidate=300";
@@ -275,17 +279,87 @@ export async function discoveryList(
   });
 }
 
+/**
+ * Task 9 — the division/org/competition/stage context `loadMatchCentre`
+ * needs, gathered in one place for the API usecase (which, unlike the page
+ * data loader below, has none of this in memory already: `publicFixture`
+ * takes a bare fixture id with no org/competition/division route params).
+ * Base-table reads (`divisions`/`organizations`/`schedule_settings`/
+ * `stages`), same convention `engine-db/fold.ts`'s own division/stage
+ * lookups and `data.ts`'s `withCourtVenueNames` use for non-consent
+ * metadata not exposed by a `public_*_v` view — the caller has already
+ * confirmed the fixture's own division/competition are public/unlisted (the
+ * row came from `public_fixtures_v`, which filters on that), so no
+ * additional visibility check is needed here.
+ */
+async function loadFixtureMatchCentreCtx(
+  divisionId: string,
+  stageId: string,
+): Promise<MatchCentreLoadCtx> {
+  const [row] = await sql<
+    {
+      sport_key: string;
+      module_version: string;
+      variant_key: string;
+      youth: boolean;
+      player_name_display: string | null;
+      division_tz: string | null;
+      org_slug: string;
+      org_tz: string | null;
+      org_default_locale: string;
+      competition_slug: string;
+      division_slug: string;
+    }[]
+  >`
+    select d.sport_key, d.module_version, d.variant_key,
+           d.youth, d.player_name_display,
+           ss.tz as division_tz,
+           o.slug as org_slug, o.timezone as org_tz, o.default_locale as org_default_locale,
+           c.slug as competition_slug, d.slug as division_slug
+    from divisions d
+    join competitions c on c.id = d.competition_id
+    join organizations o on o.id = d.org_id
+    left join schedule_settings ss on ss.division_id = d.id
+    where d.id = ${divisionId}`;
+  if (!row) throw new HttpError(404, "fixture not found");
+  const [stageRow] = await sql<{ name: string }[]>`select name from stages where id = ${stageId}`;
+  const locale = toLocale(row.org_default_locale);
+  const basePath = `/shared/${row.org_slug}/${row.competition_slug}/${row.division_slug}`;
+  return {
+    orgTz: row.org_tz,
+    division: {
+      sportKey: row.sport_key,
+      moduleVersion: row.module_version,
+      formatLabel: row.variant_key,
+      tz: row.division_tz,
+      youth: row.youth,
+      playerNameDisplay: row.player_name_display,
+    },
+    locale,
+    hrefs: { division: basePath, competition: `/shared/${row.org_slug}/${row.competition_slug}`, calendar: `${basePath}/calendar.ics` },
+    stage: stageRow ? { name: stageRow.name, roundLabel: null } : null,
+    slotLabelLookup: (key: MessageKey, vars?: Record<string, string | number>) => msgFor(locale, key, vars),
+  };
+}
+
 /** Live public fixture summary (the score widget). */
 export async function publicFixture(fixtureId: string): Promise<unknown> {
   if (!/^[0-9a-f-]{36}$/i.test(fixtureId)) throw new HttpError(404, "fixture not found");
   return cached(`pub:v1:fixture:${fixtureId}`, async () => {
     // Fix round 3 (Gap 9): same gap as publicSchedule above.
+    // Task 9 — `pool_id` added to this Pick (was absent): `loadMatchCentre`
+    // takes a full `PublicFixture` (match-centre.ts's own `MatchCentreInput`
+    // signature, frozen/reviewed — not this task's to narrow), which
+    // declares `pool_id` required, unlike `lane`/`is_final`/`third_place`/
+    // `conditional` below it, which are `?`-optional and so needed no
+    // change here.
     const [row] = await sql<
       Pick<
         PublicFixture,
         | "id"
         | "division_id"
         | "stage_id"
+        | "pool_id"
         | "round_no"
         | "seq_in_round"
         | "home_entrant_id"
@@ -301,7 +375,7 @@ export async function publicFixture(fixtureId: string): Promise<unknown> {
         | "last_seq"
       >[]
     >`
-      select id, division_id, stage_id, round_no, seq_in_round, home_entrant_id,
+      select id, division_id, stage_id, pool_id, round_no, seq_in_round, home_entrant_id,
              away_entrant_id, home_slot_label, away_slot_label,
              scheduled_at, venue, court_label, status, outcome,
              summary, last_seq
@@ -309,6 +383,13 @@ export async function publicFixture(fixtureId: string): Promise<unknown> {
     if (!row) throw new HttpError(404, "fixture not found");
     // P9 cutover (finding #2): same treatment as publicSchedule above —
     // venue_name/court_name replace the frozen venue/court_label.
-    return withCourtVenueName(row);
+    const fixture = await withCourtVenueName(row);
+    // Task 9 — the match-centre view model, built by the SAME loader
+    // `getPublicFixture` (public-site/data.ts) uses. venue_name/court_name
+    // must already be resolved on `fixture` before this call: the Info
+    // tab's venue row reads them straight off the fixture object.
+    const ctx = await loadFixtureMatchCentreCtx(fixture.division_id, fixture.stage_id);
+    const match_centre = await loadMatchCentre(sql, fixture, ctx);
+    return { ...fixture, match_centre };
   });
 }

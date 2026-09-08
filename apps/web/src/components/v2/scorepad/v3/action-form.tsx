@@ -66,7 +66,13 @@ import type { ReactNode } from "react";
 import { enumLabel, padLabel } from "@/lib/scoring-vocab";
 import type { LineupPair, SquadState } from "@seazn/engine/core";
 import type { PadAttributionItem, PadField, PadFieldValue } from "@seazn/engine/sport";
-import { buildActionPayload, checkActionValidity, deriveFieldPathLabel, type PadActionView } from "../view-model";
+import {
+  attributionValueInadmissible,
+  buildActionPayload,
+  checkActionValidity,
+  deriveFieldPathLabel,
+  type PadActionView,
+} from "../view-model";
 // Attribution collection — the missing half of this file's own port (see
 // this file's header, "attribution collection itself is a typed seam").
 // `candidatesForPerson`/`attributionItemCaption` are PURE, sport-agnostic
@@ -106,19 +112,96 @@ const inputClass =
  * file's own header. Same precedent as context-strip.tsx's
  * `renderCandidateRow` and the legacy action-form.tsx's own `renderField`
  * (which this ports).
+ *
+ * Every arm carries `data-field-path`, matching `renderAttributionRow`'s
+ * `data-attribution-path` below. Only the chip arm did, which meant a test
+ * or an e2e selector could address a field's row by NAME for exactly one
+ * field kind and had to fall back to positional indexing everywhere else —
+ * and a positional assertion on a CAPTION is satisfied by any sibling's copy
+ * (French "Joueur" for the person picker is a prefix of "Joueur de champ"
+ * for the fielder). Presentationally inert.
  */
 function renderField(
   field: PadField,
   value: PadFieldValue | undefined,
   onChange: (value: PadFieldValue | undefined) => void,
   t: TFn,
+  /** The owning action's `type`, used ONLY to scope the chip row's caption id.
+   *  `ActionFormList` holds `expandedTypes` as a SET, so two actions can be
+   *  open at once and a bare `field.path` would put the same id in the
+   *  document twice — at which point `aria-labelledby` resolves to whichever
+   *  the browser saw first and one chip row is named for the other's field. */
+  scope: string,
 ): ReactNode {
   const caption = field.labelKey ? padLabel(field.labelKey.key, t, field.labelKey.label) : deriveFieldPathLabel(field.path);
 
   if (field.kind === "enum") {
     const bareField = field.path.split(".").pop()!;
+
+    // Owner ruling 12, S18 — a field-level rendering flag (module.ts,
+    // `PadFieldEnum.chips`), never a per-path branch: this stays the SAME
+    // "enum" kind as every `<select>` field above, just declared to draw as
+    // a chip row instead. Cricket sets this on `batting.dismissal.kind`
+    // only — every pre-existing enum field renders exactly as before.
+    if (field.chips === true) {
+      // A11Y — THE CHIP ROW NEEDS A NAME OF ITS OWN. Every other arm in this
+      // function wraps its caption and its control in ONE `<label>`, which is
+      // what associates them. This arm cannot: a `<label>` names a single
+      // control and a chip row draws one button per declared value. Its
+      // caption was therefore a bare `<span>` naming nothing, and a screen
+      // reader announced "Bowled, button. Caught, button." with nothing
+      // saying which field they belonged to.
+      //
+      // `role="group"` + `aria-labelledby` pointing at the caption ALREADY
+      // rendered — never a duplicated `aria-label`: the string is authored
+      // once, translated once in the four dictionaries, and the visible label
+      // and the accessible name cannot drift apart.
+      const captionId = `pad-chips-${scope}-${field.path}`;
+      return (
+        <div key={field.path} data-field-path={field.path} className="space-y-1">
+          {caption && (
+            <span id={captionId} className={fieldLabelClass}>
+              {caption}
+            </span>
+          )}
+          {/* No name to point at means no group: an unnamed `role="group"` is
+              worse than none, since it announces a grouping boundary and then
+              cannot say what the grouping is. `caption` is non-empty for every
+              field the engine declares today (`deriveFieldPathLabel` is total
+              on a non-empty path), so this is the defensive arm, not a
+              second rendering to design for. */}
+          <div
+            role={caption ? "group" : undefined}
+            aria-labelledby={caption ? captionId : undefined}
+            className="flex flex-wrap gap-2"
+          >
+            {field.values.map((v) => {
+              const pressed = value === v;
+              return (
+                <button
+                  key={v}
+                  type="button"
+                  data-value={v}
+                  aria-pressed={pressed}
+                  onClick={() => onChange(pressed ? undefined : v)}
+                  style={{ minHeight: 44 }}
+                  className={`inline-flex shrink-0 items-center rounded-full border px-4 text-sm font-medium transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-lime-400 ${
+                    pressed
+                      ? "border-transparent bg-violet-600 text-white hover:bg-violet-700"
+                      : "border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
+                  }`}
+                >
+                  {enumLabel(bareField, v, t)}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      );
+    }
+
     return (
-      <label key={field.path} className="block">
+      <label key={field.path} data-field-path={field.path} className="block">
         {caption && <span className={fieldLabelClass}>{caption}</span>}
         <select
           className={inputClass}
@@ -141,7 +224,7 @@ function renderField(
   if (field.kind === "number") {
     const step = field.step ?? 1;
     return (
-      <label key={field.path} className="block">
+      <label key={field.path} data-field-path={field.path} className="block">
         {caption && <span className={fieldLabelClass}>{caption}</span>}
         <input
           type="number"
@@ -169,7 +252,7 @@ function renderField(
 
   // toggle
   return (
-    <label key={field.path} className="flex items-center gap-2">
+    <label key={field.path} data-field-path={field.path} className="flex items-center gap-2">
       <input type="checkbox" checked={value === true} onChange={(e) => onChange(e.target.checked)} />
       {caption && <span className="text-sm text-slate-700">{caption}</span>}
     </label>
@@ -352,9 +435,25 @@ function renderActionRow(params: {
     <div key={action.type} className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
       <p className="mk-eyebrow px-4 pt-3 text-slate-600">{label}</p>
       <div className="space-y-3 px-4 py-3">
-        {action.fields.map((field) => renderField(field, values[field.path], (v) => onChange(field.path, v), t))}
+        {action.fields.map((field) =>
+          renderField(field, values[field.path], (v) => onChange(field.path, v), t, action.type),
+        )}
+        {/* Task B — an item whose gating field is unset, or set to a value
+            the engine will not accept alongside this item, is not OFFERED at
+            all. `attributionValueInadmissible` (view-model.ts) is the SAME
+            predicate `buildActionPayload` uses to drop the value, read here
+            so the two can never disagree about which rows are live: the
+            builder alone would leave the scorer a visible dead end (tap a
+            bowler on a run out, Confirm, watch the engine refuse it), and
+            this alone would let a value tapped before the field changed
+            still reach the payload. `index` stays the item's DECLARED
+            position, not its position among the visible rows, so the
+            chassis's ordinal caption fallback does not renumber as rows
+            appear and disappear. */}
         {action.attribution.map((item, index) =>
-          renderAttributionRow(item, index, label, values[item.path], (v) => onChange(item.path, v), squads, lineups, personNames, t),
+          attributionValueInadmissible(item, values)
+            ? null
+            : renderAttributionRow(item, index, label, values[item.path], (v) => onChange(item.path, v), squads, lineups, personNames, t),
         )}
         {!validity.ok && <p className="text-xs font-medium text-amber-700">{t(validity.reason.key)}</p>}
       </div>

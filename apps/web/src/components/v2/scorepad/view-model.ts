@@ -64,6 +64,51 @@ const MISSING_ATTRIBUTION_REASON: ChassisLabel = {
   label: "Choose who's required before you can continue.",
 };
 
+/**
+ * Task 20 — Confirm's reason when an action declares one or more `PadField
+ * .group`s (module.ts) and NONE of them has been touched. Deliberately
+ * chassis-generic, like the two reasons above, and NEVER the sport-specific
+ * wording a particular action's groups happen to mean ("batting or bowling",
+ * for `cricket.player.line`): this file's own header states the contract —
+ * "a chassis-native reason is never one of those keys" (an engine `PadLabel`)
+ * — and `ActionValidity.reason` is typed `ChassisLabel`, whose `key` is a
+ * `MessageKey`, not the wider `string` a `PadLabel.key` carries; threading a
+ * per-action label through here would need a cast at the boundary this file
+ * exists to keep un-cast. A future action with its own group semantics gets
+ * the same generic copy for free, with zero per-sport branching added here.
+ *
+ * Fix round 1 (task-20-review.md, Important #1) — the copy must never claim
+ * a UI affordance the renderer doesn't have: `field.group` is read nowhere
+ * in `action-form.tsx` (no highlighting, no visual grouping, no section
+ * boundary), so the original "Fill in at least one of the highlighted
+ * sections" was a truthfulness defect, not just a wording one. This wording
+ * names no visual treatment at all. */
+const MISSING_GROUP_REASON: ChassisLabel = {
+  key: "scorepad.validity.missingGroup",
+  label: "Fill in at least one section.",
+};
+
+/**
+ * Task 20 — which of an action's declared `PadField.group` names have at
+ * least one field "touched" (a defined value in `values`). A `kind: "toggle"`
+ * field is EXCLUDED from this test on purpose: `initialActionValues`
+ * (action-form.tsx) pre-seeds every toggle to `false` before the scorer taps
+ * anything, so a toggle's mere presence in `values` says nothing about
+ * whether its group was genuinely engaged (`cricket.player.line`'s
+ * `batting.out` is exactly this case). Shared by `checkActionValidity` and
+ * `buildActionPayload` so the two can never drift on what "touched" means. */
+function groupsTouched(
+  fields: readonly PadField[],
+  values: Readonly<Record<string, PadFieldValue | undefined>>,
+): ReadonlySet<string> {
+  const touched = new Set<string>();
+  for (const field of fields) {
+    if (field.group === undefined || field.kind === "toggle") continue;
+    if (values[field.path] !== undefined) touched.add(field.group);
+  }
+  return touched;
+}
+
 // W1 / Task 4 (entitlements v18): `ActionAvailability` and its
 // `LOCKED_REASON` are DELETED, not defaulted. They had exactly one producer —
 // `spec.fidelityEntitlements[band]`, a field Task 2 removed from the engine —
@@ -218,13 +263,53 @@ export type ActionValidity =
  * anything. Enforced by an `@ts-expect-error` proof in view-model.test.ts,
  * since vitest never typechecks and nothing at runtime can witness a
  * parameter that was merely widened.
+ *
+ * Task 20 — `field.group` (module.ts, hand-authored): a group with ZERO
+ * touched fields (`groupsTouched` above) is skipped entirely, same as an
+ * `optional` field, regardless of each member's own `optional` flag. The
+ * moment ANY field in a group is touched, every field in THAT group reverts
+ * to its own `optional` flag exactly as if `group` were absent — a
+ * half-filled aspect still blocks Confirm on its own required fields. An
+ * action declaring 1+ distinct group names additionally requires at least
+ * one be touched (`cricket.player.line`'s "batting and/or bowling" rule,
+ * mirrored from `CricketPlayerLine`'s own schema `.refine()` — see that
+ * schema's comment — with no schema or reducer change needed).
  */
 export function checkActionValidity(
   action: Pick<PadAction, "fields" | "attribution">,
   values: Readonly<Record<string, PadFieldValue | undefined>>,
 ): ActionValidity {
-  const missingFields = action.fields.filter((field) => values[field.path] === undefined);
+  const touchedGroups = groupsTouched(action.fields, values);
+  const groupNames = new Set(action.fields.map((field) => field.group).filter((g): g is string => g !== undefined));
+
+  // Owner ruling 12, S18 — `field.optional` (module.ts, hand-authored, never
+  // derived) is skipped from the gate entirely: a field flagged this way may
+  // stay unset and Confirm still fires. Absent/falsy behaves exactly as
+  // before this flag existed — every pre-ruling-12 field on every action
+  // stays required. See cricket's `cricket.player.line` for the shipped
+  // example (its six band-2 enrichment fields vs. its original seven).
+  //
+  // Task 20 — a field whose `group` is declared but NOT (yet) touched is
+  // also skipped here, on top of `optional`: an untouched aspect is not
+  // "missing", it is not being submitted at all.
+  const missingFields = action.fields.filter((field) => {
+    if (field.optional === true) return false;
+    if (field.group !== undefined && !touchedGroups.has(field.group)) return false;
+    return values[field.path] === undefined;
+  });
   if (missingFields.length > 0) return { ok: false, missing: missingFields, reason: MISSING_FIELDS_REASON };
+
+  // Task 20 — the action declares groups (an "aspect" choice) but the
+  // scorer has touched none of them: refuse before ever reaching the
+  // attribution gate, same posture as the missing-fields check above.
+  if (groupNames.size > 0 && touchedGroups.size === 0) {
+    return {
+      ok: false,
+      missing: action.fields.filter((field) => field.group !== undefined),
+      reason: MISSING_GROUP_REASON,
+    };
+  }
+
   // The `?? []` stays deliberately, even though the type now forbids the
   // case: this is the Confirm path of a live scoring pad, and an untyped
   // caller (a cast, a hand-built fixture) should not crash it. The TYPE is
@@ -240,20 +325,102 @@ export function checkActionValidity(
 }
 
 /**
+ * Is this attribution item's collected value currently INADMISSIBLE — i.e.
+ * would `buildActionPayload` drop it? ONE predicate, exported, because two
+ * layers must agree on the answer and this repo's most-repeated defect class
+ * is two gates that drift:
+ *
+ *  - `buildActionPayload` (below) drops the value, so a chip tapped before
+ *    the gating field moved can never reach the engine;
+ *  - `ActionFormList` (v3/action-form.tsx) does not DRAW the row at all, so
+ *    the scorer is never offered a control whose value would be discarded —
+ *    or, in the `requiresFieldIn` case, one the engine would refuse outright.
+ *
+ * Either half alone is a defect: payload-only leaves a visible dead end
+ * (tap, Confirm, refused); render-only leaves a stale value able to reach
+ * the payload after the gating field changes under it.
+ *
+ * Two flags, read here and nowhere else (`PadAttributionItem`, module.ts):
+ * `requiresField` names a dotted `PadField` path that must be SET, and
+ * `requiresFieldIn` narrows that to a set of admissible VALUES of the same
+ * field. An item declaring neither is never gated — every item that predates
+ * these flags behaves exactly as before.
+ *
+ * NOT consulted by `checkActionValidity` below, and that is only safe while
+ * no module declares an item that is BOTH gated and `required` — such an
+ * item would hide its own row and then block Confirm forever with nothing on
+ * screen to satisfy. Every gated item shipped today (cricket's
+ * `batting.dismissal.bowler`/`.fielder`) is `optional: true` and stamps
+ * `required: false` from its own schema, so the case does not exist; a module
+ * that created it would be declaring a dead end, and this is the note that
+ * says where to look when one appears.
+ *
+ * `requiresFieldIn` is a `readonly string[]` and membership is decided by
+ * STRICT equality, so a non-string value of the gating field (a toggle's
+ * boolean, a number field) is inadmissible by construction rather than
+ * coerced — `String(false)` matching a literal `"false"` in a module's list
+ * would be an accident, not a declaration. That is a property of `===`, not
+ * an extra clause: an explicit `typeof gateValue !== "string" ||` in front of
+ * the membership test was written here first and then REMOVED, because
+ * mutation testing proved it could not change the answer for any input
+ * (`["a"].includes(true)` is already `false`) and therefore no test could
+ * ever kill it — a guard nothing kills is decoration, and a redundant one
+ * also masks the clause beside it.
+ */
+export function attributionValueInadmissible(
+  item: Pick<PadAttributionItem, "requiresField" | "requiresFieldIn">,
+  values: Readonly<Record<string, PadFieldValue | undefined>>,
+): boolean {
+  const gate = item.requiresField;
+  if (gate === undefined) return false;
+  const gateValue = values[gate];
+  if (gateValue === undefined) return true;
+  if (item.requiresFieldIn === undefined) return false;
+  return !item.requiresFieldIn.some((admissible) => admissible === gateValue);
+}
+
+/**
  * Turn collected form values into a real event payload — fields AND
  * attribution together, both are just `(path, value)` pairs from
  * `buildPathObject`'s point of view. An unset path is OMITTED (never sent as
  * an explicit `undefined`), matching the engine's own `z.strictObject`
  * payload shapes and the exact technique `testkit/conformance-pad.ts`'s
  * property test uses to build its reference payloads.
+ *
+ * Owner ruling 12, S18 — an attribution item declaring `requiresField` (a
+ * dotted `PadField` path, module.ts) has its collected value dropped to
+ * `undefined` here whenever that field is itself unset, REGARDLESS of what
+ * the scorer tapped — so `buildPathObject` omits it exactly like any other
+ * unset path. This is what keeps `batting.dismissal.bowler`/`.fielder` from
+ * ever reaching the payload without `batting.dismissal.kind` alongside them
+ * (the schema requires `kind` inside that sub-object; see the field's own
+ * doc in sport/module.ts). `requiresFieldIn` extends that from "set" to "set
+ * to an admissible value" — both live in `attributionValueInadmissible`
+ * above, which action-form.tsx's renderer reads too.
+ *
+ * Task 20 — a field whose `group` (module.ts) is declared but NOT touched
+ * (`groupsTouched` above, shared with `checkActionValidity` so the two can
+ * never disagree) is forced to `undefined` here REGARDLESS of what `values`
+ * holds for it — closing the exact defect this task fixes: a toggle field's
+ * own `initialActionValues` default (e.g. `cricket.player.line`'s
+ * `batting.out`, pre-seeded `false`) would otherwise survive into the built
+ * payload even when the scorer never touched that aspect at all, building a
+ * half-formed `batting`/`bowling` sub-object the engine's schema rejects.
  */
 export function buildActionPayload(
   action: Pick<PadAction, "fields" | "attribution">,
   values: Readonly<Record<string, PadFieldValue | undefined>>,
 ): Record<string, unknown> {
+  const touchedGroups = groupsTouched(action.fields, values);
   const entries: (readonly [string, unknown])[] = [];
-  for (const field of action.fields) entries.push([field.path, values[field.path]]);
-  for (const item of action.attribution) entries.push([item.path, values[item.path]]);
+  for (const field of action.fields) {
+    const suppressed = field.group !== undefined && !touchedGroups.has(field.group);
+    entries.push([field.path, suppressed ? undefined : values[field.path]]);
+  }
+  for (const item of action.attribution) {
+    const gated = attributionValueInadmissible(item, values);
+    entries.push([item.path, gated ? undefined : values[item.path]]);
+  }
   return buildPathObject(entries);
 }
 

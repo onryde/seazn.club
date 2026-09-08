@@ -5,14 +5,16 @@
 // undo OWN events, nothing else. Every call presents the dl_ token as a
 // Bearer header; the token stays in this tab (component prop), never storage.
 // Offline-tolerant: sends retry with the SAME idempotency key (doc 08 §4).
-import { useCallback, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { apiV1, ApiV1Error } from "@/lib/client-v1";
 import { ScoringErrorBoundary } from "@/components/v2/scoring-error-boundary";
-import type {
-  LiveState,
-  SendEvent,
-  SideInfo,
-  SportInfo,
+import {
+  resolvePadSpecForMount,
+  shouldMountPad,
+  type LiveState,
+  type SendEvent,
+  type SideInfo,
+  type SportInfo,
 } from "@/components/v2/fixture-console";
 import { useMsg } from "@/components/i18n/dict-provider";
 import { scoringErrorText } from "@/lib/scoring-vocab";
@@ -192,6 +194,17 @@ export function DeviceScorePad({
     [authed, fixture.id, live.last_seq, resync],
   );
 
+  // Owner ruling 17 (2026-09-06) — the SAME predicate fixture-console.tsx
+  // shares (this file already imports plain types from there — `SportInfo`,
+  // `LiveState` — so this follows suit rather than a second copy). Computed
+  // above the `if (dead)` early return below: a hook cannot follow a
+  // conditional return without breaking React's Rules of Hooks.
+  const padSpecForMount = useMemo(
+    () =>
+      resolvePadSpecForMount(sport.key, scorePadV2?.moduleVersion ?? "", scorePadV2?.resolvedConfig ?? sport.config),
+    [scorePadV2, sport.key, sport.config],
+  );
+
   // Doc 13 §7: the pad's dead-end when the link dies mid-day.
   if (dead) {
     return (
@@ -314,8 +327,12 @@ export function DeviceScorePad({
           the seven v1 pads it used to choose between are gone). `scorePadV2`
           stays a null-guard, not a flag check: it is null only when
           server-side bootstrap resolution failed, in which case there is no
-          v1 chain left to fall back to and the section renders nothing. */}
-      {scorePadV2 && scoring && !decided && home && away && (
+          v1 chain left to fall back to and the section renders nothing.
+          Owner ruling 17 (2026-09-06) — `shouldMountPad(...)` (was the
+          narrower `!decided`): a decided fixture keeps the pad mounted iff
+          its own `padSpec(cfg)` declares a post-phase panel, the same
+          predicate `fixture-console.tsx` shares. */}
+      {scorePadV2 && scoring && shouldMountPad({ decided, padSpec: padSpecForMount }) && home && away && (
         <section className="card p-4">
           <ScoringErrorBoundary>
             <ScorePad

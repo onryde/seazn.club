@@ -11,13 +11,47 @@
 // the exact same formula the default export's page body duplicates.
 import { describe, expect, it, vi } from "vitest";
 import { isValidElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import { MatchCentreDoc, type MatchCentreDocT } from "@/server/public-site/match-centre-schema";
+import publicEn from "@/dictionaries/en/public.json";
+import publicEs from "@/dictionaries/es/public.json";
+import publicFr from "@/dictionaries/fr/public.json";
+import publicNl from "@/dictionaries/nl/public.json";
+import uiEn from "@/dictionaries/en/ui.json";
+import uiEs from "@/dictionaries/es/ui.json";
+import uiFr from "@/dictionaries/fr/ui.json";
+import uiNl from "@/dictionaries/nl/ui.json";
+
+// Real dictionaries, not a table typed into this test (rule 19/reference_
+// html_grep_for_dictionary_copy...): Dutch's own `matchCentre.status.live`
+// is "Live" too (an accepted loanword), so a hardcoded ">Live<" absence
+// check would be a FALSE positive for nl — the assertions below compare
+// against each locale's OWN real dictionary value instead.
+const PUBLIC_DICTS: Record<string, Record<string, unknown>> = { en: publicEn, es: publicEs, fr: publicFr, nl: publicNl };
+const UI_DICTS: Record<string, Record<string, unknown>> = { en: uiEn, es: uiEs, fr: uiFr, nl: uiNl };
 
 const getPublicFixture = vi.fn();
 vi.mock("@/server/public-site/data", () => ({
   getPublicFixture: (...a: unknown[]) => getPublicFixture(...a),
 }));
 
-const baseData = (locale: string, fixtureOver: Record<string, unknown> = {}) => ({
+// Task 14d — the page itself no longer reads `searchParams` (the ISR
+// contract, public-isr-contract.test.ts, forbids it); the `?tab=` deep link
+// is read client-side instead, inside `<MatchCentreWithTabParam>`
+// (`useSearchParams`, next/navigation). `notFound` stays REAL — nothing
+// here exercises the `!data` branch, and a full replacement would silently
+// swallow a future accidental use of it.
+const useSearchParams = vi.fn(() => new URLSearchParams());
+vi.mock("next/navigation", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("next/navigation")>();
+  return { ...actual, useSearchParams: () => useSearchParams() };
+});
+
+const baseData = (
+  locale: string,
+  fixtureOver: Record<string, unknown> = {},
+  entrantNamesOver: Record<string, string> = {},
+) => ({
   org: { id: "o1", name: "Test Org", slug: "test-org", branded: false, branding: {}, logo: null, about: null, default_locale: locale, card_payments: false },
   competition: { id: "c1", org_id: "o1", name: "Test Comp", slug: "test-comp", description: null, starts_on: null, ends_on: null, branding: {}, status: "active", visibility: "public" },
   division: { id: "d1", competition_id: "c1", name: "Open", slug: "open", description: null, sport_key: "generic", variant_key: "score", status: "active", module_version: "1.0.0", tiebreakers: null, sport_name: null, entrant_count: 2 },
@@ -28,9 +62,88 @@ const baseData = (locale: string, fixtureOver: Record<string, unknown> = {}) => 
     status: "scheduled", outcome: null, summary: null, last_seq: null,
     ...fixtureOver,
   },
-  entrantNames: {},
+  entrantNames: entrantNamesOver,
   realtime: false,
 });
+
+// Task 14 — `getPublicFixture` now also returns `matchCentre` (Task 9); a
+// full band-3 cricket document exercises the REAL `<MatchCentre>` tree (tab
+// rail + court card + scorecard tab), not the `LiveScoreBody` fallback the
+// bare `baseData()` fixture above still takes (no `matchCentre` field —
+// `MatchCentre` degrades to its own documented `mc-fallback`, unaffected by
+// this task's page-wiring change, which is why the pre-existing tests above
+// needed no update).
+const baseDataWithMC = (
+  locale: string,
+  matchCentre: MatchCentreDocT,
+  fixtureOver: Record<string, unknown> = {},
+  entrantNamesOver: Record<string, string> = {},
+) => ({
+  ...baseData(locale, fixtureOver, entrantNamesOver),
+  matchCentre,
+});
+
+function cricketDocFor(status: "in_play" | "decided"): MatchCentreDocT {
+  const doc: MatchCentreDocT = {
+    fixtureId: "f1",
+    sportKey: "cricket",
+    derivedComplete: true,
+    header: {
+      live: status === "in_play",
+      status,
+      sides: [
+        { entrantId: "home", name: "Home XI", short: "HOM", colour: null, badgeUrl: null },
+        { entrantId: "away", name: "Away XI", short: "AWY", colour: null, badgeUrl: null },
+      ],
+      scoreLines: status === "decided" ? ["245/6", "180"] : ["156/4", null],
+      subLines: [null, null],
+      battingIndex: status === "in_play" ? 0 : null,
+      statusLine:
+        status === "decided"
+          ? { key: "matchCentre.result.regulation", params: { winner: "Home XI", margin: "65 runs" } }
+          : null,
+      rateLine: null,
+      phase: null,
+      strength: null,
+      updatedAt: new Date().toISOString(),
+    },
+    tabs: ["summary", "scorecard", "info"],
+    // `cricket.live`/`topPerformers`/`innings` all-empty is SummaryTab's own
+    // "pre-play" case (`summary-tab.tsx`'s `isPrePlay`), which falls back to
+    // `LiveScoreBody` — exactly the OLD path this test proves the page no
+    // longer takes for a fixture that IS actually in play or decided, so
+    // each status gets the minimal real content that keeps it out of that
+    // fallback: an (empty) live block while in play, a top performer once
+    // decided.
+    cricket: {
+      band: 3,
+      toss: null,
+      innings: [],
+      live:
+        status === "in_play"
+          ? { striker: null, nonStriker: null, bowler: null, batters: [], bowling: [], thisOver: [], partnership: null, lastWicket: null }
+          : null,
+      topPerformers:
+        status === "decided"
+          ? [
+              {
+                role: "batter",
+                person: { personId: "p1", name: "A. Batter", masked: false },
+                side: { entrantId: "home", name: "Home XI", short: "HOM", colour: null, badgeUrl: null },
+                line: "82 (54)",
+                detail: null,
+                innings: 1,
+              },
+            ]
+          : [],
+    },
+    timeline: null,
+    sets: null,
+    info: { rows: [], calendarHref: "/d/cal.ics", divisionHref: "/d", competitionHref: "/c" },
+  };
+  MatchCentreDoc.parse(doc); // fails loudly if this literal fixture drifts from the schema
+  return doc;
+}
 
 const meta = async (locale: string, fixtureOver: Record<string, unknown> = {}) => {
   getPublicFixture.mockResolvedValue(baseData(locale, fixtureOver));
@@ -55,6 +168,47 @@ describe("FixturePage generateMetadata — org-locale slot labels (P6 finding #2
       away_slot_label: { key: "slot.winner_group", params: { g: "B" } },
     });
     expect(m.title).toBe("Winner of Group A vs Winner of Group B — Open");
+  });
+});
+
+// Task 14, Step 1(a) — the match-centre document is now the ONE source for
+// the decided fixture's score+result, so the title stops going stale the
+// moment a spectator shares it (the pre-Task-14 title never carried a score
+// at all).
+describe("FixturePage generateMetadata — score + result in the title (Task 14)", () => {
+  it("a decided cricket fixture's title carries both raw score lines AND the localised result phrase", async () => {
+    getPublicFixture.mockResolvedValue(
+      baseDataWithMC(
+        "en",
+        cricketDocFor("decided"),
+        { status: "decided", home_entrant_id: "home", away_entrant_id: "away" },
+        { home: "Home XI", away: "Away XI" },
+      ),
+    );
+    const { generateMetadata } = await import("../page");
+    const m = await generateMetadata({
+      params: Promise.resolve({ orgSlug: "test-org", competitionSlug: "test-comp", divisionSlug: "open", fixtureId: "f1" }),
+    });
+    expect(m.title).toContain("HOM 245/6"); // score line 1
+    expect(m.title).toContain("AWY 180"); // score line 2
+    expect(m.title).toContain("Home XI won 65 runs"); // the result phrase, resolved from header.statusLine
+  });
+
+  it("a SCHEDULED fixture's title is untouched — no bare, empty parentheses", async () => {
+    getPublicFixture.mockResolvedValue(
+      baseDataWithMC(
+        "en",
+        cricketDocFor("in_play"),
+        { status: "scheduled", home_entrant_id: "home", away_entrant_id: "away" },
+        { home: "Home XI", away: "Away XI" },
+      ),
+    );
+    const { generateMetadata } = await import("../page");
+    const m = await generateMetadata({
+      params: Promise.resolve({ orgSlug: "test-org", competitionSlug: "test-comp", divisionSlug: "open", fixtureId: "f1" }),
+    });
+    expect(m.title).toBe("Home XI vs Away XI — Open");
+    expect(m.title).not.toContain("(");
   });
 });
 
@@ -86,8 +240,29 @@ function findScript(node: unknown): { props: Record<string, unknown> } | null {
   return findScript(children);
 }
 
-const render = async (fixtureOver: Record<string, unknown> = {}) => {
-  getPublicFixture.mockResolvedValue(baseData("en", fixtureOver));
+// Task 14 — `matchCentre`/`entrantNamesOver`/`locale` are new, optional, and
+// additive: every PRE-EXISTING call site (`render({...fixtureOver})`) keeps
+// its exact original behaviour (`baseData`, English, no document).
+//
+// Task 14d — `tab` no longer reaches `FixturePage` itself (it took a
+// `searchParams` prop pre-14d; the page component now takes only `params` —
+// see page.tsx's own history). It's threaded through the `useSearchParams`
+// MOCK instead, so this helper still proves the deep link end-to-end: page
+// → `<MatchCentreWithTabParam>` → `useSearchParams` → the real `<MatchCentre>`
+// tab selection, the same path a real browser takes once hydrated.
+const render = async (
+  fixtureOver: Record<string, unknown> = {},
+  matchCentre?: MatchCentreDocT,
+  entrantNamesOver: Record<string, string> = {},
+  locale: string = "en",
+  tab?: string,
+) => {
+  getPublicFixture.mockResolvedValue(
+    matchCentre
+      ? baseDataWithMC(locale, matchCentre, fixtureOver, entrantNamesOver)
+      : baseData(locale, fixtureOver, entrantNamesOver),
+  );
+  useSearchParams.mockReturnValue(new URLSearchParams(tab ? { tab } : {}));
   const { default: FixturePage } = await import("../page");
   return FixturePage({
     params: Promise.resolve({ orgSlug: "test-org", competitionSlug: "test-comp", divisionSlug: "open", fixtureId: "f1" }),
@@ -126,4 +301,107 @@ describe("FixturePage default export — derived court/venue name (P9 cutover)",
     const ld = JSON.parse(html) as { location?: unknown };
     expect(ld.location).toBeUndefined();
   });
+});
+
+// Task 14, Step 1(b) — the match centre replaces the legacy bare scorebug.
+// Real HTML (`renderToStaticMarkup`), not `collectText`: `<MatchCentre>` is a
+// separate component the tree-walk above only sees one level into (by
+// design — see `_hook-harness`'s own doc comment), so proving its INSIDE
+// needs an actual render.
+describe("FixturePage default export — the match centre replaces the legacy scorebug (Task 14)", () => {
+  it("a band-3 cricket fixture's HTML has the tab rail (mc-tab-scorecard) and the court card, never the old bare `font-display text-5xl` headline block", async () => {
+    const tree = await render(
+      { status: "in_play", home_entrant_id: "home", away_entrant_id: "away" },
+      cricketDocFor("in_play"),
+      { home: "Home XI", away: "Away XI" },
+    );
+    const html = renderToStaticMarkup(tree);
+    expect(html).toContain('data-testid="mc-tab-scorecard"');
+    expect(html).toContain('data-testid="mc-court-card"');
+    // live-score.tsx:193 (pre-Task-14) — LiveScoreBody's own bare headline,
+    // now only ever reachable from MatchCentre's fallback/non-cricket path.
+    expect(html).not.toContain("font-display text-5xl");
+  });
+
+  // `mc-tab-scorecard` above is the TAB RAIL's own button testid
+  // (`tab-rail.tsx`), rendered from `doc.tabs` regardless of what
+  // `TAB_PANELS` maps that tab id to — it would pass even against a
+  // placeholder. This selects the tab via `?tab=` and asserts the REAL
+  // `ScorecardTab`'s own root (`data-testid="mc-scorecard"`, present even
+  // with zero innings — `scorecard-tab.tsx`), which only a wired real panel
+  // renders.
+  it("selecting the scorecard tab via ?tab= renders the REAL ScorecardTab panel, not an empty placeholder", async () => {
+    const tree = await render(
+      { status: "in_play", home_entrant_id: "home", away_entrant_id: "away" },
+      cricketDocFor("in_play"),
+      { home: "Home XI", away: "Away XI" },
+      "en",
+      "scorecard",
+    );
+    const html = renderToStaticMarkup(tree);
+    expect(html).toContain('data-testid="mc-tab-panel-scorecard"');
+    expect(html).toContain('data-testid="mc-scorecard"');
+  });
+});
+
+// Task 14, Step 1(c) — every literal string on the page goes through the
+// request locale's dictionary. Both an in-play and a decided render per
+// locale: "Live"/"Ended" are two DIFFERENT dictionary keys (CourtCard's
+// status chip), so one fixture state cannot prove both are localised.
+describe("FixturePage — no hardcoded English leaks outside lang=en (Task 14)", () => {
+  for (const locale of ["en", "es", "fr", "nl"] as const) {
+    it(`locale=${locale}`, async () => {
+      const liveTree = await render(
+        { status: "in_play", scheduled_at: null, home_entrant_id: "home", away_entrant_id: "away" },
+        cricketDocFor("in_play"),
+        { home: "Home XI", away: "Away XI" },
+        locale,
+      );
+      const liveHtml = renderToStaticMarkup(liveTree);
+
+      const decidedTree = await render(
+        { status: "decided", home_entrant_id: "home", away_entrant_id: "away" },
+        cricketDocFor("decided"),
+        { home: "Home XI", away: "Away XI" },
+        locale,
+      );
+      const decidedHtml = renderToStaticMarkup(decidedTree);
+
+      // These three are never reachable from a band-3 cricket document with
+      // real tabs — `LiveScoreBody` (Discipline/Goals by period/Winner:) is
+      // only MatchCentre's own fallback for a missing/non-cricket document
+      // — so this holds in EVERY locale, English included; a real
+      // regression in any of the three would show here as much as in
+      // fr/es/nl.
+      for (const html of [liveHtml, decidedHtml]) {
+        expect(html).not.toContain("Discipline");
+        expect(html).not.toContain("Goals by period");
+        expect(html).not.toContain("Winner:");
+      }
+
+      // The other two ARE real, translated copy — the assertion is that
+      // THIS locale's own dictionary value shows up, derived from the
+      // dictionaries themselves (never a table typed into the test — one
+      // locale's translation can legitimately equal English, e.g. Dutch's
+      // own "matchCentre.status.live" is "Live" too, an accepted loanword;
+      // hardcoding ">Live<" absence for every non-English locale would be a
+      // false positive there).
+      const publicDict = PUBLIC_DICTS[locale]!;
+      const uiDict = UI_DICTS[locale]!;
+      expect(liveHtml).toContain(`>${publicDict["matchCentre.status.live"]}<`);
+      expect(decidedHtml).toContain(`>${publicDict["matchCentre.status.decided"]}<`);
+      // `ShareButton`'s aria-label now resolves through the `<DictProvider>`
+      // this task wraps the page in (it had none before — the label was
+      // always English regardless of locale).
+      expect(liveHtml).toContain(uiDict["share.whatsapp"] as string);
+
+      if (publicDict["matchCentre.status.live"] !== publicEn["matchCentre.status.live"]) {
+        expect(liveHtml).not.toContain(">Live<");
+      }
+      if (locale !== "en") {
+        expect(decidedHtml).not.toContain(">Ended<"); // "Ended" differs in es/fr/nl
+        expect(liveHtml).not.toContain("Share on WhatsApp");
+      }
+    });
+  }
 });

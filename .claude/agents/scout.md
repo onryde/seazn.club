@@ -1,7 +1,7 @@
 ---
 name: scout
 description: Read-only code locator for this repo. Answers "where is X defined", "what calls Y", "which files own Z", "map this directory" with a file:line table and nothing else. Use instead of reading files into the main thread whenever the answer requires opening more than two files.
-model: sonnet
+model: opus
 effort: xhigh
 tools: Read, Grep, Glob, Bash
 ---

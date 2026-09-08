@@ -59,6 +59,35 @@ const LIVE_TREES = [
   "proto",
   "services/placement",
   ":!scripts/__tests__/z3-retirement-drift.test.ts",
+  // Binary ASSETS are excluded, and the `-a` on every scan below is exactly why
+  // they have to be. `-a` forces git to read binaries as text so a file git
+  // merely MISDETECTS as binary is still scanned — that is deliberate and it
+  // stays. The cost is that a case-insensitive two-byte needle like `z3` then
+  // matches random bytes: the spectator W1 branch committed 50 screenshots under
+  // `apps/web/e2e/__screens__/` and 40 of them "matched", which is noise at
+  // about the rate two arbitrary bytes predict. Left in, the ledger below would
+  // have to name PNGs as files that "mention z3", and every future programme
+  // that captures screenshots reds this gate for the same non-reason.
+  //
+  // Excluded by EXTENSION rather than by that one directory, because the trap is
+  // the file type and not the location. `.wasm` is deliberately NOT excluded:
+  // z3 shipped as WASM before the CP-SAT cutover, so a wasm blob carrying `z3`
+  // is a real finding rather than noise.
+  ":!*.png",
+  ":!*.jpg",
+  ":!*.jpeg",
+  ":!*.gif",
+  ":!*.webp",
+  ":!*.avif",
+  ":!*.ico",
+  ":!*.pdf",
+  ":!*.woff",
+  ":!*.woff2",
+  ":!*.ttf",
+  ":!*.otf",
+  ":!*.mp4",
+  ":!*.webm",
+  ":!*.zip",
 ];
 
 /**
@@ -290,6 +319,32 @@ describe("z3 retirement — stage C ledger", () => {
     // Generated stubs alone put z3 in `packages/engine/src`; if this ever
     // reads zero, the pathspec drifted and every assertion below is vacuous.
     expect(gitGrep(["-a", "-il", "z3", "--", ...LIVE_TREES]).length).toBeGreaterThan(20);
+  });
+
+  it("no binary asset reaches the scan — and there are binary assets to exclude", () => {
+    // The POSITIVE half first, or the negative one below passes for the wrong
+    // reason: with no images in the scanned trees, "the scan returns no images"
+    // is true of a scan that excludes nothing. `apps/web/e2e/__screens__` held
+    // 50 PNGs when this was written; the assertion is on the file type, not on
+    // that directory, so it survives them moving.
+    // The TREES only — dropping LIVE_TREES' own `:!` exclusions, which include
+    // the very extensions this half exists to prove are present. Listing through
+    // them returns zero images and the control passes by asserting the exclusion
+    // against itself.
+    const trees = LIVE_TREES.filter((p) => !p.startsWith(":!"));
+    const tracked = execFileSync("git", ["ls-files", "--", ...trees], {
+      cwd: REPO_ROOT,
+      encoding: "utf8",
+    })
+      .split("\n")
+      .filter(Boolean);
+    const isBinaryAsset = (f: string): boolean => /\.(png|jpe?g|gif|webp|avif|ico|pdf|woff2?|ttf|otf|mp4|webm|zip)$/i.test(f);
+    expect(tracked.filter(isBinaryAsset).length, "no binary assets are tracked, so this gate proves nothing").toBeGreaterThan(0);
+
+    // The negative half. `-a` reads binaries as text, so a two-byte needle hits
+    // random bytes — 40 of those 50 PNGs "matched z3". Every scan in this file
+    // shares LIVE_TREES, so excluding them there covers all of them.
+    expect(gitGrep(["-a", "-il", "z3", "--", ...LIVE_TREES]).filter(isBinaryAsset)).toEqual([]);
   });
 
   it.each(RETIRED_CLAIMS)("$path no longer claims /$pattern/", ({ path, pattern, nowTrue }) => {

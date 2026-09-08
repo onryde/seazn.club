@@ -263,6 +263,16 @@ const WALKTHROUGH_SPECS: string[] = [
   "directory-officials-roles.spec.ts",
   "directory-player-identity.spec.ts",
   "directory-venues-courts.spec.ts",
+
+  // Spectator surface W1 (Task 15) — the anonymous match centre. Split
+  // across two files so each stays under budget: cricket matches A (tapped
+  // through the real v3 pad) and B (finished) in one; football, tennis,
+  // consent, the control-set diff, axe, screens and locale in the other.
+  // Replaces the deleted w0-spectator-capture.spec.ts (never itself
+  // registered here — its job moved into these two before this inventory
+  // and the feature branch ever met).
+  "spectator-public-2.spec.ts",
+  "spectator-public.spec.ts",
 ];
 
 afterEach(() => {

@@ -255,6 +255,102 @@ describe("checkActionValidity — required fields", () => {
   });
 });
 
+// Task 18 — owner ruling 12 (S18): `PadField.optional` (engine, hand-authored,
+// never derived — see module.ts's own doc) lets a field stay unset without
+// blocking Confirm. Uses the REAL cricket.player.line action (memory rule
+// #19) so a drift in which fields the engine actually flags optional moves
+// this test with it, rather than a hand-typed fixture asserting yesterday's
+// shape.
+describe("checkActionValidity — optional fields (owner ruling 12, S18)", () => {
+  const cricketCfg = cricket.configSchema.parse({});
+  const cricketSpec = cricket.padSpec!(cricketCfg);
+  const lineAction = allActionViews(cricketSpec, { band: 3 }).find(
+    (a) => a.type === "cricket.player.line",
+  )!;
+
+  it("the fixture actually proves the engine flagged batting.fours optional (else this suite proves nothing)", () => {
+    const foursField = lineAction.fields.find((f) => f.path === "batting.fours")!;
+    expect(foursField.optional).toBe(true);
+  });
+
+  it("every legacy (non-optional) field is still required — a negative-with-positive pair for the check above", () => {
+    const runsField = lineAction.fields.find((f) => f.path === "batting.runs")!;
+    expect(runsField.optional).not.toBe(true);
+  });
+
+  it("posting only the seven legacy fields is valid — the six optional ones stay unset", () => {
+    const values = {
+      innings: 1,
+      "batting.out": true,
+      "batting.runs": 30,
+      "batting.balls": 20,
+      "bowling.legalBalls": 12,
+      "bowling.runs": 20,
+      "bowling.wickets": 2,
+      person: "p1",
+    };
+    expect(checkActionValidity(lineAction, values).ok).toBe(true);
+  });
+
+  it("a legacy field left unset still blocks Confirm — optional fields did not accidentally widen the whole gate", () => {
+    const values = {
+      innings: 1,
+      "batting.out": true,
+      // "batting.runs" deliberately omitted
+      "batting.balls": 20,
+      "bowling.legalBalls": 12,
+      "bowling.runs": 20,
+      "bowling.wickets": 2,
+      person: "p1",
+    };
+    expect(checkActionValidity(lineAction, values).ok).toBe(false);
+  });
+
+  // Ruling 3 — an attribution item flagged `optional: true` must not be
+  // required for submit either. `checkActionValidity` already only gates on
+  // `required === true` (R8/WS-B2), so this proves the pre-existing gate
+  // logic already honours it correctly for the REAL flagged items, rather
+  // than assuming `optional` needed its own new branch.
+  it("dismissal.bowler/fielder (optional: true attribution) never block Confirm — the fixture proves both are flagged", () => {
+    const bowlerItem = lineAction.attribution.find((a) => a.path === "batting.dismissal.bowler")!;
+    const fielderItem = lineAction.attribution.find((a) => a.path === "batting.dismissal.fielder")!;
+    expect(bowlerItem.optional).toBe(true);
+    expect(fielderItem.optional).toBe(true);
+    const values = {
+      innings: 1,
+      "batting.out": true,
+      "batting.runs": 30,
+      "batting.balls": 20,
+      "bowling.legalBalls": 12,
+      "bowling.runs": 20,
+      "bowling.wickets": 2,
+      person: "p1",
+      // bowler/fielder deliberately unset
+    };
+    expect(checkActionValidity(lineAction, values).ok).toBe(true);
+  });
+
+  // Negative pair: `person` (kind: "person", no `optional`) IS required by
+  // the schema (`PersonId`, not `.optional()`) and must still block Confirm —
+  // proving `optional: true` on the dismissal items didn't accidentally
+  // loosen the REQUIRED attribution gate too.
+  it("person (required attribution, not optional) still blocks Confirm when unset", () => {
+    const personItem = lineAction.attribution.find((a) => a.path === "person")!;
+    expect(personItem.required).toBe(true);
+    const values = {
+      innings: 1,
+      "batting.out": true,
+      "batting.runs": 30,
+      "batting.balls": 20,
+      "bowling.legalBalls": 12,
+      "bowling.runs": 20,
+      "bowling.wickets": 2,
+      // person deliberately unset
+    };
+    expect(checkActionValidity(lineAction, values).ok).toBe(false);
+  });
+});
+
 // R8/WS-B2 — `PadAttributionItem.required` now exists (engine, d4c8ddbfb),
 // so `checkActionValidity` must gate on it too, closing the dead-end tap: a
 // scorer could confirm cricket.toss with `wonBy` unset and the engine's own
@@ -354,5 +450,443 @@ describe("buildActionPayload — thin wrapper over buildPathObject, fields + att
     expect(payload).toEqual({ over: 2, runs: { bat: 4 }, striker: "p1" });
     // wicket.fielder was never supplied — genuinely absent, not `undefined`.
     expect(Object.prototype.hasOwnProperty.call(payload, "wicket")).toBe(false);
+  });
+
+  // Task 18 — owner ruling 12 (S18): an attribution item's `requiresField`
+  // (engine, hand-authored) must gate its OWN value out of the built payload
+  // when the named field is unset — see `PadAttributionItem.requiresField`'s
+  // doc in module.ts for why (`CricketPlayerLine`'s schema requires
+  // `dismissal.kind` inside the same sub-object `bowler`/`fielder` sit in).
+  describe("requiresField gating (owner ruling 12, S18)", () => {
+    const action = {
+      fields: [{ kind: "enum" as const, path: "batting.dismissal.kind", values: ["bowled", "caught"], chips: true }],
+      attribution: [
+        { kind: "person" as const, path: "batting.dismissal.bowler", optional: true, requiresField: "batting.dismissal.kind" },
+        { kind: "person" as const, path: "batting.dismissal.fielder", optional: true, requiresField: "batting.dismissal.kind" },
+      ],
+    };
+
+    it("drops a gated attribution's value when its required sibling field is unset, even though the scorer picked one", () => {
+      const payload = buildActionPayload(action, { "batting.dismissal.bowler": "p1" });
+      expect(Object.prototype.hasOwnProperty.call(payload, "batting")).toBe(false);
+    });
+
+    it("keeps the gated attribution's value once the required sibling field IS set", () => {
+      const payload = buildActionPayload(action, {
+        "batting.dismissal.kind": "bowled",
+        "batting.dismissal.bowler": "p1",
+      });
+      expect(payload).toEqual({ batting: { dismissal: { kind: "bowled", bowler: "p1" } } });
+    });
+
+    it("an item with no requiresField at all is never gated (every pre-existing attribution item's behaviour)", () => {
+      const noGate = {
+        fields: [],
+        attribution: [{ kind: "person" as const, path: "striker" }],
+      };
+      expect(buildActionPayload(noGate, { striker: "p1" })).toEqual({ striker: "p1" });
+    });
+  });
+
+  // Task B — `requiresFieldIn` narrows `requiresField` from "the gating field
+  // is SET" to "the gating field is set to one of THESE values". W1 review
+  // finding P2 tightened `applyPlayerLine` (cricket.ts) so that naming
+  // `dismissal.bowler` on a kind outside `BOWLER_CREDITED_KINDS` — a run out
+  // credits no bowler — is refused outright, and `requiresField` alone cannot
+  // express that: on a run out the field IS set.
+  //
+  // Hand-built fixture here (this file's own convention for the flag's
+  // MECHANICS); the real cricket padSpec's own declaration is folded through
+  // the real reducer in packages/engine's player-line.test.ts, and driven at
+  // the rendering layer in v3/__tests__/action-form.test.ts.
+  describe("requiresFieldIn gating (Task B)", () => {
+    const ADMISSIBLE = ["bowled", "caught", "stumped"];
+    const action = {
+      fields: [
+        {
+          kind: "enum" as const,
+          path: "batting.dismissal.kind",
+          values: [...ADMISSIBLE, "runout"],
+          chips: true,
+        },
+      ],
+      attribution: [
+        {
+          kind: "person" as const,
+          path: "batting.dismissal.bowler",
+          optional: true,
+          requiresField: "batting.dismissal.kind",
+          requiresFieldIn: ADMISSIBLE,
+        },
+        // No `requiresFieldIn` — the negative pair for every assertion below.
+        { kind: "person" as const, path: "batting.dismissal.fielder", optional: true, requiresField: "batting.dismissal.kind" },
+      ],
+    };
+
+    it("drops the gated value when the gating field is set to a value OUTSIDE the list", () => {
+      const payload = buildActionPayload(action, {
+        "batting.dismissal.kind": "runout",
+        "batting.dismissal.bowler": "p1",
+      });
+      expect(payload).toEqual({ batting: { dismissal: { kind: "runout" } } });
+    });
+
+    it("keeps the gated value when the gating field is set to a value INSIDE the list", () => {
+      const payload = buildActionPayload(action, {
+        "batting.dismissal.kind": "caught",
+        "batting.dismissal.bowler": "p1",
+      });
+      expect(payload).toEqual({ batting: { dismissal: { kind: "caught", bowler: "p1" } } });
+    });
+
+    it("still drops it when the gating field is unset — requiresFieldIn NARROWS requiresField, it does not replace it", () => {
+      const payload = buildActionPayload(action, { "batting.dismissal.bowler": "p1" });
+      expect(Object.prototype.hasOwnProperty.call(payload, "batting")).toBe(false);
+    });
+
+    it("leaves a sibling that declares requiresField ALONE ungated at the very same value", () => {
+      // The fielder is legal on a run out (the engine's `creditFielding`
+      // only checks lineup membership), so the narrowing must apply to the
+      // item that declares it and to nothing else.
+      const payload = buildActionPayload(action, {
+        "batting.dismissal.kind": "runout",
+        "batting.dismissal.bowler": "p1",
+        "batting.dismissal.fielder": "p2",
+      });
+      expect(payload).toEqual({ batting: { dismissal: { kind: "runout", fielder: "p2" } } });
+    });
+
+    it("treats a non-string gating value as inadmissible rather than coercing it to one", () => {
+      // `requiresFieldIn` is a `readonly string[]`. A toggle's `false`
+      // matching a literal "false" typed into a module's list would be an
+      // accident, not a declaration — so a boolean/number gating value is
+      // never admissible.
+      const toggleGated = {
+        fields: [{ kind: "toggle" as const, path: "batting.out" }],
+        attribution: [
+          {
+            kind: "person" as const,
+            path: "batting.dismissal.bowler",
+            optional: true,
+            requiresField: "batting.out",
+            requiresFieldIn: ["true"],
+          },
+        ],
+      };
+      const payload = buildActionPayload(toggleGated, { "batting.out": true, "batting.dismissal.bowler": "p1" });
+      expect(payload).toEqual({ batting: { out: true } });
+    });
+  });
+
+  // Task 18 — real cricket.player.line, proving the wiring above against the
+  // engine's actual padSpec output rather than only a hand-built fixture
+  // (memory rule #19). This is the "negative-with-positive pair" the brief
+  // asks for: a full enriched line vs. the legacy-only line, byte-identical
+  // to what Task 17's own `player-line.test.ts` accepts.
+  describe("cricket.player.line — legacy vs. enriched payload (owner ruling 12, S18)", () => {
+    const cricketCfg = cricket.configSchema.parse({});
+    const cricketSpec = cricket.padSpec!(cricketCfg);
+    const lineAction = allActionViews(cricketSpec, { band: 3 }).find(
+      (a) => a.type === "cricket.player.line",
+    )!;
+
+    it("a line touching only the seven legacy fields builds the exact legacy 7-field payload — no extra keys", () => {
+      const values = {
+        innings: 1,
+        "batting.out": true,
+        "batting.runs": 30,
+        "batting.balls": 20,
+        "bowling.legalBalls": 12,
+        "bowling.runs": 20,
+        "bowling.wickets": 2,
+        person: "p1",
+      };
+      const payload = buildActionPayload(lineAction, values);
+      expect(payload).toEqual({
+        innings: 1,
+        person: "p1",
+        batting: { out: true, runs: 30, balls: 20 },
+        bowling: { legalBalls: 12, runs: 20, wickets: 2 },
+      });
+    });
+
+    it("a line with every new field set builds the full enriched payload, dismissal nested under batting", () => {
+      const values = {
+        innings: 1,
+        "batting.out": true,
+        "batting.runs": 30,
+        "batting.balls": 20,
+        "batting.fours": 3,
+        "batting.sixes": 1,
+        "batting.dismissal.kind": "caught",
+        "bowling.legalBalls": 12,
+        "bowling.runs": 20,
+        "bowling.wickets": 2,
+        "bowling.maidens": 1,
+        "bowling.wides": 2,
+        "bowling.noBalls": 0,
+        person: "p1",
+        "batting.dismissal.bowler": "a7",
+        "batting.dismissal.fielder": "a3",
+      };
+      const payload = buildActionPayload(lineAction, values);
+      expect(payload).toEqual({
+        innings: 1,
+        person: "p1",
+        batting: {
+          out: true,
+          runs: 30,
+          balls: 20,
+          fours: 3,
+          sixes: 1,
+          dismissal: { kind: "caught", bowler: "a7", fielder: "a3" },
+        },
+        bowling: { legalBalls: 12, runs: 20, wickets: 2, maidens: 1, wides: 2, noBalls: 0 },
+      });
+    });
+
+    // Ruling 4's exact scenario: a scorer taps the bowler chip but never
+    // picks a dismissal kind. The schema requires `kind` inside `dismissal`
+    // (sport/module.ts's own doc on `requiresField`), so the payload must
+    // omit `dismissal` (and therefore `bowler`) entirely rather than build a
+    // shape the engine would reject.
+    it("naming a bowler without ever picking a dismissal kind omits dismissal (and the bowler) entirely", () => {
+      const values = {
+        innings: 1,
+        "batting.out": true,
+        "batting.runs": 30,
+        "batting.balls": 20,
+        "bowling.legalBalls": 12,
+        "bowling.runs": 20,
+        "bowling.wickets": 2,
+        person: "p1",
+        "batting.dismissal.bowler": "a7", // kind never set
+      };
+      const payload = buildActionPayload(lineAction, values) as { batting: Record<string, unknown> };
+      expect(Object.prototype.hasOwnProperty.call(payload.batting, "dismissal")).toBe(false);
+    });
+
+    // Ruling 4's other requirement: `Number("")` is `0`, so an empty numeric
+    // input must never reach this builder AS a value at all — it must arrive
+    // as `undefined` (the renderer's own job; action-form.test.ts proves
+    // THAT half). This test proves the builder's own half: an `undefined`
+    // fours value builds no key, never a `0`.
+    it("an omitted optional numeric field builds no key at all — never a coerced 0", () => {
+      const values = {
+        innings: 1,
+        "batting.out": true,
+        "batting.runs": 30,
+        "batting.balls": 20,
+        "bowling.legalBalls": 12,
+        "bowling.runs": 20,
+        "bowling.wickets": 2,
+        person: "p1",
+        // "batting.fours" deliberately absent (never set to 0)
+      };
+      const payload = buildActionPayload(lineAction, values) as { batting: Record<string, unknown> };
+      expect(Object.prototype.hasOwnProperty.call(payload.batting, "fours")).toBe(false);
+    });
+
+    // Task B, against the REAL padSpec: a run out credits no bowler, and
+    // `applyPlayerLine` refuses one outright (packages/engine's
+    // player-line.test.ts folds the whole dismissal-kind table through the
+    // reducer to derive that set). The pad must not build the shape.
+    it("naming a bowler on a run out omits the bowler — the engine refuses that shape outright", () => {
+      const base = {
+        innings: 1,
+        "batting.out": true,
+        "batting.runs": 30,
+        "batting.balls": 20,
+        person: "p1",
+        "batting.dismissal.bowler": "a7",
+      };
+      const runOut = buildActionPayload(lineAction, { ...base, "batting.dismissal.kind": "runout" }) as {
+        batting: { dismissal: Record<string, unknown> };
+      };
+      expect(runOut.batting.dismissal).toEqual({ kind: "runout" });
+
+      // Positive pair, same values, one admissible kind: the bowler survives,
+      // so the assertion above is about the KIND and not about the builder
+      // having quietly stopped carrying bowlers at all.
+      const caught = buildActionPayload(lineAction, { ...base, "batting.dismissal.kind": "caught" }) as {
+        batting: { dismissal: Record<string, unknown> };
+      };
+      expect(caught.batting.dismissal).toEqual({ kind: "caught", bowler: "a7" });
+    });
+  });
+});
+
+// Task 20 — `PadField.group` (sport/module.ts): fields sharing a `group` name
+// are all-or-nothing for Confirm. A group with ZERO touched fields is treated
+// as entirely omitted (none of its fields required, none of their values
+// reach the built payload); the moment ANY field in the group is touched,
+// every field in that group reverts to its own `optional` flag. An action
+// declaring 2+ distinct groups additionally requires at least one be touched.
+// Generic ad-hoc fixtures first (proves the mechanism itself, not just
+// cricket's use of it), then the real `cricket.player.line` action (memory
+// rule #19 — a hand-typed fixture alone would drift from the engine's own
+// declarations the moment they changed).
+describe("checkActionValidity — field groups (Task 20)", () => {
+  const groupedAction = {
+    fields: [
+      { kind: "number" as const, path: "a.one", min: 0, max: 10, group: "a" },
+      { kind: "number" as const, path: "a.two", min: 0, max: 10, group: "a" },
+      { kind: "number" as const, path: "b.one", min: 0, max: 10, group: "b" },
+      { kind: "number" as const, path: "b.two", min: 0, max: 10, group: "b" },
+    ],
+    attribution: [],
+  };
+
+  it("neither group touched is invalid, with a reason distinct from the plain missing-fields reason", () => {
+    const result = checkActionValidity(groupedAction, {});
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(typeof result.reason.key).toBe("string");
+      expect(result.reason.label.length).toBeGreaterThan(0);
+      expect(result.reason.key).not.toBe("scorepad.validity.missingFields");
+    }
+  });
+
+  it("one group fully touched, the other untouched entirely, is valid — the untouched group is not required", () => {
+    expect(checkActionValidity(groupedAction, { "a.one": 1, "a.two": 2 })).toEqual({ ok: true });
+  });
+
+  it("a group PARTIALLY touched still blocks Confirm on its own remaining field — touching a group does not waive it", () => {
+    const result = checkActionValidity(groupedAction, { "a.one": 1 });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.missing.map((f) => f.path)).toEqual(["a.two"]);
+  });
+
+  it("a toggle field in a group never counts as 'touching' that group, even when explicitly set to its own default", () => {
+    const withToggle = {
+      fields: [
+        { kind: "toggle" as const, path: "a.flag", group: "a" },
+        { kind: "number" as const, path: "a.value", min: 0, max: 10, group: "a" },
+        { kind: "number" as const, path: "b.one", min: 0, max: 10, group: "b" },
+      ],
+      attribution: [],
+    };
+    // "a.flag" carries its `initialActionValues` default (`false`) but no
+    // OTHER field in group "a" is set, and group "b" IS fully touched — the
+    // action must read as valid (group "b" chosen), not demand "a.value" too.
+    const result = checkActionValidity(withToggle, { "a.flag": false, "b.one": 1 });
+    expect(result).toEqual({ ok: true });
+  });
+
+  // Real cricket.player.line — proves the engine's own `group` declarations
+  // (cricket.ts's playerLineAction) wire into this exact mechanism.
+  describe("cricket.player.line — a single aspect is enough to submit (Task 20)", () => {
+    const cricketCfg = cricket.configSchema.parse({});
+    const cricketSpec = cricket.padSpec!(cricketCfg);
+    const lineAction = allActionViews(cricketSpec, { band: 3 }).find(
+      (a) => a.type === "cricket.player.line",
+    )!;
+
+    it("the fixture actually proves the engine grouped the legacy fields (else this suite proves nothing)", () => {
+      expect(lineAction.fields.find((f) => f.path === "batting.runs")!.group).toBe("batting");
+      expect(lineAction.fields.find((f) => f.path === "bowling.legalBalls")!.group).toBe("bowling");
+    });
+
+    it("a batting-only line (bowling never touched) is valid", () => {
+      const values = {
+        innings: 1,
+        "batting.out": true,
+        "batting.runs": 30,
+        "batting.balls": 20,
+        person: "p1",
+      };
+      expect(checkActionValidity(lineAction, values)).toEqual({ ok: true });
+    });
+
+    it("a bowling-only line (batting never touched) is valid, even though its toggle carries a leftover default", () => {
+      // "batting.out" simulates `initialActionValues`'s forced `false`
+      // default for a toggle the scorer never tapped — it must NOT count as
+      // touching the batting aspect.
+      const values = {
+        innings: 1,
+        "batting.out": false,
+        "bowling.legalBalls": 12,
+        "bowling.runs": 20,
+        "bowling.wickets": 2,
+        person: "p1",
+      };
+      expect(checkActionValidity(lineAction, values)).toEqual({ ok: true });
+    });
+
+    it("neither aspect touched (only innings + person) is invalid", () => {
+      const result = checkActionValidity(lineAction, { innings: 1, person: "p1" });
+      expect(result.ok).toBe(false);
+    });
+  });
+});
+
+describe("buildActionPayload — field groups (Task 20)", () => {
+  const groupedAction = {
+    fields: [
+      { kind: "toggle" as const, path: "a.flag", group: "a" },
+      { kind: "number" as const, path: "a.value", min: 0, max: 10, group: "a" },
+      { kind: "number" as const, path: "b.one", min: 0, max: 10, group: "b" },
+    ],
+    attribution: [],
+  };
+
+  it("an untouched group's fields are OMITTED from the payload, even a toggle carrying its own default value", () => {
+    const payload = buildActionPayload(groupedAction, { "a.flag": false, "b.one": 5 });
+    expect(payload).toEqual({ b: { one: 5 } });
+    expect(Object.prototype.hasOwnProperty.call(payload, "a")).toBe(false);
+  });
+
+  it("a touched group's fields build normally", () => {
+    const payload = buildActionPayload(groupedAction, { "a.flag": true, "a.value": 3 });
+    expect(payload).toEqual({ a: { flag: true, value: 3 } });
+  });
+
+  // The exact production scenario: cricket.player.line's `batting.out` toggle
+  // is pre-seeded `false` by `initialActionValues` even when the scorer only
+  // ever meant to submit a bowling-only line. Before Task 20, this stray
+  // `false` (plus the un-omitted legacy fields) built a payload carrying a
+  // half-formed `batting` object the schema would reject outright — the
+  // "sent as zeros" defect this task closes.
+  describe("cricket.player.line — an untouched aspect never leaks into the payload (Task 20)", () => {
+    const cricketCfg = cricket.configSchema.parse({});
+    const cricketSpec = cricket.padSpec!(cricketCfg);
+    const lineAction = allActionViews(cricketSpec, { band: 3 }).find(
+      (a) => a.type === "cricket.player.line",
+    )!;
+
+    it("a bowling-only submission builds NO batting key at all, despite batting.out's leftover toggle default", () => {
+      const values = {
+        innings: 1,
+        "batting.out": false, // initialActionValues's default — never tapped
+        "bowling.legalBalls": 12,
+        "bowling.runs": 20,
+        "bowling.wickets": 2,
+        person: "p1",
+      };
+      const payload = buildActionPayload(lineAction, values);
+      expect(Object.prototype.hasOwnProperty.call(payload, "batting")).toBe(false);
+      expect(payload).toEqual({
+        innings: 1,
+        person: "p1",
+        bowling: { legalBalls: 12, runs: 20, wickets: 2 },
+      });
+    });
+
+    it("a batting-only submission builds NO bowling key at all", () => {
+      const values = {
+        innings: 1,
+        "batting.out": true,
+        "batting.runs": 30,
+        "batting.balls": 20,
+        person: "p1",
+      };
+      const payload = buildActionPayload(lineAction, values);
+      expect(Object.prototype.hasOwnProperty.call(payload, "bowling")).toBe(false);
+      expect(payload).toEqual({
+        innings: 1,
+        person: "p1",
+        batting: { out: true, runs: 30, balls: 20 },
+      });
+    });
   });
 });

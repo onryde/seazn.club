@@ -820,6 +820,31 @@ export const PAD_LABEL_KEYS: readonly MessageKey[] = [
   "pad.cricket.action.matchClose",
   "pad.cricket.action.newBall",
   "pad.cricket.action.playerLine",
+  // Task A — the seven fields and the one person attribution on
+  // `cricket.player.line` that shipped with no `labelKey` at all. An
+  // uncaptioned control is not blank: `renderField`/`attributionItemCaption`
+  // fall through to `deriveFieldPathLabel(path)` (view-model.ts), which
+  // word-splits the dotted path into ENGLISH and is deliberately never routed
+  // through a dictionary — so "Bowling legal balls" and "Scorecard line —
+  // Person" rendered in all four locales. The aspect segment is kept on the
+  // colliding leaves (`battingRuns`/`bowlingRuns`): they are two different
+  // numbers on one form.
+  "pad.cricket.action.playerLine.field.battingBalls",
+  "pad.cricket.action.playerLine.field.battingOut",
+  "pad.cricket.action.playerLine.field.battingRuns",
+  "pad.cricket.action.playerLine.field.bowlingLegalBalls",
+  "pad.cricket.action.playerLine.field.bowlingRuns",
+  "pad.cricket.action.playerLine.field.bowlingWickets",
+  "pad.cricket.action.playerLine.field.dismissalBowler",
+  "pad.cricket.action.playerLine.field.dismissalFielder",
+  "pad.cricket.action.playerLine.field.dismissalKind",
+  "pad.cricket.action.playerLine.field.fours",
+  "pad.cricket.action.playerLine.field.innings",
+  "pad.cricket.action.playerLine.field.maidens",
+  "pad.cricket.action.playerLine.field.noBalls",
+  "pad.cricket.action.playerLine.field.person",
+  "pad.cricket.action.playerLine.field.sixes",
+  "pad.cricket.action.playerLine.field.wides",
   "pad.cricket.action.powerplay",
   "pad.cricket.action.retire",
   "pad.cricket.action.review",
@@ -1317,15 +1342,36 @@ export interface DecidedOutcomeTemplates {
  * "super_over", … a second time — if that map ever gains or loses a method,
  * this follows with no edit.
  */
-export function decidedOutcomeTemplates(m: MsgFn): DecidedOutcomeTemplates {
+/**
+ * Sports whose shootout is SKATED, not kicked. "Won on penalties" is football's
+ * sentence; ice hockey and field hockey have a shootout, and the engine already
+ * speaks that way (icehockey's own metrics are "GWS goals" — game-winning
+ * shots). One shared, football-worded key was printed for every sport.
+ *
+ * `sportKey` is OPTIONAL, defaulting to football's wording, so every caller
+ * that does not pass one renders byte-identical to before. Deliberate: a
+ * REQUIRED parameter would have forced a change on every call site whether or
+ * not it had a sport in hand, and this is a copy nuance, not a contract.
+ */
+/** The sports whose shoot-out is SKATED, not a penalty shoot-out — they take
+ *  "in the shootout" wording rather than football's "on penalties".
+ *
+ *  Exported because `server/public-site/match-centre.ts` declared its own
+ *  verbatim copy: two sets, one fact, and a third skated sport would have
+ *  moved one of them and left the court card and the share sentence
+ *  disagreeing about the same match. */
+export const SHOOTOUT_IS_SKATED = new Set(["icehockey", "hockey"]);
+
+export function decidedOutcomeTemplates(m: MsgFn, sportKey?: string): DecidedOutcomeTemplates {
+  const skated = sportKey !== undefined && SHOOTOUT_IS_SKATED.has(sportKey);
   const byMethod: Record<string, string> = {};
   for (const [method, key] of Object.entries(DECIDED_METHOD_KEY)) {
-    byMethod[method] = m(key);
+    byMethod[method] = method === "shootout" && skated ? m("fixture.decidedBy.shootoutHockey") : m(key);
   }
   return {
     tie: m("fixture.decidedBy.tie"),
     plain: m("fixture.decidedBy.plain"),
-    shootoutPlain: m("fixture.decidedBy.shootoutPlain"),
+    shootoutPlain: skated ? m("fixture.decidedBy.shootoutHockeyPlain") : m("fixture.decidedBy.shootoutPlain"),
     byMethod,
   };
 }
@@ -1396,8 +1442,10 @@ export function decidedOutcomeText(
   entrantNames: Record<string, string>,
   m: MsgFn,
   shootoutScore?: { home: number; away: number } | null,
+  /** See `decidedOutcomeTemplates` — omitting it keeps football's wording. */
+  sportKey?: string,
 ): string | null {
-  return renderDecidedOutcome(outcome, entrantNames, decidedOutcomeTemplates(m), shootoutScore);
+  return renderDecidedOutcome(outcome, entrantNames, decidedOutcomeTemplates(m, sportKey), shootoutScore);
 }
 
 /**

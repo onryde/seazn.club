@@ -2829,3 +2829,49 @@ the "5v4" strength chip renders on the public scorebug but never the organiser
 console. #430 stays open for its two non-tier rows (plus/minus with the on-ice
 set, boardgame PGN). The T lane (fidelity band 3 for the sports that never got
 one) remains PARKED and is unblocked by this close.
+
+---
+
+## 2026-09-08 — `requiresFieldIn` added to the pad contract, from the spectator branch
+
+Recorded here because the change lands in THIS programme's shared contract while
+being driven by another one (`2026-09-04-spectator-prompts`), and because the
+mechanism it fixes is not derivable from the code.
+
+**`requiresField` gates the payload BUILD, not the RENDER.** `view-model.ts`
+drops a gated value at build time; `action-form.tsx` maps `action.attribution`
+unconditionally, so the chip row is always OFFERED. The flag reads like a
+conditional-display flag and is not one. That gap turned a spectator-side
+engine fix into a scorer-facing dead end: `applyPlayerLine` began refusing
+`dismissal.bowler` on a kind outside `BOWLER_CREDITED_KINDS`, while the pad went
+on showing the Bowler row for "Run out" — tap it, name a bowler, Confirm is
+refused. Before the guard the same taps folded silently and the PUBLIC scorecard
+credited a run-out to a bowler, so neither half alone was shippable.
+
+**`PadAttributionItem.requiresFieldIn?: readonly string[]`** narrows the field
+`requiresField` already names (it names none of its own, so presence and value
+rules cannot drift), and BOTH halves — the build gate and the render gate — read
+one exported predicate, `attributionValueInadmissible`. Render-only would let a
+stale tapped value reach the payload; build-only leaves the dead end visible.
+Absent means no existing item changes behaviour, matching `requiresField` and
+`optional`. Cricket declares it spread from the reducer's own
+`BOWLER_CREDITED_KINDS`, never a second list.
+
+**Left open, and it is an owner call, not a deferral of tidying.**
+`candidatesForPerson` loops `["home","away"]` unconditionally; `role` narrows by
+position, never by side, and cricket declares no `role`. So the Bowler/Fielder
+pickers offer the BATTING side, which makes the same guard's "not in the
+fielding lineup" arm a second reachable dead end — as is the older ungated
+`person` item, which predates all of this. It cannot be closed at the pad: which
+side bats in innings N is folded state, `innings` is a free field on the same
+form, and neither `action-form.tsx` nor `attribution-picker.tsx` references
+`battingSide` or `innings` at all. Closing it needs an engine-declared side
+selector for attribution pickers.
+
+**Also open, same class, larger:** 228 attribution/field items across 11 sports
+carry no `labelKey`, so they fall through to `deriveFieldPathLabel` and render
+ENGLISH in all four locales with no literal string anywhere to grep for. Cricket's
+eight on `cricket.player.line` are now captioned; the rest is a programme of its
+own. Note the four-part atomicity — module `labelKey`, `PAD_LABEL_KEYS`, four
+`ui.json`s, `gen-keys` — since `scoring-vocab.test.ts` ties the key list to what
+modules actually emit and reds on any half-shipped subset.

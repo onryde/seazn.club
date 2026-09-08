@@ -1103,6 +1103,11 @@ async function main() {
   await registrationWaitlistPromoteSuite();
   await registrationTeamOpsSuite();
   await registrationSelfLinkAndConsentSuite();
+
+  // Task 15 (spectator W1): the public match-centre page and its
+  // `match_centre` API field, against a live server. Own fresh org;
+  // keyless-safe.
+  await matchCentreSmoke();
 }
 
 /** F5 remainder — build.ts's per-value i18n fallbacks (the "vs" result
@@ -5530,6 +5535,70 @@ async function timedFixture(
     entrantIds: ents.map((e) => e.id),
     fixtureId: gen.fixtures[0].id,
   };
+}
+
+/**
+ * Task 15 (spectator W1) — the public match-centre page and the
+ * `match_centre` field on `GET /api/v1/public/fixtures/{id}` are real
+ * against a live server, not merely unit-tested. A bare `core.start` (no
+ * balls at all) is enough for the second check: `buildMatchCentre`
+ * (apps/web/src/server/public-site/match-centre.ts) always emits
+ * `tabs: ["summary", ...extraTabs, "info"]`, and `extraTabs` only grows once
+ * real ball/line data exists — so `tabs.length` is exactly 2 here, which is
+ * the floor the check pins. The court card renders regardless: `MatchCentre`
+ * only falls back to its placeholder when `doc.tabs.length === 0`. Own
+ * fresh org — never touches the shared org this file's other suites depend
+ * on.
+ */
+async function matchCentreSmoke(): Promise<void> {
+  const owner = newSession();
+  await signIn(owner, `matchcentre_${tag}@example.com`);
+  const comp = v1data<{ id: string; slug: string }>(
+    await v1(owner, "/api/v1/competitions", "POST", {
+      ends_on: "2030-12-31",
+      name: `Match Centre Smoke ${tag}`,
+      visibility: "public",
+    }),
+  );
+  const fx = await timedFixture(owner, comp.id, {
+    name: "Smoke XI",
+    sport_key: "cricket",
+    variant_key: "t20",
+    entrants: [
+      { kind: "team", display_name: `Smoke Home ${tag}`, seed: 1 },
+      { kind: "team", display_name: `Smoke Away ${tag}`, seed: 2 },
+    ],
+  });
+  const fxLedger = ledger(owner, fx.fixtureId);
+  // cricket.toss BEFORE core.start — the engine's own guard 422s the other
+  // way round ("toss must precede core.start", cricket.ts:3372).
+  const toss = await fxLedger.send("cricket.toss", { wonBy: fx.entrantIds[0], elected: "bat" });
+  check("match centre smoke: cricket.toss is accepted before core.start", toss.status < 300);
+  const start = await fxLedger.send("core.start", {});
+  check("match centre smoke: core.start is accepted", start.status < 300);
+
+  const orgs = (await call(owner, "/api/orgs")) as { id: string; slug: string }[];
+  const orgSlug = orgs[0]?.slug ?? "";
+  const divSlug = v1data<{ slug: string }>(await v1(owner, `/api/v1/divisions/${fx.divisionId}`)).slug;
+  const path = `/shared/${orgSlug}/${comp.slug}/${divSlug}/fixtures/${fx.fixtureId}`;
+  // Fix round 1 (task-15-review.md I3): the whole point of this check is
+  // that an ANONYMOUS spectator can read the page -- `owner`'s session
+  // cookies would still pass if `/shared` silently started requiring auth,
+  // exactly the regression this check exists to catch. `newSession()` here
+  // (moved up from below, now shared with the JSON check too) carries none.
+  const anon = newSession();
+  const page = await html(anon, path);
+  check(
+    "match centre smoke: GET /shared/.../fixtures/{id} renders the match centre (mc-court-card), read ANONYMOUSLY",
+    page.status === 200 && page.body.includes('data-testid="mc-court-card"'),
+  );
+
+  const pub = await v1(anon, `/api/v1/public/fixtures/${fx.fixtureId}`);
+  const tabs = v1data<{ match_centre?: { tabs?: unknown[] } }>(pub).match_centre?.tabs;
+  check(
+    "match centre smoke: GET /api/v1/public/fixtures/{id} carries match_centre.tabs.length >= 2",
+    Array.isArray(tabs) && tabs.length >= 2,
+  );
 }
 
 interface ActiveSuspensionOut {
@@ -17988,6 +18057,9 @@ async function cleanup(tag: string): Promise<void> {
     `regwait_${tag}@example.com`,
     `regteam_${tag}@example.com`,
     `regself_${tag}@example.com`,
+    // Task 15 (spectator W1) — matchCentreSmoke's own org (one competition,
+    // one cricket division and its fixture cascade with it).
+    `matchcentre_${tag}@example.com`,
   ];
   const isLocal = /@(localhost|127\.0\.0\.1)[:/]/.test(url);
   const sql = postgres(url, {

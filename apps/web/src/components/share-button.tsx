@@ -58,7 +58,12 @@ export function ShareButton({
       aria-label={msg("share.whatsapp")}
       className={
         className ||
-        "inline-flex items-center gap-1.5 rounded-lg border border-zinc-200/80 bg-surface px-3 py-1.5 text-sm font-medium text-accent-strong shadow-sm transition hover:bg-accent-soft"
+        // `min-h-11` (44px) is the standing mobile tap-target floor. Measured
+        // at 34px before it, on the public match centre at every width — the
+        // one caller that already passed its own className (`fixture-console`)
+        // had reached for `min-h-11` for exactly this reason, so the DEFAULT
+        // was the short one and every caller that took it inherited the gap.
+        "inline-flex min-h-11 items-center gap-1.5 rounded-lg border border-zinc-200/80 bg-surface px-3 py-1.5 text-sm font-medium text-accent-strong shadow-sm transition hover:bg-accent-soft"
       }
     >
       <Share2 className="h-4 w-4" strokeWidth={1.75} />

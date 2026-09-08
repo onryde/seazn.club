@@ -94,6 +94,38 @@ const eslintConfig = defineConfig([
     },
   },
   {
+    // `lib/timeline-keys.ts` exists SOLELY so a client component can reach the
+    // Timeline's dictionary keys without importing
+    // `server/public-site/timeline.ts`, which pulls in pino. A client component
+    // importing anything under `@/server/**` is a BUILD FAILURE in this app,
+    // not a warning — and a stray import here would surface only as a broken
+    // production build, long after the change that caused it. So the constraint
+    // is enforced at the one file where it is easy to violate.
+    files: ["src/lib/timeline-keys.ts"],
+    rules: {
+      "no-restricted-imports": [
+        "error",
+        {
+          patterns: [
+            {
+              group: ["@/server/*", "@/server/**", "server-only"],
+              message:
+                "timeline-keys.ts must stay client-safe: a client component importing @/server/** fails the build.",
+            },
+          ],
+          paths: [
+            {
+              name: "pino",
+              message:
+                "timeline-keys.ts must stay client-safe — logging belongs in server/public-site/timeline.ts.",
+            },
+          ],
+        },
+      ],
+    },
+  },
+
+  {
     // Server-only surfaces (route handlers, usecases): pino (server/logger.ts)
     // is the logger, not console. Scoped to server/** and app/api/** rather
     // than repo-wide — pino is server-only, and src/**/*.tsx client

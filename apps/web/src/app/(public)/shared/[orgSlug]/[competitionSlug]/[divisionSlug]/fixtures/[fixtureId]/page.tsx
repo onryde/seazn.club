@@ -1,19 +1,37 @@
 // Live match page (doc 09 §2): render-agnostic scoreboard from the fold
 // cache's ScoreSummary, live via realtime push (Pro) or 15 s polling, with
 // SportsEvent JSON-LD (doc 09 §3).
+//
+// Task 14 (spectator surface W1) replaced the legacy `<LiveScore>` scorebug
+// with the full match centre (`<MatchCentre>`, Task 10's shell + Tasks
+// 11-13's real tab panels): `initial` is built here from the SAME
+// `getPublicFixture` result the poll endpoint's own `match_centre` field
+// mirrors (`server/public-site/data.ts`), so first paint and every refresh
+// after it render the identical document shape (rule R10). `ShareButton`'s
+// `useMsg()` (ui.json) needs a `<DictProvider>` ancestor to see the request
+// locale at all — this route had none before this task, so its "Share on
+// WhatsApp"/"Copied" labels always rendered in English regardless of
+// `org.default_locale`; wrapping the page fixes that for real, the same
+// convention `(public)/r/[ref]/page.tsx` already uses.
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import type { Metadata } from "next";
 import { getPublicFixture } from "@/server/public-site/data";
 import { sportsEventJsonLd } from "@/lib/public-site";
 import { publicThemeStyle } from "@/lib/public-theme";
-import { LiveScore } from "@/components/public-site/live-score";
+import { MatchCentreWithTabParam } from "@/components/public-site/match-centre/match-centre-with-tab-param";
+import type { LiveFixtureData } from "@/components/public-site/live-score-data";
 import { ShareButton } from "@/components/share-button";
+import { DictProvider } from "@/components/i18n/dict-provider";
 import { fixtureSubheading } from "./fixture-subheading";
+import { shareTextFor } from "./share-text";
 import { resolveSlotLabel } from "@/lib/slot-label";
 import { toLocale } from "@/lib/i18n-constants";
+import type { Dict } from "@/lib/i18n-constants";
 import { msgFor } from "@/lib/messages-i18n";
-import { decidedOutcomeText, decidedOutcomeTemplates, shootoutScoreFromDetail } from "@/lib/scoring-vocab";
+import { getDictionary, t } from "@/lib/i18n";
+import type { MatchCentreDocT } from "@/server/public-site/match-centre-schema";
+import { decidedOutcomeText, shootoutScoreFromDetail } from "@/lib/scoring-vocab";
 // P6 fix round 1, finding #2 (CRITICAL) — org.default_locale, same pattern
 // as data.ts:502-503 and every other public surface this fix round wires.
 // This IS a server component and getPublicFixture already carries `org`, so
@@ -35,12 +53,18 @@ function decidedLineFor(
   fixture: { outcome: { kind?: string; winner?: string; method?: string } | null; summary: { detail?: unknown } | null },
   entrantNames: Record<string, string>,
   msgFn: ReturnType<typeof lookup>,
+  // The shootout sentence is the SPORT's: ice hockey and field hockey have a
+  // shootout, football has penalties. Threaded so the share/OG text and the
+  // court card cannot describe one match two ways — which they did, briefly,
+  // when only the court card was made sport-aware.
+  sportKey: string,
 ): string | null {
   return decidedOutcomeText(
     fixture.outcome,
     entrantNames,
     msgFn,
     shootoutScoreFromDetail(fixture.summary?.detail),
+    sportKey,
   );
 }
 
@@ -52,6 +76,29 @@ function withDecidedLine(headline: string | undefined, decidedLine: string | nul
   return headline ? `${headline} — ${decidedLine}` : decidedLine;
 }
 
+/**
+ * Task 14 — the decided fixture's raw score lines ("HOM 156/6" ·
+ * "AWY 98 all out") plus the localised result sentence, straight off the
+ * SAME match-centre document the page's own `<MatchCentre>` (and every
+ * live poll after it) renders — never re-derived from `fixture.outcome`/
+ * `summary` a second way. `null` when the document has neither (a decided
+ * fixture the builder could not resolve a header for), so a title never
+ * grows a bare "()".
+ */
+function scoreAndResultFor(matchCentre: MatchCentreDocT, dict: Dict): string | null {
+  const scoreParts = matchCentre.header.sides
+    .map((side, i) => {
+      const line = matchCentre.header.scoreLines[i];
+      return line ? `${side.short || side.name} ${line}` : null;
+    })
+    .filter((s): s is string => s !== null);
+  const resultPhrase = matchCentre.header.statusLine
+    ? t(dict, matchCentre.header.statusLine.key, matchCentre.header.statusLine.params)
+    : null;
+  const parts = [...scoreParts, ...(resultPhrase ? [resultPhrase] : [])];
+  return parts.length > 0 ? parts.join(" · ") : null;
+}
+
 export const revalidate = 30;
 
 // ISR (task-8): empty-array generateStaticParams is required for on-demand
@@ -60,6 +107,14 @@ export async function generateStaticParams() {
   return [];
 }
 
+// Task 14d — this page briefly read `searchParams` (`?tab=`) directly and
+// shipped `export const dynamic = "force-dynamic"` to work around the
+// resulting `DYNAMIC_SERVER_USAGE` throw, which broke the ISR contract
+// (task-8) this route is audited against (public-isr-contract.test.ts). The
+// `?tab=` deep link now moves client-side instead — see
+// `match-centre-with-tab-param.tsx` (`useSearchParams` inside a `<Suspense>`
+// boundary) — so this page never touches `searchParams` at all, and stays
+// cacheable exactly like its sibling public pages.
 type Props = {
   params: Promise<{
     orgSlug: string;
@@ -69,23 +124,39 @@ type Props = {
   }>;
 };
 
-export async function generateMetadata({ params }: Props): Promise<Metadata> {
+export async function generateMetadata({ params }: Pick<Props, "params">): Promise<Metadata> {
   const { orgSlug, competitionSlug, divisionSlug, fixtureId } = await params;
   const data = await getPublicFixture(orgSlug, competitionSlug, divisionSlug, fixtureId);
   if (!data) return {};
-  const msgFn = lookup(toLocale(data.org.default_locale));
+  const locale = toLocale(data.org.default_locale);
+  const msgFn = lookup(locale);
+  const dict = await getDictionary(locale, "public");
+  const ui = await getDictionary(locale, "ui");
   const home = data.fixture.home_entrant_id
     ? (data.entrantNames[data.fixture.home_entrant_id] ?? resolveSlotLabel(null, msgFn, "schedule.tbd"))
     : resolveSlotLabel(data.fixture.home_slot_label, msgFn, "schedule.tbd");
   const away = data.fixture.away_entrant_id
     ? (data.entrantNames[data.fixture.away_entrant_id] ?? resolveSlotLabel(null, msgFn, "schedule.tbd"))
     : resolveSlotLabel(data.fixture.away_slot_label, msgFn, "schedule.tbd");
-  const decidedLine = decidedLineFor(data.fixture, data.entrantNames, msgFn);
+  const decidedLine = decidedLineFor(data.fixture, data.entrantNames, msgFn, data.division.sport_key);
+  const decided = data.fixture.status === "decided" || data.fixture.status === "finalized";
+  // Task 14 acceptance (a) — a decided fixture's title carries both the raw
+  // score lines and the result phrase, so a share/search preview shows the
+  // final score without opening the page.
+  const scoreAndResult = decided ? scoreAndResultFor(data.matchCentre, dict) : null;
+  // Task 14c (task-14b-review.md Remaining-English list) — the "vs"/"at"
+  // glue words in this page's <title>/description were hardcoded English in
+  // every locale; both are now whole-string templates (`fixture.meta.*`,
+  // `ui.json`), mirroring the `fixture.share.*` templates `share-text.ts`
+  // already uses for the identical "vs"→"contre"/"tegen" word choice.
+  const title = scoreAndResult
+    ? t(ui, "fixture.meta.titleDecided", { home, away, division: data.division.name, result: scoreAndResult })
+    : t(ui, "fixture.meta.title", { home, away, division: data.division.name });
   return {
-    title: `${home} vs ${away} — ${data.division.name}`,
+    title,
     description:
       withDecidedLine(data.fixture.summary?.headline, decidedLine) ??
-      `${home} vs ${away} at ${data.competition.name}`,
+      t(ui, "fixture.meta.description", { home, away, competition: data.competition.name }),
     ...(data.competition.visibility === "unlisted"
       ? { robots: { index: false, follow: false } }
       : {}),
@@ -97,7 +168,14 @@ export default async function FixturePage({ params }: Props) {
   const data = await getPublicFixture(orgSlug, competitionSlug, divisionSlug, fixtureId);
   if (!data) notFound();
   const { org, competition, division, fixture, entrantNames, realtime } = data;
-  const msgFn = lookup(toLocale(org.default_locale));
+  const locale = toLocale(org.default_locale);
+  const msgFn = lookup(locale);
+  // `public` (match-centre copy, threaded to `<MatchCentre>` as an explicit
+  // prop — Task 11's convention) and `ui` (`ShareButton`'s `useMsg()`, via
+  // the `<DictProvider>` below — the SAME split `(public)/r/[ref]/page.tsx`
+  // already uses).
+  const dict = await getDictionary(locale, "public");
+  const ui = await getDictionary(locale, "ui");
 
   const home = fixture.home_entrant_id
     ? (entrantNames[fixture.home_entrant_id] ?? resolveSlotLabel(null, msgFn, "schedule.tbd"))
@@ -106,10 +184,10 @@ export default async function FixturePage({ params }: Props) {
     ? (entrantNames[fixture.away_entrant_id] ?? resolveSlotLabel(null, msgFn, "schedule.tbd"))
     : resolveSlotLabel(fixture.away_slot_label, msgFn, "schedule.tbd");
   const basePath = `/shared/${org.slug}/${competition.slug}/${division.slug}`;
-  const decidedLine = decidedLineFor(fixture, entrantNames, msgFn);
+  const decidedLine = decidedLineFor(fixture, entrantNames, msgFn, division.sport_key);
 
   const jsonLd = sportsEventJsonLd({
-    name: `${home} vs ${away} — ${division.name}, ${competition.name}`,
+    name: t(ui, "fixture.meta.jsonLdName", { home, away, division: division.name, competition: competition.name }),
     ...(fixture.scheduled_at ? { startDate: fixture.scheduled_at } : {}),
     // P9 cutover: venue_name is DERIVED (fixtures.venue_id via data.ts's
     // withCourtVenueNames) — venue is frozen, no writer touches it any more.
@@ -125,61 +203,100 @@ export default async function FixturePage({ params }: Props) {
           : "EventScheduled",
   });
 
-  return (
-    <div style={publicThemeStyle(competition.branding)}>
-      <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: jsonLd }} />
-      <nav className="mb-4 text-xs text-ink-muted">
-        <Link
-          href={`/shared/${org.slug}/${competition.slug}`}
-          className="hover:text-accent-strong hover:underline"
-        >
-          {competition.name}
-        </Link>{" "}
-        /{" "}
-        <Link href={basePath} className="hover:text-accent-strong hover:underline">
-          {division.name}
-        </Link>
-      </nav>
+  // Task 14 — the SAME `LiveFixtureData` shape the poll endpoint returns
+  // (`match_centre`, snake_case on the wire — `getPublicFixture`'s own
+  // `matchCentre` field, camelCase, is the identical document under a
+  // different key), so `useLiveFixture`'s first render and every refresh
+  // after it are one shape, never two.
+  const initial: LiveFixtureData = {
+    status: fixture.status,
+    summary: fixture.summary,
+    outcome: fixture.outcome,
+    match_centre: data.matchCentre,
+  };
 
-      <div className="mb-1 flex flex-wrap items-start justify-between gap-3">
-        <h1 className="font-display text-2xl font-semibold text-ink">
-          {home} <span className="text-ink-muted">vs</span> {away}
-        </h1>
-        {/* One-tap share (v3/10 #2) — the message reads like a human wrote it. */}
-        <ShareButton
-          title={`${home} vs ${away}`}
-          text={
-            fixture.status === "decided" || fixture.status === "finalized"
-              ? `${home} vs ${away} — ${withDecidedLine(fixture.summary?.headline, decidedLine) ?? "full-time"} (${division.name}, ${competition.name})`
-              : `${home} vs ${away} — ${division.name}, ${competition.name}. Follow it live:`
-          }
-          url={`${basePath}/fixtures/${fixture.id}`}
+  return (
+    <DictProvider dict={ui} locale={locale}>
+      <div style={publicThemeStyle(competition.branding)}>
+        <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: jsonLd }} />
+        <nav className="mb-4 text-xs text-ink-muted">
+          <Link
+            href={`/shared/${org.slug}/${competition.slug}`}
+            className="hover:text-accent-strong hover:underline"
+          >
+            {competition.name}
+          </Link>{" "}
+          /{" "}
+          <Link href={basePath} className="hover:text-accent-strong hover:underline">
+            {division.name}
+          </Link>
+        </nav>
+
+        <div className="mb-1 flex flex-wrap items-start justify-between gap-3">
+          <h1 className="font-display text-2xl font-semibold text-ink">
+            {home} <span className="text-ink-muted">{msgFn("schedule.vs")}</span> {away}
+          </h1>
+          {/* One-tap share (v3/10 #2) — the message reads like a human wrote it.
+              Task 14b — both `title` and `text` now go through the request
+              locale: `title` reuses the SAME `schedule.vs` word the visible
+              <h1> above already renders (it was still a bare "vs" here,
+              inconsistent with that heading in every non-English locale);
+              `text` is `shareTextFor` (`./share-text.ts`), localised via
+              `fixture.share.decided`/`fixture.share.live`/
+              `fixture.share.fullTime`. */}
+          <ShareButton
+            title={`${home} ${msgFn("schedule.vs")} ${away}`}
+            text={shareTextFor(
+              fixture.status === "decided" || fixture.status === "finalized",
+              home,
+              away,
+              division.name,
+              competition.name,
+              withDecidedLine(fixture.summary?.headline, decidedLine),
+              ui,
+            )}
+            url={`${basePath}/fixtures/${fixture.id}`}
+          />
+        </div>
+        {/* R11 fix round, C3 — `fixtureSubheading` returns "" for an in-play
+            fixture with no scheduled time (the court card right below
+            already carries the LIVE chip); joining through `filter(Boolean)`
+            rather than string concatenation means that empty case doesn't
+            leave a stray leading " · " in front of the venue/court name, and
+            the whole line disappears rather than rendering blank when there
+            is neither a subheading nor a venue/court to show. */}
+        {(() => {
+          const subheadingParts = [
+            fixtureSubheading(
+              fixture.status,
+              fixture.scheduled_at,
+              t(dict, "matchCentre.status.timeTbd"),
+              t(dict, "matchCentre.status.timeNotRecorded"),
+              locale,
+            ),
+            fixture.venue_name,
+            fixture.court_name,
+          ].filter((part): part is string => Boolean(part));
+          return subheadingParts.length > 0 ? (
+            <p className="mb-4 text-sm text-ink-muted">{subheadingParts.join(" · ")}</p>
+          ) : null;
+        })()}
+
+        {/* Task 14 — the match centre replaces the old bare scorebug
+            (`<LiveScore>`, retired). `<MatchCentre>` drives its own live
+            transport (`useLiveFixture`) from `initial` and re-renders every
+            open tab in place on each poll/realtime update (rule R10) — the
+            decided-fixture sentence R3.5/Task G|O introduced now lives in
+            the document's own `header.statusLine` (`CourtCard`), resolved
+            through the SAME `dict` every panel gets, so it updates live in
+            the viewer's own locale without this page re-rendering. */}
+        <MatchCentreWithTabParam
+          fixtureId={fixture.id}
+          initial={initial}
+          realtime={realtime}
+          dict={dict}
         />
       </div>
-      <p className="mb-4 text-sm text-ink-muted">
-        {fixtureSubheading(fixture.status, fixture.scheduled_at)}
-        {fixture.venue_name ? ` · ${fixture.venue_name}` : ""}
-        {fixture.court_name ? ` · ${fixture.court_name}` : ""}
-      </p>
-
-      {/* R3.5/Task G gave this page the winner-and-HOW sentence (`decidedLine`
-          above, still used by the OG description and share text below, which
-          are inherently one-shot renders). R3.5/Task O moved the VISIBLE copy
-          of it from a static paragraph here into `LiveScore` itself: a Server
-          Component can only render `decidedLine` once, at request time, so a
-          spectator already on this page when a decider lands never saw it
-          without a reload. `LiveScore` recomputes the same sentence from its
-          own live `data.outcome` on every poll/realtime update — the
-          `decidedTemplates` prop is the (pre-localized, not yet interpolated)
-          copy this client island has no dictionary of its own to produce. */}
-      <LiveScore
-        fixtureId={fixture.id}
-        initial={{ status: fixture.status, summary: fixture.summary, outcome: fixture.outcome }}
-        realtime={realtime}
-        entrantNames={entrantNames}
-        sportKey={division.sport_key}
-        decidedTemplates={decidedOutcomeTemplates(msgFn)}
-      />
-    </div>
+    </DictProvider>
   );
 }

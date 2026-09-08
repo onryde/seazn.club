@@ -56,3 +56,27 @@ export {
   dlsTarget,
   dlsPar,
 } from "./dls.ts";
+// Spectator match centre (spectator-surface design, "The shared model") — the
+// public-fold seam `@seazn/engine/sports/cricket` exposes so a caller outside
+// this package never re-implements a cricket rule of its own.
+//
+// Fix round 1, finding 8 (Task 1 re-review): named exports, not
+// `export type *` — a barrel re-export gives every future addition to
+// `scorecard-types.ts` a silent, unreviewed public API; naming the 12 types
+// (plus `ScorecardInput`, `scorecard.ts`'s own input shape) makes the public
+// surface an explicit, diffable list.
+export { deriveCricketScorecard, type ScorecardInput } from "./scorecard.ts";
+export type {
+  SideId,
+  PersonId,
+  DismissalKind,
+  BattingLine,
+  BowlingLine,
+  BallGlyph,
+  OverLog,
+  FallOfWicket,
+  Partnership,
+  CricketInningsCard,
+  CricketLive,
+  CricketScorecard,
+} from "./scorecard-types.ts";

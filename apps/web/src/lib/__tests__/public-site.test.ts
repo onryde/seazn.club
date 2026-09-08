@@ -9,6 +9,10 @@ import {
   formatMetric,
   setBreakdown,
   stripLiveSetPoints,
+  teamShortOf,
+  personShortCandidates,
+  disambiguatedShorts,
+  BADGE_MAX_CHARS,
   type StandingsRowLike,
 } from "@/lib/public-site";
 
@@ -283,16 +287,20 @@ describe("setBreakdown (public per-set scoreboard)", () => {
     },
   };
 
+  // Task 14c — `unit` is now a dictionary-key suffix ("game"/"set"), not the
+  // literal English display word ("Game"/"Set") this test used to pin —
+  // `live-score.tsx` resolves it through `matchCentre.col.<unit>` /
+  // `matchCentre.unit.<unit>` instead of rendering it straight through.
   it("extracts every set including the live one, unit-labelled per sport", () => {
     expect(setBreakdown(summary, "badminton")).toEqual({
-      unit: "Game",
+      unit: "game",
       sets: [
         { home: 21, away: 15, closed: true },
         { home: 5, away: 3, closed: false },
       ],
     });
-    expect(setBreakdown(summary, "tabletennis")?.unit).toBe("Game");
-    expect(setBreakdown(summary, "volleyball")?.unit).toBe("Set");
+    expect(setBreakdown(summary, "tabletennis")?.unit).toBe("game");
+    expect(setBreakdown(summary, "volleyball")?.unit).toBe("set");
   });
 
   it("returns null for non-set-based or malformed summaries", () => {
@@ -333,5 +341,189 @@ describe("competitionChip (spectator status vocabulary)", () => {
     expect(competitionChip("live")).toBe("on-now");
     expect(competitionChip("draft")).toBe("upcoming");
     expect(competitionChip("published")).toBe("upcoming");
+  });
+});
+
+// R11 fix round, C9 — the match-centre court card abbreviates every entrant
+// to three letters. The TEAM rule (`teamShortOf`, unchanged: first three
+// compacted letters of the whole name) already disambiguates in practice
+// (cricket's BLA/COM), but it collided for PERSON entrants: "Player One" and
+// "Player Two" both read "PLA". `personShortCandidates` prefers the surname;
+// `disambiguatedShorts` resolves BOTH sides together, since a single side's
+// name never carries enough information on its own to know it needs to widen.
+describe("teamShortOf / personShortCandidates / disambiguatedShorts (R11 fix round, C9)", () => {
+  it("teamShortOf is unchanged — first three compacted, uppercased letters", () => {
+    expect(teamShortOf("Blazers")).toBe("BLA");
+    expect(teamShortOf("Comets FC")).toBe("COM");
+    expect(teamShortOf("")).toBe("?");
+  });
+
+  it("personShortCandidates prefers the surname first ('Player One' -> 'ONE', not 'PLA')", () => {
+    expect(personShortCandidates("Player One")[0]).toBe("ONE");
+    expect(personShortCandidates("Player Two")[0]).toBe("TWO");
+  });
+
+  it("a single-word name still yields a usable candidate list (no first/last split to draw on)", () => {
+    expect(personShortCandidates("Cher")[0]).toBe("CHE");
+  });
+
+  it("disambiguatedShorts: two PERSON entrants whose first names collide but surnames differ — 'Player One'/'Player Two' -> 'ONE'/'TWO', never both 'PLA'", () => {
+    const [home, away] = disambiguatedShorts(
+      { name: "Player One", isPerson: true },
+      { name: "Player Two", isPerson: true },
+    );
+    expect(home).not.toBe(away);
+    expect(home).toBe("ONE");
+    expect(away).toBe("TWO");
+  });
+
+  // The brief's OWN required case: "include the case where the surnames also
+  // collide, and pin what the code does then". Surname-first candidates
+  // ("SMI"/"SMI") collide too, so the widened rung (initial + 2 letters of
+  // surname) must be what breaks the tie.
+  it("disambiguatedShorts: surnames ALSO collide ('Alice Smith'/'Bob Smith') — widens to initial+surname, still 3 letters, still different", () => {
+    const [home, away] = disambiguatedShorts(
+      { name: "Alice Smith", isPerson: true },
+      { name: "Bob Smith", isPerson: true },
+    );
+    expect(home).not.toBe(away);
+    expect(home).toBe("ASM");
+    expect(away).toBe("BSM");
+    // Each abbreviation is still traceable to its OWN name, not a swap.
+    expect(home.startsWith("A")).toBe(true);
+    expect(away.startsWith("B")).toBe(true);
+  });
+
+  // Found by driving the real spectator walkthrough (e2e/walkthrough/
+  // spectator-public-2.spec.ts names its two tennis entrants "Player One
+  // <tag>"/"Player Two <tag>" — the SAME per-run tag suffix on both, so
+  // first word AND last word collide and only the middle differs). Without
+  // this rung the ladder fell to the untruncated full name, which overflows
+  // the 24x24px badge chips in `timeline-tab.tsx`/`sets-tab.tsx` — a real,
+  // screenshotted defect, not a hypothetical.
+  it("disambiguatedShorts: first AND last word collide (a shared per-run tag), only the MIDDLE word differs — still resolves to a short 3-letter code, not the untruncated full name", () => {
+    const [home, away] = disambiguatedShorts(
+      { name: "Player One mtpyoivq", isPerson: true },
+      { name: "Player Two mtpyoivq", isPerson: true },
+    );
+    expect(home).not.toBe(away);
+    expect(home).toBe("ONE");
+    expect(away).toBe("TWO");
+  });
+
+  // Re-review of this round: "never equal" was the only thing asserted here,
+  // and the tie-break satisfied it with the WIDEST candidate — "JOHNSMITH1" /
+  // "JOHNSMITH2", ten characters in a fixed 24x24px chip with no `truncate`.
+  // That is the same overflow the middle-word rung above exists to prevent,
+  // reached by a different degenerate input. So this pins the SHAPE as well
+  // as the inequality: a badge label is at most four characters wide — three
+  // for the shortest candidate (`surname.slice(0, 3)`) plus the positional
+  // digit — which is the width the ladder's own widest short rungs already
+  // produce.
+  it("disambiguatedShorts: genuinely identical full names on both sides — the tie-break keeps 'never equal' AND stays a short badge label, never the untruncated name", () => {
+    const [home, away] = disambiguatedShorts(
+      { name: "John Smith", isPerson: true },
+      { name: "John Smith", isPerson: true },
+    );
+    expect(home).not.toBe(away);
+    expect(home).toBe("SMI1");
+    expect(away).toBe("SMI2");
+  });
+
+  // `compactWord` upper-cases, so two differently-typed spellings of one name
+  // collide through every rung exactly as literal duplicates do — the same
+  // tie-break, and the same width ceiling.
+  it("disambiguatedShorts: names identical only after normalisation ('John Smith'/'john SMITH') take the same short tie-break", () => {
+    const [home, away] = disambiguatedShorts(
+      { name: "John Smith", isPerson: true },
+      { name: "john SMITH", isPerson: true },
+    );
+    expect(home).not.toBe(away);
+    expect([home, away]).toEqual(["SMI1", "SMI2"]);
+  });
+
+  // The LAST rung — the whole compacted name, clamped — earns its place here
+  // and nowhere else. "Ann Smith" and "Anna Smith" agree on every rung above
+  // it (SMI, ASM, SMIT, ANSM, and even the three-letter joined form ANN) and
+  // first differ at the fourth character of the joined name. Without this rung
+  // the pair falls to a positional tie-break; with it they keep an
+  // abbreviation that still says something. Found by mutating the rung away
+  // and watching nothing fail.
+  it("disambiguatedShorts: a pair that differs only in the JOINED name keeps a real abbreviation, not a positional one", () => {
+    const [home, away] = disambiguatedShorts(
+      { name: "Ann Smith", isPerson: true },
+      { name: "Anna Smith", isPerson: true },
+    );
+    expect([home, away]).toEqual(["ANNS", "ANNA"]);
+  });
+
+  // Two long surnames sharing their first four letters: every rung inside the
+  // chip collides, so this lands on the tie-break rather than on an eight-
+  // character surname. Pinned by value, because "short" and "different" were
+  // both true of ANDERSEN/ANDERSON and it was still the defect.
+  it("disambiguatedShorts: surnames that collide for longer than the badge is wide fall to the tie-break, never to the full surname", () => {
+    const [home, away] = disambiguatedShorts(
+      { name: "John Andersen", isPerson: true },
+      { name: "John Anderson", isPerson: true },
+    );
+    expect(home).toBe("AND1");
+    expect(away).toBe("AND2");
+    expect(personShortCandidates("John Andersen")).not.toContain("ANDERSEN");
+  });
+
+  // What this CAN prove: a resolved label is never wider than the ladder's own
+  // declared ceiling, for each of the shapes below. What it cannot: that the
+  // ceiling fits the chip — `apps/web` vitest is `environment: "node"`, so
+  // there is no layout here and a width claim made in this file would be
+  // decoration. The chip sizes itself to the label (`timeline-tab.tsx`'s
+  // `SideBadge`), and the e2e is where that is actually seen.
+  // The bound is read from the production constant, not typed in again, so
+  // moving the ceiling moves this test with it.
+  it(`disambiguatedShorts: every shape below resolves to at most BADGE_MAX_CHARS (${BADGE_MAX_CHARS}) characters`, () => {
+    const pairs: Array<[string, string]> = [
+      ["Player One", "Player Two"],
+      ["Alice Smith", "Bob Smith"],
+      ["Player One mtpyoivq", "Player Two mtpyoivq"],
+      ["John Smith", "John Smith"],
+      ["Wolfeschlegelsteinhausenbergerdorff", "Wolfeschlegelsteinhausenbergerdorff"],
+      ["Ann-Marie de la Cruz", "Ann-Marie de la Cruz"],
+      // Two long surnames sharing a four-letter prefix. This pair is the one
+      // the re-review caught: the ladder's terminal rungs went out unsliced,
+      // so it resolved to ANDERSEN/ANDERSON — eight characters, and this very
+      // test would have vouched for it.
+      ["John Andersen", "John Anderson"],
+      ["Maria Fernandez-Garcia", "Marco Fernandez-Garrido"],
+      // A name whose surname is one letter, and a single-word name — the two
+      // shapes where the early rungs cannot reach three characters at all.
+      ["Kim Y", "Lee Y"],
+      ["Ronaldinho", "Ronaldo"],
+    ];
+    for (const [nameA, nameB] of pairs) {
+      const [home, away] = disambiguatedShorts({ name: nameA, isPerson: true }, { name: nameB, isPerson: true });
+      expect(home).not.toBe(away);
+      expect(home.length, `${nameA} -> ${home}`).toBeLessThanOrEqual(BADGE_MAX_CHARS);
+      expect(away.length, `${nameB} -> ${away}`).toBeLessThanOrEqual(BADGE_MAX_CHARS);
+    }
+  });
+
+  it("disambiguatedShorts: TEAM entrants keep today's behaviour unconditionally (out of C9's scope) — no widening even if they collided", () => {
+    const [home, away] = disambiguatedShorts(
+      { name: "Blazers United", isPerson: false },
+      { name: "Blazers Town", isPerson: false },
+    );
+    // Both compact to "BLA" under the unchanged team rule — this is NOT
+    // fixed by C9 (team entrants "keep today's behaviour where it already
+    // disambiguates"); pinned here so a future change to the team rule is a
+    // deliberate decision, not an accidental side effect of this one.
+    expect(home).toBe("BLA");
+    expect(away).toBe("BLA");
+  });
+
+  it("disambiguatedShorts: a PERSON side against a TEAM side (mixed kinds, defensive — does not occur in practice) resolves each independently and still differs when they would otherwise collide", () => {
+    const [home, away] = disambiguatedShorts(
+      { name: "Ben Lane", isPerson: true },
+      { name: "Ben Lane FC", isPerson: false },
+    );
+    expect(home).not.toBe(away);
   });
 });

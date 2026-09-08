@@ -31,6 +31,22 @@ import { getPublicDivision, getPublicFixture } from "../data";
 const HAS_DB = !!process.env.DATABASE_URL;
 const uniq = () => randomUUID().slice(0, 8);
 
+// Task 9 — a real `generic.configSchema`-valid config, not `'{}'`. Before
+// Task 9, nothing here ever validated `divisions.config` (this file inserts
+// rows directly, bypassing `createDivision`'s own validation, precisely
+// because "the point is the venue/court derivation, not the scheduling
+// engine" — see this file's header comment), so an empty object was a
+// harmless placeholder. `getPublicFixture` now also builds `matchCentre`
+// (Task 9), which resolves the division's own module and parses this exact
+// column through its `configSchema` — genuinely needed now, not a
+// gratuitous widening of this file's scope.
+const GENERIC_DIVISION_CONFIG = {
+  resultMode: "score",
+  allowDraws: true,
+  points: { w: 3, d: 1, l: 0 },
+  progressScore: false,
+};
+
 interface Seeded {
   orgSlug: string;
   compSlug: string;
@@ -60,7 +76,7 @@ async function seed(): Promise<Seeded> {
   const [{ id: divId }] = await sql<{ id: string }[]>`
     insert into divisions
       (org_id, competition_id, name, slug, sport_key, variant_key, status, config, module_version)
-    values (${orgId}, ${compId}, 'Open', ${divSlug}, 'generic', 'score', 'active', '{}', '1.0.0')
+    values (${orgId}, ${compId}, 'Open', ${divSlug}, 'generic', 'score', 'active', ${sql.json(GENERIC_DIVISION_CONFIG)}, '1.0.0')
     returning id`;
   const [{ id: stageId }] = await sql<{ id: string }[]>`
     insert into stages (org_id, division_id, kind, name, seq)
@@ -126,7 +142,7 @@ async function seedSetupRedaction(): Promise<SeededSetup> {
   const [{ id: divId }] = await sql<{ id: string }[]>`
     insert into divisions
       (org_id, competition_id, name, slug, sport_key, variant_key, status, config, module_version)
-    values (${orgId}, ${compId}, 'Setup Division', ${divSlug}, 'generic', 'score', 'setup', '{}', '1.0.0')
+    values (${orgId}, ${compId}, 'Setup Division', ${divSlug}, 'generic', 'score', 'setup', ${sql.json(GENERIC_DIVISION_CONFIG)}, '1.0.0')
     returning id`;
   const [{ id: stageId }] = await sql<{ id: string }[]>`
     insert into stages (org_id, division_id, kind, name, seq)

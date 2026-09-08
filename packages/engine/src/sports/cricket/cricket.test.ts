@@ -13,6 +13,7 @@ import {
   cricket,
   padSpec,
   CRICKET_EVENT_SCHEMAS,
+  CricketWicket,
   nextBattingSide,
   eligibleBowlers,
   reviewsRemaining,
@@ -295,6 +296,101 @@ describe("cricket golden: ball-by-ball mini match (fine fidelity)", () => {
         data: { field: "batting.runs", expected: 9, got: 10 },
       });
     }
+  });
+
+  // W1 review finding P2 — a band-2 line's `dismissal.bowler` IS the bowler
+  // credit (the band-3 ball says the same thing with `bowlerCredited`), so the
+  // two bands must agree about which modes of dismissal carry one. They did
+  // not: `applyPlayerLine` checked only the boundary arithmetic and
+  // `out === true`, so `{ kind: "runout", bowler: "A-10" }` folded clean and
+  // the scorecard printed a run out as "b A-10" while band 3 refused the
+  // identical claim.
+  //
+  // Which kinds credit a bowler is NOT re-typed here: `band3Credits` ASKS the
+  // band-3 gate (`cricket.ball` with `bowlerCredited: true`) one kind at a
+  // time, so this sweep moves with `BOWLER_CREDITED_KINDS` itself rather than
+  // asserting yesterday's list, and it enumerates the WHOLE table rather than
+  // sampling the one kind the finding named.
+  describe("player-line dismissals answer to the same bowler-credit rule as a ball (finding P2)", () => {
+    // H-1 in innings 1 of the mini match: 5 runs off 2 balls, run out.
+    // `applyPlayerLine` cross-checks both numbers against `FineInnings`
+    // exactly, so they are the ledger's, not a choice.
+    const H1_LINE = { runs: 5, balls: 2, out: true } as const;
+    const withLine = (payload: unknown) =>
+      fold(mini, [...events, makeEnvelope(events.length, { type: "cricket.player.line", payload })]);
+    const lineWith = (dismissal: Record<string, unknown>) => ({
+      innings: 1,
+      person: "H-1",
+      batting: { ...H1_LINE, dismissal },
+    });
+
+    /** The engine's OWN answer to "does this kind credit a bowler", read off
+     *  the band-3 gate rather than a second copy of the set. */
+    const band3Credits = (kind: string): boolean => {
+      const ball = [
+        ...stream(["core.start"]),
+        makeEnvelope(1, {
+          type: "cricket.ball",
+          payload: {
+            over: 0,
+            ballInOver: 1,
+            striker: "H-1",
+            nonStriker: "H-2",
+            bowler: "A-11",
+            runs: { bat: 0 },
+            wicket: { kind, out: "H-1", bowlerCredited: true },
+          },
+        }),
+      ];
+      try {
+        fold(mini, ball);
+        return true;
+      } catch {
+        return false;
+      }
+    };
+
+    it("refuses a bowler on exactly the kinds a ball refuses one on", () => {
+      const kinds = CricketWicket.shape.kind.options;
+      // The sweep is only worth running if the table has BOTH answers in it.
+      const credited = kinds.filter((kind) => band3Credits(kind));
+      expect(credited.length).toBeGreaterThan(0);
+      expect(credited.length).toBeLessThan(kinds.length);
+
+      for (const kind of kinds) {
+        const line = lineWith({ kind, bowler: "A-10" });
+        if (band3Credits(kind)) {
+          expect(withLine(line).playerLines, `${kind} credits a bowler`).toHaveLength(1);
+        } else {
+          expect(() => withLine(line), `${kind} credits no bowler`).toThrowError(
+            expect.objectContaining({ code: "INVALID_EVENT" }),
+          );
+        }
+        // The POSITIVE PAIR for every row: the same dismissal with no bowler
+        // named is legal whatever the kind — this rule refuses the CREDIT,
+        // never the mode of dismissal.
+        expect(withLine(lineWith({ kind })).playerLines).toHaveLength(1);
+      }
+    });
+
+    it("refuses a bowler or fielder who is not in the fielding lineup", () => {
+      // Band 3 gets both for free — its bowler through `applyDelivery`'s own
+      // "not in the fielding lineup" check and its fielder through
+      // `creditFielding`. H-5 is on the BATTING side of innings 1.
+      expect(() => withLine(lineWith({ kind: "bowled", bowler: "H-5" }))).toThrowError(
+        expect.objectContaining({ code: "INVALID_EVENT" }),
+      );
+      expect(() => withLine(lineWith({ kind: "caught", fielder: "H-5" }))).toThrowError(
+        expect.objectContaining({ code: "INVALID_EVENT" }),
+      );
+      // Positive pair: the same two names taken from the fielding lineup.
+      expect(withLine(lineWith({ kind: "bowled", bowler: "A-10" })).playerLines).toHaveLength(1);
+      expect(
+        withLine(lineWith({ kind: "caught", bowler: "A-10", fielder: "A-3" })).playerLines,
+      ).toHaveLength(1);
+      // …and the run out the finding actually named: a fielder, no bowler.
+      expect(withLine(lineWith({ kind: "runout", fielder: "A-5" })).playerLines).toHaveLength(1);
+    });
   });
 });
 

@@ -212,6 +212,21 @@ export interface PadFieldEnum {
    *  by variant). */
   values: readonly string[];
   labelKey?: PadLabel;
+  /** Owner ruling 12, S18 — render this field's values as a chip row (one
+   *  button per value, `data-value`, ≥44px) instead of the default `<select>`.
+   *  Absent/false keeps every existing enum field's rendering byte-identical;
+   *  this is data the module declares, never a renderer decision keyed off
+   *  `path` (the renderer still has ZERO per-path branching — see
+   *  action-form.tsx's own header). Cricket sets this on
+   *  `batting.dismissal.kind` only. */
+  chips?: boolean;
+  /** Owner ruling 12, S18 — same meaning as `PadFieldNumber.optional` below,
+   *  restated here because `PadField` is a discriminated union and each
+   *  member carries its own copy of the flag. */
+  optional?: boolean;
+  /** Task 20 — same meaning as `PadFieldNumber.group` below, restated here
+   *  for the same discriminated-union reason `optional` gives above. */
+  group?: string;
 }
 export interface PadFieldNumber {
   kind: "number";
@@ -220,11 +235,66 @@ export interface PadFieldNumber {
   max: number;
   step?: number;
   labelKey?: PadLabel;
+  /** Owner ruling 12, S18 — a DIFFERENT, hand-authored flag from anything
+   *  schema-derived (mirrors `PadAttributionItem.optional`'s own doc comment
+   *  below, which explains the pattern in full): `checkActionValidity`
+   *  (view-model.ts) does not gate Confirm on this field being set. Absent
+   *  means "required, same as every field before this flag existed" — no
+   *  existing field changes behaviour. Cricket sets this on the six band-2
+   *  enrichment fields `cricket.player.line` gained (S17): `batting.fours`,
+   *  `.sixes`, `.dismissal.kind`, `bowling.maidens`, `.wides`, `.noBalls` —
+   *  the ORIGINAL seven fields on that same action stay unmarked (still
+   *  required), which is what keeps the legacy 7-field payload reachable
+   *  from the pad with nothing new touched. */
+  optional?: boolean;
+  /**
+   * Task 20 — a THIRD, independent hand-authored flag: fields sharing the
+   * same `group` name on one `PadAction` form an aspect that is all-or-
+   * nothing from Confirm's point of view. `checkActionValidity`/
+   * `buildActionPayload` (view-model.ts) treat a group with ZERO touched
+   * fields as entirely omitted — none of its fields are required, and none
+   * of their values (even a stray default, e.g. a toggle's own `false`
+   * from `initialActionValues`) reach the built payload. The moment ANY
+   * field in the group is touched, every field in that same group reverts
+   * to its own `optional` flag exactly as if `group` were absent (so a
+   * half-filled aspect still blocks Confirm on its own required fields).
+   *
+   * Why this exists (`cricket.player.line`, Task 20): the legacy seven
+   * fields split evenly across `batting.*`/`bowling.*`, and `applyPlayerLine`
+   * (cricket.ts) — like `CricketPlayerLine`'s own schema — already accepts
+   * EITHER aspect alone (the schema's `.refine()` requires only "at least
+   * one"). Before `group`, every field lacking `optional: true` was
+   * unconditionally required, so a real Confirm always built BOTH aspects —
+   * impossible for a real fixture, since a person cannot be a member of a
+   * batting side's order AND the OPPOSING side's bowling order at once.
+   * `group` lets the pad mirror the schema's own "at least one, not both"
+   * rule instead of requiring both, with no schema or reducer change.
+   *
+   * An action declaring 2+ distinct group names on its fields additionally
+   * requires that at least one group be touched — see
+   * `MISSING_GROUP_REASON`'s own doc in view-model.ts for why that reason
+   * stays chassis-generic rather than naming "batting"/"bowling" here.
+   * Absent means "ungrouped", identical to every field before this flag
+   * existed. */
+  group?: string;
 }
 export interface PadFieldToggle {
   kind: "toggle";
   path: string;
   labelKey?: PadLabel;
+  /** See `PadFieldNumber.optional`. No shipped toggle field uses this yet —
+   *  present for union symmetry, so `checkActionValidity` can read
+   *  `field.optional` generically without a per-kind type narrow. */
+  optional?: boolean;
+  /** See `PadFieldNumber.group`. A toggle's value is EXCLUDED from a
+   *  group's own "has this aspect been touched" test (view-model.ts's
+   *  `groupsTouched`) — `initialActionValues` (action-form.tsx) defaults
+   *  every toggle field to `false` before the scorer taps anything, so a
+   *  toggle can never honestly signal "untouched" the way an unset number/
+   *  enum field can. `cricket.player.line`'s `batting.out` is exactly this
+   *  case: grouped `"batting"`, but its pre-seeded `false` must never by
+   *  itself mark the batting aspect as touched. */
+  group?: string;
 }
 export type PadField = PadFieldEnum | PadFieldNumber | PadFieldToggle;
 
@@ -243,10 +313,77 @@ export type PadField = PadFieldEnum | PadFieldNumber | PadFieldToggle;
  * own payload schema (`isPathRequired`/`stampAttributionRequired`), never
  * hand-typed per sport — memory rule #19: a value typed into a table
  * drifts from the source of truth the moment the schema changes under it.
+ *
+ * `optional` (owner ruling 12, S17) is a DIFFERENT, hand-authored flag: a
+ * sport declares it directly (never derived, never stamped) to mark an
+ * attribution item the picker may skip even though the underlying payload
+ * key happens to be optional in the schema too. It is not a restatement of
+ * `!required` — a module could in principle attach `optional: true` to an
+ * item whose path resolves required (the picker would then be wrong to
+ * skip it; that is a sport-authoring bug, not something this type prevents)
+ * — but every item the pad declares `optional` on today also resolves
+ * `required: false`, e.g. cricket's `batting.dismissal.bowler`/`.fielder`.
+ * Absent means "required, same as before this flag existed" — no existing
+ * item changes behaviour.
+ *
+ * `requiresField` (owner ruling 12, S18) — ANOTHER hand-authored flag,
+ * independent of `optional`/`required`: a dotted `PadField` path that must
+ * also be set for this item's collected value to survive into the built
+ * payload. `buildActionPayload` (view-model.ts) drops this item's value
+ * (builds it as `undefined`, which `buildPathObject` then omits) whenever
+ * the named field is unset — regardless of what the scorer tapped, and
+ * regardless of the order fields/attribution were filled in. This exists
+ * because a nested object can have one member REQUIRED alongside others
+ * that are optional (cricket's `batting.dismissal` needs `kind`; `bowler`/
+ * `fielder` are optional siblings) — three independent `PadField`/
+ * `PadAttribution` entries with no schema-level relationship view-model.ts
+ * could otherwise see (this file's own module-level note: view-model.ts
+ * never reads a module's zod `eventSchemas`). Without this gate, a scorer
+ * who tapped a bowler/fielder chip before ever picking a dismissal kind
+ * would build `batting.dismissal.{bowler}` with no `kind` — a shape
+ * `CricketPlayerLine`'s schema rejects outright (`dismissal.kind` is NOT
+ * optional inside that sub-object), turning Confirm into a silent dead end.
+ * Absent means "no gating field" — no existing item changes behaviour.
+ *
+ * `requiresFieldIn` — NARROWS `requiresField` from "set at all" to "set to
+ * one of THESE values". It names no field of its own and is meaningless
+ * without `requiresField`, deliberately: one gating field, declared once, so
+ * the presence rule and the value rule can never name two different paths
+ * and disagree. Both the payload builder and the RENDERER read it
+ * (`buildActionPayload` drops the value; `ActionFormList` does not draw the
+ * row at all) — payload-only would leave a visible dead end, render-only
+ * would let a value tapped before the field changed still reach the payload.
+ *
+ * Why this exists (cricket's `batting.dismissal.bowler`, W1 review finding
+ * P2): a nested member can be legal for SOME values of its sibling and
+ * refused for others. `applyPlayerLine` (cricket.ts) refuses a named
+ * `dismissal.bowler` on any kind outside `BOWLER_CREDITED_KINDS` — a run out
+ * credits no bowler — so a pad that offered the bowler chips the moment ANY
+ * kind was picked let a scorer tap "Run out", name a bowler and Confirm into
+ * an engine refusal. `requiresField` alone cannot express that: the field IS
+ * set. Absent means "any value of the gating field will do" — no existing
+ * item changes behaviour.
  */
 export type PadAttributionItem =
-  | { kind: "side"; path: string; labelKey?: PadLabel; required?: boolean }
-  | { kind: "person"; path: string; role?: string; labelKey?: PadLabel; required?: boolean };
+  | {
+      kind: "side";
+      path: string;
+      labelKey?: PadLabel;
+      required?: boolean;
+      optional?: boolean;
+      requiresField?: string;
+      requiresFieldIn?: readonly string[];
+    }
+  | {
+      kind: "person";
+      path: string;
+      role?: string;
+      labelKey?: PadLabel;
+      required?: boolean;
+      optional?: boolean;
+      requiresField?: string;
+      requiresFieldIn?: readonly string[];
+    };
 
 /**
  * A LIST of attribution requirements, not a single discriminated choice —

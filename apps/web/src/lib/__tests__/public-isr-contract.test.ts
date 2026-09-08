@@ -85,4 +85,22 @@ describe("public/embed ISR contract (task-8)", () => {
       expect(source).not.toMatch(/dynamicParams\s*=\s*false/);
     },
   );
+
+  // The three checks above are each satisfied by a page that is ALSO
+  // `export const dynamic = "force-dynamic"` — and that page has no ISR at
+  // all, because the route segment config wins over everything they assert.
+  // This is not hypothetical: the fixture page shipped exactly that in task
+  // 14d, to escape a `DYNAMIC_SERVER_USAGE` throw from reading `searchParams`,
+  // and this file stayed green for the whole window (its own source comment,
+  // `fixtures/[fixtureId]/page.tsx`, records the episode). A guard nothing
+  // kills is not a guard.
+  //
+  // Anchored at statement position (`^\s*export`), NOT on the bare phrase:
+  // that same page discusses `export const dynamic = "force-dynamic"` inside
+  // a comment, and a substring match would fail on the prose while the real
+  // export slipped past in a file that never mentioned it.
+  it.each(CASES)("$name: exports no `dynamic` segment config at all", ({ file }) => {
+    const source = readFileSync(file, "utf8");
+    expect(source).not.toMatch(/^\s*export\s+const\s+dynamic\b/m);
+  });
 });

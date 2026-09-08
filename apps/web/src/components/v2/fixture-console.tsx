@@ -4,8 +4,9 @@
 // POST /api/v1/fixtures/{id}/events with optimistic concurrency: every event
 // carries expected_seq + an idempotency key (doc 08 §4); a 409 resyncs from
 // the ledger and replays the UI.
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import type { PadSpec } from "@seazn/engine/sport";
 import { apiV1, ApiV1Error } from "@/lib/client-v1";
 import { UpgradeGate } from "@/components/upgrade-gate";
 import type { ViewerPlan } from "@/lib/viewer-plan";
@@ -34,6 +35,12 @@ import type { MessageKey } from "@/lib/messages";
 // server-side bootstrap-resolution failure (fidelity.ts's own doc) means
 // "no pad renders", never a fallback to a v1 chain that no longer exists.
 import { ScorePad, type ScorePadBootstrap } from "@/components/v2/scorepad/registry";
+// Owner ruling 17 (2026-09-06) — `shouldMountPad`/`resolvePadSpecForMount`
+// below need the SAME client-side module resolver `<ScorePad>` itself uses
+// (module-client.ts's own doc: no server round trip, a process-wide
+// registry singleton `<ScorePad>` has already booted by the time either
+// mount decision below runs).
+import { resolveModuleClient } from "@/components/v2/scorepad/module-client";
 // R7/C1 (D-4, ruling R7-1) — the ONE ledger. This console used to hand-roll
 // its own `<ul>` beside the pad's panel; the two were not duplicates (the
 // pad's named people in sentences, the page's carried #seq, the timestamp,
@@ -299,6 +306,58 @@ export interface PersonAvailability {
 
 export type SendEvent = (type: string, payload: unknown) => Promise<boolean>;
 
+// ---------------------------------------------------------------------------
+// Owner ruling 17 (2026-09-06, "Decision 1 - fix") — Task 18 proved a band-2
+// organiser cannot post `cricket.player.line` through the product: its only
+// panel is `phase: "post"` (cricket.ts:3090-3096), the cricket skin's
+// `resolvePhase` (v3/skins/cricket.tsx:1163-1167) reaches that PadPhase ONLY
+// once the fixture's own folded `state.phase` is "done"/"final", and BOTH
+// real consumers of the pad — this console (below, was `scorePadV2 &&
+// !decided`) and the device-link route (`device-score-pad.tsx`, same shape)
+// — used to unmount the pad the INSTANT a fixture became `decided`. Same
+// instant, no window: `outcome`/terminal `phase` land in the same fold
+// return (cricket.ts's `decideWin`/tie/draw/no-result branches).
+//
+// `shouldMountPad` is the ONE predicate both files now share (device-
+// score-pad.tsx already imports plain types from this file — `SportInfo`,
+// `LiveState` — so importing this follows the same convention rather than
+// inventing a new one). `decided` stays each caller's OWN boolean (this
+// file's `decided` also treats `status === "abandoned"` as decided; the
+// device pad's does not) — only the "does the resolved padSpec still have
+// something to say once decided" half is shared.
+//
+// Every sport whose `padSpec(cfg)` declares no post-phase panel (football,
+// generic, ...) gets `panels.some(post) === false`, so a decided fixture
+// unmounts exactly as it did before this ruling — proven by running
+// `scorepad-v3-football.spec.ts` in full alongside this change, not just
+// asserted here.
+export function shouldMountPad(args: { decided: boolean; padSpec: PadSpec }): boolean {
+  if (!args.decided) return true;
+  return args.padSpec.panels.some((panel) => panel.phase === "post");
+}
+
+const EMPTY_PAD_SPEC: PadSpec = { panels: [], fidelity: {} };
+
+/**
+ * Resolves the sport's own `padSpec(cfg)` purely to feed `shouldMountPad`
+ * above. Defensive: `resolveModuleClient` throws a typed `EngineError` for
+ * an unpinned (sportKey, moduleVersion) (module-client.ts's own doc) — a
+ * resolution failure here must fall back to the pre-ruling-17 behaviour
+ * (unmount on decided), never crash the console/device pad outside
+ * `<ScorePad>`'s own `ScoringErrorBoundary`, which independently re-resolves
+ * the SAME module and is what actually surfaces a resolution failure to the
+ * user.
+ */
+export function resolvePadSpecForMount(sportKey: string, moduleVersion: string, cfg: unknown): PadSpec {
+  try {
+    const sportModule = resolveModuleClient(sportKey, moduleVersion);
+    return sportModule.padSpec?.(cfg) ?? EMPTY_PAD_SPEC;
+  } catch {
+    return EMPTY_PAD_SPEC;
+  }
+}
+// ---------------------------------------------------------------------------
+
 const STATUS_STYLE: Record<string, string> = {
   scheduled: "bg-slate-100 text-slate-600",
   in_play: "bg-amber-100 text-amber-700",
@@ -485,23 +544,37 @@ export function FixtureConsole({
   // row may still be voided, and undoing a mistaken abandon must stay possible.
   // Over, but reversible.
   const decided = live.outcome !== null || live.status === "abandoned";
+  // Owner ruling 17 — the padSpec resolved purely to decide whether a
+  // DECIDED fixture still keeps the pad mounted (`shouldMountPad` above).
+  // `scorePadV2?.resolvedConfig ?? sport.config` is the SAME cfg fallback
+  // `activityDetail`'s own `cfg:` prop already uses a few lines below.
+  const padSpecForMount = useMemo(
+    () =>
+      resolvePadSpecForMount(sport.key, scorePadV2?.moduleVersion ?? "", scorePadV2?.resolvedConfig ?? sport.config),
+    [scorePadV2, sport.key, sport.config],
+  );
+  const mountPad = shouldMountPad({ decided, padSpec: padSpecForMount });
   const started = live.status !== "scheduled";
   // Task 13 finding B — the SCORING section's header row hides itself on
   // phones once `started` (below, "Owner review ... hand-over as an icon"),
-  // and its ScorePad mount is gated on `scorePadV2 && !decided` (below) —
-  // so a fixture that is BOTH started and decided has nothing left to show
-  // inside `<section data-role="console-scoring">` on a phone, yet the
-  // section's own `card p-5 max-md:p-3` wrapper (padding, border, bg-white)
-  // still rendered, an empty white box between the header's "won on ..."
-  // line and the Activity card (found on cricket/football/ice-hockey
-  // decided-screen captures at 320, absent from the pre-branch baseline —
-  // the baseline's header row had no `started`-gated max-md:hidden at all).
-  // `canHandOver && handoverOpen` is the one thing that CAN still put real
-  // content in the section on a phone regardless of `started`/`decided`
-  // (the phone-only header icon, line ~629, opens `DeviceLinkPanel` inside
-  // this section with no `max-md:hidden` of its own) — excluded here so
-  // hiding the section can never hide content a scorer just asked to see.
-  const consoleScoringEmptyOnPhone = started && !(scorePadV2 && !decided) && !(canHandOver && handoverOpen);
+  // and its ScorePad mount is gated on `scorePadV2 && mountPad` (below,
+  // owner ruling 17 — was the narrower `scorePadV2 && !decided`) — so a
+  // fixture that is BOTH started and decided-with-nothing-left-to-show has
+  // nothing left inside `<section data-role="console-scoring">` on a phone,
+  // yet the section's own `card p-5 max-md:p-3` wrapper (padding, border,
+  // bg-white) still rendered, an empty white box between the header's
+  // "won on ..." line and the Activity card (found on cricket/football/
+  // ice-hockey decided-screen captures at 320, absent from the pre-branch
+  // baseline — the baseline's header row had no `started`-gated
+  // max-md:hidden at all). `canHandOver && handoverOpen` is the one thing
+  // that CAN still put real content in the section on a phone regardless of
+  // `started`/`mountPad` (the phone-only header icon, line ~629, opens
+  // `DeviceLinkPanel` inside this section with no `max-md:hidden` of its
+  // own) — excluded here so hiding the section can never hide content a
+  // scorer just asked to see. `mountPad`, not the raw `!decided`, so a
+  // decided cricket fixture whose pad now renders its post-phase Scorecard
+  // panel keeps this section's phone chrome too.
+  const consoleScoringEmptyOnPhone = started && !(scorePadV2 && mountPad) && !(canHandOver && handoverOpen);
 
   const sides = { home, away };
   // R7/C5 (D-6) — what to CALL each side, resolved ONCE here and read by the
@@ -519,10 +592,12 @@ export function FixtureConsole({
   for (const side of [home, away]) {
     for (const m of side?.members ?? []) entrantNames[m.person_id] = m.full_name;
   }
-  // R3.5/Task G — the v3 pad UNMOUNTS entirely once a fixture is decided
-  // (the `scoring && !decided` gate below), so this is the ONE surface left
-  // that can say who won and how; `msg`/`entrantNames` are exactly what
-  // `decidedOutcomeText` needs and this component already has both.
+  // R3.5/Task G — the v3 pad UNMOUNTS once a fixture is decided for every
+  // sport whose padSpec declares no post-phase panel (the `scorePadV2 &&
+  // mountPad` gate below, owner ruling 17), so this stays the ONE surface
+  // that can say who won and how for those sports; `msg`/`entrantNames` are
+  // exactly what `decidedOutcomeText` needs and this component already has
+  // both.
   const decidedLine = decidedOutcomeText(outcome, entrantNames, msg, shootoutScoreFromDetail(summary?.detail));
   const lastVoidable = [...events]
     .reverse()
@@ -805,8 +880,13 @@ export function FixtureConsole({
               and the eight v1 pads it used to choose between are gone).
               `scorePadV2` stays a null-guard, not a flag check: it is null
               only when server-side bootstrap resolution failed, in which case
-              there is no v1 chain left to fall back to. */}
-          {scorePadV2 && !decided && (
+              there is no v1 chain left to fall back to. Owner ruling 17
+              (2026-09-06) — `mountPad` (was the narrower `!decided`): a
+              decided fixture keeps the pad mounted iff its own `padSpec(cfg)`
+              declares a post-phase panel (cricket's Scorecard), so
+              `cricket.player.line` becomes reachable; every sport without one
+              is unaffected. */}
+          {scorePadV2 && mountPad && (
             <div data-testid="score-pad">
               <ScoringErrorBoundary fixtureId={fixture.id}>
                 <ScorePad
@@ -838,9 +918,9 @@ export function FixtureConsole({
           `ActivityPanel` `/score/[token]` mounts, here with authority:
           console-wide void rights, the provenance the deleted page panel
           carried, and the audit strip in its footer. Rendered OUTSIDE the
-          `scoring && !decided` gate above on purpose: the pad unmounts the
-          moment a fixture is decided and a finalized fixture must still say
-          what happened. */}
+          `scorePadV2 && mountPad` gate above on purpose: a finalized fixture
+          must still say what happened even for the sports (most of them —
+          owner ruling 17) whose pad still unmounts on decided. */}
       <ActivityPanel
         events={activityRows}
         // Irrelevant while `deviceLinkId` is null — `activityRowState`'s own

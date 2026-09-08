@@ -9,8 +9,8 @@
 // rather than fixed. These tests are what stop the passthrough being dropped as
 // an unused-looking flag.
 //
-// Exercises the real script against a real path (src/server/public-site, 4 files)
-// rather than injecting a fake listing: a seam bypassing `vitest list` would leave
+// Exercises the real script against a real path (src/server/public-site) rather
+// than injecting a fake listing: a seam bypassing `vitest list` would leave
 // the production path — the one that shells out — untested, and a list on this
 // path costs ~0.6s, so there is nothing to buy.
 //
@@ -27,8 +27,8 @@ import { describe, expect, it } from "vitest";
 const REPO_ROOT = join(import.meta.dirname, "../..");
 const SCRIPT = "scripts/check-vitest-collection.ts";
 
-// The five files `vitest list --filesOnly src/server/public-site` selects, and
-// the one a `c*` glob removes. Named explicitly so that adding or removing a file
+// The files `vitest list --filesOnly src/server/public-site` selects, and the
+// one a `c*` glob removes. Named explicitly so that adding or removing a file
 // in that directory fails loudly rather than quietly changing what is proven.
 const CONSENT = "src/server/public-site/__tests__/consent.test.ts";
 const REST = [
@@ -40,8 +40,25 @@ const REST = [
   "src/server/public-site/__tests__/pass-scope-public-realtime.test.ts",
   "src/server/public-site/__tests__/player-stats-public.test.ts",
   "src/server/public-site/__tests__/revalidate.test.ts",
+  // Spectator W1: the match-centre document and the two panels folded from the
+  // ledger. Same story as P9 — this gate reddened the moment they landed, which
+  // is the explicit list doing its job.
+  "src/server/public-site/__tests__/match-centre.test.ts",
+  "src/server/public-site/__tests__/match-centre-dictionary.test.ts",
+  "src/server/public-site/__tests__/match-centre-parity.test.ts",
+  "src/server/public-site/__tests__/public-lineups.test.ts",
+  "src/server/public-site/__tests__/timeline.test.ts",
 ];
 const EXCLUDE_C = "**/public-site/__tests__/c*";
+
+// Derived from REST, never typed twice. The counts are not what this file
+// proves — the `excluding` line, the two drift reports and the exit status are —
+// but a hand-copied literal beside a list that grows means every new file in
+// that directory reds this gate TWICE: once at the list (intended) and once at
+// a number that has no independent meaning (pure toil). `+ 1` is CONSENT, the
+// single file `c*` removes.
+const NARROWED = `listed=${REST.length} executed=${REST.length}`;
+const UNNARROWED = `listed=${REST.length + 1} executed=${REST.length}`;
 
 const dir = mkdtempSync(join(tmpdir(), "collection-exclude-test-"));
 
@@ -72,7 +89,7 @@ describe("check-vitest-collection --exclude", () => {
     const { status, output } = run([
       "--results", results, "--exclude", EXCLUDE_C, "--", "src/server/public-site",
     ]);
-    expect(output).toContain("listed=4 executed=4");
+    expect(output).toContain(NARROWED);
     expect(output).toContain(`excluding ${EXCLUDE_C}`);
     expect(status).toBe(0);
   });
@@ -82,7 +99,7 @@ describe("check-vitest-collection --exclude", () => {
     // mattering and the two-job split is no longer being reconciled per half.
     const results = resultsFile("unnarrowed", REST);
     const { status, output } = run(["--results", results, "--", "src/server/public-site"]);
-    expect(output).toContain("listed=5 executed=4");
+    expect(output).toContain(UNNARROWED);
     expect(output).toContain("LISTED BUT NOT RUN (1)");
     expect(output).toContain(CONSENT);
     expect(status).toBe(1);
@@ -111,7 +128,7 @@ describe("check-vitest-collection --exclude", () => {
     const { status, output } = run([
       "--results", results, "--exclude", "", "--", "src/server/public-site",
     ]);
-    expect(output).toContain("listed=5 executed=4");
+    expect(output).toContain(UNNARROWED);
     expect(output).not.toContain("excluding");
     expect(status).toBe(1);
   });

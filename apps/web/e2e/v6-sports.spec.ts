@@ -1,5 +1,14 @@
 import { test, expect, type APIRequestContext, type Page } from "@playwright/test";
 import AxeBuilder from "@axe-core/playwright";
+// `with { type: "json" }` is REQUIRED, not decoration: `apps/web` is
+// "type": "module", so Playwright loads this through Node's ESM loader, which
+// refuses a bare JSON import with `needs an import attribute of "type: json"`.
+// The spec then collects NO TESTS AT ALL and the run reports "No tests found",
+// which reads like a bad path filter rather than a broken import — see
+// `e2e/price-kit.ts`'s own note, and `marketing-ai-demo.spec.ts`, which reads
+// its dictionary with readFileSync for the same reason. Vitest bundles instead
+// of using the loader, which is why the unit suites and tsc were both happy.
+import enPublic from "../src/dictionaries/en/public.json" with { type: "json" };
 import {
   activeOrg,
   addEntrantsViaApi,
@@ -729,8 +738,23 @@ test("public fixture page: phase + strength chip live, goals-by-period + discipl
   const publicPath = `/shared/${org.slug}/${compSlug}/${divSlug}/fixtures/${fixtureId}`;
 
   await page.goto(publicPath);
-  await expect(page.getByText("1 — 0 · P1")).toBeVisible({ timeout: 20_000 });
-  await expect(page.getByText("5v4")).toBeVisible();
+  // W1 replaced this page's bare scorebug with the match centre, so the
+  // engine's own headline string ("1 — 0 · P1") is no longer painted anywhere:
+  // the court card renders each side's score on its own row. The two FACTS
+  // that headline carried are what matter, and both are asserted below —
+  // they were briefly LOST in the swap (`suppressScorebug` hid their only
+  // renderer and the new header carried neither), which is the regression
+  // this test now guards on its own terms rather than by matching a format.
+  await expect(page.getByTestId("mc-court-card")).toBeVisible({ timeout: 20_000 });
+  // Both scores, on the card, as the card renders them.
+  await expect(page.getByTestId("mc-score-0")).toHaveText("1");
+  await expect(page.getByTestId("mc-score-1")).toHaveText("0");
+  // The live PHASE — resolved to its term ("1st period"), not the raw "P1"
+  // token the old headline showed. Read from the dictionary rather than typed
+  // here, so re-wording `term.P1` moves this with it.
+  await expect(page.getByTestId("mc-phase")).toHaveText(enPublic["term.P1"] as string);
+  // The power-play STRENGTH chip — a number pair, verbatim.
+  await expect(page.getByTestId("mc-strength")).toHaveText("5v4");
 
   // Decide it and check the period table + discipline list render.
   await sendEvent(request, fixtureId, "icehockey.suspension.end", { by: wolves, class: "minor" });

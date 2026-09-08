@@ -1,11 +1,21 @@
 "use client";
-// Live scoreboard for the public match page (doc 09 §2). Entitlement split
-// (doc 09 §4): Pro orgs get Supabase Realtime push on `fixture:{id}`; everyone
-// falls back to 15 s polling of the public fixture endpoint. Reuses the
-// use-tournament-realtime pattern (renamed per PROMPT-12 item 3), inlined here
-// because the public page authenticates with a public token endpoint instead
-// of the org-member one.
-import { useCallback, useEffect, useState } from "react";
+// `LiveScoreBody` — the score-strip/set-scoreboard/period/discipline
+// rendering for the public match page (doc 09 §2), pure and hookless.
+//
+// Task 10 (spectator surface W1) lifted the transport (poll/realtime/
+// debounce, doc 09 §4's Pro-realtime/community-poll split) out into
+// `useLiveFixture` (`./match-centre/use-live-fixture.ts`), shared by the new
+// `MatchCentre` root; Task 14 retired this file's own `LiveScore` wrapper
+// (the transport + this body, composed for the legacy fixture page) once the
+// fixture detail page switched to rendering `<MatchCentre>` directly —
+// `MatchCentre` calls `useLiveFixture` itself and falls back to
+// `LiveScoreBody` only for a missing/empty document (`match-centre.tsx`) or
+// a non-cricket/pre-play `SummaryTab` (`summary-tab.tsx`). Both of those
+// call sites import `LiveScoreBody` directly; nothing imports `LiveScore`
+// any more.
+import type { Dict } from "@/lib/i18n-constants";
+import { t } from "@/lib/i18n-runtime";
+import en from "@/dictionaries/en/public.json";
 import {
   disciplineLabel,
   disciplineList,
@@ -15,109 +25,94 @@ import {
   setBreakdown,
   stripLiveSetPoints,
 } from "@/lib/public-site";
-import {
-  fetchLiveFixture,
-  fetchPublicRealtimeToken,
-  type LiveFixtureData,
-} from "./live-score-data";
+import { type LiveFixtureData } from "./live-score-data";
 import {
   renderDecidedOutcome,
   shootoutScoreFromDetail,
   type DecidedOutcomeTemplates,
 } from "@/lib/scoring-vocab";
 
-const POLL_MS = 15_000;
-
 export type { LiveFixtureData };
 
-interface Props {
-  fixtureId: string;
-  initial: LiveFixtureData;
-  realtime: boolean; // org entitlement, resolved server-side
+interface LiveScoreBodyProps {
+  data: LiveFixtureData;
   entrantNames: Record<string, string>;
   sportKey: string;
-  /**
-   * R3.5/Task O — the decided-fixture sentence's pre-localized templates,
-   * resolved ONCE server-side (`decidedOutcomeTemplates`, `@/lib/
-   * scoring-vocab`) by the page component, which has a dictionary this
-   * client island does not. Every live poll/realtime update interpolates a
-   * NEW `data.outcome` into these SAME strings via `renderDecidedOutcome`,
-   * so the sentence updates live instead of only on the next full page
-   * load — the gap this task exists to close (see `live-score-no-i18n`).
-   */
   decidedTemplates: DecidedOutcomeTemplates;
+  /**
+   * Task 11 review fix round 1 — now actually consumed (status text,
+   * "Winner:"). Optional so a caller with no dictionary in hand (R3.5/Task
+   * O's whole reason `decidedTemplates` is pre-resolved server-side instead)
+   * keeps working unchanged: an absent `dict` falls back to the English
+   * `public.json` import below, which is byte-for-byte what these strings
+   * already were.
+   */
+  dict?: Dict;
+  /**
+   * Whether the live transport is currently receiving realtime pushes —
+   * not in the dispatch's own literal prop list, added because dropping the
+   * pre-existing "· realtime" indicator text below would itself have been a
+   * (forbidden) behaviour change. Defaults to `false` so `LiveScoreBody` can
+   * be mounted directly (e.g. from a future match-centre panel) without a
+   * transport in hand.
+   */
+  subscribed?: boolean;
+  /**
+   * R11 fix round, C7 — `summary-tab.tsx`'s non-cricket fallback mounts this
+   * component BELOW a `CourtCard` that already renders the identical
+   * court-slab scorebug (same wrapper class, same score) — two near-
+   * identical lifted cards, stacked, printing the score twice. Suppresses
+   * the decided-line sentence and the whole court-slab block (the court card
+   * above already carries both, via `header.statusLine` and
+   * `header.scoreLines`); the set/period/discipline panels below are
+   * UNCHANGED, since the court card does not carry those. Defaults to
+   * `false` so every other caller (`match-centre.tsx`'s no-document
+   * fallback, which has no `CourtCard` above it, and every existing test)
+   * renders byte-identical to before this round.
+   */
+  suppressScorebug?: boolean;
 }
 
-export function LiveScore({
-  fixtureId,
-  initial,
-  realtime,
+// Task 11 review round 2 (NEW IMPORTANT B) — the DB's `fixtures.status`
+// vocabulary (apps/web/src/server/usecases/stages.ts:2142-2156) carries
+// several values beyond in_play/decided/finalized/scheduled: abandoned,
+// cancelled, forfeited, postponed, walkover. Round 1's fallback collapsed
+// every one of these into the generic `matchCentre.status.other` ("Not
+// played") on the legacy fixture page — each now gets its OWN word instead.
+// Anything STILL unrecognised falls back to the RAW status word, never a
+// dictionary lookup at all: `matchCentre.status.other` is reserved for
+// `CourtCard`'s own "no chip" bucket (a status-ENUM concept,
+// `MatchCentreHeaderT["status"]`'s `"other"` literal), not this
+// loosely-typed `string` field's catch-all.
+const OTHER_STATUS_KEY: Record<string, string> = {
+  abandoned: "matchCentre.status.abandoned",
+  cancelled: "matchCentre.status.cancelled",
+  forfeited: "matchCentre.status.forfeited",
+  postponed: "matchCentre.status.postponed",
+  walkover: "matchCentre.status.walkover",
+};
+
+function statusText(dict: Dict, status: string, inPlay: boolean, decided: boolean): string {
+  if (inPlay) return t(dict, "matchCentre.status.live");
+  if (decided) return t(dict, "matchCentre.status.decided");
+  if (status === "scheduled") return t(dict, "matchCentre.status.scheduled");
+  const key = OTHER_STATUS_KEY[status];
+  return key ? t(dict, key) : status;
+}
+
+export function LiveScoreBody({
+  data,
   entrantNames,
   sportKey,
   decidedTemplates,
-}: Props) {
-  const [data, setData] = useState<LiveFixtureData>(initial);
-
-  const refresh = useCallback(async () => {
-    try {
-      setData(await fetchLiveFixture(fixtureId));
-    } catch {
-      // transient — keep the last known score
-    }
-  }, [fixtureId]);
-
-  const live = data.status === "in_play" || data.status === "scheduled";
-
-  // Realtime push (Pro orgs). Any failure — no entitlement (403), env missing,
-  // websocket refused — leaves `subscribed` false and polling takes over.
-  const [subscribed, setSubscribed] = useState(false);
-  useEffect(() => {
-    if (!realtime || !live) return;
-    if (!process.env.NEXT_PUBLIC_SUPABASE_URL) return;
-    let cancelled = false;
-    let debounce: ReturnType<typeof setTimeout> | null = null;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    let channel: any = null;
-
-    (async () => {
-      let token: { token: string; channel: string };
-      try {
-        token = await fetchPublicRealtimeToken(fixtureId);
-      } catch {
-        return; // not entitled or server error → polling
-      }
-      if (cancelled) return;
-      const { supabaseBrowser } = await import("@/lib/supabase-browser");
-      const sb = supabaseBrowser();
-      await sb.realtime.setAuth(token.token);
-      channel = sb
-        .channel(token.channel, { config: { private: true } })
-        .on("broadcast", { event: "state_changed" }, () => {
-          if (debounce) clearTimeout(debounce);
-          debounce = setTimeout(refresh, 250);
-        })
-        .subscribe((status: string) => {
-          if (!cancelled) setSubscribed(status === "SUBSCRIBED");
-        });
-    })();
-
-    return () => {
-      cancelled = true;
-      if (debounce) clearTimeout(debounce);
-      channel?.unsubscribe();
-      setSubscribed(false);
-    };
-  }, [fixtureId, realtime, live, refresh]);
-
-  // 15 s polling fallback (Community, or realtime not connected).
-  useEffect(() => {
-    if (!live || subscribed) return;
-    const id = setInterval(refresh, POLL_MS);
-    return () => clearInterval(id);
-  }, [live, subscribed, refresh]);
-
+  dict,
+  subscribed = false,
+  suppressScorebug = false,
+}: LiveScoreBodyProps) {
+  const activeDict = dict ?? (en as Dict);
   const inPlay = data.status === "in_play";
   const decided = data.status === "decided" || data.status === "finalized";
+  const statusWord = statusText(activeDict, data.status, inPlay, decided);
   const breakdown = setBreakdown(data.summary, sportKey);
   // Kernel perSide order is [home, away]; row labels come from it.
   const sideIds = data.summary?.perSide?.map((s) => s.entrantId) ?? [];
@@ -136,8 +131,68 @@ export function LiveScore({
   // Server Component cannot react to a client-side data change.
   const shootoutScore = shootoutScoreFromDetail(data.summary?.detail);
   const decidedLine = renderDecidedOutcome(data.outcome, entrantNames, decidedTemplates, shootoutScore);
+
+  // WHEN SUPPRESSION LEAVES NOTHING AT ALL. `summary-tab.tsx` passes
+  // `suppressScorebug` for every non-cricket sport so the court slab is not
+  // painted twice (R11/C7). That is right once there is a set/period breakdown
+  // or a discipline list to fill the panel — and wrong before a ball is
+  // bowled, when those all render null and the scorebug was the only content.
+  // The Summary tab came out COMPLETELY EMPTY: an `<tabpanel "Summary">` with
+  // no children in the accessibility tree, on a page a spectator opened to
+  // find out when the match starts. `scorepad-v3-football.spec.ts` was failing
+  // on exactly that.
+  //
+  // The fix is an EMPTY STATE, not an un-suppressed second scorebug: restoring
+  // the slab here reds the two tests that enforce C7 ("renders EXACTLY ONCE"),
+  // and they are right — the court card above already carries the score and
+  // the status. What was missing is a sentence saying what will appear.
+  //
+  // Two sentences, because they are two different facts: a fixture that has
+  // not started yet will fill in, and one recorded as a result only never
+  // will. _DESIGN §10's rule is that an empty state "says what appears when",
+  // which one generic line cannot do for both.
+  //
+  // WHOLE-BRANCH REVIEW, P6 — `in_play` USED TO FALL THROUGH TO `null` HERE,
+  // on the reasoning that "the next poll fills it". It does not always: a
+  // football fixture is `in_play` from kick-off, and until the first period
+  // event is recorded `showBreakdown`, `periods` and `discipline` are ALL
+  // null. With the scorebug suppressed that left `<div role="tabpanel">` with
+  // no children whatsoever — the exact defect the paragraph above says it
+  // fixed, left open for one status. The ladder is now binary: either
+  // something will fill this in, or nothing ever will.
+  //
+  // COPY GAP NOW CLOSED. P6 reused `matchCentre.empty.beforeStart` for the
+  // in-play arm — the only existing key that made the promise that is TRUE
+  // here ("this fills in") — and recorded the debt: its temporal clause
+  // ("…once the match starts") renders directly beside the court card's own
+  // LIVE pill, telling a spectator watching a live match that the match has
+  // not started. That is a contradiction a customer reads, not a nit. The
+  // in-play arm now has its OWN sentence (`matchCentre.empty.inPlay`, all four
+  // locales); `beforeStart` is untouched and still serves genuinely
+  // not-started fixtures. Three facts, three sentences: this will fill in and
+  // has not begun / this will fill in and is happening now / this never will.
+  const hasSecondaryContent =
+    (showBreakdown && sideIds.length === 2) || periods !== null || discipline !== null;
+  const emptyStateKey = hasSecondaryContent
+    ? null
+    : decided || data.status === "finalized"
+      ? "matchCentre.empty.noDetail"
+      : inPlay
+        ? "matchCentre.empty.inPlay"
+        : "matchCentre.empty.beforeStart";
+
   return (
     <div className="space-y-4">
+      {suppressScorebug && emptyStateKey !== null ? (
+        <p
+          data-testid="mc-summary-empty"
+          className="rounded-2xl border border-dashed border-zinc-300 px-4 py-6 text-center text-sm text-ink-muted"
+        >
+          {t(activeDict, emptyStateKey)}
+        </p>
+      ) : null}
+      {suppressScorebug ? null : (
+        <>
       {decidedLine ? <p className="text-base font-semibold text-ink">{decidedLine}</p> : null}
       {/* Court-slab scorebug — the broadcast moment of the page. */}
       <div className="overflow-hidden rounded-2xl bg-court text-court-ink shadow-lg">
@@ -145,7 +200,7 @@ export function LiveScore({
           {inPlay ? (
             <p className="mb-3 flex items-center gap-2 text-[11px] font-bold uppercase tracking-[0.22em] text-emerald-300">
               <span className="animate-live-pulse h-2 w-2 rounded-full bg-emerald-400" />
-              Live{subscribed ? " · realtime" : ""}
+              {statusWord}{subscribed ? " · realtime" : ""}
               {strength ? (
                 <span className="rounded-full bg-amber-400/20 px-2 py-0.5 font-mono text-[11px] font-bold tracking-normal text-amber-300">
                   {strength}
@@ -154,15 +209,26 @@ export function LiveScore({
             </p>
           ) : (
             <p className="mb-3 text-[11px] font-semibold uppercase tracking-[0.22em] text-court-muted">
-              {decided ? "Ended" : data.status.replace("_", " ")}
+              {statusWord}
             </p>
           )}
+          {/* Task 11 fix round 3 — PRODUCT OWNER RULING: this headline
+              fallback keeps its existing copy verbatim ("Not started"),
+              on its OWN key (`matchCentre.status.notStarted`), never
+              `matchCentre.status.scheduled` ("Scheduled") — round 2 briefly
+              routed it through the chip's word instead, which silently
+              changed what `apps/web/e2e/scorepad-v3-football.spec.ts`
+              (a live, non-skipped Playwright spec) asserts a spectator
+              sees on the legacy public fixture page. The status PILL/chip
+              above and this HEADLINE are two different pieces of copy that
+              happen to describe the same moment; they keep two different
+              keys on purpose now. */}
           <p className="font-display text-5xl font-bold tabular-nums leading-none tracking-tight sm:text-6xl">
             {data.summary?.headline
               ? showBreakdown
                 ? stripLiveSetPoints(data.summary.headline)
                 : data.summary.headline
-              : "Not started"}
+              : t(activeDict, "matchCentre.status.notStarted")}
           </p>
           {!showBreakdown && data.summary?.perSide ? (
             <ul className="mt-5 space-y-2">
@@ -193,7 +259,7 @@ export function LiveScore({
           {data.outcome?.winner ? (
             <p className="mt-4 flex items-center gap-1.5 text-sm text-court-muted">
               <span className="animate-trophy">🏆</span>
-              Winner:{" "}
+              {t(activeDict, "matchCentre.winner")}{" "}
               <strong className="text-amber-300">
                 {entrantNames[data.outcome.winner] ?? data.outcome.winner}
               </strong>
@@ -202,10 +268,13 @@ export function LiveScore({
         </div>
         <div aria-hidden className={`h-1 ${inPlay ? "bg-emerald-400" : "bg-accent"}`} />
       </div>
+        </>
+      )}
 
       {showBreakdown ? (
         <SetScoreboard
           breakdown={breakdown}
+          dict={activeDict}
           names={sideIds.map((id, row) => {
             const name = entrantNames[id] ?? "—";
             const hasServe = serving !== null && (row === 0 ? "home" : "away") === serving;
@@ -217,9 +286,21 @@ export function LiveScore({
       {periods && sideIds.length === 2 ? (
         <div className="rounded-2xl border border-zinc-200/80 bg-surface p-5 shadow-sm">
           <p className="mb-3 font-display text-sm font-semibold uppercase tracking-[0.18em] text-ink-muted">
-            Goals by period
+            {t(activeDict, "matchCentre.goalsByPeriod")}
           </p>
-          <div className="overflow-x-auto">
+          {/* A scrolling region owes `tabIndex` + a role + an accessible name,
+              or axe reds `scrollable-region-focusable` at SERIOUS impact and a
+              keyboard user cannot reach the columns at all. `tabIndex` cannot
+              be varied by media query, so it is unconditional. Named from the
+              heading directly above rather than a new dictionary key — one
+              string, one translation, and the two can never disagree.
+              (`sets-tab.tsx` already does this; this older file predates it.) */}
+          <div
+            className="overflow-x-auto"
+            tabIndex={0}
+            role="region"
+            aria-label={t(activeDict, "matchCentre.goalsByPeriod")}
+          >
             <table className="w-full border-separate border-spacing-0 tabular-nums">
               <thead>
                 <tr>
@@ -237,11 +318,20 @@ export function LiveScore({
               <tbody>
                 {(["home", "away"] as const).map((side, row) => (
                   <tr key={side}>
-                    <td
-                      className={`max-w-40 truncate pr-4 text-sm font-medium text-zinc-800 ${row === 0 ? "border-b border-zinc-100" : ""} py-2`}
+                    {/* Whole-branch review, Accessibility group — the entrant
+                        name is the ROW HEADER, not a data cell: without it a
+                        screen reader reading "1" out of the Q1 column has
+                        nothing to say whose 1 it is. `text-left` because a
+                        `<th>` is centred by default; `font-medium` was
+                        already here and keeps it off the UA's bold.
+                        `sets-tab.tsx:164` is the one place on this surface
+                        that already did this. */}
+                    <th
+                      scope="row"
+                      className={`max-w-40 truncate pr-4 text-left text-sm font-medium text-zinc-800 ${row === 0 ? "border-b border-zinc-100" : ""} py-2`}
                     >
                       {entrantNames[sideIds[row]!] ?? "—"}
-                    </td>
+                    </th>
                     {periods.map((p) => (
                       <td
                         key={p.phase}
@@ -261,7 +351,7 @@ export function LiveScore({
       {discipline && sideIds.length === 2 ? (
         <div className="rounded-2xl border border-zinc-200/80 bg-surface p-5 shadow-sm">
           <p className="mb-3 font-display text-sm font-semibold uppercase tracking-[0.18em] text-ink-muted">
-            Discipline
+            {t(activeDict, "matchCentre.discipline")}
           </p>
           <ul className="space-y-1.5">
             {discipline.map((entry, i) => (
@@ -289,21 +379,34 @@ export function LiveScore({
   );
 }
 
-/** Per-set scoreboard card: one column per played set, live set tinted. */
+/** Per-set scoreboard card: one column per played set, live set tinted.
+ *  Task 14c — `dict` added so the heading and per-column labels resolve
+ *  through `matchCentre.scoreByUnit`/`matchCentre.unit.<unit>`/
+ *  `matchCentre.col.<unit>` instead of rendering `breakdown.unit`'s raw
+ *  English word straight through. */
 function SetScoreboard({
   breakdown,
   names,
+  dict,
 }: {
   breakdown: NonNullable<ReturnType<typeof setBreakdown>>;
   names: string[];
+  dict: Dict;
 }) {
   const sides = ["home", "away"] as const;
   return (
     <div className="rounded-2xl border border-zinc-200/80 bg-surface p-5 shadow-sm">
       <p className="mb-3 font-display text-sm font-semibold uppercase tracking-[0.18em] text-ink-muted">
-        Score by {breakdown.unit.toLowerCase()}
+        {t(dict, "matchCentre.scoreByUnit", { unit: t(dict, `matchCentre.unit.${breakdown.unit}`) })}
       </p>
-      <div className="overflow-x-auto">
+      {/* See the goals-by-period table above: same rule, same reason, and the
+          name comes from this panel's own heading. */}
+      <div
+        className="overflow-x-auto"
+        tabIndex={0}
+        role="region"
+        aria-label={t(dict, "matchCentre.scoreByUnit", { unit: t(dict, `matchCentre.unit.${breakdown.unit}`) })}
+      >
         <table className="w-full border-separate border-spacing-0 tabular-nums">
           <thead>
             <tr>
@@ -311,7 +414,17 @@ function SetScoreboard({
               {breakdown.sets.map((s, i) => (
                 <th
                   key={i}
-                  className={`min-w-14 rounded-t-lg px-3 pb-2 text-center text-xs font-medium uppercase tracking-wide ${
+                  // `whitespace-nowrap`: the OPEN column puts a live-pulse dot
+                  // inside this same inline-flex, and `min-w-14` less `px-3`
+                  // leaves a 32px content box — the dot plus its `gap-1.5`
+                  // takes 12px, so "SET 1" (~34px at 12px) wrapped onto two
+                  // lines. Only the open column has the dot, so only that one
+                  // header was two lines tall while its neighbours were one,
+                  // which is what reads as an alignment fault. This table is
+                  // NOT `table-fixed`, so the column simply takes the width it
+                  // needs; the wrapper below is a real scroll region for the
+                  // case where that no longer fits.
+                  className={`min-w-14 whitespace-nowrap rounded-t-lg px-3 pb-2 text-center text-xs font-medium uppercase tracking-wide ${
                     s.closed ? "text-zinc-400" : "bg-emerald-50 text-emerald-700"
                   }`}
                 >
@@ -319,7 +432,7 @@ function SetScoreboard({
                     {!s.closed && (
                       <span className="animate-live-pulse h-1.5 w-1.5 rounded-full bg-emerald-500" />
                     )}
-                    {breakdown.unit} {i + 1}
+                    {t(dict, `matchCentre.col.${breakdown.unit}`, { n: i + 1 })}
                   </span>
                 </th>
               ))}
@@ -328,13 +441,16 @@ function SetScoreboard({
           <tbody>
             {sides.map((side, row) => (
               <tr key={side}>
-                <td
-                  className={`max-w-40 truncate pr-4 text-sm font-medium text-zinc-800 ${
+                {/* The row header — see the goals-by-period table above, same
+                    rule and same reason. */}
+                <th
+                  scope="row"
+                  className={`max-w-40 truncate pr-4 text-left text-sm font-medium text-zinc-800 ${
                     row === 0 ? "border-b border-zinc-100" : ""
                   } py-2`}
                 >
                   {names[row]}
-                </td>
+                </th>
                 {breakdown.sets.map((s, i) => {
                   const mine = s[side];
                   const theirs = s[side === "home" ? "away" : "home"];

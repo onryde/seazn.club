@@ -273,8 +273,19 @@ export interface SetScore {
 }
 
 export interface SetBreakdown {
-  /** Column label: badminton & table tennis score "Games", volleyball "Sets". */
-  unit: string;
+  /**
+   * Task 14c — a DICTIONARY-KEY suffix, not a display word: badminton &
+   * table tennis are "game", tennis & volleyball are "set" (never "period"
+   * — that's `SetsView.unit`'s own third value, in `match-centre-schema.ts`,
+   * a different document this function never sees). The renderer resolves
+   * it through `matchCentre.col.<unit>` (column labels) and
+   * `matchCentre.unit.<unit>` (the bare word in "Score by {unit}") — same
+   * `matchCentre.col.*` family `sets-tab.tsx` already reads off the newer
+   * `SetsView.unit`, so this and that document share one translated
+   * vocabulary instead of two. Used to be the literal English word
+   * ("Game"/"Set") rendered straight into the page in every locale.
+   */
+  unit: "game" | "set";
   sets: SetScore[];
 }
 
@@ -300,7 +311,7 @@ export function setBreakdown(summary: unknown, sportKey: string): SetBreakdown |
     if (typeof home !== "number" || typeof away !== "number") return null;
     sets.push({ home, away, closed: closed === true });
   }
-  return { unit: GAME_UNIT_SPORTS.has(sportKey) ? "Game" : "Set", sets };
+  return { unit: GAME_UNIT_SPORTS.has(sportKey) ? "game" : "set", sets };
 }
 
 // ---------------------------------------------------------------------------
@@ -332,6 +343,23 @@ export function periodBreakdown(summary: unknown): PeriodScoreRow[] | null {
     rows.push({ phase, home, away });
   }
   return rows;
+}
+
+/** The period kernel's own CURRENT phase token — "P1", "H1", "ET_H2",
+ *  "SHOOTOUT" (`sports/period/kernel.ts`'s summary `detail.phase`). A raw
+ *  token, never copy: callers resolve it through `term.<phase>` the way
+ *  `sets-tab.tsx` already does for its column headers.
+ *
+ *  Read from `detail.phase` rather than off the engine's `headline`, which
+ *  appends the same fact as a " · P1" suffix — parsing that prose back apart
+ *  would make this a SECOND authority for something `detail` already states
+ *  by name. */
+export function matchPhase(summary: unknown): string | null {
+  if (typeof summary !== "object" || summary === null) return null;
+  const detail = (summary as { detail?: unknown }).detail;
+  if (typeof detail !== "object" || detail === null) return null;
+  const phase = (detail as { phase?: unknown }).phase;
+  return typeof phase === "string" && phase !== "" ? phase : null;
 }
 
 /** "5v4" / "10v11" while a team-short suspension runs, else null. */
@@ -418,4 +446,157 @@ export function chipLabelKey(
     : chip === "finished"
       ? "chip.finished"
       : "chip.upcoming";
+}
+
+// ---------------------------------------------------------------------------
+// Match-centre entrant abbreviations (R11 fix round, C9). The court card and
+// the timeline/sets-tab chips abbreviate each side to a short label. TEAM
+// entrants keep the existing "first three compacted letters of the whole
+// name" rule unconditionally (it already disambiguates in practice —
+// cricket's BLA/COM — and C9 is scoped to person sports only). PERSON
+// entrants collided under that same rule ("Player One"/"Player Two" both
+// read "PLA"): `personShortCandidates` prefers the surname instead, and
+// `disambiguatedShorts` resolves both sides of a fixture TOGETHER, since a
+// single side's name never carries enough information on its own to know it
+// needs to widen past its first candidate.
+// ---------------------------------------------------------------------------
+
+function compactWord(word: string): string {
+  return word.replace(/[^\p{L}\p{N}]/gu, "").toUpperCase();
+}
+
+/**
+ * How wide a badge label may be. This is the LADDER's own bound, not the chip's
+ * — the chips (`timeline-tab.tsx`'s `SideBadge`, `sets-tab.tsx`'s row badge)
+ * size to their content and carry `min-w-[24px]` as a FLOOR, so they have no
+ * ceiling for this constant to correspond to. An earlier version of this
+ * comment said they were fixed 24x24px boxes that a wider label "spills" out
+ * of, and that this constant and their classes "move together"; the round that
+ * made the chips content-sized left that standing, so it is stated plainly
+ * here: nothing in CSS pins this number any more.
+ *
+ * What forces 4 is the tie-break below (`disambiguatedShorts`): its terminal
+ * shape is `${surname.slice(0, 3)}1` / `…2`, three characters plus an ordinal.
+ * A ceiling under 4 would truncate that suffix and stop it disambiguating; a
+ * ceiling above it buys nothing the earlier rungs do not already provide, and
+ * costs legibility at `text-[10px]`. The ladder's own early rungs happen to
+ * land on the same width (`surname.slice(0, 4)`, `first.slice(0, 2) +
+ * surname.slice(0, 2)`), which is why 4 reads as derived rather than invented.
+ *
+ * Moving it is a real change, not a tuning knob: `public-site.test.ts`'s
+ * "Ann Smith"/"Anna Smith" case reds at 3, 5 and 6.
+ */
+export const BADGE_MAX_CHARS = 4;
+
+/** The existing team-style rule, unchanged by C9: first three compacted
+ *  letters of the whole name ("Blazers" -> "BLA"). */
+export function teamShortOf(name: string): string {
+  const compact = compactWord(name);
+  return compact.length > 0 ? compact.slice(0, 3) : "?";
+}
+
+/**
+ * Ordered, increasingly specific abbreviations for a PERSON's name — surname
+ * first (how a spectator actually tells two players apart), then initial +
+ * surname, widening only as far as needed to disambiguate two entrants that
+ * would otherwise render identically. Never empty, and never wider than
+ * `BADGE_MAX_CHARS` — see the note on `add`.
+ */
+export function personShortCandidates(name: string): string[] {
+  const words = name
+    .trim()
+    .split(/\s+/)
+    .map(compactWord)
+    .filter((w) => w.length > 0);
+  if (words.length === 0) return ["?"];
+  const surname = words[words.length - 1]!;
+  const first = words[0]!;
+  // Found by driving the real spectator walkthrough (R11 fix round, C9
+  // follow-up): its own fixtures name two entrants "Player One <tag>" /
+  // "Player Two <tag>" — SAME first word, SAME last word (a per-run unique
+  // suffix), differing only in the middle. Every rung above and below this
+  // one collides for that pair, so without a middle-word candidate the
+  // ladder fell all the way to the full, untruncated name — far past
+  // `BADGE_MAX_CHARS`, and so past the width the badge chips in the
+  // Timeline/Sets tabs are legible at. A 3+-word name's middle word(s) are
+  // exactly where a shared first-and-last-word pair still differs.
+  const middle = words.length > 2 ? words.slice(1, -1).join("") : "";
+  const out: string[] = [];
+  // EVERY RUNG BELOW STATES ITS OWN WIDTH; the clamp inside `add` is a net
+  // under them, not the mechanism that shortens them. That distinction is
+  // load-bearing in both directions: remove the per-rung `slice` calls trusting
+  // the clamp and the ladder still holds, remove the clamp trusting the rungs
+  // and it still holds — but do BOTH and the ladder silently uncaps, with the
+  // unit suite green, because no test pins a candidate LIST. The pair to watch
+  // is `slice(0, 3)`/`slice(0, 4)` on the rungs against `slice(0,
+  // BADGE_MAX_CHARS)` here.
+  //
+  // The bound exists because a candidate wider than the chip does not
+  // disambiguate anything — it renders as overflow whatever it says. Before it,
+  // "John Andersen" against "John Anderson" resolved to ANDERSEN/ANDERSON,
+  // eight characters, which is longer than AND1/AND2 without being clearer. So
+  // the ladder ends at `BADGE_MAX_CHARS`, and a pair that collides through
+  // every rung inside it falls to `disambiguatedShorts`'s positional tie-break
+  // — honest that the two names are indistinguishable at this width.
+  const add = (s: string) => {
+    const clamped = s.slice(0, BADGE_MAX_CHARS);
+    if (clamped.length > 0 && !out.includes(clamped)) out.push(clamped);
+  };
+  add(surname.slice(0, 3));
+  if (words.length > 1) add(`${first.slice(0, 1)}${surname.slice(0, 2)}`);
+  if (middle.length > 0) add(middle.slice(0, 3));
+  add(surname.slice(0, 4));
+  if (words.length > 1) add(`${first.slice(0, 2)}${surname.slice(0, 2)}`);
+  if (middle.length > 0) add(middle.slice(0, 4));
+  add(words.join("").slice(0, 3));
+  // The ladder used to end with three unclamped rungs — the whole surname, the
+  // whole middle, the whole compacted name. Clamping `add` made the first two
+  // of those exact duplicates of `surname.slice(0, 4)` and `middle.slice(0, 4)`
+  // above, so they pushed nothing at all (0 pushes across 300k generated names
+  // when the re-review measured it); they are gone rather than left as rungs
+  // that read like they still widen something. The third is genuinely distinct
+  // — a compacted whole name is not a prefix of any single word — and is kept,
+  // written at its real width.
+  add(words.join("").slice(0, BADGE_MAX_CHARS));
+  return out.length > 0 ? out : ["?"];
+}
+
+/**
+ * The two sides' court-card abbreviations, resolved TOGETHER: a collision on
+ * one side can only be seen — and broken — by comparing both at once. Team
+ * sides keep today's fixed rule unconditionally (out of C9's scope: "team
+ * entrants keep today's behaviour where it already disambiguates"); a person
+ * side widens through its own candidate ladder until it differs from the
+ * other side. If every candidate is exhausted and the two sides are STILL
+ * equal — the two entrants share the exact same full name, letter for
+ * letter — a positional tie-break keeps the invariant "never equal" intact
+ * even then (still built from each side's own candidate, just no longer
+ * unique to it).
+ */
+export function disambiguatedShorts(
+  a: { name: string; isPerson: boolean },
+  b: { name: string; isPerson: boolean },
+): [string, string] {
+  if (!a.isPerson && !b.isPerson) return [teamShortOf(a.name), teamShortOf(b.name)];
+  const candsA = a.isPerson ? personShortCandidates(a.name) : [teamShortOf(a.name)];
+  const candsB = b.isPerson ? personShortCandidates(b.name) : [teamShortOf(b.name)];
+  const rungs = Math.max(candsA.length, candsB.length);
+  for (let i = 0; i < rungs; i++) {
+    const candA = candsA[Math.min(i, candsA.length - 1)]!;
+    const candB = candsB[Math.min(i, candsB.length - 1)]!;
+    if (candA !== candB) return [candA, candB];
+  }
+  // The tie-break is built from each side's FIRST (shortest) candidate, never
+  // its last. The last rung is the full compacted name by construction, so
+  // `${last}1` produced a 10-character label like "JOHNSMITH1" for two
+  // entrants genuinely called the same thing — a label no badge chip is
+  // legible at, and the exact defect the C9 follow-up rung exists to prevent.
+  // Every first candidate is at most three characters (`surname.slice(0, 3)`,
+  // or `teamShortOf`), so the suffixed label is at most four. THIS SHAPE IS
+  // WHAT SETS `BADGE_MAX_CHARS`: three plus an ordinal. The two must move
+  // together — a smaller ceiling truncates the ordinal away and the tie-break
+  // stops disambiguating.
+  const firstA = candsA[0]!;
+  const firstB = candsB[0]!;
+  return [`${firstA}1`, `${firstB}2`];
 }
