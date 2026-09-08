@@ -17,6 +17,7 @@ import { useMsg } from "@/components/i18n/dict-provider";
 // `entrants-panel.tsx`'s `runGated` wraps 4 roster-write call sites with.
 import type { EligibilityIssue } from "@/lib/registration-rules";
 import { EligibilityOverrideDialog } from "@/components/v2/eligibility-override-dialog";
+import { suspendedPlayersText } from "@/lib/eligibility-issue-i18n";
 
 /** One row of the resolved `PositionCatalog.groups` (engine `PositionGroup`),
  *  narrowed to the fields this editor reads. Structural, not an engine import:
@@ -366,6 +367,22 @@ export function LineupEditor({
       if (err instanceof ApiV1Error && err.code === "ELIGIBILITY_VIOLATION") {
         const violations = (err.extra.violations as EligibilityIssue[] | undefined) ?? [];
         setEligibilityGate({ violations });
+      } else if (err instanceof ApiV1Error && err.code === "SUSPENDED_PLAYER") {
+        // B05: the discipline gate's own 422 (`gateLineupSuspensions`,
+        // server/usecases/discipline.ts). It is NOT an eligibility violation —
+        // it carries no `violations`, and the override dialog is deliberately
+        // not offered here — but it IS the same organiser reading the same
+        // refusal, so it gets said in their language off the structured
+        // `suspended` list rather than through the server's English sentence.
+        // `suspendedPlayersText` returns null when the names are unusable, and
+        // the English then stands rather than a nameless accusation.
+        const suspended = (err.extra.suspended as { full_name?: string }[] | undefined) ?? [];
+        setError(
+          suspendedPlayersText(
+            suspended.map((s) => s.full_name ?? ""),
+            msg,
+          ) ?? err.message,
+        );
       } else {
         setError(err instanceof Error ? err.message : msg("lineup.failed"));
       }
