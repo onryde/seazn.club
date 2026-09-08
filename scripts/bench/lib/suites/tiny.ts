@@ -2351,11 +2351,11 @@ export async function runTinySuite(
     // T1/T2 have folded, no team sheet can be written at all.
     //
     // Read `compareSuspensions`'s header in oracle.ts for how a suspension
-    // actually comes about here, and for why the brief's expected proof pair
-    // (a 422 ELIGIBILITY_VIOLATION on a lineup naming a banned player) is not
-    // assertable: nothing on the lineup path reads the `suspensions` table.
-    // The enforcement probe below MEASURES that on every run rather than
-    // leaving it as a claim.
+    // actually comes about here. T5b-3 measured the enforcement question
+    // rather than answering it (the product had not decided); B05 answered it,
+    // so the probe below is an ORACLE now — 422 SUSPENDED_PLAYER for the
+    // banned player, acceptance for the eligible team-mate, both sides on the
+    // same sheet.
     //
     // Gated on `input.sql !== undefined`, like every other B05 step.
     if (input.sql !== undefined) {
@@ -2441,7 +2441,53 @@ export async function runTinySuite(
             continue;
           }
 
-          // (1) The PRODUCER, through the product's own two calls. A row this
+          // A local write, used twice below: the PLAYED sheets go in before the
+          // ban exists, the MISSED ones after it. The read-BACK is deliberately
+          // NOT here — it is one pass at the end, so every sheet is read at the
+          // SAME moment, after every write and after the ban is confirmed. A
+          // read taken beside its own write would sample the played sheets
+          // before the ban existed at all, and a ban that then reached too far
+          // would be invisible to `absentOnPlayed`.
+          const writtenTargets: { extKey: string; fixtureId: string; missed: boolean }[] = [];
+          const writeFailures: string[] = [];
+          const writeSheet = async (
+            target: { extKey: string; fixtureId: string; missed: boolean },
+            wanted: readonly string[],
+          ): Promise<boolean> => {
+            const written = await putFixtureLineup(
+              base,
+              s,
+              target.fixtureId,
+              susEntrantId,
+              wanted,
+              input.oracleTransport,
+            );
+            if (written.status >= 400) {
+              writeFailures.push(
+                `${target.extKey}: HTTP ${written.status}${written.code === undefined ? "" : ` ${written.code}`}`,
+              );
+              return false;
+            }
+            if (!writtenTargets.some((t) => t.fixtureId === target.fixtureId)) writtenTargets.push(target);
+            return true;
+          };
+
+          // (1) The PLAYED sheets — the fixtures the pack does NOT say this
+          // person misses — written BEFORE the ban exists.
+          //
+          // THE ORDER IS THE PRODUCT'S, not a convenience. A ban names no
+          // fixtures: `suspensions` carries no fixture list and no date range,
+          // so while a row is `active` the lineup gate refuses that person on
+          // EVERY fixture of the division, the ones this pack says they play
+          // included. Writing these after the confirm would be asking the
+          // product to contradict the gate, and the honest sequence is a real
+          // season anyway — the organiser names a squad, a ban lands, and the
+          // sheets for the fixtures the player misses get redone.
+          for (const target of targets.filter((t) => !t.missed)) {
+            await writeSheet(target, [controlPersonId, bannedPersonId]);
+          }
+
+          // (2) The PRODUCER, through the product's own two calls. A row this
           // bench wrote in SQL would prove the fixture, not the product.
           const pending = await createManualSuspension(
             base,
@@ -2458,17 +2504,26 @@ export async function runTinySuite(
           );
           const confirmed = await confirmSuspension(base, s, pending.id, input.oracleTransport);
 
-          // (2) The ENFORCEMENT PROBE. The brief for this task expected a
-          // 422 ELIGIBILITY_VIOLATION here. Measured on every run rather than
-          // asserted either way: freezing today's answer as an expectation
-          // would make a future enforcement gate look like a regression, and
-          // asserting the brief's answer would red on the product as it is.
-          // The correct sheet is written over this one immediately below —
-          // `putLineup` REPLACES an entrant's whole lineup — so the stored
-          // state the oracle then reads is unaffected by the probe.
+          // (3) The ENFORCEMENT ORACLE. Until B05 this was a WARNING: it
+          // reported the live HTTP status and asserted neither answer, because
+          // the product had not decided whether discipline was advisory. It
+          // has decided — `putLineup` reads `suspensions` and refuses an
+          // `active` ban with 422 SUSPENDED_PLAYER — so the measurement is an
+          // assertion now, and the bench PROVES the gate instead of
+          // describing it.
+          //
+          // BOTH directions, on the SAME fixture and the SAME entrant. A
+          // product that refuses every team sheet satisfies the negative half
+          // on its own, which is why the eligible team-mate's acceptance is
+          // asserted here rather than left to the sheets loop below.
           const probeFixture = targets.find((f) => f.missed);
-          if (probeFixture !== undefined) {
-            const probe = await putFixtureLineup(
+          if (probeFixture === undefined) {
+            errors.push(
+              `oracle: discipline carry for "${sus.person}" resolved no MISSED fixture — the ` +
+                `enforcement assertion has no subject to refuse a team sheet for`,
+            );
+          } else {
+            const refusal = await putFixtureLineup(
               base,
               s,
               probeFixture.fixtureId,
@@ -2476,41 +2531,58 @@ export async function runTinySuite(
               [controlPersonId, bannedPersonId],
               input.oracleTransport,
             );
-            const refused = probe.status >= 400;
-            warnings.push(
-              `discipline enforcement probe: naming the ACTIVE-suspended "${sus.person}" on the team sheet of ` +
-                `"${probeFixture.extKey}" (the fixture the pack says they miss) answered HTTP ${probe.status}` +
-                `${probe.code === undefined ? "" : ` ${probe.code}`} — ` +
-                (refused
-                  ? `the lineup gate REFUSED it, so discipline is enforced on this path`
-                  : `the lineup gate ACCEPTED it. Discipline is ADVISORY in this product: putLineup calls ` +
-                    `gateRosterEligibility, and neither it nor rosterIssues beneath it reads the suspensions ` +
-                    `table — every reader of that table is a display surface or the stage-rebuild guard`),
+            const refused = refusal.status === 422 && refusal.code === "SUSPENDED_PLAYER";
+            // The POSITIVE half doubles as this fixture's real team sheet:
+            // `putLineup` REPLACES an entrant's whole lineup, so this write is
+            // the stored state the comparison below reads back.
+            const accepted = await writeSheet(probeFixture, [controlPersonId]);
+            const enforced = refused && accepted;
+            oracles.push({
+              name: `oracle: ${sus.divisionRef} discipline enforced at the team sheet (${sus.person})`,
+              passed: enforced,
+              detail: enforced
+                ? `naming the ACTIVE-suspended "${sus.person}" on "${probeFixture.extKey}" was REFUSED ` +
+                  `with 422 SUSPENDED_PLAYER, and the ELIGIBLE team-mate "${controlRef}" alone was ` +
+                  `ACCEPTED on that same sheet — the gate refuses the banned player, not everybody`
+                : [
+                    refused
+                      ? undefined
+                      : `the banned player was NOT refused: HTTP ${refusal.status}` +
+                        `${refusal.code === undefined ? "" : ` ${refusal.code}`} (expected 422 SUSPENDED_PLAYER)`,
+                    accepted
+                      ? undefined
+                      : `the ELIGIBLE team-mate "${controlRef}" was refused too — the gate is refusing everybody`,
+                  ]
+                    .filter((x): x is string => x !== undefined)
+                    .join("; "),
+            });
+            log.info(
+              { kind: "discipline_enforced", passed: enforced, division: sus.divisionRef },
+              "oracle_checked",
             );
+            if (!enforced) {
+              errors.push(
+                `oracle: ${sus.divisionRef}: the lineup gate did not enforce "${sus.person}"'s ACTIVE ban on ` +
+                  `"${probeFixture.extKey}" — banned player HTTP ${refusal.status}` +
+                  `${refusal.code === undefined ? "" : ` ${refusal.code}`}, eligible team-mate ` +
+                  `${accepted ? "accepted" : "REFUSED"}`,
+              );
+            }
           }
 
-          // (3) The team sheets the oracle actually compares: the banned
-          // player OFF every fixture the pack names, ON every fixture it does
-          // not; the eligible team-mate on all of them.
-          const sheets: SuspensionFixtureSheet[] = [];
-          const writeFailures: string[] = [];
+          // (4) Every remaining MISSED sheet (the probe wrote the first one):
+          // the banned player OFF the fixtures the pack names, the eligible
+          // team-mate on all of them. The PLAYED sheets went in at (1).
           for (const target of targets) {
-            const wanted = target.missed ? [controlPersonId] : [controlPersonId, bannedPersonId];
-            const written = await putFixtureLineup(
-              base,
-              s,
-              target.fixtureId,
-              susEntrantId,
-              wanted,
-              input.oracleTransport,
-            );
-            if (written.status >= 400) {
-              writeFailures.push(
-                `${target.extKey}: HTTP ${written.status}${written.code === undefined ? "" : ` ${written.code}`}`,
-              );
-              continue;
-            }
-            // Read BACK, never the PUT's own echo.
+            if (!target.missed || target.fixtureId === probeFixture?.fixtureId) continue;
+            await writeSheet(target, [controlPersonId]);
+          }
+
+          // (5) The read-BACK, never the PUTs' own echoes, and all of it AFTER
+          // every write: the stored state as it stands at comparison time is
+          // what the oracle compares.
+          const sheets: SuspensionFixtureSheet[] = [];
+          for (const target of writtenTargets) {
             const lineup = await fetchFixtureLineup(
               base,
               s,
@@ -2532,7 +2604,7 @@ export async function runTinySuite(
             );
           }
 
-          // (4) The comparison, against the product's own active-ban list.
+          // (6) The comparison, against the product's own active-ban list.
           const active = await fetchActiveSuspensions(base, s, susDivisionId, input.oracleTransport);
           const expectedSuspensions: ExpectedSuspension[] = [
             {

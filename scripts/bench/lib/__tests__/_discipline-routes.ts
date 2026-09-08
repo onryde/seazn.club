@@ -12,10 +12,19 @@
 // `active` and stamps the entrant. A fake that returned `active` from the
 // POST would let a suite that forgot to confirm still pass.
 //
-// The lineup routes ACCEPT a banned player, deliberately — that is what the
-// product does (`putLineup` never reads the `suspensions` table), and a fake
-// that refused would make the bench's enforcement probe report a gate this
-// product does not have.
+// B05 — the lineup PUT now REFUSES a banned player, because the product does:
+// `putLineup` reads `suspensions` and answers 422 SUSPENDED_PLAYER for anyone
+// holding an `active` row, unless `eligibility_override.reason` is supplied.
+// (Before B05 it accepted everyone and the bench only WARNED about it.)
+//
+// Scoped by ENTRANT, not by division, and that is faithful rather than lazy:
+// the confirm branch stamps the ban's `entrantId` from `entrant_members` in
+// its own division, and a lineup is written per (fixture, entrant) — so "the
+// ban's entrant is this request's entrant" is exactly "the ban's division is
+// this fixture's division", without this world having to model a
+// fixture -> division map it owns nothing else about. A ban whose confirm
+// resolved NO entrant (`entrantForPerson` returned undefined) refuses nobody,
+// same as the product, whose gate joins on a division the row does carry.
 import type { RawResult } from "../http.ts";
 
 export interface SuspensionRowLike {
@@ -52,6 +61,11 @@ export function makeDisciplineRoutesWorld(input: {
   /** Test seam: bend a stored team sheet on the way out. Used to model a ban
    *  that reached a fixture the pack does not name, or one that reached none. */
   interceptSheet?(fixtureId: string, entrantId: string, personIds: string[]): string[];
+  /** Test seam: model the PRE-B05 product, whose lineup path never read the
+   *  `suspensions` table and accepted a banned player onto any team sheet.
+   *  This is the mutant the enforcement oracle exists to kill — without it,
+   *  "the gate refused" is satisfied by a fake that refuses on its own. */
+  advisoryLineupGate?: boolean;
 }): DisciplineRoutesWorld {
   const rows: SuspensionRowLike[] = [];
   const sheets = new Map<string, string[]>();
@@ -123,6 +137,35 @@ export function makeDisciplineRoutesWorld(input: {
           const slots = ((body as { slots?: { person_id?: string }[] } | null)?.slots ?? [])
             .map((sl) => sl.person_id ?? "")
             .filter((id) => id !== "");
+          const overrideReason = (
+            body as { eligibility_override?: { reason?: string } } | null
+          )?.eligibility_override?.reason;
+          const banned =
+            input.advisoryLineupGate === true
+              ? []
+              : rows.filter(
+                  (r) => r.status === "active" && r.entrantId === entrantId && slots.includes(r.personId),
+                );
+          if (banned.length > 0 && (overrideReason === undefined || overrideReason === "")) {
+            // Refused BEFORE the store, exactly as the product does — the
+            // transaction throws before `delete from lineups`, so a refused
+            // PUT leaves the previous sheet intact.
+            // Same `as unknown as RawResult` cast as the 404 above, for the
+            // same reason: `RawJson.error` is typed `string` and widening it
+            // is a lib change this file does not own.
+            return {
+              status: 422,
+              json: {
+                ok: false,
+                error: {
+                  code: "SUSPENDED_PLAYER",
+                  message:
+                    `${banned.map((r) => r.personName).join(", ")} is serving an active suspension ` +
+                    `in this division and cannot be named on a team sheet.`,
+                },
+              },
+            } as unknown as RawResult;
+          }
           // REPLACE, exactly as `putLineup` does (it deletes the entrant's
           // rows before inserting). A merge here would hide a bench step that
           // wrote the wrong sheet second.

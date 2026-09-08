@@ -76,6 +76,12 @@ function fakeServer(
      *  named one: the banned player is off EVERY team sheet, including the
      *  ones `expected.suspensions` does not name. */
     disciplineBanOverReaches?: boolean;
+    /** B05 regression — the PRE-B05 product, whose lineup path never read the
+     *  `suspensions` table: the PUT accepts a banned player onto any team
+     *  sheet. The enforcement oracle is the ONLY thing that can see this, and
+     *  the carry comparison cannot: this bench writes the sheets it wants, so
+     *  an advisory product still stores exactly the sheets the pack expects. */
+    disciplineAdvisoryLineupGate?: boolean;
     /** B05 T4b regression — `GET /stages/{id}/standings` answers `d-badminton`'s
      *  own league table with ZERO rows (as if nothing ever folded into it),
      *  proving `compareStandings`'s empty-case discipline through the WIRING:
@@ -239,6 +245,7 @@ function fakeServer(
           ],
         }
       : {}),
+    ...(opts.disciplineAdvisoryLineupGate === true ? { advisoryLineupGate: true } : {}),
     ...(opts.disciplineBanOverReaches === true
       ? {
           // A ban that reached EVERY fixture, not the named one: the banned
@@ -742,6 +749,7 @@ describe("runTinySuite — B05 T1 division-A stream fold wiring", () => {
       // that has left `scheduled`, so it runs before the folds rather than
       // beside the other oracles after them. `if (false)`-ing the block drops
       // exactly this entry — the wiring regression this task owes.
+      "oracle: d-tiebreak discipline enforced at the team sheet (p-hotel)",
       "oracle: d-tiebreak discipline carry (p-hotel)",
       "oracle: d-tiny/s-league standings table",
       "oracle: d-tiny/s-league tie-order cascade",
@@ -764,7 +772,7 @@ describe("runTinySuite — B05 T1 division-A stream fold wiring", () => {
     ]);
     expect(runtimeOracles.map((o) => o.passed)).toEqual([
       true, true, true, true, true, true, true, true, true, true,
-      true, true, true, true, true, true, true, true, true,
+      true, true, true, true, true, true, true, true, true, true,
     ]);
     // The genuinely tied pair (echo/golf) was actually CHECKED, not merely
     // present-and-skipped — the whole point of an ordering-differential
@@ -773,18 +781,22 @@ describe("runTinySuite — B05 T1 division-A stream fold wiring", () => {
     const tiebreakCascade = runtimeOracles.find((o) => o.name === "oracle: d-tiebreak/s-tiebreak-league tie-order cascade");
     expect(tiebreakCascade?.detail).toContain("1 checked");
 
-    // B05 T5b-3 — the enforcement probe RAN, against the fixture the pack
-    // names, and reported a real HTTP answer. Deliberately NOT pinned to a
-    // particular status: the probe exists to MEASURE whether the lineup gate
-    // refuses a banned player, and freezing today's answer would turn a
-    // future enforcement gate into a fake regression (AGENTS.md failure class
-    // 4 — a test that froze a live behaviour as its expected value). What is
-    // pinned is that it is not inert.
-    const probe = (report.warnings ?? []).find((w) => w.includes("discipline enforcement probe"));
-    expect(probe).toBeDefined();
-    expect(probe).toContain("rr-r3-c1");
-    expect(probe).toContain("p-hotel");
-    expect(probe).toMatch(/answered HTTP \d{3}/);
+    // B05 — the enforcement oracle. T5b-3 left this as a WARNING that pinned
+    // no status, because the product had not decided whether discipline was
+    // advisory; B05 decided (`putLineup` -> `gateLineupSuspensions`), so the
+    // measurement is an assertion and this pins BOTH of its halves. The
+    // warning it replaced is gone, and that absence is asserted too — a
+    // measurement left lying beside an assertion is how two answers to one
+    // question start drifting apart.
+    const enforcement = runtimeOracles.find((o) => o.name.includes("discipline enforced"));
+    expect(enforcement?.passed).toBe(true);
+    expect(enforcement?.detail).toContain("rr-r3-c1");
+    expect(enforcement?.detail).toContain("p-hotel");
+    expect(enforcement?.detail).toContain("422 SUSPENDED_PLAYER");
+    // The POSITIVE half is named, not merely implied: a detail that only said
+    // "refused" would read identically against a gate that refuses everybody.
+    expect(enforcement?.detail).toMatch(/ELIGIBLE team-mate "p-\w+" alone was ACCEPTED/);
+    expect((report.warnings ?? []).some((w) => w.includes("discipline enforcement probe"))).toBe(false);
 
     // B05 T5b-2 — HOW MANY subjects each new oracle actually compared, not
     // merely that it ran. A reachability assertion is satisfied by any
@@ -1130,6 +1142,51 @@ describe("runTinySuite — B05 T1 division-A stream fold wiring", () => {
     const carry = (report.oracles ?? []).find((o) => o.name.includes("discipline carry"));
     expect(carry?.passed).toBe(false);
     expect(carry?.detail).toContain("which the pack does NOT name");
+  });
+
+  it("B05 — an ADVISORY lineup gate (the pre-B05 product) reds the enforcement oracle, and the carry oracle cannot see it", async () => {
+    // The wiring regression this task owes. `advisoryLineupGate` restores the
+    // product as it was before B05: `putLineup` accepts a banned player onto
+    // any team sheet. Nothing else about the world changes — the ban is still
+    // created, confirmed, active, correctly sized and stamped on the right
+    // entrant.
+    //
+    // The second assertion is the point of adding a SEPARATE oracle rather
+    // than folding enforcement into `compareSuspensions`: the carry oracle
+    // still PASSES here, because this bench writes the sheets it wants and an
+    // advisory product stores them faithfully. Only a live 422 can witness the
+    // gate, so only the enforcement oracle reds.
+    const { transport, sql } = fakeServer({ disciplineAdvisoryLineupGate: true });
+    const report = await runTinySuite({
+      base: "http://bench.example",
+      engine: "optimized",
+      keep: false,
+      log: silent,
+      cliEntry: "admin",
+      packPath: TINY_PACK_PATH,
+      transport,
+      sql,
+      probeTransport: transport,
+      simTransport: transport,
+      importTransport: transport,
+      startTransport: transport,
+      advanceTransport: transport,
+      oracleTransport: transport,
+    });
+
+    expect(report.gate).toBe("red");
+    const enforcement = (report.oracles ?? []).find((o) => o.name.includes("discipline enforced"));
+    expect(enforcement).toBeDefined();
+    expect(enforcement?.passed).toBe(false);
+    expect(enforcement?.detail).toContain("was NOT refused");
+    expect(enforcement?.detail).toContain("expected 422 SUSPENDED_PLAYER");
+    expect(
+      (report.errors ?? []).some((e) => e.includes("the lineup gate did not enforce")),
+    ).toBe(true);
+    // The carry oracle is BLIND to this, which is why enforcement is its own
+    // subject and not an extra clause inside `compareSuspensions`.
+    const carry = (report.oracles ?? []).find((o) => o.name.includes("discipline carry"));
+    expect(carry?.passed).toBe(true);
   });
 
   it("B05 T5b-3 — a pack with NO expected.suspensions reports a warning and NO carry oracle, never a vacuous pass", async () => {

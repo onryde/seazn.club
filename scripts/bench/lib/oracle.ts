@@ -753,23 +753,25 @@ export function comparePersonDivisionStat(
 // treat as a ban at all. Every one of these paths is additionally gated on
 // the `discipline.enforced` entitlement (`requireFeature`).
 //
-// WHAT THIS COMPARATOR DOES **NOT** ASSERT, and why (T5b-3's brief expected
-// otherwise — recorded as a finding rather than built as an assertion).
-// The brief's black-box pair was "PUT `/fixtures/{id}/lineups/{entrantId}`
-// naming the suspended person 422s ELIGIBILITY_VIOLATION". It does not.
-// `putLineup` (`usecases/fixtures.ts:307-386`) calls `gateRosterEligibility`,
-// and neither that function nor `rosterIssues` beneath it reads the
-// `suspensions` table — `usecases/registration-eligibility.ts` contains the
-// string "suspen" ZERO times, and so does `usecases/fixtures.ts`. Every
-// reader of `suspensions` in the whole app is a DISPLAY surface
-// (`listSuspensions`, `activeSuspensionsByEntrant`, `suspensionsForFixture`'s
-// pad banner, `publicSuspensions`, `me.ts`'s own-bans strip) or a rebuild
-// guard (`stages.ts:1833`). Discipline in this product is ADVISORY: the ban
-// is recorded and shown, and nothing refuses the player a team sheet.
+// WHAT THIS COMPARATOR DOES **NOT** ASSERT, and where that moved to.
+// T5b-3's brief expected a black-box pair here: "PUT
+// `/fixtures/{id}/lineups/{entrantId}` naming the suspended person 422s". At
+// the time it did not — `putLineup` called `gateRosterEligibility` and nothing
+// on that path read the `suspensions` table, so discipline was ADVISORY and
+// this file recorded that as a finding instead of building an assertion on it.
 //
-// So the two directions this comparator DOES assert are the ones the product
-// can actually answer, and it asserts both, because a one-sided check passes
-// against a product that refuses everybody:
+// B05 closed that gap in the product: `putLineup` now runs
+// `gateLineupSuspensions` (`usecases/discipline.ts`) and answers 422
+// SUSPENDED_PLAYER for an `active` ban unless the organiser supplies
+// `eligibility_override.reason`. The assertion that follows from it lives in
+// the SUITE (`suites/tiny.ts`, the "discipline enforced at the team sheet"
+// oracle), not in this comparator, because it is a live HTTP verdict rather
+// than a comparison of two states — this function still compares only what it
+// can be handed as data.
+//
+// The two directions this comparator asserts are about the STORED sheets, and
+// it asserts both, because a one-sided check passes against a product that
+// refuses everybody:
 //   NEGATIVE — the banned person holds an ACTIVE suspension in this division,
 //     for a ban length equal to the number of fixtures the pack says she
 //     misses, stamped against her own entrant; and she is off the team sheet
