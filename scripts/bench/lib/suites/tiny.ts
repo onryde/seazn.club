@@ -190,8 +190,15 @@ import {
   comparePersonDivisionStat,
   compareRankCrossings,
   compareStandings,
+  compareSuspensions,
   compareTieOrderCascade,
+  confirmSuspension,
+  createManualSuspension,
+  fetchActiveSuspensions,
   fetchDivisionPlayerStats,
+  fetchFixtureLineup,
+  putFixtureLineup,
+  suspensionMismatchReasons,
   fetchPersonCareerStats,
   fetchPersonStats,
   fetchStandings,
@@ -205,8 +212,10 @@ import {
   type ExpectedCareerStat,
   type ExpectedLeaderboardEntry,
   type ExpectedStandingsRow,
+  type ExpectedSuspension,
   type PersonCareerStatsWire,
   type PersonStatsWire,
+  type SuspensionFixtureSheet,
 } from "../oracle.ts";
 import type { SelectedDivisionExposure } from "../env.ts";
 import {
@@ -2327,6 +2336,242 @@ export async function runTinySuite(
         });
         for (const issue of issues)
           errors.push(`player-stats baseline: ${issue}`);
+      }
+    }
+
+    // B05 T5b-3 — the DISCIPLINE CARRY (bench spec section 8), wired against
+    // `expected.suspensions` through `oracle.ts`'s `compareSuspensions`.
+    // That block carried ZERO rows until this task, so its oracle was a
+    // silence: nothing compared, nothing able to fail.
+    //
+    // POSITION IS LOAD-BEARING. This runs BEFORE the folds below, not beside
+    // the other oracles after them, because `putLineup`
+    // (`usecases/fixtures.ts:333-335`) refuses any fixture whose status has
+    // left `scheduled` — "lineup is locked once a fixture is decided". Once
+    // T1/T2 have folded, no team sheet can be written at all.
+    //
+    // Read `compareSuspensions`'s header in oracle.ts for how a suspension
+    // actually comes about here, and for why the brief's expected proof pair
+    // (a 422 ELIGIBILITY_VIOLATION on a lineup naming a banned player) is not
+    // assertable: nothing on the lineup path reads the `suspensions` table.
+    // The enforcement probe below MEASURES that on every run rather than
+    // leaving it as a claim.
+    //
+    // Gated on `input.sql !== undefined`, like every other B05 step.
+    if (input.sql !== undefined) {
+      if (pack.expected.suspensions.length === 0) {
+        // An EMPTY expected set is not a passing oracle — the same discipline
+        // T5b-2's career block states. A green "discipline carry" line for a
+        // pack that declares no ban is exactly the vacuity this wave removes.
+        warnings.push(
+          `oracle: pack declares no expected.suspensions rows — the discipline-carry oracle ` +
+            `(compareSuspensions) has no subject and was NOT run`,
+        );
+      } else {
+        for (const sus of pack.expected.suspensions) {
+          const susDivisionId = seeded.divisionIdByRef.get(sus.divisionRef);
+          const bannedPersonId = seeded.personIdByRef.get(sus.person);
+          if (susDivisionId === undefined || bannedPersonId === undefined) {
+            errors.push(
+              `oracle: expected.suspensions names division "${sus.divisionRef}" / person "${sus.person}" ` +
+                `and one of them has no resolved id`,
+            );
+            continue;
+          }
+          // The entrant is DERIVED from the pack's own rosters, never named
+          // by `expected.suspensions` — a second declaration of the same fact
+          // could disagree with the roster and still pass.
+          const bannedEntrant = pack.entrants.find(
+            (e) => e.divisionRef === sus.divisionRef && e.roster.some((m) => m.person === sus.person),
+          );
+          if (bannedEntrant === undefined) {
+            errors.push(
+              `oracle: expected.suspensions names person "${sus.person}", who is on no entrant of ` +
+                `division "${sus.divisionRef}" — there is nothing to ban them from`,
+            );
+            continue;
+          }
+          // The POSITIVE half's subject: a team-mate on the SAME entrant that
+          // no expected.suspensions row bans. Without one, "was she refused?"
+          // is satisfied by a product that refuses everybody.
+          const bannedRefs = new Set(
+            pack.expected.suspensions
+              .filter((other) => other.divisionRef === sus.divisionRef)
+              .map((other) => other.person),
+          );
+          const controlRef = bannedEntrant.roster
+            .map((m) => m.person)
+            .find((ref) => !bannedRefs.has(ref));
+          const controlPersonId = controlRef === undefined ? undefined : seeded.personIdByRef.get(controlRef);
+          const susEntrantId = seeded.entrantIdByRef.get(bannedEntrant.ref);
+          if (controlRef === undefined || controlPersonId === undefined || susEntrantId === undefined) {
+            errors.push(
+              `oracle: entrant "${bannedEntrant.ref}" cannot carry a two-sided discipline check — ` +
+                `${controlRef === undefined ? "every one of its members is banned, so there is no ELIGIBLE control" : "an id never resolved"}`,
+            );
+            continue;
+          }
+          const controlPerson = pack.persons?.find((pp) => pp.ref === controlRef);
+
+          // Every fixture this entrant is a side of, split by the pack's own
+          // verdict. `missed` is what `expected.suspensions` names; `played`
+          // is the REST, and it is the fixture-identity discriminator — a ban
+          // from every fixture also satisfies "absent from the named one".
+          const missedKeys = new Set<string>(sus.missesFixtureExtKeys);
+          const entrantStreams = pack.streams.filter(
+            (st) =>
+              st.divisionRef === sus.divisionRef &&
+              (st.home === bannedEntrant.ref || st.away === bannedEntrant.ref),
+          );
+          const unresolvedFixtures: string[] = [];
+          const targets: { extKey: string; fixtureId: string; missed: boolean }[] = [];
+          for (const st of entrantStreams) {
+            const fid = seeded.fixtureIdByKey.get(fixtureKey(sus.divisionRef, st.fixtureExtKey));
+            if (fid === undefined) {
+              unresolvedFixtures.push(st.fixtureExtKey);
+              continue;
+            }
+            targets.push({ extKey: st.fixtureExtKey, fixtureId: fid, missed: missedKeys.has(st.fixtureExtKey) });
+          }
+          if (unresolvedFixtures.length > 0) {
+            errors.push(
+              `oracle: discipline carry for "${sus.person}" could not resolve fixture id(s) ` +
+                `${unresolvedFixtures.join(", ")} in division "${sus.divisionRef}"`,
+            );
+            continue;
+          }
+
+          // (1) The PRODUCER, through the product's own two calls. A row this
+          // bench wrote in SQL would prove the fixture, not the product.
+          const pending = await createManualSuspension(
+            base,
+            s,
+            susDivisionId,
+            {
+              personId: bannedPersonId,
+              // DERIVED, never declared: the ban is exactly as long as the
+              // list of fixtures the pack says are missed.
+              matchesTotal: sus.missesFixtureExtKeys.length,
+              reason: sus.reason ?? `bench discipline carry: ${sus.person}`,
+            },
+            input.oracleTransport,
+          );
+          const confirmed = await confirmSuspension(base, s, pending.id, input.oracleTransport);
+
+          // (2) The ENFORCEMENT PROBE. The brief for this task expected a
+          // 422 ELIGIBILITY_VIOLATION here. Measured on every run rather than
+          // asserted either way: freezing today's answer as an expectation
+          // would make a future enforcement gate look like a regression, and
+          // asserting the brief's answer would red on the product as it is.
+          // The correct sheet is written over this one immediately below —
+          // `putLineup` REPLACES an entrant's whole lineup — so the stored
+          // state the oracle then reads is unaffected by the probe.
+          const probeFixture = targets.find((f) => f.missed);
+          if (probeFixture !== undefined) {
+            const probe = await putFixtureLineup(
+              base,
+              s,
+              probeFixture.fixtureId,
+              susEntrantId,
+              [controlPersonId, bannedPersonId],
+              input.oracleTransport,
+            );
+            const refused = probe.status >= 400;
+            warnings.push(
+              `discipline enforcement probe: naming the ACTIVE-suspended "${sus.person}" on the team sheet of ` +
+                `"${probeFixture.extKey}" (the fixture the pack says they miss) answered HTTP ${probe.status}` +
+                `${probe.code === undefined ? "" : ` ${probe.code}`} — ` +
+                (refused
+                  ? `the lineup gate REFUSED it, so discipline is enforced on this path`
+                  : `the lineup gate ACCEPTED it. Discipline is ADVISORY in this product: putLineup calls ` +
+                    `gateRosterEligibility, and neither it nor rosterIssues beneath it reads the suspensions ` +
+                    `table — every reader of that table is a display surface or the stage-rebuild guard`),
+            );
+          }
+
+          // (3) The team sheets the oracle actually compares: the banned
+          // player OFF every fixture the pack names, ON every fixture it does
+          // not; the eligible team-mate on all of them.
+          const sheets: SuspensionFixtureSheet[] = [];
+          const writeFailures: string[] = [];
+          for (const target of targets) {
+            const wanted = target.missed ? [controlPersonId] : [controlPersonId, bannedPersonId];
+            const written = await putFixtureLineup(
+              base,
+              s,
+              target.fixtureId,
+              susEntrantId,
+              wanted,
+              input.oracleTransport,
+            );
+            if (written.status >= 400) {
+              writeFailures.push(
+                `${target.extKey}: HTTP ${written.status}${written.code === undefined ? "" : ` ${written.code}`}`,
+              );
+              continue;
+            }
+            // Read BACK, never the PUT's own echo.
+            const lineup = await fetchFixtureLineup(
+              base,
+              s,
+              target.fixtureId,
+              susEntrantId,
+              input.oracleTransport,
+            );
+            sheets.push({
+              fixtureExtKey: target.extKey,
+              fixtureId: target.fixtureId,
+              missed: target.missed,
+              lineup,
+            });
+          }
+          if (writeFailures.length > 0) {
+            errors.push(
+              `oracle: discipline carry for "${sus.person}" could not write the team sheet(s) it compares — ` +
+                `${writeFailures.join("; ")}`,
+            );
+          }
+
+          // (4) The comparison, against the product's own active-ban list.
+          const active = await fetchActiveSuspensions(base, s, susDivisionId, input.oracleTransport);
+          const expectedSuspensions: ExpectedSuspension[] = [
+            {
+              personId: bannedPersonId,
+              personName: pack.persons?.find((pp) => pp.ref === sus.person)?.fullName ?? sus.person,
+              divisionId: susDivisionId,
+              entrantId: susEntrantId,
+              matchesTotal: sus.missesFixtureExtKeys.length,
+              controlPersonId,
+              controlPersonName: controlPerson?.fullName ?? controlRef,
+            },
+          ];
+          const susCheck = compareSuspensions(expectedSuspensions, { active, sheets });
+          const entry = susCheck.entries[0];
+          oracles.push({
+            name: `oracle: ${sus.divisionRef} discipline carry (${sus.person})`,
+            passed: susCheck.matched,
+            detail: susCheck.matched
+              ? `the ban confirmed through POST /divisions/{id}/suspensions + PATCH {kind:"confirm"} is ACTIVE ` +
+                `over ${confirmed.matchesTotal} match(es), stamped on entrant "${bannedEntrant.ref}", and "${sus.person}" ` +
+                `is off the team sheet of ${sus.missesFixtureExtKeys.join(", ")} while still on ` +
+                `${entry?.playedFixturesChecked ?? 0} fixture(s) the pack does NOT name — and the ELIGIBLE ` +
+                `team-mate "${controlRef}" holds no ban and is on all ${sheets.length} sheet(s)`
+              : entry === undefined
+                ? `compareSuspensions returned no entry for "${sus.person}" — the expected list resolved empty`
+                : suspensionMismatchReasons(entry).join("; "),
+          });
+          log.info(
+            { kind: "suspension_carry", passed: susCheck.matched, division: sus.divisionRef },
+            "oracle_checked",
+          );
+          if (!susCheck.matched) {
+            errors.push(
+              `oracle: ${sus.divisionRef}: the live discipline state disagrees with the pack's ` +
+                `expected.suspensions row for "${sus.person}" — ` +
+                `${entry === undefined ? "no comparison entry" : suspensionMismatchReasons(entry).join("; ")}`,
+            );
+          }
+        }
       }
     }
 
