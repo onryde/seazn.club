@@ -92,6 +92,20 @@ async function overrideAuditRows(
     order by created_at`;
 }
 
+/** Every `suspension.overridden` row for this competition. B05: a DISTINCT
+ *  action from `eligibility.overridden` above, deliberately — the two gates
+ *  reuse one override field (`PutLineup.eligibility_override`) but a reader of
+ *  the ledger must still be able to tell "organiser waved through an age/
+ *  category violation" from "organiser named a banned player". */
+async function suspensionOverrideAuditRows(
+  competitionId: string,
+): Promise<{ type: string; payload: Record<string, unknown>; actor_id: string | null }[]> {
+  return sql<{ type: string; payload: Record<string, unknown>; actor_id: string | null }[]>`
+    select type, payload, actor_id from competition_events
+    where competition_id = ${competitionId} and type = 'suspension.overridden'
+    order by created_at`;
+}
+
 afterAll(async () => {
   if (!HAS_DB) return;
   const globalForDb = globalThis as { _sql?: { end(): Promise<void> } };
@@ -589,6 +603,178 @@ describe.skipIf(!HAS_DB)("RS011 — organiser-side eligibility gates", () => {
       const [entrant] = await sql<{ id: string }[]>`
         select id from entrants where id = ${confirmed.entrant_id}`;
       expect(entrant).toBeTruthy();
+    });
+  });
+
+  // ---------------------------------------------------------------------
+  // B05 — the discipline gate at the team sheet. Before this, an organiser
+  // could record a suspension, CONFIRM it (status 'active'), and still name
+  // the banned player on a lineup: nothing on the lineup write path read the
+  // `suspensions` table at all. `discipline.enforced` is a paid feature, so
+  // the gate is resolved with `hasFeature` (never `requireFeature`) — an org
+  // that never bought discipline must see NO behaviour change, not a 402.
+  // ---------------------------------------------------------------------
+  describe("putLineup — active suspensions", () => {
+    /** A division with NO eligibility rules (so `gateRosterEligibility` passes
+     *  clean and any 422 below is unambiguously the suspension gate), one
+     *  entrant carrying two members, and a generated fixture. */
+    async function seedBanScenario(plan: "community" | "pro" = "pro") {
+      const { auth } = await sharedSeedOrg(plan);
+      const { comp, division } = await seedDivision(auth);
+      const [entrantA, entrantB] = await createEntrants(auth, division.id, [
+        { kind: "individual", display_name: "A", seed: 1, members: [] },
+        { kind: "individual", display_name: "B", seed: 2, members: [] },
+      ]);
+      expect(entrantB).toBeTruthy(); // generateStageFixtures needs a pair
+      const banned = await seedPerson(auth, "Banned Player");
+      const mate = await seedPerson(auth, "Clean Mate");
+      // Raw-SQL membership, same technique as the eligibility precedent above.
+      await sql`
+        insert into entrant_members (entrant_id, person_id)
+        values (${entrantA!.id}, ${banned.id}), (${entrantA!.id}, ${mate.id})`;
+      const [stage] = await createStages(auth, division.id, {
+        seq: 1,
+        kind: "league",
+        name: "L",
+        config: {},
+      });
+      const { fixtures } = await generateStageFixtures(auth, stage!.id);
+      return { auth, comp, division, entrant: entrantA!, banned, mate, fixture: fixtures[0]! };
+    }
+
+    async function seedSuspension(
+      auth: AuthCtx,
+      divisionId: string,
+      personId: string,
+      status: string,
+    ): Promise<string> {
+      const [row] = await sql<{ id: string }[]>`
+        insert into suspensions
+          (org_id, division_id, person_id, status, source, reason, matches_total)
+        values (${auth.orgId}, ${divisionId}, ${personId}, ${status}, 'manual', 'Violent conduct', 1)
+        returning id`;
+      return row!.id;
+    }
+
+    function slot(personId: string, orderNo: number) {
+      return { person_id: personId, slot: "starting", position_key: null, order_no: orderNo, roles: [] };
+    }
+
+    it("refuses the banned player, and still accepts an eligible team-mate on the same sheet", async () => {
+      const s = await seedBanScenario("pro");
+      await seedSuspension(s.auth, s.division.id, s.banned.id, "active");
+
+      // BOTH directions. A one-sided test passes against a product that
+      // refuses everyone.
+      await expect(
+        putLineup(s.auth, s.fixture.id, s.entrant.id, { slots: [slot(s.banned.id, 1)] }),
+      ).rejects.toMatchObject({ status: 422, code: "SUSPENDED_PLAYER" });
+      // …and the refusal names the person, not just "someone".
+      await expect(
+        putLineup(s.auth, s.fixture.id, s.entrant.id, { slots: [slot(s.banned.id, 1)] }),
+      ).rejects.toThrow(/Banned Player/);
+
+      const ok = await putLineup(s.auth, s.fixture.id, s.entrant.id, { slots: [slot(s.mate.id, 1)] });
+      expect(ok.slots.map((x) => x.person_id)).toEqual([s.mate.id]);
+
+      // A sheet naming BOTH is refused as a whole — the ban is not silently
+      // dropped from an otherwise-valid lineup.
+      await expect(
+        putLineup(s.auth, s.fixture.id, s.entrant.id, {
+          slots: [slot(s.mate.id, 1), slot(s.banned.id, 2)],
+        }),
+      ).rejects.toMatchObject({ status: 422, code: "SUSPENDED_PLAYER" });
+      // …and that refusal left the earlier, legal sheet intact.
+      const after = await sql<{ person_id: string }[]>`
+        select person_id from lineups
+        where fixture_id = ${s.fixture.id} and entrant_id = ${s.entrant.id}`;
+      expect(after.map((r) => r.person_id)).toEqual([s.mate.id]);
+    });
+
+    // Rule: an "is the status in this set" check is vacuously satisfied by an
+    // empty or wrong set. All FOUR statuses the CHECK constraint allows are
+    // enumerated, not just the blocking one.
+    it("ONLY 'active' blocks — 'pending', 'served' and 'waived' are all accepted", async () => {
+      const s = await seedBanScenario("pro");
+      const id = await seedSuspension(s.auth, s.division.id, s.banned.id, "pending");
+      const verdicts: Record<string, "blocked" | "accepted"> = {};
+      for (const status of ["pending", "active", "served", "waived"] as const) {
+        await sql`update suspensions set status = ${status} where id = ${id}`;
+        try {
+          await putLineup(s.auth, s.fixture.id, s.entrant.id, { slots: [slot(s.banned.id, 1)] });
+          verdicts[status] = "accepted";
+        } catch (err) {
+          expect(err).toMatchObject({ status: 422, code: "SUSPENDED_PLAYER" });
+          verdicts[status] = "blocked";
+        }
+      }
+      expect(verdicts).toEqual({
+        pending: "accepted", // nobody confirmed it — not a ban yet
+        active: "blocked",
+        served: "accepted",
+        waived: "accepted",
+      });
+    });
+
+    it("a ban in ANOTHER division does not reach this division's team sheet", async () => {
+      const s = await seedBanScenario("pro");
+      const other = await seedDivision(s.auth);
+      await seedSuspension(s.auth, other.division.id, s.banned.id, "active");
+      const ok = await putLineup(s.auth, s.fixture.id, s.entrant.id, { slots: [slot(s.banned.id, 1)] });
+      expect(ok.slots.map((x) => x.person_id)).toEqual([s.banned.id]);
+    });
+
+    it("an org WITHOUT discipline.enforced is unaffected; the same org WITH it is blocked", async () => {
+      const free = await seedBanScenario("community");
+      await seedSuspension(free.auth, free.division.id, free.banned.id, "active");
+      const ok = await putLineup(free.auth, free.fixture.id, free.entrant.id, {
+        slots: [slot(free.banned.id, 1)],
+      });
+      expect(ok.slots.map((x) => x.person_id)).toEqual([free.banned.id]);
+
+      const paid = await seedBanScenario("pro");
+      await seedSuspension(paid.auth, paid.division.id, paid.banned.id, "active");
+      await expect(
+        putLineup(paid.auth, paid.fixture.id, paid.entrant.id, { slots: [slot(paid.banned.id, 1)] }),
+      ).rejects.toMatchObject({ status: 422, code: "SUSPENDED_PLAYER" });
+    });
+
+    it("the override lets the ban through and writes EXACTLY ONE suspension.overridden row", async () => {
+      const s = await seedBanScenario("pro");
+      await seedSuspension(s.auth, s.division.id, s.banned.id, "active");
+
+      await expect(
+        putLineup(s.auth, s.fixture.id, s.entrant.id, { slots: [slot(s.banned.id, 1)] }),
+      ).rejects.toMatchObject({ status: 422, code: "SUSPENDED_PLAYER" });
+      expect(await suspensionOverrideAuditRows(s.comp.id)).toHaveLength(0);
+
+      const ok = await putLineup(s.auth, s.fixture.id, s.entrant.id, {
+        slots: [slot(s.banned.id, 1)],
+        eligibility_override: { reason: "Appeal upheld by the committee" },
+      });
+      expect(ok.slots.map((x) => x.person_id)).toEqual([s.banned.id]);
+
+      const rows = await suspensionOverrideAuditRows(s.comp.id);
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({ type: "suspension.overridden", actor_id: s.auth.userId });
+      expect(rows[0]!.payload).toMatchObject({
+        context: "put_lineup",
+        reason: "Appeal upheld by the committee",
+        fixture_id: s.fixture.id,
+        division_id: s.division.id,
+      });
+      expect(rows[0]!.payload.person_ids).toEqual([s.banned.id]);
+      // Distinguishable from its sibling: the eligibility ledger stayed empty.
+      expect(await overrideAuditRows(s.comp.id)).toHaveLength(0);
+    });
+
+    it("an override with nothing to override writes NO audit row", async () => {
+      const s = await seedBanScenario("pro");
+      await putLineup(s.auth, s.fixture.id, s.entrant.id, {
+        slots: [slot(s.mate.id, 1)],
+        eligibility_override: { reason: "belt and braces" },
+      });
+      expect(await suspensionOverrideAuditRows(s.comp.id)).toHaveLength(0);
     });
   });
 });
