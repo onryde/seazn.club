@@ -68,10 +68,16 @@ describe("mapSaveError — plain-message usecase 422s (finding 2 guard, characte
     expect(mapSaveError(err)).toEqual({ field: "age_max", message: AGE_MAX_BEFORE_MIN });
   });
 
-  // RS007/V380 — the cutoff columns' own both-or-neither race backstop
-  // (divisions.ts's isAgeCutoffCheckViolation), same shape as the age-band
-  // case above: a bare HttpError(422, "...") string, no path.
-  it("cutoff month/day sent as a mismatched pair — the real schemas.ts constant, not a hand-typed copy", () => {
+  // RS007/V380 — the same SHAPE as the age-band case above (a bare
+  // HttpError(422, "...") string, no path), but not the same producer. Since
+  // W8/F12 this 422 comes from `patchDivision`'s cutoff merge-check
+  // (usecases/divisions.ts) comparing the patch against the STORED row — an
+  // explicit null on one half. NOT from isAgeCutoffCheckViolation: that
+  // predicate can never fire on both-or-neither, because a one-sided orphan
+  // SATISFIES divisions_age_cutoff_check (`false OR NULL`). A mismatched pair
+  // in ONE body is a different response entirely — 400 with a zod issue at
+  // age_cutoff_day, routed by the issue-path branch, not this table.
+  it("cutoff both-or-neither as a 422 from patchDivision's merge-check, NOT the 400 a mismatched pair in one body gets — the real schemas.ts constant, not a hand-typed copy", () => {
     const err = new ApiV1Error(AGE_CUTOFF_BOTH_OR_NEITHER, 422, "ERROR");
     expect(mapSaveError(err)).toEqual({ field: "age_cutoff_day", message: AGE_CUTOFF_BOTH_OR_NEITHER });
   });

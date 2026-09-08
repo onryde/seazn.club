@@ -163,6 +163,31 @@ function expectCutoffIssue(res: ApiResult, message: string, note: string): void 
   ).toHaveLength(1);
 }
 
+/**
+ * Assert a refusal is the USE-CASE one — 422 whose `error.message` is exactly
+ * `AGE_CUTOFF_BOTH_OR_NEITHER`, raised by `patchDivision`'s merge-check
+ * (W8/F12) rather than by `checkAgeCutoff`.
+ *
+ * Deliberately a SECOND helper and not a parameter on `expectCutoffIssue`:
+ * the two layers answer in different shapes, and the status is the only thing
+ * that says which one caught the request. A 400 carrying the same sentence
+ * would mean the ZodError fired and the merge-check was never reached, which
+ * is exactly the confusion this file is here to prevent — so the status is
+ * asserted with `toBe`, never a `< 400` band.
+ *
+ * `error.message`, not `issues`: an `HttpError` from a use-case carries no
+ * `issues` array at all (`errorResponse`, api-v1/http.ts), so a shape-blind
+ * assertion would pass on the wrong layer.
+ */
+function expectCutoffMergeRefusal(res: ApiResult, note: string): void {
+  expect(res.status, `${note}: ${JSON.stringify(res.error)}`).toBe(422);
+  expect(res.error?.message, note).toBe(AGE_CUTOFF_BOTH_OR_NEITHER);
+  expect(
+    issuesOf(res),
+    `${note}: a use-case refusal carries no zod issues — a body with them came from the WRONG layer`,
+  ).toHaveLength(0);
+}
+
 async function patchDivision(
   request: APIRequestContext,
   divisionId: string,
@@ -209,6 +234,44 @@ function cardSettingsBody(feeCents: number): Record<string, unknown> {
     entrant_kind: "team",
     payment_method: "stripe",
     fee_cents: feeCents,
+    approval: "auto",
+  };
+}
+
+/**
+ * The SOLO sign-up price's own card body (W8/F14). `fee_cents` is left at 0
+ * deliberately — the team fee must be a legal value throughout, so the only
+ * thing any row of the matrix below can be refused for is the free-agent
+ * price. 0 clears `fee_cents`' own minimum by its own sentence ("or 0 for
+ * free"), and in any case that check sits BEHIND the Connect gate this test
+ * never opens.
+ *
+ * `entrant_kind: "team"` and `allow_free_agents: true` are both preconditions
+ * of the guard rather than decoration: without them the request is refused
+ * one or two guards earlier ("allow_free_agents requires entrant_kind 'team'"
+ * / "A solo sign-up price only applies where solo sign-ups are allowed"), and
+ * the test would witness the wrong refusal. They travel in the PUT BODY, not
+ * in a preparatory `PATCH /divisions` — `putRegistrationSettings` reads
+ * `input.entrant_kind ?? "individual"` off this very body, and `PatchDivision`
+ * (`api-v1/schemas.ts:386`) has no `entrant_kind` member at all.
+ *
+ * Such a PATCH would not merely be ignored, it would be REFUSED:
+ * `PatchDivision` closes `.partial().refine((p) => Object.keys(p).length > 0,
+ * "empty patch")`, and a `.refine` runs on the parsed OUTPUT — which zod has
+ * already stripped of unknown keys. So a body of nothing but `entrant_kind`
+ * parses to `{}` and fails that refinement, giving 400 `VALIDATION` /
+ * "empty patch". Probed against this repo's own zod (4.4.3), not assumed:
+ * `safeParse({ entrant_kind: "team" })` on a `.partial().refine(len > 0)`
+ * object returns `success: false` with a `custom` issue at the root path.
+ */
+function freeAgentSettingsBody(freeAgentFeeCents: number): Record<string, unknown> {
+  return {
+    enabled: true,
+    entrant_kind: "team",
+    payment_method: "stripe",
+    fee_cents: 0,
+    allow_free_agents: true,
+    free_agent_fee_cents: freeAgentFeeCents,
     approval: "auto",
   };
 }
@@ -327,7 +390,7 @@ test("an impossible cutoff day is refused for every short month, and each month'
   }
 });
 
-test("cutoff both-or-neither: either field alone is refused, and both-null is accepted", async ({
+test("cutoff both-or-neither: a value on one half (400) and an explicit null on one half (422) are both refused, and both-null is accepted", async ({
   request,
 }) => {
   const div = await seedDivision(request, comp.id, { name: `W7 bounds cutoff-pairing ${TAG()}` });
@@ -338,27 +401,81 @@ test("cutoff both-or-neither: either field alone is refused, and both-null is ac
     const dayOnly = await patchDivision(request, div.id, { age_cutoff_day: 15 });
     expectCutoffIssue(dayOnly, AGE_CUTOFF_BOTH_OR_NEITHER, "age_cutoff_day alone");
 
-    // NOT asserted here, deliberately — F12 (`FINDINGS.md`). A single-field
-    // patch carrying an explicit NULL (`{ age_cutoff_day: null }` against a
-    // stored month) is ACCEPTED 200 and stores an orphan half, because
-    // `checkAgeCutoff`'s `(month != null) !== (day != null)` reads a
-    // NOT-SUPPLIED field and an explicit null identically, and the DB CHECK
-    // cannot catch it either (one NULL side makes the second disjunct NULL,
-    // and `false OR NULL` satisfies a CHECK). Verified live, both directions.
-    // Left unasserted for the same reason F8 is: pinning the 200 would freeze
-    // a live bug as this suite's expected value, and asserting the 400 it
-    // ought to give would red the branch for a defect this test-only wave did
-    // not create. When it is fixed, its case belongs on this line.
+    // F12, FIXED (W8 Task 6). The same orphaning a value-on-one-half is
+    // refused for, assembled instead out of an explicit NULL on one half and
+    // the STORED value of the other — and now refused too, but by a different
+    // layer, so the status differs and that is the point.
+    //
+    // `checkAgeCutoff` is a `superRefine` on the request BODY, and
+    // `(month != null) !== (day != null)` reads a NOT-SUPPLIED field and an
+    // explicit `null` identically: both are `null`-ish, so a single-field
+    // patch carrying `{ age_cutoff_day: null }` read `false !== false` and
+    // sailed through. The DB CHECK could not catch it either — with one side
+    // NULL its second disjunct evaluates to NULL, and `false OR NULL`
+    // SATISFIES a CHECK — so `{ age_cutoff_day: null }` against a stored
+    // month answered 200 and stored an orphan half (witnessed live in both
+    // directions, W7 T2 probe 2026-09-07; recorded as F12 in the programme's
+    // FINDINGS.md). `patchDivision` now merges the patch against the stored
+    // row inside its own tenant transaction, exactly like the age_min/age_max
+    // block beside it, and raises its own `HttpError(422,
+    // AGE_CUTOFF_BOTH_OR_NEITHER)` — hence **422** here against the **400**
+    // the two `expectCutoffIssue` rows above assert. Same sentence, two
+    // layers, and the status is what says which one caught it.
+    const realPair = await patchDivision(request, div.id, {
+      age_cutoff_month: 9,
+      age_cutoff_day: 1,
+    });
+    expect(
+      realPair.status,
+      `a real pair must land before the orphan cases: ${JSON.stringify(realPair.error)}`,
+    ).toBeLessThan(300);
+
+    // (a) an explicit null on the DAY, against the stored month.
+    const dayNulled = await patchDivision(request, div.id, { age_cutoff_day: null });
+    expectCutoffMergeRefusal(dayNulled, "explicit null on age_cutoff_day alone");
+    // The read-back is what pins the guard's PLACEMENT, not just its verdict:
+    // a check that ran after the UPDATE would 422 and still have orphaned the
+    // row. Read from the server, never from the refusal's own echo.
+    const afterDayNulled = await readDivision(request, div.id);
+    expect(
+      afterDayNulled.age_cutoff_month,
+      "a refused patch must not have orphaned the stored month",
+    ).toBe(9);
+    expect(
+      afterDayNulled.age_cutoff_day,
+      "a refused patch must not have written the explicit null",
+    ).toBe(1);
+
+    // (b) the MIRROR — an explicit null on the MONTH, against the stored day.
+    // The merge has two sides and each is separately reachable: a guard that
+    // only merged the month against the stored row still passes (a). One
+    // request per side, per AGENTS.md failure class 3.
+    const monthNulled = await patchDivision(request, div.id, { age_cutoff_month: null });
+    expectCutoffMergeRefusal(monthNulled, "explicit null on age_cutoff_month alone");
+    const afterMonthNulled = await readDivision(request, div.id);
+    expect(
+      afterMonthNulled.age_cutoff_month,
+      "the mirror refusal must not have written the explicit null",
+    ).toBe(9);
+    expect(
+      afterMonthNulled.age_cutoff_day,
+      "and must not have orphaned the stored day",
+    ).toBe(1);
 
     // The POSITIVE pair, without which a guard that refused EVERY cutoff body
-    // would satisfy both assertions above. Explicit nulls on both halves is a
+    // would satisfy every assertion above. Explicit nulls on both halves is a
     // real edit an organiser makes (clearing a cutoff back to 1 January), and
-    // `(month != null) !== (day != null)` is false for it, so it must pass.
+    // `(month != null) !== (day != null)` is false for it — on the merged
+    // values as well as the body's — so it must pass. It is a genuine CLEAR
+    // here, not a no-op: (9, 1) is stored at this point, from `realPair`.
     const bothNull = await patchDivision(request, div.id, {
       age_cutoff_month: null,
       age_cutoff_day: null,
     });
     expect(bothNull.status, `both null: ${JSON.stringify(bothNull.error)}`).toBeLessThan(300);
+    const afterClear = await readDivision(request, div.id);
+    expect(afterClear.age_cutoff_month, "clearing both halves must actually clear them").toBeNull();
+    expect(afterClear.age_cutoff_day, "clearing both halves must actually clear them").toBeNull();
 
     const bothSet = await patchDivision(request, div.id, {
       age_cutoff_month: 6,
@@ -464,6 +581,99 @@ test("a cutoff with no age band is accepted and stored on its own", async ({ req
 // ---------------------------------------------------------------------------
 // The card-fee minimum, proved on the server
 // ---------------------------------------------------------------------------
+
+/**
+ * W8/F14 (option a). `free_agent_fee_cents` carries its OWN copy of the card
+ * minimum, and — unlike `fee_cents`' copy asserted in the next test — it sits
+ * AHEAD of the Connect gate: a standalone
+ * `if (method === "stripe" && … > 0 && … < 100)` at `registrations.ts`, above
+ * the `if (method === "stripe") { … }` block that holds `!charges_enabled`,
+ * `requireFeature("registration.paid")` and the `fee_cents` minimum. So it
+ * fires for an org with no Connect account and no paid entitlement, which is
+ * exactly the state this file's shared org is in until the NEXT test attaches
+ * one — hence this test's position immediately above it. Nothing here mutates
+ * Connect state, and the first assertion below fails loudly (rather than
+ * passing on the wrong guard) if the order is ever changed.
+ *
+ * The two guards throw an IDENTICAL sentence, so this test cannot distinguish
+ * them by message; what distinguishes them is the state it runs in — with
+ * charges disabled the `fee_cents` copy is UNREACHABLE, so a
+ * CARD_FEE_MINIMUM here can only have come from the free-agent copy.
+ * Recorded as F15: the client MISROUTES this refusal onto the `fee_cents`
+ * input for the same reason (`registration-hub-save-error.ts`'s one pattern
+ * matches both sentences).
+ */
+test("a solo sign-up price below 1.00 is refused ahead of the Connect gate", async ({
+  request,
+}) => {
+  const div = await seedDivision(request, comp.id, { name: `W8 bounds free-agent-fee ${TAG()}` });
+  try {
+    // The PRECONDITION, witnessed rather than assumed: a legal solo price
+    // (100, the boundary the guard names) clears the free-agent minimum and
+    // is then refused by the Connect gate behind it. Two facts in one
+    // request — charges really are still disabled at this point in the file,
+    // and 100 is NOT refused by the guard under test. Asserting the exact
+    // CONNECT sentence is what makes the pairing meaningful: a bare "422"
+    // would be satisfied by the free-agent guard itself refusing 100.
+    const atMinimum = await putRegistrationSettings(request, div.id, freeAgentSettingsBody(100));
+    expect(
+      atMinimum.status,
+      `free_agent_fee_cents=100: ${JSON.stringify(atMinimum.error)}`,
+    ).toBe(422);
+    expect(
+      atMinimum.error?.message,
+      "free_agent_fee_cents=100 must reach the Connect gate — a CARD_FEE_MINIMUM here means the guard refuses its own boundary",
+    ).toBe(CONNECT_REQUIRED);
+
+    // 0 is the other half of the guard's own sentence ("or 0 for free") — a
+    // team division whose solo entrants pay nothing while the team fee is
+    // charged. `?? null` in the usecase keeps 0 distinct from "unset", so
+    // this row also witnesses that the zero is not being coerced away into
+    // the null branch.
+    const free = await putRegistrationSettings(request, div.id, freeAgentSettingsBody(0));
+    expect(free.status, `free_agent_fee_cents=0: ${JSON.stringify(free.error)}`).toBe(422);
+    expect(
+      free.error?.message,
+      "a free solo sign-up must clear the minimum, not be refused by it",
+    ).toBe(CONNECT_REQUIRED);
+
+    // The matrix itself. Every row here would answer CONNECT_REQUIRED if the
+    // free-agent guard were removed — the two rows above prove that is the
+    // fall-through — so an exact `toBe` on the fee sentence is what witnesses
+    // the guard, and a `toContain` on the shared prefix would not (the client
+    // says the same rule in a different sentence; see CARD_FEE_MINIMUM).
+    for (const feeCents of [1, 50, 99]) {
+      const refused = await putRegistrationSettings(
+        request,
+        div.id,
+        freeAgentSettingsBody(feeCents),
+      );
+      expect(
+        refused.status,
+        `free_agent_fee_cents=${feeCents}: ${JSON.stringify(refused.error)}`,
+      ).toBe(422);
+      expect(refused.error?.message, `free_agent_fee_cents=${feeCents}`).toBe(CARD_FEE_MINIMUM);
+    }
+
+    // Nothing above reached the row. Every request in this test was refused,
+    // so the division still has no `registration_settings` row at all and the
+    // GET answers from DEFAULT_SETTINGS — which is also why the `finally`
+    // needs no closing PUT (a division with no settings row deletes with 204;
+    // see the next test's own note for the case that does not).
+    const unwritten = await apiJson<{
+      payment_method: string;
+      free_agent_fee_cents: number | null;
+    }>(request, `/api/v1/divisions/${div.id}/registration-settings`, "GET");
+    expect(unwritten.status).toBe(200);
+    expect(unwritten.data?.payment_method, "no refused setting may have been stored").toBe(
+      "offline",
+    );
+    expect(unwritten.data?.free_agent_fee_cents, "no refused solo price may have been stored")
+      .toBeNull();
+  } finally {
+    await releaseDivision(request, div.id);
+  }
+});
 
 test("card entry fees are gated on Connect first, then held to the 1.00 minimum server-side", async ({
   request,

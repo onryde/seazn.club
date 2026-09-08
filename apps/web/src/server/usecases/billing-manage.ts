@@ -7,6 +7,7 @@ import { HttpError } from "@/lib/errors";
 import { getActiveOrgId, requireUser } from "@/lib/auth";
 import { ORG_SCOPE_HEADER } from "@/lib/org-scope";
 import { orgBySlug } from "@/server/slug-resolve";
+import { log } from "@/server/logger";
 import {
   syncPaymentMethodFlag,
   syncPaymentMethodFlagFromCards,
@@ -314,7 +315,8 @@ export async function getBillingOverview(orgId: string): Promise<BillingOverview
       taxIds: taxIdRows(taxIds.data),
       discount: discountSummary(stripeSub?.discounts),
     };
-  } catch {
+  } catch (err) {
+    log.error({ err, orgId }, "getBillingOverview: Stripe fetch failed, rendering as no-customer");
     return null;
   }
 }

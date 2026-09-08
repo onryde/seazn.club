@@ -83,11 +83,22 @@ interface ZodIssueLike {
  *  capacity limit's number) is deliberately left out of the pattern. */
 const MESSAGE_FIELD_PATTERNS: readonly [RegExp, ConfigFieldKey][] = [
   [/age_max must be greater than or equal to age_min/i, "age_max"],
-  // RS007/V380 — AGE_CUTOFF_BOTH_OR_NEITHER (schemas.ts): the merge-and-
-  // validate race backstop (divisions.ts's isAgeCutoffCheckViolation) can
-  // land a bare message string here the same way the age-band check
-  // already could, above. Anchored on the day field, mirroring age_max's
-  // own choice above of the LATER-typed side of a two-field pair.
+  // RS007/V380 — AGE_CUTOFF_BOTH_OR_NEITHER (schemas.ts) arrives here as a
+  // bare message the same way the age-band check above does, but from a
+  // different place since W8/F12: `patchDivision`'s cutoff merge-check
+  // (usecases/divisions.ts), which compares the patch against the STORED row
+  // and throws its own 422. That merge-check is the only REACHABLE producer of
+  // this sentence at 422 — not the only producer in the code.
+  // `isAgeCutoffCheckViolation` (usecases/divisions.ts:914) raises the same
+  // AGE_CUTOFF_BOTH_OR_NEITHER string, but only for a RANGE violation of
+  // divisions_age_cutoff_check, and PatchDivision's own `.min`/`.max` bound
+  // every half before one can be sent, so nothing reaches it over /api/v1
+  // (that line's own comment says so). It cannot fire on the both-or-neither
+  // rule in any case: a one-sided orphan SATISFIES the constraint
+  // (`false OR NULL` is NULL, and a CHECK passes on NULL), so there is no
+  // CHECK-violation race to catch here.
+  // Anchored on the day field, mirroring age_max's own choice above of the
+  // LATER-typed side of a two-field pair.
   [/age_cutoff_month and age_cutoff_day must be set together/i, "age_cutoff_day"],
   [/allow_free_agents requires entrant_kind/i, "allow_free_agents"],
   [/before choosing card payments/i, "payment_method"],

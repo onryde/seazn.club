@@ -14,9 +14,13 @@ import { createEntrants } from "../entrants";
 import { createStages, generateStageFixtures, replaceStages } from "../stages";
 
 import { setOrgPlan } from "@/lib/__tests__/_billing-group";
+import { invalidateOrgEntitlements } from "@/lib/entitlements";
 const HAS_DB = !!process.env.DATABASE_URL;
 
-async function seedOwner(): Promise<AuthCtx> {
+/** `plan` defaults to the Pro this file has always seeded; pass "community" for
+ *  the paid-layer gate cases at the bottom, which need an org that genuinely
+ *  lacks the key rather than one carrying a staff deny. */
+async function seedOwner(plan: "pro" | "community" = "pro"): Promise<AuthCtx> {
   const suffix = randomUUID().slice(0, 8);
   const [{ id: userId }] = await sql<{ id: string }[]>`
     insert into users (email, display_name, email_verified)
@@ -25,7 +29,8 @@ async function seedOwner(): Promise<AuthCtx> {
     insert into organizations (name, slug, created_by)
     values (${"V8 Org " + suffix}, ${"v8-org-" + suffix}, ${userId}) returning id`;
   await sql`insert into org_members (org_id, user_id, role) values (${orgId}, ${userId}, 'owner')`;
-  await setOrgPlan(orgId);
+  await setOrgPlan(orgId, plan);
+  await invalidateOrgEntitlements(orgId);
   await sql`
     insert into sports (key, name, module_version, position_catalog)
     values ('generic', 'Generic', '1.0.0', ${sql.json({ groups: [], lineup: { size: 1, benchMax: 0 } })})
@@ -218,6 +223,99 @@ describe.skipIf(!HAS_DB)("eligibility columns: category/age_min/age_max (V364/RS
     const cleared = await patchDivision(owner, division.id, { age_min: null });
     expect(cleared.age_min).toBeNull();
     expect(cleared.age_max).toBe(20);
+  });
+
+  // W8/F12. The cutoff pair gets the same merge-and-validate as the age band
+  // above, for the same reason: `checkAgeCutoff` (schemas.ts) is a
+  // `superRefine` on the request BODY and its `!= null` cannot tell an
+  // OMITTED field from an explicit `null`, so `{ age_cutoff_day: null }`
+  // against a stored month used to answer 200 and store an orphan half.
+  //
+  // The HTTP half of this is `settings-registration-bounds.spec.ts`; these
+  // cases exercise the OTHER caller shape — `patchDivision` called directly,
+  // with no schema parse in front of it, which is what a server action or a
+  // script does. That is also the only layer from which the merged
+  // day-for-month clause is reachable at all (over /api/v1, any body with
+  // both merged halves non-null carried both itself and zod already
+  // day-validated it), so the last case here is the only thing in the tree
+  // that can kill that clause.
+  // One test per merge SIDE, not one test with two assertions: the two sides
+  // are separately reachable and a guard that merged only the month against
+  // the stored row still satisfies the day case. Mutating per operand needs a
+  // distinct test per operand to land on (AGENTS.md failure class 3).
+  it("an explicit null on the DAY is rejected 422 against the stored month", async () => {
+    const owner = await seedOwner();
+    const { division } = await rig(owner);
+    await patchDivision(owner, division.id, { age_cutoff_month: 9, age_cutoff_day: 1 });
+
+    await expect(
+      patchDivision(owner, division.id, { age_cutoff_day: null }),
+    ).rejects.toMatchObject({ status: 422 });
+
+    // The refusal did not half-apply. The guard throws INSIDE the tenant
+    // transaction, so this is asserting the rollback, not merely the status.
+    const fetched = await getDivision(owner, division.id);
+    expect(fetched.age_cutoff_month).toBe(9);
+    expect(fetched.age_cutoff_day).toBe(1);
+  });
+
+  it("an explicit null on the MONTH is rejected 422 against the stored day", async () => {
+    const owner = await seedOwner();
+    const { division } = await rig(owner);
+    await patchDivision(owner, division.id, { age_cutoff_month: 9, age_cutoff_day: 1 });
+
+    await expect(
+      patchDivision(owner, division.id, { age_cutoff_month: null }),
+    ).rejects.toMatchObject({ status: 422 });
+
+    const fetched = await getDivision(owner, division.id);
+    expect(fetched.age_cutoff_month).toBe(9);
+    expect(fetched.age_cutoff_day).toBe(1);
+  });
+
+  // The POSITIVE pair for the case above: a guard that refused every patch
+  // naming a cutoff field would satisfy it. Clearing BOTH halves is a real
+  // organiser edit (back to the 1 January default) and must still land.
+  it("clearing BOTH cutoff halves to null is still allowed", async () => {
+    const owner = await seedOwner();
+    const { division } = await rig(owner);
+    await patchDivision(owner, division.id, { age_cutoff_month: 9, age_cutoff_day: 1 });
+
+    const cleared = await patchDivision(owner, division.id, {
+      age_cutoff_month: null,
+      age_cutoff_day: null,
+    });
+    expect(cleared.age_cutoff_month).toBeNull();
+    expect(cleared.age_cutoff_day).toBeNull();
+  });
+
+  it("an impossible day-for-month is refused even when zod never ran", async () => {
+    const owner = await seedOwner();
+    const { division } = await rig(owner);
+
+    // 31 February. `divisions_age_cutoff_check` (V380) caps the day at 31 and
+    // says nothing about the month it belongs to, so without the use-case
+    // clause this write LANDS — and `ageBandEligibilityIssues` then rolls it
+    // into March at read time, shifting eligibility by days with no error.
+    await expect(
+      patchDivision(owner, division.id, { age_cutoff_month: 2, age_cutoff_day: 31 }),
+    ).rejects.toMatchObject({ status: 422 });
+
+    const fetched = await getDivision(owner, division.id);
+    expect(fetched.age_cutoff_month).toBeNull();
+    expect(fetched.age_cutoff_day).toBeNull();
+
+    // And the boundary the predicate actually turns on: February's own last
+    // day is 28 here by design (`DAYS_IN_MONTH`, registration-rules.ts —
+    // a cutoff is re-evaluated every season, so 29 February is refused for
+    // every year, not just non-leap ones). Without this row, a clause that
+    // rejected the whole month would pass the case above.
+    const accepted = await patchDivision(owner, division.id, {
+      age_cutoff_month: 2,
+      age_cutoff_day: 28,
+    });
+    expect(accepted.age_cutoff_month).toBe(2);
+    expect(accepted.age_cutoff_day).toBe(28);
   });
 });
 
@@ -641,6 +739,62 @@ describe.skipIf(!HAS_DB)(
     });
   },
 );
+
+// ---------------------------------------------------------------------------
+// The two paid-layer gates on `patchDivision` (W8 Task 9, finding F21)
+// ---------------------------------------------------------------------------
+
+/**
+ * W8's second mutation sweep found these two `requireFeature` calls
+ * (`divisions.ts`, inside `patchDivision`) had NO test anywhere in the repo
+ * that reddened when they stopped throwing: the sweep mutated each to
+ * `.catch(() => undefined)` and 117 and 141 tests respectively stayed green
+ * across every suite that calls `patchDivision`. The single test that reaches
+ * the `formats.advanced` line (`format-ext.test.ts`'s auto_progress case) runs
+ * on a **pro** org, where the gate passes; `auto_posts` reaches `patchDivision`
+ * only from `e2e/news.spec.ts`, which expects 200 on the shared Pro org.
+ *
+ * Both keys are FALSE on `community` in the live matrix, so this is the state
+ * a real free org is in — no staff deny needed, and a regression would hand
+ * every free org auto-progression and auto-drafted news with no witness.
+ *
+ * Each case carries its POSITIVE pair in the same block: turning the toggle
+ * OFF must stay allowed on the very same org (`divisions.ts`' own comment:
+ * "turning it off is always allowed — a downgraded org can quiet its toggle"),
+ * so a guard that simply refused every write could not satisfy these tests.
+ */
+describe.skipIf(!HAS_DB)("paid-layer gates on patchDivision (W8 F21)", () => {
+  it("refuses auto_progress on a Community org with 402 formats.advanced, while still allowing it OFF", async () => {
+    const owner = await seedOwner("community");
+    const { division } = await rig(owner);
+
+    await expect(patchDivision(owner, division.id, { auto_progress: true })).rejects.toMatchObject({
+      status: 402,
+      featureKey: "formats.advanced",
+    });
+    // A refusal, not a silent no-op: nothing was written on the way past.
+    expect((await getDivision(owner, division.id)).auto_progress).toBe(false);
+
+    // The positive pair. Without it a guard that refused EVERY auto_progress
+    // patch — the over-refusing mutant — would satisfy the assertion above.
+    const off = await patchDivision(owner, division.id, { auto_progress: false });
+    expect(off.auto_progress).toBe(false);
+  });
+
+  it("refuses auto_posts on a Community org with 402 news.auto, while still allowing it OFF", async () => {
+    const owner = await seedOwner("community");
+    const { division } = await rig(owner);
+
+    await expect(patchDivision(owner, division.id, { auto_posts: true })).rejects.toMatchObject({
+      status: 402,
+      featureKey: "news.auto",
+    });
+    expect((await getDivision(owner, division.id)).auto_posts).toBe(false);
+
+    const off = await patchDivision(owner, division.id, { auto_posts: false });
+    expect(off.auto_posts).toBe(false);
+  });
+});
 
 afterAll(async () => {
   if (!HAS_DB) return;

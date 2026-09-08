@@ -16,7 +16,7 @@ import { requireBillingPage } from "@/server/page-auth";
 import { getAddOnsTab } from "@/server/usecases/add-ons-tab";
 import { preferredCurrency } from "@/lib/currency-server";
 import { resolveLocale } from "@/lib/resolve-locale";
-import { getDictionary, t } from "@/lib/i18n";
+import { getDictionary, plural, t } from "@/lib/i18n";
 import { ExtraOrgsControl } from "@/components/extra-orgs-control";
 import { Tip } from "@/components/ui/tip";
 import { SettingsShell, navContext } from "../_components/settings-nav";
@@ -43,9 +43,15 @@ export default async function AddOnsSettingsPage({
   // (`purchasedCapacity`). The resolver's admission cap is allowed to degrade
   // during dunning; a receipt is not. The degradation is said in words below
   // instead, so the page never shows two caps that disagree.
+  //
+  // `plural()`, not `t()`, on the unlimited half (W8 F2). A group that has never
+  // added a second organisation is the commonest one there is, and a flat key
+  // read "Using 1 organisations on this bill". The finite half keeps `t()`: its
+  // sentence carries a cap as well as a count, and "1 of 5 organisations" is
+  // already correct at every count it can hold.
   const capSummary =
     view.orgCap === null
-      ? t(dict, "addOns.cap.summaryUnlimited", { count: view.liveOrgCount })
+      ? plural(dict, "addOns.cap.summaryUnlimited", view.liveOrgCount, locale)
       : t(dict, "addOns.cap.summary", { count: view.liveOrgCount, cap: view.orgCap });
 
   return (
@@ -74,7 +80,29 @@ export default async function AddOnsSettingsPage({
         </p>
       )}
 
-      {!view.addonAvailable || view.priceMinor === null ? (
+      {/* UNLIMITED FIRST, and the order is half the fix (W8 F1). A plan whose
+          `orgs.max_owned` is NULL sells no rider either — there is nothing to
+          sell a group that already has no ceiling — so it ALSO fails
+          `addonAvailable`, and behind the community arm this branch would never
+          be reached. Before it existed, an unlimited customer was told to
+          "Upgrade to buy past the Community limit" one line under a summary
+          that had just said their plan sets no limit.
+
+          BOTH CLAUSES, and the second one is the other half. `orgCap === null`
+          alone is NOT "the plan is unlimited": `purchasedCapacity`
+          (lib/billing-group.ts) answers null for three different states, and a
+          staff `int_value = null` override on a PRO group is one of them
+          (add-ons-tab.test.ts seeds exactly that). Firing on `orgCap` alone
+          would take the control away from a payer who is still billed monthly
+          for riders and is here to cancel them — the invariant stated over the
+          capReduced notice above. Adding `!view.addonAvailable` makes this arm
+          a strict SUBSET of the community arm below, so it can only ever change
+          WHICH NOTICE shows, never whether the control does. */}
+      {view.orgCap === null && !view.addonAvailable ? (
+        <p className="rounded-xl border border-purple-100 bg-purple-50/50 p-4 text-sm text-slate-600">
+          {t(dict, "addOns.unlimitedNotice")}
+        </p>
+      ) : !view.addonAvailable || view.priceMinor === null ? (
         <p className="rounded-xl border border-purple-100 bg-purple-50/50 p-4 text-sm text-slate-600">
           {t(dict, "addOns.communityNotice")}
         </p>

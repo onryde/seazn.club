@@ -1,4 +1,5 @@
 import { test, expect, type APIRequestContext, type Page } from "@playwright/test";
+import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import {
@@ -13,9 +14,11 @@ import {
   apiJson,
   TAG,
   invalidateOrgEntitlements,
+  ownerIsStaffSql,
   setBoolEntitlementOverrideSql,
   setEntitlementOverrideSql,
 } from "../helpers";
+import { freshOrg } from "../directory-kit";
 import { routes } from "../../src/lib/routes";
 
 /**
@@ -76,16 +79,19 @@ const L = {
   tabGeneral: ui("compset.tab.general"),
   tabBranding: ui("compset.tab.branding"),
   /**
-   * The sentence the 400's `issues[0].message` must carry.
+   * The sentence BOTH date refusals must carry — the 400's `issues[0].message`
+   * (one body carrying an inverted pair) and the 422's `error.message` (one
+   * date inverted against the stored row, W8/F8).
    *
    * Read from the dictionary rather than retyped BECAUSE the schema says it
-   * is a mirror: `ENDS_BEFORE_STARTS` (api-v1/schemas.ts:71) is documented as
-   * "Message mirrors the `en` copy for `comp.validation.endsBeforeStarts` —
-   * the forms render the localized key, API clients read this sentence out of
-   * the 400's `issues`". Two spellings of one sentence in two files is a
-   * standing invitation to drift, and this is the only thing in the tree that
-   * would notice. A value import of `schemas.ts` is not the alternative: it
-   * pulls `@seazn/engine/scheduling` and `lib/registration-rules.ts` into a
+   * is a mirror: `ENDS_BEFORE_STARTS` (api-v1/schemas.ts, `export const` just
+   * under the `#376` block comment) is documented as "Message mirrors the `en`
+   * copy for `comp.validation.endsBeforeStarts` … an API client reads this
+   * same sentence either out of a 400's `issues` … or out of a 422's
+   * `error.message`". Two spellings of one sentence in two files is a standing
+   * invitation to drift, and this is the only thing in the tree that would
+   * notice. A value import of `schemas.ts` is not the alternative: it pulls
+   * `@seazn/engine/scheduling` and `lib/registration-rules.ts` into a
    * Playwright worker, and no e2e file imports it today.
    */
   endsBeforeStarts: ui("comp.validation.endsBeforeStarts"),
@@ -249,9 +255,13 @@ const overridden = new Set<string>();
  * No assertion in this file changes either way: with no Redis there is no
  * cached resolution to drop.
  *
- * Note the helper never checks either fetch's response status, so a lost race
- * fails silently rather than loudly. Tracked as `FINDINGS.md` F10 — not this
- * wave's to fix, three other specs call it.
+ * The helper now reads BOTH fetches' response status and throws on either
+ * (W8/F10) — a lost race fails loudly, inside the test that asked for the
+ * drop, rather than as a wrong-plan assertion later. Because the predicate
+ * above skips the call in every environment this suite can run in, nothing
+ * else in this file exercises that guard: the "W8/F10" test at the foot of
+ * this file is what proves it, and it is here because this is the file that
+ * recorded the gap.
  */
 async function dropEntitlementCache(request: APIRequestContext, orgId: string): Promise<void> {
   if (!process.env.REDIS_URL) return;
@@ -671,7 +681,7 @@ test("a viewer sees the same form with no Save button, and their PATCH is 403 wh
   }
 });
 
-test("case #18: a PATCH carrying both dates refuses an end before the start, with the issue on ends_on", async ({
+test("case #18: an end before the start is refused both in one body (400, issue on ends_on) and against the stored row (422)", async ({
   request,
 }) => {
   test.setTimeout(budget(0, 0));
@@ -681,12 +691,14 @@ test("case #18: a PATCH carrying both dates refuses an end before the start, wit
       starts_on: "2027-06-01",
       ends_on: "2027-01-01",
     });
-    // 400, NOT 422. The order check is a `superRefine` on `PatchCompetition`
-    // (api-v1/schemas.ts:72-79, :139), so it throws a ZodError, and `v1Inner`
-    // maps ZodError to 400 with `issues` (http.ts:152-155) before any
-    // use-case runs. 422 on this route is reserved for the semantic refusals
-    // `patchCompetition` raises itself (a reserved slug, showcasing a
-    // non-public competition).
+    // 400, NOT 422, for THIS shape. The order check is a `superRefine` on
+    // `PatchCompetition` (api-v1/schemas.ts, `checkDateOrder` and the
+    // `.superRefine(checkDateOrder)` on `PatchCompetition`), so it throws a
+    // ZodError, and `v1Inner` maps ZodError to 400 with `issues`
+    // (api-v1/http.ts) before any use-case runs. 422 on this route is the
+    // semantic refusals `patchCompetition` raises itself — a reserved slug,
+    // showcasing a non-public competition, and since W8/F8 the stored-row
+    // date order asserted at the end of this test.
     expect(
       refused.status,
       `an inverted date pair must be refused: ${JSON.stringify(v1Error(refused))}`,
@@ -719,33 +731,294 @@ test("case #18: a PATCH carrying both dates refuses an end before the start, wit
     expect(after.starts_on).toBe("2027-01-01");
     expect(after.ends_on).toBe("2027-06-01");
 
-    // WHAT THIS TEST DOES NOT COVER, and it is not an oversight.
+    // F8, FIXED (W8 Task 4). The same inversion assembled across TWO requests
+    // is now refused exactly like the inversion in ONE request above — but by
+    // a different layer, so the status differs and that is the point.
     //
     // `checkDateOrder` is a `superRefine` on the request BODY, so it can only
-    // compare dates the request CARRIES. `schemas.ts:65-68` says the gap is
-    // closed elsewhere — "the patch can only see the dates it carries, which
-    // is why the same order is re-checked in the use-case against the stored
-    // row" — and no such re-check exists: `ENDS_BEFORE_STARTS` appears in
-    // `schemas.ts` and in one scheduling unit test, nowhere in
-    // `usecases/competitions.ts`, and there is no CHECK constraint either.
+    // compare the dates a request CARRIES; a patch naming one date alone walks
+    // past it by construction. `schemas.ts` has always claimed the gap was
+    // closed elsewhere ("the same order is re-checked in the use-case against
+    // the stored row"), and until W8 that re-check did not exist: with
+    // `starts_on = 2027-06-01` stored, a `PATCH { ends_on: "2027-01-01" }`
+    // answered 200 and left the row ending five months before it started
+    // (witnessed against a running server, W5 T2 probe 2026-09-06; recorded as
+    // F8 in the programme's FINDINGS.md). `patchCompetition` now merges the
+    // patch against the stored row inside its own tenant transaction and
+    // raises its own `HttpError(422, ENDS_BEFORE_STARTS)` — hence **422** here
+    // against **400** above. Same sentence, two layers, and the status is what
+    // says which one caught it.
     //
-    // Verified against the running server rather than reasoned about (W5 T2
-    // probe, 2026-09-06): with `starts_on = 2027-06-01` already stored, a
-    // PATCH of `{ ends_on: "2027-01-01" }` alone answered 200 and left the row
-    // ending five months before it starts. The form always sends both dates,
-    // so this is script-only — but /api/v1 is a public API.
+    // Stored at this point, from the `allowed` pair just above:
+    //   starts_on = 2027-01-01, ends_on = 2027-06-01.
+
+    // (a) `ends_on` alone, dragged BEFORE the stored start.
+    const endsFirst = await patchComp(request, comp.id, { ends_on: "2026-12-31" });
+    expect(
+      endsFirst.status,
+      `a cross-request inversion via ends_on must be refused: ${JSON.stringify(v1Error(endsFirst))}`,
+    ).toBe(422);
+    expect(v1Error(endsFirst).message).toBe(L.endsBeforeStarts);
+    const afterEndsFirst = await readComp(request, comp.id);
+    expect(afterEndsFirst.ends_on, "a refused patch must not have written the new end date").toBe(
+      "2027-06-01",
+    );
+    expect(afterEndsFirst.starts_on, "and must not have moved the start either").toBe("2027-01-01");
+
+    // (b) the MIRROR — `starts_on` alone, dragged AFTER the stored end. The
+    // merge has two sides and each is separately reachable: a guard that only
+    // merged the end against the stored start still passes (a). One request
+    // per side, per AGENTS.md failure class 3.
+    const startsLater = await patchComp(request, comp.id, { starts_on: "2027-12-01" });
+    expect(
+      startsLater.status,
+      `a cross-request inversion via starts_on must be refused: ${JSON.stringify(v1Error(startsLater))}`,
+    ).toBe(422);
+    expect(v1Error(startsLater).message).toBe(L.endsBeforeStarts);
+    const afterStartsLater = await readComp(request, comp.id);
+    expect(afterStartsLater.starts_on, "a refused patch must not have written the new start").toBe(
+      "2027-01-01",
+    );
+
+    // (c) the POSITIVE pair for (a) and (b), without which a use-case that
+    // refused EVERY single-date patch — or every patch at all — satisfies both
+    // of them. A single date that stays in order against the stored row lands.
+    const singleAllowed = await patchComp(request, comp.id, { ends_on: "2027-09-01" });
+    expect(
+      singleAllowed.status,
+      `a single-date patch that stays in order must land: ${JSON.stringify(v1Error(singleAllowed))}`,
+    ).toBe(200);
+    const afterSingle = await readComp(request, comp.id);
+    expect(afterSingle.ends_on, "the in-order single-date patch must apply").toBe("2027-09-01");
+    expect(afterSingle.starts_on, "and must leave the start where it was").toBe("2027-01-01");
+
+    // (d) THE BOUNDARY. A ONE-DAY competition — merged start EQUAL to merged
+    // end — is a supported product state, and every case above misses it: the
+    // four inversions are all strictly ordered and the two positives are all
+    // months apart, so `mergedEnds < mergedStarts` had never been evaluated on
+    // an equal pair. Widening it to `<=` therefore survived the entire suite,
+    // including the four-mutant shape sweep, while silently refusing every
+    // single-day event (review finding, W8 T4).
     //
-    // NOT asserted here on purpose: pinning the 200 would freeze a live bug as
-    // this file's expected value (AGENTS.md failure class 4), and asserting
-    // the 400 it ought to give would red the branch for a defect this wave did
-    // not create. When the use-case guard lands, its case belongs right here.
+    // `competition-settings.tsx` makes the state reachable on purpose: the end
+    // input carries `min={form.starts_on}` and HTML `min` is INCLUSIVE, and the
+    // client's own pre-check at `save()` is a strict `<`. So the form offers
+    // the same-day pick and the server must take it.
     //
-    // Recorded as **F8** in the programme's findings register
-    // (`docs/superpowers/specs/2026-09-03-settings-walkthrough-prompts/
-    // FINDINGS.md`), which is what W8 plans its fixes from — a comment in one
-    // test body does not reach that far on its own.
+    // Stored right now: starts_on = 2027-01-01, ends_on = 2027-09-01.
+    const sameDay = await patchComp(request, comp.id, { ends_on: "2027-01-01" });
+    expect(
+      sameDay.status,
+      `a one-day competition must be allowed, not refused: ${JSON.stringify(v1Error(sameDay))}`,
+    ).toBe(200);
+    const afterSameDay = await readComp(request, comp.id);
+    expect(afterSameDay.starts_on, "the one-day competition keeps its start").toBe("2027-01-01");
+    expect(afterSameDay.ends_on, "and ends the SAME day, not the day before").toBe("2027-01-01");
+
+    // (e) the same boundary one layer up. `checkDateOrder` (zod) carries its
+    // OWN `<`, and (d) cannot reach it — (d) sends one date, so the superRefine
+    // has nothing to compare. This is the shape the FORM actually sends for a
+    // one-day event (`competition-settings.tsx` always sends both dates), so a
+    // `<`->`<=` slip in the schema would 400 the real user path while the
+    // use-case guard stayed innocent. Two comparators, two requests.
+    const sameDayPair = await patchComp(request, comp.id, {
+      starts_on: "2028-03-05",
+      ends_on: "2028-03-05",
+    });
+    expect(
+      sameDayPair.status,
+      `an equal pair in ONE body must be allowed: ${JSON.stringify(v1Error(sameDayPair))}`,
+    ).toBe(200);
+    const afterSameDayPair = await readComp(request, comp.id);
+    expect(afterSameDayPair.starts_on).toBe("2028-03-05");
+    expect(afterSameDayPair.ends_on).toBe("2028-03-05");
   } finally {
     await releaseCompetition(request, comp.id);
   }
 });
 
+
+// ---------------------------------------------------------------------------
+// The helper this file leans on, and the refusal it used to swallow (W8/F10).
+// ---------------------------------------------------------------------------
+
+/**
+ * `invalidateOrgEntitlements` flips the org owner to superadmin, POSTs an
+ * override, DELETEs it, and flips the owner back. Until W8 it read neither
+ * response: a 401, a 404 or a 5xx left the caller believing a cache it had
+ * not dropped was clear (`FINDINGS.md` F10).
+ *
+ * The proof lives HERE rather than in one of the other callers because this
+ * is the file that recorded the finding, and because the guard belongs to the
+ * helper: `dropEntitlementCache` above gates the call on `REDIS_URL`, so
+ * nothing else in this file exercises it in any environment this suite can
+ * run in.
+ *
+ * Four cases. The third is not decoration — an unconditional `throw` passes
+ * both refusal cases and breaks every real caller — and the fourth is about
+ * WHERE the throws sit rather than what they test: it is the only one that
+ * reds if they are hoisted out from under the `finally` that gives the
+ * borrowed superadmin back.
+ */
+test("W8/F10: a refused entitlement-cache drop throws, on either half, the happy path still resolves, and the borrowed superadmin is handed back anyway", async ({
+  page,
+  request,
+}) => {
+  // The only test in this file that performs a browser SIGNUP. `freshOrg` is a
+  // magic-link `loginUi` (a goto plus a redirect wait) followed by
+  // `POST /api/orgs`, and case (d) adds four more helper round trips on top —
+  // so this is two navs and two seeds, not the zero the first version claimed.
+  // `budget(0, 0, 0)` and the ledger's own suggested `budget(1, 0, 1)` BOTH
+  // evaluate to the 60s floor, so neither expressed the cost (`_RULES.md`
+  // §5.7 / AGENTS.md failure class 20: a flat budget beside a derived cost is
+  // a latent red). Two navs + two seeds computes to 75s. The two sibling specs
+  // that also call `freshOrg` (`directory-clubs-import-limits.spec.ts`,
+  // `directory-import-paywall-preview.spec.ts`) use a flat `120_000` instead;
+  // that is their file-wide convention, and this file's is `budget()`.
+  test.setTimeout(budget(2, 0, 2));
+
+  // (a) The REAL server refuses, and the helper says so — no stub in this
+  //     half. An org id nothing was seeded under: `setOwnerStaffSql` matches
+  //     zero `org_members` rows, so the calling session is never made
+  //     superadmin and `requireSuperadmin` throws an `AuthError`, which
+  //     `lib/http.ts` answers 401. (If a sibling spec's superadmin window
+  //     happens to be open — `settings-admin.spec.ts` flips the same shared
+  //     `users` row — the route gets past that check and answers 404
+  //     "Organization not found" instead. Both are non-ok, which is the whole
+  //     assertion.) Nothing real is touched either way: both
+  //     `update users … where id in (select … where org_id = <nowhere>)`
+  //     statements match zero rows, so the shared Pro user's `is_staff` bit is
+  //     never written.
+  const nowhere = randomUUID();
+  await expect(
+    invalidateOrgEntitlements(request, nowhere),
+    "a refused override write must be reported, not swallowed",
+  ).rejects.toThrow(/invalidateOrgEntitlements: set override failed \(40\d\)/);
+
+  // (b) The CLEAR half carries its own guard, and (a) cannot reach it: the
+  //     first fetch has to SUCCEED before the second one runs. Playwright's
+  //     routing is no help — `page.route` AND `context.route` were both
+  //     measured on 1.61.1 intercepting ZERO of `page.request`'s calls, so an
+  //     `APIRequestContext` is unroutable and there is no network seam to
+  //     inject through. The seam that does exist is the helper's own first
+  //     parameter. Without this case, deleting the second `if` leaves this
+  //     file green: two guards covering for each other are each untested
+  //     (AGENTS.md failure class 3).
+  const stub = (ok: (method: string) => boolean): APIRequestContext =>
+    ({
+      fetch: (_url: string, opts?: { method?: string }) => {
+        const method = opts?.method ?? "GET";
+        return Promise.resolve({ ok: () => ok(method), status: () => (ok(method) ? 200 : 503) });
+      },
+    }) as unknown as APIRequestContext;
+
+  await expect(
+    invalidateOrgEntitlements(
+      stub((m) => m !== "DELETE"),
+      nowhere,
+    ),
+    "a refused override CLEAR must be reported too",
+  ).rejects.toThrow(/invalidateOrgEntitlements: clear override failed \(503\)/);
+
+  // (c) The positive pair for both of the above. Both halves ok ⇒ the helper
+  //     RESOLVES, and every caller keeps working.
+  await expect(
+    invalidateOrgEntitlements(
+      stub(() => true),
+      nowhere,
+    ),
+    "a helper that throws on the happy path breaks all eleven of its callers",
+  ).resolves.toBeUndefined();
+
+  // (d) WHERE the throws sit, not just what they test. (a)-(c) all pass an org
+  //     id nothing was seeded under, so the `finally { setStaff(false) }` is a
+  //     zero-row no-op in every one of them: hoist both throws out from under
+  //     the try/finally and all three stay green, with identical messages,
+  //     while the helper leaks superadmin on whichever `users` row it borrowed.
+  //     That is the mutant this case exists for.
+  //
+  //     It needs a REAL org, and — importantly — its own FRESH user. The bit
+  //     is a global `users` row (`setOwnerStaffSql`: the org id only picks
+  //     WHICH user), so asserting on it demands sole ownership of that row.
+  //     This file's seeded `org` belongs to the shared Pro user, which
+  //     `settings-admin.spec.ts` flips ~11 times, concurrently, at the
+  //     walkthrough leg's `--workers=3` — reading that row back would be a
+  //     coin toss AND would reintroduce the contention W5 removed by gating
+  //     `dropEntitlementCache` on `REDIS_URL`. `freshOrg` mints a user nobody
+  //     else touches; the org it leaves behind is inert, like the directory
+  //     specs' own.
+  const mine = await freshOrg(page, "w8f10");
+  await expect(
+    invalidateOrgEntitlements(
+      stub((m) => m !== "DELETE"),
+      mine.orgId,
+    ),
+    "the refusal still has to be reported for a real org",
+  ).rejects.toThrow(/invalidateOrgEntitlements: clear override failed \(503\)/);
+  expect(
+    await ownerIsStaffSql(mine.orgId),
+    "the borrowed superadmin must be handed back even when the helper throws — a leaked staff bit is invisible until some unrelated spec's 403 assertion passes for the wrong reason",
+  ).toBe(false);
+});
+
+/**
+ * The race the F10 fix above turned from silent into loud (W8 final review).
+ *
+ * `invalidateOrgEntitlements` BORROWS a privilege that is global — the org
+ * owner's `users.is_staff` row — and hands it back in a `finally`. Two callers
+ * on the same owner interleave into a hand-back that lands mid-flight:
+ *
+ *     A: staff := true → A: POST → B: staff := true (no-op, already true)
+ *     → A: DELETE → A: staff := FALSE → B: DELETE → 401
+ *
+ * Before W8 that 401 was swallowed; F10's fix makes it a hard throw, so the
+ * interleave stopped being invisible and started being a flake. Six root specs
+ * call this helper, but only TWO land on the SAME shared auth-state org —
+ * `official-marks-reports` (×1, `parallel`) and `public-dashboards` (×6,
+ * routed to `serial` via `SERIAL_SPECS`). The other four
+ * (`scoring-free`, `pass-scope-w2`, `pass-scope-officials`,
+ * `scorepad-v3-swap-off-step-enforcement`) each mint their own fresh
+ * email/org first and cannot interleave with anything else. `serial` runs
+ * `fullyParallel: false` at `--workers=1` with its own job-scoped Postgres in
+ * CI, so `public-dashboards` cannot race there either — the reachable window
+ * is a bare `npx playwright test` invocation running `parallel` and `serial`
+ * concurrently on one shared local DB.
+ *
+ * The fix is a Postgres advisory lock around the whole borrow, keyed on the
+ * owner whose bit is being flipped (`rs007-money-kit.ts`'s Connect fixture
+ * takes the same kind of lock for the same kind of reason). This test is what
+ * fails without it: the stub holds each fetch open long enough that two
+ * unserialised borrows are guaranteed to overlap, so the recorded order reads
+ * `ABAB` rather than `AABB`.
+ *
+ * No browser, no server, no seeded org — the org id is one nothing was seeded
+ * under, so both `setOwnerStaffSql` statements match zero rows and the only
+ * thing under test is the mutual exclusion itself.
+ */
+test("W8/F10: two concurrent entitlement-cache drops on one org serialize instead of stealing each other's superadmin", async ({}) => {
+  test.setTimeout(budget(0, 0, 0));
+
+  const seq: string[] = [];
+  /** Each fetch takes long enough that an unlocked second caller is certain to
+   *  start its own POST before the first caller's DELETE returns. */
+  const HOLD_MS = 60;
+  const slow = (tag: string): APIRequestContext =>
+    ({
+      fetch: async () => {
+        seq.push(tag);
+        await new Promise((r) => setTimeout(r, HOLD_MS));
+        return { ok: () => true, status: () => 200 };
+      },
+    }) as unknown as APIRequestContext;
+
+  const contested = randomUUID();
+  await Promise.all([
+    invalidateOrgEntitlements(slow("A"), contested),
+    invalidateOrgEntitlements(slow("B"), contested),
+  ]);
+
+  expect(
+    seq.join(""),
+    "each borrow must hold the owner's staff bit for BOTH of its calls — an interleaved ABAB means the first caller's restore lands while the second is still using the privilege, and the second's DELETE 401s",
+  ).toMatch(/^(AABB|BBAA)$/);
+});

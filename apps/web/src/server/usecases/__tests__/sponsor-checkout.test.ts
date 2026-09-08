@@ -139,6 +139,100 @@ describe.skipIf(!HAS_DB)("sponsor monetization", () => {
     expect(orders).toHaveLength(0);
   });
 
+  /**
+   * W8 Task 9's mutation sweep, finding F21 — the fifth gate, and the only one
+   * of the five on a live money path.
+   *
+   * `startSponsorCheckout` gates `sponsors.monetize` (`sponsors.ts:465`) before
+   * it mints a real Stripe Checkout Session on the org's connected account.
+   * Mutating that call to `.catch(() => undefined)` left all 13 tests across
+   * this file, `sponsors.test.ts` and `pass-scope-sponsors-write.test.ts` green
+   * — nothing in the repo reddened. Every checkout case here seeds a `pro` org
+   * with the key granted, and the walkthrough spec that drives this path
+   * (`settings-sponsor-monetize.spec.ts`) is a Pro happy path whose only
+   * override sets the key to TRUE.
+   *
+   * The deny has to be written AFTER the package exists: a community org
+   * cannot create a package at all (`createSponsorPackage`'s own
+   * `sponsors.monetize` gate at `:380`, proven by the first test in this file),
+   * so the state this gate exists for is the org that sold a package and then
+   * LOST the key — a staff deny for abuse or chargeback risk, or a downgrade.
+   * If it regressed, that org would keep minting real Checkout Sessions.
+   *
+   * The org is deliberately Connect-live, so the 409 Connect refusal one line
+   * below the gate cannot be what answers; and the positive pair runs on the
+   * SAME org with the deny lifted, so an over-refusing guard — or a broken
+   * fixture — cannot satisfy this test.
+   */
+  it("refuses checkout with 402 sponsors.monetize when the key is denied, before any order row — and mints once it is back", async () => {
+    const { auth, orgId } = await seedOrg("pro");
+    const pkg = await createSponsorPackage(auth, {
+      name: "Revoked package",
+      price_cents: 12_000,
+      currency: "gbp",
+      tier: "gold",
+    });
+
+    await sql`
+      insert into org_entitlement_overrides (org_id, feature_key, bool_value, reason)
+      values (${orgId}, 'sponsors.monetize', false, 'test: W8 F21 gate coverage')
+      on conflict (org_id, feature_key) do update set bool_value = false`;
+    await invalidateOrgEntitlements(orgId);
+
+    // Stripe is armed to SUCCEED for the refused call. Without this the gate's
+    // own mutant (`requireFeature(…).catch(() => undefined)`) reds this test on
+    // an incidental `TypeError` from reading `.url` off an unmocked create —
+    // the test fails, but for the wrong reason and with a message that does not
+    // say "the guard did not fire". Armed, the mutant produces a real session
+    // and the assertions below name exactly that.
+    stripeMock.checkoutCreate.mockResolvedValue({
+      id: "cs_must_not_be_minted",
+      url: "https://stripe.test/must-not-be-minted",
+    });
+
+    await expect(
+      startSponsorCheckout(
+        auth,
+        {
+          package_id: pkg.id,
+          sponsor_name: "Acme",
+          sponsor_email: "a@acme.test",
+        },
+        "https://app.test",
+      ),
+    ).rejects.toMatchObject({ status: 402, featureKey: "sponsors.monetize" });
+    // The ENTITLEMENT answered, not the Connect gate below it — this org has a
+    // connected account, so a 409 here would mean the gate under test is gone.
+    expect(stripeMock.checkoutCreate).not.toHaveBeenCalled();
+    // No half-written rail either: the refusal happens before the order insert.
+    const none = await sql<{ id: string }[]>`
+      select id from sponsor_orders where org_id = ${orgId}`;
+    expect(none).toHaveLength(0);
+
+    // The positive pair, same org, same package: lift the deny and the exact
+    // call above succeeds. Without it, a guard that refused EVERY checkout
+    // would pass the assertions above.
+    await sql`
+      delete from org_entitlement_overrides
+       where org_id = ${orgId} and feature_key = 'sponsors.monetize'`;
+    await invalidateOrgEntitlements(orgId);
+    stripeMock.checkoutCreate.mockResolvedValue({
+      id: "cs_regranted",
+      url: "https://stripe.test/regranted",
+    });
+    const { order, checkout_url } = await startSponsorCheckout(
+      auth,
+      {
+        package_id: pkg.id,
+        sponsor_name: "Acme",
+        sponsor_email: "a@acme.test",
+      },
+      "https://app.test",
+    );
+    expect(checkout_url).toBe("https://stripe.test/regranted");
+    expect(order.status).toBe("pending");
+  });
+
   it("checkout: pending order first, destination charge with fee + metadata + idempotency", async () => {
     const { auth, orgId } = await seedOrg("pro");
     const pkg = await createSponsorPackage(auth, {

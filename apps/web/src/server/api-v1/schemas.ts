@@ -65,9 +65,18 @@ export const ApiKeyScope = z.enum(["read", "score", "manage", "write"]);
 /** #376: ISO `YYYY-MM-DD` sorts lexicographically, so a string compare IS the
  *  date compare. Attached to both the create and the patch body; the patch can
  *  only see the dates it CARRIES, which is why the same order is re-checked in
- *  the use-case against the stored row. Message mirrors the `en` copy for
- *  `comp.validation.endsBeforeStarts` — the forms render the localized key,
- *  API clients read this sentence out of the 400's `issues`. */
+ *  `patchCompetition` (usecases/competitions.ts) against the stored row. That
+ *  re-check landed with settings-walkthrough F8 (2026-09-07) — this sentence
+ *  described it for months before it existed, and a `PATCH { ends_on }` alone
+ *  answered 200 the whole time, so do not read it as evidence for the next
+ *  claim of the same shape.
+ *
+ *  Message mirrors the `en` copy for `comp.validation.endsBeforeStarts` — the
+ *  forms render the localized key, and an API client reads this same sentence
+ *  either out of a **400**'s `issues` (this refinement, when one body carries
+ *  both dates) or out of a **422**'s `error.message` (the use-case's own
+ *  `HttpError`, when the inversion is only visible against the stored row).
+ *  Two layers, two statuses, one sentence: change it here and both move. */
 export const ENDS_BEFORE_STARTS = "The end date cannot be before the start date.";
 
 function checkDateOrder(
@@ -260,11 +269,56 @@ function checkAgeBand(
   }
 }
 
-// RS007/V380: the age-band cutoff override — both-or-neither, mirroring the
-// DB CHECK (`divisions_age_cutoff_check`). This catches the common
-// single-request case; usecases/divisions.ts's isAgeCutoffCheckViolation
-// backstops the READ COMMITTED race a merge-and-validate guard can't see,
-// same pattern as AGE_MAX_BEFORE_MIN/checkAgeBand above.
+// RS007/V380: the age-band cutoff override — both-or-neither. This refinement
+// sees the request BODY only, so it catches the single-request case and
+// answers 400 with an issue on `age_cutoff_day`. Since W8/F12 the SAME
+// sentence is also raised as a 422 by `patchDivision` (usecases/divisions.ts),
+// which merges the patch against the STORED row before deciding — the
+// constant is exported for that use, so the two layers cannot drift apart.
+//
+// The merge-check is not redundant with this one, and the reason is subtle:
+// `!= null` cannot distinguish an OMITTED field from one set to an explicit
+// `null`, so `{ age_cutoff_day: null }` against a stored month reads
+// `false !== false` here and passes. Before F12 that patch answered 200 and
+// stored an orphan half.
+//
+// THE DB CHECK IS NOT A BACKSTOP FOR THIS RULE, and that is where the cutoff
+// pair differs from AGE_MAX_BEFORE_MIN/checkAgeBand above — do not read the
+// two as the same three-layer arrangement. `divisions_age_cutoff_check`
+// (V380) is
+//
+//   (month is null and day is null)
+//   or (month between 1 and 12 and day between 1 and 31)
+//
+// and with exactly one side NULL and the PRESENT half IN RANGE, the first
+// disjunct is false while the second is NULL (`null between 1 and 31` is
+// NULL, and `true and NULL` is NULL), so the whole predicate is NULL — which
+// SATISFIES a CHECK under SQL's tri-valued logic. A one-sided orphan of
+// otherwise-valid values passes it, always.
+//
+// The "in range" qualifier is load-bearing, and getting it wrong is what a
+// W8 T6 re-review caught here: `false and NULL` is FALSE, not NULL, so a
+// one-sided half that is OUT of range collapses the second disjunct to false
+// and IS refused. Verified against this constraint's live definition rather
+// than reasoned about — `(13, null)` and `(null, 32)` REFUSED, `(9, null)`
+// and `(null, 5)` SATISFIED, `(2, 31)` (31 February) SATISFIED.
+//
+// So what the constraint actually refuses is: any PRESENT half outside its
+// own range, one-sided included. That is a third rule neither refinement here
+// states, and it is not day-per-month either. `isAgeCutoffCheckViolation`
+// (usecases/divisions.ts) maps it to a 422 carrying THIS sentence, which is
+// the wrong sentence for a range violation — harmless today only because
+// zod's own `.min`/`.max` below bound every half before it can be sent, so
+// nothing reaches the constraint over /api/v1.
+//
+// Two consequences worth stating plainly. `patchDivision`'s merge-check is
+// the SOLE enforcement point for both-or-neither — there is no database
+// invariant underneath it. And READ COMMITTED therefore has a residual this
+// pair cannot close the way the age band closes it: two concurrent PATCHes
+// that each read the pre-commit row can still commit an orphan between them.
+// Known and accepted (W8/F12), not a TODO — closing it needs a constraint
+// that can see the case, e.g. `num_nulls(age_cutoff_month,
+// age_cutoff_day) <> 1`, which is its own migration.
 export const AGE_CUTOFF_BOTH_OR_NEITHER =
   "age_cutoff_month and age_cutoff_day must be set together, or both left null.";
 
@@ -273,12 +327,16 @@ export const AGE_CUTOFF_BOTH_OR_NEITHER =
 // 30 February parsed successfully and silently rolled a month at READ time
 // (ageBandEligibilityIssues, @/lib/registration-rules — `new
 // Date(Date.UTC(...))` normalises an out-of-range day), shifting eligibility
-// by days with no error anywhere. No merge-and-validate/DB-race backstop is
-// needed for this one, unlike age_min/age_max: the both-or-neither check
-// just above already forces month and day to travel together in the SAME
-// request, so this can only ever be evaluated with both present, and either
-// PASSES self-contained or FAILS self-contained — there is no stale-stored-
-// value half to race against.
+// by days with no error anywhere.
+//
+// Over /api/v1 this rule really is self-contained: a body that reaches it
+// with both halves present carries both, and the both-or-neither check just
+// above rejects every body that carries only one — so there is no stale
+// stored half to race against, and the 400 raised here is the whole story.
+// `patchDivision` re-checks it on the MERGED pair anyway (W8/F12), NOT for
+// that case but for the caller shape zod never sees at all: the use-case is
+// exported and a direct caller gets no schema parse. Same predicate
+// (`isValidCutoffDay`), same sentence, 422 instead of 400.
 export const AGE_CUTOFF_DAY_INVALID_FOR_MONTH = "age_cutoff_day is not a valid day for age_cutoff_month.";
 
 function checkAgeCutoff(
@@ -344,7 +402,12 @@ export const PatchDivision = z
     age_max: z.number().int().min(0).max(120).nullable(),
     /** RS007/V380: overrides the age band's cutoff date (default 1
      *  January) — school-year age groups commonly run 1 September.
-     *  Both-or-neither (checkAgeCutoff below; DB CHECK backstops it). */
+     *  Both-or-neither via `checkAgeCutoff` below on the body, and
+     *  `patchDivision`'s merge-check on the merged row (W8/F12). Unlike
+     *  age_min/age_max two fields up, the DB CHECK does NOT backstop this
+     *  one — a one-sided orphan satisfies it (`false OR NULL`), so the
+     *  merge-check is the sole enforcement point. Full reasoning at
+     *  AGE_CUTOFF_BOTH_OR_NEITHER above. */
     age_cutoff_month: z.number().int().min(1).max(12).nullable(),
     age_cutoff_day: z.number().int().min(1).max(31).nullable(),
     /** RS007/V380: the retired jsonb "custom rule" note, now a first-class

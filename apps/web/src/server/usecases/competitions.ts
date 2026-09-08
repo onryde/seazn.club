@@ -12,7 +12,7 @@ import { EVENTS, type AnalyticsEvent } from "@/lib/analytics-events";
 import { log } from "@/server/logger";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { page, type ListQuery, type Page } from "@/server/api-v1/http";
-import { CompetitionStatus, type CreateCompetition, type PatchCompetition, type PublicQuotaDegraded } from "@/server/api-v1/schemas";
+import { CompetitionStatus, ENDS_BEFORE_STARTS, type CreateCompetition, type PatchCompetition, type PublicQuotaDegraded } from "@/server/api-v1/schemas";
 import { fireDiscoveryRevalidate, invalidateDiscoveryCache } from "@/server/public-site/revalidate";
 import { ONBOARDING_EARN, REFERRAL_WELCOME_EARN, tryEarnGrant } from "@/lib/credits";
 import { invalidateSlugCache } from "@/server/slug-resolve";
@@ -533,10 +533,43 @@ export async function patchCompetition(
       if (taken) throw new HttpError(409, `slug '${patch.slug}' is already in use`);
     }
     const [before] = await tx<
-      { visibility: string; discoverable: boolean; status: string; name: string; slug: string }[]
+      {
+        visibility: string;
+        discoverable: boolean;
+        status: string;
+        name: string;
+        slug: string;
+        starts_on: string | null;
+        ends_on: string | null;
+      }[]
     >`
-      select visibility, discoverable, status, name, slug from competitions where id = ${id}`;
+      select visibility, discoverable, status, name, slug, starts_on, ends_on
+      from competitions where id = ${id}`;
     if (!before) throw new HttpError(404, "competition not found");
+    // Settings walkthrough F8. `checkDateOrder` (api-v1/schemas.ts) is a
+    // `superRefine` on the request BODY, so it only ever compares the two
+    // dates a single request CARRIES — and the settings form always sends
+    // both, which is why this hole never showed up through the UI. A scripted
+    // `PATCH { ends_on }` alone walked straight past it and left the row
+    // ending before it starts (witnessed 2026-09-06 against a running
+    // server: starts_on 2027-06-01 stored, `{ ends_on: "2027-01-01" }` -> 200).
+    // `schemas.ts` had documented this re-check as already existing; it did
+    // not. Same merge-against-the-stored-row shape as `divisions.ts`'s
+    // age_min/age_max check, inside the SAME tenant transaction as the write
+    // so nothing can slip between the read and the update, and reusing the
+    // exported message so the 400 (zod) and the 422 (here) cannot drift apart.
+    //
+    // #376 keeps `ends_on` non-nullable on PATCH but `starts_on` nullable, so
+    // a merged pair with a null side is legal and simply not comparable —
+    // ISO `YYYY-MM-DD` sorts lexicographically, so a string compare IS the
+    // date compare (same reasoning as `checkDateOrder`'s own comment).
+    if (patch.starts_on !== undefined || patch.ends_on !== undefined) {
+      const mergedStarts = patch.starts_on !== undefined ? patch.starts_on : before.starts_on;
+      const mergedEnds = patch.ends_on !== undefined ? patch.ends_on : before.ends_on;
+      if (mergedStarts && mergedEnds && mergedEnds < mergedStarts) {
+        throw new HttpError(422, ENDS_BEFORE_STARTS);
+      }
+    }
     if (patch.status && patch.status !== before.status) statusChangedTo = patch.status;
     oldVisibility = before.visibility;
     // Growth-loop gate (SPEC-5 §2, v17 gap #296): count divisions here, in
