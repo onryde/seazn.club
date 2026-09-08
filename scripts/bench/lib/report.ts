@@ -121,8 +121,32 @@ export const OracleResult = z
      *  derives `pass`/`fail` from `passed` for those, so an existing report
      *  round-trips and renders byte-identically. */
     verdict: OracleVerdict.optional(),
+    /** B05 review round 1, MINOR: did this oracle actually COMPARE anything?
+     *
+     *  The run summary used to answer that by deriving it — `verdict !==
+     *  "no_subject"` — which counted a FAIL raised precisely BECAUSE nothing
+     *  was compared (a board resolving zero entries, an empty rank crossing)
+     *  among the oracles that had a subject. It is set by the call site off
+     *  the comparator's OWN field — `RankCrossingComparison.reason`,
+     *  `FinalRanksComparison.reason`, `TieOrderCascadeComparison.checkedPairs`,
+     *  the resolved entry count — so the summary reports what the comparator
+     *  measured instead of re-deriving it from the verdict.
+     *
+     *  Absent means "not reported", and the old derivation stands for it, so
+     *  every oracle written before this round round-trips unchanged. */
+    subject: z.boolean().optional(),
   })
   .superRefine((o, ctx) => {
+    // B05 review round 1, MINOR: `no_subject` and `subject: true` are two
+    // answers to one question, and left free to drift they are how the
+    // summary line would quietly start over-counting again.
+    if (o.verdict === "no_subject" && o.subject === true) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["subject"],
+        message: `oracle "${o.name}": verdict "no_subject" cannot also report subject: true`,
+      });
+    }
     if (o.verdict === undefined) return;
     // `passed` is the GATE-facing half and `verdict` the READER-facing half.
     // Pinned against each other here rather than left to each call site,
@@ -783,8 +807,15 @@ function renderHeader(report: BenchReport): string {
   if (allOracles.length > 0) {
     const verdicts = allOracles.map(oracleVerdictOf);
     const noSubject = verdicts.filter((v) => v === "no_subject").length;
+    // B05 review round 1, MINOR: read from the comparator's own `subject`
+    // where it reports one, and fall back to the verdict only for oracles
+    // that do not — a FAIL raised over ZERO comparisons is not an oracle that
+    // had a subject, and deriving this from the verdict alone said it was.
+    // The verdict tallies below stay verdict tallies, so this number
+    // deliberately need not add up to them: that gap IS the fact.
+    const withSubject = allOracles.filter((o) => o.subject ?? oracleVerdictOf(o) !== "no_subject").length;
     lines.push(
-      `- Oracles: ${allOracles.length} total, ${allOracles.length - noSubject} with a subject ` +
+      `- Oracles: ${allOracles.length} total, ${withSubject} with a subject ` +
         `(${verdicts.filter((v) => v === "pass").length} PASS, ${verdicts.filter((v) => v === "fail").length} FAIL), ` +
         `${noSubject} NO SUBJECT`,
     );

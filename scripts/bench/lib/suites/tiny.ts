@@ -2413,6 +2413,7 @@ export async function runTinySuite(
           name: `oracle: discipline carry`,
           passed: true,
           verdict: "no_subject",
+          subject: false,
           detail:
             `the pack declares no expected.suspensions rows — the discipline-carry oracle ` +
             `(compareSuspensions) has NO SUBJECT and compared nothing`,
@@ -2988,6 +2989,7 @@ export async function runTinySuite(
             name: `oracle: ${table.divisionRef}/${table.stageRef} tie-order cascade`,
             passed: true,
             verdict: "no_subject",
+            subject: false,
             detail:
               `division "${table.divisionRef}" declares no tiebreakers — this oracle has NO SUBJECT ` +
               `and compared nothing (0 checked, 0 skipped)`,
@@ -3012,6 +3014,9 @@ export async function runTinySuite(
             name: `oracle: ${table.divisionRef}/${table.stageRef} tie-order cascade`,
             passed: cascadeVerdict !== "fail",
             verdict: cascadeVerdict,
+            // From the comparator's OWN count, never re-derived from the
+            // verdict — see `OracleResult.subject` in report.ts.
+            subject: cascadeCheck.checkedPairs > 0,
             detail:
               cascadeVerdict === "no_subject"
                 ? `no two rows in "${table.stageRef}" are tied on points that cascade ` +
@@ -3149,6 +3154,9 @@ export async function runTinySuite(
         oracles.push({
           name: `oracle: ${board.divisionRef} person cards (${board.metricKey})`,
           passed: cardsMatched,
+          // A zero-entry board REDS (see the rule above) but did not compare
+          // anything, and the run summary must not count it as if it had.
+          subject: cardsChecked > 0,
           detail: cardsMatched
             ? `each of the ${cardsChecked} person(s) on this board carries the SAME "${board.metricKey}" count ` +
               `on their own /persons/{id}/stats card for "${board.divisionRef}"`
@@ -3203,6 +3211,7 @@ export async function runTinySuite(
           name: `oracle: career rollup`,
           passed: true,
           verdict: "no_subject",
+          subject: false,
           detail:
             `the pack declares no expected.careers rows — the cross-division career rollup oracle ` +
             `(compareCareerStats) has NO SUBJECT and compared nothing`,
@@ -3442,6 +3451,9 @@ export async function runTinySuite(
                 oracles.push({
                   name: `advance: ${stage1.ref} finalRanks`,
                   passed: franksCheck.matched,
+                  // `reason` is set by the comparator only when a side was
+                  // EMPTY — i.e. exactly when there was nothing to compare.
+                  subject: franksCheck.reason === undefined,
                   detail: franksCheck.matched
                     ? `captured finalRanks [${(franksCheck.actual ?? []).join(", ")}] match the pack's expected order`
                     : `captured finalRanks [${franksCheck.actual === undefined ? "(absent — stage did not report complete)" : franksCheck.actual.join(", ")}] ` +
@@ -3474,6 +3486,7 @@ export async function runTinySuite(
                 oracles.push({
                   name: `oracle: ${stage1.ref} rank crossing (captured vs standings)`,
                   passed: rankCrossing.matched,
+                  subject: rankCrossing.reason === undefined,
                   detail: rankCrossing.matched
                     ? `captured finalRanks and the re-read standings agree: [${standingsRanked.join(", ")}]`
                     : renderRankCrossingMismatch(rankCrossing),
@@ -3490,6 +3503,7 @@ export async function runTinySuite(
                 oracles.push({
                   name: `oracle: ${stage1.ref} standings rank vs expected.finalRanks`,
                   passed: standingsVsExpected.matched,
+                  subject: standingsVsExpected.reason === undefined,
                   detail: standingsVsExpected.matched
                     ? `re-read standings [${standingsRanked.join(", ")}] match the pack's expected order`
                     : `re-read standings [${standingsRanked.join(", ")}] disagree with the pack's expected order ` +

@@ -746,11 +746,7 @@ export function renderLeaderboardMismatch(cmp: LeaderboardComparison): string {
 // ---------------------------------------------------------------------------
 // `expected.careers` (`PackExpectedCareer` — `{person, name, metricKey,
 // count}`, no `divisionRef`: a career rollup is cross-division by design) is
-// the only pack block shaped for this. `_tiny.json` carries ZERO rows in it
-// today (verified against the committed pack, `_tiny.json`'s own `expected`
-// object has no `careers` key at all) — this comparator has NO real subject
-// on `_tiny` and is unit-tested only; see this task's final report for the
-// explicit vacuity accounting the brief requires.
+// the only pack block shaped for this.
 
 export interface ExpectedCareerStat {
   readonly personId: string;
@@ -783,7 +779,10 @@ export function compareCareerStats(
     // itself, so there is exactly one place a metric key's ambiguity can be
     // silently dropped, not two independent copies that could drift apart.
     const actualValue = hits.length === 1 ? hits[0].value : undefined;
-    const matched = actualValue !== undefined && actualValue === exp.count;
+    // `exp.count` is a `number` (`ExpectedCareerStat`), so `undefined ===
+    // exp.count` is already false — the `actualValue !== undefined` conjunct
+    // this used to carry could not change any answer (B05 review round 1).
+    const matched = actualValue === exp.count;
     return {
       personId: exp.personId,
       metricKey: exp.metricKey,

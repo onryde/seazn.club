@@ -849,6 +849,17 @@ describe("runTinySuite — B05 T1 division-A stream fold wiring", () => {
       expect(o.detail).toContain("NO SUBJECT");
       expect(o.detail).toContain("0 checked");
     }
+    // B05 review round 1, MINOR: `subject` reaches report.json off the
+    // comparator's OWN `checkedPairs`, discriminating both ways in one run —
+    // without this the field is declared, typed and read by nothing.
+    expect(cascades.map((o) => o.subject)).toEqual([false, false, true]);
+    // The two `advance:` rows and the crossing derive theirs from the
+    // comparators' `reason` field, and this run has real subjects for all of
+    // them — a hardcoded `false` would land here.
+    const crossing = (report.oracles ?? []).find((o) => o.name.includes("rank crossing"));
+    expect(crossing?.subject).toBe(true);
+    const franks = (report.oracles ?? []).find((o) => o.name.endsWith("finalRanks"));
+    expect(franks?.subject).toBe(true);
 
     // The pino event carries the verdict DISTINCTLY: the two no-subject
     // cascades are `passed: true` on the wire (they do not red a run) and are
@@ -1532,6 +1543,7 @@ describe("runTinySuite — B05 T1 division-A stream fold wiring", () => {
     expect(skipped).toHaveLength(1);
     expect(skipped[0]!.verdict).toBe("no_subject");
     expect(skipped[0]!.passed).toBe(true);
+    expect(skipped[0]!.subject).toBe(false);
     expect(skipped[0]!.detail).toContain("NO SUBJECT");
     // Its POSITIVE PAIR from the same run: the untouched division still
     // compares a real tie and still passes.

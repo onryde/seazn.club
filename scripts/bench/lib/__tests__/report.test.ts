@@ -392,6 +392,57 @@ describe("B05 T6 — the no-subject oracle verdict", () => {
     expect(md).toContain("- Oracles: 4 total, 3 with a subject (2 PASS, 1 FAIL), 1 NO SUBJECT");
   });
 
+  it("a FAIL raised over ZERO comparisons is not counted as having a subject (B05 review round 1)", () => {
+    // The count used to be derived as `verdict !== no_subject`, so an oracle
+    // that reds precisely BECAUSE it compared nothing — a board resolving zero
+    // entries, an empty rank crossing — was tallied among the ones that had a
+    // subject. `subject` is set by the call site off the comparator's own
+    // field (`reason`, `checkedPairs`, the entry count), so the summary
+    // reports what was compared rather than re-deriving it from the verdict.
+    const md = renderMarkdown(
+      reportWithOracles([
+        { name: "a", passed: true, verdict: "pass" },
+        { name: "b", passed: false, verdict: "fail", subject: false },
+        { name: "c", passed: true, verdict: "no_subject" },
+        { name: "d", passed: true },
+      ]),
+    );
+    // The verdict tallies stay verdict tallies — the FAIL is still rendered
+    // as a FAIL on its own line, so it is still counted as one here. Only
+    // "with a subject" moves, and it deliberately no longer adds up to the
+    // verdict counts: that arithmetic gap IS the fact being reported.
+    expect(md).toContain("- Oracles: 4 total, 2 with a subject (2 PASS, 1 FAIL), 1 NO SUBJECT");
+  });
+
+  it("an explicit `subject: true` on a FAIL still counts — the positive pair", () => {
+    // Without this, "never count a fail" satisfies the red above.
+    const md = renderMarkdown(
+      reportWithOracles([
+        { name: "a", passed: true, verdict: "pass" },
+        { name: "b", passed: false, verdict: "fail", subject: true },
+        { name: "c", passed: true, verdict: "no_subject" },
+        { name: "d", passed: true },
+      ]),
+    );
+    expect(md).toContain("- Oracles: 4 total, 3 with a subject (2 PASS, 1 FAIL), 1 NO SUBJECT");
+  });
+
+  it("a no_subject oracle can never claim `subject: true` — the schema pins the two against each other", () => {
+    // Same discipline the `passed`/`verdict` pairing already gets: two
+    // answers to one question, left free to drift, is how the summary line
+    // would quietly start over-counting again.
+    const bad = BenchReport.safeParse(
+      reportWithOracles([{ name: "x", passed: true, verdict: "no_subject", subject: true }]),
+    );
+    expect(bad.success).toBe(false);
+    expect(JSON.stringify(bad.error?.issues)).toContain("subject");
+
+    const good = BenchReport.safeParse(
+      reportWithOracles([{ name: "x", passed: true, verdict: "no_subject", subject: false }]),
+    );
+    expect(good.success).toBe(true);
+  });
+
   it("says nothing about oracles when a run has none — an oracle-free report is unchanged", () => {
     expect(renderMarkdown({ ...fullReport(), suites: [] })).not.toContain("- Oracles:");
   });
