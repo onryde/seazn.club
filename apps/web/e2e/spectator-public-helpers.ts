@@ -444,6 +444,18 @@ export async function shotAllTabs(page: Page, testInfo: TestInfo, namePrefix: st
   const tabIds = (
     await page.locator('[role="tab"]').evaluateAll((els) => els.map((el) => el.getAttribute("data-testid")))
   ).filter((id): id is string => !!id);
+  // A FLOOR, because this helper is the whole R11 sign-off's capture path and
+  // it had a vacuous mode: if the page renders no tab rail — a failed load, a
+  // selector rename, a document with `tabs: []` — this loop runs zero times,
+  // writes zero screenshots, and BOTH "screens" tests still pass. AGENTS.md
+  // #10 names exactly this: a visual gate that collected a sign-off on no
+  // pictures. The COUNT is deliberately not pinned (a band-2 fixture
+  // legitimately has fewer tabs than a band-3 one); only that there was
+  // something to photograph at all.
+  expect(
+    tabIds.length,
+    `${namePrefix}: no tabs found — this run would have written ZERO screenshots and still passed`,
+  ).toBeGreaterThan(0);
   for (const testId of tabIds) {
     const id = testId.replace("mc-tab-", "");
     await page.getByTestId(testId).click();

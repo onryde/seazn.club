@@ -67,7 +67,7 @@ import {
   type SquadState,
 } from "@seazn/engine/core";
 import type { AnySportModule } from "@seazn/engine/sport";
-import { periodBreakdown, setBreakdown, type PeriodScoreRow, type SetScore } from "@/lib/public-site";
+import { matchPhase, periodBreakdown, setBreakdown, type PeriodScoreRow, type SetScore } from "@/lib/public-site";
 import { log } from "@/server/logger";
 import {
   TIMELINE_KEY_FOR,
@@ -654,16 +654,6 @@ export function buildTimeline(args: TimelineArgs): TimelineResult {
   return { lines: lines.map((entry) => entry.line), derivedComplete };
 }
 
-/** The phase the period kernel says is in play, when its summary carries one.
- *  Football's summary does not (its `detail` is `{ periods, shootout? }`), so
- *  for football the last recorded period always reads as the open one. */
-function currentPhaseOf(summary: ScoreSummary): string | null {
-  const detail = summary.detail;
-  if (typeof detail !== "object" || detail === null) return null;
-  const phase = (detail as { phase?: unknown }).phase;
-  return typeof phase === "string" && phase !== "" ? phase : null;
-}
-
 /**
  * The Sets / Periods tab: per-set points (racket and set-based sports) or
  * goals by period (football, field hockey, ice hockey). `null` for a sport
@@ -692,7 +682,7 @@ export function buildSets(args: SetsArgs): SetsViewT | null {
 
   const periods = periodsOf(summary);
   if (periods.length > 0) {
-    const phase = currentPhaseOf(summary);
+    const phase = matchPhase(summary);
     return {
       kind: "periods",
       unit: "period",

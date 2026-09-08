@@ -820,12 +820,29 @@ export const PAD_LABEL_KEYS: readonly MessageKey[] = [
   "pad.cricket.action.matchClose",
   "pad.cricket.action.newBall",
   "pad.cricket.action.playerLine",
+  // Task A — the seven fields and the one person attribution on
+  // `cricket.player.line` that shipped with no `labelKey` at all. An
+  // uncaptioned control is not blank: `renderField`/`attributionItemCaption`
+  // fall through to `deriveFieldPathLabel(path)` (view-model.ts), which
+  // word-splits the dotted path into ENGLISH and is deliberately never routed
+  // through a dictionary — so "Bowling legal balls" and "Scorecard line —
+  // Person" rendered in all four locales. The aspect segment is kept on the
+  // colliding leaves (`battingRuns`/`bowlingRuns`): they are two different
+  // numbers on one form.
+  "pad.cricket.action.playerLine.field.battingBalls",
+  "pad.cricket.action.playerLine.field.battingOut",
+  "pad.cricket.action.playerLine.field.battingRuns",
+  "pad.cricket.action.playerLine.field.bowlingLegalBalls",
+  "pad.cricket.action.playerLine.field.bowlingRuns",
+  "pad.cricket.action.playerLine.field.bowlingWickets",
   "pad.cricket.action.playerLine.field.dismissalBowler",
   "pad.cricket.action.playerLine.field.dismissalFielder",
   "pad.cricket.action.playerLine.field.dismissalKind",
   "pad.cricket.action.playerLine.field.fours",
+  "pad.cricket.action.playerLine.field.innings",
   "pad.cricket.action.playerLine.field.maidens",
   "pad.cricket.action.playerLine.field.noBalls",
+  "pad.cricket.action.playerLine.field.person",
   "pad.cricket.action.playerLine.field.sixes",
   "pad.cricket.action.playerLine.field.wides",
   "pad.cricket.action.powerplay",
@@ -1336,7 +1353,14 @@ export interface DecidedOutcomeTemplates {
  * REQUIRED parameter would have forced a change on every call site whether or
  * not it had a sport in hand, and this is a copy nuance, not a contract.
  */
-const SHOOTOUT_IS_SKATED = new Set(["icehockey", "hockey"]);
+/** The sports whose shoot-out is SKATED, not a penalty shoot-out — they take
+ *  "in the shootout" wording rather than football's "on penalties".
+ *
+ *  Exported because `server/public-site/match-centre.ts` declared its own
+ *  verbatim copy: two sets, one fact, and a third skated sport would have
+ *  moved one of them and left the court card and the share sentence
+ *  disagreeing about the same match. */
+export const SHOOTOUT_IS_SKATED = new Set(["icehockey", "hockey"]);
 
 export function decidedOutcomeTemplates(m: MsgFn, sportKey?: string): DecidedOutcomeTemplates {
   const skated = sportKey !== undefined && SHOOTOUT_IS_SKATED.has(sportKey);

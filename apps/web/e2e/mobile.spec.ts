@@ -346,6 +346,15 @@ let soloStatusPath = "";
 let publicCricketFixturePath = "";
 
 test("setup: public competition with an entrant-ready division", async ({ page, request }) => {
+  // This file is `mode: "serial"`, so a red HERE aborts every test after it —
+  // roughly 110 of them, across all seven width projects. This block is also
+  // the heaviest in the file: a competition, a division, entrants, a fixture
+  // and a scored ledger, all over the API, and it ran on the config's plain
+  // 60s while individually lighter blocks below already ask for 90s. Under
+  // load that is a wall-clock red wearing a data defect's clothes (AGENTS
+  // rule 20) — and its cost is the whole file, not one test.
+  test.setTimeout(180_000);
+
   const comp = await apiJson<{ id: string; slug: string }>(request, "/api/v1/competitions", "POST", { ends_on: "2030-12-31",
     name: `Mobile Gate ${TAG}`,
     visibility: "public",

@@ -49,6 +49,22 @@
 // All five compile and collect (`numTotalTests` stayed 12 before fix round 1
 // and 20 after), so none is the collection-break shape that reads as a
 // survivor.
+//
+// The whole-branch review fix round added two more (`numTotalTests` stayed
+// 534 under both, restored from a `cp` backup of the FIXED state):
+//
+//  (f) IDS BACK ON `innings.number` — `position={index + 1}` and the
+//      `<details>` key both reverted to `entry.number`, which is what the
+//      super over reuses.
+//      → RED: "no per-innings testid appears twice", "the ids are scoped by
+//        the innings' 1-BASED ARRAY POSITION, not its number", "the
+//        per-innings lines follow the same scope", "did-not-bat, extras and
+//        total lines", "fall of wickets joins entries with ' · '…", and both
+//        "an innings with no bowling/batting rows renders no … table".
+//
+//  (g) NAME CELLS BACK TO `<td>` — `<th scope="row">` reverted in both tables.
+//      → RED: "every batting and bowling row opens with a row header carrying
+//        the name", "the FIGURES are still data cells…".
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -281,6 +297,17 @@ const data = {} as LiveFixtureData;
 const render = (d: MatchCentreDocT): string =>
   renderToStaticMarkup(<ScorecardTab doc={d} dict={dict} data={data} />);
 
+/** The expected accessible name of one scroll region, built from the DICTIONARY
+ *  template rather than typed out — a revision to the English copy moves every
+ *  assertion below with it instead of leaving them pinning yesterday's wording.
+ *  `position` is the innings' 1-based ARRAY POSITION (component note 5), which
+ *  is what makes the name unique when a super over reuses a number. */
+const regionLabel = (
+  key: "matchCentre.battingFor" | "matchCentre.bowlingFor",
+  sideName: string,
+  position: number,
+): string => en[key].replace("{side}", sideName).replace("{position}", String(position));
+
 /** The opening `<details …>` tag for one innings, order-independent — an
  *  assertion on `data-testid="…" open=""` would be pinning React's attribute
  *  ORDER, which is not the contract. */
@@ -360,10 +387,10 @@ describe("ScorecardTab", () => {
     expect(render(DECIDED)).not.toContain(en["matchCentre.superOver"]);
   });
 
-  it("batting rows carry mc-bat-<personId>, and the dismissal Msg is RESOLVED, both params interpolated", () => {
+  it("batting rows carry mc-bat-<inningsPosition>.<personId>, and the dismissal Msg is RESOLVED, both params interpolated", () => {
     const html = render(RICH_ONLY);
-    expect(html).toContain('data-testid="mc-bat-p-rohit"');
-    expect(html).toContain('data-testid="mc-bat-p-suryakumar"');
+    expect(html).toContain('data-testid="mc-bat-1.p-rohit"');
+    expect(html).toContain('data-testid="mc-bat-1.p-suryakumar"');
     expect(html).toContain("R. Sharma");
     // The whole sentence, not just a fragment: "c {fielder} b {bowler}".
     expect(html).toContain("c S. Patel b J. Bumrah");
@@ -390,11 +417,17 @@ describe("ScorecardTab", () => {
     expect(html).toContain(en["matchCentre.total"]);
     expect(html).toContain("7.80");
 
-    // Positive pairs for the two "hidden when absent" lines.
+    // Positive pairs for the two "hidden when absent" lines. NOTE the "1":
+    // `COARSE_ONLY` is a ONE-innings document whose only innings carries
+    // `number: 2`, and every id here is the ARRAY POSITION (see the component's
+    // note 5), so it is `-1`. That difference is the whole point of the
+    // scheme, and spelling it out here is what makes these three probes fire
+    // at all — against `-2` they would be vacuously true.
     const coarse = render(COARSE_ONLY);
-    expect(coarse).not.toContain('data-testid="mc-extras-2"'); // extrasLine null
-    expect(coarse).not.toContain('data-testid="mc-dnb-2"'); // didNotBat empty
-    expect(coarse).toContain('data-testid="mc-total-2"'); // …but the total still renders
+    expect(coarse).toContain('data-testid="mc-innings-1"'); // the probes are aimed at a real innings
+    expect(coarse).not.toContain('data-testid="mc-extras-1"'); // extrasLine null
+    expect(coarse).not.toContain('data-testid="mc-dnb-1"'); // didNotBat empty
+    expect(coarse).toContain('data-testid="mc-total-1"'); // …but the total still renders
   });
 
   it("band 2: the optional columns are ABSENT; band 3: PRESENT", () => {
@@ -502,13 +535,14 @@ describe("ScorecardTab", () => {
   it("the bowling region is named for the FIELDING side, not the batting one", () => {
     const html = render(RICH_ONLY);
     // Innings 1 is Mumbai batting, so Rajasthan are bowling.
-    expect(html).toContain(`aria-label="${AWAY.name} — bowling"`);
-    expect(html).not.toContain(`aria-label="${HOME.name} — bowling"`);
+    expect(html).toContain(`aria-label="${regionLabel("matchCentre.bowlingFor", AWAY.name, 1)}"`);
+    expect(html).not.toContain(`aria-label="${regionLabel("matchCentre.bowlingFor", HOME.name, 1)}"`);
     // Both tables still carry a name, and they are DIFFERENT names.
     const labels = [...html.matchAll(/aria-label="([^"]+)"/g)].map((m) => m[1]);
     expect(labels.length).toBeGreaterThanOrEqual(2);
     expect(new Set(labels).size).toBe(labels.length);
   });
+
 
   it("the summary keeps a disclosure affordance after `display:flex` removes the marker", () => {
     const html = render(DECIDED);
@@ -611,14 +645,14 @@ describe("ScorecardTab", () => {
       new RegExp(`<td class="${esc(NUM_CELL)} font-semibold">${v}</td>`);
 
     // Stokes took 0 wickets: the W cell renders WITHOUT font-semibold.
-    const stokesRow = rowSlice(html, "mc-bowl-p-stokes");
+    const stokesRow = rowSlice(html, "mc-bowl-1.p-stokes");
     expect(stokesRow).toMatch(plainCell("0"));
     expect(stokesRow).not.toMatch(/<td class="[^"]*font-semibold[^"]*">0<\/td>/);
     // Khan took 3 wickets: the W cell IS bold — the positive pair.
-    const khanRow = rowSlice(html, "mc-bowl-p-khan");
+    const khanRow = rowSlice(html, "mc-bowl-1.p-khan");
     expect(khanRow).toMatch(boldCell("3"));
     // R. Sharma scored 62 runs: the R cell IS bold.
-    const rohitRow = rowSlice(html, "mc-bat-p-rohit");
+    const rohitRow = rowSlice(html, "mc-bat-1.p-rohit");
     expect(rohitRow).toMatch(boldCell("62"));
 
     // A duck (0 runs): the R cell renders WITHOUT font-semibold — the
@@ -640,20 +674,20 @@ describe("ScorecardTab", () => {
     expect(html).toMatch(/class="[^"]*max-md:hidden[^"]*"[^>]*title="Wides"/);
     expect(html).toMatch(/class="[^"]*max-md:hidden[^"]*"[^>]*title="No-balls"/);
     // …and the phone gets the same numbers as notation under the name.
-    expect(html).toContain('data-testid="mc-bowl-extras-p-khan"');
+    expect(html).toContain('data-testid="mc-bowl-extras-1.p-khan"');
     expect(html).toContain("wd 2 · nb 1");
     // The second bowler recorded wides but no no-balls: only the half that
     // exists is printed.
-    expect(html).toContain('data-testid="mc-bowl-extras-p-archer"');
+    expect(html).toContain('data-testid="mc-bowl-extras-1.p-archer"');
     expect(html).toContain("wd 2");
     // …and a bowler with recorded ZEROS gets NO sub-line: a zero is not a fact
     // worth a line, and `!== null` put "wd 0 · nb 0" under nearly every name.
-    expect(html).not.toContain('data-testid="mc-bowl-extras-p-stokes"');
+    expect(html).not.toContain('data-testid="mc-bowl-extras-1.p-stokes"');
     expect(html).not.toContain("wd 0");
     expect(html).not.toContain("nb 0");
     // Negative pair: a bowler with neither recorded gets no sub-line either.
     const coarse = render(COARSE_ONLY);
-    expect(coarse).not.toContain('data-testid="mc-bowl-extras-p-boult"');
+    expect(coarse).not.toContain('data-testid="mc-bowl-extras-1.p-boult"');
 
     // The `<td>` half of the fold, not just the headers: two `<th>` plus two
     // cells on each of three bowler rows.
@@ -675,10 +709,14 @@ describe("ScorecardTab", () => {
 
   it("both region labels are localised templates, batting and bowling alike", () => {
     const html = render(RICH_ONLY);
-    expect(html).toContain(`aria-label="${HOME.name} — batting"`);
-    expect(html).toContain(`aria-label="${AWAY.name} — bowling"`);
+    expect(html).toContain(`aria-label="${regionLabel("matchCentre.battingFor", HOME.name, 1)}"`);
+    expect(html).toContain(`aria-label="${regionLabel("matchCentre.bowlingFor", AWAY.name, 1)}"`);
     // No hardcoded em-dash concatenation left behind.
     expect(html).not.toContain(`aria-label="${HOME.name} — Batter"`);
+    // …and every placeholder the template declares was actually filled — an
+    // unfilled `{position}` survives `interpolate` VERBATIM, so a caller that
+    // forgot to pass it would put a brace on a screen reader's landmark list.
+    expect(html).not.toMatch(/aria-label="[^"]*\{/);
   });
 
   it("no panel in this directory uses the phantom `border-line` token", () => {
@@ -726,8 +764,12 @@ describe("ScorecardTab", () => {
     expect(html).toContain(en["matchCentre.fallOfWickets"]);
     expect(html).toContain("1-24 (R. Sharma, 3.2) · 2-88 (I. Kishan, 11.5)");
 
+    // `COARSE_ONLY` is a one-innings document, so its only innings is at
+    // array position 1 whatever its `number` says — see note 5. Probed at the
+    // id that DOES exist for it, or the negative is vacuous.
     const coarse = render(COARSE_ONLY);
-    expect(coarse).not.toContain('data-testid="mc-fow-line-2"');
+    expect(coarse).toContain('data-testid="mc-innings-1"');
+    expect(coarse).not.toContain('data-testid="mc-fow-line-1"');
   });
 
   it("both tables are reachable overflow regions, not clipped boxes", () => {
@@ -825,22 +867,215 @@ describe("ScorecardTab dictionary coverage", () => {
     const html = render(doc({ innings: [noBowling] }));
     // The innings itself must still be there — this hides an empty table, it
     // does not hide the innings.
-    expect(html).toContain(`data-testid="mc-innings-${noBowling.number}"`);
-    expect(html).not.toContain(`aria-label="${HOME.name} — bowling"`);
+    expect(html).toContain(`data-testid="mc-innings-1"`);
+    expect(html).not.toContain(`aria-label="${regionLabel("matchCentre.bowlingFor", HOME.name, 1)}"`);
 
     // Positive pair: with a bowling row, the header and region come back.
     const withBowling = render(doc({ innings: [coarseInnings] }));
-    expect(withBowling).toContain(`aria-label="${HOME.name} — bowling"`);
+    expect(withBowling).toContain(`aria-label="${regionLabel("matchCentre.bowlingFor", HOME.name, 1)}"`);
   });
 
   it("an innings with no batting rows renders no batting table — not a bare header", () => {
     const noBatting: CricketInningsViewT = { ...coarseInnings, batting: [] };
     const html = render(doc({ innings: [noBatting] }));
-    expect(html).toContain(`data-testid="mc-innings-${noBatting.number}"`);
-    expect(html).not.toContain(`aria-label="${AWAY.name} — batting"`);
+    expect(html).toContain(`data-testid="mc-innings-1"`);
+    expect(html).not.toContain(`aria-label="${regionLabel("matchCentre.battingFor", AWAY.name, 1)}"`);
     // The BOWLING table is untouched by the batting guard — the two are
     // independent, and a guard that took both out would pass a test asserting
     // only the absence above.
-    expect(html).toContain(`aria-label="${HOME.name} — bowling"`);
+    expect(html).toContain(`aria-label="${regionLabel("matchCentre.bowlingFor", HOME.name, 1)}"`);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// P5 (whole-branch review) — a SUPER OVER CAN REUSE AN INNINGS NUMBER.
+// ---------------------------------------------------------------------------
+//
+// `innings.number` is not unique. `commentary-tab.tsx`'s note 1b states the
+// same precondition in its own words and solves it with the 1-BASED ARRAY
+// POSITION, which cannot collide by construction; this panel keyed its
+// `<details>` and named five per-innings testids off `number`, and named its
+// batting/bowling rows off `personId` alone — a player who bats in two innings
+// is one person with two rows.
+//
+// The duplicate `key` on sibling `<details>` is the part with teeth beyond the
+// testids: React mis-reconciles `open` across two children that claim the same
+// key, so the "last innings is open" rule silently applied to the wrong panel.
+//
+// STATIC MARKUP CANNOT SEE A REACT KEY. What it CAN see is the testid derived
+// from the same 1-based index in the same expression, so a mutant that puts
+// `entry.number` back moves both together and is caught here.
+describe("ScorecardTab — a super over reusing an innings number produces no duplicate ids", () => {
+  // The collision, exactly as it reaches production: a third innings that is a
+  // super over and carries innings NUMBER 1 again, batting and bowling the
+  // SAME people as the first innings.
+  const superOverReusingNumber1: CricketInningsViewT = {
+    ...richInnings,
+    number: 1,
+    isSuperOver: true,
+  };
+  const REUSED = doc({ innings: [richInnings, coarseInnings, superOverReusingNumber1] });
+
+  /** Every `data-testid` in the markup that starts with `prefix`. */
+  const idsWithPrefix = (html: string, prefix: string): string[] =>
+    [...html.matchAll(/data-testid="([^"]+)"/g)].map((m) => m[1]!).filter((id) => id.startsWith(prefix));
+
+  const duplicates = (ids: string[]): string[] => ids.filter((id, i) => ids.indexOf(id) !== i);
+
+  it("the fixture really does collide — `number` repeats across two innings", () => {
+    // Rule 5: the premise is asserted, not assumed. Without this the whole
+    // describe could be passing on a fixture that never had the defect.
+    const numbers = REUSED.cricket!.innings.map((i) => i.number);
+    expect(numbers).toEqual([1, 2, 1]);
+    const people = REUSED.cricket!.innings.map((i) => i.batting.map((r) => r.person.personId));
+    expect(people[0]).toEqual(people[2]); // the same batters, twice
+  });
+
+  it("no per-innings testid appears twice", () => {
+    const html = render(REUSED);
+    for (const prefix of [
+      "mc-innings-",
+      "mc-extras-",
+      "mc-total-",
+      "mc-dnb-",
+      "mc-fow-line-",
+      "mc-bat-",
+      "mc-bowl-",
+    ]) {
+      const ids = idsWithPrefix(html, prefix);
+      expect(ids.length, prefix).toBeGreaterThan(0); // the probe fires at all
+      expect(duplicates(ids), prefix).toEqual([]);
+    }
+  });
+
+  // -------------------------------------------------------------------------
+  // The same collision, one level up: the LANDMARK NAMES
+  // -------------------------------------------------------------------------
+  //
+  // The ids above were scoped by position; the two `role="region"` scroll
+  // regions in each innings panel were the one thing left on an un-scoped
+  // template (`{side} — batting`). In this document Mumbai bat at positions 1
+  // AND 3, so a screen-reader user listing the landmarks heard "Mumbai Kings —
+  // batting" twice with nothing to tell the chase from the super over — and
+  // `role="region"` + `aria-label` is exactly what puts an entry in that list.
+  //
+  // Static markup CAN see this one in full: `aria-label` is a serialised
+  // attribute, unlike the React key the ids stand in for.
+  it("no two landmarks share an accessible name", () => {
+    const html = render(REUSED);
+    const labels = [...html.matchAll(/aria-label="([^"]+)"/g)].map((m) => m[1]!);
+    // Three innings, a named batting and bowling region in each — the probe
+    // fires at all before its uniqueness claim means anything.
+    expect(labels.length).toBeGreaterThanOrEqual(6);
+    expect(new Set(labels).size, `duplicate landmark names: ${labels.join(" | ")}`).toBe(labels.length);
+  });
+
+  it("the landmark names are scoped by ARRAY POSITION, not by innings.number", () => {
+    const html = render(REUSED);
+    // Mumbai bat in positions 1 and 3 and BOTH of those innings are number 1,
+    // so naming by number prints "innings 1" twice. Position gives 1 and 3 —
+    // the scope every id in this panel already uses.
+    expect(html).toContain(`aria-label="${regionLabel("matchCentre.battingFor", HOME.name, 1)}"`);
+    expect(html).toContain(`aria-label="${regionLabel("matchCentre.battingFor", HOME.name, 3)}"`);
+    expect(html).toContain(`aria-label="${regionLabel("matchCentre.bowlingFor", AWAY.name, 3)}"`);
+    // The DISPLAYED innings number is deliberately untouched by this: the
+    // super over is still shown as "Innings 1" in its own summary, because
+    // that is what a scorecard says. Only the machine-facing name is scoped.
+    expect(html).toContain(en["matchCentre.innings"].replace("{number}", "1"));
+  });
+
+  it("every locale's landmark template fills its {position}, not just English", () => {
+    // `interpolate` leaves an unmatched placeholder VERBATIM, so a locale whose
+    // template never got the new param would put a literal "{position}" into a
+    // screen reader's landmark list — silently, since nothing else reads it.
+    for (const [locale, d] of Object.entries(LOCALES)) {
+      const html = renderToStaticMarkup(
+        <ScorecardTab doc={REUSED} dict={d as unknown as Dict} data={data} />,
+      );
+      const labels = [...html.matchAll(/aria-label="([^"]+)"/g)].map((m) => m[1]!);
+      expect(labels.length, locale).toBeGreaterThanOrEqual(6);
+      for (const label of labels) expect(label, `${locale}: ${label}`).not.toContain("{");
+      expect(new Set(labels).size, `${locale}: ${labels.join(" | ")}`).toBe(labels.length);
+    }
+  });
+
+  it("the ids are scoped by the innings' 1-BASED ARRAY POSITION, not its number", () => {
+    const html = render(REUSED);
+    // Three innings, three sections — the third named 3 even though its
+    // `number` is 1.
+    for (const n of [1, 2, 3]) expect(html, `innings ${n}`).toContain(`data-testid="mc-innings-${n}"`);
+    // …and the same batter in innings 1 and innings 3 gets two DISTINCT rows.
+    expect(html).toContain('data-testid="mc-bat-1.p-rohit"');
+    expect(html).toContain('data-testid="mc-bat-3.p-rohit"');
+    expect(html).toContain('data-testid="mc-bowl-1.p-khan"');
+    expect(html).toContain('data-testid="mc-bowl-3.p-khan"');
+    // The phone sub-line rides on the same scope.
+    expect(html).toContain('data-testid="mc-bowl-extras-1.p-khan"');
+    expect(html).toContain('data-testid="mc-bowl-extras-3.p-khan"');
+    // The negative half: the OLD unscoped names are gone, so an e2e selector
+    // written against them fails loudly instead of matching the wrong row.
+    expect(html).not.toContain('data-testid="mc-bat-p-rohit"');
+    expect(html).not.toContain('data-testid="mc-bowl-p-khan"');
+  });
+
+  it("the per-innings lines follow the same scope — extras/total/dnb/fow", () => {
+    const html = render(REUSED);
+    // Innings 3 reuses number 1, so under the old scheme these four ids each
+    // appeared twice; under the array-position scheme innings 3 owns its own.
+    for (const prefix of ["mc-extras", "mc-total", "mc-dnb", "mc-fow-line"]) {
+      expect(html, prefix).toContain(`data-testid="${prefix}-1"`);
+      expect(html, prefix).toContain(`data-testid="${prefix}-3"`);
+    }
+    // Positive pair for the "index, not number" claim: the MIDDLE innings is
+    // number 2 AND array position 2, so it is the one case where the two
+    // schemes agree and the test would be blind if it were the only sample.
+    expect(html).toContain('data-testid="mc-total-2"');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Accessibility (whole-branch review) — THE NAME CELL IS THE ROW HEADER.
+// ---------------------------------------------------------------------------
+//
+// Both tables put the player's name in a plain `<td>`, so a screen reader
+// reading "62" out of the R column had no row header to say whose 62 it is.
+// `sets-tab.tsx:164` is the one place on this surface that already got it
+// right; the two tables here and `stat-table.tsx` did not.
+describe("ScorecardTab — the player-name cell is <th scope=\"row\">", () => {
+  /** The `<tr>` for one row testid, from its opening tag to `</tr>`. */
+  const rowSlice = (html: string, testid: string): string => {
+    const start = html.indexOf(`data-testid="${testid}"`);
+    expect(start, testid).toBeGreaterThanOrEqual(0);
+    return html.slice(start, html.indexOf("</tr>", start));
+  };
+
+  it("every batting and bowling row opens with a row header carrying the name", () => {
+    const html = render(RICH_ONLY);
+    for (const [testid, name] of [
+      ["mc-bat-1.p-rohit", "R. Sharma"],
+      ["mc-bat-1.p-suryakumar", "S. Yadav"],
+      ["mc-bowl-1.p-khan", "S. Khan"],
+      ["mc-bowl-1.p-stokes", "B. Stokes"],
+    ] as const) {
+      const row = rowSlice(html, testid);
+      expect(row, testid).toMatch(/<th scope="row"/);
+      expect(row, testid).toContain(name);
+    }
+    // Every row in the innings, counted — a guard applied to the first row of
+    // each table would pass the four samples above.
+    expect((html.match(/<th scope="row"/g) ?? []).length).toBe(
+      richInnings.batting.length + richInnings.bowling.length,
+    );
+  });
+
+  it("the FIGURES are still data cells — this moves the name, it does not make every cell a header", () => {
+    // The positive pair. A mutant that turned the whole row into `<th>`s
+    // satisfies the assertions above and fails here.
+    const html = render(RICH_ONLY);
+    const row = rowSlice(html, "mc-bat-1.p-rohit");
+    expect(row).toContain(">62<");
+    expect(row).toMatch(/<td[^>]*>41<\/td>/);
+    // …and the negative half: the name is not in a data cell any more.
+    expect(row).not.toMatch(/<td[^>]*>\s*<span[^>]*>R\. Sharma/);
   });
 });

@@ -272,6 +272,7 @@ export default async function FixturePage({ params }: Props) {
               fixture.scheduled_at,
               t(dict, "matchCentre.status.timeTbd"),
               t(dict, "matchCentre.status.timeNotRecorded"),
+              locale,
             ),
             fixture.venue_name,
             fixture.court_name,
@@ -294,7 +295,6 @@ export default async function FixturePage({ params }: Props) {
           initial={initial}
           realtime={realtime}
           dict={dict}
-          locale={locale}
         />
       </div>
     </DictProvider>

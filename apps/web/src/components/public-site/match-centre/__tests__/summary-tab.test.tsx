@@ -499,7 +499,14 @@ describe("SummaryTab — cricket", () => {
     const html = renderToStaticMarkup(<SummaryTab doc={cricketDoc} dict={dict} data={liveFixtureFor(cricketDoc)} />);
     expect(html).toMatch(/<table class="[^"]*\btable-fixed\b[^"]*"/);
     // Every numeric <th> (R, B, 4s, 6s, SR for batters) carries a `w-` class.
-    const numericHeaderMatches = [...html.matchAll(/<th scope="col" title="[^"]*" class="([^"]*)">(?:R|B|4s|6s|SR)<\/th>/g)];
+    // The abbreviation now sits inside an `aria-hidden` span beside an
+    // `sr-only` localised word (whole-branch review, Accessibility group), so
+    // the header's own text node is no longer the notation.
+    const numericHeaderMatches = [
+      ...html.matchAll(
+        /<th scope="col" title="[^"]*" class="([^"]*)"><span class="sr-only">[^<]*<\/span><span aria-hidden="true">(?:R|B|4s|6s|SR)<\/span><\/th>/g,
+      ),
+    ];
     expect(numericHeaderMatches.length).toBeGreaterThan(0);
     for (const m of numericHeaderMatches) {
       expect(m[1]).toMatch(/\bw-\d+\b/);
@@ -750,7 +757,7 @@ describe("SummaryTab — non-cricket", () => {
         initial={liveFixtureFor(nonCricketDoc)}
         realtime={false}
         dict={dict}
-        locale="en"
+       
         tabParam={null}
       />,
     );
@@ -770,7 +777,7 @@ describe("SummaryTab — non-cricket", () => {
         initial={liveFixtureFor(cricketDoc)}
         realtime={false}
         dict={dict}
-        locale="en"
+       
         tabParam={null}
       />,
     );
@@ -802,7 +809,7 @@ describe("SummaryTab — non-cricket", () => {
       match_centre: decidedDoc,
     };
     const html = renderToStaticMarkup(
-      <MatchCentre fixtureId={decidedDoc.fixtureId} initial={initial} realtime={false} dict={dict} locale="en" tabParam={null} />,
+      <MatchCentre fixtureId={decidedDoc.fixtureId} initial={initial} realtime={false} dict={dict} tabParam={null} />,
     );
     expect(html).toContain('data-testid="mc-status-line"');
     expect(html).toContain("Competitions run by Home XI won by 20 runs"); // positive pair — the court card carries it
@@ -819,7 +826,7 @@ describe("no raw i18n key leaks into any match-centre component", () => {
         initial={liveFixtureFor(cricketDoc)}
         realtime={false}
         dict={dict}
-        locale="en"
+       
         tabParam={null}
       />,
     );

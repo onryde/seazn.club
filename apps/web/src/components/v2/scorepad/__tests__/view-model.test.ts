@@ -488,6 +488,96 @@ describe("buildActionPayload — thin wrapper over buildPathObject, fields + att
     });
   });
 
+  // Task B — `requiresFieldIn` narrows `requiresField` from "the gating field
+  // is SET" to "the gating field is set to one of THESE values". W1 review
+  // finding P2 tightened `applyPlayerLine` (cricket.ts) so that naming
+  // `dismissal.bowler` on a kind outside `BOWLER_CREDITED_KINDS` — a run out
+  // credits no bowler — is refused outright, and `requiresField` alone cannot
+  // express that: on a run out the field IS set.
+  //
+  // Hand-built fixture here (this file's own convention for the flag's
+  // MECHANICS); the real cricket padSpec's own declaration is folded through
+  // the real reducer in packages/engine's player-line.test.ts, and driven at
+  // the rendering layer in v3/__tests__/action-form.test.ts.
+  describe("requiresFieldIn gating (Task B)", () => {
+    const ADMISSIBLE = ["bowled", "caught", "stumped"];
+    const action = {
+      fields: [
+        {
+          kind: "enum" as const,
+          path: "batting.dismissal.kind",
+          values: [...ADMISSIBLE, "runout"],
+          chips: true,
+        },
+      ],
+      attribution: [
+        {
+          kind: "person" as const,
+          path: "batting.dismissal.bowler",
+          optional: true,
+          requiresField: "batting.dismissal.kind",
+          requiresFieldIn: ADMISSIBLE,
+        },
+        // No `requiresFieldIn` — the negative pair for every assertion below.
+        { kind: "person" as const, path: "batting.dismissal.fielder", optional: true, requiresField: "batting.dismissal.kind" },
+      ],
+    };
+
+    it("drops the gated value when the gating field is set to a value OUTSIDE the list", () => {
+      const payload = buildActionPayload(action, {
+        "batting.dismissal.kind": "runout",
+        "batting.dismissal.bowler": "p1",
+      });
+      expect(payload).toEqual({ batting: { dismissal: { kind: "runout" } } });
+    });
+
+    it("keeps the gated value when the gating field is set to a value INSIDE the list", () => {
+      const payload = buildActionPayload(action, {
+        "batting.dismissal.kind": "caught",
+        "batting.dismissal.bowler": "p1",
+      });
+      expect(payload).toEqual({ batting: { dismissal: { kind: "caught", bowler: "p1" } } });
+    });
+
+    it("still drops it when the gating field is unset — requiresFieldIn NARROWS requiresField, it does not replace it", () => {
+      const payload = buildActionPayload(action, { "batting.dismissal.bowler": "p1" });
+      expect(Object.prototype.hasOwnProperty.call(payload, "batting")).toBe(false);
+    });
+
+    it("leaves a sibling that declares requiresField ALONE ungated at the very same value", () => {
+      // The fielder is legal on a run out (the engine's `creditFielding`
+      // only checks lineup membership), so the narrowing must apply to the
+      // item that declares it and to nothing else.
+      const payload = buildActionPayload(action, {
+        "batting.dismissal.kind": "runout",
+        "batting.dismissal.bowler": "p1",
+        "batting.dismissal.fielder": "p2",
+      });
+      expect(payload).toEqual({ batting: { dismissal: { kind: "runout", fielder: "p2" } } });
+    });
+
+    it("treats a non-string gating value as inadmissible rather than coercing it to one", () => {
+      // `requiresFieldIn` is a `readonly string[]`. A toggle's `false`
+      // matching a literal "false" typed into a module's list would be an
+      // accident, not a declaration — so a boolean/number gating value is
+      // never admissible.
+      const toggleGated = {
+        fields: [{ kind: "toggle" as const, path: "batting.out" }],
+        attribution: [
+          {
+            kind: "person" as const,
+            path: "batting.dismissal.bowler",
+            optional: true,
+            requiresField: "batting.out",
+            requiresFieldIn: ["true"],
+          },
+        ],
+      };
+      const payload = buildActionPayload(toggleGated, { "batting.out": true, "batting.dismissal.bowler": "p1" });
+      expect(payload).toEqual({ batting: { out: true } });
+    });
+  });
+
   // Task 18 — real cricket.player.line, proving the wiring above against the
   // engine's actual padSpec output rather than only a hand-built fixture
   // (memory rule #19). This is the "negative-with-positive pair" the brief
@@ -595,6 +685,33 @@ describe("buildActionPayload — thin wrapper over buildPathObject, fields + att
       };
       const payload = buildActionPayload(lineAction, values) as { batting: Record<string, unknown> };
       expect(Object.prototype.hasOwnProperty.call(payload.batting, "fours")).toBe(false);
+    });
+
+    // Task B, against the REAL padSpec: a run out credits no bowler, and
+    // `applyPlayerLine` refuses one outright (packages/engine's
+    // player-line.test.ts folds the whole dismissal-kind table through the
+    // reducer to derive that set). The pad must not build the shape.
+    it("naming a bowler on a run out omits the bowler — the engine refuses that shape outright", () => {
+      const base = {
+        innings: 1,
+        "batting.out": true,
+        "batting.runs": 30,
+        "batting.balls": 20,
+        person: "p1",
+        "batting.dismissal.bowler": "a7",
+      };
+      const runOut = buildActionPayload(lineAction, { ...base, "batting.dismissal.kind": "runout" }) as {
+        batting: { dismissal: Record<string, unknown> };
+      };
+      expect(runOut.batting.dismissal).toEqual({ kind: "runout" });
+
+      // Positive pair, same values, one admissible kind: the bowler survives,
+      // so the assertion above is about the KIND and not about the builder
+      // having quietly stopped carrying bowlers at all.
+      const caught = buildActionPayload(lineAction, { ...base, "batting.dismissal.kind": "caught" }) as {
+        batting: { dismissal: Record<string, unknown> };
+      };
+      expect(caught.batting.dismissal).toEqual({ kind: "caught", bowler: "a7" });
     });
   });
 });

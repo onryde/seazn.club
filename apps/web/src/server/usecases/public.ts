@@ -336,7 +336,7 @@ async function loadFixtureMatchCentreCtx(
       playerNameDisplay: row.player_name_display,
     },
     locale,
-    hrefs: { division: basePath, competition: `/shared/${row.org_slug}/${row.competition_slug}`, calendar: null },
+    hrefs: { division: basePath, competition: `/shared/${row.org_slug}/${row.competition_slug}`, calendar: `${basePath}/calendar.ics` },
     stage: stageRow ? { name: stageRow.name, roundLabel: null } : null,
     slotLabelLookup: (key: MessageKey, vars?: Record<string, string | number>) => msgFor(locale, key, vars),
   };

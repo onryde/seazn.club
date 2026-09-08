@@ -344,9 +344,36 @@ export type PadField = PadFieldEnum | PadFieldNumber | PadFieldToggle;
  * `CricketPlayerLine`'s schema rejects outright (`dismissal.kind` is NOT
  * optional inside that sub-object), turning Confirm into a silent dead end.
  * Absent means "no gating field" — no existing item changes behaviour.
+ *
+ * `requiresFieldIn` — NARROWS `requiresField` from "set at all" to "set to
+ * one of THESE values". It names no field of its own and is meaningless
+ * without `requiresField`, deliberately: one gating field, declared once, so
+ * the presence rule and the value rule can never name two different paths
+ * and disagree. Both the payload builder and the RENDERER read it
+ * (`buildActionPayload` drops the value; `ActionFormList` does not draw the
+ * row at all) — payload-only would leave a visible dead end, render-only
+ * would let a value tapped before the field changed still reach the payload.
+ *
+ * Why this exists (cricket's `batting.dismissal.bowler`, W1 review finding
+ * P2): a nested member can be legal for SOME values of its sibling and
+ * refused for others. `applyPlayerLine` (cricket.ts) refuses a named
+ * `dismissal.bowler` on any kind outside `BOWLER_CREDITED_KINDS` — a run out
+ * credits no bowler — so a pad that offered the bowler chips the moment ANY
+ * kind was picked let a scorer tap "Run out", name a bowler and Confirm into
+ * an engine refusal. `requiresField` alone cannot express that: the field IS
+ * set. Absent means "any value of the gating field will do" — no existing
+ * item changes behaviour.
  */
 export type PadAttributionItem =
-  | { kind: "side"; path: string; labelKey?: PadLabel; required?: boolean; optional?: boolean; requiresField?: string }
+  | {
+      kind: "side";
+      path: string;
+      labelKey?: PadLabel;
+      required?: boolean;
+      optional?: boolean;
+      requiresField?: string;
+      requiresFieldIn?: readonly string[];
+    }
   | {
       kind: "person";
       path: string;
@@ -355,6 +382,7 @@ export type PadAttributionItem =
       required?: boolean;
       optional?: boolean;
       requiresField?: string;
+      requiresFieldIn?: readonly string[];
     };
 
 /**

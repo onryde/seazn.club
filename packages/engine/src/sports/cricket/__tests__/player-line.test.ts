@@ -245,3 +245,133 @@ describe("cricket.player.line — a single aspect is accepted end to end (Task 2
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// Task A — every `cricket.player.line` control is NAMED.
+//
+// A `PadField`/`PadAttributionItem` with no `labelKey` is legal by design
+// (`PadFieldEnum`'s own header, sport/module.ts), and apps/web's universal
+// renderer then falls back to `deriveFieldPathLabel(field.path)`
+// (view-model.ts) — a word-split of the dotted path. That fallback is
+// DERIVED ENGLISH and is never routed through a dictionary, so a French,
+// Spanish or Dutch scorer read "Bowling legal balls" off this action's seven
+// uncaptioned fields (and "Scorecard line — Person" off its one uncaptioned
+// attribution item) in every locale.
+//
+// The other twelve cricket actions keep their uncaptioned fields
+// deliberately (see `WICKET_ATTRIBUTION`'s own comment in cricket.ts): this
+// suite is scoped to `cricket.player.line`, the one action a scorer fills in
+// FIELD BY FIELD with no surrounding layout naming anything.
+// ---------------------------------------------------------------------------
+describe("cricket.player.line padSpec — every control carries a labelKey (Task A)", () => {
+  const cfg = cricket.configSchema.parse({});
+  const action = padSpec(cfg)
+    .panels.flatMap((p) => p.actions)
+    .find((a) => a.type === "cricket.player.line")!;
+
+  it("leaves NO field and NO attribution item uncaptioned", () => {
+    const uncaptioned = [
+      ...action.fields.filter((f) => f.labelKey === undefined).map((f) => `field ${f.path}`),
+      ...action.attribution.filter((a) => a.labelKey === undefined).map((a) => `attribution ${a.path}`),
+    ];
+    expect(uncaptioned, "these render deriveFieldPathLabel()'s English in all four locales").toEqual([]);
+  });
+
+  it("names each of them under the action's own key namespace, with a non-empty English fallback", () => {
+    const keys = [...action.fields.map((f) => f.labelKey!), ...action.attribution.map((a) => a.labelKey!)];
+    for (const { key, label } of keys) {
+      expect(key, `"${key}" is outside the action's namespace`).toMatch(
+        /^pad\.cricket\.action\.playerLine(\.field\.[A-Za-z]+)?$/,
+      );
+      expect(label.trim(), `"${key}" has an empty English fallback`).not.toBe("");
+    }
+    expect(new Set(keys.map((k) => k.key)).size, "two controls share one key").toBe(keys.length);
+  });
+
+  it("disambiguates the two aspects that collide on a leaf name — batting.runs is not bowling.runs", () => {
+    // The pre-existing sibling convention (`batting.fours` -> `…field.fours`)
+    // drops the aspect segment, which is only safe while no two paths share a
+    // leaf. `batting.runs`/`bowling.runs` DO, on this one action, so the new
+    // keys carry the aspect. A single key for both would make
+    // `checkLabelKeysUnique` (testkit/conformance-pad.ts) a false alarm and
+    // would caption two different numbers identically on one form.
+    const battingRuns = action.fields.find((f) => f.path === "batting.runs")!.labelKey!;
+    const bowlingRuns = action.fields.find((f) => f.path === "bowling.runs")!.labelKey!;
+    expect(battingRuns.key).not.toBe(bowlingRuns.key);
+    expect(battingRuns.label).not.toBe(bowlingRuns.label);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Task B — the pad must not OFFER a bowler on a dismissal the reducer
+// refuses one for.
+//
+// W1 review finding P2 tightened `applyPlayerLine` (above): naming
+// `dismissal.bowler` on a kind outside `BOWLER_CREDITED_KINDS` is refused
+// outright. `requiresField` alone only asks that SOME kind be picked, so a
+// scorer could tap "Run out", name a bowler and hit Confirm into a refusal —
+// the exact "never offer what the engine will refuse" rule this programme
+// runs on.
+//
+// The expected set is MEASURED FROM THE REDUCER, never typed into this test
+// (memory rule #19): each declared dismissal kind is folded twice through the
+// real `applyPlayerLine`, once with a bowler named and once without, and the
+// differential IS the set the pad may offer. Change `BOWLER_CREDITED_KINDS`
+// in cricket.ts and this test moves with it.
+// ---------------------------------------------------------------------------
+describe("cricket.player.line padSpec — the bowler chip is offered only for bowler-credited dismissals (Task B)", () => {
+  const cfg = cricket.configSchema.parse({});
+  const action = padSpec(cfg)
+    .panels.flatMap((p) => p.actions)
+    .find((a) => a.type === "cricket.player.line")!;
+  const kindField = action.fields.find((f) => f.path === "batting.dismissal.kind")!;
+  const kinds = kindField.kind === "enum" ? kindField.values : [];
+
+  // "h1" bats for home in innings 1; "a7" bowls for away (scorecard-ledger.ts's
+  // own DEFAULT_LINES comment). A bowler from the fielding side is therefore
+  // the ONLY variable between the two folds below.
+  const foldsClean = (bowler: string | undefined, kind: string): boolean => {
+    try {
+      lineLedger(undefined, [
+        {
+          innings: 1,
+          person: "h1",
+          batting: {
+            runs: 30,
+            balls: 20,
+            out: true,
+            dismissal: { kind, ...(bowler === undefined ? {} : { bowler }) },
+          },
+        },
+      ] as never);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  it("every declared dismissal kind is foldable WITHOUT a bowler — so the differential below is about the bowler alone", () => {
+    expect(kinds.length).toBeGreaterThan(1);
+    expect(kinds.filter((k) => !foldsClean(undefined, k))).toEqual([]);
+  });
+
+  it("declares requiresFieldIn as exactly the kinds applyPlayerLine actually accepts a bowler on", () => {
+    const acceptedByTheReducer = kinds.filter((k) => foldsClean("a7", k));
+    // Vacuity guard: if the reducer accepted a bowler on every kind there
+    // would be nothing to gate, and an empty `requiresFieldIn` would pass.
+    expect(acceptedByTheReducer.length).toBeGreaterThan(0);
+    expect(acceptedByTheReducer.length).toBeLessThan(kinds.length);
+
+    const bowler = action.attribution.find((a) => a.path === "batting.dismissal.bowler")!;
+    expect([...(bowler.requiresFieldIn ?? [])].sort()).toEqual([...acceptedByTheReducer].sort());
+  });
+
+  it("leaves the fielder ungated by VALUE — creditFielding accepts a fielder on every kind", () => {
+    // Negative pair: `requiresFieldIn` must not be sprayed across every
+    // gated item. A fielder is legal on any dismissal (creditFielding only
+    // checks lineup membership), so gating it would hide a legal control.
+    const fielder = action.attribution.find((a) => a.path === "batting.dismissal.fielder")!;
+    expect(fielder.requiresFieldIn).toBeUndefined();
+    expect(fielder.requiresField).toBe("batting.dismissal.kind");
+  });
+});

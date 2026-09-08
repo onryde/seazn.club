@@ -40,7 +40,6 @@ export interface MatchCentreProps {
   initial: LiveFixtureData;
   realtime: boolean;
   dict: PublicDict;
-  locale: string;
   tabParam: string | null;
 }
 
@@ -111,8 +110,19 @@ export function MatchCentre({ fixtureId, initial, realtime, dict, tabParam }: Ma
           unit (`doc.sets?.unit`: "set"/"game"/"period"), never a fixed
           word — see `tab-rail.tsx`'s own doc comment. */}
       <TabRail tabs={doc.tabs} active={active} onChange={onChange} dict={dict} setsUnit={doc.sets?.unit} />
+      {/* Whole-branch review, Accessibility group — `tabIndex={0}`. The Info
+          and Timeline panels contain NO focusable element at all (prose,
+          definition rows, a list of lines), so a keyboard user arrowing along
+          the rail and pressing Tab landed PAST the content the rail had just
+          selected, with no way to reach or scroll it. The APG tabs pattern
+          gives the panel itself a tab stop for exactly that case.
+          UNCONDITIONAL, not "only when nothing inside is focusable": which
+          panels hold a focusable child is document-dependent (a scorecard's
+          scroll regions exist only when there are rows to scroll), so a
+          conditional would be a rule that silently changed with the data. */}
       <div
         role="tabpanel"
+        tabIndex={0}
         id={`mc-tab-panel-${active}`}
         aria-labelledby={`mc-tab-${active}`}
         data-testid={`mc-tab-panel-${active}`}

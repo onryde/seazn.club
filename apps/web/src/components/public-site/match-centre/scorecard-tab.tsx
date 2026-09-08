@@ -6,7 +6,7 @@
 // guaranteed to disagree with the scorebug three inches above it.
 //
 // ---------------------------------------------------------------------------
-// Four things that are NOT derivable from reading this file
+// Six things that are NOT derivable from reading this file
 // ---------------------------------------------------------------------------
 //
 // 1. NATIVE `<details>`, not a JS accordion. The panel has to work in static
@@ -49,6 +49,36 @@
 //    PAINT IS NOT PROVABLE STATICALLY: no assertion on markup measures a
 //    rendered width, so the 320 claim rests on Task 15's screenshots, not on
 //    this file's tests.
+//
+// 5. EVERY ID IS SCOPED BY THE INNINGS' 1-BASED ARRAY POSITION, NEVER BY
+//    `innings.number`. A SUPER OVER CAN REUSE A NUMBER, so `mc-innings-1`,
+//    `mc-extras-1`, `mc-total-1`, `mc-dnb-1` and `mc-fow-line-1` each named
+//    two different innings in the same document, and the `<details>` key
+//    collided with them — React mis-reconciles `open` across two siblings
+//    claiming one key, so note 2's "the last innings is open" silently landed
+//    on the wrong panel. Row ids have the same problem one level down: a
+//    player who bats in two innings is ONE `personId`, so the rows are
+//    `mc-bat-<position>.<personId>` and `mc-bowl-<position>.<personId>`.
+//    This is `commentary-tab.tsx`'s note 1b, which states the same
+//    precondition and reaches the same answer — the array position cannot
+//    collide by construction — applied to this panel rather than reinvented.
+//    The key and the testid come from ONE expression at the call site so a
+//    change to either moves both.
+//    THE SAME SCOPE NAMES THE TWO SCROLL REGIONS. `role="region"` +
+//    `aria-label` puts an entry in a screen reader's landmark list, and
+//    `{side} — batting` alone made two of those entries identical the moment
+//    a super over let one side bat twice — the accessible-name twin of the
+//    id collision above, and the one this note originally missed. Both
+//    templates therefore take `{position}`, not `{number}`: the DISPLAYED
+//    number stays `innings.number` ("Innings 1" again, as a scorecard prints
+//    it) and only the machine-facing name is scoped.
+//
+// 6. THE NAME CELL IS A `<th scope="row">`, NOT A `<td>`. Without it a screen
+//    reader reading "62" out of the R column has no row header and cannot say
+//    whose 62 it is. `<th>` is centred and bold by default, so both cells
+//    carry `text-left font-normal` — the same two classes, for the same
+//    reason, as `sets-tab.tsx:164`, which is the one place on this surface
+//    that already got this right.
 //
 // CONTRACT NOTES for the task that builds `doc.cricket` (recorded here because
 // nothing in this file can enforce them):
@@ -251,10 +281,14 @@ function BattingTable({
   rows,
   dict,
   label,
+  position,
 }: {
   rows: readonly CricketBattingRowT[];
   dict: PublicDict;
   label: string;
+  /** The innings' 1-BASED ARRAY POSITION — see note 5. Scopes the row testids,
+   *  because one person can bat in two innings of the same match. */
+  position: number;
 }): ReactNode {
   // An innings with NO rows of this kind renders NOTHING, never a bare header
   // row. `match-b-tab-scorecard-320.png` showed exactly that: "BOWLER  O R W"
@@ -291,18 +325,23 @@ function BattingTable({
         <tbody>
           {rows.map((row) => (
             <tr
-              key={row.person.personId}
-              data-testid={`mc-bat-${row.person.personId}`}
+              key={`${position}.${row.person.personId}`}
+              data-testid={`mc-bat-${position}.${row.person.personId}`}
               className="border-b border-zinc-200/60 align-top"
             >
-              <td className="px-1 py-1">
+              {/* `<th scope="row">`, not `<td>` — see note 6. `text-left
+                  font-normal` because a `<th>` is centred and bold by default
+                  and this is a name, not a heading a reader is meant to weigh
+                  differently; `sets-tab.tsx`'s row header carries the same two
+                  for the same reason. */}
+              <th scope="row" className="px-1 py-1 text-left font-normal">
                 <span className={NAME_CELL}>{row.person.name}</span>
                 {/* The dismissal is a Msg, resolved here in the viewer's own
                     locale — the document never carries pre-rendered copy. */}
                 <span className={`dis text-[11px] text-ink-muted ${NAME_CELL}`}>
                   {dismissalText(dict, row.dismissal)}
                 </span>
-              </td>
+              </th>
               <td className={emphasisedNumCell(row.runs)}>{row.runs}</td>
               <Num value={row.balls} />
               {showFours ? <Num value={row.fours} /> : null}
@@ -320,10 +359,13 @@ function BowlingTable({
   rows,
   dict,
   label,
+  position,
 }: {
   rows: readonly CricketBowlingRowT[];
   dict: PublicDict;
   label: string;
+  /** The innings' 1-BASED ARRAY POSITION — see note 5. */
+  position: number;
 }): ReactNode {
   // An innings with NO rows of this kind renders NOTHING, never a bare header
   // row. `match-b-tab-scorecard-320.png` showed exactly that: "BOWLER  O R W"
@@ -365,21 +407,22 @@ function BowlingTable({
         <tbody>
           {rows.map((row) => (
             <tr
-              key={row.person.personId}
-              data-testid={`mc-bowl-${row.person.personId}`}
+              key={`${position}.${row.person.personId}`}
+              data-testid={`mc-bowl-${position}.${row.person.personId}`}
               className="border-b border-zinc-200/60"
             >
-              <td className="px-1 py-1">
+              {/* `<th scope="row">` — see the batting table and note 6. */}
+              <th scope="row" className="px-1 py-1 text-left font-normal">
                 <span className={NAME_CELL}>{row.person.name}</span>
                 {extrasSubLine(row) === null ? null : (
                   <span
-                    data-testid={`mc-bowl-extras-${row.person.personId}`}
+                    data-testid={`mc-bowl-extras-${position}.${row.person.personId}`}
                     className={`block text-[11px] tabular-nums text-ink-muted md:hidden`}
                   >
                     {extrasSubLine(row)}
                   </span>
                 )}
-              </td>
+              </th>
               <Num value={row.overs} />
               {showMaidens ? <Num value={row.maidens} /> : null}
               <Num value={row.runs} />
@@ -402,20 +445,26 @@ function Innings({
   fieldingSide,
   open,
   dict,
+  position,
 }: {
   innings: CricketInningsViewT;
   /** The side BOWLING in this innings — the other one. See the call site. */
   fieldingSide: SideT;
   open: boolean;
   dict: PublicDict;
+  /** 1-BASED ARRAY POSITION, which is what every id here is scoped by — see
+   *  note 5. `innings.number` is the DISPLAYED number and stays that. */
+  position: number;
 }): ReactNode {
+  // The two are deliberately separate. `n` is what a reader sees ("Innings 1"
+  // again, for a super over); `position` is what the document is keyed by.
   const n = innings.number;
   const fow = innings.fallOfWickets
     .map((f) => `${f.wicket}-${f.runs} (${f.batter.name}, ${f.over})`)
     .join(" · ");
   return (
     <details
-      data-testid={`mc-innings-${n}`}
+      data-testid={`mc-innings-${position}`}
       open={open}
       className="group rounded-xl border border-zinc-200/80 bg-surface"
     >
@@ -459,16 +508,25 @@ function Innings({
           <BattingTable
             rows={innings.batting}
             dict={dict}
-            label={t(dict, "matchCentre.battingFor", { side: innings.side.name })}
+            position={position}
+            // The name carries the POSITION as well as the side — see note 5.
+            // A super over is the same side batting again, so `{side} —
+            // batting` alone put two `role="region"` landmarks with one name
+            // in the document and a screen-reader user could not tell the
+            // chase from the super over.
+            label={t(dict, "matchCentre.battingFor", {
+              side: innings.side.name,
+              position,
+            })}
           />
           {innings.extrasLine === null ? null : (
-            <p data-testid={`mc-extras-${n}`} className="flex justify-between gap-2 px-1 text-[13px]">
+            <p data-testid={`mc-extras-${position}`} className="flex justify-between gap-2 px-1 text-[13px]">
               <span className="text-ink-muted">{t(dict, "matchCentre.extras")}</span>
               <span className="font-mono tabular-nums">{innings.extrasLine}</span>
             </p>
           )}
           <p
-            data-testid={`mc-total-${n}`}
+            data-testid={`mc-total-${position}`}
             className="flex justify-between gap-2 border-t border-zinc-200/80 px-1 pt-1 text-[13px] font-semibold"
           >
             <span>{t(dict, "matchCentre.total")}</span>
@@ -478,13 +536,13 @@ function Innings({
             </span>
           </p>
           {innings.didNotBat.length === 0 ? null : (
-            <p data-testid={`mc-dnb-${n}`} className="px-1 text-[11px] text-ink-muted">
+            <p data-testid={`mc-dnb-${position}`} className="px-1 text-[11px] text-ink-muted">
               <span className="font-medium">{t(dict, "matchCentre.didNotBat")}</span>{" "}
               {names(innings.didNotBat)}
             </p>
           )}
           {fow === "" ? null : (
-            <p data-testid={`mc-fow-line-${n}`} className="px-1 text-[11px] text-ink-muted">
+            <p data-testid={`mc-fow-line-${position}`} className="px-1 text-[11px] text-ink-muted">
               <span className="font-medium">{t(dict, "matchCentre.fallOfWickets")}</span> {fow}
             </p>
           )}
@@ -493,10 +551,15 @@ function Innings({
         <BowlingTable
           rows={innings.bowling}
           dict={dict}
+          position={position}
           // The BOWLERS ARE THE FIELDING SIDE'S. Naming this region after
           // `innings.side` labelled the away team's attack with the batting
           // team's name — the one thing a screen-reader user relies on it for.
-          label={t(dict, "matchCentre.bowlingFor", { side: fieldingSide.name })}
+          // `position` for the same reason as the batting region above.
+          label={t(dict, "matchCentre.bowlingFor", {
+            side: fieldingSide.name,
+            position,
+          })}
         />
       </div>
     </details>
@@ -512,7 +575,12 @@ export function ScorecardTab({ doc, dict }: ScorecardTabProps): ReactNode {
     <div data-testid="mc-scorecard" className="grid gap-2">
       {innings.map((entry, index) => (
         <Innings
-          key={entry.number}
+          // KEY AND TESTID SCOPE, from ONE expression — see note 5. `index + 1`
+          // is the 1-based array position; `entry.number` is NOT unique (a
+          // super over reuses one), and as a key that mis-reconciled `open`
+          // across two sibling `<details>`.
+          key={`mc-innings-${index + 1}`}
+          position={index + 1}
           innings={entry}
           // The side that is NOT batting is the one bowling. Matched on
           // `entrantId` rather than by index, because `innings[].side` is a

@@ -23,6 +23,17 @@
 //    must actually exist — because the alternative failure (a club called
 //    "Red" printing as "red", or an official's note saying "HT" becoming
 //    "Half-time") is worse than an untranslated token.
+//
+// 3. ROWS ARE KEYED AND NAMED BY THEIR 1-BASED ARRAY POSITION, NOT BY `seq`.
+//    Note 1 already says why `seq` cannot be unique: a DERIVED line sits
+//    immediately above the event that caused it and the two SHARE a `seq`. The
+//    row testids were named off `seq` anyway, so exactly the pairing note 1
+//    describes produced `mc-timeline-line-7` (and `mc-marker-7`, and
+//    `mc-side-badge-7`) twice — a duplicate React key, and an e2e selector
+//    that silently matched whichever came first. The 1-based array position
+//    cannot collide by construction; it is `commentary-tab.tsx`'s note 1b
+//    applied to a FLAT list, not a second scheme. The ids stay plain digits so
+//    the walkthrough specs' `/^mc-timeline-line-\d+$/` row count still matches.
 import type { ReactNode } from "react";
 import type { Dict as PublicDict } from "@/lib/i18n-constants";
 import { lookup, t } from "@/lib/i18n-runtime";
@@ -132,10 +143,10 @@ const EMPHASIS_CLASS: Record<string, string> = {
  * enough for four characters — turns every two-character label into a lozenge.
  * The floor keeps the common case square; the ragged case is the rarer one.
  */
-function SideBadge({ side, seq }: { side: SideT; seq: number }): ReactNode {
+function SideBadge({ side, position }: { side: SideT; position: number }): ReactNode {
   return (
     <span
-      data-testid={`mc-side-badge-${seq}`}
+      data-testid={`mc-side-badge-${position}`}
       title={side.name}
       className="inline-flex h-6 min-w-[24px] shrink-0 items-center justify-center rounded-md bg-accent/15 px-0.5 text-[10px] font-bold uppercase tabular-nums"
     >
@@ -150,18 +161,21 @@ export function TimelineTab({ doc, dict }: TimelineTabProps): ReactNode {
     <TabPanel id="timeline" className="grid gap-1">
       <h2 className="sr-only">{t(dict, "matchCentre.timeline")}</h2>
       {/* See note 1: delivered order, preserved. */}
-      {lines.map((line) => {
+      {lines.map((line, i) => {
         const side = line.sideIndex === null ? null : doc.header.sides[line.sideIndex];
+        // See note 3. The key and the three testids all come from THIS one
+        // expression, so a change to it moves them together.
+        const position = i + 1;
         return (
           <div
-            key={`${line.seq}-${line.text.key}`}
-            data-testid={`mc-timeline-line-${line.seq}`}
+            key={`mc-timeline-line-${position}`}
+            data-testid={`mc-timeline-line-${position}`}
             data-emphasis={line.emphasis}
             className="flex items-start gap-2 border-b border-zinc-200/50 px-1 py-1.5 text-[13px] last:border-0"
           >
             {line.marker === null ? null : (
               <span
-                data-testid={`mc-marker-${line.seq}`}
+                data-testid={`mc-marker-${position}`}
                 className="w-12 shrink-0 tabular-nums text-[11px] text-ink-muted"
               >
                 {line.marker}
@@ -170,7 +184,7 @@ export function TimelineTab({ doc, dict }: TimelineTabProps): ReactNode {
             <span className={`min-w-0 flex-1 ${EMPHASIS_CLASS[line.emphasis] ?? ""}`}>
               {t(dict, line.text.key, localiseParams(dict, line.text.params))}
             </span>
-            {side === null ? null : <SideBadge side={side} seq={line.seq} />}
+            {side === null ? null : <SideBadge side={side} position={position} />}
           </div>
         );
       })}

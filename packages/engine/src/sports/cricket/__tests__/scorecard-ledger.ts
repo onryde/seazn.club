@@ -46,6 +46,12 @@ export type Delivery =
       fielder?: string;
       assist?: string;
       bat?: number;
+      // W1 review finding P4 — the same mid-over `bowler` escape hatch the
+      // plain-bat variant above carries, on the delivery that also files a
+      // DISMISSAL. The card's dismissal credit ("c a3 b …") is the second
+      // place a payload-keyed bowler could disagree with the one state
+      // charged the wicket to, and no ledger could express that ball at all.
+      bowler?: string;
     }
   // `reason` (fix round 1, finding 4): defaults to "hurt" (retired NOT out —
   // the previous, only behaviour) so every existing caller is unaffected;

@@ -776,7 +776,7 @@ export async function getPublicFixture(
           playerNameDisplay: division.player_name_display ?? null,
         },
         locale,
-        hrefs: { division: basePath, competition: `/shared/${shell.org.slug}/${shell.competition.slug}`, calendar: null },
+        hrefs: { division: basePath, competition: `/shared/${shell.org.slug}/${shell.competition.slug}`, calendar: `${basePath}/calendar.ics` },
         stage: stageRow ? { name: stageRow.name, roundLabel: null } : null,
         slotLabelLookup: (key: MessageKey, vars?: Record<string, string | number>) => msgFor(locale, key, vars),
       });

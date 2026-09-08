@@ -28,7 +28,7 @@ import {
 } from "../match-centre";
 import type { PublicFixture } from "../data";
 import type { PublicPerson } from "../public-lineups";
-import type { MsgT, PersonT, SideT } from "../match-centre-schema";
+import type { MatchCentreDocT, MsgT, PersonT, SideT } from "../match-centre-schema";
 import type { Dict } from "@/lib/i18n-constants";
 import { t } from "@/lib/i18n-runtime";
 import enPublic from "@/dictionaries/en/public.json";
@@ -1008,5 +1008,180 @@ describe("buildMatchCentre — the live phase and power-play strength", () => {
       }),
     ).header;
     expect(header.phase).toBe("H2");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The anonymous read path must not 500 — cricket's two uncontained throws
+// ---------------------------------------------------------------------------
+//
+// Found by the whole-branch review. Both were live on a PUBLIC page, and both
+// were invisible to the existing regression test
+// (`usecases/__tests__/public-fixture-match-centre.test.ts`), which seeds the
+// `generic` sport and so never enters the cricket branch at all.
+describe("buildMatchCentre — cricket degrades rather than throwing", () => {
+  const cricketInput = (over: Partial<MatchCentreInput>) =>
+    input({ sportKey: "cricket", cfg: cricket.configSchema.parse({}), ...over });
+
+  // `match-centre-load.ts` safeParses the division config and falls back to
+  // the RAW value when the schema rejects it. This branch then hard-`parse`d
+  // that same value, so the fallback bought nothing for cricket and the page
+  // still 500d. Every shape below is something the column can actually hold.
+  it.each([
+    ["a jsonb scalar", 42],
+    ["a jsonb array", [1, 2, 3]],
+    ["SQL NULL", null],
+    ["a string", "not-a-config"],
+    ["a config the schema refines away", { ballsPerInnings: 6, ballsPerOver: 6, minOversForResult: 99 }],
+  ])("does not throw on %s — it degrades", (_label, cfg) => {
+    const doc = buildMatchCentre(cricketInput({ cfg }));
+    // The page still renders: header, sides and the info tab do not depend on
+    // the fold. Only the derived tabs are gone.
+    expect(doc.header.sides).toHaveLength(2);
+    expect(doc.tabs).toContain("summary");
+    expect(doc.tabs).toContain("info");
+    expect(doc.tabs).not.toContain("scorecard");
+    expect(doc.tabs).not.toContain("commentary");
+    // ...and it SAYS so, rather than looking like a fixture that never had a
+    // scorecard to lose — the distinction `buildTimeline` already draws.
+    expect(doc.derivedComplete).toBe(false);
+    expect(doc.cricket).toBeNull();
+  });
+
+  // The positive pair: a VALID cricket config still produces the full document.
+  // Without this, a change that simply disabled the cricket branch outright
+  // would pass every assertion above.
+  it("a valid config still yields the cricket view and its derived tabs", () => {
+    const ledger = scriptLedger(CHASE_SCRIPT);
+    const doc = buildMatchCentre(cricketInput({ events: ledger.events, cfg: ledger.cfg }));
+    expect(doc.cricket).not.toBeNull();
+    expect(doc.derivedComplete).toBe(true);
+    expect(doc.tabs).toContain("scorecard");
+  });
+
+  // The engine's `invalid()`/`wrongPhase()` throw regardless of the read
+  // path's `strict: false`, so one unfoldable event used to take down the
+  // whole response for cricket while every other sport kept rendering. A
+  // `cricket.ball` before any `core.start` is the cheapest such ledger.
+  it("does not throw when the fold itself refuses an event", () => {
+    const rogue = [
+      makeEnvelope(0, { type: "cricket.ball", payload: { over: 0, ballInOver: 1, striker: "h1", nonStriker: "h2", bowler: "a1", runs: { bat: 1 } } }),
+    ] as EventEnvelope[];
+    const doc = buildMatchCentre(cricketInput({ events: rogue }));
+    expect(doc.header.sides).toHaveLength(2);
+    expect(doc.derivedComplete).toBe(false);
+    expect(doc.cricket).toBeNull();
+  });
+
+  // This test was written asserting the band SURVIVES a rejected config, and
+  // it failed — `effectiveBand` calls `cricket.padSpec(cfg)`, which throws on
+  // exactly the configs this degrade exists for. The CODE was fixed to contain
+  // it and the CLAIM was corrected: a rejected config means the band is
+  // unknown, and `null` omits the "scored as" row rather than guessing a
+  // number. Recorded because the first fix moved the same 500 one line down.
+  it("omits the band when the config was rejected, and still renders the rest", () => {
+    const ledger = scriptLedger(CHASE_SCRIPT);
+    const doc = buildMatchCentre(cricketInput({ events: ledger.events, cfg: 42 }));
+    expect(doc.derivedComplete).toBe(false);
+    // The page is still a page: the info tab keeps every row that does not
+    // depend on the config.
+    expect(doc.info.rows.length).toBeGreaterThan(0);
+    // ...and the one row that DOES is gone rather than wrong.
+    expect(doc.info.rows.some((row) => row.value.key.startsWith("matchCentre.band."))).toBe(false);
+  });
+
+  // The positive pair: a valid config still produces the band row, so the
+  // assertion above cannot be satisfied by a build that never emits one.
+  it("reports the band normally when the config is valid", () => {
+    const ledger = scriptLedger(CHASE_SCRIPT);
+    const doc = buildMatchCentre(cricketInput({ events: ledger.events, cfg: ledger.cfg }));
+    expect(doc.info.rows.some((row) => row.value.key.startsWith("matchCentre.band."))).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// A masked person's REAL id must not reach the document
+// ---------------------------------------------------------------------------
+//
+// Found by the whole-branch review. `PersonT.personId` carried the raw
+// `persons.id` regardless of consent, and the components put it into anonymous
+// HTML as a testid and a React key — a stable cross-division identifier for
+// exactly the people who withheld their name. The existing masking test
+// (`consent: a masked person's name never reaches the document`) proves NAME
+// masking only and passes just as happily with the uuid present, which is why
+// this needed its own case rather than an extra assertion there.
+describe("buildMatchCentre — a masked person's identity", () => {
+  const maskedDoc = () => {
+    const ledger = scriptLedger(DECIDED_BY_RUNS_SCRIPT);
+    return buildMatchCentre(
+      input({
+        events: ledger.events,
+        cfg: ledger.cfg,
+        lineups: lineupsWithOneMasked("h1"),
+        fixture: decidedFixture(ledger),
+      }),
+    );
+  };
+
+  const everyPerson = (doc: MatchCentreDocT): PersonT[] => {
+    const out: PersonT[] = [];
+    for (const innings of doc.cricket?.innings ?? []) {
+      for (const row of innings.batting) out.push(row.person);
+      for (const row of innings.bowling) out.push(row.person);
+      out.push(...innings.didNotBat);
+      for (const fow of innings.fallOfWickets) out.push(fow.batter);
+      for (const p of innings.partnerships) out.push(p.batters[0], p.batters[1]);
+    }
+    for (const p of doc.cricket?.topPerformers ?? []) out.push(p.person);
+    const live = doc.cricket?.live;
+    if (live) {
+      for (const p of [live.striker, live.nonStriker, live.bowler]) if (p) out.push(p);
+      for (const row of live.batters) out.push(row.person);
+      for (const row of live.bowling) out.push(row.person);
+    }
+    return out;
+  };
+
+  // The whole point: sweep EVERY person-carrying field, not the batting rows
+  // the review happened to name. A fix applied at one call site would pass a
+  // test that only looked there.
+  it("the real person id appears NOWHERE in the document for a masked person", () => {
+    const doc = maskedDoc();
+    const people = everyPerson(doc);
+    expect(people.length, "the sweep must actually have found people to check").toBeGreaterThan(0);
+    const masked = people.filter((p) => p.masked);
+    expect(masked.length, "the fixture must actually produce a masked person").toBeGreaterThan(0);
+    for (const person of people) {
+      if (person.masked) expect(person.personId, `masked person leaked its real id`).not.toBe("h1");
+    }
+    // And not anywhere else in the serialised document either — params,
+    // testable ids, anything a later field might carry it through.
+    expect(JSON.stringify(doc)).not.toContain("h1");
+  });
+
+  // The positive pair. Without it, emitting a surrogate for EVERY person —
+  // which would break the player-card link for people who did consent — passes
+  // the assertion above.
+  it("an UNMASKED person keeps their real id, because consent is what makes that safe", () => {
+    const doc = maskedDoc();
+    const unmasked = everyPerson(doc).filter((p) => !p.masked);
+    expect(unmasked.length).toBeGreaterThan(0);
+    expect(unmasked.some((p) => p.personId === "h2")).toBe(true);
+  });
+
+  // One masked person is ONE surrogate everywhere in the document, or a live
+  // update re-keys their row and React remounts it mid-over.
+  it("a masked person has the SAME surrogate in every field that names them", () => {
+    const doc = maskedDoc();
+    const maskedNames = new Map<string, Set<string>>();
+    for (const person of everyPerson(doc)) {
+      if (!person.masked) continue;
+      const ids = maskedNames.get(person.name) ?? new Set<string>();
+      ids.add(person.personId);
+      maskedNames.set(person.name, ids);
+    }
+    for (const [name, ids] of maskedNames) {
+      expect([...ids], `"${name}" was given more than one surrogate id`).toHaveLength(1);
+    }
   });
 });

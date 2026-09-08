@@ -11,7 +11,6 @@ export const POLL_MS = 15_000;
 
 export interface UseLiveFixtureResult {
   data: LiveFixtureData;
-  updatedAt: number;
   transport: "realtime" | "poll";
 }
 
@@ -21,9 +20,12 @@ export function useLiveFixture(
   realtime: boolean,
 ): UseLiveFixtureResult {
   const [data, setData] = useState<LiveFixtureData>(initial);
-  // "Now" at mount — `initial` was just fetched server-side, so treating that
-  // moment as the first `updatedAt` is correct; every later success moves it.
-  const [updatedAt, setUpdatedAt] = useState<number>(() => Date.now());
+  // NO `updatedAt` state here. The freshness line ("Updated 5s ago") derives
+  // from `header.updatedAt` — the DOCUMENT's own timestamp, ticked every
+  // second by `useNow()` in `court-card.tsx` — never from when this hook last
+  // succeeded. A hook-side clock would have said "Updated 0s ago" after a poll
+  // that returned an unchanged document, i.e. reported the FETCH as freshness
+  // rather than the DATA.
 
   // Review fix round 1 (MINOR 10) — a poll/debounced refresh in flight when
   // the component unmounts must not call `setState` on its way back; the
@@ -42,7 +44,6 @@ export function useLiveFixture(
       const next = await fetchLiveFixture(fixtureId);
       if (!mountedRef.current) return;
       setData(next);
-      setUpdatedAt(Date.now());
     } catch {
       // transient — keep the last known data (never throw to the UI)
     }
@@ -98,5 +99,5 @@ export function useLiveFixture(
     return () => clearInterval(id);
   }, [live, subscribed, refresh]);
 
-  return { data, updatedAt, transport: subscribed ? "realtime" : "poll" };
+  return { data, transport: subscribed ? "realtime" : "poll" };
 }

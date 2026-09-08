@@ -15,6 +15,9 @@
 import { beforeAll, describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import en from "@/dictionaries/en/public.json";
+import es from "@/dictionaries/es/public.json";
+import fr from "@/dictionaries/fr/public.json";
+import nl from "@/dictionaries/nl/public.json";
 import type { Dict } from "@/lib/i18n-constants";
 import {
   MatchCentreDoc,
@@ -296,6 +299,63 @@ describe("SetsTab", () => {
   it("no dictionary key leaks into the markup unresolved", () => {
     for (const s of [TENNIS, BADMINTON, FOOTBALL, LEGACY, null]) {
       expect(render(s)).not.toContain("matchCentre.");
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// `term.short.H1` / `term.short.H2` are NOT notation — they are ORDINALS
+// ---------------------------------------------------------------------------
+//
+// This file's own note 5 said the whole `term.short.*` family is "identical in
+// all four locales because it is notation", and for `Q1`/`P3`/`ET1`/`SO` that
+// is true. It is NOT true of the two HALF labels: English writes "1st"/"2nd",
+// French "1re"/"2e", Spanish "1.ª"/"2.ª", Dutch "1e"/"2e". fr, es and nl all
+// shipped the ENGLISH pair, so a French spectator read "1st" over the first
+// half of every football match.
+//
+// The expectation is DERIVED, never typed in: the short form is exactly the
+// ordinal token of the locale's OWN prose name for that period (`term.H1`,
+// "1re mi-temps" -> "1re"). A locale that revises its prose moves this test
+// with it, and a locale added later needs no edit here.
+//
+// Rendered, not read out of the JSON: a dictionary-file assertion proves the
+// file, and the thing under test is what reaches a spectator's screen.
+const LOCALES: Record<string, Record<string, string>> = { en, es, fr, nl };
+
+/** The ordinal token of a prose period name — "1st half" -> "1st",
+ *  "1.ª parte" -> "1.ª", "2e helft" -> "2e". */
+const ordinalOf = (prose: string): string => prose.split(" ")[0]!;
+
+describe("SetsTab — the half headers carry each locale's OWN ordinal", () => {
+  for (const [locale, d] of Object.entries(LOCALES)) {
+    it(`${locale}: H1 and H2 render ${locale}'s ordinal form, not English`, () => {
+      const html = renderToStaticMarkup(
+        <SetsTab doc={makeDoc({ sets: EXTRA_TIME })} dict={d as unknown as Dict} data={data} />,
+      );
+      // The visible header, in this locale, for both halves.
+      expect(html).toContain(`<span aria-hidden="true">${ordinalOf(d["term.H1"]!)}</span>`);
+      expect(html).toContain(`<span aria-hidden="true">${ordinalOf(d["term.H2"]!)}</span>`);
+      // …and the dictionary agrees with its own prose, so the two cannot drift.
+      expect(d["term.short.H1"], `${locale} term.short.H1`).toBe(ordinalOf(d["term.H1"]!));
+      expect(d["term.short.H2"], `${locale} term.short.H2`).toBe(ordinalOf(d["term.H2"]!));
+    });
+  }
+
+  it("the three non-English locales do not ship the English ordinals", () => {
+    for (const locale of ["fr", "es", "nl"]) {
+      expect(LOCALES[locale]!["term.short.H1"], `${locale} H1`).not.toBe(en["term.short.H1"]);
+      expect(LOCALES[locale]!["term.short.H2"], `${locale} H2`).not.toBe(en["term.short.H2"]);
+    }
+  });
+
+  it("the rest of the family IS notation and stays identical in all four", () => {
+    // The negative pair for the rule above: only the two halves are ordinals.
+    // Widening the fix to Q1/P3/ET1/SO would be a different defect.
+    for (const key of ["term.short.Q1", "term.short.P3", "term.short.ET_H1", "term.short.SHOOTOUT"]) {
+      for (const [locale, d] of Object.entries(LOCALES)) {
+        expect(d[key], `${locale} ${key}`).toBe(en[key as keyof typeof en]);
+      }
     }
   });
 });

@@ -34,6 +34,28 @@
 // which moves to the button since that's what needs to not shrink in the
 // scrolling flex row). The 32px pill still LOOKS the same, centred inside
 // the taller, transparent hit target.
+//
+// Whole-branch review, Accessibility group — ROVING TABINDEX, AND NO DANGLING
+// `aria-controls`. Two defects, one cause: every tab was in the browser's own
+// Tab order and every tab pointed at a panel id.
+//
+//  * A six-tab rail cost SEVEN tab stops (the tablist's own `tabIndex={0}`
+//    plus one per button) before a keyboard user reached the content. The APG
+//    tabs pattern puts exactly ONE stop on the rail — the SELECTED tab — and
+//    moves between tabs with the arrow keys, which `handleKeyDown` already
+//    implements. So the container stops being focusable and each button
+//    carries `tabIndex={isActive ? 0 : -1}`; the container's `onKeyDown` is
+//    unaffected, because the event bubbles up from the focused button.
+//
+//  * `aria-controls` named `mc-tab-panel-<id>` on all six buttons, but
+//    `MatchCentre` renders ONLY the active panel — five of the six referenced
+//    an element that is not in the document. It is now set on the active tab
+//    alone. The reverse direction (`id="mc-tab-<id>"`, which the panel's
+//    `aria-labelledby` points back at) always resolves and stays on every tab.
+//
+// NEITHER IS DIRECTLY TESTABLE HERE — no jsdom, so nothing can press Tab or
+// read a focus ring. `tab-rail.test.tsx` pins the attribute state the browser
+// derives that behaviour from, which is the most a markup test can witness.
 import { useEffect, useRef } from "react";
 import type { Dict as PublicDict } from "@/lib/i18n-constants";
 import { t } from "@/lib/i18n-runtime";
@@ -147,9 +169,10 @@ export function TabRail({ tabs, active, onChange, dict, setsUnit }: TabRailProps
   }
 
   return (
+    // NO `tabIndex` on the tablist — see the roving-tabindex note above. The
+    // `onKeyDown` still fires: the event bubbles up from the focused button.
     <div
       role="tablist"
-      tabIndex={0}
       aria-label={t(dict, "matchCentre.tabs.label")}
       className="flex gap-2 overflow-x-auto max-md:-mx-4 max-md:px-4"
       onKeyDown={handleKeyDown}
@@ -165,7 +188,17 @@ export function TabRail({ tabs, active, onChange, dict, setsUnit }: TabRailProps
             id={`mc-tab-${tab}`}
             type="button"
             role="tab"
-            aria-controls={`mc-tab-panel-${tab}`}
+            // ONLY the active tab: `MatchCentre` renders one panel, so the
+            // other five `aria-controls` pointed at ids that are not in the
+            // document. See the note above.
+            aria-controls={isActive ? `mc-tab-panel-${tab}` : undefined}
+            // Roving tabindex — the selected tab is the rail's single tab
+            // stop. Placed BEFORE `data-testid` deliberately: React serialises
+            // attributes in JSX order and `tab-rail.test.tsx`'s pill-class
+            // test captures the span that follows
+            // `data-testid=… aria-selected=… class=…`, so an attribute wedged
+            // between those three reds a test about something else entirely.
+            tabIndex={isActive ? 0 : -1}
             data-testid={`mc-tab-${tab}`}
             aria-selected={isActive}
             onClick={() => onChange(tab)}

@@ -151,6 +151,26 @@ export function LiveScoreBody({
   // not started yet will fill in, and one recorded as a result only never
   // will. _DESIGN §10's rule is that an empty state "says what appears when",
   // which one generic line cannot do for both.
+  //
+  // WHOLE-BRANCH REVIEW, P6 — `in_play` USED TO FALL THROUGH TO `null` HERE,
+  // on the reasoning that "the next poll fills it". It does not always: a
+  // football fixture is `in_play` from kick-off, and until the first period
+  // event is recorded `showBreakdown`, `periods` and `discipline` are ALL
+  // null. With the scorebug suppressed that left `<div role="tabpanel">` with
+  // no children whatsoever — the exact defect the paragraph above says it
+  // fixed, left open for one status. The ladder is now binary: either
+  // something will fill this in, or nothing ever will.
+  //
+  // COPY GAP NOW CLOSED. P6 reused `matchCentre.empty.beforeStart` for the
+  // in-play arm — the only existing key that made the promise that is TRUE
+  // here ("this fills in") — and recorded the debt: its temporal clause
+  // ("…once the match starts") renders directly beside the court card's own
+  // LIVE pill, telling a spectator watching a live match that the match has
+  // not started. That is a contradiction a customer reads, not a nit. The
+  // in-play arm now has its OWN sentence (`matchCentre.empty.inPlay`, all four
+  // locales); `beforeStart` is untouched and still serves genuinely
+  // not-started fixtures. Three facts, three sentences: this will fill in and
+  // has not begun / this will fill in and is happening now / this never will.
   const hasSecondaryContent =
     (showBreakdown && sideIds.length === 2) || periods !== null || discipline !== null;
   const emptyStateKey = hasSecondaryContent
@@ -158,7 +178,7 @@ export function LiveScoreBody({
     : decided || data.status === "finalized"
       ? "matchCentre.empty.noDetail"
       : inPlay
-        ? null // in play with nothing derived yet: the next poll fills it.
+        ? "matchCentre.empty.inPlay"
         : "matchCentre.empty.beforeStart";
 
   return (
@@ -298,11 +318,20 @@ export function LiveScoreBody({
               <tbody>
                 {(["home", "away"] as const).map((side, row) => (
                   <tr key={side}>
-                    <td
-                      className={`max-w-40 truncate pr-4 text-sm font-medium text-zinc-800 ${row === 0 ? "border-b border-zinc-100" : ""} py-2`}
+                    {/* Whole-branch review, Accessibility group — the entrant
+                        name is the ROW HEADER, not a data cell: without it a
+                        screen reader reading "1" out of the Q1 column has
+                        nothing to say whose 1 it is. `text-left` because a
+                        `<th>` is centred by default; `font-medium` was
+                        already here and keeps it off the UA's bold.
+                        `sets-tab.tsx:164` is the one place on this surface
+                        that already did this. */}
+                    <th
+                      scope="row"
+                      className={`max-w-40 truncate pr-4 text-left text-sm font-medium text-zinc-800 ${row === 0 ? "border-b border-zinc-100" : ""} py-2`}
                     >
                       {entrantNames[sideIds[row]!] ?? "—"}
-                    </td>
+                    </th>
                     {periods.map((p) => (
                       <td
                         key={p.phase}
@@ -412,13 +441,16 @@ function SetScoreboard({
           <tbody>
             {sides.map((side, row) => (
               <tr key={side}>
-                <td
-                  className={`max-w-40 truncate pr-4 text-sm font-medium text-zinc-800 ${
+                {/* The row header — see the goals-by-period table above, same
+                    rule and same reason. */}
+                <th
+                  scope="row"
+                  className={`max-w-40 truncate pr-4 text-left text-sm font-medium text-zinc-800 ${
                     row === 0 ? "border-b border-zinc-100" : ""
                   } py-2`}
                 >
                   {names[row]}
-                </td>
+                </th>
                 {breakdown.sets.map((s, i) => {
                   const mine = s[side];
                   const theirs = s[side === "home" ? "away" : "home"];

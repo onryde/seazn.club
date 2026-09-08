@@ -254,12 +254,28 @@ test("cricket match A: the anonymous match centre updates live as the real pad a
   const strikerId = priorBall?.payload.striker as string | undefined;
   expect(strikerId, "a striker must already be on strike before the pad taps").toBeTruthy();
   await anon320.getByTestId("mc-tab-scorecard").click();
-  const strikerRow = anon320.getByTestId(`mc-bat-${strikerId}`);
+  // Scoped `mc-bat-<innings position>.<personId>`: a super over reuses an
+  // innings number, so two rows once shared one testid. The position is
+  // matched as `\d+` rather than pinned, because which innings this striker
+  // bats in is the fixture's business, not this test's.
+  const strikerRow = anon320.getByTestId(new RegExp(`^mc-bat-\\d+\\.${strikerId}$`));
   await expect(strikerRow, "the current striker must already have a scorecard row").toBeVisible();
   const strikerRunsBefore = await strikerRow.locator("td").nth(1).textContent();
   // back to Commentary -- the taps below assert the newest ball appears there.
   await anon320.getByTestId("mc-tab-commentary").click();
   await expect(anon320.getByTestId("mc-tab-panel-commentary")).toBeVisible();
+
+  // The ball ids ALREADY on screen before a single tap. Without this the
+  // assertion after the taps ("the newest ball appeared") was satisfied by
+  // balls rendered at page load: it read `.first()` of the ball testids and
+  // checked it was visible, which is true of any innings with a ball in it.
+  // It stayed green with the live transport deleted entirely.
+  const ballIdsBefore = new Set(
+    await anon320
+      .getByTestId(/^mc-ball-\d+\.\d+\.\d+$/)
+      .evaluateAll((els) => els.map((el) => el.getAttribute("data-testid") ?? "")),
+  );
+  expect(ballIdsBefore.size, "the commentary must already show balls — otherwise 'a NEW ball' proves nothing").toBeGreaterThan(0);
 
   let loadFired = false;
   anon320.on("load", () => {
@@ -297,10 +313,24 @@ test("cricket match A: the anonymous match centre updates live as the real pad a
   await pollBallCount(page.request, matchA, ++ballsBefore, pollTimeout);
 
   // --- back on the ALREADY-OPEN anonymous page, without navigating ---------
-  await expect(
-    anon320.getByTestId(/^mc-ball-\d+\.\d+\.\d+$/).first(),
-    "the newest ball must appear on the already-open anonymous page within one poll interval",
-  ).toBeVisible({ timeout: LIVE_UPDATE_BUDGET_MS });
+  // A ball id that was NOT on screen before the taps. The seven taps above
+  // each minted a delivery, so at least one new id must arrive by transport
+  // alone — the page never navigates. Compared as ids rather than counts: an
+  // over that rolls could leave the count unchanged while the content moved.
+  await expect
+    .poll(
+      async () => {
+        const now = await anon320
+          .getByTestId(/^mc-ball-\d+\.\d+\.\d+$/)
+          .evaluateAll((els) => els.map((el) => el.getAttribute("data-testid") ?? ""));
+        return now.filter((id) => !ballIdsBefore.has(id)).length;
+      },
+      {
+        timeout: LIVE_UPDATE_BUDGET_MS,
+        message: "a ball that was not on screen before the taps must arrive on the already-open anonymous page",
+      },
+    )
+    .toBeGreaterThan(0);
 
   await expect
     .poll(
@@ -324,7 +354,7 @@ test("cricket match A: the anonymous match centre updates live as the real pad a
   // never the API payload.
   await anon320.getByTestId("mc-tab-scorecard").click();
   await expect(anon320.getByTestId("mc-tab-panel-scorecard")).toBeVisible();
-  const strikerRowAfter = anon320.getByTestId(`mc-bat-${strikerId}`);
+  const strikerRowAfter = anon320.getByTestId(new RegExp(`^mc-bat-\\d+\\.${strikerId}$`));
   await expect(strikerRowAfter, "the striker's row must still render after the update").toBeVisible();
   await expect
     .poll(async () => strikerRowAfter.locator("td").nth(1).textContent(), { timeout: LIVE_UPDATE_BUDGET_MS })
@@ -393,7 +423,7 @@ test("cricket: the batting-only player line posted through the API shows on the 
   // innings 2 is the LAST innings — open by default (`ScorecardTab`'s own
   // "the open innings is always the last one" rule), so no accordion click
   // is needed to see this row.
-  const row = anon.getByTestId(`mc-bat-${matchBEnrichedPersonId}`);
+  const row = anon.getByTestId(new RegExp(`^mc-bat-\\d+\\.${matchBEnrichedPersonId}$`));
   await expect(row, "the enriched line's batter row must render").toBeVisible({ timeout: 10_000 });
   // The "bowled" dismissal names the REAL bowler (matchBBowlerName), never
   // "not out" — proves the dismissal Msg resolved, not merely that the row

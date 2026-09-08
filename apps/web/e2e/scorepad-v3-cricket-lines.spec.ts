@@ -39,6 +39,20 @@ const PLAYER_LINE_LABEL = {
   noBalls: playerLineLabel("noBalls"),
   dismissalBowler: playerLineLabel("dismissalBowler"),
   dismissalFielder: playerLineLabel("dismissalFielder"),
+  // Task A — the seven fields and the person picker that had NO `labelKey`
+  // and were therefore captioned by `deriveFieldPathLabel(path)`: derived
+  // ENGLISH, rendered in all four locales, and hardcoded into this file as
+  // "Batting out"/"Bowling legal balls"/… exactly the drift the helper above
+  // exists to stop. They are dictionary keys now, so they are read like the
+  // rest.
+  innings: playerLineLabel("innings"),
+  battingOut: playerLineLabel("battingOut"),
+  battingRuns: playerLineLabel("battingRuns"),
+  battingBalls: playerLineLabel("battingBalls"),
+  bowlingLegalBalls: playerLineLabel("bowlingLegalBalls"),
+  bowlingRuns: playerLineLabel("bowlingRuns"),
+  bowlingWickets: playerLineLabel("bowlingWickets"),
+  person: playerLineLabel("person"),
 } as const;
 
 // Task 18 — owner ruling 12 (2026-09-05, the ONLY deliberate scorepad touch
@@ -287,16 +301,26 @@ test(
 
     // --- Line 1: BATTING-ONLY, every batting field touched, bowling never
     // touched at all (Task 20's headline scenario). -----------------------
-    await pad(page).getByLabel("Innings", { exact: true }).fill("1");
-    await pad(page).getByLabel("Batting out", { exact: true }).check();
-    await pad(page).getByLabel("Batting runs", { exact: true }).fill("42");
-    await pad(page).getByLabel("Batting balls", { exact: true }).fill("30");
+    await pad(page).getByLabel(PLAYER_LINE_LABEL.innings, { exact: true }).fill("1");
+    await pad(page).getByLabel(PLAYER_LINE_LABEL.battingOut, { exact: true }).check();
+    await pad(page).getByLabel(PLAYER_LINE_LABEL.battingRuns, { exact: true }).fill("42");
+    await pad(page).getByLabel(PLAYER_LINE_LABEL.battingBalls, { exact: true }).fill("30");
     await pad(page).getByLabel(PLAYER_LINE_LABEL.fours, { exact: true }).fill("5");
     await pad(page).getByLabel(PLAYER_LINE_LABEL.sixes, { exact: true }).fill("2");
-    // Deliberately NOT filled: "Bowling legal balls"/"Bowling runs"/
-    // "Bowling wickets" — before Task 20 these had to be zero-filled just to
-    // satisfy Confirm; now the bowling GROUP stays untouched and is omitted
-    // from the built payload entirely (view-model.ts's `groupsTouched`).
+    // Deliberately NOT filled: the three bowling fields — before Task 20
+    // these had to be zero-filled just to satisfy Confirm; now the bowling
+    // GROUP stays untouched and is omitted from the built payload entirely
+    // (view-model.ts's `groupsTouched`).
+
+    // Task B — the bowler row is GATED on the dismissal kind, and on the
+    // kind being one the engine credits a bowler for. Nothing has been
+    // picked yet, so it is not on the screen at all: assert that in the
+    // browser, since a node-environment unit test cannot see a rendered
+    // page and this is the surface the rule "never offer what the engine
+    // will refuse" is actually about.
+    await expect(
+      pad(page).getByRole("group", { name: PLAYER_LINE_LABEL.dismissalBowler, exact: true }),
+    ).toHaveCount(0);
 
     // The dismissal-kind chip row (owner ruling 12/S18 — PadFieldEnum.chips).
     // Scoped by `data-field-path`, not by PLAYER_LINE_LABEL.dismissalKind's
@@ -311,13 +335,12 @@ test(
       .getByRole("button", { name: "Bowled", exact: true })
       .click();
 
-    // Person: scoped by `data-attribution-path`, not caption text — this
-    // item has no `labelKey` (Task 17/18's own precedent of leaving the
-    // main person slot uncaptioned, `attribution-picker.tsx`), so
-    // `attributionItemCaption` derives it AND composes it with the
-    // action's own label ("Scorecard line — Person"), a two-part string
-    // this fix round did not touch and has no dictionary entry of its own
-    // to read back.
+    // Person: still scoped by `data-attribution-path` rather than by its
+    // caption. Task A gave this item a real `labelKey` (it used to render
+    // the composed "Scorecard line — Person", derived English in every
+    // locale), but the chips inside the row are person NAMES, so the row is
+    // addressed by path and the button by name — the caption itself is
+    // asserted in action-form.test.ts.
     await pad(page)
       .locator('[data-attribution-path="person"]')
       .getByRole("button", { name: batterName, exact: true })
@@ -358,7 +381,7 @@ test(
     expect(Object.prototype.hasOwnProperty.call(battingOnlyLine.payload, "bowling")).toBe(false);
 
     // --- Line 2: BOWLING-ONLY, mirroring Line 1 — batting never touched at
-    // all, including its "Batting out" toggle (view-model.ts's `groupsTouched`
+    // all, including its dismissed toggle (view-model.ts's `groupsTouched`
     // excludes toggles from "touched" precisely so this leftover default
     // never leaks a half-formed `batting` object into the payload). The
     // bowler ("V3 Line Bowler") is in the AWAY roster, the bowling side for
@@ -373,10 +396,10 @@ test(
     // itself stays open, so the same collapsed "Scorecard line" row is
     // tapped again with fresh values. -------------------------------------
     await pad(page).getByRole("button", { name: "Scorecard line", exact: true }).click();
-    await pad(page).getByLabel("Innings", { exact: true }).fill("1");
-    await pad(page).getByLabel("Bowling legal balls", { exact: true }).fill("12");
-    await pad(page).getByLabel("Bowling runs", { exact: true }).fill("20");
-    await pad(page).getByLabel("Bowling wickets", { exact: true }).fill("1");
+    await pad(page).getByLabel(PLAYER_LINE_LABEL.innings, { exact: true }).fill("1");
+    await pad(page).getByLabel(PLAYER_LINE_LABEL.bowlingLegalBalls, { exact: true }).fill("12");
+    await pad(page).getByLabel(PLAYER_LINE_LABEL.bowlingRuns, { exact: true }).fill("20");
+    await pad(page).getByLabel(PLAYER_LINE_LABEL.bowlingWickets, { exact: true }).fill("1");
     await pad(page).getByLabel(PLAYER_LINE_LABEL.maidens, { exact: true }).fill("1");
     await pad(page).getByLabel(PLAYER_LINE_LABEL.wides, { exact: true }).fill("2");
     await pad(page).getByLabel(PLAYER_LINE_LABEL.noBalls, { exact: true }).fill("0");
@@ -407,10 +430,10 @@ test(
     // can. A fresh person (home2) since `applyPlayerLine` refuses a second
     // line for the SAME person+aspect in one innings. ----------------------
     await pad(page).getByRole("button", { name: "Scorecard line", exact: true }).click();
-    await pad(page).getByLabel("Innings", { exact: true }).fill("1");
-    await pad(page).getByLabel("Batting out", { exact: true }).check();
-    await pad(page).getByLabel("Batting runs", { exact: true }).fill("10");
-    await pad(page).getByLabel("Batting balls", { exact: true }).fill("8");
+    await pad(page).getByLabel(PLAYER_LINE_LABEL.innings, { exact: true }).fill("1");
+    await pad(page).getByLabel(PLAYER_LINE_LABEL.battingOut, { exact: true }).check();
+    await pad(page).getByLabel(PLAYER_LINE_LABEL.battingRuns, { exact: true }).fill("10");
+    await pad(page).getByLabel(PLAYER_LINE_LABEL.battingBalls, { exact: true }).fill("8");
     await pad(page)
       .locator('[data-attribution-path="person"]')
       .getByRole("button", { name: home2Name, exact: true })

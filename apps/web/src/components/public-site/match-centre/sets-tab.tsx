@@ -39,11 +39,22 @@
 // 5. THE HEADER TAKES THE SHORT FORM, THE `title` TAKES THE PROSE. A period
 //    column is 32px of a fixed-layout table, and the prose `term.ET_H1` is
 //    "Extra time — first half" — it cannot fit, and a fixed-layout table never
-//    grows to make it. So headers resolve `term.short.<phase>` ("ET1"),
-//    identical in all four locales because it is notation, and the full name
-//    rides in `title` plus an `sr-only` span so a screen reader and a hover
-//    still get it. The prose keys are not redundant: the Timeline's sentences
-//    use them.
+//    grows to make it. So headers resolve `term.short.<phase>` ("ET1"), and
+//    the full name rides in `title` plus an `sr-only` span so a screen reader
+//    and a hover still get it. The prose keys are not redundant: the
+//    Timeline's sentences use them.
+//
+// 5b. MOST OF `term.short.*` IS NOTATION AND IS IDENTICAL IN ALL FOUR LOCALES
+//    — "Q3", "P1", "ET2", "SO" are written the same everywhere. THE TWO HALF
+//    LABELS ARE NOT: they are ORDINALS, and every language writes its own
+//    ("1st"/"2nd" en, "1re"/"2e" fr, "1.ª"/"2.ª" es, "1e"/"2e" nl). This note
+//    used to claim the whole family was notation, and fr/es/nl shipped the
+//    ENGLISH pair on the strength of it — a French spectator read "1st" over
+//    the first half of every football match. The rule that holds: each
+//    locale's short half label is the ordinal token of its own prose name
+//    (`term.H1` = "1re mi-temps" -> "1re"), which is what
+//    `sets-tab.test.tsx` derives its expectation from rather than typing a
+//    table of four ordinals into a test.
 import type { ReactNode } from "react";
 import type { Dict as PublicDict } from "@/lib/i18n-constants";
 import { lookup, t } from "@/lib/i18n-runtime";

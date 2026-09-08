@@ -69,10 +69,11 @@ import {
   type OverLog,
 } from "@seazn/engine/sports/cricket";
 import { resolveLatestModule, resolveModule } from "@/server/engine-db/registry";
+import { log } from "@/server/logger";
 // The ONE reader of `summary.detail.shootout`, shared with `live-score.tsx`'s
 // decided sentence — a second parse of the same jsonb is a second chance to
 // disagree about the same match.
-import { shootoutScoreFromDetail } from "@/lib/scoring-vocab";
+import { SHOOTOUT_IS_SKATED, shootoutScoreFromDetail } from "@/lib/scoring-vocab";
 // The SAME readers `live-score.tsx` uses for the pair the match centre had
 // dropped — one authority per fact, never a second parse of the same jsonb.
 import { matchPhase, matchStrength } from "@/lib/public-site";
@@ -185,13 +186,52 @@ type PersonOf = (id: string) => PersonT;
 
 /** Looks a person up on EITHER side's consent-resolved lineup; a person the
  *  lineup export never named (a stale ledger reference, a lineup gap) falls
- *  back to a masked placeholder row — never a blank one (contract notes). */
+ *  back to a masked placeholder row — never a blank one (contract notes).
+ *
+ *  A MASKED PERSON'S REAL id NEVER REACHES THE DOCUMENT. It used to: `PersonT`
+ *  carried the raw `persons.id` whatever the consent said, and the components
+ *  put it straight into the markup as `data-testid="mc-bat-<uuid>"` and as
+ *  React keys. Anonymous HTML therefore published a stable, cross-division
+ *  identifier for exactly the people who had withheld their name — so the same
+ *  uuid appearing on another division's page, where that person DID consent,
+ *  re-joins the name to the row this page had masked. `data.ts:306` already
+ *  states the opposite convention for the sibling surface in as many words
+ *  ("`person_id: null` = no public-name consent, no player card"); this
+ *  surface simply had not followed it.
+ *
+ *  A SURROGATE rather than `null`, because the id is load-bearing in the
+ *  renderer: it is the React key that keeps a batting row's identity stable
+ *  across live updates and the testid the e2e suite selects by. `m1`, `m2`, …
+ *  are assigned in first-seen order and memoised, so one masked person is ONE
+ *  surrogate everywhere in the document — the same row across Summary,
+ *  Scorecard and Commentary — while carrying nothing that survives the page.
+ *
+ *  Unmasked people keep their real id: the player card links to it, and their
+ *  consent is precisely what makes that safe.
+ *
+ *  `toLineupPair` below deliberately keeps REAL ids — it feeds the engine's
+ *  own fold, which runs server-side and never reaches a viewer. */
 function makePersonOf(lineups: Record<string, PublicPerson[]>): PersonOf {
   const byId = new Map<string, PublicPerson>();
   for (const list of Object.values(lineups)) {
     for (const person of list) byId.set(person.personId, person);
   }
-  return (id: string): PersonT => byId.get(id) ?? { personId: id, name: "?", masked: true };
+  const surrogates = new Map<string, string>();
+  const surrogateFor = (realId: string): string => {
+    const seen = surrogates.get(realId);
+    if (seen !== undefined) return seen;
+    const minted = `m${surrogates.size + 1}`;
+    surrogates.set(realId, minted);
+    return minted;
+  };
+  return (id: string): PersonT => {
+    const person = byId.get(id);
+    // Unknown to the lineup export: masked by construction, and its id is a
+    // ledger reference we equally must not publish.
+    if (person === undefined) return { personId: surrogateFor(id), name: "?", masked: true };
+    if (!person.masked) return { personId: person.personId, name: person.name, masked: false };
+    return { personId: surrogateFor(person.personId), name: person.name, masked: true };
+  };
 }
 
 /** The consent-resolved `Record<entrantId, PublicPerson[]>` this module
@@ -587,7 +627,7 @@ function buildCricketView(
  * printed for every sport, which was invisible until the shootout sentence
  * started reaching the court card at all.
  */
-const SHOOTOUT_IS_SKATED = new Set(["icehockey", "hockey"]);
+
 
 function resultMsg(
   outcome: PublicFixture["outcome"],
@@ -946,19 +986,66 @@ export function buildMatchCentre(input: MatchCentreInput): MatchCentreDocT {
   const extraTabs: MatchCentreTabIdT[] = [];
 
   if (sportKey === "cricket") {
-    const parsedCfg = cricket.configSchema.parse(cfg);
-    card = deriveCricketScorecard({ events, cfg: parsedCfg, lineups: lineupPair });
-    cricketView = buildCricketView(card, sides, personOf, locale);
-    if (card.innings.some((innings) => innings.batting.length > 0)) extraTabs.push("scorecard");
-    if (card.innings.some((innings) => innings.overs.length > 0)) extraTabs.push("commentary");
-    // Cricket's fold has no partial-failure mode to report — unlike
-    // `buildTimeline` it never replays under a try/catch degrade, so
-    // `derivedComplete` stays `true` unconditionally (contract notes: "true
-    // for cricket unless the fold reports an inconsistency" — it has no
-    // mechanism to).
-    // Fix round 2 — the SAME shared `effectiveBand`, never `card.band`
-    // (the fold's own copy of the identical computation): one code path.
-    band = effectiveBand(events, cricket, parsedCfg);
+    // ONE guard, not two. The first cut of this fix had a `safeParse` AND a
+    // try/catch, and a mutant proved the pair worthless: replacing the
+    // safeParse with "accept anything" killed ZERO tests, because a rejected
+    // config and a thrown fold produce byte-identical output — each guard hid
+    // the other's removal, so neither was actually tested. One `try` around
+    // the whole derivation is the honest shape, and a mutant that removes it
+    // reds immediately.
+    //
+    // Three throw sites live in here, and all three were 500s on an ANONYMOUS
+    // page before this:
+    //   - `configSchema.parse` on a config the schema rejects. The safeParse
+    //     one frame upstream (`match-centre-load.ts`) falls back to the RAW
+    //     value, so this line re-threw on exactly what that fallback produced.
+    //   - `deriveCricketScorecard`, whose reducer's `invalid()`/`wrongPhase()`
+    //     throw regardless of the read path's `strict: false`. One unfoldable
+    //     event took the whole response down for cricket, where every other
+    //     sport degrades and reports it.
+    //   - `effectiveBand` -> `cricket.padSpec(cfg)`, which reaches into the
+    //     config and throws on the same bad input. Found by the degrade test
+    //     itself after the first two were fixed — the same 500, one line
+    //     further down.
+    //
+    // Degrading matches `buildTimeline` exactly: keep the header, the sides
+    // and every info row that does not depend on the fold; drop the derived
+    // tabs; and SAY so through `derivedComplete`, so a fixture that LOST its
+    // scorecard is distinguishable from one that never had one. A rejected
+    // config leaves the band `null` — unknown, which omits the "scored as" row
+    // rather than guessing a number.
+    try {
+      const parsedCfg = cricket.configSchema.parse(cfg);
+      card = deriveCricketScorecard({ events, cfg: parsedCfg, lineups: lineupPair });
+      cricketView = buildCricketView(card, sides, personOf, locale);
+      // Fix round 2 — the SAME shared `effectiveBand`, never `card.band` (the
+      // fold's own copy of the identical computation): one code path.
+      //
+      // The MODULE is resolved the same way the non-cricket branch resolves
+      // its own, honouring the division's pinned `moduleVersion`. This branch
+      // used the imported `cricket` SINGLETON, so a division pinned to an
+      // older module was read with the latest fold's fidelity map — a silent
+      // disagreement between what the organiser's pad offered and what the
+      // spectator page said the match was scored at.
+      //
+      // `deriveCricketScorecard` above still takes the singleton: it is the
+      // cricket fold itself, not a versioned capability, which is exactly the
+      // asymmetry the findings doc records as the case for lifting the fold
+      // onto `SportModule`.
+      const bandModule = moduleVersion !== null ? resolveModule(sportKey, moduleVersion) : resolveLatestModule(sportKey);
+      band = effectiveBand(events, bandModule, parsedCfg);
+    } catch (err) {
+      card = null;
+      cricketView = null;
+      band = null;
+      derivedComplete = false;
+      log.warn(
+        { sportKey, fixtureId: fixture.id, err: err instanceof Error ? err.message : String(err) },
+        "match-centre: cricket config or fold refused; scorecard, commentary and the scored-as row are absent",
+      );
+    }
+    if (card !== null && card.innings.some((innings) => innings.batting.length > 0)) extraTabs.push("scorecard");
+    if (card !== null && card.innings.some((innings) => innings.overs.length > 0)) extraTabs.push("commentary");
   } else {
     // Fix round 1 (Important #2) — a single division's own read resolves its
     // PINNED module version, never the latest (`engine-db/registry.ts:31-36`'s

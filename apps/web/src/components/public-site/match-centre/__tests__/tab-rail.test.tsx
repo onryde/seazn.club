@@ -36,16 +36,19 @@ import { renderToStaticMarkup } from "react-dom/server";
 import en from "@/dictionaries/en/public.json";
 import fr from "@/dictionaries/fr/public.json";
 import type { Dict } from "@/lib/i18n-constants";
+import type { MatchCentreTabIdT } from "@/server/public-site/match-centre-schema";
 import { TabRail, scrollActiveTabIntoView } from "../tab-rail";
 
 const dict = en as Dict;
 const frDict = fr as Dict;
 
-it("TabRail renders one role=tab per tab with aria-selected on the active one, inside a focusable, labelled rail", () => {
+it("TabRail renders one role=tab per tab with aria-selected on the active one, inside a labelled rail with a single tab stop", () => {
   const html = renderToStaticMarkup(
     <TabRail tabs={["summary", "scorecard", "commentary", "info"]} active="scorecard" onChange={() => {}} dict={dict} />,
   );
   expect(html).toContain('role="tablist"');
+  // The tab stop now lives on the SELECTED BUTTON, not on the rail — see the
+  // roving-tabindex describe below, which pins which element has it.
   expect(html).toContain('tabindex="0"');
   expect(html).toContain('aria-label="');
   expect(html.match(/role="tab"/g)?.length).toBe(4);
@@ -62,14 +65,26 @@ it("renders the real dictionary word for each tab, not a raw key (RENDERED COPY,
   expect(html).not.toMatch(/\bmatchCentre\.tab\./); // no raw key ever leaks into the DOM
 });
 
-it("each tab button carries id=mc-tab-<id> and aria-controls=mc-tab-panel-<id> — the pairing MatchCentre's tabpanel wrapper relies on", () => {
+it("each tab button carries id=mc-tab-<id>, and the ACTIVE one carries aria-controls=mc-tab-panel-<id> — the pairing MatchCentre's tabpanel wrapper relies on", () => {
   const html = renderToStaticMarkup(
     <TabRail tabs={["summary", "scorecard"]} active="summary" onChange={() => {}} dict={dict} />,
   );
+  // `id` is on EVERY tab: it is what the rendered panel's `aria-labelledby`
+  // points BACK at, and that direction always resolves.
   expect(html).toContain('id="mc-tab-summary"');
-  expect(html).toContain('aria-controls="mc-tab-panel-summary"');
   expect(html).toContain('id="mc-tab-scorecard"');
-  expect(html).toContain('aria-controls="mc-tab-panel-scorecard"');
+  // `aria-controls` is on the ACTIVE tab only — see the component's own note.
+  // `MatchCentre` renders one panel, so the inactive tab's reference would
+  // name an element that is not in the document.
+  expect(html).toContain('aria-controls="mc-tab-panel-summary"');
+  expect(html).not.toContain('aria-controls="mc-tab-panel-scorecard"');
+  // The positive pair for that negative: make SCORECARD active and the
+  // reference moves with it, rather than simply never being emitted.
+  const other = renderToStaticMarkup(
+    <TabRail tabs={["summary", "scorecard"]} active="scorecard" onChange={() => {}} dict={dict} />,
+  );
+  expect(other).toContain('aria-controls="mc-tab-panel-scorecard"');
+  expect(other).not.toContain('aria-controls="mc-tab-panel-summary"');
 });
 
 describe("TabRail — accented/quiet pill classes (shipped vocabulary, tabs.tsx:30-31)", () => {
@@ -224,5 +239,112 @@ describe("scrollActiveTabIntoView (R11 fix round, C6)", () => {
   it("does nothing (never throws) when the element is null or undefined — the ref before it attaches", () => {
     expect(() => scrollActiveTabIntoView(null, false)).not.toThrow();
     expect(() => scrollActiveTabIntoView(undefined, false)).not.toThrow();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Accessibility (whole-branch review) — ROVING TABINDEX, AND NO DANGLING
+// `aria-controls`.
+// ---------------------------------------------------------------------------
+//
+// Two separate defects with one cause: every tab was in the browser's own Tab
+// order, and every tab pointed at a panel id.
+//
+//  * A six-tab rail cost SEVEN tab stops (the `tablist` itself carried
+//    `tabIndex={0}`, plus one per button) before a keyboard user reached the
+//    content. The APG tabs pattern puts exactly ONE tab stop on the rail — the
+//    selected tab — and moves between tabs with the arrow keys, which this
+//    rail already implements. The container stops being focusable; its
+//    `onKeyDown` still fires, because the event bubbles from the focused
+//    button.
+//
+//  * `aria-controls` referenced `mc-tab-panel-<id>` for all six tabs, but
+//    `MatchCentre` renders ONLY the active panel — so five of the six pointed
+//    at an element that is not in the document.
+//
+// NEITHER IS DIRECTLY TESTABLE HERE: this workspace has no jsdom, so nothing
+// can press Tab or read a focus ring. What static markup CAN pin is the
+// attribute state the browser derives that behaviour from, which is what these
+// assert.
+//
+// MUTANTS KILLED (applied by hand, restored from a `cp` backup of the FIXED
+// state; `numTotalTests` stayed 534 under all three, so none is the
+// collection-break shape that reads as a survivor). The two tabindex mutants
+// are deliberately SEPARATE — the rail had two sources of tab stops, and one
+// mutant covering for the other would leave each of them untested:
+//
+//  (M9a) `tabIndex={isActive ? 0 : -1}` → `tabIndex={0}` on every button.
+//        → RED: "exactly one element in the rail is in the tab order…",
+//          "the tab stop MOVES with the selection".
+//  (M9b) `tabIndex={0}` restored on the TABLIST container.
+//        → RED: "exactly one element in the rail is in the tab order…",
+//          "the tablist container is NOT itself focusable".
+//  (M10) `aria-controls` unconditional again.
+//        → RED: "only the selected tab carries aria-controls…", and "each tab
+//          button carries id=mc-tab-<id>, and the ACTIVE one carries
+//          aria-controls…".
+describe("TabRail — roving tabindex (one tab stop, not one per tab)", () => {
+  const SIX: MatchCentreTabIdT[] = ["summary", "scorecard", "commentary", "timeline", "sets", "info"];
+
+  const render = (active: MatchCentreTabIdT): string =>
+    renderToStaticMarkup(<TabRail tabs={SIX} active={active} onChange={() => {}} dict={dict} />);
+
+  /** One tab's whole opening `<button …>` tag — asserted on as a unit rather
+   *  than as an attribute-ORDER regex, which is not the contract (and which
+   *  is what makes an unrelated attribute insertion red a test). */
+  const buttonTag = (html: string, tab: MatchCentreTabIdT): string => {
+    const match = html.match(new RegExp(`<button[^>]*data-testid="mc-tab-${tab}"[^>]*>`));
+    expect(match, tab).not.toBeNull();
+    return match![0];
+  };
+
+  it("exactly one element in the rail is in the tab order, and it is the SELECTED tab", () => {
+    const html = render("commentary");
+    expect((html.match(/tabindex="0"/g) ?? []).length).toBe(1);
+    expect((html.match(/tabindex="-1"/g) ?? []).length).toBe(SIX.length - 1);
+    // …and it is the selected one, not merely the first.
+    const active = buttonTag(html, "commentary");
+    expect(active).toContain('aria-selected="true"');
+    expect(active).toContain('tabindex="0"');
+  });
+
+  it("the tab stop MOVES with the selection", () => {
+    // The positive pair for the assertion above: a rail whose `tabindex="0"`
+    // were hardcoded to `tabs[0]` passes the first test and fails this one.
+    const html = render("info");
+    expect(buttonTag(html, "info")).toContain('tabindex="0"');
+    expect(buttonTag(html, "summary")).toContain('tabindex="-1"');
+    expect(buttonTag(html, "summary")).toContain('aria-selected="false"');
+  });
+
+  it("the tablist container is NOT itself focusable", () => {
+    const html = render("summary");
+    const tablistTag = html.match(/<div[^>]*role="tablist"[^>]*>/)?.[0];
+    expect(tablistTag).toBeTruthy();
+    expect(tablistTag).not.toContain("tabindex");
+    // The positive pair: it keeps the role and the accessible name that make
+    // it a tablist at all — this removes a tab stop, not the landmark.
+    expect(tablistTag).toContain('role="tablist"');
+    expect(tablistTag).toContain('aria-label="');
+  });
+});
+
+describe("TabRail — aria-controls names only a panel that EXISTS", () => {
+  const SIX: MatchCentreTabIdT[] = ["summary", "scorecard", "commentary", "timeline", "sets", "info"];
+
+  it("only the selected tab carries aria-controls — the other five would dangle", () => {
+    const html = renderToStaticMarkup(
+      <TabRail tabs={SIX} active="scorecard" onChange={() => {}} dict={dict} />,
+    );
+    // `MatchCentre` renders ONE panel: `mc-tab-panel-scorecard` and no other.
+    expect((html.match(/aria-controls="/g) ?? []).length).toBe(1);
+    expect(html).toContain('aria-controls="mc-tab-panel-scorecard"');
+    // The negative half, spelled out for the five that are not in the DOM.
+    for (const tab of SIX.filter((t) => t !== "scorecard")) {
+      expect(html, tab).not.toContain(`aria-controls="mc-tab-panel-${tab}"`);
+    }
+    // …and every tab still carries its OWN id, which is what the panel's
+    // `aria-labelledby` points BACK at — that direction always resolves.
+    for (const tab of SIX) expect(html, tab).toContain(`id="mc-tab-${tab}"`);
   });
 });

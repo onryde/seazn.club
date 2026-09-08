@@ -50,9 +50,23 @@ export function fixtureSubheading(
   scheduledAt: string | null | undefined,
   timeTbdLabel: string = "Time TBD",
   timeNotRecordedLabel: string = "Time not recorded",
+  locale: string = "en-GB",
 ): string {
   if (scheduledAt) {
-    return new Date(scheduledAt).toLocaleString("en-GB", {
+    // `locale`, not a hardcoded "en-GB". The whole-branch review found this
+    // branch rendering "Monday 20 July, 14:30" on fr/es/nl orgs — the ONLY
+    // part of this function that had not been localised, while the two labels
+    // beside it were localised in the same session. The page already had the
+    // locale in hand (`page.tsx`'s `toLocale(org.default_locale)`); it was
+    // simply never passed.
+    //
+    // Two tests should have caught it and structurally could not, which is the
+    // more useful half: `page.test.ts`'s describe is titled "no hardcoded
+    // English leaks outside lang=en" but renders only fixtures with
+    // `scheduled_at: null`, so it never reaches this line; and this function's
+    // own test asserted the date branch with three NEGATIVES ("not Time TBD",
+    // "not empty"), which every locale satisfies equally.
+    return new Date(scheduledAt).toLocaleString(locale, {
       weekday: "long",
       day: "numeric",
       month: "long",

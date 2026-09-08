@@ -42,6 +42,24 @@
 // a data cell belongs to without one), and an `sr-only` span carrying real
 // TEXT in the name column's header — a `title` attribute alone is not
 // reliably announced, unlike visible or `sr-only` text content.
+//
+// Whole-branch review, Accessibility group — TWO fixes, both about who can
+// read this table:
+//
+//  * THE NUMERIC HEADERS LOCALISED ONLY VIA `title`, which is a HOVER
+//    affordance a phone does not have; and where a `<th>` has text content
+//    that text WINS the accessible name, so "R" was announced and the
+//    localised word in `title` never was. Each numeric header now ships the
+//    localised word as `sr-only` text with the notation `aria-hidden` — a
+//    fold out of the accessibility tree, never a removal, so a sighted reader
+//    still reads "R", "B", "4s". This is exactly what `scorecard-tab.tsx`'s
+//    own `Th` already did, three inches away on the same tab.
+//
+//  * THE NAME CELL WAS A `<td>`. In a stat table the name IS the row's
+//    header: without `<th scope="row">` a screen reader reading "62" out of
+//    the R column cannot say whose 62 it is. `text-left` is needed because a
+//    `<th>` is centred by default; `font-medium` was already there and keeps
+//    it off the UA's bold.
 import type { ReactNode } from "react";
 import type { Dict as PublicDict } from "@/lib/i18n-constants";
 import { t, type TKey } from "@/lib/i18n-runtime";
@@ -128,7 +146,12 @@ export function StatTable<Row>({
                 col.foldAtPhone ? " max-md:hidden" : ""
               }`}
             >
-              {col.abbr}
+              {/* See the note above: the localised word ships as REAL text, and
+                  the notation is hidden from the accessibility tree so a
+                  screen reader reads "Strike rate" once rather than "SR Strike
+                  rate". `scorecard-tab.tsx`'s `Th` is the same two spans. */}
+              <span className="sr-only">{t(dict, col.titleKey)}</span>
+              <span aria-hidden>{col.abbr}</span>
             </th>
           ))}
         </tr>
@@ -136,7 +159,11 @@ export function StatTable<Row>({
       <tbody>
         {rows.map((row, i) => (
           <tr key={rowKey(row, i)} {...(rowAttrs ? rowAttrs(row) : {})}>
-            <td data-testid="mc-stat-name-cell" className="min-w-0 py-1.5 pr-2 align-top text-sm font-medium text-zinc-800">
+            <th
+              scope="row"
+              data-testid="mc-stat-name-cell"
+              className="min-w-0 py-1.5 pr-2 text-left align-top text-sm font-medium text-zinc-800"
+            >
               <span className="block truncate">{nameCell(row)}</span>
               {/* Phone only, and only when the caller folded something. The
                   `md:hidden` is what stops it printing twice on desktop,
@@ -149,7 +176,7 @@ export function StatTable<Row>({
                   {phoneSubLine(row)}
                 </span>
               ) : null}
-            </td>
+            </th>
             {columns.map((col) => (
               <td
                 key={col.abbr}

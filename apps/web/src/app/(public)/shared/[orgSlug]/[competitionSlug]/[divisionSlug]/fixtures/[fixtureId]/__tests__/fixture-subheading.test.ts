@@ -38,6 +38,42 @@ describe("fixtureSubheading", () => {
     }
   });
 
+  // The date branch had NO positive witness in the repo: it was asserted with
+  // three negatives ("not Time TBD", "not Time not recorded", "not empty"),
+  // which every locale satisfies equally — so it rendered hardcoded en-GB on
+  // fr/es/nl for the life of the branch and no test could see it. These pin
+  // what it actually produces, and that the LOCALE is what decides it.
+  it("formats the date in the locale it is given, not in English", () => {
+    const at = "2026-07-20T14:30:00.000Z";
+    const en = fixtureSubheading("scheduled", at, "Time TBD", "Time not recorded", "en-GB");
+    const fr = fixtureSubheading("scheduled", at, "Time TBD", "Time not recorded", "fr-FR");
+    // Derived from Intl itself, never a literal typed here: a CI runner with a
+    // different ICU build must move the expectation with it, not red.
+    const expected = (locale: string) =>
+      new Date(at).toLocaleString(locale, {
+        weekday: "long",
+        day: "numeric",
+        month: "long",
+        hour: "2-digit",
+        minute: "2-digit",
+      });
+    expect(en).toBe(expected("en-GB"));
+    expect(fr).toBe(expected("fr-FR"));
+    // The assertion with teeth: the two must DIFFER. Passing the locale
+    // through and then ignoring it would satisfy both lines above.
+    expect(fr).not.toBe(en);
+  });
+
+  // Callers that pass no locale keep the previous behaviour exactly — the
+  // parameter is additive, and every existing two- and four-argument call site
+  // still reads as it did.
+  it("defaults to en-GB when no locale is given", () => {
+    const at = "2026-07-20T14:30:00.000Z";
+    expect(fixtureSubheading("scheduled", at)).toBe(
+      fixtureSubheading("scheduled", at, "Time TBD", "Time not recorded", "en-GB"),
+    );
+  });
+
   it("shows the formatted date whenever a scheduled time exists, regardless of status", () => {
     for (const status of ["in_play", "decided", "scheduled"]) {
       const result = fixtureSubheading(status, "2026-07-20T14:30:00.000Z");

@@ -5042,5 +5042,13 @@
   "history.event.officialsAssigned": "Officiels assignés",
   "history.event.participantsImported": "Participants importés",
   "history.event.schedulePublished": "Calendrier publié",
-  "history.event.divisionStarted": "Division démarrée"
+  "history.event.divisionStarted": "Division démarrée",
+  "pad.cricket.action.playerLine.field.innings": "Manche",
+  "pad.cricket.action.playerLine.field.battingOut": "Éliminé",
+  "pad.cricket.action.playerLine.field.battingRuns": "Runs marqués",
+  "pad.cricket.action.playerLine.field.battingBalls": "Balles jouées",
+  "pad.cricket.action.playerLine.field.bowlingLegalBalls": "Balles lancées",
+  "pad.cricket.action.playerLine.field.bowlingRuns": "Runs concédés",
+  "pad.cricket.action.playerLine.field.bowlingWickets": "Guichets",
+  "pad.cricket.action.playerLine.field.person": "Joueur"
 }

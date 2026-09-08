@@ -20,6 +20,7 @@ import {
   type CricketCfg,
   type CricketEv,
   type CricketState,
+  type FineInnings,
   type InningsState,
 } from "./cricket.ts";
 import type {
@@ -67,6 +68,26 @@ function emptyExtras(): ExtrasTally {
 // display and validation can never disagree.
 function fmtOvers(legalBalls: number, ballsPerOver: number): string {
   return `${Math.floor(legalBalls / ballsPerOver)}.${legalBalls % ballsPerOver}`;
+}
+
+/**
+ * W1 review finding P4 — the bowler STATE credited for the delivery just
+ * folded: the one `finishDelivery` charged its runs, balls and wicket to,
+ * never the name the payload carried. On the read path (`strict: false`,
+ * which is what `READ_CTX` above passes for the whole stream) a ball may
+ * name a bowler who does not own the over in progress; `applyDelivery`
+ * keeps the over's own bowler, so anything keyed on `payload.bowler` prints
+ * a name `fine.bowlerRuns`/`bowlerWickets` never touched — a card reading
+ * "c a3 b a8" over a bowling row that gave that wicket to a7, and a phantom
+ * `a8 0.0 0 0 0` row for a bowler who never bowled.
+ *
+ * `currentBowler` is nulled the instant an over closes (`finishDelivery`
+ * moves it to `prevOverBowler` in the same step it swaps ends), so the LAST
+ * ball of an over is read from there — the same pair the maiden credit below
+ * already reads.
+ */
+function creditedBowler(fine: FineInnings | null | undefined): string | null {
+  return fine?.currentBowler ?? fine?.prevOverBowler ?? null;
 }
 
 interface CricketBallLikePayload {
@@ -305,9 +326,15 @@ class InningsAccumulator {
       if (!order.includes(person)) order.push(person);
     }
 
-    // Bowling order: first ball of a bowler's first over.
+    // Bowling order: first ball of a bowler's first over. Keyed on the bowler
+    // STATE credited (finding P4 — see `creditedBowler`), because this list
+    // is what MINTS the card's bowling rows and every number in those rows is
+    // read out of `FineInnings` by the same name: a row for a payload-only
+    // bowler is a phantom `a8 0.0 0 0 0` beside the figures of the man who
+    // actually bowled the over.
+    const credited = creditedBowler(innings.fine);
     const bowlerOrder = this.bowlerOrderByIndex[index] ?? (this.bowlerOrderByIndex[index] = []);
-    if (!bowlerOrder.includes(payload.bowler)) bowlerOrder.push(payload.bowler);
+    if (credited !== null && !bowlerOrder.includes(credited)) bowlerOrder.push(credited);
 
     // Fours/sixes — only the ball payload carries this; state only keeps
     // the batter's aggregate runs.
@@ -327,7 +354,10 @@ class InningsAccumulator {
       const dismissals = this.dismissalByIndex[index] ?? (this.dismissalByIndex[index] = {});
       dismissals[wicket.out] = {
         kind: wicket.kind,
-        bowler: wicket.bowlerCredited ? payload.bowler : null,
+        // Finding P4 — the SAME bowler `applyDelivery` incremented
+        // `fine.bowlerWickets` for, so "c a3 b X" and the wicket in X's own
+        // bowling row can never name two different people.
+        bowler: wicket.bowlerCredited ? credited : null,
         fielder: wicket.fielder ?? null,
         fielderAssist: wicket.fielderAssist ?? null,
       };
@@ -711,7 +741,6 @@ class InningsAccumulator {
     const bpo = state.cfg.ballsPerOver;
     this.ensure(index);
     const tally = this.extrasByIndex[index] ?? emptyExtras();
-    const total = tally.wides + tally.noBalls + tally.byes + tally.legByes + tally.penalties;
     const fine = innings.fine;
 
     // Fix round 1, finding 5: a batter seated by the LAST ball's wicket
@@ -812,7 +841,19 @@ class InningsAccumulator {
         overs: fmtOvers(innings.legalBalls, bpo),
         runRate: innings.legalBalls > 0 ? (innings.runs * bpo) / innings.legalBalls : null,
       },
-      extras: this.hasBallEventByIndex[index] === true ? { ...tally, total } : null,
+      // Finding P4 — `total` is `FineInnings.extras`, the reducer's own
+      // running sum of every delivery's extra runs (`finishDelivery`:
+      // `fine.extras + extraRuns`), never a second sum of the very payloads
+      // that fed it. The per-kind SPLIT stays local because `FineInnings`
+      // carries no breakdown at all, which is the whole reason this tally
+      // exists. `fine !== null` is not a fallback: a ball event can only
+      // reach an innings recorded ball-by-ball (`applyDelivery` refuses a
+      // summary-fidelity innings outright), so the two conditions name the
+      // same innings.
+      extras:
+        this.hasBallEventByIndex[index] === true && fine !== null
+          ? { ...tally, total: fine.extras }
+          : null,
       batting,
       didNotBat,
       bowling,

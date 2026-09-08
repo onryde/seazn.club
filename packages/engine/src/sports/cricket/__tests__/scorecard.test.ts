@@ -408,7 +408,19 @@ describe("deriveCricketScorecard — batting and bowling", () => {
     expect(h3.sixes).toBe(1);
     expect(h3.sixes).toBe(scriptBoundaries(TWO_INNINGS, "h3", 6));
     const h1 = inn1!.batting.find((b) => b.person === "h1")!;
+    // W1 review finding T3 — this line used to be the derived expression
+    // ALONE, which recomputes the implementation including its rounding and
+    // so cannot witness a rounding change. Pinned literals now sit beside it
+    // (the same belt-and-suspenders the band-2 test below already uses), and
+    // h2 carries the case that actually EXERCISES the rounding: 4 off 3 is
+    // 133.333…, so a strike rate that stopped rounding to one decimal — or
+    // rounded to a different place — moves this number, while h1's exact
+    // 120 could not tell the two apart.
+    expect(h1.strikeRate).toBe(120);
     expect(h1.strikeRate).toBe(Math.round(((h1.runs * 100) / h1.balls) * 10) / 10);
+    expect((h2.runs * 100) / h2.balls).not.toBe(h2.strikeRate); // rounding really happened
+    expect(h2.strikeRate).toBe(133.3);
+    expect(h2.strikeRate).toBe(Math.round(((h2.runs * 100) / h2.balls) * 10) / 10);
     const caught = inn1!.batting.find((b) => b.dismissal.kind === "caught")!;
     expect(caught.dismissal).toEqual({ kind: "caught", bowler: "a7", fielder: "a3", fielderAssist: null });
     const runout = inn1!.batting.find((b) => b.dismissal.kind === "runout")!;
@@ -1224,7 +1236,191 @@ describe("deriveCricketScorecard — fix round 1", () => {
     const a7 = inn1!.bowling.find((b) => b.person === "a7")!;
     expect(a7.runs).toBe(fine.bowlerRuns["a7"]);
     expect(a7.runs).toBe(scriptedRuns);
-    expect(inn1!.bowling.find((b) => b.person === "a8")?.runs ?? 0).toBe(0);
+    // W1 review findings P4/T4 — this used to read `…?.runs ?? 0` and expect
+    // 0, which passes BOTH for "no row for a8" and for "a phantom row for a8
+    // showing 0". The card's bowling ROWS come from the same authority their
+    // numbers do (`fine.bowlerBalls`/`bowlerRuns`/`bowlerWickets`, keyed by
+    // the bowler STATE credited), so a name that only ever appeared on a
+    // payload gets no row at all — assert the absence.
+    expect(inn1!.bowling.find((b) => b.person === "a8")).toBeUndefined();
+    expect(inn1!.bowling.map((b) => b.person)).toEqual(["a7"]);
+  });
+
+  // W1 review finding P4 — the dismissal's own bowler credit, the second
+  // payload-keyed field on the same class of ball. `scorecard.test.ts`'s
+  // MID_OVER_SWAP above already proved a payload can name a bowler the
+  // reducer ignores; this is that ball carrying a WICKET, where the card
+  // printed "c a3 b a8" while the bowling row gave the wicket to a7.
+  it("a wicket ball naming a bowler he does not own is credited to the over's bowler", () => {
+    const MID_OVER_WICKET: Script = {
+      cfg: { ballsPerInnings: 12, playersPerSide: 8, minOversForResult: 2 },
+      home: HOME,
+      away: AWAY,
+      tossWonBy: "home",
+      elected: "bat",
+      innings: [
+        {
+          batting: "home",
+          bowlers: ["a7"],
+          deliveries: [{ bat: 0 }, { out: "caught", fielder: "a3", bowler: "a8" }],
+          leaveOpen: true,
+        },
+      ],
+    };
+    const s = scriptLedger(MID_OVER_WICKET);
+    const [inn1] = deriveCricketScorecard({ events: s.events, cfg: s.cfg, lineups: s.lineups }).innings;
+    const fine = s.state.innings[0]!.fine!;
+
+    // The premise: the ledger really does name a8 on the wicket ball, and the
+    // reducer really does charge the wicket to a7 instead.
+    expect(
+      s.events.some(
+        (ev) =>
+          (ev.payload as { wicket?: unknown; bowler?: string }).wicket !== undefined &&
+          (ev.payload as { bowler?: string }).bowler === "a8",
+      ),
+    ).toBe(true);
+    expect(fine.currentBowler).toBe("a7");
+    expect(fine.bowlerWickets["a7"]).toBe(1);
+    expect(fine.bowlerWickets["a8"]).toBeUndefined();
+
+    // h1 is the striker on both balls (a dot does not rotate), so h1 is out.
+    const h1 = inn1!.batting.find((b) => b.person === "h1")!;
+    expect(h1.dismissal).toEqual({
+      kind: "caught",
+      bowler: "a7",
+      fielder: "a3",
+      fielderAssist: null,
+    });
+    // …and the row the card credits that wicket to is the same bowler, with
+    // no row minted for the name on the ball.
+    expect(inn1!.bowling.map((b) => b.person)).toEqual(["a7"]);
+    expect(inn1!.bowling[0]!.wickets).toBe(fine.bowlerWickets["a7"]);
+  });
+
+  // W1 review finding P4, third site: `extras.total` was re-summed from the
+  // ball payloads this class tallies by KIND, while `FineInnings.extras` is
+  // the reducer's own running sum of exactly those numbers. The per-kind
+  // split has no state authority (`FineInnings` does not carry one) and stays
+  // here; the TOTAL now reads state, so the figure printed beside the innings
+  // score is the innings score's own.
+  it("the extras total is the reducer's own, not a second sum of the same payloads", () => {
+    const s = scriptLedger(TWO_INNINGS);
+    const card = deriveCricketScorecard({ events: s.events, cfg: s.cfg, lineups: s.lineups });
+    // Every extra kind appears across the two innings, so this is the whole
+    // table rather than one lucky sample.
+    const kinds = ["wides", "noBalls", "byes", "legByes", "penalties"] as const;
+    for (const [i, inn] of card.innings.entries()) {
+      const extras = inn.extras!;
+      expect(extras.total).toBe(s.state.innings[i]!.fine!.extras);
+      // The split still sums to it — the two authorities AGREE, which is the
+      // premise that makes reading state a simplification rather than a
+      // behaviour change.
+      expect(kinds.reduce((sum, kind) => sum + extras[kind], 0)).toBe(extras.total);
+    }
+    expect(kinds.every((kind) => card.innings.some((inn) => inn.extras![kind] > 0))).toBe(true);
+  });
+
+  // W1 review finding P4, FOURTH site — the over log's own `bowler`, routed on
+  // from the lane that fixed the bowling rows and the dismissal credit. The
+  // suspicion was the same class (Commentary naming one man while the
+  // Scorecard credits another for the same over); the reducer says it cannot
+  // happen HERE, and this pins why rather than changing anything:
+  //
+  //  * the over object is minted ONCE, on the over's FIRST delivery — the only
+  //    ball whose `overIndex` has no entry yet;
+  //  * `finishDelivery` nulls `currentBowler` (moving it to `prevOverBowler`)
+  //    at every over boundary, so `fine.currentBowler` is `null` going INTO an
+  //    over's first ball;
+  //  * `applyDelivery`'s bowler branch is `if (currentBowler === null) { …;
+  //    currentBowler = payload.bowler }` — it ADOPTS the payload's name. The
+  //    "over in progress belongs to …" refusal (the branch that lets state and
+  //    payload diverge on the read path) is the OTHER arm, reachable only from
+  //    ball 2 onward. So at the mint, payload and credited state are the same
+  //    person by construction.
+  //
+  // `prevOverBowler` — the field the maiden credit a few lines below reads —
+  // is the WRONG one here: at the mint it names the PREVIOUS over's bowler,
+  // and `null` for the first over of an innings. That is the differential this
+  // ledger exists to expose, so the right answer differs from the wrong one's
+  // value in BOTH rows.
+  it("the over log names the bowler state credits for that over, never the previous over's", () => {
+    const OVER_HANDOVER_SWAP: Script = {
+      cfg: { ballsPerInnings: 12, playersPerSide: 8, minOversForResult: 2 },
+      home: HOME,
+      away: AWAY,
+      tossWonBy: "home",
+      elected: "bat",
+      innings: [
+        {
+          batting: "home",
+          bowlers: ["a7", "a8"],
+          deliveries: [
+            // Over 1 — a7's, six legal balls, so the reducer really does run
+            // its end-of-over swap before over 2 is minted.
+            { bat: 1 },
+            { bat: 0 },
+            { bat: 0 },
+            { bat: 0 },
+            { bat: 0 },
+            { bat: 0 },
+            // Over 2 — a8's by rotation. Its SECOND ball names a7, the man who
+            // bowled the over before: a strict-only refusal, folded here the
+            // way the READ path folds it, so the ledger genuinely carries a
+            // payload bowler the reducer ignores INSIDE this over.
+            { bat: 1 },
+            { bat: 2, bowler: "a7" },
+          ],
+          leaveOpen: true,
+        },
+      ],
+    };
+    const s = scriptLedger(OVER_HANDOVER_SWAP);
+    const inn1 = deriveCricketScorecard({ events: s.events, cfg: s.cfg, lineups: s.lineups }).innings[0]!;
+    const fine = s.state.innings[0]!.fine!;
+
+    // Premise 1 — the ledger really does name a7 on a ball inside over 2
+    // (`payload.over` is 0-based, as `applyDelivery`'s `expectedOver` is).
+    expect(
+      s.events.some(
+        (ev) =>
+          ev.type === "cricket.ball" &&
+          (ev.payload as { bowler?: string }).bowler === "a7" &&
+          (ev.payload as { over?: number }).over === 1,
+      ),
+    ).toBe(true);
+    // Premise 2 — and the reducer ignored it: over 2 still belongs to a8, and
+    // the swapped ball's runs were charged to a8, never to the name on it.
+    expect(fine.currentBowler).toBe("a8");
+    expect(fine.prevOverBowler).toBe("a7");
+    expect(fine.bowlerBalls["a7"]).toBe(s.cfg.ballsPerOver);
+
+    // The mint-time credited bowler for each over, read off the reducer's own
+    // state at exactly the delivery that minted it (deliveries 1 and 7) —
+    // never a table typed here, so a change to the ledger moves both sides.
+    const creditedAtMint = (deliveryCount: number): string | null => {
+      const at = scriptPrefix(OVER_HANDOVER_SWAP, 0, deliveryCount).state.innings[0]!.fine!;
+      return at.currentBowler ?? at.prevOverBowler;
+    };
+    expect(inn1.overs.map((o) => o.bowler)).toEqual([creditedAtMint(1), creditedAtMint(7)]);
+    expect(inn1.overs.map((o) => o.bowler)).toEqual(["a7", "a8"]);
+
+    // The ordering differential — `prevOverBowler` at each mint is a DIFFERENT
+    // value from the answer, so a fold that read it there fails both rows.
+    const atOver1Mint = scriptPrefix(OVER_HANDOVER_SWAP, 0, 1).state.innings[0]!.fine!;
+    const atOver2Mint = scriptPrefix(OVER_HANDOVER_SWAP, 0, 7).state.innings[0]!.fine!;
+    expect(atOver1Mint.prevOverBowler).toBeNull();
+    expect(atOver2Mint.prevOverBowler).not.toBe(atOver2Mint.currentBowler);
+    expect(inn1.overs[0]!.bowler).not.toBe(atOver1Mint.prevOverBowler);
+    expect(inn1.overs[1]!.bowler).not.toBe(atOver2Mint.prevOverBowler);
+
+    // …and the Commentary tab's over header agrees with the Scorecard's
+    // bowling table for the same over: the rows are minted in the order each
+    // bowler's first over opens, and the runs the table shows for over 2's
+    // bowler include the swapped ball's.
+    expect(inn1.bowling.map((b) => b.person)).toEqual([...new Set(inn1.overs.map((o) => o.bowler))]);
+    expect(inn1.bowling.find((b) => b.person === "a7")).toBeDefined();
+    expect(inn1.bowling.find((b) => b.person === inn1.overs[1]!.bowler)!.runs).toBe(inn1.overs[1]!.runs);
   });
 });
 
@@ -1470,6 +1666,23 @@ describe("deriveCricketScorecard — coarser bands, result, super over", () => {
     expect(superOvers[0]!.overs.flatMap((o) => o.balls)).toHaveLength(
       SUPER_OVER_SCRIPT.innings[2]!.deliveries.length,
     );
+
+    // The extras TOTAL beside that split (W1 finding P4's third site) is the
+    // super over's OWN `FineInnings.extras`, and the split still sums to it.
+    // This is the pair that makes a state-sourced total safe at an OFFSET
+    // slot: `total` comes off the innings object `cards()` hands to `card()`,
+    // so it is right whatever the index does, while the split comes from the
+    // accumulator's per-slot store — a card addressed at the wrong slot
+    // therefore shows a total and a split that no longer add up. Nothing else
+    // in this suite pins `extras.total` for a super-over card.
+    const SO_KINDS = ["wides", "noBalls", "byes", "legByes", "penalties"] as const;
+    for (const [i, so] of superOvers.entries()) {
+      expect(so.extras!.total).toBe(soState[i]!.fine!.extras);
+      expect(SO_KINDS.reduce((sum, kind) => sum + so.extras![kind], 0)).toBe(so.extras!.total);
+    }
+    // …and the first super over's total is genuinely non-zero, or both sides
+    // of the comparison above are a vacuous 0.
+    expect(superOvers[0]!.extras!.total).toBeGreaterThan(0);
 
     // THE SUPER OVER CONTINUES THE INNINGS COUNT (cricket.ts's own rule, the
     // one `activeInnings` states) — cards are numbered 1..N across both

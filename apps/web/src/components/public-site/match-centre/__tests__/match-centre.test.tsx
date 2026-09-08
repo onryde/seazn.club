@@ -54,7 +54,7 @@ function buildDoc(overrides: Partial<MatchCentreDocT> = {}): MatchCentreDocT {
 
 function props(doc: MatchCentreDocT, tabParam: string | null = null): MatchCentreProps {
   const initial: LiveFixtureData = { status: "scheduled", summary: null, outcome: null, match_centre: doc };
-  return { fixtureId: doc.fixtureId, initial, realtime: false, dict, locale: "en", tabParam };
+  return { fixtureId: doc.fixtureId, initial, realtime: false, dict, tabParam };
 }
 
 const fullDoc = buildDoc();
@@ -140,7 +140,7 @@ describe("MatchCentre — graceful fallback (no document, or an empty tabs list)
   it("an `initial` with NO match_centre document renders the mc-fallback LiveScoreBody, not a blank page", () => {
     const initial: LiveFixtureData = { status: "scheduled", summary: null, outcome: null }; // no match_centre at all
     const html = renderToStaticMarkup(
-      <MatchCentre fixtureId="fx-none" initial={initial} realtime={false} dict={dict} locale="en" tabParam={null} />,
+      <MatchCentre fixtureId="fx-none" initial={initial} realtime={false} dict={dict} tabParam={null} />,
     );
     expect(html).toContain('data-testid="mc-fallback"');
     // Review round 3 — LiveScoreBody's headline fallback keeps its ORIGINAL
@@ -168,12 +168,56 @@ describe("MatchCentre — graceful fallback (no document, or an empty tabs list)
       match_centre: emptyTabsDoc,
     };
     const html = renderToStaticMarkup(
-      <MatchCentre fixtureId={emptyTabsDoc.fixtureId} initial={initial} realtime={false} dict={dict} locale="en" tabParam={null} />,
+      <MatchCentre fixtureId={emptyTabsDoc.fixtureId} initial={initial} realtime={false} dict={dict} tabParam={null} />,
     );
     expect(html).toContain('data-testid="mc-fallback"');
     // Review fix round 2 (Task 10 deferred minor) — the document (just an
     // empty tabs list) still has a real header with both sides' names.
     expect(html).toContain("Home");
     expect(html).toContain("Away");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Accessibility (whole-branch review) — THE TABPANEL MUST BE REACHABLE.
+// ---------------------------------------------------------------------------
+//
+// The Info and Timeline panels contain no focusable element at all: prose,
+// definition rows, a list of lines. Under the APG tabs pattern that is exactly
+// the case where the panel itself takes `tabIndex={0}` — otherwise a keyboard
+// user arrows along the rail, presses Tab, and lands PAST the content the rail
+// was selecting, with no way to scroll or read it from the keyboard.
+//
+// Applied unconditionally rather than "only when the panel has no focusable
+// child": which panels have one is data-dependent (a scorecard's scroll
+// regions appear only when there are rows to scroll), so a conditional would
+// be a rule that silently changed with the document.
+//
+// MUTANT KILLED: `tabIndex={0}` deleted from the wrapper, applied by hand and
+// restored from a `cp` backup of the FIXED state (`numTotalTests` stayed 534).
+// → RED: "the role=tabpanel wrapper carries tabIndex=0, for panels with
+// nothing focusable inside".
+describe("MatchCentre — the tabpanel wrapper is focusable", () => {
+  it("the role=tabpanel wrapper carries tabIndex=0, for panels with nothing focusable inside", () => {
+    for (const tab of ["info", "timeline", "summary"] as const) {
+      const html = renderToStaticMarkup(<MatchCentre {...props(fullDoc, tab)} />);
+      const wrapperTag = html.match(/<div[^>]*role="tabpanel"[^>]*>/)?.[0];
+      expect(wrapperTag, tab).toBeTruthy();
+      expect(wrapperTag, tab).toContain('tabindex="0"');
+      // The positive pair: it is still the SAME element that owns the role,
+      // the id and the label — this adds a tab stop, it does not move the
+      // panel's identity onto a new wrapper.
+      expect(wrapperTag, tab).toContain(`id="mc-tab-panel-${tab}"`);
+      expect(wrapperTag, tab).toContain(`aria-labelledby="mc-tab-${tab}"`);
+    }
+  });
+
+  it("the no-document fallback does NOT invent a tabpanel", () => {
+    // The negative half: `tabIndex` belongs to the tabpanel, and the fallback
+    // branch has no rail and no panel — a blanket `tabIndex={0}` sprayed on
+    // every wrapper would show up here.
+    const html = renderToStaticMarkup(<MatchCentre {...props(buildDoc({ tabs: [] }))} />);
+    expect(html).toContain('data-testid="mc-fallback"');
+    expect(html).not.toContain('role="tabpanel"');
   });
 });

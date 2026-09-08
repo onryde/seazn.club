@@ -1823,6 +1823,44 @@ function applyPlayerLine(
       // checked it) — `0` names that without a self-defeating comparison.
       reject("batting.dismissal", "out: true", 0);
     }
+    // W1 review finding P2 — the SAME two rules band 3 applies to a
+    // `CricketWicket`, mirrored here rather than re-derived, because a
+    // band-2 line says exactly the same things in a different shape:
+    //
+    //  * naming `dismissal.bowler` IS this band's `bowlerCredited: true`, so
+    //    it answers to the one shared `BOWLER_CREDITED_KINDS` set that
+    //    `applyDelivery`'s "bowlerCredited must be …" check reads. Without
+    //    this, `{ kind: "runout", bowler: "a7" }` folded clean at band 2 and
+    //    the scorecard printed a run out as bowler-credited, while band 3
+    //    refused the identical claim.
+    //  * a named bowler or fielder must be in the FIELDING lineup. Band 3
+    //    gets that for free: its bowler through `applyDelivery`'s own
+    //    "not in the fielding lineup" check, its fielder through
+    //    `creditFielding`. A line could name the batting side, or nobody.
+    const dismissal = payload.batting.dismissal;
+    if (dismissal !== undefined) {
+      const shouldCredit = BOWLER_CREDITED_KINDS.has(dismissal.kind);
+      if (dismissal.bowler !== undefined && !shouldCredit) {
+        invalid(`bowlerCredited must be ${shouldCredit} for "${dismissal.kind}"`);
+      }
+      if (dismissal.bowler !== undefined && !bowlingOrder.includes(dismissal.bowler)) {
+        invalid(`bowler "${dismissal.bowler}" is not in the fielding lineup`);
+      }
+      // `creditFielding` is band 3's own fielder check; called for that
+      // validation alone (band 2 keeps no fielding map, and a line carries
+      // no `fielderAssist`) so there is ONE predicate for "is this fielder
+      // in the fielding lineup", never a second copy of it here.
+      creditFielding(
+        undefined,
+        {
+          kind: dismissal.kind,
+          out: payload.person,
+          ...(dismissal.fielder === undefined ? {} : { fielder: dismissal.fielder }),
+          bowlerCredited: shouldCredit,
+        },
+        bowlingOrder,
+      );
+    }
     if (innings.fine !== null) {
       const runs = innings.fine.batterRuns[payload.person] ?? 0;
       const balls = innings.fine.batterBalls[payload.person] ?? 0;
@@ -2315,7 +2353,14 @@ function generatePlayerLine(
         ? {
             dismissal: {
               kind: dismissalKind,
-              ...(dismissalBowlingOrder.length > 0 && rng() < 0.7
+              // W1 review finding P2 — `applyPlayerLine` now refuses a bowler
+              // on a mode of dismissal that credits none (the same rule band 3
+              // enforces), so this generator must stop minting one into the
+              // golden corpus. `BOWLER_CREDITED_KINDS` is the reducer's own
+              // set, read here rather than restated.
+              ...(BOWLER_CREDITED_KINDS.has(dismissalKind) &&
+              dismissalBowlingOrder.length > 0 &&
+              rng() < 0.7
                 ? { bowler: pickFrom(dismissalBowlingOrder, rng) }
                 : {}),
               ...(dismissalBowlingOrder.length > 0 && rng() < 0.5
@@ -3024,14 +3069,61 @@ export function padSpec(cfg: CricketCfg): PadSpec {
   // below) — the pad-form layer was the only place still requiring BOTH.
   // `PadField.group`'s own doc (sport/module.ts) has the full mechanism;
   // `innings` stays ungrouped (shared by both aspects, always required).
+  //
+  // Task A — every remaining control on this action is now CAPTIONED. A
+  // `labelKey` is optional by design (`PadFieldEnum`'s header, module.ts) and
+  // apps/web's universal renderer falls back to `deriveFieldPathLabel(path)`,
+  // which is derived ENGLISH routed through no dictionary — so the seven
+  // fields and the `person` attribution that shipped uncaptioned read
+  // "Bowling legal balls" / "Scorecard line — Person" to a French, Spanish or
+  // Dutch scorer. This action is the one a scorer fills in field by field
+  // with no surrounding layout naming anything, so every control here earns a
+  // key; the other twelve cricket actions keep theirs deliberately (see
+  // `WICKET_ATTRIBUTION` above). Two notes on the keys:
+  // - the aspect segment is KEPT (`…field.battingRuns`, not `…field.runs`)
+  //   where the leaf name collides. `batting.runs` and `bowling.runs` are two
+  //   different numbers on ONE form; the older sibling convention
+  //   (`batting.fours` -> `…field.fours`) only holds while leaves are unique,
+  //   and `checkLabelKeysUnique` would flag the collision as a false alarm.
+  // - the captions are the scorecard's own words ("Balls faced", "Runs
+  //   conceded"), not the path's, precisely because two of them would
+  //   otherwise be the same word twice.
+  //
+  // Task B — `requiresFieldIn` on `batting.dismissal.bowler` (see its own
+  // line below, and `PadAttributionItem.requiresFieldIn` in sport/module.ts).
   const playerLineAction: PadAction = {
     type: "cricket.player.line",
     labelKey: { key: "pad.cricket.action.playerLine", label: "Scorecard line" },
     fields: [
-      { kind: "number", path: "innings", min: 1, max: Math.max(1, cfg.inningsPerSide * 2) },
-      { kind: "toggle", path: "batting.out", group: "batting" },
-      { kind: "number", path: "batting.runs", min: 0, max: MAX_PLAUSIBLE_RUNS, group: "batting" },
-      { kind: "number", path: "batting.balls", min: 0, max: inningsBallsBound(cfg), group: "batting" },
+      {
+        kind: "number",
+        path: "innings",
+        min: 1,
+        max: Math.max(1, cfg.inningsPerSide * 2),
+        labelKey: { key: "pad.cricket.action.playerLine.field.innings", label: "Innings" },
+      },
+      {
+        kind: "toggle",
+        path: "batting.out",
+        group: "batting",
+        labelKey: { key: "pad.cricket.action.playerLine.field.battingOut", label: "Dismissed" },
+      },
+      {
+        kind: "number",
+        path: "batting.runs",
+        min: 0,
+        max: MAX_PLAUSIBLE_RUNS,
+        group: "batting",
+        labelKey: { key: "pad.cricket.action.playerLine.field.battingRuns", label: "Runs scored" },
+      },
+      {
+        kind: "number",
+        path: "batting.balls",
+        min: 0,
+        max: inningsBallsBound(cfg),
+        group: "batting",
+        labelKey: { key: "pad.cricket.action.playerLine.field.battingBalls", label: "Balls faced" },
+      },
       {
         kind: "number",
         path: "batting.fours",
@@ -3059,9 +3151,30 @@ export function padSpec(cfg: CricketCfg): PadSpec {
         group: "batting",
         labelKey: { key: "pad.cricket.action.playerLine.field.dismissalKind", label: "How out" },
       },
-      { kind: "number", path: "bowling.legalBalls", min: 0, max: inningsBallsBound(cfg), group: "bowling" },
-      { kind: "number", path: "bowling.runs", min: 0, max: MAX_PLAUSIBLE_RUNS, group: "bowling" },
-      { kind: "number", path: "bowling.wickets", min: 0, max: Math.max(0, cfg.playersPerSide - 1), group: "bowling" },
+      {
+        kind: "number",
+        path: "bowling.legalBalls",
+        min: 0,
+        max: inningsBallsBound(cfg),
+        group: "bowling",
+        labelKey: { key: "pad.cricket.action.playerLine.field.bowlingLegalBalls", label: "Balls bowled" },
+      },
+      {
+        kind: "number",
+        path: "bowling.runs",
+        min: 0,
+        max: MAX_PLAUSIBLE_RUNS,
+        group: "bowling",
+        labelKey: { key: "pad.cricket.action.playerLine.field.bowlingRuns", label: "Runs conceded" },
+      },
+      {
+        kind: "number",
+        path: "bowling.wickets",
+        min: 0,
+        max: Math.max(0, cfg.playersPerSide - 1),
+        group: "bowling",
+        labelKey: { key: "pad.cricket.action.playerLine.field.bowlingWickets", label: "Wickets" },
+      },
       {
         kind: "number",
         path: "bowling.maidens",
@@ -3091,12 +3204,22 @@ export function padSpec(cfg: CricketCfg): PadSpec {
       },
     ],
     attribution: [
-      { kind: "person", path: "person" },
+      {
+        kind: "person",
+        path: "person",
+        labelKey: { key: "pad.cricket.action.playerLine.field.person", label: "Player" },
+      },
       {
         kind: "person",
         path: "batting.dismissal.bowler",
         optional: true,
         requiresField: "batting.dismissal.kind",
+        // W1 review finding P2 — `applyPlayerLine` (above) refuses a named
+        // bowler on any kind this set does not credit one for, so the pad
+        // must not OFFER the chips there. Spread from the reducer's OWN set
+        // rather than restated, so the two cannot drift: a kind added to or
+        // removed from `BOWLER_CREDITED_KINDS` moves the pad with it.
+        requiresFieldIn: [...BOWLER_CREDITED_KINDS],
         labelKey: { key: "pad.cricket.action.playerLine.field.dismissalBowler", label: "Bowler" },
       },
       {

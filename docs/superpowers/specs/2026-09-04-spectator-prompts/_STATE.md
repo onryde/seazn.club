@@ -165,3 +165,55 @@ Verification on b8ed8fa31: public-site suites 537/0 (26 pending = DB suites on e
 ## In flight at 23:3x (post-outage)
 
 - Task 6 review; Task 8 fix round 1; Task 18 implementer (resumed); W4 plan (Opus, new); W5 prompt + plan verification (Opus); design verification (Opus). Next after they land: cherry-pick Tasks 6, 8, 18 onto the feature branch (union dictionaries, regenerate keys, tsc), commit the W4/W5/_DESIGN docs, `_INDEX.md` single-pass update, design phase 2, then Task 9.
+
+## Whole-branch review — 2026-09-07, all four reviewers `needs-fixes`
+
+Full list: `W1-whole-branch-review-findings.md` beside this file. Four Opus reviewers,
+read-only, disjoint areas, against `2f3b4f9f4` — which was CI-green 8/8 and unit 523/0
+at the time. Everything they found survived ~4,000 passing tests and a full CI run.
+
+FIXING IN THIS ROUND (blocking or one-line):
+- B1 the cricket config 500 (the earlier safeParse fix was a no-op — the hard `parse`
+  one frame later still threw on the same value) and B2 the uncontained cricket fold.
+  Cricket now degrades like every other sport instead of taking the page down.
+- P1 `fixture-subheading.ts:55` renders the date in hardcoded en-GB on fr/es/nl.
+- S1 `MatchCentreProps.locale` inert (THIRD occurrence of this class on this branch),
+  S2 `useLiveFixture.updatedAt` dead, D1 `currentPhaseOf` duplicating `matchPhase`
+  (both added by this wave, in the same session).
+- T1 `shotAllTabs` silently writes zero screenshots — the vacuous visual gate, in the
+  helper the whole R11 sign-off runs through.
+- M1/M2 two comments declaring LIVE product defects this branch has already fixed.
+
+QUEUED, NOT FIXED — needs an owner ruling or its own wave:
+- B3 masked people's raw person UUIDs reach the anonymous document as testids and React
+  keys. Not a one-line fix: needs a stable per-document surrogate id.
+- P2 band 2 accepts a run-out credited to a bowler (band 3 refuses the same payload).
+- P4 three payload-keyed tallies that can contradict the state-keyed numbers printed
+  beside them on the same card.
+- P5 duplicate React keys/testids when a super over reuses an innings number.
+- The accessibility group (table row headers, tabpanel focus, roving tabindex,
+  dangling `aria-controls`, duplicate landmark names).
+
+## OWNER-RECORDED 2026-09-07 — the `sportKey === "cricket"` branch becomes a
+## `SportModule` capability, at the FRONT of W2
+
+Owner asked why `match-centre.ts` branches on the sport name instead of using a factory
+or strategy. It should: `SportModule` IS the strategy interface, and the non-cricket
+path already dispatches through it (`resolveModule` → `buildTimeline({ module })`) with
+no sport names anywhere. The branch exists only because `deriveCricketScorecard` has no
+slot on that interface.
+
+Measured before answering: it is the ONLY `sportKey === "cricket"` in the entire
+public-site tree (two `"cricket"` literals total; the other is a type alias). So this is
+one wart, not a spreading pattern — but it has already cost twice: P3 (the branch uses
+the cricket SINGLETON and silently drops the division's pinned `moduleVersion`, which
+the other branch honours) and B2 (the degrade path had to be hand-written rather than
+inherited from the module path).
+
+RULING: add `scorecard?(cfg, events, lineups)` to `SportModule` and let the web layer
+resolve the module and ask it. Version pinning comes free, the degrade path is shared,
+and the web layer stops knowing sport names. Do it at the FRONT of W2 — W2 adds more
+per-sport public surfaces and pays for it immediately. Deliberately NOT in this fix
+round: it is an engine interface change touching every module and its conformance
+suite, and mixing a refactor into a review-fix round on a green branch makes both
+harder to judge.

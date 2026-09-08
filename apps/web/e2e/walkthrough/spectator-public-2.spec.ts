@@ -468,13 +468,33 @@ test("consent: a masked person appears masked, never blank, across batting, bowl
   await anon.getByTestId("mc-tab-scorecard").click();
   await expect(anon.getByTestId("mc-tab-panel-scorecard")).toBeVisible();
   await anon.getByTestId("mc-innings-1").locator("summary").click();
-  const batRow = anon.getByTestId(`mc-bat-${maskedPersonId}`);
-  await expect(batRow, "a masked batter must render a real row, never blank").toBeVisible();
-  await expect(batRow).toContainText(maskedLabel);
-  const bowlRow = anon.getByTestId(`mc-bowl-${maskedPersonId}`);
-  await expect(bowlRow, "a masked bowler must render a real row, never blank").toBeVisible();
-  await expect(bowlRow).toContainText(maskedLabel);
+  // The rows are found by the masked LABEL, never by `maskedPersonId`. This
+  // selector used to be `mc-bat-${maskedPersonId}` — which quietly asserted
+  // the very leak the surrogate fix removed: a masked person's real
+  // `persons.id` reaching anonymous HTML as a testid and a React key, where
+  // the same uuid on another division's page (one where they DID consent)
+  // re-joins the name to the row this page took care to mask. The testid is
+  // also scoped `<innings position>.<id>` now, because a super over can reuse
+  // an innings number and two rows shared one testid.
+  const batRow = anon.getByTestId(/^mc-bat-\d+\./).filter({ hasText: maskedLabel });
+  await expect(batRow, "a masked batter must render a real row, never blank").toHaveCount(1);
+  const bowlRow = anon.getByTestId(/^mc-bowl-\d+\./).filter({ hasText: maskedLabel });
+  await expect(bowlRow, "a masked bowler must render a real row, never blank").toHaveCount(1);
+
   await expect(anon.locator("body")).not.toContainText(maskedFullName);
+
+  // The point of the whole block, and the half that was missing: neither the
+  // name NOR the id survives into the page. Checked against the raw MARKUP,
+  // not rendered text — the leak was in an attribute, where `toContainText`
+  // cannot see it. `maskedPersonId` is a uuid, so a substring check is exact.
+  const markup = await anon.content();
+  expect(markup, "a masked person's real id must not reach anonymous HTML").not.toContain(maskedPersonId);
+
+  // ...and the row is keyed by a SURROGATE rather than by nothing at all: an
+  // absent id would break the row's React identity across a live update, so
+  // "no real id" and "no id" are different fixes and only one is correct.
+  const batTestId = await batRow.getAttribute("data-testid");
+  expect(batTestId, "the masked row must still carry a stable surrogate id").toMatch(/^mc-bat-\d+\.m\d+$/);
 });
 
 // ---------------------------------------------------------------------------
@@ -484,29 +504,58 @@ test("consent: a masked person appears masked, never blank, across batting, bowl
 test("widths 320 vs 1280: control-set diff, every tab reachable, 44px tab hit targets, no horizontal scroll", async ({
   browser,
 }) => {
-  // PRODUCT DEFECT, not a test bug -- recorded here with evidence, not
-  // fixed (tab-rail.tsx is Task 10's, out of Task 15's scope): the tab
-  // rail's buttons (`ACTIVE_CLASS`/`INACTIVE_CLASS` in
-  // src/components/public-site/match-centre/tab-rail.tsx, `py-1.5` +
-  // `text-sm`) measure ~32px tall at 320px width via `boundingBox()` --
-  // short of the 44px minimum tap target R11 requires. Previously
-  // undiscovered: every prior run of this walkthrough aborted earlier
-  // (match A's seed bug, fixed above) before serial execution ever
-  // reached this test. The assertion below is left intact, unweakened, so
-  // this test starts passing again on its own once tab-rail.tsx is fixed.
+  // CLOSED. This block used to declare a LIVE product defect — the tab rail's
+  // buttons measuring ~32px against R11's 44px minimum — and it went stale
+  // when the fix landed: `tab-rail.tsx:102`'s `TAB_BUTTON_CLASS` now carries
+  // `min-h-11`, and the assertion below has passed ever since. Rewritten
+  // rather than deleted because the note's own history is the useful part:
+  // the defect was invisible for weeks because every prior run of this serial
+  // file aborted earlier, so nothing ever reached this test. That is the
+  // reason the assertion stays here, unweakened, rather than being trimmed
+  // now that it is green.
   const matchAPath = publicFixturePath(orgSlug, compSlug, liveDivSlug, matchA);
   const anon = await anonPage(browser, { width: 320, height: 568 });
   await anon.goto(matchAPath, { waitUntil: "load" });
   await expect(anon.getByTestId("mc-court-card")).toBeVisible({ timeout: 20_000 });
   await expectNoHorizontalScroll(anon);
-  const controls320 = await controlSet(anon);
+
+  // R1 sweeps EVERY tab, not merely whichever panel happens to be mounted.
+  // Only the ACTIVE tab's panel is in the DOM, so a single `controlSet(anon)`
+  // call could only ever see the Summary tab — and a phone-only control added
+  // to Scorecard, Commentary or Timeline was invisible to the one gate that
+  // exists to catch exactly that ("a phone view showing the same control set
+  // at smaller sizes is a groomed shrink, which is the thing this programme
+  // exists to undo"). The per-tab `expectNoHorizontalScroll` is the same
+  // widening: page overflow was previously only ever checked on Summary.
+  const controlSetByTab = async (): Promise<Record<string, string[]>> => {
+    const ids = await anon
+      .locator('[role="tab"]')
+      .evaluateAll((els) => els.map((el) => el.getAttribute("data-testid") ?? ""));
+    expect(ids.length, "the rail must render tabs — an empty sweep passes R1 vacuously").toBeGreaterThan(0);
+    const out: Record<string, string[]> = {};
+    for (const id of ids) {
+      await anon.getByTestId(id).click();
+      await expect(anon.getByTestId(id.replace("mc-tab-", "mc-tab-panel-"))).toBeVisible();
+      out[id] = await controlSet(anon);
+      await expectNoHorizontalScroll(anon);
+    }
+    return out;
+  };
+
+  const controls320 = await controlSetByTab();
 
   await anon.setViewportSize({ width: 1280, height: 900 });
   await anon.waitForTimeout(200);
   await expectNoHorizontalScroll(anon);
-  const controls1280 = await controlSet(anon);
+  const controls1280 = await controlSetByTab();
 
-  expect(controls1280, "R1: the SAME control set at 320 and 1280 — membership, order, repeats").toEqual(controls320);
+  expect(Object.keys(controls1280), "R1: the same TABS must exist at 320 and 1280").toEqual(Object.keys(controls320));
+  for (const tabId of Object.keys(controls320)) {
+    expect(
+      controls1280[tabId],
+      `R1: the SAME control set at 320 and 1280 on ${tabId} — membership, order, repeats`,
+    ).toEqual(controls320[tabId]);
+  }
 
   // every tab reachable + visible when clicked, and a real 44px tap target.
   const tabTestIds = await anon.locator('[role="tab"]').evaluateAll((els) => els.map((el) => el.getAttribute("data-testid")));
@@ -656,22 +705,15 @@ test("tab deep link: ?tab=scorecard lands on Scorecard; an unknown ?tab=nope fal
 // ---------------------------------------------------------------------------
 
 test("axe: the match centre at 320 has zero serious/critical violations", async ({ browser }) => {
-  // PRODUCT DEFECT, not a test bug -- recorded here with evidence, not
-  // fixed (Task 10's court-card and stat-card styling, out of Task 15's
-  // scope): axe reports two SERIOUS color-contrast violations at 320,
-  // previously undiscovered because every prior run aborted earlier
-  // (match A's seed bug, fixed above) before serial execution ever
-  // reached this test.
-  //   1. `mc-updated-at` ("Updated 0s ago", court-card.tsx) --
-  //      `text-court-muted/70` at 11px on the court card's dark `bg-court`
-  //      background measures 4.09:1, short of WCAG AA's 4.5:1 for text
-  //      this small.
-  //   2. The bowling-figure labels ("SR 104.5", "Econ 6.5", ...) at 12px --
-  //      `text-ink-muted/80` on white `bg-surface` cards measures 3.45:1,
-  //      also short of 4.5:1. Four such nodes on this one page (repeated
-  //      per stat card).
-  // The assertion below is left intact, unweakened, so this test starts
-  // passing again on its own once those two styles are fixed.
+  // CLOSED. This block used to declare two LIVE SERIOUS axe contrast
+  // violations at 320 — `text-court-muted/70` on the court card (4.09:1) and
+  // `text-ink-muted/80` on the stat cards (3.45:1), both short of WCAG AA's
+  // 4.5:1 at those sizes. Both opacity variants are gone from
+  // `components/public-site/` entirely; the court card uses the unmodified
+  // `text-court-muted`. Kept as a record rather than deleted for the same
+  // reason as the note above: both were invisible for weeks because this
+  // serial file aborted before reaching either test, which is why the
+  // assertions stay unweakened now that they pass.
   const matchAPath = publicFixturePath(orgSlug, compSlug, liveDivSlug, matchA);
   const anon = await anonPage(browser, { width: 320, height: 568 });
   await anon.goto(matchAPath, { waitUntil: "load" });
@@ -1016,5 +1058,85 @@ test("tap targets: every button-shaped control in the match centre clears 44px a
   // "none of them are too short" assertion ever written.
   expect(swept, "the sweep found no button-shaped controls at all — check the selector").toBeGreaterThan(0);
   expect(undersized, `controls under the 44px tap-target floor at 320px:\n${undersized.join("\n")}`).toEqual([]);
+  await anon.close();
+});
+
+// ---------------------------------------------------------------------------
+// The tab rail's KEYBOARD path, driven in a real browser
+// ---------------------------------------------------------------------------
+//
+// `tab-rail.tsx` uses the ARIA roving-tabindex pattern: exactly one tab is in
+// the browser's tab order (`tabIndex={isActive ? 0 : -1}`) and the others are
+// reached with the arrow keys, which `handleKeyDown` turns into an `onChange`
+// plus a `.focus()` on the newly selected button.
+//
+// The two halves of that pattern only work TOGETHER, and neither half can be
+// witnessed by a unit test: `apps/web` vitest is `environment: "node"`, so a
+// markup scan sees the `tabindex` attributes but never what a browser does
+// with them. Delete the arrow handling and the markup is byte-identical while
+// a keyboard user loses every tab except the selected one — a suite-green
+// accessibility regression. Every other tab assertion in this file clicks.
+test("tab rail keyboard: one tab stop, arrows move selection AND focus, Home/End reach the ends", async ({
+  browser,
+}) => {
+  const matchAPath = publicFixturePath(orgSlug, compSlug, liveDivSlug, matchA);
+  const anon = await anonPage(browser, { width: 1280, height: 900 });
+  await anon.goto(matchAPath, { waitUntil: "load" });
+  await expect(anon.getByTestId("mc-court-card")).toBeVisible({ timeout: 20_000 });
+
+  const tabIds = await anon
+    .locator('[role="tab"]')
+    .evaluateAll((els) => els.map((el) => el.getAttribute("data-testid") ?? ""));
+  expect(tabIds.length, "the rail must render tabs — otherwise every assertion below is vacuous").toBeGreaterThan(1);
+
+  // ONE tab stop. Counted off the live DOM rather than the class list,
+  // because `tabindex` is what the browser actually reads.
+  const inTabOrder = await anon
+    .locator('[role="tab"]')
+    .evaluateAll((els) => els.filter((el) => el.getAttribute("tabindex") === "0").length);
+  expect(inTabOrder, "exactly one tab may be in the tab order (roving tabindex)").toBe(1);
+  const tablistFocusable = await anon.locator('[role="tablist"]').getAttribute("tabindex");
+  expect(tablistFocusable, "the tablist container must not be a tab stop of its own").toBeNull();
+
+  // Focus the selected tab the way a keyboard user arrives at it, then walk
+  // right. Both halves are asserted: the selection moved, AND the browser's
+  // focus went with it. Selection alone would strand the user's focus on a
+  // tab that is no longer the selected one.
+  const focusedTestId = async () =>
+    anon.evaluate(() => document.activeElement?.getAttribute("data-testid") ?? null);
+
+  await anon.getByTestId(tabIds[0]!).focus();
+  expect(await focusedTestId(), "focus must start on the first tab").toBe(tabIds[0]);
+
+  await anon.keyboard.press("ArrowRight");
+  await expect(anon.getByTestId(tabIds[1]!), "ArrowRight must SELECT the next tab").toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+  expect(await focusedTestId(), "ArrowRight must also move FOCUS to the next tab").toBe(tabIds[1]);
+  await expect(
+    anon.getByTestId(`mc-tab-panel-${tabIds[1]!.replace("mc-tab-", "")}`),
+    "the newly selected tab's panel must be the one on screen",
+  ).toBeVisible();
+
+  // Home/End reach the ends. A rail whose arrows worked but whose Home/End
+  // did nothing passes everything above.
+  await anon.keyboard.press("End");
+  expect(await focusedTestId(), "End must land on the last tab").toBe(tabIds[tabIds.length - 1]);
+  await expect(anon.getByTestId(tabIds[tabIds.length - 1]!)).toHaveAttribute("aria-selected", "true");
+
+  await anon.keyboard.press("Home");
+  expect(await focusedTestId(), "Home must land on the first tab").toBe(tabIds[0]);
+  await expect(anon.getByTestId(tabIds[0]!)).toHaveAttribute("aria-selected", "true");
+
+  // Still exactly ONE tab stop after all that movement — the roving half of
+  // roving tabindex. A rail that set the new tab to 0 without clearing the
+  // old one passes every assertion above while leaving a growing trail of
+  // stops behind it.
+  const inTabOrderAfter = await anon
+    .locator('[role="tab"]')
+    .evaluateAll((els) => els.filter((el) => el.getAttribute("tabindex") === "0").length);
+  expect(inTabOrderAfter, "still exactly one tab stop after arrow/Home/End navigation").toBe(1);
+
   await anon.close();
 });

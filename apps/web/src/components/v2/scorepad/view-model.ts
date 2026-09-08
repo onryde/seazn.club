@@ -325,6 +325,61 @@ export function checkActionValidity(
 }
 
 /**
+ * Is this attribution item's collected value currently INADMISSIBLE — i.e.
+ * would `buildActionPayload` drop it? ONE predicate, exported, because two
+ * layers must agree on the answer and this repo's most-repeated defect class
+ * is two gates that drift:
+ *
+ *  - `buildActionPayload` (below) drops the value, so a chip tapped before
+ *    the gating field moved can never reach the engine;
+ *  - `ActionFormList` (v3/action-form.tsx) does not DRAW the row at all, so
+ *    the scorer is never offered a control whose value would be discarded —
+ *    or, in the `requiresFieldIn` case, one the engine would refuse outright.
+ *
+ * Either half alone is a defect: payload-only leaves a visible dead end
+ * (tap, Confirm, refused); render-only leaves a stale value able to reach
+ * the payload after the gating field changes under it.
+ *
+ * Two flags, read here and nowhere else (`PadAttributionItem`, module.ts):
+ * `requiresField` names a dotted `PadField` path that must be SET, and
+ * `requiresFieldIn` narrows that to a set of admissible VALUES of the same
+ * field. An item declaring neither is never gated — every item that predates
+ * these flags behaves exactly as before.
+ *
+ * NOT consulted by `checkActionValidity` below, and that is only safe while
+ * no module declares an item that is BOTH gated and `required` — such an
+ * item would hide its own row and then block Confirm forever with nothing on
+ * screen to satisfy. Every gated item shipped today (cricket's
+ * `batting.dismissal.bowler`/`.fielder`) is `optional: true` and stamps
+ * `required: false` from its own schema, so the case does not exist; a module
+ * that created it would be declaring a dead end, and this is the note that
+ * says where to look when one appears.
+ *
+ * `requiresFieldIn` is a `readonly string[]` and membership is decided by
+ * STRICT equality, so a non-string value of the gating field (a toggle's
+ * boolean, a number field) is inadmissible by construction rather than
+ * coerced — `String(false)` matching a literal `"false"` in a module's list
+ * would be an accident, not a declaration. That is a property of `===`, not
+ * an extra clause: an explicit `typeof gateValue !== "string" ||` in front of
+ * the membership test was written here first and then REMOVED, because
+ * mutation testing proved it could not change the answer for any input
+ * (`["a"].includes(true)` is already `false`) and therefore no test could
+ * ever kill it — a guard nothing kills is decoration, and a redundant one
+ * also masks the clause beside it.
+ */
+export function attributionValueInadmissible(
+  item: Pick<PadAttributionItem, "requiresField" | "requiresFieldIn">,
+  values: Readonly<Record<string, PadFieldValue | undefined>>,
+): boolean {
+  const gate = item.requiresField;
+  if (gate === undefined) return false;
+  const gateValue = values[gate];
+  if (gateValue === undefined) return true;
+  if (item.requiresFieldIn === undefined) return false;
+  return !item.requiresFieldIn.some((admissible) => admissible === gateValue);
+}
+
+/**
  * Turn collected form values into a real event payload — fields AND
  * attribution together, both are just `(path, value)` pairs from
  * `buildPathObject`'s point of view. An unset path is OMITTED (never sent as
@@ -339,7 +394,9 @@ export function checkActionValidity(
  * unset path. This is what keeps `batting.dismissal.bowler`/`.fielder` from
  * ever reaching the payload without `batting.dismissal.kind` alongside them
  * (the schema requires `kind` inside that sub-object; see the field's own
- * doc in sport/module.ts).
+ * doc in sport/module.ts). `requiresFieldIn` extends that from "set" to "set
+ * to an admissible value" — both live in `attributionValueInadmissible`
+ * above, which action-form.tsx's renderer reads too.
  *
  * Task 20 — a field whose `group` (module.ts) is declared but NOT touched
  * (`groupsTouched` above, shared with `checkActionValidity` so the two can
@@ -361,7 +418,7 @@ export function buildActionPayload(
     entries.push([field.path, suppressed ? undefined : values[field.path]]);
   }
   for (const item of action.attribution) {
-    const gated = item.requiresField !== undefined && values[item.requiresField] === undefined;
+    const gated = attributionValueInadmissible(item, values);
     entries.push([item.path, gated ? undefined : values[item.path]]);
   }
   return buildPathObject(entries);
