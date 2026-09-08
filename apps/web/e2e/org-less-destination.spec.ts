@@ -132,12 +132,36 @@ test.describe("the org-less bounce keeps where you were going", () => {
 
       const name = `Orgless plain ${TAG} ${Math.random().toString(36).slice(2, 6)}`;
       await page.getByLabel(UI_EN["orgNew.nameLabel"]!).fill(name);
+
+      // `/dashboard` is not a page. It is a server redirect straight to
+      // `routes.orgHome(org.slug)` (`app/dashboard/page.tsx`), so the URL bar
+      // holds it for as long as one RSC round trip and then moves on. This
+      // assertion used to be `toHaveURL(/\/dashboard\b/)`, which is a poll
+      // against that transient value: it passes on a machine slow enough to
+      // sample it and fails on one that is not. It passes locally and failed
+      // twice in CI, where the recorded samples were 2 x `/orgs/new` and then
+      // 62 x the org board — `/dashboard` never observed at all.
+      //
+      // The claim itself is unchanged and is now asserted in two halves that
+      // cannot race: the form really did aim at the generic landing (a
+      // request to `/dashboard` was made — the thing that distinguishes this
+      // from the honoured-`next` case in the test above), and the viewer ends
+      // up on a board.
+      const dashboardHits: string[] = [];
+      page.on("request", (req) => {
+        if (new URL(req.url()).pathname === "/dashboard") dashboardHits.push(req.url());
+      });
+
       await page.getByRole("button", { name: UI_EN["orgNew.create"]! }).click();
 
       await expect(page, "with no destination the create still lands on the board").toHaveURL(
-        /\/dashboard\b/,
+        /\/o\/[^/?#]+\/?(\?|$)/,
         { timeout: 30_000 },
       );
+      expect(
+        dashboardHits.length,
+        "the create never routed through /dashboard — it either honoured a `next` it should not have, or navigated straight to the org",
+      ).toBeGreaterThan(0);
     } finally {
       await ctx.close();
     }
