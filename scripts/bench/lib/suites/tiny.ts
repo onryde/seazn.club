@@ -185,11 +185,19 @@ import {
 } from "../advance.ts";
 import {
   compareChampion,
+  compareLeaderboard,
   compareRankCrossings,
+  compareStandings,
+  fetchDivisionPlayerStats,
   fetchStandings,
   renderChampionMismatch,
+  renderLeaderboardMismatch,
   renderRankCrossingMismatch,
+  renderStandingsMismatch,
   standingsRankOrder,
+  type DivisionPlayerStatsWire,
+  type ExpectedLeaderboardEntry,
+  type ExpectedStandingsRow,
 } from "../oracle.ts";
 import type { SelectedDivisionExposure } from "../env.ts";
 import {
@@ -2490,6 +2498,140 @@ export async function runTinySuite(
           },
           "suite_simulated",
         );
+      }
+    }
+
+    // B05 T4b — the standings comparator (design doc §3, oracle.ts's
+    // `compareStandings`), wired against EVERY `expected.tables` row the
+    // pack declares — not only the final stage's placement crossing T4
+    // already wires above. T4 built and unit-tested this comparator but
+    // reached it from nothing on a real run (AGENTS.md failure class 1, the
+    // inert seam — the exact thing this whole wave exists to close;
+    // `b05-oracle-comparators.md`'s own vacuity note). Gated on
+    // `input.sql !== undefined` only — unlike T3's advance step below, this
+    // does NOT depend on `stage1?.progression`: `d-badminton` (T2's
+    // batch-import division, folded just above) carries its own
+    // `expected.tables` row and is never advanced through a progression at
+    // all, so a gate on `stage1?.progression` would leave it permanently
+    // unreached.
+    if (input.sql !== undefined) {
+      for (const table of pack.expected.tables) {
+        const tableStageId = seeded.stageIdByRef.get(table.stageRef);
+        if (tableStageId === undefined) {
+          errors.push(
+            `oracle: expected.tables row for "${table.divisionRef}"/"${table.stageRef}" names a stage ref with no resolved id`,
+          );
+          continue;
+        }
+        const expectedRows: ExpectedStandingsRow[] = [];
+        const unresolvedEntrantRefs: string[] = [];
+        for (const row of table.rows) {
+          const entrantId = seeded.entrantIdByRef.get(row.entrant);
+          if (entrantId === undefined) {
+            unresolvedEntrantRefs.push(row.entrant);
+            continue;
+          }
+          expectedRows.push({
+            entrantId,
+            played: row.played,
+            won: row.won,
+            drawn: row.drawn,
+            lost: row.lost,
+            points: row.points,
+            ...(row.metrics === undefined ? {} : { metrics: row.metrics }),
+          });
+        }
+        if (unresolvedEntrantRefs.length > 0) {
+          errors.push(
+            `oracle: expected.tables row for "${table.divisionRef}"/"${table.stageRef}" names entrant ref(s) with no ` +
+              `resolved id: ${unresolvedEntrantRefs.join(", ")}`,
+          );
+          continue;
+        }
+        // `compareStandings`'s own empty-case discipline ("an empty expected
+        // table is itself a case this asserts on, never silently vacuous")
+        // is exercised here for free: `table.rows.min(1)` (pack-schema.ts)
+        // means `expectedRows` is never empty for a REAL pack row, but a
+        // live fetch returning ZERO rows (a stage nothing ever folded events
+        // into) still reds via `actual.length === expected.length`, never a
+        // vacuous pass.
+        const standingsWire = await fetchStandings(base, s, tableStageId, table.poolKey, input.oracleTransport);
+        const tableCheck = compareStandings(expectedRows, standingsWire.rows);
+        oracles.push({
+          name: `oracle: ${table.divisionRef}/${table.stageRef} standings table`,
+          passed: tableCheck.matched,
+          detail: tableCheck.matched
+            ? `live standings for "${table.stageRef}" match the pack's expected.tables row`
+            : renderStandingsMismatch(tableCheck),
+        });
+        log.info({ kind: "standings_table", passed: tableCheck.matched }, "oracle_checked");
+        if (!tableCheck.matched) {
+          errors.push(
+            `oracle: ${table.divisionRef}/${table.stageRef}: live standings disagree with the pack's ` +
+              `expected.tables row — ${renderStandingsMismatch(tableCheck)}`,
+          );
+        }
+      }
+    }
+
+    // B05 T4b — the leaderboard comparator (design §8, oracle.ts's
+    // `compareLeaderboard`), wired against `expected.leaderboards` via
+    // `GET /divisions/{id}/stats/players` — the SAME "built by T4, reached
+    // by nothing" gap `compareStandings` above closes. Grouped by a
+    // per-division cache so a division with more than one `metricKey` entry
+    // (`_tiny.json`'s own d-tiny: "scores" and "points") fetches once, not
+    // once per entry.
+    if (input.sql !== undefined && pack.expected.leaderboards.length > 0) {
+      const playerStatsCache = new Map<string, DivisionPlayerStatsWire>();
+      for (const board of pack.expected.leaderboards) {
+        const leaderboardDivisionId = seeded.divisionIdByRef.get(board.divisionRef);
+        if (leaderboardDivisionId === undefined) {
+          errors.push(
+            `oracle: expected.leaderboards names division ref "${board.divisionRef}" with no resolved id`,
+          );
+          continue;
+        }
+        let playerStats = playerStatsCache.get(leaderboardDivisionId);
+        if (playerStats === undefined) {
+          playerStats = await fetchDivisionPlayerStats(base, s, leaderboardDivisionId, input.oracleTransport);
+          playerStatsCache.set(leaderboardDivisionId, playerStats);
+        }
+        const expectedEntries: ExpectedLeaderboardEntry[] = [];
+        const unresolvedPersonRefs: string[] = [];
+        for (const entry of board.entries) {
+          const personId = seeded.personIdByRef.get(entry.person);
+          if (personId === undefined) {
+            unresolvedPersonRefs.push(entry.person);
+            continue;
+          }
+          expectedEntries.push({ personId, name: entry.name, count: entry.count });
+        }
+        if (unresolvedPersonRefs.length > 0) {
+          errors.push(
+            `oracle: expected.leaderboards "${board.divisionRef}"/"${board.metricKey}" names person ref(s) with no ` +
+              `resolved id: ${unresolvedPersonRefs.join(", ")}`,
+          );
+          continue;
+        }
+        // Name AND count, independently (design §8) — `compareLeaderboard`'s
+        // own discipline, exercised here against a LIVE fetch for the first
+        // time: a count-only or name-only check would each pass for a wrong
+        // half of a mis-attributed entry (D6, below).
+        const boardCheck = compareLeaderboard(board.metricKey, expectedEntries, playerStats);
+        oracles.push({
+          name: `oracle: ${board.divisionRef} leaderboard (${board.metricKey})`,
+          passed: boardCheck.matched,
+          detail: boardCheck.matched
+            ? `live leaderboard "${board.metricKey}" matches the pack's expected.leaderboards row`
+            : renderLeaderboardMismatch(boardCheck),
+        });
+        log.info({ kind: "leaderboard", passed: boardCheck.matched }, "oracle_checked");
+        if (!boardCheck.matched) {
+          errors.push(
+            `oracle: ${board.divisionRef}/${board.metricKey}: live leaderboard disagrees with the pack's ` +
+              `expected.leaderboards row — ${renderLeaderboardMismatch(boardCheck)}`,
+          );
+        }
       }
     }
 
