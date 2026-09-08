@@ -26,7 +26,7 @@ import { runTinySuite, TINY_PACK_PATH } from "../suites/tiny.ts";
 import { makeScheduleWorld } from "./_schedule-routes.ts";
 import { makeDivisionPhaseWorld } from "./_division-phase.ts";
 import { makeAdvanceRoutesWorld } from "./_advance-routes.ts";
-import { makeOracleRoutesWorld, tinyDivisionPlayerStats, tinyLeagueTableRows } from "./_oracle-routes.ts";
+import { makeOracleRoutesWorld, tinyLeagueTableRows } from "./_oracle-routes.ts";
 
 const silent = pino({ level: "silent" });
 
@@ -71,10 +71,11 @@ function fakeServer(
   // league, which was true of every pack this file drove before this task.
   const kindByStageId = new Map<string, string>();
   const divisionIdByStageId = new Map<string, string>();
-  // B05 T4b — the two names `_oracle-routes.ts`'s `tinyLeagueTableRows`/
-  // `tinyDivisionPlayerStats` key their real (non-placement) fixture values
-  // on: the `/stages` and `/divisions` POST bodies' own `name` field
-  // (`seed.ts`), never a pack ref this fake never sees.
+  // B05 T4b — the name `_oracle-routes.ts`'s `tinyLeagueTableRows` keys its
+  // real (non-placement) standings fixture on: the `/stages` POST body's
+  // own `name` field (`seed.ts`), never a pack ref this fake never sees.
+  // `divisionNameById` is this file's OWN discriminator for
+  // `getDivisionPlayerStats` below (is this division "Tiny"?).
   const stageNameById = new Map<string, string>();
   const divisionNameById = new Map<string, string>();
   const fixtureDivisionId = new Map<string, string>();
@@ -88,6 +89,14 @@ function fakeServer(
   const fixtureExtKeyById = new Map<string, string>();
   const fixtureOfficials = new Map<string, unknown[]>();
   const claimInvites = new Map<string, unknown>();
+  // B05 T4b — D6's OWN mis-attribution regression, run through the WIRED
+  // leaderboard oracle rather than only a unit fixture: this fake TALLIES
+  // real `generic.score` events as they land on `/fixtures/{id}/events`
+  // (never a hardcoded constant), so `GET /divisions/{id}/stats/players`
+  // answers with whatever the pack's OWN streams actually produced —
+  // exactly what a mis-transcribed `payload.person` would change.
+  const personNameById = new Map<string, string>();
+  const personScoreTally = new Map<string, { scores: number; points: number }>();
   let divisionCounter = 0;
   let stageCounter = 0;
   let fixtureCounter = 0;
@@ -132,9 +141,26 @@ function fakeServer(
       if (divisionId === undefined || stageName === undefined) return undefined;
       return tinyLeagueTableRows(stageName, schedule.entrantsOfDivision(divisionId));
     },
+    // B05 T4b/D6 — a LIVE tally of `generic.score` events actually posted to
+    // `/fixtures/{id}/events` (`personScoreTally`, filled below in `raw()`),
+    // never `_oracle-routes.ts`'s hardcoded fixture: this file is the one
+    // that folds division0's OWN real events, and D6's regression needs the
+    // fake to report whatever a mis-attributed `payload.person` actually
+    // produced, not a constant that could never disagree with it.
     getDivisionPlayerStats: (divisionId) => {
       if (divisionNameById.get(divisionId) !== "Tiny") return undefined;
-      return tinyDivisionPlayerStats((fullName) => `person-${slug(fullName)}`);
+      return {
+        metrics: [
+          { key: "scores", label: "Scores" },
+          { key: "points", label: "Points" },
+        ],
+        rows: [...personScoreTally.entries()].map(([personId, tally]) => ({
+          person_id: personId,
+          full_name: personNameById.get(personId) ?? personId,
+          stats: { scores: tally.scores, points: tally.points },
+        })),
+        requires_detailed_scoring: false,
+      };
     },
   });
 
@@ -165,7 +191,10 @@ function fakeServer(
         return { id } as T;
       }
       if (method === "POST" && routePath === "/api/v1/persons") {
-        return { id: `person-${slug((body as { full_name: string }).full_name)}` } as T;
+        const fullName = (body as { full_name: string }).full_name;
+        const id = `person-${slug(fullName)}`;
+        personNameById.set(id, fullName);
+        return { id } as T;
       }
       if (method === "POST" && routePath === "/api/v1/competitions") {
         return { id: `comp-${slug((body as { name: string }).name)}` } as T;
@@ -367,6 +396,21 @@ function fakeServer(
             error: { code: "SEQ_CONFLICT", message: "deliberate test conflict", current_seq: expected_seq + 5 },
           } as never,
         };
+      }
+      // B05 T4b/D6 — tally the event actually accepted, never one this fake
+      // is about to refuse above: `payload.person` is already the REAL
+      // resolved id by this point (`simulate.ts#resolvePayloadRefs` runs
+      // before `raw()` ever sees the event), so a re-attributed
+      // `generic.score` in the SOURCE pack changes exactly this tally, with
+      // no help from this fake.
+      if (type === "generic.score") {
+        const scorePayload = payload as unknown as { person?: string; points?: number };
+        if (scorePayload.person !== undefined) {
+          const tally = personScoreTally.get(scorePayload.person) ?? { scores: 0, points: 0 };
+          tally.scores += 1;
+          tally.points += typeof scorePayload.points === "number" ? scorePayload.points : 0;
+          personScoreTally.set(scorePayload.person, tally);
+        }
       }
       return { status: 201, json: { ok: true, data: { seq: expected_seq + 1 } } as never };
     },
