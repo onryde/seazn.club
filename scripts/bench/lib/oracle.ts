@@ -578,6 +578,11 @@ export interface RankCrossingComparison {
  * Same discipline for an EMPTY (but present) crossing on either side: an
  * empty captured or an empty standings means there is nothing to agree ON,
  * never a free pass just because the lengths happen to agree at zero.
+ *
+ * ZERO-SUBJECT RULE (report.ts, beside `OracleVerdict`): that emptiness REDS
+ * rather than reporting `no_subject`, deliberately — the pack asked for a
+ * final order and a completed stage owes one, so an empty crossing is a
+ * missing answer from the PRODUCT, not an absent subject in the pack.
  */
 export function compareRankCrossings(
   captured: readonly string[] | undefined,

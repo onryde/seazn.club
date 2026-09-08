@@ -336,6 +336,10 @@ export interface FinalRanksComparison {
  * and a schema constraint elsewhere is not the comparator's own discipline: a
  * later pack shape, or a second caller, silently re-opens it. So an empty side
  * reds here, with a `reason`, exactly as the crossings comparator does.
+ *
+ * ZERO-SUBJECT RULE (report.ts, beside `OracleVerdict`): that red is
+ * deliberate and NOT `no_subject` — the pack declared an expected order, so an
+ * empty side is the PRODUCT failing to answer, not an absent question.
  */
 export function compareFinalRanks(
   expected: readonly string[],

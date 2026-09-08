@@ -2398,10 +2398,26 @@ export async function runTinySuite(
         // An EMPTY expected set is not a passing oracle — the same discipline
         // T5b-2's career block states. A green "discipline carry" line for a
         // pack that declares no ban is exactly the vacuity this wave removes.
+        //
+        // B05 review round 1, MAJOR 2: the PACK declared nothing here, so the
+        // zero-subject rule (report.ts, beside `OracleVerdict`) says
+        // `no_subject` — counted, never red, never readable as a pass. It used
+        // to be a warning and NOTHING else, which left a skipped comparator
+        // indistinguishable from one nobody ever wrote, both in
+        // `report.oracles` and on the `oracle_checked` stream.
         warnings.push(
           `oracle: pack declares no expected.suspensions rows — the discipline-carry oracle ` +
             `(compareSuspensions) has no subject and was NOT run`,
         );
+        oracles.push({
+          name: `oracle: discipline carry`,
+          passed: true,
+          verdict: "no_subject",
+          detail:
+            `the pack declares no expected.suspensions rows — the discipline-carry oracle ` +
+            `(compareSuspensions) has NO SUBJECT and compared nothing`,
+        });
+        log.info(oracleLogFields("suspension_carry", "no_subject"), "oracle_checked");
       } else {
         for (const sus of pack.expected.suspensions) {
           const susDivisionId = seeded.divisionIdByRef.get(sus.divisionRef);
@@ -2551,6 +2567,10 @@ export async function runTinySuite(
           // product that refuses every team sheet satisfies the negative half
           // on its own, which is why the eligible team-mate's acceptance is
           // asserted here rather than left to the sheets loop below.
+          // ZERO-SUBJECT RULE (report.ts): this REDS rather than reporting
+          // `no_subject` — the pack declared this suspension, so a run with no
+          // missed fixture to refuse a sheet for is a missing answer, not an
+          // absent question.
           const probeFixture = targets.find((f) => f.missed);
           if (probeFixture === undefined) {
             errors.push(
@@ -2955,10 +2975,24 @@ export async function runTinySuite(
         // reports `checkedPairs: 0`.
         const tableDivision = pack.divisions.find((d) => d.ref === table.divisionRef);
         if (tableDivision?.tiebreakers === undefined) {
+          // B05 review round 1, MAJOR 2: the third warn-with-no-oracle site.
+          // `tiebreakers` is the PACK's own declaration, so an absent one is
+          // the pack side being empty — `no_subject` by the zero-subject rule
+          // (report.ts), pushed and emitted rather than left as a warning
+          // string no oracle consumer can see.
           warnings.push(
             `oracle: division "${table.divisionRef}" declares no tiebreakers — tie-order cascade oracle ` +
               `skipped for "${table.stageRef}"`,
           );
+          oracles.push({
+            name: `oracle: ${table.divisionRef}/${table.stageRef} tie-order cascade`,
+            passed: true,
+            verdict: "no_subject",
+            detail:
+              `division "${table.divisionRef}" declares no tiebreakers — this oracle has NO SUBJECT ` +
+              `and compared nothing (0 checked, 0 skipped)`,
+          });
+          log.info(oracleLogFields("tie_order_cascade", "no_subject"), "oracle_checked");
         } else {
           const cascade = tableDivision.tiebreakers;
           const cascadeCheck = compareTieOrderCascade(cascade, standingsWire.rows);
@@ -3104,6 +3138,12 @@ export async function runTinySuite(
         // here, and `pack-schema.ts` gives every board `entries.min(1)`, so
         // an empty list here would mean the pack changed shape underneath
         // this block rather than that nothing was owed.
+        //
+        // ZERO-SUBJECT RULE (report.ts, beside `OracleVerdict`): this REDS
+        // rather than reporting `no_subject`, deliberately. The pack declared
+        // a board — `pack-schema.ts` gives every one of them `entries.min(1)`
+        // — so zero resolved entries here is a missing answer to a question
+        // that WAS asked, not an absent subject.
         const cardsChecked = expectedEntries.length;
         const cardsMatched = cardsChecked > 0 && cardIssues.length === 0;
         oracles.push({
@@ -3151,10 +3191,23 @@ export async function runTinySuite(
         // no career at all, which is the vacuity this wave exists to remove.
         // Stated as a warning, the same way T5a's cascade states a division
         // that declares no tiebreakers.
+        //
+        // B05 review round 1, MAJOR 2: and, since the pack is the empty side,
+        // ALSO as a `no_subject` oracle row — see the zero-subject rule in
+        // report.ts. The warning alone was invisible to every oracle consumer.
         warnings.push(
           `oracle: pack declares no expected.careers rows — the cross-division career rollup oracle ` +
             `(compareCareerStats) has no subject and was NOT run`,
         );
+        oracles.push({
+          name: `oracle: career rollup`,
+          passed: true,
+          verdict: "no_subject",
+          detail:
+            `the pack declares no expected.careers rows — the cross-division career rollup oracle ` +
+            `(compareCareerStats) has NO SUBJECT and compared nothing`,
+        });
+        log.info(oracleLogFields("career_stats", "no_subject"), "oracle_checked");
       } else {
         const careersByPerson = new Map<string, ExpectedCareerStat[]>();
         const unresolvedCareerRefs: string[] = [];

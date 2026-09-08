@@ -1388,7 +1388,17 @@ describe("runTinySuite — B05 T1 division-A stream fold wiring", () => {
     });
 
     const oracles = report.oracles ?? [];
-    expect(oracles.some((o) => o.name.includes("discipline carry"))).toBe(false);
+    // B05 review round 1, MAJOR 2: this used to pin NO oracle row at all,
+    // which made a skipped comparator indistinguishable from one that was
+    // never written — for `report.oracles` and for the `oracle_checked`
+    // stream alike. The zero-subject rule (report.ts, beside `OracleVerdict`)
+    // says a PACK that declared nothing yields `no_subject`: counted, never
+    // red, never readable as a pass.
+    const carry = oracles.filter((o) => o.name.includes("discipline carry"));
+    expect(carry).toHaveLength(1);
+    expect(carry[0]!.verdict).toBe("no_subject");
+    expect(carry[0]!.passed).toBe(true);
+    expect(carry[0]!.detail).toContain("NO SUBJECT");
     expect(
       (report.warnings ?? []).some(
         (w) => w.includes("no expected.suspensions rows") && w.includes("NOT run"),
@@ -1446,7 +1456,13 @@ describe("runTinySuite — B05 T1 division-A stream fold wiring", () => {
     });
 
     const oracles = report.oracles ?? [];
-    expect(oracles.some((o) => o.name.includes("career rollup"))).toBe(false);
+    // B05 review round 1, MAJOR 2 — the zero-subject rule, same as the
+    // suspensions case above: counted as `no_subject`, not omitted.
+    const career = oracles.filter((o) => o.name.includes("career rollup"));
+    expect(career).toHaveLength(1);
+    expect(career[0]!.verdict).toBe("no_subject");
+    expect(career[0]!.passed).toBe(true);
+    expect(career[0]!.detail).toContain("NO SUBJECT");
     expect(
       (report.warnings ?? []).some((w) => w.includes("no expected.careers rows") && w.includes("NOT run")),
     ).toBe(true);
@@ -1457,6 +1473,80 @@ describe("runTinySuite — B05 T1 division-A stream fold wiring", () => {
     const cardOracles = oracles.filter((o) => o.name.includes("person cards"));
     expect(cardOracles).toHaveLength(4);
     expect(cardOracles.every((o) => o.passed)).toBe(true);
+    expect(report.gate).toBe("green");
+  });
+
+  it("B05 review round 1, MAJOR 2 — a division declaring NO tiebreakers reports a no_subject cascade, not silence", async () => {
+    // The third warn-with-no-oracle site, and the one the review did not name
+    // by line: it is the same convention as the two above, so it moves with
+    // them or the wave ships a fourth answer to the same question. A skipped
+    // cascade is now COUNTED — in `report.oracles` and on the `oracle_checked`
+    // stream — instead of existing only as a warning string.
+    const raw = JSON.parse(await readFile(TINY_PACK_PATH, "utf8")) as {
+      divisions: { ref: string; tiebreakers?: unknown }[];
+    };
+    const dTiny = raw.divisions.find((d) => d.ref === "d-tiny");
+    if (dTiny?.tiebreakers === undefined) {
+      throw new Error("test fixture assumption broken: d-tiny declares no tiebreakers");
+    }
+    delete dTiny.tiebreakers;
+
+    const dir = await mkdtemp(join(tmpdir(), "b05-major2-notiebreakers-"));
+    const mutatedPackPath = join(dir, "_tiny.json");
+    await writeFile(mutatedPackPath, JSON.stringify(raw), "utf8");
+
+    const events: { kind: unknown; passed: unknown; verdict: unknown }[] = [];
+    const capturing = pino({ level: "info" }, {
+      write(line: string) {
+        const entry = JSON.parse(line) as Record<string, unknown>;
+        if (entry.msg === "oracle_checked") {
+          events.push({ kind: entry.kind, passed: entry.passed, verdict: entry.verdict });
+        }
+      },
+    });
+
+    const { transport, sql } = fakeServer();
+    const report = await runTinySuite({
+      base: "http://bench.example",
+      engine: "optimized",
+      keep: false,
+      log: capturing,
+      cliEntry: "admin",
+      packPath: mutatedPackPath,
+      transport,
+      sql,
+      probeTransport: transport,
+      simTransport: transport,
+      importTransport: transport,
+      startTransport: transport,
+      advanceTransport: transport,
+      oracleTransport: transport,
+    });
+
+    const cascades = (report.oracles ?? []).filter((o) => o.name.endsWith("tie-order cascade"));
+    // Still one per table — the mutation changes the VERDICT of d-tiny's,
+    // never the population. A block that simply stopped running would also
+    // satisfy a "no pass here" assertion, vacuously.
+    expect(cascades).toHaveLength(3);
+    const skipped = cascades.filter((o) => o.name.includes("d-tiny/"));
+    expect(skipped).toHaveLength(1);
+    expect(skipped[0]!.verdict).toBe("no_subject");
+    expect(skipped[0]!.passed).toBe(true);
+    expect(skipped[0]!.detail).toContain("NO SUBJECT");
+    // Its POSITIVE PAIR from the same run: the untouched division still
+    // compares a real tie and still passes.
+    const tiebreak = cascades.find((o) => o.name.includes("d-tiebreak/"));
+    expect(tiebreak?.verdict).toBe("pass");
+    // The warning is kept — the oracle row is an addition, not a replacement.
+    expect(
+      (report.warnings ?? []).some((w) => w.includes("declares no tiebreakers")),
+    ).toBe(true);
+    // And the log stream counts it too, or a consumer still undercounts.
+    expect(events.filter((e) => e.kind === "tie_order_cascade")).toEqual([
+      { kind: "tie_order_cascade", passed: true, verdict: "no_subject" },
+      { kind: "tie_order_cascade", passed: true, verdict: "no_subject" },
+      { kind: "tie_order_cascade", passed: true, verdict: "pass" },
+    ]);
     expect(report.gate).toBe("green");
   });
 

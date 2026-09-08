@@ -77,9 +77,37 @@ export type SolverResult = z.infer<typeof SolverResult>;
  * vacuity this wave exists to eliminate, printing itself green in the wave's
  * own report.
  *
- * `no_subject` does not RED a run (an absent subject is not a failure — the
- * same stance `tiny.ts` already takes when it warns "has no subject and was
- * NOT run" for an empty `expected.careers`), but it must never READ as PASS.
+ * `no_subject` does not RED a run (an absent subject is not a failure), but it
+ * must never READ as PASS.
+ *
+ * ---------------------------------------------------------------------------
+ * B05 review round 1, MAJOR 2 — THE ZERO-SUBJECT RULE, stated once, here.
+ *
+ * The wave shipped three different answers to "this comparator had nothing to
+ * compare": this verdict, a hard FAIL, and a warning with NO oracle row at all
+ * (the last one invisible to `report.oracles` AND to the `oracle_checked`
+ * stream, so a reader could not tell a skipped comparator from one that was
+ * never written). Which answer is right turns on WHOSE side the emptiness is
+ * on, and that is the whole rule:
+ *
+ *  - The PACK declared nothing for this comparator  -> `no_subject`.
+ *    The bench was never owed a check. It still pushes an oracle row (and
+ *    emits `oracle_checked`), so the absence is COUNTED rather than silent,
+ *    and it never reds. Empty `expected.suspensions`/`expected.careers`, a
+ *    division declaring no `tiebreakers`.
+ *
+ *  - The pack declared a subject and the PRODUCT returned nothing for it
+ *    -> `fail`. That is not an absent subject, it is a missing answer to a
+ *    question that WAS asked, and it reds. Every site that reds this way
+ *    states the reason in one line beside the guard: `compareRankCrossings`
+ *    and `compareFinalRanks` (an empty crossing where a completed stage owed
+ *    a ranking), the person-cards block (a board `pack-schema.ts` gives
+ *    `entries.min(1)` resolving to zero), the enforcement probe (a declared
+ *    suspension with no missed fixture to refuse a sheet for).
+ *
+ * A new comparator picks its side by asking which of those two it is. There
+ * is no third answer.
+ * ---------------------------------------------------------------------------
  */
 export const OracleVerdict = z.enum(["pass", "fail", "no_subject"]);
 export type OracleVerdict = z.infer<typeof OracleVerdict>;
