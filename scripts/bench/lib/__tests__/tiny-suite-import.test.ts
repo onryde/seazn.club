@@ -27,6 +27,7 @@ import { makeScheduleWorld } from "./_schedule-routes.ts";
 import { makeDivisionPhaseWorld } from "./_division-phase.ts";
 import { makeAdvanceRoutesWorld } from "./_advance-routes.ts";
 import { makeOracleRoutesWorld, tinyDivisionPlayerStats, tinyLeagueTableRows } from "./_oracle-routes.ts";
+import { roundRobinRoundCount } from "./_roundrobin-rounds.ts";
 
 const silent = pino({ level: "silent" });
 
@@ -182,13 +183,21 @@ function fakeServer(opts: { refuseImportWith?: { status: number; code: string; m
                 fixtureExtKeyById.set(id, "se-r0-i0");
                 return { id, ext_key: "se-r0-i0" };
               })()]
-            : Array.from({ length: legsByStageId.get(stageId) ?? 1 }, (_v, i) => {
-                const id = `fx-${++fixtureCounter}`;
-                if (divisionId !== undefined) fixtureDivisionId.set(id, divisionId);
-                const extKey = `rr-r${i + 1}-c1`;
-                fixtureExtKeyById.set(id, extKey);
-                return { id, ext_key: extKey };
-              });
+            : Array.from(
+                {
+                  length: roundRobinRoundCount(
+                    divisionId === undefined ? 0 : schedule.entrantsOfDivision(divisionId).length,
+                    legsByStageId.get(stageId) ?? 1,
+                  ),
+                },
+                (_v, i) => {
+                  const id = `fx-${++fixtureCounter}`;
+                  if (divisionId !== undefined) fixtureDivisionId.set(id, divisionId);
+                  const extKey = `rr-r${i + 1}-c1`;
+                  fixtureExtKeyById.set(id, extKey);
+                  return { id, ext_key: extKey };
+                },
+              );
         schedule.addFixtures(stageId, fixtures);
         return { fixtures } as unknown as T;
       }
