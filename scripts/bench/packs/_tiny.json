@@ -196,6 +196,60 @@
         }
       ],
       "entry": "registration-ui"
+    },
+    {
+      "ref": "d-tiebreak",
+      "name": "Tiebreak",
+      "sportKey": "generic",
+      "variantKey": "score",
+      "moduleVersion": "1.0.0",
+      "cfgOverrides": {
+        "resultMode": "score",
+        "allowDraws": true,
+        "points": {
+          "w": 3,
+          "d": 1,
+          "l": 0
+        },
+        "progressScore": false
+      },
+      "tiebreakers": [
+        "points",
+        "diff",
+        "for"
+      ],
+      "stages": [
+        {
+          "ref": "s-tiebreak-league",
+          "seq": 1,
+          "kind": "league",
+          "name": "Tiebreak League",
+          "config": {
+            "legs": 1
+          },
+          "seeding": [
+            "e-echo",
+            "e-foxtrot",
+            "e-golf"
+          ]
+        }
+      ],
+      "scheduleConfig": {
+        "startAt": "2099-01-03T08:00:00.000Z",
+        "matchMinutes": 30,
+        "gapMinutes": 0,
+        "courts": [
+          "@c-tiny-1",
+          "@c-tiny-2"
+        ],
+        "perEntrantMinRest": 0,
+        "sessionWindows": [
+          {
+            "from": "2099-01-03T08:00:00.000Z",
+            "to": "2099-01-03T20:00:00.000Z"
+          }
+        ]
+      }
     }
   ],
   "persons": [
@@ -244,6 +298,24 @@
       "fullName": "Sami Okafor",
       "lane": "player",
       "dob": "1988-11-02"
+    },
+    {
+      "ref": "p-echo",
+      "fullName": "Elena Reyes",
+      "lane": "player",
+      "shortName": "E. Reyes"
+    },
+    {
+      "ref": "p-foxtrot",
+      "fullName": "Farid Haddad",
+      "lane": "player",
+      "shortName": "F. Haddad"
+    },
+    {
+      "ref": "p-golf",
+      "fullName": "Greta Lindqvist",
+      "lane": "player",
+      "shortName": "G. Lindqvist"
     }
   ],
   "entrants": [
@@ -324,6 +396,48 @@
         {
           "person": "p-reg-sami",
           "captain": true
+        }
+      ]
+    },
+    {
+      "ref": "e-echo",
+      "divisionRef": "d-tiebreak",
+      "kind": "individual",
+      "displayName": "Elena Reyes",
+      "seed": 1,
+      "roster": [
+        {
+          "person": "p-echo",
+          "captain": true,
+          "squadNumber": 1
+        }
+      ]
+    },
+    {
+      "ref": "e-foxtrot",
+      "divisionRef": "d-tiebreak",
+      "kind": "individual",
+      "displayName": "Farid Haddad",
+      "seed": 2,
+      "roster": [
+        {
+          "person": "p-foxtrot",
+          "captain": true,
+          "squadNumber": 1
+        }
+      ]
+    },
+    {
+      "ref": "e-golf",
+      "divisionRef": "d-tiebreak",
+      "kind": "individual",
+      "displayName": "Greta Lindqvist",
+      "seed": 3,
+      "roster": [
+        {
+          "person": "p-golf",
+          "captain": true,
+          "squadNumber": 1
         }
       ]
     }
@@ -896,6 +1010,66 @@
           }
         }
       ]
+    },
+    {
+      "divisionRef": "d-tiebreak",
+      "fixtureExtKey": "rr-r1-c1",
+      "stageRef": "s-tiebreak-league",
+      "home": "e-echo",
+      "away": "e-foxtrot",
+      "provenance": "real",
+      "events": [
+        {
+          "type": "core.start"
+        },
+        {
+          "type": "generic.result",
+          "payload": {
+            "p1Score": 3,
+            "p2Score": 0
+          }
+        }
+      ]
+    },
+    {
+      "divisionRef": "d-tiebreak",
+      "fixtureExtKey": "rr-r2-c1",
+      "stageRef": "s-tiebreak-league",
+      "home": "e-golf",
+      "away": "e-echo",
+      "provenance": "real",
+      "events": [
+        {
+          "type": "core.start"
+        },
+        {
+          "type": "generic.result",
+          "payload": {
+            "p1Score": 1,
+            "p2Score": 1
+          }
+        }
+      ]
+    },
+    {
+      "divisionRef": "d-tiebreak",
+      "fixtureExtKey": "rr-r3-c1",
+      "stageRef": "s-tiebreak-league",
+      "home": "e-foxtrot",
+      "away": "e-golf",
+      "provenance": "real",
+      "events": [
+        {
+          "type": "core.start"
+        },
+        {
+          "type": "generic.result",
+          "payload": {
+            "p1Score": 8,
+            "p2Score": 9
+          }
+        }
+      ]
     }
   ],
   "venues": [
@@ -1089,6 +1263,63 @@
             "line": "0"
           }
         ]
+      },
+      {
+        "divisionRef": "d-tiebreak",
+        "fixtureExtKey": "rr-r1-c1",
+        "outcome": {
+          "kind": "win",
+          "winner": "e-echo",
+          "loser": "e-foxtrot",
+          "method": "regulation"
+        },
+        "perSide": [
+          {
+            "entrant": "e-echo",
+            "line": "3"
+          },
+          {
+            "entrant": "e-foxtrot",
+            "line": "0"
+          }
+        ]
+      },
+      {
+        "divisionRef": "d-tiebreak",
+        "fixtureExtKey": "rr-r2-c1",
+        "outcome": {
+          "kind": "draw"
+        },
+        "perSide": [
+          {
+            "entrant": "e-golf",
+            "line": "1"
+          },
+          {
+            "entrant": "e-echo",
+            "line": "1"
+          }
+        ]
+      },
+      {
+        "divisionRef": "d-tiebreak",
+        "fixtureExtKey": "rr-r3-c1",
+        "outcome": {
+          "kind": "win",
+          "winner": "e-golf",
+          "loser": "e-foxtrot",
+          "method": "regulation"
+        },
+        "perSide": [
+          {
+            "entrant": "e-foxtrot",
+            "line": "8"
+          },
+          {
+            "entrant": "e-golf",
+            "line": "9"
+          }
+        ]
       }
     ],
     "tables": [
@@ -1137,6 +1368,54 @@
             "drawn": 0,
             "lost": 1,
             "points": 0
+          }
+        ]
+      },
+      {
+        "divisionRef": "d-tiebreak",
+        "stageRef": "s-tiebreak-league",
+        "rows": [
+          {
+            "entrant": "e-echo",
+            "rank": 1,
+            "played": 2,
+            "won": 1,
+            "drawn": 1,
+            "lost": 0,
+            "points": 4,
+            "metrics": {
+              "for": 4,
+              "against": 1,
+              "diff": 3
+            }
+          },
+          {
+            "entrant": "e-golf",
+            "rank": 2,
+            "played": 2,
+            "won": 1,
+            "drawn": 1,
+            "lost": 0,
+            "points": 4,
+            "metrics": {
+              "for": 10,
+              "against": 9,
+              "diff": 1
+            }
+          },
+          {
+            "entrant": "e-foxtrot",
+            "rank": 3,
+            "played": 2,
+            "won": 0,
+            "drawn": 0,
+            "lost": 2,
+            "points": 0,
+            "metrics": {
+              "for": 8,
+              "against": 12,
+              "diff": -4
+            }
           }
         ]
       }

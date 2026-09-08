@@ -56,9 +56,9 @@ describe("build-packs/_tiny.ts — the determinism gate", () => {
 });
 
 describe("packs/_tiny.json — two divisions, stage 0, no new errors", () => {
-  it("declares THREE divisions (generic d-tiny, badminton d-badminton, registration d-registration)", () => {
+  it("declares FOUR divisions (generic d-tiny, badminton d-badminton, registration d-registration, generic d-tiebreak)", () => {
     const pack = PackSchema.parse(JSON.parse(readFileSync(TINY_JSON_PATH, "utf8")));
-    expect(pack.divisions.map((d) => d.ref)).toEqual(["d-tiny", "d-badminton", "d-registration"]);
+    expect(pack.divisions.map((d) => d.ref)).toEqual(["d-tiny", "d-badminton", "d-registration", "d-tiebreak"]);
   });
 
   it("d-registration declares entry:\"registration-ui\" and a registration block with 2 free entries, manual approval, 1 approve", () => {
@@ -144,7 +144,7 @@ describe("buildSeedPlan — the T4 generalisation, exercised on a REAL two-divis
     const pack = PackSchema.parse(JSON.parse(readFileSync(TINY_JSON_PATH, "utf8")));
     const plan = buildSeedPlan(pack);
 
-    expect(plan.divisions.map((d) => d.ref)).toEqual(["d-tiny", "d-badminton", "d-registration"]);
+    expect(plan.divisions.map((d) => d.ref)).toEqual(["d-tiny", "d-badminton", "d-registration", "d-tiebreak"]);
 
     const badmintonEntrants = plan.entrants.filter((e) => e.divisionRef === "d-badminton");
     expect(badmintonEntrants.map((e) => e.ref).sort()).toEqual(["e-cho", "e-dahl"]);
@@ -156,14 +156,21 @@ describe("buildSeedPlan — the T4 generalisation, exercised on a REAL two-divis
     // has no knowledge of which divisions `suites/tiny.ts` later filters out.
     const registrationEntrants = plan.entrants.filter((e) => e.divisionRef === "d-registration");
     expect(registrationEntrants.map((e) => e.ref).sort()).toEqual(["e-reg-priya", "e-reg-sami"]);
+    // B05 T5a — d-tiebreak's own THREE entrants, the ordering-differential
+    // tie-order-cascade subject (oracle.ts's `compareTieOrderCascade`).
+    const tiebreakEntrants = plan.entrants.filter((e) => e.divisionRef === "d-tiebreak");
+    expect(tiebreakEntrants.map((e) => e.ref).sort()).toEqual(["e-echo", "e-foxtrot", "e-golf"]);
 
-    // Every player-lane person, from ALL THREE divisions, becomes a `persons`
+    // Every player-lane person, from ALL FOUR divisions, becomes a `persons`
     // row; Dee Duarte and Eli Ostrander (d-tiny's officials) do not.
     expect(plan.persons.map((p) => p.ref).sort()).toEqual([
       "p-ana",
       "p-bo",
       "p-cho",
       "p-dahl",
+      "p-echo",
+      "p-foxtrot",
+      "p-golf",
       "p-reg-priya",
       "p-reg-sami",
     ]);
@@ -174,10 +181,13 @@ describe("buildSeedPlan — the T4 generalisation, exercised on a REAL two-divis
     // d-tiny: 2 entrants over 3 legs = 3. d-badminton: 2 entrants over 1
     // leg = 1. d-registration's stage is kind:"knockout" (never "league"),
     // so it contributes NO entry here at all — see build-packs/_tiny.ts's
-    // own comment on why that stage kind was chosen.
+    // own comment on why that stage kind was chosen. d-tiebreak: 3 entrants
+    // over 1 leg = 3 (the odd-field round robin's own pivot-bye round, not
+    // just `legs`).
     expect(plan.expectedFixtureCounts).toEqual([
       { divisionRef: "d-tiny", stageRef: "s-league", count: 3 },
       { divisionRef: "d-badminton", stageRef: "s-badminton-league", count: 1 },
+      { divisionRef: "d-tiebreak", stageRef: "s-tiebreak-league", count: 3 },
     ]);
   });
 

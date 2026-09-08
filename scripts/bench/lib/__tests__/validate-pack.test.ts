@@ -326,12 +326,14 @@ describe("validatePack — _tiny.json, the shared fixture", () => {
     // d-tiny: THREE `real` streams (B05 T3 added the playoff final,
     // provenance "real") and one `reconstructed`. d-badminton (B03 T5): one
     // `reconstructed` stream (`reconstructSetBasedStream`, folded through the
-    // real generator). Overall sums both divisions.
+    // real generator). d-tiebreak (B05 T5a): three `real` streams (the
+    // tie-order-cascade subject, plain generic.result events). Overall sums
+    // all three streamed divisions.
     expect(result.provenance.overall).toEqual({
-      real: 3,
+      real: 6,
       reconstructed: 2,
       synthetic: 0,
-      total: 5,
+      total: 8,
     });
     expect(result.provenance.byDivision).toEqual({
       "d-tiny": { real: 3, reconstructed: 1, synthetic: 0, total: 4 },
@@ -340,6 +342,7 @@ describe("validatePack — _tiny.json, the shared fixture", () => {
       // split is present and zeroed, same as "gives every declared division
       // a split" below proves for d-tiny/d-badminton with streams emptied.
       "d-registration": { real: 0, reconstructed: 0, synthetic: 0, total: 0 },
+      "d-tiebreak": { real: 3, reconstructed: 0, synthetic: 0, total: 3 },
     });
   });
 
@@ -356,12 +359,13 @@ describe("validatePack — _tiny.json, the shared fixture", () => {
     pack.officials = [];
     const result = validatePack(pack, TINY);
     // An absent key and a zero count are different facts: a report that cannot
-    // tell them apart hides a division nothing replayed. Both declared
-    // divisions appear, each zeroed.
+    // tell them apart hides a division nothing replayed. Every declared
+    // division appears, each zeroed.
     expect(result.provenance.byDivision).toEqual({
       "d-tiny": { real: 0, reconstructed: 0, synthetic: 0, total: 0 },
       "d-badminton": { real: 0, reconstructed: 0, synthetic: 0, total: 0 },
       "d-registration": { real: 0, reconstructed: 0, synthetic: 0, total: 0 },
+      "d-tiebreak": { real: 0, reconstructed: 0, synthetic: 0, total: 0 },
     });
   });
 });
@@ -671,14 +675,15 @@ describe("validatePack — provenance", () => {
     const result = validatePack(pack, TINY);
     expectClean(result, TINY_NOT_DERIVED);
     // d-tiny's THREE `real` streams (B05 T3 added the playoff final), the
-    // mutated `synthetic` one, and d-badminton's own `reconstructed` stream
-    // (B03 T5) — untouched by this mutation, since it targets
-    // `pack.streams[1]`, d-tiny's own.
+    // mutated `synthetic` one, d-badminton's own `reconstructed` stream
+    // (B03 T5), and d-tiebreak's own THREE `real` streams (B05 T5a) — all
+    // untouched by this mutation, since it targets `pack.streams[1]`,
+    // d-tiny's own.
     expect(result.provenance.overall).toEqual({
-      real: 3,
+      real: 6,
       reconstructed: 1,
       synthetic: 1,
-      total: 5,
+      total: 8,
     });
   });
 });

@@ -231,29 +231,31 @@ describe("fixtureCountIssue — addendum 1's comparison, on the testable side of
   const plan = (): SeedPlan => buildSeedPlan(tinyPack());
 
   it("is null when the generator minted exactly what the pack implies", () => {
-    // `_tiny` implies three from d-tiny's league PLUS one from d-badminton's
-    // (B03 T5) — four, summed across BOTH league stages, since `actual` at
-    // the real call site is a pool-wide count spanning every division.
-    expect(fixtureCountIssue(4, plan())).toBeNull();
+    // `_tiny` implies three from d-tiny's league, one from d-badminton's
+    // (B03 T5), and three from d-tiebreak's (B05 T5a) — seven, summed across
+    // all THREE league stages, since `actual` at the real call site is a
+    // pool-wide count spanning every division.
+    expect(fixtureCountIssue(7, plan())).toBeNull();
   });
 
   it("names BOTH numbers and a per-division breakdown when the count is short", () => {
     const issue = fixtureCountIssue(1, plan());
-    expect(issue).toContain("expected 4 fixture(s) total across 2 league stage(s)");
+    expect(issue).toContain("expected 7 fixture(s) total across 3 league stage(s)");
     expect(issue).toContain("got 1");
     // Each division's own arithmetic is named, not just the total — a reader
     // has to be able to tell WHICH stage's count is off.
     expect(issue).toContain('"d-tiny": 3 fixture(s) from the pack\'s 2-entrant league over 3 leg(s)');
     expect(issue).toContain('"d-badminton": 1 fixture(s) from the pack\'s 2-entrant league over 1 leg(s)');
+    expect(issue).toContain('"d-tiebreak": 3 fixture(s) from the pack\'s 3-entrant league over 1 leg(s)');
   });
 
   it("names both numbers when the count is LONG too — the inverted operator", () => {
     // The direction matters: an inversion reports a mismatch as a match and a
     // match as a mismatch, so an arm that only ever sees `actual < expected`
     // cannot witness it.
-    const issue = fixtureCountIssue(6, plan());
-    expect(issue).toContain("expected 4 fixture(s) total across 2 league stage(s)");
-    expect(issue).toContain("got 6");
+    const issue = fixtureCountIssue(9, plan());
+    expect(issue).toContain("expected 7 fixture(s) total across 3 league stage(s)");
+    expect(issue).toContain("got 9");
   });
 
   it("degrades to the ORIGINAL single-entry sentence for a one-league-stage pack — no shape change for every pack before T5", () => {
@@ -642,11 +644,23 @@ export function makeFakeServer(
             ? [{ id: "fx-bm-1", ext_key: "rr-r1-c1" }]
             : stageId === "stage-playoff"
               ? [{ id: "fx-playoff-1", ext_key: "se-r0-i0" }]
-              : [
-                  { id: "fx-1", ext_key: "rr-r1-c1" },
-                  { id: "fx-2", ext_key: "rr-r2-c1" },
-                  { id: "fx-3", ext_key: "rr-r3-c1" },
-                ];
+              : // B05 T5a — `d-tiebreak`'s own league (3 entrants, 1 leg — the
+                // odd-field round robin's pivot-bye means 3 rounds, the SAME
+                // count as d-tiny's own s-league below, which is why this
+                // branch needs its OWN `fx-tb-*` ids: reusing `fx-1..3` for
+                // BOTH stages would collide in `schedule.addFixtures`'
+                // shared table and silently orphan d-tiny's own fixtures.
+                stageId === "stage-tiebreak-league"
+                ? [
+                    { id: "fx-tb-1", ext_key: "rr-r1-c1" },
+                    { id: "fx-tb-2", ext_key: "rr-r2-c1" },
+                    { id: "fx-tb-3", ext_key: "rr-r3-c1" },
+                  ]
+                : [
+                    { id: "fx-1", ext_key: "rr-r1-c1" },
+                    { id: "fx-2", ext_key: "rr-r2-c1" },
+                    { id: "fx-3", ext_key: "rr-r3-c1" },
+                  ];
         // B04: the SAME rows become this world's fixture table, so the board
         // `GET /divisions/{id}/fixtures` returns below is the one `/generate`
         // actually minted rather than a second, independently invented list.
