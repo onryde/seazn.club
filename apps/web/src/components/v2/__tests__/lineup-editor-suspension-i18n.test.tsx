@@ -155,6 +155,16 @@ describe("LineupEditor — a 422 SUSPENDED_PLAYER is said in the organiser's own
     expect(text).toContain(suspendedPlayersMessage(["Alex Doe"]));
   });
 
+  it("falls back to English when a suspended row carries no usable name — never a nameless accusation", async () => {
+    // `err.extra.suspended` is server-shaped data, not a guarantee: a row with
+    // no `full_name` maps to "" at the call site, and interpolating that would
+    // render "… cannot be named on a team sheet: " with nobody in it.
+    const island = await saveAndReadBanner(["Alex Doe"], [{ person_id: "p1", full_name: "" }]);
+    const text = textOf(island.tree());
+    expect(text).toContain(suspendedPlayersMessage(["Alex Doe"]));
+    expect(text).not.toContain(expectedBanner([""]));
+  });
+
   it("does NOT open the override dialog — a ban is refused at the banner, not offered as an override here", async () => {
     const island = await saveAndReadBanner(
       ["Alex Doe"],

@@ -33,7 +33,7 @@ const esDict = es as unknown as Dict;
 const enText = en as unknown as Record<string, string>;
 const esText = es as unknown as Record<string, string>;
 
-function render(violations: EligibilityIssue[], dict: Dict, locale: string): string {
+function render(violations: EligibilityIssue[], dict: Dict, locale: "en" | "es"): string {
   return renderToStaticMarkup(
     <DictProvider dict={dict} locale={locale}>
       <EligibilityOverrideDialog
