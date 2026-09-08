@@ -161,6 +161,50 @@ bridge, and manual `POST /divisions/{id}/suspensions`. **All three land
 ban**, and only there are `entrant_id`/`decided_at` stamped. All gated on
 `discipline.enforced`.
 
+#### Recommendation to the owner (bench recommendation, NOT a ruling)
+
+This is a product change in `apps/web`, so it is outside B05's file set and
+belongs in its own small wave. Recorded here because the bench found it.
+
+**Recommend: make a confirmed ban block the team sheet, reusing the
+override-with-reason seam roster eligibility already has, behind the paid flag
+that already exists.**
+
+What the customer gets. Today an organiser can announce a two-match ban, record
+it, confirm it — and the banned player is accepted onto the sheet and scored.
+The rule exists everywhere except the one moment it matters, which is a team
+manager naming a player. The failure mode is not a bug report: it is a banned
+player appearing in a knockout final, a protest, and a result that has to be
+replayed or forfeited in public. Organisers buy this product to run competitions
+that hold up when challenged, and this is the seam where one does not.
+
+What the business gets. `discipline.enforced` is an entitlement key
+(`usecases/discipline.ts:519,532,560,581,610,729`) sold on the pricing matrix as
+"Automatic suspension tracking" (`dictionaries/en/marketing.json:133`). The paid
+tier currently delivers detection and a record; the word in its own key is
+`enforced`. Closing the gap completes a feature customers already pay for and
+lets the matrix say enforcement rather than tracking — a stronger line at the
+same price, and one a competitor cannot claim by shipping a list view.
+
+Why override-with-reason rather than a hard block. Appeals get upheld, the wrong
+person gets banned, a tournament committee overrules. `gateRosterEligibility`
+already solves exactly this shape: 422 unless `override.reason` is supplied,
+with the reason recorded. Reusing it means no new UX concept, an audit trail
+that protects the organiser in the dispute the ban exists for, and a change with
+a blast radius of one gate rather than a redesign.
+
+Cost and risk. One gate in the lineup write path plus its tests. It stays behind
+`discipline.enforced`, so free orgs and orgs that never confirm a suspension see
+nothing change. The behaviour only tightens for an org that has bought the
+feature, created a suspension AND confirmed it — which is a deliberate act, not
+an accident. Orgs deliberately running advisory discipline keep working via the
+override.
+
+If the owner decides advisory is correct and deliberate, the fix is one line of
+copy rather than code: say tracking, not enforced, where a customer can read it.
+Either way B05's measurement stays, and becomes the regression that proves the
+decision held.
+
 ## Corrections to this wave's own documents
 
 - **F1 was too narrow** (fixed `698476409`). The design doc and re-pin record
