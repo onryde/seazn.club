@@ -110,6 +110,33 @@ exact predicate in the fold has NOT been read yet: T5 reads it first and, if
 the product turns out not to discriminate, records a spec §15 product finding
 rather than weakening the assertion to match.
 
+**D9 — the bench must START the division, and how it handles the refusals is
+the ruling.** Found by T2, verified before acting: nothing in `scripts/bench`
+has ever called `POST /api/v1/divisions/{id}/start`. The schedule layer takes a
+division `setup → scheduled` and stops, while both write paths refuse anything
+still in those states — `usecases/scoring.ts:222` (`WRONG_PHASE`, "division has
+not started — scoring is closed") and `usecases/event-import.ts:704`
+(409 `import.division_not_started`). Every fold T1 and T2 built is correct
+plumbing that would 409 on contact with a real server, and no unit test could
+see it: the fakes have no phase gate.
+
+Starting is not a formality — it PUBLISHES the schedule under the same
+server-side validation publish runs
+(`app/api/v1/divisions/[id]/start/route.ts`), so it can refuse. The policy:
+
+- Attempt the start **without** `acknowledge_warnings`. A bench that
+  acknowledges pre-emptively can never observe a warning.
+- On 422 `SCHEDULE_UNACKNOWLEDGED_WARNINGS`: record every warning in the
+  report as a finding, THEN retry with `acknowledge_warnings: true` — the human
+  path, with the warnings on the record rather than swallowed.
+- On 422 `SCHEDULE_BLOCKING_CONFLICTS`: **red**. B04's independent checker has
+  just certified this board; a blocking-conflict refusal from the product is a
+  disagreement between the product and the checker, which is exactly the class
+  of finding this bench exists to produce. Report both sides.
+- Assert the division's status actually flipped by RE-READING it. A 200 from
+  the start call is not proof the phase moved, and every write path downstream
+  depends on the phase rather than on the response.
+
 ## 4. Shape
 
 New files under `scripts/bench/lib/`:
@@ -140,7 +167,8 @@ field order — per the re-pin, tie order is a cascade array, not a column.
 |---|---|---|
 | T0 | bench plan chooser: never provision a non-public plan; least-privileged public plan that satisfies; fixtures off the live catalog | in flight |
 | T1 | `simulate.ts` — single-POST path, per-fixture sequentiality, throughput | the 409 regression (D5) |
-| T2 | `simulate.ts` — import path, caps asserted from `IMPORT_CAPS` (D4) | both divisions fold; neither path is inert |
+| T2 | `import.ts` — import path, caps mirrored from `IMPORT_CAPS` (D4) | both divisions fold; neither path is inert |
+| T2.5 | division start + its refusal policy (D9) | the division's status is RE-READ as started, not inferred from a 200 |
 | T3 | `advance.ts` — propose/assert/confirm/generate/complete, capture (D1/D7) | wrong expected table reds BEFORE any next-stage write |
 | T4 | `oracle.ts` — standings, tie order, ranks, champion, leaderboards, person/career stats | the post-validation mutation reds the RUNTIME oracle (D6) |
 | T5 | `oracle.ts` — suspension carry + specials; P3's discriminator read first (D8) | ineligible person 422s on lineup PUT and is absent from the GET |
