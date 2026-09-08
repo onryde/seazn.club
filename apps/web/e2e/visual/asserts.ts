@@ -1,6 +1,10 @@
 // The owner checklist's VERIFY-AS-CUSTOMER rows, each as one reusable
 // assertion the capture spec runs per manifest row. Every function returns
-// offenders BY NAME so a red names a thing, not a count.
+// offenders BY NAME so a red names a thing, not a count — and every box a
+// check EXCUSES is returned too, in FULL, so `capture.spec.ts` can hold the
+// exemption list to the one the manifest row declares (AGENTS.md class 23:
+// "assert that every box you excused is the reachable kind, or the next
+// overflow hides behind it").
 import { expect, type Page } from "@playwright/test";
 import { overflowingIn } from "../helpers";
 import {
@@ -10,6 +14,7 @@ import {
   hitTargetFloorReport,
   measureHitTargets,
 } from "../scorepad-a11y-kit";
+import { notInDomSentinel } from "./manifest";
 
 export const BACKDROPS = {
   light: "linear-gradient(180deg, #e8f0e2 0%, #3d7a3a 55%, #2e6a2d 100%)",
@@ -24,47 +29,75 @@ export const BACKDROPS = {
 export interface Seen {
   inspected: number;
   sample: string[];
+  /** Every box this check EXCUSED, by STABLE identity (tag + data-testid),
+   *  complete and never sliced — `capture.spec.ts` asserts this against the
+   *  row's declared `exempt` list. Sizes deliberately excluded so the declared
+   *  list does not churn when content changes width. */
+  exempt?: Record<string, string[]>;
 }
+
+// A box's STABLE identity — `main`, `div[data-testid=mc-root]`, `a` — is tag
+// plus `data-testid` and nothing else: no pixel sizes, so a declared list in
+// `manifest.json` does not churn when content changes width. Defined inline in
+// each page.evaluate below rather than passed as source: this app serves a
+// strict CSP and `eval` inside an evaluated function would be refused by it.
 
 /** Paint the backdrop UNDER the page. A transparent segment (the overlay)
  *  composites over it the way OBS composites over a camera; an opaque page
- *  is unaffected. `!important` so the root layout's own ground cannot win. */
+ *  is unaffected. `!important` so the root layout's own ground cannot win.
+ *
+ *  The computed result is ASSERTED rather than assumed: `addStyleTag` can be
+ *  refused by CSP, and a backdrop that silently failed to paint would make
+ *  every future overlay row photograph the wrong thing while still passing
+ *  (fix round 1, Important 6 — this whole path was inert). */
 export async function applyBackdrop(page: Page, backdrop: keyof typeof BACKDROPS): Promise<void> {
   await page.addStyleTag({
     content: `html { background: ${BACKDROPS[backdrop]} fixed !important; min-height: 100vh; }`,
   });
+  const painted = await page.evaluate(
+    () => getComputedStyle(document.documentElement).backgroundImage,
+  );
+  expect(
+    painted,
+    `backdrop "${backdrop}" did not reach the computed style of <html> (got ${painted}) — addStyleTag was dropped, or the page's own ground won`,
+  ).toContain("gradient");
 }
 
 /** The visible interactive controls under `root`, in DOM order, named by
  *  data-testid, then aria-label, then text. Membership, ORDER and REPEATS —
  *  the thing to diff between 320 and 1280, never box size. */
 export async function controlSet(page: Page, root: string): Promise<string[]> {
-  return page.evaluate((rootSel) => {
-    const rootEl = document.querySelector<HTMLElement>(rootSel);
-    if (!rootEl) return [`<${rootSel} not in DOM>`];
-    return Array.from(
-      rootEl.querySelectorAll<HTMLElement>(
-        'button, a[href], select, input, textarea, [role="button"], [role="tab"], [role="radio"]',
-      ),
-    )
-      .filter((el) => {
-        const r = el.getBoundingClientRect();
-        const cs = getComputedStyle(el);
-        return r.width > 0 && r.height > 0 && cs.visibility !== "hidden" && cs.display !== "none";
-      })
-      .map(
-        (el) =>
-          el.dataset.testid ??
-          el.getAttribute("aria-label") ??
-          (el.textContent ?? "").trim().replace(/\s+/g, " ").slice(0, 60),
-      );
-  }, root);
+  return page.evaluate(
+    ({ rootSel, sentinel }) => {
+      const rootEl = document.querySelector<HTMLElement>(rootSel);
+      if (!rootEl) return [sentinel];
+      return Array.from(
+        rootEl.querySelectorAll<HTMLElement>(
+          'button, a[href], select, input, textarea, [role="button"], [role="tab"], [role="radio"]',
+        ),
+      )
+        .filter((el) => {
+          const r = el.getBoundingClientRect();
+          const cs = getComputedStyle(el);
+          return r.width > 0 && r.height > 0 && cs.visibility !== "hidden" && cs.display !== "none";
+        })
+        .map(
+          (el) =>
+            el.dataset.testid ??
+            el.getAttribute("aria-label") ??
+            (el.textContent ?? "").trim().replace(/\s+/g, " ").slice(0, 60),
+        );
+    },
+    { rootSel: root, sentinel: notInDomSentinel(root) },
+  );
 }
 
-/** The CSS selector every clip scan walks under its root. One constant so the
- *  two measurements below (`overflowingIn` and the bleed split) can never
- *  disagree about which boxes were in scope. */
-const CLIP_CHILD_SELECTOR = "button,div,span,p,a,li,td,th,h1,h2,h3";
+/** Every element under the clip root, not just the scorebug's card tags. This
+ *  used to be a hand-listed set carried over from `mobile.spec.ts`, which
+ *  omitted `table`, `section`, `nav`, `ul`, `header`, `img` and `svg` — so
+ *  `standings-768` ran `no-clip` over a page whose entire subject is a
+ *  `<table>` the scan could not see (fix round 1, Important 9). */
+const CLIP_CHILD_SELECTOR = "*";
 
 /** No REAL clip under `root`: content wider than a box that cannot scroll and
  *  is not truncated on purpose. Reachable rails are allowed here and held to
@@ -73,29 +106,29 @@ const CLIP_CHILD_SELECTOR = "button,div,span,p,a,li,td,th,h1,h2,h3";
  *  `overflowingIn` — this suite's one authority for the three-way split — was
  *  written against the scorebug, whose root is a single card, and it calls
  *  BOTH `overflow-x: hidden|clip` and `overflow-x: visible` a clip. Over a
- *  whole PAGE root that is too blunt in one specific, designed case, measured
- *  here on 2026-09-08: the public fixture page's tab strip is a rail that
- *  BLEEDS through the page gutter on phones (`flex gap-2 overflow-x-auto
- *  max-md:-mx-4 max-md:px-4`), so at 320 it is 320 px wide inside a 288 px
+ *  whole PAGE root that is too blunt in one specific, designed case: the
+ *  public fixture page's tab strip is a rail that BLEEDS through the page
+ *  gutter on phones (`flex gap-2 overflow-x-auto max-md:-mx-4 max-md:px-4`,
+ *  `match-centre/tab-rail.tsx`), so at 320 it is 320 px wide inside a 288 px
  *  content box and every `visible` ANCESTOR of it reports `304px content in
- *  288px`. Those ancestors are bystanders — the content is fully reachable
- *  inside the rail, and nothing escapes the viewport (the row's
- *  `no-horizontal-scroll` check proves that separately). The culprit is the
- *  rail, and it is a feature.
+ *  288px`. Those ancestors are bystanders; the culprit is the rail, and it is
+ *  a feature.
  *
- *  So the `clipped` list is split once more, and each half is held to its own
- *  invariant rather than one half being waved through:
- *
- *   - a box that really clips (`overflow-x: hidden|clip`) is a DEFECT, always;
- *   - a `visible` box is a DEFECT TOO, unless it contains a rail that is both
- *     reachable (`auto|scroll`) and actually overflowing — i.e. the exemption
- *     has to be earned by a rail that exists in the DOM at measure time, and
- *     that rail is then reported BY NAME in `Seen.sample` and held to
- *     `expectRailsA11y`'s keyboard invariant on any row that lists it.
+ *  The exemption is ACCOUNTED FOR, not merely explained. A first pass said
+ *  "this box contains some overflowing rail" — which `main` satisfies on every
+ *  fixture row forever, because the tab rail is always a descendant of it, so
+ *  a genuinely too-wide fixed child would have been waved through on the one
+ *  box that could have reported it (fix round 1, Important 2; a too-wide fixed
+ *  child never enters `suspects` itself, since its own `scrollWidth` equals
+ *  its `clientWidth`). Now the rail's box must reach far enough past the
+ *  parent's content edge to ACCOUNT for the parent's whole overhang; anything
+ *  the rails cannot explain is a clip. On top of that, `capture.spec.ts`
+ *  asserts the resulting bleed list against the row's declared `exempt.bleeds`,
+ *  so a NEW bleed ancestor fails until someone writes it down.
  *
  *  The split is reconciled against `overflowingIn`'s own count before either
- *  half is asserted, so if that function's classification ever moves, this
- *  reds with the disagreement instead of silently exempting more. */
+ *  half is asserted, so if that function's classification ever moves, this reds
+ *  with the disagreement instead of silently exempting more. */
 export async function expectNoClip(page: Page, root: string, label: string): Promise<Seen> {
   const childSel = CLIP_CHILD_SELECTOR;
   const { clipped, scrollable, truncatedByDesign } = await overflowingIn(
@@ -109,12 +142,15 @@ export async function expectNoClip(page: Page, root: string, label: string): Pro
     0,
   );
 
-  const { realClips, bleeds } = await page.evaluate(
+  const { realClips, bleeds, bleedIds } = await page.evaluate(
     ({ rootSel, childSel: cs }) => {
       const rootEl = document.querySelector<HTMLElement>(rootSel);
-      if (!rootEl) return { realClips: [`<${rootSel} not in DOM>`], bleeds: [] as string[] };
-      const reachable = (el: Element) =>
-        /^(auto|scroll)$/.test(getComputedStyle(el).overflowX);
+      if (!rootEl) {
+        return { realClips: [`<${rootSel} not in DOM>`], bleeds: [] as string[], bleedIds: [] as string[] };
+      }
+      const identity = (el: HTMLElement) =>
+        el.tagName.toLowerCase() + (el.dataset.testid ? `[data-testid=${el.dataset.testid}]` : "");
+      const reachable = (el: Element) => /^(auto|scroll)$/.test(getComputedStyle(el).overflowX);
       const truncatedByDesign = (el: Element) => {
         const s = getComputedStyle(el);
         if (s.textOverflow === "ellipsis") return true;
@@ -122,29 +158,45 @@ export async function expectNoClip(page: Page, root: string, label: string): Pro
         return clamp !== "" && clamp !== "none";
       };
       const describe = (el: HTMLElement) =>
-        `${el.tagName.toLowerCase()}` +
-        `${el.dataset.testid ? `[data-testid=${el.dataset.testid}]` : ""}` +
+        `${identity(el)}` +
         `${typeof el.className === "string" && el.className.trim() ? `.${el.className.trim().split(/\s+/).slice(0, 4).join(".")}` : ""}` +
         ` ${el.scrollWidth}px content in ${el.clientWidth}px (overflow-x: ${getComputedStyle(el).overflowX})`;
       const realClips: string[] = [];
       const bleeds: string[] = [];
+      const bleedIds: string[] = [];
       const suspects: HTMLElement[] = [
         rootEl,
         ...Array.from(rootEl.querySelectorAll<HTMLElement>(cs)),
       ];
       for (const el of suspects) {
-        if (el.scrollWidth - el.clientWidth <= 1) continue;
+        const overhang = el.scrollWidth - el.clientWidth;
+        if (overhang <= 1) continue;
         if (reachable(el) || truncatedByDesign(el)) continue; // already split out
-        const rail = Array.from(el.querySelectorAll<HTMLElement>("*")).find(
-          (d) => reachable(d) && d.scrollWidth - d.clientWidth > 1,
-        );
-        if (getComputedStyle(el).overflowX === "visible" && rail) {
-          bleeds.push(`${describe(el)} ← bleed of ${describe(rail)}`);
+        // How far past this box's own content edge do the reachable rails
+        // inside it actually reach? That is the ONLY overhang a bleed can
+        // account for; anything beyond it is something else overflowing.
+        const box = el.getBoundingClientRect();
+        const contentRight = box.left + el.clientLeft + el.clientWidth;
+        let attributable = 0;
+        let culprit = "";
+        for (const d of Array.from(el.querySelectorAll<HTMLElement>("*"))) {
+          if (!reachable(d) || d.scrollWidth - d.clientWidth <= 1) continue;
+          const reach = d.getBoundingClientRect().right - contentRight;
+          if (reach > attributable) {
+            attributable = reach;
+            culprit = describe(d);
+          }
+        }
+        if (getComputedStyle(el).overflowX === "visible" && overhang <= attributable + 1) {
+          bleeds.push(`${describe(el)} ← bleed of ${culprit}`);
+          bleedIds.push(identity(el));
         } else {
-          realClips.push(describe(el));
+          realClips.push(
+            `${describe(el)}${attributable > 0 ? ` (rails inside reach only ${Math.round(attributable)}px of the ${overhang}px overhang)` : ""}`,
+          );
         }
       }
-      return { realClips, bleeds };
+      return { realClips, bleeds, bleedIds };
     },
     { rootSel: root, childSel },
   );
@@ -158,10 +210,11 @@ export async function expectNoClip(page: Page, root: string, label: string): Pro
   return {
     inspected,
     sample: [
-      ...bleeds.slice(0, 3).map((s) => `bleed: ${s}`),
+      ...bleeds.map((s) => `bleed: ${s}`),
       ...scrollable.slice(0, 3).map((s) => `rail: ${s}`),
       ...truncatedByDesign.slice(0, 3).map((s) => `truncated: ${s}`),
     ],
+    exempt: { bleeds: bleedIds },
   };
 }
 
@@ -169,24 +222,33 @@ export async function expectNoClip(page: Page, root: string, label: string): Pro
  *  the thing a tap at its centre reaches (`elementFromPoint`, recurring
  *  class 2: boundingBox() measures paint, not hit area).
  *
- *  ONE exemption, and it is WCAG's own, not an excuse invented to pass a
- *  page: 2.5.8 Target Size (Minimum) exempts a target that "is in a sentence
- *  or its size is otherwise constrained by the line-height of non-target
- *  text". `scorepad-a11y-kit`'s `INTERACTIVE_SELECTOR` includes `a[href]` and
- *  was written for the PAD, where every control is a tile; pointed at a whole
- *  public page root it also picks up running-text links — measured here on
- *  2026-09-08, where the public fixture page's breadcrumb (`nav.text-xs`)
- *  reported `116.66x16px — height` at 320 and 768. The exemption is drawn at
- *  computed `display: inline` and nowhere else: a link Tailwind lays out as
- *  `flex`, `inline-flex`, `inline-block` or `block` is a CONTROL and stays
- *  held to the full 44 px, so the exemption cannot be widened by styling.
- *  Exempt elements are returned by name in `Seen.sample`, never dropped.
+ *  TWO exemptions, both returned in full for the row to declare:
  *
- *  The kit stays the authority for WHAT was measured: its under-floor count
- *  is reconciled against this scan's before either is asserted, so if
- *  `measureHitTargets` or `hitTargetFloorReport` ever changes what it
- *  collects, this reds with the disagreement instead of quietly measuring
- *  something else. */
+ *  1. WCAG 2.5.8 Target Size (Minimum) exempts a target that "is in a sentence
+ *     or its size is otherwise constrained by the line-height of non-target
+ *     text". `scorepad-a11y-kit`'s `INTERACTIVE_SELECTOR` includes `a[href]`
+ *     and was written for the PAD, where every control is a tile; pointed at a
+ *     whole public page root it also picks up running-text links — the fixture
+ *     page's breadcrumb reported `116.66x16px` at 320 and 768. Drawn at
+ *     computed `display: inline` and nowhere else, so a link Tailwind lays out
+ *     as `flex`, `inline-flex`, `inline-block` or `block` is a CONTROL and
+ *     stays held to the full 44 px.
+ *  2. `document.elementFromPoint` is VIEWPORT-relative and answers `null` for
+ *     any coordinate outside it, so a control parked off-screen reports "hits
+ *     nothing" — measured as `mc-tab-info @ (333,509)` at a 320 px viewport,
+ *     where that tab simply sits further along the tab strip. The hit test
+ *     cannot answer for those, so they are split off rather than counted as a
+ *     miss — but PER AXIS, and each axis needs its own reachability. A control
+ *     off to the RIGHT needs a horizontally scrollable ancestor; one BELOW the
+ *     fold needs a vertically scrollable ancestor or a scrollable document.
+ *     The first version tested only `overflow-x`, so the first below-the-fold
+ *     button any wave added would have reddened as "hits nothing" — a false
+ *     red whose obvious repair is to loosen the check, which is how a gate
+ *     dies (fix round 1, Important 5). A control off-viewport with no way to
+ *     bring it into view on that axis is still a defect.
+ *
+ *  The kit stays the authority for WHAT was measured: its under-floor count is
+ *  reconciled against this scan's before either is asserted. */
 export async function expectHitTargetsByPoint(
   page: Page,
   root: string,
@@ -199,9 +261,12 @@ export async function expectHitTargetsByPoint(
   const floorScan = await page.evaluate(
     ({ rootSel, sel, floor }) => {
       const rootEl = document.querySelector<HTMLElement>(rootSel);
-      if (!rootEl) return { under: [`<${rootSel} not in DOM>`], inlineExempt: [] as string[] };
+      if (!rootEl) return { under: [`<${rootSel} not in DOM>`], inlineExempt: [] as string[], inlineIds: [] as string[] };
+      const identity = (el: HTMLElement) =>
+        el.tagName.toLowerCase() + (el.dataset.testid ? `[data-testid=${el.dataset.testid}]` : "");
       const under: string[] = [];
       const inlineExempt: string[] = [];
+      const inlineIds: string[] = [];
       for (const el of Array.from(rootEl.querySelectorAll<HTMLElement>(sel))) {
         const r = el.getBoundingClientRect();
         if (r.width <= 0 || r.height <= 0) continue;
@@ -211,10 +276,12 @@ export async function expectHitTargetsByPoint(
           el.getAttribute("aria-label") ??
           (el.textContent ?? "").trim().replace(/\s+/g, " ").slice(0, 40);
         const line = `"${name}" (${el.tagName.toLowerCase()}) is ${Math.round(r.width)}x${Math.round(r.height)}px, display:${getComputedStyle(el).display}`;
-        if (getComputedStyle(el).display === "inline") inlineExempt.push(line);
-        else under.push(line);
+        if (getComputedStyle(el).display === "inline") {
+          inlineExempt.push(line);
+          inlineIds.push(identity(el));
+        } else under.push(line);
       }
-      return { under, inlineExempt };
+      return { under, inlineExempt, inlineIds };
     },
     { rootSel: root, sel: INTERACTIVE_SELECTOR, floor: HIT_TARGET_FLOOR_PX },
   );
@@ -228,58 +295,76 @@ export async function expectHitTargetsByPoint(
     `${label}: controls under ${HIT_TARGET_FLOOR_PX}px (kit: ${floorViolationLines(report).join("; ")})`,
   ).toEqual([]);
 
-  // `document.elementFromPoint` is VIEWPORT-relative and answers `null` for
-  // any coordinate outside it, so a control parked off-screen inside a rail
-  // reports "hits nothing" — measured 2026-09-08 as
-  // `mc-tab-info @ (333,509) hits nothing` at a 320 px viewport, where that
-  // tab simply sits further along the match-centre tab strip. The hit test
-  // cannot answer for those, so they are split off rather than counted as a
-  // miss: a control whose centre is off-viewport is fine IF an ancestor is a
-  // reachable rail (the reader swipes to it) and a DEFECT otherwise — parked
-  // somewhere with no way to bring it into view. Both halves are named.
-  const { missed, offscreen } = await page.evaluate((rootSel) => {
-    const rootEl = document.querySelector<HTMLElement>(rootSel);
-    if (!rootEl) return { missed: [`<${rootSel} not in DOM>`], offscreen: [] as string[] };
-    const missed: string[] = [];
-    const offscreen: string[] = [];
-    const name = (el: HTMLElement) =>
-      el.dataset.testid ?? el.getAttribute("aria-label") ?? el.tagName.toLowerCase();
-    const inReachableRail = (el: HTMLElement) => {
-      for (let a = el.parentElement; a; a = a.parentElement) {
-        const cs = getComputedStyle(a);
-        if (/^(auto|scroll)$/.test(cs.overflowX) && a.scrollWidth - a.clientWidth > 1) return true;
+  const { missed, offscreen, offscreenIds } = await page.evaluate(
+    ({ rootSel }) => {
+      const rootEl = document.querySelector<HTMLElement>(rootSel);
+      if (!rootEl) {
+        return { missed: [`<${rootSel} not in DOM>`], offscreen: [] as string[], offscreenIds: [] as string[] };
       }
-      return false;
-    };
-    for (const el of Array.from(
-      rootEl.querySelectorAll<HTMLElement>('button, a[href], select, [role="button"], [role="tab"]'),
-    )) {
-      const r = el.getBoundingClientRect();
-      if (r.width <= 0 || r.height <= 0) continue;
-      if ((el as HTMLButtonElement).disabled) continue;
-      const x = r.left + r.width / 2;
-      const y = r.top + r.height / 2;
-      const at = `${name(el)} @ (${Math.round(x)},${Math.round(y)})`;
-      if (x < 0 || y < 0 || x > window.innerWidth || y > window.innerHeight) {
-        if (inReachableRail(el)) offscreen.push(`${at} is off-viewport inside a reachable rail`);
-        else missed.push(`${at} is off-viewport and is NOT inside a scrollable rail`);
-        continue;
+      const identity = (el: HTMLElement) =>
+        el.tagName.toLowerCase() + (el.dataset.testid ? `[data-testid=${el.dataset.testid}]` : "");
+      const missed: string[] = [];
+      const offscreen: string[] = [];
+      const offscreenIds: string[] = [];
+      const name = (el: HTMLElement) =>
+        el.dataset.testid ?? el.getAttribute("aria-label") ?? el.tagName.toLowerCase();
+      /** An ancestor that scrolls on `axis` and actually overflows on it. */
+      const inReachableRail = (el: HTMLElement, axis: "x" | "y") => {
+        for (let a: HTMLElement | null = el.parentElement; a; a = a.parentElement) {
+          const cs = getComputedStyle(a);
+          const scrolls = /^(auto|scroll)$/.test(axis === "x" ? cs.overflowX : cs.overflowY);
+          const over = axis === "x" ? a.scrollWidth - a.clientWidth : a.scrollHeight - a.clientHeight;
+          if (scrolls && over > 1) return true;
+        }
+        return false;
+      };
+      const doc = document.documentElement;
+      const docScrollsY = doc.scrollHeight - doc.clientHeight > 1;
+      const docScrollsX = doc.scrollWidth - doc.clientWidth > 1;
+      for (const el of Array.from(
+        rootEl.querySelectorAll<HTMLElement>('button, a[href], select, [role="button"], [role="tab"]'),
+      )) {
+        const r = el.getBoundingClientRect();
+        if (r.width <= 0 || r.height <= 0) continue;
+        if ((el as HTMLButtonElement).disabled) continue;
+        const x = r.left + r.width / 2;
+        const y = r.top + r.height / 2;
+        const at = `${name(el)} @ (${Math.round(x)},${Math.round(y)})`;
+        const offX = x < 0 || x > window.innerWidth;
+        const offY = y < 0 || y > window.innerHeight;
+        if (offX || offY) {
+          const xOk = !offX || inReachableRail(el, "x") || docScrollsX;
+          const yOk = !offY || inReachableRail(el, "y") || docScrollsY;
+          if (xOk && yOk) {
+            offscreen.push(
+              `${at} is off-viewport but reachable (${[offX ? "x" : "", offY ? "y" : ""].filter(Boolean).join("+")})`,
+            );
+            offscreenIds.push(identity(el));
+          } else {
+            missed.push(
+              `${at} is off-viewport with nothing to scroll on ${!xOk ? "x" : "y"} — it cannot be brought into view`,
+            );
+          }
+          continue;
+        }
+        const hit = document.elementFromPoint(x, y);
+        if (!hit || !(el === hit || el.contains(hit))) {
+          missed.push(`${at} hits ${hit ? hit.tagName.toLowerCase() : "nothing"}`);
+        }
       }
-      const hit = document.elementFromPoint(x, y);
-      if (!hit || !(el === hit || el.contains(hit))) {
-        missed.push(`${at} hits ${hit ? hit.tagName.toLowerCase() : "nothing"}`);
-      }
-    }
-    return { missed, offscreen };
-  }, root);
+      return { missed, offscreen, offscreenIds };
+    },
+    { rootSel: root },
+  );
   expect(missed, `${label}: a tap at the centre reaches something else`).toEqual([]);
   return {
     inspected: report.operable.length,
     sample: [
-      ...floorScan.inlineExempt.slice(0, 3).map((s) => `inline (WCAG 2.5.8 exception): ${s}`),
-      ...offscreen.slice(0, 3).map((s) => `off-viewport in rail: ${s}`),
+      ...floorScan.inlineExempt.map((s) => `inline (WCAG 2.5.8 exception): ${s}`),
+      ...offscreen.map((s) => `off-viewport: ${s}`),
       ...report.operable.slice(0, 5).map((t) => `${t.name} ${t.width}x${t.height}`),
     ],
+    exempt: { inline: floorScan.inlineIds, offscreen: offscreenIds },
   };
 }
 
@@ -288,10 +373,14 @@ export async function expectHitTargetsByPoint(
  *  non-shrinkable flex/grid item. The missing `min-width: 0` is what put
  *  106px of overflow on the console at 320 with a 43-character name.
  *
+ *  Scans the WHOLE document, not `controlRoot` — deliberately wider than the
+ *  row's other checks, since a broken chain outside `main` breaks the page
+ *  just as thoroughly.
+ *
  *  Two qualifications, both from the CSS spec rather than from a page that
  *  wanted to pass, and both measured on the public fixture page 2026-09-08
  *  where a naive "every flex ancestor needs min-width:0" walk raised five
- *  offenders and all but one were noise:
+ *  offenders and four were noise:
  *
  *  1. **Only a ROW flex parent bites.** `min-width: auto` resolves to the
  *     automatic minimum size on the MAIN axis only (css-flexbox-1 §4.5), so
@@ -301,11 +390,21 @@ export async function expectHitTargetsByPoint(
  *     Grid items are still checked: there the automatic minimum applies in
  *     the inline axis regardless of flow.
  *  2. **The walk stops at the first ancestor that BOUNDS the width** — one
- *     that scrolls or clips horizontally, or that carries an explicit
- *     `max-width`. Above such a box nothing can widen the truncate's line,
+ *     that scrolls or clips horizontally, or that carries a max-width in
+ *     LENGTH units. Above such a box nothing can widen the truncate's line,
  *     so a missing `min-w-0` up there cannot break it: the standings `th`
- *     (`max-w-40`, inside `overflow-x-auto`) reported `main` as its offender
- *     purely by climbing past both. */
+ *     (`max-w-40` → a computed `160px`, inside `overflow-x-auto`) reported
+ *     `main` as its offender purely by climbing past both.
+ *
+ *     A PERCENTAGE max-width is not such a bound and must not stop the walk.
+ *     `max-w-full` resolves against the containing block, so an ancestor that
+ *     fails to shrink widens it too; and `min-width` overrides `max-width`
+ *     (CSS 2.1 §10.4), so a `max-w-full truncate` span in a row flex with no
+ *     `min-w-0` does NOT engage — which is the exact defect fixed in
+ *     `court-card.tsx`, and the first version of this walk skipped it before
+ *     the walk even started. `max-w-full` is live in this repo
+ *     (`components/public-site/tabs.tsx`) and is a repair people reach for
+ *     (fix round 1, Important 4). */
 export async function expectTruncateChain(page: Page, label: string): Promise<Seen> {
   const { offenders, truncates } = await page.evaluate(() => {
     const out: string[] = [];
@@ -321,17 +420,21 @@ export async function expectTruncateChain(page: Page, label: string): Promise<Se
       if (/grid/.test(ps.display)) return true;
       return /flex/.test(ps.display) && /^row/.test(ps.flexDirection);
     };
-    /** Nothing above a box that scrolls, clips or caps its width can widen
-     *  the truncate's containing block. */
+    /** A LENGTH max-width caps the box whatever its ancestors do. A percentage
+     *  one does not — it resolves against a containing block an unshrinkable
+     *  ancestor can widen — so it must not stop the walk. `getComputedStyle`
+     *  leaves a percentage max-width as "100%" and resolves a rem/px one to
+     *  "…px", which is exactly the distinction needed. */
+    const isLengthCap = (v: string) => v !== "none" && v.endsWith("px");
     const boundsWidth = (parent: HTMLElement) => {
       const ps = getComputedStyle(parent);
-      return /^(auto|scroll|hidden|clip)$/.test(ps.overflowX) || ps.maxWidth !== "none";
+      return /^(auto|scroll|hidden|clip)$/.test(ps.overflowX) || isLengthCap(ps.maxWidth);
     };
     for (const el of Array.from(document.querySelectorAll<HTMLElement>("*"))) {
       const cs = getComputedStyle(el);
       if (!isTruncate(cs)) continue;
       truncates.push(describe(el));
-      if (cs.maxWidth !== "none") continue; // capped on itself — always engages
+      if (isLengthCap(cs.maxWidth)) continue; // capped on itself — always engages
       let node: HTMLElement = el;
       while (node !== document.body) {
         const parent: HTMLElement | null = node.parentElement;
@@ -356,8 +459,17 @@ export async function expectTruncateChain(page: Page, label: string): Promise<Se
 /** Every scrolling rail (overflow-x auto|scroll AND actually overflowing) is
  *  keyboard-reachable — `tabindex="0"` on the rail, or a focusable child
  *  inside it (axe accepts either) — and a rail that carries tabindex="0"
- *  also carries a role and an accessible name. The exemption list is
- *  asserted, not assumed: every reachable rail is returned by name. */
+ *  also carries a role and an accessible name.
+ *
+ *  Scans the WHOLE document rather than `controlRoot`, deliberately: an
+ *  unreachable rail in the header is as unreachable as one in `main`.
+ *
+ *  Returns `rails` in full so `capture.spec.ts` can record every reachable
+ *  rail by name in `report.json` — the exemption list is data a reviewer can
+ *  read, not a count. The `tabindex="0"` branch has no natural killer on the
+ *  routes photographed today (nothing on the seeded football fixture carries
+ *  one — `tab-rail.tsx` deliberately does not, per its roving-tabindex note),
+ *  so `capture.spec.ts` drives it against a synthetic rail instead. */
 export async function expectRailsA11y(
   page: Page,
   label: string,

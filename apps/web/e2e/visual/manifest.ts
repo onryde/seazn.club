@@ -2,6 +2,12 @@
 // hold each picture to. Deny by default — an unknown check, an unknown seed
 // kind, a dangling reference or a duplicate id is refused at parse time, with
 // the offending name, so a later wave's appended row cannot silently no-op.
+//
+// Pure on purpose: no `@playwright/test`, no DOM. `visual-manifest.test.ts`
+// imports it as a plain unit, and the cross-row comparisons below
+// (`differingPairViolations`, `controlSetViolations`) live here rather than in
+// the spec so they have permanent unit killers instead of a probe that gets
+// reverted (fix round 1, Important 7/8).
 import { z } from "zod";
 
 /** Seed kinds and the placeholders each provides — declared HERE (a pure
@@ -24,6 +30,44 @@ export const VISUAL_CHECKS = [
 ] as const;
 export type VisualCheck = (typeof VISUAL_CHECKS)[number];
 
+/** What `controlSet` returns when its root is not in the DOM. Declared here so
+ *  `controlSetViolations` can recognise it without importing `asserts.ts`
+ *  (which would pull in `@playwright/test`), and so exactly one file decides
+ *  the wording. A pair of rows BOTH in this state used to compare equal and
+ *  pass `controlSetEqual` vacuously (fix round 1, Important 8). */
+export const notInDomSentinel = (selector: string) => `<${selector} not in DOM>`;
+const NOT_IN_DOM = /^<.+ not in DOM>$/;
+
+/** A box a check EXCUSED, named by a STABLE identity — tag plus `data-testid`,
+ *  never a pixel size, so the declared list in the manifest does not churn
+ *  when content changes width. */
+const ExemptSchema = z
+  .object({
+    /** `no-clip`: `overflow-x: visible` boxes whose overhang is accounted for
+     *  by a reachable rail inside them. */
+    bleeds: z.array(z.string()).default([]),
+    /** `hit-targets`: WCAG 2.5.8 "Inline" — a link in running text. */
+    inline: z.array(z.string()).default([]),
+    /** `hit-targets`: a control off-viewport but reachable (a rail, or below
+     *  the fold on a scrollable page). */
+    offscreen: z.array(z.string()).default([]),
+  })
+  .default({ bleeds: [], inline: [], offscreen: [] });
+
+/** A check this row deliberately does NOT assert because the page has a
+ *  recorded defect owed to another wave. The harness still RUNS the check and
+ *  requires the defect to still be present — so the row reds the day the page
+ *  is fixed, which is the only thing that will tell anyone to put the check
+ *  back (fix round 1, Minor: "nothing currently fails when it is fixed"). */
+const KnownDefectSchema = z.object({
+  check: z.enum(VISUAL_CHECKS, {
+    error: (issue) =>
+      `unknown check ${JSON.stringify(issue.input)} in knownDefects — expected one of ${VISUAL_CHECKS.join(", ")}`,
+  }),
+  /** Long enough to name the file and the owed fix, not just "broken". */
+  reason: z.string().min(40),
+});
+
 const RowSchema = z.object({
   id: z.string().min(1),
   /** A path with `{placeholders}` the group's seed provides. */
@@ -35,19 +79,40 @@ const RowSchema = z.object({
   }),
   /** 1 = 100 %. 1.25 = the browser's 125 % (CSS viewport ÷ 1.25, DPR × 1.25). */
   zoom: z.number().min(0.5).max(2).default(1),
-  backdrop: z.enum(["light", "dark"]).nullable().default(null),
-  /** CSS selector the page must render before the shot — the state proven. */
+  backdrop: z
+    .enum(["light", "dark"], {
+      error: (issue) => `unknown backdrop ${JSON.stringify(issue.input)} — expected light or dark`,
+    })
+    .nullable()
+    .default(null),
+  /** CSS selector the page must render before the shot — the state proven.
+   *  Must be something ONLY the intended page renders: `main h1` also matches
+   *  the branded 404 (`shared/[orgSlug]/not-found.tsx` renders an `<h1>`
+   *  inside the layout's `<main>`), on which every check passes and both
+   *  cross-row comparisons still hold (fix round 1, Important 1). */
   awaitSelector: z.string().min(1),
   /** Signed in as the shared Pro org (AUTH_STATE) or anonymous. */
   auth: z.boolean().default(false),
   /** Root for `controlSet`; required for a row named in `controlSetEqual`. */
   controlRoot: z.string().min(1).nullable().default(null),
-  checks: z.array(z.enum(VISUAL_CHECKS)).default([]),
+  checks: z
+    .array(
+      z.enum(VISUAL_CHECKS, {
+        error: (issue) =>
+          `unknown check ${JSON.stringify(issue.input)} — expected one of ${VISUAL_CHECKS.join(", ")}`,
+      }),
+    )
+    .default([]),
+  exempt: ExemptSchema,
+  knownDefects: z.array(KnownDefectSchema).default([]),
 });
 
 const GroupSchema = z.object({
   id: z.string().min(1),
-  seed: z.enum(SEED_KINDS),
+  seed: z.enum(SEED_KINDS, {
+    error: (issue) =>
+      `unknown seed kind ${JSON.stringify(issue.input)} — expected one of ${SEED_KINDS.join(", ")}`,
+  }),
   rows: z.array(RowSchema).min(1),
   /** Pairs of row ids whose PNG hashes must differ (recurring class 10). */
   mustDiffer: z.array(z.tuple([z.string(), z.string()])).default([]),
@@ -77,6 +142,13 @@ export function parseManifest(json: unknown): VisualManifest {
     for (const r of g.rows) {
       if (ids.has(r.id)) throw new Error(`duplicate row id ${g.id}/${r.id}`);
       ids.add(r.id);
+      for (const d of r.knownDefects) {
+        if (r.checks.includes(d.check)) {
+          throw new Error(
+            `${g.id}/${r.id}: ${d.check} is listed in BOTH checks and knownDefects — a row either asserts a check or records why it cannot`,
+          );
+        }
+      }
     }
     for (const [a, b] of [...g.mustDiffer, ...g.controlSetEqual]) {
       for (const id of [a, b]) if (!ids.has(id)) throw new Error(`${g.id}: reference to unknown row ${id}`);
@@ -102,5 +174,59 @@ export function resolveRoute(template: string, params: Record<string, string>): 
     if (v === undefined) throw new Error(`route ${template}: unresolved placeholder {${key}}`);
     return encodeURIComponent(v);
   });
+  return out;
+}
+
+/** Every `mustDiffer` pair whose two pictures are NOT different, named. Pure
+ *  so it has a unit killer: the spec used to compare hashes inline, and the
+ *  only way to prove that loop fired was a duplicate-row probe that then had
+ *  to be reverted (fix round 1, Important 7). A missing hash counts as a
+ *  violation — a pair the harness never photographed is not a pair it proved. */
+export function differingPairViolations(
+  pairs: readonly (readonly [string, string])[],
+  hashById: Readonly<Record<string, string | undefined>>,
+): string[] {
+  const out: string[] = [];
+  for (const [a, b] of pairs) {
+    const ha = hashById[a];
+    const hb = hashById[b];
+    if (ha === undefined || hb === undefined) {
+      out.push(`${a}/${b}: no picture for ${ha === undefined ? a : b}`);
+    } else if (ha === hb) {
+      out.push(`${a} and ${b} are pixel-identical (${ha.slice(0, 12)}) — nothing opened, or the size never applied`);
+    }
+  }
+  return out;
+}
+
+/** Every `controlSetEqual` pair that does not hold, named — INCLUDING the two
+ *  ways the comparison used to pass on nothing: a root that was not in the DOM
+ *  (both sides carry the sentinel and compare equal) and a root that matched no
+ *  control at all (both sides empty). Pure, so both vacuous modes have unit
+ *  killers rather than depending on `no-clip` happening to run first. */
+export function controlSetViolations(
+  pairs: readonly (readonly [string, string])[],
+  controlsById: Readonly<Record<string, readonly string[] | null | undefined>>,
+): string[] {
+  const out: string[] = [];
+  for (const [a, b] of pairs) {
+    for (const id of [a, b]) {
+      const list = controlsById[id];
+      if (list === undefined || list === null) {
+        out.push(`${id}: no control set was captured (the row has no controlRoot?)`);
+      } else if (list.length === 0) {
+        out.push(`${id}: its controlRoot matched NO controls — an empty set compares equal to anything`);
+      } else if (list.some((c) => NOT_IN_DOM.test(c))) {
+        out.push(`${id}: its controlRoot was not in the DOM (${list.join(", ")})`);
+      }
+    }
+    const ca = controlsById[a];
+    const cb = controlsById[b];
+    if (ca && cb && JSON.stringify(ca) !== JSON.stringify(cb)) {
+      out.push(
+        `${a} vs ${b}: control SET differs (membership, order or repeats)\n  ${a}: ${ca.join(" | ")}\n  ${b}: ${cb.join(" | ")}`,
+      );
+    }
+  }
   return out;
 }

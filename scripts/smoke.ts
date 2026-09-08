@@ -16528,14 +16528,21 @@ async function gapSuite(admin: Session, org1Id: string, proOrgId: string): Promi
  * invites). Scoped to the run's `tag` by exact email match. No-op when
  * DATABASE_URL is unset. Never throws — teardown must not fail the run.
  */
+
+// =====================================================================
+// Streaming T1 — the routes the visual gate photographs.
+// =====================================================================
 /**
- * Streaming T1 — the two routes the visual gate photographs today answer as
- * its manifest expects them to, through the SERVER rather than a browser:
- * the public fixture page with a headline inside `<main>`, and the embed
- * standings widget with both a `<table>` and its auto-height script. Those
- * are the manifest's own `awaitSelector`s (`apps/web/e2e/visual/manifest.json`
- * — `main h1` and `table`), so a 200 whose body lacks them is the inert page
- * the harness would otherwise photograph as "fine" and sign off on.
+ * The two routes the visual gate photographs today answer as its manifest
+ * expects them to, through the SERVER rather than a browser: the public
+ * fixture page with the match-centre score the manifest awaits, and the embed
+ * standings widget with both a `<table>` and its auto-height script. Those are
+ * the manifest's own `awaitSelector`s (`apps/web/e2e/visual/manifest.json` —
+ * `[data-testid=mc-score-0]` and `table`), so a 200 whose body lacks them is
+ * the inert page the harness would otherwise photograph as "fine" and sign
+ * off on. `mc-score-0` rather than a heading deliberately: the branded 404
+ * (`shared/[orgSlug]/not-found.tsx`) renders an `<h1>` inside the same
+ * `<main>`, so a heading probe passes on a page that is not the fixture.
  *
  * The fixture is driven to FULL TIME on purpose, and that was measured rather
  * than assumed: `/embed/divisions/{id}/standings` renders from the standings
@@ -16567,12 +16574,27 @@ async function visualSeedRoutesSuite(owner: Session, orgSlug: string): Promise<v
     ],
   });
   const led = ledger(owner, fx.fixtureId);
-  await led.send("core.start", {});
-  await led.send("football.goal", { by: fx.entrantIds[0] });
-  await led.send("football.goal", { by: fx.entrantIds[1] });
-  await led.send("football.goal", { by: fx.entrantIds[0] });
-  await led.send("football.period", { phase: "HT" });
-  await led.send("football.period", { phase: "FT" });
+  // Status-checked one at a time. A mid-sequence refusal used to surface only
+  // as the `decided` check failing, which names neither the event nor its
+  // reason — and a 422 on the first `football.period` reads exactly like a
+  // 422 on the third goal.
+  const refused: string[] = [];
+  const send = async (type: string, payload: unknown) => {
+    const res = await led.send(type, payload);
+    if (res.status !== 201) {
+      refused.push(`${type} -> ${res.status} ${JSON.stringify(res.json)}`.slice(0, 160));
+    }
+  };
+  await send("core.start", {});
+  await send("football.goal", { by: fx.entrantIds[0] });
+  await send("football.goal", { by: fx.entrantIds[1] });
+  await send("football.goal", { by: fx.entrantIds[0] });
+  await send("football.period", { phase: "HT" });
+  await send("football.period", { phase: "FT" });
+  check(
+    `visual gate: every seed event was accepted${refused.length ? ` (refused: ${refused.join("; ")})` : ""}`,
+    refused.length === 0,
+  );
   const state = v1data<{ status: string }>(await v1(owner, `/api/v1/fixtures/${fx.fixtureId}/state`));
   check(
     `visual gate: full time decides the seeded fixture (got '${state.status}')`,
@@ -16591,8 +16613,10 @@ async function visualSeedRoutesSuite(owner: Session, orgSlug: string): Promise<v
     `/shared/${orgSlug}/${comp.slug}/${div.slug}/fixtures/${fx.fixtureId}`,
   );
   check(
-    "visual gate: public fixture page renders a headline inside <main>",
-    page.status === 200 && page.body.includes("<main") && /<h1[\s>]/.test(page.body),
+    "visual gate: public fixture page renders the match-centre score the manifest awaits",
+    page.status === 200 &&
+      page.body.includes("<main") &&
+      page.body.includes('data-testid="mc-score-0"'),
   );
 }
 
