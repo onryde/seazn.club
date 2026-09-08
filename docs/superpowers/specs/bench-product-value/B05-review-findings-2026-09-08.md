@@ -243,6 +243,70 @@ spec §7 both forbid filing):
    true of `lib/schedule-board.ts` (via `@/lib/zoned-datetime`) for the two
    publish refusal codes.
 
+## The live run — what it proved, and the two defects it found
+
+Three green live runs, the last on the rebased tree (`a40d40167`) against a
+v400 database, plus both legs `_RULES.md` §2 demands:
+
+| leg | placement | engine | gate | oracles |
+|---|---|---|---|---|
+| A | up | `optimized` | GREEN | 33 total, 31 with a subject (31 PASS, 0 FAIL), 2 NO SUBJECT |
+| B | down | `greedy` (`solver_unavailable`) | GREEN | same |
+
+Same verdicts through the solver and through the fallback, which is what CI
+will see — smoke has no placement container by design.
+
+The pipeline that ran end to end: seed → schedule → **start** → fold (single-POST
+9 events @ 28/s AND import 84 events in 2 chunks @ 112/s) → advance
+`s-league → s-playoff` with the captured ranks agreeing with the re-read
+standings → oracles → registration funnel.
+
+**Two defects the live run found that 1,340 passing unit tests could not:**
+
+1. **The standings comparator failed on metrics the pack never declared.** Every
+   declared field matched; the live row simply carried `for/diff/against` (or
+   `sets_won/points_won`) that `expected.tables` does not declare. Any pack
+   omitting an optional metrics map could never pass. Fixed by comparing what
+   the pack declares and carrying the rest as informational — NOT by making
+   `_tiny` declare every metric, which would have hidden the bug in the
+   comparator and left the trap for the next pack author. The `_oracle-routes`
+   fake had answered no metrics at all, which is exactly why the suite was blind.
+2. **A PASS over zero comparisons.** `tie-order cascade … (0 checked, 0 skipped)`
+   printed green on two divisions. A comparator that compared nothing has not
+   passed — it had no subject. Now a third verdict, counted separately in the
+   run summary, never reading as PASS and never reddening the run.
+
+## The product fix, proven outside the test suite
+
+Driven by hand in a browser against the real server, as the organiser, after
+creating and confirming a two-match ban through the product's own API:
+
+| attempt | result |
+|---|---|
+| name the banned player | **422 `SUSPENDED_PLAYER`** — "Farid Haddad is serving an active suspension in this division and cannot be named on a team sheet." |
+| name his eligible team-mate | **200** — not refusing everyone |
+| name the banned player WITH an override reason | **200** — the organiser proceeds on the record |
+
+A decided fixture refuses earlier ("lineup is locked once a fixture is decided"),
+so the check had to be driven on a scheduled one — worth knowing before someone
+concludes the gate does not fire.
+
+## The i18n fix, verified visually
+
+French, at 1280 / 768 / 320, on the product's own refusal:
+« Purge une suspension active dans cette division et ne peut pas figurer sur la
+feuille de match : Farid Haddad ». Wraps to 2 / 1 / 3 lines respectively,
+nothing clipped, save button intact, and `scrollWidth <= clientWidth` at 320.
+Two capture traps hit: at 320 the editor is folded behind the phone disclosure
+(opened it rather than weakening the capture, AGENTS.md rule 22), and the cookie
+banner covered the refusal until dismissed.
+
+**A11y finding, separate and not fixed here:** the page renders French while
+`document.documentElement.lang` stays `"en"`. `resolve-locale.ts`'s own header
+says the static root layout deliberately never calls it, so the resolved locale
+never reaches the `<html>` tag. A screen reader will pronounce French copy with
+English rules. Recorded for the owner; not this wave's file set.
+
 ## Still owed
 
 - T4 oracles, T5 suspension carry + specials, T6 people layer, T7 report
