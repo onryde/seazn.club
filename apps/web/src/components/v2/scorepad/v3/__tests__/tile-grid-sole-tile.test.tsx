@@ -45,7 +45,10 @@ describe("TileGrid — phones run three columns, desktop four", () => {
   // pins the result (measured at 320: 60px tiles before, ~82px after).
   function gridClass(tiles: readonly TileSpec[]): string {
     const island = renderIsland(TileGrid as never, { tiles, phase: "live", t } as never);
-    const root = island.tree().find((el) => typeof el.props?.className === "string" && /grid-cols/.test(el.props.className as string));
+    const root = island.tree().find((el) => {
+      const cls = (el.props as { className?: unknown }).className;
+      return typeof cls === "string" && /grid-cols/.test(cls);
+    });
     return (root?.props as { className: string }).className;
   }
 
