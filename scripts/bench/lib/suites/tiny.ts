@@ -3119,7 +3119,7 @@ export async function runTinySuite(
         }
         const careerStatsCache = new Map<string, PersonCareerStatsWire>();
         for (const [personRef, expectedCareers] of careersByPerson) {
-          const careerPersonId = expectedCareers[0]!.personId;
+          const careerPersonId = expectedCareers[0].personId;
           let careerWire = careerStatsCache.get(careerPersonId);
           if (careerWire === undefined) {
             careerWire = await fetchPersonCareerStats(base, s, careerPersonId, input.oracleTransport);

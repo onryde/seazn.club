@@ -350,7 +350,7 @@ export function makeOracleRoutesWorld(input: {
       const [personRoutePath, personQuery] = path.split("?");
       const personStatsMatch = /^\/api\/v1\/persons\/([^/]+)\/stats$/.exec(personRoutePath ?? "");
       if (personStatsMatch !== null) {
-        const personId = personStatsMatch[1]!;
+        const personId = personStatsMatch[1];
         if (personQuery === "group=sport") {
           const career = input.getPersonCareerStats?.(personId);
           if (career === undefined) return undefined;
