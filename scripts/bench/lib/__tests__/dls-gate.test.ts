@@ -105,6 +105,17 @@ describe("classifyDlsGateCell — the freedom cell (engine_rejection)", () => {
   it("NOT ok on a 201 either — an engine that ACCEPTS a payload it should refuse on shape is its own regression", () => {
     expect(classifyDlsGateCell("revise_no_target_community", SHAPE_REFUSAL, v1Ok(201)).ok).toBe(false);
   });
+
+  it("pins the STATUS as well as the code — the same code under a different status is not the same refusal", () => {
+    // Found by mutation: dropping `result.status === expectation.status` left
+    // every test green, because no case carried the right code under the
+    // wrong status. `api-v1/http.ts:23` is the single place that maps
+    // INVALID_EVENT -> 422; a change there must move this cell, not slip past
+    // it.
+    const out = classifyDlsGateCell("revise_no_target_community", SHAPE_REFUSAL, v1Error(400, "INVALID_EVENT"));
+    expect(out.ok).toBe(false);
+    expect(out.status).toBe(400);
+  });
 });
 
 describe("classifyDlsGateCell — the paywall cell (payment_refusal)", () => {
@@ -142,6 +153,19 @@ describe("classifyDlsGateCell — the paywall cell (payment_refusal)", () => {
       "gated_feature_refusal_names_its_key",
       { kind: "payment_refusal", featureKey: "officials.auto" },
       v1Ok(200),
+    );
+    expect(out.ok).toBe(false);
+  });
+
+  it("NOT ok on a 402 carrying the right feature_key under the WRONG code", () => {
+    // Found by mutation: dropping the `code === "PAYMENT_REQUIRED"` check
+    // survived, because every 402 case in this file also carried that code.
+    // The code is what says a PAYWALL refused; 402 with anything else is a
+    // different animal wearing the same status.
+    const out = classifyDlsGateCell(
+      "gated_feature_refusal_names_its_key",
+      { kind: "payment_refusal", featureKey: "officials.auto" },
+      v1Error(402, "QUOTA_EXCEEDED", { feature_key: "officials.auto" }),
     );
     expect(out.ok).toBe(false);
   });
