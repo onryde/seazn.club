@@ -19,6 +19,8 @@ Branch `feat/bench-b05-simulation`. Design of record:
 | T2 import fold | `2841ae8f7`, `7716a0e98` | subagent | SHIP | 3 MINOR, all fixed in T2.5 |
 | T2.5 division start (D9) | `1974dbb23`, `b488ea5de` | subagent | SHIP | 2 MINOR, 1 fixed in T3, 1 accepted |
 | T3 advancement + pack stage | `a1d4f573f`, `55171ef13`, `6dee0d855` | **orchestrator** (subagent stalled twice under machine load) | SHIP | 1 MINOR, fixed `2915d3fa0` |
+| T4 comparators | `c731357ed`, `1794992c9`, `6695c65c2` | subagent | **NEEDS FIXES** | 2 MAJOR, 1 MINOR — being fixed in T5a |
+| T4b wiring | `34b7dfb8c` … `28291950e` (8) | subagent (same pass) | — | see above |
 
 ## Findings, with what happened to each
 
@@ -80,6 +82,45 @@ reports as a finding rather than crashing the walk. Witness: a test masking
 every fetched row's `stage_id` to a foreign value — a state no pack can
 produce. Neutering the guard (`if (false && …)`) reds exactly that test,
 78 → 77; restored 78/78.
+
+### F-T4-1 — a third unwired comparator, and the only one nobody disclosed (OPEN, T5a)
+
+MAJOR. `compareTieOrderCascade` (`oracle.ts:410`) has no call site anywhere in
+`lib/suites/tiny.ts`. Two other comparators were knowingly left unwired for
+want of a pack subject and were reported as such; this one was not mentioned in
+any commit message or hand-off, so it would have shipped as an inert seam with
+nobody counting it as owed. `_tiny` genuinely has no tied rows (7≠1, 2≠0), so
+it needs a pack subject as well as a call site — and the tie has to be
+ORDERING-DIFFERENTIAL, or the case cannot witness which cascade ran.
+
+The lesson is not "wire it": it is that the vacuity ledger has to be written
+down and checked against the code, because a comparator nobody remembers is
+indistinguishable from one that passes.
+
+### F-T4-2 — the D1-critical comparator passes on empty/empty (OPEN, T5a)
+
+MAJOR. `compareRankCrossings` (`oracle.ts:483-491`) returns `matched: true`
+when both the captured ranks and the standings ranks are empty: `[].every(...)`
+is vacuously true and the lengths agree at 0. No test covers empty/empty
+(`oracle.test.ts:355-380` covers agree, disagree, absent-capture). Production
+is masked today only by the sibling `standingsVsExpected` check at
+`tiny.ts:2833` reddening independently — two guards covering for each other,
+which AGENTS.md failure class 3 says means neither is tested. Fixed in T5a as
+`matched: false` with a reason, plus the empty/empty test and its positive pair.
+
+### F-T4-3 — leaderboard's empty case is unit-only (OPEN, T5a)
+
+MINOR, same class: standings' empty-actual case is proven through the wire
+(`a830a775a`), the leaderboard's only in the comparator's own unit test.
+
+### Verified as sound in the same pass
+
+The D6 mis-attribution regression runs through the real `runTinySuite` against
+a mutated temp pack, not a fixture; the two rank crossings come from genuinely
+separate fake responses, so the "they disagree" test is not a tautology; the
+narrowed `/stats/players` → `/persons/{id}/stats` assertion in
+`tiny-suite-stats.test.ts` is a narrowing, not a weakening (the baseline oracle
+name and warning still assert the original intent).
 
 ## Corrections to this wave's own documents
 
