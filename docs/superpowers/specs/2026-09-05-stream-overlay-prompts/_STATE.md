@@ -21,6 +21,18 @@ Last updated: 2026-09-08, planning complete and merged to `main`.
   (#744) merged. Consequences recorded in the spec's findings: FS14 —
   `run-sheet-edit-time` is now `desk/run-sheet-row.tsx:407` (was `:377`;
   the symbol is the authority). Deltas still end at `V399`.
+- **2026-09-08 (later) — spectator W1 MERGED (PR #743, `main` 60c0615b0;
+  worktree rebased, HEAD `09f5fa1de`+).** Consequences applied (design FS18):
+  the live transport already exists at
+  `components/public-site/match-centre/use-live-fixture.ts:17` — W1 Task 1 is
+  rewritten to widen it IN PLACE (no lift; `LiveScore` wrapper is RETIRED,
+  `live-score.tsx` exports only `LiveScoreBody`); the public payload carries
+  `match_centre` (with `timeline: TimelineLine[] | null` — NO event `type` on a
+  line); **the W2 gate is OPEN** — W2 waits on PR1 and its own task-zero RE-PIN
+  (rows annotated in `W2-moments.md` and the W2 plan; `match_centre.timeline`
+  to be evaluated as the moments source, F4 unchanged); `run-sheet.tsx`
+  mounts re-pinned to `:355/:390/:428/:669`; `WALKTHROUGH_SPECS` now lists the
+  two spectator walkthroughs, so W1 Task 8's insertion point moved.
 - **Findings since the design was written:** FS10 credits donor is
   `ai_credit_ledger` (V320) + `lib/credits.ts` + `credit-pack-checkout` +
   `billing-events.ts:151`, not size packs; FS11 Stripe events may be applied

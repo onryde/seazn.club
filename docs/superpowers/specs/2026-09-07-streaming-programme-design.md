@@ -73,7 +73,8 @@ TIER B  phone (SRT) ► Cloudflare Stream live input ┬ passthrough: simulcast 
 W1-A data path ─┐
 W1-B schema     ─┼─► W1-C overlay surface ─► W1-D console + link ─► W1-E acceptance = PR1
 T1 themes+gate  ─┘        │
-                          ├─► W2 moments (PR2) — only after feat/spectator-surface W1 merges
+                          ├─► W2 moments (PR2) — gate OPEN: spectator W1 MERGED 2026-09-08 (#743, main 60c0615b0);
+                          │     after PR1, W2 task zero = its RE-PIN table on this main (FS18)
                           ├─► R1 relay core + credits + Phone tab (PR-R1) ─► R2 compositor + relay page (PR-R2)
                           └─► PR3 sponsor logos — LAST, by ruling, after its artboard
 R0 bench spike — parallel from now, no repo dependency; its memo gates R2
@@ -101,8 +102,12 @@ client: fetchPublicRealtimeToken → /realtime-token (403 unless org holds `real
   over SUPABASE_JWT_SECRET :95, claims {role:"authenticated", sub:`public:{id}`, fixture_id})
   → private channel → on state_changed → 250 ms debounce → refresh()
   → GET /api/v1/public/fixtures/[id] → publicFixture (usecases/public.ts:279 ac85c70) ← public_fixtures_v
-poll fallback: POLL_MS = 15_000 (components/public-site/live-score.tsx:29); poll effect :113-117;
-  `live` INCLUDES `scheduled` (:69) so the pre-match state self-updates.
+poll fallback (re-pinned 2026-09-08 @ 60c0615b0 — spectator W1 extracted the hook, FS18):
+  components/public-site/match-centre/use-live-fixture.ts — POLL_MS = 15_000 :10; useLiveFixture :17;
+  refresh :42 (mountedRef guard); `live` INCLUDES `scheduled` (:52) so the pre-match state
+  self-updates; subscribe effect :57-95; poll effect :96-100; returns { data, transport } :102.
+  live-score.tsx exports only the hookless LiveScoreBody; MatchCentre (match-centre.tsx:56) is the
+  hook's one production caller. publicFixture now returns { ...fixture, match_centre } (public.ts:392-393).
 ```
 
 Facts the design stands on, each verified this session unless marked:
@@ -119,7 +124,7 @@ Facts the design stands on, each verified this session unless marked:
 | `barlowCondensed` declared with `weight: ["600", "700"]` — **800 absent** | `apps/web/src/lib/fonts.ts:7-9` | E fb99bbd4c |
 | Run-sheet row exists; edit-time control at `data-testid="run-sheet-edit-time"` | `apps/web/src/components/v2/desk/run-sheet-row.tsx` — the SYMBOL is the pin (`:407` on `b2244879f` after desk W3 #740; was `:377` — FS14) | E b2244879f |
 | Competition desk W2 (the fixtures tab as a run sheet) MERGED as PR #725; **desk W3 is in flight** on `feat/competition-desk-w3-band-and-phone` (worktree `desk-w3`) and is the live contention on `run-sheet-row.tsx` | `git log main`; `git worktree list` | E fb99bbd4c |
-| Spectator W1 NOT merged: no spectator surface under `apps/web/src`; branch `feat/spectator-surface` at `2f3b4f9f4` (worktree `spectator`, locked) | grep; worktree list | E fb99bbd4c |
+| **Spectator W1 MERGED** (PR #743, `main` 60c0615b0, 2026-09-08 — FS18): `live-score.tsx` rewritten (485 ±), `LiveScore` wrapper RETIRED, only `LiveScoreBody` (pure, hookless; props incl. `subscribed`/`suppressScorebug`) exported; the transport is `match-centre/use-live-fixture.ts:17`; `LiveFixtureData` gains `outcome.method` and `match_centre?: MatchCentreDocT` (`live-score-data.ts:23,46`); `MatchCentreDocT { header, cricket, timeline, sets, info, derivedComplete }` from `loadMatchCentre` (`match-centre-load.ts:248`), `timeline: z.array(TimelineLine).nullable()` (`match-centre-schema.ts:87`), `buildTimeline(args)` (`timeline.ts:587`); `WALKTHROUGH_SPECS` gains `spectator-public.spec.ts` / `spectator-public-2.spec.ts` (`e2e-ci-wiring.test.ts:274-275`) | grep -a on the tree | E 60c0615b0 |
 | Cookie consent is mounted unconditionally in the root layout and gated by `localStorage` only — **there is no pathname or route-key mechanism** | `apps/web/src/components/cookie-consent.tsx:34,66`; `app/layout.tsx:68` | E fb99bbd4c |
 | Deltas run to **`V399__stats_player_career_split.sql`**; next free is V400 | `ls db/migration/deltas` | E fb99bbd4c |
 | Entitlement plans in the v18 catalogue: `community, pro, event_pass, event_pass_l, enterprise` (`pro_plus` retired and dropped at L145); catalogue is the `plan_entitlements` table, resolver "bool requires true; no row denies" | `db/migration/deltas/V393__entitlements_v18.sql` | E fb99bbd4c |
@@ -217,18 +222,26 @@ time zone) stands as written: it rides on `getPublicFixture` via
 
 ### 3.3 The hook
 
-`components/public-site/use-live-fixture.ts` — the subscribe-or-poll logic
-lifted VERBATIM from `live-score.tsx:61-117` [E] (`refresh :61`, the
-`live`-includes-`scheduled` predicate `:69`, the realtime effect `:74-110`,
-the poll `:113-117`, `POLL_MS` import). New surface only: an options object
-`{ fetcher, delayMs? }` and a `presentationNowOffsetMs` FIELD on the object
-the hook returns (`LiveFixture<T>`; one authority per hook instance, never a
-module-level export — FS17, plan review 2026-09-08 finding 58). With
-`delayMs` absent the hook is byte-identical in behaviour; `LiveScore` is
-repointed in the SAME commit and `live-score.test.tsx` unchanged-and-green is
-the witness (R5, one transport). `delayMs` buffers `(receivedAt, snapshot)`
-pairs and presents the newest with `receivedAt ≤ now − delayMs` (R2 uses it;
-W1 builds it so the seam is real, not "left for later").
+The hook EXISTS (re-pinned 2026-09-08 @ 60c0615b0, FS18): spectator W1
+extracted it to `components/public-site/match-centre/use-live-fixture.ts`
+(`useLiveFixture(fixtureId, initial, realtime)` `:17`, `POLL_MS` `:10`,
+`refresh` `:42` with a `mountedRef` guard, the `live`-includes-`scheduled`
+predicate `:52`, the subscribe effect `:57-95`, the poll `:96-100`, returning
+`{ data, transport: "realtime" | "poll" }` `:102`). There is nothing to lift:
+`live-score.tsx` exports only the hookless `LiveScoreBody`, and `MatchCentre`
+(`match-centre.tsx:56`) is the hook's one production caller. W1 modifies the
+hook IN PLACE, generic over its payload: an options object `{ fetcher,
+delayMs? }` (default `fetcher` = `fetchLiveFixture`, so every three-argument
+caller is byte-identical) and a `presentationNowOffsetMs` FIELD on the
+returned `UseLiveFixtureResult<T>` (one authority per hook instance, never a
+module-level export — FS17). Witnesses: the hook's OWN unit test
+(`match-centre/__tests__/use-live-fixture.test.ts` — `renderIsland` +
+`vi.useFakeTimers` + a module-mocked `fetchLiveFixture`, because SSR
+`renderToStaticMarkup` runs no effects) unchanged and extended, plus the
+match-centre SSR tests unchanged (R5, one transport). `delayMs` buffers
+`(receivedAt, snapshot)` pairs and presents the newest with `receivedAt ≤ now
+− delayMs` on a 1 s drain (R2 uses it; W1 builds it so the seam is real, not
+"left for later").
 
 ### 3.4 Projection (pure)
 
@@ -954,13 +967,13 @@ time anyone read them); a prompt names symbols, which survive.
 | **R0** | `R0-bench.md` (§8) | none — the memo is the deliverable | now | — |
 | **R1** | `R1-relay-core.md` (§5, §6, §7.6: V401 keys, V402 tables, credits ledger + checkout + webhook, crypto, ports + fakes, tokens, session API, cron pair + workflow, Phone tab with QR, passthrough live-detect, failed-reason copy, replay fill, Sentry DSN) | `2026-09-07-streaming-r1.md` | prompt now; **plan after PR1 merges** | PR-R1 |
 | **R2** | `R2-compositor.md` (§7: relay page, `slate`, `delayMs` + alignment e2e, container + supervisor, `relay-*` workflows, soak harness, green soak) | `2026-09-07-streaming-r2.md` | prompt now; **plan after the R0 memo** | PR-R2 |
-| W2 | existing `W2-moments.md` (+F3/F4 corrections at Task 0) | existing `2026-09-05-stream-overlay-w2-moments.md` | exists | PR2 |
+| W2 | existing `W2-moments.md` (+F3/F4 corrections at Task 0; RE-PIN rows annotated 2026-09-08 @ 60c0615b0) | existing `2026-09-05-stream-overlay-w2-moments.md` — **gate satisfied 2026-09-08** (spectator W1 #743 merged); its task zero = the RE-PIN table on THIS main, with `buildTimeline` / `match_centre.timeline` evaluated as the moments source (F4 still rides the overlay endpoint: the endpoint may embed a projected timeline slice rather than the page double-polling); NOT executable until those rows close | exists; executes after PR1 | PR2 |
 | PR3 | after its artboard | — | deferred | PR3 |
 | R3 | own spec in `seazn-capture` | — | deferred | — |
 
 Out of the plans written now, with reasons: **W2** has its own committed plan
-(`…-w2-moments.md`, 1083 lines) and is gated on spectator W1, which has not
-merged; **R3** native apps live in the `seazn-capture` repo under their own
+(`…-w2-moments.md`, 1083 lines); its spectator gate OPENED 2026-09-08 (#743),
+so it now waits only on PR1 and on its own task-zero RE-PIN; **R3** native apps live in the `seazn-capture` repo under their own
 spec (only §7.6 is fixed here); **PR3** sponsor logos are LAST by ruling and
 wait for their artboard. Sequencing: W1-D rebases after any desk-W3 merge to
 `run-sheet-row.tsx`; R1 cuts a new worktree `relay` from `main` after PR1
@@ -1023,7 +1036,8 @@ design or owner RULING is an `_INDEX.md` finding, never silently resolved.
 | FS12 | §5.1's plan split read as the landing state | landing rows are false for all five plans (dark, §10.4); the split is the GA-flip migration shipped with the domain entry and copy |
 | FS15 | §2 atlas pinned the `:root { --sport-* }` block at `globals.css:1014-1022` | it is `:1135-1141` on `b2244879f` (plan review 2026-09-08 finding 23); §2 corrected. The T1 plan had it right |
 | FS16 | §4.2 manifest vocabulary (`awaitTestId`, row-level `mustDifferFrom`, `toBeAttached`) | the T1 plan's vocabulary is adopted — `awaitSelector`, group-level `mustDiffer` / `controlSetEqual`, `toBeVisible` — because the seeded pages carry no testids and a pair is a group fact; §4.2, `T1-theme-and-visual-gate.md` items 5–6 amended (plan review finding 10) |
-| FS17 | §3.3 "an exported `presentationNowOffsetMs`" | it is a FIELD of the hook's returned `LiveFixture<T>` (one authority per hook instance); §3.3 amended (plan review finding 58) |
+| FS17 | §3.3 "an exported `presentationNowOffsetMs`" | it is a FIELD of the hook's returned `UseLiveFixtureResult<T>` (one authority per hook instance); §3.3 amended (plan review finding 58) |
+| **FS18** | Spectator W1 assumed NOT merged; the hook to be LIFTED from `live-score.tsx:61-117`; `LiveScore` to be repointed; `run-sheet.tsx` mounts at earlier lines | **Spectator W1 MERGED 2026-09-08 (PR #743, `main` 60c0615b0).** The hook is already extracted at `components/public-site/match-centre/use-live-fixture.ts:17` (returns `{ data, transport }`); W1 Task 1 now widens it IN PLACE (`{ fetcher, delayMs? }`, `presentationNowOffsetMs`) with the hook's own unit test as witness. `live-score.tsx` is a 485-line rewrite exporting only the hookless `LiveScoreBody` — the `LiveScore` wrapper is RETIRED (every "repoint `LiveScore`" step is gone). The public payload carries `match_centre` (`publicFixture` → `{ ...fixture, match_centre }`, `usecases/public.ts:392-393`; `match_centre.timeline: TimelineLine[] \| null`, `match-centre-schema.ts:87`; `buildTimeline` `timeline.ts:587`; `loadMatchCentre` `match-centre-load.ts:248`). **`TimelineLine` carries NO event `type`** — `{ seq, at, marker, sideIndex, text: Msg, emphasis }`; a kind is recoverable for scoring/card types by inverting `TIMELINE_KEY_FOR` (`lib/timeline-keys.ts:60`), not for lineup lines. **The W2 gate is OPEN**: W2's task zero = its RE-PIN table on this main, evaluating `match_centre.timeline` as the moments source (F4 holds — the source rides the overlay endpoint, which may embed a projected timeline slice). `run-sheet.tsx` `<RunSheetRow` mounts are `:355 / :390 / :428 / :669`; `run-sheet-edit-time` `:407` unchanged; fonts `["600","700"]` and cookie-consent (no `usePathname`) unchanged; `WALKTHROUGH_SPECS` gains the two spectator specs (`:274-275`). §1 DAG, §2 atlas, §3.3, §11 amended; W1/W2 prompts and plans annotated "(re-pinned 2026-09-08 @ 60c0615b0)" |
 
 ### 13.2 Re-pins against `main` `fb99bbd4c`
 

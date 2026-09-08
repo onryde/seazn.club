@@ -4,7 +4,7 @@
 
 **Goal:** Ship the transparent per-fixture overlay page, its pure projection, the stream-link write path and the organiser panel, so a club can put seazn's live score inside its own OBS broadcast for every sport the engine scores.
 
-**Architecture:** One client transport (`useLiveFixture`, lifted out of `LiveScore`) feeds one pure projection (`overlayModel`) that eleven sports share; a THEME REGISTRY (`OVERLAY_THEMES`, owner answer 18 / Q7) whose two day-one entries are the presentational skins `OverlayBar` and `OverlayBug` renders it at a native 1920×1080 canvas scaled with `transform: scale(min(vw/1920, vh/1080))`, themed by `sportThemeStyle(sportKey)` so the overlay inherits the pad's own palettes. A new `fixtures.stream_url` column, appended to `public_fixtures_v`, is written by `PUT /api/v1/fixtures/{id}/stream` and read by the public match page's "Watch live" link; both the overlay route and the organiser panel are gated server-side on the `streaming.overlay` entitlement, which no plan grants.
+**Architecture:** One client transport (`useLiveFixture`, already extracted by spectator W1 to `match-centre/use-live-fixture.ts` and widened here (re-pinned 2026-09-08 @ 60c0615b0)) feeds one pure projection (`overlayModel`) that eleven sports share; a THEME REGISTRY (`OVERLAY_THEMES`, owner answer 18 / Q7) whose two day-one entries are the presentational skins `OverlayBar` and `OverlayBug` renders it at a native 1920×1080 canvas scaled with `transform: scale(min(vw/1920, vh/1080))`, themed by `sportThemeStyle(sportKey)` so the overlay inherits the pad's own palettes. A new `fixtures.stream_url` column, appended to `public_fixtures_v`, is written by `PUT /api/v1/fixtures/{id}/stream` and read by the public match page's "Watch live" link; both the overlay route and the organiser panel are gated server-side on the `streaming.overlay` entitlement, which no plan grants.
 
 **Tech Stack:** Next.js (App Router, RSC + client islands), React 19.2.4, TypeScript, Tailwind v4 + `app/globals.css` custom properties, Zod 4, postgres.js + Flyway migrations, vitest (`environment: "node"`), Playwright, `scripts/smoke.ts`.
 
@@ -49,7 +49,7 @@ club sets up" (the OBS flow), and "Organiser console: Stream this match" plus
 - **The hiding gate is the per-organisation entitlement override row (owner answer 17 / Q14)** — not a request header (a browser cannot set one on a navigation and OBS sends none), not a preview cookie, not an environment flag. A viewer whose org does not hold `streaming.overlay` gets exactly three things: `notFound()` (404) on `/overlay/fixtures/[id]`, no panel on the division page, and nothing on `/pricing`. No task in this plan may invent a second gate.
 - **Themes are a REGISTRY, not a two-value union (owner answer 18 / Q7):** *"we will have multiple theme per sports so make it abstract and use can choose for now apply the default one."* `OVERLAY_THEMES` (`components/overlay/theme-registry.ts`, Task 5 Steps 6a–6d) keys an `OverlayThemeDef` by `ThemeId` and holds `bar` and `bug` on day one. **A third theme is one registry entry plus one component** — never an edit to the route (Task 5's page passes `resolveTheme(...).id` and nothing else), never an edit to the panel (Task 6's tabs map over `themesForSport(sportKey)`), never an edit to the model (Task 2 does not know a theme exists). `?style=<themeId>` is validated against the registry AND against the entry's `sports`; an unknown, misspelt or unsuitable id falls back to `defaultThemeFor(sportKey)` and **never throws**, because an OBS browser source cannot be asked to correct a typo mid-match. The per-sport default is exactly what it was — cricket `bar`, every other sport `bug` — but it now lives in one named function instead of an inline boolean. No task may reintroduce a `"bar" | "bug"` union, an `overlayStyleFor`, or a `props.style === "bar" ? … : …` branch.
 - **Sponsor logos are not in this wave, and not in W2 (owner answer 20 / Q9: *"ok for own wave as put it last"*).** They become their own wave, scheduled LAST in the programme, after W1 and W2. Nothing in this plan designs, reserves a slot for, or leaves a seam for them — a reserved-but-empty slab is an inert seam, and the sizing, placement and per-tier rules are that wave's job.
-- Do NOT touch: `components/v2/scorepad/**` (read `sport-theme.ts`, import from it, never edit), **the whole of `packages/engine`** (amended 2026-09-07: Task 0 reads the folded STATE the engine already holds; there is no engine edit anywhere in this programme, and `/usr/bin/git status --porcelain packages` must print nothing at every gate), `components/v2/fixture-console.tsx`, `ENTITLEMENT_DOMAINS`, other keys' matrix rows, any pricing surface, `LiveScore`'s render and `Props`, `proxy.ts` CSP, `app/embed/**`, `app/slideshow/**`, `.github/workflows/e2e.yml`, T1b's harness files (`e2e/visual/capture.spec.ts`, `asserts.ts`, `manifest.ts` — this wave appends to `manifest.json` and adds one seed kind to `seeds.ts`, nothing else), and anything in `desk/run-sheet-row.tsx` beyond one import plus one conditional line, or in `desk/run-sheet.tsx` / `stages-panel.tsx` beyond threading two props (R11; re-pinned 2026-09-07 @ fb99bbd4c — `FixtureLine` was retired by desk W2 #725; **desk W3** `feat/competition-desk-w3-band-and-phone` is editing `run-sheet-row.tsx` now, so Task 6 rebases after any W3 merge and never races it).
+- Do NOT touch: `components/v2/scorepad/**` (read `sport-theme.ts`, import from it, never edit), **the whole of `packages/engine`** (amended 2026-09-07: Task 0 reads the folded STATE the engine already holds; there is no engine edit anywhere in this programme, and `/usr/bin/git status --porcelain packages` must print nothing at every gate), `components/v2/fixture-console.tsx`, `ENTITLEMENT_DOMAINS`, other keys' matrix rows, any pricing surface, `LiveScoreBody`'s render and props, `MatchCentre`, and the hook's subscribe effect, `proxy.ts` CSP, `app/embed/**`, `app/slideshow/**`, `.github/workflows/e2e.yml`, T1b's harness files (`e2e/visual/capture.spec.ts`, `asserts.ts`, `manifest.ts` — this wave appends to `manifest.json` and adds one seed kind to `seeds.ts`, nothing else), and anything in `desk/run-sheet-row.tsx` beyond one import plus one conditional line, or in `desk/run-sheet.tsx` / `stages-panel.tsx` beyond threading two props (R11; re-pinned 2026-09-07 @ fb99bbd4c — `FixtureLine` was retired by desk W2 #725; **desk W3** `feat/competition-desk-w3-band-and-phone` is editing `run-sheet-row.tsx` now, so Task 6 rebases after any W3 merge and never races it).
 - **Owner checklist (`docs/superpowers/RULES.md` §"Owner checklist (2026-09-07)")** binds every task below; each task's acceptance names the rows it satisfies, and the reviewer checks the rows, not the prose.
 - **Patterns this plan invokes, with exemplars (design §9a):** parse → authorize → delegate (`lib/http.ts:69`, `auth.ts:352`, `app/api/v1/fixtures/[id]/route.ts`); zod at `server/api-v1/schemas.ts`; privacy folds in VIEWS (`public_fixtures_v`); fire-and-forget side channels (`fireDivisionRevalidate`); one authority per fact (`resolveVenueTz`, `fixtureStatusLabel`/`VOID_STATUSES`, the five `lib/public-site.ts` derivations, `globals.css` for colour via T1's `overlay-tokens.ts`); registry over branching (`OVERLAY_THEMES`); pure projections with strings via `msg` (`overlayModel`); deny by default (`notFound()`, exact-host allowlist); the client never decides (`hasFeature` on the page and the division page); one DOM branched for phone.
 
@@ -69,9 +69,9 @@ club sets up" (the OBS flow), and "Organiser console: Stream this match" plus
 | `apps/web/src/components/overlay/use-overlay-clock.ts` | Create | The ONE timer: 1 Hz, anchored on `OverlayLiveData.clock`, offset by the hook's `presentationNowOffsetMs`, holds the last value while `clock` is absent (owner ruling 2026-09-06: the clock TICKS in W1). |
 | `apps/web/src/components/overlay/__tests__/use-overlay-clock.test.ts` | Create | `renderIsland` + captured `setInterval`: anchors, ticks, re-anchors on push, holds at half-time, offsets under `delayMs`. |
 | `apps/web/src/server/public-site/__tests__/public-fixture-venue-tz.test.ts` | Create | DB-backed: division override wins, org fallback, UTC default. |
-| `apps/web/src/components/public-site/use-live-fixture.ts` | Create | The ONE public live transport: subscribe-or-poll, lifted verbatim from `live-score.tsx:61-117` (`refresh` is `:61`; `:60` is blank). |
-| `apps/web/src/components/public-site/__tests__/use-live-fixture.test.tsx` | Create | Hook branches via `renderIsland` + captured `setInterval`. |
-| `apps/web/src/components/public-site/live-score.tsx` | Modify (`:8`, `:29`, `:59-117`, `:148`) | Repointed to the hook; render and `Props` unchanged. |
+| `apps/web/src/components/public-site/match-centre/use-live-fixture.ts` | Modify (`:12-21` result type + signature, `:42-49` refresh, a drain effect before `:96`, `:102` return) (re-pinned 2026-09-08 @ 60c0615b0) | The ONE public live transport (extracted by spectator W1, #743) gains `{ fetcher, delayMs? }` and `presentationNowOffsetMs`; every 3-arg caller byte-identical. |
+| `apps/web/src/components/public-site/match-centre/__tests__/use-live-fixture.test.ts` | Modify (append five cases) (re-pinned 2026-09-08 @ 60c0615b0) | Hook branches via `renderIsland` + `vi.useFakeTimers` + module-mocked `fetchLiveFixture` — the file's own convention. |
+| `apps/web/src/components/public-site/live-score.tsx` | UNTOUCHED (re-pinned 2026-09-08 @ 60c0615b0) | Exports only the hookless `LiveScoreBody` since spectator W1; the `LiveScore` wrapper is retired. Nothing here to repoint. |
 | `apps/web/src/lib/public-site.ts` | Modify (append after `disciplineLabel`'s closing brace, `:384` on b2244879f) | `battingEntrantId`, `chaseNeed` (summary readers) and `chaseBalls` (reads `OverlayLiveData.cricket`, amended 2026-09-07) — `matchClock` is GONE: the clock is the stage's timer, formatted by `formatClock` in `overlay-model.ts`. |
 | `apps/web/src/lib/__tests__/public-site-overlay-derive.test.ts` | Create | Unit cover for the three readers. |
 | `apps/web/src/lib/overlay-model.ts` | Create | Pure projection `overlayModel(input): OverlayModel`; `overlayStartLabel(iso, locale, tz)`; type-only `OverlayMoment` slot for W2. |
@@ -154,7 +154,7 @@ club sets up" (the OBS flow), and "Organiser console: Stream this match" plus
 > the 2026-09-05 plan smuggled two numbers through the engine's summary at the
 > cost of §9.6 exposure and a golden re-baseline. The endpoint reads them off
 > the folded STATE the engine already holds, through the engine, changing no
-> engine file — and Task 1's hook becomes generic over its fetcher so `LiveScore`
+> engine file — and Task 1's hook becomes generic over its fetcher so `MatchCentre`
 > and the overlay share one transport with two payloads.
 >
 > **Contract (design §3.2 in equivalent form — `extends LiveFixtureData` IS the spec's inline `status`/`summary`/`outcome`, which is exactly that type's three fields; the one poll target on every tier):**
@@ -836,365 +836,172 @@ export async function GET(req: Request, { params }: Ctx) {
 
 ---
 
-### Task 1: Extract the live transport into `useLiveFixture` and repoint `LiveScore`
+### Task 1: Make the EXISTING `useLiveFixture` generic over its fetcher, add `delayMs`, expose `presentationNowOffsetMs`
+
+> **Re-pinned 2026-09-08 @ 60c0615b0 (spectator W1, PR #743, merged).** There is
+> no lift any more. Spectator W1 already extracted the transport to
+> `apps/web/src/components/public-site/match-centre/use-live-fixture.ts`
+> (`POLL_MS = 15_000` `:10`; `export function useLiveFixture(` `:17`; `refresh`
+> `:42` — with a `mountedRef` guard; `live = in_play || scheduled` `:52`; the
+> subscribe effect `:57-95`; the poll effect `:96-100`; returns
+> `{ data, transport: "realtime" | "poll" }` `:102`). `live-score.tsx` is a
+> 485-line rewrite that exports ONLY the hookless `LiveScoreBody` — the
+> `LiveScore` wrapper is RETIRED; `MatchCentre` (`match-centre/match-centre.tsx:56`)
+> is the hook's one production caller and reads `{ data, transport }`. This task
+> MODIFIES the hook in place with the two additions design §3.3 asks for; every
+> existing caller stays a three-argument call and is byte-identical.
 
 **Files:**
-- Create: `apps/web/src/components/public-site/use-live-fixture.ts`
-- Create (Test): `apps/web/src/components/public-site/__tests__/use-live-fixture.test.tsx`
-- Modify: `apps/web/src/components/public-site/live-score.tsx` — imports `:8-27`, `POLL_MS` `:29`, body `:59-117`, `subscribed` read `:148`
-- Unchanged regression witness: `apps/web/src/components/public-site/__tests__/live-score.test.tsx`, `apps/web/src/components/public-site/__tests__/live-score-data.test.ts`
+- Modify: `apps/web/src/components/public-site/match-centre/use-live-fixture.ts` — the result type (`:12-15`), the signature (`:17-21`), `refresh` (`:42-49`), a new drain effect immediately BEFORE the poll effect (`:96`), the return (`:102`)
+- Modify (Test): `apps/web/src/components/public-site/match-centre/__tests__/use-live-fixture.test.ts` — five cases APPENDED to the existing `describe("useLiveFixture")`; the five existing cases are untouched
+- Unchanged regression witnesses: `match-centre/match-centre.tsx` (the 3-arg caller), `__tests__/live-score.test.tsx` (SSR of `LiveScoreBody`, 604 lines), `match-centre/__tests__/match-centre.test.tsx`
 
 **Interfaces:**
-- Consumes: `fetchLiveFixture(fixtureId: string): Promise<LiveFixtureData>`, `fetchPublicRealtimeToken(fixtureId: string): Promise<PublicRealtimeToken>`, `type LiveFixtureData` — all from `./live-score-data`; `supabaseBrowser()` from `@/lib/supabase-browser` (dynamic import).
-- Produces:
-  - `export const POLL_MS: number` (15_000)
-  - `export const DEBOUNCE_MS: number` (250)
-  - `export function isLiveStatus(status: string): boolean`
-  - `export interface LiveFixture<T extends LiveFixtureData = LiveFixtureData> { data: T; live: boolean; subscribed: boolean; refresh: () => Promise<void>; presentationNowOffsetMs: number }` (amended 2026-09-07: generic, plus the offset)
-  - `export interface LiveFixtureOptions<T extends LiveFixtureData> { fetcher?: (fixtureId: string) => Promise<T>; delayMs?: number }`
-  - `export function useLiveFixture<T extends LiveFixtureData = LiveFixtureData>(fixtureId: string, initial: T, realtime: boolean, options?: LiveFixtureOptions<T>): LiveFixture<T>` — `LiveScore` calls it with three arguments and is byte-identical in behaviour; the overlay stage passes `{ fetcher: fetchOverlayFixture }`; R2 passes `delayMs`.
+- Consumes: `fetchLiveFixture(fixtureId): Promise<LiveFixtureData>`, `fetchPublicRealtimeToken`, `type LiveFixtureData` (`../live-score-data`, `:54`/`:58`/`:8`); `renderIsland` (`components/__tests__/_hook-harness.tsx`); `vi.useFakeTimers` + `vi.mock("../../live-score-data")` — the file's OWN convention (its header says so: SSR `renderToStaticMarkup` cannot drive effects, so the hook is driven through `renderIsland` with fake timers and a module-mocked fetcher).
+- Produces (all in `match-centre/use-live-fixture.ts`):
+  - `export interface UseLiveFixtureResult<T extends LiveFixtureData = LiveFixtureData> { data: T; transport: "realtime" | "poll"; presentationNowOffsetMs: number }` — widened, not renamed, so `MatchCentre`'s `{ data, transport }` destructure compiles unchanged
+  - `export interface UseLiveFixtureOptions<T extends LiveFixtureData> { fetcher?: (fixtureId: string) => Promise<T>; delayMs?: number }`
+  - `export function useLiveFixture<T extends LiveFixtureData = LiveFixtureData>(fixtureId: string, initial: T, realtime: boolean, options?: UseLiveFixtureOptions<T>): UseLiveFixtureResult<T>` — with no `options` the behaviour is byte-identical to `60c0615b0`; the overlay stage (Task 5) passes `{ fetcher: fetchOverlayFixture }`; R2 passes `delayMs`.
 
-> **Conflict with the wave prompt, recorded:** scope 1 writes the return type as bare `LiveFixtureData`. `LiveScore` renders `subscribed` at `live-score.tsx:148` (`Live{subscribed ? " · realtime" : ""}`), and the same scope requires its render to stay untouched — a bare `LiveFixtureData` return cannot satisfy both. The object return above is the minimum that does. `live` is returned because the overlay stage needs it for the live-dot breath (`_THEMES.md` §6).
+> **How the hook is unit-tested, stated plainly (coordinator 2026-09-08).** `apps/web` vitest is `environment: "node"`. `renderToStaticMarkup` (what `live-score.test.tsx` uses for `LiveScoreBody`) renders once and runs NO effects — it can prove props, never a poll. The hook's existing test therefore mounts a `Probe` component through `renderIsland` (React's dispatcher without a DOM), runs `vi.useFakeTimers()` and advances the clock with `vi.advanceTimersByTimeAsync(POLL_MS)`, with `fetchLiveFixture` module-mocked. The new cases keep EXACTLY that shape (the 2026-09-05 plan's captured-`setInterval` idiom is dropped — this file already owns the pattern). Realtime is off in every case (`fetchPublicRealtimeToken` is mocked to throw, as the file does), so the poll path is the one under test; the subscribe effect is untouched by this task.
 
 **Acceptance (four kinds, named):**
-- Unit: `use-live-fixture.test.tsx` — Step 1's six + Step 2a's five (fetcher, no-drain default, delayMs presentation, ordered drain, rejected fetch holds the score).
-- E2E: `stream-overlay.spec.ts` › `a new event changes the score in place…` (the transport under the overlay) and Step 2b's dead-endpoint case (design §3.1 resilience).
+- Unit: `match-centre/__tests__/use-live-fixture.test.ts` — the file's five existing cases (initial render; poll replaces the whole document; failed poll keeps the last data; decided at mount arms nothing; late resolve after unmount) UNCHANGED, plus this task's five (default fetcher hits the public URL; `fetcher` option is what the poll calls; no drain timer without options and `presentationNowOffsetMs === 0`; `delayMs` presents at `t + delayMs` on the 1 s drain with the offset exposed; two snapshots drain in order).
+- E2E: `stream-overlay.spec.ts` › `a new event changes the score in place…` (the transport under the overlay stage) and Step 2b's dead-endpoint case (design §3.1).
 - Smoke: `streamOverlaySuite` › overlay 200 with `ovl-root` in the body — the transport's first paint through `initial`.
-- Regression: `live-score.test.tsx` and `live-score-data.test.ts` UNCHANGED and green (the witness that `LiveScore` is byte-identical).
-- Checklist rows: "Negative assertion needs its positive pair" (no drain interval without options ↔ drain armed with `delayMs`); "Pin the VALUE a control opens at" (`presentationNowOffsetMs` = 0 / 3000, not merely present); mutants (d) Step 6 and (q) (Self-review).
+- Regression: `match-centre.test.tsx`, `live-score.test.tsx`, `court-card.test.tsx` and the rest of `match-centre/__tests__` UNCHANGED and green; `MatchCentre` still compiles against `{ data, transport }` (tsc).
+- Checklist rows: "Negative assertion needs its positive pair" (no drain timer without options ↔ one armed with `delayMs`); "Pin the VALUE a control opens at" (`presentationNowOffsetMs` = 0 / 3000, asserted by value); mutants (d) Step 5 and (q) (Self-review).
 
-- [ ] **Step 1: Write the failing test.** Create `apps/web/src/components/public-site/__tests__/use-live-fixture.test.tsx`:
-
-```tsx
-// The public live transport, lifted out of LiveScore (W1 scope 1). vitest runs
-// `environment: "node"` here (vitest.config.ts:129), so the hook is driven
-// through `renderIsland` — React's dispatcher without a DOM — and the poll is
-// witnessed by CAPTURING setInterval rather than faking a clock, the same
-// idiom live-score.test.tsx:37-40 already uses.
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { renderIsland } from "@/components/__tests__/_hook-harness";
-import {
-  isLiveStatus,
-  POLL_MS,
-  useLiveFixture,
-  type LiveFixture,
-} from "../use-live-fixture";
-import type { LiveFixtureData } from "../live-score-data";
-
-function stubFetch(payload: unknown, ok = true, status = 200) {
-  vi.stubGlobal(
-    "fetch",
-    vi.fn(async () => ({ ok, status, json: async () => payload })),
-  );
-}
-
-/** Captures setInterval's callback and the delay it was armed with. */
-function stubInterval(): { fire: () => Promise<void>; delay: () => number | null; armed: () => number } {
-  let callback: (() => void | Promise<void>) | null = null;
-  let delay: number | null = null;
-  let armed = 0;
-  vi.stubGlobal(
-    "setInterval",
-    ((fn: () => void, ms?: number) => {
-      callback = fn;
-      delay = ms ?? null;
-      armed += 1;
-      return 1 as unknown as ReturnType<typeof setInterval>;
-    }) as unknown as typeof setInterval,
-  );
-  vi.stubGlobal("clearInterval", (() => {}) as typeof clearInterval);
-  return {
-    fire: async () => {
-      if (!callback) throw new Error("setInterval was never armed — the hook did not start polling");
-      await callback();
-    },
-    delay: () => delay,
-    armed: () => armed,
-  };
-}
-
-const IN_PLAY: LiveFixtureData = { status: "in_play", summary: { headline: "1 — 0" }, outcome: null };
-const DECIDED: LiveFixtureData = {
-  status: "decided",
-  summary: { headline: "2 — 0" },
-  outcome: { kind: "win", winner: "e-home" },
-};
-
-/** Probe island: the harness renders COMPONENTS, so the hook is called inside
- *  one and its return captured for assertions. */
-function harness(initial: LiveFixtureData, realtime: boolean) {
-  let latest: LiveFixture | null = null;
-  const island = renderIsland(
-    (props: { fixtureId: string; initial: LiveFixtureData; realtime: boolean }) => {
-      latest = useLiveFixture(props.fixtureId, props.initial, props.realtime);
-      return null;
-    },
-    { fixtureId: "fx-1", initial, realtime },
-  );
-  return { island, read: (): LiveFixture => latest as unknown as LiveFixture };
-}
-
-afterEach(() => vi.unstubAllGlobals());
-
-describe("isLiveStatus", () => {
-  it("is true for the two statuses that can still move, false for the rest", () => {
-    expect(isLiveStatus("in_play")).toBe(true);
-    expect(isLiveStatus("scheduled")).toBe(true);
-    expect(isLiveStatus("decided")).toBe(false);
-    expect(isLiveStatus("finalized")).toBe(false);
-    expect(isLiveStatus("cancelled")).toBe(false);
-  });
-});
-
-describe("useLiveFixture", () => {
-  it("arms exactly one poll at POLL_MS while in play with realtime off, and a tick replaces the data", async () => {
-    const timer = stubInterval();
-    stubFetch({ ok: true, data: { status: "in_play", summary: { headline: "2 — 0" }, outcome: null } });
-    const { read } = harness(IN_PLAY, false);
-    expect(timer.armed(), "one interval, not one per render").toBe(1);
-    expect(timer.delay()).toBe(POLL_MS);
-    expect(read().data.summary?.headline).toBe("1 — 0");
-    await timer.fire();
-    expect(read().data.summary?.headline, "the poll's payload replaced the score").toBe("2 — 0");
-    expect(read().live).toBe(true);
-  });
-
-  it("never arms a poll for a fixture that is already decided at mount", () => {
-    const timer = stubInterval();
-    stubFetch({ ok: true, data: DECIDED });
-    const { read } = harness(DECIDED, false);
-    expect(timer.armed(), "a decided fixture must not poll").toBe(0);
-    expect(read().live).toBe(false);
-    expect(read().subscribed).toBe(false);
-  });
-
-  it("falls back to the poll when the realtime token is refused (403)", () => {
-    const timer = stubInterval();
-    stubFetch({ ok: false, error: "payment required" }, false, 403);
-    const { read } = harness(IN_PLAY, true);
-    expect(timer.armed(), "a refused token leaves subscribed false, so the poll must run").toBe(1);
-    expect(read().subscribed).toBe(false);
-  });
-
-  it("keeps the last known score when a poll throws", async () => {
-    const timer = stubInterval();
-    stubFetch({ ok: false, error: "boom" }, false, 500);
-    const { read } = harness(IN_PLAY, false);
-    await timer.fire();
-    expect(read().data.summary?.headline, "a transient failure must not blank the scoreboard").toBe("1 — 0");
-  });
-
-  it("stops polling once the fixture it is polling becomes decided", async () => {
-    const timer = stubInterval();
-    stubFetch({ ok: true, data: DECIDED });
-    const { read } = harness(IN_PLAY, false);
-    expect(timer.armed()).toBe(1);
-    await timer.fire();
-    expect(read().data.status).toBe("decided");
-    expect(read().live, "live follows the DATA, not the initial prop").toBe(false);
-    expect(timer.armed(), "the effect re-ran with live false and armed nothing new").toBe(1);
-  });
-});
-```
-
-- [ ] **Step 2: Run it — expect red.** `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/stream-overlay/apps/web && npx vitest run src/components/public-site/__tests__/use-live-fixture.test.tsx --reporter=json --outputFile=/tmp/ovl-w1/t1-red.json`
-  Expected: the suite fails to COLLECT with `Failed to resolve import "../use-live-fixture" from "src/components/public-site/__tests__/use-live-fixture.test.tsx"`. In the JSON that is `numTotalTests: 0` with a non-empty `testResults[0].message` — a collection failure, which `rtk` would have printed as `PASS(0) FAIL(0)`. Read the JSON.
-
-- [ ] **Step 2a (amended 2026-09-07, design §3.3): the fetcher and delay cases.** Append INSIDE the same `describe` in `use-live-fixture.test.tsx`, after Step 1's last case. Step 1's `stubInterval` captures ONE callback; the delay buffer arms a SECOND interval (1000 ms) beside the poll (`POLL_MS`), so these cases use a stub keyed by delay:
-
-```tsx
-/** Every setInterval, keyed by its delay — the poll (POLL_MS) and the delay
- *  drain (1000) are told apart by the number they were armed with. */
-function stubIntervals(): { fire: (ms: number) => Promise<void>; armed: () => number[] } {
-  const byDelay = new Map<number, () => void | Promise<void>>();
-  vi.stubGlobal(
-    "setInterval",
-    ((fn: () => void, ms?: number) => {
-      byDelay.set(ms ?? -1, fn);
-      return byDelay.size as unknown as ReturnType<typeof setInterval>;
-    }) as unknown as typeof setInterval,
-  );
-  vi.stubGlobal("clearInterval", (() => {}) as typeof clearInterval);
-  return {
-    fire: async (ms) => {
-      const cb = byDelay.get(ms);
-      if (!cb) throw new Error(`no interval armed at ${ms} ms — armed: ${[...byDelay.keys()].join(",")}`);
-      await cb();
-    },
-    armed: () => [...byDelay.keys()].sort((a, b) => a - b),
-  };
-}
-
-function harnessWith<T extends LiveFixtureData>(initial: T, realtime: boolean, options: LiveFixtureOptions<T>) {
-  let latest: LiveFixture<T> | null = null;
-  const island = renderIsland(
-    (props: { fixtureId: string; initial: T; realtime: boolean }) => {
-      latest = useLiveFixture<T>(props.fixtureId, props.initial, props.realtime, options);
-      return null;
-    },
-    { fixtureId: "fx-1", initial, realtime },
-  );
-  return { island, read: (): LiveFixture<T> => latest as unknown as LiveFixture<T> };
-}
-
-it("uses the fetcher it is given, and fetchLiveFixture's URL by default (one transport, two payloads)", async () => {
-  const timers = stubIntervals();
-  stubFetch({ ...IN_PLAY, summary: { headline: "9 — 9" } });
-  const own = vi.fn(async (id: string) => ({ ...IN_PLAY, summary: { headline: `own:${id}` } }));
-  const h = harnessWith(IN_PLAY, false, { fetcher: own });
-  await timers.fire(POLL_MS);
-  expect(own).toHaveBeenCalledWith("fx-1");
-  expect(h.read().data.summary?.headline).toBe("own:fx-1");
-  // Default: the public endpoint, through global fetch.
-  const d = harnessWith(IN_PLAY, false, {});
-  await timers.fire(POLL_MS);
-  expect((globalThis.fetch as unknown as { mock: { calls: unknown[][] } }).mock.calls.some((c) => String(c[0]).endsWith("/api/v1/public/fixtures/fx-1"))).toBe(true);
-  expect(d.read().data.summary?.headline).toBe("9 — 9");
-});
-
-it("a rejected fetch keeps the last known score and does not throw (design §3.1: the stage never paints a white frame)", async () => {
-  const timers = stubIntervals();
-  const fetcher = vi.fn(async () => { throw new Error("endpoint down"); });
-  const h = harnessWith(IN_PLAY, false, { fetcher });
-  await expect(timers.fire(POLL_MS)).resolves.toBeUndefined();
-  expect(fetcher).toHaveBeenCalledTimes(1);
-  expect(h.read().data, "the last known score is still the data").toEqual(IN_PLAY);
-  expect(h.read().live, "and the transport keeps trying").toBe(true);
-});
-
-it("without options arms ONLY the poll — no drain interval, offset 0 (byte-identical to LiveScore's behaviour)", () => {
-  const timers = stubIntervals();
-  const h = harnessWith(IN_PLAY, false, {});
-  expect(timers.armed()).toEqual([POLL_MS]);
-  expect(h.read().presentationNowOffsetMs).toBe(0);
-});
-
-it("delayMs: a refreshed snapshot is presented only once delayMs has elapsed, on the drain tick, and the offset is exposed", async () => {
-  const timers = stubIntervals();
-  const now = vi.spyOn(Date, "now");
-  now.mockReturnValue(100_000);
-  const fetcher = vi.fn(async () => ({ ...IN_PLAY, summary: { headline: "1 — 1" } }));
-  const h = harnessWith(IN_PLAY, false, { fetcher, delayMs: 3000 });
-  expect(h.read().presentationNowOffsetMs).toBe(3000);
-  expect(timers.armed()).toEqual([1000, POLL_MS]);
-  await timers.fire(POLL_MS);                 // received at 100 000
-  expect(h.read().data.summary?.headline, "not yet — 3 s have not passed").toBe(IN_PLAY.summary?.headline);
-  now.mockReturnValue(102_000);
-  await timers.fire(1000);
-  expect(h.read().data.summary?.headline, "2 s in: still held").toBe(IN_PLAY.summary?.headline);
-  now.mockReturnValue(103_000);
-  await timers.fire(1000);
-  expect(h.read().data.summary?.headline, "3 s in: presented").toBe("1 — 1");
-  now.mockRestore();
-});
-
-it("delayMs: two snapshots received 500 ms apart present in order, newest-due wins, nothing is skipped backwards", async () => {
-  const timers = stubIntervals();
-  const now = vi.spyOn(Date, "now");
-  let n = 0;
-  const fetcher = vi.fn(async () => ({ ...IN_PLAY, summary: { headline: `s${++n}` } }));
-  const h = harnessWith(IN_PLAY, false, { fetcher, delayMs: 2000 });
-  now.mockReturnValue(10_000);
-  await timers.fire(POLL_MS);                 // s1 @ 10 000
-  now.mockReturnValue(10_500);
-  await timers.fire(POLL_MS);                 // s2 @ 10 500
-  now.mockReturnValue(12_200);
-  await timers.fire(1000);                    // s1 due (12 000), s2 not (12 500)
-  expect(h.read().data.summary?.headline).toBe("s1");
-  now.mockReturnValue(12_600);
-  await timers.fire(1000);
-  expect(h.read().data.summary?.headline).toBe("s2");
-  now.mockRestore();
-});
-```
-
-  Add `type LiveFixtureOptions` to the file's imports from `../use-live-fixture`. RE-PIN: `renderIsland`'s exact signature and whether effects run synchronously on first render (`components/__tests__/_hook-harness.tsx:169`) — if effects are deferred, call the harness's flush before reading `timers.armed()`. Re-run Step 2's command: the four new cases red for `useLiveFixture is not a function` / missing export until Step 3 lands.
-
-
-- [ ] **Step 3: Implement the hook.** Create `apps/web/src/components/public-site/use-live-fixture.ts`:
+- [ ] **Step 1: Write the failing tests.** Append INSIDE `describe("useLiveFixture", …)` in `apps/web/src/components/public-site/match-centre/__tests__/use-live-fixture.test.ts`, after its last case (`a poll fetch that resolves AFTER unmount…`). Add to the imports: `import type { UseLiveFixtureOptions } from "../use-live-fixture";` and widen the file's `mount()` helper to take an optional fourth argument `options?: UseLiveFixtureOptions<LiveFixtureData>` that it passes as the hook's fourth argument (the five existing cases call it with three and are unchanged):
 
 ```ts
-"use client";
-// THE public live transport (W1 scope 1, R5). Lifted verbatim out of
-// `live-score.tsx` so the public match page and the stream overlay share ONE
-// subscribe-or-poll implementation instead of two copies that drift: Pro orgs
-// get a Supabase Realtime push on the private channel `fixture:{id}`
-// (`lib/realtime.ts:9,27,91`, event `state_changed`, payload carries no body),
-// everyone else falls back to a 15 s poll of the public fixture endpoint.
-// Behaviour — the interval, the 250 ms debounce, the "any failure leaves
-// `subscribed` false" rule — is contract, not tuning (R5).
-import { useCallback, useEffect, useRef, useState } from "react";
-import {
-  fetchLiveFixture,
-  fetchPublicRealtimeToken,
-  type LiveFixtureData,
-} from "./live-score-data";
+  // ---- Stream overlay W1 (design §3.3): generic fetcher + presentation delay ----
 
-export const POLL_MS = 15_000;
-/** The realtime ping carries no body, so several pings in a burst would fire
- *  several refetches; one debounced refetch answers all of them. */
-export const DEBOUNCE_MS = 250;
+  it("polls the public fixture URL by default — every existing caller is byte-identical", async () => {
+    // The default fetcher IS `fetchLiveFixture` (mocked here), called with the id.
+    vi.mocked(fetchLiveFixture).mockResolvedValueOnce({ ...scheduled, status: "in_play" } as LiveFixtureData);
+    const hook = mount("fx-1", scheduled, false);
+    expect(hook.current.presentationNowOffsetMs, "no delay → offset 0, by value").toBe(0);
+    await vi.advanceTimersByTimeAsync(POLL_MS);
+    expect(fetchLiveFixture).toHaveBeenCalledWith("fx-1");
+    expect(hook.current.data.status).toBe("in_play");
+  });
 
-/** The two statuses that can still change under the reader. Exported so a
- *  consumer (and the unit suite) reads the same predicate the effects do —
- *  a second `status === "in_play" || …` written elsewhere is the drift this
- *  extraction exists to prevent. */
-export function isLiveStatus(status: string): boolean {
-  return status === "in_play" || status === "scheduled";
-}
+  it("uses the fetcher it is given, and then never calls fetchLiveFixture (one transport, two payloads)", async () => {
+    const own = vi.fn(async (id: string) => ({ ...scheduled, status: "in_play", summary: { headline: `own:${id}` } }) as LiveFixtureData);
+    const hook = mount("fx-1", scheduled, false, { fetcher: own });
+    await vi.advanceTimersByTimeAsync(POLL_MS);
+    expect(own).toHaveBeenCalledWith("fx-1");
+    expect(fetchLiveFixture).not.toHaveBeenCalled();
+    expect(hook.current.data.summary?.headline).toBe("own:fx-1");
+  });
 
-export interface LiveFixture<T extends LiveFixtureData = LiveFixtureData> {
-  data: T;
-  /** How far behind wall time the PRESENTED snapshot is (= `delayMs`, 0 by
-   *  default). The overlay clock subtracts it; nothing else reads it. */
-  presentationNowOffsetMs: number;
-  /** `isLiveStatus(data.status)` — recomputed from the LIVE data, never from
-   *  the initial prop, so a fixture that decides while the page is open stops
-   *  polling on the very next tick. */
-  live: boolean;
-  /** Realtime actually connected. `LiveScore` renders it as "· realtime"; the
-   *  overlay ignores it (OBS shows no transport state). */
-  subscribed: boolean;
-  refresh: () => Promise<void>;
-}
+  it("without options arms ONLY the poll timer — no drain timer (the positive pair for the delay cases)", () => {
+    mount("fx-1", scheduled, false);
+    // One pending timer: the POLL_MS interval. A drain interval would make it two.
+    expect(vi.getTimerCount()).toBe(1);
+  });
 
-/** Amended 2026-09-07 (design §3.3): generic over the payload and its
- *  fetcher, so `LiveScore` (public JSON) and the overlay stage (the overlay
- *  endpoint) share ONE transport with two payloads. `delayMs` is R2's
- *  presentation buffer, built here so the seam is real from W1: with it
- *  absent the hook is byte-identical in behaviour. */
-export interface LiveFixtureOptions<T extends LiveFixtureData> {
+  it("delayMs: a snapshot received at t is presented at t + delayMs, on the 1 s drain, and the offset is exposed by value", async () => {
+    const fetcher = vi.fn(async () => ({ ...scheduled, status: "in_play", summary: { headline: "1 — 1" } }) as LiveFixtureData);
+    const hook = mount("fx-1", scheduled, false, { fetcher, delayMs: 3000 });
+    expect(hook.current.presentationNowOffsetMs).toBe(3000);
+    expect(vi.getTimerCount(), "poll + drain").toBe(2);
+    await vi.advanceTimersByTimeAsync(POLL_MS);              // received at POLL_MS
+    expect(hook.current.data.summary?.headline, "not yet — 3 s have not passed").toBeUndefined();
+    await vi.advanceTimersByTimeAsync(2000);                 // drains at +1 s, +2 s: still held
+    expect(hook.current.data.summary?.headline).toBeUndefined();
+    await vi.advanceTimersByTimeAsync(1000);                 // +3 s: presented
+    expect(hook.current.data.summary?.headline).toBe("1 — 1");
+  });
+
+  it("delayMs: two snapshots received 500 ms apart present in order; the newest DUE one wins, nothing goes backwards", async () => {
+    let n = 0;
+    const fetcher = vi.fn(async () => ({ ...scheduled, status: "in_play", summary: { headline: `s${++n}` } }) as LiveFixtureData);
+    const hook = mount("fx-1", scheduled, false, { fetcher, delayMs: 2000 });
+    await vi.advanceTimersByTimeAsync(POLL_MS);              // s1 received at T
+    // A realtime push would call refresh directly; simulate the second
+    // receipt 500 ms later by advancing to the next poll boundary is too
+    // coarse, so drive `refresh` through the fetcher's own cadence: advance
+    // 500 ms and force a second poll by advancing another full POLL_MS.
+    await vi.advanceTimersByTimeAsync(500);
+    await vi.advanceTimersByTimeAsync(POLL_MS);              // s2 received at T + POLL_MS + 500 (drained later)
+    // At T + 2000 (+ a drain tick) s1 is due, s2 is not.
+    expect(hook.current.data.summary?.headline).toBe("s1");
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(hook.current.data.summary?.headline).toBe("s2");
+  });
+```
+
+  RE-PIN at execution: the exact `mount()` helper shape (`:27-41` on `60c0615b0`) and whether `renderIsland` runs effects synchronously at mount (the file's existing cases already depend on it, so it does). The last case's arithmetic is written against `POLL_MS = 15_000` and a 1 s drain — if the drain cadence in Step 3 changes, move the numbers with it (a flat timing beside a derived cost is a latent red; recurring class 20).
+
+- [ ] **Step 2: Run it — expect red.** `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/stream-overlay/apps/web && npx vitest run src/components/public-site/match-centre/__tests__/use-live-fixture.test.ts --reporter=json --outputFile=/tmp/ovl-w1/t1-red.json; node -e "const r=require('/tmp/ovl-w1/t1-red.json');console.log(r.numTotalTests,r.numFailedTests)"`
+  Expected: `numTotalTests: 10`, `numFailedTests: 4` — the fetcher case (`own` never called; `fetchLiveFixture` called instead), the offset assertions (`presentationNowOffsetMs` undefined), the timer-count case (`expected 1 to be 2`) and the ordering case; the five pre-existing cases stay green (`UseLiveFixtureOptions` is a type import, so collection succeeds — if tsc-in-vitest refuses the missing export, that is the red, read the message).
+
+- [ ] **Step 3: Modify the hook in place.** In `apps/web/src/components/public-site/match-centre/use-live-fixture.ts` (every line number on `60c0615b0`):
+
+  (a) Replace `:12-21` (the result interface and the signature) with:
+
+```ts
+/** Stream overlay W1 (design §3.3): the ONE transport now serves two payloads
+ *  — the public fixture JSON (`MatchCentre`, the default) and the overlay
+ *  endpoint (`OverlayStage`, via `fetcher`). `delayMs` is R2's presentation
+ *  buffer, built here so the seam is real from W1; with it absent the hook is
+ *  byte-identical to the spectator-W1 version. */
+export interface UseLiveFixtureOptions<T extends LiveFixtureData> {
   fetcher?: (fixtureId: string) => Promise<T>;
   /** Present snapshots no sooner than `delayMs` after they were received. */
   delayMs?: number;
+}
+
+export interface UseLiveFixtureResult<T extends LiveFixtureData = LiveFixtureData> {
+  data: T;
+  transport: "realtime" | "poll";
+  /** How far behind wall time the PRESENTED snapshot is (= `delayMs`, 0 by
+   *  default). The overlay clock subtracts it (design §3.6); nothing else
+   *  reads it. A FIELD here, never a module export — one authority per hook
+   *  instance (design FS17). */
+  presentationNowOffsetMs: number;
 }
 
 export function useLiveFixture<T extends LiveFixtureData = LiveFixtureData>(
   fixtureId: string,
   initial: T,
   realtime: boolean,
-  options: LiveFixtureOptions<T> = {},
-): LiveFixture<T> {
-  const fetcher = (options.fetcher ?? (fetchLiveFixture as unknown as (id: string) => Promise<T>));
+  options: UseLiveFixtureOptions<T> = {},
+): UseLiveFixtureResult<T> {
+  const fetcher = options.fetcher ?? (fetchLiveFixture as (id: string) => Promise<T>);
   const delayMs = options.delayMs ?? 0;
-  // The newest snapshot RECEIVED (always current) and the one PRESENTED
-  // (held back by delayMs). With delayMs 0 they are the same state.
   const [data, setData] = useState<T>(initial);
+  // The delay buffer: snapshots RECEIVED, waiting to be PRESENTED. Empty and
+  // unused when delayMs is 0.
   const bufferRef = useRef<{ receivedAt: number; snapshot: T }[]>([]);
+```
 
-  const present = useCallback(
-    (snapshot: T) => {
+  (b) Replace `refresh` (`:42-49`) with — the `mountedRef` guard is kept exactly, and the only change is WHAT is fetched and WHERE it goes:
+
+```ts
+  const refresh = useCallback(async () => {
+    try {
+      const next = await fetcher(fixtureId);
+      if (!mountedRef.current) return;
       if (delayMs <= 0) {
-        setData(snapshot);
+        setData(next);
         return;
       }
-      bufferRef.current.push({ receivedAt: Date.now(), snapshot });
-    },
-    [delayMs],
-  );
+      bufferRef.current.push({ receivedAt: Date.now(), snapshot: next });
+    } catch {
+      // transient — keep the last known data (never throw to the UI)
+    }
+  }, [fixtureId, fetcher, delayMs]);
+```
 
+  (c) Insert immediately BEFORE the poll effect (`// 15 s polling fallback` at `:95-96`):
+
+```ts
   // Drain the delay buffer once per second: present the newest snapshot whose
-  // receivedAt ≤ now − delayMs. One interval, only while delayMs > 0.
+  // receivedAt ≤ now − delayMs, drop everything older. One interval, armed only
+  // while delayMs > 0 — the no-option path never creates it.
   useEffect(() => {
     if (delayMs <= 0) return;
     const id = setInterval(() => {
@@ -1202,134 +1009,28 @@ export function useLiveFixture<T extends LiveFixtureData = LiveFixtureData>(
       const buf = bufferRef.current;
       let idx = -1;
       for (let i = 0; i < buf.length; i++) if (buf[i]!.receivedAt <= due) idx = i;
-      if (idx >= 0) {
+      if (idx >= 0 && mountedRef.current) {
         setData(buf[idx]!.snapshot);
         bufferRef.current = buf.slice(idx + 1);
       }
     }, 1000);
     return () => clearInterval(id);
   }, [delayMs]);
-
-  const refresh = useCallback(async () => {
-    try {
-      present(await fetcher(fixtureId));
-    } catch {
-      // transient — keep the last known score
-    }
-  }, [fixtureId, fetcher, present]);
-
-  const live = isLiveStatus(data.status);
-
-  // Realtime push (Pro orgs). Any failure — no entitlement (403), env missing,
-  // websocket refused — leaves `subscribed` false and polling takes over.
-  const [subscribed, setSubscribed] = useState(false);
-  useEffect(() => {
-    if (!realtime || !live) return;
-    if (!process.env.NEXT_PUBLIC_SUPABASE_URL) return;
-    let cancelled = false;
-    let debounce: ReturnType<typeof setTimeout> | null = null;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    let channel: any = null;
-
-    (async () => {
-      let token: { token: string; channel: string };
-      try {
-        token = await fetchPublicRealtimeToken(fixtureId);
-      } catch {
-        return; // not entitled or server error → polling
-      }
-      if (cancelled) return;
-      const { supabaseBrowser } = await import("@/lib/supabase-browser");
-      const sb = supabaseBrowser();
-      await sb.realtime.setAuth(token.token);
-      channel = sb
-        .channel(token.channel, { config: { private: true } })
-        .on("broadcast", { event: "state_changed" }, () => {
-          if (debounce) clearTimeout(debounce);
-          debounce = setTimeout(refresh, DEBOUNCE_MS);
-        })
-        .subscribe((status: string) => {
-          if (!cancelled) setSubscribed(status === "SUBSCRIBED");
-        });
-    })();
-
-    return () => {
-      cancelled = true;
-      if (debounce) clearTimeout(debounce);
-      channel?.unsubscribe();
-      setSubscribed(false);
-    };
-  }, [fixtureId, realtime, live, refresh]);
-
-  // 15 s polling fallback (Community, or realtime not connected).
-  useEffect(() => {
-    if (!live || subscribed) return;
-    const id = setInterval(refresh, POLL_MS);
-    return () => clearInterval(id);
-  }, [live, subscribed, refresh]);
-
-  // The ONE authority for "how far behind the wall clock is the picture":
-  // the football clock (use-overlay-clock.ts) subtracts it so a delayed goal
-  // and the clock advance land together (design §3.6).
-  return { data, live, subscribed, refresh, presentationNowOffsetMs: delayMs };
-}
 ```
 
-- [ ] **Step 4: Repoint `LiveScore`.** In `apps/web/src/components/public-site/live-score.tsx`, replace the import block `:8-27` and the state/effect body `:59-117` so the file reads (unchanged parts elided — Props `:32-50` and everything from `const inPlay` at `:118` down are untouched):
+  (d) Replace the return (`:102`) with `return { data, transport: subscribed ? "realtime" : "poll", presentationNowOffsetMs: delayMs };`. Nothing else in the file changes — `POLL_MS`, `live`, the subscribe effect (`:57-95`) and the poll effect are untouched. `MatchCentre`'s `const { data, transport } = useLiveFixture(fixtureId, initial, realtime);` (`match-centre.tsx:56`) compiles as-is.
 
-```tsx
-"use client";
-// Live scoreboard for the public match page (doc 09 §2). The subscribe-or-poll
-// transport moved to `./use-live-fixture` (stream overlay W1, R5) so this page
-// and the OBS overlay share one implementation; this component's Props, its
-// derivations and its entire render are unchanged by that move.
-import {
-  disciplineLabel,
-  disciplineList,
-  matchStrength,
-  periodBreakdown,
-  servingSide,
-  setBreakdown,
-  stripLiveSetPoints,
-} from "@/lib/public-site";
-import { type LiveFixtureData } from "./live-score-data";
-import { useLiveFixture } from "./use-live-fixture";
-import {
-  renderDecidedOutcome,
-  shootoutScoreFromDetail,
-  type DecidedOutcomeTemplates,
-} from "@/lib/scoring-vocab";
+- [ ] **Step 4: Run — expect PASS, including every untouched witness.** `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/stream-overlay/apps/web && npx vitest run src/components/public-site --reporter=json --outputFile=/tmp/ovl-w1/t1-green.json; node -e "const r=require('/tmp/ovl-w1/t1-green.json');console.log(r.numPassedTests,r.numTotalTests,r.numFailedTests);console.log(r.testResults.filter(t=>t.status!=='passed').map(t=>t.name).join('\n'))"`
+  Expected: `numFailedTests: 0`; `use-live-fixture.test.ts` contributes 10; `live-score.test.tsx` (604 lines, SSR of `LiveScoreBody`), `match-centre.test.tsx`, `court-card.test.tsx` and the rest of `match-centre/__tests__` pass with ZERO edits. Then `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/stream-overlay && npx tsc --noEmit -p apps/web/tsconfig.json; echo "EXIT=$?"` → `EXIT=0` (the 3-arg caller against the widened result type is what tsc proves).
 
-export type { LiveFixtureData };
-```
+- [ ] **Step 5: Mutation checks (d) and (q), each named.**
+  (d) In the poll effect change `if (!live || subscribed) return;` to `if (subscribed) return;`. Re-run Step 2's command. Expected red: the file's own `never arms a poll timer when the fixture is already decided at mount` — `fetchLiveFixture` called. Restore.
+  (q) In `refresh` delete the `try/catch` so a rejected fetch throws. Expected red: the file's own `a failed poll fetch keeps the last known data — never throws to the UI`. Restore and re-run to green. Record both with their killers in the PR inventory.
 
-and the body opener:
-
-```tsx
-export function LiveScore({
-  fixtureId,
-  initial,
-  realtime,
-  entrantNames,
-  sportKey,
-  decidedTemplates,
-}: Props) {
-  const { data, subscribed } = useLiveFixture(fixtureId, initial, realtime);
-
-  const inPlay = data.status === "in_play";
-```
-
-  Deletions: the `useCallback, useEffect, useState` import from `react`, the `fetchLiveFixture` / `fetchPublicRealtimeToken` imports, `const POLL_MS = 15_000;` (`:29`), and the whole `:59-117` block (`useState`, `refresh`, `live`, both effects).
-
-- [ ] **Step 5: Run — expect PASS, including the untouched regression witnesses.** `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/stream-overlay/apps/web && npx vitest run src/components/public-site --reporter=json --outputFile=/tmp/ovl-w1/t1-green.json`
-  Expected: `numFailedTests: 0`; `use-live-fixture.test.tsx` contributes 10 tests (Step 1's six plus Step 2a's four); `live-score.test.tsx` and `live-score-data.test.ts` pass with ZERO edits. Confirm every `.testResults[].name` starts with `/Users/ashokhein/github/seazn.club/.claude/worktrees/stream-overlay/apps/web/src/components/public-site/`.
-
-- [ ] **Step 6: Mutation check (d) — delete the poll guard.** Temporarily change `if (!live || subscribed) return;` to `if (subscribed) return;` in `use-live-fixture.ts`, re-run Step 5's command. Expected red: `never arms a poll for a fixture that is already decided at mount` — `expected 1 to be 0`. Restore the guard and re-run to green. Record "mutant (d) killed by use-live-fixture.test.tsx › never arms a poll…" in the PR inventory.
-
-- [ ] **Step 7: Commit.**
-  `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/stream-overlay && /usr/bin/git add apps/web/src/components/public-site/use-live-fixture.ts apps/web/src/components/public-site/__tests__/use-live-fixture.test.tsx apps/web/src/components/public-site/live-score.tsx`
+- [ ] **Step 6: Commit.**
+  `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/stream-overlay && /usr/bin/git add apps/web/src/components/public-site/match-centre/use-live-fixture.ts apps/web/src/components/public-site/match-centre/__tests__/use-live-fixture.test.ts`
   then
-  `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/stream-overlay && /usr/bin/git commit -m "overlay(transport): lift LiveScore's subscribe-or-poll into useLiveFixture" -m "One transport for the public match page and the OBS overlay (R5). LiveScore's Props and render are untouched; live-score.test.tsx is the unedited regression witness." -m "Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>" -m "Claude-Session: https://claude.ai/code/session_01LJGBoVPAWczYB9c45TD1aw"`
+  `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/stream-overlay && /usr/bin/git commit -m "overlay(transport): useLiveFixture takes a fetcher and a presentation delay" -m "Spectator W1 already extracted the transport; this widens it in place — a fetcher option so the overlay polls its own endpoint, a delayMs buffer with the presentation offset on the result. Every existing caller is a three-argument call and byte-identical; the hook's own five tests are the witness." -m "Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>" -m "Claude-Session: https://claude.ai/code/session_01LJGBoVPAWczYB9c45TD1aw"`
 
 ---
 
@@ -1365,7 +1066,7 @@ export function LiveScore({
 
 > **Three deviations from the wave prompt's scope 2, each recorded as a finding:**
 > 1. `msg` is typed `OverlayMsg` (a plain `string` key), not `MsgFn` (`scoring-vocab.ts:1147`). `MsgFn`'s key type is `MessageKey = keyof typeof messages` (`lib/messages.ts:12`), and `messages` is `dictionaries/en/ui.json` — the overlay's copy is the `public` namespace, so every `overlay.*` key would fail to type-check against `MsgFn`. `OverlayMsg` is structurally a supertype, so a real `MsgFn` is still assignable.
-> 2. `overlayModel` also takes `decidedTemplates`. The decided sentence's one authority is `renderDecidedOutcome` (`scoring-vocab.ts:1345`), whose templates are built from **ui** keys (`fixture.decidedBy.*`) — exactly what `LiveScore` already receives as a prop. Re-implementing that sentence off `summary.headline` would be a second authority for a fact this repo already owns.
+> 2. `overlayModel` also takes `decidedTemplates`. The decided sentence's one authority is `renderDecidedOutcome` (`scoring-vocab.ts:1345`), whose templates are built from **ui** keys (`fixture.decidedBy.*`) — exactly what `MatchCentre` → `LiveScoreBody` already receive as a prop. Re-implementing that sentence off `summary.headline` would be a second authority for a fact this repo already owns.
 > 3. `startLabel: string | null` stays a formatted string on the input rather than the model computing it: `overlayModel` takes no zone and no `Intl`, so it stays pure and locale-free. What CHANGED with owner answer 12 is where the string comes from — `overlayStartLabel(iso, locale, venueTz)` in this same file, called by the overlay page with the `venueTz` Task 0 puts on the payload. One formatter, tested here, instead of an `Intl.DateTimeFormat` literal inlined in `page.tsx`.
 >
 > **Owner answer 12 (2026-09-06) closed the two W1 deviations and the unpinned clock that used to sit here.** Deviation 4 ("start time formats in UTC") and deviation 6 ("chase reads 'Need 45', not 'Need 45 off 45'") are both closed by Task 0, and so is "football's clock is unpinned". Their replacements: the start label formats in `venueTz`, the chase line renders `overlay.chase.needBalls`, and `header.clock` is the STAGE's ticking value handed in as `clockLabel` (amended 2026-09-07: the anchor rides the overlay endpoint, `useOverlayClock` advances it — Task 5 Step 8a — and this pure model only places the string). Nothing in this task may fall back to UTC, to a runs-only chase line, or read a clock off the summary.
@@ -2062,7 +1763,7 @@ export interface OverlayModelInput {
   clockLabel: string | null;
   msg: OverlayMsg;
   /** The decided sentence's templates — `fixture.decidedBy.*`, the `ui`
-   *  namespace — resolved server-side exactly as `LiveScore` receives them. */
+   *  namespace — resolved server-side exactly as `LiveScoreBody` receives them. */
   decidedTemplates: DecidedOutcomeTemplates;
 }
 
@@ -2925,7 +2626,7 @@ on conflict (plan_key, feature_key) do update
 - Unit: `theme-registry.test.ts` (with the probe registry), `cookie-consent-overlay-segment.test.tsx`, `use-overlay-clock.test.ts` (six), `overlay-dict-coverage.test.ts`, the T1 contrast sweep re-run after Step 10's role audit.
 - E2E: `stream-overlay.spec.ts` › transparent body, seeded score, style/lang from the URL, unknown style → sport default, banner absent + zero cookies, tick on the changed side only (Task 8 Step 1).
 - Smoke: `streamOverlaySuite` › overlay 200 body contains `ovl-root` (Task 8 Step 6).
-- Regression: the WHOLE `mobile.spec.ts` at seven widths (the cookie-consent edit touches every page); `LiveScore` untouched; the built CSS shows ONE Barlow mount (Step 12).
+- Regression: the WHOLE `mobile.spec.ts` at seven widths (the cookie-consent edit touches every page); `LiveScoreBody` / `MatchCentre` untouched; the built CSS shows ONE Barlow mount (Step 12).
 - Checklist rows: "Pin the VALUE a control opens at" (the clock opens at the anchor, `12:41`, not merely rendered); "Derive expected values" (contrast from `OVERLAY_TOKENS`); mutants (e) (f) (k) (l) (m) (n) (j2) (j3) — Self-review table.
 
 - [ ] **Step 1: Write the failing dictionary-coverage test.** Create `apps/web/src/lib/__tests__/overlay-dict-coverage.test.ts`:
@@ -3712,7 +3413,7 @@ export default async function OverlayPage({
 // COMPONENT at a smaller scale rather than a picture of it.
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { sportThemeAttr, sportThemeStyle } from "@/components/v2/scorepad/v3/sport-theme";
-import { useLiveFixture } from "@/components/public-site/use-live-fixture";
+import { useLiveFixture } from "@/components/public-site/match-centre/use-live-fixture";
 import { fetchOverlayFixture, type OverlayLiveData } from "@/components/public-site/live-score-data";
 import { overlayModel, type OverlayModel, type OverlaySideInput } from "@/lib/overlay-model";
 import { useOverlayClock } from "./use-overlay-clock";
@@ -3759,7 +3460,7 @@ function usePrevious<T>(value: T): T | undefined {
 
 export function OverlayStage(props: OverlayStageProps) {
   // One transport, two payloads (Task 1): the overlay endpoint is this
-  // stage's fetcher; `LiveScore` keeps the public JSON. `presentationNowOffsetMs`
+  // stage's fetcher; `MatchCentre` keeps the public JSON. `presentationNowOffsetMs`
   // is 0 until R2 passes `delayMs` — the clock subtracts it either way.
   const { data, presentationNowOffsetMs } = useLiveFixture(props.fixtureId, props.initial, props.realtime, {
     fetcher: fetchOverlayFixture,
@@ -3846,7 +3547,9 @@ export function OverlayStage(props: OverlayStageProps) {
 // goal and the clock land together (R2's alignment, unit-level here).
 //
 // `environment: "node"` — driven through renderIsland with setInterval and
-// Date.now stubbed, the idiom live-score.test.tsx and use-live-fixture.test.tsx use.
+// Date.now stubbed. The hook's own test (match-centre/__tests__/use-live-fixture.test.ts)
+// uses vi.useFakeTimers; a 1 Hz clock is easier to witness by capturing the
+// callback, so this file keeps the captured-setInterval form on purpose.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { renderIsland } from "@/components/__tests__/_hook-harness";
 import { useOverlayClock } from "../use-overlay-clock";
@@ -4823,7 +4526,7 @@ describe("the stream toggle opens at EVERY fixture status (owner Q6: the replay 
 ### Task 7: The public match page link
 
 **Files:**
-- Modify: `apps/web/src/app/(public)/shared/[orgSlug]/[competitionSlug]/[divisionSlug]/fixtures/[fixtureId]/page.tsx` — insert above the `<LiveScore>` mount (`:175-182`)
+- Modify: `apps/web/src/app/(public)/shared/[orgSlug]/[competitionSlug]/[divisionSlug]/fixtures/[fixtureId]/page.tsx` — insert above the `<MatchCentre` mount (`grep -a -n "<MatchCentre"` in the page; the `<LiveScore>` mount is gone since spectator W1 #743 (re-pinned 2026-09-08 @ 60c0615b0))
 
 **Interfaces:**
 - Consumes: `fixture.stream_url: string | null` (Task 3), `fixture.status: string`, `getDictionary(locale, "public")` + `t(dict, key)` — the page already resolves `org.default_locale` and holds a `msgFn` for the `ui` namespace (`:23-24`), so the two `public.overlay.*` labels need the `public` dict, loaded the same way `news/[postSlug]/page.tsx:62` does.
@@ -4864,12 +4567,12 @@ describe("the stream toggle opens at EVERY fixture status (owner Q6: the replay 
   });
 ```
 
-> **Recorded hand-off (the wave prompt asks for this decision explicitly):** the "Watch live" → "Replay" flip cannot happen without a reload on the current page. `LiveScore` owns the only live-updating region and its `LiveFixtureData` carries `status/summary/outcome` — not `stream_url` — so the label is a server render. Widening the client payload for a label is spectator W1's composition work (spec §7 already says that programme moves this link into its court header). The test reloads and says so.
+> **Recorded hand-off (the wave prompt asks for this decision explicitly):** the "Watch live" → "Replay" flip cannot happen without a reload on the current page. `MatchCentre` (via `useLiveFixture`) owns the only live-updating region and its `LiveFixtureData` carries `status/summary/outcome/match_centre` — not `stream_url` — so the label is a server render. Widening the client payload for a label is spectator W1's composition work (spec §7 already says that programme moves this link into its court header). The test reloads and says so.
 
 - [ ] **Step 2: Run it — expect red.** `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/stream-overlay/apps/web && PLAYWRIGHT_BASE=<ovl base> E2E_PROD_TARGET=1 npx playwright test e2e/walkthrough/stream-overlay.spec.ts --project=walkthrough -x`
   Expected red: `Error: expect(locator).toBeVisible() failed … waiting for getByTestId('public-stream-link')` — the anchor does not exist yet.
 
-- [ ] **Step 3: Render the link.** In the public fixture page, add to the imports `import { getDictionary, t } from "@/lib/i18n";`, resolve the dict beside the existing locale work (`const publicDict = await getDictionary(locale, "public");`), and insert immediately above the `<LiveScore …>` mount (`:175`):
+- [ ] **Step 3: Render the link.** In the public fixture page, add to the imports `import { getDictionary, t } from "@/lib/i18n";`, resolve the dict beside the existing locale work (`const publicDict = await getDictionary(locale, "public");`), and insert immediately above the `<MatchCentre …>` mount (grep it; the file was rewritten by spectator W1 (re-pinned 2026-09-08 @ 60c0615b0)):
 
 ```tsx
       {/* The club's own broadcast (stream overlay W1). Placement only —
@@ -4917,7 +4620,7 @@ describe("the stream toggle opens at EVERY fixture status (owner Q6: the replay 
 
 **Files:**
 - Create: `apps/web/e2e/walkthrough/stream-overlay.spec.ts`
-- Modify: `apps/web/src/lib/__tests__/e2e-ci-wiring.test.ts` — `WALKTHROUGH_SPECS` gains `"stream-overlay.spec.ts"` under a `// Streaming — the OBS overlay, end to end.` comment (re-pinned 2026-09-07 @ fb99bbd4c: the list EXISTS; edited HERE, in Step 1's commit, not post-rebase)
+- Modify: `apps/web/src/lib/__tests__/e2e-ci-wiring.test.ts` — `WALKTHROUGH_SPECS` gains `"stream-overlay.spec.ts"` under a `// Streaming — the OBS overlay, end to end.` comment, placed AFTER the two spectator entries `"spectator-public-2.spec.ts"`, `"spectator-public.spec.ts"` that landed at `:274-275` with #743 (re-pinned 2026-09-08 @ 60c0615b0) — the list EXISTS (`:155`); edited HERE, in Step 1's commit, not post-rebase; groups are in programme order, not alphabetical (recurring class 18)
 - Modify: `apps/web/e2e/visual/seeds.ts` — ONE seed kind, `overlay-fixture` (Step 8a)
 - Modify: `apps/web/e2e/visual/manifest.json` — the `overlay` and `console-panel` groups (Step 8b)
 - Modify: `scripts/smoke.ts` — a new `streamOverlaySuite`, called beside `await scorePadV2AppendSuite(admin, org2.id);` (`:818` @ b2244879f; grep the call, the file moves every wave)
@@ -4956,7 +4659,7 @@ import {
   invalidateOrgEntitlements,
   setBoolEntitlementOverrideSql,
 } from "../helpers";
-import { POLL_MS } from "../../src/components/public-site/use-live-fixture";
+import { POLL_MS } from "../../src/components/public-site/match-centre/use-live-fixture";
 
 const TAG = `ovl${Math.random().toString(36).slice(2, 7)}`;
 const KEY = "streaming.overlay";
@@ -5508,7 +5211,7 @@ async function overlayFixture(page: Page): Promise<Record<string, string>> {
 | Spec §3 Theme (`sportThemeStyle`, seven tokens, `.ovl-*`) / `_THEMES.md` §1–§4 | 5 |
 | Spec §4 Data (V400, view, `PublicFixture`, `PUT /stream`, OpenAPI) / prompt scope 3 | 3 |
 | Design §3.2 — the overlay endpoint, `OverlayLiveData` verbatim, fold cached on `last_seq`, zero engine edits (owner answers 12, 19; Q15 closed) | 0 (Steps 5–13), 1 (the generic fetcher), 8 (the endpoint e2e case) |
-| Design §3.3 — `useLiveFixture` generic over `{ fetcher, delayMs? }`, `presentationNowOffsetMs`, `LiveScore` byte-identical | 1 (Steps 1, 2a, 3, 4, 5) |
+| Design §3.3 — `useLiveFixture` generic over `{ fetcher, delayMs? }`, `presentationNowOffsetMs`, every 3-arg caller (`MatchCentre`) byte-identical | 1 (Steps 1–5, re-pinned 2026-09-08: the hook is widened in place) |
 | Design §5.1 / §5.3 — both keys `false` on five plans (V401); the Phone tab reads the gate from PR1 (D-W1-1) | 4, 6 (Step 3b) |
 | Design §4.2 / T1b — this wave adds manifest rows and one seed kind, never harness code | 8 (Steps 8a, 8b, 9) |
 | Spec §5 Entitlement (`streaming.overlay`, no plan, override row) / prompt scope 4 | 4 |
@@ -5520,7 +5223,7 @@ async function overlayFixture(page: Page): Promise<Record<string, string>> {
 | Spec "Tests" — Unit | 0, 1, 2, 3, 4, 5 |
 | Spec "Tests" — E2E | 8 (with 7's block) |
 | Spec "Tests" — Smoke | 8 |
-| Spec "Tests" — Regression (`LiveScore` unchanged, `mobile.spec.ts`, gen diffs) | 1, 8 (Steps 5, 11) |
+| Spec "Tests" — Regression (the hook's own five cases, `live-score.test.tsx` (SSR of `LiveScoreBody`) and `match-centre.test.tsx` unchanged; `mobile.spec.ts`; gen diffs) | 1 (Step 4), 8 (Step 11) |
 | Spec "Tests" — Visual gate (T1b manifest rows: bar + bug × four sports × light + dark, "—", 404; panel 320/768/1280/320 @ 125 % with control-set-equal) | 8 (Steps 8–9) |
 | Prompt scope 1 Hook extraction | 1 |
 | Prompt scope 8 i18n (four locales, gen-keys, derived coverage test) | 5, 6 |
@@ -5543,7 +5246,7 @@ async function overlayFixture(page: Page): Promise<Record<string, string>> {
 | a | `stream-url.ts`: `return ALLOWED.has(url.hostname)` → `return true` | `stream-url.test.ts` › `rejects https://evil.example/www.youtube.com — an allowed host in the PATH is not the host` (and the other nine rejections) |
 | b | `overlay-model.ts` `ledEntrantId`: swap the serving branch's two side ids | `overlay-model.test.ts` › `tennis: the LED and the serve dot follow the server` |
 | c | `overlay-model.ts` `cellsOf`: `if (breakdown) return [];` | `overlay-model.test.ts` › `badminton renders one cell per game, in order, home–away` |
-| d | `use-live-fixture.ts`: `if (!live || subscribed) return;` → `if (subscribed) return;` | `use-live-fixture.test.tsx` › `never arms a poll for a fixture that is already decided at mount` |
+| d | `match-centre/use-live-fixture.ts`: `if (!live || subscribed) return;` → `if (subscribed) return;` | `match-centre/__tests__/use-live-fixture.test.ts` › `never arms a poll timer when the fixture is already decided at mount` (the file's own case) |
 | e | `overlay/.../page.tsx`: delete the `hasFeature` guard | `stream-overlay.spec.ts` › `the entitlement gate opens and closes the route, in both directions` (e2e only — no unit can see it) |
 | f | `overlay-bar.tsx`: remove ` ovl-tick` from the score `className` | `stream-overlay.spec.ts` › `a new event changes the score in place, ticks only the side that moved, and never navigates` |
 | l | `theme-registry.ts` `resolveThemeFrom`: delete the `sports` filter — `if (requested && suits(requested, sportKey))` → `if (requested)` | `theme-registry.test.ts` › `falls back when the requested theme does not list the fixture's sport` — `expected 'bar' to be 'bug'`. **Only the PROBE registry can kill this**: both shipped themes are `sports: "all"`, so a test written against `OVERLAY_THEMES` alone would survive the mutation. A surviving (l) means the probe is wrong, not the code (Task 5 Step 6d) |
@@ -5553,7 +5256,7 @@ async function overlayFixture(page: Page): Promise<Record<string, string>> {
 | extra | `entitlement-domains.ts`: add `"streaming.overlay"` to any section | `entitlement-streaming-overlay.test.ts` › `is in NO ENTITLEMENT_DOMAINS section` |
 | o | `run-sheet-row.tsx`: delete `streamingEntitled` from the toggle's condition (`canEdit && streamingEntitled` → `canEdit`) — design §10.2's ninth W1 mutant (review 2026-09-08 finding 34) | `run-sheet-row.test.tsx` › `is absent when the org is not entitled, on a DECIDED row` — `expected … not to contain 'data-testid="fixture-stream-toggle"'`; and `stream-overlay.spec.ts` › `a non-entitled org sees no stream toggle at all, and still sees the schedule one` (Task 6 Step 3a + Task 8) |
 | p | `run-sheet.tsx`: drop `streamingEntitled={streamingEntitled}` from the `settled` mount (`:428`) | `run-sheet-filters.test.tsx` › the mount-count case — `expected 2 to be 3`; and `stream-overlay.spec.ts` › `the panel opens on a DECIDED fixture in the settled lane` (Task 6 Step 4d, Task 8 Step 2b) |
-| q | `overlay-stage.tsx` / `use-live-fixture.ts`: remove the `try/catch` around the fetcher so a rejected poll throws | `use-live-fixture.test.tsx` › `a rejected fetch keeps the last known score and does not throw` (Task 1 Step 2a); and `stream-overlay.spec.ts` › `the overlay holds the last score through a dead endpoint` (Task 8 Step 2b — design §3.1 "resilience on air", review finding 33) |
+| q | `match-centre/use-live-fixture.ts`: remove the `try/catch` around the fetcher so a rejected poll throws | `match-centre/__tests__/use-live-fixture.test.ts` › `a failed poll fetch keeps the last known data — never throws to the UI` (the file's own case; Task 1 Step 5); and `stream-overlay.spec.ts` › `the overlay holds the last score through a dead endpoint` (Task 8 Step 2b — design §3.1 "resilience on air", review finding 33) |
 
 A surviving mutant is a missing test, not a note. Run each one, restore, and re-run to green before recording it.
 
@@ -5566,10 +5269,10 @@ A surviving mutant is a missing test, not a note. Run each one, restore, and re-
 5. **Barlow double-mount (watch-list 7).** Verified in Task 5 Step 12 by reading the built CSS and the network tab, not by assumption.
 6. **`V3_SKINS` = every `sport_key` a division can carry (watch-list 8).** Task 2's sweep asserts eleven keys; run `select distinct sport_key from divisions` on the ovl DB and diff before the PR — a division on a twelfth key would render the generic composition, which is a designed state but should be a KNOWN one.
 7. **CLOSED 2026-09-07 @ fb99bbd4c — `WALKTHROUGH_SPECS` exists** (`e2e-ci-wiring.test.ts:155`, on `main` since #723). Task 8 Step 1 registers `stream-overlay.spec.ts` in its own commit. The capture spec is retired in favour of T1b's manifest, so one name, not two.
-8. **CLOSED 2026-09-07 — the engine conflict no longer exists.** Was: Task 0 edits four engine files because the live transport carries only `{ status, summary, outcome }`. Now: the overlay ENDPOINT (design §3.2, owner Q16/Q15) projects the two numbers off the folded STATE `foldFixture` already returns, through the engine and changing no engine file; Task 1's hook is generic over its fetcher so the overlay polls that endpoint and `LiveScore` keeps the public JSON. The "second authority" objection that rejected the server-side graft on 2026-09-05 is answered by reading the engine's own state fields (`asOf`, `innings[].ballsLimit`) rather than re-deriving them, and by keeping `footballPosition`'s staleness guard verbatim in `clockOf`. `/usr/bin/git status --porcelain packages` is empty at every gate.
+8. **CLOSED 2026-09-07 — the engine conflict no longer exists.** Was: Task 0 edits four engine files because the live transport carries only `{ status, summary, outcome }`. Now: the overlay ENDPOINT (design §3.2, owner Q16/Q15) projects the two numbers off the folded STATE `foldFixture` already returns, through the engine and changing no engine file; Task 1's hook is generic over its fetcher so the overlay polls that endpoint and `MatchCentre` keeps the public JSON. The "second authority" objection that rejected the server-side graft on 2026-09-05 is answered by reading the engine's own state fields (`asOf`, `innings[].ballsLimit`) rather than re-deriving them, and by keeping `footballPosition`'s staleness guard verbatim in `clockOf`. `/usr/bin/git status --porcelain packages` is empty at every gate.
 8a. **FS13 (2026-09-07) — the design's RP3 pin was wrong; this plan's is right.** `grep -al public_fixtures_v db/migration/deltas/*.sql | sort -V | tail -1` → `V369__public_fixtures_round_role.sql:18` is the latest definer on `main`; the design's `V362:22` is the 2026-09-06 consolidation's stale scout pin. `_INDEX.md` records FS10 and the design's §13.2 row is corrected at PR1.
 8b. **Plan decision D-W1-1 (2026-09-07) — the Phone tab ships in W1 with its buy card DISABLED, not absent.** Design §3.8 says W1 ships the Phone tab "showing the upgrade or buy card and nothing else until R1"; a buy card whose buttons POST to a route that does not exist until R1 is an inert seam. So: no `streaming.relay` → `UpgradeGate` (real, tested); `streaming.relay` (override only, while dark) → the three pack tiles rendered `disabled` with `aria-disabled` and `ui.stream.phone.soon` copy in four locales, asserted disabled by the e2e. R1 removes the `disabled` and the copy in the same change that adds the checkout route. Reviewer: this is a designed state with a named owner, not a stub — if the owner would rather the tiles not render at all until R1, that is one prop.
 9. **Themes are a registry (owner answer 18 / Q7) — recorded so the review checks the ABSTRACTION, not just the two themes.** The claim W1 now makes is "a third theme is one registry entry plus one component". It is provable, and the reviewer should prove it rather than take it: add a throwaway third entry, confirm it appears in the panel's tabs and resolves on the route, and confirm that neither `page.tsx`, `overlay-stage.tsx` nor `fixture-stream-panel.tsx` needed an edit — then delete it. A registry nothing has ever been added to is a registry whose claim is untested. (The one honest caveat: the `ThemeId` union is declared in the registry file, so a third theme is two lines in ONE file, not one. That is deliberate — see the type's comment in Task 5 Step 6c — and it is still no edit outside the registry.)
 10. **The registry's `sports` filter has no production user on day one.** Both shipped themes are `sports: "all"`. Designed, not an oversight, but it means the filter's ONLY cover is the probe registry in `theme-registry.test.ts`. If a later wave deletes that probe as "redundant", mutant (l) stops being killable and the filter silently becomes decoration.
-11. **Conflicts with the wave prompt, listed for `_INDEX.md`:** the hook's return type (object, not bare `LiveFixtureData` — `LiveScore` renders `subscribed`); `OverlayMsg` instead of `MsgFn` (`MessageKey` is the `ui` catalog, the overlay's copy is `public`); `decidedTemplates` as a fourth model input (one authority for the decided sentence); `startLabel` formatted by the server; W2's plan names `apps/web/e2e/stream-overlay.spec.ts` while the W1 prompt's R9 puts it under `e2e/walkthrough/` — the W1 prompt wins and W2 re-pins. **And two the owner's later answers create, where the OWNER wins over both the prompt and the spec:** the wave prompt and the spec both describe `style=bar|bug` as a two-value query parameter with a per-sport default, which owner answer 18 (Q7) replaces with the registry; and R16's ten-host allowlist, which owner answer 16 (Q5) widens to eleven. Neither `_RULES.md` nor `W1-step-one.md` is edited by this plan — `_INDEX.md` records both supersessions at PR time.
+11. **Conflicts with the wave prompt, listed for `_INDEX.md`:** the hook's return type (spectator W1's `{ data, transport }` object widened with `presentationNowOffsetMs`, not the prompt's bare `LiveFixtureData` — `MatchCentre` reads `transport` (re-pinned 2026-09-08 @ 60c0615b0)); `OverlayMsg` instead of `MsgFn` (`MessageKey` is the `ui` catalog, the overlay's copy is `public`); `decidedTemplates` as a fourth model input (one authority for the decided sentence); `startLabel` formatted by the server; W2's plan names `apps/web/e2e/stream-overlay.spec.ts` while the W1 prompt's R9 puts it under `e2e/walkthrough/` — the W1 prompt wins and W2 re-pins. **And two the owner's later answers create, where the OWNER wins over both the prompt and the spec:** the wave prompt and the spec both describe `style=bar|bug` as a two-value query parameter with a per-sport default, which owner answer 18 (Q7) replaces with the registry; and R16's ten-host allowlist, which owner answer 16 (Q5) widens to eleven. Neither `_RULES.md` nor `W1-step-one.md` is edited by this plan — `_INDEX.md` records both supersessions at PR time.
 

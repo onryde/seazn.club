@@ -82,40 +82,31 @@ rulings 18–22 and the design §0/§13):
 Numbered in build order. Every `path:line` is from `_INDEX.md`'s tables unless
 marked (re-pinned), and is re-pinned before an edit regardless.
 
-1. **Hook extraction** — `apps/web/src/components/public-site/use-live-fixture.ts`,
-   `useLiveFixture(fixtureId, initial: LiveFixtureData, realtime: boolean):
-   LiveFixtureData`, lifted VERBATIM from `live-score.tsx:60-117` (`refresh`
-   `:60-66`, `live` `:68`, the realtime effect `:73-110` — token via
-   `fetchPublicRealtimeToken`, private channel, `state_changed`, 250 ms debounce —
-   the `POLL_MS` fallback effect `:112-117`; `POLL_MS` itself at `:29`).
-   `LiveScore` is repointed to the hook in the SAME commit, keeping `Props`
-   (`:32-50`) and its render untouched. `live-score.test.tsx:77-140` (three
-   cases: same instance polls a decided outcome; plain template when no
-   `method`; never arms a poll when decided at mount) stay green UNCHANGED —
-   they are the regression witness, not something to edit.
-   (re-pinned 2026-09-07 @ fb99bbd4c: `live-score.tsx:29` `POLL_MS`, `:69`
-   the `live`-includes-`scheduled` predicate, `:113-117` the poll effect —
-   verified.) New surface ONLY, per design §3.3: an options object
+1. **Hook generalisation** (re-pinned 2026-09-08 @ 60c0615b0) — spectator W1 (#743) already
+   extracted the transport to `apps/web/src/components/public-site/match-centre/
+   use-live-fixture.ts` (`POLL_MS` `:10`, `export function useLiveFixture(` `:17`,
+   `refresh` `:42` with a `mountedRef` guard, `live = in_play || scheduled` `:52`,
+   subscribe effect `:57-95`, poll effect `:96-100`, returns `{ data, transport }`
+   `:102`). There is NO lift. `live-score.tsx` now exports only the hookless
+   `LiveScoreBody`; the `LiveScore` wrapper is RETIRED and `MatchCentre`
+   (`match-centre/match-centre.tsx:56`) is the hook's one production caller.
+   W1 modifies the hook IN PLACE, per design §3.3: an options object
    `{ fetcher, delayMs? }` so the overlay polls ITS endpoint (scope 2b) while
-   `LiveScore` keeps `fetchLiveFixture`; and an exported
-   `presentationNowOffsetMs`. With `delayMs` absent the hook is byte-identical
-   in behaviour; `delayMs` buffers `(receivedAt, snapshot)` pairs and presents
-   the newest with `receivedAt ≤ now − delayMs` — built and unit-tested HERE
-   so R2's seam is real (its consumer arrives in R2; the unit proves the
-   buffer, never a fixture on both ends).
-2b. **Overlay endpoint** (Task 0's replacement, design §3.2 — VERBATIM
-   contract) — `apps/web/src/app/api/v1/public/fixtures/[id]/overlay/route.ts`
-   returning `OverlayLiveData { status, summary, outcome, lastSeq, venueTz,
-   clock?, cricket? }`: snapshot fields from the cached public fixture row
-   (one authority: `match_states`); `clock` and `cricket` projected from
-   `foldFixture(tx, id).state` (`server/engine-db/fold.ts:58`, return `:130`;
-   football `phase`/`periods`/`asOf` and cricket `legalBalls`/`ballsLimit`
-   are ALREADY in state — nothing in `packages/engine` is touched, Q15) inside
-   `unstable_cache` keyed on `last_seq` (fold ≤ 1× per ledger advance);
-   `venueTz = resolveVenueTz(schedule_settings.tz, org.timezone)`
-   (`lib/tz.ts:44`; Step 1 of Task 0 stands as written). Gate = view
-   visibility only (the same guard `publicFixture` uses); NO entitlement on
-   the endpoint — the PAGE gates. OpenAPI public document entry (R7).
+   `MatchCentre` keeps `fetchLiveFixture` (the default); and a
+   `presentationNowOffsetMs` FIELD on the returned `UseLiveFixtureResult<T>`
+   (design FS17). With options absent the hook is byte-identical; `delayMs`
+   buffers `(receivedAt, snapshot)` pairs and presents the newest with
+   `receivedAt ≤ now − delayMs` on a 1 s drain — built and unit-tested HERE
+   so the R2 seam is real. Witnesses: the hook's OWN five cases in
+   `match-centre/__tests__/use-live-fixture.test.ts` (`renderIsland` +
+   `vi.useFakeTimers` + module-mocked `fetchLiveFixture` — the file's
+   convention; SSR `renderToStaticMarkup` cannot drive effects), plus
+   `live-score.test.tsx` (SSR of `LiveScoreBody`) and `match-centre.test.tsx`,
+   all UNCHANGED and green. Five new cases: default fetcher hits the public
+   URL; `fetcher` is what the poll calls; no drain timer without options
+   (`vi.getTimerCount() === 1`) and offset 0; `delayMs: 3000` presents at
+   `t + 3000` with `presentationNowOffsetMs === 3000`; two snapshots drain in
+   order.
 2. **Projection** — `apps/web/src/lib/overlay-model.ts`, `overlayModel(input)` and
    `OverlayModel` exactly as spec §2 (`live, decided, header{context, clock?},
    sides[2]{short,name,big,sub?,led,serving}, cells[], detail[], chase?,
@@ -306,7 +297,7 @@ marked (re-pinned), and is re-pinned before an edit regardless.
    `console.json` is NOT the row's namespace. Finding closed.
 7. **Public match page link** — in
    `apps/web/src/app/(public)/shared/[orgSlug]/[competitionSlug]/[divisionSlug]/fixtures/[fixtureId]/page.tsx`,
-   under the headline block and above the `<LiveScore>` mount (`:175-182`):
+   under the headline block and above the `<MatchCentre>` mount (re-find it: `grep -a -n "<MatchCentre" …/fixtures/[fixtureId]/page.tsx`; the `<LiveScore>` mount is gone since #743 (re-pinned 2026-09-08 @ 60c0615b0)):
    when `fixture.stream_url` is set, `<a data-testid="public-stream-link"
    href={stream_url} target="_blank" rel="noopener">` labelled
    `public.overlay.watchLive` while `scheduled`/`in_play` and
@@ -333,7 +324,7 @@ sponsor logos, in-stream language switching (spec §"Out of scope").
 The scorepad and its skins (`components/v2/scorepad/**` — read `sport-theme.ts`,
 import from it, never edit it); the engine; `components/v2/fixture-console.tsx`
 (R12 — wrong console); the entitlement MATRIX rows of other keys and every
-pricing surface; `ENTITLEMENT_DOMAINS`; `LiveScore`'s render and `Props`; the
+pricing surface; `ENTITLEMENT_DOMAINS`; `LiveScoreBody`'s render and props, `MatchCentre` and the hook's subscribe effect (re-pinned 2026-09-08 @ 60c0615b0); the
 public page's composition beyond the one link; `proxy.ts` CSP; `app/embed/**`
 and `app/slideshow/**`; `.github/workflows/e2e.yml`; `stages-panel.tsx` (no
 longer the mount — re-pinned 2026-09-07 @ fb99bbd4c; import
@@ -375,16 +366,16 @@ changes).
     to the fold's state; the fold spy is called ≤ 1× per `last_seq` across
     three polls (the cache key), and EXACTLY once more after one new event
     (the positive pair).
-  - `components/public-site/__tests__/use-live-fixture.test.tsx` with
-    `renderIsland` (`components/__tests__/_hook-harness.tsx`) and the captured
-    `setInterval` idiom (`live-score.test.tsx:37-40`): realtime off + in play →
+  - `components/public-site/match-centre/__tests__/use-live-fixture.test.ts` (re-pinned 2026-09-08 @ 60c0615b0) — append to the file's own
+    `renderIsland` + `vi.useFakeTimers` + module-mocked `fetchLiveFixture` convention (NOT a captured
+    `setInterval` — `live-score.test.tsx` is SSR-only now): realtime off + in play →
     one interval armed at `POLL_MS` and a fired tick replaces `data`; decided at
     mount → no interval armed; realtime on but token 403 → falls to the poll;
     subscribed → no poll; **`{ fetcher }` is what the poll calls** (a spy
     fetcher counts) and `{ delayMs: 3000 }` presents a snapshot received at `t`
     only at `t + 3000` with `presentationNowOffsetMs === 3000`, while
     `delayMs` absent is byte-identical to the no-option assertions (added
-    2026-09-07, design §3.3). `live-score.test.tsx` passes unchanged.
+    2026-09-07, design §3.3). The hook's five existing cases, `live-score.test.tsx` and `match-centre.test.tsx` pass unchanged.
   - Dictionary coverage test from scope 8.
   - **Mutation checks, per SURFACE, each recorded in the plan with the test that
     went red:** (a) delete the hostname `===` comparison in `streamUrlSchema`;
@@ -464,7 +455,7 @@ changes).
   needed); `PUT /api/v1/fixtures/<id>/stream` with a valid link → 200 and `GET
   /api/v1/public/fixtures/<id>` returns `stream_url` equal to it (the seam,
   driven end to end); an invalid host → 422.
-- **Regression**: `live-score.test.tsx` and `live-score-data.test.ts` unchanged
+- **Regression**: the hook's own five cases, `live-score.test.tsx`, `match-centre.test.tsx` and `live-score-data.test.ts` unchanged
   and green (poll interval, debounce, decided templates identical); the whole
   `mobile.spec.ts` file green with the new toggle folded in at all seven widths
   (the fixtures-tab cases at `:578,2715,2907,3096,3189` are the ones that will
@@ -510,7 +501,7 @@ EVERY rebase (a duplicate Flyway version survives a clean rebase).
 ## Dispatch notes (for the orchestrator)
 
 - Lanes that are provably disjoint and may run in parallel (re-pinned
-  2026-09-07): (A) scope 1 + 2 + 2b (`use-live-fixture.ts`, `live-score.tsx`,
+  2026-09-07): (A) scope 1 + 2 + 2b (`match-centre/use-live-fixture.ts` + its test,
   `overlay-model.ts`, the overlay endpoint, their tests); (B) scope 3 + 4
   (migrations, `stream-url.ts`, the route, usecase, schema, OpenAPI,
   entitlement rows). Scope 5 depends on A AND on T1 having landed; scope 6
