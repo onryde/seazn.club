@@ -58,16 +58,23 @@ describe("planImport golden (Jul3/01 §3)", () => {
   it("3 clubs × 4 teams × 11 players → expected plan stats + op kinds", () => {
     const plan = planImport(goldenRows(), { ...EMPTY, divisions: DIVISIONS }, CONFIG);
     expect(plan.issues).toEqual([]);
-    expect(plan.stats).toEqual({ clubs: 3, teams: 12, persons: 11, entrants: 12, rosters: 11 });
+    // `squads` matches `rosters` here and that is not a coincidence worth
+    // hiding: the eleven golden players each name a team, so each one is both
+    // a squad membership and an entrant-roster membership. The two counts
+    // diverge the moment a row omits its division — see the directory-only
+    // case below, where rosters is 0 and squads is not.
+    expect(plan.stats).toEqual({ clubs: 3, teams: 12, persons: 11, entrants: 12, rosters: 11, squads: 11 });
     const kinds = plan.ops.map((o) => o.kind);
     expect(kinds.filter((k) => k === "club.create")).toHaveLength(3);
     expect(kinds.filter((k) => k === "team.create")).toHaveLength(12);
     expect(kinds.filter((k) => k === "person.create")).toHaveLength(11);
     expect(kinds.filter((k) => k === "entrant.create")).toHaveLength(12);
     expect(kinds.filter((k) => k === "roster.add")).toHaveLength(11);
-    // ref-dependency bucket order (Jul3/01 §9)
+    expect(kinds.filter((k) => k === "squad.add")).toHaveLength(11);
+    // ref-dependency bucket order (Jul3/01 §9). `squad.add` sits after
+    // person.create because it resolves BOTH a team ref and a person ref.
     const order = ["club.create", "club.update", "team.create", "team.link",
-      "person.create", "entrant.create", "roster.add"];
+      "person.create", "squad.add", "entrant.create", "roster.add"];
     const seen = kinds.map((k) => order.indexOf(k));
     expect([...seen].sort((a, b) => a - b)).toEqual(seen);
   });
@@ -78,11 +85,114 @@ describe("planImport golden (Jul3/01 §3)", () => {
     const after = applyPlanToSnapshot(plan, { ...EMPTY, divisions: DIVISIONS });
     const replan = planImport(rows, after, CONFIG);
     expect(replan.ops).toEqual([]);
-    expect(replan.stats).toEqual({ clubs: 0, teams: 0, persons: 0, entrants: 0, rosters: 0 });
+    expect(replan.stats).toEqual({ clubs: 0, teams: 0, persons: 0, entrants: 0, rosters: 0, squads: 0 });
   });
 });
 
 describe("planImport rules (Jul3/01 §4)", () => {
+  it("a directory-only row (Club,Team,Player, NO division) still joins the player to the team's squad", () => {
+    // This file used to plan club.create + team.create + person.create and
+    // nothing joining the three, so the team's squad stayed empty: "Sync from
+    // team squad" pulled nothing, and enrolling that team seeded an empty
+    // roster (entrants.ts resolves a roster from request → copied entrant →
+    // the team's persistent squad, and the third arm had nothing to read).
+    const plan = planImport(
+      [row({ rowNo: 1, clubName: "Riverside", teamName: "Riverside U12", playerFullName: "Ada" })],
+      EMPTY,
+      CONFIG,
+    );
+    expect(plan.issues).toEqual([]);
+    expect(plan.stats.squads).toBe(1);
+    // No division on the row ⇒ no entrant and no entrant roster. The squad op
+    // is NOT a rename of roster.add; the two are different memberships.
+    expect(plan.stats.entrants).toBe(0);
+    expect(plan.stats.rosters).toBe(0);
+    const squad = plan.ops.find((o) => o.kind === "squad.add");
+    expect(squad, "no squad.add op planned for a Club,Team,Player row").toBeDefined();
+    const team = plan.ops.find((o) => o.kind === "team.create");
+    const person = plan.ops.find((o) => o.kind === "person.create");
+    // Pointed at THIS row's own team and person, not merely present.
+    expect(squad).toMatchObject({
+      team: { ref: (team as { ref: string }).ref },
+      person: { ref: (person as { ref: string }).ref },
+    });
+  });
+
+  it("carries the row's squad number and captain flag onto the squad membership", () => {
+    const plan = planImport(
+      [row({ rowNo: 1, teamName: "Riverside U12", playerFullName: "Ada", squadNumber: 7, isCaptain: true })],
+      EMPTY,
+      CONFIG,
+    );
+    expect(plan.ops.find((o) => o.kind === "squad.add")).toMatchObject({
+      after: { squadNumber: 7, isCaptain: true },
+    });
+  });
+
+  it("a validated division position lands on the squad membership as well as the roster", () => {
+    // One validation, two memberships. `team_members.default_position_key` is
+    // the squad's default; the entrant roster keeps its own copy. Deriving the
+    // squad's key from the SAME `positionKeys.find` hit is what stops the two
+    // drifting — and it is why the squad op carries a position at all despite
+    // a squad having no catalog of its own.
+    const plan = planImport(
+      [row({ rowNo: 1, teamName: "T", playerFullName: "A B", position: "GK", divisionSlug: "u12" })],
+      { ...EMPTY, divisions: DIVISIONS },
+      CONFIG,
+    );
+    expect(plan.issues).toEqual([]);
+    // normalised to the catalog key, not echoed back as typed
+    expect(plan.ops.find((o) => o.kind === "squad.add")).toMatchObject({
+      after: { positionKey: "gk" },
+    });
+    expect(plan.ops.find((o) => o.kind === "roster.add")).toMatchObject({
+      after: { positionKey: "gk" },
+    });
+  });
+
+  it("a position with no division is warned and left off the squad, not silently dropped", () => {
+    const plan = planImport(
+      [row({ rowNo: 1, teamName: "Riverside U12", playerFullName: "Ada", position: "gk" })],
+      EMPTY,
+      CONFIG,
+    );
+    // A warn, not an error: the row is still committable and the squad
+    // membership is still planned. Only the position is refused, because
+    // nothing here can say whether 'gk' is a football key or a typo.
+    expect(plan.issues).toEqual([
+      expect.objectContaining({
+        severity: "warn",
+        code: "POSITION_WITHOUT_DIVISION",
+        column: "position",
+        rowNo: 1,
+      }),
+    ]);
+    const squad = plan.ops.find((o) => o.kind === "squad.add");
+    expect(squad, "the warn must not cost the row its squad membership").toBeDefined();
+    expect((squad as { after: { positionKey?: string } }).after.positionKey).toBeUndefined();
+  });
+
+  it("a player already in the team's squad plans no squad.add", () => {
+    const snapshot: ImportSnapshot = {
+      ...EMPTY,
+      teams: [{ id: "t1", name: "Riverside U12", clubId: null, memberPersonIds: ["p1"] }],
+      persons: [{ id: "p1", fullName: "Ada", dob: null, externalRef: null }],
+    };
+    const plan = planImport(
+      [row({ rowNo: 1, teamName: "Riverside U12", playerFullName: "Ada" })],
+      snapshot,
+      CONFIG,
+    );
+    expect(plan.stats.squads).toBe(0);
+    expect(plan.ops.filter((o) => o.kind === "squad.add")).toEqual([]);
+  });
+
+  it("a row with a player but NO team plans no squad.add — there is no squad to join", () => {
+    const plan = planImport([row({ rowNo: 1, playerFullName: "Ada" })], EMPTY, CONFIG);
+    expect(plan.stats.squads).toBe(0);
+    expect(plan.ops.filter((o) => o.kind === "squad.add")).toEqual([]);
+  });
+
   it("club matches by external_ref before folded name", () => {
     const snapshot: ImportSnapshot = {
       ...EMPTY,
@@ -117,7 +227,7 @@ describe("planImport rules (Jul3/01 §4)", () => {
     const snapshot: ImportSnapshot = {
       ...EMPTY,
       clubs: [{ id: "c1", name: "Acme SC", shortName: null, externalRef: null }],
-      teams: [{ id: "t1", name: "U12", clubId: null }],
+      teams: [{ id: "t1", name: "U12", clubId: null, memberPersonIds: [] }],
     };
     const plan = planImport([row({ rowNo: 1, clubName: "Acme SC", teamName: "U12" })], snapshot, CONFIG);
     expect(plan.ops).toEqual([
@@ -284,7 +394,15 @@ export function applyPlanToSnapshot(
           id,
           name: op.after.name,
           clubId: op.after.club ? resolve(op.after.club) : null,
+          memberPersonIds: [],
         });
+        break;
+      }
+      case "squad.add": {
+        const teamId = resolve(op.team);
+        const personId = resolve(op.person);
+        const team = next.teams.find((t) => t.id === teamId);
+        if (team && !team.memberPersonIds.includes(personId)) team.memberPersonIds.push(personId);
         break;
       }
       case "team.link": {

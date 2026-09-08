@@ -3189,6 +3189,10 @@ export const ImportPreview = z.object({
       persons: z.number().int(),
       entrants: z.number().int(),
       rosters: z.number().int(),
+      /** W4: squad places written to `team_members`. Distinct from `rosters`,
+       *  which counts entrant-roster spots — a file with no Division column
+       *  has zero of those and a non-zero `squads`. */
+      squads: z.number().int(),
     }),
     issues: z.array(
       z.object({

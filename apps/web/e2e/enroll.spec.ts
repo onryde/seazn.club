@@ -43,6 +43,12 @@ test("enroll an existing team into a division via the UI", async ({ page }) => {
   await page.getByRole("button", { name: "Existing team" }).click();
   await page.getByRole("textbox", { name: "Search teams" }).fill(`Riverside U12 ${TAG}`);
   await page.getByText(`Riverside U12 ${TAG}`, { exact: true }).first().click();
+  // The enroll form reads the squad it is about to copy. The sibling test
+  // below drives the OTHER branch of this same element ("Team squad is
+  // empty"), so the two together pin both states rather than one.
+  await expect(page.getByTestId("squad-preview")).toContainText(
+    "Team squad: 1 player will be copied to this entry.",
+  );
   await page.getByRole("button", { name: /Enroll team/ }).click();
 
   // The team now appears as an entrant in the division table.
@@ -53,46 +59,48 @@ test("enroll an existing team into a division via the UI", async ({ page }) => {
   // badge, team has no own logo — the resolved logo map must fall through).
   await expect(cell.locator('img[src*="enroll-crest.png"]')).toBeVisible();
 
-  // Clubs W1 regression 2, REWRITTEN — the assertion here was
-  // `page.getByText(\`Ada \${TAG}\`)`, page-wide and unscoped, under a comment
-  // claiming "first-time enrollment seeded the roster from the team's squad".
-  // It never checked that. Read off the database after a failing run
-  // (competition-desk W3): every team this spec has ever created has ZERO
-  // `team_members` rows and its entrant ZERO `entrant_members` — in the runs
-  // where this passed as much as the ones where it failed. A CSV with no
-  // Division column plans `club.create`/`team.create`/`person.create` and
-  // nothing else (`executePlan`, imports.ts: `roster.add` writes
-  // `entrant_members` and needs an entrant; NOTHING in that file writes
-  // `team_members`), so there is no squad for enrollment to seed from and the
-  // roster is correctly empty.
+  // Clubs W1 regression 2: first-time enrollment seeds the entry's roster
+  // from the team's persistent squad.
   //
-  // What made the old assertion pass was the ADD-PLAYER SUGGESTIONS below the
-  // roster: `entrants-panel.tsx` renders `persons.filter(...).slice(0, 6)`,
-  // so with a small directory "+ Ada <TAG>" happened to be on screen and a
-  // page-wide `getByText` matched it. Add four more people to the org — which
-  // is all a neighbouring spec in the same shard has to do — and Ada falls off
-  // the six, and this test fails 40 lines from the thing it was really
-  // depending on. That is how it failed: the roster it names was empty either
-  // way.
+  // This assertion has been wrong twice, in opposite directions, and both
+  // are worth keeping in view. It began as a page-wide
+  // `getByText(\`Ada ${TAG}\`)` under a comment claiming it proved the seed;
+  // it did not. `entrants-panel.tsx` renders `persons.filter(...).slice(0, 6)`
+  // as ADD-PLAYER SUGGESTIONS in the same subtree as the roster, so with a
+  // small org directory "+ Ada <TAG>" was on screen and the page-wide probe
+  // matched it. Read off the database, every team this spec had ever made
+  // carried ZERO `team_members` rows — in the passing runs as much as the
+  // failing one. It failed the day a neighbouring spec in the same shard
+  // added four people and pushed Ada off the six.
   //
-  // So it now asserts what is actually true and load-bearing: the imported
-  // player reached the org directory and is REACHABLE for this entrant,
-  // found through the picker's own search rather than by hoping for a slot in
-  // a six-item list. Whether a directory-only import should also seed the
-  // TEAM's squad is a product question, and an open one — it is recorded for
-  // the owner rather than frozen here as either an expectation or a silent
-  // pass.
+  // It was then narrowed to "the player is REACHABLE through the picker",
+  // which was true but weaker than the product's own claim, because a
+  // directory-only import genuinely did not fill the squad — noted at the
+  // time as an open product question.
+  //
+  // The owner has since answered it: a `Club,Team,Player` row IS a statement
+  // about that team's squad, and the import now writes `team_members`. So the
+  // original claim is finally testable, and is asserted here properly scoped:
+  // inside the roster's own box, Ada is a MEMBER — and the differential that
+  // the old assertion lacked, `+ Ada` is NOT offered as a suggestion, because
+  // `candidates` filters out anyone already on the roster. One of those two
+  // can only be true if the seed really happened.
   await cell.getByRole("button", { name: new RegExp(`Riverside U12 ${TAG}`) }).click();
-  // One roster editor is open, so the picker's own input identifies it — a
-  // `filter({ hasText })` wrapper matched an inner div that does not contain
-  // the input and sat there to the test budget.
-  const find = page.getByPlaceholder("Find player…");
-  await expect(find, "the roster editor did not open").toBeVisible();
-  await find.fill(`Ada ${TAG}`);
+  const roster = page.getByTestId("entrant-roster");
+  await expect(roster, "the roster editor did not open").toBeVisible();
   await expect(
-    page.getByRole("button", { name: new RegExp(`Ada ${TAG}`) }),
-    "the imported player is not offered for this entrant's roster",
+    roster,
+    "enrollment left the entry with no roster — the team's squad was empty",
+  ).not.toContainText("No players on this roster.");
+  await expect(
+    roster.getByText(`Ada ${TAG}`, { exact: true }),
+    "the imported player is not ON the seeded roster",
   ).toBeVisible();
+  await expect(
+    roster.getByRole("button", { name: `+ Ada ${TAG}` }),
+    "Ada is still OFFERED for the roster, so she is not on it — this is the "
+      + "exact false pass the page-wide probe used to produce",
+  ).toHaveCount(0);
 });
 
 // Enrollment snapshots the squad ONCE; players added to the squad afterwards

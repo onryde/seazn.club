@@ -102,6 +102,7 @@ describe.skipIf(!HAS_DB)("bulk import (Jul3/01)", () => {
       persons: 6,
       entrants: 3,
       rosters: 6,
+      squads: 6,
     });
     expect(preview.mapping).toMatchObject({
       Club: "clubName",
@@ -120,13 +121,38 @@ describe.skipIf(!HAS_DB)("bulk import (Jul3/01)", () => {
       "City Rovers",
     ]);
     const [counts] = await sql<
-      { teams: number; persons: number; members: number }[]
+      { teams: number; persons: number; members: number; squad: number }[]
     >`
       select (select count(*)::int from teams where org_id = ${auth.orgId} and club_id is not null) as teams,
              (select count(*)::int from persons where org_id = ${auth.orgId}) as persons,
              (select count(*)::int from entrant_members em join entrants e on e.id = em.entrant_id
-              where e.org_id = ${auth.orgId}) as members`;
-    expect(counts).toEqual({ teams: 3, persons: 6, members: 6 });
+              where e.org_id = ${auth.orgId}) as members,
+             (select count(*)::int from team_members tm join teams t on t.id = tm.team_id
+              where t.org_id = ${auth.orgId}) as squad`;
+    // `squad` is the W4 addition: before it, an import wrote the entrant
+    // roster and left `team_members` empty, so the team a person belonged to
+    // was knowable only through the division they happened to be entered in.
+    expect(counts).toEqual({ teams: 3, persons: 6, members: 6, squad: 6 });
+    // Ada One is the only row in GOLDEN_CSV carrying a Position and a
+    // Captain flag; both must survive onto the squad membership, and the
+    // position must be the catalog key rather than the string as typed.
+    const [ada] = await sql<
+      {
+        squad_number: number | null;
+        default_position_key: string | null;
+        is_captain: boolean;
+      }[]
+    >`
+      select tm.squad_number, tm.default_position_key, tm.is_captain
+      from team_members tm
+      join teams t on t.id = tm.team_id
+      join persons p on p.id = tm.person_id
+      where t.org_id = ${auth.orgId} and p.full_name = 'Ada One'`;
+    expect(ada).toEqual({
+      squad_number: 1,
+      default_position_key: GK,
+      is_captain: true,
+    });
 
     // ledger row + intact hash chain
     const [ev] = await sql<{ type: string; broken: string | null }[]>`
@@ -499,6 +525,124 @@ describe.skipIf(!HAS_DB)("bulk import (Jul3/01)", () => {
     });
   });
 
+  it("a directory-only file (no Division) still fills the team squad", async () => {
+    const { auth } = await seedOrg();
+    await seedDivision(auth);
+    // No Division column at all. Before W4 this file produced a club, a team
+    // and two persons and then joined them to NOTHING: `team_members` stayed
+    // empty, so the squad the file plainly describes existed nowhere, and the
+    // roster editor had no members to offer when the team was later entered.
+    const csv = [
+      "Club,Team,Player,DOB,Number,Position,Captain",
+      `Acme SC,Acme U12,Ada One,2014-01-01,7,${GK},y`,
+      "Acme SC,Acme U12,Bo Two,2014-01-02,,,",
+    ].join("\n");
+    const preview = await createImport(auth, csvUpload(csv));
+    // Position IS given here and there is no division to validate it against,
+    // so it is warned and left off — a warn does not block the commit, and
+    // the squad membership is planned regardless.
+    expect(preview.plan.issues).toEqual([
+      expect.objectContaining({
+        severity: "warn",
+        code: "POSITION_WITHOUT_DIVISION",
+        column: "position",
+      }),
+    ]);
+    expect(preview.plan.stats.squads).toBe(2);
+    // no division named ⇒ no entrant, and so no entrant roster: the squad is
+    // the only place these two people land.
+    expect(preview.plan.stats.entrants).toBe(0);
+    expect(preview.plan.stats.rosters).toBe(0);
+
+    const result = await commitImport(auth, preview.importId, null);
+    expect(result.divisionIds).toEqual([]);
+
+    const squad = await sql<
+      {
+        person: string;
+        squad_number: number | null;
+        default_position_key: string | null;
+        is_captain: boolean;
+      }[]
+    >`
+      select p.full_name as person, tm.squad_number, tm.default_position_key,
+             tm.is_captain
+      from team_members tm
+      join teams t on t.id = tm.team_id
+      join persons p on p.id = tm.person_id
+      where t.org_id = ${auth.orgId} and t.name = 'Acme U12'
+      order by p.full_name`;
+    // The per-row attributes travel with the membership, not just the name —
+    // a squad.add that dropped them would still satisfy a bare count.
+    expect(squad).toEqual([
+      {
+        person: "Ada One",
+        squad_number: 7,
+        // null, NOT `GK`: no division on the row ⇒ nothing validated the
+        // column, and the warn above is where that went. The golden test
+        // proves the other half — with a Division, the validated key lands
+        // on `team_members.default_position_key`.
+        default_position_key: null,
+        is_captain: true,
+      },
+      {
+        person: "Bo Two",
+        squad_number: null,
+        default_position_key: null,
+        is_captain: false,
+      },
+    ]);
+    const [{ n }] = await sql<{ n: number }[]>`
+      select count(*)::int as n from entrant_members em
+      join entrants e on e.id = em.entrant_id where e.org_id = ${auth.orgId}`;
+    expect(n).toBe(0);
+
+    // re-uploading is a no-op: the snapshot carries the squad, so `squad.add`
+    // diffs to nothing rather than re-inserting behind `on conflict`.
+    const again = await createImport(auth, csvUpload(csv));
+    expect(again.plan.ops).toEqual([]);
+  });
+
+  it("a squad over teams.squad_max is rejected with featureKey teams.squad_max", async () => {
+    const { auth } = await seedOrg("community");
+    await seedDivision(auth);
+    // Derived from the catalog, never typed in: if the community squad cap
+    // moves, this file moves with it instead of asserting yesterday's number.
+    const cap = await getLimit(auth.orgId, "teams.squad_max");
+    // Thrown, not asserted, so the narrowing reaches the rest of the test: a
+    // null cap is "unlimited" and a 0 cap would make the boundary leg below
+    // vacuously green on an empty file.
+    if (typeof cap !== "number" || cap < 1) {
+      throw new Error(`teams.squad_max is not a positive cap here: ${cap}`);
+    }
+    const over = cap + 1;
+    const rows = Array.from(
+      { length: over },
+      (_, i) => `Acme U12,Player ${String(i).padStart(2, "0")}`,
+    );
+    const csv = ["Team,Player", ...rows].join("\n");
+    const preview = await createImport(auth, csvUpload(csv));
+    expect(preview.plan.issues).toEqual([]);
+    expect(preview.plan.stats.squads).toBe(over);
+    // The KEY is the assertion. `over` rows also has to clear import.bulk (50)
+    // and teams.max (1 team, cap 8) for this to be the squad cap talking, and
+    // naming the key is what pins that.
+    await expect(
+      commitImport(auth, preview.importId, null),
+    ).rejects.toMatchObject({ featureKey: "teams.squad_max" });
+    // refused before a single write — no team, no persons, no memberships
+    const [n] = await sql<{ teams: number; persons: number }[]>`
+      select (select count(*)::int from teams where org_id = ${auth.orgId}) as teams,
+             (select count(*)::int from persons where org_id = ${auth.orgId}) as persons`;
+    expect(n).toEqual({ teams: 0, persons: 0 });
+
+    // exactly at the cap commits — the boundary the refusal is measured from
+    const okCsv = ["Team,Player", ...rows.slice(0, cap)].join("\n");
+    const ok = await createImport(auth, csvUpload(okCsv));
+    const done = await commitImport(auth, ok.importId, null);
+    expect(done.stats.squads).toBe(cap);
+  });
+
   it("parses XLSX to the same plan as CSV (golden workbook)", async () => {
     const { auth } = await seedOrg();
     await seedDivision(auth);
@@ -528,6 +672,7 @@ describe.skipIf(!HAS_DB)("bulk import (Jul3/01)", () => {
       persons: 2,
       entrants: 1,
       rosters: 2,
+      squads: 2,
     });
     const person = preview.plan.ops.find((o) => o.kind === "person.create");
     expect(person).toMatchObject({ after: { dob: "2014-01-01" } });

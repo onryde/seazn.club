@@ -64,8 +64,13 @@ function pinSnapshot(snapshot: ImportSnapshot, pinDivisionId: string | null): Im
 async function fetchSnapshot(tx: Tx): Promise<ImportSnapshot> {
   const clubs = await tx<{ id: string; name: string; short_name: string | null; external_ref: string | null }[]>`
     select id, name, short_name, external_ref from clubs order by id`;
-  const teams = await tx<{ id: string; name: string; club_id: string | null }[]>`
-    select id, name, club_id from teams order by id`;
+  // `member_ids` mirrors the entrants query below: the planner needs each
+  // team's CURRENT squad to stay idempotent about `squad.add`.
+  const teams = await tx<{ id: string; name: string; club_id: string | null; member_ids: string[] }[]>`
+    select t.id, t.name, t.club_id,
+           coalesce((select array_agg(tm.person_id) from team_members tm
+                     where tm.team_id = t.id), '{}') as member_ids
+    from teams t order by t.id`;
   const persons = await tx<{ id: string; full_name: string; dob: string | null; external_ref: string | null }[]>`
     select id, full_name, dob::text as dob, external_ref from persons
      where merged_into is null order by id`;
@@ -85,7 +90,9 @@ async function fetchSnapshot(tx: Tx): Promise<ImportSnapshot> {
     clubs: clubs.map((c) => ({
       id: c.id, name: c.name, shortName: c.short_name, externalRef: c.external_ref,
     })),
-    teams: teams.map((t) => ({ id: t.id, name: t.name, clubId: t.club_id })),
+    teams: teams.map((t) => ({
+      id: t.id, name: t.name, clubId: t.club_id, memberPersonIds: t.member_ids,
+    })),
     persons: persons.map((p) => ({
       id: p.id, fullName: p.full_name, dob: p.dob, externalRef: p.external_ref,
     })),
@@ -317,6 +324,10 @@ export async function commitImport(
   const clubsHierarchy = await hasFeature(auth.orgId, "clubs.hierarchy");
   const clubCap = await getLimit(auth.orgId, "clubs.max");
   const teamCap = await getLimit(auth.orgId, "teams.max");
+  // `squad.add` writes `team_members`, the same table `setTeamMembers`
+  // (teams.ts) guards with this cap — so an import must answer to it too, or
+  // the import becomes the way around a paid limit.
+  const squadCap = await getLimit(auth.orgId, "teams.squad_max");
   // The per-file row cap, re-resolved for the COMMIT and not merely trusted
   // from `createImport`. An `imports` row carries only planned/committed and
   // no expiry, so a plan made under a bigger allowance stays committable
@@ -468,6 +479,29 @@ export async function commitImport(
       const [{ n }] = await tx<{ n: number }[]>`select count(*)::int as n from teams`;
       assertWithinLimit(teamCap, "teams.max", n + plannedTeams);
     }
+    // Per TEAM, not per file: the cap is a squad size. A team created by this
+    // same plan has no rows yet, so its existing count is 0 and only the
+    // planned additions count — hence the ref/id split rather than one query.
+    const plannedSquads = plan.ops.filter((op) => op.kind === "squad.add");
+    if (plannedSquads.length > 0) {
+      const byTeam = new Map<string, number>();
+      for (const op of plannedSquads) {
+        const k = "id" in op.team ? `id:${op.team.id}` : `ref:${op.team.ref}`;
+        byTeam.set(k, (byTeam.get(k) ?? 0) + 1);
+      }
+      const existingIds = [...byTeam.keys()].filter((k) => k.startsWith("id:")).map((k) => k.slice(3));
+      const existing = new Map<string, number>();
+      if (existingIds.length > 0) {
+        const rows = await tx<{ team_id: string; n: number }[]>`
+          select team_id, count(*)::int as n from team_members
+          where team_id in ${tx(existingIds)} group by team_id`;
+        for (const r of rows) existing.set(r.team_id, r.n);
+      }
+      for (const [k, planned] of byTeam) {
+        const already = k.startsWith("id:") ? (existing.get(k.slice(3)) ?? 0) : 0;
+        assertWithinLimit(squadCap, "teams.squad_max", already + planned);
+      }
+    }
 
     const divisionIds = await executePlan(tx, auth, plan.ops);
 
@@ -561,6 +595,20 @@ async function executePlan(tx: Tx, auth: AuthCtx, ops: ImportOp[]): Promise<stri
           returning id`;
         ids.set(op.ref, row!.id);
         divisionIds.add(op.divisionId);
+        break;
+      }
+      case "squad.add": {
+        // `on conflict do nothing` against team_members' own primary key
+        // (team_id, person_id) — the planner already skips a membership it
+        // can SEE in the snapshot, and this covers the one it cannot: two
+        // rows of the same file naming the same pair through different
+        // spellings that fold to one person.
+        await tx`
+          insert into team_members (team_id, person_id, squad_number,
+                                    default_position_key, is_captain)
+          values (${resolve(op.team)}, ${resolve(op.person)}, ${op.after.squadNumber ?? null},
+                  ${op.after.positionKey ?? null}, ${op.after.isCaptain})
+          on conflict (team_id, person_id) do nothing`;
         break;
       }
       case "roster.add": {

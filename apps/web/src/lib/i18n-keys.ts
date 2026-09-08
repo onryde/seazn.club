@@ -2321,6 +2321,7 @@ export type DictionaryKey =
   | "import.op.entrantCreate"
   | "import.op.personCreate"
   | "import.op.rosterAdd"
+  | "import.op.squadAdd"
   | "import.op.teamCreate"
   | "import.op.teamLink"
   | "import.preview"

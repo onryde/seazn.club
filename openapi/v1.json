@@ -68692,6 +68692,11 @@
                                   "type": "integer",
                                   "minimum": -9007199254740991,
                                   "maximum": 9007199254740991
+                                },
+                                "squads": {
+                                  "type": "integer",
+                                  "minimum": -9007199254740991,
+                                  "maximum": 9007199254740991
                                 }
                               },
                               "required": [
@@ -68699,7 +68704,8 @@
                                 "teams",
                                 "persons",
                                 "entrants",
-                                "rosters"
+                                "rosters",
+                                "squads"
                               ],
                               "additionalProperties": false
                             },
@@ -68779,7 +68785,8 @@
                         "teams": -9007199254740991,
                         "persons": -9007199254740991,
                         "entrants": -9007199254740991,
-                        "rosters": -9007199254740991
+                        "rosters": -9007199254740991,
+                        "squads": -9007199254740991
                       },
                       "issues": [
                         {
@@ -69176,6 +69183,11 @@
                                   "type": "integer",
                                   "minimum": -9007199254740991,
                                   "maximum": 9007199254740991
+                                },
+                                "squads": {
+                                  "type": "integer",
+                                  "minimum": -9007199254740991,
+                                  "maximum": 9007199254740991
                                 }
                               },
                               "required": [
@@ -69183,7 +69195,8 @@
                                 "teams",
                                 "persons",
                                 "entrants",
-                                "rosters"
+                                "rosters",
+                                "squads"
                               ],
                               "additionalProperties": false
                             },
@@ -69263,7 +69276,8 @@
                         "teams": -9007199254740991,
                         "persons": -9007199254740991,
                         "entrants": -9007199254740991,
-                        "rosters": -9007199254740991
+                        "rosters": -9007199254740991,
+                        "squads": -9007199254740991
                       },
                       "issues": [
                         {
@@ -69523,6 +69537,11 @@
                               "type": "integer",
                               "minimum": -9007199254740991,
                               "maximum": 9007199254740991
+                            },
+                            "squads": {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
                             }
                           },
                           "required": [
@@ -69530,7 +69549,8 @@
                             "teams",
                             "persons",
                             "entrants",
-                            "rosters"
+                            "rosters",
+                            "squads"
                           ],
                           "additionalProperties": false
                         },
@@ -69563,7 +69583,8 @@
                       "teams": -9007199254740991,
                       "persons": -9007199254740991,
                       "entrants": -9007199254740991,
-                      "rosters": -9007199254740991
+                      "rosters": -9007199254740991,
+                      "squads": -9007199254740991
                     },
                     "divisionIds": [
                       "example"
