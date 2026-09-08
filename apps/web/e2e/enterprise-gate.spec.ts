@@ -397,6 +397,20 @@ test.describe("the org settings billing upgrade grid", () => {
     const pro = await seedOrgOnPlan("pro");
     await signIn(page, pro.ownerEmail);
     await page.goto(`/o/${pro.orgSlug}/settings/billing`);
+
+    // Prove we are on the FULLY RENDERED billing page for THIS org before
+    // asserting anything is absent. `page.goto` does not throw on a non-2xx,
+    // and `requireBillingPage` (server/page-auth.ts) has a silent `notFound()`
+    // path — so a 404, a failed seed, or a blank render would ALSO leave
+    // `#upgrade` absent and pass the check below for the wrong reason. The
+    // "Current plan" card (`data-tour="billing-plan"`) is mounted
+    // unconditionally (no isPayer/guest branch above it in the page), and it
+    // names the resolved plan, so it also confirms this is the PRO org's own
+    // page, not merely a page.
+    const planCard = page.locator('[data-tour="billing-plan"]');
+    await expect(planCard, "billing page failed to render for the pro org").toBeVisible();
+    await expect(planCard, "must show the seeded org's own Pro plan").toContainText("Pro");
+
     await expect(
       page.locator("#upgrade"),
       "a non-lapsed paid org must not be sold a plan it already has",
@@ -404,6 +418,10 @@ test.describe("the org settings billing upgrade grid", () => {
 
     // The positive pair, on an independent org: without it, a build that
     // hid the grid from EVERYONE would pass the row above and look correct.
+    // No separate render-anchor is needed for this half: `toBeVisible()` is
+    // already self-anchoring — an element cannot be visible on a 404 or an
+    // empty render, so a false pass here isn't reachable the way it was for
+    // the absence check above.
     const community = await seedOrgOnPlan("community");
     await signIn(page, community.ownerEmail);
     await page.goto(`/o/${community.orgSlug}/settings/billing`);
