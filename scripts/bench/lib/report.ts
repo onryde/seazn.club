@@ -183,6 +183,14 @@ export const DivisionStartReport = z.object({
    *  refusal next to the checker's own verdict for the same board. */
   checkerClean: z.boolean().optional(),
   checkerFindingCount: z.number().int().optional(),
+  /** T2.5 review MINOR — set (`true`) INSTEAD of `checkerClean`/
+   *  `checkerFindingCount` when a `SCHEDULE_BLOCKING_CONFLICTS` refusal fires
+   *  but this division's own `scheduling[]` row carries no `.checker` at all
+   *  (the board fetch itself failed earlier in this SAME division's walk).
+   *  Without this, "the checker had nothing to say" and "the checker said
+   *  clean" were both just an absent `checkerClean` — D9's "report both
+   *  sides" silently degraded to one side that reads as agreement. */
+  checkerUnavailable: z.boolean().optional(),
   /** The division's status as RE-READ after a 200 — absent when no attempt
    *  ever returned 200. */
   confirmedStatus: z.string().optional(),

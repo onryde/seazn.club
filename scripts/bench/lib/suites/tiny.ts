@@ -2189,8 +2189,14 @@ export async function runTinySuite(
               ? {}
               : {
                   blockingConflicts: outcome.blockingConflicts.map(toDivisionStartConflictReport),
+                  // T2.5 review MINOR: an absent `schedRow.checker` (the
+                  // board fetch itself failed earlier in this division's own
+                  // walk) is reported EXPLICITLY as "nothing to compare",
+                  // never left to read the same as "the checker said clean" —
+                  // D9's "report both sides" needs a THIRD, honest state
+                  // between "clean" and "found something".
                   ...(schedRow?.checker === undefined
-                    ? {}
+                    ? { checkerUnavailable: true as const }
                     : {
                         checkerClean: schedRow.checker.clean,
                         checkerFindingCount: schedRow.checker.findings.length,
