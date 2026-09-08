@@ -722,3 +722,271 @@ export function comparePersonDivisionStat(
   const actualCount = row?.stats[metricKey];
   return { matched: actualCount === expectedCount, expectedCount, actualCount };
 }
+
+// ---------------------------------------------------------------------------
+// 7 — Discipline carry (B05 T5b-3)
+// ---------------------------------------------------------------------------
+// `expected.suspensions` (`PackExpectedSuspension` — `{divisionRef, person,
+// missesFixtureExtKeys, reason?}`) is the pack block this comparator reads.
+// It carried ZERO rows until T5b-3, so its oracle was a silence: nothing
+// compared, nothing able to fail.
+//
+// HOW A SUSPENSION ACTUALLY COMES ABOUT (pinned against the tree, not
+// assumed — `apps/web/src/server/usecases/discipline.ts`):
+//
+//   (a) AUTO. `detectSuspensions` re-folds the division's `score_events`
+//       through the sport module's `discipline` model on EVERY read of the
+//       discipline surfaces — recompute-on-read, idempotent. It needs a
+//       `discipline_rules` row with `enabled = true` (PUT
+//       `/divisions/{id}/discipline-rules`) AND a module that declares a card
+//       model. Rows land as `source: "auto_accumulation" | "auto_dismissal"`.
+//   (b) REPORT BRIDGE. `usecases/match-reports.ts:279-310` raises a row off a
+//       named incident in a submitted match report.
+//   (c) MANUAL. `POST /divisions/{id}/suspensions` -> `createManualSuspension`,
+//       `source: "manual"`.
+//
+// All three insert `status: 'pending'`. **None of them is a ban yet.** Only
+// `decideSuspension` (`PATCH /suspensions/{id}` `{kind:"confirm"}`) flips the
+// row to `active`, and only THERE are `entrant_id` and `decided_at` stamped —
+// which is what `updateServing` then counts fixtures against. A bench that
+// POSTed and stopped would be asserting against a row the product does not
+// treat as a ban at all. Every one of these paths is additionally gated on
+// the `discipline.enforced` entitlement (`requireFeature`).
+//
+// WHAT THIS COMPARATOR DOES **NOT** ASSERT, and why (T5b-3's brief expected
+// otherwise — recorded as a finding rather than built as an assertion).
+// The brief's black-box pair was "PUT `/fixtures/{id}/lineups/{entrantId}`
+// naming the suspended person 422s ELIGIBILITY_VIOLATION". It does not.
+// `putLineup` (`usecases/fixtures.ts:307-386`) calls `gateRosterEligibility`,
+// and neither that function nor `rosterIssues` beneath it reads the
+// `suspensions` table — `usecases/registration-eligibility.ts` contains the
+// string "suspen" ZERO times, and so does `usecases/fixtures.ts`. Every
+// reader of `suspensions` in the whole app is a DISPLAY surface
+// (`listSuspensions`, `activeSuspensionsByEntrant`, `suspensionsForFixture`'s
+// pad banner, `publicSuspensions`, `me.ts`'s own-bans strip) or a rebuild
+// guard (`stages.ts:1833`). Discipline in this product is ADVISORY: the ban
+// is recorded and shown, and nothing refuses the player a team sheet.
+//
+// So the two directions this comparator DOES assert are the ones the product
+// can actually answer, and it asserts both, because a one-sided check passes
+// against a product that refuses everybody:
+//   NEGATIVE — the banned person holds an ACTIVE suspension in this division,
+//     for a ban length equal to the number of fixtures the pack says she
+//     misses, stamped against her own entrant; and she is off the team sheet
+//     of every fixture the pack names.
+//   POSITIVE — the eligible team-mate holds NO active suspension, and IS on
+//     the team sheet of every one of that entrant's fixtures, the missed one
+//     INCLUDED. Same fixture, same route, opposite verdict.
+//
+// FIXTURE IDENTITY is `playedFixturesChecked`. "Banned from rr-r3-c1" and
+// "banned from everything" both satisfy "absent from rr-r3-c1", so the banned
+// player must ALSO be present on at least one fixture of the same entrant
+// that the pack does NOT name. A subject with no such fixture cannot pin the
+// identity, and this comparator reports that as unmatched rather than
+// counting the missing discriminator as a pass.
+
+/** `usecases/discipline.ts#Suspension`, the fields this file reads. */
+export interface SuspensionWire {
+  readonly id: string;
+  readonly divisionId: string;
+  readonly personId: string;
+  readonly personName: string;
+  readonly entrantId: string | null;
+  readonly status: string;
+  readonly source: string;
+  readonly reason: string;
+  readonly matchesTotal: number;
+  readonly matchesServed: number;
+}
+
+/** `usecases/fixtures.ts#readLineup`'s stored slot — snake_case on the wire,
+ *  unlike the discipline reads above, which is the product's own split. */
+export interface LineupSlotWire {
+  readonly person_id: string;
+  readonly full_name: string;
+}
+
+export interface LineupWire {
+  readonly fixture_id: string;
+  readonly entrant_id: string;
+  readonly slots: readonly LineupSlotWire[];
+}
+
+/** One fixture of the banned player's entrant, with the team sheet the
+ *  product actually stored for it. `missed` is the PACK's verdict — whether
+ *  `expected.suspensions[].missesFixtureExtKeys` names this fixture. */
+export interface SuspensionFixtureSheet {
+  readonly fixtureExtKey: string;
+  readonly fixtureId: string;
+  readonly missed: boolean;
+  readonly lineup: LineupWire;
+}
+
+/** Already resolved from pack refs to real ids by the caller — the same
+ *  convention every comparator in this file uses. */
+export interface ExpectedSuspension {
+  readonly personId: string;
+  readonly personName: string;
+  readonly divisionId: string;
+  readonly entrantId: string;
+  /** DERIVED — `missesFixtureExtKeys.length`. The pack does not declare a ban
+   *  length, deliberately: a hand-typed one could drift away from the list of
+   *  fixtures it is supposed to be the length of and still pass. */
+  readonly matchesTotal: number;
+  /** The eligible team-mate on the SAME entrant — the positive half. */
+  readonly controlPersonId: string;
+  readonly controlPersonName: string;
+}
+
+export interface SuspensionComparison {
+  readonly personId: string;
+  readonly personName: string;
+  /** An `active` suspension for this person, in this division, was found. */
+  readonly banFound: boolean;
+  readonly actualStatus: string | undefined;
+  readonly actualMatchesTotal: number | undefined;
+  readonly actualEntrantId: string | null | undefined;
+  readonly matchesTotalMatched: boolean;
+  readonly entrantMatched: boolean;
+  /** MISSED fixtures whose team sheet still names the banned player. */
+  readonly presentOnMissed: readonly string[];
+  /** PLAYED fixtures whose team sheet does NOT name the banned player — a ban
+   *  that reached too far. */
+  readonly absentOnPlayed: readonly string[];
+  /** The fixture-identity discriminator: how many of the entrant's fixtures
+   *  the pack does NOT name were available to check. Zero means the subject
+   *  cannot tell "banned from this fixture" from "banned from all of them". */
+  readonly playedFixturesChecked: number;
+  readonly missedFixturesChecked: number;
+  /** The eligible team-mate holds an active ban too — a product refusing
+   *  everybody. */
+  readonly controlBanned: boolean;
+  /** Fixtures (missed or played) whose team sheet omits the eligible
+   *  team-mate — the positive half failing. */
+  readonly controlMissingFrom: readonly string[];
+  readonly matched: boolean;
+}
+
+/**
+ * `actual` is the division's `?status=active` suspension list plus the team
+ * sheets of every fixture the banned player's entrant is a side of. An EMPTY
+ * `actual.active` against a non-empty `expected` produces `banFound: false`,
+ * never a vacuous pass — and `expected.length === 0` is NOT this function's
+ * problem to report: callers check the length themselves, exactly as
+ * `compareLeaderboard` and `compareCareerStats` document.
+ */
+export function compareSuspensions(
+  expected: readonly ExpectedSuspension[],
+  actual: {
+    readonly active: readonly SuspensionWire[];
+    readonly sheets: readonly SuspensionFixtureSheet[];
+  },
+): { readonly matched: boolean; readonly entries: readonly SuspensionComparison[] } {
+  const entries = expected.map((exp) => {
+    const row = actual.active.find(
+      (s) => s.personId === exp.personId && s.divisionId === exp.divisionId && s.status === "active",
+    );
+    const banFound = row !== undefined;
+    // Read off `row`, never re-derived from `banFound`: one place decides
+    // whether the ban was found, so the two cannot drift apart.
+    const matchesTotalMatched = row?.matchesTotal === exp.matchesTotal;
+    const entrantMatched = row?.entrantId === exp.entrantId;
+
+    const missed = actual.sheets.filter((f) => f.missed);
+    const played = actual.sheets.filter((f) => !f.missed);
+    const names = (sheet: SuspensionFixtureSheet, personId: string): boolean =>
+      sheet.lineup.slots.some((slot) => slot.person_id === personId);
+
+    const presentOnMissed = missed.filter((f) => names(f, exp.personId)).map((f) => f.fixtureExtKey);
+    const absentOnPlayed = played.filter((f) => !names(f, exp.personId)).map((f) => f.fixtureExtKey);
+    const controlMissingFrom = actual.sheets
+      .filter((f) => !names(f, exp.controlPersonId))
+      .map((f) => f.fixtureExtKey);
+    const controlBanned = actual.active.some(
+      (s) =>
+        s.personId === exp.controlPersonId &&
+        s.divisionId === exp.divisionId &&
+        s.status === "active",
+    );
+
+    return {
+      personId: exp.personId,
+      personName: exp.personName,
+      banFound,
+      actualStatus: row?.status,
+      actualMatchesTotal: row?.matchesTotal,
+      actualEntrantId: row?.entrantId,
+      matchesTotalMatched,
+      entrantMatched,
+      presentOnMissed,
+      absentOnPlayed,
+      playedFixturesChecked: played.length,
+      missedFixturesChecked: missed.length,
+      controlBanned,
+      controlMissingFrom,
+      matched:
+        banFound &&
+        matchesTotalMatched &&
+        entrantMatched &&
+        // Both counts guard a vacuous `every`/`filter`: no missed sheet means
+        // the ban was never actually witnessed, and no played sheet means the
+        // fixture identity is unpinned.
+        missed.length > 0 &&
+        played.length > 0 &&
+        presentOnMissed.length === 0 &&
+        absentOnPlayed.length === 0 &&
+        !controlBanned &&
+        controlMissingFrom.length === 0,
+    };
+  });
+  return { matched: entries.every((e) => e.matched), entries };
+}
+
+/** Why one subject failed, in the pack's own vocabulary. Returns `[]` for a
+ *  matched entry, so a caller can concatenate over every entry. */
+export function suspensionMismatchReasons(cmp: SuspensionComparison): string[] {
+  const out: string[] = [];
+  if (!cmp.banFound) {
+    out.push(
+      `no ACTIVE suspension for "${cmp.personName}" in this division` +
+        (cmp.actualStatus === undefined ? "" : ` (found status "${cmp.actualStatus}")`),
+    );
+    return out;
+  }
+  if (!cmp.matchesTotalMatched) {
+    out.push(
+      `ban length is ${cmp.actualMatchesTotal ?? "(absent)"}, but the pack names ` +
+        `a different number of missed fixtures`,
+    );
+  }
+  if (!cmp.entrantMatched) {
+    out.push(
+      `the confirmed ban is stamped against entrant ${cmp.actualEntrantId ?? "(none)"}, ` +
+        `not the entrant this person is rostered on`,
+    );
+  }
+  if (cmp.missedFixturesChecked === 0) {
+    out.push("no MISSED fixture sheet was read — the ban itself was never witnessed");
+  }
+  if (cmp.playedFixturesChecked === 0) {
+    out.push(
+      "no PLAYED fixture sheet was read — a ban from this fixture cannot be told apart " +
+        "from a ban from every fixture",
+    );
+  }
+  if (cmp.presentOnMissed.length > 0) {
+    out.push(`still named on the team sheet of ${cmp.presentOnMissed.join(", ")}`);
+  }
+  if (cmp.absentOnPlayed.length > 0) {
+    out.push(`missing from ${cmp.absentOnPlayed.join(", ")}, which the pack does NOT name`);
+  }
+  if (cmp.controlBanned) {
+    out.push("the ELIGIBLE team-mate holds an active ban too — the product refused everybody");
+  }
+  if (cmp.controlMissingFrom.length > 0) {
+    out.push(
+      `the ELIGIBLE team-mate is off the team sheet of ${cmp.controlMissingFrom.join(", ")}`,
+    );
+  }
+  return out;
+}

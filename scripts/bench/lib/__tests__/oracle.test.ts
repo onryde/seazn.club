@@ -49,6 +49,11 @@ import {
   standingsRankOrder,
   type DivisionPlayerStatsWire,
   type ExpectedCareerStat,
+  type ExpectedSuspension,
+  type SuspensionFixtureSheet,
+  type SuspensionWire,
+  compareSuspensions,
+  suspensionMismatchReasons,
   type ExpectedLeaderboardEntry,
   type ExpectedStandingsRow,
   type OracleTransport,
@@ -643,5 +648,227 @@ describe("D6 — a mis-transcribed scorer stays invisible to stage 0, but reds t
     // the very same mutated pack, and said so via its own warning.
     expect(runtimeCheck.matched).toBe(false);
     expect(runtimeCheck.entries.find((e) => e.personId === "p-bo")?.countMatched).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// B05 T5b-3 — compareSuspensions (discipline carry)
+// ---------------------------------------------------------------------------
+// Read `compareSuspensions`'s own header in oracle.ts first: it records WHY
+// this comparator does not assert a 422 on the lineup route. It cannot —
+// `putLineup` never reads the `suspensions` table, so a suspended player is
+// accepted onto a team sheet by this product. What is asserted instead is the
+// pair the product CAN answer, in both directions.
+
+const SUS_DIVISION = "div-tiebreak";
+const SUS_ENTRANT = "ent-foxtrot";
+const BANNED = "person-hotel";
+const CONTROL = "person-foxtrot";
+
+function sheet(
+  fixtureExtKey: string,
+  missed: boolean,
+  personIds: readonly string[],
+): SuspensionFixtureSheet {
+  return {
+    fixtureExtKey,
+    fixtureId: `fx-${fixtureExtKey}`,
+    missed,
+    lineup: {
+      fixture_id: `fx-${fixtureExtKey}`,
+      entrant_id: SUS_ENTRANT,
+      slots: personIds.map((id) => ({ person_id: id, full_name: `name-${id}` })),
+    },
+  };
+}
+
+function activeBan(over: Partial<SuspensionWire> = {}): SuspensionWire {
+  return {
+    id: "sus-1",
+    divisionId: SUS_DIVISION,
+    personId: BANNED,
+    personName: "Hana Okonkwo",
+    entrantId: SUS_ENTRANT,
+    status: "active",
+    source: "manual",
+    reason: "Dissent toward the match official",
+    matchesTotal: 1,
+    matchesServed: 0,
+    ...over,
+  };
+}
+
+const SUS_EXPECTED: ExpectedSuspension[] = [
+  {
+    personId: BANNED,
+    personName: "Hana Okonkwo",
+    divisionId: SUS_DIVISION,
+    entrantId: SUS_ENTRANT,
+    matchesTotal: 1,
+    controlPersonId: CONTROL,
+    controlPersonName: "Farid Haddad",
+  },
+];
+
+/** The shape a correct run produces: the banned player off the MISSED sheet,
+ *  on the PLAYED one; the control on both. */
+function goodSheets(): SuspensionFixtureSheet[] {
+  return [
+    sheet("rr-r1-c1", false, [CONTROL, BANNED]),
+    sheet("rr-r3-c1", true, [CONTROL]),
+  ];
+}
+
+describe("compareSuspensions — the discipline carry", () => {
+  it("matches when the ban is active, correctly sized, and lands on exactly the named fixture", () => {
+    const cmp = compareSuspensions(SUS_EXPECTED, {
+      active: [activeBan()],
+      sheets: goodSheets(),
+    });
+    expect(cmp.matched).toBe(true);
+    const e = cmp.entries[0]!;
+    expect(e.banFound).toBe(true);
+    expect(e.playedFixturesChecked).toBe(1);
+    expect(e.missedFixturesChecked).toBe(1);
+    expect(suspensionMismatchReasons(e)).toEqual([]);
+  });
+
+  it("reds when the banned player is still named on the MISSED fixture's team sheet", () => {
+    const cmp = compareSuspensions(SUS_EXPECTED, {
+      active: [activeBan()],
+      sheets: [sheet("rr-r1-c1", false, [CONTROL, BANNED]), sheet("rr-r3-c1", true, [CONTROL, BANNED])],
+    });
+    expect(cmp.matched).toBe(false);
+    expect(cmp.entries[0]!.presentOnMissed).toEqual(["rr-r3-c1"]);
+    expect(suspensionMismatchReasons(cmp.entries[0]!)).toEqual([
+      "still named on the team sheet of rr-r3-c1",
+    ]);
+  });
+
+  // THE fixture-identity assertion. A ban that reaches every fixture is
+  // absent from the named one too, so an oracle that only asked "was she
+  // absent from rr-r3-c1?" would pass on it.
+  it("reds a ban that reached a fixture the pack does NOT name — over-reach, not carry", () => {
+    const cmp = compareSuspensions(SUS_EXPECTED, {
+      active: [activeBan()],
+      sheets: [sheet("rr-r1-c1", false, [CONTROL]), sheet("rr-r3-c1", true, [CONTROL])],
+    });
+    expect(cmp.matched).toBe(false);
+    expect(cmp.entries[0]!.absentOnPlayed).toEqual(["rr-r1-c1"]);
+    expect(cmp.entries[0]!.presentOnMissed).toEqual([]);
+    expect(suspensionMismatchReasons(cmp.entries[0]!)).toEqual([
+      "missing from rr-r1-c1, which the pack does NOT name",
+    ]);
+  });
+
+  // The POSITIVE half, and the reason it is mandatory: this `active` list
+  // bans everybody, and every negative assertion above still holds on it.
+  it("reds a product that refuses EVERYBODY — the eligible team-mate is banned too", () => {
+    const cmp = compareSuspensions(SUS_EXPECTED, {
+      active: [activeBan(), activeBan({ id: "sus-2", personId: CONTROL, personName: "Farid Haddad" })],
+      sheets: goodSheets(),
+    });
+    expect(cmp.matched).toBe(false);
+    expect(cmp.entries[0]!.controlBanned).toBe(true);
+    // Every NEGATIVE check still passes on this input — which is exactly why
+    // the one-sided version of this oracle would have shipped green.
+    expect(cmp.entries[0]!.presentOnMissed).toEqual([]);
+    expect(cmp.entries[0]!.absentOnPlayed).toEqual([]);
+    expect(cmp.entries[0]!.banFound).toBe(true);
+  });
+
+  it("reds a product that seats NOBODY — the eligible team-mate is off the sheets too", () => {
+    const cmp = compareSuspensions(SUS_EXPECTED, {
+      active: [activeBan()],
+      sheets: [sheet("rr-r1-c1", false, []), sheet("rr-r3-c1", true, [])],
+    });
+    expect(cmp.matched).toBe(false);
+    expect(cmp.entries[0]!.controlMissingFrom).toEqual(["rr-r1-c1", "rr-r3-c1"]);
+  });
+
+  it("reds a ban still PENDING — a row nobody confirmed is not a ban", () => {
+    const cmp = compareSuspensions(SUS_EXPECTED, {
+      // `listSuspensions(?status=active)` would not return this row at all;
+      // the guard is here because a caller that forgot the filter would
+      // otherwise match a pending row and call the carry proven.
+      active: [activeBan({ status: "pending", entrantId: null })],
+      sheets: goodSheets(),
+    });
+    expect(cmp.matched).toBe(false);
+    expect(cmp.entries[0]!.banFound).toBe(false);
+    expect(suspensionMismatchReasons(cmp.entries[0]!)).toEqual([
+      `no ACTIVE suspension for "Hana Okonkwo" in this division`,
+    ]);
+  });
+
+  it("reds a ban length that disagrees with the number of fixtures the pack names", () => {
+    const cmp = compareSuspensions(SUS_EXPECTED, {
+      active: [activeBan({ matchesTotal: 3 })],
+      sheets: goodSheets(),
+    });
+    expect(cmp.matched).toBe(false);
+    expect(cmp.entries[0]!.matchesTotalMatched).toBe(false);
+    expect(cmp.entries[0]!.actualMatchesTotal).toBe(3);
+  });
+
+  it("reds a confirmed ban stamped against the wrong entrant", () => {
+    const cmp = compareSuspensions(SUS_EXPECTED, {
+      active: [activeBan({ entrantId: "ent-echo" })],
+      sheets: goodSheets(),
+    });
+    expect(cmp.matched).toBe(false);
+    expect(cmp.entries[0]!.entrantMatched).toBe(false);
+  });
+
+  it("reds a ban recorded in a DIFFERENT division", () => {
+    const cmp = compareSuspensions(SUS_EXPECTED, {
+      active: [activeBan({ divisionId: "div-tiny" })],
+      sheets: goodSheets(),
+    });
+    expect(cmp.matched).toBe(false);
+    expect(cmp.entries[0]!.banFound).toBe(false);
+  });
+
+  // The vacuity guards. An EMPTY `active` list must not read as "nothing to
+  // disagree with"; an entrant with no PLAYED fixture must not read as a pass
+  // just because the negative half happens to hold.
+  it("an EMPTY live suspension list is a failure, never a vacuous pass", () => {
+    const cmp = compareSuspensions(SUS_EXPECTED, { active: [], sheets: goodSheets() });
+    expect(cmp.matched).toBe(false);
+    expect(cmp.entries[0]!.banFound).toBe(false);
+  });
+
+  it("reds a subject with NO played fixture — the identity discriminator is missing", () => {
+    const cmp = compareSuspensions(SUS_EXPECTED, {
+      active: [activeBan()],
+      sheets: [sheet("rr-r3-c1", true, [CONTROL])],
+    });
+    expect(cmp.matched).toBe(false);
+    expect(cmp.entries[0]!.playedFixturesChecked).toBe(0);
+    expect(suspensionMismatchReasons(cmp.entries[0]!)).toEqual([
+      "no PLAYED fixture sheet was read — a ban from this fixture cannot be told apart " +
+        "from a ban from every fixture",
+    ]);
+  });
+
+  it("reds a subject with NO missed fixture — the ban itself was never witnessed", () => {
+    const cmp = compareSuspensions(SUS_EXPECTED, {
+      active: [activeBan()],
+      sheets: [sheet("rr-r1-c1", false, [CONTROL, BANNED])],
+    });
+    expect(cmp.matched).toBe(false);
+    expect(cmp.entries[0]!.missedFixturesChecked).toBe(0);
+    expect(suspensionMismatchReasons(cmp.entries[0]!)).toEqual([
+      "no MISSED fixture sheet was read — the ban itself was never witnessed",
+    ]);
+  });
+
+  // `every()` over an empty list is a silent yes — same trap `compareCareerStats`
+  // documents. The caller checks `expected.length`; this pins the shape it
+  // must not trust.
+  it("an EMPTY expected set is vacuously matched — which is why the caller checks the length", () => {
+    const cmp = compareSuspensions([], { active: [], sheets: [] });
+    expect(cmp.matched).toBe(true);
+    expect(cmp.entries).toEqual([]);
   });
 });
