@@ -50,7 +50,7 @@ export function makeAdvanceRoutesWorld(input: {
 
       const proposeMatch = /^\/api\/v1\/stages\/([^/]+)\/seed-proposal$/.exec(path);
       if (proposeMatch !== null) {
-        const stageId = proposeMatch[1]!;
+        const stageId = proposeMatch[1];
         const qualifiers = input.getQualifiers(stageId) ?? [];
         return {
           status: 201,
@@ -71,7 +71,7 @@ export function makeAdvanceRoutesWorld(input: {
                 standingsHash: `hash-${stageId}`,
               },
             },
-          } as never,
+          },
         };
       }
 
@@ -79,7 +79,7 @@ export function makeAdvanceRoutesWorld(input: {
         const b = body as { proposalId?: string } | undefined;
         return {
           status: 200,
-          json: { ok: true, data: { proposalId: b?.proposalId ?? "proposal", filled: 1 } } as never,
+          json: { ok: true, data: { proposalId: b?.proposalId ?? "proposal", filled: 1 } },
         };
       }
 
@@ -88,19 +88,19 @@ export function makeAdvanceRoutesWorld(input: {
       // (via `request()`) already created fixtures for, so this is always
       // idempotent (`existing: 1`) in every scenario these four files drive.
       if (/^\/api\/v1\/stages\/[^/]+\/generate$/.test(path)) {
-        return { status: 200, json: { ok: true, data: { created: 0, existing: 1, fixtures: [] } } as never };
+        return { status: 200, json: { ok: true, data: { created: 0, existing: 1, fixtures: [] } } };
       }
 
       const completeMatch = /^\/api\/v1\/stages\/([^/]+)\/complete$/.exec(path);
       if (completeMatch !== null) {
-        const stageId = completeMatch[1]!;
+        const stageId = completeMatch[1];
         const finalRanks = input.getQualifiers(stageId) ?? [];
         return {
           status: 200,
           json: {
             ok: true,
             data: { completed: true, events: [{ type: "stage_completed", stageId, finalRanks }] },
-          } as never,
+          },
         };
       }
 
