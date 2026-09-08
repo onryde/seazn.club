@@ -83,14 +83,36 @@ the "two authorities" framing in W2/W3 was itself a false premise, `BRAND_PALETT
 organiser's picker menu and not a competing fallback table, so nothing is withdrawn from
 the tree; only W3's proposal to hash over it is dropped.
 
-**Next:** re-pin W2 (`../../plans/2026-09-05-spectator-w2-competition-landing.md`, DRAFT)
-against merged `main` before executing — every wave plan is DRAFT until re-pinned after the
-wave before it merges. The re-pin owes, specifically: re-verify the six false premises the
-plan recorded on 2026-09-05 (module-spec floor at `stats.ts:106`; `division:{id}` Realtime
-channels token-less; public OpenAPI routes carrying no `response` schema — W1 added one for
-its own routes, so this is likely stale; reschedules bypassing `invalidatePublicCache`;
-`getPublicCompetition` selecting no `config`; the mobile.spec seed having no fixtures), and
-re-pin every line number in the plan. A grep is not a read: open each file.
+**W2 RE-PINNED 2026-09-08** against merged `main` (`4ee38278d`). All twenty premises
+P1–P20 were re-opened file by file; the corrected pins live in the plan's own **"Re-pin
+table — verified 2026-09-08"**, which is authoritative over the 2026-09-05 rows above it
+(those are left in place so the drift stays legible). **Three held unchanged (P3, P4, P7);
+seventeen moved, changed, or were false.**
+
+Five change what gets BUILT, not just where it lives:
+
+1. **P5** — copying W1's "TabRail contract" verbatim would re-introduce two defects W1
+   deliberately fixed: the tablist carries no `tabIndex={0}` (roving tabindex is on the
+   buttons) and `aria-controls` is emitted only on the ACTIVE tab. `tab-rail.tsx:39-54`
+   records both. No W2 test may assert the old contract.
+2. **P14** — `recomputePlayerStats` is NOT watermark-based; it re-folds every
+   `score_event` in the division on every call. The Stats tab calls it per division on a
+   hub page, so Task 3 owes a cost answer the plan never asked for.
+3. **P11** — `bucketFixture` has never existed. Task 4 writes it from scratch.
+4. **P13** — reschedule staleness was overstated: `afterScheduleWrite` DOES drop
+   `pub:v1:div:*` and revalidate; only `pub:v1:fixture:{id}` is missed.
+5. **P12** — W1 falsified it in our favour: `/public/fixtures/{id}` already carries a
+   typed `response`, so Task 5 has a worked precedent.
+
+**P9 is confirmed hard** — no floor, no leaderboard anywhere in `PlayerStatsModel`, and
+every count key ruling 15.2 names exists as a declared metric. **P20 is the worst drift**
+and touches every e2e task: the helpers are in `e2e/spectator-public-helpers.ts` (not
+`spectator-public.spec.ts`, which does not exist), `DEFAULT_SHOT_WIDTHS` is three widths
+not seven, and **`setScheduledAt` does not exist at all**.
+
+**Next:** dispatch W2 Task 1. The plan is no longer DRAFT on its premises; the four owner
+questions are ruled (`_INDEX.md` ruling 15) and the pins are current as of `4ee38278d`.
+Re-check anything W2 touches if `main` moves materially before execution starts.
 
 **Owed documentation:** the bench `_MASTER.md` spectator row still reads "W0 in flight; W1–W4
 sequential" — stale since W1 began, and now wrong in the other direction too.
