@@ -36,7 +36,7 @@ export const SECTION_FIELDS: Record<SectionId, readonly ConfigFieldKey[]> = {
   ],
   schedule: ["enabled", "entrant_kind", "opens_at", "closes_at"],
   capacity: ["capacity"],
-  money: ["fee_cents", "payment_method", "payment_instructions", "refund_lock_at"],
+  money: ["fee_cents", "free_agent_fee_cents", "payment_method", "payment_instructions", "refund_lock_at"],
   form: ["form_fields"],
 };
 

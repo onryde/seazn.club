@@ -29,6 +29,7 @@ export type ConfigFieldKey =
   | "closes_at"
   | "capacity"
   | "fee_cents"
+  | "free_agent_fee_cents"
   | "refund_lock_at"
   | "place_by_at"
   | "form_fields"
@@ -55,6 +56,7 @@ export const ROUTABLE_FIELDS: readonly ConfigFieldKey[] = [
   "closes_at",
   "capacity",
   "fee_cents",
+  "free_agent_fee_cents",
   "refund_lock_at",
   "place_by_at",
   "form_fields",
@@ -102,6 +104,13 @@ const MESSAGE_FIELD_PATTERNS: readonly [RegExp, ConfigFieldKey][] = [
   [/age_cutoff_month and age_cutoff_day must be set together/i, "age_cutoff_day"],
   [/allow_free_agents requires entrant_kind/i, "allow_free_agents"],
   [/before choosing card payments/i, "payment_method"],
+  // F15 — the solo-sign-up guard used to throw the exact same string as the
+  // fee_cents guard below, so this table could never route the error to the
+  // right field. "for a solo sign-up " now sits between "fees" and "must be
+  // at least", which breaks the generic pattern's consecutive substring
+  // match — the two are mutually exclusive regardless of table order, and
+  // this one is listed first only for a human reading top to bottom.
+  [/card entry fees for a solo sign-up must be at least/i, "free_agent_fee_cents"],
   [/card entry fees must be at least/i, "fee_cents"],
   [/capacity exceeds your plan/i, "capacity"],
   [/closes_at must be after opens_at/i, "closes_at"],

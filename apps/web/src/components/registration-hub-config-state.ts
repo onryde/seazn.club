@@ -197,6 +197,7 @@ export type ConfigValidationIssue =
   | "capacityRange"
   | "feeCentsRange"
   | "cardFeeMinimum"
+  | "soloCardFeeMinimum"
   | "datesOrder"
   | "duplicateFormFieldKeys"
   | "selectNeedsOptions";
@@ -231,6 +232,20 @@ export function validateConfigState(
     state.fee_cents < CARD_FEE_CENTS_MIN
   ) {
     issues.fee_cents = "cardFeeMinimum";
+  }
+
+  // F15 — mirrors registrations.ts's OWN solo-sign-up Stripe-minimum guard,
+  // which is charged instead of fee_cents for a free-agent entry and so has
+  // to pass the same minimum independently (a division can clear the
+  // fee_cents check above and still mint a checkout Stripe rejects for the
+  // solo price). null means "no separate price" and is never a violation.
+  if (
+    state.payment_method === "stripe" &&
+    state.free_agent_fee_cents !== null &&
+    state.free_agent_fee_cents > 0 &&
+    state.free_agent_fee_cents < CARD_FEE_CENTS_MIN
+  ) {
+    issues.free_agent_fee_cents = "soloCardFeeMinimum";
   }
 
   // Both null (neither side set yet) is not a violation — the server's own
