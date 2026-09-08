@@ -111,9 +111,12 @@ marked (re-pinned), and is re-pinned before an edit regardless.
    `OverlayModel` exactly as spec §2 (`live, decided, header{context, clock?},
    sides[2]{short,name,big,sub?,led,serving}, cells[], detail[], chase?,
    result?`). Pure; no React, no `@/server/**` import (the stage is a client
-   component). Derivations imported from `@/lib/public-site` (`setBreakdown :290`,
-   `periodBreakdown :319`, `matchStrength :338`, `disciplineList :352`,
-   `servingSide :373`) — never re-derived. Every string via `msg: MsgFn`
+   component). Derivations imported from `@/lib/public-site` — **import them by
+   SYMBOL; the line pins here have already gone stale once** (re-pinned
+   2026-09-08 post-rebase: `setBreakdown :301`, `periodBreakdown :330`,
+   `matchStrength :366`, `disciplineList :380`, `servingSide :401`; the
+   2026-09-07 text said `:290/:319/:338/:352/:373` and every one of those five
+   landed on a brace, a comment or a blank line) — never re-derived. Every string via `msg: MsgFn`
    (`lib/messages-i18n.ts:24-28`). `short`: the linked team's `short_name`
    (`teams.short_name`, `db/migration/v2-engine/tables/V206__teams.sql:5`,
    re-pinned) when the entrant reaches one, else the first three letters of the
@@ -128,10 +131,16 @@ marked (re-pinned), and is re-pinned before an edit regardless.
    fb99bbd4c — never a hand-typed union). Input is `OverlayLiveData` (scope
    2b), not the public fixture JSON.
 3. **Data** —
-   - Migration `db/migration/deltas/V400__fixture_stream_url.sql` (re-pinned
-     2026-09-07 @ fb99bbd4c: deltas run to `V399__stats_player_career_split.sql`,
-     so V392 AND the 09-06 documents' V399 are both taken — FS2; number = next
-     free at rebase, R10, `ls db/migration/deltas | sort -V | tail -1` FIRST):
+   - Migration `db/migration/deltas/V<next>__fixture_stream_url.sql`, where
+     `<next>` is the first free number after
+     `ls db/migration/deltas | sort -V | tail -1` — read at Task 0, **re-read at
+     every rebase**, and again immediately before the file is written (R10, and
+     `_INDEX.md`'s migration RULE). **Never carry a number forward from a
+     document, this one included**: a duplicate Flyway version survives a clean
+     rebase with no conflict, which is why the check is at every rebase and not
+     once. **`V400` is NOT available** — this document reserved it, and `main`
+     has since taken it with `V400__repair_orphaned_age_cutoff_half.sql`; the
+     09-06 documents' `V399` and the older `V392` are taken too (FS2). Body:
      `alter table fixtures add column stream_url text null check (stream_url
      is null or stream_url like 'https://%')`, then a FULL redefinition of
      `public_fixtures_v` copied from its LATEST definer (re-pinned 2026-09-07:
@@ -163,8 +172,11 @@ marked (re-pinned), and is re-pinned before an edit regardless.
    - OpenAPI: one `ROUTES` entry next to `PATCH /fixtures/{id}` (`openapi.ts:142`),
      `request: S.PutFixtureStream`, `errors: [403, 404, 422]`; `npm run
      openapi:gen`; commit both generated files (R7).
-4. **Entitlement** — delta migration `V401__streaming_overlay_entitlement.sql`
-   (next free number after the one above; re-pinned 2026-09-07 @ fb99bbd4c)
+4. **Entitlement** — delta migration
+   `V<next+1>__streaming_overlay_entitlement.sql`, the next free number after
+   step 3's, taken from the same `ls db/migration/deltas | sort -V | tail -1`
+   read and re-read at every rebase (**not `V401`** — this document reserved
+   that off a `V400` that `main` has since taken; see step 3)
    inserting `streaming.overlay` with `bool_value = false` for the FIVE v18
    plan keys — `community, pro, event_pass, event_pass_l, enterprise`
    (`V393__entitlements_v18.sql`; `pro_plus` retired and dropped there — RP4;
@@ -228,7 +240,7 @@ marked (re-pinned), and is re-pinned before an edit regardless.
      root scaled with `transform: scale(min(vw/1920, vh/1080))`, origin top-left
      (R15). Root `style={sportThemeStyle(sportKey)}` (`sport-theme.ts:557`;
      `undefined` for cricket/generic → `:root` defaults in
-     `app/globals.css:1014-1022`); classes `.ovl-*` reading ALL SEVEN custom
+     `app/globals.css:1135-1141`); classes `.ovl-*` reading ALL SEVEN custom
      properties `var(--sport-board)`, `--sport-board-2`, `--sport-ink`,
      `--sport-led`, **`--sport-advisory`**, `--sport-caution`,
      `--sport-dismissal` (`SPORT_TOKENS` at
@@ -414,6 +426,34 @@ changes).
   - `?style=bug` renders `ovl-root[data-style="bug"]`; an unknown style falls to
     the sport default; `?lang=fr` renders the French `notStarted` on a scheduled
     fixture (drive the DOM, not the HTML).
+  - **Added 2026-09-08 by T1's close — the `--sport-ink` HAIRLINE. This
+    assertion is not optional and W1 is the wave that owes it.** The OWNER
+    RULING 2026-09-08 ("apply your rec") is exactly this and no wider: **the
+    red-card chip and the live dot take a 1-px `--sport-ink` hairline, not a
+    `board` one** — those two, the two that fail their floor, and the two whose
+    T1 closures depend on it. `_THEMES.md` then extends the same hairline to the
+    `advisory` and `caution` chips as a consistency choice of its own (`:183-200`
+    says so explicitly); **build all three chips and the dot**, but do not
+    describe the wider three as the owner's ruling when the sheet goes back for
+    per-screen sign-off. In BOTH §3's bar and §4's bug
+    (`_THEMES.md:126-141`, `:183-200`, `:233`, `:328`, `:341`). Assert it in the
+    browser on a fixture that renders a card — computed `border-width` is 1px
+    and computed `border-color` resolves to the sport's `--sport-ink`, on the
+    chip AND on `ovl-live-dot`, in both styles. Prefer a football or hockey
+    fixture: those are the two sports whose numbers depend on it.
+
+    **Why it is load-bearing rather than cosmetic.** T1's contrast suite closes
+    two sub-floor WCAG 1.4.11 rows as *covered*, not waived — football's
+    red-card chip measures **2.56** and hockey's live dot **2.75** on their own
+    `board-2` bands, against a floor of 3 — and the element that meets the
+    criterion for both is this hairline (`ink` on `board-2` = 9.46–16.11 across
+    all eleven sports). **No unit test can see it.** `apps/web` vitest is
+    `environment: "node"`; the sweep proves the colour PAIR would work if the
+    border were drawn, and it passes identically when the border is never
+    rendered. If this assertion is not written, both closures are unbacked and
+    two approved themes ship under the accessibility floor with a green suite
+    saying otherwise. Full record: `_INDEX.md` "## 2026-09-08 — T1 wave CLOSED",
+    finding FS-T1f.
   - Added 2026-09-07: **cookie banner** — its testid ABSENT on the overlay and
     PRESENT on the public match page in the same anonymous context (positive
     pair); `context.cookies()` is `[]` after the overlay loads and after one

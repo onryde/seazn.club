@@ -223,3 +223,87 @@ describe("CourtCard", () => {
     expect(html).not.toContain('data-testid="mc-strength"');
   });
 });
+
+// ---------------------------------------------------------------------------
+// The truncate chain on the entrant-name span — streaming T1's D4 fix, and the
+// only production change on that branch (`court-card.tsx`: a `min-w-0` beside
+// the existing `truncate`). Until this block its ONLY regression witness was
+// the visual gate's `truncate-chain` check, and `.github/workflows/e2e.yml`
+// triggers on push to `main`, never on a pull request — so the change was
+// covered AFTER merge, not before. This closes that.
+//
+// Same node-env idiom as the rest of this file and `phone-disclosure.test.tsx`:
+// `renderToStaticMarkup` is real React SSR, so these assertions read the class
+// list that actually reaches the browser rather than the source text. There is
+// no jsdom here and jsdom does no layout anyway — the 320px paint stays the
+// visual gate's job. What this pins is the class contract that produces it, so
+// a later edit cannot silently drop the `min-w-0` again.
+// ---------------------------------------------------------------------------
+
+/** The whole `<div>…</div>` of the score row that carries `name`. */
+function nameRow(html: string, name: string): string {
+  const at = html.indexOf(`>${name}<`);
+  expect(at, `"${name}" is not rendered in the card`).toBeGreaterThan(-1);
+  const open = html.lastIndexOf('<div class="flex items-baseline', at);
+  expect(open, "no row flex opens before the name").toBeGreaterThan(-1);
+  const close = html.indexOf("</div>", at);
+  expect(close, "the row never closes").toBeGreaterThan(-1);
+  return html.slice(open, close + "</div>".length);
+}
+
+/** The class list of the row's FIRST span — the entrant-name span. */
+function nameSpanClasses(row: string): string {
+  const m = /<span class="([^"]*)"/.exec(row);
+  expect(m, "the row opens no span").not.toBeNull();
+  return m![1];
+}
+
+/** `\bmin-w-0\b` also matches inside `max-md:min-w-0` (`-` to `m` is a word
+ *  boundary in JS regex), and a phone-only variant would leave the desktop row
+ *  exactly as broken as it was. Anchored on real class-list separators so a
+ *  variant-prefixed utility cannot satisfy these assertions. */
+const utility = (name: string) => new RegExp(`(?:^|\\s)${name}(?:\\s|$)`);
+
+describe("CourtCard — a long entrant name ellipses instead of pushing the score off its row", () => {
+  // `short` is EMPTY on both sides on purpose (the schema types it `z.string()`,
+  // never nullable, so "" is how a side without a short code arrives):
+  // `{side.short || side.name}` means a short code ("RVS") is what renders when
+  // one exists, and short codes never reached the overflow threshold — which is
+  // why this sat latent until the gate photographed a realistic full name.
+  const longHeader: MatchCentreHeaderT = {
+    ...liveHeader,
+    sides: [
+      { entrantId: "home", name: "Riverside Wanderers Athletic Club", short: "", colour: null, badgeUrl: null },
+      { entrantId: "away", name: "Oakdale Community Sports Association", short: "", colour: null, badgeUrl: null },
+    ],
+  };
+
+  it("the name span carries min-w-0 beside its truncate, in a row flex whose other item is shrink-0", () => {
+    const html = renderToStaticMarkup(<CourtCard header={longHeader} dict={dict} />);
+    const row = nameRow(html, "Riverside Wanderers Athletic Club");
+    // The parent is what makes `min-w-0` necessary rather than decorative: an
+    // item of a row flex takes `min-width: auto` (css-flexbox-1 §4.5), which
+    // refuses to shrink it below its content — so `truncate` never engages and
+    // the name pushes its sibling out of the row instead of ellipsing.
+    expect(row.startsWith('<div class="flex items-baseline justify-between gap-3 tabular-nums')).toBe(true);
+    const classes = nameSpanClasses(row);
+    expect(classes, "the flex item cannot shrink below its content without min-w-0").toMatch(utility("min-w-0"));
+    expect(classes, "min-w-0 only matters because this span truncates").toMatch(utility("truncate"));
+    // The sibling that wins the row when the name will not shrink — the score,
+    // i.e. the one thing on this card a spectator came for.
+    expect(row).toContain('<span class="shrink-0 text-right">');
+    expect(row).toContain('data-testid="mc-score-0"');
+  });
+
+  it("carries it on BOTH sides' rows, not just the batting one — the class list is rebuilt per row", () => {
+    const html = renderToStaticMarkup(<CourtCard header={longHeader} dict={dict} />);
+    // `battingIndex: 0` appends `font-bold` to the home row only, so the two
+    // rows are not the same string; one sample is not a parity sweep.
+    const away = nameRow(html, "Oakdale Community Sports Association");
+    expect(away.startsWith('<div class="flex items-baseline justify-between gap-3 tabular-nums')).toBe(true);
+    const classes = nameSpanClasses(away);
+    expect(classes).toMatch(utility("min-w-0"));
+    expect(classes).toMatch(utility("truncate"));
+    expect(away).toContain('data-testid="mc-score-1"');
+  });
+});

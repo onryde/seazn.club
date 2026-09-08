@@ -21,6 +21,7 @@ import {
   setFixtureScheduledAtSql,
   setFixtureStatusSql,
   setStageStatusSql,
+  overflowingIn,
 } from "./helpers";
 import {
   HIT_TARGET_FLOOR_PX,
@@ -45,81 +46,6 @@ test.describe.configure({ mode: "serial" });
 const projectViewport = (): { width: number; height: number } | null =>
   (test.info().project.use as { viewport?: { width: number; height: number } })
     .viewport ?? null;
-
-/** Split every box inside `rootSelector` whose content is wider than its box
- *  into the three cases this file used to conflate into one.
- *
- *  A box wider than its content is CLIPPED only when the extra content is
- *  both unreachable AND unsignalled. Three designed exceptions:
- *
- *  1. The v3 scorebug's meta strip is a deliberate swipeable rail below `md`
- *     (`max-md:overflow-x-auto`, scorebug.tsx — spec
- *     2026-09-02-scorepad-v3-phone-composition §3.4), so on a phone it
- *     reports `scrollWidth > clientWidth` BY DESIGN. The distinction is the
- *     computed `overflow-x`: `auto`/`scroll` means the reader can bring the
- *     rest into view.
- *  2. `HalfContent`'s hint span is `max-md:truncate` (scorebug.tsx) — a
- *     deliberate single-line ellipsis when a hint like "Tap to award the
- *     point" does not fit at phone widths, not silent unsignalled clipping.
- *  3. `HalfContent`'s who-line name is `max-md:line-clamp-2` — a deliberate
- *     TWO-line clamp for a doubles pairing's two names, using the SAME
- *     "there's more, and I told you" idea via a different CSS mechanism
- *     (`-webkit-line-clamp`, not `text-overflow`, so `computedStyle.
- *     textOverflow` never sees it — a plain 'ellipsis'-only check is blind
- *     to it, found live: run 33750743914, `phones-large`, doubles, a 4px
- *     margin — "div 173px content in 169px" — after the singles/hint case
- *     above had already landed clean).
- *
- *  Both 2 and 3 were found the same way: CI's Linux font metrics measure
- *  this repo's text a few px wider than this repo's own macOS dev machines,
- *  which was enough to cross each truncation's threshold there and nowhere
- *  else — this file's OWN blind spot both times, not a product regression.
- *  The full text is still in the tappable half's own `aria-label` either
- *  way (this file's own `whoNames`+hint join, scorebug.tsx) — visually
- *  shortened, never lost to a screen reader.
- *
- *  `hidden`/`visible` overflow with NEITHER signal is what remains a
- *  defect — that is the clipped-name case these scans were written for
- *  (`scorepad-v3-strip-geometry.spec.ts`'s own long-surname test), and
- *  none of the three exceptions weakens it: a name that clips WITHOUT an
- *  ellipsis or a line-clamp still reddens here.
- *
- *  `scrollable`/`truncatedByDesign` are returned rather than silently
- *  dropped so the caller can hold each to something: an exemption nothing
- *  checks would let any future overflow hide behind any of the three. See
- *  `expectScorebugNotClipped`. */
-async function overflowingIn(
-  page: Page,
-  rootSelector: string,
-  childSelector: string,
-  absentMessage: string,
-): Promise<{ clipped: string[]; scrollable: string[]; truncatedByDesign: string[] }> {
-  return page.evaluate(
-    ({ rootSel, childSel, absent }) => {
-      const root = document.querySelector<HTMLElement>(rootSel);
-      if (!root) return { clipped: [absent], scrollable: [], truncatedByDesign: [] };
-      const suspects: HTMLElement[] = [root, ...Array.from(root.querySelectorAll<HTMLElement>(childSel))];
-      const over = suspects.filter((el) => el.scrollWidth - el.clientWidth > 1);
-      const describe = (el: HTMLElement) =>
-        `${el.tagName.toLowerCase()} ${el.scrollWidth}px content in ${el.clientWidth}px` +
-        `${el.hasAttribute("tabindex") ? ` tabindex=${el.getAttribute("tabindex")}` : ""}`;
-      const reachable = (el: HTMLElement) => /^(auto|scroll)$/.test(getComputedStyle(el).overflowX);
-      const truncatedByDesign = (el: HTMLElement) => {
-        const cs = getComputedStyle(el);
-        if (cs.textOverflow === "ellipsis") return true;
-        const clamp = cs.webkitLineClamp;
-        return clamp !== "" && clamp !== "none";
-      };
-      const rest = over.filter((el) => !reachable(el));
-      return {
-        clipped: rest.filter((el) => !truncatedByDesign(el)).map(describe),
-        scrollable: over.filter(reachable).map(describe),
-        truncatedByDesign: rest.filter(truncatedByDesign).map(describe),
-      };
-    },
-    { rootSel: rootSelector, childSel: childSelector, absent: absentMessage },
-  );
-}
 
 /** The scorebug's own clipping gate. Nothing inside it may be silently
  *  clipped. Two things are allowed to overflow, each held to its own

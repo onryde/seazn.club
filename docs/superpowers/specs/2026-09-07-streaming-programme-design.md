@@ -772,11 +772,26 @@ capture repo — the cross-repo drift gate. Payload:
 `{ v: 1, sid, srt: { url, streamId, passphrase, latencyMs }, exp }` — the
 three SRT fields **opaque** (no port knowledge; a front-door swap never
 touches shipped phones); `exp` = provision + `max_duration` + 30 min; ≈
-220–300 B → QR version ~10–13 at EC-M, ≥ 264 px, 4-module quiet zone [A];
-manual paste-code fallback. The panel renders it client-side from the
+220–300 B → QR version ~10–13 at EC-M, 4-module quiet zone [A]; manual
+paste-code fallback, which the sheet makes unconditional rather than a
+degraded-mode extra. The panel renders it client-side from the
 organiser-authed session projection — the secret never enters page HTML.
 Everything else about the phone app (libraries, ABR, thermal, five screens)
 is the `seazn-capture` spec's, not this one's.
+
+**Amended 2026-09-08 (T1 wave close). The `≥ 264 px` floor this sentence used
+to carry is SUPERSEDED for the Phone tab by
+`specs/2026-09-05-stream-overlay-prompts/_THEMES.md` §8a, whose `QR size` row —
+`min(264px, available)`, with NO floor above `available` — is the authority.**
+It was an `[A]`-class fact disagreeing with the binding sheet, which is the one
+shape of drift this document must not leave standing. The floor cannot hold on
+a phone: with the panel's own padding, 264 CSS px of `available` needs a
+viewport of at least 264 + 2(12 + 1 + 16 + 1 + 12) = **348 CSS px**, so every
+width in the project's own 320–430 matrix fails it and 320 @ 125 % zoom fails it
+by more than half. A floor that cannot be met is not a floor; it is a guaranteed
+defect report, and the QR would be the thing that puts a horizontal scrollbar on
+the panel. **§7.6 remains the authority for the payload, the version range,
+EC-M and the quiet zone** — only the pixel floor moves.
 
 ## 8. R0 — the bench spike (parallel, no repo dependency)
 
