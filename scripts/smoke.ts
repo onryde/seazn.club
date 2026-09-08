@@ -5572,7 +5572,7 @@ async function matchCentreSmoke(): Promise<void> {
   const fxLedger = ledger(owner, fx.fixtureId);
   // cricket.toss BEFORE core.start — the engine's own guard 422s the other
   // way round ("toss must precede core.start", cricket.ts:3372).
-  const toss = await fxLedger.send("cricket.toss", { wonBy: fx.entrantIds[0]!, elected: "bat" });
+  const toss = await fxLedger.send("cricket.toss", { wonBy: fx.entrantIds[0], elected: "bat" });
   check("match centre smoke: cricket.toss is accepted before core.start", toss.status < 300);
   const start = await fxLedger.send("core.start", {});
   check("match centre smoke: core.start is accepted", start.status < 300);
