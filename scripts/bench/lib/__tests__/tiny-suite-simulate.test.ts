@@ -773,6 +773,19 @@ describe("runTinySuite — B05 T1 division-A stream fold wiring", () => {
     const tiebreakCascade = runtimeOracles.find((o) => o.name === "oracle: d-tiebreak/s-tiebreak-league tie-order cascade");
     expect(tiebreakCascade?.detail).toContain("1 checked");
 
+    // B05 T5b-3 — the enforcement probe RAN, against the fixture the pack
+    // names, and reported a real HTTP answer. Deliberately NOT pinned to a
+    // particular status: the probe exists to MEASURE whether the lineup gate
+    // refuses a banned player, and freezing today's answer would turn a
+    // future enforcement gate into a fake regression (AGENTS.md failure class
+    // 4 — a test that froze a live behaviour as its expected value). What is
+    // pinned is that it is not inert.
+    const probe = (report.warnings ?? []).find((w) => w.includes("discipline enforcement probe"));
+    expect(probe).toBeDefined();
+    expect(probe).toContain("rr-r3-c1");
+    expect(probe).toContain("p-hotel");
+    expect(probe).toMatch(/answered HTTP \d{3}/);
+
     // B05 T5b-2 — HOW MANY subjects each new oracle actually compared, not
     // merely that it ran. A reachability assertion is satisfied by any
     // value (AGENTS.md rule 19): a career block that passed an EMPTY expected

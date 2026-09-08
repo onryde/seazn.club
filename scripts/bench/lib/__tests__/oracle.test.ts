@@ -822,6 +822,23 @@ describe("compareSuspensions — the discipline carry", () => {
     ]);
   });
 
+  // The mirror of the banned player's own PENDING case: a row nobody
+  // confirmed is not a ban in EITHER direction. Without this, the status
+  // filter on the control lookup has no killer of its own — every row a
+  // `?status=active` read returns is active already, so only a fake that
+  // hands back a pending one can witness the guard.
+  it("does NOT count a PENDING row against the eligible team-mate", () => {
+    const cmp = compareSuspensions(SUS_EXPECTED, {
+      active: [
+        activeBan(),
+        activeBan({ id: "sus-2", personId: CONTROL, personName: "Farid Haddad", status: "pending" }),
+      ],
+      sheets: goodSheets(),
+    });
+    expect(cmp.entries[0]!.controlBanned).toBe(false);
+    expect(cmp.matched).toBe(true);
+  });
+
   it("reds a ban length that disagrees with the number of fixtures the pack names", () => {
     const cmp = compareSuspensions(SUS_EXPECTED, {
       active: [activeBan({ matchesTotal: 3 })],
