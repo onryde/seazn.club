@@ -66,6 +66,11 @@ export function makeDisciplineRoutesWorld(input: {
    *  This is the mutant the enforcement oracle exists to kill — without it,
    *  "the gate refused" is satisfied by a fake that refuses on its own. */
   advisoryLineupGate?: boolean;
+  /** Test seam: an OVER-refusing gate — every lineup PUT is refused with the
+   *  same 422, banned player or not. This is the mutant the enforcement
+   *  oracle's POSITIVE half exists to kill: "the banned player was refused"
+   *  reads identically against a product that refuses everybody. */
+  refuseEveryLineupWrite?: boolean;
 }): DisciplineRoutesWorld {
   const rows: SuspensionRowLike[] = [];
   const sheets = new Map<string, string[]>();
@@ -143,7 +148,13 @@ export function makeDisciplineRoutesWorld(input: {
           const banned =
             input.advisoryLineupGate === true
               ? []
-              : rows.filter(
+              : input.refuseEveryLineupWrite === true
+                ? slots.map((pid) => ({
+                    ...(rows[0] ?? { personName: pid }),
+                    personId: pid,
+                    personName: input.personName?.(pid) ?? pid,
+                  }))
+                : rows.filter(
                   (r) => r.status === "active" && r.entrantId === entrantId && slots.includes(r.personId),
                 );
           if (banned.length > 0 && (overrideReason === undefined || overrideReason === "")) {

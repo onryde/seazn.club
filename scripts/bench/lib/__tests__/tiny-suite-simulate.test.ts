@@ -82,6 +82,10 @@ function fakeServer(
      *  the carry comparison cannot: this bench writes the sheets it wants, so
      *  an advisory product still stores exactly the sheets the pack expects. */
     disciplineAdvisoryLineupGate?: boolean;
+    /** B05 regression — an OVER-refusing lineup gate: every PUT answers 422
+     *  SUSPENDED_PLAYER, banned player or not. Only the enforcement oracle's
+     *  POSITIVE half can tell this from a gate that works. */
+    disciplineRefusesEveryLineup?: boolean;
     /** B05 T4b regression — `GET /stages/{id}/standings` answers `d-badminton`'s
      *  own league table with ZERO rows (as if nothing ever folded into it),
      *  proving `compareStandings`'s empty-case discipline through the WIRING:
@@ -246,6 +250,7 @@ function fakeServer(
         }
       : {}),
     ...(opts.disciplineAdvisoryLineupGate === true ? { advisoryLineupGate: true } : {}),
+    ...(opts.disciplineRefusesEveryLineup === true ? { refuseEveryLineupWrite: true } : {}),
     ...(opts.disciplineBanOverReaches === true
       ? {
           // A ban that reached EVERY fixture, not the named one: the banned
@@ -1187,6 +1192,39 @@ describe("runTinySuite — B05 T1 division-A stream fold wiring", () => {
     // subject and not an extra clause inside `compareSuspensions`.
     const carry = (report.oracles ?? []).find((o) => o.name.includes("discipline carry"));
     expect(carry?.passed).toBe(true);
+  });
+
+  it("B05 — a gate that refuses EVERY team sheet reds the enforcement oracle on its POSITIVE half", async () => {
+    // The mirror of the advisory mutant above, and the reason the enforcement
+    // oracle asserts two things rather than one. Here every lineup PUT answers
+    // 422 SUSPENDED_PLAYER — so "the banned player was refused" is TRUE, and
+    // the oracle must still red, because the eligible team-mate was refused
+    // too. A one-sided check passes against exactly this product.
+    const { transport, sql } = fakeServer({ disciplineRefusesEveryLineup: true });
+    const report = await runTinySuite({
+      base: "http://bench.example",
+      engine: "optimized",
+      keep: false,
+      log: silent,
+      cliEntry: "admin",
+      packPath: TINY_PACK_PATH,
+      transport,
+      sql,
+      probeTransport: transport,
+      simTransport: transport,
+      importTransport: transport,
+      startTransport: transport,
+      advanceTransport: transport,
+      oracleTransport: transport,
+    });
+
+    expect(report.gate).toBe("red");
+    const enforcement = (report.oracles ?? []).find((o) => o.name.includes("discipline enforced"));
+    expect(enforcement?.passed).toBe(false);
+    // The NEGATIVE half held — the failure is entirely the positive one.
+    expect(enforcement?.detail).not.toContain("was NOT refused");
+    expect(enforcement?.detail).toContain("was refused too");
+    expect(enforcement?.detail).toContain("refusing everybody");
   });
 
   it("B05 T5b-3 — a pack with NO expected.suspensions reports a warning and NO carry oracle, never a vacuous pass", async () => {
