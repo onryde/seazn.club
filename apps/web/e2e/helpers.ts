@@ -990,17 +990,22 @@ function advisoryKey32(id: string): number {
  *     A: staff := true → A: POST → B: staff := true (no-op, already true)
  *     → A: DELETE → A: staff := FALSE → B: DELETE → 401
  *
- * SIX root specs call this against the SAME shared auth-state org (counted by
- * grepping the call site, not the import — `payments-hardening.spec.ts` only
- * NAMES the helper in a comment, and `directory-kit.ts` re-exports without
- * calling): five in `parallel` — `scoring-free`, `pass-scope-w2`,
- * `pass-scope-officials`, `official-marks-reports`,
- * `scorepad-v3-swap-off-step-enforcement` — plus `public-dashboards`, which
- * `SERIAL_SPECS` puts in the `serial` project. `parallel` and `walkthrough`
- * both run `fullyParallel: true` on more than one worker, and locally all
- * three projects run concurrently in one invocation, so the interleave is
- * reachable today. Before the F10 fix above it was silent; that fix turned it
- * into a hard throw, which makes the lock the other half of the same repair.
+ * SIX root specs call this helper (counted by grepping the call site, not the
+ * import — `payments-hardening.spec.ts` only NAMES the helper in a comment,
+ * and `directory-kit.ts` re-exports without calling), but only TWO land on
+ * the SAME shared auth-state org (traced by argument, not by call count):
+ * `official-marks-reports` (×1, in `parallel`) and `public-dashboards` (×6,
+ * in `serial` via `SERIAL_SPECS`). The other four — `scoring-free`,
+ * `pass-scope-w2`, `pass-scope-officials`,
+ * `scorepad-v3-swap-off-step-enforcement` — each mint their own fresh
+ * email/org first, so they cannot interleave with anything else. `serial` is
+ * `fullyParallel: false` at `--workers=1` with its own job-scoped Postgres in
+ * CI, so `public-dashboards` cannot race there either; the reachable window
+ * is a bare `npx playwright test` invocation running `parallel` and `serial`
+ * concurrently on one shared local DB, which is the shape `official-marks-
+ * reports` and `public-dashboards` can actually collide in. Before the F10
+ * fix above the collision was silent; that fix turned it into a hard throw,
+ * which makes the lock the other half of the same repair.
  * `rs007-money-kit.ts`'s `claimConnectAccount` takes the same kind of lock for
  * the same kind of reason (its own docblock: a lock, not a comment saying "run
  * with --workers=1").

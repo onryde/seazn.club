@@ -973,13 +973,16 @@ test("W8/F10: a refused entitlement-cache drop throws, on either half, the happy
  *
  * Before W8 that 401 was swallowed; F10's fix makes it a hard throw, so the
  * interleave stopped being invisible and started being a flake. Six root specs
- * call this helper against the SAME shared auth-state org — five in `parallel`
+ * call this helper, but only TWO land on the SAME shared auth-state org —
+ * `official-marks-reports` (×1, `parallel`) and `public-dashboards` (×6,
+ * routed to `serial` via `SERIAL_SPECS`). The other four
  * (`scoring-free`, `pass-scope-w2`, `pass-scope-officials`,
- * `official-marks-reports`, `scorepad-v3-swap-off-step-enforcement`) plus
- * `public-dashboards`, which `SERIAL_SPECS` routes to the `serial` project —
- * and `parallel` and `walkthrough` both run `fullyParallel: true` on more than
- * one worker, with all three projects running concurrently in a local
- * invocation.
+ * `scorepad-v3-swap-off-step-enforcement`) each mint their own fresh
+ * email/org first and cannot interleave with anything else. `serial` runs
+ * `fullyParallel: false` at `--workers=1` with its own job-scoped Postgres in
+ * CI, so `public-dashboards` cannot race there either — the reachable window
+ * is a bare `npx playwright test` invocation running `parallel` and `serial`
+ * concurrently on one shared local DB.
  *
  * The fix is a Postgres advisory lock around the whole borrow, keyed on the
  * owner whose bit is being flipped (`rs007-money-kit.ts`'s Connect fixture
