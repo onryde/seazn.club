@@ -63,7 +63,7 @@ export function makeDisciplineRoutesWorld(input: {
     handle(method, path, body) {
       const createMatch = /^\/api\/v1\/divisions\/([^/?]+)\/suspensions$/.exec(path);
       if (method === "POST" && createMatch !== null) {
-        const divisionId = createMatch[1]!;
+        const divisionId = createMatch[1];
         const b = body as { person_id?: string; matches_total?: number; reason?: string };
         const personId = b?.person_id ?? "";
         const row: SuspensionRowLike = {
@@ -116,8 +116,8 @@ export function makeDisciplineRoutesWorld(input: {
 
       const lineupMatch = /^\/api\/v1\/fixtures\/([^/?]+)\/lineups\/([^/?]+)$/.exec(path);
       if (lineupMatch !== null) {
-        const fixtureId = lineupMatch[1]!;
-        const entrantId = lineupMatch[2]!;
+        const fixtureId = lineupMatch[1];
+        const entrantId = lineupMatch[2];
         const key = `${fixtureId}|${entrantId}`;
         if (method === "PUT") {
           const slots = ((body as { slots?: { person_id?: string }[] } | null)?.slots ?? [])
