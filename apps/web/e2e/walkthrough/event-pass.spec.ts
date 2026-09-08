@@ -527,7 +527,18 @@ for (const vp of VIEWPORTS) {
       // real key returns 200 and everything below RUNS for real.
       const probeStatus = await passCheckoutProbeStatus(page.request, rig.orgId, rig.compId);
       stripeUsable = probeStatus === 200;
-      test.skip(probeStatus >= 500, "Stripe not usable (dummy key) — skipping the pass money path");
+      // The message reports the STATUS, never a guessed cause. It used to say
+      // "(dummy key)", which is one reason a probe can 5xx and not the one that
+      // actually fired: the first real walkthrough run (2026-09-08) skipped here
+      // with a REAL key because Stripe answered `resource_missing` — the pass
+      // price does not exist in the shared test account until `stripe:sync`
+      // runs. A hardcoded cause sends the next reader to the wrong fix.
+      test.skip(
+        probeStatus >= 500,
+        `Stripe not usable — /api/billing/pass-checkout probe returned ${probeStatus}. ` +
+          "A real key still 5xxes when the pass price is unsynced (resource_missing); " +
+          "check the server log before assuming the key is the dummy.",
+      );
       // Pin the non-skip path to a real 200 so this can never silently become an
       // unconditional skip (billing.spec.ts:255-257 learned this the hard way).
       expect(probeStatus).toBe(200);
@@ -980,7 +991,7 @@ test.describe("checkout sheet vs the cookie banner", () => {
         // Stripe iframe, which never mounts under CI's dummy key. Skip cleanly
         // there; a real key returns 200 and the hit-test RUNS.
         const probeStatus = await passCheckoutProbeStatus(page.request, rig.orgId, rig.compId);
-        test.skip(probeStatus >= 500, "Stripe not usable (dummy key) — skipping");
+        test.skip(probeStatus >= 500, `Stripe not usable — pass-checkout probe returned ${probeStatus}`);
         expect(probeStatus).toBe(200);
         await page.goto(upgradeUrl(rig));
         // The banner must actually be up, or this proves nothing.
