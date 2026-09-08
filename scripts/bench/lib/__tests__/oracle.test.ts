@@ -209,14 +209,40 @@ describe("compareStandings", () => {
     expect(cmp.matched).toBe(false);
     expect(cmp.rows[0]!.mismatchFields).toContain("points");
     const rendered = renderStandingsMismatch(cmp);
-    expect(rendered).toContain("Pts7"); // expected
-    expect(rendered).toContain("Pts1"); // actual
+    // LABELLED association, not just "both values appear somewhere" — a
+    // mutant that swapped which side is rendered as "expected" vs "actual"
+    // must be caught, not just one that dropped a value entirely.
+    expect(rendered).toMatch(/expected:\s*e-alpha[^\n]*Pts7/);
+    expect(rendered).toMatch(/actual:\s*e-alpha[^\n]*Pts1/);
+  });
+
+  it("is LENGTH-sensitive the OTHER way too: an actual LONGER than expected is not silently ignored", () => {
+    const extra: StandingsRowWire[] = [...expectedTable.map((r) => ({ ...r })), { entrantId: "e-charlie", played: 3, won: 1, drawn: 1, lost: 1, points: 4 }];
+    const cmp = compareStandings(expectedTable, extra);
+    expect(cmp.matched).toBe(false);
   });
 
   it("is ORDER-sensitive: a same-length, reordered actual does not match", () => {
     const reordered: StandingsRowWire[] = [{ ...expectedTable[1]! }, { ...expectedTable[0]! }];
     const cmp = compareStandings(expectedTable, reordered);
     expect(cmp.matched).toBe(false);
+  });
+
+  it("catches an entrantId SWAP even when every scalar field is otherwise identical", () => {
+    const evenlyMatched: ExpectedStandingsRow[] = [
+      { entrantId: "e1", played: 2, won: 1, drawn: 0, lost: 1, points: 3 },
+      { entrantId: "e2", played: 2, won: 1, drawn: 0, lost: 1, points: 3 },
+    ];
+    // Same stats on both sides, but e1/e2's IDENTITIES are swapped —
+    // no scalar field differs, so only the entrantId check itself can see
+    // this.
+    const swapped: StandingsRowWire[] = [
+      { entrantId: "e2", played: 2, won: 1, drawn: 0, lost: 1, points: 3 },
+      { entrantId: "e1", played: 2, won: 1, drawn: 0, lost: 1, points: 3 },
+    ];
+    const cmp = compareStandings(evenlyMatched, swapped);
+    expect(cmp.matched).toBe(false);
+    expect(cmp.rows[0]!.mismatchFields).toContain("entrantId");
   });
 
   it("the EMPTY set is checked explicitly: empty expected + empty actual matches", () => {
@@ -344,8 +370,8 @@ describe("compareRankCrossings", () => {
     const cmp = compareRankCrossings(captured, standings);
     expect(cmp.matched).toBe(false);
     const rendered = renderRankCrossingMismatch(cmp);
-    expect(rendered).toContain("e-alpha, e-bravo");
-    expect(rendered).toContain("e-bravo, e-alpha");
+    expect(rendered).toMatch(/expected:[^\n]*e-alpha, e-bravo/);
+    expect(rendered).toMatch(/actual:[^\n]*e-bravo, e-alpha/);
   });
 
   it("an absent capture never counts as agreement", () => {
@@ -376,8 +402,8 @@ describe("compareChampion", () => {
     expect(cmp.crossingsAgree).toBe(false);
     expect(cmp.matched).toBe(false);
     const rendered = renderChampionMismatch(cmp);
-    expect(rendered).toContain("e-alpha");
-    expect(rendered).toContain("e-bravo");
+    expect(rendered).toMatch(/expected:\s*e-alpha/);
+    expect(rendered).toMatch(/actual:[^\n]*standings: e-alpha[^\n]*captured: e-bravo/);
   });
 });
 
@@ -418,8 +444,8 @@ describe("compareLeaderboard", () => {
     expect(cmp.entries[0]!.nameMatched).toBe(true);
     expect(cmp.entries[0]!.countMatched).toBe(false);
     const rendered = renderLeaderboardMismatch(cmp);
-    expect(rendered).toContain("Ana Alvarez = 2");
-    expect(rendered).toContain("Ana Alvarez = 99");
+    expect(rendered).toMatch(/expected:\s*Ana Alvarez = 2\b/);
+    expect(rendered).toMatch(/actual:\s*Ana Alvarez = 99/);
   });
 
   it("reds when the count matches but the NAME does not (the wrong-player trap, its positive-pair complement)", () => {

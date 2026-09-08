@@ -608,7 +608,12 @@ export function compareLeaderboard(
       matched: nameMatched && countMatched,
     };
   });
-  return { matched: entries.every((e) => e.matched) && entries.length === expected.length, metricKey, entries };
+  // `entries.length === expected.length` would be a TAUTOLOGY here — `entries`
+  // is always `expected.map(...)`, so the two counts can never disagree. The
+  // real "did we check something" question for the empty-set case is
+  // answered by `expected.length` itself, which every caller of this
+  // function already has.
+  return { matched: entries.every((e) => e.matched), metricKey, entries };
 }
 
 export function renderLeaderboardMismatch(cmp: LeaderboardComparison): string {
@@ -659,8 +664,12 @@ export function compareCareerStats(
 ): { readonly matched: boolean; readonly entries: readonly CareerStatComparison[] } {
   const entries = expected.map((exp) => {
     const hits = actual.sports.flatMap((sport) => sport.metrics.filter((m) => m.key === exp.metricKey));
+    // `hits.length === 1` is the ONLY ambiguity guard, checked once here —
+    // `matched` below reads `actualValue` rather than re-checking the length
+    // itself, so there is exactly one place a metric key's ambiguity can be
+    // silently dropped, not two independent copies that could drift apart.
     const actualValue = hits.length === 1 ? hits[0].value : undefined;
-    const matched = hits.length === 1 && actualValue === exp.count;
+    const matched = actualValue !== undefined && actualValue === exp.count;
     return {
       personId: exp.personId,
       metricKey: exp.metricKey,
@@ -670,7 +679,9 @@ export function compareCareerStats(
       matched,
     };
   });
-  return { matched: entries.every((e) => e.matched) && entries.length === expected.length, entries };
+  // Same tautology `compareLeaderboard` avoids: `entries` is always
+  // `expected.map(...)`, so comparing the two lengths can never fail.
+  return { matched: entries.every((e) => e.matched), entries };
 }
 
 /** Cross-checks a SINGLE division's leaderboard-authored count against the
