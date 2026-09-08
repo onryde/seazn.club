@@ -29,6 +29,7 @@ import { runTinySuite, TINY_PACK_PATH } from "../suites/tiny.ts";
 import { makeScheduleWorld } from "./_schedule-routes.ts";
 import { makeDivisionPhaseWorld } from "./_division-phase.ts";
 import { makeAdvanceRoutesWorld } from "./_advance-routes.ts";
+import { makeDisciplineRoutesWorld, type SuspensionRowLike } from "./_discipline-routes.ts";
 import type { DivisionCardSource, DivisionPlayerStatsLike } from "./_oracle-routes.ts";
 import {
   makeOracleRoutesWorld,
@@ -67,6 +68,14 @@ function fakeServer(
      *  response: with this set, the captured response still says
      *  [e-alpha, e-bravo] but the re-read standings say the opposite. */
     wrongFinalStandingsOrder?: boolean;
+    /** B05 T5b-3 regression — the division's active-ban list comes back with
+     *  EVERY member of the banned player's entrant on it, so the eligible
+     *  control is banned too. Every NEGATIVE assertion still holds. */
+    disciplineBansEveryone?: boolean;
+    /** B05 T5b-3 regression — the ban reaches every fixture rather than the
+     *  named one: the banned player is off EVERY team sheet, including the
+     *  ones `expected.suspensions` does not name. */
+    disciplineBanOverReaches?: boolean;
     /** B05 T4b regression — `GET /stages/{id}/standings` answers `d-badminton`'s
      *  own league table with ZERO rows (as if nothing ever folded into it),
      *  proving `compareStandings`'s empty-case discipline through the WIRING:
@@ -208,6 +217,39 @@ function fakeServer(
         : [{ divisionId, divisionName, sportKey: divisionSportById.get(divisionId) ?? "unknown", playerStats }];
     });
 
+  // B05 T5b-3 — the discipline surface (five routes), from the shared world.
+  const entrantMembers = new Map<string, string[]>();
+  const entrantByDivisionPerson = new Map<string, string>();
+  const discipline = makeDisciplineRoutesWorld({
+    entrantForPerson: (divisionId, personId) =>
+      entrantByDivisionPerson.get(`${divisionId}|${personId}`),
+    ...(opts.disciplineBansEveryone === true
+      ? {
+          // A product that refuses EVERYBODY: every other member of the
+          // banned player's own entrant comes back banned too. The NEGATIVE
+          // half of the oracle still holds on this — which is exactly why
+          // the positive half has to exist.
+          interceptActive: (rows: SuspensionRowLike[]) => [
+            ...rows,
+            ...rows.flatMap((r) =>
+              (entrantMembers.get(r.entrantId ?? "") ?? [])
+                .filter((pid) => pid !== r.personId)
+                .map((pid, i) => ({ ...r, id: `${r.id}-also-${i}`, personId: pid })),
+            ),
+          ],
+        }
+      : {}),
+    ...(opts.disciplineBanOverReaches === true
+      ? {
+          // A ban that reached EVERY fixture, not the named one: the banned
+          // player is off every team sheet. "Absent from rr-r3-c1" still
+          // holds, so only the fixture-identity check can see this.
+          interceptSheet: (_fixtureId: string, _entrantId: string, personIds: string[]) =>
+            personIds.filter((pid) => !discipline.created.some((r) => r.personId === pid)),
+        }
+      : {}),
+  });
+
   const oracleRoutes = makeOracleRoutesWorld({
     getRankedEntrantIds: (stageId) => {
       const divisionId = divisionIdByStageId.get(stageId);
@@ -295,10 +337,23 @@ function fakeServer(
       }
       const entrantsMatch = /^\/api\/v1\/divisions\/([^/]+)\/entrants$/.exec(routePath);
       if (method === "POST" && entrantsMatch !== null) {
-        const rows = body as { display_name?: string }[];
+        const rows = body as { display_name?: string; members?: { person_id?: string }[] }[];
         const out = rows.map((e, i) => ({
           id: `entrant-${slug(e.display_name ?? String(i))}-${Math.random()}`,
         }));
+        // B05 T5b-3: the roster the request carried, kept so the discipline
+        // world can answer `entrantForPerson` the way `decideSuspension`'s
+        // confirm branch resolves it out of `entrant_members`. Recorded from
+        // the REQUEST body rather than re-derived from the pack, so a suite
+        // that sent the wrong roster cannot be papered over here.
+        rows.forEach((e, i) => {
+          const entrantId = out[i]!.id;
+          const memberIds = (e.members ?? []).map((m) => m.person_id).filter((x): x is string => !!x);
+          entrantMembers.set(entrantId, memberIds);
+          for (const personId of memberIds) {
+            entrantByDivisionPerson.set(`${entrantsMatch[1]!}|${personId}`, entrantId);
+          }
+        });
         schedule.addEntrants(entrantsMatch[1]!, out.map((e) => e.id));
         return out as unknown as T;
       }
@@ -420,6 +475,12 @@ function fakeServer(
       // comment).
       const oracled = oracleRoutes.handle(method, path);
       if (oracled !== undefined) return oracled;
+      // B05 T5b-3 — the discipline surface. AFTER the oracle routes, whose
+      // `GET /divisions/{id}/stats/players` shares this route's prefix, and
+      // BEFORE the import branch below, whose own `/divisions/{id}/...`
+      // regex would not match these but which throws on anything unhandled.
+      const disciplined = discipline.handle(method, path, body);
+      if (disciplined !== undefined) return disciplined;
       // B05 T2 — division B's own streams (`d-badminton`) fold through THIS
       // route unconditionally whenever `sql` is present, same gating as
       // division A's single-event fold this file is actually about. Handled
@@ -676,6 +737,12 @@ describe("runTinySuite — B05 T1 division-A stream fold wiring", () => {
     // (`if (false)`) drops all THREE from this list, which is the wiring
     // regression this task owes.
     expect(runtimeOracles.map((o) => o.name)).toEqual([
+      // B05 T5b-3 — FIRST, and that position is the point: the discipline
+      // step has to write team sheets, and `putLineup` refuses any fixture
+      // that has left `scheduled`, so it runs before the folds rather than
+      // beside the other oracles after them. `if (false)`-ing the block drops
+      // exactly this entry — the wiring regression this task owes.
+      "oracle: d-tiebreak discipline carry (p-hotel)",
       "oracle: d-tiny/s-league standings table",
       "oracle: d-tiny/s-league tie-order cascade",
       "oracle: d-badminton/s-badminton-league standings table",
@@ -696,7 +763,7 @@ describe("runTinySuite — B05 T1 division-A stream fold wiring", () => {
       "oracle: d-tiny champion",
     ]);
     expect(runtimeOracles.map((o) => o.passed)).toEqual([
-      true, true, true, true, true, true, true, true, true,
+      true, true, true, true, true, true, true, true, true, true,
       true, true, true, true, true, true, true, true, true,
     ]);
     // The genuinely tied pair (echo/golf) was actually CHECKED, not merely
