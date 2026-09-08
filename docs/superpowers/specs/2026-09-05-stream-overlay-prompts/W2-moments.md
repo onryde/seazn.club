@@ -7,8 +7,10 @@ beside the bug, each in its sport's own colour. Then read
 `_RULES.md` → `_INDEX.md` → `W1-step-one.md` (the slot this wave fills) →
 `_THEMES.md` §5 (the moment slab: tones, sizes, Barlow 800), §6 (slab row of
 the motion table), §3 (the cricket detail band cells marked W2) →
-spec §"Step two — moments", §9 "Motion", decision 4:
-`../2026-09-05-stream-overlay-design.md`. Plan:
+**the design of record is now `../2026-09-07-streaming-programme-design.md`**
+(§3.2 the overlay endpoint, §3.4 `OverlayMoment`, §3.6 motion, §13 findings
+F3/F4 — re-pinned 2026-09-07 @ fb99bbd4c; the 09-05 design is superseded and
+kept for the canvas and the approval record). Plan:
 `../../plans/2026-09-05-stream-overlay-w2-moments.md` (being written by a Fable
 agent 2026-09-05; absent when this file was written; the plan's task order wins,
 this file's rulings win, a conflict is an `_INDEX.md` finding). Worktree
@@ -48,7 +50,8 @@ longer holds is a finding, not a blocker.
 
 | As read 2026-09-05 (`feat/spectator-surface`) | What this wave needs from it |
 |---|---|
-| `apps/web/src/server/public-site/match-centre-schema.ts:59-72` `MatchCentreDoc { fixtureId, sportKey, header, tabs, cricket, timeline, sets, info, derivedComplete }`; wire field `match_centre` (snake_case, `:4`) on the public fixture JSON | Whether the JSON the overlay already polls (`GET /api/v1/public/fixtures/[id]`, `publicFixture()` `usecases/public.ts:263`) carries it — the overlay must read the SAME payload (R5), never a second endpoint |
+| **F4 (re-pinned 2026-09-07 @ fb99bbd4c, design §3.2/§13):** the overlay no longer polls `GET /api/v1/public/fixtures/[id]` — its ONE poll target is the **overlay endpoint** `GET /api/v1/public/fixtures/[id]/overlay` (`OverlayLiveData`, W1 scope 2b). R5's "same payload" referent is therefore the overlay endpoint: the moments source (W1's field, if it carries event types) AND the fallback both ride `OverlayLiveData` — no double poll, never a second endpoint | Task zero adds the chosen source as a field on `OverlayLiveData` (server-side projection beside `clock`/`cricket`), and the spectator payload `match_centre` is READ by that projection, not polled by the overlay |
+| `apps/web/src/server/public-site/match-centre-schema.ts:59-72` `MatchCentreDoc { fixtureId, sportKey, header, tabs, cricket, timeline, sets, info, derivedComplete }`; wire field `match_centre` (snake_case, `:4`) on the public fixture JSON | Whether the merged public fixture row / `publicFixture()` (`usecases/public.ts:279` at `ac85c70`) carries it so the overlay endpoint's projection can read it server-side (F4 above) |
 | `:44` `TimelineLine { seq, at, marker, sideIndex, text: Msg{key,params}, emphasis }` — carries `seq` but **NOT the raw event `type`** | A per-sport allowlist keyed on EVENT TYPE cannot be applied to this line as read. `TIMELINE_KEY_FOR` (`@/lib/timeline-keys`, re-exported at `timeline.ts:107-110`) maps type → dictionary key and **several sports share one template** (`timeline.ts:35`), so inverting key → type is lossy. Do NOT invert. If W1 lands with `type` (or an equivalent) on the line or on a `recentEvents` array, use it; if not, use the fallback below |
 | `timeline.ts:587` `buildTimeline(args: TimelineArgs): TimelineResult`; `TimelineArgs { sportKey, events, module, cfg, lineups, sides, personOf }` (`:80-92`) | `personOf: (personId) => PersonT` is consent-resolved by the caller (`public-lineups.ts`) — the resolver to reuse for names on moments (R17) |
 | `match-centre-schema.ts:11` `Side { entrantId, name, short, colour, badgeUrl }`; `:14-24` `MatchCentreHeader { battingIndex, statusLine, rateLine, … }` | `Side.short` may supersede W1-overlay's three-letter fallback (watch-list 6); `battingIndex` may supersede the overlay's own `led` derivation — if so, ONE authority: repoint the overlay, delete the duplicate |
@@ -64,10 +67,11 @@ when the owner wants moments):** a server helper of our own,
 (fixture_id, seq)`, index `(fixture_id, seq)`), excluding voided rows, projecting
 ONLY `{ seq, type, <allowlisted payload fields> }` with person ids resolved
 through `resolvePersonDisplayName` (`lib/name-display.ts:72`) /
-`maskPublicEntrantNames` (`server/public-site/data.ts:510`) — surfaced on the
-SAME public fixture JSON as `recentEvents` (extend `publicFixture()`, add the
-field to `PublicFixture` in both hand-maintained lists, `data.ts:206`, and to the
-OpenAPI public document, R7). Never a raw payload dump: a `cricket.ball` payload
+`maskPublicEntrantNames` (`server/public-site/data.ts:510`) — surfaced as
+`recentEvents` on **`OverlayLiveData`** (the overlay endpoint's projection,
+W1 scope 2b — F4, re-pinned 2026-09-07 @ fb99bbd4c; NOT on the public fixture
+JSON, which the overlay no longer polls), and on the OpenAPI public document
+entry for the overlay endpoint (R7). Never a raw payload dump: a `cricket.ball` payload
 carries more than a fan may see. The cricket batter line's fallback is a
 server-side `foldMatch` (`packages/engine/src/core/events.ts:445`) with the real
 cricket module in the same helper, projecting striker*/non-striker `runs(balls)`
@@ -87,8 +91,11 @@ and bowler `O-M-R-W` — never retyped cricket maths.
    headlineKey; lineKey? }>>` per spec: cricket boundary four and six (`led`),
    wicket (`dismissal`); football goal (`led`), card (`caution`); hockey and ice
    hockey goal and card; tennis, badminton, table tennis: ace where the module
-   records it, break point, set point, match point, set won (`led`); volleyball
-   set won. **No entries** for boardgame, carrom, generic. The exact event type
+   records it, break point, set point, match point, set won (`led`);
+   **volleyball set won, set point AND match point** (F3 — owner Q10,
+   2026-09-06; re-pinned 2026-09-07 @ fb99bbd4c: set/match point are
+   state-derived for volleyball per the module note, never an event match).
+   **No entries** for boardgame, carrom, generic. The exact event type
    strings are read from each module's declared event schemas at plan time and
    a unit test derives them again at run time (`registry.ts:35,89`; the fold
    pattern `view-model.test.ts:8-12`) so a renamed event type fails the test
