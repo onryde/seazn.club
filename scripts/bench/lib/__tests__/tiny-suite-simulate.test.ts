@@ -1051,6 +1051,127 @@ describe("runTinySuite — B05 T1 division-A stream fold wiring", () => {
     expect(siblings.every((o) => o.passed)).toBe(true);
   });
 
+  // -------------------------------------------------------------------------
+  // B05 T5b-3 — the discipline carry
+  // -------------------------------------------------------------------------
+
+  it("B05 T5b-3 — a product that bans EVERYBODY reds the carry oracle, even though every negative check still holds", async () => {
+    // The POSITIVE half, and the reason it is mandatory. Here the division's
+    // active-ban list comes back naming every member of the banned player's
+    // entrant. The banned player IS banned, her ban IS the right length, she
+    // IS off the named sheet and ON the other one — every negative assertion
+    // passes. Only the eligible team-mate's own verdict can see this.
+    const { transport, sql } = fakeServer({ disciplineBansEveryone: true });
+    const report = await runTinySuite({
+      base: "http://bench.example",
+      engine: "optimized",
+      keep: false,
+      log: silent,
+      cliEntry: "admin",
+      packPath: TINY_PACK_PATH,
+      transport,
+      sql,
+      probeTransport: transport,
+      simTransport: transport,
+      importTransport: transport,
+      startTransport: transport,
+      advanceTransport: transport,
+      oracleTransport: transport,
+    });
+
+    expect(report.gate).toBe("red");
+    const carry = (report.oracles ?? []).find((o) => o.name.includes("discipline carry"));
+    expect(carry).toBeDefined();
+    expect(carry?.passed).toBe(false);
+    expect(carry?.detail).toContain("refused everybody");
+    expect(
+      (report.errors ?? []).some((e) => e.includes("discipline") || e.includes("expected.suspensions")),
+    ).toBe(true);
+  });
+
+  it("B05 T5b-3 — a ban that reaches EVERY fixture reds on fixture identity, not on absence", async () => {
+    // "Ineligible for exactly the right fixture" versus "ineligible
+    // somewhere". Here the banned player is off EVERY team sheet, so
+    // `presentOnMissed` is still empty and the ban is still active and
+    // correctly sized — the only check that can witness it is the one that
+    // requires her PRESENT on a fixture the pack does not name.
+    const { transport, sql } = fakeServer({ disciplineBanOverReaches: true });
+    const report = await runTinySuite({
+      base: "http://bench.example",
+      engine: "optimized",
+      keep: false,
+      log: silent,
+      cliEntry: "admin",
+      packPath: TINY_PACK_PATH,
+      transport,
+      sql,
+      probeTransport: transport,
+      simTransport: transport,
+      importTransport: transport,
+      startTransport: transport,
+      advanceTransport: transport,
+      oracleTransport: transport,
+    });
+
+    expect(report.gate).toBe("red");
+    const carry = (report.oracles ?? []).find((o) => o.name.includes("discipline carry"));
+    expect(carry?.passed).toBe(false);
+    expect(carry?.detail).toContain("which the pack does NOT name");
+  });
+
+  it("B05 T5b-3 — a pack with NO expected.suspensions reports a warning and NO carry oracle, never a vacuous pass", async () => {
+    // The empty case, stated the same way T5b-2's career block states its
+    // own: `compareSuspensions([], …).matched` is TRUE by contract, so a
+    // wiring that pushed an oracle unconditionally would report a GREEN
+    // "discipline carry" for a pack that declares no ban at all.
+    const raw = JSON.parse(await readFile(TINY_PACK_PATH, "utf8")) as {
+      expected: { suspensions?: unknown[] };
+    };
+    if (raw.expected.suspensions === undefined || raw.expected.suspensions.length === 0) {
+      throw new Error("test fixture assumption broken: the committed pack declares no expected.suspensions");
+    }
+    delete raw.expected.suspensions;
+
+    const dir = await mkdtemp(join(tmpdir(), "b05-t5b3-nosuspensions-"));
+    const mutatedPackPath = join(dir, "_tiny.json");
+    await writeFile(mutatedPackPath, JSON.stringify(raw), "utf8");
+
+    const { transport, sql } = fakeServer();
+    const report = await runTinySuite({
+      base: "http://bench.example",
+      engine: "optimized",
+      keep: false,
+      log: silent,
+      cliEntry: "admin",
+      packPath: mutatedPackPath,
+      transport,
+      sql,
+      probeTransport: transport,
+      simTransport: transport,
+      importTransport: transport,
+      startTransport: transport,
+      advanceTransport: transport,
+      oracleTransport: transport,
+    });
+
+    const oracles = report.oracles ?? [];
+    expect(oracles.some((o) => o.name.includes("discipline carry"))).toBe(false);
+    expect(
+      (report.warnings ?? []).some(
+        (w) => w.includes("no expected.suspensions rows") && w.includes("NOT run"),
+      ),
+    ).toBe(true);
+    // The enforcement probe rides inside the same block, so it must be gone
+    // too — a probe still firing would mean the block ran and only declined
+    // to report its oracle.
+    expect((report.warnings ?? []).some((w) => w.includes("enforcement probe"))).toBe(false);
+    // The SIBLINGS still ran: the mutation reached the suite and disabled
+    // only this block, rather than the whole oracle step falling over (which
+    // would satisfy the "no carry oracle" assertion above, vacuously).
+    expect(oracles.filter((o) => o.name.includes("standings table"))).toHaveLength(3);
+    expect(report.gate).toBe("green");
+  });
+
   it("B05 T5b-2 — a pack with NO expected.careers reports a warning and NO career oracle, never a vacuous pass", async () => {
     // The third empty case, and the one that cannot be reached with a
     // transport knob: `compareCareerStats([], anything).matched` is TRUE by
