@@ -141,7 +141,15 @@ describe("LineupEditor — a 422 SUSPENDED_PLAYER is said in the organiser's own
     );
     const text = textOf(island.tree());
     expect(text).toContain(expectedBanner(["Alex Doe"]));
-    expect(text).not.toContain(suspendedPlayersMessage(["Alex Doe"]));
+    // This used to assert the banner did NOT contain the server's sentence.
+    // That divergence was a regression — the en dictionary had silently
+    // reworded copy organisers already read, which `rs011-eligibility-gates`
+    // asserts and e2e on main caught. English now matches the server verbatim,
+    // so "routed, not fallback" is no longer witnessable in English; the fr
+    // case below is the witness, and this case pins the NAME reaching the
+    // sentence, which a fallback would also have to do but a broken
+    // interpolation would not.
+    expect(text).toContain("Alex Doe");
   });
 
   it("names EVERY banned player — two rosters with different bans read differently", async () => {
@@ -192,7 +200,18 @@ describe("LineupEditor — a 422 SUSPENDED_PLAYER is said in the organiser's own
     const island = await saveAndReadBanner(["Alex Doe"], [{ person_id: "p1", full_name: "" }]);
     const text = textOf(island.tree());
     expect(text).toContain(suspendedPlayersMessage(["Alex Doe"]));
-    expect(text).not.toContain(expectedBanner([""]));
+    // The failure this guards is an EMPTY name reaching the sentence, not the
+    // choice of sentence: with en copy now matching the server's verbatim,
+    // `expectedBanner([""])` and the server fallback are the same words, so
+    // the old `not.toContain` compared a string against itself. Assert the
+    // hole directly instead.
+    // The hole is a sentence with nobody in it, so assert the name sits
+    // immediately before the verb — which a nameless render cannot satisfy and
+    // a substring check against the empty-name form cannot distinguish (that
+    // form is a suffix of the correct one, which is why the previous
+    // assertion compared a string against itself once en matched the server).
+    expect(text).toContain("Alex Doe is serving an active suspension");
+    expect(text).not.toContain("{names}");
   });
 
   it("OPENS the override dialog on a ban, carrying the localized sentence and NO faked EligibilityIssue", async () => {

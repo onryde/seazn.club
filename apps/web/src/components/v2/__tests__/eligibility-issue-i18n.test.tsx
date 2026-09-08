@@ -25,6 +25,7 @@ import { DictProvider } from "@/components/i18n/dict-provider";
 import type { Dict } from "@/lib/i18n-constants";
 import en from "@/dictionaries/en/ui.json";
 import es from "@/dictionaries/es/ui.json";
+import fr from "@/dictionaries/fr/ui.json";
 import { EligibilityOverrideDialog } from "@/components/v2/eligibility-override-dialog";
 import type { EligibilityIssue } from "@/lib/registration-rules";
 
@@ -32,8 +33,10 @@ const enDict = en as unknown as Dict;
 const esDict = es as unknown as Dict;
 const enText = en as unknown as Record<string, string>;
 const esText = es as unknown as Record<string, string>;
+const frDict = fr as unknown as Dict;
+const frText = fr as unknown as Record<string, string>;
 
-function render(violations: EligibilityIssue[], dict: Dict, locale: "en" | "es"): string {
+function render(violations: EligibilityIssue[], dict: Dict, locale: "en" | "es" | "fr"): string {
   return renderToStaticMarkup(
     <DictProvider dict={dict} locale={locale}>
       <EligibilityOverrideDialog
@@ -77,10 +80,24 @@ describe("EligibilityOverrideDialog — refusal reasons render off `code`, not t
   it("renders the DICTIONARY English sentence under en, not the server's — the map is used in every locale", () => {
     const html = render([ageTooOld(35)], enDict, "en");
     expect(html).toContain(enText[KEY.ageTooOld].replace("{limit}", "35"));
-    // The en dictionary sentence is deliberately worded differently from
-    // `ageBandEligibilityIssues`'s, so an English-only harness can still tell
-    // a routed render from an inert one.
-    expect(html).not.toContain("must be 35 or younger");
+    // This assertion USED to read `not.toContain("must be 35 or younger")` —
+    // the en dictionary sentence was worded differently from the server's, so
+    // an English-only harness could tell a routed render from an inert one.
+    // That divergence was a REGRESSION, not a feature: it silently reworded
+    // English copy that `rs011-eligibility-gates.spec.ts:107` asserts and that
+    // organisers already read, and e2e on main caught it. English now matches
+    // `ageBandEligibilityIssues` verbatim, which makes the two paths
+    // indistinguishable HERE — so the proof that the map is used moves to a
+    // locale where it can actually be witnessed (the fr case below), and this
+    // case pins the interpolation instead.
+  });
+
+  it("renders the FRENCH sentence under fr — where a routed render is distinguishable from the server's English", () => {
+    // The witness the English case can no longer be: fr copy shares no words
+    // with the server sentence, so this fails if the fallback is used.
+    const html = render([ageTooOld(35)], frDict, "fr");
+    expect(html).toContain(frText[KEY.ageTooOld].replace("{limit}", "35"));
+    expect(html).not.toContain("Too old for this division");
   });
 
   it("interpolates the REAL limit — two divisions with different bands render different numbers", () => {
