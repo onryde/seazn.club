@@ -866,6 +866,152 @@ describe("runTinySuite — B05 T1 division-A stream fold wiring", () => {
     expect((report.errors ?? []).some((e) => e.includes("d-tiny/scores") || e.includes("leaderboard"))).toBe(true);
   });
 
+  // B05 T5b-2 — the two person-stats comparators' own empty cases, each
+  // proven THROUGH THE WIRE and each in ISOLATION. The isolation is the
+  // point: a knob that reddened its own oracle AND a sibling's would be two
+  // guards covering for each other, and neither would be evidence for the
+  // other. So each of these tests asserts BOTH that its own oracle went red
+  // and that every sibling oracle over the same subjects stayed green.
+  it("B05 T5b-2 — an EMPTY career rollup (no sports) reds the wired career oracle, and NOTHING else", async () => {
+    const { transport, sql } = fakeServer({ emptyCareerSports: true });
+
+    const report = await runTinySuite({
+      base: "http://bench.example",
+      engine: "optimized",
+      keep: false,
+      log: silent,
+      cliEntry: "admin",
+      packPath: TINY_PACK_PATH,
+      transport,
+      sql,
+      probeTransport: transport,
+      simTransport: transport,
+      importTransport: transport,
+      startTransport: transport,
+      advanceTransport: transport,
+      oracleTransport: transport,
+    });
+
+    const oracles = report.oracles ?? [];
+    // `compareCareerStats([], {sports: []})` is a MATCH by the comparator's
+    // own documented contract. What must not happen is that contract being
+    // reached with a NON-empty expected set and still passing: `_tiny`'s two
+    // authored `expected.careers` rows are both absent from an empty
+    // `sports[]`, so both must red.
+    const careerOracle = oracles.find((o) => o.name === "oracle: p-ana career rollup");
+    expect(careerOracle).toBeDefined();
+    expect(careerOracle?.passed).toBe(false);
+    expect(report.gate).toBe("red");
+    expect((report.errors ?? []).some((e) => e.includes("career rollup"))).toBe(true);
+    // ISOLATION — the knob is scoped to `?group=sport` alone, so every OTHER
+    // oracle over the same persons and the same counts is still green. If
+    // this list ever goes red alongside the career oracle, the fault is the
+    // fake leaking between routes and the assertion above stops being
+    // evidence for the career block specifically.
+    const siblings = oracles.filter(
+      (o) => o.name.includes("person cards") || o.name.includes("leaderboard"),
+    );
+    expect(siblings).toHaveLength(8);
+    expect(siblings.every((o) => o.passed)).toBe(true);
+  });
+
+  it("B05 T5b-2 — an EMPTY person card (no divisions) reds the wired person-card oracles, and NOTHING else", async () => {
+    const { transport, sql } = fakeServer({ emptyPersonDivisions: true });
+
+    const report = await runTinySuite({
+      base: "http://bench.example",
+      engine: "optimized",
+      keep: false,
+      log: silent,
+      cliEntry: "admin",
+      packPath: TINY_PACK_PATH,
+      transport,
+      sql,
+      probeTransport: transport,
+      simTransport: transport,
+      importTransport: transport,
+      startTransport: transport,
+      advanceTransport: transport,
+      oracleTransport: transport,
+    });
+
+    const oracles = report.oracles ?? [];
+    // Every board's cross-check reds: the person's own card names NO
+    // division at all, so `comparePersonDivisionStat` finds no row — the
+    // `actualCount === undefined` case, which must never read as a pass.
+    const cardOracles = oracles.filter((o) => o.name.includes("person cards"));
+    expect(cardOracles.map((o) => o.name)).toEqual([
+      "oracle: d-tiny person cards (scores)",
+      "oracle: d-tiny person cards (points)",
+      "oracle: d-tiebreak person cards (scores)",
+      "oracle: d-tiebreak person cards (points)",
+    ]);
+    expect(cardOracles.map((o) => o.passed)).toEqual([false, false, false, false]);
+    expect(cardOracles[0]?.detail).toContain("(absent)");
+    expect(report.gate).toBe("red");
+    expect((report.errors ?? []).some((e) => e.includes("/persons/{id}/stats card"))).toBe(true);
+    // ISOLATION — the division leaderboards and the career rollup read
+    // different routes and are untouched by this knob.
+    const siblings = oracles.filter((o) => o.name.includes("leaderboard") || o.name.includes("career rollup"));
+    expect(siblings).toHaveLength(5);
+    expect(siblings.every((o) => o.passed)).toBe(true);
+  });
+
+  it("B05 T5b-2 — a pack with NO expected.careers reports a warning and NO career oracle, never a vacuous pass", async () => {
+    // The third empty case, and the one that cannot be reached with a
+    // transport knob: `compareCareerStats([], anything).matched` is TRUE by
+    // its own contract, so a wiring that pushed an oracle unconditionally
+    // would report a GREEN "career rollup" for a pack that declares no
+    // career at all — a check that proves nothing, reported as a check that
+    // passed. The block must decline to report instead.
+    const raw = JSON.parse(await readFile(TINY_PACK_PATH, "utf8")) as {
+      expected: { careers?: unknown[] };
+    };
+    // The key is DELETED, not emptied — `pack-schema.ts` defaults `careers`
+    // to `[]`, so absence and emptiness are the same state downstream, and
+    // absence is the one a pack actually ships in.
+    if (raw.expected.careers === undefined) {
+      throw new Error("test fixture assumption broken: the committed pack declares no expected.careers");
+    }
+    delete raw.expected.careers;
+
+    const dir = await mkdtemp(join(tmpdir(), "b05-t5b2-nocareers-"));
+    const mutatedPackPath = join(dir, "_tiny.json");
+    await writeFile(mutatedPackPath, JSON.stringify(raw), "utf8");
+
+    const { transport, sql } = fakeServer();
+    const report = await runTinySuite({
+      base: "http://bench.example",
+      engine: "optimized",
+      keep: false,
+      log: silent,
+      cliEntry: "admin",
+      packPath: mutatedPackPath,
+      transport,
+      sql,
+      probeTransport: transport,
+      simTransport: transport,
+      importTransport: transport,
+      startTransport: transport,
+      advanceTransport: transport,
+      oracleTransport: transport,
+    });
+
+    const oracles = report.oracles ?? [];
+    expect(oracles.some((o) => o.name.includes("career rollup"))).toBe(false);
+    expect(
+      (report.warnings ?? []).some((w) => w.includes("no expected.careers rows") && w.includes("NOT run")),
+    ).toBe(true);
+    // The SIBLING block still ran and still passed — this proves the pack
+    // mutation reached the suite and disabled only the career block, rather
+    // than the whole oracle step falling over (which would also satisfy the
+    // "no career oracle" assertion above, vacuously).
+    const cardOracles = oracles.filter((o) => o.name.includes("person cards"));
+    expect(cardOracles).toHaveLength(4);
+    expect(cardOracles.every((o) => o.passed)).toBe(true);
+    expect(report.gate).toBe("green");
+  });
+
   it("B05 T4 — the runtime oracle is a REAL wire read, not an inert restatement: a reversed re-read standings order reds the run", async () => {
     // The captured `complete` response still reports [e-alpha, e-bravo] —
     // this fake's `advanceRoutes` world is untouched. Only the SEPARATE
