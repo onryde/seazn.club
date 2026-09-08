@@ -210,3 +210,100 @@ genuine. Empty-set stated: `groups: []` and `rows: []` both throw
 to fail) and `:770-771` (the minimal manifest is valid). Visual gate fails on
 zero images: yes at parse time and at `:1285` — but see finding 9 for the
 guard that cannot fire.
+
+---
+
+# Re-review 2026-09-08
+
+Scope: the 17 blockers only, plus the two rejections and the three spec
+amendments. Majors and minors were not re-read. Verified against the tree at
+`709ec7c3d`, **rebased on `main` `b2244879f`** (confirmed:
+`merge-base --is-ancestor b2244879f HEAD` → 0; `run-sheet-edit-time` now
+`:407` in this tree; deltas tail still `V399`).
+
+**16 CONFIRMED FIXED · 1 STILL OPEN.**
+
+| # | verdict | evidence |
+|---|---|---|
+| 1 | CONFIRMED FIXED | `export const OVERLAY_TOKENS = { root, fixed, slate, sportKeys, pairRoles, alphaRoles, paletteFor } as const` at `t1.md:653`, `export type OverlayTokens` beside it; the contrast test now opens `import { OVERLAY_TOKENS } from "../overlay-tokens"` and destructures it; zero `components/overlay/tokens.ts` references remain in either plan. |
+| 2 | CONFIRMED FIXED | The deviation is argued at `t1.md:701` (Playwright's rule fires spec→spec only; `mobile.spec.ts:3-24` already imports twenty symbols from `helpers.ts`) and lands as `_INDEX.md` finding **FS-T1a** in Task 0 Step 8(b) (`t1.md:117`), with the owner told at Task 4 sign-off and a one-file fallback if the owner prefers the copy. |
+| 3 | CONFIRMED FIXED (one nit) | `t1.md:699,781` now delete `:49-122` exactly, with a `sed -n '49p;91p;122p;124p'` pre-check. Verified on this tree: comment `:49`, function `:91`, brace `:122`, `:123` blank, `:124` the next comment. **Nit:** the post-check at `:781` says `sed -n '49p'` "now prints `/** The scorebug's own clipping gate.`" — after deleting 74 lines it prints the BLANK old `:123`; the comment lands at `:50`. Change to `sed -n '50p'`, and squash the resulting double blank at `:48-49` or Prettier will. |
+| 4 | CONFIRMED FIXED | `t1.md:668-674` is a six-row table with the measured ratios (tabletennis `#ff7a80` 2.35; badminton / icehockey / volleyball `#ff6b6b` 2.59; hockey `#ff5a4d` 2.88; tennis `#fa5252` 3.07), and ONE A/B design question to the owner recorded as **FS-T1d** (`t1.md:119`). Matches my own computation exactly. |
+| 5 | CONFIRMED FIXED | `t1.md:305` → `expect(blendOver("#f5f0e8", "#150b36", 0.7)).toBe("#b2abb3")`, all three channels shown in the comment. |
+| 6 | CONFIRMED FIXED | `t1.md:107-118`: Step 8(a) is verify-only (five greps that must pass on an untouched tree, a miss being a finding rather than a task), 8(b) adds the genuinely-absent `_INDEX.md` T1 row plus FS-T1a/FS-T1c, and the vanished `_STATE.md` sentence is named as gone. |
+| 7 | CONFIRMED FIXED | Global Constraints (`t1.md:17`) cite `main` `b2244879f`; Step 1 (`t1.md:72-73`) runs `git fetch origin main && merge-base --is-ancestor origin/main HEAD; UPTODATE=$?` and STOPS the wave on `1` with the rebase-then-baseline order spelled out. Also tightened `test -e .git` → `test -f .git`. |
+| 8 | CONFIRMED FIXED | Zero `:377` mount pins remain in either plan; both now carry the SYMBOL `data-testid="run-sheet-edit-time"` with "`:407` on `b2244879f`, grep never seek". T1 Step 8.1's write is gone. The single surviving `:377` (`w1.md:1493`) is a deliberate back-reference explaining finding 46's old wrong pin. |
+| 24 | CONFIRMED FIXED | All four mounts named and re-pinned on the rebased tree — verified `<RunSheetRow` at `run-sheet.tsx:355` (day), `:390` (unscheduled), `:428` (settled), `:669` (`RunSheetRowWithRule`, via `{...rest}`). New Step 4(d) adds a mount-count test (three lanes → three toggles, zero when unentitled). |
+| 25 | CONFIRMED FIXED | Fifteen `wonBy` occurrences and zero `winner:`/`decision:` in `w1.md`; the RE-PIN paragraph quotes `CricketToss` from `cricket.ts:240-243`. |
+| 26 | CONFIRMED FIXED | `w1.md:523` → `["cricket.revise", { oversPerSide: 10, target: 91 }]`, with the expected limit derived as `oversPerSide × cfg.ballsPerOver` from the module's own config and a differential assertion against `innings[0]`. |
+| 27 | CONFIRMED FIXED | `w1.md:2499-2500` asserts `stream_url` holds the MAX `ordinal_position` in `public_fixtures_v` rather than a literal, and records why the number moves (23 columns in V369 → 24 today). V369 confirmed still the latest definer on this tree. |
+| 28 | CONFIRMED FIXED | Re-pinned to `export const PatchFixture` `:1118` / `export type` `:1144` — **the fixer is right and my `:1081` was pre-rebase**; verified on `b2244879f`. |
+| 29 | CONFIRMED FIXED | Re-pinned on the rebased tree and verified symbol by symbol: `expectNoHorizontalScroll:49`, `apiJson:128`, `setBoolEntitlementOverrideSql:518`, `invalidateOrgEntitlements:1013`, `activeOrg:1454`, `addEntrantsViaApi:1598`, `createStageAndGenerate:1615`. **Four of my five "correct" numbers had themselves moved under desk W3** — the fixer's symbol-anchor rule is the right response. |
+| 30 | CONFIRMED FIXED | Verified: `scorePadV2AppendSuite(admin, org2.id)` called `scripts/smoke.ts:818` (defined `:17358`), `insertEntitlementOverride:9937`, `html:13356`; `check` is now found by `grep -F` rather than a number. |
+| 31 | CONFIRMED FIXED | `e2e-ci-wiring.test.ts:155` everywhere (`w1.md:4926,5564`); confirmed `const WALKTHROUGH_SPECS` is `:155` and `const WALKTHROUGH` is `playwright.config.ts:119` on the rebased tree. |
+| **32** | **STILL OPEN** | `w1.md:4676` — see below. |
+
+## 32 — STILL OPEN
+
+The placeholder is gone and the replacement is a genuinely good test: `it.each`
+over the whole status table, `aria-expanded="false"` pinning the VALUE the
+control opens at, both negative pairs, an `expectRowRendered(html)` guard so an
+absence cannot pass by nothing rendering, and a positive pair separating the
+stream gate from `run-sheet-edit-time`. One line breaks all of it:
+
+```
+const STATUSES = (PatchFixture.shape.status as z.ZodEnum<[string, ...string[]]>).options;
+```
+
+Two independent faults, verified at `apps/web/src/server/api-v1/schemas.ts:1118-1144`:
+
+1. **`PatchFixture` has no `status` field.** Its keys are `scheduled_at`,
+   `venue_id`, `court_id`, `officials`, `schedule_locked`, `expected_seq`.
+2. **`PatchFixture` has no `.shape`.** It is
+   `z.object({…}).partial().strict().refine(…)` — a `ZodEffects`, on which
+   `.shape` is `undefined`, so `.status` throws `TypeError` at module scope.
+
+A module-scope throw in this repo collects **zero tests and reports green**
+(the `PASS(0) FAIL(0)` trap), so the owner's Q6 ruling would ship untested for
+the second time, and the failure would not announce itself.
+
+The seven-value enum the plan wants is real and is at the cited line `:1188` —
+but it belongs to `export const Fixture = z.object({…})` (`:1154`), a plain
+object schema. **Fix:** `import { Fixture } from "@/server/api-v1/schemas";`
+and `const STATUSES = Fixture.shape.status.options;` — no cast needed. The
+hand-typed seven-value cross-check in the "status table is the whole enum"
+case is correct as written and should stay; it is the tripwire for a new
+status.
+
+## Rejections — both UPHELD
+
+- **Row 50 (`openapi:gen`).** Rejection correct. `"openapi:gen"` is
+  `package.json:45` on `b2244879f`. My `:46` was wrong; the plan needs no
+  change.
+- **Row 52 (`embed/layout.tsx`).** Rejection correct. `export default function
+  EmbedLayout(` is `:24` and `<div className="min-h-4 bg-white p-3">` is `:26`.
+  My `:23`/`:25` were both off by one; the plan's `:26` is right, and naming
+  `:24` for the function is an improvement.
+
+## Spec amendments FS15–FS17 — all consistent
+
+- **FS15** (`design:1024`) — §2's atlas now reads `globals.css:1135-1141`
+  (`design:118`), which is the value on the tree. The T1 plan already had it.
+- **FS16** (`design:1025`) — §4.2 (`design:412-418`) now specifies the plan's
+  vocabulary in full: GROUPS carrying `mustDiffer`/`controlSetEqual`, rows
+  carrying `awaitSelector`, `auth`, `controlRoot`, `checks`, with the reason
+  (`/embed` and the public fixture page carry no testids). The T1 prompt is
+  amended to match (`T1-theme-and-visual-gate.md:90,108`) and the T1 plan
+  records it as FS-T1b (`t1.md:121`). Three documents, one vocabulary.
+- **FS17** (`design:1026`) — §3.3 (`design:224-226`) now says
+  `presentationNowOffsetMs` is a FIELD on the returned `LiveFixture<T>`,
+  "never a module-level export", matching `w1.md:808,1212`.
+
+## Verdict
+
+**Needs one fix.** Sixteen of seventeen blockers are genuinely closed, several
+with better answers than the findings asked for — the symbol-anchor rule
+(29), the max-`ordinal_position` assertion (27), the derived `ballsLimit`
+(26), and the argued deviation with a fallback (2). Blocker 32 is a
+one-line change: `Fixture.shape.status.options`. Fix it and the wave is
+executable.

@@ -2268,7 +2268,7 @@ export function overlayStartLabel(iso: string | null, locale: string, tz: string
 - Create: `db/migration/deltas/V400__fixture_stream_url.sql`
 - Modify: `apps/web/src/server/public-site/data.ts` — `PublicFixture` (`:207`), the `getPublicFixture` SELECT (`:722-729`) (re-pinned 2026-09-08 @ b2244879f)
 - Modify: `apps/web/src/server/usecases/public.ts` — `publicFixture()`'s `Pick<>` and SELECT (`:263-297`)
-- Modify: `apps/web/src/server/api-v1/schemas.ts` — after `PatchedFixture`'s neighbourhood, next to `PatchFixture` (`:964-989`)
+- Modify: `apps/web/src/server/api-v1/schemas.ts` — after `PatchedFixture`'s neighbourhood, next to `PatchFixture` (`:1118-1144` on b2244879f)
 - Modify: `apps/web/src/server/usecases/fixtures.ts` — after `patchFixture` (`:136-176`)
 - Create: `apps/web/src/app/api/v1/fixtures/[id]/stream/route.ts`
 - Modify: `apps/web/src/server/api-v1/openapi.ts` (after `:142`), `apps/web/src/server/api-v1/key-scopes.ts` (after `:175`)
@@ -4661,9 +4661,13 @@ export function StreamRowSlot(props: {
 // The decided row is the case that matters: every other status would pass
 // even with the wrong gate copied in, because `scheduled` is the default in
 // most fixtures a test builds.
-// Imports this block adds to the file: `import { PatchFixture } from "@/server/api-v1/schemas";`
-// and `import type { z } from "zod";` (a vitest file, not a client component —
-// the @/server import is fine here).
+// Imports this block adds to the file: `import { Fixture } from "@/server/api-v1/schemas";`
+// (a vitest file, not a client component — the @/server import is fine here).
+// NOT `PatchFixture`: it is `z.object({…}).partial().strict().refine(…)` at
+// :1118 — a ZodEffects with no `.shape` and no `status` field — so
+// `PatchFixture.shape.status` throws at module scope, collects ZERO tests and
+// reports green (re-review 2026-09-08, blocker 32). `Fixture` (:1154) is the
+// plain object that owns the enum.
 // `rowHtml(fixture, canEdit, stageName)` is the file's own helper (:63-77);
 // it gains four trailing props with defaults so every existing call is
 // untouched: `rowHtml(fixture, canEdit = true, stageName?, stream = { streamingEntitled: false, relayEntitled: false, sportKey: "cricket", openStreamFor: null, openStreamTab: "obs" as const })`,
@@ -4674,7 +4678,7 @@ export function StreamRowSlot(props: {
 /** The seven values of `fixtures.status` — read off the wire schema, never
  *  typed here (server/api-v1/schemas.ts: `status: z.enum([...])` at :1188 on
  *  b2244879f), so a new status joins the table by itself. */
-const STATUSES = (PatchFixture.shape.status as z.ZodEnum<[string, ...string[]]>).options;
+const STATUSES = Fixture.shape.status.options; // no cast: `Fixture` is a plain z.object
 
 describe("the stream toggle opens at EVERY fixture status (owner Q6: the replay link is pasted after the whistle)", () => {
   it("the status table is the whole enum, not a sample", () => {
@@ -4730,7 +4734,7 @@ describe("the stream toggle opens at EVERY fixture status (owner Q6: the replay 
 });
 ```
 
-  RE-PIN: `PatchFixture.shape.status` — if `PatchFixture` wraps the enum (`.partial()`/`.optional()`), unwrap with `.unwrap()` or import the status enum by its own name from `schemas.ts` (grep `z.enum(["scheduled", "in_play"`); the point is that the table is DERIVED. `outcome`'s shape for a decided row: copy the file's own `outcome` fixture from its `:160` case.
+  RE-PIN: `Fixture.shape.status.options` — `Fixture` is `export const Fixture = z.object({` at `schemas.ts:1154` and its `status: z.enum([...])` is `:1188` on `b2244879f`. If a later commit wraps `Fixture` (`.partial()`, `.refine()`), `.shape` disappears: then import the status enum by its own name (grep `z.enum(["scheduled", "in_play"`) — the point is that the table is DERIVED, and a module-scope throw here collects zero tests and reports green, so Step 3a's run-it-fails step must show the `it.each` rows being COUNTED. `outcome`'s shape for a decided row: copy the file's own `outcome` fixture from its `:160` case.
 
   `run-sheet-row.test.tsx` already mounts `RunSheetRow` to markup (read its helper before writing); if a status the row's fixture type refuses is in the list above, drop that one row and record it. If the row is somehow not mountable, assert the same three facts through `stream-overlay.spec.ts` in Task 8 instead and record WHICH here — but do not drop the decided-status row: it is the whole point of the ruling.
 
