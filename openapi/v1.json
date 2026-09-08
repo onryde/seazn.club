@@ -50234,6 +50234,26 @@
                                     }
                                   ]
                                 },
+                                "phase": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "strength": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
                                 "updatedAt": {
                                   "type": "string"
                                 }
@@ -50247,6 +50267,8 @@
                                 "battingIndex",
                                 "statusLine",
                                 "rateLine",
+                                "phase",
+                                "strength",
                                 "updatedAt"
                               ],
                               "additionalProperties": false
@@ -51729,6 +51751,8 @@
                           "params": {}
                         },
                         "rateLine": "example",
+                        "phase": "example",
+                        "strength": "example",
                         "updatedAt": "example"
                       },
                       "tabs": [
