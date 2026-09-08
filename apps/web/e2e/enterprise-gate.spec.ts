@@ -366,3 +366,50 @@ test.describe("/admin/entitlements", () => {
     expect(planHeaderCount, "no extra or missing plan column").toBe(expectedLabels.length);
   });
 });
+
+// ===========================================================================
+// C6 (fix round 1 finding) — the org settings billing upgrade grid is hidden
+// from a paid org and shown to a community one (billing/page.tsx:594-595:
+// `{(!isPaid || planLapsed) && isPayer}` wrapping `<section id="upgrade">`)
+// ===========================================================================
+//
+// `apps/web/e2e/billing.spec.ts` already proves the COMMUNITY half (its
+// "an org that has already had Pro is not offered the trial again" test, and
+// others, all run against a community org and assert something inside
+// `#upgrade` is visible) — but nothing anywhere in `apps/web/e2e/` seeds a
+// genuinely non-lapsed PAID org and confirms the grid is ABSENT. A build that
+// rendered `#upgrade` unconditionally would pass every existing check.
+//
+// "Genuinely non-lapsed" is the load-bearing word: `isPaid` alone
+// (`planKey !== "community"`) is not the real gate — `planLapsed` also
+// participates (`(!isPaid || planLapsed) && isPayer`), so a paid-but-lapsed
+// org (a stale trial, a 14-day-dunning past_due, an expired comp) still SEES
+// the grid by design (the resolver has already degraded it to community) and
+// would make an assertion of absence pass for the wrong reason. `pro` +
+// `status: 'active'` with no trial/comp/past_due fields set — exactly what
+// `seedOrgOnPlan("pro")` seeds — resolves through `orgPlanKey` to `pro` with
+// nothing degrading it, so `planLapsed` is false and `isPaid` is true: the
+// one combination that actually reaches the hidden branch of the gate.
+test.describe("the org settings billing upgrade grid", () => {
+  test("is absent for a non-lapsed paid org, and present for a community org", async ({
+    page,
+  }) => {
+    const pro = await seedOrgOnPlan("pro");
+    await signIn(page, pro.ownerEmail);
+    await page.goto(`/o/${pro.orgSlug}/settings/billing`);
+    await expect(
+      page.locator("#upgrade"),
+      "a non-lapsed paid org must not be sold a plan it already has",
+    ).toHaveCount(0);
+
+    // The positive pair, on an independent org: without it, a build that
+    // hid the grid from EVERYONE would pass the row above and look correct.
+    const community = await seedOrgOnPlan("community");
+    await signIn(page, community.ownerEmail);
+    await page.goto(`/o/${community.orgSlug}/settings/billing`);
+    await expect(
+      page.locator("#upgrade"),
+      "a community org must still see the upgrade grid",
+    ).toBeVisible();
+  });
+});
