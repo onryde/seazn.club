@@ -918,6 +918,46 @@ describe.skipIf(!HAS_DB)("getCompetitionDesk", () => {
       expect(desk.in_play_fixtures.map((f) => f.fixture_no)).toEqual([1, 2]);
     });
 
+    // The test above depends on two `core.start` inserts landing in DIFFERENT
+    // milliseconds, which is a race, not a guarantee — it is what made this
+    // suite flake red in a loaded CI run while passing alone. `started_at` is
+    // `min(recorded_at)`, a microsecond `timestamptz`, but it reaches JS as a
+    // `Date` (millisecond) and the comparator used to compare the ISO string
+    // built from it. Two kick-offs inside one millisecond therefore compared
+    // EQUAL, and `Array.sort` being stable returned the query's own fixture_no
+    // order — the list reported insertion order while claiming kick-off order.
+    // Here the two kick-offs are pinned 100us apart INSIDE one millisecond, so
+    // the tie is deterministic rather than a race: this fails without the
+    // microsecond sort key and passes with it.
+    it("orders two kick-offs recorded inside the SAME millisecond by their real time", async () => {
+      const { auth } = await seedOrg();
+      const { competitionId, divisionId } = await seedDivision(auth, 4);
+      const [stage] = await createStages(auth, divisionId, {
+        seq: 1, kind: "league", name: "League", config: {}, progression: null,
+      });
+      await generateStageFixtures(auth, stage!.id);
+      await sql`update divisions set status = 'active' where id = ${divisionId}`;
+      const rows = await sql<{ id: string }[]>`select id from fixtures where division_id = ${divisionId} order by fixture_no`;
+      await sql`update fixtures set status = 'in_play' where id = ${rows[0]!.id}`;
+      await sql`update fixtures set status = 'in_play' where id = ${rows[1]!.id}`;
+
+      // Same millisecond (.000), 800us apart. fixture_no 2 kicks off FIRST,
+      // the opposite of both fixture_no order and the physical write order
+      // above — so a comparator that ties returns [1, 2] and is caught.
+      await sql`
+        insert into score_events (fixture_id, org_id, seq, type, payload, recorded_at)
+        values (${rows[1]!.id}, ${auth.orgId}, 0, 'core.start', '{}', '2026-03-01T12:00:00.000100+00')`;
+      await sql`
+        insert into score_events (fixture_id, org_id, seq, type, payload, recorded_at)
+        values (${rows[0]!.id}, ${auth.orgId}, 0, 'core.start', '{}', '2026-03-01T12:00:00.000900+00')`;
+
+      const desk = await getCompetitionDesk(auth, competitionId);
+      expect(desk.in_play_fixtures.map((f) => f.fixture_no)).toEqual([2, 1]);
+      // Both render the SAME millisecond-precision instant to consumers — the
+      // payload is unchanged by the fix; only the sort sees the microseconds.
+      expect(desk.in_play_fixtures[0]?.started_at).toBe(desk.in_play_fixtures[1]?.started_at);
+    });
+
     // Fix round 1, Major 2: the ORIGINAL version of this test used only TWO
     // divisions, one of which was excluded outright (in-play), so
     // `upNextCandidates` only ever held ONE element and the comparator was
