@@ -36,6 +36,14 @@ the engine derives against what the pack says history did.
 - **F1.** `finalRanks` crosses the wire exactly once, in the
   `POST /api/v1/stages/{id}/complete` response body, and can never be re-read:
   `GET /divisions/{id}/history` does not select `payload`.
+  **Corrected by T3, verified:** this document first said the event appears
+  "for a ladder/bracket completion". It appears for EVERY stage kind —
+  `packages/engine/src/competition/stage.ts:237` (table/pool, ranks from
+  `crossPoolOrder`), `:275` (bracket, from `bracketRanks`) and
+  `engine-db/competition.ts:498` (ladder, from `config.ladder_order`). The
+  narrow reading came from grepping `finalRanks` in `competition.ts` alone,
+  where the table path's emission does not appear because it happens in the
+  engine package. A grep is not a read, one file at a time least of all.
 - **F1b.** There is no champion field anywhere in the product.
 - **F2.** Advancement lives in `usecases/stages.ts`, not `stage-seeding.ts`;
   all four routes are `/api/v1`-reachable, so B05 §2's bench-as-organizer
