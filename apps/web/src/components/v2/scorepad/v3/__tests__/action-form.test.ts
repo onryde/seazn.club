@@ -1306,3 +1306,141 @@ describe("ActionFormList — the bowler row is not OFFERED on a dismissal the en
     expect(payload.batting.dismissal).toEqual({ kind: "runout" });
   });
 });
+
+// Owner ruling 2026-09-08 — Option A, "group the names under their side".
+//
+// `candidatesForPerson` reads BOTH squads for a person item (the engine's
+// `PadAttributionItem` names no side, so a sport-agnostic picker cannot
+// narrow), and `attributionOptions` used to flatten that straight into one
+// chip wrap. On cricket's `dismissal.bowler` that is ~22 names in a single
+// undifferentiated row, half of them structurally impossible for the action,
+// and the engine's refusal of a wrong pick names no field (refusal-copy.ts
+// resolves by error CODE only) — so a wrong tap sent the scorer back to the
+// identical list with nothing new to go on.
+//
+// The remedy changes NOTHING about eligibility: the same candidates are
+// offered. It only stops discarding the side that was already computed.
+describe("ActionFormList — a person item groups its candidates under a side heading (owner ruling 2026-09-08, Option A)", () => {
+  type Member = SquadState["home"]["members"][number];
+  function member(personId: string, orderNo: number): Member {
+    return { personId, role: "player", provenance: "named", orderNo, onField: true, started: true, timesOff: 0, timesOn: 0 };
+  }
+
+  // TWO per side, not one: with a single candidate each, "grouped by side"
+  // and "one chip per group" are the same picture, and a grouping that put
+  // one name in the wrong group would still look right. Two per side is the
+  // smallest fixture in which membership is actually witnessed.
+  const SQUADS: SquadState = {
+    home: { entrantId: "home-1", members: [member("p-h1", 1), member("p-h2", 2)], subsUsed: 0, exemptUsed: {} },
+    away: { entrantId: "away-1", members: [member("p-a1", 1), member("p-a2", 2)], subsUsed: 0, exemptUsed: {} },
+  };
+  const LINEUPS: LineupPair = {
+    home: {
+      entrantId: "home-1",
+      slots: [
+        { personId: "p-h1", slot: "starting", orderNo: 1 },
+        { personId: "p-h2", slot: "starting", orderNo: 2 },
+      ],
+    },
+    away: {
+      entrantId: "away-1",
+      slots: [
+        { personId: "p-a1", slot: "starting", orderNo: 1 },
+        { personId: "p-a2", slot: "starting", orderNo: 2 },
+      ],
+    },
+  };
+  // Realistic, and deliberately carrying NO clue to the side in the name
+  // itself — the whole defect is that a scorer cannot tell these apart, and
+  // "Home Player"/"Away Player" fixtures are exactly why it never looked bad
+  // in a test.
+  const NAMES = { "p-h1": "Aravind Menon", "p-h2": "Barry Whitlock", "p-a1": "Chetan Rao", "p-a2": "Dermot Fahy" };
+
+  const pickerAction = action({
+    type: "cricket.review",
+    labelKey: label("Review"),
+    fields: [],
+    attribution: [
+      { kind: "side", path: "by" },
+      { kind: "person", path: "person" },
+    ],
+  });
+
+  function render(squads: SquadState = SQUADS) {
+    const island = renderIsland(ActionFormList, {
+      actions: [pickerAction],
+      t,
+      submittingType: null,
+      onSubmit: () => {},
+      squads,
+      lineups: LINEUPS,
+      personNames: NAMES,
+    });
+    click(buttonsOf(island.tree())[0]!); // expand
+    return island;
+  }
+  const rowFor = (island: ReturnType<typeof render>, path: string) =>
+    island.tree().find((el) => propsOf(el)["data-attribution-path"] === path)!;
+  const kidsOf = (el: ReturnType<typeof walk>[number]) => walk(propsOf(el).children as never);
+  const sideGroupsOf = (row: ReturnType<typeof walk>[number]) =>
+    kidsOf(row).filter((el) => propsOf(el)["data-attribution-side"] !== undefined);
+  const chipValuesOf = (el: ReturnType<typeof walk>[number]) =>
+    kidsOf(el)
+      .filter((c) => c.type === "button")
+      .map((c) => propsOf(c)["data-value"]);
+
+  it("splits the person candidates into a home group and an away group, each holding only its own side", () => {
+    const row = rowFor(render(), "person");
+    const groups = sideGroupsOf(row);
+
+    // Reds before the change: nothing in the row is marked with a side at all.
+    expect(groups.map((g) => propsOf(g)["data-attribution-side"])).toEqual(["home", "away"]);
+    expect(chipValuesOf(groups[0]!)).toEqual(["p-h1", "p-h2"]);
+    expect(chipValuesOf(groups[1]!)).toEqual(["p-a1", "p-a2"]);
+  });
+
+  it("heads each group with the SAME wording the side picker gives its own chips, and names the group for a screen reader", () => {
+    const island = render();
+    const groups = sideGroupsOf(rowFor(island, "person"));
+
+    // Read the expected wording off the SIDE item's own chips rather than
+    // typing the two strings a second time: if either control's copy moves,
+    // this fails instead of silently asserting yesterday's wording.
+    const sideChips = kidsOf(rowFor(island, "by")).filter((c) => c.type === "button");
+    const [homeWord, awayWord] = sideChips.map((c) => textOf(c));
+
+    expect(textOf(groups[0]!)).toContain(homeWord!);
+    expect(textOf(groups[1]!)).toContain(awayWord!);
+    // Visible heading only is a heading a screen reader never reaches.
+    expect(propsOf(groups[0]!)["aria-label"]).toBe(homeWord);
+    expect(propsOf(groups[1]!)["aria-label"]).toBe(awayWord);
+    expect(propsOf(groups[0]!).role).toBe("group");
+  });
+
+  it("emits no group and no bare heading for a side with no candidates", () => {
+    const oneSided: SquadState = { ...SQUADS, away: { ...SQUADS.away, members: [] } };
+    const island = render(oneSided);
+    const row = rowFor(island, "person");
+    const groups = sideGroupsOf(row);
+
+    expect(groups.map((g) => propsOf(g)["data-attribution-side"])).toEqual(["home"]);
+    const awayWord = textOf(kidsOf(rowFor(island, "by")).filter((c) => c.type === "button")[1]!);
+    expect(textOf(row)).not.toContain(awayWord);
+  });
+
+  it("leaves the chip ORDER exactly as the ungrouped row had it — headings are inserted, nothing is re-sorted", () => {
+    // The guarantee that every pre-existing selector and nth-chip assertion
+    // in this suite (and in the e2e specs) still names the same chip.
+    expect(chipValuesOf(rowFor(render(), "person"))).toEqual(["p-h1", "p-h2", "p-a1", "p-a2"]);
+  });
+
+  it("does NOT side-group the SIDE item — its own two chips already read Home and Away", () => {
+    // A pin against over-applying the ruling: a Home heading above a chip
+    // labelled "Home" is a heading over itself. Passes before the change as
+    // well as after, deliberately — it exists to red on a future edit that
+    // groups every item kind indiscriminately, not on this one.
+    const row = rowFor(render(), "by");
+    expect(sideGroupsOf(row)).toEqual([]);
+    expect(chipValuesOf(row)).toEqual(["home-1", "away-1"]);
+  });
+});
