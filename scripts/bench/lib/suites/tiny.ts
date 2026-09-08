@@ -3307,6 +3307,10 @@ export async function runTinySuite(
               : `proposal qualifiers [${qc.actual.join(", ")}] disagree with the pack's expected order ` +
                 `[${qc.expected.join(", ")}] — confirm/generate/complete were never called for "${stage1.ref}" (D7)`,
           });
+          // B05 review round 1, MAJOR 4: this pushed an `OracleResult` and
+          // emitted nothing, so a log consumer reading `oracle_checked`
+          // undercounted the wave against the report's own oracle list.
+          log.info(oracleLogFields("seed_proposal_qualifiers", qc.matched ? "pass" : "fail"), "oracle_checked");
           if (!qc.matched) {
             errors.push(
               `advance: ${stage1.ref}: seed proposal qualifiers [${qc.actual.join(", ")}] disagree with the ` +
@@ -3390,6 +3394,8 @@ export async function runTinySuite(
                     : `captured finalRanks [${franksCheck.actual === undefined ? "(absent — stage did not report complete)" : franksCheck.actual.join(", ")}] ` +
                       `disagree with the pack's expected order [${franksCheck.expected.join(", ")}]`,
                 });
+                // B05 review round 1, MAJOR 4 — see the sibling emitter above.
+                log.info(oracleLogFields("final_ranks", franksCheck.matched ? "pass" : "fail"), "oracle_checked");
                 if (!franksCheck.matched) {
                   errors.push(
                     `advance: ${stage1.ref}: captured finalRanks ` +

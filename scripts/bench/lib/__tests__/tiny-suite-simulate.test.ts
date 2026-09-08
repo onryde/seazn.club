@@ -864,10 +864,27 @@ describe("runTinySuite — B05 T1 division-A stream fold wiring", () => {
     expect(
       oracleEvents.filter((e) => e.kind !== "tie_order_cascade").every((e) => e.passed === true && e.verdict === "pass"),
     ).toBe(true);
-    // Exactly one event per runtime oracle — a dropped emitter shrinks this
+    // Exactly one event per emitting oracle — a dropped emitter shrinks this
     // and is not hidden by the two `every()` assertions above, which an empty
     // or short list satisfies vacuously.
-    expect(oracleEvents).toHaveLength(runtimeOracles.length);
+    //
+    // B05 review round 1, MAJOR 4: this used to count only the `oracle:`-
+    // prefixed rows, and the two `advance:` ones (seed proposal qualifiers,
+    // finalRanks) pushed an `OracleResult` while emitting NO `oracle_checked`
+    // event — so a log consumer undercounted the wave by exactly two against
+    // the report's own list, and this length check could not see it because
+    // both sides of it excluded the same two rows. The set spans both
+    // prefixes now.
+    const emittingOracles = (report.oracles ?? []).filter(
+      (o) => o.name.startsWith("oracle:") || o.name.startsWith("advance:"),
+    );
+    // The two `advance:` rows are genuinely in this run, or the widened
+    // count below would be the same number it always was.
+    expect(emittingOracles.length).toBe(runtimeOracles.length + 2);
+    expect(oracleEvents).toHaveLength(emittingOracles.length);
+    // …and by KIND, so a mislabelled emitter cannot satisfy the count alone.
+    expect(oracleEvents.filter((e) => e.kind === "seed_proposal_qualifiers")).toHaveLength(1);
+    expect(oracleEvents.filter((e) => e.kind === "final_ranks")).toHaveLength(1);
     // Every OTHER oracle's verdict is untouched by this change — either
     // absent (the pre-T6 shape) or an explicit pass, never no_subject.
     expect(
