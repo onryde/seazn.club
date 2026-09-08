@@ -88,6 +88,7 @@ function fullReport(): BenchReportType {
           chunks: 2,
           findings: [
             {
+              kind: "call_refused",
               chunkIndex: 1,
               streamKeys: ['["d-badminton","rr-r2-c1"]'],
               status: 409,
@@ -95,6 +96,7 @@ function fullReport(): BenchReportType {
               message: "another import with this import_id is already running for this division",
             },
             {
+              kind: "stream_not_imported",
               streamKey: '["d-badminton","rr-r3-c1"]',
               fixture: "fx-9",
               status: "rejected",
@@ -178,6 +180,46 @@ describe("report schema round-trip", () => {
       ...base,
       entryMode: "registration",
       suites: [{ ...(base.suites[0] as BenchReportType["suites"][number]), registration: [registrationDivision()] }],
+    };
+
+    const written = await writeReport(dir, report);
+    const onDisk: unknown = JSON.parse(await readFile(written.jsonPath, "utf8"));
+    const reparsed = BenchReport.parse(onDisk);
+    expect(reparsed).toEqual(JSON.parse(JSON.stringify(report)));
+  });
+
+  // B05 T2.5 (D9) — same discipline as the B02/B03r comments above:
+  // `writeReport` PARSES before it writes, so a `divisionStart` field the
+  // schema does not declare would be silently stripped from both
+  // report.json and report.md, invisible to a renderer-only test.
+  it("round-trips a suite's divisionStart section, including a blocking-conflicts row", async () => {
+    const dir = await tempDir();
+    const base = fullReport();
+    const report: BenchReportType = {
+      ...base,
+      suites: [
+        {
+          ...(base.suites[0] as BenchReportType["suites"][number]),
+          divisionStart: [
+            {
+              divisionRef: "d-tiny",
+              acknowledgedWarnings: true,
+              warnings: [{ fixtureId: "fx-1", blocking: false, kind: "back_to_back" }],
+              started: true,
+              confirmedStatus: "active",
+            },
+            {
+              divisionRef: "d-badminton",
+              acknowledgedWarnings: false,
+              warnings: [],
+              blockingConflicts: [{ fixtureId: "fx-9", blocking: true, kind: "court_overlap" }],
+              checkerClean: true,
+              checkerFindingCount: 0,
+              started: false,
+            },
+          ],
+        },
+      ],
     };
 
     const written = await writeReport(dir, report);

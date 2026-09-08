@@ -24,6 +24,7 @@ import type { ProbeTransport } from "../dls-gate.ts";
 import type { PlanEntitlementRow, PlanSql } from "../plan.ts";
 import { runTinySuite, TINY_PACK_PATH } from "../suites/tiny.ts";
 import { makeScheduleWorld } from "./_schedule-routes.ts";
+import { makeDivisionPhaseWorld } from "./_division-phase.ts";
 
 const silent = pino({ level: "silent" });
 
@@ -56,6 +57,12 @@ function fakeServer(opts: { refuseImportWith?: { status: number; code: string; m
   let entitled = false;
 
   const schedule = makeScheduleWorld({ solverEngine: "optimized" });
+  // B05 T2.5 (D9) — see `_division-phase.ts`'s own header comment: EVERY
+  // `sql`-passing fake now reaches `/start`/`GET /divisions/{id}`
+  // unconditionally, and phase-gating `/events/import` here is what makes
+  // this file's own "clean fold" assertions a real regression against the
+  // start step being wired in.
+  const phase = makeDivisionPhaseWorld();
 
   const transport: ProbeTransport = {
     async signIn(_base, _s) {
@@ -173,7 +180,9 @@ function fakeServer(opts: { refuseImportWith?: { status: number; code: string; m
         return (claimInvites.get(personId) ?? null) as T;
       }
       if (method === "GET" && /^\/api\/v1\/divisions\/[^/]+$/.test(routePath)) {
-        return { slug: `slug-${routePath.split("/")[4]}` } as T;
+        // B05 T2.5 — `status` is D9's own RE-READ; `slug` is unrelated
+        // scaffolding no production call site actually reads.
+        return { slug: `slug-${routePath.split("/")[4]}`, ...phase.handleDivisionGet(method, routePath) } as T;
       }
       if (method === "POST" && /^\/api\/admin\/orgs\/[^/]+\/entitlement-override$/.test(routePath)) {
         entitled = true;
@@ -186,13 +195,26 @@ function fakeServer(opts: { refuseImportWith?: { status: number; code: string; m
     },
     async raw(_base, _s, path, method = "GET", body): Promise<RawResult> {
       calls.push({ method, path, body });
+      // B05 T2.5 (D9) — `/start` itself, unconditionally whenever `sql` is
+      // present. Checked FIRST: nothing below can be reached before this.
+      const started = phase.handleStart(method, path);
+      if (started !== undefined) return started;
       // B05 T2's own addition: division B's batch-import fold. Refuses the
       // WHOLE call when `opts.refuseImportWith` is set (so a wiring test can
       // prove a call-level refusal reaches `report.errors`/`report.gate`,
       // never a silent skip or retry); otherwise every stream in the call
       // reports "imported".
-      const importMatch = /^\/api\/v1\/divisions\/[^/]+\/events\/import$/.exec(path);
+      const importMatch = /^\/api\/v1\/divisions\/([^/]+)\/events\/import$/.exec(path);
       if (importMatch) {
+        const importDivisionId = importMatch[1]!;
+        // B05 T2.5 (D9) — the phase gate `usecases/event-import.ts:704`
+        // enforces: this is what proves `runDivisionStartLayer` actually ran
+        // BEFORE this fold, not merely that the function exists. Checked
+        // BEFORE `opts.refuseImportWith` — a caller that wants to test the
+        // call-refused-finding path never needs to also start the division
+        // first, since `fakeServer()` (no overrides) already does.
+        const phaseRefused = phase.refuseUnlessStarted(importDivisionId, "import");
+        if (phaseRefused !== undefined) return phaseRefused;
         if (opts.refuseImportWith !== undefined) {
           const { status, code, message } = opts.refuseImportWith;
           return { status, json: { ok: false, error: { code, message } } as never };
@@ -220,6 +242,16 @@ function fakeServer(opts: { refuseImportWith?: { status: number; code: string; m
       const divisionId = fixtureDivisionId.get(fixtureId);
       const dlsEnabled = divisionId !== undefined && dlsByDivisionId.get(divisionId) === true;
       const { type, payload, expected_seq } = body as { type: string; payload: { target?: unknown }; expected_seq: number };
+      // B05 T2.5 (D9) — same scoping-away-from-cricket.* reasoning as
+      // `tiny-suite-simulate.test.ts`'s own identical comment: the DLS-gate
+      // probe's own throwaway division is never started by this run, and its
+      // probe cells must reach the ENTITLEMENT door, not this phase door.
+      // This file drives no division-A scoring calls of its own, but the DLS
+      // probe's unconditional cells still hit this same route.
+      if (divisionId !== undefined && !type.startsWith("cricket.")) {
+        const phaseRefused = phase.refuseUnlessStarted(divisionId, "scoring");
+        if (phaseRefused !== undefined) return phaseRefused;
+      }
       const manualTarget = payload?.target !== undefined;
       const requiresDls = type === "cricket.revise" && dlsEnabled && !manualTarget;
       if (requiresDls && !entitled) {
@@ -288,9 +320,20 @@ describe("runTinySuite — B05 T2 division-B stream fold wiring", () => {
       probeTransport: transport,
       simTransport: transport,
       importTransport: transport,
+      startTransport: transport,
     });
 
     expect(report.gate).toBe("green");
+    // B05 T2.5 (D9) — both `_tiny.json`'s streamed divisions were started and
+    // RE-READ as active BEFORE either fold ran — this is the whole reason
+    // the import call below succeeded rather than 409ing against the fake's
+    // own phase gate.
+    expect(report.divisionStart).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ divisionRef: "d-tiny", started: true, confirmedStatus: "active" }),
+        expect.objectContaining({ divisionRef: "d-badminton", started: true, confirmedStatus: "active" }),
+      ]),
+    );
     // `_tiny.json`'s division B (`d-badminton`) declares ONE stream with 76
     // events. Asserted against what the pack ACTUALLY sent, never a constant
     // typed into this test a second time.
@@ -299,6 +342,11 @@ describe("runTinySuite — B05 T2 division-B stream fold wiring", () => {
     const sentStreams = (calls2[0]!.body as { streams: { events: unknown[] }[] }).streams;
     expect(sentStreams).toHaveLength(1);
     expect(sentStreams[0]!.events).toHaveLength(76);
+    // `/start` happens BEFORE the import POST — never the other way around.
+    const firstStartIdx = calls.findIndex((c) => c.method === "POST" && /\/start$/.test(c.path));
+    const firstImportIdx = calls.findIndex((c) => c.method === "POST" && /\/events\/import$/.test(c.path));
+    expect(firstStartIdx).toBeGreaterThan(-1);
+    expect(firstImportIdx).toBeGreaterThan(firstStartIdx);
 
     expect(report.importSimulation).toBeDefined();
     expect(report.importSimulation?.eventsSent).toBe(76);
@@ -342,12 +390,13 @@ describe("runTinySuite — B05 T2 division-B stream fold wiring", () => {
       probeTransport: transport,
       simTransport: transport,
       importTransport: transport,
+      startTransport: transport,
     });
 
     expect(report.gate).toBe("red");
     expect((report.errors ?? []).some((e) => e.includes("import.concurrent"))).toBe(true);
     expect(report.importSimulation?.findings).toHaveLength(1);
-    expect(report.importSimulation?.findings?.[0]).toMatchObject({ code: "import.concurrent", status: 409 });
+    expect(report.importSimulation?.findings?.[0]).toMatchObject({ kind: "call_refused", code: "import.concurrent", status: 409 });
     expect(report.importSimulation?.eventsSent).toBe(0);
 
     // Never retried: exactly one import POST for the one chunk this run

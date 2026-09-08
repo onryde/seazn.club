@@ -64,7 +64,7 @@
 import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { encodeConstraints, type Board, type BoardCourt, type BoardFixture, type CheckerFinding, type EncodedConstraints } from "./board.ts";
-import type { Session } from "./http.ts";
+import { BenchHttpError, raw, type RawResult, type Session } from "./http.ts";
 import { defaultTransport, type SeedTransport } from "./seed.ts";
 
 const MINUTE_MS = 60_000;
@@ -1165,4 +1165,261 @@ export async function readEngineArtifacts(
     }
   }
   return out;
+}
+
+// ---------------------------------------------------------------------------
+// Division start (B05 T2.5, design doc §3 D9) — the missing step between
+// "scheduled" and every write path this bench drives after it
+// ---------------------------------------------------------------------------
+//
+// `runScheduleLayer` above takes a division `setup -> scheduled` and stops.
+// Both `usecases/scoring.ts:222` (`WRONG_PHASE`, "division has not started —
+// scoring is closed") and `usecases/event-import.ts:704` (409
+// `import.division_not_started`) refuse a division still in "setup" or
+// "scheduled" — so `simulate.ts`'s and `import.ts`'s folds are correct
+// plumbing that 409s on contact with a real server until this runs first.
+//
+// Starting is not a formality — it PUBLISHES the schedule under the SAME
+// server-side validation `publishSchedule` runs
+// (`app/api/v1/divisions/[id]/start/route.ts`'s own header comment: "starting
+// PUBLISHES the schedule, under the same server-side validation publish
+// runs"), so it can refuse exactly like a publish can. D9's policy, verbatim:
+//
+//  - Attempt WITHOUT `acknowledge_warnings` first — a bench that acknowledges
+//    pre-emptively can never observe a warning.
+//  - 422 `SCHEDULE_UNACKNOWLEDGED_WARNINGS`: record every warning, THEN retry
+//    WITH `acknowledge_warnings: true` (the human path — warnings on the
+//    record rather than swallowed). Never a second retry: a refusal on the
+//    retry itself is reported as an error, not chased further.
+//  - 422 `SCHEDULE_BLOCKING_CONFLICTS`: red, and never retry — that flag
+//    cannot fix a blocking conflict; `assertPublishable` (apps/web) throws
+//    this BEFORE it even reads `acknowledge_warnings`. B04's independent
+//    checker has already certified this same board; a blocking refusal here
+//    is a disagreement between the product and the checker, exactly the class
+//    of finding this bench exists to produce. This function reports the
+//    product's own conflict list; the CALLER (`tiny.ts`) is the one holding
+//    the checker's own verdict for the SAME board, so it does the comparison.
+//  - The division's status is RE-READ (`GET /api/v1/divisions/{id}`) — a 200
+//    from the start call is not proof the phase moved, and every write path
+//    downstream depends on the phase rather than the response.
+
+/** `DivisionStatus`'s wire values (`apps/web/src/server/api-v1/schemas.ts:53`
+ *  — `z.enum(["setup","scheduled","active","completed"])`). Hand mirrored,
+ *  not imported: no PRODUCTION scripts/bench file imports from apps/web
+ *  (established convention — `IMPORT_CAPS` in `import.ts`,
+ *  `STAGE_DECIDER_KEYS` in `validate-pack.ts`), even though `schemas.ts`
+ *  itself is safely importable (pure Zod, not server-only). A TEST file pins
+ *  this against a REAL import of `DivisionStatus` (`schedule.test.ts`'s own
+ *  "the mirror is diffed against apps/web, not itself" describe block, R05
+ *  precedent — same file already does this for `ScheduleConfig`), so a value
+ *  renamed on the wire reds there rather than silently going stale.
+ *
+ *  `startDivision` (`apps/web/src/server/usecases/schedule.ts`) transitions a
+ *  division to exactly `"active"` — the one value the RE-READ assertion below
+ *  (D9's "assert the status actually flipped") pins against. Never a bare
+ *  string literal typed a second time into a test: every assertion in this
+ *  file and its own test reads this constant. */
+export const STARTED_DIVISION_STATUS = "active" as const;
+
+/** Hand mirror of `apps/web/src/lib/schedule-board.ts:57,61`
+ *  (`PUBLISH_BLOCKED` / `PUBLISH_UNACKNOWLEDGED`) — the two 422 codes
+ *  `startDivision` throws under, since it shares `assertPublishable` with
+ *  `publishSchedule` (D9's own citation). Same "no production apps/web
+ *  import" reason as `STARTED_DIVISION_STATUS` above; pinned against a real
+ *  import in `schedule.test.ts`. */
+export const SCHEDULE_BLOCKING_CONFLICTS_CODE = "SCHEDULE_BLOCKING_CONFLICTS";
+export const SCHEDULE_UNACKNOWLEDGED_WARNINGS_CODE = "SCHEDULE_UNACKNOWLEDGED_WARNINGS";
+
+/** Narrow, injected transport for this step alone (same DI shape as
+ *  `SeedTransport`, `SimTransport`, `ProbeTransport` — see
+ *  `reference_bench_transport_di_pattern.md`): `SeedTransport`'s own
+ *  `request()` for the RE-READ (which should throw on a genuine failure —
+ *  the division was just reported started, so a broken GET is a real bug),
+ *  plus `raw()` to read a 422's real code/conflicts without an exception,
+ *  the same reason `simulate.ts`'s `SimTransport` and `dls-gate.ts`'s
+ *  `ProbeTransport` both need it. Declared fresh rather than importing
+ *  `ProbeTransport` — this file's own `Sink`/`WireConflict` precedent is one
+ *  authority per concern, and a bench transport interface is narrowed to
+ *  exactly the primitives ITS OWN file calls. */
+export interface DivisionStartTransport extends SeedTransport {
+  raw(base: string, s: Session, path: string, method?: string, body?: unknown): Promise<RawResult>;
+}
+
+export const defaultDivisionStartTransport: DivisionStartTransport = { ...defaultTransport, raw };
+
+/** One division `runDivisionStartLayer` is asked to start. No `stageId` —
+ *  unlike `ScheduleDivision`, start acts on the DIVISION, never a stage. */
+export interface DivisionToStart {
+  divisionRef: string;
+  divisionId: string;
+}
+
+/** The v1 error envelope this step reads (`api-v1/http.ts`'s `errorResponse`:
+ *  `{ ok: false, error: { code, message, ...extra } }`) — a LOCAL type, same
+ *  convention `simulate.ts`/`import.ts` each declare independently rather
+ *  than trusting `lib/http.ts`'s loosely-typed `RawJson` (`error?: string`,
+ *  written for a different envelope). `conflicts` is `assertPublishable`'s
+ *  own `extra.conflicts` — present on BOTH 422 codes. */
+interface StartErrorEnvelope {
+  readonly ok: false;
+  readonly error?: {
+    readonly code?: string;
+    readonly message?: string;
+    readonly conflicts?: readonly WireConflict[];
+  };
+}
+
+function startErrorOf(result: RawResult): {
+  code?: string;
+  message?: string;
+  conflicts?: readonly WireConflict[];
+} {
+  const body = result.json as unknown as StartErrorEnvelope;
+  const err = body?.ok === false ? body.error : undefined;
+  return { code: err?.code, message: err?.message, conflicts: err?.conflicts };
+}
+
+export interface DivisionStartOutcome {
+  divisionRef: string;
+  divisionId: string;
+  /** True iff the retry (`acknowledge_warnings: true`) is what succeeded —
+   *  false when the first attempt already succeeded outright, and false when
+   *  nothing succeeded at all. */
+  acknowledgedWarnings: boolean;
+  /** Every warning conflict the `SCHEDULE_UNACKNOWLEDGED_WARNINGS` refusal
+   *  carried, recorded BEFORE the retry (D9) — empty whenever the first
+   *  attempt succeeded outright or refused some other way. */
+  warnings: readonly WireConflict[];
+  /** Set only on a `SCHEDULE_BLOCKING_CONFLICTS` refusal — the product's own
+   *  conflict list. The caller compares it against the checker's own verdict
+   *  for the SAME board (D9's "report both sides"); this function has no
+   *  access to that verdict. */
+  blockingConflicts?: readonly WireConflict[];
+  /** The division's status as RE-READ after a 200 — undefined when no
+   *  attempt ever returned 200. */
+  confirmedStatus?: string;
+  /** THE D9 GATE: true iff an attempt returned 200 AND the re-read confirms
+   *  `STARTED_DIVISION_STATUS`. A 200 whose re-read disagrees is `false`, not
+   *  a thrown error — `errors` below says why, and the caller decides how
+   *  loud that is. */
+  started: boolean;
+  errors: readonly string[];
+}
+
+export interface DivisionStartLayerInput {
+  base: string;
+  /** An ALREADY AUTHENTICATED session — same convention as
+   *  `ScheduleLayerInput.session`; this driver never signs in. */
+  session: Session;
+  divisions: readonly DivisionToStart[];
+  transport?: DivisionStartTransport;
+}
+
+export interface DivisionStartLayerResult {
+  outcomes: readonly DivisionStartOutcome[];
+  /** True iff EVERY division in the input started and was confirmed. */
+  allStarted: boolean;
+}
+
+async function startOneDivision(
+  base: string,
+  session: Session,
+  division: DivisionToStart,
+  t: DivisionStartTransport,
+): Promise<DivisionStartOutcome> {
+  const errors: string[] = [];
+  const warnings: WireConflict[] = [];
+  let blockingConflicts: readonly WireConflict[] | undefined;
+  let acknowledgedWarnings = false;
+  let confirmedStatus: string | undefined;
+  let started = false;
+  const path = `/api/v1/divisions/${division.divisionId}/start`;
+
+  try {
+    // Step 1: attempt WITHOUT acknowledge_warnings (D9 — "a bench that
+    // acknowledges pre-emptively can never observe a warning").
+    const first = await t.raw(base, session, path, "POST", {});
+    let finalStatus = first.status;
+
+    if (first.status === 422) {
+      const { code, message, conflicts } = startErrorOf(first);
+      if (code === SCHEDULE_UNACKNOWLEDGED_WARNINGS_CODE) {
+        // Record BEFORE the retry — the order D9 asks for.
+        warnings.push(...(conflicts ?? []));
+        const retry = await t.raw(base, session, path, "POST", { acknowledge_warnings: true });
+        finalStatus = retry.status;
+        if (retry.status === 200) {
+          acknowledgedWarnings = true;
+        } else {
+          const retryErr = startErrorOf(retry);
+          errors.push(
+            `${division.divisionRef}: start retried with acknowledge_warnings=true and still refused — ` +
+              `HTTP ${retry.status} ${retryErr.code ?? "(no code)"} — ${retryErr.message ?? "(no message)"}`,
+          );
+        }
+      } else if (code === SCHEDULE_BLOCKING_CONFLICTS_CODE) {
+        blockingConflicts = conflicts ?? [];
+        errors.push(
+          `${division.divisionRef}: start refused with SCHEDULE_BLOCKING_CONFLICTS ` +
+            `(${blockingConflicts.length} conflict(s)) — B04's independent checker has already certified this ` +
+            "board; a blocking refusal here is a disagreement between the product and the checker",
+        );
+      } else {
+        errors.push(
+          `${division.divisionRef}: start refused 422 with an unrecognized code ` +
+            `${code ?? "(no code)"} — ${message ?? "(no message)"}`,
+        );
+      }
+    } else if (first.status !== 200) {
+      throw new BenchHttpError(path, first.status, first.json);
+    }
+
+    if (finalStatus === 200) {
+      // Step 2: RE-READ (D9) — a 200 is not proof the phase moved, and every
+      // write path downstream depends on the phase rather than the response.
+      const reRead = await t.request<{ status?: string }>(
+        base,
+        session,
+        `/api/v1/divisions/${division.divisionId}`,
+      );
+      confirmedStatus = reRead?.status;
+      started = confirmedStatus === STARTED_DIVISION_STATUS;
+      if (!started) {
+        errors.push(
+          `${division.divisionRef}: start returned 200 but the re-read shows status ` +
+            `${show(confirmedStatus)}, not "${STARTED_DIVISION_STATUS}" — a 200 is not proof the phase moved (D9)`,
+        );
+      }
+    }
+  } catch (err) {
+    errors.push(`${division.divisionRef}: ${messageOf(err)}`);
+  }
+
+  return {
+    divisionRef: division.divisionRef,
+    divisionId: division.divisionId,
+    acknowledgedWarnings,
+    warnings,
+    ...(blockingConflicts === undefined ? {} : { blockingConflicts }),
+    ...(confirmedStatus === undefined ? {} : { confirmedStatus }),
+    started,
+    errors,
+  };
+}
+
+/** Starts every division in `input.divisions`, sequentially — matching
+ *  `runScheduleLayer`'s own per-division loop, and never throwing for a
+ *  division: one division's refusal or a genuine transport error becomes
+ *  that division's own `errors`, and the walk continues (same "never abandon
+ *  the rest of the run" discipline `runScheduleLayer`'s own header comment
+ *  states). */
+export async function runDivisionStartLayer(
+  input: DivisionStartLayerInput,
+): Promise<DivisionStartLayerResult> {
+  const t = input.transport ?? defaultDivisionStartTransport;
+  const outcomes: DivisionStartOutcome[] = [];
+  for (const division of input.divisions) {
+    outcomes.push(await startOneDivision(input.base, input.session, division, t));
+  }
+  return { outcomes, allStarted: outcomes.every((o) => o.started) };
 }

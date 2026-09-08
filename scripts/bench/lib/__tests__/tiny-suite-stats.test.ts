@@ -26,6 +26,7 @@ import { runTinySuite, TINY_PACK_PATH } from "../suites/tiny.ts";
 // B04 — the seven scheduling endpoints, shared with the other fakes in this
 // directory, so no two of them can disagree about what landed on the board.
 import { makeScheduleWorld } from "./_schedule-routes.ts";
+import { makeDivisionPhaseWorld } from "./_division-phase.ts";
 
 const silent = pino({ level: "silent" });
 
@@ -57,6 +58,11 @@ function fakeServer(opts: { statsPlayerGranted: boolean }): {
   let entitled = false;
 
   const schedule = makeScheduleWorld({ solverEngine: "optimized" });
+  // B05 T2.5 (D9) — see `_division-phase.ts`'s own header comment: EVERY
+  // `sql`-passing fake now reaches `/start`/`GET /divisions/{id}`
+  // unconditionally. This file is not ABOUT the start step, so it only
+  // answers `/start` and the re-read.
+  const phase = makeDivisionPhaseWorld();
 
   const transport: ProbeTransport = {
     async signIn(_base, _s) {
@@ -187,7 +193,9 @@ function fakeServer(opts: { statsPlayerGranted: boolean }): {
       // Ordered AFTER every more specific `/divisions/{id}/...` pattern
       // above so it only ever matches the bare form.
       if (method === "GET" && /^\/api\/v1\/divisions\/[^/]+$/.test(routePath)) {
-        return { slug: `slug-${routePath.split("/")[4]}` } as T;
+        // B05 T2.5 — `status` is D9's own RE-READ; `slug` is the pre-existing
+        // read-back this file's own header comment names.
+        return { slug: `slug-${routePath.split("/")[4]}`, ...phase.handleDivisionGet(method, routePath) } as T;
       }
       if (method === "POST" && /^\/api\/admin\/orgs\/[^/]+\/entitlement-override$/.test(routePath)) {
         entitled = true;
@@ -200,6 +208,10 @@ function fakeServer(opts: { statsPlayerGranted: boolean }): {
     },
     async raw(_base, _s, path, method = "GET", body): Promise<RawResult> {
       calls.push({ method, path, body });
+      // B05 T2.5 (D9) — `/start` itself, unconditionally whenever `sql` is
+      // present. Checked FIRST: nothing below can be reached before this.
+      const started = phase.handleStart(method, path);
+      if (started !== undefined) return started;
       // B05 T2 — division B's own streams (`d-badminton`) fold through THIS
       // route unconditionally whenever `sql` is present, same gating as
       // division A's single-event fold below. This suite is not ABOUT the
@@ -308,6 +320,7 @@ describe("runTinySuite — B03 T6b player-stats baseline wiring", () => {
       // file's own `raw()`), so division B's own streams fold cleanly
       // rather than falling back to a real `fetch()`.
       importTransport: transport,
+      startTransport: transport,
     });
 
     expect(report.gate).toBe("green");
@@ -361,6 +374,7 @@ describe("runTinySuite — B03 T6b player-stats baseline wiring", () => {
       // file's own `raw()`), so division B's own streams fold cleanly
       // rather than falling back to a real `fetch()`.
       importTransport: transport,
+      startTransport: transport,
     });
 
     expect(report.gate).toBe("green");

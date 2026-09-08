@@ -24,6 +24,7 @@ import type { ProbeTransport } from "../dls-gate.ts";
 import type { PlanEntitlementRow, PlanSql } from "../plan.ts";
 import { runTinySuite, TINY_PACK_PATH } from "../suites/tiny.ts";
 import { makeScheduleWorld } from "./_schedule-routes.ts";
+import { makeDivisionPhaseWorld } from "./_division-phase.ts";
 
 const silent = pino({ level: "silent" });
 
@@ -47,6 +48,13 @@ function fakeServer(opts: { conflictAt?: { extKey: string; expectedSeq: number }
   const legsByStageId = new Map<string, number>();
   const divisionIdByStageId = new Map<string, string>();
   const fixtureDivisionId = new Map<string, string>();
+  // B05 T2.5 (D9) — see `_division-phase.ts`'s own header comment: EVERY
+  // `sql`-passing fake now reaches `/start`/`GET /divisions/{id}`
+  // unconditionally, and phase-gating `/fixtures/{id}/events` here is what
+  // makes this file's own "clean fold" assertions a real regression against
+  // the start step being wired in, rather than a test that only proves the
+  // fold function exists.
+  const phase = makeDivisionPhaseWorld();
   const fixtureExtKeyById = new Map<string, string>();
   const fixtureOfficials = new Map<string, unknown[]>();
   const claimInvites = new Map<string, unknown>();
@@ -173,7 +181,9 @@ function fakeServer(opts: { conflictAt?: { extKey: string; expectedSeq: number }
         return (claimInvites.get(personId) ?? null) as T;
       }
       if (method === "GET" && /^\/api\/v1\/divisions\/[^/]+$/.test(routePath)) {
-        return { slug: `slug-${routePath.split("/")[4]}` } as T;
+        // B05 T2.5 — `status` is D9's own RE-READ; `slug` is unrelated
+        // scaffolding no production call site actually reads.
+        return { slug: `slug-${routePath.split("/")[4]}`, ...phase.handleDivisionGet(method, routePath) } as T;
       }
       if (method === "POST" && /^\/api\/admin\/orgs\/[^/]+\/entitlement-override$/.test(routePath)) {
         entitled = true;
@@ -186,14 +196,21 @@ function fakeServer(opts: { conflictAt?: { extKey: string; expectedSeq: number }
     },
     async raw(_base, _s, path, method = "GET", body): Promise<RawResult> {
       calls.push({ method, path, body });
+      // B05 T2.5 (D9) — `/start` itself, unconditionally whenever `sql` is
+      // present. Checked FIRST: nothing below can be reached before this.
+      const started = phase.handleStart(method, path);
+      if (started !== undefined) return started;
       // B05 T2 — division B's own streams (`d-badminton`) fold through THIS
       // route unconditionally whenever `sql` is present, same gating as
       // division A's single-event fold this file is actually about. Handled
       // here as a plain pass-through so THIS file's own division-A
       // assertions stay green; the import path's own wiring/behaviour is
       // covered by `tiny-suite-import.test.ts`.
-      const importMatch = /^\/api\/v1\/divisions\/[^/]+\/events\/import$/.exec(path);
+      const importMatch = /^\/api\/v1\/divisions\/([^/]+)\/events\/import$/.exec(path);
       if (importMatch) {
+        const importDivisionId = importMatch[1]!;
+        const refused = phase.refuseUnlessStarted(importDivisionId, "import");
+        if (refused !== undefined) return refused;
         const sent = (body as { streams: { fixture: { id: string }; events: unknown[] }[] }).streams;
         return {
           status: 200,
@@ -213,6 +230,23 @@ function fakeServer(opts: { conflictAt?: { extKey: string; expectedSeq: number }
       const divisionId = fixtureDivisionId.get(fixtureId);
       const dlsEnabled = divisionId !== undefined && dlsByDivisionId.get(divisionId) === true;
       const { type, payload, expected_seq } = body as { type: string; payload: { target?: unknown }; expected_seq: number };
+      // B05 T2.5 (D9) — the phase gate `usecases/scoring.ts:222` enforces:
+      // this is what proves `runDivisionStartLayer` actually ran BEFORE this
+      // fold, not merely that the function exists. Scoped away from
+      // `cricket.*` types on purpose: the DLS-gate probe's own throwaway
+      // division is NEVER in `runDivisionStartLayer`'s input (only `_tiny`'s
+      // OWN streamed divisions are), and the probe's whole point is proving
+      // the ENTITLEMENT door — this phase door would otherwise shadow it,
+      // turning a "must be 402" cell into a false "422 WRONG_PHASE" this
+      // probe's own `NEVER_REACHED_THE_GATE` list does not even know to
+      // exclude. `_tiny.json`'s division-A stream events use only
+      // `core.*`/`generic.*` types (this file's own `divisionAEventCalls`
+      // helper relies on the same non-overlap), so this scoping costs the
+      // real fold nothing.
+      if (divisionId !== undefined && !type.startsWith("cricket.")) {
+        const refused = phase.refuseUnlessStarted(divisionId, "scoring");
+        if (refused !== undefined) return refused;
+      }
       const manualTarget = payload?.target !== undefined;
       const requiresDls = type === "cricket.revise" && dlsEnabled && !manualTarget;
       if (requiresDls && !entitled) {
@@ -315,9 +349,34 @@ describe("runTinySuite — B05 T1 division-A stream fold wiring", () => {
       // assertions are about division A; the import path's own wiring is
       // `tiny-suite-import.test.ts`'s job.
       importTransport: transport,
+      startTransport: transport,
     });
 
     expect(report.gate).toBe("green");
+    // B05 T2.5 (D9) — both `_tiny.json`'s streamed divisions (`d-tiny` AND
+    // `d-badminton`) were started and RE-READ as active BEFORE either fold
+    // below ran at all — this is the whole reason the fold above succeeded
+    // rather than 409ing against the fake's own phase gate.
+    expect(report.divisionStart).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ divisionRef: "d-tiny", started: true, confirmedStatus: "active" }),
+        expect.objectContaining({ divisionRef: "d-badminton", started: true, confirmedStatus: "active" }),
+      ]),
+    );
+    // `/start` happens BEFORE any division-A event POST — never the other
+    // way around. Scoped to division A's OWN `core.*`/`generic.*` calls
+    // (`divisionAEventCalls`'s own reasoning): the DLS-gate probe's
+    // `cricket.*` cells run BEFORE scheduling/start even begins, so an
+    // unscoped index would always read as "before" regardless of ordering.
+    const firstStartIdx = calls.findIndex((c) => c.method === "POST" && /\/start$/.test(c.path));
+    const firstDivisionAEventIdx = calls.findIndex(
+      (c) =>
+        c.method === "POST" &&
+        /^\/api\/v1\/fixtures\/[^/]+\/events$/.test(c.path) &&
+        !(c.body as { type: string }).type.startsWith("cricket."),
+    );
+    expect(firstStartIdx).toBeGreaterThan(-1);
+    expect(firstDivisionAEventIdx).toBeGreaterThan(firstStartIdx);
     // `_tiny.json`'s division A (`d-tiny`) declares 3 streams with 2, 5 and 2
     // events — 9 total. Asserted against what the pack ACTUALLY sent (call
     // count), never a constant typed into this test a second time.
@@ -381,6 +440,7 @@ describe("runTinySuite — B05 T1 division-A stream fold wiring", () => {
       // assertions are about division A; the import path's own wiring is
       // `tiny-suite-import.test.ts`'s job.
       importTransport: transport,
+      startTransport: transport,
     });
 
     expect(report.gate).toBe("red");

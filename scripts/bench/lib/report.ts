@@ -108,12 +108,19 @@ export type SimulationReport = z.infer<typeof SimulationReport>;
  *  `import.ts`'s three finding kinds (`stream_oversize`, `call_refused`,
  *  `stream_not_imported`) into one reportable row rather than three
  *  separate arrays — `code` and `message`/`eventCount`/`cap` are populated
- *  per kind, and a reader distinguishes them by which fields are present
- *  (a `chunkIndex` names a call-level refusal; a bare `streamKey` with no
- *  `chunkIndex` names either an oversize stream or a per-stream product
- *  outcome). Never a gate — same D5 "report, never silently retry or drop"
- *  convention `SimulationFinding` already follows. */
+ *  per kind. Never a gate — same D5 "report, never silently retry or drop"
+ *  convention `SimulationFinding` already follows.
+ *
+ *  T2.5 review MINOR: `kind` is a REQUIRED discriminator, not inferred from
+ *  which optional fields happen to be populated. The three kinds' field sets
+ *  are disjoint TODAY (a `chunkIndex` names a call-level refusal; a bare
+ *  `streamKey` with no `chunkIndex` names either an oversize stream or a
+ *  per-stream product outcome) but nothing enforced that beyond the mapper's
+ *  own discipline — a reader inferring the kind from field presence breaks
+ *  the moment two kinds' shapes overlap even slightly, and a discriminator
+ *  costs nothing to keep correct. */
 export const ImportFindingReport = z.object({
+  kind: z.enum(["stream_oversize", "call_refused", "stream_not_imported"]),
   chunkIndex: z.number().int().optional(),
   streamKeys: z.array(z.string()).optional(),
   streamKey: z.string().optional(),
@@ -139,6 +146,51 @@ export const ImportSimulationReport = z.object({
   findings: z.array(ImportFindingReport).optional(),
 });
 export type ImportSimulationReport = z.infer<typeof ImportSimulationReport>;
+
+/** B05 T2.5 (D9) — one `ScheduleConflict` row `runDivisionStartLayer` read
+ *  off a 422 body. Same three fields `schedule.ts`'s own `WireConflict`
+ *  reads and no others (`details.kind` ONLY, never `code`/`detail` — see
+ *  that type's own doc comment) — present on BOTH refusal codes
+ *  (`assertPublishable`'s shared `{ conflicts }` extra, apps/web). */
+export const DivisionStartConflictReport = z.object({
+  fixtureId: z.string().optional(),
+  blocking: z.boolean().optional(),
+  kind: z.string().optional(),
+});
+export type DivisionStartConflictReport = z.infer<typeof DivisionStartConflictReport>;
+
+/** B05 T2.5 (D9) — one division's walk through `runDivisionStartLayer`: the
+ *  step between "scheduled" and every write path this bench drives after it
+ *  (`simulate.ts`'s and `import.ts`'s folds both 409 against an unstarted
+ *  division). Never a gate on its own fields — `_tiny.ts`'s wiring folds a
+ *  blocking refusal or a failed re-read into the suite's own `errors`, which
+ *  is what actually reds `SuiteReport.gate`. */
+export const DivisionStartReport = z.object({
+  divisionRef: z.string(),
+  /** True iff the retry (`acknowledge_warnings: true`) is what succeeded. */
+  acknowledgedWarnings: z.boolean(),
+  /** Every warning conflict recorded from an `SCHEDULE_UNACKNOWLEDGED_WARNINGS`
+   *  refusal, before the retry — empty when the first attempt succeeded
+   *  outright. */
+  warnings: z.array(DivisionStartConflictReport),
+  /** Present only on a `SCHEDULE_BLOCKING_CONFLICTS` refusal — the product's
+   *  own conflict list. */
+  blockingConflicts: z.array(DivisionStartConflictReport).optional(),
+  /** D9's "report both sides": what B04's OWN independent checker
+   *  (`checkBoard`, `SuiteReport.scheduling[]`'s own `.checker` field for the
+   *  SAME `divisionRef`) said about this board moments earlier — populated
+   *  alongside `blockingConflicts` so a reader can see the product's fresh
+   *  refusal next to the checker's own verdict for the same board. */
+  checkerClean: z.boolean().optional(),
+  checkerFindingCount: z.number().int().optional(),
+  /** The division's status as RE-READ after a 200 — absent when no attempt
+   *  ever returned 200. */
+  confirmedStatus: z.string().optional(),
+  /** THE D9 gate this row exists to prove: true iff a 200 was returned AND
+   *  the re-read confirms the product's own "started" status. */
+  started: z.boolean(),
+});
+export type DivisionStartReport = z.infer<typeof DivisionStartReport>;
 
 /**
  * design §5.3 / §7: an unexpected 4xx/5xx or failed UI step attaches its
@@ -514,6 +566,12 @@ export const SuiteReport = z.object({
   /** F-T6-3 — the run-level cross-division court gate's findings. RUN-level,
    *  so exactly one list per suite. Absent when it found nothing. */
   crossDivisionCourtClashes: z.array(CrossDivisionCourtClashReport).readonly().optional(),
+  /** B05 T2.5 (D9) — one row per division `runDivisionStartLayer` started,
+   *  in the order it started them — always BEFORE `simulation`/
+   *  `importSimulation` below, since neither fold can run against an
+   *  unstarted division. Absent for a run that never reached the step (no
+   *  `input.sql`) or that declared no streamed division at all. */
+  divisionStart: z.array(DivisionStartReport).optional(),
   /** B05 T1 — division A's streams folded through the single-event scoring
    *  route. Absent for a run that never reached the step (no `input.sql`,
    *  same gating the DLS-gate probe and the player-stats baseline already

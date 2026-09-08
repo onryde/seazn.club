@@ -122,8 +122,11 @@ import { fixtureKey, type Pack, type PackDivision, type PackStream } from "../pa
 // seam plus `judgeDivision`, the one place a division's verdict is composed.
 import {
   readEngineArtifacts,
+  runDivisionStartLayer,
   runScheduleLayer,
   writeEngineArtifact,
+  type DivisionStartTransport,
+  type DivisionToStart,
   type EngineSnapshot,
   type EngineSnapshotDivision,
   type ScheduleDivision,
@@ -162,6 +165,8 @@ import {
 } from "../stats.ts";
 import type {
   DivisionScheduleReport,
+  DivisionStartConflictReport,
+  DivisionStartReport,
   EngineDeltaSection,
   ImportFindingReport,
   ImportSimulationReport,
@@ -493,6 +498,18 @@ export interface TinySuiteInput {
    * different fakes for each must be able to say so.
    */
   importTransport?: ProbeTransport;
+  /**
+   * B05 T2.5 (D9) — overridable so a test can drive the division-start
+   * step's OWN HTTP surface through a fake, never `global.fetch`.
+   * `DivisionStartTransport` (`schedule.ts`'s own type — structurally the
+   * same `signIn`/`request`/`raw` shape as `ProbeTransport`, so a fake typed
+   * either way satisfies both). Defaults to `schedule.ts`'s own
+   * `defaultDivisionStartTransport`; a live run never passes it. Meaningless
+   * (never read) when `sql` is omitted — same gating as `simTransport`/
+   * `importTransport`. A SEPARATE field from both (never falls back to
+   * either): starting is neither fold, and runs before both of them.
+   */
+  startTransport?: DivisionStartTransport;
   /** B03r tasks 9+10: `bench.ts`'s `--entry admin|registration` flag,
    *  forwarded through `BenchConfig.entry`/`runSuite`. `undefined` (no flag)
    *  leaves every registration-carrying division on its own pack-declared
@@ -764,6 +781,25 @@ export function divisionDeclaresOfficials(pack: Pack, divisionRef: string): bool
   );
 }
 
+/** B05 T2.5 (D9) — `schedule.ts`'s own `WireConflict` shape
+ *  (`fixture_id?`/`blocking?`/`details.kind?`, read through `details.kind`
+ *  ONLY, never `code`) renamed onto `report.ts`'s `DivisionStartConflictReport`
+ *  — one rename site, matching every other wire-to-report mapper in this
+ *  file. Typed structurally rather than importing `WireConflict` by name:
+ *  that type is not exported from `schedule.ts` (it is this module's own
+ *  private wire shape), and this function needs nothing beyond its shape. */
+function toDivisionStartConflictReport(c: {
+  fixture_id?: string;
+  blocking?: boolean;
+  details?: { kind?: string };
+}): DivisionStartConflictReport {
+  return {
+    ...(c.fixture_id === undefined ? {} : { fixtureId: c.fixture_id }),
+    ...(c.blocking === undefined ? {} : { blocking: c.blocking }),
+    ...(typeof c.details?.kind === "string" ? { kind: c.details.kind } : {}),
+  };
+}
+
 /** B05 T2 — flattens `import.ts`'s discriminated `ImportFinding` union into
  *  `report.ts`'s single reportable row shape (`ImportFindingReport`). A
  *  `switch` over `kind` rather than a spread, so a FOURTH finding kind added
@@ -773,6 +809,7 @@ function toImportFindingReport(finding: ImportFinding): ImportFindingReport {
   switch (finding.kind) {
     case "stream_oversize":
       return {
+        kind: finding.kind,
         streamKey: finding.streamKey,
         eventCount: finding.eventCount,
         cap: finding.cap,
@@ -780,6 +817,7 @@ function toImportFindingReport(finding: ImportFinding): ImportFindingReport {
       };
     case "call_refused":
       return {
+        kind: finding.kind,
         chunkIndex: finding.chunkIndex,
         streamKeys: [...finding.streamKeys],
         status: finding.status,
@@ -788,6 +826,7 @@ function toImportFindingReport(finding: ImportFinding): ImportFindingReport {
       };
     case "stream_not_imported":
       return {
+        kind: finding.kind,
         streamKey: finding.streamKey,
         fixture: finding.fixture,
         status: finding.status,
@@ -1199,6 +1238,12 @@ export async function runTinySuite(
   /** B05 T2 — set only when the import step actually ran (`input.sql`
    *  present AND some OTHER division declared at least one stream). */
   let importSimulation: ImportSimulationReport | undefined;
+  /** B05 T2.5 (D9) — one row per division `runDivisionStartLayer` started,
+   *  set only when the step actually ran (`input.sql` present AND at least
+   *  one division declared a stream). Populated BEFORE `simulation`/
+   *  `importSimulation` above run, since neither fold can succeed against an
+   *  unstarted division. */
+  let divisionStart: DivisionStartReport[] | undefined;
 
   // Stage 0 FIRST, and nothing is created if it refuses: a pack the offline
   // gate rejects would otherwise be seeded over HTTP and report a product
@@ -2020,7 +2065,91 @@ export async function runTinySuite(
 
     timings.scheduleMs = Math.round(performance.now() - scheduleStart);
 
-
+    // B05 T2.5 (D9) — start every division this run's folds need. Gated on
+    // `input.sql`, same as the player-stats baseline and both folds below —
+    // every EXISTING caller that does not know about this step gets today's
+    // behavior unchanged. Runs BEFORE either fold (T1's division-A
+    // single-event fold, T2's division-B batch import): both write paths
+    // refuse a division still "setup"/"scheduled"
+    // (`usecases/scoring.ts:222` WRONG_PHASE, `usecases/event-import.ts:704`
+    // 409 `import.division_not_started`), and `runScheduleLayer` above only
+    // ever takes a division that far.
+    if (input.sql !== undefined) {
+      // EVERY streamed division, not only `division0` — `division0`'s own
+      // streams AND every "other" division's (the exact same grouping T1's
+      // and T2's blocks below each re-derive for their own fold) all need
+      // the phase moved before either fold below can succeed.
+      const streamedDivisionRefs = new Set(pack.streams.map((st) => st.divisionRef));
+      const divisionsToStart: DivisionToStart[] = [];
+      for (const ref of streamedDivisionRefs) {
+        const id = seeded.divisionIdByRef.get(ref);
+        if (id === undefined) {
+          // Never silent — same discipline as the import block below's
+          // identical guard for an unresolved divisionId.
+          errors.push(
+            `tiny: division "${ref}" declares streams but has no resolved divisionId — cannot start it`,
+          );
+          continue;
+        }
+        divisionsToStart.push({ divisionRef: ref, divisionId: id });
+      }
+      if (divisionsToStart.length > 0) {
+        log.info(
+          { divisions: divisionsToStart.map((d) => d.divisionRef) },
+          "tiny: starting the division(s) the folds below need (B05 T2.5, D9)",
+        );
+        const startLayer = await runDivisionStartLayer({
+          base,
+          session: s,
+          divisions: divisionsToStart,
+          ...(input.startTransport === undefined ? {} : { transport: input.startTransport }),
+        });
+        divisionStart = startLayer.outcomes.map((outcome) => {
+          // D9's "report both sides": what B04's OWN independent checker
+          // (`scheduling[]`'s own `.checker`, populated moments earlier in
+          // THIS division's own walk above) said about the SAME board —
+          // populated only alongside a blocking refusal, since that is the
+          // one case D9 asks the two to be compared.
+          const schedRow = scheduling.find((r) => r.divisionRef === outcome.divisionRef);
+          return {
+            divisionRef: outcome.divisionRef,
+            acknowledgedWarnings: outcome.acknowledgedWarnings,
+            warnings: outcome.warnings.map(toDivisionStartConflictReport),
+            ...(outcome.blockingConflicts === undefined
+              ? {}
+              : {
+                  blockingConflicts: outcome.blockingConflicts.map(toDivisionStartConflictReport),
+                  ...(schedRow?.checker === undefined
+                    ? {}
+                    : {
+                        checkerClean: schedRow.checker.clean,
+                        checkerFindingCount: schedRow.checker.findings.length,
+                      }),
+                }),
+            ...(outcome.confirmedStatus === undefined ? {} : { confirmedStatus: outcome.confirmedStatus }),
+            started: outcome.started,
+          };
+        });
+        for (const outcome of startLayer.outcomes) {
+          // `errors`, never `warnings`: D9's blocking/unrecognized/re-read
+          // refusals are all product disagreements or bugs, matching the
+          // "a refusal is a FINDING, reported and never silently retried"
+          // convention both folds below already follow.
+          for (const err of outcome.errors) errors.push(`start: ${err}`);
+          log.info(
+            {
+              division: outcome.divisionRef,
+              acknowledgedWarnings: outcome.acknowledgedWarnings,
+              warningCount: outcome.warnings.length,
+              blockingConflictCount: outcome.blockingConflicts?.length,
+              confirmedStatus: outcome.confirmedStatus,
+              started: outcome.started,
+            },
+            "suite_division_started",
+          );
+        }
+      }
+    }
 
     // B03 T6b: the player-stats baseline. Gated on `input.sql` — it needs
     // the org-authenticated routes' `stats.player` entitlement (derived
@@ -2589,6 +2718,7 @@ export async function runTinySuite(
     // on every pre-B04 report would be noise — but never omitted when it
     // fired, because nothing else in the run can see it.
     ...(crossDivisionClashes.length > 0 ? { crossDivisionCourtClashes: crossDivisionClashes } : {}),
+    ...(divisionStart === undefined || divisionStart.length === 0 ? {} : { divisionStart }),
     ...(simulation === undefined ? {} : { simulation }),
     ...(importSimulation === undefined ? {} : { importSimulation }),
   };

@@ -32,6 +32,7 @@ import {
   type FakeScheduleOptions,
   type FakeScheduleWorld,
 } from "./_schedule-routes.ts";
+import { makeDivisionPhaseWorld } from "./_division-phase.ts";
 
 const silent = pino({ level: "silent" });
 
@@ -88,6 +89,13 @@ function fakeServer(opts: {
   let fixtureCounter = 0;
   let entitled = false;
   const sqlCalls: string[] = [];
+  // B05 T2.5 (D9) — see `_division-phase.ts`'s own header comment: EVERY
+  // `sql`-passing fake now reaches `/start`/`GET /divisions/{id}`
+  // unconditionally. This file is not ABOUT the start step (it exists for
+  // the DLS-gate probe/officials-auto wiring), so it only answers `/start`
+  // and the re-read — it does not phase-gate scoring/import, which stays
+  // out of this file's own scope.
+  const phase = makeDivisionPhaseWorld();
 
   const transport: ProbeTransport = {
     async signIn(_base, s) {
@@ -234,6 +242,10 @@ function fakeServer(opts: {
         const personId = routePath.split("/")[4]!;
         return (claimInvites.get(personId) ?? null) as T;
       }
+      // B05 T2.5 (D9) — the RE-READ `runDivisionStartLayer` makes after a
+      // successful `/start`.
+      const divisionGet = phase.handleDivisionGet(method, routePath);
+      if (divisionGet !== undefined) return divisionGet as T;
       if (method === "POST" && /^\/api\/admin\/orgs\/[^/]+\/entitlement-override$/.test(routePath)) {
         entitled = true;
         return { ok: true } as unknown as T;
@@ -245,6 +257,10 @@ function fakeServer(opts: {
     },
     async raw(_base, _s, path, method = "GET", body): Promise<RawResult> {
       calls.push({ method, path, body });
+      // B05 T2.5 (D9) — `/start` itself, unconditionally whenever `sql` is
+      // present. Checked FIRST: nothing below can be reached before this.
+      const started = phase.handleStart(method, path);
+      if (started !== undefined) return started;
       // B05 T2 — division B's own streams (`d-badminton`) fold through THIS
       // route unconditionally whenever `sql` is present, same gating as
       // division A's single-event fold below. This suite is not ABOUT the
@@ -361,6 +377,7 @@ describe("runTinySuite — B03 T7 plan/entitlement-gate wiring", () => {
       // file's own `raw()`), so division B's own streams fold cleanly
       // rather than falling back to a real `fetch()`.
       importTransport: transport,
+      startTransport: transport,
     });
 
     expect(report.gate).toBe("green");
@@ -412,6 +429,7 @@ describe("runTinySuite — B03 T7 plan/entitlement-gate wiring", () => {
       // file's own `raw()`), so division B's own streams fold cleanly
       // rather than falling back to a real `fetch()`.
       importTransport: transport,
+      startTransport: transport,
     });
 
     expect(report.gate).toBe("green");
@@ -458,6 +476,7 @@ describe("runTinySuite — B03 T7 plan/entitlement-gate wiring", () => {
       // file's own `raw()`), so division B's own streams fold cleanly
       // rather than falling back to a real `fetch()`.
       importTransport: transport,
+      startTransport: transport,
     });
 
     expect(report.gate).toBe("green");
@@ -546,6 +565,7 @@ describe("runTinySuite — the post-officials re-check (B04 F-T6-2)", () => {
       probeTransport: server.transport,
       simTransport: server.transport,
       importTransport: server.transport,
+      startTransport: server.transport,
     });
     return { report, server };
   }

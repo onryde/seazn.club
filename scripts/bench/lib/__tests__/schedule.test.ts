@@ -25,18 +25,24 @@
 import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 // The PRODUCT schema, imported so the fake's key set below is checked against
 // its source of truth instead of against a second hand-copy of the same list
 // (R05). Same import `board.test.ts` already uses for its own drift guards.
-import { ScheduleConfig } from "../../../../apps/web/src/server/api-v1/schemas.ts";
+import { ScheduleConfig, DivisionStatus } from "../../../../apps/web/src/server/api-v1/schemas.ts";
 import { checkBoard } from "../checker.ts";
-import type { RequestOptions, Session } from "../http.ts";
+import { BenchHttpError, type RawResult, type RequestOptions, type Session } from "../http.ts";
 import type { SeedTransport } from "../seed.ts";
 import {
   readEngineArtifacts,
+  runDivisionStartLayer,
   runScheduleLayer,
   writeEngineArtifact,
+  SCHEDULE_BLOCKING_CONFLICTS_CODE,
+  SCHEDULE_UNACKNOWLEDGED_WARNINGS_CODE,
+  STARTED_DIVISION_STATUS,
+  type DivisionStartTransport,
   type EngineSnapshot,
   type ScheduleDivision,
   type ScheduleLayerInput,
@@ -45,6 +51,15 @@ import {
 const BASE = "http://bench.test";
 const ORG = "org-1";
 const SESSION: Session = { cookies: {} };
+
+/** For the two 422 codes' text-based drift guard below — `schedule-board.ts`
+ *  is NOT server-only, but it real-imports `@/lib/zoned-datetime` (a path
+ *  alias apps/web's own bundler resolves and scripts/bench's vitest config
+ *  does not), so importing it here throws `Cannot find package` at module
+ *  load — confirmed directly. Read as TEXT instead, same fallback the
+ *  `server-only` files use (`IMPORT_CAPS` in `import.ts`). */
+const HERE = path.dirname(fileURLToPath(import.meta.url));
+const REPO_ROOT = path.resolve(HERE, "../../../..");
 
 /** `@`-sigilled pack refs -> the ids B03's seeder handed back. */
 const COURTS = new Map([
@@ -1934,5 +1949,314 @@ describe("SCHEDULE_CONFIG_KEYS — drift guard", () => {
     expect(declared.length).toBeGreaterThan(5);
 
     expect([...SCHEDULE_CONFIG_KEYS].sort()).toEqual([...declared].sort());
+  });
+});
+
+// ---------------------------------------------------------------------------
+// runDivisionStartLayer — D9's refusal policy (B05 T2.5)
+// ---------------------------------------------------------------------------
+//
+// `POST /api/v1/divisions/{id}/start` shares `assertPublishable` with
+// `publishSchedule`, so it can refuse exactly like a publish can. The policy:
+// attempt WITHOUT `acknowledge_warnings` first; on 422
+// SCHEDULE_UNACKNOWLEDGED_WARNINGS record the warnings then retry WITH it; on
+// 422 SCHEDULE_BLOCKING_CONFLICTS red, never retry; and never trust a 200 as
+// proof the phase moved — RE-READ the division and compare against
+// `STARTED_DIVISION_STATUS`.
+
+interface StartCall {
+  readonly path: string;
+  readonly method: string;
+  readonly body: unknown;
+}
+
+function okStartBody(divisionId: string): unknown {
+  return { ok: true, data: { division_id: divisionId, status: STARTED_DIVISION_STATUS, started: true, generated: 0 } };
+}
+
+/** A fake `DivisionStartTransport`. `firstStatus`/`firstBody` answer the
+ *  INITIAL POST (no `acknowledge_warnings`); `retryStatus`/`retryBody` answer
+ *  a SECOND POST carrying `acknowledge_warnings: true` — never sent unless
+ *  the first attempt's body names `SCHEDULE_UNACKNOWLEDGED_WARNINGS`, so a
+ *  script that only sets `firstStatus: 200` never needs a retry entry at all.
+ *  `reReadStatus`/`reReadBody` answer the GET re-read D9 requires after ANY
+ *  200 — defaulting to `STARTED_DIVISION_STATUS`, so a test only overrides it
+ *  to prove the re-read (not the POST body) is what `started` gates on. */
+function fakeStartTransport(
+  script: {
+    firstStatus?: number;
+    firstBody?: unknown;
+    retryStatus?: number;
+    retryBody?: unknown;
+    reReadStatus?: number;
+    reReadBody?: unknown;
+  } = {},
+): { transport: DivisionStartTransport; calls: StartCall[] } {
+  const calls: StartCall[] = [];
+  const transport: DivisionStartTransport = {
+    async signIn(): Promise<{ has_org: boolean; org_id: string; redirect: string }> {
+      // `runDivisionStartLayer` never signs in — a call here is this file's
+      // own bug, not the layer's.
+      throw new Error("fake: signIn should never be called by runDivisionStartLayer");
+    },
+    async request<T>(_base: string, _s: Session, requestPath: string, opts?: RequestOptions): Promise<T> {
+      calls.push({ path: requestPath, method: opts?.method ?? "GET", body: opts?.body });
+      if (!/^\/api\/v1\/divisions\/[^/]+$/.test(requestPath)) {
+        throw new Error(`fake: unhandled request ${requestPath}`);
+      }
+      const status = script.reReadStatus ?? 200;
+      if (status >= 400) throw new BenchHttpError(requestPath, status, script.reReadBody);
+      return (script.reReadBody ?? { status: STARTED_DIVISION_STATUS }) as T;
+    },
+    async raw(_base: string, _s: Session, rawPath: string, method = "GET", body?: unknown): Promise<RawResult> {
+      calls.push({ path: rawPath, method, body });
+      const acknowledged = (body as { acknowledge_warnings?: boolean } | undefined)?.acknowledge_warnings === true;
+      const divisionId = /\/divisions\/([^/]+)\/start$/.exec(rawPath)?.[1] ?? "unknown";
+      if (acknowledged) {
+        return { status: script.retryStatus ?? 200, json: (script.retryBody ?? okStartBody(divisionId)) as never };
+      }
+      return { status: script.firstStatus ?? 200, json: (script.firstBody ?? okStartBody(divisionId)) as never };
+    },
+  };
+  return { transport, calls };
+}
+
+function startPosts(calls: readonly StartCall[]): StartCall[] {
+  return calls.filter((c) => c.method === "POST");
+}
+
+describe("runDivisionStartLayer — the clean path", () => {
+  it("attempts WITHOUT acknowledge_warnings, succeeds on the first try, and the RE-READ confirms started", async () => {
+    const { transport, calls } = fakeStartTransport();
+
+    const result = await runDivisionStartLayer({
+      base: BASE,
+      session: SESSION,
+      divisions: [{ divisionRef: "d-a", divisionId: "div-a" }],
+      transport,
+    });
+
+    expect(result.allStarted).toBe(true);
+    expect(result.outcomes).toEqual([
+      {
+        divisionRef: "d-a",
+        divisionId: "div-a",
+        acknowledgedWarnings: false,
+        warnings: [],
+        confirmedStatus: STARTED_DIVISION_STATUS,
+        started: true,
+        errors: [],
+      },
+    ]);
+
+    const posts = startPosts(calls);
+    expect(posts).toHaveLength(1);
+    expect(posts[0].body).toEqual({});
+    // The RE-READ (D9) — a GET against the division, distinct from the start
+    // call, and it happens.
+    expect(calls.some((c) => c.method === "GET" && c.path === "/api/v1/divisions/div-a")).toBe(true);
+  });
+
+  it("starts every division in the input independently, in order", async () => {
+    const { transport, calls } = fakeStartTransport();
+
+    const result = await runDivisionStartLayer({
+      base: BASE,
+      session: SESSION,
+      divisions: [
+        { divisionRef: "d-a", divisionId: "div-a" },
+        { divisionRef: "d-b", divisionId: "div-b" },
+      ],
+      transport,
+    });
+
+    expect(result.allStarted).toBe(true);
+    expect(result.outcomes.map((o) => o.divisionRef)).toEqual(["d-a", "d-b"]);
+    expect(result.outcomes.every((o) => o.started)).toBe(true);
+    expect(startPosts(calls)).toHaveLength(2);
+  });
+});
+
+describe("runDivisionStartLayer — SCHEDULE_UNACKNOWLEDGED_WARNINGS", () => {
+  it("records every warning THEN retries with acknowledge_warnings:true, in that order — never pre-emptively", async () => {
+    const conflicts = [
+      { fixture_id: "fx-1", blocking: false, details: { kind: "back_to_back" } },
+      { fixture_id: "fx-2", blocking: false, details: { kind: "back_to_back" } },
+    ];
+    const { transport, calls } = fakeStartTransport({
+      firstStatus: 422,
+      firstBody: {
+        ok: false,
+        error: { code: SCHEDULE_UNACKNOWLEDGED_WARNINGS_CODE, message: "confirm to publish anyway", conflicts },
+      },
+    });
+
+    const result = await runDivisionStartLayer({
+      base: BASE,
+      session: SESSION,
+      divisions: [{ divisionRef: "d-a", divisionId: "div-a" }],
+      transport,
+    });
+
+    const outcome = result.outcomes[0]!;
+    expect(outcome.acknowledgedWarnings).toBe(true);
+    expect(outcome.warnings).toEqual(conflicts);
+    expect(outcome.started).toBe(true);
+    expect(outcome.errors).toEqual([]);
+    expect(result.allStarted).toBe(true);
+
+    // ORDER: two POSTs, the SECOND (and only the second) carrying
+    // acknowledge_warnings:true.
+    const posts = startPosts(calls);
+    expect(posts).toHaveLength(2);
+    expect(posts[0].body).toEqual({});
+    expect(posts[1].body).toEqual({ acknowledge_warnings: true });
+  });
+
+  it("an unrecognized refusal on the RETRY itself is an error, and is never retried a second time", async () => {
+    const conflicts = [{ fixture_id: "fx-1", blocking: false, details: { kind: "back_to_back" } }];
+    const { transport, calls } = fakeStartTransport({
+      firstStatus: 422,
+      firstBody: {
+        ok: false,
+        error: { code: SCHEDULE_UNACKNOWLEDGED_WARNINGS_CODE, message: "confirm to publish anyway", conflicts },
+      },
+      retryStatus: 422,
+      retryBody: { ok: false, error: { code: "SOME_OTHER_CODE", message: "board changed underneath" } },
+    });
+
+    const result = await runDivisionStartLayer({
+      base: BASE,
+      session: SESSION,
+      divisions: [{ divisionRef: "d-a", divisionId: "div-a" }],
+      transport,
+    });
+
+    const outcome = result.outcomes[0]!;
+    expect(outcome.warnings).toEqual(conflicts);
+    expect(outcome.started).toBe(false);
+    expect(outcome.errors.length).toBeGreaterThan(0);
+    // Exactly two POSTs — the retry refusal is reported, not retried again.
+    expect(startPosts(calls)).toHaveLength(2);
+  });
+});
+
+describe("runDivisionStartLayer — SCHEDULE_BLOCKING_CONFLICTS", () => {
+  it("reds with the product's own conflict list and NEVER retries", async () => {
+    const conflicts = [{ fixture_id: "fx-1", blocking: true, details: { kind: "court_overlap" } }];
+    const { transport, calls } = fakeStartTransport({
+      firstStatus: 422,
+      firstBody: {
+        ok: false,
+        error: { code: SCHEDULE_BLOCKING_CONFLICTS_CODE, message: "conflicts must be fixed first", conflicts },
+      },
+    });
+
+    const result = await runDivisionStartLayer({
+      base: BASE,
+      session: SESSION,
+      divisions: [{ divisionRef: "d-a", divisionId: "div-a" }],
+      transport,
+    });
+
+    const outcome = result.outcomes[0]!;
+    expect(outcome.blockingConflicts).toEqual(conflicts);
+    expect(outcome.started).toBe(false);
+    expect(outcome.warnings).toEqual([]);
+    expect(outcome.acknowledgedWarnings).toBe(false);
+    expect(outcome.errors.length).toBeGreaterThan(0);
+    expect(result.allStarted).toBe(false);
+
+    // Exactly ONE POST — a blocking refusal is never retried with
+    // acknowledge_warnings (that flag cannot fix a blocking conflict; the
+    // usecase throws PUBLISH_BLOCKED before it even looks at the flag).
+    expect(startPosts(calls)).toHaveLength(1);
+    // No re-read either: a division that never started has nothing to
+    // confirm.
+    expect(calls.some((c) => c.method === "GET")).toBe(false);
+  });
+});
+
+describe("runDivisionStartLayer — the re-read is the gate, not the 200 (D9)", () => {
+  it("a 200 whose RE-READ still shows the pre-start status is NOT started", async () => {
+    const { transport } = fakeStartTransport({ reReadBody: { status: "scheduled" } });
+
+    const result = await runDivisionStartLayer({
+      base: BASE,
+      session: SESSION,
+      divisions: [{ divisionRef: "d-a", divisionId: "div-a" }],
+      transport,
+    });
+
+    const outcome = result.outcomes[0]!;
+    // The POST's OWN body (`okStartBody`, above) claims
+    // `STARTED_DIVISION_STATUS` — this proves that claim is never trusted.
+    expect(outcome.confirmedStatus).toBe("scheduled");
+    expect(outcome.started).toBe(false);
+    expect(outcome.errors.length).toBeGreaterThan(0);
+    expect(result.allStarted).toBe(false);
+  });
+});
+
+describe("runDivisionStartLayer — one division's failure never aborts another", () => {
+  it("an unrecognized HTTP status becomes THIS division's own error; the other division still starts", async () => {
+    const { transport } = fakeStartTransport({ firstStatus: 500, firstBody: { ok: false, error: { code: "INTERNAL", message: "boom" } } });
+    const goodTransport = fakeStartTransport().transport;
+    const merged: DivisionStartTransport = {
+      signIn: goodTransport.signIn,
+      request: goodTransport.request,
+      async raw(base, s, rawPath, method, body) {
+        if (rawPath.includes("div-broken")) return transport.raw(base, s, rawPath, method, body);
+        return goodTransport.raw(base, s, rawPath, method, body);
+      },
+    };
+
+    const result = await runDivisionStartLayer({
+      base: BASE,
+      session: SESSION,
+      divisions: [
+        { divisionRef: "d-broken", divisionId: "div-broken" },
+        { divisionRef: "d-ok", divisionId: "div-ok" },
+      ],
+      transport: merged,
+    });
+
+    const broken = result.outcomes.find((o) => o.divisionRef === "d-broken")!;
+    const ok = result.outcomes.find((o) => o.divisionRef === "d-ok")!;
+    expect(broken.started).toBe(false);
+    expect(broken.errors.length).toBeGreaterThan(0);
+    expect(ok.started).toBe(true);
+    expect(result.allStarted).toBe(false);
+  });
+});
+
+describe("division-start code/status mirrors — the mirror is diffed against apps/web, not itself", () => {
+  // R05 precedent (this file's own `SCHEDULE_CONFIG_KEYS` guard above):
+  // assert against the schema's/module's OWN real values, imported directly
+  // — `schemas.ts`/`schedule-board.ts` are both NOT server-only, and no
+  // PRODUCTION scripts/bench file imports them (`schedule.ts`'s own header
+  // comment on `STARTED_DIVISION_STATUS`), so this test is the only thing
+  // that can catch the product renaming either value out from under the
+  // hand mirror.
+  it("STARTED_DIVISION_STATUS is one of DivisionStatus's real wire values, and is the one startDivision sets", () => {
+    expect(DivisionStatus.options).toContain(STARTED_DIVISION_STATUS);
+    expect(STARTED_DIVISION_STATUS).toBe("active");
+  });
+
+  it("SCHEDULE_BLOCKING_CONFLICTS_CODE / SCHEDULE_UNACKNOWLEDGED_WARNINGS_CODE equal the real PUBLISH_BLOCKED / PUBLISH_UNACKNOWLEDGED, read as TEXT", async () => {
+    // `schedule-board.ts` cannot be IMPORTED here (see the `HERE`/`REPO_ROOT`
+    // comment above) — reading it as text is not importing it, and it is the
+    // only thing that can catch the product renaming either code out from
+    // under the hand mirror.
+    const source = await readFile(
+      path.join(REPO_ROOT, "apps/web/src/lib/schedule-board.ts"),
+      "utf8",
+    );
+    const blocked = /export const PUBLISH_BLOCKED = "([^"]+)";/.exec(source);
+    const unacknowledged = /export const PUBLISH_UNACKNOWLEDGED = "([^"]+)";/.exec(source);
+    expect(blocked, "PUBLISH_BLOCKED literal not found in schedule-board.ts").not.toBeNull();
+    expect(unacknowledged, "PUBLISH_UNACKNOWLEDGED literal not found in schedule-board.ts").not.toBeNull();
+    expect(SCHEDULE_BLOCKING_CONFLICTS_CODE).toBe(blocked![1]);
+    expect(SCHEDULE_UNACKNOWLEDGED_WARNINGS_CODE).toBe(unacknowledged![1]);
   });
 });
