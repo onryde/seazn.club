@@ -89,7 +89,6 @@ function fakeServer(opts: {
   const calls: RecordedCall[] = [];
   const schedule = makeScheduleWorld({ solverEngine: "optimized", ...(opts.schedule ?? {}) });
   const orgBySession = new WeakMap<Session, string>();
-  const dlsByDivisionId = new Map<string, boolean>();
   const legsByStageId = new Map<string, number>();
   // B05 T3 — d-tiny now declares a second, non-league stage (s-playoff, a
   // knockout fed from the league). `/generate` needs to know which shape to
@@ -115,7 +114,13 @@ function fakeServer(opts: {
   let divisionCounter = 0;
   let stageCounter = 0;
   let fixtureCounter = 0;
-  let entitled = false;
+  // B05: the plan `provisionPlan` has flipped this org onto, null until it
+  // does. Replaces the old `entitled` flag, which modelled a `cricket.dls`
+  // paywall the product DELETED — scoring is free by owner ruling. What is
+  // still sold is `officials.auto` (V393:84 grants it to `pro`; `community`
+  // gets no row), which is the key the probe's re-pointed paywall cell
+  // derives and provokes above, while this is still null.
+  let provisionedPlan: string | null = null;
   const sqlCalls: string[] = [];
   // B05 T2.5 (D9) — see `_division-phase.ts`'s own header comment: EVERY
   // `sql`-passing fake now reaches `/start`/`GET /divisions/{id}`
@@ -215,7 +220,6 @@ function fakeServer(opts: {
       if (method === "POST" && /^\/api\/v1\/competitions\/[^/]+\/divisions$/.test(routePath)) {
         const b = body as { name?: string; sport_key?: string; config?: { dls?: { enabled?: boolean } } };
         const id = `div-${++divisionCounter}`;
-        dlsByDivisionId.set(id, b.config?.dls?.enabled === true);
         if (b.name !== undefined) divisionNameById.set(id, b.name);
         if (b.sport_key !== undefined) divisionSportById.set(id, b.sport_key);
         return { id } as T;
@@ -362,7 +366,6 @@ function fakeServer(opts: {
       const divisionGet = phase.handleDivisionGet(method, routePath);
       if (divisionGet !== undefined) return divisionGet as T;
       if (method === "POST" && /^\/api\/admin\/orgs\/[^/]+\/entitlement-override$/.test(routePath)) {
-        entitled = true;
         return { ok: true } as unknown as T;
       }
       if (method === "DELETE" && /^\/api\/admin\/orgs\/[^/]+\/entitlement-override$/.test(routePath)) {
@@ -408,18 +411,36 @@ function fakeServer(opts: {
           } as never,
         };
       }
+      // B05 — the DLS-gate probe's RE-POINTED paywall cell. "A 402 names its
+      // feature_key" is still a real regression-catcher, but `cricket.dls` is
+      // free now, so the probe derives a key the live matrix still gates and
+      // provokes it here. `autoAssignOfficials` (usecases/officials.ts:496)
+      // gates on `officials.auto` as its FIRST statement, before any division
+      // state is read, so the plan is the only thing that decides the answer.
+      const autoGate = /^\/api\/v1\/divisions\/([^/]+)\/officials\/auto$/.exec(path);
+      if (autoGate && provisionedPlan === null) {
+        return {
+          status: 402,
+          json: { ok: false, error: { code: "PAYMENT_REQUIRED", message: "nope", feature_key: "officials.auto" } } as never,
+        };
+      }
       const m = /^\/api\/v1\/fixtures\/([^/]+)\/events$/.exec(path);
       if (!m) throw new Error(`fake server: unhandled raw ${method} ${path}`);
       const fixtureId = m[1]!;
-      const divisionId = fixtureDivisionId.get(fixtureId);
-      const dlsEnabled = divisionId !== undefined && dlsByDivisionId.get(divisionId) === true;
       const { type, payload } = body as { type: string; payload: { target?: unknown } };
-      const manualTarget = payload?.target !== undefined;
-      const requiresDls = type === "cricket.revise" && dlsEnabled && !manualTarget;
-      if (requiresDls && !entitled) {
+      // B05: SCORING IS FREE (owner ruling; V390__scoring_free.sql, and
+      // V393__entitlements_v18.sql:63-70 puts `cricket.dls` on `community`),
+      // so NO plan check gates this route. The only refusal a `cricket.revise`
+      // can draw here is the ENGINE's own shape rule — `CricketRevise` needs
+      // `oversPerSide` and/or `target` (packages/engine/src/sports/cricket/
+      // cricket.ts:259-266) — which is exactly what the DLS-gate probe's
+      // freedom cell requires, as 422 INVALID_EVENT. This used to 402 on
+      // `cricket.dls`, which kept a deleted paywall alive inside the fakes.
+      const revisePayload = payload as { target?: unknown; oversPerSide?: unknown };
+      if (type === "cricket.revise" && revisePayload?.target === undefined && revisePayload?.oversPerSide === undefined) {
         return {
-          status: 402,
-          json: { ok: false, error: { code: "PAYMENT_REQUIRED", message: "nope", feature_key: "cricket.dls" } } as never,
+          status: 422,
+          json: { ok: false, error: { code: "INVALID_EVENT", message: "revise needs oversPerSide and/or target" } } as never,
         };
       }
       return { status: 201, json: { ok: true, data: { seq: 1 } } as never };
@@ -430,8 +451,12 @@ function fakeServer(opts: {
     async entitlementRows(featureKey) {
       sqlCalls.push(`entitlementRows(${featureKey})`);
       if (featureKey === "cricket.dls") {
+        // B05: `community` GRANTS this — V393__entitlements_v18.sql:63-70,
+        // "charge for leverage, never correctness". The probe reads this row
+        // to report `dlsFreeOnCommunityPlan`, and a `false` here would claim
+        // scoring had been re-gated for customers who never paid.
         return [
-          { plan_key: "community", bool_value: false },
+          { plan_key: "community", bool_value: true },
           { plan_key: "pro", bool_value: true },
         ] satisfies PlanEntitlementRow[];
       }
@@ -463,8 +488,11 @@ function fakeServer(opts: {
     async getOrgSubscriptionId() {
       return null;
     },
-    async updateSubscriptionPlan() {},
-    async createSubscriptionForOrg() {
+    async updateSubscriptionPlan(_subscriptionId, plan) {
+      provisionedPlan = plan;
+    },
+    async createSubscriptionForOrg(_orgId, plan) {
+      provisionedPlan = plan;
       return "sub-new";
     },
     async setOwnerStaff() {},
@@ -516,14 +544,29 @@ describe("runTinySuite — B03 T7 plan/entitlement-gate wiring", () => {
     // proved separately below and in tiny-suite.test.ts), which this test
     // does not own.
     const gateOracles = (report.oracles ?? []).filter((o) => o.name.startsWith("entitlement-gate:"));
+    // B05: the cells no longer say "unentitled"/"entitled", because no plan
+    // choice can make an org unentitled to `cricket.dls` any more — scoring
+    // is free (owner ruling; V393__entitlements_v18.sql:63-70). The
+    // `gated_feature_...` cell is ABSENT here on purpose: this fixture's
+    // catalog grants `officials.auto` to no plan at all
+    // (`officialsAutoGranted: false`), so nothing it can provoke is still
+    // sold and the cell retires itself — asserted below.
     expect(gateOracles.map((o) => o.name)).toEqual([
-      "entitlement-gate: revise_no_target_unentitled",
-      "entitlement-gate: revise_with_target_unentitled",
-      "entitlement-gate: revise_dls_off_unentitled",
-      "entitlement-gate: other_event_unentitled",
-      "entitlement-gate: revise_no_target_entitled",
+      "entitlement-gate: revise_no_target_community",
+      "entitlement-gate: revise_with_target_community",
+      "entitlement-gate: revise_dls_off_community",
+      "entitlement-gate: other_event_community",
+      "entitlement-gate: revise_no_target_after_plan",
+      "entitlement-gate: cricket.dls is free on the plan a non-paying org resolves to",
     ]);
     expect(gateOracles.every((o) => o.passed)).toBe(true);
+
+    // The retirement is REPORTED, never silent: a run that loses the "a 402
+    // names its feature_key" cell has to say so, or the coverage evaporates
+    // with a green gate — the exact shape of the failure this wave repaired.
+    const retiredWarning = (report.warnings ?? []).find((w) => w.includes("did not run"));
+    expect(retiredWarning, "a retired paywall cell must be reported").toBeDefined();
+    expect(retiredWarning).toContain("PROVOCABLE_GATED_FEATURES");
 
     // The probe's own throwaway competition really was created over HTTP —
     // proof this is DRIVEN, not merely defined and never called.
@@ -577,7 +620,15 @@ describe("runTinySuite — B03 T7 plan/entitlement-gate wiring", () => {
     expect(gapWarning).toContain("officials.auto");
     // Names the plan it settled on too, so a reader can tell "no plan grants
     // this" from "the plan we picked for something else does not".
-    expect(gapWarning).toContain("pro");
+    //
+    // B05: that plan is now `community`. On this fixture's catalog NO plan
+    // grants officials.auto, and `cricket.dls` — the one REQUIRED capability
+    // — is granted by `community` itself (V393:63-70), which is public and
+    // privilege-0, so it is the least-privileged public grantor and wins.
+    // That is the chooser working correctly on a catalog where scoring is
+    // free, not a regression: before V393 `community` had no cricket.dls row
+    // at all and could never have been a candidate.
+    expect(gapWarning).toContain('plan "community"');
   });
 
   it("autoAssign ON: the provisioned plan DOES grant officials.auto, so runOfficialsAutoAssign's auto pass is actually called — AFTER schedule/apply, never before", async () => {
@@ -628,9 +679,23 @@ describe("runTinySuite — B03 T7 plan/entitlement-gate wiring", () => {
     const scheduleApplyIdx = calls.findIndex(
       (c) => c.method === "POST" && /^\/api\/v1\/stages\/[^/]+\/schedule\/apply$/.test(c.path),
     );
-    const officialsAutoIdx = calls.findIndex((c) => c.method === "POST" && /\/officials\/auto$/.test(c.path));
+    // B05: `/officials/auto` is now hit TWICE in a run. The DLS-gate probe's
+    // RE-POINTED paywall cell provokes it FIRST, on the probe's own throwaway
+    // division and deliberately BEFORE the plan flip, where it must 402 —
+    // `officials.auto` is what the live matrix still gates now that
+    // `cricket.dls` is free. Taking `findIndex` here would match THAT call and
+    // satisfy the ordering check for free, which is exactly the vacuous pass
+    // this assertion exists to prevent, so scope to the LAST one and pin the
+    // probe's call on the other side of schedule/apply.
+    const officialsAutoIdxs = calls
+      .map((c, i) => ({ c, i }))
+      .filter(({ c }) => c.method === "POST" && /\/officials\/auto$/.test(c.path))
+      .map(({ i }) => i);
+    expect(officialsAutoIdxs).toHaveLength(2);
+    const officialsAutoIdx = officialsAutoIdxs[1]!;
     const officialsApplyIdx = calls.findIndex((c) => c.method === "POST" && /\/officials\/apply$/.test(c.path));
     expect(scheduleApplyIdx).toBeGreaterThan(-1);
+    expect(officialsAutoIdxs[0]!).toBeLessThan(scheduleApplyIdx);
     expect(officialsAutoIdx).toBeGreaterThan(scheduleApplyIdx);
     expect(officialsApplyIdx).toBeGreaterThan(officialsAutoIdx);
 

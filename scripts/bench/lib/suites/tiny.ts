@@ -157,7 +157,7 @@ import {
   type SeedTransport,
 } from "../seed.ts";
 import { runDlsGateProbe, type ProbeTransport } from "../dls-gate.ts";
-import { type PlanSql } from "../plan.ts";
+import { FREE_PLAN_KEY, type PlanSql } from "../plan.ts";
 import {
   readPlayerStatsBaseline,
   playerStatsBaselineIssues,
@@ -1524,6 +1524,36 @@ export async function runTinySuite(
           );
         }
       }
+      // THE PROMISE at the matrix, as its own oracle (dls-gate.ts's header,
+      // point 2). The cells above prove the door is open for THIS org over
+      // HTTP; this proves it is open for every org that never paid. Scoring
+      // is free by owner ruling — a false here means a migration put it back
+      // behind a price.
+      oracles.push({
+        name: "entitlement-gate: cricket.dls is free on the plan a non-paying org resolves to",
+        passed: probe.dlsFreeOnCommunityPlan,
+        detail: probe.dlsFreeOnCommunityPlan
+          ? `plan_entitlements grants cricket.dls on "${FREE_PLAN_KEY}" — scoring is free, as ruled ` +
+            `(V390__scoring_free.sql; V393__entitlements_v18.sql:63-70)`
+          : `plan_entitlements no longer grants cricket.dls on "${FREE_PLAN_KEY}" — scoring has been ` +
+            `re-gated for customers who never paid, which contradicts the standing owner ruling`,
+      });
+      if (!probe.dlsFreeOnCommunityPlan) {
+        errors.push(
+          `entitlement-gate: cricket.dls is no longer granted on "${FREE_PLAN_KEY}" — scoring is supposed to be free`,
+        );
+      }
+      // The paywall cell retires itself when nothing this probe can provoke
+      // is still sold (`DlsGateProbeResult.gatedFeatureProbed`). That is a
+      // finding to act on — point one of those gates at a key that IS sold —
+      // never a silent loss of coverage.
+      if (probe.gatedFeatureProbed === null) {
+        warnings.push(
+          "tiny: no feature key the DLS-gate probe knows how to provoke is still gated for a " +
+            `"${FREE_PLAN_KEY}" org, so the "a 402 names its feature_key" cell did not run — that ` +
+            "coverage is retired until PROVOCABLE_GATED_FEATURES (lib/dls-gate.ts) names a key that is still sold",
+        );
+      }
       autoAssign = probe.officialsAutoGranted;
       // B03 review F1(a): the chosen plan is not guaranteed to grant every
       // capability this run wants (`chooseGrantingPlanForCapabilities` picks
@@ -1543,6 +1573,8 @@ export async function runTinySuite(
           officialsAutoGranted: probe.officialsAutoGranted,
           unsatisfiedCapabilities: probe.unsatisfiedCapabilities,
           statsPlayerGranted,
+          dlsFreeOnCommunityPlan: probe.dlsFreeOnCommunityPlan,
+          gatedFeatureProbed: probe.gatedFeatureProbed,
         },
         "tiny: entitlement-gate probe complete",
       );

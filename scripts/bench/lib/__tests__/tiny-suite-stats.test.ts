@@ -57,7 +57,6 @@ function fakeServer(opts: { statsPlayerGranted: boolean }): {
   calls: RecordedCall[];
 } {
   const calls: RecordedCall[] = [];
-  const dlsByDivisionId = new Map<string, boolean>();
   const legsByStageId = new Map<string, number>();
   // B05 T3 — d-tiny now declares a second, non-league stage (s-playoff, a
   // knockout fed from the league). `/generate` needs to know which shape to
@@ -83,7 +82,13 @@ function fakeServer(opts: { statsPlayerGranted: boolean }): {
   let divisionCounter = 0;
   let stageCounter = 0;
   let fixtureCounter = 0;
-  let entitled = false;
+  // B05: the plan `provisionPlan` has flipped this org onto, null until it
+  // does. Replaces the old `entitled` flag, which modelled a `cricket.dls`
+  // paywall the product DELETED — scoring is free by owner ruling. What is
+  // still sold is `officials.auto` (V393:84 grants it to `pro`; `community`
+  // gets no row), which is the key the probe's re-pointed paywall cell
+  // derives and provokes above, while this is still null.
+  let provisionedPlan: string | null = null;
 
   const schedule = makeScheduleWorld({ solverEngine: "optimized" });
   // B05 T2.5 (D9) — see `_division-phase.ts`'s own header comment: EVERY
@@ -182,7 +187,6 @@ function fakeServer(opts: { statsPlayerGranted: boolean }): {
       if (method === "POST" && /^\/api\/v1\/competitions\/[^/]+\/divisions$/.test(routePath)) {
         const b = body as { name?: string; sport_key?: string; config?: { dls?: { enabled?: boolean } } };
         const id = `div-${++divisionCounter}`;
-        dlsByDivisionId.set(id, b.config?.dls?.enabled === true);
         if (b.name !== undefined) divisionNameById.set(id, b.name);
         if (b.sport_key !== undefined) divisionSportById.set(id, b.sport_key);
         return { id } as T;
@@ -312,7 +316,6 @@ function fakeServer(opts: { statsPlayerGranted: boolean }): {
         return { slug: `slug-${routePath.split("/")[4]}`, ...phase.handleDivisionGet(method, routePath) } as T;
       }
       if (method === "POST" && /^\/api\/admin\/orgs\/[^/]+\/entitlement-override$/.test(routePath)) {
-        entitled = true;
         return { ok: true } as unknown as T;
       }
       if (method === "DELETE" && /^\/api\/admin\/orgs\/[^/]+\/entitlement-override$/.test(routePath)) {
@@ -358,18 +361,36 @@ function fakeServer(opts: { statsPlayerGranted: boolean }): {
           } as never,
         };
       }
+      // B05 — the DLS-gate probe's RE-POINTED paywall cell. "A 402 names its
+      // feature_key" is still a real regression-catcher, but `cricket.dls` is
+      // free now, so the probe derives a key the live matrix still gates and
+      // provokes it here. `autoAssignOfficials` (usecases/officials.ts:496)
+      // gates on `officials.auto` as its FIRST statement, before any division
+      // state is read, so the plan is the only thing that decides the answer.
+      const autoGate = /^\/api\/v1\/divisions\/([^/]+)\/officials\/auto$/.exec(path);
+      if (autoGate && provisionedPlan === null) {
+        return {
+          status: 402,
+          json: { ok: false, error: { code: "PAYMENT_REQUIRED", message: "nope", feature_key: "officials.auto" } } as never,
+        };
+      }
       const m = /^\/api\/v1\/fixtures\/([^/]+)\/events$/.exec(path);
       if (!m) throw new Error(`fake server: unhandled raw ${method} ${path}`);
       const fixtureId = m[1]!;
-      const divisionId = fixtureDivisionId.get(fixtureId);
-      const dlsEnabled = divisionId !== undefined && dlsByDivisionId.get(divisionId) === true;
       const { type, payload } = body as { type: string; payload: { target?: unknown } };
-      const manualTarget = payload?.target !== undefined;
-      const requiresDls = type === "cricket.revise" && dlsEnabled && !manualTarget;
-      if (requiresDls && !entitled) {
+      // B05: SCORING IS FREE (owner ruling; V390__scoring_free.sql, and
+      // V393__entitlements_v18.sql:63-70 puts `cricket.dls` on `community`),
+      // so NO plan check gates this route. The only refusal a `cricket.revise`
+      // can draw here is the ENGINE's own shape rule — `CricketRevise` needs
+      // `oversPerSide` and/or `target` (packages/engine/src/sports/cricket/
+      // cricket.ts:259-266) — which is exactly what the DLS-gate probe's
+      // freedom cell requires, as 422 INVALID_EVENT. This used to 402 on
+      // `cricket.dls`, which kept a deleted paywall alive inside the fakes.
+      const revisePayload = payload as { target?: unknown; oversPerSide?: unknown };
+      if (type === "cricket.revise" && revisePayload?.target === undefined && revisePayload?.oversPerSide === undefined) {
         return {
-          status: 402,
-          json: { ok: false, error: { code: "PAYMENT_REQUIRED", message: "nope", feature_key: "cricket.dls" } } as never,
+          status: 422,
+          json: { ok: false, error: { code: "INVALID_EVENT", message: "revise needs oversPerSide and/or target" } } as never,
         };
       }
       return { status: 201, json: { ok: true, data: { seq: 1 } } as never };
@@ -379,8 +400,12 @@ function fakeServer(opts: { statsPlayerGranted: boolean }): {
   const sql: PlanSql = {
     async entitlementRows(featureKey) {
       if (featureKey === "cricket.dls") {
+        // B05: `community` GRANTS this — V393__entitlements_v18.sql:63-70,
+        // "charge for leverage, never correctness". The probe reads this row
+        // to report `dlsFreeOnCommunityPlan`, and a `false` here would claim
+        // scoring had been re-gated for customers who never paid.
         return [
-          { plan_key: "community", bool_value: false },
+          { plan_key: "community", bool_value: true },
           { plan_key: "pro", bool_value: true },
         ] satisfies PlanEntitlementRow[];
       }
@@ -407,8 +432,11 @@ function fakeServer(opts: { statsPlayerGranted: boolean }): {
     async getOrgSubscriptionId() {
       return null;
     },
-    async updateSubscriptionPlan() {},
-    async createSubscriptionForOrg() {
+    async updateSubscriptionPlan(_subscriptionId, plan) {
+      provisionedPlan = plan;
+    },
+    async createSubscriptionForOrg(_orgId, plan) {
+      provisionedPlan = plan;
       return "sub-new";
     },
     async setOwnerStaff() {},
