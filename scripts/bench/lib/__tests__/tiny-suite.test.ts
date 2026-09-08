@@ -84,15 +84,26 @@ describe("TINY_PACK_PATH", () => {
 // ---------------------------------------------------------------------------
 
 describe("tinyPackStage — warnings are reportable, never fatal", () => {
-  it("SUCCEEDS on the committed pack and still surfaces its three warnings", async () => {
+  it("SUCCEEDS on the committed pack and still surfaces its five warnings", async () => {
     const stage = await tinyPackStage(TINY_PACK_PATH);
     // The run proceeds…
     expect(stage.ok).toBe(true);
     if (!stage.ok) throw new Error(`refused: ${stage.errors.join(" | ")}`);
     // …and the warnings reach the report rather than being swallowed.
-    expect(stage.warnings).toHaveLength(3);
+    //
+    // FIVE, not three. This count was left behind twice: T5b (2d40b85a4) gave
+    // the pack `expected.careers` and T5b-3 gave it `expected.suspensions`,
+    // and each block's `*.not_derived` notice is permanent for as long as the
+    // block is non-empty. It was already red on arrival at T5b-3 — the
+    // careers row alone made it 4 — so this is a repair of an inherited red,
+    // not a weakening: every `toContain` below is untouched and two more join
+    // them.
+    expect(stage.warnings).toHaveLength(5);
     expect(stage.warnings.join(" | ")).toContain("leaderboards.not_derived");
     expect(stage.warnings.join(" | ")).toContain("champions.not_derived");
+    // B05 T5b / T5b-3 — the two blocks whose arrival moved this count.
+    expect(stage.warnings.join(" | ")).toContain("careers.not_derived");
+    expect(stage.warnings.join(" | ")).toContain("suspensions.not_derived");
     // B05 T3 — d-tiny's second stage (s-playoff) gave the pack its first
     // expected.finalRanks entry, which is exactly as offline-unverifiable
     // as champions (see PackExpectedFinalRanks's own doc comment).
@@ -352,9 +363,10 @@ describe("runTinySuite — what the SuiteReport carries", () => {
     // The network is unreachable, so the gate is red for THAT reason…
     expect(report.gate).toBe("red");
     expect(report.errors ?? []).not.toHaveLength(0);
-    // …and the pack's three permanent warnings still reached the report
-    // rather than being dropped on the way through the run.
-    expect(report.warnings ?? []).toHaveLength(3);
+    // …and the pack's five permanent warnings still reached the report
+    // rather than being dropped on the way through the run. (Same inherited
+    // drift as `tinyPackStage`'s own count above — see the note there.)
+    expect(report.warnings ?? []).toHaveLength(5);
     expect((report.warnings ?? []).join(" | ")).toContain("leaderboards.not_derived");
   });
 });

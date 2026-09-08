@@ -29,6 +29,7 @@ import { makeScheduleWorld } from "./_schedule-routes.ts";
 import { makeDivisionPhaseWorld } from "./_division-phase.ts";
 import { makeAdvanceRoutesWorld } from "./_advance-routes.ts";
 import type { DivisionCardSource } from "./_oracle-routes.ts";
+import { makeDisciplineRoutesWorld } from "./_discipline-routes.ts";
 import {
   makeOracleRoutesWorld,
   personCareerStatsFromDivisions,
@@ -124,6 +125,13 @@ function fakeServer(opts: { refuseImportWith?: { status: number; code: string; m
         : [{ divisionId, divisionName, sportKey: divisionSportById.get(divisionId) ?? "unknown", playerStats }];
     });
 
+  // B05 T5b-3 — the discipline surface (five routes), from the shared world.
+  const entrantByDivisionPerson = new Map<string, string>();
+  const discipline = makeDisciplineRoutesWorld({
+    entrantForPerson: (divisionId, personId) =>
+      entrantByDivisionPerson.get(`${divisionId}|${personId}`),
+  });
+
   const oracleRoutes = makeOracleRoutesWorld({
     getRankedEntrantIds: (stageId) => {
       const divisionId = divisionIdByStageId.get(stageId);
@@ -184,10 +192,19 @@ function fakeServer(opts: { refuseImportWith?: { status: number; code: string; m
       }
       const entrantsMatch = /^\/api\/v1\/divisions\/([^/]+)\/entrants$/.exec(routePath);
       if (method === "POST" && entrantsMatch !== null) {
-        const rows = body as { display_name?: string }[];
+        const rows = body as { display_name?: string; members?: { person_id?: string }[] }[];
         const out = rows.map((e, i) => ({
           id: `entrant-${slug(e.display_name ?? String(i))}-${Math.random()}`,
         }));
+        // B05 T5b-3 — the roster the request carried, so the discipline world
+        // can answer `entrantForPerson` the way `decideSuspension` resolves it.
+        rows.forEach((e, i) => {
+          for (const m of e.members ?? []) {
+            if (m.person_id !== undefined) {
+              entrantByDivisionPerson.set(`${entrantsMatch[1]!}|${m.person_id}`, out[i]!.id);
+            }
+          }
+        });
         schedule.addEntrants(entrantsMatch[1]!, out.map((e) => e.id));
         return out as unknown as T;
       }
@@ -309,6 +326,9 @@ function fakeServer(opts: { refuseImportWith?: { status: number; code: string; m
       // comment).
       const oracled = oracleRoutes.handle(method, path);
       if (oracled !== undefined) return oracled;
+      // B05 T5b-3 — the discipline surface (see `_discipline-routes.ts`).
+      const disciplined = discipline.handle(method, path, body);
+      if (disciplined !== undefined) return disciplined;
       // B05 T2's own addition: division B's batch-import fold. Refuses the
       // WHOLE call when `opts.refuseImportWith` is set (so a wiring test can
       // prove a call-level refusal reaches `report.errors`/`report.gate`,
