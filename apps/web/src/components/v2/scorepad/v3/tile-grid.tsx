@@ -221,10 +221,25 @@ export interface TileGridProps {
  */
 export function TileGrid({ tiles, phase, t, onAction, onOpenSheet }: TileGridProps) {
   const visible = tilesForPhase(tiles, phase);
+  // A four-column grid reserves four columns even when the phase leaves ONE
+  // tile in the row, so the lone tile gets a quarter of the width and three
+  // columns sit empty. English hid this — "Toss" fits 60px on one line — while
+  // fr/es/nl wrap it to three lines and the tile renders 60x92, taller than it
+  // is wide. A row with a single unspanned tile therefore gives it the whole
+  // row; a tile that declares its own span keeps it, and two or more tiles are
+  // untouched, so the four-across rhythm the phone composition design asks for
+  // is unchanged wherever it actually applies.
+  const soleUnspanned = visible.length === 1 && visible[0]?.span === undefined;
   return (
     <div className="grid grid-cols-4 gap-2">
       {visible.map((tile) => (
-        <Tile key={tile.id} tile={tile} t={t} onAction={onAction} onOpenSheet={onOpenSheet} />
+        <Tile
+          key={tile.id}
+          tile={soleUnspanned ? { ...tile, span: 4 } : tile}
+          t={t}
+          onAction={onAction}
+          onOpenSheet={onOpenSheet}
+        />
       ))}
     </div>
   );
