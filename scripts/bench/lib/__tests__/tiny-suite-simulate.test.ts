@@ -19,6 +19,9 @@
 // suite (which already covers the fold logic exhaustively).
 import { describe, expect, it } from "vitest";
 import pino from "pino";
+import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { RawResult, Session } from "../http.ts";
 import type { ProbeTransport } from "../dls-gate.ts";
 import type { PlanEntitlementRow, PlanSql } from "../plan.ts";
@@ -573,6 +576,76 @@ describe("runTinySuite — B05 T1 division-A stream fold wiring", () => {
       "oracle: d-tiny champion",
     ]);
     expect(runtimeOracles.map((o) => o.passed)).toEqual([true, true, true, true, true, true, true]);
+  });
+
+  // B05 T4b — D6, MOVED ONTO THE WIRED PATH (the re-pin's own instruction:
+  // "this regression must now run through the WIRED leaderboard oracle, not
+  // only through a unit fixture — otherwise D6 proves the comparator and
+  // not the pipeline"). `oracle.test.ts`'s own D6 test proves
+  // `compareLeaderboard` itself, fed a hand-built `liveDerivedActual`; this
+  // one proves the WIRING — the mutated pack's stream is folded through the
+  // REAL `simulateDivisionStreams`/`/fixtures/{id}/events` path, and the
+  // fake's `getDivisionPlayerStats` (this file's own live tally, not a
+  // fixture) answers with whatever that fold actually produced.
+  it("D6 — a mis-transcribed generic.score stays invisible to stage 0, but reds the WIRED leaderboard oracle", async () => {
+    // The SAME mutation `oracle.test.ts`'s own D6 test uses: `rr-r2-c1`'s
+    // `@p-bo` scoring event re-attributed to `@p-ana`. `by` (the SIDE,
+    // `@e-bravo`) is untouched, so the fixture's own outcome/standings stay
+    // exactly what stage 0 already checks — only who gets PERSONAL credit
+    // changes, which stage 0's own header names as the one thing it cannot
+    // see.
+    const raw = JSON.parse(await readFile(TINY_PACK_PATH, "utf8")) as {
+      streams: { fixtureExtKey: string; events: { type: string; payload?: Record<string, string | number> }[] }[];
+    };
+    const stream = raw.streams.find((st) => st.fixtureExtKey === "rr-r2-c1");
+    if (stream === undefined) throw new Error("test fixture assumption broken: rr-r2-c1 stream not found");
+    const boEvent = stream.events.find((e) => e.type === "generic.score" && e.payload?.person === "@p-bo");
+    if (boEvent?.payload === undefined) throw new Error("test fixture assumption broken: no @p-bo scoring event");
+    boEvent.payload.person = "@p-ana"; // the mis-transcription
+
+    // The filename must stay `_tiny.json`: `pack-schema.ts`'s own
+    // `suite_mismatch` check refuses a pack whose declared `suite` disagrees
+    // with the file it was loaded from — a different temp DIRECTORY keeps
+    // this isolated from the real committed pack without tripping it.
+    const dir = await mkdtemp(join(tmpdir(), "b05-d6-"));
+    const mutatedPackPath = join(dir, "_tiny.json");
+    await writeFile(mutatedPackPath, JSON.stringify(raw), "utf8");
+
+    const { transport, sql } = fakeServer();
+    const report = await runTinySuite({
+      base: "http://bench.example",
+      engine: "optimized",
+      keep: false,
+      log: silent,
+      cliEntry: "admin",
+      packPath: mutatedPackPath,
+      transport,
+      sql,
+      probeTransport: transport,
+      simTransport: transport,
+      importTransport: transport,
+      startTransport: transport,
+      advanceTransport: transport,
+      oracleTransport: transport,
+    });
+
+    // The mutated pack still reaches the live run at all — stage 0 does NOT
+    // derive `expected.leaderboards` from events (`validate-pack.ts`'s own
+    // "LIMITS" header), so this is a warning, never a stage-0 error.
+    const leaderboardOracles = (report.oracles ?? []).filter((o) => o.name.startsWith("oracle: d-tiny leaderboard"));
+    expect(leaderboardOracles.map((o) => o.name)).toEqual([
+      "oracle: d-tiny leaderboard (scores)",
+      "oracle: d-tiny leaderboard (points)",
+    ]);
+    // Both metrics disagree: the live tally now shows p-ana with 3
+    // scores/4 points (three events, one worth 2) and p-bo with 0/0, against
+    // the pack's OWN unchanged `expected.leaderboards` (2/1 scores, 2/2
+    // points) — a REAL disagreement the wiring caught, not a restated
+    // fixture (`expected.leaderboards` is read from the pack exactly once,
+    // by `lib/suites/tiny.ts`'s own T4b block, never re-derived here).
+    expect(leaderboardOracles.map((o) => o.passed)).toEqual([false, false]);
+    expect(report.gate).toBe("red");
+    expect((report.errors ?? []).some((e) => e.includes("d-tiny/scores") || e.includes("leaderboard"))).toBe(true);
   });
 
   it("B05 T4 — the runtime oracle is a REAL wire read, not an inert restatement: a reversed re-read standings order reds the run", async () => {
