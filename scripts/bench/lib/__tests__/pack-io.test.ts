@@ -36,16 +36,17 @@ const TINY_TEXT = readFileSync(TINY_PACK_PATH, "utf8");
 const tinyRaw = (): unknown => JSON.parse(TINY_TEXT) as unknown;
 
 /**
- * `_tiny` declares two leaderboards, a champion, and (B05 T3 — d-tiny's
- * second stage, s-playoff) a finalRanks order, and stage 0 derives NONE of
- * them, so every green `_tiny` load carries exactly these three warnings.
- * Spelled out rather than filtered away — the whole point of a not-derived
- * warning is that a reader sees it.
+ * `_tiny` declares leaderboards, a champion, (B05 T3 — d-tiny's second stage,
+ * s-playoff) a finalRanks order, and (B05 T5b) a cross-division career
+ * rollup, and stage 0 derives NONE of them, so every green `_tiny` load
+ * carries exactly these four warnings. Spelled out rather than filtered away
+ * — the whole point of a not-derived warning is that a reader sees it.
  */
 const TINY_WARNINGS = [
   "leaderboards.not_derived",
   "champions.not_derived",
   "finalRanks.not_derived",
+  "careers.not_derived",
 ];
 
 const codes = (load: PackLoad): { errors: string[]; warnings: string[] } => ({
@@ -86,6 +87,8 @@ describe("loadPackValue — the committed micro-pack", () => {
       "expected.leaderboards",
       "expected.champions",
       "expected.finalRanks",
+      // B05 T5b — the cross-division career rollup.
+      "expected.careers",
     ]);
   });
 });

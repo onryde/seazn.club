@@ -310,12 +310,6 @@
       "fullName": "Farid Haddad",
       "lane": "player",
       "shortName": "F. Haddad"
-    },
-    {
-      "ref": "p-golf",
-      "fullName": "Greta Lindqvist",
-      "lane": "player",
-      "shortName": "G. Lindqvist"
     }
   ],
   "entrants": [
@@ -431,11 +425,11 @@
       "ref": "e-golf",
       "divisionRef": "d-tiebreak",
       "kind": "individual",
-      "displayName": "Greta Lindqvist",
+      "displayName": "Ana Alvarez",
       "seed": 3,
       "roster": [
         {
-          "person": "p-golf",
+          "person": "p-ana",
           "captain": true,
           "squadNumber": 1
         }
@@ -1043,11 +1037,23 @@
           "type": "core.start"
         },
         {
-          "type": "generic.result",
+          "type": "generic.score",
           "payload": {
-            "p1Score": 1,
-            "p2Score": 1
+            "by": "@e-golf",
+            "points": 1,
+            "person": "@p-ana"
           }
+        },
+        {
+          "type": "generic.score",
+          "payload": {
+            "by": "@e-echo",
+            "points": 1,
+            "person": "@p-echo"
+          }
+        },
+        {
+          "type": "generic.result"
         }
       ]
     },
@@ -1468,6 +1474,52 @@
             "count": 2
           }
         ]
+      },
+      {
+        "divisionRef": "d-tiebreak",
+        "metricKey": "scores",
+        "entries": [
+          {
+            "person": "p-ana",
+            "name": "Ana Alvarez",
+            "count": 1
+          },
+          {
+            "person": "p-echo",
+            "name": "Elena Reyes",
+            "count": 1
+          }
+        ]
+      },
+      {
+        "divisionRef": "d-tiebreak",
+        "metricKey": "points",
+        "entries": [
+          {
+            "person": "p-ana",
+            "name": "Ana Alvarez",
+            "count": 1
+          },
+          {
+            "person": "p-echo",
+            "name": "Elena Reyes",
+            "count": 1
+          }
+        ]
+      }
+    ],
+    "careers": [
+      {
+        "person": "p-ana",
+        "name": "Ana Alvarez",
+        "metricKey": "scores",
+        "count": 3
+      },
+      {
+        "person": "p-ana",
+        "name": "Ana Alvarez",
+        "metricKey": "points",
+        "count": 3
       }
     ],
     "suspensions": [],

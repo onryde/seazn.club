@@ -501,6 +501,29 @@ const TINY_LEADERBOARDS: NonNullable<PackInput["expected"]["leaderboards"]> = [
   },
 ];
 
+// B05 T5b — the cross-division career rollup (`oracle.ts`'s
+// `compareCareerStats`, which had NO subject on this pack at all: `expected.
+// careers` was absent entirely and the comparator's verdict was silence).
+//
+// AUTHORED, never summed by this generator. `PackExpectedCareer`'s own doc
+// comment is explicit that deriving a career from the per-division
+// leaderboards would make the bench compute its expected value out of its
+// other expected values; these two counts are stated as history, and
+// `__tests__/_tiny.test.ts` cross-checks them against the two divisions'
+// independently-authored leaderboard rows.
+//
+// Ana Alvarez plays in d-tiny (e-alpha) and d-tiebreak (seat 3) — both
+// `generic`, so `personCareerStats` files them under ONE `sports[]` entry
+// and sums them. `scores` counts her three `generic.score` events (two in
+// d-tiny's rr-r2-c1, one in d-tiebreak's rr-r2-c1); `points` sums their
+// `points` fields (1 + 1 + 1). Both totals differ from EITHER division's own
+// leaderboard count (2 and 1), so a rollup that served one division's total
+// in place of the career cannot pass.
+const TINY_CAREERS: NonNullable<PackInput["expected"]["careers"]> = [
+  { person: "p-ana", name: "Ana Alvarez", metricKey: "scores", count: 3 },
+  { person: "p-ana", name: "Ana Alvarez", metricKey: "points", count: 3 },
+];
+
 const TINY_SPECIALS: NonNullable<PackInput["expected"]["specials"]> = [
   {
     kind: "retirement",
@@ -1015,10 +1038,17 @@ const TIEBREAK_HOME_ECHO = "e-echo";
 const TIEBREAK_AWAY_FOXTROT = "e-foxtrot";
 const TIEBREAK_THIRD_GOLF = "e-golf";
 
+// B05 T5b: seat 3 has NO person of its own. The entrant refs here are NATO
+// SEAT LABELS — exactly what `e-alpha`/`e-bravo` are in d-tiny, where the
+// people are Ana and Bo — so `e-golf` naming a person called "Golf" was never
+// the convention. Seat 3 is Ana Alvarez (`p-ana`, d-tiny's own e-alpha)
+// entering a SECOND division, which is the only thing that gives
+// `expected.careers` a cross-division subject to roll up: `personCareerStats`
+// groups by sport_key, and d-tiny and d-tiebreak are both `generic` while
+// d-badminton is not.
 const TIEBREAK_PERSONS: NonNullable<PackInput["persons"]> = [
   { ref: "p-echo", fullName: "Elena Reyes", lane: "player", shortName: "E. Reyes" },
   { ref: "p-foxtrot", fullName: "Farid Haddad", lane: "player", shortName: "F. Haddad" },
-  { ref: "p-golf", fullName: "Greta Lindqvist", lane: "player", shortName: "G. Lindqvist" },
 ];
 
 const TIEBREAK_ENTRANTS: PackInput["entrants"] = [
@@ -1042,9 +1072,9 @@ const TIEBREAK_ENTRANTS: PackInput["entrants"] = [
     ref: TIEBREAK_THIRD_GOLF,
     divisionRef: TIEBREAK_DIVISION_REF,
     kind: "individual",
-    displayName: "Greta Lindqvist",
+    displayName: "Ana Alvarez",
     seed: 3,
-    roster: [{ person: "p-golf", captain: true, squadNumber: 1 }],
+    roster: [{ person: "p-ana", captain: true, squadNumber: 1 }],
   },
 ];
 
@@ -1128,9 +1158,17 @@ const TIEBREAK_STREAMS: NonNullable<PackInput["streams"]> = [
     home: TIEBREAK_THIRD_GOLF,
     away: TIEBREAK_HOME_ECHO,
     provenance: "real",
+    // B05 T5b — the ONLY person-attributed fixture in this division, and the
+    // second half of Ana Alvarez's career rollup. A bare `generic.result`
+    // (no p1Score/p2Score) derives the 1–1 this stream already folded to
+    // from the two `generic.score` events themselves, so the division's
+    // table, its tie-order cascade and every T5a assertion above are
+    // untouched: the SCORE is identical, only its ATTRIBUTION is new.
     events: [
       { type: "core.start" },
-      { type: "generic.result", payload: { p1Score: 1, p2Score: 1 } },
+      { type: "generic.score", payload: { by: `@${TIEBREAK_THIRD_GOLF}`, points: 1, person: "@p-ana" } },
+      { type: "generic.score", payload: { by: `@${TIEBREAK_HOME_ECHO}`, points: 1, person: "@p-echo" } },
+      { type: "generic.result" },
     ],
   },
   {
@@ -1176,6 +1214,36 @@ const TIEBREAK_MATCHES: NonNullable<PackInput["expected"]["matches"]> = [
     perSide: [
       { entrant: TIEBREAK_AWAY_FOXTROT, line: "8" },
       { entrant: TIEBREAK_THIRD_GOLF, line: "9" },
+    ],
+  },
+];
+
+// B05 T5b — d-tiebreak's own leaderboard, the SECOND division contributing to
+// Ana's career rollup and the second subject `comparePersonDivisionStat`
+// crosses against `/persons/{id}/stats`. Its counts (1 each) differ from
+// d-tiny's (2 and 1), which is what lets a division-mixup bug be seen at all:
+// a per-division card serving the wrong division's row cannot pass both.
+//
+// BOTH of `generic`'s playerStats metrics are declared, matching d-tiny's own
+// pair. They are not redundant: `scores` is a COUNT of score events and
+// `points` a SUM of their `points` field, so d-tiny separates them (2 and 2
+// off three events) even though this division's single attributed fixture
+// happens to give each person 1 of each.
+const TIEBREAK_LEADERBOARDS: NonNullable<PackInput["expected"]["leaderboards"]> = [
+  {
+    divisionRef: TIEBREAK_DIVISION_REF,
+    metricKey: "scores",
+    entries: [
+      { person: "p-ana", name: "Ana Alvarez", count: 1 },
+      { person: "p-echo", name: "Elena Reyes", count: 1 },
+    ],
+  },
+  {
+    divisionRef: TIEBREAK_DIVISION_REF,
+    metricKey: "points",
+    entries: [
+      { person: "p-ana", name: "Ana Alvarez", count: 1 },
+      { person: "p-echo", name: "Elena Reyes", count: 1 },
     ],
   },
 ];
@@ -1228,7 +1296,8 @@ export function buildTinyPack(): PackInput {
       tables: [...TINY_TABLES, BADMINTON_TABLE, TIEBREAK_TABLE],
       champions: TINY_CHAMPIONS,
       finalRanks: TINY_FINAL_RANKS,
-      leaderboards: TINY_LEADERBOARDS,
+      leaderboards: [...TINY_LEADERBOARDS, ...TIEBREAK_LEADERBOARDS],
+      careers: TINY_CAREERS,
       suspensions: [],
       specials: TINY_SPECIALS,
     },

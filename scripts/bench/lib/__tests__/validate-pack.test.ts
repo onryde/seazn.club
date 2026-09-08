@@ -124,6 +124,11 @@ const TINY_NOT_DERIVED = [
   "leaderboards.not_derived",
   "champions.not_derived",
   "finalRanks.not_derived",
+  // B05 T5b — `_tiny.json` now declares expected.careers (Ana Alvarez's
+  // cross-division rollup), so stage 0's FOURTH permanent notice is part of
+  // this pack's clean baseline. Order matches validate-pack.ts's own
+  // emission order (:1839-1870), which this list is compared against exactly.
+  "careers.not_derived",
 ];
 
 /** `genericPack` declares a league stage and no `expected.tables`, so stage 0
@@ -308,8 +313,11 @@ describe("validatePack — _tiny.json, the shared fixture", () => {
     expect(result.pack?.suite).toBe("_tiny");
     // The notices are not decoration: each names what it did not check.
     expect(warnings(result.findings).map((f) => f.message)).toEqual([
+      // B05 T5b — FOUR now: d-tiny's own two (scores, points) plus
+      // d-tiebreak's own two, the second division contributing to Ana
+      // Alvarez's career rollup.
       expect.stringContaining(
-        "2 declared expected.leaderboards entries are NOT checked offline",
+        "4 declared expected.leaderboards entries are NOT checked offline",
       ),
       expect.stringContaining(
         "1 declared expected.champions entry is NOT checked offline",
@@ -317,6 +325,10 @@ describe("validatePack — _tiny.json, the shared fixture", () => {
       // B05 T3 — d-tiny's second stage, s-playoff.
       expect.stringContaining(
         "1 declared expected.finalRanks entry is NOT checked offline",
+      ),
+      // B05 T5b — the cross-division career rollup, both metric rows.
+      expect.stringContaining(
+        "2 declared expected.careers entries are NOT checked offline",
       ),
     ]);
   });
@@ -2060,6 +2072,10 @@ describe("validatePack — the oracles it does NOT derive say so", () => {
     // (d-tiny/s-playoff); cleared here too so this test still proves silence
     // on an EMPTY block rather than silently stopping being about finalRanks.
     (pack.expected as Record<string, unknown>)["finalRanks"] = [];
+    // B05 T5b — same again for expected.careers, which `_tiny.json` now
+    // declares: without this the test asserts silence on a block that is no
+    // longer empty, which is the opposite of what it is named for.
+    (pack.expected as Record<string, unknown>)["careers"] = [];
     expectClean(validatePack(pack, TINY), []);
   });
 
@@ -2120,7 +2136,11 @@ describe("validatePack — the oracles it does NOT derive say so", () => {
       { person: "p-bo", name: "Bo Baptiste", metricKey: "scores", count: 1 },
     ];
     const result = validatePack(pack, TINY);
-    expectClean(result, [...TINY_NOT_DERIVED, "careers.not_derived"]);
+    // B05 T5b — `careers.not_derived` is already part of TINY_NOT_DERIVED
+    // now that the committed pack declares its own careers block; this test
+    // REPLACES that block with two rows of its own to pin the COUNT in the
+    // message below, so the warning list is unchanged, not one longer.
+    expectClean(result, TINY_NOT_DERIVED);
     const found = warnings(result.findings).find(
       (f) => f.code === "careers.not_derived",
     );
