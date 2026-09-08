@@ -260,32 +260,85 @@ function renderField(
 }
 
 /**
- * Candidate (value, label) pairs for one attribution item. "side" items
- * offer the two entrants by their real lineup id, worded Home/Away — never
- * a raw entrant id, and never sourced from the roster (a side is not a
- * person). "person" items reuse `candidatesForPerson` (attribution-picker.tsx),
- * which reads BOTH sides' squads: the engine's own `PadAttributionItem`
- * names no side for a person item — cricket's fielder may be either side's
- * player structurally — so a sport-agnostic picker cannot narrow further
- * than the item itself does.
+ * One heading's worth of chips. `side` is the GROUPING key, null for a group
+ * that is not a side at all (the "side" item's own two chips); `heading` is
+ * null exactly when no heading renders.
  */
-function attributionOptions(
+type AttributionGroup = {
+  readonly side: "home" | "away" | null;
+  readonly heading: string | null;
+  readonly options: readonly { value: string; label: string }[];
+};
+
+/**
+ * Candidate chips for one attribution item, GROUPED UNDER A SIDE HEADING.
+ *
+ * "side" items offer the two entrants by their real lineup id, worded
+ * Home/Away — never a raw entrant id, and never sourced from the roster (a
+ * side is not a person). They come back as ONE unheaded group: their two
+ * chips already read "Home" and "Away", so a Home/Away heading above them
+ * would be a heading over itself.
+ *
+ * "person" items reuse `candidatesForPerson` (attribution-picker.tsx), which
+ * reads BOTH sides' squads: the engine's own `PadAttributionItem` names no
+ * side for a person item — cricket's fielder may be either side's player
+ * structurally — so a sport-agnostic picker cannot narrow further than the
+ * item itself does. It therefore CANNOT drop the wrong side's players, and
+ * before this change it did not even say which side each name belonged to:
+ * cricket's ~22-name bowler picker rendered as one undifferentiated wrap of
+ * names, half of them structurally impossible for the action, and the
+ * engine's refusal of a wrong pick names no field (refusal-copy.ts resolves
+ * by error CODE only), so the scorer was sent back to the same flat list
+ * with nothing new to go on. Owner-picked remedy, 2026-09-08: Option A —
+ * group the names under their side. The side was already computed here and
+ * thrown away; nothing about eligibility changes, only what the screen says
+ * about it.
+ *
+ * The headings reuse `scorepad.attribution.home`/`.away` — the SAME two
+ * strings the side picker words its own chips with, so the two controls
+ * cannot drift apart, and no new key enters the four dictionaries.
+ *
+ * Order is `candidatesForPerson`'s own order, unchanged: home candidates
+ * then away candidates. Grouping INSERTS headings, it does not re-sort — so
+ * every selector and every nth-chip assertion written against the flat row
+ * still names the same chip.
+ *
+ * A side contributing no candidates emits no group, so an empty squad
+ * renders no bare heading over nothing.
+ */
+function attributionGroups(
   item: PadAttributionItem,
   squads: SquadState,
   lineups: LineupPair,
   personNames: Readonly<Record<string, string>>,
   t: TFn,
-): readonly { value: string; label: string }[] {
+): readonly AttributionGroup[] {
   if (item.kind === "side") {
     return [
-      { value: lineups.home.entrantId, label: t("scorepad.attribution.home") },
-      { value: lineups.away.entrantId, label: t("scorepad.attribution.away") },
+      {
+        side: null,
+        heading: null,
+        options: [
+          { value: lineups.home.entrantId, label: t("scorepad.attribution.home") },
+          { value: lineups.away.entrantId, label: t("scorepad.attribution.away") },
+        ],
+      },
     ];
   }
-  return candidatesForPerson(item, squads).map((c) => ({
-    value: c.personId,
-    label: personNames[c.personId] ?? t("eventCopy.unknownPerson"),
-  }));
+  const bySide: Record<"home" | "away", { value: string; label: string }[]> = { home: [], away: [] };
+  for (const c of candidatesForPerson(item, squads)) {
+    bySide[c.side].push({
+      value: c.personId,
+      label: personNames[c.personId] ?? t("eventCopy.unknownPerson"),
+    });
+  }
+  return (["home", "away"] as const)
+    .filter((side) => bySide[side].length > 0)
+    .map((side) => ({
+      side,
+      heading: t(side === "home" ? "scorepad.attribution.home" : "scorepad.attribution.away"),
+      options: bySide[side],
+    }));
 }
 
 /**
@@ -321,7 +374,8 @@ function renderAttributionRow(
   t: TFn,
 ): ReactNode {
   const caption = attributionItemCaption(item, index, t, actionLabel);
-  const options = attributionOptions(item, squads, lineups, personNames, t);
+  const groups = attributionGroups(item, squads, lineups, personNames, t);
+  const candidateCount = groups.reduce((n, g) => n + g.options.length, 0);
   const required = item.required === true;
   const requiredMicrocopy = t("scorepad.attribution.required");
   return (
@@ -342,7 +396,7 @@ function renderAttributionRow(
         )}
       </span>
       {required && <p className="text-xs font-medium text-red-600">{requiredMicrocopy}</p>}
-      {options.length === 0 ? (
+      {candidateCount === 0 ? (
         // R8 branch review, finding 6 — a REQUIRED item with an empty roster
         // is a DEAD END: zero chips to tap, and `checkActionValidity` can
         // never be satisfied, so Confirm stays disabled forever. Required
@@ -356,27 +410,74 @@ function renderAttributionRow(
           {t(required ? "scorepad.attribution.noRosterRequired" : "scorepad.attribution.noRoster")}
         </p>
       ) : (
-        <div className="flex flex-wrap gap-2">
-          {options.map((opt) => {
-            const pressed = value === opt.value;
-            return (
-              <button
-                key={opt.value}
-                type="button"
-                data-value={opt.value}
-                aria-pressed={pressed}
-                onClick={() => onSelect(pressed ? undefined : opt.value)}
-                style={{ minHeight: 44 }}
-                className={`inline-flex shrink-0 items-center rounded-full border px-4 text-sm font-medium transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-lime-400 ${
-                  pressed
-                    ? "border-transparent bg-violet-600 text-white hover:bg-violet-700"
-                    : "border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
-                }`}
-              >
-                {opt.label}
-              </button>
-            );
-          })}
+        <div className="space-y-2">
+          {groups.map((group) => (
+            // A HEADED group is its own `role="group"` named by that heading,
+            // so a screen reader landing on a chip announces which side it
+            // belongs to — the whole point of the grouping, and the part a
+            // purely visual heading would withhold. The side item's single
+            // unheaded group takes neither, so its markup stays what it was
+            // apart from the wrapper.
+            <div
+              key={group.side ?? "all"}
+              {...(group.side ? { "data-attribution-side": group.side } : {})}
+              {...(group.heading ? { role: "group", "aria-label": group.heading } : {})}
+            >
+              {group.heading && (
+                <span className="mb-1 block text-xs font-medium text-slate-500">{group.heading}</span>
+              )}
+              <div className="flex flex-wrap gap-2">
+                {group.options.map((opt) => {
+                  const pressed = value === opt.value;
+                  return (
+                    <button
+                      key={opt.value}
+                      type="button"
+                      data-value={opt.value}
+                      aria-pressed={pressed}
+                      onClick={() => onSelect(pressed ? undefined : opt.value)}
+                      style={{ minHeight: 44 }}
+                      // `max-w-full break-words` — without them a real
+                      // 31-character entrant name is CUT at the card's edge
+                      // rather than wrapped. `shrink-0` means the chip is
+                      // sized by its content whatever `min-w-0` says, so it
+                      // overflows its own flex row and the CARD clips it:
+                      // measured at 320, the chip was 253px inside a 194px row
+                      // (59px of overhang) while its own
+                      // `scrollWidth - clientWidth` was ZERO. That zero is the
+                      // trap — the obvious "does this element clip its text"
+                      // probe passes here, because the element does not clip
+                      // its text, its ancestor does. `max-w-full` caps the chip
+                      // at the row (194px, overhang 0) and `break-words` is
+                      // what then wraps the name inside it; `min-w-0` alone is
+                      // INERT against `shrink-0` and was tried first, shipped,
+                      // and disproved by re-shooting the page.
+                      //
+                      // Invisible to everything already running: the page does
+                      // not scroll horizontally (the card clips), so the
+                      // no-h-scroll gate cannot see it; vitest here is
+                      // `environment: "node"`; and the suite's own short
+                      // synthetic names never reach the width that triggers it.
+                      // Only a browser at 320 with a realistic name shows it.
+                      //
+                      // This row is the one that holds NAMES. `renderField`'s
+                      // enum chips and guided-sheet.tsx's chip classes share
+                      // the same missing `max-w-full`, but they are separate
+                      // controls this change has not driven, so they are left
+                      // alone rather than changed on suspicion.
+                      className={`inline-flex max-w-full shrink-0 items-center break-words rounded-full border px-4 text-sm font-medium transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-lime-400 ${
+                        pressed
+                          ? "border-transparent bg-violet-600 text-white hover:bg-violet-700"
+                          : "border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
+                      }`}
+                    >
+                      {opt.label}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          ))}
         </div>
       )}
     </div>
