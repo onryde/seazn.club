@@ -50,6 +50,44 @@ const STRUCTURAL_KEYS: ReadonlySet<string> = new Set([
   "points",
 ]);
 
+/** Tie-break trace keys the engine has an English phrase for
+ *  (`packages/engine/src/competition/display.ts` — `TIE_BREAK_LABELS`). Each
+ *  earns a dictionary key `table.tieBreak.<key>` so the RULE NAME travels
+ *  translated too.
+ *
+ *  Review fix round 1, finding 4: `tieBreakLabel` is hardcoded English, so
+ *  wrapping it in the localised `table.tieBreak` frame gave an es/fr/nl
+ *  spectator "À égalité avec Alpha — départagés sur goal/run difference". A
+ *  bare NOTATION inside a translated sentence is fine (GD, NRR, Buchholz
+ *  Cut-1 are the sport's own symbols); a whole English clause is a leak.
+ *
+ *  DECLARED, not derived: two of the engine's entries label themselves
+ *  (`points → "points"`, `wins → "wins"`), so `tieBreakLabel(k) !== k` cannot
+ *  separate a key the engine knows from one it does not. A key absent from
+ *  this set falls back to `tieBreakLabel`, which is today's behaviour — so an
+ *  engine key added later degrades to English rather than to a dotted key on
+ *  screen, and the raw key still comes through for anything neither knows. */
+const TIE_BREAK_MSG_KEYS: ReadonlySet<string> = new Set([
+  "points",
+  "wins",
+  "diff",
+  "for",
+  "fair_play",
+  "nrr",
+  "set_ratio",
+  "board_ratio",
+  "point_ratio",
+  "h2h_points",
+  "h2h_diff",
+  "h2h_for",
+  "direct",
+  "buchholz",
+  "buchholz_cut1",
+  "sberger",
+  "seed",
+  "lots",
+]);
+
 /** Sort key for a row the ranking pass has not ranked (a division with no
  *  played fixtures yet, or a row excluded from the cascade). Unranked rows go
  *  last. Deliberately NOT the `99` that `standings-table.tsx` uses: a division
@@ -84,6 +122,8 @@ export function buildTableView(input: TableViewInput): TableViewT {
   const columns = standingsColumns(input.metricSpecs, input.cascade, input.rows, DERIVED_METRICS);
   const ranked = [...input.rows].sort((a, b) => (a.rank ?? UNRANKED) - (b.rank ?? UNRANKED));
   const name = (id: string) => input.entrantNames[id] ?? id;
+  const rule = (key: string) =>
+    TIE_BREAK_MSG_KEYS.has(key) ? input.msg(`table.tieBreak.${key}`) : tieBreakLabel(key);
 
   return {
     id: input.id,
@@ -117,7 +157,7 @@ export function buildTableView(input: TableViewInput): TableViewT {
       tieBreakText: r.tieBreak
         ? input.msg("table.tieBreak", {
             with: r.tieBreak.with.map(name).join(", "),
-            rule: tieBreakLabel(r.tieBreak.key),
+            rule: rule(r.tieBreak.key),
           })
         : null,
       champion: input.championId === r.entrantId,

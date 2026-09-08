@@ -27,6 +27,20 @@
 //  (t) `showFullLink` ignored → its negative pair.
 //  (u) `data-champion` hard-coded → its negative pair.
 //  (v) cells rendered in reverse column order → the cell-alignment test.
+//  (w) the `-scroll` element loses its `data-testid` (round 1 fix 4).
+//  (x) the rank chip goes back to a fixed `w-5` (round 1 fix 2).
+//  (y) `minTableWidth` drops `NAME_MIN_PX` (round 1 fix 3).
+//  (z) `minTableWidth` counts FOLDED columns too — the value that would put a
+//      rail under a collapsed phone (round 1 fix 3).
+//  (aa) the empty case tests `view.rows` instead of the sliced `rows`
+//      (round 1 fix 6).
+//
+// A NOTE ON WHAT THESE CANNOT SHOW. `environment: "node"` — no DOM, no
+// cascade, no layout. The three geometry fixes are asserted as ARITHMETIC and
+// as class/attribute presence only. That a 96px column truncates rather than
+// clips, that a three-digit chip paints, that the region actually scrolls when
+// the table exceeds it — none of that is evidence available here, and no test
+// below claims it. The 320/360/390 pass owes it.
 //
 // Every mutant compiles and collects; `numTotalTests` was pinned on each run.
 import { describe, expect, it } from "vitest";
@@ -124,6 +138,10 @@ describe("StandingsTableView — phone composition", () => {
     // AGENTS.md #23: a scrolling region owes a tabindex, a role and a name,
     // and tabindex cannot follow a media query, so all three are unconditional.
     expect(h).toMatch(/id="mh-table-t1-scroll"[^>]*role="region"[^>]*tabindex="0"[^>]*aria-label="League"/);
+    // …and the region is addressable as a TESTID, not only as an `id`, because
+    // that is the contract Tasks 4/9/11/13 were briefed on. With the `id`
+    // alone their `[data-testid="…-scroll"]` selectors match nothing.
+    expect(h).toContain(`data-testid="${TESTID}-scroll"`);
   });
 
   it("a table whose columns are ALL compact renders no disclosure (negative pair for the one above)", () => {
@@ -197,6 +215,65 @@ describe("StandingsTableView — phone composition", () => {
     // Differential against a flat class: "Pts" is three characters wide and
     // lands between the two.
     expect(h).toMatch(/<th[^>]*data-col="points"[^>]*class="w-11\s/);
+  });
+
+  it("the rank column is sized for a three-digit chip AND the tie-break marker beside it", () => {
+    const h = html();
+    // 48px less `pl-2` (8px) = 40px of content box. The old `w-8`/`pl-3` left
+    // exactly the chip's own 20px, with the marker overflowing into the name
+    // cell on every tied row.
+    expect(h).toMatch(/<th[^>]*data-col="rank"[^>]*class="w-12 py-2 pl-2\s/);
+    // The chip sizes to its CONTENT: `min-w-5` keeps the 20px circle for one
+    // and two digits and grows for three. A fixed `w-5` clipped rank 100,
+    // which the builder deliberately sorts correctly.
+    expect(h).toMatch(/class="inline-flex h-5 min-w-5 shrink-0 /);
+    expect(h).not.toMatch(/class="inline-flex h-5 w-5 /);
+    // The marker is a flex sibling with real gap, not an adjacent JSX
+    // expression with no break opportunity between it and the chip.
+    expect(rowHtml(h, "b")).toMatch(/<span class="flex items-center gap-px">/);
+    expect(rowHtml(h, "b")).toMatch(/class="shrink-0 text-\[10px\] leading-none text-accent"/);
+  });
+
+  it("a three-digit rank reaches the markup (the paint is owed by the width pass, not asserted here)", () => {
+    const h = html({
+      view: { ...view, rows: [{ ...view.rows[0]!, rank: 100 }, view.rows[1]!] },
+    });
+    expect(h).toMatch(/min-w-5[^>]*>100</);
+  });
+
+  it("the table carries a min-width floor built from the rank column, the name floor and the columns actually shown", () => {
+    // 48 (rank) + 96 (name floor) + played 32 + won 32 + lost 32 + points 44.
+    // `gd` is long-tail: below `md` it is display:none and claims nothing, so
+    // counting it here would put a rail under the COLLAPSED phone, which is
+    // the one thing the fold exists to prevent.
+    expect(html()).toContain('style="min-width:284px"');
+    // Differential — the same five columns with `gd` made compact must add its
+    // 32px, so the number is really derived from the shown set and not a
+    // constant. (A flat literal would print 284 here too.)
+    const allCompact = html({
+      view: { ...view, columns: view.columns.map((c) => ({ ...c, compact: true })) },
+    });
+    expect(allCompact).toContain('style="min-width:316px"');
+    // …and a wide derived column contributes its own wider size, so the floor
+    // tracks `columnSize`, not a per-column constant.
+    const wide = html({
+      view: {
+        ...view,
+        columns: view.columns.map((c) =>
+          c.key === "gd" ? { key: "nrr", abbr: "NRR", title: "NRR", compact: true } : { ...c, compact: true },
+        ),
+        rows: view.rows.map((r) => ({ ...r, cells: [...r.cells.slice(0, 3), "+1.000", r.cells[4]!] })),
+      },
+    });
+    expect(wide).toContain('style="min-width:340px"');
+  });
+
+  it("preview={0} states the empty case rather than painting a header over nothing", () => {
+    const h = html({ preview: 0 });
+    expect(h).toContain(`data-testid="${TESTID}-empty"`);
+    expect(h).not.toContain("<table");
+    // Positive pair: the same view with preview={1} does paint a table.
+    expect(html({ preview: 1 })).toContain("<table");
   });
 
   it("preview={1} renders one row plus the full-division link; showFullLink=false hides it (positive pair)", () => {

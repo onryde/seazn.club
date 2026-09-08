@@ -30,6 +30,9 @@
 //  (j) `tieBreak` guard inverted / always computed → a row with no trace.
 //  (k) `rank: r.rank ?? null` loses its fallback.
 //  (l) `columns.map` reversed when building `cells` → cell/column alignment.
+//  (w) `TIE_BREAK_MSG_KEYS.has(key)` → `false` (round 1 fix 5: the rule name
+//      leaks back to English inside a translated sentence).
+//  (x) the same guard → `true` (an unknown key becomes a dotted key on screen).
 //
 // Every mutant compiles and collects, so none is the collection-break shape
 // that reads as a survivor; `numTotalTests` was pinned on each run.
@@ -186,24 +189,44 @@ describe("buildTableView", () => {
     expect(v.rows[0]!.cells).toEqual(["1", "0", "0", "2", "0", "2", "3"]);
     // `entrantLogos.b` is an explicit null — the initials fallback, not a badge.
     expect(v.rows[1]).toMatchObject({ rank: 2, name: "Beta", badgeUrl: null, champion: false });
-    // The rule name is the ENGINE's label for the trace key, never a word typed
-    // here: `tieBreakLabel("diff")` is "goal/run difference".
+    // The rule name is LOCALISED too — a whole English clause inside a
+    // translated sentence is a leak, unlike a bare notation (GD, NRR).
     expect(v.rows[1]!.tieBreakText).toBe(
-      'table.tieBreak:{"with":"Alpha","rule":"goal/run difference"}',
+      'table.tieBreak:{"with":"Alpha","rule":"table.tieBreak.diff"}',
     );
     expect(TableView.parse(v)).toEqual(v);
   });
 
-  it("a trace key the engine has no phrase for falls through to the raw key, and every tied entrant is named", () => {
+  it("a trace key neither the dictionary nor the engine knows falls through to the raw key, and every tied entrant is named", () => {
     const rows = [
       row("a", { rank: 1 }),
       row("b", { rank: 2, tieBreak: { key: "gd", with: ["a", "zz"] } }),
     ];
     const v = buildTableView({ ...base, rows });
     // `TIE_BREAK_LABELS` has no "gd" entry (its goal-difference key is "diff"),
-    // so `tieBreakLabel` returns the key verbatim. An unknown entrant id in the
+    // and neither does the localised set, so the raw key comes through — never
+    // a dotted `table.tieBreak.gd` on screen. An unknown entrant id in the
     // `with` list renders as the id, never as "undefined".
     expect(v.rows[1]!.tieBreakText).toBe('table.tieBreak:{"with":"Alpha, zz","rule":"gd"}');
+  });
+
+  it("a self-labelling engine key is still localised (the trap that forbids deriving the set from tieBreakLabel)", () => {
+    // `tieBreakLabel("points")` returns "points" — identical to the key — so a
+    // `label !== key` derivation would classify it as unknown and leak the
+    // English word. Same for "wins". Both must localise.
+    const has = (key: string) =>
+      buildTableView({
+        ...base,
+        rows: [row("a", { rank: 1 }), row("b", { rank: 2, tieBreak: { key, with: ["a"] } })],
+      }).rows[1]!.tieBreakText;
+    expect(has("points")).toBe('table.tieBreak:{"with":"Alpha","rule":"table.tieBreak.points"}');
+    expect(has("wins")).toBe('table.tieBreak:{"with":"Alpha","rule":"table.tieBreak.wins"}');
+    // …and a key the engine phrases but the set were to miss would fall back to
+    // the engine's English rather than to a dotted key. Positive pair for the
+    // fall-through above, on a key that IS in both.
+    expect(has("h2h_points")).toBe(
+      'table.tieBreak:{"with":"Alpha","rule":"table.tieBreak.h2h_points"}',
+    );
   });
 
   it("unranked rows sort LAST, behind a three-digit rank", () => {
