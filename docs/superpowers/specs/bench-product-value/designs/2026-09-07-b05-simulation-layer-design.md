@@ -179,7 +179,7 @@ field order — per the re-pin, tie order is a cascade array, not a column.
 | T2.5 | division start + its refusal policy (D9) | the division's status is RE-READ as started, not inferred from a 200 |
 | T3 | `advance.ts` — propose/assert/confirm/generate/complete, capture (D1/D7) | wrong expected table reds BEFORE any next-stage write |
 | T4 | `oracle.ts` — standings, tie order, ranks, champion, leaderboards, person/career stats | the post-validation mutation reds the RUNTIME oracle (D6) |
-| T5 | `oracle.ts` — suspension carry + specials; P3's discriminator read first (D8) | **acceptance criterion withdrawn — the premise was false.** Discipline is ADVISORY: nothing in the lineup write path reads `suspensions`. The suite measures what the product does per run instead of asserting a behaviour it does not have |
+| T5 | `oracle.ts` — suspension carry + specials; P3's discriminator read first (D8) | **premise was false, then FIXED.** Discipline WAS advisory — nothing in the lineup write path read `suspensions`. The owner ruled it should block, so this branch also ships `gateLineupSuspensions`: 422 `SUSPENDED_PLAYER`, overridable with a reason against an audit row, behind the existing paid flag. The bench now ASSERTS the block rather than measuring the absence of one |
 | T6 | `people.ts` — P1 officials, P2 claims incl. `CLAIM_EXPIRED`, P6 news | a published post is visible on the public page; the rest stay draft |
 | T7 | report sections + pino events + provenance % | the report names which oracles had something to check (B04's vacuity lesson) |
 | T8 | live `_tiny` run, whole-branch review, PR | run by this thread, never a subagent |

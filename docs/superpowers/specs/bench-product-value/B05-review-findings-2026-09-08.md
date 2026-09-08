@@ -234,9 +234,14 @@ spec §7 both forbid filing):
    selects `seq, type, actor_id, created_at` and not `payload`, so the ranks a
    completion computed cannot be re-read by any client that missed the
    response. Worth knowing before a UI tries.
-3. **A confirmed ban does not keep a player off a team sheet** (F-T5b-3-1
-   above). Nothing in the lineup write path reads `suspensions`; discipline is
-   advisory. Whether that is intended is an owner decision, not a bench call.
+3. ~~**A confirmed ban does not keep a player off a team sheet**~~ — **CLOSED
+   in this branch, owner ruled it should block.** `gateLineupSuspensions`
+   (`usecases/discipline.ts`) refuses the write with 422 `SUSPENDED_PLAYER`,
+   overridable with a reason against a `suspension.overridden` ledger row,
+   behind the existing paid `discipline.enforced` flag via `hasFeature` so an
+   org that never bought discipline sees no change. Verified by hand in a
+   browser: banned refused, team-mate accepted, override accepted and the
+   French reason landed in `competition_events`. No longer a §15 entry.
 4. **`event-import.ts` cannot be imported by any non-Next consumer** — it opens
    `import "server-only"`, a webpack alias with no package behind it, so
    `IMPORT_CAPS` had to be hand-mirrored with a text-diff guard. The same is
