@@ -121,6 +121,31 @@ A caveat rather than a rewrite: §8's `copy button` row still carries Tailwind
 
 The slab's `dismissal` pair is per-sport and lives in §5.
 
+**The overlay's graphical pairs — floor 3:1, not 4.5.** The card chips and the
+live dot are shapes, not words, so they answer to WCAG 1.4.11 at 3:1. §3
+explains why the boundary is an `--sport-ink` hairline rather than the `board`
+hairline the pad uses; these are the numbers behind it, all eleven sports:
+
+| Pair (on `--sport-board-2`) | Range across the eleven sports | Floor 3 |
+|---|---|---|
+| **`--sport-ink` 1-px hairline** | **9.46 (hockey) – 16.11 (icehockey)** | clears everywhere — this is what carries the boundary |
+| `advisory` fill | 3.93 (tennis) – 5.81 (hockey) | clears unaided |
+| `caution` fill | 4.63 (carrom) – 11.24 (icehockey) | clears unaided |
+| `dismissal` fill | **2.56 (football)** – 6.53 (icehockey) | football fails — **covered by the hairline** |
+| live dot `#ef4444` | **2.75 (hockey)** – 4.82 (icehockey) | hockey fails — **covered by the hairline** |
+| `--sport-board` 1-px hairline | 1.08 (cricket) – 1.33 (hockey) | fails everywhere — why the pad's hairline cannot serve here |
+
+The two failing fills are **covered**, which is neither a pass nor a waiver: the
+hairline is the boundary the criterion is met by, and the fill is then free to be
+the sport's own red. Recorded this way so that a later change which removes or
+thins the hairline reads as removing a load-bearing element rather than as
+tidying a decoration.
+
+Both also clear 3:1 on the OTHER ground — `dismissal` on `board` is 3.01
+(football) and the live dot on `board` is 3.65 (hockey) — so "darken the band
+these sit on" remains a live alternative for anyone who revisits this. It was not
+taken because it would move `board-2`, which every theme reads.
+
 ## 3. Theme A — Broadcast bar (`?style=bar`)
 
 > **This section IS registry entry `bar`** (owner answer 18 / Q7, 2026-09-06 —
@@ -138,7 +163,8 @@ Anchored bottom, full width. Two stacked bands, one shadow, radius 6 px.
 inset:            left 72   right 72   bottom 54
 main band:        height 126   background board   ink
   live cell:      min-width 225, padding 0 33, background board-2
-                  dot 15 (#ef4444) + "Live" Geist 24/600 letter-spacing .02em
+                  dot 15 (#ef4444) + 1-px --sport-ink hairline (see below)
+                  "Live" Geist 24/600 letter-spacing .02em
                   context line Geist 21/500 ink 70 %      e.g. "T20, 2nd innings"
   team cell ×2:   flex 1 1 auto, padding 0 42, gap 24
                   name  Barlow 45/600 letter-spacing .01em nowrap
@@ -154,12 +180,43 @@ detail band:      height 51, padding 0 33, gap 33, background board @ 90 %
                   striker/server marker: 10.5 px LED dot before the name
 ```
 
+**The hairline is `--sport-ink`, not `--sport-board`, and it — not the fill —
+is what satisfies WCAG 1.4.11 here.** This applies to both themes: the three
+discipline card chips and the live dot, in §3's bar and §4's bug alike, each
+carry a 1-px `--sport-ink` hairline (owner 2026-09-08, "apply your rec").
+
+The pad's standing rule reads the other way, and deliberately so.
+`components/v2/scorepad/v3/tokens.ts:267-270` says of the pad's swatch:
+
+> Its boundary against the pale sheet is carried by the `--sport-board`
+> hairline, NEVER by the fill — yellow-on-wash is ~1.15:1 and cannot meet WCAG
+> 1.4.11 alone. Exactly the pair that passes by eye and fails when computed.
+
+Read the words "against the pale sheet": that rule is scoped to the pad's
+console ground. **It does not transfer to the overlay**, where these chips sit
+on `board-2`, a dark band of the sport's own palette. `board` against `board-2`
+measures **1.08 (cricket) – 1.33 (hockey)** across the eleven sports — the two
+are neighbouring shades by design — so a `board` hairline is invisible exactly
+where it would have to do the work, and the FILL would silently become the
+boundary. Two fills cannot carry it: `dismissal` on `board-2` bottoms out at
+**2.56 (football)** and the live dot `#ef4444` at **2.75 (hockey)**, both under
+the 3:1 graphical floor. `--sport-ink` on `board-2` measures **9.46 (hockey) –
+16.11 (icehockey)** and clears everywhere, so the hairline carries the boundary
+for all three chips and the dot.
+
+`advisory` (3.93–5.81) and `caution` (4.63–11.24) clear 3:1 unaided on every
+sport, so for those two the hairline is a boundary device rather than a
+requirement; for `dismissal` and the live dot it is the requirement. §2 records
+all of it. A later wave reading only `tokens.ts` would reach for `board` and
+reintroduce this, which is why the scoping is written out here rather than left
+to be inferred.
+
 Per-sport content of the bar (W1 unless marked W2):
 
 | Sport | Live cell context | Team cell score / meta | Between cells | Detail band |
 |---|---|---|---|---|
 | cricket | format + innings ("T20, 2nd innings") | `142/6` / overs `20`; chasing side LED | divider | W2: striker* R (B), non-striker R (B), bowler O-M-R-W, "This over 1 4 W 0 2"; W1: chase line "Need 45 off 45", CRR, RRR |
-| football, hockey, icehockey | period ("2nd half") | `2` / none | divider; clock cell Barlow 60/700 LED before brand | scorers per side ("Okafor 23'"), card chips 13.5×18 radius 3 in caution / dismissal / advisory with name and minute |
+| football, hockey, icehockey | period ("2nd half") | `2` / none | divider; clock cell Barlow 60/700 LED before brand | scorers per side ("Okafor 23'"), card chips 13.5×18 radius 3 in caution / dismissal / advisory, each with a 1-px `--sport-ink` hairline (see below), with name and minute |
 | tennis | set + round ("Set 3, quarter-final") | sets as cells Barlow 51/600 ink 70 %, current set 700 ink 100 %; serve dot 13.5 LED before server's name | points cell Barlow 60/700 LED ("30 : 15") | "Novak serving", break points saved, format line |
 | badminton, tabletennis | game ("Game 2, men's doubles") | games as cells, current 700 ink 100 %; serve dot | games-won cell LED ("1 : 0") | who serves, previous game result, longest rally where the ledger has it |
 | volleyball | set ("Set 4") | four set cells Barlow 45/600 ink 70 %, current set 54/700 ink 100 %; serve dot | sets-won cell LED ("1 : 2") | serving side, timeouts, set-situation line |
@@ -254,7 +311,8 @@ Anchored top-left. Width 480, radius 12, one shadow. The pad's own
 ```
 inset:            left 60   top 54
 header:           height 48, padding 0 21, background board-2
-                  dot 13.5 (#ef4444), "Live" Geist 21/600, context Geist 19.5/500 ink 65 %
+                  dot 13.5 (#ef4444) + 1-px --sport-ink hairline (§3's rule)
+                  "Live" Geist 21/600, context Geist 19.5/500 ink 65 %
                   right: brand Barlow 24/600 .08em ink 70 %  — football family: clock Barlow 33/700 LED instead
 row ×2:           height 90, padding 0 24, gap 18
                   code  Barlow 48/600 width 96         ("MK", "NBR", "RDG"; tennis: surname Barlow 42/600 width 144)
@@ -265,6 +323,10 @@ side in play:     row background board-2 + inset-left bar 8 px LED, score colour
 footer:           height 45, padding 0 24, Geist 21/500 ink 85 %, space-between
                   emphasis Geist 600 ink 100 % (chase line)
 ```
+
+The bug's card chips and its live dot carry the **1-px `--sport-ink` hairline**
+on the same terms as §3's — same reasoning, same measurements, same reason not
+to reach for `board`. Nothing about it is per-theme.
 
 Per-sport content of the bug: cricket rows `code · score · overs`, footer
 "Need 45 off 45 · CRR 7.84 · RRR 6.00"; football family rows `code · [card
