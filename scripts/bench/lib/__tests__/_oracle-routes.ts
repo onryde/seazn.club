@@ -109,27 +109,52 @@ export function tinyLeagueTableRows(
 }
 
 /**
- * `_tiny.json`'s own `expected.leaderboards` values for `d-tiny` — the
- * ONLY division this pack's leaderboard block names. `personIdOf` is the
- * SAME `person-${slug(full_name)}` id every one of these four fakes'
- * `POST /api/v1/persons` handler already mints (copied verbatim across all
- * four, per this file's own header note), so this stays correct without
- * each fake tracking its own person-ref map.
+ * `_tiny.json`'s own `expected.leaderboards` values, by division NAME (the
+ * `POST /competitions/{id}/divisions` payload's own `name` field,
+ * `seed.ts:613`) — the same discriminator `tinyLeagueTableRows` above already
+ * uses for stages, and the only one these fakes ever see (they never see pack
+ * refs). `personIdOf` is the SAME `person-${slug(full_name)}` id every one of
+ * these four fakes' `POST /api/v1/persons` handler already mints (copied
+ * verbatim across all four, per this file's own header note), so this stays
+ * correct without each fake tracking its own person-ref map.
+ *
+ * B05 T5b — `d-tiebreak` ("Tiebreak") joined `d-tiny` ("Tiny") in
+ * `expected.leaderboards` when T5b-1 gave `expected.careers` a SECOND
+ * division to roll up. Until this branch existed the wired leaderboard oracle
+ * fetched a division no fake modelled and every `sql`-passing file died on
+ * `fake server: unhandled raw GET /api/v1/divisions/{id}/stats/players`.
+ * Returns `undefined` for any other division name (`Badminton`,
+ * `Registration UI Proof`), which the pack names no leaderboard for.
  */
-export function tinyDivisionPlayerStats(personIdOf: (fullName: string) => string): DivisionPlayerStatsLike {
-  const ana = personIdOf("Ana Alvarez");
-  const bo = personIdOf("Bo Baptiste");
-  return {
-    metrics: [
-      { key: "scores", label: "Scores" },
-      { key: "points", label: "Points" },
-    ],
-    rows: [
-      { person_id: ana, full_name: "Ana Alvarez", stats: { scores: 2, points: 2 } },
-      { person_id: bo, full_name: "Bo Baptiste", stats: { scores: 1, points: 2 } },
-    ],
-    requires_detailed_scoring: false,
-  };
+export function tinyDivisionPlayerStats(
+  divisionName: string,
+  personIdOf: (fullName: string) => string,
+): DivisionPlayerStatsLike | undefined {
+  const metrics = [
+    { key: "scores", label: "Scores" },
+    { key: "points", label: "Points" },
+  ];
+  if (divisionName === "Tiny") {
+    return {
+      metrics,
+      rows: [
+        { person_id: personIdOf("Ana Alvarez"), full_name: "Ana Alvarez", stats: { scores: 2, points: 2 } },
+        { person_id: personIdOf("Bo Baptiste"), full_name: "Bo Baptiste", stats: { scores: 1, points: 2 } },
+      ],
+      requires_detailed_scoring: false,
+    };
+  }
+  if (divisionName === "Tiebreak") {
+    return {
+      metrics,
+      rows: [
+        { person_id: personIdOf("Ana Alvarez"), full_name: "Ana Alvarez", stats: { scores: 1, points: 1 } },
+        { person_id: personIdOf("Elena Reyes"), full_name: "Elena Reyes", stats: { scores: 1, points: 1 } },
+      ],
+      requires_detailed_scoring: false,
+    };
+  }
+  return undefined;
 }
 
 export interface OracleRoutesWorld {

@@ -22,6 +22,8 @@ import pino from "pino";
 import type { RawResult, Session } from "../http.ts";
 import type { ProbeTransport } from "../dls-gate.ts";
 import type { PlanEntitlementRow, PlanSql } from "../plan.ts";
+import { readFile } from "node:fs/promises";
+
 import { runTinySuite, TINY_PACK_PATH } from "../suites/tiny.ts";
 import { makeScheduleWorld } from "./_schedule-routes.ts";
 import { makeDivisionPhaseWorld } from "./_division-phase.ts";
@@ -101,9 +103,14 @@ function fakeServer(opts: { refuseImportWith?: { status: number; code: string; m
       if (divisionId === undefined || stageName === undefined) return undefined;
       return tinyLeagueTableRows(stageName, schedule.entrantsOfDivision(divisionId));
     },
+    // B05 T5b — keyed by division NAME so BOTH leaderboard divisions the pack
+    // now names (`Tiny` and, since T5b-1, `Tiebreak`) are answered; a name
+    // this pack declares no leaderboard for still falls through to
+    // `undefined` exactly as before.
     getDivisionPlayerStats: (divisionId) => {
-      if (divisionNameById.get(divisionId) !== "Tiny") return undefined;
-      return tinyDivisionPlayerStats((fullName) => `person-${slug(fullName)}`);
+      const divisionName = divisionNameById.get(divisionId);
+      if (divisionName === undefined) return undefined;
+      return tinyDivisionPlayerStats(divisionName, (fullName) => `person-${slug(fullName)}`);
     },
   });
 
@@ -410,22 +417,43 @@ describe("runTinySuite — B05 T2 division-B stream fold wiring", () => {
         expect.objectContaining({ divisionRef: "d-badminton", started: true, confirmedStatus: "active" }),
       ]),
     );
-    // `_tiny.json`'s division B (`d-badminton`) declares ONE stream with 76
-    // events. B05 T5a added a THIRD streamed division (`d-tiebreak`, 3
-    // streams of 2 events each — 6 total), which the SAME "every OTHER
-    // division" import fold covers with no code change (`lib/suites/
+    // `_tiny.json`'s division B (`d-badminton`) declares ONE stream; B05 T5a
+    // added a THIRD streamed division (`d-tiebreak`), which the SAME "every
+    // OTHER division" import fold covers with no code change (`lib/suites/
     // tiny.ts`'s own comment: "grouped by divisionRef... so a future pack
-    // adding a third streamed division folds it too") — so this now sends
-    // TWO import POSTs, one per division, never re-grouped into one.
-    // Asserted against what the pack ACTUALLY sent, never a constant typed
-    // into this test a second time.
+    // adding a third streamed division folds it too") — so this sends one
+    // import POST per non-division0 division, never re-grouped into one.
+    //
+    // B05 T5b — the expected per-division totals are now READ OUT OF THE PACK
+    // rather than typed here. They had already gone stale twice: T5a's own
+    // three streams were written as `[6, 76]`, and T5b-1 then added two more
+    // `generic.score` events to `d-tiebreak` for Ana's career rollup, making
+    // this assertion red on a pack change it was never about. A count derived
+    // from the pack moves with the pack; a literal freezes yesterday's one.
+    const packStreams = (
+      JSON.parse(await readFile(TINY_PACK_PATH, "utf8")) as {
+        divisions: { ref: string }[];
+        streams: { divisionRef: string; events: unknown[] }[];
+      }
+    );
+    const division0Ref = packStreams.divisions[0]!.ref;
+    const expectedByDivision = new Map<string, number>();
+    for (const st of packStreams.streams) {
+      if (st.divisionRef === division0Ref) continue;
+      expectedByDivision.set(st.divisionRef, (expectedByDivision.get(st.divisionRef) ?? 0) + st.events.length);
+    }
+    const expectedEventCounts = [...expectedByDivision.values()].sort((a, b) => a - b);
     const calls2 = importPostCalls(calls);
-    expect(calls2).toHaveLength(2);
+    expect(calls2).toHaveLength(expectedByDivision.size);
     const eventCounts = calls2
       .map((c) => (c.body as { streams: { events: unknown[] }[] }).streams)
       .map((streams) => streams.reduce((sum, st) => sum + st.events.length, 0))
       .sort((a, b) => a - b);
-    expect(eventCounts).toEqual([6, 76]);
+    expect(eventCounts).toEqual(expectedEventCounts);
+    // Not a tautology against the line above: a pack whose non-division0
+    // streams carried nothing would satisfy `toEqual` with two empty sums,
+    // so the totals are pinned as non-empty in their own right.
+    expect(expectedEventCounts.every((n) => n > 0)).toBe(true);
     // `/start` happens BEFORE the import POST — never the other way around.
     const firstStartIdx = calls.findIndex((c) => c.method === "POST" && /\/start$/.test(c.path));
     const firstImportIdx = calls.findIndex((c) => c.method === "POST" && /\/events\/import$/.test(c.path));
@@ -433,7 +461,7 @@ describe("runTinySuite — B05 T2 division-B stream fold wiring", () => {
     expect(firstImportIdx).toBeGreaterThan(firstStartIdx);
 
     expect(report.importSimulation).toBeDefined();
-    expect(report.importSimulation?.eventsSent).toBe(82);
+    expect(report.importSimulation?.eventsSent).toBe(expectedEventCounts.reduce((a, b) => a + b, 0));
     expect(report.importSimulation?.chunks).toBe(2);
     expect(report.importSimulation?.findings ?? []).toHaveLength(0);
     expect(report.timings.importMs).toBeDefined();

@@ -29,7 +29,7 @@ import { runTinySuite, TINY_PACK_PATH } from "../suites/tiny.ts";
 import { makeScheduleWorld } from "./_schedule-routes.ts";
 import { makeDivisionPhaseWorld } from "./_division-phase.ts";
 import { makeAdvanceRoutesWorld } from "./_advance-routes.ts";
-import { makeOracleRoutesWorld, tinyLeagueTableRows } from "./_oracle-routes.ts";
+import { makeOracleRoutesWorld, tinyDivisionPlayerStats, tinyLeagueTableRows } from "./_oracle-routes.ts";
 import { roundRobinRoundCount } from "./_roundrobin-rounds.ts";
 
 const silent = pino({ level: "silent" });
@@ -165,7 +165,17 @@ function fakeServer(
     // fake to report whatever a mis-attributed `payload.person` actually
     // produced, not a constant that could never disagree with it.
     getDivisionPlayerStats: (divisionId) => {
-      if (divisionNameById.get(divisionId) !== "Tiny") return undefined;
+      const divisionName = divisionNameById.get(divisionId);
+      if (divisionName === undefined) return undefined;
+      // B05 T5b — `d-tiebreak` ("Tiebreak") also carries `expected.
+      // leaderboards` rows since T5b-1 gave `expected.careers` a second
+      // division to roll up. Its own streams fold through `/events/import`
+      // (this file's pass-through branch, which tallies nothing), so it takes
+      // `_oracle-routes.ts`'s shared committed fixture rather than the live
+      // tally below — only division A's fold is tallied here.
+      if (divisionName !== "Tiny") {
+        return tinyDivisionPlayerStats(divisionName, (fullName) => `person-${slug(fullName)}`);
+      }
       if (opts.emptyLeaderboard === true) {
         return { metrics: [], rows: [], requires_detailed_scoring: true };
       }
@@ -609,12 +619,14 @@ describe("runTinySuite — B05 T1 division-A stream fold wiring", () => {
       "oracle: d-tiebreak/s-tiebreak-league tie-order cascade",
       "oracle: d-tiny leaderboard (scores)",
       "oracle: d-tiny leaderboard (points)",
+      "oracle: d-tiebreak leaderboard (scores)",
+      "oracle: d-tiebreak leaderboard (points)",
       "oracle: s-playoff rank crossing (captured vs standings)",
       "oracle: s-playoff standings rank vs expected.finalRanks",
       "oracle: d-tiny champion",
     ]);
     expect(runtimeOracles.map((o) => o.passed)).toEqual([
-      true, true, true, true, true, true, true, true, true, true, true,
+      true, true, true, true, true, true, true, true, true, true, true, true, true,
     ]);
     // The genuinely tied pair (echo/golf) was actually CHECKED, not merely
     // present-and-skipped — the whole point of an ordering-differential

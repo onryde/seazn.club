@@ -100,9 +100,14 @@ function fakeServer(opts: { statsPlayerGranted: boolean }): {
       if (divisionId === undefined || stageName === undefined) return undefined;
       return tinyLeagueTableRows(stageName, schedule.entrantsOfDivision(divisionId));
     },
+    // B05 T5b — keyed by division NAME so BOTH leaderboard divisions the pack
+    // now names (`Tiny` and, since T5b-1, `Tiebreak`) are answered; a name
+    // this pack declares no leaderboard for still falls through to
+    // `undefined` exactly as before.
     getDivisionPlayerStats: (divisionId) => {
-      if (divisionNameById.get(divisionId) !== "Tiny") return undefined;
-      return tinyDivisionPlayerStats((fullName) => `person-${slug(fullName)}`);
+      const divisionName = divisionNameById.get(divisionId);
+      if (divisionName === undefined) return undefined;
+      return tinyDivisionPlayerStats(divisionName, (fullName) => `person-${slug(fullName)}`);
     },
   });
 
