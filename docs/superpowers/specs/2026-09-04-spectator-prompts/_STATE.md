@@ -7,44 +7,68 @@
 > spectator worktree; its "RESUME HERE" block carries per-task detail). Update this file at
 > every handoff; it is committed, the ledger is not.
 
-**Last updated:** 2026-09-06, after the second cosmetic round (16c) and a second rebase.
+**Last updated:** 2026-09-08 — **W1 MERGED**.
 
-## Position at the last handoff (read this first)
+## Position (read this first)
 
-Branch `feat/spectator-surface` in the `spectator` worktree. Tip when this was written:
-`fa61b23a9`, rebased onto `origin/main ac85c705f` (105 commits replayed, one conflict — a
-"Last updated" line in the bench `_MASTER.md`). Tree clean.
+**W1 is merged.** PR #743, merge commit `60c0615b0` on `main`, 2026-09-08 07:43Z. Branch
+`feat/spectator-surface` (tip `ce0830339`) is contained in `main`; the `spectator` worktree
+has been reset to the merge commit. Tasks 1–20 all shipped, including 8b, 14b–14d, 15b, the
+16a and 16c cosmetic rounds, Task 16's gate, and the whole-branch review — dispositions in
+`W1-whole-branch-review-findings.md`.
 
-**Done, reviewed, on the branch:** Tasks 1–20, including 8b, 14b–14d, 15b, the 16a cosmetic
-round (C1–C6) and its fix round, and `ac3d49ca2` (an OpenAPI regen that 16a owed and skipped
-— a public schema field had been added without running `openapi:gen`, which CI checks).
+**How it was verified, because CI could not be the arbiter.** e2e run `34194829130` and then
+`34194897523` both passed — all eight jobs, all seven widths. CI never gave a verdict: from
+about 06:30Z, every `runs-on: ubuntu-latest` job in this repo died in 2–4 seconds with ZERO
+steps recorded (no runner ever allocated), while every `blacksmith-4vcpu-ubuntu-2404` job in
+the same runs passed. The identical signature appeared on an unrelated branch
+(`docs/entitlements-w4-handoff`) whose CI had been green 16 minutes earlier, which is what
+proved it account-wide rather than ours — an Actions spending cap or a GitHub incident. Three
+reruns over ten minutes did not clear it. See
+[[reference_ci_job_with_zero_steps_never_got_a_runner]].
 
-**In flight at the handoff:** the scoped review of 16c (cosmetics C7–C10), diff
-`review-ac3d49ca2..7681cb8b6.diff`, verdict due in `task-16c-review.md`. 16c's six commits sit
-in lane `agent-a4b308f799056d2c2` and are NOT yet on the branch — cherry-pick them after the
-review clears.
+So the six dead jobs were reproduced locally against the MERGED tree (`origin/main` merged in,
+then every gate run): `tsc` clean in web/engine/scripts; eslint 0 errors; OpenAPI, i18n
+`gen-keys` and engine schema-snapshot all zero drift; engine boundary and plan-scrub pass;
+apps/web **15171 tests, 11600 passed, 0 failed** (4456 suites, 0 failed, all 1177 files inside
+the worktree); engine **4363 / 4350 passed, 0 failed**; bench 1187. The security-scan job was
+not reproduced and did not need to be — both its steps are `continue-on-error: true`, and this
+branch changes no dependency file, so its 42 advisories are pre-existing on main.
 
-**Then, in order:**
-1. Cherry-pick 16c, verify on the merged tree (scoped suites + tsc + `i18n:gen-keys` and
-   `openapi:gen` for zero drift — 16c touched a public schema, so the regen is owed again).
-2. Rule on 16c's found-not-fixed item: `sets-tab.tsx`'s panel caption carries the same
-   kind-vs-unit defect as C8 one level down (badminton and table tennis would show a "Sets"
-   heading over "Game" columns). Leaning fix-now — C8 exists because the vocabulary was wrong,
-   and the same defect one level down would ship knowingly.
-3. Task 16, the gate, in the spectator worktree with no other implementer active: contract
-   notes in `task-16-contract-notes.md`. Fresh `t16` env; `seazn-env gate`; full `apps/web` and
-   `packages/engine` vitest with the DB, judged on JSON totals; the WHOLE `mobile.spec.ts` per
-   project (a serial file's failure count is a floor); the walkthrough project; cricket-lines,
-   football and scorepad-skins e2e; smoke. Then R11: read ALL 50 screens against `_DESIGN.md`
-   §9 and write the per-screen verdict table into the design doc under "W1 sign-off — per-screen
-   verdicts". Strengthen `public-isr-contract.test.ts` to assert `dynamic` is absent (one line).
-4. Final whole-branch review — Opus, on the settled diff, slim package of
-   `origin/main..feat/spectator-surface` excluding generated JSON, goldens and PNGs. ONE fix
-   dispatch, one scoped re-review, residuals adjudicated.
-5. Report to the owner. **NO PR until the owner says so.**
+**Three CI gates this branch reddened, all fixed before merge** (commits `d04b1339e`,
+`ce0830339`):
+1. **OpenAPI drift** — the match-centre header gained `phase`/`strength` without a regen.
+2. **`z3-retirement-drift`** — a GATE DEFECT, not a missing ledger row. Its scans pass `-a`, so
+   `git grep -a -il z3` read our 50 new screenshots as text and 40 matched on random bytes.
+   Binary assets are now excluded by extension (`.wasm` deliberately still in scope). This
+   branch was the first ever to commit images under a scanned tree. See
+   [[reference_git_grep_dash_a_matches_random_bytes_in_binaries]].
+3. **`check-vitest-collection`** — working as designed; its explicit file list gained our five
+   new `src/server/public-site/__tests__` files, and its two hand-typed counts are now derived
+   from that list so one cause reds it once, not twice.
 
-**Owed documentation before the PR:** the bench `_MASTER.md` spectator row still reads "W0 in
-flight; W1–W4 sequential" — stale since W1 began.
+**Post-merge:** the merge pushed to `main`, which is what triggers `e2e.yml` — run
+`34200765497` at `60c0615b0`. That is the first e2e over W1 merged with main and is the one to
+read before starting W2.
+
+**Deliberately open, carried out of W1** (all three are in the PR body):
+- The pad attribution pickers offer BOTH sides (`candidatesForPerson` loops home/away; `role`
+  narrows by position, never side), and `action-form.tsx:285` computes each candidate's `side`
+  and discards it — so the Bowler picker is a flat, unlabelled ~22-name list of which half are
+  invalid, and the refusal is resolved by error code only ("That entry isn't valid for this
+  match"), naming no field. Three options were put to the owner (A grouped headers, B inline
+  side tag, C filter chip; recommendation A) and NOT yet chosen. Owner call outstanding.
+- 228 uncaptioned pad items across 11 sports share the English-in-every-locale defect;
+  cricket's eight are fixed, the rest is its own programme.
+- The OG card and page title compose the score from different sources — W2, no consent
+  exposure (every engine `summary.headline` is numeric).
+
+**Next:** re-pin W2 (`../../plans/2026-09-05-spectator-w2-competition-landing.md`, DRAFT)
+against merged `main` before executing — every wave plan is DRAFT until re-pinned after the
+wave before it merges.
+
+**Owed documentation:** the bench `_MASTER.md` spectator row still reads "W0 in flight; W1–W4
+sequential" — stale since W1 began, and now wrong in the other direction too.
 
 **OPEN FOLLOW-UP — the DLS revised target is invisible to a spectator.** Ruled 2026-09-07
 (product owner, during the gate): NOT a gate item and not fixed in W1, because unlike the
