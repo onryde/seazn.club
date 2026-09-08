@@ -562,3 +562,65 @@ the `overflow-hidden` that had been breaking sticky positioning freed both to
 pin at the same 56px line. Bracket headers now offset below the day header when a
 day block exists, and keep `top-14` when there is none, so a bracket-only
 division gains no unearned gap.
+
+---
+
+## Amendment 7 (2026-09-07) — W4: the band polls while quiet, and the sticky offset is measured
+
+Two corrections to W3 as built, both found by review rather than by a failing
+test, and both in places the unit suite structurally cannot reach.
+
+**The band's poll. This supersedes Task 7's "cleared otherwise".** W3 cleared
+the interval whenever nothing was in play, on the reasoning that a quiet
+competition should not poll a permanently-empty band. That is right about the
+cost and wrong about the band: `inPlay.length === 0` renders `null`, so a desk
+opened before the day's first match had no card on screen to update and no
+poll running to notice one arriving — it appeared only on a manual reload,
+which is the opposite of what a live band is for.
+
+The schedule is now two cadences plus a visibility gate: `LIVE_POLL_MS` 20s
+while something is live, `QUIET_POLL_MS` 90s while the band is empty, and
+nothing at all while the tab is hidden, with one catch-up fetch on the way
+back. A hidden tab costing zero requests is what pays for the quiet poll.
+
+It lives in `components/v2/desk/band-poll.ts`, not in the effect, and that is
+deliberate. `apps/web` vitest is `environment: "node"`: inside `useEffect`
+none of these decisions is reachable, which is how the wrong schedule shipped
+behind a green suite in the first place. `startBandPolling` takes its timers
+and its visibility check as injected dependencies, so the node suite drives
+every branch with fakes, and the browser wiring is three lines with no
+decisions in them. Six mutants were run against it; one (dropping the
+re-entrancy guard in `start()`) survived the first pass and was killed by
+adding the case the suite could not otherwise reach — two `visibilitychange`
+events with no hidden state between them.
+
+The wake itself is proven in `e2e/desk-in-play-band.spec.ts` ("a quiet desk
+left open picks up the day's first fixture without a reload"): `page.clock`,
+a real `core.start` out of band, no reload, and a deliberate assertion that
+the band is STILL absent one live-cadence tick later — otherwise the test
+would pass on some other mechanism and the 90s cadence would be unproven.
+
+**Finding m2 is closed: the bracket round header's offset is measured.** The
+paragraph above ("Two sticky headers may not share one offset") shipped as
+`top-[86px]` — 56 for nav plus a day header height ASSUMED to be 30px at one
+line. `DayHeading` prints "<long weekday date> · <venue> · N fixtures", so at
+320 with a real venue name it wraps, and the bracket header then overlapped
+the header it exists to stack under. Measured live at 320: the day header is
+**62px**, not 30, so the shipped offset was 32px short.
+
+`run-sheet.tsx` now measures the tallest day header into `--desk-day-h` on the
+sheet root (a `ResizeObserver`, re-measured when the blocks change) and the
+bracket header resolves `calc(3.5rem + var(--desk-day-h, 0px))`. One
+expression covers both cases — with no day block the sheet publishes `0px`
+and it collapses to the ordinary `top-14`, so there is no second class for
+Tailwind's scanner to find. The pre-hydration and no-JS fallback is
+deliberately the old 30px constant: before the effect runs the sheet behaves
+exactly as it shipped rather than collapsing both headers onto one slot.
+
+The finding had been recorded as UNREPRODUCED, and precisely: it needs a
+division holding both a day block and a bracket block with a placed venue,
+driven at 320, and both live sticky cases (C-1, C-3) seed a bracket-ONLY
+division. That state had never been rendered at any width. It now is, in
+`run-sheet.spec.ts`, which asserts the wrap actually happened (`> 30px`)
+before asserting the offset clears it — and separately that the offset is not
+back to 86.

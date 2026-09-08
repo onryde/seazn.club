@@ -660,3 +660,60 @@ assumed:
   `stage-unscheduled-count`, `roster-drift-banner` and `roster-drift-rebuild`
   exist as testids** in the stage-chrome region. Generate, Complete and Delete
   carry none, so task 2 adds them and breaks no existing locator.
+
+## W4 — post-merge follow-ups (2026-09-07, branch `feat/competition-desk-w4-followups`)
+
+W3's review left four items that were deliberately NOT fixed mid-branch. All
+four are done here. Design of record for the two desk-surface ones is
+amendment 7 in `2026-09-02-competition-desk-design.md`; this section records
+only what a future session cannot re-derive from the code.
+
+1. **The dead per-stage capacity hook is gone.** `useCapacityReportsByStage`
+   and its `CapacityRequest` type had no caller after the rail landed — the
+   panel resolves capacity a different way now. Deleted with its describe
+   block, and three comments (including the false-premise note above, and
+   `stage-rail.tsx`'s own header) that still described it as live were
+   corrected in place rather than left to mislead the next reader.
+
+2. **The band polls while quiet.** See amendment 7. The ruling worth carrying:
+   a component that renders `null` in a state cannot notice that state
+   changing, so "stop polling when there is nothing to show" is exactly
+   backwards for a band whose job is to announce the first fixture. Cost is
+   paid for by a visibility gate, not by stopping.
+
+3. **Finding m2 closed.** See amendment 7. The number that matters: the day
+   header measures **62px** at 320 with a real venue name, against the 30 the
+   shipped `top-[86px]` assumed.
+
+4. **A directory-only import now fills the team squad — OWNER-APPROVED,
+   2026-09-07.** The question was left open in W3 (recorded in
+   `enroll.spec.ts`'s own comment, which asserted only reachability because
+   the seed genuinely did not happen). The owner ruled that a
+   `Club,Team,Player` row IS a statement about that team's squad.
+
+   Consequences a future session should not have to rediscover:
+
+   - `executePlan` gains a `squad.add` op writing `team_members`, so
+     enrollment's third arm (`entrants.ts`: request → copied prior entrant →
+     the team's persistent squad) finally has something to read. `enroll.spec.ts`
+     asserts the seeded roster properly scoped, with the differential the old
+     assertion lacked: `+ Ada` must NOT be offered as a suggestion, because
+     `candidates` filters out anyone already on the roster.
+   - **This is a live behaviour change for existing users.** The commit is now
+     subject to `teams.squad_max` (community 23 / Pro 40, V395), enforced PER
+     TEAM. A CSV with a 30-player squad that used to commit on a community org
+     will now 402. That is the cap doing its job and is consistent with how
+     `clubs.max`/`teams.max` already refuse the whole commit — but it is not a
+     no-op upgrade.
+   - **A Position on a row with no Division is warned, not carried.** There is
+     no catalog to validate it against, and `team_members.default_position_key`
+     would otherwise take whatever the file said. Rows WITH a division carry
+     the same validated key onto both memberships, derived from the one
+     `positionKeys.find` hit rather than resolved twice.
+   - The wizard's `OP_BADGE` had no entry for the new kind, so the preview
+     printed a literal `squad.add` chip beside "new club" and "new player".
+     Nothing failed — an unmapped kind falls back to `op.kind`. It was found by
+     looking at a screenshot, and is now held by a sentinel that derives the
+     kinds from the engine's own `ImportOp` union
+     (`import-wizard-op-badges.test.ts`), so the next op added moves the test
+     with it.
